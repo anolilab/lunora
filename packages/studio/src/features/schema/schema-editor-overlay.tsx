@@ -10,22 +10,25 @@ import { useT } from "../../i18n/i18n-context";
 import { fireAndForget } from "../../lib/internal";
 import type { AdditiveEdit, SchemaEditResult, SchemaEditTable } from "../../lib/schema-edit";
 import { applyEdit } from "../../lib/schema-edit";
+import type { Mode } from "./schema-editor-mode-bar";
+import { SchemaEditorModeBar } from "./schema-editor-mode-bar";
+import SchemaEditorResult from "./schema-editor-result";
 
 /** Validator palette for an added optional column. Each maps to a `v.*` call. */
 const COLUMN_TYPES: ReadonlyArray<{ label: string; validator: string }> = [
     { label: "string", validator: "v.string()" },
     { label: "number", validator: "v.number()" },
     { label: "boolean", validator: "v.boolean()" },
-    { label: "bigint", validator: "v.int64()" },
+    // `v.bigint()`, not `v.int64()`: `int64` is neither exported by
+    // `@lunora/values` nor on the server's validator allow-list, so every
+    // "bigint" column the palette offered answered `400 invalid-validator`.
+    { label: "bigint", validator: "v.bigint()" },
     { label: "bytes", validator: "v.bytes()" },
     { label: "any", validator: "v.any()" },
 ];
 
 /** Default validator for a new column (the first palette entry). */
 const DEFAULT_VALIDATOR = "v.string()";
-
-/** Which form is open, if any. `destructive` is the migration-handoff notice. */
-type Mode = "addColumn" | "addIndex" | "addTable" | "destructive" | null;
 
 /** Split a comma-separated field list into trimmed, non-empty field names. */
 const splitFields = (raw: string): string[] =>
@@ -93,9 +96,9 @@ export const SchemaEditorOverlay = ({ onApplied, tableNames }: SchemaEditorOverl
             }
         } catch (error) {
             setResult({ kind: "error", message: error instanceof Error ? error.message : String(error) });
-        } finally {
-            setBusy(false);
         }
+
+        setBusy(false);
     };
 
     const onSubmitTable = (): void => {
@@ -174,41 +177,14 @@ export const SchemaEditorOverlay = ({ onApplied, tableNames }: SchemaEditorOverl
                 <CardDescription>{t("Adds a table, column, or index to lunora/schema.ts and reruns codegen.")}</CardDescription>
             </CardHeader>
             <CardContent>
-                <div className="flex flex-wrap gap-2">
-                    <Button data-testid="sc-editor-add-table" onClick={openTable} size="xs" type="button" variant={mode === "addTable" ? "default" : "outline"}>
-                        {t("Add table")}
-                    </Button>
-                    <Button
-                        data-testid="sc-editor-add-column"
-                        disabled={tableNames.length === 0}
-                        onClick={openColumn}
-                        size="xs"
-                        type="button"
-                        variant={mode === "addColumn" ? "default" : "outline"}
-                    >
-                        {t("Add column")}
-                    </Button>
-                    <Button
-                        data-testid="sc-editor-add-index"
-                        disabled={tableNames.length === 0}
-                        onClick={openIndex}
-                        size="xs"
-                        type="button"
-                        variant={mode === "addIndex" ? "default" : "outline"}
-                    >
-                        {t("Add index")}
-                    </Button>
-                    <Button
-                        data-testid="sc-editor-destructive"
-                        disabled={tableNames.length === 0}
-                        onClick={openDestructive}
-                        size="xs"
-                        type="button"
-                        variant={mode === "destructive" ? "default" : "ghost"}
-                    >
-                        {t("Rename / drop / change type…")}
-                    </Button>
-                </div>
+                <SchemaEditorModeBar
+                    hasTables={tableNames.length > 0}
+                    mode={mode}
+                    onAddColumn={openColumn}
+                    onAddIndex={openIndex}
+                    onAddTable={openTable}
+                    onDestructive={openDestructive}
+                />
 
                 {mode === "addTable" && (
                     <div className="mt-3 flex flex-wrap items-end gap-2" data-testid="sc-editor-table-form">
@@ -229,6 +205,7 @@ export const SchemaEditorOverlay = ({ onApplied, tableNames }: SchemaEditorOverl
                     <div className="mt-3 flex flex-wrap items-end gap-2" data-testid="sc-editor-column-form">
                         <div className="flex flex-col gap-1 text-xs">
                             <Label htmlFor="sc-editor-column-table">{t("Table name")}</Label>
+                            {/* react-doctor-disable-next-line react-doctor/control-has-associated-label -- labelled by the `<Label htmlFor="sc-editor-column-table">` directly above; the rule only recognises a nested or aria label */}
                             <select
                                 className="h-8 rounded-md border border-input bg-transparent px-2 text-xs"
                                 data-testid="sc-editor-column-table"
@@ -249,6 +226,7 @@ export const SchemaEditorOverlay = ({ onApplied, tableNames }: SchemaEditorOverl
                         </div>
                         <div className="flex flex-col gap-1 text-xs">
                             <Label htmlFor="sc-editor-column-type">{t("Column type")}</Label>
+                            {/* react-doctor-disable-next-line react-doctor/control-has-associated-label -- labelled by the `<Label htmlFor="sc-editor-column-type">` directly above; the rule only recognises a nested or aria label */}
                             <select
                                 className="h-8 rounded-md border border-input bg-transparent px-2 text-xs"
                                 data-testid="sc-editor-column-type"
@@ -283,6 +261,7 @@ export const SchemaEditorOverlay = ({ onApplied, tableNames }: SchemaEditorOverl
                     <div className="mt-3 flex flex-wrap items-end gap-2" data-testid="sc-editor-index-form">
                         <div className="flex flex-col gap-1 text-xs">
                             <Label htmlFor="sc-editor-index-table">{t("Table name")}</Label>
+                            {/* react-doctor-disable-next-line react-doctor/control-has-associated-label -- labelled by the `<Label htmlFor="sc-editor-index-table">` directly above; the rule only recognises a nested or aria label */}
                             <select
                                 className="h-8 rounded-md border border-input bg-transparent px-2 text-xs"
                                 data-testid="sc-editor-index-table"
@@ -330,44 +309,7 @@ export const SchemaEditorOverlay = ({ onApplied, tableNames }: SchemaEditorOverl
                     </div>
                 )}
 
-                {result?.kind === "error" && (
-                    <p className="mt-3 text-sm text-destructive" data-testid="sc-editor-error" role="alert">
-                        {result.message}
-                    </p>
-                )}
-
-                {result?.kind === "needs-migration" && (
-                    <div className="mt-3 flex flex-col gap-2" data-testid="sc-editor-needs-migration">
-                        <p className="text-sm text-warning" role="alert">
-                            {t("This edit changes stored data and must go through a migration. Review the migration before applying.")}
-                        </p>
-                        <Button
-                            className="self-start"
-                            data-testid="sc-editor-open-migrations"
-                            onClick={onOpenMigrations}
-                            size="xs"
-                            type="button"
-                            variant="outline"
-                        >
-                            {t("Open Migrations")}
-                        </Button>
-                    </div>
-                )}
-
-                {result?.kind === "ok" && result.diagnostics.length > 0 && (
-                    <div className="mt-3 flex flex-col gap-1" data-testid="sc-editor-diagnostics">
-                        <p className="text-sm text-destructive" role="alert">
-                            {t("Codegen reported diagnostics:")}
-                        </p>
-                        <ul className="flex flex-col gap-0.5">
-                            {result.diagnostics.map((diagnostic) => (
-                                <li className="font-mono text-[11px] text-destructive" key={diagnostic}>
-                                    {diagnostic}
-                                </li>
-                            ))}
-                        </ul>
-                    </div>
-                )}
+                <SchemaEditorResult onOpenMigrations={onOpenMigrations} result={result} />
             </CardContent>
         </Card>
     );

@@ -2,7 +2,7 @@ import type { StudioHtmlConfig } from "./types";
 
 /**
  * Serialise a string for safe inline-script embedding: JSON-encode it, then
- * neutralise `&lt;` so a `&lt;/script>` (or comment opener) in the value can't end the
+ * neutralise `<` so a `</script>` (or comment opener) in the value can't end the
  * tag early.
  */
 const forInlineScript = (value: string): string => JSON.stringify(value).replaceAll("<", String.raw`\u003c`);

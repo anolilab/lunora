@@ -1,4 +1,8 @@
 import { expect, test } from "../fixtures/lunora.js";
+import { BASE_URL } from "../origin";
+
+/** Must match `LUNORA_ADMIN_TOKEN` written into the E2E `.dev.vars` by `globalSetup.ts`. */
+const ADMIN_TOKEN = "e2e-deterministic-admin-token";
 
 /**
  * R2 storage E2E — verifies the signed-URL flow against Miniflare's R2 stub.
@@ -39,6 +43,10 @@ test("upload returns a signed URL and the URL serves the bytes back", async ({ u
         throw new Error("no signed url");
     }
 
+    // No storage base is configured anywhere: the action signs against the
+    // origin this request reached the worker on, and the PUT below verifies it.
+    expect(new URL(url).origin).toBe(new URL(BASE_URL).origin);
+
     // Put bytes at the signed URL — Miniflare validates the signature.
     const png = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
     const putResponse = await user.request.fetch(url, {
@@ -65,6 +73,8 @@ test("upload returns a signed URL and the URL serves the bytes back", async ({ u
         throw new Error("no signed get url");
     }
 
+    expect(new URL(getUrl).origin).toBe(new URL(BASE_URL).origin);
+
     const fetched = await user.request.get(getUrl);
 
     expect(fetched.ok()).toBe(true);
@@ -83,13 +93,8 @@ test("signed URL returns 403 after expiry", async ({ user }) => {
         data: { expiresInSeconds: 1, key: "avatars/e2e/expiry" },
     });
 
-    if (response.status() === 404) {
-        // Older playground without /test/sign — skip rather than fail.
-        test.skip(true, "playground has no /test/sign helper; expiry test needs harness route");
-
-        return;
-    }
-
+    // A 404 here means the harness route is gone (or `LUNORA_E2E` is unset) —
+    // that is a broken harness, not a reason to mute the assertion below.
     expect(response.ok()).toBe(true);
 
     const body = (await response.json()) as { url?: string };
@@ -101,6 +106,9 @@ test("signed URL returns 403 after expiry", async ({ user }) => {
         throw new Error("no signed url");
     }
 
+    // Signed against the request origin, not a configured base.
+    expect(new URL(url).origin).toBe(new URL(BASE_URL).origin);
+
     // Wait well past the 1s expiry. The signed `exp` is a whole-second boundary
     // (`floor(now)+1`), so a 1.3s wait can land *on* the boundary and read as
     // still-valid; 2.3s clears it deterministically. Hard sleep is necessary —
@@ -110,4 +118,70 @@ test("signed URL returns 403 after expiry", async ({ user }) => {
     const expired = await user.request.get(url);
 
     expect(expired.status()).toBe(403);
+});
+
+test("an avatar upload URL is refused for an active content type", async ({ user }) => {
+    // Avatars are served back from the app origin, so a caller-chosen
+    // `text/html` would be a stored page on that origin.
+    const response = await user.request.post(`/_lunora/rpc`, {
+        data: { args: { contentType: "text/html", key: "profile" }, functionPath: "avatars:uploadAvatar" },
+    });
+
+    const body = (await response.json()) as { error?: { code?: string }; result?: { url?: string } };
+
+    expect(body.result?.url).toBeUndefined();
+    expect(body.error?.code).toBe("BAD_REQUEST");
+});
+
+test("an object stored as text/html is served as a non-executable download", async ({ user }) => {
+    // The harness signer pins whatever type it is asked for, so this stores an
+    // HTML body the way any other minting path could.
+    const key = "avatars/e2e/page.html";
+    const putSigned = await user.request.post(`/test/sign`, { data: { contentType: "text/html", key, method: "PUT" } });
+    const { url: putUrl } = (await putSigned.json()) as { url?: string };
+
+    expect(putUrl).toBeTruthy();
+
+    const put = await user.request.fetch(putUrl ?? "", {
+        data: "<script>document.title='pwned'</script>",
+        headers: { "content-type": "text/html" },
+        method: "PUT",
+    });
+
+    expect(put.ok()).toBe(true);
+
+    const getSigned = await user.request.post(`/test/sign`, { data: { key } });
+    const { url: getUrl } = (await getSigned.json()) as { url?: string };
+    const fetched = await user.request.get(getUrl ?? "");
+
+    expect(fetched.ok()).toBe(true);
+    expect(fetched.headers()["x-content-type-options"]).toBe("nosniff");
+    expect(fetched.headers()["content-disposition"]).toBe("attachment");
+});
+
+test("the studio signs a servable URL for a named bucket", async ({ user }) => {
+    // With no `publicBaseUrl` the studio signs against this origin for every
+    // declared bucket, so the worker has to serve each one from its own
+    // binding, whatever the key looks like.
+    const admin = { authorization: `Bearer ${ADMIN_TOKEN}` };
+    const key = encodeURIComponent("studio/e2e.png");
+    const signPut = await user.request.get(`/_lunora/admin/storage/url?key=${key}&bucket=avatars&method=PUT&contentType=image%2Fpng`, { headers: admin });
+
+    expect(signPut.ok()).toBe(true);
+
+    const { url: putUrl } = (await signPut.json()) as { url?: string };
+
+    expect(new URL(putUrl ?? "").origin).toBe(new URL(BASE_URL).origin);
+
+    const png = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+    const put = await user.request.fetch(putUrl ?? "", { data: Buffer.from(png), headers: { "content-type": "image/png" }, method: "PUT" });
+
+    expect(put.ok()).toBe(true);
+
+    const signGet = await user.request.get(`/_lunora/admin/storage/url?key=${key}&bucket=avatars`, { headers: admin });
+    const { url: getUrl } = (await signGet.json()) as { url?: string };
+    const fetched = await user.request.get(getUrl ?? "");
+
+    expect(fetched.ok()).toBe(true);
+    expect(new Uint8Array(await fetched.body())[0]).toBe(0x89);
 });

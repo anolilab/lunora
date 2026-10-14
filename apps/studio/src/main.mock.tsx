@@ -4,7 +4,7 @@ import type { FunctionDescriptor, StudioAppProps } from "@lunora/studio";
 import { StudioApp } from "@lunora/studio";
 import { createRoot } from "react-dom/client";
 
-import createDevMockClient from "./mock/dev-client.js";
+import createDevMockClient from "./mock/dev-client";
 
 // Mirrors the mock client's `listFunctions` so the API docs panel has registered
 // functions to document — the shell takes the list as a prop, not via the client.

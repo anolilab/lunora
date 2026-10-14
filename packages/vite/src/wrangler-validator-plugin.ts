@@ -1,7 +1,8 @@
 import { spawnSync } from "node:child_process";
 
-import type { WranglerConfig } from "@lunora/config";
-import { readWranglerJsonc, validateWranglerProject } from "@lunora/config";
+import { lunoraLine } from "@lunora/config";
+import type { WranglerConfig } from "@lunora/config/cloudflare";
+import { assertWranglerSatisfiesSchema, findWranglerFile, readWranglerJsonc } from "@lunora/config/cloudflare";
 import type { Plugin } from "vite";
 
 import type { ResolvedLunoraPluginOptions } from "./types";
@@ -36,21 +37,10 @@ const warnWhenDockerMissing = (wranglerPath: string, dockerAvailable: () => bool
 
     // eslint-disable-next-line no-console
     console.warn(
-        "[lunora] wrangler.jsonc declares containers built from a local Dockerfile, but no Docker-compatible engine is running. Start Docker (or Colima) before `vite dev`, or the container instances will fail to start.",
+        lunoraLine(
+            "wrangler.jsonc declares containers built from a local Dockerfile, but no Docker-compatible engine is running. Start Docker (or Colima) before `vite dev`, or the container instances will fail to start.",
+        ),
     );
-};
-
-const formatError = (wranglerPath: string, problems: ReadonlyArray<string>): Error => {
-    const lines = [
-        "[lunora] wrangler configuration is missing bindings required by your schema.",
-        `  file: ${wranglerPath}`,
-        "",
-        ...problems.map((problem) => `  - ${problem}`),
-        "",
-        "  Update your wrangler.jsonc and restart the dev server.",
-    ];
-
-    return new Error(lines.join("\n"));
 };
 
 /**
@@ -59,38 +49,49 @@ const formatError = (wranglerPath: string, problems: ReadonlyArray<string>): Err
  * missing requirements during `configResolved`. Delegates the parsing /
  * validation logic to `@lunora/config` so the rules stay in lockstep with
  * the CLI (`lunora deploy`).
+ *
+ * Provisioning runs BEFORE this, in `bindingsProvisionPlugin`'s `config` hook,
+ * which is the order `lunora dev` uses (infer → reconcile, no validation pass):
+ * the bindings this check requires are the ones Lunora writes itself, so
+ * validating first killed the dev server the first time a project declared a
+ * `.global()` table or a container. That plugin is registered unconditionally and
+ * ahead of this one — the write is not optional the way the check is, and it must
+ * land in `config` to reach the worker at all (see its docblock).
+ *
+ * Skipped under `vite preview`, which resolves with `command: "serve"` and so
+ * runs `apply: "serve"` plugins: previewing a built app must not probe Docker.
  */
 const wranglerValidatorPlugin = (options: ResolvedLunoraPluginOptions): Plugin => {
+    let isPreview = false;
+
     return {
-        configResolved() {
-            const result = validateWranglerProject({
-                projectRoot: options.projectRoot,
-                schemaDir: options.schemaDir,
-            });
-
-            if (!result.wranglerPath) {
-                throw new Error(
-                    [
-                        "[lunora] wrangler.jsonc not found.",
-                        `  searched in: ${options.projectRoot}`,
-                        "  create a wrangler.jsonc declaring at least the SHARD durable object binding.",
-                    ].join("\n"),
-                );
-            }
-
-            if (result.report.warnings.length > 0) {
-                for (const warning of result.report.warnings) {
-                    // eslint-disable-next-line no-console
-                    console.warn(`[lunora] wrangler validator: ${warning}`);
-                }
-            }
-
-            if (result.problems.length > 0) {
-                throw formatError(result.wranglerPath, result.problems);
-            }
-
-            warnWhenDockerMissing(result.wranglerPath);
+        // `isPreview` is on the config-hook env only — never on the resolved config.
+        config(_userConfig, env) {
+            isPreview = env.isPreview === true;
         },
+        configResolved() {
+            if (isPreview) {
+                return;
+            }
+
+            // Shared with `@lunora/rspack` — same rules, same messages, only the
+            // closing remedy differs.
+            assertWranglerSatisfiesSchema(
+                options,
+                (message) => {
+                    // eslint-disable-next-line no-console
+                    console.warn(message);
+                },
+                "Update your wrangler.jsonc and restart the dev server.",
+            );
+
+            const wranglerPath = findWranglerFile(options.projectRoot);
+
+            if (wranglerPath !== undefined) {
+                warnWhenDockerMissing(wranglerPath);
+            }
+        },
+        enforce: "pre",
         name: "lunora:wrangler-validator",
     };
 };

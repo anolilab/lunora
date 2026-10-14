@@ -2,7 +2,7 @@
  * Real-workerd integration tests for `ShardDO`.
  *
  * These run inside a Miniflare-driven `workerd` process via
- * `@cloudflare/vitest-pool-workers`. The mock-state suite under
+ * `@cloudflare/vitest-plugin`. The mock-state suite under
  * `__tests__/shard-do.test.ts` exercises the same surface against hand-rolled
  * doubles — the value here is catching anything mock state cannot model:
  *
@@ -208,5 +208,38 @@ describe("shardDO (workerd)", () => {
 
         subA.client.close(1000, "done");
         subB.client.close(1000, "done");
+    });
+
+    it("puts the serializeAttachment ceiling where MAX_ATTACHMENT_BYTES says it is", async () => {
+        expect.assertions(3);
+
+        // The number the per-socket subscription budget is derived from,
+        // measured against the runtime rather than read off a doc page — the
+        // previous derivation used 2048, which is nowhere near it, and cut the
+        // cap to a quarter of what a socket can actually hold. Nothing else in
+        // the repo can catch that: the mock suite's fake enforces whatever
+        // constant it is handed.
+        const ceiling = 16_384;
+
+        await runInDurableObject(newStub("attachment-ceiling"), async (_instance, state) => {
+            const pair = new WebSocketPair();
+
+            state.acceptWebSocket(pair[1]);
+
+            // Comfortably under, and right at the boundary on both sides. The
+            // payload is a single string, so its length is the attachment size
+            // to within a few bytes of structured-clone envelope — which is why
+            // the "fits" leg is measured at half the ceiling rather than at
+            // `ceiling` exactly.
+            expect(() => {
+                pair[1].serializeAttachment({ blob: "x".repeat(ceiling / 2) });
+            }).not.toThrow();
+            expect(() => {
+                pair[1].serializeAttachment({ blob: "x".repeat(ceiling) });
+            }).toThrow(`cannot be larger than ${String(ceiling)} bytes`);
+            expect(() => {
+                pair[1].serializeAttachment({ blob: "x".repeat(ceiling * 4) });
+            }).toThrow(`cannot be larger than ${String(ceiling)} bytes`);
+        });
     });
 });

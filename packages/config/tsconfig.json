@@ -1,8 +1,10 @@
 {
     "extends": "../../tsconfig.base.json",
     "compilerOptions": {
-        "outDir": "dist",
-        "rootDir": ".",
+        // No outDir/rootDir: src/log-format.ts inlines `../../../shared/log-fields.ts`
+        // (a bundler-inlined shared helper), and a set rootDir raises TS6059 for that
+        // out-of-package file under `tsc --noEmit`. lint:types is noEmit; the real
+        // build is packem, so these were vestigial anyway. See CLAUDE.md `shared/` rules.
         "moduleResolution": "bundler",
         "types": ["node"]
     },

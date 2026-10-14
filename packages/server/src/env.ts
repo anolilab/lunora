@@ -1,5 +1,8 @@
+import { LunoraError } from "@lunora/errors";
 import type { Infer, Validator } from "@lunora/values";
 import { optionalInner } from "@lunora/values";
+
+import { isSecretKeyName } from "../../../shared/secret-key";
 
 /**
  * Typed, lazily-validated env accessor — the Lunora answer to void's
@@ -74,30 +77,38 @@ const EMBEDDED_PREFIXED_TOKEN_LONG = /\b(?:AKIA|AIza)[\w./+-]+|Bearer\s+[\w./+-]
  * leaks verbatim. We redact only the password segment, keeping scheme/user/host
  * for diagnostics.
  *
- * Leading `\b` anchors the match at a word boundary so the engine cannot
- * backtrack into the preceding non-word context, preventing super-linear runtime
- * (scslre S5852). The scheme character class covers valid URI-scheme
- * continuation characters (so schemes such as the postgres and mongodb
- * variants match); the user/password class covers alphanumerics plus dot,
- * percent-encoding, plus and hyphen.
+ * Anchored on the literal `://`, and the scheme is not matched at all.
+ *
+ * Matching it was the whole problem. An unbounded `[\w.+-]*` before `://` is
+ * quadratic — `\b` limits which offsets are tried, but a payload of alternating
+ * word/non-word characters (`.a.a.a…`) opens a boundary at every other position,
+ * and at each one the run reached the end of the string before failing to find
+ * `://`. This function is documented as safe to call on request bodies and thrown
+ * errors, so that input is attacker-controlled: a 128KB body cost 4.8 SECONDS.
+ *
+ * Length-bounding the scheme fixed the cost and introduced a quieter bug — a
+ * credential whose scheme exceeded the bound stopped being redacted at all,
+ * failing OPEN on the one thing this function exists to prevent. That is the same
+ * trap the user and password runs are deliberately left unbounded to avoid.
+ *
+ * Anchoring on `://` removes both. The scheme is only ever echoed back into the
+ * replacement, never validated, so there is nothing to gain by matching it: the
+ * engine finds candidates from a literal substring instead of scanning from every
+ * word boundary. Measured on the same 128KB payload: 4.8s unbounded, 6ms bounded,
+ * **0ms** here — and a 40-character scheme redacts correctly.
+ *
+ * The user run is `*`, not `+`: `redis://:password@host` and `amqps://:pw@broker`
+ * are ordinary usernameless credential URLs, and requiring a username left their
+ * passwords in the clear.
+ *
+ * The user/password class covers alphanumerics plus dot, percent-encoding, plus
+ * and hyphen. Both runs stay unbounded on purpose — a bound either could exceed
+ * would silently stop redacting a real credential.
  */
-const URL_CREDENTIAL = /\b([a-z][\w.+-]*:\/\/[\w.%+-]+):[\w.%+-]+@/gu;
+const URL_CREDENTIAL = /:\/\/([\w.%+-]*):[\w.%+-]+@/gu;
 
 /** The fixed placeholder substituted for any redacted secret. */
 const REDACTED = "[redacted]";
-
-/**
- * Keys whose **value** is a secret. Mirrors `@lunora/config`'s `.dev.vars`
- * scaffolder regex (`packages/config/src/scaffold-dev-variables.ts`, `SECRET_KEY`)
- * so the runtime validator and the scaffolder agree on what "looks secret". Kept
- * as a small local copy rather than importing `@lunora/config` — `@lunora/server`
- * is the app runtime and must not take a build/CLI-layer dependency on the config
- * package. If you change this, change it there too.
- *
- * Anchored at the end of the key (`…SECRET`, `…_TOKEN`) so `STRIPE_SECRET_KEY`
- * and `API_TOKEN` match while an innocuous `SECRETARY` does not.
- */
-const SECRET_KEY = /(?:KEY|PASSWORD|SECRET|TOKEN)$/u;
 
 /** Whether a value (already a string) looks like a credential by prefix or entropy. */
 const looksLikeSecretValue = (value: string): boolean => {
@@ -111,8 +122,72 @@ const looksLikeSecretValue = (value: string): boolean => {
     return trimmed.length >= 24 && STANDALONE_TOKEN.test(trimmed);
 };
 
-/** Matches a quoted (`"…"` / `'…'`) value; the inner contents are masked when credential-like. */
-const QUOTED_VALUE = /(["'])(?<inner>(?:\\.|(?!\1).)*)\1/gu;
+/** Characters a quoted value never spans, as `.` in a regular expression doesn't. */
+const LINE_TERMINATORS = new Set(["\n", "\r", "\u2028", "\u2029"]);
+
+/**
+ * Where the quoted value opened at `start` closes: at its first unescaped quote; without one before
+ * the line ends, at its last escaped quote (its backslash read as a plain character); else `-1`.
+ */
+const closingQuoteIndex = (message: string, start: number): number => {
+    const quote = message.charAt(start);
+    let lastEscapedQuote = -1;
+    let index = start + 1;
+
+    while (index < message.length) {
+        const character = message.charAt(index);
+
+        if (character === quote) {
+            return index;
+        }
+
+        if (LINE_TERMINATORS.has(character)) {
+            break;
+        }
+
+        const next = message.charAt(index + 1);
+
+        if (character === "\\" && index + 1 < message.length && !LINE_TERMINATORS.has(next)) {
+            if (next === quote) {
+                lastEscapedQuote = index + 1;
+            }
+
+            index += 2;
+        } else {
+            index += 1;
+        }
+    }
+
+    return lastEscapedQuote;
+};
+
+/**
+ * Replaces each quoted (`"…"` / `'…'`) value in `message` with `replace(match, inner)`, closing
+ * each as {@link closingQuoteIndex} says.
+ *
+ * This is what `/(["'])((?:\\.|(?!\1).)*)\1/gu` matches, in one pass: that pattern could read
+ * every backslash as an escape or as a character, so a quote followed by a run of backslashes
+ * backtracked exponentially (40 backslashes took seconds; CodeQL js/polynomial-redos).
+ */
+const replaceQuotedValues = (message: string, replace: (match: string, inner: string) => string): string => {
+    let out = "";
+    let index = 0;
+
+    while (index < message.length) {
+        const character = message.charAt(index);
+        const close = character === '"' || character === "'" ? closingQuoteIndex(message, index) : -1;
+
+        if (close === -1) {
+            out += character;
+            index += 1;
+        } else {
+            out += replace(message.slice(index, close + 1), message.slice(index + 1, close));
+            index = close + 1;
+        }
+    }
+
+    return out;
+};
 
 /** Matches a `KEY=value` / `KEY: value` pair; the value is masked when the key is secret-named. */
 const KEYED_VALUE = /\b(?<key>[A-Za-z_]\w*)\s*[=:]\s*\S+/gu;
@@ -138,14 +213,10 @@ const KEYED_VALUE = /\b(?<key>[A-Za-z_]\w*)\s*[=:]\s*\S+/gu;
 const redactSecrets = (message: string): string => {
     let out = message;
 
-    out = out.replaceAll(QUOTED_VALUE, (match: string, ...groups: unknown[]) => {
-        const named = groups.at(-1) as { inner?: string } | undefined;
-
-        return named?.inner !== undefined && looksLikeSecretValue(named.inner) ? REDACTED : match;
-    });
+    out = replaceQuotedValues(out, (match, inner) => (looksLikeSecretValue(inner) ? REDACTED : match));
 
     // Redact only the password segment (between `:` and `@`), keeping scheme/user/host.
-    out = out.replaceAll(URL_CREDENTIAL, (_match, prefix: string) => `${prefix}:${REDACTED}@`);
+    out = out.replaceAll(URL_CREDENTIAL, (_match, user: string) => `://${user}:${REDACTED}@`);
 
     // Known-prefix credential tokens anywhere, any length (no entropy floor).
     out = out.replaceAll(EMBEDDED_PREFIXED_TOKEN_SHORT, REDACTED);
@@ -154,7 +225,7 @@ const redactSecrets = (message: string): string => {
     out = out.replaceAll(KEYED_VALUE, (match: string, ...groups: unknown[]) => {
         const named = groups.at(-1) as { key?: string } | undefined;
 
-        return named?.key !== undefined && SECRET_KEY.test(named.key) ? `${named.key}=${REDACTED}` : match;
+        return named?.key !== undefined && isSecretKeyName(named.key) ? `${named.key}=${REDACTED}` : match;
     });
 
     out = out.replaceAll(HIGH_ENTROPY_TOKEN, REDACTED);
@@ -177,7 +248,7 @@ const redactSecrets = (message: string): string => {
 const redactValueForKey = (message: string, key: string, raw: unknown): string => {
     const masked = redactSecrets(message);
 
-    if (typeof raw === "string" && raw !== "" && SECRET_KEY.test(key)) {
+    if (typeof raw === "string" && raw !== "" && isSecretKeyName(key)) {
         return masked.replaceAll(raw, REDACTED);
     }
 
@@ -199,15 +270,13 @@ interface EnvKeyFailure {
  *
  * Named export only (no default) per the repo export convention.
  */
-class LunoraEnvError extends Error {
-    public override readonly name = "LunoraEnvError";
-
+class LunoraEnvError extends LunoraError {
     public readonly failures: ReadonlyArray<EnvKeyFailure>;
 
     public constructor(failures: ReadonlyArray<EnvKeyFailure>) {
         const summary = failures.map((failure) => `  - ${failure.key}: ${failure.message}`).join("\n");
 
-        super(`Invalid environment (${String(failures.length)} key(s)):\n${summary}`);
+        super("ENV_INVALID", `Invalid environment (${String(failures.length)} key(s)):\n${summary}`, { name: "LunoraEnvError" });
         this.failures = failures;
     }
 }

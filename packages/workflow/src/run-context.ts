@@ -1,124 +1,34 @@
 /**
  * Builds the Lunora-flavored context handed to a workflow body. Node-safe (no
  * `cloudflare:workers` import) so the runner and context assembly are unit
- * testable; the workerd-only `src/do` base class consumes it.
+ * testable; the workerd-only `src/do` base class consumes it. The `ctx.run`
+ * dispatcher + the logger are the shared `@lunora/dispatch` primitives (the same
+ * ones `@lunora/queue` uses), POSTing to `/_lunora/scheduler/dispatch` with the
+ * admin bearer. Wrap calls in `ctx.step.do(...)` to make them durable.
  */
+// eslint-disable-next-line import/no-extraneous-dependencies -- @lunora/dispatch is a devDependency on purpose: packem inlines it into this bundle, so it is not a published runtime dep
+import { createDispatchLogger, createDispatchRunner } from "@lunora/dispatch";
+import { LunoraError } from "@lunora/errors";
+
+import { decodeWire } from "../../../shared/wire-codec";
+import { resolveWorkflowHandle } from "../../../shared/workflow-binding";
+import { dedupNamespace, pinDedupId } from "./dedup-id";
+import { workflowClassName } from "./define-workflow";
 import type { NativeNonRetryableErrorConstructor } from "./errors";
+import { raiseNonRetryable } from "./errors";
+import type { WorkflowBindingResolver } from "./fan-out";
+import { createParallel, createSpawn } from "./fan-out";
 import { createRunStep } from "./run-step";
-import type {
-    ArgsOf,
-    FunctionReference,
-    RunFunctionOptions,
-    WorkflowEventLike,
-    WorkflowLogger,
-    WorkflowRunContext,
-    WorkflowRunFunction,
-    WorkflowStepLike,
-} from "./types";
-
-/** Strip trailing slashes from an origin so the dispatch path joins cleanly. */
-const trimTrailingSlashes = (value: string): string => {
-    let end = value.length;
-
-    while (end > 0 && value[end - 1] === "/") {
-        end -= 1;
-    }
-
-    return value.slice(0, end);
-};
-
-interface RunnerOptions {
-    /** Worker `env` — read `LUNORA_ORIGIN_URL` + `LUNORA_ADMIN_TOKEN` at call time. */
-    env: Record<string, unknown>;
-    /** Injectable fetch (tests); defaults to the global. */
-    fetchImpl?: typeof fetch;
-}
-
-/**
- * Build a {@link WorkflowRunFunction} that invokes a Lunora function by POSTing
- * to the Worker's `/_lunora/scheduler/dispatch` endpoint — the same path the
- * SchedulerDO and the Queues workpool dispatch through — authenticated with the
- * admin bearer. The parsed JSON body (the function's return value) is resolved;
- * an empty/non-JSON body resolves to `undefined`.
- *
- * Wrap calls in `ctx.step.do(...)` to make them durable + memoized + retried.
- */
-const createWorkflowRunner = (options: RunnerOptions): WorkflowRunFunction => {
-    const globalFetch = (globalThis as { fetch?: typeof fetch }).fetch;
-    // Bind the global `fetch` to `globalThis` so calling it through a captured
-    // reference cannot trip "Illegal invocation" in receiver-strict runtimes
-    // (where `fetch` must run with the global as its `this`). An injected
-    // `fetchImpl` is used as-is — the caller owns its binding.
-    const fetchImpl = options.fetchImpl ?? (typeof globalFetch === "function" ? globalFetch.bind(globalThis) : undefined);
-
-    return async <F extends FunctionReference>(function_: F, args?: ArgsOf<F>, runOptions: RunFunctionOptions = {}): Promise<unknown> => {
-        if (typeof fetchImpl !== "function") {
-            throw new TypeError("@lunora/workflow: no fetch implementation available — pass fetchImpl or run on a platform with global fetch");
-        }
-
-        const origin = options.env.LUNORA_ORIGIN_URL;
-
-        if (typeof origin !== "string" || origin.length === 0) {
-            throw new Error("@lunora/workflow: `LUNORA_ORIGIN_URL` must be set on the Worker env so a workflow can call back into Lunora functions");
-        }
-
-        const token = options.env.LUNORA_ADMIN_TOKEN;
-
-        if (typeof token !== "string" || token.length === 0) {
-            throw new Error("@lunora/workflow: `LUNORA_ADMIN_TOKEN` must be set on the Worker env to authenticate workflow function dispatch");
-        }
-
-        const url = `${trimTrailingSlashes(origin)}/_lunora/scheduler/dispatch`;
-        const response = await fetchImpl(url, {
-            body: JSON.stringify({ args: args ?? {}, functionPath: function_.__lunoraRef, shardKey: runOptions.shardKey }),
-            headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
-            method: "POST",
-        });
-
-        if (!response.ok) {
-            throw new Error(`@lunora/workflow: function dispatch failed (${String(response.status)}): ${await response.text()}`);
-        }
-
-        const text = await response.text();
-
-        if (text.length === 0) {
-            return undefined;
-        }
-
-        try {
-            return JSON.parse(text);
-        } catch {
-            return text;
-        }
-    };
-};
-
-/** Console-backed logger, prefixed with the workflow name for log correlation. */
-const createWorkflowLogger = (exportName: string): WorkflowLogger => {
-    const prefix = `[workflow:${exportName}]`;
-
-    /* eslint-disable no-console -- this logger's whole job is to write to the console; the workflow runtime routes it to wrangler tail / Studio. */
-    return {
-        debug: (message, ...rest) => {
-            console.debug(prefix, message, ...rest);
-        },
-        error: (message, ...rest) => {
-            console.error(prefix, message, ...rest);
-        },
-        info: (message, ...rest) => {
-            console.info(prefix, message, ...rest);
-        },
-        warn: (message, ...rest) => {
-            console.warn(prefix, message, ...rest);
-        },
-    };
-    /* eslint-enable no-console */
-};
+import type { WorkflowBindingLike, WorkflowEventLike, WorkflowRunContext, WorkflowRunFunction, WorkflowStepLike } from "./types";
+import { createWaitForEvent } from "./wait-for-event";
+import { waitOutDeclines } from "./wait-out-declines";
 
 interface RunContextOptions<Params> {
     env: Record<string, unknown>;
     event: WorkflowEventLike<Params>;
     exportName: string;
+    /** The invoking context's `ctx.exports`, where Cloudflare exposes the workflows declared in wrangler `exports`. */
+    exports?: unknown;
     fetchImpl?: typeof fetch;
     /** Native `cloudflare:workflows` `NonRetryableError` — injected by `src/do`; absent in Node tests. */
     nonRetryableErrorClass?: NativeNonRetryableErrorConstructor;
@@ -127,18 +37,145 @@ interface RunContextOptions<Params> {
 
 /** Assemble the {@link WorkflowRunContext} passed to a `defineWorkflow` handler. */
 const createWorkflowRunContext = <Params = Record<string, unknown>>(options: RunContextOptions<Params>): WorkflowRunContext<Params> => {
-    const log = createWorkflowLogger(options.exportName);
-    const run = createWorkflowRunner({ env: options.env, fetchImpl: options.fetchImpl });
+    const log = createDispatchLogger(`[workflow:${options.exportName}]`);
+    // `@lunora/dispatch`'s runner is deliberately loose at the boundary (its
+    // `ArgsOf` collapses to `Record<string, unknown>`); this package's
+    // `WorkflowRunFunction` reads the reference's `__lunoraPhantom` instead, so a
+    // call is checked against the target function's own args. The runtime
+    // dispatch is identical — only the arg type narrows — hence the cast. (The
+    // `FunctionReference`/`ArgsOf` types stay per-package by design; the mirror
+    // is pinned by `packages/client/__tests__/structural-mirrors.test.ts`.)
+    //
+    // Every dispatch, top-level and in-step, waits out a `DISPATCH_IN_PROGRESS`
+    // decline in place rather than throwing it into the engine's retry budget
+    // (see `wait-out-declines.ts`). `createRunStep` gets the bare runner and
+    // wraps it per attempt, because only there is the step's timeout known.
+    const runner = createDispatchRunner({ env: options.env, fetchImpl: options.fetchImpl, label: "@lunora/workflow" }) as unknown as WorkflowRunFunction;
+    const dispatch = waitOutDeclines(runner);
+
+    // A top-level `ctx.run` is not durable — the body re-executes from the top on
+    // every activation (after a `step.sleep`, a `waitForEvent`, an eviction) — so
+    // without a replay-stable dedup id it re-applies its mutation once per
+    // activation. Pinning the counter here, per context, is what restarts it at
+    // `.1` on each replay so the second activation reproduces the first's ids.
+    // `createRunStep` gets the UNPINNED dispatcher: it pins its own per-step
+    // scopes, which must not sit inside this one's numbering. See `dedup-id.ts`,
+    // including why the namespace carries the workflow and not just the instance.
+    const namespace = dedupNamespace(options.exportName, options.event.instanceId);
+    const run = pinDedupId(dispatch, `${namespace}#body`);
+
+    // Resolve a child workflow by its export key (the generated class name) via
+    // the shared naming helper — the same derivation codegen and the config layer
+    // use, so no generated map is needed for the workflow body to spawn children.
+    const resolveBinding: WorkflowBindingResolver = (workflow: string) => {
+        const key = workflowClassName(workflow);
+        const binding = resolveWorkflowHandle<WorkflowBindingLike>(options.env, options.exports, key, ["create", "get"]);
+
+        if (binding === undefined) {
+            throw new LunoraError(
+                "INTERNAL",
+                `@lunora/workflow: cannot spawn child workflow "${workflow}" — no "${key}" on ctx.exports or env (is it declared in lunora/workflows.ts?)`,
+            );
+        }
+
+        return binding;
+    };
+
+    // Deterministic child-id allocator: the handler replays in the same order, so
+    // a per-invocation counter yields replay-stable ids and `step.do` memoization
+    // re-attaches to the existing children instead of double-spawning.
+    //
+    // Deliberately unbounded: `options.event.instanceId` is the HOST's id, at
+    // whatever length and in whatever alphabet it mints (`@lunora/platform-node`
+    // issues `<definitionId>:<uuid>`), and an explicit id is returned verbatim.
+    // The engine's 100-character ceiling is applied where the id reaches `create`
+    // — `boundInstanceId` in `fan-out.ts` — so both `ctx.parallel` and `ctx.spawn`
+    // fold through one place and neither this allocator nor any other
+    // `nextChildId` implementation has to restate the rule.
+    //
+    // The parent's export name sits in the id for the reason it sits in the
+    // dedup namespace: an instance id is unique only within its own workflow, so
+    // two parents of different workflows running as `order-42` would both mint
+    // `order-42-c0` on the SAME child binding, and `createOrAttach` would take
+    // the second create's "already exists" as its own earlier attempt and attach
+    // to the other parent's child. Anything outside the engine's id alphabet is
+    // folded to `_` so a `$` in an export name cannot make the id uncreatable.
+    const childScope = options.exportName.replaceAll(/\W/gu, "_");
+    let childCounter = 0;
+    const nextChildId = (explicit?: string): string => {
+        if (explicit !== undefined) {
+            return explicit;
+        }
+
+        const id = `${options.event.instanceId}-${childScope}-c${String(childCounter)}`;
+        childCounter += 1;
+
+        return id;
+    };
+
+    const fanOutDeps = {
+        env: options.env,
+        exports: options.exports,
+        instanceId: options.event.instanceId,
+        log,
+        nextChildId,
+        parentClassName: workflowClassName(options.exportName),
+        resolveBinding,
+        step: options.step,
+    };
+
+    // `decodeWire`, not the raw payload: a scheduled workflow's args travel in
+    // wire form because Workflow `params` are JSON-serialised into durable
+    // storage, and this is the first point that can hand the handler real
+    // `bigint`/`Date`/bytes values. Identity for pure JSON, so a directly
+    // created or spawned instance is unaffected.
+    //
+    // A payload the codec refuses is PERMANENT — the params are already in
+    // durable storage and no retry re-serialises them — but `decodeWire` throws
+    // a bare `TypeError` (malformed tag) or `RangeError` (past its depth bound),
+    // which the platform treats as retryable and re-runs until the budget is
+    // gone. Raise it non-retryably, naming the workflow, so it fails once and
+    // says why.
+    const decodeParams = (): Readonly<Params> => {
+        try {
+            return decodeWire(options.event.payload) as Readonly<Params>;
+        } catch (error) {
+            return raiseNonRetryable(
+                `@lunora/workflow: workflow "${options.exportName}" params could not be decoded — ${error instanceof Error ? error.message : String(error)}`,
+                error,
+                options.nonRetryableErrorClass,
+            );
+        }
+    };
+
+    const params = decodeParams();
 
     return {
         env: options.env,
+        exports: options.exports,
         event: options.event,
+        // Re-exposed, not just consumed: a body that builds its own dispatcher
+        // (the agent loop does) must dispatch through the same implementation
+        // this context's `run` uses. Omitted when absent — the key's presence
+        // would otherwise read as "the host injected `undefined`".
+        ...(options.fetchImpl === undefined ? {} : { fetchImpl: options.fetchImpl }),
         log,
-        params: options.event.payload,
+        parallel: createParallel(fanOutDeps),
+        params,
         run,
-        runStep: createRunStep({ env: options.env, log, nonRetryableErrorClass: options.nonRetryableErrorClass, run, step: options.step }),
+        runStep: createRunStep({
+            dedupNamespace: namespace,
+            env: options.env,
+            log,
+            nonRetryableErrorClass: options.nonRetryableErrorClass,
+            run: runner,
+            step: options.step,
+        }),
+        spawn: createSpawn(fanOutDeps),
         step: options.step,
+        waitForEvent: createWaitForEvent({ nonRetryableErrorClass: options.nonRetryableErrorClass, step: options.step }),
     };
 };
 
-export { createWorkflowLogger, createWorkflowRunContext, createWorkflowRunner };
+// eslint-disable-next-line import/prefer-default-export -- named export by package convention; index.ts re-exports it
+export { createWorkflowRunContext };

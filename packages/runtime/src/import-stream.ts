@@ -11,6 +11,8 @@
 import { MAX_BODY_BYTES } from "./body-readers";
 import type { ShardingInfo, WorkerOptions } from "./create-worker";
 import { LunoraError } from "./errors";
+import type { QueryCoordinator } from "./query-coordinator";
+import type { ShardNamespaceLike } from "./resolve-shard";
 
 interface AdminBatch {
     rows: { doc: Record<string, unknown>; table: string }[];
@@ -88,6 +90,17 @@ interface BucketedImport {
     errors: ImportRowError[];
     globalRows: { doc: Record<string, unknown>; line: number; table: string }[];
     perShard: Map<string, AdminBatch>;
+
+    /**
+     * Non-blank NDJSON lines read from the body — the denominator a caller
+     * compares the inserted total against.
+     *
+     * Counted HERE, as each line is consumed, rather than reconstructed
+     * afterwards from the three buckets: `errors` is handed to the caller by
+     * reference and appended to during fan-out, so a post-hoc sum counts every
+     * failed row twice — once in its bucket and again as an error.
+     */
+    received: number;
 }
 
 /**
@@ -107,6 +120,7 @@ const bucketImportStream = async (request: Request, options: WorkerOptions, defa
     // only describe rows physically contiguous from the first one.
     const globalRows: { doc: Record<string, unknown>; line: number; table: string }[] = [];
     const perShard = new Map<string, AdminBatch>();
+    let received = 0;
     // Physical 1-based source line index. Incremented for EVERY line handled,
     // including blank ones, so `error.line` / `startLine` always point at the
     // user's actual source line. Counting only non-blank lines (the old bug)
@@ -131,6 +145,8 @@ const bucketImportStream = async (request: Request, options: WorkerOptions, defa
         if (trimmed.length === 0) {
             return;
         }
+
+        received += 1;
 
         const row = parseImportRow(trimmed, physicalLine);
 
@@ -206,14 +222,39 @@ const bucketImportStream = async (request: Request, options: WorkerOptions, defa
         handleLine(buffer);
     }
 
-    return { errors, globalRows, perShard };
+    return { errors, globalRows, perShard, received };
 };
+
+/**
+ * A shard the import fan-out could not write to at all (timed out, or the shard
+ * RPC errored). Distinct from an {@link ImportRowError}: no line of the source
+ * NDJSON is at fault, and an unknown number of that shard's rows are simply not
+ * in the database.
+ */
+interface ImportShardFailure {
+    message: string;
+    shardKey: string;
+    timedOut: boolean;
+}
 
 interface ImportTotals {
     conflicts: number;
     errors: ImportRowError[];
+    failed: ImportShardFailure[];
     inserted: Record<string, number>;
 }
+
+/**
+ * The shards that did not complete, as reported by `rollUpImport`.
+ *
+ * A dead shard is recorded ONLY in `failed` / `shards[].error` — it contributes
+ * nothing to `errors`, `inserted` or `conflicts`, which is exactly why folding
+ * only those three made a 3-shard import that lost one shard to
+ * `perShardTimeoutMs` answer `200 { errors: [], conflicts: 0 }` with a third of
+ * the dataset missing: structurally indistinguishable from a clean run.
+ */
+const shardFailures = (shards: ReadonlyArray<{ error?: { message: string; timedOut: boolean }; shardKey: string }>): ImportShardFailure[] =>
+    shards.flatMap((shard) => (shard.error ? [{ message: shard.error.message, shardKey: shard.shardKey, timedOut: shard.error.timedOut }] : []));
 
 /**
  * Fold a per-plane insert result (`{ inserted, errors, conflicts }`) into the
@@ -246,33 +287,53 @@ const mergeImportResult = (
 const streamingImport = async (
     request: Request,
     options: WorkerOptions,
+    coordinator: QueryCoordinator,
     forwardedHeaders: Record<string, string>,
+    namespace: ShardNamespaceLike,
 ): Promise<{
     conflicts: number;
     errors: ImportRowError[];
+    failed: ImportShardFailure[];
     inserted: Record<string, number>;
+    received: number;
+    warnings?: string[];
 }> => {
     const defaultShard = options.defaultShardKey ?? "__root__";
 
-    const { errors, globalRows, perShard } = await bucketImportStream(request, options, defaultShard);
+    const { errors, globalRows, perShard, received } = await bucketImportStream(request, options, defaultShard);
 
-    const totals: ImportTotals = { conflicts: 0, errors, inserted: {} };
+    const totals: ImportTotals = { conflicts: 0, errors, failed: [], inserted: {} };
+    const warnings: string[] = [];
+
+    // A worker with no `resolveTableSharding` cannot tell a `.global()` table
+    // from a shard-local one, so every row routes to the default shard. That is
+    // the right default for a single-shard app and silent misplacement for a
+    // sharded one — and it also suppresses the `GLOBAL_NOT_CONFIGURED` error
+    // below, because no row is ever classified global. Two missing options
+    // cancelling out each other's diagnostics is why this read as a 200 with
+    // nothing written and nothing wrong.
+    if (options.resolveTableSharding === undefined && perShard.size > 0) {
+        warnings.push(
+            "no `resolveTableSharding` is configured, so every row was routed to the default shard and no row could be recognised as `.global()` — " +
+                "correct for a single-shard app, silent misplacement for a sharded one",
+        );
+    }
 
     // Fan shard-local batches out via the coordinator. The order of batches
     // is insertion order so error line numbers reflect the source NDJSON.
     if (perShard.size > 0) {
-        const coordinator = options.queryCoordinator;
-
-        if (!coordinator) {
-            throw new LunoraError("Import endpoint requires a `queryCoordinator` on the worker", { code: "BAD_REQUEST", status: 400 });
-        }
-
-        const result = await coordinator.orchestrateImport(options.shardDO, {
+        // `namespace` is the worker's jurisdiction-pinned shard binding (create-worker
+        // pins it once). Fanning out through it keeps import writing to the SAME DOs
+        // the app reads — using the raw `options.shardDO` would land rows in the
+        // un-pinned global DOs, outside the residency boundary and unreachable by
+        // the live worker (a fail-open leak).
+        const result = await coordinator.orchestrateImport(namespace, {
             batches: [...perShard.values()],
             headers: forwardedHeaders,
         });
 
         mergeImportResult(totals, result);
+        totals.failed.push(...shardFailures(result.shards));
     }
 
     // Run global imports through the user-supplied helper.
@@ -298,7 +359,26 @@ const streamingImport = async (
         }
     }
 
-    return { conflicts: totals.conflicts, errors: totals.errors, inserted: totals.inserted };
+    // `received` is the honest denominator, counted as each line was read (see
+    // `BucketedImport.received`). Without it the response asserted success by
+    // omission: `errors: []` and `conflicts: 0` together read as "nothing went
+    // wrong", and an empty `inserted` map is also exactly what a legitimately
+    // empty batch returns — so a bulk import that was structurally unable to
+    // write was indistinguishable from one that had nothing to do, and a
+    // migration script could report "imported 4.2M rows" against an empty
+    // database. A caller compares `received` against the inserted total.
+    //
+    // `failed` is the other half of that honesty: a non-empty array means an
+    // unknown slice of the batch never reached storage, so `inserted` is a floor
+    // rather than a result. The endpoint answers 207 in that case.
+    return {
+        conflicts: totals.conflicts,
+        errors: totals.errors,
+        failed: totals.failed,
+        inserted: totals.inserted,
+        received,
+        ...(warnings.length > 0 ? { warnings } : {}),
+    };
 };
 
 export type { ImportRowError };

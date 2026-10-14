@@ -1,17 +1,31 @@
 ---
 title: "@lunora/solid"
 description: SolidJS bindings built on @lunora/client — live query signals, optimistic mutations, and an SSR hydration handoff.
+related:
+    - to: /docs/packages/react
+      note: "the same contract for React"
+    - to: /docs/packages/vue
+      note: "the Vue adapter"
+    - to: /docs/packages/svelte
+      note: "the Svelte adapter"
+    - to: /docs/packages/client
+      note: "the framework-neutral SDK this wraps"
+    - to: /docs/frameworks/bring-your-framework
+      note: "composition + adapter maturity"
+    - to: /docs/frameworks/reactive-loaders
+      note: "the hydrate-then-subscribe handoff"
+    - to: /docs/concepts/realtime
 ---
 
-`@lunora/solid` is the SolidJS adapter for Lunora. It's a thin, idiomatic layer
-over the framework-neutral [`@lunora/client`](/docs/packages/client) — which owns the
+`@lunora/solid` is the SolidJS adapter for Lunora. It's a thin layer over the
+framework-neutral [`@lunora/client`](/docs/packages/client), which owns the
 WebSocket transport, subscription registry, offline queue, and delta-merge.
 Solid's fine-grained signals map directly onto Lunora's per-subscription deltas,
-so a live query is just a signal the socket writes to: only the components that
-read the accessor re-render.
+so a live query is a signal the socket writes to: only the components that read
+the accessor re-render.
 
 <Callout type="warn">
-    **Preview.** The Solid adapter exists and exposes the same hydrate-then-subscribe handoff as React, but it is **preview** maturity — not yet proven
+    **Preview.** The Solid adapter exists and exposes the same hydrate-then-subscribe handoff as React, but it is **preview** maturity and not yet proven
     end-to-end against a running app. Solid lands first after React because its signals map most directly onto Lunora deltas. See [Bring your
     framework](/docs/frameworks/bring-your-framework).
 </Callout>
@@ -42,14 +56,16 @@ render(
 | --------------------------------------------------- | --------- | ------------------------------------------------------------------------------------------------ |
 | `LunoraProvider`                                    | component | Provides the shared `LunoraClient` to the tree via context. Required at the root.                |
 | `useLunora`                                         | function  | Read the `LunoraClient` from the nearest `<LunoraProvider>`. Throws if none is mounted.          |
-| `LunoraContext`                                     | context   | The underlying Solid context — for advanced manual `useContext`.                                 |
+| `LunoraContext`                                     | context   | The underlying Solid context, for advanced manual `useContext`.                                  |
 | `createQuery`                                       | primitive | Live query as a reactive accessor. Accessor args re-subscribe; `"skip"` short-circuits.          |
 | `createMutation`                                    | primitive | Optimistic mutation handle: `{ data, error, pending, mutate, reset }` accessors.                 |
 | `createMutationForClient`                           | primitive | Build a mutation handle bound to an explicit client (test/internal seam).                        |
+| `createAction`                                      | primitive | Action handle: `{ data, error, pending, call, reset }` accessors. No optimistic options.         |
+| `createActionForClient`                             | primitive | Build an action handle bound to an explicit client (test/internal seam).                         |
 | `createSubscription`                                | primitive | Raw live stream as `{ data, error }` accessors. `"skip"` tears down.                             |
-| `createPaginatedQuery`                              | primitive | Cursor pagination: `{ results, status, isLoading, loadMore }`.                                   |
+| `createPaginatedQuery`                              | primitive | Cursor pagination: `{ results, status, isLoading, loadMore, error }`.                            |
 | `createInfiniteQuery`                               | primitive | Infinite-scroll variant: `{ pages, status, hasNextPage, fetchNextPage, ... }`.                   |
-| `createAuth`                                        | primitive | Identity plumbing: `{ token, user }` signals + `setToken`.                                       |
+| `createAuth`                                        | primitive | Identity plumbing: `{ status, token, user }` signals + `setToken`. Gate on `status`.             |
 | `Authenticated` / `AuthLoading` / `Unauthenticated` | component | Render `children` per identity state (signed-in / resolving / signed-out).                       |
 | `createPresence`                                    | primitive | Collaborative awareness: heartbeat + live `present` member list.                                 |
 | `createRateLimit`                                   | primitive | Client-side rate-limit mirror: `{ ok, disabled, retryAfter, check, consume, reset }`.            |
@@ -58,12 +74,13 @@ render(
 
 Re-exported types: `ArgsOf`, `FunctionReference`, `OptimisticUpdate`,
 `Preloaded`, `ReturnOf`, `Unsubscribe`, plus `LunoraProviderProps`,
-`CreateQueryOptions`, `MutationClient`, and the `MutationHandle` interface.
+`CreateQueryOptions`, `MutationClient`, `ActionClient`, and the
+`MutationHandle` / `ActionHandle` interfaces.
 
 ## `<LunoraProvider client={...}>`
 
 Provides a `LunoraClient` to the Solid tree. Unlike the React provider there is
-no `QueryClient` to detect or lazily create — the adapter's reactive primitives
+no `QueryClient` to detect or lazily create: the adapter's reactive primitives
 own their own signals and read the client straight from context. The provider
 does not own the client's lifecycle, so the same instance survives across route
 navigations.
@@ -82,8 +99,9 @@ accessor reads `undefined` until the first server frame lands, then updates on
 every delta the WebSocket pushes.
 
 `args` may be a plain value or an accessor. Passing an accessor makes the
-subscription reactive — when the args change the previous subscription is torn
-down (via `onCleanup`) and a fresh one opens for the new args. Pass `"skip"` (or
+subscription reactive: when the args change the previous subscription is torn
+down (via `onCleanup`), the accessor resets to `undefined`, and a fresh one opens
+for the new args. Pass `"skip"` (or
 an accessor returning `"skip"`) to short-circuit: no network call, no socket.
 
 ```tsx
@@ -144,7 +162,7 @@ function Composer(props: { channelId: string }) {
 ### Optimistic updates
 
 Optimistic updates stay client-owned and are passed **per call** via `mutate`'s
-options — the `optimistic` / `optimisticUpdate` options pass straight through to
+options: the `optimistic` / `optimisticUpdate` options pass straight through to
 `client.mutation`, which applies and rolls them back against the live Lunora
 subscription cache (the same machinery `createQuery` / `hydratePreloaded`
 subscribe to), so an optimistic write reflects in those accessors immediately and
@@ -166,16 +184,68 @@ await send.mutate(
 client object (only `{ mutation }` is required). It's the internal seam behind
 `createMutation`, exported for tests that inject a stub.
 
+## `createAction(fn)`
+
+Returns a reactive `ActionHandle` — the same shape as `MutationHandle`, with
+`call` in place of `mutate`:
+
+```ts
+interface ActionHandle<F> {
+    data: Accessor<ReturnOf<F> | undefined>; // latest resolved value
+    error: Accessor<Error | undefined>; // latest error
+    pending: Accessor<boolean>; // true while any call from this handle is in flight (ref-counted)
+    call: (args, options?) => Promise<ReturnOf<F>>; // awaitable; resolves with the server value
+    reset: () => void; // clear data/error back to idle
+}
+```
+
+```tsx
+import { createAction } from "@lunora/solid";
+
+import { api } from "./lunora/_generated/api";
+
+function VerifyButton() {
+    const verify = createAction(api.commands.run);
+
+    return (
+        <button disabled={verify.pending()} onClick={() => verify.call({ command: "lunora", args: ["verify"] })}>
+            Verify
+        </button>
+    );
+}
+```
+
+Per-call options are `{ shardKey }` only. Unlike `createMutation` there are no
+`optimistic` / `optimisticUpdate` options: an optimistic update patches the
+subscription cache on the assumption a write will land, and an action is not a
+write — it runs in the Worker, may call a third party, and has no declared
+effect on any query.
+
+`createActionForClient(client, fn)` builds the same handle bound to an explicit
+client object (only `{ action }` is required), the seam behind `createAction`.
+
 ## Reactive loaders — `hydratePreloaded`
 
 The client half of "your loaders are live". Run the query on the server with
 `preloadQuery` (from `@lunora/solid/server`) inside a SolidStart route loader,
 hand the serializable `Preloaded` token to the client, and `hydratePreloaded`
-seeds the accessor **synchronously** from `preloaded.value` — so the first read
+seeds the accessor **synchronously** from `preloaded.value`, so the first read
 during hydration returns the server-rendered value with no loading flash and no
 `Suspense` fallback (unlike `createResource`, which always starts pending). After
 mount, a WebSocket subscription attaches in an effect and every subsequent delta
 flows into the same signal, so the UI goes live with zero refetch.
+
+The preloaded value was read for whoever was signed in when the page loaded.
+After a sign-out or user switch retires that identity, every `hydratePreloaded`
+on the client — mounted then or later — stops using it and holds `undefined`
+until the live value arrives, so the previous user's rows are never shown to the
+next one. A same-user token refresh does not count as a switch. The accessor
+is typed `Accessor<T | undefined>` for that reason, like `createQuery`.
+
+Pass `{ onError }` as the second argument to observe a subscription-scoped error
+the server pushes after hydration (a session expiry, an RLS denial). Without it
+such an error is dropped and the accessor keeps rendering the SSR snapshot as if
+it were live.
 
 Internally `hydratePreloaded` is a default export, but the package barrel
 re-publishes it as a named binding, so import it from `@lunora/solid` directly:
@@ -193,12 +263,12 @@ function Posts(props: { preloaded: Preloaded<Array<{ _id: string; title: string 
 ```
 
 Effects do not run during SSR (Solid runs them only after hydration), so the
-subscription is strictly client-side — the seed is the only value the server
+subscription is strictly client-side; the seed is the only value the server
 render ever sees.
 
 ## `@lunora/solid/server`
 
-Server-side preload helpers, re-exported from `@lunora/client/ssr` — the
+Server-side preload helpers, re-exported from `@lunora/client/ssr`, the
 framework-neutral server contract shared by every adapter. This entry opens no
 WebSocket and touches no browser globals, so it is safe to import from a
 SolidStart `"use server"` route loader.
@@ -218,12 +288,103 @@ Exports: `createServerClient`, `preloadQuery`, `serializePreloaded`,
 `deserializePreloaded`, `preloadedQueryResult`, `getServerSession`, plus the
 `Preloaded` / `ServerClientOptions` / `ServerSession` types.
 
-## See also
+## Agent tool events — `createAgentToolEvents(options)`
 
-- [@lunora/react](/docs/packages/react) — the same contract for React
-- [@lunora/vue](/docs/packages/vue) — the Vue adapter
-- [@lunora/svelte](/docs/packages/svelte) — the Svelte adapter
-- [@lunora/client](/docs/packages/client) — the framework-neutral SDK this wraps
-- [Bring your framework](/docs/frameworks/bring-your-framework) — composition + adapter maturity
-- [Reactive loaders](/docs/frameworks/reactive-loaders) — the hydrate-then-subscribe handoff
-- [Real-time](/docs/concepts/realtime)
+Observes one agent thread's **tool activity**, separate from its chat
+transcript: which tools the model called, what they returned, which are parked
+on a human approval, and any in-flight `ctx.reportProgress(...)` updates.
+
+`options`: `{ api, threadKey, stream?, limit? }` — `api` is the generated `api`
+(it reads `api.agents.agentMessages`), and `stream` is the same app stream
+reference `createAgentChat` takes. Returns `{ events }`, an `Accessor`.
+`threadKey` may be a plain string or an accessor — an accessor re-subscribes
+when it changes.
+
+Each event discriminates on `type`:
+
+| `type`              | Fields                                                 | Source      |
+| ------------------- | ------------------------------------------------------ | ----------- |
+| `call`              | `toolCallId`, `toolName`, `input`, `seq`               | durable     |
+| `result`            | `toolCallId?`, `toolName?`, `output`, `status?`, `seq` | durable     |
+| `awaiting-approval` | `toolCallId?`, `toolName?`, `seq`                      | durable     |
+| `progress`          | `toolCallId`, `data`                                   | live stream |
+
+Durable events come first, oldest first by `seq`, followed by the ephemeral
+`progress` events for the in-flight turn. With no `stream` reference only the
+durable lifecycle is surfaced. The array is rebuilt on every update — treat it
+as derived, not identity-stable, and key rendered rows on `toolCallId`/`seq`.
+
+```tsx
+import { For } from "solid-js";
+import { createAgentToolEvents } from "@lunora/solid";
+import { api } from "~/lunora/_generated/api";
+
+const ToolTimeline = (props: { threadKey: string }) => {
+    const { events } = createAgentToolEvents({ api, stream: api.chat.liveEvents, threadKey: () => props.threadKey });
+
+    return (
+        <ol>
+            <For each={events()}>{(event) => <li>{event.type}</li>}</For>
+        </ol>
+    );
+};
+```
+
+## Voice agents — `createVoiceAgent(options)`
+
+Opens a full-duplex voice call against a voice-enabled agent — the
+`api.agents.<name>Voice` reference codegen emits. Microphone capture goes up the
+agent's WebSocket, synthesized speech comes back down, and transcripts plus
+barge-in are surfaced along the way.
+
+`options`: `{ voice, threadKey, silenceThreshold?, silenceDurationMs?,
+interruptThreshold?, interruptChunks?, createMicrophone?, createSocket?,
+createSpeaker? }`. `threadKey` is shared with the agent's text turns, so a voice
+call continues the very same conversation `createAgentChat` renders.
+
+Returns `{ status, connected, transcript, interimTranscript, audioLevel,
+isMuted, error, startCall, endCall, sendText, toggleMute }`, where every value
+is an `Accessor`. `status` is
+`"idle" | "listening" | "thinking" | "speaking"`.
+
+```tsx
+import { createVoiceAgent } from "@lunora/solid";
+import { api } from "~/lunora/_generated/api";
+
+const CallButton = (props: { threadKey: string }) => {
+    const call = createVoiceAgent({ threadKey: () => props.threadKey, voice: api.agents.supportVoice });
+
+    return (
+        <>
+            <button onClick={() => (call.status() === "idle" ? void call.startCall() : call.endCall())}>{call.status() === "idle" ? "Call" : "Hang up"}</button>
+            <meter max={1} value={call.audioLevel()} />
+            <p>{call.transcript()}</p>
+        </>
+    );
+};
+```
+
+### Microphone and audio lifecycle
+
+The part the type signature does not tell you:
+
+- **Nothing opens until `startCall()`.** Creating the handle touches neither the
+  microphone nor the socket. `startCall` is what calls `getUserMedia`, so it has
+  to run from a user gesture — browsers block both the permission prompt and
+  `AudioContext` resumption outside one. It is idempotent while a call is
+  active, and a denied permission lands in `error` rather than throwing at the
+  call site.
+- **`endCall()` releases everything** — the socket, the microphone tracks, and
+  the Web Audio graph — and is idempotent. `onCleanup` calls it for you, so
+  disposing the owning root ends the call.
+- **`audioLevel` is the live input RMS (0–1).** It drives a mic meter, and it is
+  also what the heuristics read: `silenceThreshold` + `silenceDurationMs` decide
+  when an utterance auto-commits (defaults `0.01` / `1200`ms), and
+  `interruptThreshold` + `interruptChunks` decide when the user barges in on the
+  agent mid-sentence (defaults `0.15` / `3` consecutive chunks). These are
+  room-dependent; tune them against real hardware rather than trusting the
+  defaults.
+- **`createMicrophone` / `createSpeaker` / `createSocket` are injection seams**
+  for tests and non-DOM hosts. The defaults are `getUserMedia` + Web Audio +
+  `new WebSocket(url)`, so the primitive is inert (and mockable) anywhere those
+  are missing.

@@ -79,7 +79,6 @@ describe("schedulerDO", () => {
             post("/schedule", {
                 args: { text: "hi" },
                 functionPath: "messages.send",
-                originUrl: "https://app.test",
                 scheduledFor,
             }),
         );
@@ -102,8 +101,8 @@ describe("schedulerDO", () => {
         const later = Date.now() + 60_000;
         const sooner = Date.now() + 1000;
 
-        await scheduler.fetch(post("/schedule", { args: {}, functionPath: "a", originUrl: "https://x.test", scheduledFor: later }));
-        await scheduler.fetch(post("/schedule", { args: {}, functionPath: "b", originUrl: "https://x.test", scheduledFor: sooner }));
+        await scheduler.fetch(post("/schedule", { args: {}, functionPath: "a", scheduledFor: later }));
+        await scheduler.fetch(post("/schedule", { args: {}, functionPath: "b", scheduledFor: sooner }));
 
         expect(state.alarm).toBe(sooner);
     });
@@ -116,10 +115,10 @@ describe("schedulerDO", () => {
         const later = Date.now() + 60_000;
         const sooner = Date.now() + 1000;
 
-        const soonerResponse = await scheduler.fetch(post("/schedule", { args: {}, functionPath: "b", originUrl: "https://x.test", scheduledFor: sooner }));
+        const soonerResponse = await scheduler.fetch(post("/schedule", { args: {}, functionPath: "b", scheduledFor: sooner }));
         const soonerBody = await readSchedule(soonerResponse);
 
-        await scheduler.fetch(post("/schedule", { args: {}, functionPath: "a", originUrl: "https://x.test", scheduledFor: later }));
+        await scheduler.fetch(post("/schedule", { args: {}, functionPath: "a", scheduledFor: later }));
 
         expect(state.alarm).toBe(sooner);
 
@@ -148,8 +147,8 @@ describe("schedulerDO", () => {
         const scheduler = new TestScheduler(state, { LUNORA_ORIGIN_URL: "https://app.test" });
         const now = Date.now();
 
-        await scheduler.fetch(post("/schedule", { args: { x: 1 }, functionPath: "due", originUrl: "https://x.test", scheduledFor: now - 1000 }));
-        await scheduler.fetch(post("/schedule", { args: {}, functionPath: "later", originUrl: "https://x.test", scheduledFor: now + 60_000 }));
+        await scheduler.fetch(post("/schedule", { args: { x: 1 }, functionPath: "due", scheduledFor: now - 1000 }));
+        await scheduler.fetch(post("/schedule", { args: {}, functionPath: "later", scheduledFor: now + 60_000 }));
 
         await scheduler.alarm();
 
@@ -157,6 +156,26 @@ describe("schedulerDO", () => {
         expect(scheduler.dispatched[0]?.args).toEqual({ x: 1 });
         // The "later" record stays pending and the alarm is rescheduled to its time.
         expect(state.alarm).toBe(now + 60_000);
+    });
+
+    it("/schedule accepts a workflow target (no functionPath) and alarm() dispatches it", async () => {
+        expect.assertions(4);
+
+        const state = createFakeState();
+        const scheduler = new TestScheduler(state, { LUNORA_ORIGIN_URL: "https://app.test" });
+        const now = Date.now();
+
+        // A workflow/agent schedule carries a `workflow` binding instead of a functionPath.
+        const response = await scheduler.fetch(post("/schedule", { args: { prompt: "digest" }, scheduledFor: now - 1000, workflow: "SupportAgentWorkflow" }));
+
+        expect(response.status).toBe(200);
+
+        await scheduler.alarm();
+
+        expect(scheduler.dispatched).toHaveLength(1);
+        expect(scheduler.dispatched[0]?.workflow).toBe("SupportAgentWorkflow");
+        // The stored record carries no functionPath — the two targets are exclusive.
+        expect(scheduler.dispatched[0]?.functionPath).toBeUndefined();
     });
 
     it("/get returns a single record by id (direct O(1) read), or {} when absent", async () => {
@@ -201,6 +220,32 @@ describe("schedulerDO", () => {
         expect(response.status).toBe(404);
     });
 
+    it("/schedule stores the record under a caller-supplied id", async () => {
+        expect.assertions(3);
+
+        const state = createFakeState();
+        const scheduler = new TestScheduler(state, { LUNORA_ORIGIN_URL: "https://app.test" });
+        const scheduledFor = Date.now() + 60_000;
+
+        // `@lunora/server`'s deferred-schedule facade hands a mutation handler the
+        // id synchronously and only makes the call after the transaction commits,
+        // so the id it answered has to be the one the record ends up under.
+        const id = await scheduledId(await scheduler.fetch(post("/schedule", { args: {}, functionPath: "messages.send", id: "pre-minted_1-A", scheduledFor })));
+
+        expect(id).toBe("pre-minted_1-A");
+
+        const hit = await scheduler.fetch(get("/get?id=pre-minted_1-A"));
+        const hitBody = await hit.json<{ record?: ScheduleRecord }>();
+
+        expect(hitBody.record?.functionPath).toBe("messages.send");
+
+        // An id that could corrupt the `id:` / `t:<padded>:<id>` storage keys is
+        // ignored rather than trusted, and the DO mints its own.
+        const rejected = await scheduledId(await scheduler.fetch(post("/schedule", { args: {}, functionPath: "messages.send", id: "bad:id", scheduledFor })));
+
+        expect(rejected).not.toBe("bad:id");
+    });
+
     it("/schedule validates required fields", async () => {
         expect.assertions(1);
 
@@ -229,7 +274,7 @@ describe("schedulerDO — live subscriptions", () => {
         // Simulate an already-connected subscriber.
         state.acceptWebSocket?.(createFakeSocket() as never);
 
-        await scheduler.fetch(post("/schedule", { args: {}, functionPath: "a", originUrl: "https://x.test", scheduledFor: Date.now() + 10_000 }));
+        await scheduler.fetch(post("/schedule", { args: {}, functionPath: "a", scheduledFor: Date.now() + 10_000 }));
 
         const pushed = state.sockets[0]?.sent ?? [];
 
@@ -243,9 +288,7 @@ describe("schedulerDO — live subscriptions", () => {
         const state = createFakeStateWithSockets();
         const scheduler = new TestScheduler(state, { LUNORA_ORIGIN_URL: "https://app.test" });
 
-        const scheduled = await scheduler.fetch(
-            post("/schedule", { args: {}, functionPath: "a", originUrl: "https://x.test", scheduledFor: Date.now() + 10_000 }),
-        );
+        const scheduled = await scheduler.fetch(post("/schedule", { args: {}, functionPath: "a", scheduledFor: Date.now() + 10_000 }));
         const { id } = await readSchedule(scheduled);
 
         // Connect after scheduling, then cancel — the cancel should push an empty list.
@@ -264,9 +307,7 @@ describe("schedulerDO — live subscriptions", () => {
         const scheduler = new TestScheduler(state, { LUNORA_ORIGIN_URL: "https://app.test" });
 
         // No WS hooks on the plain fake — broadcast must be a silent no-op.
-        const response = await scheduler.fetch(
-            post("/schedule", { args: {}, functionPath: "a", originUrl: "https://x.test", scheduledFor: Date.now() + 10_000 }),
-        );
+        const response = await scheduler.fetch(post("/schedule", { args: {}, functionPath: "a", scheduledFor: Date.now() + 10_000 }));
 
         expect(response.status).toBe(200);
     });
@@ -280,6 +321,114 @@ describe("schedulerDO — live subscriptions", () => {
         const response = await scheduler.fetch(new Request("https://scheduler.internal/ws", { headers: { Upgrade: "websocket" } }));
 
         expect(response.status).toBe(501);
+    });
+});
+
+describe("schedulerDO — bounded listing", () => {
+    /** Directly seed `id:<prefix>-NNNN` headers, bypassing /schedule for speed with large counts. */
+    const seedHeaders = (state: ReturnType<typeof createFakeState>, count: number, options: { pool?: string; prefix?: string } = {}): void => {
+        const prefix = options.prefix ?? "job";
+
+        for (let index = 0; index < count; index += 1) {
+            const id = `${prefix}-${String(index).padStart(4, "0")}`;
+            const record: ScheduleRecord = {
+                args: {},
+                enqueuedAt: Date.now(),
+                functionPath: "f",
+                id,
+                scheduledFor: Date.now() + 60_000,
+                ...(options.pool === undefined ? {} : { pool: options.pool }),
+            };
+
+            state.storageMap.set(`id:${id}`, record);
+        }
+    };
+
+    it("gET /list returns at most 100 records with truncated: true when more are pending", async () => {
+        expect.assertions(3);
+
+        const state = createFakeState();
+
+        seedHeaders(state, 150);
+
+        const scheduler = new SchedulerDO(state, { LUNORA_ORIGIN_URL: "https://app.test" });
+        const response = await scheduler.fetch(get("/list"));
+        const body = await response.json<{ records: ScheduleRecord[]; truncated: boolean }>();
+
+        expect(body.records).toHaveLength(100);
+        expect(body.truncated).toBe(true);
+        expect(new Set(body.records.map((record) => record.id)).size).toBe(100);
+    });
+
+    it("gET /list returns truncated: false when the backlog is at or under the page size", async () => {
+        expect.assertions(2);
+
+        const state = createFakeState();
+
+        seedHeaders(state, 42);
+
+        const scheduler = new SchedulerDO(state, { LUNORA_ORIGIN_URL: "https://app.test" });
+        const response = await scheduler.fetch(get("/list"));
+        const body = await response.json<{ records: ScheduleRecord[]; truncated: boolean }>();
+
+        expect(body.records).toHaveLength(42);
+        expect(body.truncated).toBe(false);
+    });
+
+    it("a broadcastChange-triggering mutation carries the bounded { records, truncated } shape", async () => {
+        expect.assertions(3);
+
+        const state = createFakeStateWithSockets();
+
+        seedHeaders(state, 150);
+
+        const scheduler = new TestScheduler(state, { LUNORA_ORIGIN_URL: "https://app.test" });
+
+        // Simulate an already-connected subscriber (as the sibling live-subscription
+        // tests do above — the real `/ws` upgrade needs a runtime `WebSocketPair`,
+        // which the node-mock test environment doesn't provide; that path is only
+        // exercisable under the opt-in `workerd` project. handleWebSocketUpgrade()'s
+        // seed message is built from the same listRecords() call and put through the
+        // same JSON.stringify shape as broadcastChange() below, so this still covers
+        // the wire format both paths emit.)
+        state.acceptWebSocket?.(createFakeSocket() as never);
+
+        await scheduler.fetch(post("/schedule", { args: {}, functionPath: "new", scheduledFor: Date.now() + 10_000 }));
+
+        const changeMessage = JSON.parse(state.sockets[0]?.sent.at(-1) ?? "{}") as { records: ScheduleRecord[]; truncated: boolean; type: string };
+
+        expect(changeMessage.type).toBe("jobs");
+        expect(changeMessage.truncated).toBe(true);
+        expect(changeMessage.records).toHaveLength(100);
+    });
+
+    it("gET /status and GET /pool report EXACT counts (not capped) across >100 headers in two pools", async () => {
+        expect.assertions(3);
+
+        const state = createFakeState();
+
+        seedHeaders(state, 60, { pool: "a", prefix: "a-job" });
+        seedHeaders(state, 70, { pool: "b", prefix: "b-job" });
+        // handleStatus()'s poolRows scan needs a durable `pool:<name>` row per pool.
+        state.storageMap.set("pool:a", { inFlight: 0, maxConcurrency: 5 });
+        state.storageMap.set("pool:b", { inFlight: 0, maxConcurrency: 5 });
+
+        const scheduler = new SchedulerDO(state, { LUNORA_ORIGIN_URL: "https://app.test" });
+
+        const statusResponse = await scheduler.fetch(get("/status"));
+        const status = await statusResponse.json<{ backlog: number; pools: { name: string; queued: number }[] }>();
+
+        expect(status.backlog).toBe(130);
+
+        const poolAResponse = await scheduler.fetch(get("/pool?name=a"));
+        const poolA = await poolAResponse.json<{ queued: number }>();
+
+        expect(poolA.queued).toBe(60);
+
+        const poolBResponse = await scheduler.fetch(get("/pool?name=b"));
+        const poolB = await poolBResponse.json<{ queued: number }>();
+
+        expect(poolB.queued).toBe(70);
     });
 });
 
@@ -380,6 +529,101 @@ describe("schedulerDO — retry / dead-letter pipeline", () => {
         expect(dead.attempts).toBeGreaterThan(5);
     });
 
+    it("does not requeue a job whose dead-letter row is already durable", async () => {
+        expect.assertions(3);
+
+        const state = createFakeState();
+        const scheduler = new FailingScheduler(state, { LUNORA_ORIGIN_URL: "https://app.test" }, Number.POSITIVE_INFINITY);
+        const realDelete = state.storage.delete.bind(state.storage);
+
+        // `parkDead` writes `dead:<id>` and THEN clears the pending rows. Fail
+        // that clear: the park is durable, the error reaches
+        // `drainRecordGuarded`, and re-asserting the time index there dispatched
+        // a job that already has a terminal record — a duplicate run of a
+        // workflow or any other non-idempotent job.
+        state.storage.delete = async (keyOrKeys: string | string[]) => {
+            if (Array.isArray(keyOrKeys) && keyOrKeys.some((key) => key.startsWith("id:"))) {
+                throw new Error("storage unavailable");
+            }
+
+            return realDelete(keyOrKeys);
+        };
+
+        const id = await scheduledId(await scheduler.fetch(post("/schedule", { args: {}, functionPath: "f", scheduledFor: Date.now() - 1000 })));
+
+        // Force the re-armed job due, moving the HEADER's `scheduledFor` with the
+        // index key: `alarm()` reads the record off the header, so a rewrite that
+        // touches only the index leaves the claim delete pointing at a key that
+        // no longer exists and the forced entry survives every pass.
+        const forceDue = (): void => {
+            const indexKey = [...state.storageMap.keys()].find((key) => key.startsWith("t:"));
+
+            if (indexKey === undefined) {
+                return;
+            }
+
+            const recordId = String(state.storageMap.get(indexKey));
+            const header = state.storageMap.get(`id:${recordId}`) as ScheduleRecord | undefined;
+
+            state.storageMap.delete(indexKey);
+
+            if (header !== undefined) {
+                state.storageMap.set(`id:${recordId}`, { ...header, scheduledFor: 0 });
+            }
+
+            state.storageMap.set(`t:${"0".padStart(15, "0")}:${recordId}`, recordId);
+        };
+
+        for (let index = 0; index < 7; index += 1) {
+            forceDue();
+
+            // eslint-disable-next-line no-await-in-loop -- sequential alarm fires
+            await scheduler.alarm();
+        }
+
+        const dispatchedByPark = scheduler.attempts;
+
+        await scheduler.alarm();
+
+        expect(state.storageMap.has(`dead:${id}`)).toBe(true);
+        expect(keysWithPrefix(state, "t:")).toHaveLength(0);
+        expect(scheduler.attempts).toBe(dispatchedByPark);
+    });
+
+    it("logs a warning when a job is parked in the dead-letter store", async () => {
+        expect.assertions(2);
+
+        const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+
+        try {
+            const state = createFakeState();
+            const scheduler = new FailingScheduler(state, { LUNORA_ORIGIN_URL: "https://app.test" }, Number.POSITIVE_INFINITY);
+
+            const id = await scheduledId(await scheduler.fetch(post("/schedule", { args: {}, functionPath: "f", scheduledFor: Date.now() - 1000 })));
+
+            // Fire the alarm enough times to exhaust MAX_RETRY_ATTEMPTS (5). Each
+            // fire we force the re-armed entry due again.
+            for (let index = 0; index < 7; index += 1) {
+                const indexKey = [...state.storageMap.keys()].find((key) => key.startsWith("t:"));
+
+                if (indexKey) {
+                    const recordId = state.storageMap.get(indexKey);
+
+                    state.storageMap.delete(indexKey);
+                    state.storageMap.set(`t:${"0".padStart(15, "0")}:${String(recordId)}`, recordId);
+                }
+
+                // eslint-disable-next-line no-await-in-loop -- sequential alarm fires
+                await scheduler.alarm();
+            }
+
+            expect(warnSpy).toHaveBeenCalledTimes(1);
+            expect(warnSpy.mock.calls[0]?.[0]).toContain(id);
+        } finally {
+            warnSpy.mockRestore();
+        }
+    });
+
     it("does not leave a dangling dispatched: marker (claim is index-only)", async () => {
         expect.assertions(2);
 
@@ -394,6 +638,32 @@ describe("schedulerDO — retry / dead-letter pipeline", () => {
         // appear, and a successful fire leaves nothing behind.
         expect([...state.storageMap.keys()].filter((key) => key.startsWith("dispatched:"))).toHaveLength(0);
         expect(state.storageMap.size).toBe(0);
+    });
+
+    it("deletes a dangling time-index entry whose id: header is missing instead of busy-looping", async () => {
+        expect.assertions(3);
+
+        const state = createFakeState();
+        const scheduler = new TestScheduler(state, { LUNORA_ORIGIN_URL: "https://app.test" });
+        const now = Date.now();
+
+        // A stale index entry (past time) pointing at an id: header that no
+        // longer exists — the orphan a partial-failure path can leave behind.
+        const danglingKey = `t:${String(now - 5000).padStart(15, "0")}:ghost`;
+
+        state.storageMap.set(danglingKey, "ghost");
+
+        // A real future job so rescheduleAlarm() has a legitimate next time.
+        await scheduler.fetch(post("/schedule", { args: {}, functionPath: "real", scheduledFor: now + 60_000 }));
+
+        await scheduler.alarm();
+
+        // The orphan is cleaned up, nothing was dispatched for it, and the alarm
+        // is armed to the real future job — NOT stuck re-arming the past dangling
+        // time (which would fire, find no record, and busy-loop forever).
+        expect(state.storageMap.has(danglingKey)).toBe(false);
+        expect(scheduler.dispatched).toHaveLength(0);
+        expect(state.alarm).toBe(now + 60_000);
     });
 
     it("preserves the job for retry when LUNORA_ORIGIN_URL is unset at fire time", async () => {
@@ -419,9 +689,18 @@ describe("schedulerDO — retry / dead-letter pipeline", () => {
 
 describe("schedulerDO — dead-letter admin endpoints", () => {
     /** Schedule a job and drive the alarm until it exhausts its retries and parks under `dead:`. */
-    const parkDeadJob = async (state: ReturnType<typeof createFakeState>, functionPath = "f"): Promise<string> => {
+    const parkDeadJob = async (state: ReturnType<typeof createFakeState>, functionPath = "f", requestedId?: string): Promise<string> => {
         const scheduler = new FailingScheduler(state, { LUNORA_ORIGIN_URL: "https://app.test" }, Number.POSITIVE_INFINITY);
-        const id = await scheduledId(await scheduler.fetch(post("/schedule", { args: { n: 1 }, functionPath, scheduledFor: Date.now() - 1000 })));
+        const id = await scheduledId(
+            await scheduler.fetch(
+                post("/schedule", {
+                    args: { n: 1 },
+                    functionPath,
+                    ...(requestedId === undefined ? {} : { id: requestedId }),
+                    scheduledFor: Date.now() - 1000,
+                }),
+            ),
+        );
 
         for (let index = 0; index < 7; index += 1) {
             const indexKey = [...state.storageMap.keys()].find((key) => key.startsWith("t:"));
@@ -491,6 +770,49 @@ describe("schedulerDO — dead-letter admin endpoints", () => {
         // A fresh time-index entry re-arms the resurrected job at its new due time.
         expect(state.storageMap.has(`t:${String(result.scheduledFor).padStart(15, "0")}:${id}`)).toBe(true);
         expect(state.alarm).toBe(result.scheduledFor);
+    });
+
+    it("refuses a caller-supplied id the workflow engine would reject", async () => {
+        expect.assertions(3);
+
+        const state = createFakeState();
+        const scheduler = new SchedulerDO(state, { LUNORA_ORIGIN_URL: "https://app.test" });
+
+        // Minting over it stored the job under an id the caller never sees, so a
+        // repeated call scheduled a SECOND job rather than answering 409.
+        const response = await scheduler.fetch(
+            post("/schedule", { args: {}, functionPath: "jobs.charge", id: "-daily-2026-09-06", scheduledFor: Date.now() + 60_000 }),
+        );
+
+        expect(response.status).toBe(400);
+        await expect(response.json<{ error: { code: string } }>()).resolves.toMatchObject({ error: { code: "INVALID_SCHEDULE_ID" } });
+        expect([...state.storageMap.keys()]).toStrictEqual([]);
+    });
+
+    it("refuses a caller-supplied id a dead-letter record still holds, so /dead/retry cannot overwrite the new job", async () => {
+        expect.assertions(4);
+
+        const state = createFakeState();
+        const id = await parkDeadJob(state, "f", "invoice-42");
+        const scheduler = new SchedulerDO(state, { LUNORA_ORIGIN_URL: "https://app.test" });
+
+        expect(id).toBe("invoice-42");
+
+        // A dead record keeps no `id:` header, so a pending-only conflict check
+        // let the id be reused. `/dead/retry` then wrote the revived corpse over
+        // the new job's header and added a second `t:` index under the same id:
+        // the new job was gone and the dead one fired in its place.
+        const reused = await scheduler.fetch(post("/schedule", { args: {}, functionPath: "jobs.charge", id: "invoice-42", scheduledFor: Date.now() + 60_000 }));
+
+        expect(reused.status).toBe(409);
+        await expect(reused.json<{ error: { code: string } }>()).resolves.toMatchObject({ error: { code: "DUPLICATE_SCHEDULE_ID" } });
+
+        // The dead record is the only thing that answers to the id — nothing new
+        // was written under it.
+        const listResponse = await scheduler.fetch(get("/list"));
+        const listed = await listResponse.json<{ records: unknown[] }>();
+
+        expect(listed.records).toHaveLength(0);
     });
 
     it("pOST /dead/retry is a no-op for an unknown id", async () => {
@@ -571,9 +893,7 @@ describe("schedulerDO — alarm contract (fake clock)", () => {
 
         // runAt posts /schedule with an absolute time; runAfter is the same path
         // with `Date.now() + delayMs`. Schedule 60s out.
-        await scheduler.fetch(
-            post("/schedule", { args: { text: "hi" }, functionPath: "messages.send", originUrl: "https://app.test", scheduledFor: now + 60_000 }),
-        );
+        await scheduler.fetch(post("/schedule", { args: { text: "hi" }, functionPath: "messages.send", scheduledFor: now + 60_000 }));
 
         // The DO armed the alarm for exactly the scheduled time.
         expect(setAlarmCalls).toEqual([now + 60_000]);
@@ -588,14 +908,38 @@ describe("schedulerDO — alarm contract (fake clock)", () => {
         expect(scheduler.dispatched.map((record) => record.functionPath)).toEqual(["messages.send"]);
     });
 
+    it("refuses a caller-supplied id that is already scheduled, instead of firing the newer job at the older time", async () => {
+        expect.assertions(4);
+
+        const now = 1_700_000_000_000;
+        const { scheduler, fastForwardToAlarm, currentAlarm } = harness((state, env) => new TestScheduler(state, env), now);
+
+        const first = await scheduler.fetch(post("/schedule", { args: {}, functionPath: "jobs.remind", id: "reminder-42", scheduledFor: now + 1000 }));
+        // Same id, five seconds later. Accepting it overwrites the `id:` header
+        // while BOTH `t:` index entries survive, so the drain dispatches the
+        // t+5000 record at t+1000 and then deletes the entry it should have
+        // fired at — the job runs four seconds early and never runs again.
+        const second = await scheduler.fetch(post("/schedule", { args: {}, functionPath: "jobs.remind", id: "reminder-42", scheduledFor: now + 5000 }));
+
+        expect(first.status).toBe(200);
+        expect(second.status).toBe(409);
+
+        await fastForwardToAlarm();
+
+        // The record that fired is the one that was actually scheduled, at its
+        // own time — and the queue is drained, not left holding a phantom entry.
+        expect(scheduler.dispatched.map((record) => record.scheduledFor)).toStrictEqual([now + 1000]);
+        expect(currentAlarm()).toBeNull();
+    });
+
     it("fires only the due job and re-arms setAlarm to the next pending entry", async () => {
         expect.assertions(4);
 
         const now = 1_700_000_000_000;
         const { scheduler, setAlarmCalls, fastForwardToAlarm, currentAlarm } = harness((state, env) => new TestScheduler(state, env), now);
 
-        await scheduler.fetch(post("/schedule", { args: { x: 1 }, functionPath: "due", originUrl: "https://app.test", scheduledFor: now + 1000 }));
-        await scheduler.fetch(post("/schedule", { args: {}, functionPath: "later", originUrl: "https://app.test", scheduledFor: now + 60_000 }));
+        await scheduler.fetch(post("/schedule", { args: { x: 1 }, functionPath: "due", scheduledFor: now + 1000 }));
+        await scheduler.fetch(post("/schedule", { args: {}, functionPath: "later", scheduledFor: now + 60_000 }));
 
         // Earliest-pending wins the alarm (armed to the sooner of the two).
         expect(currentAlarm()).toBe(now + 1000);
@@ -615,8 +959,8 @@ describe("schedulerDO — alarm contract (fake clock)", () => {
         const now = 1_700_000_000_000;
         const { scheduler, setAlarmCalls, fastForwardToAlarm, currentAlarm } = harness((state, env) => new TestScheduler(state, env), now);
 
-        await scheduler.fetch(post("/schedule", { args: {}, functionPath: "first", originUrl: "https://app.test", scheduledFor: now + 1000 }));
-        await scheduler.fetch(post("/schedule", { args: {}, functionPath: "second", originUrl: "https://app.test", scheduledFor: now + 2000 }));
+        await scheduler.fetch(post("/schedule", { args: {}, functionPath: "first", scheduledFor: now + 1000 }));
+        await scheduler.fetch(post("/schedule", { args: {}, functionPath: "second", scheduledFor: now + 2000 }));
 
         await fastForwardToAlarm();
         await fastForwardToAlarm();
@@ -633,7 +977,7 @@ describe("schedulerDO — alarm contract (fake clock)", () => {
         const now = 1_700_000_000_000;
         const { scheduler, setAlarmCalls, fastForwardToAlarm } = harness((state, env) => new FailingScheduler(state, env, Number.POSITIVE_INFINITY), now);
 
-        await scheduler.fetch(post("/schedule", { args: {}, functionPath: "f", originUrl: "https://app.test", scheduledFor: now + 1000 }));
+        await scheduler.fetch(post("/schedule", { args: {}, functionPath: "f", scheduledFor: now + 1000 }));
 
         const { firedAt } = await fastForwardToAlarm();
 
@@ -736,6 +1080,76 @@ describe("schedulerDO — real dispatch() fetch contract", () => {
         expect(state.storageMap.has(`id:${id}`)).toBe(true);
     });
 
+    it("re-arms a `409 DISPATCH_IN_PROGRESS` decline without clearing, dead-lettering, or charging an attempt", async () => {
+        expect.assertions(4);
+
+        // The shard declines a re-delivery whose first attempt is still running.
+        // Temporary, never terminal: clearing the record would make the job
+        // at-most-once, and charging the retry budget would dead-letter a job
+        // that is running fine before the attempt that is doing the work ends.
+        const spy = vi
+            .spyOn(globalThis, "fetch")
+            .mockImplementation(async () =>
+                Response.json(
+                    { error: { code: "DISPATCH_IN_PROGRESS", message: "already running" } },
+                    { headers: { "x-lunora-dispatch-declined": "1" }, status: 409 },
+                ),
+            );
+        const start = Date.now();
+        const clock = vi.spyOn(Date, "now").mockReturnValue(start);
+
+        restoreFetch = () => {
+            spy.mockRestore();
+            clock.mockRestore();
+        };
+
+        const state = createFakeState();
+        const scheduler = new SchedulerDO(state, { LUNORA_ORIGIN_URL: "https://app.test" });
+        const id = await scheduledId(
+            await scheduler.fetch(post("/schedule", { args: {}, functionPath: "f", retry: { maxAttempts: 1 }, scheduledFor: start - 1000 })),
+        );
+
+        // Two declines against a budget of ONE retry: charged, the second would park it.
+        await scheduler.alarm();
+        clock.mockReturnValue(start + 3_600_000);
+        await scheduler.alarm();
+
+        const dispatches = spy.mock.calls.length;
+
+        expect(dispatches).toBe(2);
+        expect([...state.storageMap.keys()].filter((key) => key.startsWith("dead:"))).toHaveLength(0);
+        expect(state.storageMap.has(`id:${id}`)).toBe(true);
+        expect((state.storageMap.get(`id:${id}`) as { attempts?: number }).attempts ?? 0).toBe(0);
+    });
+
+    it("charges a DISPATCH_IN_PROGRESS-coded 409 the shard's claim path did not mark — a handler threw it", async () => {
+        expect.assertions(1);
+
+        // The shard echoes a handler-thrown error's code and status. Without the
+        // claim's header this is the job failing, and an uncharged failure would
+        // re-arm forever instead of dead-lettering.
+        const spy = vi
+            .spyOn(globalThis, "fetch")
+            .mockImplementation(async () => Response.json({ error: { code: "DISPATCH_IN_PROGRESS", message: "forwarded" } }, { status: 409 }));
+        const start = Date.now();
+        const clock = vi.spyOn(Date, "now").mockReturnValue(start);
+
+        restoreFetch = () => {
+            spy.mockRestore();
+            clock.mockRestore();
+        };
+
+        const state = createFakeState();
+        const scheduler = new SchedulerDO(state, { LUNORA_ORIGIN_URL: "https://app.test" });
+        const id = await scheduledId(
+            await scheduler.fetch(post("/schedule", { args: {}, functionPath: "f", retry: { maxAttempts: 3 }, scheduledFor: start - 1000 })),
+        );
+
+        await scheduler.alarm();
+
+        expect((state.storageMap.get(`id:${id}`) as { attempts?: number }).attempts ?? 0).toBe(1);
+    });
+
     it("routes a thrown dispatch (network error / crypto failure) to retry rather than orphaning the job", async () => {
         expect.assertions(3);
 
@@ -832,17 +1246,34 @@ describe("schedulerDO — scheduledFor validation", () => {
         expect(nonFiniteResponse.status).toBe(400);
     });
 
-    it("accepts the maximum valid Date millisecond value", async () => {
+    it("accepts the largest scheduledFor that still pads to a uniform width", async () => {
         expect.assertions(1);
 
         const state = createFakeState();
         const scheduler = new TestScheduler(state, { LUNORA_ORIGIN_URL: "https://app.test" });
 
-        // 8.64e15 is the largest valid Date; String() stays in plain digits so
-        // the index padding holds.
-        const response = await scheduler.fetch(post("/schedule", { args: {}, functionPath: "f", scheduledFor: 8_640_000_000_000_000 }));
+        // 999_999_999_999_999 (1e15 - 1) is the largest accepted value: it fits
+        // in exactly TIME_PAD (15) digits, so its time-index key keeps the
+        // lexical-order == numeric-order invariant.
+        const response = await scheduler.fetch(post("/schedule", { args: {}, functionPath: "f", scheduledFor: 999_999_999_999_999 }));
 
         expect(response.status).toBe(200);
+    });
+
+    it("rejects a scheduledFor one digit wider than the pad width (would break the index sort)", async () => {
+        expect.assertions(2);
+
+        const state = createFakeState();
+        const scheduler = new TestScheduler(state, { LUNORA_ORIGIN_URL: "https://app.test" });
+
+        // 1e15 is 16 digits — one wider than TIME_PAD (15) — so it would zero-pad
+        // to a 16-char key that sorts BEFORE shorter 15-char keys (e.g.
+        // "1000000000000000" < "200000000000000"), mis-ordering the alarm. It
+        // must be rejected up front and nothing persisted.
+        const response = await scheduler.fetch(post("/schedule", { args: {}, functionPath: "f", scheduledFor: 1_000_000_000_000_000 }));
+
+        expect(response.status).toBe(400);
+        expect([...state.storageMap.keys()].filter((key) => key.startsWith("id:"))).toHaveLength(0);
     });
 });
 
@@ -865,7 +1296,7 @@ describe("schedulerDO — per-record drain isolation (storage throw)", () => {
         }
 
         protected override async dispatch(record: ScheduleRecord): Promise<boolean> {
-            if (this.poison.has(record.functionPath)) {
+            if (this.poison.has(record.functionPath ?? "")) {
                 return false;
             }
 
@@ -917,7 +1348,7 @@ describe("schedulerDO — per-record drain isolation (storage throw)", () => {
         await expect(scheduler.alarm()).resolves.toBeUndefined();
 
         // The two healthy due records still dispatched despite the poison throw.
-        expect(scheduler.dispatched.map((record) => record.functionPath).toSorted((left, right) => left.localeCompare(right))).toEqual(["ok-a", "ok-b"]);
+        expect(scheduler.dispatched.map((record) => record.functionPath ?? "").toSorted((left, right) => left.localeCompare(right))).toEqual(["ok-a", "ok-b"]);
 
         // rescheduleAlarm() still ran (finally) and armed the next pending time.
         // The poison record was re-claimed (re-fireable) at its original time
@@ -987,5 +1418,69 @@ describe("schedulerDO — per-record drain isolation (storage throw)", () => {
         const indexKeys = [...state.storageMap.keys()].filter((key) => key.startsWith("t:") && key.endsWith(`:${id}`));
 
         expect(indexKeys).toHaveLength(0);
+    });
+
+    it("re-fires a job whose time-index claim was deleted by a dispatch its instance did not survive", async () => {
+        expect.assertions(5);
+
+        const state = createFakeState();
+        const scheduler = new TestScheduler(state, { LUNORA_ORIGIN_URL: "https://app.test" });
+        const id = await scheduledId(await scheduler.fetch(post("/schedule", { args: {}, functionPath: "messages.send", scheduledFor: Date.now() - 1000 })));
+
+        // The eviction. `drainRecordGuarded` deletes the `t:` claim and AWAITS
+        // it — the output gate holds the outbound fetch until that delete is
+        // durable — so a Durable Object lost during the dispatch leaves the
+        // `id:` header behind with no index entry. Nothing re-indexes it:
+        // `rescheduleAlarm` derives the clock from `t:` alone and `alarm()`
+        // reconciles only the inverse orphan.
+        const claimKey = [...state.storageMap.keys()].find((key) => key.startsWith("t:"));
+
+        state.storageMap.delete(claimKey ?? "");
+
+        expect([...state.storageMap.keys()].filter((key) => key.startsWith("t:"))).toHaveLength(0);
+        expect(state.storageMap.has(`id:${id}`)).toBe(true);
+
+        // A FRESH instance: the crash ended the one that minted the orphan.
+        const revived = new TestScheduler(state, { LUNORA_ORIGIN_URL: "https://app.test" });
+
+        await revived.alarm();
+
+        expect(revived.dispatched.map((record) => record.id)).toEqual([id]);
+        // Settled, so both the header and the re-put claim are gone again.
+        expect(state.storageMap.has(`id:${id}`)).toBe(false);
+        expect([...state.storageMap.keys()].filter((key) => key.startsWith("t:"))).toHaveLength(0);
+    });
+
+    it("recovers that orphan from the fetch entry point too — the crash left no alarm to recover from", async () => {
+        expect.assertions(5);
+
+        const state = createFakeState();
+        const scheduler = new TestScheduler(state, { LUNORA_ORIGIN_URL: "https://app.test" });
+        const id = await scheduledId(await scheduler.fetch(post("/schedule", { args: {}, functionPath: "messages.send", scheduledFor: Date.now() - 1000 })));
+
+        // The same eviction as above — but the death happens BEFORE the trailing
+        // `rescheduleAlarm()`, so the alarm the DO would have re-armed was never
+        // written. Recovery reachable only from `alarm()` is therefore recovery
+        // that never runs: nothing will ever deliver one.
+        const claimKey = [...state.storageMap.keys()].find((key) => key.startsWith("t:"));
+
+        state.storageMap.delete(claimKey ?? "");
+        await state.storage.deleteAlarm();
+
+        // A FRESH instance, woken the only way anything can still wake it: a
+        // request. `/status` is a plain read — it schedules nothing.
+        const revived = new TestScheduler(state, { LUNORA_ORIGIN_URL: "https://app.test" });
+        const status = await revived.fetch(get("/status"));
+
+        expect(status.status).toBe(200);
+        // The claim is back and an alarm is armed for it, so the runtime will
+        // deliver `alarm()` again on its own.
+        expect([...state.storageMap.keys()].filter((key) => key.startsWith("t:"))).toHaveLength(1);
+        await expect(state.storage.getAlarm()).resolves.not.toBeNull();
+
+        await revived.alarm();
+
+        expect(revived.dispatched.map((record) => record.id)).toEqual([id]);
+        expect(state.storageMap.has(`id:${id}`)).toBe(false);
     });
 });

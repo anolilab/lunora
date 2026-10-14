@@ -1,7 +1,7 @@
-import { render, screen, within } from "@testing-library/react";
+import { render, screen } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 
-import { StorageTierBadge, StorageTierHeader, StorageTierHint, TIER_META } from "../../src/components/storage-tier";
+import { StorageTierBadge, TIER_META } from "../../src/components/storage-tier";
 
 describe("storageTier", () => {
     it("renders the shard badge with its label, accent colour, and tooltip", () => {
@@ -24,24 +24,5 @@ describe("storageTier", () => {
         expect(screen.getByTestId("storage-tier-global").textContent).toContain(TIER_META.global.label);
         // The two tiers must not share a label, or the distinction is moot.
         expect(TIER_META.global.label).not.toBe(TIER_META.shard.label);
-    });
-
-    it("renders the plain-language hint for a tier", () => {
-        expect.assertions(1);
-
-        render(<StorageTierHint tier="global" />);
-
-        expect(screen.getByTestId("storage-tier-hint-global").textContent).toBe(TIER_META.global.hint);
-    });
-
-    it("header composes the badge over the hint for a tier", () => {
-        expect.assertions(2);
-
-        render(<StorageTierHeader tier="shard" />);
-
-        const header = within(screen.getByTestId("storage-tier-header-shard"));
-
-        expect(header.getByTestId("storage-tier-shard")).toBeDefined();
-        expect(header.getByTestId("storage-tier-hint-shard")).toBeDefined();
     });
 });

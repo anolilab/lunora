@@ -1,3 +1,6 @@
+import { LunoraError } from "@lunora/errors";
+
+import { randomSessionId } from "../../../shared/random-session-id";
 import { assertSafeAddresses, assertSafeHeaderValue } from "./address";
 import { isCaptureTransport } from "./capture-transport";
 import { createCloudflareTransport } from "./cloudflare-transport";
@@ -11,8 +14,11 @@ import type { LunoraMailOptions, Mailer, MailTransport, SendOptions, SendPayload
  * preference order encodes "Cloudflare Email Workers is the default provider":
  * `cloudflareSend` selects the Cloudflare Email Workers transport (the
  * scaffolded default; `send_email` binding wired in the project); `apiKey`
- * selects the Resend transport (bring-your-own-provider escape hatch). Anything
- * else is a misconfiguration — fail loudly with an actionable message.
+ * selects the Resend transport (bring-your-own-provider escape hatch).
+ *
+ * With none of those, a mailer that has a `queue` is a producer-only one (it
+ * enqueues, a consumer delivers): it is still built, and only `send()` rejects.
+ * Without a queue either, nothing could ever go out — fail loudly at construction.
  */
 const buildDefaultTransport = (options: LunoraMailOptions): MailTransport => {
     if (options.cloudflareSend) {
@@ -23,12 +29,44 @@ const buildDefaultTransport = (options: LunoraMailOptions): MailTransport => {
         return createResendTransport(options.apiKey, options.from);
     }
 
-    throw new Error("@lunora/mail: a transport is required — pass `transport`, `cloudflareSend` (Cloudflare Email Workers, the default), or `apiKey` (Resend)");
+    if (options.queue) {
+        return {
+            send: () =>
+                Promise.reject(
+                    new LunoraError(
+                        "INTERNAL",
+                        "@lunora/mail: no transport configured — this mailer can only queue(); pass `transport`, `cloudflareSend` (a SEND_EMAIL binding) or `apiKey` (Resend) to send()",
+                    ),
+                ),
+        };
+    }
+
+    throw new LunoraError(
+        "INTERNAL",
+        "@lunora/mail: a transport is required — pass `transport`, `cloudflareSend` (Cloudflare Email Workers, the default), or `apiKey` (Resend), or a `queue` for a producer-only mailer",
+    );
 };
 
+/**
+ * Create a mailer bound to a transport.
+ *
+ * SECURITY — recipient policy and HTML content are the caller's responsibility.
+ * The mailer fully blocks header/CRLF/comma injection in addresses
+ * (`assertSafeAddresses` / `assertSafeHeaderValue`), but it does NOT decide WHO
+ * you may send to or WHAT HTML you render.
+ *
+ * Open relay: derive `to`/`cc`/`bcc` from server-trusted state, never from raw
+ * request input, and prefer a fixed/allowlisted `from` — sending to an arbitrary
+ * user-supplied address turns your deployment into a spam relay.
+ *
+ * Template XSS / content injection: treat template HTML like any other HTML sink
+ * — never interpolate untrusted data into raw markup (or a
+ * `dangerouslySetInnerHTML`-style template) without escaping. The mailer sends
+ * whatever HTML you hand it verbatim.
+ */
 const createMailer = (options: LunoraMailOptions): Mailer => {
     if (!options.from) {
-        throw new Error("@lunora/mail: `from` is required");
+        throw new LunoraError("INTERNAL", "@lunora/mail: `from` is required");
     }
 
     const transport = options.transport ?? buildDefaultTransport(options);
@@ -71,8 +109,12 @@ const createMailer = (options: LunoraMailOptions): Mailer => {
         });
 
         return {
-            bcc: options_.bcc,
-            cc: options_.cc,
+            // Drop an empty optional recipient list rather than carrying `[]` into
+            // the payload: downstream (providers, custom transports, the capture
+            // sink) tests these for presence, so an empty list must be spelled the
+            // same way an absent field is.
+            bcc: options_.bcc?.length ? options_.bcc : undefined,
+            cc: options_.cc?.length ? options_.cc : undefined,
             from,
             headers: options_.headers,
             html,
@@ -105,7 +147,7 @@ const createMailer = (options: LunoraMailOptions): Mailer => {
                 return { queued: true };
             }
 
-            throw new Error("@lunora/mail: `queue` binding is required for mailer.queue()");
+            throw new LunoraError("INTERNAL", "@lunora/mail: `queue` binding is required for mailer.queue()");
         }
 
         // React elements are NOT structured-cloneable, so the queue body
@@ -114,7 +156,16 @@ const createMailer = (options: LunoraMailOptions): Mailer => {
         // pattern intentionally works on pre-rendered payloads.
         const payload = await buildPayload(options_);
 
-        await options.queue.send(toQueuedPayload(payload));
+        // Mint the idempotency key HERE, at enqueue time — never inside the
+        // consumer, where Cloudflare Queues' at-least-once redelivery would mint
+        // a fresh key on every retry and defeat dedup entirely. A caller-supplied
+        // key wins; otherwise generate one so every queued send still carries a
+        // stable key a consumer can dedupe against. `randomSessionId` is the
+        // shared generator: `randomUUID` where available, Web Crypto bytes
+        // otherwise — a bare `crypto.randomUUID()` throws on runtimes lacking it.
+        const idempotencyKey = options_.idempotencyKey ?? randomSessionId();
+
+        await options.queue.send(toQueuedPayload({ ...payload, idempotencyKey }));
 
         return { queued: true };
     };

@@ -1,6 +1,10 @@
 ---
 title: "@lunora/react"
-description: React 18+/19 hooks built on @lunora/client, with React Server Component data loading.
+description: React 19 hooks built on @lunora/client, with React Server Component data loading.
+related:
+    - to: /docs/packages/client
+    - to: /docs/packages/storage#end-user-uploads-rls-gated
+    - to: /docs/packages/auth
 ---
 
 `@lunora/react` ships the official React bindings. It's a thin layer over
@@ -41,12 +45,72 @@ const profile = useQuery(api.users.me, signedIn ? {} : "skip");
 
 ## `useMutation(fn)`
 
-Returns a callable with a `.pending` property:
+Returns `{ mutate, pending, data, error, reset, withOptimisticUpdate }`.
+`mutate` is the awaitable call; `pending` is ref-counted across overlapping
+calls from this hook, so it stays `true` until the last one settles. Destructure
+what you need:
 
 ```tsx
-const send = useMutation(api.messages.send);
-await send({ channelId, text }, { optimistic: (current) => [...(current ?? []), draft] });
+const { mutate, pending } = useMutation(api.messages.send);
+
+await mutate(
+    { channelId, text },
+    {
+        optimisticUpdate: (store, args) => {
+            const current = store.getQuery(api.messages.list, { channelId: args.channelId }) ?? [];
+
+            store.setQuery(api.messages.list, { channelId: args.channelId }, [...current, draft]);
+        },
+    },
+);
 ```
+
+`optimisticUpdate` names the query it patches, which is what the `send`/`list`
+shape needs: the per-call `optimistic: (current) => next` shortcut only patches a
+subscription registered under the **mutation's own** reference and args, so it
+fits a query and a mutation that share a path (a counter, a document by id) and
+quietly does nothing for anything else.
+
+To bind the same update to every call of a handle, use
+`withOptimisticUpdate(update)`, which returns the same handle with the update
+applied by default.
+
+Offline, `mutate` calls `client.mutation` at once when the client can queue the
+write: the optimistic update paints, and the write goes to the offline queue (or
+your durable outbox) to replay on reconnect. Before the shard's first connect
+(unless `queueBeforeFirstConnect` is set), or on a client with no WebSocket, the
+client cannot queue, so the call waits until the browser is back online and then
+sends. TanStack never retries; the queue owns replays.
+
+## `useAction(fn)`
+
+Returns `{ call, pending, data, error, reset }`. `call` is the awaitable
+invocation and rejects on failure; `pending` is ref-counted across overlapping
+calls from this hook, so a sibling component calling the same action never
+affects it.
+
+`data` and `error` both track the **latest** invocation, not the last to settle:
+a double-click whose first call resolves after the second cannot overwrite the
+second's outcome. A success clears `error`; a failure leaves the previous `data`
+in place, so a transient error does not blank the view. `reset()` clears both,
+but does not cancel an in-flight call — its result still lands.
+
+Unlike `useMutation`, the call never waits for the network, is never queued and
+is never retried: `client.action` has no offline queue and sends no idempotency
+key, so a paused call would fire minutes later on reconnect and a retry could run
+a third-party side effect twice. It fails fast instead and lets you decide.
+
+```tsx
+const { call: runVerify, pending } = useAction(api.commands.run);
+await runVerify({ command: "lunora", args: ["verify"] });
+```
+
+Per-call options are `{ shardKey }` only — there is no `optimistic` /
+`optimisticUpdate` and no `withOptimisticUpdate`. An optimistic update patches
+the subscription cache on the assumption a write will land; an action is not a
+write — it runs in the Worker, may call a third party, and has no declared
+effect on any query. Offering the option would imply a rollback guarantee
+nothing can honour.
 
 ## `useSubscription(fn, args)`
 
@@ -55,13 +119,37 @@ without a separate `useState`.
 
 ## `useAuth()`
 
-Returns `{ user, token, setToken(next) }`. Call `setToken(jwt)` after a
-sign-in flow; subsequent RPC calls carry the token automatically.
+Returns `{ status, user, token, setToken(next) }`. Call `setToken(jwt)` after a
+sign-in flow; subsequent RPC calls carry the token automatically. It does not
+re-authenticate an open subscription — the WebSocket credential is fixed at
+upgrade time; `client.setWsToken(token)` rotates that.
+
+`status` is the gate: `"loading"`, `"authenticated"`, `"unauthenticated"` or
+`"unreachable"` (a credential is held but the identity endpoint could not be
+reached — gates as authenticated). Branch on it, never on whether `user` is
+null: `user` is null both when signed out and when a held credential's identity
+has not resolved, so a `user` gate renders the sign-in form to a signed-in user.
+See the [`@lunora/client` reference](/docs/packages/client) for the full table.
+
+```tsx
+const { setToken, status, user } = useAuth();
+
+if (status === "loading") return <Spinner />;
+if (status === "unauthenticated") return <SignInForm onToken={setToken} />;
+return <Dashboard email={user?.email} />;
+```
+
+Resolving the session also keys the client's offline-queue identity on the
+user id rather than the token bytes, so rotating the JWT for the same user
+keeps queued writes and the durable read cache instead of reading as a user
+switch. Between the rotation and the next session resolve, queued writes are
+held rather than replayed — the client cannot yet tell a refresh from an
+account switch.
 
 ## Server Components (Next.js App Router)
 
 Every hook in `@lunora/react` calls `useState`/`useEffect` and owns a live
-WebSocket — they're **client-only**, and each module declares `"use client"`.
+WebSocket: they're **client-only**, and each module declares `"use client"`.
 Use them inside your own Client Components (the examples below mark
 `"use client"` on the files that call them).
 
@@ -123,7 +211,7 @@ export function PostList() {
 ```
 
 Drop the `await` before `prefetchQuery` for fire-and-forget prefetch when you
-don't need the data on the very first paint.
+don't need the data on the first paint.
 
 ### 2. Preload an explicit token
 
@@ -153,9 +241,19 @@ import type { Preloaded } from "@lunora/react/server";
 
 export function Post({ preloaded }: { preloaded: Preloaded<{ title: string }> }) {
     const post = usePreloadedQuery(preloaded); // server value first, then live
+
+    // `undefined` after a sign-out or user switch, until the new identity's subscription answers.
+    if (!post) {
+        return <p>Loading…</p>;
+    }
+
     return <h1>{post.title}</h1>;
 }
 ```
+
+`usePreloadedQuery` returns `T | undefined`. The preloaded value was read for whoever was
+signed in when the page loaded, so after a sign-out or user switch it is dropped and the hook
+returns `undefined` until the live value arrives: guard before reading fields.
 
 ### Providers
 
@@ -177,17 +275,291 @@ export function Providers({ children }: { children: React.ReactNode }) {
 
 ### `@lunora/react/server` reference
 
-- **`createServerClient({ url, token?, fetch? })`** — a request-scoped,
+- **`createServerClient({ url, token?, fetch? })`**: a request-scoped,
   HTTP-only `LunoraClient`. Build one **per request** so a user's `token`
   (and any cookies forwarded via `fetch`) never leak across requests.
-- **`prefetchQuery(queryClient, client, fn, args, { shardKey? }?)`** — runs the
+- **`prefetchQuery(queryClient, client, fn, args, { shardKey? }?)`**: runs the
   query and seeds `queryClient` under the key the client hooks use.
-- **`preloadQuery(client, fn, args, { shardKey? }?)`** — runs the query and
+- **`preloadQuery(client, fn, args, { shardKey? }?)`**: runs the query and
   returns a serializable `Preloaded` token for `usePreloadedQuery`.
-- **`dehydrate` / `HydrationBoundary`** — re-exported from
+- **`dehydrate` / `HydrationBoundary`**: re-exported from
   `@tanstack/react-query` for convenience.
 
-## See also
+## File uploads (`@lunora/react/upload`)
 
-- [@lunora/client](/docs/packages/client)
-- [Add-on: auth](/docs/packages/auth)
+End-user file uploads (live progress, pause/resume, large-file resumable and
+per-part retry) are re-exported from `@visulima/storage-client` (Lunora does not
+hand-roll the uploader). `useUpload` speaks the protocol named in `method`; without it, it uses the only
+endpoint given, or picks between several by file size against `tusThreshold`.
+The TUS path survives a pause/resume and a dropped connection.
+Point the endpoint at a route backed by
+[`@lunora/storage/upload`](/docs/packages/storage#end-user-uploads-rls-gated);
+these uploads are gated by _your_ per-user RLS policy, **not** the studio
+`adminToken`. [File storage](/docs/concepts/file-storage#resumable-uploads-from-the-browser)
+walks through mounting the handler, authenticating the route, and the size limits.
+
+### TanStack Query reconciliation
+
+The **upload** hooks (`useUpload`, `useMultipartUpload`, `useTusUpload`,
+`useChunkedRestUpload`, `useFileInput`, `usePasteUpload`) hold their own state and
+need **no** `QueryClientProvider`, so they coexist with Lunora's own `useQuery`.
+The `@visulima/storage-client` _data_ hooks (`useGetFileList` …) are not
+re-exported and do not work against a Lunora upload route: they read files over
+`GET`, which the route refuses (`405`). Read stored files with `ctx.storage` or a
+signed URL.
+
+For resumable uploads use `useTusUpload` (or `useUpload` with TUS).
+`useChunkedRestUpload` sends four chunks in parallel, which the binding-backed
+provider refuses, so it can only upload a file as one chunk; see
+[Chunked REST](/docs/packages/storage#chunked-rest).
+
+### Drag-and-drop uploader with a progress bar
+
+```tsx
+import { useCallback, useRef, useState } from "react";
+import { useUpload } from "@lunora/react/upload";
+
+export function Uploader() {
+    const [dragging, setDragging] = useState(false);
+    const controlRef = useRef(null);
+
+    // Each endpoint is its own `@lunora/storage/upload` handler: one handler
+    // speaks one protocol. The hook auto-selects TUS for large files
+    // (resumable), a plain multipart POST for small ones.
+    const { upload, progress, isUploading, isPaused, pause, resume, abort, error, result } = useUpload({
+        endpointTus: "/uploads",
+        endpointMultipart: "/uploads-form",
+        // Over R2 each TUS chunk is a multipart part, and R2 rejects parts under 5 MiB.
+        chunkSize: 5 * 1024 * 1024,
+        // Send the user's session so the server's `authorize` gate can identify them.
+        headers: async () => ({ authorization: `Bearer ${await getSessionToken()}` }),
+        restrictions: { maxFileSize: 5 * 1024 * 1024 * 1024, allowedFileTypes: ["video/*", "image/*"] },
+        onSuccess: (file) => console.log("uploaded", file.id),
+    });
+
+    const onDrop = useCallback(
+        (event: React.DragEvent) => {
+            event.preventDefault();
+            setDragging(false);
+            const file = event.dataTransfer.files[0];
+            if (file) void upload(file);
+        },
+        [upload],
+    );
+
+    return (
+        <div
+            onDragOver={(e) => {
+                e.preventDefault();
+                setDragging(true);
+            }}
+            onDragLeave={() => setDragging(false)}
+            onDrop={onDrop}
+            data-dragging={dragging}
+            className="dropzone"
+        >
+            {isUploading ? (
+                <>
+                    <progress value={progress} max={100} />
+                    <span>{progress}%</span>
+                    {isPaused ? <button onClick={() => void resume?.()}>Resume</button> : <button onClick={() => pause?.()}>Pause</button>}
+                    <button onClick={() => abort()}>Cancel</button>
+                </>
+            ) : result ? (
+                <p>Uploaded ✓</p>
+            ) : (
+                <p>{dragging ? "Drop to upload" : "Drag a file here"}</p>
+            )}
+            {error ? <p role="alert">{error.message}</p> : null}
+        </div>
+    );
+}
+```
+
+`useUpload` returns `pause` / `resume` / `isPaused` / `offset` only for the
+resumable protocols (TUS / chunked-REST). For a plain `<input type="file">`,
+`useFileInput` gives you the change-handler + selected-files plumbing; `useTusUpload`
+is the lower-level hook when you always want the resumable protocol.
+
+## Admin auth hooks
+
+Reactive reads over the **admin-gated auth plane** — the `/_lunora/admin/auth/*`
+HTTP endpoints `LunoraClient` exposes as `listAuthUsers`, `listAuthSessions`,
+`listAuthOrganizations`, and `impersonateAuthUser`. They are HTTP-only: unlike
+`useQuery` there is no live subscription behind them (the auth-admin surface
+does not ride the WS transport at all), so they are one-shot TanStack reads with
+an explicit `refetch()`. The worker must be built with an `authAdmin` and an
+`adminToken`, and the client must carry an admin-capable token.
+
+| Hook                         | Returns                                        |
+| ---------------------------- | ---------------------------------------------- |
+| `useAuthUsers(options?)`     | `AdminAuthListResult<AuthUser>`                |
+| `useAuthSessions(options?)`  | `AdminAuthListResult<AuthSession>`             |
+| `useOrganizations(options?)` | `AdminAuthListResult<Record<string, unknown>>` |
+| `useImpersonate()`           | `{ data, error, pending, impersonate, reset }` |
+
+`AdminAuthListResult<T>` is
+`{ data, error, loading, hasMore, total, loadMore, refetch }`: `data` is the
+full current window (`undefined` before the first response), `total` is the
+server-reported count across the whole collection, and `loadMore()` grows the
+requested window by one page and re-fetches. It is a growing-window re-fetch,
+not a cursor accumulator — the underlying `AuthPage` is offset/limit-based and
+there is no live delta stream to keep page boundaries stable against.
+
+Shared options: `{ enabled?, pageSize? }` (`pageSize` defaults to `50`).
+`useAuthUsers` adds `{ search?, searchField?, filterField?, filterValue?,
+sortBy?, sortDirection? }`; `useAuthSessions` adds `{ userId? }` to scope the
+list to one user.
+
+`AuthUser`, `AuthSession`, `AuthPage`, and `AuthImpersonation` are re-exported
+from the package root, so a console UI can annotate these results without
+reaching into `@lunora/client`.
+
+```tsx
+import { useAuthUsers, useImpersonate, type AuthUser } from "@lunora/react";
+
+const UserTable = () => {
+    const { data, error, hasMore, loadMore, loading, refetch, total } = useAuthUsers({ pageSize: 25, search: "acme" });
+    const { impersonate, pending } = useImpersonate();
+
+    if (loading) return <p>Loading…</p>;
+    if (error) return <p role="alert">{error.message}</p>;
+
+    return (
+        <>
+            <p>
+                {data?.length ?? 0} of {total ?? 0}
+            </p>
+            <ul>
+                {(data ?? []).map((user: AuthUser) => (
+                    <li key={user.id}>
+                        {user.email}
+                        <button disabled={pending} onClick={() => void impersonate(user.id)}>
+                            Impersonate
+                        </button>
+                    </li>
+                ))}
+            </ul>
+            {hasMore ? <button onClick={loadMore}>Load more</button> : null}
+            <button onClick={refetch}>Refresh</button>
+        </>
+    );
+};
+```
+
+Mutations stay plain `client.*` calls (`client.createAuthOrganization`,
+`client.deleteAuthOrganization`, …); call the relevant hook's `refetch()`
+afterwards — nothing is invalidated implicitly.
+
+`impersonate(userId)` resolves an `AuthImpersonation` (bearer token + target
+user + expiry) and deliberately does **not** call `client.setAuthToken(...)`.
+Swapping the current session would sign the admin out of their own admin
+session with no visible transition and no way back; what to do with the token —
+open it in a second tab, surface it for copy — is the caller's decision.
+
+## Agent tool events — `useAgentToolEvents(options)`
+
+Observes one agent thread's **tool activity**, separate from its chat
+transcript: which tools the model called, what they returned, which are parked
+on a human approval, and any in-flight `ctx.reportProgress(...)` updates.
+
+`options`: `{ api, threadKey, stream?, limit? }` — `api` is the generated `api`
+(it reads `api.agents.agentMessages`), and `stream` is the same app stream
+reference `useAgentChat` takes. Returns `{ events }`.
+
+Each event discriminates on `type`:
+
+| `type`              | Fields                                                 | Source      |
+| ------------------- | ------------------------------------------------------ | ----------- |
+| `call`              | `toolCallId`, `toolName`, `input`, `seq`               | durable     |
+| `result`            | `toolCallId?`, `toolName?`, `output`, `status?`, `seq` | durable     |
+| `awaiting-approval` | `toolCallId?`, `toolName?`, `seq`                      | durable     |
+| `progress`          | `toolCallId`, `data`                                   | live stream |
+
+Durable events come first, oldest first by `seq`, followed by the ephemeral
+`progress` events for the in-flight turn. With no `stream` reference only the
+durable lifecycle is surfaced. The array is rebuilt on every update — treat it
+as derived, not identity-stable, and key rendered rows on `toolCallId`/`seq`.
+
+```tsx
+import { useAgentToolEvents } from "@lunora/react";
+import { api } from "@/lunora/_generated/api";
+
+const ToolTimeline = ({ threadKey }: { threadKey: string }) => {
+    const { events } = useAgentToolEvents({ api, stream: api.chat.liveEvents, threadKey });
+
+    return (
+        <ol>
+            {events.map((event, index) => (
+                <li key={event.type === "progress" ? `p-${index}` : event.seq}>
+                    {event.type === "call" ? `→ ${event.toolName}` : null}
+                    {event.type === "result" ? `← ${event.output}` : null}
+                    {event.type === "awaiting-approval" ? "⏸ awaiting approval" : null}
+                    {event.type === "progress" ? JSON.stringify(event.data) : null}
+                </li>
+            ))}
+        </ol>
+    );
+};
+```
+
+## Voice agents — `useVoiceAgent(options)`
+
+Opens a full-duplex voice call against a voice-enabled agent — the
+`api.agents.<name>Voice` reference codegen emits. Microphone capture goes up the
+agent's WebSocket, synthesized speech comes back down, and transcripts plus
+barge-in are surfaced along the way.
+
+`options`: `{ voice, threadKey, silenceThreshold?, silenceDurationMs?,
+interruptThreshold?, interruptChunks?, createMicrophone?, createSocket?,
+createSpeaker? }`. `threadKey` is shared with the agent's text turns, so a voice
+call continues the very same conversation `useAgentChat` renders.
+
+Returns `{ status, connected, transcript, interimTranscript, audioLevel,
+isMuted, error, startCall, endCall, sendText, toggleMute }`. `status` is
+`"idle" | "listening" | "thinking" | "speaking"`.
+
+```tsx
+import { useVoiceAgent } from "@lunora/react";
+import { api } from "@/lunora/_generated/api";
+
+const CallButton = ({ threadKey }: { threadKey: string }) => {
+    const { audioLevel, endCall, startCall, status, transcript } = useVoiceAgent({
+        threadKey,
+        voice: api.agents.supportVoice,
+    });
+
+    return (
+        <>
+            <button onClick={status === "idle" ? () => void startCall() : endCall}>{status === "idle" ? "Call" : "Hang up"}</button>
+            <meter max={1} value={audioLevel} />
+            <p>{transcript}</p>
+        </>
+    );
+};
+```
+
+### Microphone and audio lifecycle
+
+The part the type signature does not tell you:
+
+- **Nothing opens until `startCall()`.** Creating the handle touches neither the
+  microphone nor the socket. `startCall` is what calls `getUserMedia`, so it has
+  to run from a user gesture — browsers block both the permission prompt and
+  `AudioContext` resumption outside one. It is idempotent while a call is
+  active, and a denied permission lands in `error` rather than throwing at the
+  call site.
+- **`endCall()` releases everything** — the socket, the microphone tracks, and
+  the Web Audio graph — and is idempotent. The hook also tears the call down on
+  unmount, so a component that navigates away mid-call leaks nothing.
+- **`audioLevel` is the live input RMS (0–1).** It drives a mic meter, and it is
+  also what the heuristics read: `silenceThreshold` + `silenceDurationMs` decide
+  when an utterance auto-commits (defaults `0.01` / `1200`ms), and
+  `interruptThreshold` + `interruptChunks` decide when the user barges in on the
+  agent mid-sentence (defaults `0.15` / `3` consecutive chunks). These are
+  room-dependent; tune them against real hardware rather than trusting the
+  defaults.
+- **`createMicrophone` / `createSpeaker` / `createSocket` are injection seams**
+  for tests and non-DOM hosts. The defaults are `getUserMedia` + Web Audio +
+  `new WebSocket(url)`, so the primitive is inert (and mockable) anywhere those
+  are missing.

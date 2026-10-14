@@ -3,12 +3,7 @@ import { describe, expect, it } from "vitest";
 
 import type { Id, Infer } from "../src/index";
 import { isOrWrapsFromValidator, v, ValidationError } from "../src/index";
-
-type Assert<T extends true> = T;
-// The canonical type-equality idiom: the single-use `<T>()` params are
-// load-bearing (they force structural comparison), so the rule is disabled here.
-// eslint-disable-next-line @typescript-eslint/no-unnecessary-type-parameters
-type Equal<X, Y> = (<T>() => T extends X ? 1 : 2) extends <T>() => T extends Y ? 1 : 2 ? true : false;
+import type { Assert, Equal } from "./__helpers__/type-assert";
 
 const assertOk: (condition: unknown, message: string) => asserts condition = (condition, message) => {
     if (!condition) {
@@ -58,13 +53,36 @@ describe("primitives", () => {
         expect(() => v.null().parse(undefined)).toThrow(ValidationError);
     });
 
-    it("bytes accepts ArrayBuffer only", () => {
+    it("bytes passes an ArrayBuffer through and rejects a non-buffer", () => {
         expect.assertions(2);
 
         const buffer = new ArrayBuffer(4);
 
         expect(v.bytes().parse(buffer)).toBe(buffer);
-        expect(() => v.bytes().parse(new Uint8Array(4))).toThrow(ValidationError);
+        expect(() => v.bytes().parse("nope")).toThrow(ValidationError);
+    });
+
+    it("bytes normalises a view to an ArrayBuffer", () => {
+        expect.assertions(3);
+
+        const parsed = v.bytes().parse(new Uint8Array([1, 2, 3]));
+
+        expect(parsed).toBeInstanceOf(ArrayBuffer);
+        expect(parsed.byteLength).toBe(3);
+        expect([...new Uint8Array(parsed)]).toStrictEqual([1, 2, 3]);
+    });
+
+    it("bytes copies only a view's own window, not its parent buffer", () => {
+        expect.assertions(2);
+
+        // A subarray views a slice of a larger buffer. Returning `view.buffer`
+        // would hand the column every byte of the parent — the neighbouring
+        // records' bytes included.
+        const parent = new Uint8Array([9, 9, 1, 2, 3, 9, 9]);
+        const parsed = v.bytes().parse(parent.subarray(2, 5));
+
+        expect(parsed.byteLength).toBe(3);
+        expect([...new Uint8Array(parsed)]).toStrictEqual([1, 2, 3]);
     });
 
     it("literal", () => {
@@ -114,6 +132,67 @@ describe("composites", () => {
         expect(schema.parse({ name: "a" })).toEqual({ name: "a" });
         expect(schema.parse({ name: "a", nickname: "b" })).toEqual({ name: "a", nickname: "b" });
         expect(() => schema.parse({ name: "a", nickname: 7 })).toThrow(ValidationError);
+    });
+
+    it("parses an absent bare `v.any()` field, so the key is optional and not required (issue #688)", () => {
+        expect.assertions(3);
+
+        // `v.any()`'s parser returns its input unchanged, so `undefined` is a
+        // perfectly good value for it — an absent field parses. That is why
+        // `ObjectShapeType` types the key `data?: unknown` and `toJsonSchema`
+        // leaves it out of `required`; `@lunora/codegen` used to disagree and
+        // emit a REQUIRED `data: unknown` into `_generated/api.ts`, which made
+        // two procedures declaring the identical validator fail to typecheck
+        // against each other.
+        const schema = v.object({ data: v.any(), id: v.string() });
+
+        expect(schema.safeParse({ id: "x" }).ok).toBe(true);
+        expect(schema.parse({ id: "x" })).toEqual({ id: "x" });
+        // A declared `v.any()` still round-trips a supplied value untouched.
+        expect(schema.parse({ data: { nested: 1 }, id: "x" })).toEqual({ data: { nested: 1 }, id: "x" });
+    });
+
+    it("parses an absent field of a `v.union(...)` with an `any` member (issue #688)", () => {
+        expect.assertions(2);
+
+        // The union tries its members; `v.any()` accepts `undefined`, so the
+        // field is absent-tolerant exactly like a bare `v.any()`.
+        const schema = v.object({ id: v.string(), payload: v.union(v.string(), v.any()) });
+
+        expect(schema.safeParse({ id: "x" }).ok).toBe(true);
+        // A union of only absent-INTOLERANT members still requires the field.
+        expect(v.object({ flag: v.union(v.string(), v.number()) }).safeParse({}).ok).toBe(false);
+    });
+
+    it("object reads declared fields as own-properties, not through the prototype chain", () => {
+        expect.assertions(3);
+
+        // A field whose name collides with an Object.prototype member must read
+        // as absent when omitted — not as the inherited function.
+        const schema = v.object({ toString: v.optional(v.string()), value: v.string() });
+
+        // An absent optional `toString` is skipped; without the own-property read
+        // it would see `Object.prototype.toString` and reject `received function`.
+        expect(schema.parse({ value: "x" })).toEqual({ value: "x" });
+        // A present own `toString` still validates and round-trips.
+        expect(schema.parse({ toString: "custom", value: "x" })).toEqual({ toString: "custom", value: "x" });
+        // A required field colliding with a prototype member fails when absent.
+        expect(() => v.object({ constructor: v.string() }).parse({})).toThrow(ValidationError);
+    });
+
+    it("rejects a declared `__proto__` field at construction time instead of silently dropping it at parse time (VALUES-01)", () => {
+        expect.assertions(1);
+
+        // Bracket notation creates a REAL own property named "__proto__" on the
+        // shape map; the bare-literal form (`{ __proto__: v.string() }`) is a
+        // distinct object-literal special case that sets the object's own
+        // prototype instead, so it wouldn't exercise this at all. Before this
+        // fix, this shape type-checked and built, but a parsed `__proto__` value
+        // silently vanished — `out["__proto__"] = …` on a plain `{}` invokes the
+        // inherited `Object.prototype` accessor instead of creating a data
+        // property (a no-op for a non-object value). Rejecting it here, at
+        // construction, surfaces the same collision as a loud, immediate error.
+        expect(() => v.object({ ["__proto__"]: v.string(), value: v.number() })).toThrow(/"__proto__"/u);
     });
 
     it("array parses element-wise and surfaces index in path", () => {
@@ -429,9 +508,45 @@ describe(".check() refinement", () => {
 
         expect(caught).toBeInstanceOf(ValidationError);
         expect(caught.expected).toBe("must be non-negative");
-        // describeValue now carries the concrete primitive literal.
-        expect(caught.received).toBe("number -1");
+        // A .check() refinement failure redacts the concrete literal to the bare
+        // type tag so secret-bearing fields never surface their value.
+        expect(caught.received).toBe("number");
         expect(caught.message).toContain("non-negative");
+    });
+
+    it("redacts the offending value's literal on a string refinement failure", () => {
+        expect.hasAssertions();
+
+        // A secret-bearing string field (correct type, failing predicate) must
+        // not echo its value into the ValidationError message/received.
+        const minLength = v.string().check((s) => s.length >= 64);
+        const secret = "supersecrettoken12345";
+
+        let caught: unknown;
+
+        try {
+            minLength.parse(secret);
+        } catch (error: unknown) {
+            caught = error;
+        }
+
+        assertOk(caught instanceof ValidationError, "expected ValidationError");
+
+        expect(caught).toBeInstanceOf(ValidationError);
+        expect(caught.received).toBe("string");
+        expect(caught.message).not.toContain("supersecret");
+    });
+
+    it("keeps the concrete literal for a genuine type mismatch", () => {
+        expect.hasAssertions();
+
+        // Redaction is scoped to refinement failures — a type mismatch keeps its
+        // literal so `string "7"` vs `number 7` stays a useful diagnostic.
+        const failure = v.number().safeParse("7");
+
+        assertOk(!failure.ok, "expected parse to fail");
+
+        expect(failure.error.received).toBe('string "7"');
     });
 
     it("uses a default message when none is supplied", () => {
@@ -601,6 +716,45 @@ describe(".nullable() runtime parsing", () => {
         expect(validator.parse(7)).toBe(7);
         expect(() => validator.parse("7")).toThrow(ValidationError);
     });
+
+    it("chain order decides whether a refinement sees null, and the type says which", () => {
+        expect.assertions(3);
+
+        // `.nullable().check(p)` refines the WIDENED type, so `p` runs on null —
+        // and its parameter is typed `string | null`, which is what makes that
+        // safe to rely on. A predicate that dereferences the value here is a
+        // compile error, not a runtime surprise:
+        //
+        //     v.string().nullable().check((s) => s.length > 0)
+        //     //                                 ^ TS18047: 's' is possibly 'null'
+        const seen: unknown[] = [];
+
+        expect(
+            v
+                .string()
+                .nullable()
+                .check((value) => {
+                    seen.push(value);
+
+                    return true;
+                })
+                .parse(null),
+        ).toBeNull();
+        expect(seen).toStrictEqual([null]);
+
+        // `.check(p).nullable()` wraps the refined parser instead, so null
+        // short-circuits ahead of `p`. Same two calls, opposite semantics —
+        // pick the order that states the invariant you mean.
+        expect(
+            v
+                .string()
+                .check(() => {
+                    throw new Error("predicate must not run for null");
+                })
+                .nullable()
+                .parse(null),
+        ).toBeNull();
+    });
 });
 
 describe("v.optional() standalone parsing", () => {
@@ -669,10 +823,66 @@ describe("v.union() edge cases", () => {
         expect(result.error.message).not.toMatch(/union of/u);
     });
 
+    it("a union miss never echoes a value one of its members redacted", () => {
+        expect.hasAssertions();
+
+        // Alone, the refined member reports `received string` — `.check()` failures
+        // redact so a password never reaches the 400 body. The union's own
+        // diagnostic wraps the same miss and must withhold the same literal,
+        // whichever position the refined member sits in.
+        const strong = v.string().check((value) => value.length >= 12, "strong password");
+
+        for (const schema of [v.union(strong, v.number()), v.union(v.number(), strong)]) {
+            const result = schema.safeParse("hunter2");
+
+            assertOk(!result.ok, "expected parse to fail");
+
+            expect(result.error.message).not.toContain("hunter2");
+            expect(result.error.received).toBe("string");
+        }
+
+        // A plain type miss keeps its literal: nothing redacted it.
+        const plain = v.union(v.literal("draft"), v.literal("published")).safeParse("Draft");
+
+        assertOk(!plain.ok, "expected parse to fail");
+
+        expect(plain.error.received).toBe('string "Draft"');
+    });
+
     it("a single-member union accepts a valid value", () => {
         expect.assertions(1);
 
         expect(v.union(v.string()).parse("ok")).toBe("ok");
+    });
+
+    it("a nested union that misses every branch reports a real diagnostic, not the internal probe signal", () => {
+        expect.hasAssertions();
+
+        // `union` runs its branch trial with `context.probe` set, which makes
+        // `fail` throw the shared, stackless PROBE_MISS instead of building a
+        // per-branch ValidationError. The inner union here misses under the
+        // outer union's trial, so PROBE_MISS travels one level up — it must
+        // never reach the caller, and the outer union must still build the
+        // full "union of N member(s) (closest: …)" diagnostic.
+        const schema = v.object({ value: v.union(v.union(v.number(), v.boolean()), v.string()) });
+        const result = schema.safeParse({ value: { nope: true } });
+
+        assertOk(!result.ok, "expected parse to fail");
+
+        expect(result.error.message).not.toMatch(/probe/iu);
+        expect(result.error.expected).toMatch(/^union of 2 member\(s\)/u);
+        expect(result.error.path).toStrictEqual(["value"]);
+    });
+
+    it("a nested union still matches on a branch reached only after a miss", () => {
+        expect.assertions(2);
+
+        // The trial pass must leave the shared path stack unwound so a later
+        // branch parses at the right depth, and the matched value passes through.
+        const schema = v.object({ value: v.union(v.union(v.number(), v.boolean()), v.array(v.string())) });
+
+        expect(schema.parse({ value: ["a", "b"] })).toStrictEqual({ value: ["a", "b"] });
+        expect(schema.parse({ value: true })).toStrictEqual({ value: true });
     });
 });
 
@@ -758,5 +968,54 @@ describe("isOrWrapsFromValidator", () => {
         const metaless = { kind: "string" } as unknown as Parameters<typeof isOrWrapsFromValidator>[0];
 
         expect(isOrWrapsFromValidator(metaless)).toBe(false);
+    });
+});
+
+describe("v.partial", () => {
+    it("makes every member optional", () => {
+        expect.assertions(3);
+
+        const shape = v.partial({ done: v.boolean(), title: v.string() });
+        const object = v.object(shape);
+
+        expect(object.parse({})).toStrictEqual({});
+        expect(object.parse({ title: "a" })).toStrictEqual({ title: "a" });
+        expect(object.parse({ done: true, title: "a" })).toStrictEqual({ done: true, title: "a" });
+    });
+
+    it("still rejects a present member of the wrong type", () => {
+        expect.assertions(1);
+
+        const object = v.object(v.partial({ title: v.string() }));
+
+        expect(() => object.parse({ title: 1 })).toThrow(ValidationError);
+    });
+
+    it("passes an already-optional member through instead of double-wrapping", () => {
+        expect.assertions(2);
+
+        const inner = v.optional(v.string());
+        const shape = v.partial({ title: inner });
+
+        expect(shape.title).toBe(inner);
+        expect(v.object(shape).parse({})).toStrictEqual({});
+    });
+
+    it("infers every key as optional", () => {
+        expect.assertions(3);
+
+        const object = v.object(v.partial({ done: v.boolean(), title: v.string() }));
+
+        type Inferred = Infer<typeof object>;
+
+        // Compile-time: each member keeps its type, widened by `undefined`…
+        const doneCheck: Assert<Equal<Inferred["done"], boolean | undefined>> = true;
+        // …and every KEY is optional, or neither literal below would assign.
+        const empty: Inferred = {};
+        const some: Inferred = { title: "a" };
+
+        expect(doneCheck).toBe(true);
+        expect(empty).toStrictEqual({});
+        expect(some).toStrictEqual({ title: "a" });
     });
 });

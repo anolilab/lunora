@@ -66,16 +66,60 @@ describe.each(adapters)("%s", (_name, makeAdapter) => {
 
         const adapter = makeAdapter();
 
-        await adapter.append(mutation("a", { args: { title: "hi" }, shardKey: "room-1" }));
+        await adapter.append(
+            mutation("a", {
+                args: { title: "hi" },
+                clientId: "client-1",
+                identity: "user-1",
+                shardKey: "room-1",
+                version: "v3",
+            }),
+        );
 
         const [loaded] = await adapter.load();
 
-        expect(loaded).toEqual({
+        // `toStrictEqual` so an adapter that drops keys or invents explicit
+        // `undefined` keys fails — this is the cross-adapter contract.
+        expect(loaded).toStrictEqual({
             args: { title: "hi" },
+            clientId: "client-1",
             functionPath: "posts:create",
             id: "a",
+            identity: "user-1",
             shardKey: "room-1",
+            version: "v3",
         });
+    });
+
+    it("load() keeps optional fields absent (not explicit undefined) when unset", async () => {
+        expect.assertions(1);
+
+        const adapter = makeAdapter();
+
+        await adapter.append(mutation("a"));
+
+        const [loaded] = await adapter.load();
+
+        // Absence, not explicit `undefined`, is the contract — the AsyncStorage
+        // adapter's JSON round-trip drops `undefined` keys, so the others must
+        // not invent them.
+        expect(loaded).toStrictEqual({
+            args: { id: "a" },
+            functionPath: "posts:create",
+            id: "a",
+        });
+    });
+
+    it("load() preserves clientId, version, and identity", async () => {
+        expect.assertions(1);
+
+        const adapter = makeAdapter();
+
+        await adapter.append(mutation("a", { clientId: "c-1", identity: "u-1", version: "v2" }));
+
+        const [loaded] = await adapter.load();
+
+        expect(loaded).toMatchObject({ clientId: "c-1", identity: "u-1", version: "v2" });
     });
 
     it("remove() drops a single mutation by id and leaves the rest in order", async () => {
@@ -101,6 +145,40 @@ describe.each(adapters)("%s", (_name, makeAdapter) => {
 
         await adapter.append(mutation("a"));
         await adapter.remove("nope");
+
+        const loaded = await adapter.load();
+
+        expect(loaded.map((m) => m.id)).toEqual(["a"]);
+    });
+
+    it("replace() swaps a record in place, keeping its position in FIFO order", async () => {
+        expect.assertions(2);
+
+        const adapter = makeAdapter();
+
+        await adapter.append(mutation("a"));
+        await adapter.append(mutation("b"));
+        await adapter.append(mutation("c"));
+
+        // The offline queue restamps a queued write's identity after a sign-in.
+        // Done as remove + append it moved to the tail and replayed out of the
+        // order it was issued in — and left a crash window where the record was
+        // in no store at all.
+        await adapter.replace(mutation("b", { identity: "signed-in" }));
+
+        const loaded = await adapter.load();
+
+        expect(loaded.map((m) => m.id)).toEqual(["a", "b", "c"]);
+        expect(loaded[1]?.identity).toBe("signed-in");
+    });
+
+    it("replace() of an unknown id is a no-op — a drained record must not come back", async () => {
+        expect.assertions(1);
+
+        const adapter = makeAdapter();
+
+        await adapter.append(mutation("a"));
+        await adapter.replace(mutation("gone"));
 
         const loaded = await adapter.load();
 
@@ -239,5 +317,80 @@ describe("createAsyncStoragePersistence", () => {
         const adapter = createAsyncStoragePersistence({ storage });
 
         await expect(adapter.load()).resolves.toEqual([]);
+    });
+
+    it("round-trips a bigint arg instead of rejecting the append", async () => {
+        expect.assertions(1);
+
+        const adapter = createAsyncStoragePersistence({ storage: createFakeAsyncStorage() });
+
+        await adapter.append(mutation("a", { args: { amount: 1n } }));
+
+        const [loaded] = await adapter.load();
+
+        expect(loaded?.args.amount).toBe(1n);
+    });
+
+    it("round-trips a Date arg as a Date, not a string", async () => {
+        expect.assertions(1);
+
+        const adapter = createAsyncStoragePersistence({ storage: createFakeAsyncStorage() });
+
+        await adapter.append(mutation("a", { args: { when: new Date(0) } }));
+
+        const [loaded] = await adapter.load();
+
+        expect(loaded?.args.when).toStrictEqual(new Date(0));
+    });
+
+    it("loads a plain-JSON blob written by an earlier version unchanged", async () => {
+        expect.assertions(1);
+
+        const storage = createFakeAsyncStorage();
+        const legacy = mutation("a", { clientId: "c1", identity: "user-1", shardKey: "s", version: "v3" });
+
+        await storage.setItem("lunora:offline-mutations", JSON.stringify([legacy]));
+
+        await expect(createAsyncStoragePersistence({ storage }).load()).resolves.toEqual([legacy]);
+    });
+
+    it("loads empty from an undecodable blob but refuses to overwrite it", async () => {
+        expect.assertions(4);
+
+        const storage = createFakeAsyncStorage();
+        const corrupt = JSON.stringify(["$lunora.wire$", "date", "not-a-number"]);
+
+        await storage.setItem("lunora:offline-mutations", corrupt);
+
+        const adapter = createAsyncStoragePersistence({ storage });
+
+        await expect(adapter.load()).resolves.toEqual([]);
+        await expect(adapter.append(mutation("a"))).rejects.toThrow(/can't be decoded/);
+        await expect(adapter.remove("a")).rejects.toThrow(/can't be decoded/);
+        await expect(storage.getItem("lunora:offline-mutations")).resolves.toBe(corrupt);
+    });
+
+    it("rejects an over-long bigint at append instead of writing a blob it can't read back", async () => {
+        expect.assertions(2);
+
+        const adapter = createAsyncStoragePersistence({ storage: createFakeAsyncStorage() });
+
+        await adapter.append(mutation("a"));
+
+        await expect(adapter.append(mutation("b", { args: { huge: 10n ** 1100n } }))).rejects.toThrow(
+            /cannot encode args for 'posts:create' — wire-codec: over-long bigint/,
+        );
+        await expect(adapter.load()).resolves.toEqual([mutation("a")]);
+    });
+
+    it("rejects a non-encodable arg at append and leaves the queued mutations intact", async () => {
+        expect.assertions(2);
+
+        const adapter = createAsyncStoragePersistence({ storage: createFakeAsyncStorage() });
+
+        await adapter.append(mutation("a"));
+
+        await expect(adapter.append(mutation("b", { args: { re: /x/ } }))).rejects.toThrow(/RegExp/);
+        await expect(adapter.load()).resolves.toEqual([mutation("a")]);
     });
 });

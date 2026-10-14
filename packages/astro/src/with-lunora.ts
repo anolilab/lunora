@@ -13,8 +13,8 @@
  * surfaced as a plain 500 — it can never take down the realtime plane.
  *
  * The composition is the framework-neutral `withFrameworkWorker` from
- * `@lunora/runtime` (one implementation shared with `@lunora/svelte/worker` and
- * `@lunora/vue/worker`); `withLunora` is the Astro-named alias. It accepts Astro's
+ * `@lunora/runtime` (the same composer codegen's `buildFrameworkWorker` uses
+ * for SvelteKit); `withLunora` is the Astro-named alias. It accepts Astro's
  * handler as a bare `fetch` function *or* a `{ fetch }` object, fixed options or
  * an `(env) => options` factory (for the per-request `env.SHARD` binding), and
  * preserves any `scheduled` the adapter emits when no Lunora crons are configured.
@@ -25,7 +25,7 @@
  * function — and wrap it at that boundary:
  *
  * ```ts
- * // src/worker.ts
+ * // src/server.ts
  * import { handle } from "@astrojs/cloudflare/handler";
  * import { withLunora } from "@lunora/astro";
  *
@@ -36,15 +36,13 @@
  * );
  * ```
  *
- * Set `"main": "src/worker.ts"` in `wrangler.jsonc` — wrangler bundles this file
+ * Set `"main": "src/server.ts"` in `wrangler.jsonc` — wrangler bundles this file
  * (via `@cloudflare/vite-plugin` through the Astro adapter) so `handle` resolves
- * at build time. The `lunora()` integration (from this package) declares the
- * build-time wiring so templates don't hand-roll it.
+ * at build time. Add the `lunora()` integration (from this package) to
+ * `astro.config.*` to declare the composition in the idiomatic Astro place and
+ * reserve a home for future build-time wiring — but the load-bearing step is
+ * this `withLunora` wrapper plus `wrangler.jsonc`'s `main`; the integration does
+ * not resolve `serverEntry` or emit the worker for you today.
  */
-export type {
-    FrameworkHostHandler as AstroWorkerHandler,
-    LunoraWorker as ComposedWorker,
-    FrameworkWorkerOptionsInput,
-    FrameworkWorkerOptions as LunoraOptions,
-} from "@lunora/runtime";
+export type { FrameworkHostHandler as AstroWorkerHandler, LunoraWorker as ComposedWorker, FrameworkWorkerOptions as LunoraOptions } from "@lunora/runtime";
 export { withFrameworkWorker as withLunora } from "@lunora/runtime";

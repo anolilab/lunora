@@ -1,7 +1,7 @@
 /**
  * Real-D1 integration tests for `@lunora/d1`.
  *
- * These boot a real Miniflare D1 instance via `@cloudflare/vitest-pool-workers`
+ * These boot a real Miniflare D1 instance via `@cloudflare/vitest-plugin`
  * and verify the Sessions API + MigrationRunner against the actual binding.
  * The mock-based suite under `__tests__/D1Client.test.ts` exercises the same
  * logic against doubles — the value here is verifying the wire shapes that
@@ -94,7 +94,10 @@ describe("d1 (workerd)", () => {
     });
 
     it("migrationRunner applies separate single-statement migrations in order", async () => {
-        expect.assertions(5);
+        // 3 assertions: applied versions + the two sqlite_master presence checks.
+        // (Was 5 from a pre-security-audit draft that split one multi-statement
+        // migration and asserted per-statement — stale after the rewrite below.)
+        expect.assertions(3);
 
         // Each migration must be a single SQL statement (multi-statement
         // migrations were rejected after the security audit — semicolon-split

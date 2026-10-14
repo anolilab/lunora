@@ -1,0 +1,175 @@
+/**
+ * Dev-only plugin that registers the running Vite dev server in
+ * `.lunora/dev.json` (see `@lunora/config`'s `dev-server-state`).
+ *
+ * The record is what makes a Vite-based Lunora project manageable without
+ * parsing terminal output: `lunora dev status|stop|logs` resolve the running
+ * instance from it, a second `lunora dev` reports the existing server instead
+ * of double-starting, and `lunora dev --background` (which detaches `vite dev`
+ * for AI-agent workflows) blocks on this record + an HTTP probe before
+ * reporting the URL and PID. The record carries the authoritative resolved
+ * local URL and THIS process's PID — signalling it shuts Vite (and the workerd
+ * runtime inside it) down cleanly.
+ *
+ * The detach plumbing arrives via env: `LUNORA_DEV_DAEMON=1` marks a
+ * backgrounded run and `LUNORA_DEV_LOG_FILE` names the capture log, both
+ * recorded so `status`/`logs` can report them. `LUNORA_DEV_HANDOFF_PID` names
+ * the parent CLI's provisional record this server may supersede — the CLI
+ * claims `.lunora/dev.json` before spawning Vite (closing the duplicate-start
+ * race) and this plugin replaces that record with the authoritative URL + PID.
+ */
+import { claimDevServerState, clearDevServerState, DEV_DAEMON_ENV, DEV_HANDOFF_ENV, DEV_LOG_FILE_ENV, lunoraLine, readDevServerState } from "@lunora/config";
+import type { Plugin, ViteDevServer } from "vite";
+
+import type { PendingCloseMap } from "./server-close";
+import { registerDevServerClose, runPendingClose } from "./server-close";
+import type { ResolvedLunoraPluginOptions } from "./types";
+
+/** Trailing slash on Vite's resolved URL, trimmed so state consumers can append paths uniformly. */
+const TRAILING_SLASH = /\/$/;
+
+/**
+ * The dev server's local URL: Vite's resolved URL when already computed, else
+ * built from the live listening address (the `printUrls` wrap runs after
+ * `resolvedUrls` exists; the `listening` fallback may run just before).
+ */
+const resolveLocalUrl = (server: ViteDevServer): string | undefined => {
+    const resolved = server.resolvedUrls?.local[0];
+
+    if (resolved !== undefined) {
+        return resolved.replace(TRAILING_SLASH, "");
+    }
+
+    const address = server.httpServer?.address();
+
+    if (address !== null && typeof address === "object") {
+        return `http://localhost:${String(address.port)}`;
+    }
+
+    return undefined;
+};
+
+/**
+ * The `tunnelUrl` a closing server's record carried, handed to the next record
+ * this process writes. `server.restart()` closes the old server — clearing the
+ * record — before the new one listens and claims a fresh one, while the
+ * `lunora dev --tunnel` daemon keeps the same tunnel up throughout; without the
+ * hand-over `lunora dev status` would stop showing a tunnel that still serves.
+ * Module scope because a restart re-instantiates the plugin. Consumed by the
+ * next claim, so it never outlives one close → listen cycle.
+ */
+let carriedTunnelUrl: string | undefined;
+
+/** Vite plugin (serve-only) that writes the dev-server state record on listen and clears it on close. */
+const devStatePlugin = (options: ResolvedLunoraPluginOptions): Plugin => {
+    let recorded = false;
+
+    // Clear callbacks pending a middleware-mode dev-server close (no
+    // httpServer to hang a "close" listener on) — see `server-close.ts` for
+    // the middleware/`buildEnd` mechanics and the restart-race rationale.
+    // Without this, `.lunora/dev.json` would be left pointing at a dead pid.
+    const pendingMiddlewareClears: PendingCloseMap = new Map();
+
+    return {
+        apply: "serve",
+        configureServer(server: ViteDevServer) {
+            const root = options.projectRoot;
+
+            const record = (): void => {
+                if (recorded) {
+                    return;
+                }
+
+                const url = resolveLocalUrl(server);
+
+                if (url === undefined) {
+                    return;
+                }
+
+                // Atomic exclusive claim: never clobber another live server's
+                // record (even in a start race) — surface it instead, so
+                // `lunora dev stop` keeps targeting the first server. The one
+                // exception is the parent CLI's provisional record named via
+                // LUNORA_DEV_HANDOFF_PID, which exists to be superseded here.
+                const handoffPid = Number(process.env[DEV_HANDOFF_ENV]);
+                const claim = claimDevServerState(
+                    root,
+                    {
+                        background: process.env[DEV_DAEMON_ENV] === "1",
+                        logFile: process.env[DEV_LOG_FILE_ENV],
+                        mode: "vite",
+                        pid: process.pid,
+                        // Truthful at claim time here, unlike the CLI's wrangler
+                        // flavor, which claims before spawning and has to probe:
+                        // this only runs once Vite has resolved its URLs, i.e.
+                        // the server is already listening.
+                        readyAt: new Date().toISOString(),
+                        startedAt: new Date().toISOString(),
+                        ...(carriedTunnelUrl === undefined ? {} : { tunnelUrl: carriedTunnelUrl }),
+                        url,
+                    },
+                    Number.isInteger(handoffPid) && handoffPid > 0 ? { supersedePid: handoffPid } : undefined,
+                );
+
+                if (!claim.ok) {
+                    if (claim.existing !== undefined) {
+                        server.config.logger.warn(
+                            lunoraLine(
+                                `another dev server is already recorded at ${claim.existing.url} (pid ${String(claim.existing.pid)}) — leaving .lunora/dev.json untouched`,
+                            ),
+                        );
+                    }
+
+                    return;
+                }
+
+                recorded = true;
+                carriedTunnelUrl = undefined;
+            };
+
+            const clearOnClose = (): void => {
+                if (recorded) {
+                    const current = readDevServerState(root);
+
+                    carriedTunnelUrl = current?.pid === process.pid ? current.tunnelUrl : undefined;
+                    clearDevServerState(root, process.pid);
+                    recorded = false;
+                }
+            };
+
+            registerDevServerClose(server, pendingMiddlewareClears, clearOnClose);
+
+            // Returned hook runs after internal middlewares are installed.
+            return () => {
+                // Preferred: piggyback on Vite's startup banner (`printUrls` runs
+                // once `resolvedUrls` is populated, and again on the `u` shortcut).
+                if (typeof server.printUrls === "function") {
+                    const printUrls = server.printUrls.bind(server);
+
+                    // eslint-disable-next-line no-param-reassign -- intentionally wrap the live dev server's printUrls, mirroring studio-plugin's announce
+                    server.printUrls = (): void => {
+                        printUrls();
+                        record();
+                    };
+                }
+
+                // Fallback for middleware-mode / programmatic servers that never
+                // print a banner: record off the listening event. The macrotask
+                // hop lets Vite assign `resolvedUrls` first; `resolveLocalUrl`
+                // still works from the raw address if not.
+                server.httpServer?.once("listening", () => {
+                    setTimeout(record, 0);
+                });
+            };
+        },
+        buildEnd() {
+            // Middleware-mode close fallback for `clearOnClose` above (no-op in
+            // classic dev mode; never fires for a production build — this
+            // plugin is `apply: "serve"`-only); see `server-close.ts`.
+            runPendingClose(pendingMiddlewareClears, this.environment);
+        },
+        name: "lunora:dev-state",
+    };
+};
+
+export default devStatePlugin;

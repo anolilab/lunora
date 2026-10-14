@@ -1,6 +1,8 @@
 import type { MouseEvent, ReactElement } from "react";
 
 import { useT } from "../../i18n/i18n-context";
+import { formatCell } from "../../lib/internal";
+import type { MaskView } from "../../lib/mask-preview";
 import type { FacetState } from "./hooks/use-data-browser";
 
 /** Render a facet value for display, distinguishing the empty string and NULL from a real value. */
@@ -13,12 +15,9 @@ const formatValue = (value: unknown): string => {
         return "(empty)";
     }
 
-    if (typeof value === "object") {
-        return JSON.stringify(value);
-    }
-
-    // eslint-disable-next-line @typescript-eslint/no-base-to-string -- non-object primitives (string/number/boolean/bigint) stringify meaningfully; objects are handled above
-    return String(value);
+    // `formatCell`, not `JSON.stringify`: a `v.bytes()` facet value is an
+    // ArrayBuffer, which JSON renders as `{}`.
+    return formatCell(value);
 };
 
 /**
@@ -91,15 +90,25 @@ const FacetSection = ({
  *
  * Pure markup — all state (`facets`, the toggle, the value-click handler) is owned
  * by the data-browser model. Hidden entirely when there are no columns to facet.
+ *
+ * Mask-covered columns are withheld while the preview is on — both the toggle and
+ * any section already open. A facet is a plaintext dump of a column's DISTINCT
+ * values, and clicking one writes that value into the URL as an `eq` filter, so
+ * offering it for a covered column would leak exactly what every other surface
+ * (grid cell, row detail, JSON, transposed, all three exports) hides — and put a
+ * secret in a shareable link besides. Same rule the grid cell takes when it drops
+ * the expand-to-raw affordance for a covered column.
  */
 const DataFacets = ({
     columns,
     facets,
+    mask,
     onFacetFilter,
     onToggleFacet,
 }: {
     columns: ReadonlyArray<string>;
     facets: Record<string, FacetState>;
+    mask: MaskView;
     onFacetFilter: (column: string, value: unknown) => void;
     onToggleFacet: (column: string) => void;
 }): null | ReactElement => {
@@ -113,7 +122,11 @@ const DataFacets = ({
         }
     };
 
-    if (columns.length === 0) {
+    const isMasked = (column: string): boolean => mask.enabled && mask.columns.has(column);
+    const facetable = columns.filter((column) => !isMasked(column));
+    const openFacets = Object.entries(facets).filter(([column]) => !isMasked(column));
+
+    if (facetable.length === 0) {
         return null;
     }
 
@@ -122,7 +135,7 @@ const DataFacets = ({
             <div className="flex flex-col gap-1.5">
                 <span className="font-mono text-[11px] tracking-wide uppercase text-muted-foreground">{t("Facets")}</span>
                 <div className="flex flex-wrap gap-1">
-                    {columns.map((column) => (
+                    {facetable.map((column) => (
                         <button
                             aria-pressed={column in facets}
                             className="rounded border border-border px-1.5 py-0.5 text-muted-foreground transition-colors hover:bg-accent aria-pressed:bg-accent aria-pressed:text-accent-foreground"
@@ -138,7 +151,7 @@ const DataFacets = ({
                 </div>
             </div>
 
-            {Object.entries(facets).map(([column, state]) => (
+            {openFacets.map(([column, state]) => (
                 <FacetSection column={column} key={column} onFacetFilter={onFacetFilter} state={state} />
             ))}
         </aside>

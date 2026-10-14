@@ -1,37 +1,35 @@
 import { expect, test } from "../fixtures/lunora.js";
 
 /**
- * Scheduler E2E — schedules a job through `ctx.scheduler.runAfter` and waits
- * for the SchedulerDO alarm to fire it.
+ * Scheduler E2E — schedules a job through the `/test/schedule` harness route
+ * and waits for the SchedulerDO alarm to dispatch it back into the worker.
  *
  * Notes:
- *   - Miniflare emulates DO `setAlarm` honestly, so 1-second delays really
- *     do take 1 second of wall time. We tolerate up to 5 seconds.
- *   - This is the *only* spec that uses a wall-clock sleep, because cron
- *     timing is the unit of measure under test.
+ *   - Durable Object alarms DO fire in `@cloudflare/vite-plugin`'s embedded dev
+ *     Miniflare; this spec was skipped for years on the belief that they don't.
+ *     What actually swallowed every job was the playground's own
+ *     `authorizeShard` gate: server-initiated dispatch re-enters it with a
+ *     `null` system identity, so a gate demanding a `userId` answered the DO's
+ *     callback with a 403 the app never saw. See `apps/playground/src/server/index.ts`.
+ *   - Miniflare emulates `setAlarm` honestly, so a 1-second delay really does
+ *     take a second of wall time. This is the *only* spec that sleeps, because
+ *     alarm timing is the unit of measure under test.
+ *   - A failed dispatch is not retried for 30 s (`RETRY_BASE_DELAY_MS`), so the
+ *     poll budget below is sized for the first attempt landing, not a retry.
  */
 
 test.beforeEach(async ({ resetServer }) => {
     await resetServer();
 });
 
-test("scheduled cleanup fires within a few seconds and updates the runs log", async ({ user }) => {
-    // Durable Object alarms don't fire in `@cloudflare/vite-plugin`'s embedded dev
-    // Miniflare, so the SchedulerDO never dispatches the job here. The scheduler
-    // itself works against a standalone `wrangler dev` / production; schedule +
-    // `/test/job-status` are wired correctly (the job just stays "scheduled").
-    test.skip(true, "DO alarms don't fire in the embedded dev worker (@cloudflare/vite-plugin Miniflare)");
-
+test("scheduled cleanup fires within a few seconds", async ({ user }) => {
     // `user.request` carries the better-auth session cookie set during signup.
+    // `now` is a required input on `cleanup:cleanupOldMessages` (the handler must
+    // stay deterministic, so the caller stamps wall-clock time). Omitting it makes
+    // the dispatch fail input validation and the job never completes.
     const scheduleResponse = await user.request.post(`/test/schedule`, {
-        data: { delayMs: 1000, functionPath: "cleanup:cleanupOldMessages" },
+        data: { args: { now: Date.now() }, delayMs: 1000, functionPath: "cleanup:cleanupOldMessages" },
     });
-
-    if (scheduleResponse.status() === 404) {
-        test.skip(true, "playground has no /test/schedule helper; scheduler test needs harness route");
-
-        return;
-    }
 
     expect(scheduleResponse.ok()).toBe(true);
 
@@ -40,8 +38,8 @@ test("scheduled cleanup fires within a few seconds and updates the runs log", as
     expect(jobId).toBeTruthy();
 
     // Poll the /test/job-status route until the SchedulerDO marks it
-    // executed, or we hit the 5s budget.
-    const deadline = Date.now() + 5000;
+    // executed, or we hit the budget.
+    const deadline = Date.now() + 15_000;
     let status: string | null = null;
 
     while (Date.now() < deadline) {
@@ -61,4 +59,18 @@ test("scheduled cleanup fires within a few seconds and updates the runs log", as
     }
 
     expect(status).toBe("executed");
+});
+
+/*
+ * The poll above only ever asks for "executed", so it is worth no more than the
+ * endpoint's willingness to withhold that word. `/test/job-status` answered
+ * "executed" for ANY id it held no record of — the SchedulerDO deletes a job's
+ * rows on success, and the route read that absence as proof — so a spec polling
+ * a typo'd or never-scheduled id passed on its first attempt.
+ */
+test("job-status refuses to invent a verdict for an id it never issued", async ({ user }) => {
+    const response = await user.request.get(`/test/job-status?id=never-scheduled-${Date.now()}`);
+
+    expect(response.ok()).toBe(true);
+    expect(((await response.json()) as { status?: string }).status).toBe("unknown");
 });

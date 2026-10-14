@@ -10,6 +10,8 @@
 
 <!-- END_PACKAGE_OG_IMAGE_PLACEHOLDER -->
 
+> **Experimental** — this package is outside the Lunora 1.0 stability promise: its API may change in any release, without a major version bump.
+
 <br />
 
 <div align="center">
@@ -66,6 +68,7 @@ export const transcoder = defineContainer({
     maxInstances: 5,
     sleepAfter: "5m",
     secrets: ["TRANSCODER_API_KEY"], // forwarded from Worker secrets / .dev.vars
+    labels: { team: "media" }, // metadata attached to every instance for metrics/observability
 });
 ```
 
@@ -89,9 +92,111 @@ export const transcode = action.input({ videoId: v.id("videos") }).action(async 
 });
 ```
 
-`ctx.containers` is action-only (container calls are external I/O, like `ctx.fetch`); `.get(name)` handles also expose `start`/`stop`/`destroy`/`getState` lifecycle control.
+`.get()` and `.any()` retry the **same** instance through a cold start — when a request lands while Cloudflare is still provisioning (a `503` "no instance", `500` "Failed to start", `429`, or "not listening"), they back off and retry (default 3 attempts) so the provisioning race never reaches your handler. Genuine app `5xx`s pass straight through. Tune or disable per call with `.get(id, { attempts, backoffMs })` (a pre-built `Request` is sent once and not retried, since its body may not be replayable).
+
+`ctx.containers` is action-only (container calls are external I/O, like `ctx.fetch`); `.get(name)` handles also expose `start`/`stop`/`destroy`/`getState` lifecycle control plus `renewActivityTimeout()` and `egress.*` (adjust the allow/deny lists at runtime). HTTP requests and WebSocket frames already keep a busy container awake automatically; `renewActivityTimeout()` is the escape hatch for non-HTTP/non-WS activity.
 
 The config layer (`lunora dev` / `lunora deploy`) reconciles the wrangler `containers[]` entry, the `CONTAINER_*` Durable Object binding, and the SQLite-class migration automatically; `wrangler deploy` builds the Dockerfile with local Docker and pushes it to the Cloudflare Registry.
+
+### Multi-port containers
+
+Declare every port the container must be listening on with `requiredPorts` (start-up waits for all of them); `defaultPort` is the target when a request doesn't pick one. Route a single request to another port with `.port(n)` — it composes with `.get()`, `.any()`, and `.pool()`:
+
+```ts
+export const app = defineContainer({
+    image: "./containers/app",
+    defaultPort: 8080,
+    requiredPorts: [8080, 9090], // app + admin
+});
+
+// in an action:
+await ctx.containers.app.get(tenantId).fetch("/work"); // → 8080
+await ctx.containers.app.get(tenantId).port(9090).fetch("/admin"); // → 9090
+```
+
+### Build-time args
+
+`env` and `secrets` are runtime values; for build-time `docker build --build-arg` values (wrangler `image_vars`, exposed to the Dockerfile as `ARG`) use `buildArgs`. They apply only to an image Lunora builds and are ignored for a pre-built `{ registry }` image.
+
+```ts
+export const worker = defineContainer({
+    image: "./containers/worker",
+    buildArgs: { NODE_VERSION: "22", BUILD_TARGET: "production" },
+});
+```
+
+### Secrets and Secrets Store
+
+`secrets` forwards plain Worker secrets into the container env; `secretsStore` maps a _container env-var name → Cloudflare [Secrets Store](https://developers.cloudflare.com/secrets-store/) binding name_ and resolves each with its async `.get()` at first start (memoised). A collision with `env`/`secrets` is rejected at authoring time; a missing binding fails the start — the same fail-closed stance as `secrets`. A per-instance `start({ envVars })` replaces the env set wholesale (and skips Secrets Store resolution entirely), and is persisted for that instance: later starts, including implicit restarts, reuse it until `destroy()`. The override cannot change while the container is running or still starting: a differing `start({ envVars })` is rejected with `CONFLICT` in either case, so `stop()` it (and let any start in flight finish) first.
+
+```ts
+export const worker = defineContainer({
+    image: "./containers/worker",
+    secrets: ["TRANSCODER_API_KEY"], // plain Worker secret → same-named env var
+    secretsStore: { STRIPE_KEY: "STRIPE_SECRET" }, // env.STRIPE_SECRET.get() → STRIPE_KEY
+});
+```
+
+### Egress firewall
+
+Pair `enableInternet: false` with an `allowedHosts` allow-list (or layer a `deniedHosts` deny-list that overrides everything) to constrain a container's outbound traffic; `interceptHttps: true` extends the lists to TLS connections (the image must trust the Cloudflare CA). Codegen re-exports the `ContainerProxy` worker entrypoint the interception path needs automatically.
+
+```ts
+export const fetcher = defineContainer({
+    image: "./containers/fetcher",
+    enableInternet: false,
+    allowedHosts: ["*.stripe.com", "api.github.com"],
+    deniedHosts: ["*.evil.com"],
+});
+
+// tighten or relax one running instance at runtime:
+await ctx.containers.fetcher.get(tenantId).egress.allow("hooks.slack.com");
+```
+
+For advanced egress rewriting in worker code, `@lunora/container/do` re-exports Cloudflare's custom outbound-handler types (`OutboundHandler`, `OutboundHandlers`, `outboundParams`) — wire them onto a hand-authored `LunoraContainer` subclass to inject auth, route, or mock a container's outbound calls.
+
+### Readiness gating
+
+The platform health check waits for an open port, not necessarily a _ready_ app. `readyOn` adds application-level probes that gate request proxying: a `ctx.containers.<name>` fetch holds until every probe responds with its expected status, so callers never hit a container still applying migrations or warming caches. Probes are declarative data (path + optional `port`/`status`), run in parallel at start, and probe the container's TCP port directly.
+
+```ts
+export const api = defineContainer({
+    image: "./containers/api",
+    defaultPort: 8080,
+    readyOn: [
+        { path: "/ready" }, // expect 200 on defaultPort
+        { path: "/live", port: 9090, status: 204 }, // own port + expected status
+    ],
+});
+```
+
+### Hard timeout
+
+`sleepAfter` caps _idle_ time; `hardTimeout` caps _total_ lifetime — a runaway-cost backstop measured from start, regardless of activity (same grammar as `sleepAfter`). When it elapses the generated class's `onHardTimeoutExpired` hook runs (default: `stop()`, i.e. SIGTERM with no escalation — a container that ignores SIGTERM outlives its cap unless you override the hook and follow up with `destroy()`); the timer is run-generation-stamped so a stale timer from a slept/crashed run can't kill a fresh one.
+
+```ts
+export const job = defineContainer({
+    image: "./containers/job",
+    hardTimeout: "1h", // stopped after an hour, busy or not
+});
+```
+
+### Per-instance images and snapshots
+
+`schedulingPolicy: "durable_object"` (Cloudflare public beta) lets each instance pick its image and size at start, and save and restore its filesystem:
+
+```ts
+export const agentComputer = defineContainer({
+    schedulingPolicy: "durable_object",
+    images: { base: "./containers/base" },
+    image: "base",
+});
+
+const computer = ctx.containers.agentComputer.get(taskId);
+await computer.start({ image: "base", instanceType: "standard-2" });
+const saved = await computer.snapshot();
+await ctx.containers.agentComputer.get(otherId).start({ snapshot: saved });
+```
 
 ### Calling Lunora from inside a container
 
@@ -108,7 +213,7 @@ await lunora.mutation("jobs:markDone", { id: pending[0].id });
 
 The token is a bearer your Worker's `resolveIdentity` recognizes — pass it to the container as a `secret`. Non-JS containers can `POST /_lunora/rpc` with `{ functionPath, args }` directly.
 
-Secure the bridge in `resolveIdentity`: read `request.headers.get("authorization")`, strip the `Bearer ` prefix, and compare the token against a Worker secret (e.g. `env.LUNORA_CONTAINER_TOKEN`) you also forward to the container. Return a `{ userId }` identity only on a match and `null` otherwise — an unrecognised request then runs anonymously and is rejected by your functions' own authorization checks. See [Securing the bridge](https://lunora.sh/docs/addons/containers#securing-the-bridge) for the full example.
+Secure the bridge in `resolveIdentity`: read `request.headers.get("authorization")`, strip the `Bearer ` prefix, and compare the token against a Worker secret (e.g. `env.LUNORA_CONTAINER_TOKEN`) you also forward to the container. Return a `{ userId }` identity only on a match and `null` otherwise — an unrecognised request then runs anonymously and is rejected by your functions' own authorization checks. See [Securing the bridge](https://lunora.sh/docs/packages/container#securing-the-bridge) for the full example.
 
 ### Entry points
 
@@ -116,7 +221,17 @@ Secure the bridge in `resolveIdentity`: read `request.headers.get("authorization
 - `@lunora/container/do` — workerd-only: the `LunoraContainer` base class the generated DO classes extend (pulls in `@cloudflare/containers`).
 - `@lunora/container/bridge` — runtime-agnostic: `createContainerBridge` for calling Lunora functions from inside a container.
 
-> This README covers the basics. For the full API, options, and guides, see the **[documentation](https://lunora.sh/docs/addons/containers)**.
+> This README covers the basics. For the full API, options, and guides, see the **[documentation](https://lunora.sh/docs/packages/container)**.
+
+### Known platform limitations
+
+Some constraints live in Cloudflare Containers itself (open issues on [`cloudflare/containers`](https://github.com/cloudflare/containers/issues)). Lunora papers over what it can — cold-start retry and WebSocket keep-alive — and surfaces the rest:
+
+- **No autoscaling / location-aware routing** — pools are fixed-size and pick uniformly at random ([#226](https://github.com/cloudflare/containers/issues/226)).
+- **Ephemeral disk; no FUSE / tmpfs / some `node:net` modes** — persist to [`@lunora/storage`](https://www.npmjs.com/package/@lunora/storage) (R2) ([#112](https://github.com/cloudflare/containers/issues/112), [#160](https://github.com/cloudflare/containers/issues/160), [#67](https://github.com/cloudflare/containers/issues/67)).
+- **Egress interception is HTTP-first** — HTTPS needs `interceptHttps`; raw gRPC isn't interceptable yet ([#195](https://github.com/cloudflare/containers/issues/195)).
+- **Long jobs can be terminated on rollout** — use `hardTimeout` and make work resumable ([#138](https://github.com/cloudflare/containers/issues/138)).
+- **Local dev can't pull from the Cloudflare Registry** — build from a local Dockerfile ([#155](https://github.com/cloudflare/containers/issues/155)).
 
 ## Related
 

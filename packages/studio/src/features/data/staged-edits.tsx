@@ -20,6 +20,14 @@ interface StagedEditsModel {
     readonly clear: () => void;
     /** Total number of staged (row, column) cells. */
     readonly count: number;
+
+    /**
+     * Drop the cells one row's patch just wrote — used as each row commits, so a
+     * mid-batch failure leaves only the rows still unwritten staged. `committed`
+     * is the snapshot the patch was built from: a cell restaged since then was
+     * NOT written and stays pending.
+     */
+    readonly drop: (rowId: string, committed: Readonly<Record<string, unknown>>) => void;
     /** Stage (or overwrite) one cell's pending value. */
     readonly stage: (rowId: string, column: string, value: unknown) => void;
     /** The raw buffer, for commit. */
@@ -49,6 +57,41 @@ const useStagedEdits = (): StagedEditsModel => {
         setStaged({});
     };
 
+    const drop = (rowId: string, committed: Readonly<Record<string, unknown>>): void => {
+        setStaged((previous) => {
+            const row = previous[rowId];
+
+            if (row === undefined) {
+                return previous;
+            }
+
+            // Only the cells whose staged value is still the one that was
+            // written leave the buffer. The grid stays editable while a commit
+            // is in flight and `commitStaged` iterates a snapshot, so dropping
+            // the whole row entry silently discarded any edit made since —
+            // an edit the writer never saw.
+            //
+            // Membership first, then the value: a column ABSENT from `committed`
+            // was never written, and `committed[column]` reads `undefined` for
+            // it — indistinguishable by value alone from a cell written as
+            // `undefined`. Comparing values only threw away a cell staged as
+            // `undefined` after the snapshot was taken, which is exactly the
+            // edit this filter exists to keep.
+            const pending = Object.fromEntries(Object.entries(row).filter(([column, value]) => !(column in committed) || !Object.is(value, committed[column])));
+
+            if (Object.keys(pending).length === 0) {
+                return Object.fromEntries(Object.entries(previous).filter(([id]) => id !== rowId));
+            }
+
+            // Overwrite in place. Deleting the key and re-adding it moved the row
+            // to the END of the buffer, and insertion order is what `commitStaged`
+            // iterates and the diff panel renders — so a partly-committed row
+            // jumped to the bottom of a list the operator was reading, and the
+            // retry ran out of the order the writes were made in.
+            return { ...previous, [rowId]: pending };
+        });
+    };
+
     const stagedValue = (rowId: string, column: string): undefined | { value: unknown } => {
         const row = staged[rowId];
 
@@ -57,7 +100,7 @@ const useStagedEdits = (): StagedEditsModel => {
 
     const count = Object.values(staged).reduce((sum, columns) => sum + Object.keys(columns).length, 0);
 
-    return { clear, count, stage, staged, stagedValue };
+    return { clear, count, drop, stage, staged, stagedValue };
 };
 
 /**

@@ -1,6 +1,22 @@
+import type { LoadWith as LoadWithOf } from "@lunora/server/data-model";
 import { describe, expect, it } from "vitest";
 
-import type { Doc_attachments as Document_attachments, Doc_users as Document_users, LoadWith } from "./fixtures/simple/expected/_generated/dataModel";
+import type {
+    DataModel,
+    Doc_attachments as Document_attachments,
+    Doc_users as Document_users,
+    Relations,
+} from "./fixtures/simple/expected/_generated/dataModel";
+
+/**
+ * `LoadWith` is bound here exactly as the generated `server.ts` binds it.
+ *
+ * It is not imported from the fixture's `server.ts` because that file pulls in
+ * whichever optional add-ons the fixture app uses (`@lunora/notify`, …), none of
+ * which this package installs — which is the same coupling that made
+ * `dataModel.ts` unusable from a consumer, now demonstrated from the inside.
+ */
+type LoadWith<T extends keyof DataModel, W> = LoadWithOf<DataModel, Relations, T, W>;
 
 /**
  * Compile-fixture: the assertions below are verified by `tsc` (via `lint:types`),

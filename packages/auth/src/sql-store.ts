@@ -1,3 +1,4 @@
+import CREATION_TIME_COLUMN from "./framework-columns";
 import type { AuthRow, AuthStore, AuthWhereClause } from "./store";
 
 /** Double-quote a table/column identifier, escaping embedded quotes. */
@@ -7,6 +8,15 @@ interface SqlFragment {
     params: unknown[];
     sql: string;
 }
+
+/**
+ * "This table has no such column", in the wording of every engine a
+ * {@link SqlExecutor} can front: SQLite/D1 say `no such column: x` (D1 keeps the
+ * message and prefixes its own code), Postgres says `column "x" does not exist`.
+ * Deliberately NOT matching a bare `does not exist`, which is also how Postgres
+ * reports a missing TABLE — a different answer, and one that must not be cached.
+ */
+const MISSING_COLUMN = /no such column|column .{0,64}? does not exist/iu;
 
 /** A fragment that never matches — mirrors the in-memory evaluator returning `false`. */
 const NEVER: SqlFragment = { params: [], sql: "0" };
@@ -40,7 +50,7 @@ const patternFragment = (column: string, value: unknown, operator: "contains" | 
     return { params: [value, value], sql: `substr(${side.column}, -length(?)) = ${side.placeholder}` };
 };
 
-/** `=`/`&lt;>` equality (or `IS [NOT] NULL`), with optional case folding. `negated` flips it to `ne`. */
+/** `=`/`<>` equality (or `IS [NOT] NULL`), with optional case folding. `negated` flips it to `ne`. */
 const equalityFragment = (column: string, value: unknown, insensitive: boolean, negated: boolean): SqlFragment => {
     if (value === null) {
         return { params: [], sql: `${column} IS ${negated ? "NOT " : ""}NULL` };
@@ -106,27 +116,49 @@ const compileClause = (clause: AuthWhereClause): SqlFragment => {
     }
 };
 
+/** Join one connector group into a parenthesized fragment, or `undefined` when the group is empty. */
+const compileGroup = (clauses: ReadonlyArray<AuthWhereClause>, joiner: "AND" | "OR"): SqlFragment | undefined => {
+    if (clauses.length === 0) {
+        return undefined;
+    }
+
+    const fragments = clauses.map((clause) => compileClause(clause));
+
+    return { params: fragments.flatMap((fragment) => fragment.params), sql: fragments.map((fragment) => `(${fragment.sql})`).join(` ${joiner} `) };
+};
+
 /**
  * Compile a better-auth where clause list into a single SQL fragment (no leading
- * `WHERE`). Clauses fold left-to-right by their `connector`, parenthesized so the
- * grouping matches better-auth's own left-associative semantics rather than
- * SQL's `AND`-over-`OR` precedence. An empty list compiles to an empty fragment.
+ * `WHERE`).
+ *
+ * The list is PARTITIONED by `connector` into an AND group and an OR group, and
+ * the two groups are then ANDed — the same grouping every persistent better-auth
+ * adapter produces — and the same grouping `store.ts`'s `matchesWhere` applies,
+ * which this must agree with clause for clause. Every group is parenthesized, so
+ * SQL's `AND`-over-`OR` precedence cannot regroup it.
+ *
+ * Folding left-associatively instead — as this did — turns `[A, B(OR), C(OR)]`
+ * into `A OR B OR C`, which returns rows failing `A`. On a credential lookup that
+ * is an authentication bypass in shape. An empty list compiles to an empty
+ * fragment; a list with no OR clause compiles to the same conjunction as before.
  */
 const compileWhere = (where: ReadonlyArray<AuthWhereClause>): SqlFragment => {
-    if (where.length === 0) {
+    const groups = [
+        compileGroup(
+            where.filter((clause) => clause.connector !== "OR"),
+            "AND",
+        ),
+        compileGroup(
+            where.filter((clause) => clause.connector === "OR"),
+            "OR",
+        ),
+    ].filter((group): group is SqlFragment => group !== undefined);
+
+    if (groups.length === 0) {
         return { params: [], sql: "" };
     }
 
-    let accumulator = compileClause(where[0] as AuthWhereClause);
-
-    for (const clause of where.slice(1)) {
-        const fragment = compileClause(clause);
-        const connector = clause.connector === "OR" ? "OR" : "AND";
-
-        accumulator = { params: [...accumulator.params, ...fragment.params], sql: `(${accumulator.sql} ${connector} ${fragment.sql})` };
-    }
-
-    return accumulator;
+    return { params: groups.flatMap((group) => group.params), sql: groups.map((group) => `(${group.sql})`).join(" AND ") };
 };
 
 /** Build the ` WHERE …` suffix (with leading space) or an empty string. */
@@ -134,6 +166,13 @@ const whereSuffix = (fragment: SqlFragment): string => (fragment.sql ? ` WHERE $
 
 /** A D1 prepared-statement chain — the slice of `D1Database` {@link d1Executor} needs. */
 interface D1Like {
+    /**
+     * D1's ordered, atomic multi-statement call, when the binding has it. Method syntax so the real `D1Database`
+     * (whose `batch` takes `D1PreparedStatement[]`) satisfies it: the statements it receives are the ones `prepare().bind()`
+     * returned, passed through untouched.
+     */
+    // eslint-disable-next-line @typescript-eslint/method-signature-style -- method syntax is load-bearing: a function-typed property is checked contravariantly and the real `D1Database.batch(D1PreparedStatement[])` would stop satisfying this.
+    batch?(statements: unknown[]): Promise<unknown>;
     prepare: (sql: string) => {
         bind: (...values: unknown[]) => {
             all: () => Promise<{ results?: Record<string, unknown>[] }>;
@@ -150,6 +189,13 @@ interface D1Like {
  */
 export interface SqlExecutor {
     all: (sql: string, parameters: ReadonlyArray<unknown>) => Promise<Record<string, unknown>[]>;
+
+    /**
+     * Run several statements in order as one round trip and one transaction (a failure rolls all of them back). Present
+     * only when the database offers it; `@lunora/d1`'s `.global()` provisioning uses it to send its DDL in a few calls
+     * instead of one per statement, and falls back to one statement at a time without it.
+     */
+    batch?: (statements: ReadonlyArray<{ params: ReadonlyArray<unknown>; sql: string }>) => Promise<void>;
     run: (sql: string, parameters: ReadonlyArray<unknown>) => Promise<void>;
 }
 
@@ -180,6 +226,58 @@ export const createSqlAuthStore = (executor: SqlExecutor): AuthStore => {
         return executor.all(`SELECT * FROM ${quoteId(model)}${whereSuffix(fragment)}`, fragment.params);
     };
 
+    // Answers per table, because both provenances exist on one database: a
+    // `defineTable` table carries `_creationTime` (`frameworkColumnDdl` in
+    // `@lunora/d1`), while tables better-auth's own migrator created do not, and
+    // writing the column into those fails every insert the other way.
+    //
+    // A read that names the column, rather than a `sqlite_master` DDL match: the
+    // DDL TEXT is not a column list, so `CHECK (kind <> '_creationTime')` satisfies
+    // a substring test on a table with no such column. Not `pragma_table_info(?)`
+    // either — D1's authorizer refuses pragma table-valued functions through the
+    // Worker binding (see `./d1-index-introspection.ts`).
+    //
+    // The column reference is TABLE-QUALIFIED, and that is load-bearing on workerd:
+    // a bare `"col"` that resolves to no column is reinterpreted as a STRING
+    // LITERAL under SQLite's double-quoted-string misfeature, which workerd's build
+    // leaves enabled. The probe then succeeded on every table that lacks the column
+    // — selecting the constant `'_creationTime'` — and every Durable Object insert
+    // failed. `t."col"` cannot be a string, so an absent column raises, which is
+    // the answer being asked for.
+    //
+    // `node:sqlite` builds with `SQLITE_DQS=0` and errors either way, so the node
+    // suite was green while the DO adapter was broken; the regression lives in
+    // `__tests__/workerd/creation-time-probe.workerd.test.ts` for that reason.
+    const creationTimeColumns = new Map<string, boolean>();
+
+    const hasCreationTimeColumn = async (model: string): Promise<boolean> => {
+        const known = creationTimeColumns.get(model);
+
+        if (known !== undefined) {
+            return known;
+        }
+
+        try {
+            await executor.all(`SELECT ${quoteId(model)}.${quoteId(CREATION_TIME_COLUMN)} FROM ${quoteId(model)} LIMIT 0`, []);
+        } catch (error) {
+            // Only "no such column" is an ANSWER. A missing table (not migrated
+            // yet) or a transient backend error is not, and caching it would pin
+            // the store to `false` for the isolate's life — which is precisely the
+            // state that takes `/api/auth/*` down, one memoised failure at a time.
+            if (!MISSING_COLUMN.test(error instanceof Error ? error.message : String(error))) {
+                return false;
+            }
+
+            creationTimeColumns.set(model, false);
+
+            return false;
+        }
+
+        creationTimeColumns.set(model, true);
+
+        return true;
+    };
+
     return {
         consumeOne: async (model, where) => {
             const fragment = compileWhere(where);
@@ -205,16 +303,62 @@ export const createSqlAuthStore = (executor: SqlExecutor): AuthStore => {
             return Number(row?.["__count"] ?? 0);
         },
         create: async (model, data) => {
-            const columns = Object.keys(data);
+            // better-auth builds the INSERT from its own column list, so it can
+            // never supply `_creationTime` and every insert into a
+            // `defineTable`-backed table breached `NOT NULL`. Its durable rate
+            // limiter writes a row before every handler, so that took the whole of
+            // `/api/auth/*` down, not just sign-up.
+            //
+            // Spread `data` last so a caller that supplied its own `_creationTime` wins.
+            const row: AuthRow = CREATION_TIME_COLUMN in data || !(await hasCreationTimeColumn(model)) ? data : { [CREATION_TIME_COLUMN]: Date.now(), ...data };
+            const columns = Object.keys(row);
             const placeholders = columns.map(() => "?").join(", ");
             const sql = `INSERT INTO ${quoteId(model)} (${columns.map((column) => quoteId(column)).join(", ")}) VALUES (${placeholders})`;
 
             await executor.run(
                 sql,
-                columns.map((column) => data[column]),
+                columns.map((column) => row[column]),
             );
 
+            // better-auth's own column set, not the row written: `_creationTime` is
+            // Lunora's bookkeeping and has no field in the model it would map back to.
             return { ...data };
+        },
+        incrementOne: async (model, where, increment, set) => {
+            const table = quoteId(model);
+            const incrementColumns = Object.keys(increment);
+            const setColumns = set ? Object.keys(set) : [];
+            const fragment = compileWhere(where);
+
+            // An empty increment+set can't form a valid `SET`. better-auth never
+            // calls it that way, but mirror `update`'s empty-patch handling: treat
+            // it as a pure guard read of the single matching row.
+            if (incrementColumns.length === 0 && setColumns.length === 0) {
+                const [row] = await executor.all(`SELECT * FROM ${table}${whereSuffix(fragment)} LIMIT 1`, fragment.params);
+
+                return row;
+            }
+
+            const assignments = [
+                // COALESCE(col, 0) so a NULL counter advances from 0 rather than staying
+                // NULL (`NULL + ? = NULL` in SQLite/D1) — matches the memory store, which
+                // treats a non-numeric/absent counter as 0.
+                ...incrementColumns.map((column) => `${quoteId(column)} = COALESCE(${quoteId(column)}, 0) + ?`),
+                ...setColumns.map((column) => `${quoteId(column)} = ?`),
+            ].join(", ");
+
+            // Guarded read-modify-write in one statement: the subquery pins a
+            // single `rowid` the guard still matches (SQLite/D1 lack `UPDATE …
+            // LIMIT`), the UPDATE applies `col = col + delta` / `col = value`
+            // atomically, and RETURNING hands back the post-update row. One winner
+            // across isolates — no read-then-update race the memory/`findMany +
+            // updateMany` fallback would leave open on Workers.
+            const [row] = await executor.all(
+                `UPDATE ${table} SET ${assignments} WHERE rowid IN (SELECT rowid FROM ${table}${whereSuffix(fragment)} LIMIT 1) RETURNING *`,
+                [...incrementColumns.map((column) => increment[column]), ...setColumns.map((column) => (set as AuthRow)[column]), ...fragment.params],
+            );
+
+            return row;
         },
         read: async (model, query) => {
             const fragment = compileWhere(query.where);
@@ -285,6 +429,14 @@ export const d1Executor = (database: D1Like): SqlExecutor => {
 
             return result.results ?? [];
         },
+        // Forwarded only when the binding has it, so a hand-rolled double without `batch` keeps the statement-at-a-time path.
+        ...(typeof database.batch === "function"
+            ? {
+                  batch: async (statements: ReadonlyArray<{ params: ReadonlyArray<unknown>; sql: string }>): Promise<void> => {
+                      await database.batch?.(statements.map((statement) => database.prepare(statement.sql).bind(...statement.params)));
+                  },
+              }
+            : {}),
         run: async (sql, parameters) => {
             await database
                 .prepare(sql)

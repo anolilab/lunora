@@ -1,6 +1,8 @@
 import { spawn } from "node:child_process";
 import { platform } from "node:os";
 
+import { LunoraError } from "@lunora/errors";
+
 interface OpenUrlOptions {
     /** Inject a custom opener (tests, alternate platforms, headless CI). */
     opener?: (url: string) => Promise<void>;
@@ -29,19 +31,8 @@ const platformCommand = (): { args: ReadonlyArray<string>; command: string } => 
 // Characters that cmd.exe re-parses even inside an argv slot (libuv only
 // double-quotes args containing space/tab/quote, so these leak through to
 // `cmd /c start`). Percent-encoding each keeps the value a valid URL while
-// stripping its shell meaning. `%` is encoded first so we don't double-encode.
-const escapeForCmd = (url: string): string =>
-    url
-        .replaceAll("%", "%25")
-        .replaceAll("&", "%26")
-        .replaceAll("|", "%7C")
-        .replaceAll("^", "%5E")
-        .replaceAll("<", "%3C")
-        .replaceAll(">", "%3E")
-        .replaceAll("(", "%28")
-        .replaceAll(")", "%29")
-        .replaceAll('"', "%22")
-        .replaceAll("!", "%21");
+// stripping its shell meaning; the single pass can't double-encode `%`.
+const escapeForCmd = (url: string): string => url.replaceAll(/[!"%&()<>^|]/gu, (char) => `%${(char.codePointAt(0) ?? 0).toString(16).toUpperCase()}`);
 
 const platformOpener = (url: string): Promise<void> =>
     new Promise<void>((resolve, reject) => {
@@ -77,11 +68,11 @@ const openUrl = async (url: string, options: OpenUrlOptions = {}): Promise<void>
     try {
         parsed = new URL(url);
     } catch {
-        throw new Error(`Invalid URL: ${url}`);
+        throw new LunoraError("INTERNAL", `Invalid URL: ${url}`);
     }
 
     if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
-        throw new Error(`Refusing to open non-http(s) URL: ${url}`);
+        throw new LunoraError("INTERNAL", `Refusing to open non-http(s) URL: ${url}`);
     }
 
     const opener = options.opener ?? platformOpener;

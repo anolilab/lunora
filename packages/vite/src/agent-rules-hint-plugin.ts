@@ -1,4 +1,4 @@
-import { AGENT_RULES_HINT, claimAgentRulesHint, detectAgentRules } from "@lunora/config";
+import { AGENT_RULES_HINT, claimAgentRulesHint, detectAgentRules, lunoraLine } from "@lunora/config";
 import type { Plugin } from "vite";
 
 import type { ResolvedLunoraPluginOptions } from "./types";
@@ -20,7 +20,7 @@ const agentRulesHintPlugin = (options: ResolvedLunoraPluginOptions): Plugin => {
                     return;
                 }
 
-                server.config.logger.warn(`\n  [lunora] ${AGENT_RULES_HINT}\n`);
+                server.config.logger.warn(`\n${lunoraLine(AGENT_RULES_HINT)}\n`);
             };
         },
         name: "lunora:agent-rules-hint",

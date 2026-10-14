@@ -16,7 +16,8 @@
         "noEmit": true,
         "paths": {
             "fumadocs-mdx:collections/*": ["./.source/*"],
-            "@/*": ["./src/*"]
+            "@/*": ["./src/*"],
+            "~/*": ["./*"]
         },
         "types": ["vite/client", "vitest/globals", "@testing-library/jest-dom", "unplugin-fonts/client", "vite-plugin-svgr/client"]
     },

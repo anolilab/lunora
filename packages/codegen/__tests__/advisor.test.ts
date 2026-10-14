@@ -2,12 +2,16 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
+import { runAdvisor, scoreAdvisor } from "@lunora/advisor";
 import { Project } from "ts-morph";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import { formatAdvisories, lintSchema } from "../src/advisor";
-import discoverSchema from "../src/discover-schema";
+import { formatAdvisories, lintSchema, toAdvisorContext } from "../src/advisor";
+import { errorAdvisoryNames } from "../src/blocking";
+import discoverSchema from "../src/discover/schema";
 import { runCodegen } from "../src/index";
+import type { QueryReadIR } from "../src/ir";
+import emittedJsonData from "./emitted-json-data";
 
 /** Build a `SchemaIR` from in-memory schema source (no disk). */
 const irFrom = (schemaSource: string) => {
@@ -45,7 +49,7 @@ describe("lintSchema (codegen → advisor)", () => {
     it("flags an unindexed `one`-relation FK from the discovered IR", () => {
         expect.assertions(3);
 
-        const findings = lintSchema(irFrom(UNINDEXED));
+        const findings = lintSchema({ schema: irFrom(UNINDEXED) });
 
         expect(findings).toHaveLength(1);
         expect(findings[0]?.name).toBe("unindexed_foreign_key");
@@ -55,7 +59,46 @@ describe("lintSchema (codegen → advisor)", () => {
     it("passes once the FK column leads an index", () => {
         expect.assertions(1);
 
-        expect(lintSchema(irFrom(INDEXED))).toHaveLength(0);
+        expect(lintSchema({ schema: irFrom(INDEXED) })).toHaveLength(0);
+    });
+
+    /**
+     * The `commitOrdered` flag has to survive the IR → advisor hop, or
+     * `commit_ordered_hard_delete` silently never fires: an absent flag is read
+     * as "not opted in", so the lint would pass on every table forever with
+     * nothing anywhere reporting that the feeder dropped it.
+     */
+    it("carries `.commitOrdered()` through to the advisor and flags the missing tombstone", () => {
+        expect.assertions(2);
+
+        const findings = lintSchema({
+            schema: irFrom(`
+                import { defineSchema, defineTable, v } from "@lunora/server";
+
+                export const schema = defineSchema({
+                    orders: defineTable({ status: v.string() }).commitOrdered(),
+                });
+            `),
+        });
+
+        expect(findings.map((finding) => finding.name)).toContain("commit_ordered_hard_delete");
+        expect(findings.find((finding) => finding.name === "commit_ordered_hard_delete")?.metadata).toMatchObject({ table: "orders" });
+    });
+
+    it("stops flagging once the commit-ordered table also soft-deletes", () => {
+        expect.assertions(1);
+
+        const findings = lintSchema({
+            schema: irFrom(`
+                import { defineSchema, defineTable, v } from "@lunora/server";
+
+                export const schema = defineSchema({
+                    orders: defineTable({ status: v.string() }).commitOrdered().softDelete(),
+                });
+            `),
+        });
+
+        expect(findings.map((finding) => finding.name)).not.toContain("commit_ordered_hard_delete");
     });
 });
 
@@ -69,7 +112,7 @@ describe("formatAdvisories", () => {
     it("renders a summary header plus one line per finding", () => {
         expect.assertions(2);
 
-        const out = formatAdvisories(lintSchema(irFrom(UNINDEXED)));
+        const out = formatAdvisories(lintSchema({ schema: irFrom(UNINDEXED) }));
 
         expect(out).toContain("@lunora/codegen: 1 schema advisor finding");
         expect(out).toContain("[INFO] unindexed_foreign_key:");
@@ -92,7 +135,7 @@ describe("runCodegen lint integration", () => {
     it("returns advisories in the result (codegen does not print them)", () => {
         expect.assertions(2);
 
-        const names = runCodegen({ projectRoot: workdir }).advisories.map((advisory) => advisory.name);
+        const names = runCodegen({ projectRoot: workdir, wranglerQueueProducers: [] }).advisories.map((advisory) => advisory.name);
 
         // The FK lint fires on the schema; the write feeder also flags `posts`
         // (no `ctx.db.insert("posts", …)` in the fixture functions).
@@ -103,13 +146,15 @@ describe("runCodegen lint integration", () => {
     it("respects `lint: false` — no findings", () => {
         expect.assertions(1);
 
-        expect(runCodegen({ lint: false, projectRoot: workdir }).advisories).toHaveLength(0);
+        expect(runCodegen({ lint: false, projectRoot: workdir, wranglerQueueProducers: [] }).advisories).toHaveLength(0);
     });
 
     it("still computes advisories on a dry run", () => {
         expect.assertions(1);
 
-        expect(runCodegen({ dryRun: true, projectRoot: workdir }).advisories.map((advisory) => advisory.name)).toContain("unindexed_foreign_key");
+        expect(runCodegen({ dryRun: true, projectRoot: workdir, wranglerQueueProducers: [] }).advisories.map((advisory) => advisory.name)).toContain(
+            "unindexed_foreign_key",
+        );
     });
 
     it("flags a filter-without-index read discovered in a function body", () => {
@@ -122,27 +167,557 @@ describe("runCodegen lint integration", () => {
             "utf8",
         );
 
-        const names = runCodegen({ projectRoot: workdir }).advisories.map((advisory) => advisory.name);
+        const names = runCodegen({ projectRoot: workdir, wranglerQueueProducers: [] }).advisories.map((advisory) => advisory.name);
 
         expect(names).toContain("filter_without_index");
         expect(names).toContain("unindexed_foreign_key");
     });
 
+    it.each([
+        [
+            "a batch loop reaches a function that re-enqueues to the same queue",
+            "for (const message of batch.messages) {",
+            "await message.run(internal.mail.requeue, { to: message.body.to });",
+            true,
+        ],
+        [
+            "the re-enqueue sits behind an if",
+            "for (const message of batch.messages) {",
+            'if (message.body.to !== "") { await message.run(internal.mail.requeue, { to: message.body.to }); }',
+            false,
+        ],
+    ])("flags a queue cycle only when nothing stops it (%s)", (_label, loopOpen, hop, flagged) => {
+        expect.assertions(1);
+
+        // `emailQueue` runs `mail.requeue` for each message it receives; `requeue` sends back to `emailQueue`.
+        writeFileSync(
+            join(workdir, "lunora", "queues.ts"),
+            `import { defineQueue } from "@lunora/queue";
+import { internal } from "./_generated/api.js";
+
+export const emailQueue = defineQueue<{ to: string }>({
+    handler: async (ctx, batch) => {
+        ${loopOpen}
+            ${hop}
+            message.ack();
+        }
+    },
+});
+`,
+            "utf8",
+        );
+        writeFileSync(
+            join(workdir, "lunora", "mail.ts"),
+            `import { internalMutation } from "./_generated/server.js";
+
+export const requeue = internalMutation.mutation(async ({ ctx }) => {
+    await ctx.queues.emailQueue.send({ to: "a@example.com" });
+});
+`,
+            "utf8",
+        );
+
+        const findings = runCodegen({ projectRoot: workdir, wranglerQueueProducers: [] }).advisories.filter(
+            (advisory) => advisory.name === "queue_dispatch_cycle",
+        );
+
+        expect(findings.map((finding) => finding.cacheKey)).toStrictEqual(flagged ? ["queue_dispatch_cycle:mail:requeue,queue:emailQueue"] : []);
+    });
+
+    it("flags a count on a table with no aggregate index, and not one an inline aggregate index covers", () => {
+        expect.assertions(2);
+
+        writeFileSync(
+            join(workdir, "lunora", "schema.ts"),
+            `import { defineSchema, defineTable, v } from "@lunora/server";
+
+export default defineSchema({
+    jobs: defineTable({ state: v.string() }).aggregateIndex("byState", { by: ["state"] }),
+    posts: defineTable({ title: v.string() }),
+});
+`,
+            "utf8",
+        );
+        writeFileSync(
+            join(workdir, "lunora", "tally.ts"),
+            `import { internalMutation } from "./_generated/server.js";
+
+export const tally = internalMutation.mutation(async ({ ctx }) => {
+    await ctx.db.jobs.count({ state: "open" });
+    await ctx.db.posts.count();
+});
+`,
+            "utf8",
+        );
+
+        const findings = runCodegen({ projectRoot: workdir, wranglerQueueProducers: [] }).advisories.filter(
+            (advisory) => advisory.name === "count_without_index",
+        );
+
+        // `jobs` is counter-backed by its inline aggregate index; `posts` is a COUNT(*) scan on line 5.
+        expect(findings.map((finding) => finding.cacheKey)).toStrictEqual(["count_without_index:tally:5:posts"]);
+        expect(findings[0]?.level).toBe("WARN");
+    });
+
+    it("flags a container whose sleepAfter outlasts an hour, read from the declaration", () => {
+        expect.assertions(2);
+
+        writeFileSync(
+            join(workdir, "lunora", "containers.ts"),
+            `import { defineContainer } from "@lunora/container";\nexport const transcoder = defineContainer({ image: { registry: "docker.io/acme/transcoder:1" }, sleepAfter: "2h" });\nexport const resizer = defineContainer({ image: { registry: "docker.io/acme/resizer:1" }, sleepAfter: "2h", hardTimeout: "30m" });\n`,
+            "utf8",
+        );
+
+        const findings = runCodegen({ projectRoot: workdir, wranglerQueueProducers: [] }).advisories.filter(
+            (advisory) => advisory.name === "container_long_sleep_after",
+        );
+
+        // `resizer` is capped by its 30 minute hardTimeout, so only `transcoder` is flagged.
+        expect(findings.map((finding) => finding.cacheKey)).toStrictEqual(["container_long_sleep_after:transcoder"]);
+        expect(findings[0]?.level).toBe("WARN");
+    });
+
     it("emits the advisories into the generated shard for the getAdvisories RPC", () => {
         expect.assertions(3);
 
-        const { shard } = runCodegen({ projectRoot: workdir }).generated;
+        const { shard } = runCodegen({ projectRoot: workdir, wranglerQueueProducers: [] }).generated;
 
         // The generated subclass overrides `advisories()` with the baked list,
         // so the DO's `getAdvisories` admin RPC can serve them to the studio.
-        expect(shard).toContain("const LUNORA_ADVISORIES: AdvisoryFinding[] =");
+        expect(shard).toContain("const LUNORA_ADVISORIES = JSON.parse(");
         expect(shard).toContain("protected override advisories(): AdvisoryFinding[]");
-        expect(shard).toContain("unindexed_foreign_key");
+        expect((emittedJsonData(shard, "LUNORA_ADVISORIES") as { name: string }[]).map((advisory) => advisory.name)).toContain("unindexed_foreign_key");
     });
 
     it("emits an empty advisory list under `lint: false`", () => {
         expect.assertions(1);
 
-        expect(runCodegen({ lint: false, projectRoot: workdir }).generated.shard).toContain("const LUNORA_ADVISORIES: AdvisoryFinding[] = [];");
+        expect(
+            emittedJsonData(runCodegen({ lint: false, projectRoot: workdir, wranglerQueueProducers: [] }).generated.shard, "LUNORA_ADVISORIES"),
+        ).toStrictEqual([]);
+    });
+
+    it("flags replication shapes targeting an unknown table and a `.global()` table (full discover → lint path)", () => {
+        expect.assertions(4);
+
+        // A schema with a sharded `messages` (poke-live) and a global `users` (D1 tier).
+        writeFileSync(
+            join(workdir, "lunora", "schema.ts"),
+            `import { defineSchema, defineTable, v } from "@lunora/server";
+export const schema = defineSchema({
+    messages: defineTable({ text: v.string() }).shardBy("text"),
+    users: defineTable({ email: v.string() }).global(),
+});
+`,
+            "utf8",
+        );
+        // One shape over the global table (poll-tier WARN) and one over a typo'd table (unknown ERROR).
+        writeFileSync(
+            join(workdir, "lunora", "shapes.ts"),
+            `import { defineShape } from "@lunora/server";
+export const allUsers = defineShape({ table: "users", where: () => ({}) });
+export const ghost = defineShape({ table: "mesages", where: () => ({}) });
+`,
+            "utf8",
+        );
+
+        const findings = runCodegen({ projectRoot: workdir, wranglerQueueProducers: [] }).advisories;
+        const byName = (name: string) => findings.filter((finding) => finding.name === name);
+
+        expect(byName("shape_targets_global_table")).toHaveLength(1);
+        expect(byName("shape_targets_global_table")[0]?.metadata).toMatchObject({ exportName: "allUsers", table: "users" });
+        expect(byName("shape_unknown_table")).toHaveLength(1);
+        expect(byName("shape_unknown_table")[0]?.metadata).toMatchObject({ exportName: "ghost", table: "mesages" });
+    });
+
+    describe("advisor.minSeverity in lunora.config", () => {
+        /** One INFO (the fixture's unindexed FK), one WARN and one ERROR (the two shapes). */
+        const seedAllLevels = (config?: string): void => {
+            writeFileSync(
+                join(workdir, "lunora", "shapes.ts"),
+                `import { defineShape } from "@lunora/server";
+export const allUsers = defineShape({ table: "users", where: () => ({}) });
+export const ghost = defineShape({ table: "mesages", where: () => ({}) });
+`,
+                "utf8",
+            );
+            writeFileSync(
+                join(workdir, "lunora", "schema.ts"),
+                `import { defineSchema, defineTable, v } from "@lunora/server";
+export const schema = defineSchema({
+    users: defineTable({ email: v.string() }).global(),
+    posts: defineTable({ authorId: v.id("users") }),
+});
+`,
+                "utf8",
+            );
+
+            if (config !== undefined) {
+                writeFileSync(join(workdir, "lunora.config.ts"), config, "utf8");
+            }
+        };
+
+        const levels = (findings: ReadonlyArray<{ level: string }>): Record<string, number> => {
+            const counts: Record<string, number> = {};
+
+            for (const { level } of findings) {
+                counts[level] = (counts[level] ?? 0) + 1;
+            }
+
+            return counts;
+        };
+
+        it('drops INFO from the result and the generated shard with "warn", and keeps every ERROR', () => {
+            expect.assertions(4);
+
+            seedAllLevels();
+
+            const unfiltered = runCodegen({ dryRun: true, projectRoot: workdir, wranglerQueueProducers: [] }).advisories;
+
+            writeFileSync(join(workdir, "lunora.config.ts"), `export default { advisor: { minSeverity: "warn" } };\n`, "utf8");
+
+            const { advisories, generated } = runCodegen({ projectRoot: workdir, wranglerQueueProducers: [] });
+            const emitted = emittedJsonData(generated.shard, "LUNORA_ADVISORIES") as { level: string; name: string }[];
+
+            expect(levels(unfiltered)["INFO"]).toBeGreaterThan(0);
+            // COUNTS: every WARN and ERROR survives, no INFO does, in both channels.
+            expect(levels(advisories)).toStrictEqual({ ERROR: levels(unfiltered)["ERROR"], WARN: levels(unfiltered)["WARN"] });
+            expect(levels(emitted)).toStrictEqual(levels(advisories));
+            expect(advisories.map((advisory) => advisory.name)).toContain("shape_unknown_table");
+        });
+
+        it('keeps only ERRORs with "error", so the codegen gate still fires', () => {
+            expect.assertions(2);
+
+            seedAllLevels(`const advisor = { minSeverity: "error" } as const;\nexport default { advisor };\n`);
+
+            const { advisories } = runCodegen({ dryRun: true, projectRoot: workdir, wranglerQueueProducers: [] });
+
+            expect(Object.keys(levels(advisories))).toStrictEqual(["ERROR"]);
+            expect(errorAdvisoryNames(advisories)).toContain("shape_unknown_table");
+        });
+
+        it.each([
+            ["an unknown level", `export default { advisor: { minSeverity: "loud" } };\n`, '"loud"'],
+            ["a computed value", `const level = ["warn"][0];\nexport default { advisor: { minSeverity: level } };\n`, "not a string literal"],
+            // Each of these can make the effective floor differ from any literal
+            // the parser could read, and a wrong floor hides findings.
+            ["a top-level spread", `const base = {};\nexport default { ...base, advisor: { minSeverity: "error" } };\n`, "not a string literal"],
+            [
+                "a spread after the literal",
+                `const overrides = {};\nexport default { advisor: { minSeverity: "error", ...overrides } };\n`,
+                "not a string literal",
+            ],
+            ["a computed key", `const key = "minSeverity";\nexport default { advisor: { [key]: "error" } };\n`, "not a string literal"],
+        ])("reports %s and filters nothing", (_label, config, detail) => {
+            expect.assertions(3);
+
+            seedAllLevels();
+
+            const unfiltered = runCodegen({ dryRun: true, projectRoot: workdir, wranglerQueueProducers: [] }).advisories;
+
+            writeFileSync(join(workdir, "lunora.config.ts"), config, "utf8");
+
+            const { advisories } = runCodegen({ dryRun: true, projectRoot: workdir, wranglerQueueProducers: [] });
+            const invalid = advisories.filter((advisory) => advisory.name === "advisor_min_severity_invalid");
+
+            // A spread also makes `accept` unreadable, which reports its own warning; only the floor's is asserted here.
+            expect(advisories.filter((advisory) => advisory.name !== "advisor_accept_invalid")).toHaveLength(unfiltered.length + 1);
+            expect(invalid).toHaveLength(1);
+            expect(invalid[0]?.detail).toContain(detail);
+        });
+
+        // `advisor.accept` demotes a reviewed ERROR to INFO, matched exactly by rule, file and export.
+        it("demotes the one ERROR an accept entry names to INFO, with its reason, and lets the gate pass", () => {
+            expect.assertions(4);
+
+            seedAllLevels();
+
+            const before = runCodegen({ dryRun: true, projectRoot: workdir, wranglerQueueProducers: [] }).advisories;
+
+            writeFileSync(
+                join(workdir, "lunora.config.ts"),
+                `export default { advisor: { accept: [{ rule: "shape_unknown_table", file: "lunora/shapes.ts", exportName: "ghost", reason: "reviewed fixture" }] } };\n`,
+                "utf8",
+            );
+
+            const { advisories } = runCodegen({ dryRun: true, projectRoot: workdir, wranglerQueueProducers: [] });
+            const accepted = advisories.find((advisory) => advisory.name === "shape_unknown_table");
+
+            expect(levels(advisories)["ERROR"] ?? 0).toBe((levels(before)["ERROR"] ?? 0) - 1);
+            expect(accepted?.level).toBe("INFO");
+            expect(accepted?.detail).toContain("Accepted: reviewed fixture.");
+            expect(advisories.filter((advisory) => advisory.name === "advisor_accept_unused")).toHaveLength(0);
+        });
+
+        it("warns about an accept entry that matches no ERROR and leaves every ERROR in place", () => {
+            expect.assertions(3);
+
+            seedAllLevels();
+
+            const before = runCodegen({ dryRun: true, projectRoot: workdir, wranglerQueueProducers: [] }).advisories;
+
+            // The right rule and file, but the wrong export: the ghost shape is still an ERROR.
+            writeFileSync(
+                join(workdir, "lunora.config.ts"),
+                `export default { advisor: { accept: [{ rule: "shape_unknown_table", file: "lunora/shapes.ts", exportName: "nobody", reason: "wrong export" }] } };\n`,
+                "utf8",
+            );
+
+            const { advisories } = runCodegen({ dryRun: true, projectRoot: workdir, wranglerQueueProducers: [] });
+
+            expect(levels(advisories)["ERROR"]).toBe(levels(before)["ERROR"]);
+            expect(errorAdvisoryNames(advisories)).toContain("shape_unknown_table");
+            expect(advisories.filter((advisory) => advisory.name === "advisor_accept_unused")).toHaveLength(1);
+        });
+
+        it.each([
+            ["an empty reason", `{ rule: "shape_unknown_table", file: "lunora/shapes.ts", exportName: "ghost", reason: "" }`],
+            ["a computed reason", `{ rule: "shape_unknown_table", file: "lunora/shapes.ts", exportName: "ghost", reason: ["x"].join("") }`],
+            ["an unknown key", `{ rule: "shape_unknown_table", file: "lunora/shapes.ts", exportName: "ghost", reason: "x", note: "y" }`],
+            ["a spread entry", `{ ...base }`],
+        ])("ignores the whole list for %s and keeps every ERROR", (_label, entry) => {
+            expect.assertions(3);
+
+            seedAllLevels();
+
+            const before = runCodegen({ dryRun: true, projectRoot: workdir, wranglerQueueProducers: [] }).advisories;
+
+            writeFileSync(join(workdir, "lunora.config.ts"), `const base = {};\nexport default { advisor: { accept: [${entry}] } };\n`, "utf8");
+
+            const { advisories } = runCodegen({ dryRun: true, projectRoot: workdir, wranglerQueueProducers: [] });
+
+            expect(levels(advisories)["ERROR"]).toBe(levels(before)["ERROR"]);
+            expect(advisories.filter((advisory) => advisory.name === "advisor_accept_invalid")).toHaveLength(1);
+            expect(advisories.filter((advisory) => advisory.name === "advisor_accept_unused")).toHaveLength(0);
+        });
+
+        // A floor of "error" must not hide what the accept list did: the demoted finding and the stale warning both stay.
+        it('keeps an accepted finding and a stale-accept warning when minSeverity is "error"', () => {
+            expect.assertions(3);
+
+            seedAllLevels();
+
+            writeFileSync(
+                join(workdir, "lunora.config.ts"),
+                `export default { advisor: { minSeverity: "error", accept: [{ rule: "shape_unknown_table", file: "lunora/shapes.ts", exportName: "ghost", reason: "reviewed fixture" }, { rule: "shape_unknown_table", file: "lunora/shapes.ts", exportName: "nobody", reason: "stale" }] } };\n`,
+                "utf8",
+            );
+
+            const { advisories } = runCodegen({ dryRun: true, projectRoot: workdir, wranglerQueueProducers: [] });
+
+            expect(advisories.find((advisory) => advisory.name === "shape_unknown_table")?.level).toBe("INFO");
+            expect(advisories.filter((advisory) => advisory.name === "advisor_accept_unused")).toHaveLength(1);
+            expect(levels(advisories)["ERROR"] ?? 0).toBe(0);
+        });
+
+        // An unreadable minSeverity disables only the floor; a valid accept list still demotes its ERROR.
+        it("still applies a valid accept list when minSeverity is not a literal", () => {
+            expect.assertions(2);
+
+            seedAllLevels();
+
+            const before = runCodegen({ dryRun: true, projectRoot: workdir, wranglerQueueProducers: [] }).advisories;
+
+            writeFileSync(
+                join(workdir, "lunora.config.ts"),
+                `const level = ["warn"][0];\nexport default { advisor: { minSeverity: level, accept: [{ rule: "shape_unknown_table", file: "lunora/shapes.ts", exportName: "ghost", reason: "reviewed fixture" }] } };\n`,
+                "utf8",
+            );
+
+            const { advisories } = runCodegen({ dryRun: true, projectRoot: workdir, wranglerQueueProducers: [] });
+
+            expect(levels(advisories)["ERROR"] ?? 0).toBe((levels(before)["ERROR"] ?? 0) - 1);
+            expect(advisories.map((advisory) => advisory.name)).toContain("advisor_min_severity_invalid");
+        });
+    });
+
+    it("reads observability facts off real handler bodies", () => {
+        expect.assertions(4);
+
+        writeFileSync(
+            join(workdir, "lunora", "ops.ts"),
+            `import { action, mutation } from "@lunora/server";
+export const quiet = mutation({ args: {}, handler: async (ctx) => { throw new Error("boom"); } });
+export const loud = mutation({ args: {}, handler: async (ctx) => { ctx.log.info("did it"); } });
+export const risky = action({ args: {}, handler: async (ctx) => { await ctx.fetch("https://example.com"); } });
+export const careful = action({ args: {}, handler: async (ctx) => { try { await ctx.fetch("https://example.com"); } catch { /* degraded */ } } });
+`,
+            "utf8",
+        );
+
+        const names = new Set(
+            runCodegen({ projectRoot: workdir, wranglerQueueProducers: [] }).advisories.map(
+                (advisory) => `${advisory.name}:${String(advisory.metadata.exportName)}`,
+            ),
+        );
+
+        expect(names).toContain("error_without_catalog:quiet");
+        expect(names).toContain("procedure_without_structured_event:quiet");
+        expect(names).not.toContain("procedure_without_structured_event:loud");
+        // `risky` has no catch; `careful` does.
+        expect([...names].filter((name) => name.startsWith("action_without_error_handling:"))).toStrictEqual(["action_without_error_handling:risky"]);
+    });
+
+    it.each([
+        ["prose mentioning the directive", "// Do NOT add lunora-advisor-exempt to this one."],
+        ["a longer token", "// TODO(LUN-9): lunora-advisor-exempt-later once the audit lands"],
+    ])("does not exempt on %s", (_label, comment) => {
+        expect.assertions(1);
+
+        writeFileSync(
+            join(workdir, "lunora", "prose.ts"),
+            `import { mutation } from "@lunora/server";\n${comment}\nexport const handler = mutation({ args: {}, handler: async () => {} });\n`,
+            "utf8",
+        );
+
+        const rows = runCodegen({ dryRun: true, projectRoot: workdir, wranglerQueueProducers: [] }).advisorContext?.procedureProtections ?? [];
+
+        // A false positive here silences the procedure in compareToBaseline forever.
+        expect(rows.find((row) => row.exportName === "handler")?.exempt).toBe(false);
+    });
+
+    it("reads a source-level exemption directive above an export", () => {
+        expect.assertions(3);
+
+        writeFileSync(
+            join(workdir, "lunora", "legacy.ts"),
+            `import { mutation } from "@lunora/server";
+// lunora-advisor-exempt -- legacy endpoint, removed in Q3
+export const legacy = mutation({ args: {}, handler: async (ctx) => { throw new Error("boom"); } });
+export const current = mutation({ args: {}, handler: async (ctx) => { throw new Error("boom"); } });
+`,
+            "utf8",
+        );
+
+        const context = runCodegen({ dryRun: true, projectRoot: workdir, wranglerQueueProducers: [] }).advisorContext;
+        const rows = context?.procedureProtections ?? [];
+        const exempted = rows.find((row) => row.exportName === "legacy");
+
+        expect(exempted?.exempt).toBe(true);
+        expect(exempted?.exemptReason).toBe("legacy endpoint, removed in Q3");
+        // The directive is per-export, not per-file.
+        expect(rows.find((row) => row.exportName === "current")?.exempt).toBe(false);
+    });
+
+    it('flags a `.public()` table with a PII column under `.rls("required")` (full discover → lint path)', () => {
+        expect.assertions(2);
+
+        writeFileSync(
+            join(workdir, "lunora", "schema.ts"),
+            `import { defineSchema, defineTable, v } from "@lunora/server";
+export const schema = defineSchema({
+    accounts: defineTable({ email: v.string() }).public(),
+}).rls("required");
+`,
+            "utf8",
+        );
+
+        const findings = runCodegen({ projectRoot: workdir, wranglerQueueProducers: [] }).advisories;
+        const finding = findings.find((advisory) => advisory.name === "public_table_rls_optout_confusion");
+
+        expect(finding).toBeDefined();
+        expect(finding?.metadata).toMatchObject({ columns: ["email"], table: "accounts" });
+    });
+
+    it("flags `.extend()` enabling allowUnauthenticatedShardAccess on an RLS-gapped schema (full discover → lint path)", () => {
+        expect.assertions(2);
+
+        // The fixture schema (UNINDEXED) never calls `.rls("required")`, so it already has an RLS gap.
+        writeFileSync(
+            join(workdir, "lunora", "server.ts"),
+            `import { defineApp } from "@lunora/runtime";
+export const app = defineApp().extend(() => ({ allowUnauthenticatedShardAccess: true })).build();
+`,
+            "utf8",
+        );
+
+        const findings = runCodegen({ projectRoot: workdir, wranglerQueueProducers: [] }).advisories;
+        const finding = findings.find((advisory) => advisory.name === "allow_unauthenticated_shard_access_enabled");
+
+        expect(finding).toBeDefined();
+        expect(finding?.metadata).toMatchObject({ callee: "extend", file: "server" });
+    });
+});
+
+describe("toAdvisorContext (codegen → advisor coverage map)", () => {
+    const STAMP = "2026-07-30T00:00:00.000Z";
+
+    /** The documented two-line call site: one context, feeding both the lint run and the score. */
+    const mapOf = (source: string) => {
+        const context = toAdvisorContext({ schema: irFrom(source) });
+
+        return scoreAdvisor(context.procedureProtections ?? [], runAdvisor(context, { source: "static" }), { generatedAt: STAMP });
+    };
+
+    it("scores the same evidence lintSchema lints, penalising the unindexed schema", () => {
+        expect.assertions(3);
+
+        const unindexed = mapOf(UNINDEXED);
+        const indexed = mapOf(INDEXED);
+
+        // The FK finding names no procedure, so it lands in the project bucket.
+        expect(unindexed.project.checks.some((check) => check.name === "unindexed_foreign_key")).toBe(true);
+        expect(unindexed.score).toBeLessThan(indexed.score);
+        expect(indexed.grade).toBe("excellent");
+    });
+
+    it("attributes a filter-without-index read to the procedure that performs it", () => {
+        expect.assertions(3);
+
+        const schemaSource = `
+            import { defineSchema, defineTable, v } from "@lunora/server";
+            export const schema = defineSchema({ posts: defineTable({ published: v.boolean() }) });
+        `;
+        const project = new Project({ skipAddingFilesFromTsConfig: true, useInMemoryFileSystem: true });
+
+        project.createSourceFile("/virtual/lunora/schema.ts", schemaSource);
+
+        // The read sits inside the exported `list` query, so the finding belongs on
+        // that procedure's row rather than in the catch-all project bucket.
+        const reads: QueryReadIR[] = [{ file: "posts", hasFilter: true, hasIndex: false, line: 2, scope: { kind: "export", name: "list" }, table: "posts" }];
+        const procedures = [
+            {
+                analyzableBody: true,
+                callsMail: false,
+                emitsEvent: false,
+                exempt: false,
+                exemptReason: "",
+                exportName: "list",
+                handlesErrors: false,
+                reachesOutbound: false,
+                runsAiGeneration: false,
+                throwsBareError: false,
+                fanOut: false,
+                file: "posts",
+                kind: "query" as const,
+                unboundedAiGeneration: false,
+                usesCaptcha: false,
+                usesEmailGate: false,
+                usesInsertManyUnsafe: false,
+                usesMask: false,
+                usesRateLimit: false,
+                usesRls: false,
+                visibility: "public" as const,
+                writesUserTable: false,
+            },
+        ];
+
+        const context = toAdvisorContext({ procedureProtections: procedures, queries: reads, schema: discoverSchema(project, "/virtual/lunora/schema.ts") });
+        const map = scoreAdvisor(context.procedureProtections ?? [], runAdvisor(context, { source: "static" }), { generatedAt: STAMP });
+        const row = map.procedures.find((entry) => entry.id === "posts#list");
+
+        expect(row?.checks.map((check) => check.name)).toContain("filter_without_index");
+        expect(map.project.checks.map((check) => check.name)).not.toContain("filter_without_index");
+        expect(row?.coverage).not.toBe("clean");
+    });
+
+    it("normalizes the feeder options into evidence the lints can read", () => {
+        expect.assertions(2);
+
+        const context = toAdvisorContext({ procedureProtections: [], queries: [], schema: irFrom(UNINDEXED) });
+
+        expect(context.schema.tables.map((table) => table.name)).toStrictEqual(["users", "posts"]);
+        expect(runAdvisor(context, { source: "static" }).map((finding) => finding.name)).toContain("unindexed_foreign_key");
     });
 });

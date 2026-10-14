@@ -6,6 +6,7 @@
  * turns the current caret position into a ranked suggestion list and the span
  * of text a chosen suggestion should replace.
  */
+import { sqlContextOf } from "./sql-context";
 
 /** What a single suggestion stands for, so the dropdown can badge it. */
 type SuggestionKind = "column" | "keyword" | "table";
@@ -24,8 +25,25 @@ interface Suggestion {
  * column coverage grows as they explore — table names are always complete).
  */
 interface SqlSchema {
-    /** Columns per table, keyed by table name. Missing table ⇒ columns not probed yet. */
+    /**
+     * Real SQL columns per table, keyed by table name. Missing table ⇒ columns
+     * not probed yet.
+     *
+     * These are the names a statement may write: for a canonical shard table,
+     * `id`, `_creationTime`, `__doc__`. The user's fields live INSIDE `__doc__`
+     * and are reachable only through `json_extract` — they belong in
+     * `docFields`, never here, because this list is what the editor
+     * completes and what the linter treats as resolvable.
+     */
     readonly columns: Readonly<Record<string, ReadonlyArray<string>>>;
+
+    /**
+     * The `__doc__` field names per table — model fields, not columns. Kept
+     * apart from `columns` so the linter can recognise a field that has
+     * been written as though it were a column and say so precisely, instead of
+     * either flagging nothing or flagging every unknown identifier.
+     */
+    readonly docFields?: Readonly<Record<string, ReadonlyArray<string>>>;
     readonly tables: ReadonlyArray<string>;
 }
 
@@ -124,11 +142,17 @@ const prefersColumns = (value: string, start: number): boolean => {
 };
 
 /**
- * The table named just before a `.` qualifier (`messages.| ` ⇒ `messages`), so
- * `tbl.` completes only that table's columns. Returns `undefined` when the caret
- * isn't qualified by a dotted prefix.
+ * The TABLE a `.` qualifier before the caret resolves to (`messages.|` ⇒
+ * `messages`, and `m.|` ⇒ `messages` when the statement says `FROM messages m`).
+ * `undefined` when the caret isn't qualified by a dotted prefix.
+ *
+ * Resolution goes through `sql-context.ts` — the same alias map the linter uses
+ * — rather than treating the word before the dot as a table name. Reading the
+ * bare word cannot see aliases, so `SELECT m.| FROM messages m` completed
+ * nothing at all, while the linter (correctly) understood `m`. One resolver, so
+ * the two features cannot disagree about what a qualifier means.
  */
-const qualifierTable = (value: string, start: number): string | undefined => {
+const qualifierTable = (value: string, start: number, tables: ReadonlyArray<string>): string | undefined => {
     const before = value.slice(0, start);
 
     if (!before.endsWith(".")) {
@@ -137,7 +161,14 @@ const qualifierTable = (value: string, start: number): string | undefined => {
 
     const name = trailingWord(before.slice(0, -1));
 
-    return name === "" ? undefined : name;
+    if (name === "") {
+        return undefined;
+    }
+
+    // An unresolved qualifier falls back to the literal name: the table may
+    // simply not be in `tables` yet (the list loads asynchronously), and
+    // offering its columns is better than offering nothing.
+    return sqlContextOf(value, tables).targets.get(name.toLowerCase()) ?? name;
 };
 
 /** Case-insensitive prefix match; an empty needle matches everything (so a bare clause still offers candidates). */
@@ -203,7 +234,7 @@ const takeColumnMatches = (schema: SqlSchema, needle: string, max: number): Sugg
  */
 const suggestionsFor = (value: string, caret: number, schema: SqlSchema): Suggestion[] => {
     const span = tokenAt(value, caret);
-    const qualifier = qualifierTable(value, span.start);
+    const qualifier = qualifierTable(value, span.start, schema.tables);
 
     // A dotted `tbl.` qualifier completes only that table's columns.
     if (qualifier !== undefined) {
@@ -227,11 +258,13 @@ const suggestionsFor = (value: string, caret: number, schema: SqlSchema): Sugges
     });
     const columnHits = takeColumnMatches(schema, span.text, MAX_SUGGESTIONS);
 
-    const keywordHits: Suggestion[] = KEYWORDS.filter(
-        (keyword) => span.text !== "" && matches(keyword, span.text) && keyword.toLowerCase() !== span.text.toLowerCase(),
-    ).map((keyword) => {
-        return { kind: "keyword" as const, label: keyword };
-    });
+    // One pass over the keyword table, not `.filter().map()`: this runs on every
+    // keystroke against ~100 keywords, so the second walk is pure overhead.
+    const keywordHits: Suggestion[] = KEYWORDS.flatMap((keyword) =>
+        span.text !== "" && matches(keyword, span.text) && keyword.toLowerCase() !== span.text.toLowerCase()
+            ? [{ kind: "keyword" as const, label: keyword }]
+            : [],
+    );
 
     const ordered = prefersColumns(value, span.start) ? [...columnHits, ...tableHits, ...keywordHits] : [...tableHits, ...columnHits, ...keywordHits];
 

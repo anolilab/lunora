@@ -9,6 +9,8 @@
  */
 import { describe, expect, it } from "vitest";
 
+import type { FacadeWriterLike } from "../src/facade";
+import { bindTableFacade } from "../src/facade";
 import type { Middleware, Policy, Role } from "../src/index";
 import { definePermission, definePolicies, definePolicy, defineRole, initLunora, LunoraError, rls } from "../src/index";
 
@@ -18,7 +20,7 @@ import { definePermission, definePolicies, definePolicy, defineRole, initLunora,
  * shape is a superset (it also accepts the new `baseWhere` /
  * `restrictsCounts` count signature) so TS rejects the direct widening.
  * Pin a permissive cast once here so each test reads cleanly without
- * scattering `as unknown as Middleware&lt;…>` at every call site.
+ * scattering `as unknown as Middleware<…>` at every call site.
  */
 const rlsForTest = <Context>(policies: ReadonlyArray<Policy<Context>>): Middleware<any, any> =>
     (rls as unknown as (p: ReadonlyArray<Policy<Context>>) => Middleware<any, any>)(policies);
@@ -31,6 +33,7 @@ interface CapturedCall {
     args: unknown;
     method: string;
     tableOrId?: string;
+    verify?: (previous: Record<string, unknown>, next: Record<string, unknown>) => boolean;
 }
 
 interface FakeDatabase {
@@ -38,23 +41,38 @@ interface FakeDatabase {
     writer: {
         aggregate: (tableName: string, options: unknown) => Promise<null | number>;
         count: (tableName: string, whereOrArgs?: unknown) => Promise<number>;
-        delete: (id: string) => Promise<void>;
+        delete: (id: string, expectedTable?: string, options?: { hard?: boolean }) => Promise<void>;
         deleteMany: (ids: ReadonlyArray<string>, options?: { limit?: number }) => Promise<{ deleted: number }>;
+        deleteWhere: (tableName: string, args: { limit?: number; where: Record<string, unknown> }) => Promise<{ deleted: number }>;
+        explain: (tableName: string, args?: unknown) => Promise<{ params: unknown[]; plan: string[]; sql: string }>;
         findFirst: (tableName: string, args?: unknown) => Promise<Record<string, unknown> | null>;
         findFirstOrThrow: (tableName: string, args?: unknown) => Promise<Record<string, unknown>>;
         findMany: (tableName: string, args?: unknown) => Promise<{ continueCursor: null | string; isDone: boolean; page: Record<string, unknown>[] }>;
         get: (id: string) => Promise<Record<string, unknown> | null>;
         groupBy: (tableName: string, options: unknown) => Promise<ReadonlyArray<{ key: Record<string, unknown>; value: null | number }>>;
-        insert: (tableName: string, document: Record<string, unknown>) => Promise<string>;
-        insertMany: (tableName: string, documents: ReadonlyArray<Record<string, unknown>>, options?: { limit?: number }) => Promise<string[]>;
+        insert: (tableName: string, document: Record<string, unknown>, options?: { clientId?: string }) => Promise<string>;
+        insertMany: (
+            tableName: string,
+            documents: ReadonlyArray<Record<string, unknown>>,
+            options?: { limit?: number; skipDuplicates?: boolean },
+        ) => Promise<(string | null)[]>;
         insertManyUnsafe: (
             tableName: string,
             documents: ReadonlyArray<Record<string, unknown>>,
             options?: { allowExplicitId?: boolean; limit?: number },
         ) => Promise<string[]>;
         lookupById?: (id: string) => Promise<null | { row: Record<string, unknown>; tableName: string }>;
-        patch: (id: string, patch: Record<string, unknown>) => Promise<void>;
-        patchMany: (patches: ReadonlyArray<{ id: string; patch: Record<string, unknown> }>, options?: { limit?: number }) => Promise<void>;
+        patch: (id: string, patch: Record<string, unknown>, expectedTable?: string, options?: { verify?: CapturedCall["verify"] }) => Promise<void>;
+        patchIf: (
+            tableName: string,
+            id: string,
+            args: { patch: Record<string, unknown>; where: Record<string, unknown> },
+        ) => Promise<{ applied: boolean; doc: Record<string, unknown> | null }>;
+        patchMany: (patches: ReadonlyArray<{ id: string; patch: Record<string, unknown> }>, options?: { limit?: number }) => Promise<{ patched: number }>;
+        patchWhere: (
+            tableName: string,
+            args: { limit?: number; patch: Record<string, unknown>; where: Record<string, unknown> },
+        ) => Promise<{ patched: number }>;
         query: (tableName: string) => never;
         rank: (tableName: string, indexName: string, options: unknown) => Promise<null | { position: number; total: number }>;
         rankBefore: (tableName: string, indexName: string, options: unknown) => Promise<{ before: number; total: number }>;
@@ -63,7 +81,18 @@ interface FakeDatabase {
             indexName: string,
             options?: unknown,
         ) => Promise<{ continueCursor: null | string; isDone: boolean; page: Record<string, unknown>[] }>;
+        /** Optional — mirrors `@lunora/shard-engine`'s cross-shard companion to `rankPage`. Enabled per-test via `enableRankPageRows`. */
+        rankPageRows?: (
+            tableName: string,
+            indexName: string,
+            options?: unknown,
+        ) => Promise<{
+            directions: ReadonlyArray<"asc" | "desc">;
+            hasMore: boolean;
+            rows: ReadonlyArray<{ doc: Record<string, unknown>; key: { partitionKey: string; rowId: string; sortValues: ReadonlyArray<unknown> } }>;
+        }>;
         replace: (id: string, document: Record<string, unknown>) => Promise<void>;
+        restore: (id: string, expectedTable?: string) => Promise<void>;
     };
 }
 
@@ -91,13 +120,18 @@ const createFakeDatabase = (rows: (Record<string, unknown> & { _id: string; tabl
 
                 return rowsOfTable(tableName).length;
             },
-            async delete(id) {
-                calls.push({ args: undefined, method: "delete", tableOrId: id });
+            async delete(id, _expectedTable, options) {
+                calls.push({ args: options, method: "delete", tableOrId: id });
             },
             async deleteMany(ids) {
                 calls.push({ args: ids, method: "deleteMany", tableOrId: "" });
 
                 return { deleted: ids.length };
+            },
+            async deleteWhere(tableName, args) {
+                calls.push({ args, method: "deleteWhere", tableOrId: tableName });
+
+                return { deleted: rowsOfTable(tableName).length };
             },
             async findFirst(tableName, args) {
                 calls.push({ args, method: "findFirst", tableOrId: tableName });
@@ -119,6 +153,11 @@ const createFakeDatabase = (rows: (Record<string, unknown> & { _id: string; tabl
 
                 return result;
             },
+            async explain(tableName, args) {
+                calls.push({ args, method: "explain", tableOrId: tableName });
+
+                return { params: [], plan: [], sql: "" };
+            },
             async findMany(tableName, args) {
                 calls.push({ args, method: "findMany", tableOrId: tableName });
 
@@ -134,29 +173,50 @@ const createFakeDatabase = (rows: (Record<string, unknown> & { _id: string; tabl
 
                 return [{ key: {}, value: rowsOfTable(tableName).length }];
             },
-            async insert(tableName, document) {
-                calls.push({ args: document, method: "insert", tableOrId: tableName });
+            async insert(tableName, document, options) {
+                calls.push({ args: options === undefined ? document : { document, options }, method: "insert", tableOrId: tableName });
 
-                return (document["_id"] as string | undefined) ?? "new-id";
+                return options?.clientId ?? (document["_id"] as string | undefined) ?? "new-id";
             },
-            async insertMany(tableName, documents) {
+            async insertMany(tableName, documents, options) {
                 calls.push({ args: documents, method: "insertMany", tableOrId: tableName });
 
-                return documents.map((document, index) => (document["_id"] as string | undefined) ?? `new-id-${String(index)}`);
+                return documents.map((document, index) => {
+                    if (options?.skipDuplicates === true && index === 0 && document["_id"] === "dup") {
+                        return null;
+                    }
+
+                    return (document["_id"] as string | undefined) ?? `new-id-${String(index)}`;
+                });
             },
             async insertManyUnsafe(tableName, documents) {
                 calls.push({ args: documents, method: "insertManyUnsafe", tableOrId: tableName });
 
                 return documents.map((document, index) => (document["_id"] as string | undefined) ?? `new-id-${String(index)}`);
             },
-            async patch(id, patchValue) {
-                calls.push({ args: patchValue, method: "patch", tableOrId: id });
+            async patch(id, patchValue, _expectedTable, writeOptions) {
+                calls.push({ args: patchValue, method: "patch", tableOrId: id, verify: writeOptions?.verify });
+            },
+            async patchIf(tableName, id, args) {
+                calls.push({ args, method: "patchIf", tableOrId: id });
+
+                return { applied: true, doc: { _id: id, table: tableName, ...args.patch } };
             },
             async patchMany(patches) {
                 calls.push({ args: patches, method: "patchMany", tableOrId: "" });
+
+                return { patched: patches.length };
+            },
+            async patchWhere(tableName, args) {
+                calls.push({ args, method: "patchWhere", tableOrId: tableName });
+
+                return { patched: rowsOfTable(tableName).length };
             },
             query() {
                 throw new Error("query() not used in these tests");
+            },
+            async restore(id) {
+                calls.push({ args: undefined, method: "restore", tableOrId: id });
             },
             async rank(tableName, _indexName, options) {
                 calls.push({ args: options, method: "rank", tableOrId: tableName });
@@ -198,16 +258,41 @@ const enableGetWithTable = (database: FakeDatabase, rows: (Record<string, unknow
     };
 };
 
+/** Enable the optional `rankPageRows` seam — the cross-shard companion to `rankPage` (mirrors `@lunora/shard-engine`'s writer). */
+const enableRankPageRows = (database: FakeDatabase, rows: (Record<string, unknown> & { _id: string; table: string })[]): void => {
+    // eslint-disable-next-line no-param-reassign -- the helper's purpose is to install the seam on the caller's fake writer
+    database.writer.rankPageRows = async (tableName, _indexName, options) => {
+        database.calls.push({ args: options, method: "rankPageRows", tableOrId: tableName });
+
+        return {
+            directions: ["asc"],
+            hasMore: false,
+            rows: rows
+                .filter((row) => row.table === tableName)
+                .map((row, index) => {
+                    return { doc: row, key: { partitionKey: "", rowId: row._id, sortValues: [index] } };
+                }),
+        };
+    };
+};
+
 const lunora = initLunora.dataModel<Record<string, never>>().create();
 
 interface TestContext {
-    auth: { roles?: ReadonlyArray<string>; userId: null | string };
+    auth: { getIdentity?: () => Promise<Record<string, unknown> | null>; userId: null | string };
     db: FakeDatabase["writer"];
 }
 
+// Roles reach a policy only as the `roles` claim on the resolved identity —
+// the same single source `resolvePolicyAuth` reads at request time.
 const makeContext = (database: FakeDatabase, userId: null | string, roles: string[] = []): TestContext => {
     return {
-        auth: { roles, userId },
+        auth: {
+            getIdentity: async () => {
+                return { roles, userId };
+            },
+            userId,
+        },
         db: database.writer,
     };
 };
@@ -219,6 +304,13 @@ const insertWithPolicy = (policy: Policy<TestContext>) => (document: Record<stri
 /* -------------------------------------------------------------------------
  * Tests
  * ---------------------------------------------------------------------- */
+
+/** Runs `patch("a1", …)` through the RLS middleware as user `u1`, against `database`. */
+const patchAccount = (policy: ReturnType<typeof definePolicy<TestContext>>, database: FakeDatabase) => async (patch: Record<string, unknown>) =>
+    lunora.mutation
+        .use(rlsForTest<TestContext>([policy]))
+        .mutation(async ({ ctx }) => ctx.db.patch("a1", patch))
+        .handler(makeContext(database, "u1"), {});
 
 describe("rls — read path", () => {
     it("and-merges a policy WhereInput into findMany via baseWhere", async () => {
@@ -248,6 +340,31 @@ describe("rls — read path", () => {
         const findManyCall = database.calls.find((call) => call.method === "findMany");
 
         expect(findManyCall?.args).toMatchObject({
+            baseWhere: { ownerId: "u1" },
+            where: { archived: false },
+        });
+    });
+
+    it("merges the read policy into explain, so the plan is the one this caller's read gets", async () => {
+        expect.assertions(1);
+
+        const policies = definePolicies([
+            definePolicy<TestContext>({
+                on: "read",
+                table: "documents",
+                when: ({ auth }) => {
+                    return { ownerId: auth.userId };
+                },
+            }),
+        ]);
+        const database = createFakeDatabase([]);
+        const handler = lunora.query
+            .use(rlsForTest<TestContext>(policies))
+            .query(async ({ ctx }) => ctx.db.explain("documents", { where: { archived: false } }));
+
+        await handler.handler(makeContext(database, "u1"), {});
+
+        expect(database.calls.find((call) => call.method === "explain")?.args).toMatchObject({
             baseWhere: { ownerId: "u1" },
             where: { archived: false },
         });
@@ -345,7 +462,135 @@ describe("rls — read path", () => {
         expect((userCall?.args as { baseWhere?: unknown }).baseWhere).toEqual({ ownerId: "u1" });
     });
 
-    it("count() throws COUNT_RLS_UNSUPPORTED when a policy applies", async () => {
+    // SECURITY (regression): the mirror of the test above, and the reason a dead
+    // `auth.roles` is a vulnerability rather than a papercut. The generated
+    // context is `auth: { getIdentity, userId }` — there has never been a
+    // `ctx.auth.roles` for anything to populate — so a policy whose DENY branch
+    // is gated on a role read `[]`, never took the branch, and left a suspended
+    // caller with the same access as everyone else. Roles are now read off the
+    // resolved identity's `roles` claim, the one place the runtime produces them.
+    it("a role-gated DENY branch fires for a suspended caller", async () => {
+        expect.assertions(2);
+
+        const policy = definePolicy<TestContext>({
+            on: "read",
+            table: "documents",
+            when: ({ auth }) => (auth.roles.includes("suspended") ? false : { ownerId: auth.userId }),
+        });
+        const database = createFakeDatabase([]);
+
+        const handler = lunora.query.use(rlsForTest<TestContext>([policy])).query(async ({ ctx }) => ctx.db.findMany("documents"));
+
+        await handler.handler(makeContext(database, "u1", ["suspended"]), {});
+
+        // `{ OR: [] }` is the vacuously-false sentinel: zero rows survive.
+        expect((database.calls.at(-1)?.args as { baseWhere?: unknown }).baseWhere).toEqual({ OR: [] });
+
+        // …while an unsuspended caller keeps their own rows.
+        await handler.handler(makeContext(database, "u2", []), {});
+
+        expect((database.calls.at(-1)?.args as { baseWhere?: unknown }).baseWhere).toEqual({ ownerId: "u2" });
+    });
+
+    // better-auth's `admin()` plugin stores a multi-role value comma-joined, so a
+    // resolver forwarding that column verbatim must not silently resolve to no
+    // roles — that is the same fail-open the dead `auth.roles` produced.
+    it("reads a comma-separated `roles` claim as a role list", async () => {
+        expect.assertions(1);
+
+        const policy = definePolicy<TestContext>({
+            on: "read",
+            table: "documents",
+            when: ({ auth }) => (auth.roles.includes("admin") ? true : { ownerId: auth.userId }),
+        });
+        const database = createFakeDatabase([]);
+
+        const handler = lunora.query.use(rlsForTest<TestContext>([policy])).query(async ({ ctx }) => ctx.db.findMany("documents"));
+
+        await handler.handler(
+            {
+                auth: {
+                    getIdentity: async () => {
+                        return { roles: "user,admin" };
+                    },
+                    userId: "u1",
+                },
+                db: database.writer,
+            },
+            {},
+        );
+
+        expect((database.calls.at(-1)?.args as { baseWhere?: unknown }).baseWhere).toBeUndefined();
+    });
+
+    // A middleware may derive roles a provider's envelope does not carry as a
+    // `roles` claim and hand them over as `ctx.auth.roles`. Reading only the
+    // claim on the request path silently drops every such role, and a role-gated
+    // DENY branch that stops firing LEAKS rows. (Live shapes see the claim only
+    // — see the KNOWN DIVERGENCE in `src/rls/shape-read-base.ts`.)
+    it("honours roles contributed by an upstream middleware, not just the identity claim", async () => {
+        expect.assertions(1);
+
+        const policy = definePolicy<TestContext>({
+            on: "read",
+            table: "documents",
+            when: ({ auth }) => (auth.roles.includes("admin") ? true : { ownerId: auth.userId }),
+        });
+        const database = createFakeDatabase([]);
+
+        const handler = lunora.query.use(rlsForTest<TestContext>([policy])).query(async ({ ctx }) => ctx.db.findMany("documents"));
+
+        await handler.handler(
+            {
+                auth: {
+                    // No `roles` claim on the identity — exactly the Access shape.
+                    getIdentity: async () => {
+                        return { email: "ada@example.com" };
+                    },
+                    roles: ["admin"],
+                    userId: "u1",
+                },
+                db: database.writer,
+            },
+            {},
+        );
+
+        expect((database.calls.at(-1)?.args as { baseWhere?: unknown }).baseWhere).toBeUndefined();
+    });
+
+    it("unions middleware roles with the identity claim rather than letting one win", async () => {
+        expect.assertions(1);
+
+        // Two producers, one role each, and a policy that needs both. Either
+        // source alone leaves the caller short, so this fails if the resolution
+        // picks a winner instead of merging.
+        const policy = definePolicy<TestContext>({
+            on: "read",
+            table: "documents",
+            when: ({ auth }) => (auth.roles.includes("admin") && auth.roles.includes("auditor") ? true : { ownerId: auth.userId }),
+        });
+        const database = createFakeDatabase([]);
+
+        const handler = lunora.query.use(rlsForTest<TestContext>([policy])).query(async ({ ctx }) => ctx.db.findMany("documents"));
+
+        await handler.handler(
+            {
+                auth: {
+                    getIdentity: async () => {
+                        return { roles: ["auditor"] };
+                    },
+                    roles: ["admin"],
+                    userId: "u1",
+                },
+                db: database.writer,
+            },
+            {},
+        );
+
+        expect((database.calls.at(-1)?.args as { baseWhere?: unknown }).baseWhere).toBeUndefined();
+    });
+
+    it("count() throws COUNT_RLS_UNSUPPORTED when a policy narrows the table", async () => {
         expect.hasAssertions();
 
         // We can't observe the underlying LunoraError here without wiring the
@@ -353,10 +598,15 @@ describe("rls — read path", () => {
         // *passes* `restrictsCounts: true` down to the writer — the ORM is
         // responsible for converting that into the thrown LunoraError, and
         // we assert that in the ORM tests below.
+        //
+        // The policy has to NARROW for the flag to be set; an allow-all read
+        // policy leaves the count exactly computable and is asserted separately.
         const policy = definePolicy<TestContext>({
             on: "read",
             table: "documents",
-            when: () => true,
+            when: () => {
+                return { ownerId: "u1" };
+            },
         });
         const database = createFakeDatabase([]);
 
@@ -515,6 +765,115 @@ describe("rls — read path", () => {
         expect(unscopedProbes).toHaveLength(0);
     });
 
+    it("lookupById() resolves null (not the row) when the read policy denies it (plan 254)", async () => {
+        expect.assertions(1);
+
+        // Same shape as "get() does NOT leak a row that the read policy
+        // denied" above, but calling the `lookupById` seam directly — the
+        // `...base` spread in `rls/middleware.ts` would otherwise expose
+        // `base.lookupById` (the RLS-guarded, but not policy-filtered, seam)
+        // unfiltered by the read policy, leaking another user's row.
+        const policy = definePolicy<TestContext>({
+            on: "read",
+            table: "documents",
+            when: ({ auth }) => {
+                return { ownerId: auth.userId };
+            },
+        });
+
+        const rows = [{ _id: "d1", ownerId: "u2", table: "documents" }];
+        const fake = createFakeDatabase(rows);
+
+        enableGetWithTable(fake, rows);
+
+        // Honest fake: a baseWhere-scoped findFirst filters by the predicate,
+        // mirroring what `@lunora/do`'s `findFirst` does at runtime (the
+        // default fake ignores `baseWhere` entirely).
+        const wrappedFindFirst = fake.writer.findFirst;
+
+        fake.writer.findFirst = async (tableName, args) => {
+            const candidate = await wrappedFindFirst(tableName, args);
+            const baseWhere = (args as { baseWhere?: { ownerId?: unknown } } | undefined)?.baseWhere;
+
+            if (!candidate || !baseWhere || !("ownerId" in baseWhere)) {
+                return candidate;
+            }
+
+            return candidate["ownerId"] === baseWhere.ownerId ? candidate : null;
+        };
+
+        const handler = lunora.query.use(rlsForTest<TestContext>([policy])).query(async ({ ctx }) => (ctx as unknown as TestContext).db.lookupById?.("d1"));
+
+        await expect(handler.handler(makeContext(fake, "u1"), {})).resolves.toBeNull();
+    });
+
+    it("lookupById() returns { row, tableName } when the read policy grants access (plan 254)", async () => {
+        expect.assertions(1);
+
+        const policy = definePolicy<TestContext>({
+            on: "read",
+            table: "documents",
+            when: ({ auth }) => {
+                return { ownerId: auth.userId };
+            },
+        });
+
+        const rows = [{ _id: "d1", ownerId: "u1", table: "documents" }];
+        const fake = createFakeDatabase(rows);
+
+        enableGetWithTable(fake, rows);
+
+        const handler = lunora.query.use(rlsForTest<TestContext>([policy])).query(async ({ ctx }) => (ctx as unknown as TestContext).db.lookupById?.("d1"));
+
+        await expect(handler.handler(makeContext(fake, "u1"), {})).resolves.toMatchObject({ row: { _id: "d1" }, tableName: "documents" });
+    });
+
+    it("lookupById() on an id outside every policy-gated table passes through unrestricted (plan 254)", async () => {
+        expect.assertions(1);
+
+        const policy = definePolicy<TestContext>({
+            on: "read",
+            table: "documents",
+            when: () => {
+                return { ownerId: "anyone" };
+            },
+        });
+
+        const rows = [{ _id: "a1", event: "login", table: "audit" }];
+        const fake = createFakeDatabase(rows);
+
+        enableGetWithTable(fake, rows);
+
+        const handler = lunora.query.use(rlsForTest<TestContext>([policy])).query(async ({ ctx }) => (ctx as unknown as TestContext).db.lookupById?.("a1"));
+
+        await expect(handler.handler(makeContext(fake, "u1"), {})).resolves.toMatchObject({ row: { _id: "a1" }, tableName: "audit" });
+    });
+
+    it("lookupById() on an unresolvable (e.g. global) id returns null rather than throwing (plan 254)", async () => {
+        expect.assertions(1);
+
+        // Mirrors `@lunora/shard-engine`'s own contract: a global row's table
+        // isn't resolvable by the shard-local seam, so it returns `null` and
+        // the caller keeps its probe fallback — the gate must not turn this
+        // into a thrown error.
+        const policy = definePolicy<TestContext>({
+            on: "read",
+            table: "documents",
+            when: () => true,
+        });
+
+        const rows: (Record<string, unknown> & { _id: string; table: string })[] = [];
+        const fake = createFakeDatabase(rows);
+
+        enableGetWithTable(fake, rows);
+
+        const handler = lunora.query
+            .use(rlsForTest<TestContext>([policy]))
+            .query(async ({ ctx }) => (ctx as unknown as TestContext).db.lookupById?.("unresolvable-id"));
+
+        await expect(handler.handler(makeContext(fake, "u1"), {})).resolves.toBeNull();
+    });
+
     it("count() on a non-policy table does NOT mark restrictsCounts", async () => {
         expect.assertions(1);
 
@@ -580,6 +939,182 @@ describe("rls — write path", () => {
         expect(database.calls.some((call) => call.method === "patch")).toBe(false);
     });
 
+    it("gates each child of a nested relation write by that child's own update policy", async () => {
+        expect.assertions(2);
+
+        const policy = definePolicy<TestContext>({
+            on: "update",
+            table: "documents",
+            when: ({ auth, row }) => row?.["ownerId"] === auth.userId,
+        });
+        const database = createFakeDatabase([
+            { _id: "f1", table: "folders" },
+            { _id: "d1", ownerId: "u2", table: "documents" },
+        ]);
+
+        (database.writer as unknown as Record<string, unknown>)["relationWrites"] = {
+            folders: { documents: { colocated: true, field: "folderId", kind: "many", nullable: true, references: "_id", table: "documents" } },
+        };
+
+        const handler = lunora.mutation
+            .use(rlsForTest<TestContext>([policy]))
+            .mutation(async ({ ctx }) => bindTableFacade(ctx.db as unknown as FacadeWriterLike, "folders").patch("f1", { documents: { connect: ["d1"] } }));
+
+        // The caller may read the document but not update it, so pointing it at the folder is refused.
+        await expect(handler.handler(makeContext(database, "u1"), {})).rejects.toMatchObject({ code: "FORBIDDEN", name: "LunoraError" });
+        expect(database.calls.some((call) => call.method === "patch")).toBe(false);
+    });
+
+    /** A folder with one document, and the relation-only patch that attaches the document to it. */
+    const relationOnlyFolderPatch = (folderOwner: string, documentOwner: string) => {
+        const folderPolicy = definePolicy<TestContext>({
+            on: "update",
+            table: "folders",
+            when: ({ auth, row }) => row?.["ownerId"] === auth.userId,
+        });
+        const documentPolicy = definePolicy<TestContext>({
+            on: "update",
+            table: "documents",
+            when: ({ auth, row }) => row?.["ownerId"] === auth.userId,
+        });
+        const database = createFakeDatabase([
+            { _id: "f1", ownerId: folderOwner, table: "folders" },
+            { _id: "d1", ownerId: documentOwner, table: "documents" },
+        ]);
+
+        (database.writer as unknown as Record<string, unknown>)["relationWrites"] = {
+            folders: { documents: { colocated: true, field: "folderId", kind: "many", nullable: true, references: "_id", table: "documents" } },
+        };
+
+        const handler = lunora.mutation
+            .use(rlsForTest<TestContext>([folderPolicy, documentPolicy]))
+            .mutation(async ({ ctx }) => bindTableFacade(ctx.db as unknown as FacadeWriterLike, "folders").patch("f1", { documents: { connect: ["d1"] } }));
+
+        return { database, handler };
+    };
+
+    it("denies a relation-only patch whose parent the caller may read but not update, before any child is written", async () => {
+        expect.assertions(2);
+
+        const { database, handler } = relationOnlyFolderPatch("u2", "u1");
+
+        await expect(handler.handler(makeContext(database, "u1"), {})).rejects.toMatchObject({ code: "FORBIDDEN", name: "LunoraError" });
+        expect(database.calls.some((call) => call.method === "patch")).toBe(false);
+    });
+
+    it("still gates each child when the parent's update policy allows the relation-only patch", async () => {
+        expect.assertions(2);
+
+        const { database, handler } = relationOnlyFolderPatch("u1", "u2");
+
+        await expect(handler.handler(makeContext(database, "u1"), {})).rejects.toMatchObject({ code: "FORBIDDEN", name: "LunoraError" });
+        expect(database.calls.some((call) => call.method === "patch")).toBe(false);
+    });
+
+    it("writes the child of a relation-only patch once both the parent and the child allow it", async () => {
+        expect.assertions(2);
+
+        const { database, handler } = relationOnlyFolderPatch("u1", "u1");
+
+        await handler.handler(makeContext(database, "u1"), {});
+
+        const patches = database.calls.filter((call) => call.method === "patch");
+
+        expect(patches.map((call) => call.tableOrId)).toStrictEqual(["d1"]);
+        expect(patches[0]?.args).toStrictEqual({ folderId: "f1" });
+    });
+
+    it.each([
+        ["a policy table", "documents"],
+        ["a table without policies", "notes"],
+    ])("forwards a pinned clientId on insert into %s", async (_label, table) => {
+        expect.assertions(2);
+
+        const policy = definePolicy<TestContext>({ on: "insert", table: "documents", when: () => true });
+        const database = createFakeDatabase([]);
+        const clientId = "8d3f2a52-6a59-8c4e-9f1e-0b7c2d4e6f80";
+
+        const id = await lunora.mutation
+            .use(rlsForTest<TestContext>([policy]))
+            .mutation(async ({ ctx }) => ctx.db.insert(table, { title: "t" }, { clientId }))
+            .handler(makeContext(database, "u1"), {});
+
+        expect(id).toBe(clientId);
+        expect(database.calls.find((call) => call.method === "insert")?.args).toStrictEqual({ document: { title: "t" }, options: { clientId } });
+    });
+
+    it("update policy denies a conditional patch with FORBIDDEN before it reaches the writer", async () => {
+        expect.assertions(2);
+
+        const policy = definePolicy<TestContext>({
+            on: "update",
+            table: "documents",
+            when: ({ auth, row }) => row?.["ownerId"] === auth.userId,
+        });
+        const database = createFakeDatabase([{ _id: "d1", ownerId: "u2", table: "documents" }]);
+
+        const handler = lunora.mutation
+            .use(rlsForTest<TestContext>([policy]))
+            .mutation(async ({ ctx }) => ctx.db.patchIf("documents", "d1", { patch: { title: "new" }, where: { title: "old" } }));
+
+        await expect(handler.handler(makeContext(database, "u1"), {})).rejects.toMatchObject({ code: "FORBIDDEN", name: "LunoraError" });
+
+        expect(database.calls.some((call) => call.method === "patchIf")).toBe(false);
+    });
+
+    it("update policy checks a conditional patch's post-image and forwards it when allowed", async () => {
+        expect.assertions(2);
+
+        const policy = definePolicy<TestContext>({
+            on: "update",
+            table: "documents",
+            when: ({ auth, row }) => row?.["ownerId"] === auth.userId,
+        });
+        const database = createFakeDatabase([{ _id: "d1", ownerId: "u1", table: "documents" }]);
+        const run = async (patch: Record<string, unknown>) =>
+            lunora.mutation
+                .use(rlsForTest<TestContext>([policy]))
+                .mutation(async ({ ctx }) => ctx.db.patchIf("documents", "d1", { patch, where: { ownerId: "u1" } }))
+                .handler(makeContext(database, "u1"), {});
+
+        await expect(run({ ownerId: "u2" })).rejects.toMatchObject({ code: "FORBIDDEN" });
+        await expect(run({ title: "new" })).resolves.toMatchObject({ applied: true });
+    });
+
+    it("withholds a conditional patch's row from a caller the read policy hides it from", async () => {
+        expect.assertions(2);
+
+        const policies = definePolicies([
+            definePolicy<TestContext>({ on: "update", table: "documents", when: () => true }),
+            definePolicy<TestContext>({
+                on: "read",
+                table: "documents",
+                when: ({ auth }) => {
+                    return { ownerId: auth.userId };
+                },
+            }),
+        ]);
+        const fake = createFakeDatabase([{ _id: "d1", ownerId: "u2", table: "documents" }]);
+        const wrappedFindFirst = fake.writer.findFirst;
+
+        // The fake ignores `baseWhere`; honour the owner scope so the read policy bites.
+        fake.writer.findFirst = async (tableName, args) => {
+            const candidate = await wrappedFindFirst(tableName, args);
+            const baseWhere = (args as { baseWhere?: { ownerId?: unknown } } | undefined)?.baseWhere;
+
+            return candidate && baseWhere && "ownerId" in baseWhere && candidate["ownerId"] !== baseWhere.ownerId ? null : candidate;
+        };
+
+        const run = async (userId: string) =>
+            lunora.mutation
+                .use(rlsForTest<TestContext>(policies))
+                .mutation(async ({ ctx }) => ctx.db.patchIf("documents", "d1", { patch: { title: "new" }, where: {} }))
+                .handler(makeContext(fake, userId), {});
+
+        await expect(run("u1")).resolves.toStrictEqual({ applied: true, doc: null });
+        await expect(run("u2")).resolves.toStrictEqual({ applied: true, doc: expect.objectContaining({ _id: "d1" }) });
+    });
+
     it("update policy allows patch when the row matches", async () => {
         expect.assertions(1);
 
@@ -597,6 +1132,58 @@ describe("rls — write path", () => {
         const patchCall = database.calls.find((call) => call.method === "patch");
 
         expect(patchCall).toBeDefined();
+    });
+
+    it("checks an atomic operator's resolved value, not the operator object, against the update policy", async () => {
+        expect.assertions(7);
+
+        const policy = definePolicy<TestContext>({
+            on: "update",
+            table: "accounts",
+            when: ({ row }) => typeof row?.["balance"] === "number" && row["balance"] >= 0,
+        });
+        const database = createFakeDatabase([{ _id: "a1", balance: 3, table: "accounts" }]);
+        const run = patchAccount(policy, database);
+
+        // 3 - 1 = 2 keeps the post-image valid; 3 - 5 = -2 does not.
+        await expect(run({ balance: { decrement: 1 } })).resolves.toBeUndefined();
+        await expect(run({ balance: { decrement: 5 } })).rejects.toMatchObject({ code: "FORBIDDEN" });
+
+        await run({ balance: 9 });
+
+        // The store, not the gate, performs the arithmetic: the operator is forwarded untouched, with a
+        // verdict the store takes on the row IT reads (it may differ from the gate's, and may retry).
+        const [operatorCall, plainCall] = database.calls.filter((call) => call.method === "patch");
+
+        expect(database.calls.filter((call) => call.method === "patch")).toHaveLength(2);
+        // Every update through the gate carries the verdict, a plain patch included: the row the store reads can
+        // differ from the one the gate read, whatever the patch holds.
+        expect(plainCall?.verify).toBeTypeOf("function");
+        expect(operatorCall?.verify?.({ balance: 3 }, { balance: 2 })).toBe(true);
+        expect(operatorCall?.verify?.({ balance: 1 }, { balance: -4 })).toBe(false);
+        expect(operatorCall?.verify?.({ balance: 3 }, { balance: "x" })).toBe(false);
+    });
+
+    it("checks the merged post-image of a path patch, and hands the store a verdict for it", async () => {
+        expect.assertions(4);
+
+        const policy = definePolicy<TestContext>({
+            on: "update",
+            table: "accounts",
+            when: ({ row }) => (row?.["profile"] as { plan?: string } | undefined)?.plan !== "banned",
+        });
+        const database = createFakeDatabase([{ _id: "a1", profile: { age: 3, plan: "pro" }, table: "accounts" }]);
+        const run = patchAccount(policy, database);
+
+        // The post-image is `{ age: 3, plan: "banned" }`: the policy refuses it, though no column was named.
+        await expect(run({ "profile.plan": "banned" })).rejects.toMatchObject({ code: "FORBIDDEN" });
+        await expect(run({ "profile.plan": "team" })).resolves.toBeUndefined();
+
+        const call = database.calls.find((entry) => entry.method === "patch");
+
+        expect(call?.args).toStrictEqual({ "profile.plan": "team" });
+        // The store takes the verdict on the row IT reads: a path patch is merged into whatever the column holds then.
+        expect(call?.verify?.({ profile: { plan: "pro" } }, { profile: { plan: "banned" } })).toBe(false);
     });
 
     it("boolean update policy denies a patch that reassigns the policy column (WITH-CHECK post-image)", async () => {
@@ -704,6 +1291,33 @@ describe("rls — write path", () => {
             code: "FORBIDDEN",
             name: "LunoraError",
         });
+    });
+
+    it("compares a Date-valued predicate by equality instead of matching every row", async () => {
+        expect.assertions(2);
+
+        // A `Date` (like a `Uint8Array` or a `Map`) has no own enumerable keys.
+        // Under a `typeof value === "object"` plain-object test it counted as an
+        // operator bag, `every` over zero keys was vacuously true, and the
+        // predicate matched EVERY candidate row — so this policy allowed an
+        // insert carrying any `createdAt` at all.
+        const cutoff = new Date("2024-01-01T00:00:00.000Z");
+        const policy = definePolicy<TestContext>({
+            on: "insert",
+            table: "documents",
+            when: () => {
+                return { createdAt: cutoff };
+            },
+        });
+        const database = createFakeDatabase([]);
+        const insert = insertWithPolicy(policy);
+
+        // A different instant must be denied…
+        await expect(insert({ createdAt: new Date("2025-06-01T00:00:00.000Z"), title: "x" }).handler(makeContext(database, "u1"), {})).rejects.toMatchObject({
+            code: "FORBIDDEN",
+        });
+        // …and the matching value must still be allowed (equality, not "deny all").
+        await expect(insert({ createdAt: cutoff, title: "x" }).handler(makeContext(database, "u1"), {})).resolves.toBeDefined();
     });
 });
 
@@ -868,6 +1482,68 @@ describe("rls — batch write path", () => {
 
         await expect(handler.handler(makeContext(database, "u1"), {})).rejects.toMatchObject({ code: "FORBIDDEN", name: "LunoraError" });
         expect(database.calls.some((call) => call.method === "patch")).toBe(false);
+    });
+
+    it("deleteAll gates each row rather than delegating to the writer's uncapped erase", async () => {
+        expect.assertions(3);
+
+        const database = createFakeDatabase([
+            { _id: "d1", ownerId: "u1", table: "documents" },
+            { _id: "d2", ownerId: "u1", table: "documents" },
+        ]);
+
+        const handler = lunora.mutation.use(rlsForTest<TestContext>([deletePolicy])).mutation(async ({ ctx }) => ctx.db.deleteAll("documents"));
+
+        await expect(handler.handler(makeContext(database, "u1"), {})).resolves.toStrictEqual({ deleted: 2 });
+        // Each row went through the single-delete gate...
+        expect(database.calls.filter((call) => call.method === "delete")).toHaveLength(2);
+        // ...and the underlying writer's own `deleteAll` was never called: it loops
+        // its RAW delete, which would bypass every policy.
+        expect(database.calls.some((call) => call.method === "deleteAll")).toBe(false);
+    });
+
+    it("deleteAll denies (FORBIDDEN) when a row fails its policy, before deleting it", async () => {
+        expect.assertions(2);
+
+        const database = createFakeDatabase([{ _id: "d1", ownerId: "someone-else", table: "documents" }]);
+
+        const handler = lunora.mutation.use(rlsForTest<TestContext>([deletePolicy])).mutation(async ({ ctx }) => ctx.db.deleteAll("documents"));
+
+        await expect(handler.handler(makeContext(database, "u1"), {})).rejects.toMatchObject({ code: "FORBIDDEN", name: "LunoraError" });
+        expect(database.calls.some((call) => call.method === "delete")).toBe(false);
+    });
+
+    it("deleteAll does not pin the table, so a .global() row still routes to its backend", async () => {
+        expect.assertions(2);
+
+        const database = createFakeDatabase([{ _id: "d1", ownerId: "u1", table: "documents" }]);
+
+        const handler = lunora.mutation.use(rlsForTest<TestContext>([deletePolicy])).mutation(async ({ ctx }) => ctx.db.deleteAll("documents"));
+
+        await handler.handler(makeContext(database, "u1"), {});
+
+        // Pinning `expectedTable` would block the writer's global fallback, making every
+        // delete on a `.global()` table a silent no-op. It costs nothing to omit: the ids
+        // came from this table's own policy-filtered read, and `gateById` still resolves
+        // each row's real table to pick its delete policy.
+        const deletes = database.calls.filter((call) => call.method === "delete");
+
+        expect(deletes).toHaveLength(1);
+        expect(deletes[0]?.args).toBeUndefined();
+    });
+
+    it("wipeShard fails closed under rls() instead of erasing only policy-visible rows", async () => {
+        expect.assertions(2);
+
+        const database = createFakeDatabase([{ _id: "d1", ownerId: "u1", table: "documents" }]);
+
+        const handler = lunora.mutation.use(rlsForTest<TestContext>([deletePolicy])).mutation(async ({ ctx }) => ctx.db.wipeShard());
+
+        // "Erase everything I can see" is not an erasure guarantee — a read policy
+        // hiding rows would silently leave them behind. Account deletion belongs in
+        // an internalMutation.
+        await expect(handler.handler(makeContext(database, "u1"), {})).rejects.toMatchObject({ code: "FORBIDDEN", name: "LunoraError" });
+        expect(database.calls.some((call) => call.method === "delete")).toBe(false);
     });
 });
 
@@ -1261,6 +1937,91 @@ describe("rls — analytical reads (baseWhere on the full facade)", () => {
         expect(call?.args).toMatchObject({ baseWhere: { ownerId: "u1" }, by: ["status"] });
     });
 
+    /**
+     * A read policy that grants unconditionally for this request produces no
+     * `baseWhere`: the caller sees the whole partition, so a count or a rank
+     * over it is exact. Failing those closed on the mere PRESENCE of a policy
+     * made `count()`/`rank()`/`rankPage()` unreachable from the very procedures
+     * the policy admits — including every admin/`can(...)` branch.
+     */
+    const allowAllPolicy = definePolicy<TestContext>({ on: "read", table: "documents", when: () => true });
+
+    it("serves count() under an allow-all read policy without flagging restrictsCounts", async () => {
+        expect.assertions(2);
+
+        const database = createFakeDatabase([{ _id: "d1", ownerId: "u1", table: "documents" }]);
+        const handler = lunora.query
+            .use(rlsForTest<TestContext>([allowAllPolicy]))
+            .query(async ({ ctx }) => (ctx as unknown as TestContext).db.count("documents"));
+
+        await expect(handler.handler(makeContext(database, "u1"), {})).resolves.toBe(1);
+
+        const call = database.calls.find((entry) => entry.method === "count");
+
+        expect((call?.args as { restrictsCounts?: boolean }).restrictsCounts).toBe(false);
+    });
+
+    it("serves rank() under an allow-all read policy", async () => {
+        expect.assertions(2);
+
+        const database = createFakeDatabase([{ _id: "d1", ownerId: "u1", table: "documents" }]);
+        const handler = lunora.query
+            .use(rlsForTest<TestContext>([allowAllPolicy]))
+            .query(async ({ ctx }) => (ctx as unknown as TestContext).db.rank("documents", "byScore", { row: "d1" }));
+
+        await expect(handler.handler(makeContext(database, "u1"), {})).resolves.toMatchObject({ position: 1 });
+
+        expect(database.calls.some((entry) => entry.method === "rank")).toBe(true);
+    });
+
+    it("serves rankPage() under an allow-all read policy", async () => {
+        expect.assertions(1);
+
+        const database = createFakeDatabase([{ _id: "d1", ownerId: "u1", table: "documents" }]);
+        const handler = lunora.query
+            .use(rlsForTest<TestContext>([allowAllPolicy]))
+            .query(async ({ ctx }) => (ctx as unknown as TestContext).db.rankPage("documents", "byScore"));
+
+        await expect(handler.handler(makeContext(database, "u1"), {})).resolves.toMatchObject({ isDone: true });
+    });
+
+    it("forwards the caller's own rank() baseWhere untouched — the guard contributes none", async () => {
+        expect.assertions(1);
+
+        // `assertUnrestrictedReadBase` is a check, not a producer: reaching past it
+        // means the read base is unrestricted, so there is nothing to AND in and the
+        // caller's `options` go through as written.
+        const database = createFakeDatabase([{ _id: "d1", ownerId: "u1", table: "documents" }]);
+        const handler = lunora.query
+            .use(rlsForTest<TestContext>([allowAllPolicy]))
+            .query(async ({ ctx }) => (ctx as unknown as TestContext).db.rank("documents", "byScore", { baseWhere: { ownerId: "u1" }, row: "d1" }));
+
+        await handler.handler(makeContext(database, "u1"), {});
+
+        expect(database.calls.find((entry) => entry.method === "rank")?.args).toStrictEqual({ baseWhere: { ownerId: "u1" }, row: "d1" });
+    });
+
+    it("serves rank() under a read policy whose predicate is an empty (match-everything) WhereInput", async () => {
+        expect.assertions(1);
+
+        // `{}` matches every row and `mergeBaseWhere` already drops it, so the
+        // fail-closed guard has to read it the same way or it blocks a rank it
+        // does not restrict.
+        const emptyPredicate = definePolicy<TestContext>({
+            on: "read",
+            table: "documents",
+            when: () => {
+                return {};
+            },
+        });
+        const database = createFakeDatabase([{ _id: "d1", ownerId: "u1", table: "documents" }]);
+        const handler = lunora.query
+            .use(rlsForTest<TestContext>([emptyPredicate]))
+            .query(async ({ ctx }) => (ctx as unknown as TestContext).db.rank("documents", "byScore", { row: "d1" }));
+
+        await expect(handler.handler(makeContext(database, "u1"), {})).resolves.toMatchObject({ position: 1 });
+    });
+
     it("fails rank() closed with COUNT_RLS_UNSUPPORTED under a read policy", async () => {
         expect.assertions(2);
 
@@ -1284,6 +2045,41 @@ describe("rls — analytical reads (baseWhere on the full facade)", () => {
 
         await expect(handler.handler(makeContext(database, "u1"), {})).rejects.toMatchObject({ code: "COUNT_RLS_UNSUPPORTED" });
         expect(database.calls.some((entry) => entry.method === "rankPage")).toBe(false);
+    });
+
+    it("fails rankPageRows() closed with COUNT_RLS_UNSUPPORTED under a read policy (plan 254)", async () => {
+        expect.assertions(2);
+
+        const rows = [{ _id: "d1", ownerId: "u1", table: "documents" }];
+        const database = createFakeDatabase(rows);
+
+        enableRankPageRows(database, rows);
+
+        const handler = lunora.query
+            .use(rlsForTest<TestContext>([ownerPolicy]))
+            .query(async ({ ctx }) => (ctx as unknown as TestContext).db.rankPageRows?.("documents", "byScore"));
+
+        await expect(handler.handler(makeContext(database, "u1"), {})).rejects.toMatchObject({ code: "COUNT_RLS_UNSUPPORTED" });
+        // The underlying writer is never reached — the guard throws first.
+        expect(database.calls.some((entry) => entry.method === "rankPageRows")).toBe(false);
+    });
+
+    it("leaves rankPageRows() UNRESTRICTED on a table with no read policy (plan 254)", async () => {
+        expect.assertions(2);
+
+        const rows = [{ _id: "e1", table: "events" }];
+        const database = createFakeDatabase(rows);
+
+        enableRankPageRows(database, rows);
+
+        const handler = lunora.query
+            .use(rlsForTest<TestContext>([ownerPolicy]))
+            .query(async ({ ctx }) => (ctx as unknown as TestContext).db.rankPageRows?.("events", "byTime"));
+
+        const result = await handler.handler(makeContext(database, "u1"), {});
+
+        expect(result?.rows).toHaveLength(1);
+        expect(database.calls.some((entry) => entry.method === "rankPageRows")).toBe(true);
     });
 
     it("leaves analytical reads UNRESTRICTED on a table with no read policy", async () => {
@@ -1367,7 +2163,7 @@ describe("rls — per-table facade + orm (no RLS bypass)", () => {
         const resolve = (table: string): Record<string, unknown> => db[table] as Record<string, unknown>;
 
         return {
-            auth: { roles: [], userId },
+            auth: { userId },
             db,
             orm: {
                 delete: (table: string, id: string) => (resolve(table)["delete"] as (id: string) => unknown)(id),
@@ -1473,13 +2269,22 @@ describe("rls — per-table facade + orm (no RLS bypass)", () => {
         expect(result).toBeNull();
     });
 
-    it("leaves a non-policy table's facade entry on its original binding (no backend re-route)", async () => {
+    /**
+     * This test previously asserted the OPPOSITE — that a non-policy table's
+     * facade entry keeps its original binding — on the stated grounds that a
+     * `.global()` table's entry is bound to the D1 `globalDb` writer and
+     * re-binding it would query the wrong backend.
+     *
+     * That premise is false. `packages/codegen/src/emit/shard.ts` binds EVERY table's
+     * facade entry through the one shard ctx-db, `.global()` included, and says
+     * why in its own comment: `createShardCtxDb` routes global ops to D1
+     * internally and stamps the subscription hooks, so binding a global facade
+     * straight to `globalDb` would skip both. There is no wrong backend to route
+     * to, and the exemption bought nothing while costing a read filter.
+     */
+    it("re-binds EVERY facade entry once any policy is in scope, policy table or not", async () => {
         expect.assertions(2);
 
-        // `documents` has a policy → its facade entry is re-bound through RLS;
-        // `events` has none (it stands in for a `.global()` table) → its entry
-        // must stay the exact object the runtime glued on, so it keeps routing
-        // to its own backend rather than the local wrapped writer.
         const database = createFakeDatabase([]);
 
         let documentsEntry: unknown;
@@ -1500,9 +2305,30 @@ describe("rls — per-table facade + orm (no RLS bypass)", () => {
 
         await handler.handler(context, {});
 
-        // events: identical reference (untouched); documents: re-bound (replaced).
-        expect(eventsEntry).toBe(originalEvents);
         expect(documentsEntry).not.toBe(originalDocuments);
+        expect(eventsEntry).not.toBe(originalEvents);
+    });
+
+    it("threads relationBaseWhere through a NON-policy table's facade, so a hop cannot hydrate hidden rows", async () => {
+        expect.assertions(1);
+
+        // The bypass: `events` has no policy, so its facade entry was never
+        // re-bound and reached the raw writer with no `relationBaseWhere`. A
+        // `with` hop onto `documents` — which DOES have a read policy — then
+        // hydrated and returned rows the policy exists to hide. The flat method
+        // form `ctx.db.findMany("events", …)` was guarded the whole time; only
+        // the idiomatic facade form leaked.
+        const database = createFakeDatabase([]);
+
+        const handler = lunora.query.use(rlsForTest<TestContext>([ownerPolicy])).query(async ({ ctx }) => {
+            const { db } = ctx as unknown as { db: Record<string, { findMany: (args?: unknown) => Promise<unknown> }> };
+
+            return db["events"]!.findMany({ with: { documents: true } });
+        });
+
+        await handler.handler(makeFacadeContext(database, "u1"), {});
+
+        expect((database.calls.at(-1)?.args as { relationBaseWhere?: unknown }).relationBaseWhere).toBeTypeOf("function");
     });
 });
 
@@ -1572,5 +2398,81 @@ describe("rls — permissions / can()", () => {
         await handler.handler(makeContext(database, "u1", ["editor"]), {});
 
         expect(database.calls.some((call) => call.method === "insert")).toBe(true);
+    });
+});
+
+describe("rls — soft-delete write methods (restore / hardDelete)", () => {
+    it("restore is gated as an update — denied for a non-owner", async () => {
+        expect.assertions(2);
+
+        const policy = definePolicy<TestContext>({
+            on: "update",
+            table: "documents",
+            when: ({ auth }) => {
+                return { ownerId: auth.userId };
+            },
+        });
+        const database = createFakeDatabase([{ _id: "d1", ownerId: "u2", table: "documents" }]);
+        const handler = lunora.mutation.use(rlsForTest<TestContext>([policy])).mutation(async ({ ctx }) => ctx.db.restore("d1"));
+
+        // u1 is not the owner → the update policy denies the restore.
+        await expect(handler.handler(makeContext(database, "u1"), {})).rejects.toThrow(/denied/u);
+        // And the underlying writer was never reached.
+        expect(database.calls.some((call) => call.method === "restore")).toBe(false);
+    });
+
+    it("restore reaches the writer for the owner", async () => {
+        expect.assertions(1);
+
+        const policy = definePolicy<TestContext>({
+            on: "update",
+            table: "documents",
+            when: ({ auth }) => {
+                return { ownerId: auth.userId };
+            },
+        });
+        const database = createFakeDatabase([{ _id: "d1", ownerId: "u1", table: "documents" }]);
+        const handler = lunora.mutation.use(rlsForTest<TestContext>([policy])).mutation(async ({ ctx }) => ctx.db.restore("d1"));
+
+        await handler.handler(makeContext(database, "u1"), {});
+
+        expect(database.calls.some((call) => call.method === "restore")).toBe(true);
+    });
+
+    it("hardDelete forwards `{ hard: true }` through the delete gate", async () => {
+        expect.assertions(2);
+
+        const policy = definePolicy<TestContext>({
+            on: "delete",
+            table: "documents",
+            when: () => true,
+        });
+        const database = createFakeDatabase([{ _id: "d1", ownerId: "u1", table: "documents" }]);
+        const handler = lunora.mutation.use(rlsForTest<TestContext>([policy])).mutation(async ({ ctx }) => ctx.db.delete("d1", undefined, { hard: true }));
+
+        await handler.handler(makeContext(database, "u1"), {});
+
+        const deleteCall = database.calls.find((call) => call.method === "delete");
+
+        expect(deleteCall?.tableOrId).toBe("d1");
+        // The `{ hard: true }` option survives the RLS wrapper → the writer soft/hard branch sees it.
+        expect(deleteCall?.args).toStrictEqual({ hard: true });
+    });
+
+    it("hardDelete is still denied by the delete policy", async () => {
+        expect.assertions(2);
+
+        const policy = definePolicy<TestContext>({
+            on: "delete",
+            table: "documents",
+            when: ({ auth }) => {
+                return { ownerId: auth.userId };
+            },
+        });
+        const database = createFakeDatabase([{ _id: "d1", ownerId: "u2", table: "documents" }]);
+        const handler = lunora.mutation.use(rlsForTest<TestContext>([policy])).mutation(async ({ ctx }) => ctx.db.delete("d1", undefined, { hard: true }));
+
+        await expect(handler.handler(makeContext(database, "u1"), {})).rejects.toThrow(/denied/u);
+        expect(database.calls.some((call) => call.method === "delete")).toBe(false);
     });
 });

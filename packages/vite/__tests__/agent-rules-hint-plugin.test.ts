@@ -11,12 +11,15 @@ import type { ResolvedLunoraPluginOptions } from "../src/types";
 
 const makeOptions = (projectRoot: string): ResolvedLunoraPluginOptions => {
     return {
+        allowUnauthenticatedShardAccess: false,
         apiSpec: "openapi",
         cloudflare: false,
         generatedDir: "lunora/_generated",
         overlay: false,
         projectRoot,
         schemaDir: "lunora",
+        shard: {},
+        target: "cloudflare",
         studio: false,
         validateWrangler: false,
     };

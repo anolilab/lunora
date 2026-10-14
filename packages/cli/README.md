@@ -6,7 +6,7 @@
 
 </a>
 
-<h3 align="center">The Lunora CLI: init, dev, deploy, codegen, run, reset, and migrate commands</h3>
+<h3 align="center">The Lunora CLI: init, dev, deploy, codegen, migrate, seed, doctor, insights, logs, registry, and the rest of the project commands</h3>
 
 <!-- END_PACKAGE_OG_IMAGE_PLACEHOLDER -->
 

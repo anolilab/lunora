@@ -1,12 +1,25 @@
 ---
 title: HTTP endpoints
 description: Public HTTP routes with httpAction and the Hono-based httpRouter.
+related:
+    - to: /docs/concepts/actions
+    - to: /docs/concepts/internal-functions
+    - to: /docs/concepts/queries-mutations
+    - to: /docs/packages/server
 ---
 
 Queries, mutations, and actions are reached through Lunora's typed client over
 the RPC/WebSocket transport. Sometimes you need a plain HTTP endpoint instead:
-an inbound webhook, an OAuth callback, a REST surface for a non-Lunora client, a
-file download. That's what `httpAction` and `httpRouter` are for.
+an inbound webhook, an OAuth callback, a file download, or a REST shape that has
+to match someone else's spec. That's what `httpAction` and `httpRouter` are for.
+
+:::tip[Just want an existing procedure callable over HTTP?]
+You don't need a route for that. `.expose({ rest: true })` publishes a query,
+mutation, or action at a derived URL, dispatching through the procedure so auth,
+RLS, and validators still apply. See [Public REST API](/docs/concepts/rest-api).
+Write an `httpRoute` when the endpoint's URL or payload shape is dictated by
+something outside your app.
+:::
 
 `httpRouter()` returns a [Hono](https://hono.dev) app, so the full Hono surface
 (middleware, path params, `.route()` composition) is available. You mount it on
@@ -59,14 +72,30 @@ HTTP actions run in the worker (the "action runtime"), separate from the
 transactional store. The context is therefore a narrower view of `ActionCtx`. It
 carries:
 
-- `ctx.auth` — the resolved caller identity.
-- `ctx.fetch` — outbound HTTP.
-- `ctx.runQuery` / `ctx.runMutation` / `ctx.runAction` — reach the data layer; these forward to the owning shard.
+- `ctx.auth`: the resolved caller identity.
+- `ctx.fetch`: outbound HTTP.
+- `ctx.runQuery` / `ctx.runMutation` / `ctx.runAction`: reach the data layer; these forward an RPC to the **default** shard.
+- `ctx.forShard(key)`: the same trio bound to another shard.
+- `ctx.waitUntil`: keep work alive past the response, when the host supplies one.
+- `ctx.scheduler`: present when the app declared `.scheduler(...)`.
+- `ctx.storage`: present when the app declared `.storage(...)`.
 
-An HTTP action has no direct `ctx.db`, `ctx.scheduler`, `ctx.storage`, or
-`ctx.vectors`. Go through `runQuery` / `runMutation` / `runAction` to read or
-write your tables. (To stream a stored R2 object straight from a handler,
-`serveStorageObject(ctx, key, request)` is the purpose-built helper.)
+An HTTP action runs in the worker, one hop away from every shard, so unlike a
+query or mutation — which already execute inside the owning DO — it has to be
+told which shard it wants. The bare `ctx.run*` targets the default shard; on a
+[sharded](/docs/concepts/sharding) app that is the root DO, which holds none of a
+`.shardBy(...)` table's rows, so name the shard:
+
+```ts
+const messages = await ctx.forShard(channelId).runQuery(api.messages.list, { channelId });
+```
+
+An HTTP action has no direct `ctx.db` or `ctx.vectors`. Go through `runQuery` /
+`runMutation` / `runAction` to read or write your tables. (To stream a stored R2
+object straight from a handler,
+`serveStorageObject(ctx, key, request, authorize)` is the purpose-built
+helper — it owns `Range`/`ETag`/`nosniff`, and its required `authorize` gate is
+where your signed-URL or session check goes.)
 
 ## Typed routes with `httpRoute`
 
@@ -123,10 +152,3 @@ export default createWorker({ httpRouter: app /* …other options */ });
 The lifting middleware throws if the context is absent, so this only trips when
 the router is run outside the runtime. The misconfiguration surfaces loudly
 rather than leaving `c.var.lunora` silently `undefined`.
-
-## See also
-
-- [Actions](/docs/concepts/actions)
-- [Internal functions](/docs/concepts/internal-functions)
-- [Queries & mutations](/docs/concepts/queries-mutations)
-- [API: @lunora/server](/docs/packages/server)

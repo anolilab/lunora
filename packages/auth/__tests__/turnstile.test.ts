@@ -141,6 +141,31 @@ describe("verifyTurnstile", () => {
         expect(error.status).toBe(503);
     });
 
+    it("throws a structural SERVICE_UNAVAILABLE LunoraError on a 2xx with a non-JSON body", async () => {
+        expect.assertions(3);
+
+        const fetch = vi.fn<FetchLike>(
+            async () =>
+                ({
+                    json: async () => {
+                        throw new SyntaxError("Unexpected token < in JSON");
+                    },
+                    ok: true,
+                    status: 200,
+                }) as unknown as Response,
+        );
+
+        const error = (await verifyTurnstile({ fetch, secret: "sek", token: "tok" }).catch((error_: unknown) => error_)) as {
+            code?: string;
+            name?: string;
+            status?: number;
+        };
+
+        expect(error.name).toBe("LunoraError");
+        expect(error.code).toBe("SERVICE_UNAVAILABLE");
+        expect(error.status).toBe(503);
+    });
+
     it("throws a structural LunoraError on a transport failure", async () => {
         expect.assertions(3);
 

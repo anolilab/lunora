@@ -5,14 +5,12 @@
  */
 import { DatabaseSync } from "node:sqlite";
 
+import type { DatabaseWriterLike, SchemaLike, SocketAttachment, SqlExec, SubscriptionEnvelope } from "@lunora/shard-engine";
+import { createShardCtxDb as createShardContextDatabase, ReactiveCache, reactiveCacheKey, runShardMigrations } from "@lunora/shard-engine";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-import type { SchemaLike, SqlExec } from "../src/ctx-db";
-import { createShardCtxDb as createShardContextDatabase, runShardMigrations } from "../src/ctx-db";
-import { ReactiveCache, reactiveCacheKey } from "../src/reactive-cache";
-import type { ShardDOOptions, ShardDOState, SubscriptionOutcome } from "../src/shard-do";
+import type { QueryReadScope, ShardDOOptions, ShardDOState, SubscriptionOutcome } from "../src/shard-do";
 import { ShardDO } from "../src/shard-do";
-import type { SocketAttachment, SubscriptionEnvelope } from "../src/types";
 
 interface NodeStatement {
     all: (...params: unknown[]) => Record<string, unknown>[];
@@ -332,7 +330,7 @@ const createFakeState = (): ShardDOState & { sockets: FakeWebSocket[] } => {
  * subscribers when the cache invalidates.
  */
 class CachingShard extends ShardDO {
-    public handlers = new Map<string, (args: Record<string, unknown>) => Promise<unknown>>();
+    public handlers = new Map<string, (args: Record<string, unknown>, scope?: QueryReadScope) => Promise<unknown>>();
 
     public execCount = new Map<string, number>();
 
@@ -354,7 +352,7 @@ class CachingShard extends ShardDO {
             return { ok: true };
         }
 
-        return this.runCachedQuery(functionPath, args, async () => {
+        return this.runCachedQuery(functionPath, args, async (scope) => {
             const handler = this.handlers.get(functionPath);
 
             if (!handler) {
@@ -363,7 +361,7 @@ class CachingShard extends ShardDO {
 
             this.execCount.set(functionPath, (this.execCount.get(functionPath) ?? 0) + 1);
 
-            return handler(args);
+            return handler(args, scope);
         });
     }
 
@@ -378,15 +376,41 @@ class CachingShard extends ShardDO {
 
     /**
      * Test-only: simulate a read inside the in-flight handler by calling the
-     * tracker that `runCachedQuery` installed. Real subclasses would plumb
-     * `getCtxDbReadHook()` into `createShardCtxDb`'s `onRead` option; this
-     * test fakes that wiring inline so we don't need to build a full ctx
-     * stack just to assert the cache-tracker contract.
+     * hook bound to the scope `runCachedQuery` handed this dispatch. Real
+     * subclasses plumb `getCtxDbReadHook(scope)` into `createShardCtxDb`'s
+     * `onRead` option; this test fakes that wiring inline so we don't need to
+     * build a full ctx stack just to assert the cache-tracker contract.
      */
-    public stampRead(table: string, idOrScan: string): void {
-        const hook = this.getCtxDbReadHook();
+    public stampRead(scope: QueryReadScope | undefined, table: string, idOrScan: string): void {
+        const hook = this.getCtxDbReadHook(scope);
 
         hook(table, idOrScan);
+    }
+
+    /**
+     * Test-only: make a NESTED `runCachedQuery` from inside an in-flight one —
+     * the shape a hand-written subclass produces when it wraps its own dispatch
+     * under the base one. Pass `outer` to thread the scope this dispatch was
+     * handed; omit it to reproduce what happens when a subclass forgets.
+     */
+    public nestedQuery(functionPath: string, args: Record<string, unknown>, outer?: QueryReadScope): Promise<unknown> {
+        return this.runCachedQuery(
+            functionPath,
+            args,
+            async (scope) => {
+                const handler = this.handlers.get(functionPath);
+
+                if (!handler) {
+                    throw new Error(`no handler for ${functionPath}`);
+                }
+
+                this.execCount.set(functionPath, (this.execCount.get(functionPath) ?? 0) + 1);
+
+                return handler(args, scope);
+            },
+            undefined,
+            outer,
+        );
     }
 
     /** Test-only: expose the protected `reactiveCache` field for assertions. */
@@ -401,10 +425,10 @@ class CachingShard extends ShardDO {
             return Promise.resolve(null);
         }
 
-        return this.runCachedQuery(functionPath, args, async () => {
+        return this.runCachedQuery(functionPath, args, async (scope) => {
             this.execCount.set(functionPath, (this.execCount.get(functionPath) ?? 0) + 1);
 
-            return handler(args);
+            return handler(args, scope);
         }).then((result) => {
             return { result, tables: new Set(["users"]) };
         });
@@ -423,8 +447,8 @@ describe("shardDO + reactiveCache: dispatch path", () => {
     it("cache hit: identical query+args runs handler once across two RPC dispatches", async () => {
         expect.assertions(1);
 
-        shard.handlers.set("users:list", async () => {
-            shard.stampRead("users", "*scan");
+        shard.handlers.set("users:list", async (_args, scope) => {
+            shard.stampRead(scope, "users", "*scan");
 
             return [{ name: "alice" }];
         });
@@ -438,8 +462,8 @@ describe("shardDO + reactiveCache: dispatch path", () => {
     it("args sensitivity: different args go to different cache slots", async () => {
         expect.assertions(1);
 
-        shard.handlers.set("users:list", async (args) => {
-            shard.stampRead("users", "*scan");
+        shard.handlers.set("users:list", async (args, scope) => {
+            shard.stampRead(scope, "users", "*scan");
 
             return [args];
         });
@@ -476,6 +500,61 @@ describe("shardDO + reactiveCache: dispatch path", () => {
         // 2 slots: unrestricted (hit twice) and restricted (hit once).
         expect(shard.execCount.get("users:count")).toBe(2);
     });
+
+    // Regression for finding #8: the reactive-cache discriminator folds the
+    // FULL resolved identity (userId AND the `getIdentity()` claims RLS can key
+    // on), not the userId alone. We drive the real dispatch path via `fetch` so
+    // the identity is forwarded through the same `x-lunora-userid` /
+    // `x-lunora-identity` headers the runtime sends, then parsed into the
+    // `getCurrentUserId` / `getCurrentIdentity` getters `runCachedQuery` reads.
+    const dispatchAs = (userId: string, claims: Record<string, unknown>, functionPath: string, args: Record<string, unknown>): Promise<Response> =>
+        shard.fetch(
+            new Request("https://shard.internal/rpc", {
+                body: JSON.stringify({ args, functionPath }),
+                headers: {
+                    "content-type": "application/json",
+                    "x-lunora-identity": JSON.stringify(claims),
+                    "x-lunora-userid": userId,
+                },
+                method: "POST",
+            }),
+        );
+
+    it("identity isolation: same userId with DIFFERENT claims never shares a cache slot", async () => {
+        expect.assertions(1);
+
+        shard.handlers.set("org:list", async (_args, scope) => {
+            shard.stampRead(scope, "users", "*scan");
+
+            return [{ ok: true }];
+        });
+
+        // Same human (userId), same query+args, but a different active-org claim
+        // per request (e.g. two tabs / sessions). Each MUST re-run its handler —
+        // request A's org-A rows must never memoize for request B's org-B read.
+        await dispatchAs("u1", { activeOrgId: "A" }, "org:list", {});
+        await dispatchAs("u1", { activeOrgId: "B" }, "org:list", {});
+
+        expect(shard.execCount.get("org:list")).toBe(2);
+    });
+
+    it("cache hit preserved: same userId AND identical claims collapse to one run (key order agnostic)", async () => {
+        expect.assertions(1);
+
+        shard.handlers.set("org:list", async (_args, scope) => {
+            shard.stampRead(scope, "users", "*scan");
+
+            return [{ ok: true }];
+        });
+
+        // Identical identity across the two requests — the claim object's key
+        // order differs textually, but `stableStringify` canonicalizes it, so
+        // both fold to the same discriminator and the second call is a cache hit.
+        await dispatchAs("u1", { activeOrgId: "A", role: "admin" }, "org:list", {});
+        await dispatchAs("u1", { role: "admin", activeOrgId: "A" }, "org:list", {});
+
+        expect(shard.execCount.get("org:list")).toBe(1);
+    });
 });
 
 describe("shardDO + reactiveCache: subscription bridge", () => {
@@ -492,8 +571,8 @@ describe("shardDO + reactiveCache: subscription bridge", () => {
 
         let counter = 0;
 
-        shard.handlers.set("users:list", async () => {
-            shard.stampRead("users", "*scan");
+        shard.handlers.set("users:list", async (_args, scope) => {
+            shard.stampRead(scope, "users", "*scan");
             counter += 1;
 
             return { version: counter };
@@ -543,8 +622,8 @@ describe("shardDO + reactiveCache: subscription bridge", () => {
 
         const sequence: string[] = [];
 
-        shard.handlers.set("users:list", async () => {
-            shard.stampRead("users", "*scan");
+        shard.handlers.set("users:list", async (_args, scope) => {
+            shard.stampRead(scope, "users", "*scan");
             sequence.push("query");
 
             return Date.now();
@@ -574,5 +653,479 @@ describe("shardDO + reactiveCache: subscription bridge", () => {
         // The handler ran AT LEAST once during the refresh — proves cache
         // was empty when refresh kicked in.
         expect(sequence.filter((s) => s === "query").length).toBeGreaterThanOrEqual(1);
+    });
+});
+
+describe("shardDO + reactiveCache: range-precise cached-query invalidation (plan 206)", () => {
+    /**
+     * A table with an index, so a `.withIndex(...).eq(...)` read can be
+     * provably confined to one slice — the case `runCachedQuery`'s ranges
+     * thunk (wired via `getCtxDbReadRangeHook`) exists to narrow.
+     */
+    const rangeSchema: SchemaLike = {
+        tables: {
+            messages: {
+                indexes: [{ fields: ["channelId"], name: "by_channel" }],
+                shape: {
+                    body: { kind: "string" },
+                    channelId: { kind: "string" },
+                },
+            },
+        },
+    };
+
+    /**
+     * Subclass wiring a REAL ctx-db through `getCtxDbReadHook()` AND
+     * `getCtxDbReadRangeHook()` — the pairing a codegen subclass's
+     * `createShardCtxDb(...)` call is meant to supply — so an index-narrowed
+     * read actually reaches `runCachedQuery`'s ranges thunk, and a write goes
+     * through the real invalidation path (`cache.invalidate(table, id,
+     * indexKeys)`) instead of the other describe blocks' hand-rolled
+     * `mutationTablesToInvalidate` shortcut.
+     */
+    class RangeCachingShard extends ShardDO {
+        /** Scope-less writer the TEST writes through (a mutation builds no cache scope). */
+        public readonly writer: DatabaseWriterLike;
+
+        public handlers = new Map<string, (writer: DatabaseWriterLike) => Promise<unknown>>();
+
+        public execCount = new Map<string, number>();
+
+        private readonly rawSql: SqlExec;
+
+        public constructor(state: ShardDOState, env: unknown, sql: SqlExec, options: ShardDOOptions = {}) {
+            super(state, env, options);
+
+            this.rawSql = sql;
+            this.writer = this.buildWriter();
+        }
+
+        public override async handleRpc(functionPath: string, args: Record<string, unknown>): Promise<unknown> {
+            return this.runCachedQuery(functionPath, args, async (scope) => {
+                const handler = this.handlers.get(functionPath);
+
+                if (!handler) {
+                    throw new Error(`no handler for ${functionPath}`);
+                }
+
+                this.execCount.set(functionPath, (this.execCount.get(functionPath) ?? 0) + 1);
+
+                // A generated `buildCtx` builds the ctx-db per dispatch, with the
+                // read hooks bound to that dispatch's scope. Mirror that here.
+                return handler(this.buildWriter(scope));
+            });
+        }
+
+        /** Test-only: expose the protected `reactiveCache` field for assertions. */
+        public cacheRef(): typeof this.reactiveCache {
+            return this.reactiveCache;
+        }
+
+        /** The ctx-db a generated `buildCtx` builds, with the read hooks bound to `scope`. */
+        private buildWriter(scope?: QueryReadScope): DatabaseWriterLike {
+            return createShardContextDatabase({
+                // The slice a generated `buildCtx` spreads in: the cache plus the
+                // relation knobs. Spread FIRST, exactly as the emitter must, so
+                // per-request options below still win.
+                ...this.ctxDbTuning(),
+                onIndexUse: this.getCtxDbIndexUseHook(),
+                onRead: this.getCtxDbReadHook(scope),
+                onReadRange: scope === undefined ? undefined : this.getCtxDbReadRangeHook(scope),
+                schema: rangeSchema,
+                sql: this.rawSql,
+            });
+        }
+    }
+
+    const newRangeShard = (): RangeCachingShard => {
+        const sql = makeSql();
+
+        runShardMigrations(sql, rangeSchema);
+
+        return new RangeCachingShard(createFakeState(), {}, sql, { reactiveCache: {} });
+    };
+
+    it("a write inside range A evicts query A's cache entry and does NOT evict query B's", async () => {
+        expect.assertions(4);
+
+        const shard = newRangeShard();
+
+        shard.handlers.set("messages:byChannelA", async (writer) =>
+            writer
+                .query("messages")
+                .withIndex("by_channel", (q) => q.eq("channelId", "A"))
+                .collect(),
+        );
+        shard.handlers.set("messages:byChannelB", async (writer) =>
+            writer
+                .query("messages")
+                .withIndex("by_channel", (q) => q.eq("channelId", "B"))
+                .collect(),
+        );
+
+        await shard.handleRpc("messages:byChannelA", {});
+        await shard.handleRpc("messages:byChannelB", {});
+
+        expect(shard.cacheRef()?.size().entries).toBe(2);
+
+        // A write INSIDE range A (channelId "A") — must evict query A's entry.
+        await shard.writer.insert("messages", { body: "hi", channelId: "A" });
+
+        // Query A's entry is gone; query B's — a DISJOINT slice on the same
+        // table — survives. That is the whole point of range-precise
+        // invalidation over the prior whole-table-dependency behavior.
+        expect(shard.cacheRef()?.size().entries).toBe(1);
+
+        // Confirm B is still served from cache (a poisoned handler would throw
+        // if `runCachedQuery` re-executed it) and A re-executes.
+        shard.handlers.set("messages:byChannelB", async () => {
+            throw new Error("byChannelB should still be cached");
+        });
+
+        await expect(shard.handleRpc("messages:byChannelB", {})).resolves.toBeDefined();
+
+        const beforeA = shard.execCount.get("messages:byChannelA") ?? 0;
+
+        await shard.handleRpc("messages:byChannelA", {});
+
+        expect(shard.execCount.get("messages:byChannelA")).toBe(beforeA + 1);
+    });
+
+    it("a write outside every cached range does not evict any entry", async () => {
+        expect.assertions(1);
+
+        const shard = newRangeShard();
+
+        shard.handlers.set("messages:byChannelA", async (writer) =>
+            writer
+                .query("messages")
+                .withIndex("by_channel", (q) => q.eq("channelId", "A"))
+                .collect(),
+        );
+
+        await shard.handleRpc("messages:byChannelA", {});
+        await shard.writer.insert("messages", { body: "hi", channelId: "Z" });
+
+        expect(shard.cacheRef()?.size().entries).toBe(1);
+    });
+
+    // Regression for the missed-invalidation gap: a query that reads the SAME
+    // table through BOTH a provable range (`.withIndex(...).eq(...)`, which
+    // reports through `onReadRange` and deps nothing on its own) AND a by-id
+    // read (`writer.get(id)`, which reports through `onRead` and marks the
+    // table unnarrowable). Before the fix, `ReadFootprint.ranges()` drops the
+    // table's slice entirely once it is marked unnarrowable, so the cache
+    // entry ends up with deps `{messages:<seededId>}` and an EMPTY range set —
+    // an insert of a brand-new row into the very same range then matches
+    // neither the per-id dep nor any range dep, and the stale entry survives.
+    // `runCachedQuery`'s whole-table `SCAN_DEP` fallback (mirroring
+    // `executeSubscription`'s `footprint.tables` fallback) closes that gap.
+    it("a mixed range + get(id) read on the same table falls back to whole-table invalidation on an insert inside the range", async () => {
+        expect.assertions(2);
+
+        const shard = newRangeShard();
+
+        // Seed a row in channel A so `get(id)` has something to read
+        // alongside the range scan.
+        const seeded = await shard.writer.insert("messages", { body: "seed", channelId: "A" });
+
+        shard.handlers.set("messages:mixed", async (writer) => {
+            const ranged = await writer
+                .query("messages")
+                .withIndex("by_channel", (q) => q.eq("channelId", "A"))
+                .collect();
+            const byId = await writer.get(seeded);
+
+            return { byId, ranged };
+        });
+
+        await shard.handleRpc("messages:mixed", {});
+
+        expect(shard.cacheRef()?.size().entries).toBe(1);
+
+        // A write INSIDE the range that was also read by id. Pre-fix this
+        // evicts nothing (missed invalidation); post-fix the whole-table
+        // fallback dep catches it.
+        await shard.writer.insert("messages", { body: "new", channelId: "A" });
+
+        expect(shard.cacheRef()?.size().entries).toBe(0);
+    });
+});
+
+/**
+ * The wiring the reactive cache was unreachable without: the BASE `/rpc`
+ * dispatch path routing a registered `query` through `runCachedQuery`.
+ *
+ * Every codegen-emitted shard is `class extends ShardDOBase` with no constructor
+ * and no cache wrap in `handleRpc`, so before this the cache could only run if a
+ * hand-written subclass did both. The subclass below mirrors what the emitter
+ * actually produces — a plain `handleRpc`, plus the two hooks it overrides —
+ * and asserts the base class does the rest.
+ */
+describe("shardDO + reactiveCache: base dispatch wiring", () => {
+    const REGISTRY: Readonly<Record<string, "action" | "mutation" | "query">> = {
+        "notes:list": "query",
+        "posts:list": "query",
+        "users:create": "mutation",
+        "users:list": "query",
+        "users:notify": "action",
+    };
+
+    /** A promise plus its resolver, for parking a handler until the test releases it. */
+    const gate = (): { open: () => void; wait: Promise<void> } => {
+        let open!: () => void;
+        const wait = new Promise<void>((resolve) => {
+            open = resolve;
+        });
+
+        return { open, wait };
+    };
+
+    class GeneratedLikeShard extends ShardDO {
+        public execCount = new Map<string, number>();
+
+        /** functionPath -> a promise its handler parks on, resolved by the test. */
+        public gates = new Map<string, Promise<void>>();
+
+        /** functionPath -> resolver fired as its handler enters, so the test can sequence the interleave. */
+        public entered = new Map<string, () => void>();
+
+        public override async handleRpc(functionPath: string, args: Record<string, unknown>, _headroom?: unknown, scope?: QueryReadScope): Promise<unknown> {
+            this.execCount.set(functionPath, (this.execCount.get(functionPath) ?? 0) + 1);
+
+            if (REGISTRY[functionPath] === "mutation") {
+                this.recordChangedTable("users");
+
+                return { ok: true };
+            }
+
+            this.entered.get(functionPath)?.();
+
+            // Park BEFORE the read, so a dispatch that arrives while this one is
+            // suspended does its own reading first — the interleave that used to
+            // stamp the second query's tables into the first query's dep set.
+            await this.gates.get(functionPath);
+
+            // Stands in for a `ctx.db` read: the same `onRead` hook a generated
+            // `createShardCtxDb` call is handed, bound to THIS dispatch's scope.
+            // One table per function namespace, so a dep set that picked up a
+            // concurrent dispatch's reads is visible as a cross-table eviction.
+            this.getCtxDbReadHook(scope)(functionPath.split(":")[0] ?? "", "*scan");
+
+            return { args, rows: [] };
+        }
+
+        /** Test-only: expose the protected slice the emitter spreads into `createShardCtxDb`. */
+        public tuning(): { cache?: unknown; maxRelationKeys?: number; relationExistsPushDown?: string } {
+            return this.ctxDbTuning();
+        }
+
+        /** Test-only: expose the protected `reactiveCache` field for assertions. */
+        public cacheRef(): typeof this.reactiveCache {
+            return this.reactiveCache;
+        }
+
+        // eslint-disable-next-line class-methods-use-this -- test stub override: classifies by `functionPath` alone, no instance state.
+        protected override isCacheableQuery(functionPath: string): boolean {
+            return REGISTRY[functionPath] === "query";
+        }
+    }
+
+    const rpc = (shard: GeneratedLikeShard, functionPath: string, args: Record<string, unknown> = {}): Promise<Response> =>
+        shard.fetch(
+            new Request("https://shard.internal/rpc", {
+                body: JSON.stringify({ args, functionPath }),
+                headers: { "content-type": "application/json" },
+                method: "POST",
+            }),
+        );
+
+    it("memoizes a registered query across two /rpc dispatches without the subclass wrapping anything", async () => {
+        expect.assertions(2);
+
+        const shard = new GeneratedLikeShard(createFakeState(), {}, { reactiveCache: {} });
+
+        await rpc(shard, "users:list");
+        await rpc(shard, "users:list");
+
+        expect(shard.execCount.get("users:list")).toBe(1);
+        expect(shard.cacheRef()?.stats().hits).toBe(1);
+    });
+
+    // Regression: the dep tracker used to be an INSTANCE field on the DO, which
+    // serves concurrent `/rpc` dispatches. A second query arriving while the
+    // first was parked on an await hit `runCachedQuery`'s re-entry guard — it
+    // was never read from the cache and never stored, and its reads stamped
+    // into the FIRST query's dep set. The tracker is threaded per dispatch now
+    // (`runCachedQuery` -> `handleRpc` -> `buildCtx` -> the ctx-db read hooks),
+    // so the two are independent.
+    it("two concurrent dispatches each get their own tracker: both memoized, neither's deps include the other's tables", async () => {
+        expect.assertions(5);
+
+        const shard = new GeneratedLikeShard(createFakeState(), {}, { reactiveCache: {} });
+
+        const parkA = gate();
+        const enteredA = gate();
+        const enteredB = gate();
+
+        shard.gates.set("notes:list", parkA.wait);
+        shard.entered.set("notes:list", enteredA.open);
+        shard.entered.set("posts:list", enteredB.open);
+
+        // A enters and parks; B arrives and runs to completion while A is
+        // suspended — the interleave a busy shard actually serves.
+        const a = rpc(shard, "notes:list");
+
+        await enteredA.wait;
+
+        const b = rpc(shard, "posts:list");
+
+        await enteredB.wait;
+        await b;
+
+        parkA.open();
+        await a;
+
+        // Pre-fix B was bypassed entirely, leaving ONE entry.
+        expect(shard.cacheRef()?.size().entries).toBe(2);
+
+        // Both are real memos: neither handler re-runs.
+        await rpc(shard, "notes:list");
+        await rpc(shard, "posts:list");
+
+        expect(shard.execCount.get("notes:list")).toBe(1);
+        expect(shard.execCount.get("posts:list")).toBe(1);
+
+        // A write to `posts` evicts B's entry and ONLY B's: `notes:list` never
+        // read `posts`, and — the half the shared tracker got wrong —
+        // `posts:list`'s reads never widened `notes:list`'s dep set either.
+        shard.cacheRef()?.invalidateTable("posts");
+
+        expect(shard.cacheRef()?.size().entries).toBe(1);
+
+        await rpc(shard, "notes:list");
+
+        expect(shard.execCount.get("notes:list")).toBe(1);
+    });
+
+    it("never memoizes a non-query: an action's side effects must run on every dispatch", async () => {
+        expect.assertions(1);
+
+        const shard = new GeneratedLikeShard(createFakeState(), {}, { reactiveCache: {} });
+
+        await rpc(shard, "users:notify");
+        await rpc(shard, "users:notify");
+
+        expect(shard.execCount.get("users:notify")).toBe(2);
+    });
+
+    it("stays a pass-through when no reactiveCache is configured", async () => {
+        expect.assertions(1);
+
+        const shard = new GeneratedLikeShard(createFakeState(), {});
+
+        await rpc(shard, "users:list");
+        await rpc(shard, "users:list");
+
+        expect(shard.execCount.get("users:list")).toBe(2);
+    });
+
+    it("a write invalidates the memo even when the subclass never handed the cache to ctx-db", async () => {
+        expect.assertions(2);
+
+        // The backstop in `recordChangedTable`. A subclass whose
+        // `createShardCtxDb` call never took `ctxDbTuning()`'s `cache` has no
+        // per-row invalidation, so without this the second read would be served
+        // from the pre-write snapshot forever.
+        const shard = new GeneratedLikeShard(createFakeState(), {}, { reactiveCache: {} });
+
+        await rpc(shard, "users:list");
+        await shard.handleRpc("users:create", {});
+
+        expect(shard.cacheRef()?.size().entries).toBe(0);
+
+        await rpc(shard, "users:list");
+
+        expect(shard.execCount.get("users:list")).toBe(2);
+    });
+
+    it("carries the relation knobs from ShardDOOptions into the ctx-db slice", () => {
+        expect.assertions(2);
+
+        const tuned = new GeneratedLikeShard(createFakeState(), {}, { maxRelationKeys: 9000, relationExistsPushDown: "never" });
+        const bare = new GeneratedLikeShard(createFakeState(), {});
+
+        expect(tuned.tuning()).toStrictEqual({ maxRelationKeys: 9000, relationExistsPushDown: "never" });
+        // Unset knobs are ABSENT, not `undefined` — spreading the slice must not
+        // clobber an engine default with an explicit undefined.
+        expect(bare.tuning()).toStrictEqual({});
+    });
+});
+
+describe("runCachedQuery nested dispatch", () => {
+    let state: ReturnType<typeof createFakeState>;
+    let shard: CachingShard;
+
+    beforeEach(() => {
+        state = createFakeState();
+        shard = new CachingShard(state, {}, { reactiveCache: {} });
+    });
+
+    // `runCachedQuery`'s `outer` parameter is the threaded successor to the old
+    // instance-field re-entry guard. Nothing in this repo passes it — the emitted
+    // shard deliberately never wraps `handleRpc`, and `ctx.runQuery` dispatches the
+    // handler directly — so without these two tests it is an untested claim about
+    // a hazard, which is the exact shape this cache shipped in for a year.
+    it("threads the outer scope so a nested query's reads land in the outer dep set", async () => {
+        expect.assertions(3);
+
+        shard.handlers.set("inner:list", async (_args, scope) => {
+            shard.stampRead(scope, "inner", "*scan");
+
+            return [{ id: "i1" }];
+        });
+        // The outer reads NOTHING directly — its result is entirely the inner's.
+        shard.handlers.set("outer:list", async (_args, scope) => shard.nestedQuery("inner:list", {}, scope));
+
+        await shard.handleRpc("outer:list", {});
+
+        expect(shard.cacheRef()?.size().entries).toBe(1);
+
+        // The inner's table is the outer entry's only dependency, so writing it
+        // must evict the outer entry.
+        shard.cacheRef()?.invalidateTable("inner");
+
+        expect(shard.cacheRef()?.size().entries).toBe(0);
+
+        await shard.handleRpc("outer:list", {});
+
+        expect(shard.execCount.get("outer:list")).toBe(2);
+    });
+
+    it("without the outer scope the entry is stored dep-less and never invalidates — the hazard the parameter exists for", async () => {
+        expect.assertions(2);
+
+        shard.handlers.set("inner:list", async (_args, scope) => {
+            shard.stampRead(scope, "inner", "*scan");
+
+            return [{ id: "i1" }];
+        });
+        // A subclass that forgets to thread the scope: the nested call mints its
+        // own, so every read lands in the INNER dep set and the outer entry is
+        // stored depending on nothing at all.
+        shard.handlers.set("outer:list", async () => shard.nestedQuery("inner:list", {}));
+
+        await shard.handleRpc("outer:list", {});
+
+        shard.cacheRef()?.invalidateTable("inner");
+
+        // The outer entry survives a write to the only table its result derives
+        // from — permanently un-invalidatable stale data.
+        const outerStillCached = shard.execCount.get("outer:list");
+
+        await shard.handleRpc("outer:list", {});
+
+        expect(shard.execCount.get("outer:list")).toBe(outerStillCached);
+        expect(shard.cacheRef()?.size().entries).toBeGreaterThan(0);
     });
 });

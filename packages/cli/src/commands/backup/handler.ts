@@ -2,66 +2,95 @@
  * `lunora backup create | list | restore | pitr` — managed snapshot backups on
  * top of the export/import admin endpoints, plus native point-in-time recovery.
  *
- * `create` exports every table to a timestamped NDJSON file under a backup
- * directory and records it in a `manifest.json`; `list` prints the manifest;
- * `restore &lt;id|file>` imports a chosen snapshot back through the import
- * endpoint. Schedule `create` (CI cron, or a cron-triggered action) for
- * automated backups — this is the off-platform / portable / >30-day tier.
+ * `create` exports every table to a timestamped NDJSON snapshot and records it
+ * in a manifest; `list` prints the manifest; `restore <id|file>` imports a
+ * chosen snapshot back through the import endpoint. Schedule `create` (CI cron,
+ * or a cron-triggered action) for automated backups — this is the off-platform
+ * / portable / >30-day tier.
+ *
+ * `retention` and `prune` are the platform's own retention: what a prune would
+ * remove, and the removal itself. `prune` is the only verb here that deletes a
+ * backup — the scheduled backup reports what is past the window and leaves it.
+ *
+ * Where a snapshot lands is a destination, not a format: with no `--bucket` it
+ * is a local directory, with one it is an R2 bucket reached through the admin
+ * storage routes (`./destination`, `./r2-destination`). The NDJSON and the
+ * manifest are identical either way.
  *
  * `pitr` is the complementary in-place tier: it drives the platform's own
  * Durable-Object change log to restore a shard to any moment in the last 30
  * days (`getPitrBookmark` / `pitrRestore` via the admin-gated PITR endpoint),
  * no R2 read and no snapshot replay.
  */
-import { existsSync } from "node:fs";
-import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 
-import resolveAdminBaseUrl from "../../util/admin-url";
+import { isInteractive, promptYesNo } from "@lunora/config";
+import type { BackupManifestEntry, BackupRetentionPreview, PrunedBackups } from "@lunora/runtime";
+import { backupObjectKeyOfManifest } from "@lunora/runtime";
+
+import { resolveAdminBearer, targetsRemoteWorker } from "../../util/admin-token";
+import { adminFetch, resolveAdminBaseUrl } from "../../util/admin-url";
 import type { CommandHandler } from "../../util/command";
 import { defineHandler } from "../../util/command";
+import type { Refusal } from "../../util/exit-code";
+import { EXIT_CODE, exitCodeForStatus, isRefusal } from "../../util/exit-code";
 import type { Logger } from "../../util/logger";
+import type { CommandResult, OutputFormat } from "../../util/output-format";
 import { resolveProductionWorkerUrl } from "../../util/resolve-target";
-import type { StreamingFetchLike } from "../data-transfer";
-import { runExportCommand, runImportCommand } from "../data-transfer";
+import { runExportCommand } from "../data-transfer/export";
+import { runImportCommand } from "../data-transfer/import";
+import type { StreamingFetchLike } from "../data-transfer/shared";
 import type { FetchLike } from "../run/handler";
+import { readAndLogBody } from "../run/handler";
+import type { BackupDestination } from "./destination";
+import { createDirectoryDestination, digestFile } from "./destination";
 import type { BackupOptions } from "./index";
+import { createR2Destination } from "./r2-destination";
 
 /** Default directory (relative to cwd) backups and their manifest live in. */
 const DEFAULT_BACKUP_DIR = ".lunora-backups";
-const MANIFEST_FILE = "manifest.json";
+
+/** Read-only worker endpoint reporting what the platform's retention would delete next (see `@lunora/runtime`). */
+const RETENTION_ENDPOINT_PATH = "/_lunora/admin/backup/retention";
+
+/** The only endpoint that deletes a backup (see `@lunora/runtime`). */
+const PRUNE_ENDPOINT_PATH = "/_lunora/admin/backup/prune";
 
 /** Worker endpoint that forwards a per-shard native-PITR admin op (see `@lunora/runtime`). */
 const PITR_ENDPOINT_PATH = "/_lunora/admin/pitr";
 const GET_PITR_BOOKMARK_OP = "__lunora_admin__:getPitrBookmark";
 const PITR_RESTORE_OP = "__lunora_admin__:pitrRestore";
 
-type BackupSubcommand = "create" | "list" | "pitr" | "restore";
-
-/** One recorded snapshot. `id` is the ISO timestamp; `file` is relative to the backup dir. */
-interface BackupManifestEntry {
-    bytes: number;
-    createdAt: string;
-    file: string;
-    id: string;
-    rows: number;
-    tables?: string;
-}
+type BackupSubcommand = "create" | "list" | "pitr" | "prune" | "restore" | "retention";
 
 interface BackupCommandOptions {
+    /** Injectable fetch for the JSON admin endpoints — `pitr`, `retention`, `prune` (not the streaming export fetch). */
+    adminFetch?: FetchLike;
     /** `pitr`: restore to the bookmark nearest this time (ISO or epoch-ms), within 30 days. */
     at?: string;
+
     /** `pitr restore`: an explicit bookmark to restore to (e.g. an undo bookmark). Wins over `--at`. */
     bookmark?: string;
+
+    /**
+     * Store snapshots in an R2 bucket instead of a directory. The value is the
+     * bucket name the worker knows (`GET /_lunora/admin/storage/buckets` lists
+     * them); pass `default` for a single-bucket deployment.
+     */
+    bucket?: string;
+    /** Injectable confirmer for `prune` (tests, non-TTY callers). Returns `true` on confirmation. */
+    confirm?: (prompt: string) => Promise<boolean>;
     cwd?: string;
     /** Backup directory (relative to cwd). Defaults to `.lunora-backups`. */
     dir?: string;
     fetchImpl?: StreamingFetchLike;
+    /** Output format: `pretty` (default) or `json`. */
+    format?: OutputFormat;
     logger: Logger;
     /** Injectable clock for deterministic backup ids in tests. */
     now?: () => Date;
-    /** Injectable fetch for the `pitr` admin endpoint (plain JSON, not the streaming export fetch). */
-    pitrFetch?: FetchLike;
+    /** Key prefix bucket-backed backups live under. Defaults to `backups/`. */
+    prefix?: string;
     prod?: boolean;
     /** `pitr restore`: also restart the shard now (`ctx.abort()`) so recovery applies immediately. */
     restart?: boolean;
@@ -76,148 +105,214 @@ interface BackupCommandOptions {
     target?: string;
     token?: string;
     url?: string;
-    /** Required alongside `--prod` for `pitr restore` — confirms restoring production in place. */
+    /** `restore`: check the snapshot's SHA-256 against the manifest before importing a byte of it. */
+    verify?: boolean;
+    /** Confirm a destructive step without prompting: `pitr restore --prod`, or `prune`. */
     yes?: boolean;
 }
 
-interface BackupCommandResult {
-    code: number;
-    /** Set on `create` — the written backup's manifest entry. */
+/**
+ * The `--format json` payload — one shape per verb, discriminated by
+ * `subcommand`. The six verbs answer six different questions, so a merged
+ * document would say which one it is holding only by which fields happened to
+ * be null.
+ */
+interface BackupCommandData {
+    deleted?: string[];
+    entries?: ReadonlyArray<BackupManifestEntry>;
     entry?: BackupManifestEntry;
+    preview?: BackupRetentionPreview;
+    restored?: number;
+    /** `pitr` — the endpoint's own answer (a bookmark, or a restore receipt). */
+    result?: unknown;
+    subcommand: BackupSubcommand;
 }
 
-const isManifestEntry = (value: unknown): value is BackupManifestEntry =>
-    typeof value === "object" &&
-    value !== null &&
-    typeof (value as BackupManifestEntry).id === "string" &&
-    typeof (value as BackupManifestEntry).file === "string";
+interface BackupCommandResult extends CommandResult<BackupCommandData> {
+    /** Set on `pitr` — the endpoint's own answer (a bookmark, or a restore receipt). */
+    body?: unknown;
+    /** Set on `prune` — the sidecar keys the worker reported it deleted. */
+    deleted?: string[];
+    /** Set on `list` — the destination's manifest. */
+    entries?: ReadonlyArray<BackupManifestEntry>;
+    /** Set on `create` — the written backup's manifest entry. */
+    entry?: BackupManifestEntry;
+    /** Set on `retention` — what the worker reported it would delete next. */
+    preview?: BackupRetentionPreview;
+    /** Set on `restore` — how many rows the import leg wrote back. */
+    restored?: number;
+}
 
 /**
- * Read the backup index. A *missing* manifest is fine — start fresh with `[]`.
- * But a manifest that exists yet fails to parse (or isn't an array) is the
- * recovery index the feature exists to protect: throw rather than silently
- * treating it as empty, so the next `backup create` can't overwrite it and
- * destroy the historical index. (`isManifestEntry` still drops malformed
- * entries from an otherwise-valid array — those carry no recoverable id/file).
+ * Export every selected table and land the snapshot at `destination`. The
+ * export itself is destination-blind — it always streams NDJSON to a local
+ * path — so the only thing that varies is where `stage` puts that path and
+ * what `commit` then does with it. The manifest entry is recorded LAST, after
+ * the bytes are known to have landed, so the index never points at a snapshot
+ * that is not there.
  */
-const readManifest = async (directory: string): Promise<BackupManifestEntry[]> => {
-    const path = join(directory, MANIFEST_FILE);
+const runBackupCreate = async (options: BackupCommandOptions, destination: BackupDestination): Promise<BackupCommandResult> => {
+    const id = (options.now ?? (() => new Date()))().toISOString();
+    const staged = await destination.stage(id);
 
-    if (!existsSync(path)) {
-        return [];
-    }
-
-    let parsed: unknown;
-
+    // However this ends, staging goes with it. A remote destination stages into
+    // a temp directory, and every failure between here and `commit` — a 500
+    // mid-export, an unreadable file, a refused upload — used to leave a copy of
+    // production rows in it.
     try {
-        parsed = JSON.parse(await readFile(path, "utf8"));
-    } catch (error: unknown) {
-        const message = error instanceof Error ? error.message : String(error);
+        const result = await runExportCommand({
+            cwd: options.cwd,
+            fetchImpl: options.fetchImpl,
+            logger: options.logger,
+            out: staged.path,
+            prod: options.prod,
+            tables: options.tables,
+            token: options.token,
+            url: options.url,
+        });
 
-        throw new Error(`backup: ${path} exists but is not valid JSON (${message}) — refusing to overwrite it; fix or remove it manually`, { cause: error });
+        if (result.code !== 0) {
+            return { code: result.code };
+        }
+
+        const file = destination.locate(id);
+        // Digest the snapshot once, here: the destination declares it on the way
+        // up (the admin upload route refuses a body that does not match) and the
+        // manifest records it for `restore --verify` on the way back down.
+        // `digest.bytes` is the file's own length — the export's byte counter
+        // counts what came off the wire, which is the same thing only as long as
+        // the response ends in a newline.
+        const digest = await digestFile(staged.path);
+
+        await destination.commit(file, staged.path, digest);
+
+        const entry: BackupManifestEntry = {
+            bytes: digest.bytes,
+            createdAt: id,
+            file,
+            id,
+            rows: result.rows,
+            sha256: digest.sha256,
+            tables: options.tables,
+        };
+
+        await destination.record(entry);
+
+        options.logger.success(`backup created: ${file} (${result.rows.toString()} rows, ${digest.bytes.toString()} bytes)`);
+
+        return { code: 0, entry };
+    } finally {
+        // Cleanup failing cannot make a backup that landed report failure —
+        // `logger.success` has already printed, and a script reading the exit
+        // code would retry a snapshot that is sitting in the bucket.
+        await staged.release().catch((error: unknown) => {
+            options.logger.warn(`backup: could not clean up staging (${error instanceof Error ? error.message : String(error)})`);
+        });
     }
-
-    if (!Array.isArray(parsed)) {
-        throw new TypeError(`backup: ${path} exists but is not a JSON array — refusing to overwrite it; fix or remove it manually`);
-    }
-
-    return parsed.filter(isManifestEntry);
 };
 
-const writeManifest = async (directory: string, entries: ReadonlyArray<BackupManifestEntry>): Promise<void> => {
-    await writeFile(join(directory, MANIFEST_FILE), `${JSON.stringify(entries, undefined, 2)}\n`, "utf8");
-};
+/**
+ * `--verify`: re-digest the snapshot and compare it with the checksum recorded
+ * when it was written, BEFORE a single row is imported. A snapshot with no
+ * recorded checksum fails closed rather than passing silently — "unverifiable"
+ * and "verified" must never read the same on a restore.
+ */
+const verifySnapshot = async (path: string, entry: BackupManifestEntry | undefined, logger: Logger): Promise<BackupCommandResult | undefined> => {
+    if (entry?.sha256 === undefined) {
+        logger.error(
+            entry === undefined
+                ? "--verify needs a recorded checksum, and a snapshot restored by path/key has no manifest entry — restore it by its backup id instead"
+                : `--verify: backup ${entry.id} carries no recorded checksum — it was taken by a release before checksums existed`,
+        );
 
-const runBackupCreate = async (options: BackupCommandOptions, directory: string): Promise<BackupCommandResult> => {
-    await mkdir(directory, { recursive: true });
-
-    const timestamp = (options.now ?? (() => new Date()))().toISOString();
-    // Colons/periods are awkward in filenames across platforms; keep the raw id.
-    const file = `lunora-backup-${timestamp.replaceAll(/[.:]/gu, "-")}.ndjson`;
-
-    const result = await runExportCommand({
-        cwd: options.cwd,
-        fetchImpl: options.fetchImpl,
-        logger: options.logger,
-        out: join(directory, file),
-        prod: options.prod,
-        tables: options.tables,
-        token: options.token,
-        url: options.url,
-    });
-
-    if (result.code !== 0) {
-        return { code: result.code };
+        return { code: EXIT_CODE.USAGE };
     }
 
-    const entry: BackupManifestEntry = { bytes: result.bytes, createdAt: timestamp, file, id: timestamp, rows: result.rows, tables: options.tables };
-    const manifest = await readManifest(directory);
+    const digest = await digestFile(path);
 
-    manifest.push(entry);
-    await writeManifest(directory, manifest);
+    if (digest.sha256 !== entry.sha256) {
+        logger.error(`--verify: ${entry.file} does not match its recorded checksum (expected ${entry.sha256}, got ${digest.sha256}) — nothing was imported`);
 
-    options.logger.success(`backup created: ${file} (${result.rows.toString()} rows, ${result.bytes.toString()} bytes)`);
+        return { code: 1 };
+    }
 
-    return { code: 0, entry };
+    logger.success(`verified ${entry.file} against its recorded sha256`);
+
+    return undefined;
 };
 
-const runBackupList = async (options: BackupCommandOptions, directory: string): Promise<BackupCommandResult> => {
-    const manifest = await readManifest(directory);
+const runBackupList = async (options: BackupCommandOptions, destination: BackupDestination): Promise<BackupCommandResult> => {
+    const manifest = await destination.list();
 
     if (manifest.length === 0) {
-        options.logger.info(`no backups found in ${directory}`);
+        options.logger.info(`no backups found in ${destination.label}`);
 
-        return { code: 0 };
+        return { code: 0, entries: [] };
     }
 
     for (const entry of manifest) {
         options.logger.info(`${entry.id}  ${entry.rows.toString()} rows  ${entry.bytes.toString()} bytes  ${entry.file}`);
     }
 
-    return { code: 0 };
+    return { code: 0, entries: manifest };
 };
 
-const runBackupRestore = async (options: BackupCommandOptions, directory: string): Promise<BackupCommandResult> => {
+const runBackupRestore = async (options: BackupCommandOptions, destination: BackupDestination): Promise<BackupCommandResult> => {
     const { target } = options;
 
     if (target === undefined || target.length === 0) {
         options.logger.error("restore requires a backup id or file path. Usage: lunora backup restore <id|file>");
 
-        return { code: 1 };
+        return { code: EXIT_CODE.USAGE };
     }
 
     // Resolve the target: a manifest id maps to its recorded file; otherwise
-    // treat it as a direct path (absolute, or relative to cwd).
-    const manifest = await readManifest(directory);
+    // treat it as a direct path (absolute, or relative to cwd) / object key.
+    const manifest = await destination.list();
     const matched = manifest.find((entry) => entry.id === target);
-    const file = matched ? join(directory, matched.file) : target;
+    const snapshot = await destination.materialize(matched, target);
 
-    if (!existsSync(file)) {
+    if (snapshot === undefined) {
         options.logger.error(`backup not found: ${target}`);
 
-        return { code: 1 };
+        return { code: EXIT_CODE.NOT_FOUND };
     }
 
-    const result = await runImportCommand({
-        cwd: options.cwd,
-        fetchImpl: options.fetchImpl,
-        file,
-        logger: options.logger,
-        prod: options.prod,
-        token: options.token,
-        url: options.url,
-    });
+    try {
+        if (options.verify === true) {
+            const failure = await verifySnapshot(snapshot.path, matched, options.logger);
 
-    // Plain snapshot import — the off-platform / portable restore. For in-place
-    // time-travel to an arbitrary moment in the last 30 days, use native PITR
-    // (`lunora backup pitr` / the studio) rather than replaying a snapshot.
-    return { code: result.code };
+            if (failure !== undefined) {
+                return failure;
+            }
+        }
+
+        const result = await runImportCommand({
+            cwd: options.cwd,
+            fetchImpl: options.fetchImpl,
+            file: snapshot.path,
+            logger: options.logger,
+            prod: options.prod,
+            token: options.token,
+            url: options.url,
+            yes: options.yes,
+        });
+
+        // Plain snapshot import — the off-platform / portable restore. For in-place
+        // time-travel to an arbitrary moment in the last 30 days, use native PITR
+        // (`lunora backup pitr` / the studio) rather than replaying a snapshot.
+        return { code: result.code, entry: matched, restored: result.inserted };
+    } finally {
+        await snapshot.release().catch((error: unknown) => {
+            options.logger.warn(`backup: could not clean up the downloaded snapshot (${error instanceof Error ? error.message : String(error)})`);
+        });
+    }
 };
 
 /**
  * `lunora backup pitr` — native Durable-Object point-in-time recovery (the
  * in-place ≤30-day tier). With no flags it reads the shard's current bookmark;
- * `--at &lt;time>` previews the bookmark nearest that moment. `--restore` arms a
+ * `--at <time>` previews the bookmark nearest that moment. `--restore` arms a
  * restore (to `--bookmark`, or the one nearest `--at`) and returns an undo
  * bookmark; `--restart` applies it immediately. Hits the admin-gated
  * `/_lunora/admin/pitr` endpoint, which forwards the op to one shard.
@@ -229,44 +324,48 @@ interface PitrRequest {
 }
 
 /** Validate the guards and resolve the token / URL / fetch for a `pitr` call. Logs and returns `undefined` on any failure. */
-const resolvePitrRequest = (options: BackupCommandOptions): PitrRequest | undefined => {
-    const token = options.token ?? process.env.LUNORA_ADMIN_TOKEN;
-
-    if (!token) {
-        options.logger.error("admin token required — pass --token or set LUNORA_ADMIN_TOKEN");
-
-        return undefined;
-    }
-
+const resolvePitrRequest = (options: BackupCommandOptions): PitrRequest | Refusal => {
     if (options.prod && options.url === undefined) {
         options.logger.error("--prod requires an explicit --url (refusing to target the implicit localhost worker)");
 
-        return undefined;
+        return { refused: EXIT_CODE.USAGE };
     }
 
     if (options.restore === true && options.at === undefined && options.bookmark === undefined) {
         options.logger.error("pitr --restore requires --at <time> or --bookmark <bookmark>");
 
-        return undefined;
+        return { refused: EXIT_CODE.USAGE };
     }
 
-    if (options.restore === true && options.prod === true && options.yes !== true) {
-        options.logger.error("pitr --restore --prod restores production data in place. Re-run with --yes to confirm.");
-
-        return undefined;
-    }
-
-    const baseUrl = resolveAdminBaseUrl(options.url, options.logger);
+    const baseUrl = resolveAdminBaseUrl(options.url, options.logger, options.cwd);
 
     if (baseUrl === undefined) {
-        return undefined;
+        // `resolveAdminBaseUrl` logged an invalid `--url`, or its refusal to put a
+        // bearer on the wire in cleartext — both are the target you named.
+        return { refused: EXIT_CODE.USAGE };
     }
 
-    const fetchImpl: FetchLike = options.pitrFetch ?? (globalThis as unknown as { fetch: FetchLike }).fetch;
+    // Gated on the RESOLVED destination, not on `--prod`: a `--restore` at a
+    // deployed `--url` is an in-place restore of live data whether or not the
+    // operator remembered to also declare the flag.
+    if (options.restore === true && targetsRemoteWorker({ prod: options.prod, url: baseUrl }) && options.yes !== true) {
+        options.logger.error(`pitr --restore restores data in place at ${baseUrl}, which is not local. Re-run with --yes to confirm.`);
 
-    if (typeof fetchImpl !== "function") {
-        throw new TypeError("no fetch implementation available — pass pitrFetch or run on Node >= 18");
+        return { refused: EXIT_CODE.USAGE };
     }
+
+    // Through the shared resolver, like this file's other two admin paths, and
+    // after `baseUrl` because the `.dev.vars` fallback is loopback-gated. `pitr`
+    // was the one leg still reading `--token`/the environment only.
+    const { token } = resolveAdminBearer({ cwd: options.cwd ?? process.cwd(), token: options.token, url: baseUrl });
+
+    if (!token) {
+        options.logger.error("admin token required — pass --token, set LUNORA_ADMIN_TOKEN, or add it to .dev.vars (local targets only)");
+
+        return { refused: EXIT_CODE.AUTH };
+    }
+
+    const fetchImpl: FetchLike = options.adminFetch ?? adminFetch;
 
     return { fetchImpl, requestUrl: `${baseUrl}${PITR_ENDPOINT_PATH}`, token };
 };
@@ -293,8 +392,9 @@ const buildPitrArgs = (options: BackupCommandOptions, isRestore: boolean): Recor
 const runBackupPitr = async (options: BackupCommandOptions): Promise<BackupCommandResult> => {
     const request = resolvePitrRequest(options);
 
-    if (request === undefined) {
-        return { code: 1 };
+    if (isRefusal(request)) {
+        // The resolver logged the reason; its code says which kind it was.
+        return { code: request.refused };
     }
 
     const isRestore = options.restore === true;
@@ -310,39 +410,350 @@ const runBackupPitr = async (options: BackupCommandOptions): Promise<BackupComma
         method: "POST",
     });
 
-    const text = await response.text();
+    const body = await readAndLogBody(response, options.logger);
 
-    let body: unknown;
-
-    try {
-        body = JSON.parse(text);
-    } catch {
-        body = text;
-    }
-
-    options.logger.info(JSON.stringify(body, undefined, 2));
-
-    return { code: response.ok ? 0 : 1 };
+    return { body, code: response.ok ? 0 : exitCodeForStatus(response.status) };
 };
 
-const runBackupCommand = async (options: BackupCommandOptions): Promise<BackupCommandResult> => {
-    const cwd = options.cwd ?? process.cwd();
-    const directory = join(cwd, options.dir ?? DEFAULT_BACKUP_DIR);
+/**
+ * Pick the destination once, for every verb. `--bucket` selects R2 (reached
+ * through the worker's admin storage routes, so the bucket binding is the auth
+ * and no credentials are involved); anything else is a local directory.
+ *
+ * The two are never mixed in one invocation: a merged listing would leave an
+ * operator unable to say which copy of a snapshot they are about to restore.
+ * `undefined` means the target could not be resolved and the reason is logged.
+ */
+const resolveDestination = (options: BackupCommandOptions, cwd: string): BackupDestination | Refusal => {
+    if (options.bucket === undefined) {
+        // `--prefix` selects a key prefix INSIDE an R2 bucket; a local directory
+        // has no such thing. Refused rather than ignored, exactly as `retention`
+        // and `prune` refuse a destination flag that does not apply to them:
+        // `backup list --prefix archive/` silently listed the local directory and
+        // reported "no backups found" for an archive that was there all along.
+        if (options.prefix !== undefined) {
+            options.logger.error("--prefix applies only to an R2 destination — pass --bucket alongside it, or use --dir to point at a local directory.");
 
+            return { refused: EXIT_CODE.USAGE };
+        }
+
+        return createDirectoryDestination(join(cwd, options.dir ?? DEFAULT_BACKUP_DIR));
+    }
+
+    if (options.dir !== undefined) {
+        options.logger.error("--dir applies only to a local destination and does not apply alongside --bucket — drop one.");
+
+        return { refused: EXIT_CODE.USAGE };
+    }
+
+    if (options.prod === true && options.url === undefined) {
+        options.logger.error("--prod requires an explicit --url (refusing to target the implicit localhost worker)");
+
+        return { refused: EXIT_CODE.USAGE };
+    }
+
+    const baseUrl = resolveAdminBaseUrl(options.url, options.logger, options.cwd);
+
+    if (baseUrl === undefined) {
+        // `resolveAdminBaseUrl` logged an invalid `--url`, or its refusal to put a
+        // bearer on the wire in cleartext — both are the target you named.
+        return { refused: EXIT_CODE.USAGE };
+    }
+
+    const { token } = resolveAdminBearer({ cwd, token: options.token, url: baseUrl });
+
+    if (!token) {
+        options.logger.error("admin token required — pass --token, set LUNORA_ADMIN_TOKEN, or add it to .dev.vars (local targets only)");
+
+        return { refused: EXIT_CODE.AUTH };
+    }
+
+    const fetchImpl = options.fetchImpl ?? adminFetch;
+
+    return createR2Destination({
+        // `default` is how the worker names its unnamed bucket; the storage
+        // routes want the parameter absent for it.
+        context: { baseUrl, bucket: options.bucket === "default" ? undefined : options.bucket, fetchImpl, token },
+        logger: options.logger,
+        prefix: options.prefix,
+    });
+};
+
+/**
+ * Resolve the admin bearer + base URL for the two worker-answered backup verbs
+ * (`retention`, `prune`). Logs and returns `undefined` on any failure.
+ */
+const resolveBackupAdminRequest = (options: BackupCommandOptions): { baseUrl: string; fetchImpl: FetchLike; token: string } | Refusal => {
+    // `--bucket` / `--prefix` / `--dir` choose a destination for the snapshot
+    // verbs; these two ask the worker about its own configured store, so a
+    // destination flag would be silently ignored. On the command with no undo,
+    // that is worth refusing over: `prune --bucket archive-2024` reads as
+    // "prune that bucket" and would prune whatever the worker is wired to.
+    const ignored = [
+        options.bucket === undefined ? undefined : "--bucket",
+        options.prefix === undefined ? undefined : "--prefix",
+        options.dir === undefined ? undefined : "--dir",
+    ].filter((flag) => flag !== undefined);
+
+    if (ignored.length > 0) {
+        options.logger.error(
+            `${ignored.join(" / ")} ${ignored.length === 1 ? "does" : "do"} not apply here — retention and prune act on the store the worker itself is configured with (\`backupStore\`), not a destination you name.`,
+        );
+
+        return { refused: EXIT_CODE.USAGE };
+    }
+
+    if (options.prod === true && options.url === undefined) {
+        options.logger.error("--prod requires an explicit --url (refusing to target the implicit localhost worker)");
+
+        return { refused: EXIT_CODE.USAGE };
+    }
+
+    const baseUrl = resolveAdminBaseUrl(options.url, options.logger, options.cwd);
+
+    if (baseUrl === undefined) {
+        // `resolveAdminBaseUrl` logged an invalid `--url`, or its refusal to put a
+        // bearer on the wire in cleartext — both are the target you named.
+        return { refused: EXIT_CODE.USAGE };
+    }
+
+    // The same resolution `backup list --bucket` uses, so one command does not
+    // have two token stories: against a local dev worker `list` reads
+    // `.dev.vars` and these would have failed without a flag.
+    const { token } = resolveAdminBearer({ cwd: options.cwd ?? process.cwd(), token: options.token, url: baseUrl });
+
+    if (!token) {
+        options.logger.error("admin token required — pass --token, set LUNORA_ADMIN_TOKEN, or add it to .dev.vars (local targets only)");
+
+        return { refused: EXIT_CODE.AUTH };
+    }
+
+    const fetchImpl: FetchLike = options.adminFetch ?? adminFetch;
+
+    return { baseUrl, fetchImpl, token };
+};
+
+/** Print a retention selection the way the cron reports it and the prune records it. */
+const reportSelection = (options: BackupCommandOptions, preview: BackupRetentionPreview): void => {
+    options.logger.info(
+        `backup retention would keep the newest ${preview.keep.toString()} of ${preview.eligible.toString()} under ${preview.prefix} and delete ${preview.wouldDelete.length.toString()}`,
+    );
+
+    for (const key of preview.wouldDelete) {
+        options.logger.info(`  ${backupObjectKeyOfManifest(key)}`);
+    }
+};
+
+/**
+ * `lunora backup retention` — what the platform's own retention would delete on
+ * its next run, and nothing else.
+ *
+ * A read. Retention itself stays on the cron; there is no `--apply` here and no
+ * code path in this command deletes an object. The worker answers because it is
+ * the only party that knows its own `backupCron` and `backupRetain`, and
+ * because eligibility turns on a marker the CLI cannot see from a listing.
+ */
+const runBackupRetention = async (options: BackupCommandOptions): Promise<BackupCommandResult> => {
+    const request = resolveBackupAdminRequest(options);
+
+    if (isRefusal(request)) {
+        // The resolver logged the reason; its code says which kind it was.
+        return { code: request.refused };
+    }
+
+    const response = await request.fetchImpl(`${request.baseUrl}${RETENTION_ENDPOINT_PATH}`, {
+        headers: { authorization: `Bearer ${request.token}` },
+        method: "GET",
+    });
+
+    if (!response.ok) {
+        await readAndLogBody(response, options.logger);
+
+        return { code: exitCodeForStatus(response.status) };
+    }
+
+    const preview = (await response.json()) as BackupRetentionPreview;
+
+    if (preview.cron === undefined) {
+        options.logger.info("no scheduled backup is configured (`backupCron`), so retention would delete nothing");
+
+        return { code: 0, preview };
+    }
+
+    if (preview.keep <= 0) {
+        options.logger.info(`retention is off for cron "${preview.cron}" (\`backupRetain\` unset) — every snapshot under ${preview.prefix} is kept`);
+
+        return { code: 0, preview };
+    }
+
+    // Phrased like the line the cron writes and the prune records, so a
+    // prediction, a confirmation and an aftermath read as one story.
+    reportSelection(options, preview);
+
+    if (preview.eligible === 0) {
+        // The likeliest surprise on a real bucket: snapshots exist, but none
+        // carry this cron's marker, so retention owns none of them.
+        options.logger.info(`no snapshot under ${preview.prefix} was written by this cron, so retention has nothing of its own to remove`);
+    }
+
+    return { code: 0, preview };
+};
+
+/**
+ * Say what a prune actually did — which is not always what it predicted, and
+ * every way it can differ matters to whoever is reading.
+ */
+const reportPruneResult = (options: BackupCommandOptions, result: PrunedBackups): void => {
+    options.logger.success(`deleted ${result.deleted.length.toString()} backup(s)`);
+
+    for (const key of result.deleted) {
+        options.logger.info(`  ${backupObjectKeyOfManifest(key)}`);
+    }
+
+    if (result.failed.length > 0) {
+        options.logger.warn(
+            `${result.failed.length.toString()} could not be removed — the snapshot may be gone with its manifest left behind; run again to retry`,
+        );
+    }
+
+    if (result.ignored > 0) {
+        options.logger.info(`${result.ignored.toString()} were already gone by the time the delete ran`);
+    }
+
+    if (result.remaining > 0) {
+        options.logger.info(`${result.remaining.toString()} more are past the window — run \`lunora backup prune\` again`);
+    }
+};
+
+/**
+ * `lunora backup prune` — delete every snapshot past the retention window.
+ *
+ * The only command that deletes a backup. Nothing else does: the scheduled
+ * backup reports what is past the window and leaves it, so the destructive step
+ * is one an operator takes deliberately.
+ *
+ * It prints what will go before asking, and asks by default. Without a TTY it
+ * refuses rather than proceeding — a prune that deletes silently because it
+ * happened to run in a pipeline is the failure this whole workstream exists to
+ * prevent — so a script says `--yes` and means it.
+ */
+const runBackupPrune = async (options: BackupCommandOptions): Promise<BackupCommandResult> => {
+    const request = resolveBackupAdminRequest(options);
+
+    if (isRefusal(request)) {
+        // The resolver logged the reason; its code says which kind it was.
+        return { code: request.refused };
+    }
+
+    // Show it first, from the same endpoint `lunora backup retention` reads, so
+    // the prediction an operator confirms is the one they were shown.
+    const previewResponse = await request.fetchImpl(`${request.baseUrl}${RETENTION_ENDPOINT_PATH}`, {
+        headers: { authorization: `Bearer ${request.token}` },
+        method: "GET",
+    });
+
+    if (!previewResponse.ok) {
+        await readAndLogBody(previewResponse, options.logger);
+
+        return { code: exitCodeForStatus(previewResponse.status) };
+    }
+
+    const preview = (await previewResponse.json()) as BackupRetentionPreview;
+
+    if (preview.keep <= 0 || preview.cron === undefined) {
+        options.logger.error(
+            "backup prune needs a retention window: set `backupRetain` (and `backupCron`) on the worker. Without one there is nothing past the window to remove.",
+        );
+
+        return { code: EXIT_CODE.USAGE, preview };
+    }
+
+    if (preview.wouldDelete.length === 0) {
+        options.logger.info(
+            `nothing to prune — ${preview.eligible.toString()} snapshot(s) under ${preview.prefix} and retention keeps the newest ${preview.keep.toString()}`,
+        );
+
+        return { code: 0, preview };
+    }
+
+    reportSelection(options, preview);
+
+    if (options.yes !== true) {
+        const confirmer = options.confirm ?? (isInteractive() ? promptYesNo : undefined);
+
+        if (confirmer === undefined) {
+            options.logger.error("refusing to delete backups without confirmation — re-run with --yes (there is no undo for an object-store delete)");
+
+            return { code: EXIT_CODE.USAGE, preview };
+        }
+
+        const confirmed = await confirmer(`delete ${preview.wouldDelete.length.toString()} backup(s)? This cannot be undone. [y/N] `);
+
+        if (!confirmed) {
+            options.logger.info("nothing was deleted");
+
+            return { code: 0, preview };
+        }
+    }
+
+    // Send back exactly what was shown and agreed to. The worker deletes the
+    // intersection of that with what is still eligible, so a snapshot that
+    // became eligible while the prompt was open — a cron fire is enough — is
+    // not swept up in a confirmation that never covered it.
+    const response = await request.fetchImpl(`${request.baseUrl}${PRUNE_ENDPOINT_PATH}`, {
+        body: JSON.stringify({ confirm: preview.wouldDelete }),
+        headers: { authorization: `Bearer ${request.token}`, "content-type": "application/json" },
+        method: "POST",
+    });
+
+    if (!response.ok) {
+        await readAndLogBody(response, options.logger);
+
+        return { code: exitCodeForStatus(response.status), preview };
+    }
+
+    // Report what actually went, which is not always what was predicted.
+    const result = (await response.json()) as PrunedBackups;
+
+    reportPruneResult(options, result);
+
+    return { code: result.failed.length > 0 ? 1 : 0, deleted: result.deleted, preview };
+};
+
+/** Route one validated `backup` invocation to its subcommand. */
+const dispatchBackupSubcommand = async (options: BackupCommandOptions, cwd: string): Promise<BackupCommandResult> => {
     try {
-        if (options.subcommand === "create") {
-            return await runBackupCreate(options, directory);
-        }
-
-        if (options.subcommand === "list") {
-            return await runBackupList(options, directory);
-        }
-
+        // `pitr` is the in-place tier and reads no snapshot at all, and
+        // `retention` asks the worker about its own config — neither reads a
+        // destination, so both are answered before one exists.
         if (options.subcommand === "pitr") {
             return await runBackupPitr(options);
         }
 
-        return await runBackupRestore(options, directory);
+        if (options.subcommand === "retention") {
+            return await runBackupRetention(options);
+        }
+
+        if (options.subcommand === "prune") {
+            return await runBackupPrune(options);
+        }
+
+        const destination = resolveDestination(options, cwd);
+
+        if (isRefusal(destination)) {
+            // The resolver logged the reason; its code says which kind it was.
+            return { code: destination.refused };
+        }
+
+        if (options.subcommand === "create") {
+            return await runBackupCreate(options, destination);
+        }
+
+        if (options.subcommand === "list") {
+            return await runBackupList(options, destination);
+        }
+
+        return await runBackupRestore(options, destination);
     } catch (error: unknown) {
         // Surface a corrupt-manifest (or other) failure as a clean non-zero exit
         // instead of an unhandled rejection — and never clobber an unreadable index.
@@ -352,25 +763,56 @@ const runBackupCommand = async (options: BackupCommandOptions): Promise<BackupCo
     }
 };
 
-/** Narrow a raw argument to a known {@link BackupSubcommand}. */
-const isBackupSubcommand = (value: unknown): value is BackupSubcommand => value === "create" || value === "list" || value === "pitr" || value === "restore";
+const runBackupCommand = async (options: BackupCommandOptions): Promise<BackupCommandResult> => {
+    const cwd = options.cwd ?? process.cwd();
+    // Routed once: the export/import legs `create` and `restore` drive are handed
+    // this same logger, so in json mode every human line lands on stderr and
+    // stdout carries only the result document.
+    const result = await dispatchBackupSubcommand(options, cwd);
 
-/** `lunora backup &lt;subcommand>` handler (lazy-loaded via the command's `loader`). */
-const execute: CommandHandler<BackupOptions> = defineHandler<BackupOptions>(({ argument, cwd, logger, options }) => {
+    // One shape per verb, discriminated by `subcommand`: the six verbs answer six
+    // different questions and a merged document would say which one it is only by
+    // which fields happened to be null. No `ok` — the envelope's `code` is the
+    // verdict.
+    return {
+        ...result,
+        data: {
+            subcommand: options.subcommand,
+            ...(result.entries === undefined ? {} : { entries: result.entries }),
+            ...(result.entry === undefined ? {} : { entry: result.entry }),
+            ...(result.restored === undefined ? {} : { restored: result.restored }),
+            ...(result.preview === undefined ? {} : { preview: result.preview }),
+            ...(result.deleted === undefined ? {} : { deleted: result.deleted }),
+            ...(result.body === undefined ? {} : { result: result.body }),
+        },
+    };
+};
+
+/** Narrow a raw argument to a known {@link BackupSubcommand}. */
+const isBackupSubcommand = (value: unknown): value is BackupSubcommand =>
+    value === "create" || value === "list" || value === "pitr" || value === "prune" || value === "restore" || value === "retention";
+
+/** `lunora backup <subcommand>` handler (lazy-loaded via the command's `loader`). */
+const execute: CommandHandler<BackupOptions> = defineHandler<BackupOptions, BackupCommandData>(async ({ argument, cwd, format, logger, options }) => {
     const sub = argument[0];
 
     if (!isBackupSubcommand(sub)) {
-        logger.error(`backup: unknown subcommand "${sub ?? ""}" — expected create | list | restore | pitr`);
+        const message = `backup: unknown subcommand "${sub ?? ""}" — expected create | list | restore | retention | prune | pitr`;
 
-        return { code: 1 };
+        logger.error(message);
+
+        return { code: EXIT_CODE.USAGE, error: message };
     }
 
-    return runBackupCommand({
+    const result = await runBackupCommand({
         at: options.at,
         bookmark: options.bookmark,
+        bucket: options.bucket,
         cwd,
         dir: options.dir,
+        format,
         logger,
+        prefix: options.prefix,
         prod: options.prod === true,
         restart: options.restart === true,
         restore: options.restore === true,
@@ -380,10 +822,13 @@ const execute: CommandHandler<BackupOptions> = defineHandler<BackupOptions>(({ a
         target: argument[1],
         token: options.token,
         url: resolveProductionWorkerUrl({ cwd, prod: options.prod === true, url: options.url }),
+        verify: options.verify === true,
         yes: options.yes === true,
     });
+
+    return { code: result.code, data: result.data, error: result.error };
 });
 
 export { execute };
-export type { BackupCommandOptions, BackupCommandResult, BackupManifestEntry, BackupSubcommand };
+export type { BackupCommandData, BackupCommandOptions, BackupCommandResult, BackupSubcommand };
 export { runBackupCommand };

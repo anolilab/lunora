@@ -1,0 +1,123 @@
+/**
+ * The extras have no form flow to exercise, so what is worth asserting here is
+ * what only the Vue binding can get wrong: that the module-level toast store
+ * reaches a mounted component, that the captcha widget is rendered after the
+ * host element exists and torn down again on unmount, and that One Tap fires
+ * exactly once.
+ */
+import { fireEvent, render, screen } from "@testing-library/vue";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { defineComponent, h } from "vue";
+
+import * as captchaModule from "../../src/core/captcha";
+import * as oneTapModule from "../../src/core/one-tap";
+import { pushToast, resetToasts } from "../../src/core/toast";
+import AuthUIProvider from "../../src/vue/AuthUIProvider.vue";
+import Captcha from "../../src/vue/Captcha.vue";
+import ErrorToaster from "../../src/vue/ErrorToaster.vue";
+import OneTap from "../../src/vue/OneTap.vue";
+import OrganizationLogoCard from "../../src/vue/OrganizationLogoCard.vue";
+import { fakeNav, pluginClient } from "../fake-client";
+
+// The toast store is module-level, so a leftover toast would surface in a
+// sibling suite rather than here.
+afterEach(() => {
+    resetToasts();
+    vi.restoreAllMocks();
+});
+
+describe("vue ErrorToaster", () => {
+    it("mounts the aria-live region before any toast arrives, empty", () => {
+        expect.assertions(2);
+
+        // Regression: gating the wrapper itself on `toasts.length > 0` meant
+        // the very first toast was pushed before assistive tech was watching
+        // the region, and a live region only announces changes made AFTER it
+        // exists in the accessibility tree — so that first failure went
+        // unannounced.
+        const { container } = render(ErrorToaster);
+        const toaster = container.querySelector(".lunora-auth-toaster");
+
+        expect(toaster).not.toBeNull();
+        expect(toaster?.getAttribute("aria-live")).toBe("polite");
+    });
+
+    it("renders a pushed toast and drops it again when dismissed", async () => {
+        expect.assertions(2);
+
+        render(ErrorToaster);
+        pushToast("Could not sign in with GitHub.");
+        // Wait a tick: the store push lands in a `shallowRef`, and Vue patches
+        // the DOM on the next microtask.
+        await Promise.resolve();
+
+        expect(screen.getByRole("status").textContent).toContain("Could not sign in with GitHub.");
+
+        await fireEvent.click(screen.getByRole("button", { name: "Dismiss" }));
+
+        expect(screen.queryByRole("status")).toBeNull();
+    });
+});
+
+describe("vue extras", () => {
+    it("renders the captcha host, prompts One Tap once, and tears the widget down on unmount", async () => {
+        expect.assertions(8);
+
+        const teardown = vi.fn();
+        const renderSpy = vi.spyOn(captchaModule, "renderCaptcha").mockReturnValue(teardown);
+        const promptSpy = vi.spyOn(oneTapModule, "promptOneTap").mockResolvedValue(undefined);
+        const fake = pluginClient();
+
+        // eslint-disable-next-line vitest/unbound-method, @typescript-eslint/unbound-method -- `render` from @testing-library/vue is a free function, not a method needing `this`.
+        const { container, unmount } = render(
+            defineComponent({
+                render: () =>
+                    h(
+                        AuthUIProvider,
+                        {
+                            authClient: fake.client,
+                            avatar: { upload: async () => "https://example.test/logo.png" },
+                            nav: fakeNav(),
+                            plugins: { oneTap: true, organization: true },
+                        },
+                        { default: () => [h(OneTap), h(Captcha, { provider: "hcaptcha", siteKey: "abc" }), h(OrganizationLogoCard)] },
+                    ),
+            }),
+        );
+
+        await Promise.resolve();
+
+        expect(container.querySelector(".lunora-auth-captcha")).not.toBeNull();
+        expect(renderSpy).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ provider: "hcaptcha", siteKey: "abc" }));
+        expect(promptSpy).toHaveBeenCalledTimes(1);
+
+        // One control, not two: the file input is the only focusable thing, and
+        // the label wrapping it supplies both the visible button and the input's
+        // accessible name. A separate button that clicks a hidden input is a
+        // second tab stop with no visible focus ring.
+        const picker = container.querySelector<HTMLInputElement>('input[type="file"]');
+
+        expect(picker?.hasAttribute("aria-hidden")).toBe(false);
+        expect(picker?.hasAttribute("tabindex")).toBe(false);
+        expect(container.querySelector("label.lunora-auth-button")?.getAttribute("for")).toBe(picker?.id);
+        expect(screen.getByLabelText("Upload photo")).toBe(picker);
+
+        unmount();
+
+        expect(teardown).toHaveBeenCalledTimes(1);
+    });
+
+    it("renders no captcha host without a site key", () => {
+        expect.assertions(1);
+
+        const fake = pluginClient();
+
+        const { container } = render(
+            defineComponent({
+                render: () => h(AuthUIProvider, { authClient: fake.client, nav: fakeNav() }, { default: () => h(Captcha, { provider: "hcaptcha" }) }),
+            }),
+        );
+
+        expect(container.querySelector(".lunora-auth-captcha")).toBeNull();
+    });
+});

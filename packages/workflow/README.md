@@ -85,9 +85,32 @@ The handler context bundles:
 - `ctx.step` — the native Cloudflare durable-step API (`do` / `sleep` / `sleepUntil` / `waitForEvent`).
 - `ctx.run(ref, args, opts?)` — call a Lunora query / mutation / action; wrap in `ctx.step.do(...)` for durability.
 - `ctx.runStep(step, args, opts?)` — run a reusable, schema-validated `defineStep` as a durable step (see below).
+- `ctx.waitForEvent(event, opts?)` — hibernate until a declared `defineWorkflowEvent` arrives; resolves with its validated payload (see below).
 - `ctx.event` / `ctx.params` — the triggering event and its payload.
 - `ctx.env` — the Worker bindings.
 - `ctx.log` — a workflow-prefixed logger surfaced in `wrangler tail` / Studio.
+
+### Declared events (`defineWorkflowEvent`)
+
+`step.waitForEvent(name, { type })` and `instance.sendEvent({ type })` match on a bare string, and the payload crosses as `unknown` — so a typo hibernates the instance until its timeout with no error anywhere, and a changed payload shape resumes the workflow on garbage. Declare the event once and both ends import the same value:
+
+```ts
+// lunora/events.ts
+import { defineWorkflowEvent } from "@lunora/workflow";
+import { v } from "@lunora/values";
+
+export const orderApproved = defineWorkflowEvent("order-approved", v.object({ approvedBy: v.string() }));
+```
+
+```ts
+// inside the workflow body — typed and parsed
+const { approvedBy } = await ctx.waitForEvent(orderApproved, { name: "await approval", timeout: "7 days" });
+
+// from a mutation/action — validated before the send
+await ctx.workflows.get("orderPipeline").sendEvent(instanceId, orderApproved, { approvedBy });
+```
+
+Pass a stable `{ name }` on any wait that can outlive a deploy: the step is otherwise labelled `event:<type>`, so renaming the event type also renames the durable step and an instance that already recorded the wait replays into a fresh one nothing will satisfy.
 
 ### Reusable steps (`defineStep`)
 
@@ -169,7 +192,9 @@ export const checkout = mutation.input({ orderId: v.string() }).mutation(async (
 });
 ```
 
-A handle exposes `create({ id?, params?, retention? })`, `createBatch([...])`, and `get(id)`. An instance handle exposes its lifecycle: `status()`, `pause()`, `resume()`, `terminate()`, and `sendEvent({ type, payload })` (to satisfy a `waitForEvent`).
+A handle exposes `create({ id?, params?, retention? })`, `createBatch({ instances })` or `createBatch({ count, params?, retention? })` (returns `{ created, errors }`, one error per instance it did not create), `deleteBatch([...ids])` (up to 100), `get(id)`, and `sendEvent(instanceId, event, payload)` — the typed delivery of a declared event (see above). `create`/`get` return the native Cloudflare instance, which exposes its own lifecycle: `status()`, `pause()`, `resume()`, `restart()`, `terminate()`, `delete()`, `subscribe({ cursor?, filter? })` (streams the instance's event history, then new events), and the untyped `sendEvent({ type, payload })`.
+
+`defineWorkflow` also takes deploy settings, which codegen writes into the workflow's `wrangler.jsonc` entry: `schedules` (cron expressions that each start an instance), `limits: { steps }`, and `defaultRetention: { successRetention, errorRetention }`. Scheduled workflows are refused on the Node and celld targets.
 
 ### Runtime requirements
 
@@ -181,7 +206,7 @@ A handle exposes `create({ id?, params?, retention? })`, `createBatch([...])`, a
 ### Manual wiring (without codegen)
 
 1. Author `lunora/workflows.ts` as above.
-2. Re-export the generated class from your worker entry — wrangler requires every `workflows[].class_name` to be exported:
+2. Re-export the generated class from your worker entry — wrangler requires every workflow export to be a class the worker exports:
 
     ```ts
     import LunoraWorkflow from "@lunora/workflow/do";
@@ -194,17 +219,17 @@ A handle exposes `create({ id?, params?, retention? })`, `createBatch([...])`, a
     }
     ```
 
-3. Add the binding to `wrangler.jsonc`:
+3. Declare it in `wrangler.jsonc`'s `exports` (Wrangler 4.142.0+):
 
     ```jsonc
     {
-        "workflows": [{ "name": "order-pipeline", "binding": "WORKFLOW_ORDER_PIPELINE", "class_name": "OrderPipelineWorkflow" }],
+        "exports": { "OrderPipelineWorkflow": { "type": "workflow", "name": "order-pipeline" } },
     }
     ```
 
-4. Build `ctx.workflows` from the binding: `createWorkflows({ bindings: { orderPipeline: env.WORKFLOW_ORDER_PIPELINE } })`.
+4. Build `ctx.workflows` from the invoking context's exports: `createWorkflows({ bindings: { orderPipeline: ctx.exports.OrderPipelineWorkflow } })`.
 
-The `workflowClassName` / `workflowBindingName` / `workflowDefaultName` helpers produce exactly these names so codegen and config never disagree.
+The `workflowClassName` / `workflowDefaultName` helpers produce exactly these names so codegen and config never disagree.
 
 ### Observing instances (REST client)
 
@@ -223,7 +248,7 @@ const detail = await client.getInstance({ workflowName: "order-pipeline", instan
 await client.setInstanceStatus({ workflowName: "order-pipeline", instanceId: detail.id, action: "terminate" });
 ```
 
-> This README covers the basics. For the full API, options, and guides, see the **[documentation](https://lunora.sh/docs/addons/workflows)**.
+> This README covers the basics. For the full API, options, and guides, see the **[documentation](https://lunora.sh/docs/packages/workflow)**.
 
 ## Related
 

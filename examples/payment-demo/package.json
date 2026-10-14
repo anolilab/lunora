@@ -7,10 +7,12 @@
     "sideEffects": false,
     "scripts": {
         "build": "vite build",
-        "codegen": "node node_modules/lunora/dist/bin.mjs codegen",
+        "codegen": "node node_modules/lunorash/dist/bin.mjs codegen",
         "deploy": "wrangler deploy",
         "dev": "vite",
-        "lint:types": "tsc --noEmit"
+        "lint:types": "tsc --noEmit",
+        "lint:eslint": "eslint . --max-warnings=0",
+        "lint:eslint:fix": "eslint . --fix"
     },
     "dependencies": {
         "@lunora/payment": "workspace:*",
@@ -19,7 +21,7 @@
         "lunorash": "workspace:*",
         "react": "catalog:frontend",
         "react-dom": "catalog:frontend",
-        "stripe": "^22.2.1"
+        "stripe": "catalog:payment"
     },
     "devDependencies": {
         "@cloudflare/workers-types": "catalog:cloudflare",

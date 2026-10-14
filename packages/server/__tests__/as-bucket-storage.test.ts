@@ -44,6 +44,22 @@ describe("asBucketStorage", () => {
         expect(result.bucket("anything")).toBe(result);
     });
 
+    it("keeps a single-bucket storage's OWN name instead of stamping default over it", () => {
+        expect.assertions(2);
+
+        // `createStorage({ bucket: env.AVATARS, bucketName: "avatars" })` signs
+        // URLs with "avatars". Re-tagging it "default" split the name the HMAC
+        // canonical uses from the one `storageRules` matches on, so an
+        // `{ bucket: "avatars" }` rule was rejected as unreachable while the
+        // storage was governed by `{ bucket: "default" }` rules instead.
+        const single = { bucketName: "avatars", download: (key: string): string => `body:${key}` };
+
+        const result = asBucketStorage(single) as { bucket: (name: string) => unknown; bucketName: string };
+
+        expect(result.bucketName).toBe("avatars");
+        expect(result.bucket("anything")).toBe(result);
+    });
+
     it("tolerates a nullish input by tagging an empty default bucket", () => {
         expect.assertions(2);
 

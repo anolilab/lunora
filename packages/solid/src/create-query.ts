@@ -1,11 +1,19 @@
-import type { ArgsOf, FunctionReference, ReturnOf } from "@lunora/client";
+import type { ArgsOf, FunctionReference, ReturnOf, SubscriptionErrorCallback } from "@lunora/client";
 import { createQuerySubscription } from "@lunora/client/query";
 import type { Accessor } from "solid-js";
-import { createEffect, createSignal, on, onCleanup } from "solid-js";
+import { createSignal } from "solid-js";
 
 import { useLunora } from "./context";
+import { trackedArgsEffect } from "./reactive-args";
 
 export interface CreateQueryOptions {
+    /**
+     * Called when the server pushes a subscription-scoped error (an RLS denial, a
+     * query that starts failing server-side). Without a handler such an error has
+     * nowhere to go and the accessor simply freezes at its last good value.
+     */
+    onError?: SubscriptionErrorCallback;
+
     /** Route to a specific shard when the target function is `.shardBy(...)`-partitioned. */
     shardKey?: string;
 }
@@ -20,13 +28,18 @@ export interface CreateQueryOptions {
  *
  * `args` may be a plain value or an accessor; passing an accessor makes the
  * subscription reactive — when the args change the old subscription is torn down
- * (via `onCleanup`) and a fresh one opens for the new args. Pass `"skip"` (or an
+ * (via `onCleanup`), the accessor resets to `undefined`, and a fresh one opens for
+ * the new args. Pass `"skip"` (or an
  * accessor returning `"skip"`) to short-circuit: no network call, no socket.
  *
  * ```tsx
  * const messages = createQuery(api.messages.list, () => ({ channelId: channelId() }));
- * return &lt;For each={messages()?.messages}>{(m) => &lt;li>{m.text}&lt;/li>}&lt;/For>;
+ * return <For each={messages()?.messages}>{(m) => <li>{m.text}</li>}</For>;
  * ```
+ *
+ * Pass `onError` to surface a subscription-scoped error the server pushes (an RLS
+ * denial, a query that starts failing server-side). Without it such an error is
+ * dropped and the accessor just freezes at its last good value.
  */
 export const createQuery = <F extends FunctionReference>(
     function_: F,
@@ -34,39 +47,43 @@ export const createQuery = <F extends FunctionReference>(
     options: CreateQueryOptions = {},
 ): Accessor<ReturnOf<F> | undefined> => {
     const client = useLunora();
-    const { shardKey } = options;
+    const { onError, shardKey } = options;
 
     const [value, setValue] = createSignal<ReturnOf<F> | undefined>(undefined);
 
     const resolveArgs = (): ArgsOf<F> | "skip" => (typeof args === "function" ? (args as Accessor<ArgsOf<F> | "skip">)() : args);
 
-    // `on(resolveArgs, …)` re-runs the body whenever the args accessor changes,
-    // tearing down the previous subscription via `onCleanup` before opening the
-    // next. A static (non-accessor) `args` resolves once and never re-runs. The
-    // skip-handling, subscribe, and cleanup are owned by the shared
-    // `@lunora/client/query` state machine; this binds it to a Solid signal. The
-    // `() => …` setter forms keep Solid from mistaking a function-valued server
-    // result for an updater.
-    createEffect(
-        on(resolveArgs, (current) => {
-            const unsubscribe = createQuerySubscription<F>(
-                client,
-                function_,
-                current,
-                {
-                    onData: (next) => {
-                        setValue(() => next);
-                    },
-                    onReset: () => {
-                        setValue(() => undefined as ReturnOf<F> | undefined);
-                    },
-                },
-                { shardKey },
-            );
+    // `trackedArgsEffect(resolveArgs, …)` re-runs the body whenever the args'
+    // CONTENT changes, tearing down the previous subscription (the returned
+    // disposer) before opening the next. A static (non-accessor) `args` resolves
+    // once and never re-runs, and an accessor that re-runs but produces equal
+    // args leaves the live subscription alone. The skip-handling, subscribe, and
+    // cleanup are owned by the shared `@lunora/client/query` state machine; this
+    // binds it to a Solid signal. The `() => …` setter forms keep Solid from
+    // mistaking a function-valued server result for an updater.
+    trackedArgsEffect(resolveArgs, (current) => {
+        // The previous args' value must not render under the new args until the
+        // new subscription's first frame lands.
+        setValue(() => undefined as ReturnOf<F> | undefined);
 
-            onCleanup(unsubscribe);
-        }),
-    );
+        const unsubscribe = createQuerySubscription<F>(
+            client,
+            function_,
+            current,
+            {
+                onData: (next) => {
+                    setValue(() => next);
+                },
+                onError,
+                onReset: () => {
+                    setValue(() => undefined as ReturnOf<F> | undefined);
+                },
+            },
+            { shardKey },
+        );
+
+        return unsubscribe;
+    });
 
     return value;
 };

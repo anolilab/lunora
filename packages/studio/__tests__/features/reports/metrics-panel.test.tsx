@@ -7,6 +7,7 @@ import type { ShardMetrics } from "../../../src/lib/admin";
 import { ADMIN_FUNCTIONS } from "../../../src/lib/admin";
 import type { MockClientHooks } from "../../mock-client";
 import { createMockClient } from "../../mock-client";
+import wrapInRouter from "../../render-with-router";
 
 const METRICS: ShardMetrics = {
     cache: { bytes: 2048, entries: 3, evictions: 1, hits: 8, misses: 2 },
@@ -29,11 +30,12 @@ const createClient = (metrics: ShardMetrics = METRICS): MockClientHooks =>
         },
     });
 
-const renderPanel = (mock: MockClientHooks) => (
-    <LunoraProvider client={mock.asClient}>
-        <MetricsPanel />
-    </LunoraProvider>
-);
+const renderPanel = (mock: MockClientHooks) =>
+    wrapInRouter(
+        <LunoraProvider client={mock.asClient}>
+            <MetricsPanel />
+        </LunoraProvider>,
+    );
 
 describe("metricsPanel", () => {
     afterEach(() => {
@@ -62,6 +64,31 @@ describe("metricsPanel", () => {
         const cache = await screen.findByTestId("mt-cache");
 
         expect(cache.textContent).toBe("no cache configured");
+    });
+
+    it("renders a snapshot whose payload carries no cache key at all", async () => {
+        expect.assertions(3);
+
+        // NOT `cache: null` — the key is absent, as an older shard sends it. The
+        // stats read `metrics.cache === null`, which is false for `undefined`, so
+        // they took the "present" branch and dereferenced nothing.
+        const noCacheKey: ShardMetrics = {
+            databaseSize: 1_572_864,
+            errors: 1,
+            requests: 10,
+            shard: "__root__",
+            sinceMs: 1_700_000_000_000,
+            uptimeMs: 65_000,
+        };
+
+        expect("cache" in noCacheKey).toBe(false);
+
+        render(renderPanel(createClient(noCacheKey)));
+
+        const cache = await screen.findByTestId("mt-cache");
+
+        expect(cache.textContent).toBe("no cache configured");
+        expect(screen.getByTestId("mt-db-size").textContent).toBe("1.5 MB");
     });
 
     it("re-seeds on a debounced shard-key change", async () => {
@@ -140,7 +167,7 @@ describe("metricsPanel", () => {
     });
 
     it("renders a sparkline once at least two live samples accumulate", async () => {
-        expect.assertions(2);
+        expect.hasAssertions();
 
         const mock = createClient();
 
@@ -154,12 +181,23 @@ describe("metricsPanel", () => {
         });
 
         // Mount seeded `requests: 10`; two climbing pushes → two deltas → spark.
+        // Each push lands in its own act + settle: a real WS delivers them in
+        // separate tasks, and two synchronous emits would coalesce into a single
+        // cache notification (one data transition → one delta, no sparkline).
         act(() => {
             mock.emit(ADMIN_FUNCTIONS.getMetrics, { ...METRICS, requests: 15 });
+        });
+        await waitFor(() => {
+            expect(screen.getByTestId("mt-requests").textContent).toBe("15");
+        });
+        act(() => {
             mock.emit(ADMIN_FUNCTIONS.getMetrics, { ...METRICS, requests: 20 });
         });
 
-        expect(screen.getByTestId("mt-sparkline").dataset.testid).toBe("mt-sparkline");
+        await waitFor(() => {
+            expect(screen.getByTestId("mt-sparkline").dataset.testid).toBe("mt-sparkline");
+        });
+
         expect(screen.queryByTestId("mt-sparkline-empty")).toBeNull();
     });
 
@@ -215,7 +253,7 @@ describe("metricsPanel", () => {
     });
 
     it("live pushes update the snapshot without any interaction", async () => {
-        expect.assertions(2);
+        expect.hasAssertions();
 
         const mock = createClient();
 
@@ -230,12 +268,16 @@ describe("metricsPanel", () => {
 
         expect(screen.getByTestId("mt-requests").textContent).toBe("10");
 
-        // No toggle: a server push lands and updates the panel on its own.
+        // No toggle: a server push lands and updates the panel on its own. The
+        // push flows through the query cache, whose observer notification lands
+        // asynchronously — poll for the re-render instead of asserting sync.
         act(() => {
             mock.emit(ADMIN_FUNCTIONS.getMetrics, { ...METRICS, requests: 42 });
         });
 
-        expect(screen.getByTestId("mt-requests").textContent).toBe("42");
+        await waitFor(() => {
+            expect(screen.getByTestId("mt-requests").textContent).toBe("42");
+        });
     });
 
     it("all shards aggregates getMetrics across the known shards", async () => {
@@ -273,5 +315,71 @@ describe("metricsPanel", () => {
         expect(screen.getByTestId("mt-agg-shards").textContent).toContain("2 reachable");
 
         sessionStorage.clear();
+    });
+
+    it("drops an aggregate whose shard selection changed while it was in flight", async () => {
+        expect.assertions(2);
+
+        const held: (() => void)[] = [];
+        let hold = false;
+
+        const mock = createMockClient({
+            query: (reference, _args, options): unknown => {
+                if (reference !== ADMIN_FUNCTIONS.getMetrics) {
+                    throw new Error(`unexpected ${reference}`);
+                }
+
+                const shard = (options as { shardKey?: string }).shardKey ?? "";
+                const snapshot = { ...METRICS, shard: shard === "" ? "__root__" : shard };
+
+                if (!hold) {
+                    return snapshot;
+                }
+
+                return new Promise((resolve) => {
+                    held.push(() => {
+                        resolve(snapshot);
+                    });
+                });
+            },
+        });
+
+        render(renderPanel(mock));
+
+        await screen.findByTestId("mt-stats");
+
+        hold = true;
+        fireEvent.change(screen.getByTestId("mt-shard-input"), { target: { value: "room-1" } });
+        fireEvent.click(screen.getByTestId("mt-aggregate"));
+        fireEvent.change(screen.getByTestId("mt-shard-input"), { target: { value: "room-2" } });
+
+        await act(async () => {
+            for (const release of held) {
+                release();
+            }
+        });
+
+        // The fan-out covered root + room-1; room-2 is on screen now.
+        expect(screen.queryByTestId("mt-aggregate-view")).toBeNull();
+        expect(screen.getByTestId<HTMLButtonElement>("mt-aggregate").disabled).toBe(false);
+    });
+
+    it("hides a finished aggregate once the shard selection changes", async () => {
+        expect.assertions(2);
+
+        render(renderPanel(createClient()));
+
+        await screen.findByTestId("mt-stats");
+        fireEvent.click(screen.getByTestId("mt-aggregate"));
+        await screen.findByTestId("mt-aggregate-view");
+
+        fireEvent.change(screen.getByTestId("mt-shard-input"), { target: { value: "room-2" } });
+
+        expect(screen.queryByTestId("mt-aggregate-view")).toBeNull();
+
+        // Back to the shard it was run for: it is that shard's answer again.
+        fireEvent.change(screen.getByTestId("mt-shard-input"), { target: { value: "" } });
+
+        expect(screen.getByTestId("mt-aggregate-view")).not.toBeNull();
     });
 });

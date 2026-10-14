@@ -2,6 +2,7 @@ import { useLunora } from "@lunora/react";
 import type { ChangeEvent, ReactElement } from "react";
 import { useEffect, useRef, useState } from "react";
 
+import { decodeWire } from "../../../../../shared/wire-codec";
 import { ShardInput } from "../../components/shard-input";
 import { Badge } from "../../components/ui/badge";
 import { Button } from "../../components/ui/button";
@@ -10,7 +11,7 @@ import { Input } from "../../components/ui/input";
 import { Label } from "../../components/ui/label";
 import { Textarea } from "../../components/ui/textarea";
 import { useT } from "../../i18n/i18n-context";
-import { errorMessage, fireAndForget } from "../../lib/internal";
+import { errorMessage, fireAndForget, jsonRowReplacer } from "../../lib/internal";
 import type { FunctionDescriptor } from "../../lib/types";
 import type { ProbeOutcome } from "./use-run-as-probe";
 import useRunAsProbe from "./use-run-as-probe";
@@ -39,7 +40,7 @@ interface PermissionsPlaygroundProps {
     readonly runAsIdentity?: boolean;
 }
 
-const formatValue = (value: unknown): string => (value === undefined ? "undefined" : JSON.stringify(value, null, 2));
+const formatValue = (value: unknown): string => (value === undefined ? "undefined" : JSON.stringify(value, jsonRowReplacer, 2));
 
 /**
  * The Permissions Playground — pick a registered function and an identity
@@ -72,6 +73,10 @@ export const PermissionsPlayground = ({ functions: functionsProp, prefill, runAs
     // The last prefill nonce applied, so a given matrix "Probe this" click seeds
     // the form at most once even though `prefill` stays referentially set.
     const appliedNonce = useRef<number>(-1);
+    // Bumped by every run and every prefill: a prefill selects another function
+    // and clears the outcome, so a probe still in flight for the previous one
+    // must not paint its verdict back in.
+    const probeSeq = useRef(0);
 
     useEffect(() => {
         if (functionsProp !== undefined) {
@@ -111,6 +116,7 @@ export const PermissionsPlayground = ({ functions: functionsProp, prefill, runAs
         }
 
         appliedNonce.current = prefill.nonce;
+        probeSeq.current += 1;
         const target = prefill.functionPath;
 
         queueMicrotask(() => {
@@ -130,7 +136,8 @@ export const PermissionsPlayground = ({ functions: functionsProp, prefill, runAs
         let parsedArgs: Record<string, unknown>;
 
         try {
-            parsedArgs = argsText.trim() === "" ? {} : (JSON.parse(argsText) as Record<string, unknown>);
+            // Wire-decoded like the row editor, so a `v.bigint()` / `v.bytes()` arg can be sent in its tagged form.
+            parsedArgs = argsText.trim() === "" ? {} : (decodeWire(JSON.parse(argsText)) as Record<string, unknown>);
         } catch (parseError) {
             setArgsError(t("Invalid JSON args: {message}", { message: (parseError as Error).message }));
             setOutcome(null);
@@ -138,13 +145,19 @@ export const PermissionsPlayground = ({ functions: functionsProp, prefill, runAs
             return;
         }
 
+        probeSeq.current += 1;
+        const seq = probeSeq.current;
+
         setArgsError(null);
         setRunning(true);
 
+        // react-doctor-disable-next-line react-hooks-js/todo -- React Compiler cannot lower `try` without `catch`; the `finally` must still clear the busy flag on the throw path, and adding a catch just to satisfy the compiler would swallow the error
         try {
             const result = await probe({ args: parsedArgs, functionPath: effectivePath, shardKey: shardKey.trim(), userId: runAsUserId.trim() });
 
-            setOutcome(result);
+            if (seq === probeSeq.current) {
+                setOutcome(result);
+            }
         } finally {
             setRunning(false);
         }
@@ -223,7 +236,7 @@ export const PermissionsPlayground = ({ functions: functionsProp, prefill, runAs
                         data-testid="pp-user"
                         id="pp-user"
                         onChange={onUserIdChange}
-                        placeholder={t("Leave empty to run as admin")}
+                        placeholder={t("Required — the identity to probe as")}
                         value={runAsUserId}
                     />
                 </div>
@@ -251,6 +264,27 @@ export const PermissionsPlayground = ({ functions: functionsProp, prefill, runAs
                     <Badge variant="secondary">{t("Allowed")}</Badge>
                     <pre className="overflow-auto rounded-md border border-border bg-muted/50 p-3 font-mono text-xs" data-testid="pp-result">
                         {formatValue(outcome.value)}
+                    </pre>
+                </div>
+            )}
+
+            {outcome !== null && outcome.kind === "invalid" && (
+                <div className="flex flex-col gap-2" data-testid="pp-outcome-invalid">
+                    <Badge variant="outline">{t("Not run")}</Badge>
+                    <p className="text-sm text-muted-foreground" data-testid="pp-invalid" role="status">
+                        {outcome.message}
+                    </p>
+                </div>
+            )}
+
+            {outcome !== null && outcome.kind === "errored" && (
+                <div className="flex flex-col gap-2" data-testid="pp-outcome-errored">
+                    <Badge variant="outline">{t("Errored")}</Badge>
+                    <p className="text-sm text-muted-foreground">
+                        {t("The call failed for a reason that is not an access verdict, so it says nothing about the policy.")}
+                    </p>
+                    <pre className="overflow-auto rounded-md border border-border bg-muted/50 p-3 font-mono text-xs" data-testid="pp-errored" role="alert">
+                        {outcome.message}
                     </pre>
                 </div>
             )}

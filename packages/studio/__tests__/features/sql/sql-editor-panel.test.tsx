@@ -27,7 +27,11 @@ const schemaMock = (): MockClientHooks =>
             }
 
             if (reference === ADMIN_FUNCTIONS.readTablePage) {
-                return { columns: ["id", "author", "body"], rows: [], total: 0 };
+                // `sqlColumns` is what the editor completes and lints against
+                // — the names a statement may actually write. A fixture without
+                // it models a shard too old to report them, which the hook
+                // deliberately treats as "columns unknown".
+                return { columns: ["id", "author", "body"], rows: [], sqlColumns: ["id", "author", "body"], total: 0 };
             }
 
             return { columns: [], rowCount: 0, rows: [], truncated: false };
@@ -37,6 +41,7 @@ const schemaMock = (): MockClientHooks =>
 describe("sqlEditorPanel", () => {
     afterEach(() => {
         localStorage.clear();
+        sessionStorage.clear();
     });
 
     it("runs a query and renders the result rows + count", async () => {
@@ -147,8 +152,96 @@ describe("sqlEditorPanel", () => {
         expect(within(screen.getByTestId("sql-history")).getAllByTestId("sql-history-item")).toHaveLength(1);
     });
 
-    it("clears the history", async () => {
+    it("runs a script as separate gated calls and never sends a joined string", async () => {
+        expect.assertions(4);
+
+        const mock = createMockClient({ query: oneRowResult });
+
+        render(renderPanel(mock));
+
+        fireEvent.change(screen.getByTestId("sql-input"), { target: { value: "SELECT 1; SELECT 2; SELECT 3" } });
+        fireEvent.click(screen.getByTestId("sql-run"));
+
+        const strip = await screen.findByTestId("sql-statements");
+
+        expect(within(strip).getAllByRole("button")).toHaveLength(3);
+
+        const sent = mock.query.mock.calls.filter((call) => call[0].__lunoraRef === ADMIN_FUNCTIONS.runSql).map((call) => (call[1] as { sql: string }).sql);
+
+        expect(sent).toStrictEqual(["SELECT 1", "SELECT 2", "SELECT 3"]);
+        // The gate is the console's enforcement point; splitting happens above it
+        // and a `;`-joined string must never reach the server.
+        expect(sent.some((sql) => sql.includes(";"))).toBe(false);
+        // The last statement is what the panes show.
+        expect(screen.getByTestId("sql-statement-2").getAttribute("aria-pressed")).toBe("true");
+    });
+
+    it("does not double-prefix EXPLAIN onto a draft that already asks for a plan", async () => {
         expect.assertions(2);
+
+        // The read-only gate ALLOWS a leading `EXPLAIN [QUERY PLAN]`, so wrapping
+        // one again sends `EXPLAIN QUERY PLAN EXPLAIN QUERY PLAN …`, which SQLite
+        // refuses with `near "EXPLAIN": syntax error` — while Run executes the
+        // very same draft.
+        const mock = createMockClient({ query: oneRowResult });
+
+        render(renderPanel(mock));
+
+        fireEvent.change(screen.getByTestId("sql-input"), { target: { value: "EXPLAIN QUERY PLAN SELECT 1" } });
+        fireEvent.click(screen.getByTestId("sql-tab-explain"));
+
+        await waitFor(() => {
+            expect(mock.query.mock.calls.some((call) => call[0].__lunoraRef === ADMIN_FUNCTIONS.runSql)).toBe(true);
+        });
+
+        const sent = mock.query.mock.calls.filter((call) => call[0].__lunoraRef === ADMIN_FUNCTIONS.runSql).map((call) => (call[1] as { sql: string }).sql);
+
+        expect(sent).toStrictEqual(["EXPLAIN QUERY PLAN SELECT 1"]);
+    });
+
+    it("reports a statement the gate refuses without sending it, and still runs the rest", async () => {
+        expect.assertions(3);
+
+        const mock = createMockClient({ query: oneRowResult });
+
+        render(renderPanel(mock));
+
+        fireEvent.change(screen.getByTestId("sql-input"), { target: { value: "SELECT 1; DELETE FROM messages; SELECT 2" } });
+        fireEvent.click(screen.getByTestId("sql-run"));
+
+        await screen.findByTestId("sql-statements");
+
+        const sent = mock.query.mock.calls.filter((call) => call[0].__lunoraRef === ADMIN_FUNCTIONS.runSql).map((call) => (call[1] as { sql: string }).sql);
+
+        // The refusal is local — the write never leaves the browser — and it does
+        // not abort the statements after it.
+        expect(sent).toStrictEqual(["SELECT 1", "SELECT 2"]);
+
+        fireEvent.click(screen.getByTestId("sql-statement-1"));
+
+        expect(screen.getByTestId("sql-error").textContent).toContain("read-only");
+        expect(screen.queryByTestId("sql-rows")).toBeNull();
+    });
+
+    it("purges an on-disk history left by a build that always persisted it", async () => {
+        expect.assertions(2);
+
+        // The upgrade path. Before the toggle existed the history always lived in
+        // localStorage; an operator who never opts in must not be shown an empty,
+        // unchecked history while last week's statements sit on disk.
+        localStorage.setItem("lunora-studio-sql-history", JSON.stringify([{ at: 1, sql: "SELECT * FROM users WHERE email = 'x@y.z'" }]));
+
+        render(renderPanel(createMockClient({ query: oneRowResult })));
+
+        await waitFor(() => {
+            expect(localStorage.getItem("lunora-studio-sql-history")).toBeNull();
+        });
+
+        expect(screen.queryByTestId("sql-history")).toBeNull();
+    });
+
+    it("clears the history", async () => {
+        expect.assertions(3);
 
         const mock = createMockClient({ query: oneRowResult });
 
@@ -160,7 +253,55 @@ describe("sqlEditorPanel", () => {
         fireEvent.click(screen.getByTestId("sql-history-clear"));
 
         expect(screen.queryByTestId("sql-history")).toBeNull();
-        expect(localStorage.getItem("lunora-studio-sql-history")).toBe("[]");
+        // Both areas: clearing has to reach the on-disk copy even when the history
+        // is currently session-scoped, or "Clear history" leaves the statements it
+        // claims to have removed sitting in `localStorage`.
+        expect(localStorage.getItem("lunora-studio-sql-history") ?? "").not.toContain("sqlite_master");
+        expect(sessionStorage.getItem("lunora-studio-sql-history") ?? "").not.toContain("sqlite_master");
+    });
+
+    it("keeps the run history to the tab unless asked to remember it", async () => {
+        expect.assertions(3);
+
+        render(renderPanel(createMockClient({ query: oneRowResult })));
+
+        fireEvent.click(screen.getByTestId("sql-run"));
+        await screen.findByTestId("sql-history");
+
+        // The default. A statement that happened to succeed is not something an
+        // operator asked to keep, and before this every one of them outlived the
+        // browser on whatever origin the studio was opened from.
+        expect(localStorage.getItem("lunora-studio-sql-history")).toBeNull();
+        expect(sessionStorage.getItem("lunora-studio-sql-history")).toContain("sqlite_master");
+
+        fireEvent.click(screen.getByTestId("sql-history-remember"));
+
+        await waitFor(() => {
+            expect(localStorage.getItem("lunora-studio-sql-history")).toContain("sqlite_master");
+        });
+    });
+
+    it("deletes the on-disk history when remembering is turned back off", async () => {
+        expect.hasAssertions();
+
+        render(renderPanel(createMockClient({ query: oneRowResult })));
+
+        fireEvent.click(screen.getByTestId("sql-run"));
+        await screen.findByTestId("sql-history");
+
+        fireEvent.click(screen.getByTestId("sql-history-remember"));
+
+        await waitFor(() => {
+            expect(localStorage.getItem("lunora-studio-sql-history")).toContain("sqlite_master");
+        });
+
+        fireEvent.click(screen.getByTestId("sql-history-remember"));
+
+        // A toggle that hid the history but left it on disk would be a setting
+        // that lies about what it does.
+        await waitFor(() => {
+            expect(localStorage.getItem("lunora-studio-sql-history")).toBeNull();
+        });
     });
 
     it("formats the current draft in place", () => {
@@ -253,6 +394,39 @@ describe("sqlEditorPanel", () => {
         const popover = await screen.findByTestId("sql-autocomplete");
 
         expect(within(popover).getAllByTestId("sql-autocomplete-item")[0]?.textContent).toContain("messages");
+    });
+
+    it("inserts the suggestion the operator CLICKED, not the highlighted one", async () => {
+        expect.assertions(2);
+
+        const mock = schemaMock();
+
+        render(renderPanel(mock));
+
+        await waitForSchema(mock);
+
+        // A qualifier offering several columns, so the clicked row is not the
+        // highlighted one — the case where committing through a scheduled `move` reads
+        // the stale index and silently inserts the wrong suggestion.
+        typeInEditor("SELECT messages.");
+
+        const popover = await screen.findByTestId("sql-autocomplete");
+        const items = within(popover).getAllByTestId("sql-autocomplete-item");
+        const clicked = items.find((item) => item.textContent?.includes("body"));
+
+        expect(items.indexOf(clicked as HTMLElement)).toBeGreaterThan(0);
+
+        fireEvent.mouseDown(clicked as HTMLElement);
+
+        const input = screen.getByTestId<HTMLTextAreaElement>("sql-input");
+
+        await waitFor(() => {
+            if (input.value === "SELECT messages.") {
+                throw new Error(`not yet: ${input.value}`);
+            }
+        });
+
+        expect(input.value).toBe("SELECT messages.body");
     });
 
     it("completes a column behind a `tbl.` qualifier into the editor", async () => {
@@ -449,5 +623,77 @@ describe("sqlEditorPanel", () => {
         fireEvent.click(screen.getByTestId("sql-tab-menu-confirm-discard"));
 
         expect(within(screen.getByTestId("sql-tab-strip")).getAllByTestId(/^sql-tab-select-/u)).toHaveLength(1);
+    });
+
+    it("keeps `running` scoped per tab: a slow query in one tab never disables/spins another tab's Run button (STUDIO-11)", async () => {
+        expect.assertions(4);
+
+        let resolveSlow: ((value: SqlConsoleResult) => void) | undefined;
+
+        const mock = createMockClient({
+            query: (reference, args): unknown => {
+                if (reference !== ADMIN_FUNCTIONS.runSql) {
+                    return { columns: [], rowCount: 0, rows: [], truncated: false };
+                }
+
+                const { sql } = args as { sql: string };
+
+                // Tab A's query never resolves on its own — held open until the test
+                // calls `resolveSlow` explicitly, so it can assert on the state while
+                // it's still in flight.
+                if (sql.includes("SLOW")) {
+                    return new Promise<SqlConsoleResult>((resolve) => {
+                        resolveSlow = resolve;
+                    });
+                }
+
+                return { columns: ["name"], rowCount: 1, rows: [{ name: "fast" }], truncated: false };
+            },
+        });
+
+        render(renderPanel(mock));
+
+        // Tab A: start the slow query.
+        typeInEditor("SELECT 'SLOW'");
+        fireEvent.click(screen.getByTestId("sql-run"));
+
+        await waitFor(() => {
+            if (!screen.getByTestId<HTMLButtonElement>("sql-run").disabled) {
+                throw new Error("tab A hasn't started running yet");
+            }
+        });
+
+        // Open a second tab — it becomes active. Tab A stays first in the strip
+        // (`addTab` appends), so its id is captured before switching away.
+        fireEvent.click(screen.getByTestId("sql-tab-add"));
+
+        const tabAId =
+            (within(screen.getByTestId("sql-tab-strip")).getAllByTestId(/^sql-tab-select-/u)[0] as HTMLElement).dataset.testid?.replace(
+                "sql-tab-select-",
+                "",
+            ) ?? "";
+
+        // Tab B's Run is enabled — tab A's in-flight query hasn't disabled/spun it,
+        // the way a single panel-level `running` flag used to.
+        expect(screen.getByTestId<HTMLButtonElement>("sql-run").disabled).toBe(false);
+        expect(screen.getByTestId("sql-run").textContent).not.toContain("Running");
+
+        // Land tab A's query while tab B is still the active tab.
+        resolveSlow?.({ columns: ["name"], rowCount: 1, rows: [{ name: "slow-result" }], truncated: false });
+
+        // Tab B is unaffected by tab A's query landing.
+        expect(screen.getByTestId<HTMLButtonElement>("sql-run").disabled).toBe(false);
+
+        // Switch back to tab A: its own spinner cleared (not tab B's), and its
+        // result is the one that landed while it was in the background.
+        fireEvent.click(screen.getByTestId(`sql-tab-select-${tabAId}`));
+
+        await waitFor(() => {
+            if (screen.getByTestId<HTMLButtonElement>("sql-run").disabled) {
+                throw new Error("tab A's running flag never cleared");
+            }
+        });
+
+        expect(screen.getByTestId("sql-rows").textContent).toContain("slow-result");
     });
 });

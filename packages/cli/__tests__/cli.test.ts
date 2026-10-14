@@ -5,7 +5,8 @@ import { fileURLToPath } from "node:url";
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { COMMANDS, runCli, VERSION } from "../src/cli";
+import { COMMANDS, REGISTERED_COMMAND_NAMES, runCli, VERSION } from "../src/cli";
+import { EXIT_CODE } from "../src/util/exit-code";
 
 const testDirectory = dirname(fileURLToPath(import.meta.url));
 const templatesRoot = resolve(testDirectory, "..", "..", "..", "templates");
@@ -65,6 +66,23 @@ describe("lunora CLI entry", () => {
         }
     });
 
+    it.each(REGISTERED_COMMAND_NAMES)("`lunora %s --help` renders and exits 0", async (command) => {
+        expect.assertions(2);
+
+        // `import --help` and `run --help` both died with "Found extraneous } in
+        // template literal": cerebro renders help text through chalk's
+        // tagged-template parser, which reads `{...}` as style syntax, so a
+        // literal brace in ANY description hard-errors that command's help.
+        // The failure is invisible until someone asks for help on that specific
+        // command, which is exactly when they can least afford it — so every
+        // command's help is rendered here rather than spot-checking the two.
+        const { lines, logger } = captureLogger();
+        const code = await runCli({ argv: [command, "--help"], logger });
+
+        expect(code).toBe(0);
+        expect(`${lines.join("\n")}\n${stdout}${stderr}`).not.toContain("extraneous");
+    });
+
     it("no args prints usage and exits 0", async () => {
         expect.assertions(2);
 
@@ -85,12 +103,13 @@ describe("lunora CLI entry", () => {
         expect(`${lines.join("")}${stdout}`).toContain(VERSION);
     });
 
-    it("unknown command exits non-zero with a friendly message", async () => {
+    it("unknown command exits with the usage code and a friendly message", async () => {
         expect.assertions(2);
 
         const code = await runCli({ argv: ["zzz-not-real"] });
 
-        expect(code).toBe(1);
+        // A name the CLI does not have is bad usage (2), not a failed run (1).
+        expect(code).toBe(2);
         // runCli upgrades cerebro's bare "not found" into a friendly message.
         expect(stderr).toContain("Unknown command");
     });
@@ -100,7 +119,7 @@ describe("lunora CLI entry", () => {
 
         const code = await runCli({ argv: ["deployy"] });
 
-        expect(code).toBe(1);
+        expect(code).toBe(2);
         expect(stderr).toContain('Did you mean "deploy"?');
     });
 
@@ -136,7 +155,7 @@ describe("lunora CLI entry", () => {
 
             const code = await runCli({ argv: ["registry", "frobnicate"] });
 
-            expect(code).toBe(1);
+            expect(code).toBe(EXIT_CODE.USAGE);
             expect(stderr).toContain("unknown subcommand");
         });
 
@@ -147,7 +166,7 @@ describe("lunora CLI entry", () => {
             // `presence` is still added via `registry add`.
             const code = await runCli({ argv: ["add", "presence"] });
 
-            expect(code).toBe(1);
+            expect(code).toBe(EXIT_CODE.USAGE);
         });
     });
 
@@ -213,11 +232,14 @@ describe("lunora CLI entry", () => {
             expect(existsSync(join(target, "vite.config.ts"))).toBe(false);
         });
 
-        it("default template (no `-t` flag) is vite", async () => {
+        it("default (no `-t`, no `--vite`) with `--yes` scaffolds the React overlay", async () => {
             expect.assertions(2);
 
+            // No `-t`/`--vite` → the React create-vite overlay is the default;
+            // `--yes` opts into it rather than erroring. (Fetches create-vite, so
+            // this one exercises the network path, unlike the `--from` tests.)
             const code = await runCli({
-                argv: ["init", "argv_default", "--from", templatesRoot],
+                argv: ["init", "argv_default", "--from", templatesRoot, "--yes"],
                 cwd: workdir,
             });
 
@@ -226,6 +248,18 @@ describe("lunora CLI entry", () => {
             const target = join(workdir, "argv_default");
 
             expect(existsSync(join(target, "vite.config.ts"))).toBe(true);
+        });
+
+        it("non-interactive init without `-t` or `--yes` errors instead of guessing a template", async () => {
+            expect.assertions(2);
+
+            const code = await runCli({
+                argv: ["init", "argv_no_template", "--from", templatesRoot],
+                cwd: workdir,
+            });
+
+            expect(code).toBe(EXIT_CODE.USAGE);
+            expect(existsSync(join(workdir, "argv_no_template"))).toBe(false);
         });
     });
 });

@@ -1,37 +1,11 @@
 /* eslint-disable max-classes-per-file -- D1Session and D1Client are both public exports (re-exported by src/index.ts) and are intentionally co-located: the client mints sessions, so splitting them across files would break the cohesive Sessions-API surface consumers import together. */
-import type { D1Database } from "@cloudflare/workers-types";
+import type { D1DatabaseLike, D1PreparedStatementLike, D1SessionLike } from "@lunora/platform";
 import type { BatchItem, BatchResponse } from "drizzle-orm/batch";
-import type { DrizzleD1Database } from "drizzle-orm/d1";
+import type { AnyD1Database, DrizzleD1Database } from "drizzle-orm/d1";
 import { drizzle as drizzleD1 } from "drizzle-orm/d1";
 
-/**
- * Minimal structural projection of `D1Database` to keep the adapter
- * compatible with the real workers-types value as well as unit-test doubles.
- */
-interface D1DatabaseLike {
-    batch?: (statements: D1PreparedStatementLike[]) => Promise<unknown[]>;
-    exec?: (sql: string) => Promise<unknown>;
-    prepare: (sql: string) => D1PreparedStatementLike;
-    withSession: (bookmark?: string) => D1SessionLike;
-}
-
-interface D1SessionLike {
-    batch?: (statements: D1PreparedStatementLike[]) => Promise<unknown[]>;
-    getBookmark: () => string | null;
-    prepare: (sql: string) => D1PreparedStatementLike;
-}
-
-interface D1PreparedStatementLike {
-    // T lets callers type result rows (e.g. `.all<{ id: string }>()`); it flows
-    // from the call site into the return, so it is intentionally caller-supplied.
-    // eslint-disable-next-line @typescript-eslint/no-unnecessary-type-parameters
-    all: <T = unknown>() => Promise<{ results: T[]; success: boolean }>;
-    bind: (...values: unknown[]) => D1PreparedStatementLike;
-    first: <T = unknown>(column?: string) => Promise<T | null>;
-    raw: <T = unknown>() => Promise<T[][]>;
-    // eslint-disable-next-line @typescript-eslint/no-unnecessary-type-parameters
-    run: <T = unknown>() => Promise<{ meta?: Record<string, unknown>; results?: T[]; success: boolean }>;
-}
+import { evictOldestEntry } from "../../../shared/evict-oldest";
+import { isReadOnlyD1Sql, withD1Retry } from "./retry";
 
 /**
  * D1 client wrapping the workers `env.DB` binding. The recommended path is
@@ -54,6 +28,37 @@ interface D1PreparedStatementLike {
 const STMT_CACHE_CAPACITY = 256;
 
 /**
+ * Bounded LRU statement cache lookup shared by {@link D1Session} and
+ * {@link D1Client} (they cache over the same `Map`, differing only in the
+ * underlying `prepare` target). A hit bumps the entry to MRU (delete + re-insert,
+ * so `Map` insertion order tracks recency); a miss prepares via `prepare`,
+ * evicting the oldest entry once {@link STMT_CACHE_CAPACITY} is reached. Extracted
+ * to one definition so the subtle eviction/ordering logic can't drift between the
+ * two callers.
+ */
+const prepareCached = (
+    cache: Map<string, D1PreparedStatementLike>,
+    prepare: (sql: string) => D1PreparedStatementLike,
+    sql: string,
+): D1PreparedStatementLike => {
+    const cached = cache.get(sql);
+
+    if (cached) {
+        cache.delete(sql);
+        cache.set(sql, cached);
+
+        return cached;
+    }
+
+    const stmt = prepare(sql);
+
+    evictOldestEntry(cache, STMT_CACHE_CAPACITY);
+    cache.set(sql, stmt);
+
+    return stmt;
+};
+
+/**
  * D1 Sessions-API constraint for a bookmark-less first read: serve from any
  * replica for the lowest latency. (`"first-primary"` is the strongly-consistent
  * alternative.) Passed in place of an omitted bookmark so the consistency choice
@@ -61,7 +66,23 @@ const STMT_CACHE_CAPACITY = 256;
  */
 const D1_FIRST_UNCONSTRAINED = "first-unconstrained";
 
-/** Thin wrapper over a `D1DatabaseSession` exposing bookmark plumbing. */
+/**
+ * Thin wrapper over a `D1DatabaseSession` exposing bookmark plumbing.
+ *
+ * `all` and `first` retry D1's expected transient failures — but only for a
+ * statement that is provably read-only. D1 produces a documented
+ * baseline of infrastructural errors even when healthy (Cloudflare's team calls
+ * a handful every few hours "not unexpected") and their guidance is to retry;
+ * a client that does not has adopted that error rate as the application's own.
+ *
+ * Nothing else on this class or on {@link D1Client} retries. `run` is the write
+ * path, and every transient D1 error is ambiguous about whether the statement
+ * applied — re-running a non-idempotent write after a lost response
+ * double-applies it. `all` is not a read path either: D1 runs
+ * `UPDATE … RETURNING` through it, so the retry is gated on the statement's
+ * leading keyword rather than on the method name. Wrap a genuinely idempotent
+ * write in {@link withD1Retry} yourself, per call.
+ */
 class D1Session {
     private readonly session: D1SessionLike;
 
@@ -73,30 +94,13 @@ class D1Session {
     }
 
     public prepare(sql: string): D1PreparedStatementLike {
-        const cached = this.stmtCache.get(sql);
-
-        if (cached) {
-            this.stmtCache.delete(sql);
-            this.stmtCache.set(sql, cached);
-
-            return cached;
-        }
-
-        const stmt = this.session.prepare(sql);
-
-        if (this.stmtCache.size >= STMT_CACHE_CAPACITY) {
-            const oldest = this.stmtCache.keys().next().value;
-
-            if (oldest !== undefined) {
-                this.stmtCache.delete(oldest);
-            }
-        }
-
-        this.stmtCache.set(sql, stmt);
-
-        return stmt;
+        return prepareCached(this.stmtCache, (text) => this.session.prepare(text), sql);
     }
 
+    /**
+     * Execute a statement. **Not retried** — `run` is the write path, and a
+     * transient D1 error does not say whether the write applied.
+     */
     // eslint-disable-next-line @typescript-eslint/no-unnecessary-type-parameters -- T types the result rows for the caller and is forwarded to the prepared statement.
     public async run<T = unknown>(sql: string, ...binds: unknown[]): Promise<{ meta?: Record<string, unknown>; results?: T[]; success: boolean }> {
         return this.prepare(sql)
@@ -104,17 +108,34 @@ class D1Session {
             .run<T>();
     }
 
+    /**
+     * Read all rows, retrying D1's transient failures when `sql` is a
+     * read-only statement. An `UPDATE … RETURNING` runs through here too and is
+     * left unretried.
+     */
+    // `meta` carries D1's own per-query accounting (`rows_read`, `rows_written`,
+    // `duration`). Forwarded rather than dropped: it is the only place the
+    // SCANNED row count is observable, and scanned is what D1 bills. Widening it
+    // here is what keeps the accounting reachable through the Sessions API —
+    // without it the contract stopped at this wrapper.
     // eslint-disable-next-line @typescript-eslint/no-unnecessary-type-parameters -- T types the result rows for the caller and is forwarded to the prepared statement.
-    public async all<T = unknown>(sql: string, ...binds: unknown[]): Promise<{ results: T[]; success: boolean }> {
-        return this.prepare(sql)
-            .bind(...binds)
-            .all<T>();
+    public async all<T = unknown>(sql: string, ...binds: unknown[]): Promise<{ meta?: Record<string, unknown>; results: T[]; success: boolean }> {
+        const run = async (): Promise<{ meta?: Record<string, unknown>; results: T[]; success: boolean }> =>
+            this.prepare(sql)
+                .bind(...binds)
+                .all<T>();
+
+        return isReadOnlyD1Sql(sql) ? withD1Retry(run) : run();
     }
 
+    /** Read the first row, retrying under the same read-only rule as {@link all}. */
     public async first<T = unknown>(sql: string, ...binds: unknown[]): Promise<T | null> {
-        return this.prepare(sql)
-            .bind(...binds)
-            .first<T>();
+        const run = async (): Promise<T | null> =>
+            this.prepare(sql)
+                .bind(...binds)
+                .first<T>();
+
+        return isReadOnlyD1Sql(sql) ? withD1Retry(run) : run();
     }
 
     /**
@@ -126,6 +147,16 @@ class D1Session {
     }
 }
 
+/**
+ * A D1 handle: prepared-statement caching, Sessions-API sessions, and the
+ * drizzle-typed accessors.
+ *
+ * **Nothing on this class retries.** `prepare`, `drizzle`, `drizzleSession`,
+ * `batch` and `raw` all hand back the underlying D1 surface untouched. The
+ * automatic retry lives on {@link D1Session.all} / {@link D1Session.first} and
+ * on `retryingExec` (the seam `.global()` tables read through); wrap anything
+ * else in {@link withD1Retry} yourself, and only when it is safe to run twice.
+ */
 class D1Client {
     private readonly db: D1DatabaseLike;
 
@@ -171,32 +202,7 @@ class D1Client {
      * even when the previous caller already called `.bind(...).run()`.
      */
     public prepare(sql: string): D1PreparedStatementLike {
-        const cached = this.stmtCache.get(sql);
-
-        if (cached) {
-            // Move to tail (MRU) by re-inserting so the LRU eviction below
-            // discards genuinely cold entries.
-            this.stmtCache.delete(sql);
-            this.stmtCache.set(sql, cached);
-
-            return cached;
-        }
-
-        const stmt = this.db.prepare(sql);
-
-        // LRU eviction: drop the oldest entry (insertion-order head) once the
-        // cap is reached. Map iteration order matches insertion order.
-        if (this.stmtCache.size >= STMT_CACHE_CAPACITY) {
-            const oldest = this.stmtCache.keys().next().value;
-
-            if (oldest !== undefined) {
-                this.stmtCache.delete(oldest);
-            }
-        }
-
-        this.stmtCache.set(sql, stmt);
-
-        return stmt;
+        return prepareCached(this.stmtCache, (text) => this.db.prepare(text), sql);
     }
 
     /**
@@ -212,9 +218,14 @@ class D1Client {
 
         // Structural cast: `D1DatabaseLike` projects exactly the methods
         // `drizzle-orm/d1` introspects (`prepare`, `batch`). The runtime
-        // binding ships the full `D1Database` shape; tests pass doubles that
-        // match the projection.
-        this.drizzleHandle = drizzleD1(this.db as unknown as D1Database, { logger: false });
+        // binding ships the full D1 shape; tests pass doubles that match the
+        // projection.
+        //
+        // Cast to drizzle's own `AnyD1Database` rather than to
+        // `@cloudflare/workers-types`' `D1Database`: the cast only has to satisfy
+        // the driver's parameter, and naming the provider type here was this
+        // package's last Cloudflare import (plan 114 §5.1's ambient-types scrub).
+        this.drizzleHandle = drizzleD1(this.db as unknown as AnyD1Database, { logger: false });
 
         return this.drizzleHandle;
     }
@@ -225,13 +236,13 @@ class D1Client {
      * the same session.
      *
      * A `D1DatabaseSession` exposes the same `prepare` / `batch` surface
-     * drizzle calls into, so a single `unknown` cast lets us treat the session
-     * as a `D1Database` for driver-construction purposes.
+     * drizzle calls into, so a single `unknown` cast lets us hand the session to
+     * the driver.
      */
     public drizzleSession(bookmark?: string): DrizzleD1Database<Record<string, unknown>> {
         const session = this.db.withSession(bookmark ?? D1_FIRST_UNCONSTRAINED);
 
-        return drizzleD1(session as unknown as D1Database, { logger: false });
+        return drizzleD1(session as unknown as AnyD1Database, { logger: false });
     }
 
     /**
@@ -250,4 +261,4 @@ class D1Client {
 }
 
 export { D1Client, D1Session };
-export type { D1DatabaseLike, D1PreparedStatementLike, D1SessionLike };
+export { type D1DatabaseLike, type D1PreparedStatementLike, type D1SessionLike } from "@lunora/platform";

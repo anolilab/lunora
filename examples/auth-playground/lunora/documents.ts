@@ -1,28 +1,37 @@
+import { rateLimit } from "lunorash/ratelimit";
 import { LunoraError } from "lunorash/server";
 
-import type { Id } from "./_generated/server.js";
+import type { Id, MutationCtx } from "./_generated/server.js";
 import { mutation, query, v } from "./_generated/server.js";
+import { makeRateLimiter } from "./ratelimit/schema.js";
+
+/**
+ * The limiter comes from `lunora/ratelimit/schema.ts`, which owns the named
+ * limits and the durable store.
+ *
+ * Keyed on the signed-in user so one account cannot spend another's budget. The
+ * `ctx.ip` fallback matters: the rate-limit middleware runs *before* the handler
+ * calls `assertSignedIn`, so every unauthenticated attempt is keyed here before
+ * it is rejected. `ctx.ip` is Cloudflare's server-side `CF-Connecting-IP` and is
+ * `undefined` off Cloudflare, where those attempts then share one `"anon"`
+ * bucket.
+ */
+const limiter = (ctx: MutationCtx) => makeRateLimiter(ctx);
+const byUser = { key: (ctx: { auth: { userId?: null | string }; ip?: string }): string => ctx.auth.userId ?? ctx.ip ?? "anon" };
 
 interface DocumentRow {
     _id: Id<"documents">;
-    organizationId: string;
-    ownerId: string;
-    title: string;
     body: string;
     createdAt: number;
+    ownerId: string;
+    title: string;
 }
 
 /**
- * Lightweight identity gate. `ctx.auth.userId` is populated by Lunora's
- * runtime from the resolved session — see `src/server/index.ts` for how the
- * auth instance is wired in.
- *
- * For the *full* org-membership check, queries should compose
- * `withAuthPlugins(auth)` and call `ctx.authApi.getActiveMember({ headers,
- * query: { organizationId } })` — the addon docs page walks through the
- * `httpAction` recipe that has access to inbound `Headers`. This demo
- * keeps the handler simple and trusts the per-document `ownerId` for
- * isolation; production apps want the membership check too.
+ * Identity gate. `ctx.auth.userId` is populated by Lunora's runtime from the
+ * resolved session — see `src/server/index.ts` for how the auth instance is
+ * wired in. It is the only caller-identifying value on a procedure context that
+ * the client cannot forge.
  */
 const assertSignedIn = (userId: null | string): string => {
     if (!userId) {
@@ -33,31 +42,53 @@ const assertSignedIn = (userId: null | string): string => {
 };
 
 /**
- * List documents in an organization, newest-first. Anyone signed in can call
- * this; pair it with `withAuthPlugins` to add a strict membership check.
+ * What isolates these documents — and why there is no `organizationId` column.
+ *
+ * `ownerId` is stamped from the session on `create` and is the equality prefix
+ * of every read, so a caller only ever sees their own rows. That is a boundary
+ * the server can enforce on its own.
+ *
+ * An `organizationId` would not be. A procedure context carries the resolved
+ * identity and nothing else — no org claim, and no inbound `Headers` — so an
+ * org id could only arrive in `args`, where the caller picks it. Storing one
+ * there produces a column that *looks* like a tenant boundary and is really a
+ * caller-chosen label: `assertSignedIn` proves the caller is somebody, never
+ * that they belong to the org they named. Writing rows under another tenant's
+ * id is then one request away, and every later query that trusts the column
+ * inherits the hole. A field the server cannot verify does not belong in the
+ * row.
+ *
+ * To scope by organization for real, put the check where the request is: a
+ * better-auth membership lookup authorizes from the caller's session cookie, so
+ * compose `withAuthPlugins(auth)` onto an `httpAction` — which does have the
+ * request — and call `ctx.authApi.getActiveMember({ headers: request.headers,
+ * query: { organizationId } })` before the org id is allowed anywhere near a
+ * write. Add the column once that gate exists, not before.
  */
-export const list = query.input({ organizationId: v.string() }).query(async ({ args: { organizationId }, ctx }): Promise<DocumentRow[]> => {
-    assertSignedIn(ctx.auth.userId);
+export const list = query.query(async ({ ctx }): Promise<DocumentRow[]> => {
+    const userId = assertSignedIn(ctx.auth.userId);
 
-    const rows = await ctx.db
+    // The equality prefix pins the row set to this caller's own documents; the
+    // index's trailing `createdAt` supplies the ordering, so nothing is sorted
+    // (or over-read) in JS.
+    return ctx.db
         .query("documents")
-        .withIndex("by_org_created", (range) => range.eq("organizationId", organizationId))
+        .withIndex("by_owner_created", (range) => range.eq("ownerId", userId))
+        .order("desc")
         .collect();
-
-    return [...rows].sort((a, b) => b.createdAt - a.createdAt);
 });
 
+/** File a new document. `ownerId` comes from the session, never from `args`. */
 export const create = mutation
+    .use(rateLimit(limiter, "write", byUser))
     .input({
-        organizationId: v.string(),
-        title: v.string(),
-        body: v.string(),
+        title: v.string().max(256),
+        body: v.string().max(100_000),
     })
-    .mutation(async ({ args: { organizationId, title, body }, ctx }): Promise<Id<"documents">> => {
+    .mutation(async ({ args: { title, body }, ctx }): Promise<Id<"documents">> => {
         const userId = assertSignedIn(ctx.auth.userId);
 
         return ctx.db.insert("documents", {
-            organizationId,
             ownerId: userId,
             title,
             body,

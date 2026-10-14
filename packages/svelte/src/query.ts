@@ -1,10 +1,15 @@
-import type { ArgsOf, FunctionReference, LunoraClient, ReturnOf, SubscriptionErrorCallback } from "@lunora/client";
+import type { ArgsOf, FunctionReference, LunoraClient, ReturnOf, SubscriptionErrorCallback, Unsubscribe } from "@lunora/client";
 import { createQuerySubscription } from "@lunora/client/query";
 import type { Readable } from "svelte/store";
 import { readable } from "svelte/store";
 
+import { isBrowser } from "../../../shared/is-browser";
 import { getLunoraClient } from "./context";
 import { isFunctionReference } from "./is-function-reference";
+import { subscribeReactiveArgs } from "./subscribe-reactive-args";
+
+/** Query args, the skip sentinel, or a reactive (`Readable`) source of either. */
+export type ReactiveArgs<F extends FunctionReference> = ArgsOf<F> | "skip" | Readable<ArgsOf<F> | "skip">;
 
 /** Options accepted by {@link query}. */
 export interface QueryStoreOptions {
@@ -28,22 +33,34 @@ export type QueryStore<F extends FunctionReference> = Readable<ReturnOf<F> | und
  * re-emits on every server delta — the Svelte equivalent of React's `useQuery`.
  *
  * The subscription is opened lazily (inside `readable`'s start callback, on the
- * first `$`-read / `.subscribe()`) and torn down by the returned stop function
- * when the last subscriber goes away — so a store that's never read opens no
- * socket, and a component that unmounts releases its subscription. Sharing one
+ * first `$`-read / `.subscribe()`) and only in the browser — a server render
+ * reads the store's `undefined` seed and opens nothing. It is torn down by the
+ * returned stop function when the last subscriber goes away — so a store that's
+ * never read opens no socket, and a component that unmounts releases its
+ * subscription. Sharing one
  * store across several components shares a single underlying subscription
  * (the `LunoraClient` de-dupes by `(fn, args, shardKey)`).
+ *
+ * Pass `"skip"` as `args` to keep the store connected but the subscription
+ * dormant (the value stays `undefined`, no socket opens) — useful for a query
+ * gated on auth or a route param, matching React/Vue/Solid's `useQuery`.
  *
  * Pass `client` explicitly, or omit it to resolve the ambient client published
  * by `setLunoraClient` (which must therefore be called during component init,
  * before this runs).
+ *
+ * `args` may also be a `Readable` store (wrap runes state with `toStore` or
+ * `derived`): each emission tears down the previous subscription, resets the
+ * value to `undefined`, and opens a fresh one against the new args — the Svelte
+ * counterpart of Vue's `MaybeRefOrGetter` args. An emission of `"skip"` tears down without
+ * re-opening and resets the value to `undefined`.
  */
-export function query<F extends FunctionReference>(function_: F, args: ArgsOf<F>, options?: QueryStoreOptions): QueryStore<F>;
-export function query<F extends FunctionReference>(client: LunoraClient, function_: F, args: ArgsOf<F>, options?: QueryStoreOptions): QueryStore<F>;
+export function query<F extends FunctionReference>(function_: F, args: ReactiveArgs<F>, options?: QueryStoreOptions): QueryStore<F>;
+export function query<F extends FunctionReference>(client: LunoraClient, function_: F, args: ReactiveArgs<F>, options?: QueryStoreOptions): QueryStore<F>;
 export function query<F extends FunctionReference>(
     clientOrFunction: LunoraClient | F,
-    functionOrArguments: ArgsOf<F> | F,
-    argumentsOrOptions?: ArgsOf<F> | QueryStoreOptions,
+    functionOrArguments: F | ReactiveArgs<F>,
+    argumentsOrOptions?: QueryStoreOptions | ReactiveArgs<F>,
     maybeOptions?: QueryStoreOptions,
 ): QueryStore<F> {
     // Resolve the overload: when the first arg is a function reference (carries
@@ -52,26 +69,50 @@ export function query<F extends FunctionReference>(
     const hasExplicitClient = !isFunctionReference(clientOrFunction);
     const client = hasExplicitClient ? clientOrFunction : getLunoraClient();
     const functionRef = (hasExplicitClient ? functionOrArguments : clientOrFunction) as F;
-    const args = (hasExplicitClient ? argumentsOrOptions : functionOrArguments) as ArgsOf<F>;
+    const args = (hasExplicitClient ? argumentsOrOptions : functionOrArguments) as ReactiveArgs<F>;
     const options = (hasExplicitClient ? maybeOptions : (argumentsOrOptions as QueryStoreOptions | undefined)) ?? {};
 
-    return readable<ReturnOf<F> | undefined>(undefined, (set) =>
+    return readable<ReturnOf<F> | undefined>(undefined, (set) => {
+        // Server-render guard. Svelte's server runtime resolves `{$store}` by
+        // calling `subscribe_to_store`, so this start callback *does* run during
+        // `render()` — the store is not inert on the server. Opening there is a
+        // socket per rendered request against a client whose URL does not resolve
+        // server-side, and with an empty/relative URL the very first subscribe
+        // throws synchronously out of the render. Hold `undefined` until hydration.
+        if (!isBrowser()) {
+            return () => {};
+        }
+
         // The shared `@lunora/client/query` state machine owns the subscribe +
         // cleanup: it replays the last value synchronously when one exists and
         // pushes every subsequent delta into the store, and its returned teardown
         // is the store's stop callback, so the WS subscription closes when the
         // last `$`-reader detaches.
-        createQuerySubscription<F>(
-            client,
-            functionRef,
-            args,
-            {
-                onData: (value: ReturnOf<F>) => {
-                    set(value);
+        const open = (resolved: ArgsOf<F> | "skip"): Unsubscribe => {
+            // The previous args' value must not render under the new args until
+            // the new subscription's first frame lands.
+            set(undefined);
+
+            return createQuerySubscription<F>(
+                client,
+                functionRef,
+                resolved,
+                {
+                    onData: (value: ReturnOf<F>) => {
+                        set(value);
+                    },
+                    onError: options.onError,
+                    // `args === "skip"` short-circuits inside the shared helper and
+                    // fires this reset — clear any prior value so a store that flips
+                    // to `"skip"` does not retain stale data.
+                    onReset: () => {
+                        set(undefined);
+                    },
                 },
-                onError: options.onError,
-            },
-            { shardKey: options.shardKey },
-        ),
-    );
+                { shardKey: options.shardKey },
+            );
+        };
+
+        return subscribeReactiveArgs<ArgsOf<F> | "skip">(args, open);
+    });
 }

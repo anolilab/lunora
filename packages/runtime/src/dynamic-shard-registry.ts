@@ -37,8 +37,10 @@
  * coordination across them).
  */
 
+import { LunoraError } from "./errors";
 import type { ShardRegistry } from "./query-coordinator";
-import type { ShardNamespaceLike } from "./resolve-shard";
+import type { DurableObjectJurisdiction, ResolvedShard, ShardNamespaceLike } from "./resolve-shard";
+import { applyJurisdiction, resolveShard } from "./resolve-shard";
 
 /**
  * Conventional DO instance name. Kept in sync with `SHARD_REGISTRY_DO_NAME`
@@ -75,6 +77,13 @@ interface DynamicShardRegistryOptions {
      * only if you run multiple isolated registries in one environment.
      */
     instanceName?: string;
+
+    /**
+     * Pin the registry DO to a Cloudflare data-residency jurisdiction. Pass the
+     * same value as the worker's `jurisdiction` so the registry co-locates with
+     * the shards it tracks. Omit for the un-pinned global namespace.
+     */
+    jurisdiction?: DurableObjectJurisdiction;
     /** DO namespace binding (`env.SHARD_REGISTRY`). */
     namespace: ShardNamespaceLike;
 }
@@ -111,16 +120,14 @@ const createDynamicShardRegistry = (options: DynamicShardRegistryOptions): Dynam
     const instanceName = options.instanceName ?? SHARD_REGISTRY_DO_NAME;
     const cacheTtlMs = options.cacheTtlMs ?? DEFAULT_REGISTRY_CACHE_TTL_MS;
     const cache = new Map<string, CacheEntry>();
+    // Pin the registry DO to the configured jurisdiction (unchanged when unset).
+    const namespace = applyJurisdiction(options.namespace, options.jurisdiction);
 
-    // The stub is keyed by the fixed `instanceName` for the lifetime of this
-    // registry, so resolve it once at construction. Avoids paying the
-    // `idFromName` + `namespace.get` cost on every `register`/`list`/`unregister`.
-    let cachedStub: ReturnType<ShardNamespaceLike["get"]> | undefined;
-    const stub = (): ReturnType<ShardNamespaceLike["get"]> => {
-        cachedStub ??= options.namespace.get(options.namespace.idFromName(instanceName));
-
-        return cachedStub;
-    };
+    // Resolved per call, never cached: a registry is built once per isolate
+    // (the generated worker memoizes its options), and workerd refuses I/O on
+    // a stub created during a different request — so a cached stub serves the
+    // first request and throws on every one after it.
+    const stub = (): ResolvedShard => resolveShard(namespace, instanceName);
 
     const post = async (path: string, body: unknown): Promise<Response> =>
         stub().fetch(
@@ -155,7 +162,7 @@ const createDynamicShardRegistry = (options: DynamicShardRegistryOptions): Dynam
             const response = await get(`/list?table=${encodeURIComponent(table)}`);
 
             if (!response.ok) {
-                throw new Error(`shard registry /list returned ${String(response.status)}`);
+                throw new LunoraError(`shard registry /list returned ${String(response.status)}`);
             }
 
             const { shardKeys } = await decodeJson<{ shardKeys: ReadonlyArray<string> }>(response);
@@ -171,7 +178,7 @@ const createDynamicShardRegistry = (options: DynamicShardRegistryOptions): Dynam
             const response = await post("/register", { shardKey, table });
 
             if (!response.ok) {
-                throw new Error(`shard registry /register returned ${String(response.status)}`);
+                throw new LunoraError(`shard registry /register returned ${String(response.status)}`);
             }
 
             // Bust the local cache so the next listShardKeys reflects the
@@ -184,7 +191,7 @@ const createDynamicShardRegistry = (options: DynamicShardRegistryOptions): Dynam
             const response = await get("/snapshot");
 
             if (!response.ok) {
-                throw new Error(`shard registry /snapshot returned ${String(response.status)}`);
+                throw new LunoraError(`shard registry /snapshot returned ${String(response.status)}`);
             }
 
             const { tables } = await decodeJson<{ tables: Record<string, ReadonlyArray<string>> }>(response);
@@ -196,7 +203,7 @@ const createDynamicShardRegistry = (options: DynamicShardRegistryOptions): Dynam
             const response = await post("/unregister", { shardKey, table });
 
             if (!response.ok) {
-                throw new Error(`shard registry /unregister returned ${String(response.status)}`);
+                throw new LunoraError(`shard registry /unregister returned ${String(response.status)}`);
             }
 
             cache.delete(table);

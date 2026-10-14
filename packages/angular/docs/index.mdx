@@ -1,0 +1,346 @@
+---
+title: "@lunora/angular"
+description: Angular reactive adapter for Lunora — signal-based live queries and mutations.
+related:
+    - to: /docs/packages/react
+      note: "the same contract for React"
+    - to: /docs/packages/vue
+      note: "the Vue adapter"
+    - to: /docs/packages/solid
+      note: "the SolidJS adapter"
+    - to: /docs/packages/svelte
+      note: "the Svelte adapter"
+    - to: /docs/packages/client
+      note: "the framework-neutral SDK this wraps"
+    - to: /docs/frameworks/bring-your-framework
+      note: "composition + adapter maturity"
+    - to: /docs/concepts/realtime
+---
+
+`@lunora/angular` is the Angular adapter for Lunora. It's a thin layer over the
+framework-neutral [`@lunora/client`](/docs/packages/client), which owns the
+WebSocket transport, subscription registry, offline queue, and delta-merge.
+Angular signals map directly onto Lunora's per-subscription deltas, so a live
+query is a `signal` the WebSocket writes to.
+
+The API is signal-first and at parity with the other adapters: a DI token
+carrying one shared client, `liveQuery`, `subscription`, `mutate`/`mutator`,
+`runAction`, `stream`, `paginatedQuery`/`infiniteQuery`, `presence`,
+`rateLimit`, `flag`/`flags`, `auth`/`authGate`, the agent and voice primitives,
+`connectionStatus`, and `hydratePreloaded` alongside the `@lunora/angular/server`
+subpath for the SSR handoff.
+
+## Install
+
+```bash
+pnpm add @lunora/angular
+```
+
+`@angular/core` (`^19.2.0 || ^20.0.0 || ^21.0.0 || ^22.0.0`) is a peer
+dependency; the host app supplies the Angular runtime.
+
+## Exports
+
+| Symbol               | Kind             | Role                                                                                                                                                                              |
+| -------------------- | ---------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `provideLunora`      | provider factory | Wires a `LunoraClient` into the application injector. Add to your app config.                                                                                                     |
+| `injectLunoraClient` | function         | Read the `LunoraClient` from the current injector. Throws outside an injection context; inside DI, `LUNORA_CLIENT`'s root-scoped default applies when no provider was registered. |
+| `LUNORA_CLIENT`      | injection token  | The DI token every reactive primitive resolves the client from. Root-scoped default: a same-origin browser client.                                                                |
+| `liveQuery`          | function         | Live query as an Angular `Signal`. Pass a function/`Signal` for reactive args, or `"skip"` to short-circuit.                                                                      |
+| `mutate`             | function         | Run a mutation and resolve with the server result. Optimistic updates + offline queue pass through to the client.                                                                 |
+| `runAction`          | function         | Run an action and resolve with the server result. No optimistic options — an action is not a write.                                                                               |
+| `connectionStatus`   | function         | `Signal` of the aggregate live-socket status across all shard connections.                                                                                                        |
+
+Beyond the table: `subscription`, `mutator`, `stream`, `paginatedQuery` /
+`infiniteQuery`, `presence`, `rateLimit`, `flag` / `flags`, `auth` / `authGate`,
+`agent`, `agentChat`, `agentState`, `agentToolEvents`, `voiceAgent`, and
+`hydratePreloaded` (with the `@lunora/angular/server` subpath) are all exported
+too — see the sections below and the package's `src/index.ts` for the full list.
+
+Re-exported types: `ArgsOf`, `ConnectionStatus`, `FunctionReference`,
+`LunoraClient`, `LunoraClientOptions`, `MutationCallOptions`, `ReturnOf`,
+`SubscriptionError`, `Unsubscribe`, plus `ProvideLunoraOptions`,
+`LiveQueryOptions`, `ConnectionStatusOptions`, `MutateOptions`, and
+`RunActionOptions`. The `SKIP` sentinel (`"skip"`) is re-exported from
+`@lunora/client/query`.
+
+## Wire the client — `provideLunora` / `injectLunoraClient` / `LUNORA_CLIENT`
+
+Add `provideLunora` to your application config. It defaults to the page origin
+(the single-worker deploy where `/_lunora/ws` loops back into the app's own
+worker); pass options to point at a remote URL, or hand it an
+already-constructed `LunoraClient` to share one instance.
+
+```ts
+import { provideLunora } from "@lunora/angular";
+import type { ApplicationConfig } from "@angular/core";
+
+export const appConfig: ApplicationConfig = {
+    providers: [provideLunora(/* { url: "https://api.example.com" } */)],
+};
+```
+
+`LUNORA_CLIENT` (the underlying `InjectionToken`) has a root-scoped default
+factory, so every reactive primitive resolves a client even without
+`provideLunora`: it builds one same-origin browser client lazily. Call
+`injectLunoraClient()` inside an injection context (a component/service field
+initializer or constructor) to hold the client for imperative calls, since
+mutations usually fire from event handlers, which run _outside_ an injection
+context:
+
+```ts
+import { Component } from "@angular/core";
+import { injectLunoraClient, mutate } from "@lunora/angular";
+
+import { api } from "../lunora/_generated/api";
+
+@Component({/* … */})
+export class Composer {
+    private readonly client = injectLunoraClient();
+
+    send(text: string) {
+        return mutate(api.messages.send, { text }, { client: this.client });
+    }
+}
+```
+
+## `liveQuery(fn, args, options?)`
+
+Subscribes to a server query and mirrors its value into an Angular `signal`.
+Reads `undefined` until the first server frame lands, then updates on every
+delta the WebSocket pushes. The subscription tears down automatically when the
+owning `DestroyRef` fires (`DestroyRef.onDestroy`), by default the calling
+component/service's own `DestroyRef`, resolved via `inject(DestroyRef)`.
+
+Call it from an injection context so the default `DestroyRef` resolves the
+caller's lifetime:
+
+```ts
+import { Component } from "@angular/core";
+import { liveQuery } from "@lunora/angular";
+
+import { api } from "../lunora/_generated/api";
+
+@Component({
+    selector: "app-messages",
+    standalone: true,
+    template: `@for (m of messages()?.messages ?? []; track m.id) {
+        <p>{{ m.text }}</p>
+    }`,
+})
+export class MessagesComponent {
+    readonly messages = liveQuery(api.messages.list, { channelId: "general" });
+}
+```
+
+Pass `"skip"` (the `SKIP` sentinel from `@lunora/client/query`) as `args` to
+short-circuit: no network call, no socket; the signal stays `undefined`.
+
+```ts
+readonly profile = liveQuery(api.users.me, signedIn ? {} : "skip");
+```
+
+`args` may be a plain value **or** a function/`Signal`. A plain value resolves
+once and never re-runs. A function is reactive, like the Vue/Solid adapters:
+each change tears the previous subscription down, resets the signal to
+`undefined`, and opens a fresh one — so calling it from outside an injection
+context needs an explicit `injector` alongside `client`/`destroyRef`.
+`subscription` and `paginatedQuery`/`infiniteQuery` take the same form. Pass
+`{ shardKey }` to route to a specific shard when the target
+function is `.shardBy(...)`-partitioned, and `{ onError }` to observe a
+post-attach subscription failure (without it, a failure after the initial
+attach is dropped silently and the signal just stops updating). To call
+outside an injection context (e.g. lazily in `ngOnInit`), supply `client` and
+`destroyRef` explicitly via the options object.
+
+## `mutate(fn, args, options?)`
+
+Runs a Lunora mutation and resolves with the server result (rejects on
+failure). Optimistic updates stay client-owned: the `optimistic` /
+`optimisticUpdate` call options pass straight through to `client.mutation`,
+which applies and rolls them back against the live subscription cache, the
+same cache `liveQuery` reads, so an optimistic write reflects immediately and
+reverts on failure. The client's offline queue also engages when the socket is
+down, so the write stays durable across reconnects.
+
+```ts
+import { injectLunoraClient, mutate } from "@lunora/angular";
+
+import { api } from "../lunora/_generated/api";
+
+@Component({/* … */})
+export class Composer {
+    private readonly client = injectLunoraClient();
+
+    send(channelId: string, text: string) {
+        return mutate(
+            api.messages.send,
+            { channelId, text },
+            {
+                client: this.client,
+                optimisticUpdate: (store, args) => {
+                    const current = store.getQuery(api.messages.list, { channelId: args.channelId }) ?? [];
+                    store.setQuery(api.messages.list, { channelId: args.channelId }, [...current, { text: args.text }]);
+                },
+            },
+        );
+    }
+}
+```
+
+When called from within an injection context you may omit `client` and let it
+resolve from the injector, the same way `liveQuery` and `connectionStatus` do.
+
+## `runAction(fn, args, options?)`
+
+Runs a Lunora action and resolves with the server result (rejects on failure).
+Like `mutate`, it's a plain function rather than a reactive handle: Angular's
+adapter models writes as calls, because they fire from event handlers where a
+signal-returning primitive has nothing to bind to. The other adapters return a
+reactive `{ call, pending, … }` handle because their idioms make that natural;
+this one does not, so track pending state with your own signal if you need it.
+
+```ts
+import { injectLunoraClient, runAction } from "@lunora/angular";
+
+import { api } from "../lunora/_generated/api";
+
+@Component({/* … */})
+export class Toolbar {
+    private readonly client = injectLunoraClient();
+
+    verify() {
+        return runAction(api.commands.run, { command: "lunora", args: ["verify"] }, { client: this.client });
+    }
+}
+```
+
+Options are `{ client, shardKey }`. Unlike `mutate` there are no `optimistic` /
+`optimisticUpdate` options: an optimistic update patches the subscription cache
+on the assumption a write will land, and an action is not a write — it runs in
+the Worker, may call a third party, and has no declared effect on any query.
+When called from within an injection context you may omit `client`.
+
+## `connectionStatus(options?)`
+
+A `signal` of the client's aggregate live-socket status across all shard
+connections. Reads the current status synchronously and updates on every
+transition (`idle` → `connecting` → `connected` → `offline`). The listener is
+removed when the owning `DestroyRef` fires.
+
+```ts
+import { connectionStatus } from "@lunora/angular";
+
+@Component({/* … */})
+export class ConnectionBadge {
+    readonly status = connectionStatus(); // Signal<"idle" | "connecting" | "connected" | "offline">
+}
+```
+
+## Agent tool events — `agentToolEvents(options)`
+
+Observes one agent thread's **tool activity**, separate from its chat
+transcript: which tools the model called, what they returned, which are parked
+on a human approval, and any in-flight `ctx.reportProgress(...)` updates.
+
+`options`: `{ api, threadKey, stream?, limit?, client?, destroyRef? }` — `api`
+is the generated `api` (it reads `api.agents.agentMessages`), and `stream` is
+the same app stream reference `agentChat` takes. Returns `{ events }`, a
+`Signal`. Call it from an injection context (a field initializer or constructor)
+so the default `inject(DestroyRef)` owns the teardown; pass `client` +
+`destroyRef` to call it anywhere else.
+
+Each event discriminates on `type`:
+
+| `type`              | Fields                                                 | Source      |
+| ------------------- | ------------------------------------------------------ | ----------- |
+| `call`              | `toolCallId`, `toolName`, `input`, `seq`               | durable     |
+| `result`            | `toolCallId?`, `toolName?`, `output`, `status?`, `seq` | durable     |
+| `awaiting-approval` | `toolCallId?`, `toolName?`, `seq`                      | durable     |
+| `progress`          | `toolCallId`, `data`                                   | live stream |
+
+Durable events come first, oldest first by `seq`, followed by the ephemeral
+`progress` events for the in-flight turn. With no `stream` reference only the
+durable lifecycle is surfaced. The array is rebuilt on every update — treat it
+as derived, not identity-stable, and key rendered rows on `toolCallId`/`seq`.
+
+```ts
+import { Component } from "@angular/core";
+import { agentToolEvents } from "@lunora/angular";
+import { api } from "./lunora/_generated/api";
+
+@Component({
+    selector: "tool-timeline",
+    template: `<ol>
+        @for (event of events(); track $index) {
+            <li>{{ event.type }}</li>
+        }
+    </ol>`,
+})
+export class ToolTimelineComponent {
+    readonly events = agentToolEvents({ api, stream: api.chat.liveEvents, threadKey: "thread-1" }).events;
+}
+```
+
+## Voice agents — `voiceAgent(options)`
+
+Opens a full-duplex voice call against a voice-enabled agent — the
+`api.agents.<name>Voice` reference codegen emits. Microphone capture goes up the
+agent's WebSocket, synthesized speech comes back down, and transcripts plus
+barge-in are surfaced along the way.
+
+`options`: `{ voice, threadKey, silenceThreshold?, silenceDurationMs?,
+interruptThreshold?, interruptChunks?, createMicrophone?, createSocket?,
+createSpeaker?, client?, destroyRef? }`. `threadKey` is shared with the agent's
+text turns, so a voice call continues the very same conversation `agentChat`
+renders.
+
+Returns `{ status, connected, transcript, interimTranscript, audioLevel,
+isMuted, error, startCall, endCall, sendText, toggleMute }`, where every value
+is a `Signal`. `status` is
+`"idle" | "listening" | "thinking" | "speaking"`.
+
+```ts
+import { Component } from "@angular/core";
+import { voiceAgent } from "@lunora/angular";
+import { api } from "./lunora/_generated/api";
+
+@Component({
+    selector: "call-button",
+    template: `
+        <button (click)="call.status() === 'idle' ? call.startCall() : call.endCall()">
+            {{ call.status() === "idle" ? "Call" : "Hang up" }}
+        </button>
+        <meter max="1" [value]="call.audioLevel()"></meter>
+        <p>{{ call.transcript() }}</p>
+    `,
+})
+export class CallButtonComponent {
+    readonly call = voiceAgent({ threadKey: "thread-1", voice: api.agents.supportVoice });
+}
+```
+
+### Microphone and audio lifecycle
+
+The part the type signature does not tell you:
+
+- **Nothing opens until `startCall()`.** Creating the handle touches neither the
+  microphone nor the socket. `startCall` is what calls `getUserMedia`, so it has
+  to run from a user gesture — browsers block both the permission prompt and
+  `AudioContext` resumption outside one. It is idempotent while a call is
+  active, and a denied permission lands in `error` rather than throwing at the
+  call site.
+- **`endCall()` releases everything** — the socket, the microphone tracks, and
+  the Web Audio graph — and is idempotent. The owning `DestroyRef` calls it on
+  destroy, so a destroyed component ends its call.
+- **`audioLevel` is the live input RMS (0–1).** It drives a mic meter, and it is
+  also what the heuristics read: `silenceThreshold` + `silenceDurationMs` decide
+  when an utterance auto-commits (defaults `0.01` / `1200`ms), and
+  `interruptThreshold` + `interruptChunks` decide when the user barges in on the
+  agent mid-sentence (defaults `0.15` / `3` consecutive chunks). These are
+  room-dependent; tune them against real hardware rather than trusting the
+  defaults.
+- **`createMicrophone` / `createSpeaker` / `createSocket` are injection seams**
+  for tests and non-DOM hosts. The defaults are `getUserMedia` + Web Audio +
+  `new WebSocket(url)`, so the primitive is inert (and mockable) anywhere those
+  are missing.

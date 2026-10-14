@@ -1,0 +1,10 @@
+# Read by `zizmor`. Each entry is an audited exception, not a backlog.
+rules:
+    dangerous-triggers:
+        # `pull_request_target` runs with the base repository's token, which is only
+        # dangerous when the workflow also checks out or runs the pull request's code.
+        # These two read the event payload and the API through shared workflows and
+        # check nothing out.
+        ignore:
+            - "pr-size.yml"
+            - "pr-vouch.yml"

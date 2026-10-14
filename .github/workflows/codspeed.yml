@@ -1,5 +1,3 @@
-# https://help.github.com/en/categories/automating-your-workflow-with-github-actions
-
 "name": "CodSpeed"
 
 "on": # yamllint disable-line rule:truthy
@@ -18,8 +16,38 @@
     "contents": "read" # to fetch code (actions/checkout)
 
 "jobs":
+    # Runs on PRs only, to gate the benchmark job below: a docs-only PR gets
+    # `benchmarks: false` and the benchmark job skips. Pushes are never gated, since
+    # CodSpeed needs a complete baseline on every branch head.
+    "files-changed":
+        "name": "Detect what files changed"
+        "if": "github.event_name == 'pull_request'"
+        "runs-on": "ubuntu-latest"
+        "timeout-minutes": 5
+        "outputs":
+            "benchmarks": "${{ steps.changes.outputs.benchmarks }}"
+        "steps":
+            - "name": "Harden Runner"
+              "uses": "step-security/harden-runner@9af89fc71515a100421586dfdb3dc9c984fbf411" # v2.19.4
+              "with":
+                  "egress-policy": "audit"
+
+            - "name": "Git checkout"
+              "uses": "anolilab/workflows/step/checkout-with-retry@6c16895f4c3b5273b373656988505d1a8264e78b" # main
+
+            - "name": "Check for file changes"
+              "id": "changes"
+              "uses": "dorny/paths-filter@fbd0ab8f3e69293af611ebaee6363fc25e6d187d" # v4.0.1
+              "with":
+                  "token": "${{ github.token }}"
+                  "filters": ".github/file-filters.yml"
+
     "benchmark":
         "name": "Benchmarks"
+        # `!cancelled()` (not the implicit success()) because files-changed is
+        # skipped on push/dispatch, which would otherwise skip this job too.
+        "if": "!cancelled() && (github.event_name != 'pull_request' || needs.files-changed.outputs.benchmarks == 'true')"
+        "needs": "files-changed"
         "runs-on": "ubuntu-latest"
         "timeout-minutes": 30
         # Scope the CodSpeed OIDC token to an environment so secrets and
@@ -35,21 +63,17 @@
                   "egress-policy": "audit"
 
             - "name": "Git checkout"
-              "uses": "actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd" # v6.0.2
+              # Pulls all commits + branches so `vis affected` can resolve the PR
+              # base ref (origin/<base>) for change detection.
+              "uses": "anolilab/workflows/step/checkout-with-retry@6c16895f4c3b5273b373656988505d1a8264e78b" # main
               "with":
-                  "persist-credentials": false
-                  # Pulls all commits + branches so `vis affected` can resolve
-                  # the PR base ref (origin/<base>) for change detection.
-                  "fetch-depth": 0
-              "env":
-                  "GIT_COMMITTER_NAME": "GitHub Actions Shell"
-                  "GIT_AUTHOR_NAME": "GitHub Actions Shell"
-                  "EMAIL": "github-actions[bot]@users.noreply.github.com"
+                  "fetch-depth": "0"
 
             - "name": "Setup pnpm"
               "uses": "pnpm/action-setup@0e279bb959325dab635dd2c09392533439d90093" # v6.0.8
               "with":
-                  "version": "11.5.3"
+                  # No "version" — the action reads the pinned pnpm from package.json's
+                  # `packageManager` field, so CI can't drift from the repo's version.
                   "run_install": false
 
             - "name": "Use Node.js 22.15"
@@ -75,23 +99,39 @@
             - "name": "Install dependencies"
               "run": "pnpm install --frozen-lockfile"
 
-            # Benchmarks import workspace packages from their built `dist/`, which
-            # is gitignored. Without this the bench suites fail to resolve
-            # `@lunora/*` entries ("Failed to resolve entry for package ...").
+            # Benchmarks import the workspace packages from their gitignored `dist/`,
+            # so without this they fail to resolve.
+            #
+            # The SAME full, uncached build on every event, deliberately. A PR used to
+            # build only the affected chain while the `alpha` push that produced the
+            # baseline built everything — so head and base were measured against
+            # different `dist/` sets, which is what CodSpeed reports as "Different
+            # runtime environments detected". Two concrete ways that produced false
+            # regressions of 10-70% on benchmarks whose packages the PR never touched:
+            #
+            #   - `packages/do` does not depend on `@lunora/codegen`, so a codegen-only
+            #     PR left `packages/do/dist` unbuilt while its benchmarks still ran.
+            #   - the build cache keys on a package's own inputs and does NOT see
+            #     `shared/*`, which is bundler-inlined. `shard-do.ts` alone imports it
+            #     15 times, so a PR editing `shared/wire-codec.ts` benchmarked a `dist/`
+            #     still carrying the OLD inlined copy.
+            #
+            # `--no-cache` is here for the same reason `test:bench` already carries it:
+            # a cache hit serves a `dist/` built from different source, and a benchmark
+            # measuring code that is not the branch's code is worse than no benchmark —
+            # every false positive costs a manual disproof.
             - "name": "Build packages"
-              "run": "pnpm run build:packages"
+              "run": |
+                  pnpm exec vis run build --no-cache --query "tag=type:package"
 
-            # On PRs only the benches whose project (or an upstream dependency)
-            # changed are run; on push to main/alpha every bench runs so CodSpeed
-            # always has a complete, fresh baseline. `--no-cache` forces real
-            # execution — a vis cache hit would short-circuit the run and starve
-            # CodSpeed of measurements.
+            # PRs run only the affected benches; pushes run all of them to keep the
+            # baseline complete. `--no-cache` forces real execution — a vis cache hit
+            # would short-circuit the run and starve CodSpeed of measurements.
             - "name": "Resolve benchmark command"
               "id": "bench-cmd"
               "shell": "bash"
               "env":
-                  # Bound to env (not interpolated into the script) so untrusted
-                  # context never reaches the shell directly — see zizmor
+                  # Bound to env, never interpolated into the script — zizmor's
                   # template-injection rule.
                   "EVENT_NAME": "${{ github.event_name }}"
                   "BASE_REF": "${{ github.base_ref }}"

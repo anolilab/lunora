@@ -1,5 +1,6 @@
-import { bench, describe } from "vitest";
+import { beforeAll, bench, describe } from "vitest";
 
+import { fromBase64Url } from "../../../shared/base64";
 import { buildSignedUrl, verifySignedUrl } from "../src/signed-url";
 
 /**
@@ -22,30 +23,40 @@ const textEncoder = new TextEncoder();
 const importUncached = async (secret: string): Promise<CryptoKey> =>
     crypto.subtle.importKey("raw", textEncoder.encode(secret), { hash: "SHA-256", name: "HMAC" }, false, ["sign", "verify"]);
 
-// Pre-mint a valid URL once so both benches measure only the verify cost.
-const signedUrl = await buildSignedUrl({ baseUrl: "https://cdn.test", expiresInSeconds: 7 * 24 * 60 * 60, key: "uploads/x.png", secret: SECRET });
-const url = new URL(signedUrl);
-const exp = Number(url.searchParams.get("exp"));
-const method = url.searchParams.get("method") ?? "GET";
-const sig = url.searchParams.get("sig") ?? "";
+// Reproduce verify's canonicalize inline for the uncached baseline so the only
+// difference vs the cached path is the key import. The decode itself comes from
+// `shared/base64` — the same function verify uses, so the bench cannot drift
+// from it (an earlier inline copy outlived the implementation it mirrored).
 
-// Reproduce verify's canonicalize + fromBase64Url inline for the uncached
-// baseline so the only difference vs the cached path is the key import.
-const canonical = `${method}\n${url.host.toLowerCase()}\nuploads/x.png\n${String(exp)}`;
-const fromBase64Url = (input: string): Uint8Array => {
-    const padded = input.replaceAll("-", "+").replaceAll("_", "/") + "===".slice((input.length + 3) % 4);
-    const binary = atob(padded);
-    const bytes = new Uint8Array(binary.length);
-
-    for (let index = 0; index < binary.length; index += 1) {
-        bytes[index] = binary.codePointAt(index) ?? 0;
-    }
-
-    return bytes;
-};
-const sigBytes = fromBase64Url(sig);
+// Async state the benches close over — seeded in beforeAll (see below).
+let signedUrl: string;
+let canonical: string;
+let sigBytes: Uint8Array;
 
 describe("verifySignedUrl", () => {
+    // Mint the URL + derive verify inputs in beforeAll: CodSpeed's instrumented
+    // runner honors beforeAll but does NOT pick up module-top-level await state,
+    // so a top-level `await buildSignedUrl(...)` would leave the benches with an
+    // undefined URL.
+    beforeAll(async () => {
+        // Pre-mint a valid URL once so both benches measure only the verify cost.
+        signedUrl = await buildSignedUrl({
+            baseUrl: "https://cdn.test",
+            bucketName: "default",
+            expiresInSeconds: 7 * 24 * 60 * 60,
+            key: "uploads/x.png",
+            secret: SECRET,
+        });
+
+        const url = new URL(signedUrl);
+        const exp = Number(url.searchParams.get("exp"));
+        const method = url.searchParams.get("method") ?? "GET";
+        const sig = url.searchParams.get("sig") ?? "";
+
+        canonical = `${method}\n${url.host.toLowerCase()}\nuploads/x.png\n${String(exp)}`;
+        sigBytes = fromBase64Url(sig);
+    });
+
     bench("cached key import (shipped)", async () => {
         await verifySignedUrl(signedUrl, SECRET);
     });

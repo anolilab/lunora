@@ -11,19 +11,50 @@
  */
 import type {
     StorageDeleteFn as StorageDeleteFunction,
+    StorageDownloadFn as StorageDownloadFunction,
     StorageListFn as StorageListFunction,
     StorageSignedUrlFn as StorageSignedUrlFunction,
     StorageUploadFn as StorageUploadFunction,
 } from "./create-worker";
 import { LunoraError } from "./errors";
+import { assertMethod } from "./method-guard";
 
 const STORAGE_PATH = "/_lunora/admin/storage";
+const STORAGE_OBJECT_PATH = "/_lunora/admin/storage/object";
 const STORAGE_URL_PATH = "/_lunora/admin/storage/url";
 const STORAGE_BUCKETS_PATH = "/_lunora/admin/storage/buckets";
 
 // `@lunora/storage`'s `buildSignedUrl` rejects an `expiresInSeconds` over 7 days;
 // mirror that ceiling so an over-max request is clamped, not a 500.
 const MAX_STORAGE_EXPIRES_IN_SECONDS = 7 * 24 * 60 * 60;
+
+/**
+ * Body budget for an object upload, declared by this route the way the KV value
+ * PUT declares its own (`KV_VALUE_MAX_BODY_BYTES`). The shared 1 MiB default is
+ * a JSON-request cap; a blob migration (`lunora import --with-storage`) moves
+ * real files, and a 1 MiB ceiling would push nearly every photo onto the
+ * signed-URL fallback. 32 MiB is what the isolate can buffer and digest
+ * comfortably inside the Workers memory limit.
+ */
+const STORAGE_UPLOAD_MAX_BODY_BYTES: number = 32 * 1_048_576;
+
+/** Methods `/_lunora/admin/storage/url` will sign. Anything else is a 400, not a signed `DELETE`. */
+const SIGNABLE_METHODS = new Set(["GET", "PUT"]);
+
+/**
+ * Lowercase hex-encode an `ArrayBuffer` — WebCrypto digest output (base16) as
+ * the storage importer's `sha256` surface expects it.
+ */
+const toHex = (buffer: ArrayBuffer): string => {
+    const bytes = new Uint8Array(buffer);
+    let out = "";
+
+    for (const byte of bytes) {
+        out += byte.toString(16).padStart(2, "0");
+    }
+
+    return out;
+};
 
 /** The worker internals the storage routes reach through injection rather than closure. */
 interface StorageAdminRouteDeps {
@@ -33,14 +64,15 @@ interface StorageAdminRouteDeps {
     parsePaging: (request: Request) => { limit?: number; offset?: number };
     /** Read a query param, collapsing missing/empty to `undefined`. */
     queryParameter: (url: URL, name: string) => string | undefined;
-    /** Read the request body as bytes under the runtime's size limit (for upload). */
-    readBodyBytes: (request: Request) => Promise<ArrayBuffer>;
+    /** Read the request body as bytes under the given size limit (defaults to the runtime's shared cap). */
+    readBodyBytes: (request: Request, limit?: number) => Promise<ArrayBuffer>;
     /** Admin-gate + require a configured option, else throw the `*_NOT_CONFIGURED` error. */
     requireAdminOption: <T>(request: Request, value: T | undefined, notConfigured: { code: string; message: string }) => T;
     /** The storage admin options off `WorkerOptions`. */
     storage: {
         storageBuckets?: string[];
         storageDelete?: StorageDeleteFunction;
+        storageDownload?: StorageDownloadFunction;
         storageList?: StorageListFunction;
         storageSignedUrl?: StorageSignedUrlFunction;
         storageUpload?: StorageUploadFunction;
@@ -65,6 +97,40 @@ const buildStorageAdminRoutes = (deps: StorageAdminRouteDeps): Record<string, (r
         return key;
     };
 
+    /**
+     * Read the optional `bucket` off the request URL, refusing a name the worker
+     * does not declare — the storage mirror of `kv-admin-routes`'
+     * `requireKnownNamespace`.
+     *
+     * Without this, an unresolvable name was indistinguishable from no name at
+     * all: the generated bucket picker falls back to the DEFAULT bucket for
+     * anything it cannot resolve, so a typo, a case difference, and a bucket the
+     * app declares but this environment never bound all silently retargeted the
+     * request — a `delete` included, and `lunora import --with-storage --bucket`
+     * forwards the operator's name verbatim.
+     *
+     * `storageBuckets` is the same set the picker is built from (codegen emits
+     * `Object.keys(buckets)` alongside the drivers), so this is the picker's own
+     * knowledge enforced one layer earlier, where it can still answer 404. When
+     * a worker declares no list there is nothing to call a name unknown against
+     * and the name rides through — the same posture `requireKnownNamespace`
+     * takes for an introspector that reports no namespaces.
+     */
+    const requireKnownBucket = (url: URL): string | undefined => {
+        const bucket = queryParameter(url, "bucket");
+        const declared = storage.storageBuckets;
+
+        if (bucket === undefined || declared === undefined || declared.length === 0) {
+            return bucket;
+        }
+
+        if (!declared.includes(bucket)) {
+            throw new LunoraError(`Unknown storage bucket \`${bucket}\``, { code: "NOT_FOUND", status: 404 });
+        }
+
+        return bucket;
+    };
+
     const handleStorageList = async (request: Request): Promise<Response> => {
         const storageList = requireAdminOption(request, storage.storageList, {
             code: "STORAGE_NOT_CONFIGURED",
@@ -73,7 +139,7 @@ const buildStorageAdminRoutes = (deps: StorageAdminRouteDeps): Record<string, (r
 
         const url = new URL(request.url);
         const result = await storageList(queryParameter(url, "prefix"), {
-            bucket: queryParameter(url, "bucket"),
+            bucket: requireKnownBucket(url),
             cursor: queryParameter(url, "cursor"),
             ...parsePaging(request),
         });
@@ -82,9 +148,7 @@ const buildStorageAdminRoutes = (deps: StorageAdminRouteDeps): Record<string, (r
     };
 
     const handleStorageBuckets = (request: Request): Response => {
-        if (request.method !== "GET") {
-            throw new LunoraError("Storage-buckets endpoint requires GET", { code: "METHOD_NOT_ALLOWED", status: 405 });
-        }
+        assertMethod(request, "GET", "Storage-buckets");
 
         assertAdmin(request);
 
@@ -102,7 +166,7 @@ const buildStorageAdminRoutes = (deps: StorageAdminRouteDeps): Record<string, (r
         const url = new URL(request.url);
         const key = requireStorageKey(url);
 
-        await storageDelete(key, { bucket: queryParameter(url, "bucket") });
+        await storageDelete(key, { bucket: requireKnownBucket(url) });
 
         return Response.json({ deleted: true, key }, { headers: { "content-type": "application/json" }, status: 200 });
     };
@@ -115,16 +179,51 @@ const buildStorageAdminRoutes = (deps: StorageAdminRouteDeps): Record<string, (r
 
         const url = new URL(request.url);
         const key = requireStorageKey(url);
+        // Resolved before the body is read, not at the call below: a 404-able
+        // bucket name is knowable from the URL alone, and buffering up to 32 MiB
+        // to then refuse it wastes the isolate's memory budget on a request that
+        // was never going to land.
+        const bucket = requireKnownBucket(url);
         // The entry-point `Content-Length` guard already rejects an oversized
         // declared length for PUT; reading the buffer here is the authoritative
         // size check the runtime owns (R2 enforces its own ceilings downstream).
-        const body = await readBodyBytes(request);
+        const body = await readBodyBytes(request, STORAGE_UPLOAD_MAX_BODY_BYTES);
         const headerContentType = request.headers.get("content-type");
         const contentType = headerContentType === null || headerContentType === "" ? undefined : headerContentType;
 
-        const result = await storageUpload(key, body, { bucket: queryParameter(url, "bucket"), contentType });
+        // Optional upload verification: the caller declares the exact byte size
+        // and/or SHA-256 (base16) of what it is sending. When either is present
+        // the worker hashes the body and rejects with `STORAGE_CHECKSUM_MISMATCH`
+        // BEFORE anything is written, so a corrupt or truncated transfer fails
+        // closed instead of persisting unverified bytes. Absent both, the
+        // endpoint behaves exactly as before (legacy uploads).
+        const expectedSha256 = queryParameter(url, "expectedSha256");
+        const expectedSize = queryParameter(url, "expectedSize");
+        let sha256: string | undefined;
 
-        return Response.json(result, { headers: { "content-type": "application/json" }, status: 200 });
+        if (expectedSha256 !== undefined || expectedSize !== undefined) {
+            const digest = await crypto.subtle.digest("SHA-256", body);
+            sha256 = toHex(digest);
+
+            const sizeMismatch = expectedSize !== undefined && body.byteLength !== Number(expectedSize);
+            const hashMismatch = expectedSha256 !== undefined && sha256 !== expectedSha256.toLowerCase();
+
+            if (sizeMismatch || hashMismatch) {
+                throw new LunoraError("Upload failed verification — the body did not match the declared size or SHA-256 checksum, so nothing was written", {
+                    code: "STORAGE_CHECKSUM_MISMATCH",
+                    status: 400,
+                });
+            }
+        }
+
+        // Hand the digest we just computed to storage so R2 records it. Without
+        // that, a later `list()`/`head()` reports no checksum and every
+        // downstream integrity check degrades to comparing sizes.
+        const result = await storageUpload(key, body, { bucket, contentType, sha256 });
+
+        // Echo the computed hash only when verification was requested — the
+        // importer uses it to confirm the blob landed byte-identical.
+        return Response.json(sha256 === undefined ? result : { ...result, sha256 }, { headers: { "content-type": "application/json" }, status: 200 });
     };
 
     /**
@@ -149,10 +248,47 @@ const buildStorageAdminRoutes = (deps: StorageAdminRouteDeps): Record<string, (r
         }
     };
 
-    const handleStorageSignedUrl = async (request: Request): Promise<Response> => {
-        if (request.method !== "GET") {
-            throw new LunoraError("Storage URL endpoint requires GET", { code: "METHOD_NOT_ALLOWED", status: 405 });
+    /**
+     * Stream one object's bytes back under the admin bearer — the read half of
+     * the verified upload. `lunora backup restore --bucket` pulls a snapshot
+     * through here rather than through a signed URL, so a restore works on any
+     * deployment with a bucket bound, not only on one that also configured a
+     * URL signing secret.
+     *
+     * The body is passed through as a stream: a snapshot is arbitrarily large
+     * and must never be buffered in the isolate on its way out.
+     */
+    const handleStorageObject = async (request: Request): Promise<Response> => {
+        assertMethod(request, "GET", "Storage-object");
+
+        const storageDownload = requireAdminOption(request, storage.storageDownload, {
+            code: "STORAGE_DOWNLOAD_NOT_CONFIGURED",
+            message: "storage download requires a `storageDownload` function on the worker",
+        });
+
+        const url = new URL(request.url);
+        const key = requireStorageKey(url);
+        const object = await storageDownload(key, { bucket: requireKnownBucket(url) });
+
+        if (!object?.body) {
+            throw new LunoraError(`No object at key ${key}`, { code: "STORAGE_OBJECT_NOT_FOUND", status: 404 });
         }
+
+        return new Response(object.body, {
+            headers: {
+                // The stored type is whatever an uploader pinned, and this answers
+                // from the app origin: always a download, never a page.
+                "content-disposition": "attachment",
+                "content-type": object.httpMetadata?.contentType ?? "application/octet-stream",
+                "x-content-type-options": "nosniff",
+                ...(object.size === undefined ? {} : { "content-length": String(object.size) }),
+            },
+            status: 200,
+        });
+    };
+
+    const handleStorageSignedUrl = async (request: Request): Promise<Response> => {
+        assertMethod(request, "GET", "Storage URL");
 
         const storageSignedUrl = requireAdminOption(request, storage.storageSignedUrl, {
             code: "STORAGE_URL_NOT_CONFIGURED",
@@ -166,17 +302,34 @@ const buildStorageAdminRoutes = (deps: StorageAdminRouteDeps): Record<string, (r
         // so clamp here to keep an over-max request a valid URL rather than a 500.
         const expiresInRaw = Number(queryParameter(url, "expiresIn") ?? "");
         const expiresInSeconds = Number.isFinite(expiresInRaw) && expiresInRaw > 0 ? Math.min(expiresInRaw, MAX_STORAGE_EXPIRES_IN_SECONDS) : undefined;
-        const signedUrl = await storageSignedUrl(key, { bucket: queryParameter(url, "bucket"), expiresInSeconds });
+        // Optional HTTP method for the presigned URL — the importer uses `PUT` for
+        // large blobs that exceed the worker's body-size cap. Validated against an
+        // allowlist rather than cast: the value is caller-supplied and
+        // `buildSignedUrl` signs whatever method string it is handed, so an
+        // unchecked `?method=DELETE` would mint a signed destructive URL.
+        const methodRaw = queryParameter(url, "method");
+
+        if (methodRaw !== undefined && !SIGNABLE_METHODS.has(methodRaw)) {
+            throw new LunoraError("Storage URL `method` must be GET or PUT", { code: "BAD_REQUEST", status: 400 });
+        }
+
+        const method = methodRaw as "GET" | "PUT" | undefined;
+        const contentType = queryParameter(url, "contentType");
+        // The origin this request reached the worker on, read off the request URL (never
+        // a client header): a signer with no declared base signs against it, the host
+        // the signed-URL route then verifies.
+        const signedUrl = await storageSignedUrl(key, { bucket: requireKnownBucket(url), contentType, expiresInSeconds, method, origin: url.origin });
 
         return Response.json({ key, url: signedUrl }, { headers: { "content-type": "application/json" }, status: 200 });
     };
 
     return {
         [STORAGE_BUCKETS_PATH]: handleStorageBuckets,
+        [STORAGE_OBJECT_PATH]: handleStorageObject,
         [STORAGE_PATH]: handleStorage,
         [STORAGE_URL_PATH]: handleStorageSignedUrl,
     };
 };
 
 export type { StorageAdminRouteDeps };
-export { buildStorageAdminRoutes, STORAGE_BUCKETS_PATH, STORAGE_PATH, STORAGE_URL_PATH };
+export { buildStorageAdminRoutes, STORAGE_BUCKETS_PATH, STORAGE_PATH, STORAGE_UPLOAD_MAX_BODY_BYTES, STORAGE_URL_PATH, toHex };

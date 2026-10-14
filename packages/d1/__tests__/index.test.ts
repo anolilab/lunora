@@ -9,7 +9,7 @@ import {
     MigrationRunner,
     readD1CdcChanges,
     runD1CdcMigration,
-    trimD1CdcChanges,
+    sweepD1CdcRetention,
 } from "../src/index";
 
 /**
@@ -24,7 +24,7 @@ describe("@lunora/d1 public surface", () => {
 
         expect(typeof runD1CdcMigration).toBe("function");
         expect(typeof readD1CdcChanges).toBe("function");
-        expect(typeof trimD1CdcChanges).toBe("function");
+        expect(typeof sweepD1CdcRetention).toBe("function");
     });
 
     it("exports the core ctx-db, client, migration-runner, and introspection entry points", () => {

@@ -1,12 +1,10 @@
-# https://help.github.com/en/categories/automating-your-workflow-with-github-actions
-
 "name": "Lint"
 
-# PRs + merge queue only (see test.yml for the no-`push` rationale).
+# Automatic runs on PRs and the merge queue only, never `push` (see test.yml).
 "on": # yamllint disable-line rule:truthy
     "pull_request":
         "types": ["opened", "synchronize", "reopened"]
-        "branches": ["main", "alpha", "next", "beta"]
+        "branches": ["main", "alpha", "next", "beta", "feat/**", "fix/**"]
     "merge_group": # yamllint disable-line rule:empty-values
     "workflow_dispatch": # yamllint disable-line rule:empty-values
 
@@ -23,9 +21,16 @@
         "runs-on": "ubuntu-latest"
         "timeout-minutes": 5
         "outputs":
-            "frontend_lintable": "${{ steps.changes.outputs.frontend_lintable || steps.changes_retry.outputs.frontend_lintable }}"
-            "package_json_lintable": "${{ steps.changes.outputs.package_json_lintable || steps.changes_retry.outputs.package_json_lintable }}"
-            "yaml_lintable": "${{ steps.changes.outputs.yaml_lintable || steps.changes_retry.outputs.yaml_lintable }}"
+            "api_surface": "${{ steps.changes.outputs.api_surface }}"
+            "batch_cap": "${{ steps.changes.outputs.batch_cap }}"
+            "dependency_manifests": "${{ steps.changes.outputs.dependency_manifests }}"
+            "frontend_lintable": "${{ steps.changes.outputs.frontend_lintable }}"
+            "generated_files": "${{ steps.changes.outputs.generated_files }}"
+            "node_capabilities_docs": "${{ steps.changes.outputs.node_capabilities_docs }}"
+            "package_json_lintable": "${{ steps.changes.outputs.package_json_lintable }}"
+            "registry_items": "${{ steps.changes.outputs.registry_items }}"
+            "registry_sync": "${{ steps.changes.outputs.registry_sync }}"
+            "yaml_lintable": "${{ steps.changes.outputs.yaml_lintable }}"
         "steps":
             - "name": "Harden Runner"
               "uses": "step-security/harden-runner@9af89fc71515a100421586dfdb3dc9c984fbf411" # v2.19.4
@@ -33,34 +38,22 @@
                   "egress-policy": "audit"
 
             - "name": "Git checkout"
-              "uses": "actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd" # v6.0.2
-              "with":
-                  "persist-credentials": false
+              "uses": "anolilab/workflows/step/checkout-with-retry@6c16895f4c3b5273b373656988505d1a8264e78b" # main
 
+            # checkout-with-retry absorbs the transient mid-checkout GITHUB_TOKEN 401,
+            # so this call needs no retry handling of its own.
             - "name": "Check for file changes"
               "id": "changes"
-              "continue-on-error": true
               "uses": "dorny/paths-filter@fbd0ab8f3e69293af611ebaee6363fc25e6d187d" # v4.0.1
               "with":
                   "token": "${{ github.token }}"
                   "filters": ".github/file-filters.yml"
 
-            - "name": "Wait before retrying path filter"
-              "if": "steps.changes.outcome == 'failure'"
-              "shell": "bash"
-              "run": "sleep 30"
-
-            - "name": "Check for file changes (retry)"
-              "if": "steps.changes.outcome == 'failure'"
-              "id": "changes_retry"
-              "uses": "dorny/paths-filter@fbd0ab8f3e69293af611ebaee6363fc25e6d187d" # v4.0.1
-              "with":
-                  "token": "${{ github.token }}"
-                  "filters": ".github/file-filters.yml"
-
-    # Build once, then eslint + tsc (incl. registry) over the affected graph.
-    "ts-lint":
-        "name": "Lint (eslint + types)"
+    # eslint over the affected graph, its own required check. Type-aware rules need
+    # the upstream declarations on disk, so the affected graph is built first (which
+    # also codegens the apps' generated dirs via their `codegen` dependsOn).
+    "eslint":
+        "name": "Lint (eslint)"
         "if": "needs.files-changed.outputs.frontend_lintable == 'true'"
         "needs": "files-changed"
         "runs-on": "ubuntu-latest"
@@ -72,14 +65,9 @@
                   "egress-policy": "audit"
 
             - "name": "Git checkout"
-              "uses": "actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd" # v6.0.2
+              "uses": "anolilab/workflows/step/checkout-with-retry@6c16895f4c3b5273b373656988505d1a8264e78b" # main
               "with":
-                  "persist-credentials": false
-                  "fetch-depth": 0
-              "env":
-                  "GIT_COMMITTER_NAME": "GitHub Actions Shell"
-                  "GIT_AUTHOR_NAME": "GitHub Actions Shell"
-                  "EMAIL": "github-actions[bot]@users.noreply.github.com"
+                  "fetch-depth": "0"
 
             - "name": "Setup resources and environment"
               "uses": "anolilab/workflows/step/node@acba5fb15ac98ad23dec1ad233e40e1bb79c1dae" # v19.0.4
@@ -92,22 +80,173 @@
                   "run-npm-audit": "false"
                   "run-signatures-audit": "false"
 
-            # Type-aware eslint + tsc need the upstream packages' declarations on
-            # disk; build the affected graph first (the vis tasks also codegen the
-            # apps' generated dirs via their `codegen` dependsOn).
+            # A target declaring an `executor` and no top-level `command` makes vis
+            # report "No command configured" and pass, turning that project's eslint
+            # into a silent no-op. Runs before the build so the finding cannot be
+            # masked by a later step failing.
+            - "name": "Check project.json target shapes"
+              "run": "pnpm run lint:project-json"
+
             - "name": "Build affected packages"
               "run": "pnpm run build:affected:packages"
 
             - "name": "Lint (eslint)"
               "run": "pnpm run lint:affected:eslint"
 
+    # tsc over the affected graph plus the registry typecheck, its own required check.
+    # registry/ is not a vis project; it imports @lunora/* and typechecks against the
+    # full built dist.
+    #
+    # The two steps run SEQUENTIALLY: `lint:types:registry` starts with a full
+    # `build:packages`, and packem begins by cleaning each `dist/`. Run concurrently,
+    # that clean window races the affected typecheck's tsc mid-read and drops a
+    # freshly-removed declaration, failing with TS2307.
+    "types":
+        "name": "Lint (types)"
+        "if": "needs.files-changed.outputs.frontend_lintable == 'true'"
+        "needs": "files-changed"
+        "runs-on": "ubuntu-latest"
+        "timeout-minutes": 30
+        "steps":
+            - "name": "Harden Runner"
+              "uses": "step-security/harden-runner@9af89fc71515a100421586dfdb3dc9c984fbf411" # v2.19.4
+              "with":
+                  "egress-policy": "audit"
+
+            - "name": "Git checkout"
+              "uses": "anolilab/workflows/step/checkout-with-retry@6c16895f4c3b5273b373656988505d1a8264e78b" # main
+              "with":
+                  "fetch-depth": "0"
+
+            - "name": "Setup resources and environment"
+              "uses": "anolilab/workflows/step/node@acba5fb15ac98ad23dec1ad233e40e1bb79c1dae" # v19.0.4
+              "with":
+                  "node-version": "22.15"
+                  "cache-prefix": "lint"
+                  "install-node-gyp": "true"
+                  "skip-playwright": "true"
+                  "enable-nx-cache": "false"
+                  "run-npm-audit": "false"
+                  "run-signatures-audit": "false"
+
+            - "name": "Build affected packages"
+              "run": "pnpm run build:affected:packages"
+
             - "name": "Typecheck"
               "run": "pnpm run lint:affected:types"
 
-            # registry/ isn't a vis project; it imports @lunora/* and is
-            # typechecked against the full built dist.
+            # Sequential with the step above — see the clean-window race noted there.
             - "name": "Typecheck registry items"
               "run": "pnpm run lint:types:registry"
+
+    # fallow codebase-intelligence over the affected graph: an advisory report of dead
+    # code, dupes and complexity drift. fetch-depth 0 so `vis affected` can diff against
+    # the base ref.
+    "fallow":
+        "name": "Lint (fallow)"
+        "if": "needs.files-changed.outputs.frontend_lintable == 'true'"
+        "needs": "files-changed"
+        "runs-on": "ubuntu-latest"
+        "timeout-minutes": 15
+        "steps":
+            - "name": "Harden Runner"
+              "uses": "step-security/harden-runner@9af89fc71515a100421586dfdb3dc9c984fbf411" # v2.19.4
+              "with":
+                  "egress-policy": "audit"
+
+            - "name": "Git checkout"
+              "uses": "anolilab/workflows/step/checkout-with-retry@6c16895f4c3b5273b373656988505d1a8264e78b" # main
+              "with":
+                  "fetch-depth": "0"
+
+            - "name": "Setup resources and environment"
+              "uses": "anolilab/workflows/step/node@acba5fb15ac98ad23dec1ad233e40e1bb79c1dae" # v19.0.4
+              "with":
+                  "node-version": "22.15"
+                  "cache-prefix": "lint"
+                  "skip-playwright": "true"
+                  "enable-nx-cache": "false"
+                  "run-npm-audit": "false"
+                  "run-signatures-audit": "false"
+
+            # Static source analysis, so no build is needed. `continue-on-error` because
+            # fallow exits 1 on any finding and the `--score` script has no gate flag:
+            # the report should stay visible without gating the PR.
+            - "name": "Run fallow health"
+              "continue-on-error": true
+              "run": "pnpm run fallow:affected:health"
+
+    # Public-API snapshot guard: re-extract every package's public surface and fail on
+    # drift from the committed api-snapshots/*.api.md, so an export change has to land
+    # with an explicit `pnpm run api:update`. Builds all packages, not affected-only, to
+    # keep the check deterministic.
+    "api-surface":
+        "name": "Lint (api surface)"
+        "if": "needs.files-changed.outputs.api_surface == 'true'"
+        "needs": "files-changed"
+        "runs-on": "ubuntu-latest"
+        "timeout-minutes": 30
+        "steps":
+            - "name": "Harden Runner"
+              "uses": "step-security/harden-runner@9af89fc71515a100421586dfdb3dc9c984fbf411" # v2.19.4
+              "with":
+                  "egress-policy": "audit"
+
+            - "name": "Git checkout"
+              "uses": "anolilab/workflows/step/checkout-with-retry@6c16895f4c3b5273b373656988505d1a8264e78b" # main
+
+            - "name": "Setup resources and environment"
+              "uses": "anolilab/workflows/step/node@acba5fb15ac98ad23dec1ad233e40e1bb79c1dae" # v19.0.4
+              "with":
+                  "node-version": "22.15"
+                  "cache-prefix": "lint"
+                  "install-node-gyp": "true"
+                  "skip-playwright": "true"
+                  "enable-nx-cache": "false"
+                  "run-npm-audit": "false"
+                  "run-signatures-audit": "false"
+
+            - "name": "Build packages"
+              "run": "pnpm run build:packages"
+
+            - "name": "Check public API snapshots"
+              "run": "pnpm run api:check"
+
+    # Every other PR job builds `--development`, but only a `build:prod` output is
+    # publishable: a dev build ships the React dev JSX runtime and skips NODE_ENV
+    # folding, which is what put @lunora/react@1.0.0-alpha.31 on npm broken. Without
+    # this job the defect first surfaces in the release, after merge.
+    "dist-production":
+        "name": "Lint (dist production)"
+        "if": "needs.files-changed.outputs.api_surface == 'true'"
+        "needs": "files-changed"
+        "runs-on": "ubuntu-latest"
+        "timeout-minutes": 30
+        "steps":
+            - "name": "Harden Runner"
+              "uses": "step-security/harden-runner@9af89fc71515a100421586dfdb3dc9c984fbf411" # v2.19.4
+              "with":
+                  "egress-policy": "audit"
+
+            - "name": "Git checkout"
+              "uses": "anolilab/workflows/step/checkout-with-retry@6c16895f4c3b5273b373656988505d1a8264e78b" # main
+
+            - "name": "Setup resources and environment"
+              "uses": "anolilab/workflows/step/node@acba5fb15ac98ad23dec1ad233e40e1bb79c1dae" # v19.0.4
+              "with":
+                  "node-version": "22.15"
+                  "cache-prefix": "lint"
+                  "install-node-gyp": "true"
+                  "skip-playwright": "true"
+                  "enable-nx-cache": "false"
+                  "run-npm-audit": "false"
+                  "run-signatures-audit": "false"
+
+            - "name": "Build packages (production)"
+              "run": "pnpm run build:packages:prod"
+
+            - "name": "Verify no development-build artifacts"
+              "run": "pnpm run dist:check"
 
     "prettier":
         "name": "Lint (prettier)"
@@ -122,9 +261,7 @@
                   "egress-policy": "audit"
 
             - "name": "Git checkout"
-              "uses": "actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd" # v6.0.2
-              "with":
-                  "persist-credentials": false
+              "uses": "anolilab/workflows/step/checkout-with-retry@6c16895f4c3b5273b373656988505d1a8264e78b" # main
 
             - "name": "Setup resources and environment"
               "uses": "anolilab/workflows/step/node@acba5fb15ac98ad23dec1ad233e40e1bb79c1dae" # v19.0.4
@@ -152,9 +289,7 @@
                   "egress-policy": "audit"
 
             - "name": "Git checkout"
-              "uses": "actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd" # v6.0.2
-              "with":
-                  "persist-credentials": false
+              "uses": "anolilab/workflows/step/checkout-with-retry@6c16895f4c3b5273b373656988505d1a8264e78b" # main
 
             - "name": "Setup resources and environment"
               "uses": "anolilab/workflows/step/node@acba5fb15ac98ad23dec1ad233e40e1bb79c1dae" # v19.0.4
@@ -166,14 +301,10 @@
                   "run-npm-audit": "false"
                   "run-signatures-audit": "false"
 
-            # `vis sort-package-json` writes in place and exits 0 even on drift,
-            # so gate on a leftover diff.
+            # `--check` writes nothing, names each unsorted file and exits 1 — no
+            # write-then-diff gate needed.
             - "name": "Check package.json sort order"
-              "shell": "bash"
-              "run": |
-                  set -euo pipefail
-                  pnpm exec vis sort-package-json
-                  git diff --exit-code -- '**/package.json' 'package.json'
+              "run": "pnpm run lint:package-json"
 
     "secrets":
         "name": "Secrets"
@@ -187,9 +318,7 @@
                   "egress-policy": "audit"
 
             - "name": "Git checkout"
-              "uses": "actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd" # v6.0.2
-              "with":
-                  "persist-credentials": false
+              "uses": "anolilab/workflows/step/checkout-with-retry@6c16895f4c3b5273b373656988505d1a8264e78b" # main
 
             - "name": "Setup resources and environment"
               "uses": "anolilab/workflows/step/node@acba5fb15ac98ad23dec1ad233e40e1bb79c1dae" # v19.0.4
@@ -204,6 +333,147 @@
             - "name": "Scan for secrets"
               "run": "pnpm exec vis secrets"
 
+    # `registry/` ships copy-in code that `lunora registry add` writes into a user's
+    # project VERBATIM, and it is not a vis project: `scripts/check-generated-files.mjs`
+    # reads `examples/` only, and `test:affected` marks nothing affected for a
+    # registry-only PR. Until this job existed, `tsc -p registry/tsconfig.json` was the
+    # directory's entire CI coverage — an item could ship an ERROR-level advisory
+    # (an act-as-any-user IDOR, say) and no gate would notice.
+    #
+    # Runs the whole registry-item suite, not just its advisor sweep: every other
+    # gate in that file (manifest shape, wrangler-required binding fields, declared
+    # deps, uncoded authorization throws) had the same blind spot.
+    "registry-items":
+        "name": "Lint (registry items)"
+        "if": "needs.files-changed.outputs.registry_items == 'true'"
+        "needs": "files-changed"
+        "runs-on": "ubuntu-latest"
+        "timeout-minutes": 20
+        "steps":
+            - "name": "Harden Runner"
+              "uses": "step-security/harden-runner@9af89fc71515a100421586dfdb3dc9c984fbf411" # v2.19.4
+              "with":
+                  "egress-policy": "audit"
+
+            - "name": "Git checkout"
+              "uses": "anolilab/workflows/step/checkout-with-retry@6c16895f4c3b5273b373656988505d1a8264e78b" # main
+
+            - "name": "Setup resources and environment"
+              "uses": "anolilab/workflows/step/node@acba5fb15ac98ad23dec1ad233e40e1bb79c1dae" # v19.0.4
+              "with":
+                  "node-version": "22.15"
+                  "cache-prefix": "lint"
+                  "skip-playwright": "true"
+                  "enable-nx-cache": "false"
+                  "run-npm-audit": "false"
+                  "run-signatures-audit": "false"
+
+            # The suite imports @lunora/cli and @lunora/codegen from their dist/,
+            # and the scaffolded projects resolve @lunora/* the same way, so the
+            # packages have to be built before it runs.
+            - "name": "Build packages"
+              "run": "pnpm run build:packages"
+
+            - "name": "Lint (registry items)"
+              "run": "pnpm run lint:registry:items"
+
+    # The auth-ui-* registry items are generated from @lunora/auth-ui by
+    # scripts/sync-auth-ui-registry.mjs. Its own job, on its own `registry_sync` filter:
+    # as a step inside `prettier` it was skipped on any PR without a frontend-lintable
+    # file and masked whenever an earlier step failed, and drift reached `alpha` anyway.
+    "registry-sync":
+        "name": "Lint (auth-ui registry sync)"
+        "if": "needs.files-changed.outputs.registry_sync == 'true'"
+        "needs": "files-changed"
+        "runs-on": "ubuntu-latest"
+        "timeout-minutes": 10
+        "steps":
+            - "name": "Harden Runner"
+              "uses": "step-security/harden-runner@9af89fc71515a100421586dfdb3dc9c984fbf411" # v2.19.4
+              "with":
+                  "egress-policy": "audit"
+
+            - "name": "Git checkout"
+              "uses": "anolilab/workflows/step/checkout-with-retry@6c16895f4c3b5273b373656988505d1a8264e78b" # main
+
+            - "name": "Setup resources and environment"
+              "uses": "anolilab/workflows/step/node@acba5fb15ac98ad23dec1ad233e40e1bb79c1dae" # v19.0.4
+              "with":
+                  "node-version": "22.15"
+                  "cache-prefix": "lint"
+                  "skip-playwright": "true"
+                  "enable-nx-cache": "false"
+                  "run-npm-audit": "false"
+                  "run-signatures-audit": "false"
+
+            - "name": "Lint (auth-ui registry sync)"
+              "run": "pnpm run lint:registry:sync"
+
+    # Guards packages/platform-node/docs/index.mdx's capability table against
+    # NODE_CAPABILITIES in packages/platform/src/capabilities/node.ts. No build needed — the
+    # checker imports capabilities/node.ts directly via Node's TS type stripping.
+    "node-capabilities-docs":
+        "name": "Lint (node capabilities docs)"
+        "if": "needs.files-changed.outputs.node_capabilities_docs == 'true'"
+        "needs": "files-changed"
+        "runs-on": "ubuntu-latest"
+        "timeout-minutes": 10
+        "steps":
+            - "name": "Harden Runner"
+              "uses": "step-security/harden-runner@9af89fc71515a100421586dfdb3dc9c984fbf411" # v2.19.4
+              "with":
+                  "egress-policy": "audit"
+
+            - "name": "Git checkout"
+              "uses": "anolilab/workflows/step/checkout-with-retry@6c16895f4c3b5273b373656988505d1a8264e78b" # main
+
+            - "name": "Setup resources and environment"
+              "uses": "anolilab/workflows/step/node@acba5fb15ac98ad23dec1ad233e40e1bb79c1dae" # v19.0.4
+              "with":
+                  "node-version": "22.15"
+                  "cache-prefix": "lint"
+                  "skip-playwright": "true"
+                  "enable-nx-cache": "false"
+                  "run-npm-audit": "false"
+                  "run-signatures-audit": "false"
+
+            - "name": "Check node capabilities docs match NODE_CAPABILITIES"
+              "run": "pnpm run lint:node-capabilities-docs"
+
+    # Both batch caps against the literal each of the eight non-JS ports,
+    # protocol/README.md and the offline fixture restate. The ports only ever see a cap
+    # as a number they typed once. Over the entry cap, a client's chunk is refused with a
+    # terminal 400, which discards those durable writes rather than retrying them; the
+    # byte budget is additionally DERIVED from the worker's own request-body cap, so
+    # raising that cap stales all nine clients at once with nothing else noticing.
+    "batch-cap":
+        "name": "Lint (batch cap)"
+        "if": "needs.files-changed.outputs.batch_cap == 'true'"
+        "needs": "files-changed"
+        "runs-on": "ubuntu-latest"
+        "timeout-minutes": 10
+        "steps":
+            - "name": "Harden Runner"
+              "uses": "step-security/harden-runner@9af89fc71515a100421586dfdb3dc9c984fbf411" # v2.19.4
+              "with":
+                  "egress-policy": "audit"
+
+            - "name": "Git checkout"
+              "uses": "anolilab/workflows/step/checkout-with-retry@6c16895f4c3b5273b373656988505d1a8264e78b" # main
+
+            - "name": "Setup resources and environment"
+              "uses": "anolilab/workflows/step/node@acba5fb15ac98ad23dec1ad233e40e1bb79c1dae" # v19.0.4
+              "with":
+                  "node-version": "22.15"
+                  "cache-prefix": "lint"
+                  "skip-playwright": "true"
+                  "enable-nx-cache": "false"
+                  "run-npm-audit": "false"
+                  "run-signatures-audit": "false"
+
+            - "name": "Check every copy of the batch caps agrees"
+              "run": "pnpm run lint:batch-cap"
+
     "yaml-lint":
         "name": "Lint (yaml)"
         "if": "needs.files-changed.outputs.yaml_lintable == 'true'"
@@ -217,9 +487,7 @@
                   "egress-policy": "audit"
 
             - "name": "Git checkout"
-              "uses": "actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd" # v6.0.2
-              "with":
-                  "persist-credentials": false
+              "uses": "anolilab/workflows/step/checkout-with-retry@6c16895f4c3b5273b373656988505d1a8264e78b" # main
 
             - "name": "Lint YAML files"
               "uses": "ibiqlik/action-yamllint@2576378a8e339169678f9939646ee3ee325e845c" # v3.1.1
@@ -228,10 +496,137 @@
                   "file_or_dir": "."
                   "strict": true
 
+    "lint-workflows":
+        "name": "Lint (github workflows)"
+        "if": "needs.files-changed.outputs.yaml_lintable == 'true'"
+        "needs": "files-changed"
+        "runs-on": "ubuntu-latest"
+        "timeout-minutes": 15
+        "steps":
+            - "name": "Harden Runner"
+              "uses": "step-security/harden-runner@9af89fc71515a100421586dfdb3dc9c984fbf411" # v2.19.4
+              "with":
+                  "egress-policy": "audit"
+
+            - "name": "Git checkout"
+              "uses": "anolilab/workflows/step/checkout-with-retry@6c16895f4c3b5273b373656988505d1a8264e78b" # main
+
+            - "name": "jactionlint"
+              "uses": "jdx/jactionlint@2462f925040c2aa1c88714dc85bc12d869cc4998" # v2.0.2
+
+    # Cheap repo-consistency guards nothing else covers, sharing one install. Their
+    # own job rather than more postinstall gates: a failing postinstall turns every
+    # CI job red in its setup step, with the cause invisible in the job that reports it.
+    "dependency-manifests":
+        "name": "Lint (dependency manifests)"
+        "if": "needs.files-changed.outputs.dependency_manifests == 'true'"
+        "needs": "files-changed"
+        "runs-on": "ubuntu-latest"
+        "timeout-minutes": 15
+        "steps":
+            - "name": "Harden Runner"
+              "uses": "step-security/harden-runner@9af89fc71515a100421586dfdb3dc9c984fbf411" # v2.19.4
+              "with":
+                  "egress-policy": "audit"
+
+            - "name": "Git checkout"
+              "uses": "anolilab/workflows/step/checkout-with-retry@6c16895f4c3b5273b373656988505d1a8264e78b" # main
+
+            - "name": "Setup resources and environment"
+              "uses": "anolilab/workflows/step/node@acba5fb15ac98ad23dec1ad233e40e1bb79c1dae" # v19.0.4
+              "with":
+                  "node-version": "22.15"
+                  "cache-prefix": "lint"
+                  "skip-playwright": "true"
+                  "enable-nx-cache": "false"
+                  "run-npm-audit": "false"
+                  "run-signatures-audit": "false"
+
+            # A dependency hand-pinned outside a catalog in two or more manifests:
+            # the copies diverge on the next bump to either one.
+            - "name": "Check catalog drift"
+              "run": "pnpm run lint:catalog-drift"
+
+            # A `catalog:` in peerDependencies publishes OUR dev pin as the range
+            # consumers must satisfy. pnpm only warns on an unmet peer, so this is
+            # invisible in this repo and lands on npm users as an ERESOLVE failure.
+            - "name": "Check peerDependencies for catalog: refs"
+              "run": "pnpm run lint:peer-catalog-refs"
+
+            # The PR-title gate is a REQUIRED check and a squash merge turns the title
+            # into the commit message, with no `commit-msg` hook server-side — so its
+            # hand-kept type list is the real type gate, and it had drifted from
+            # commitlint's in both directions. It cannot be derived in that workflow:
+            # `pull_request_target` with no checkout, deliberately.
+            - "name": "Check the PR-title gate matches commitlint's types"
+              "run": "node scripts/check-pr-title-types.js"
+
+    # Regenerate every committed generator output and fail if the tree moved —
+    # `apps/docs/src/data/packages.ts` went stale exactly this way, rewritten on every
+    # build with nothing ever comparing. The diff is whole-tree, not scoped to today's
+    # output paths, so a generator added later is covered without touching this job.
+    #
+    # The sweep now includes `lunora codegen` for the 13 examples that commit a
+    # `lunora/_generated` tree (all 13 had drifted). That runs the built CLI, so this
+    # job builds first — same `build:packages` step and 30-minute budget as the
+    # api-surface job. The codegen sweep itself is ~50s on top of the build.
+    "generated-files":
+        "name": "Lint (generated files)"
+        "if": "needs.files-changed.outputs.generated_files == 'true'"
+        "needs": "files-changed"
+        "runs-on": "ubuntu-latest"
+        "timeout-minutes": 30
+        "steps":
+            - "name": "Harden Runner"
+              "uses": "step-security/harden-runner@9af89fc71515a100421586dfdb3dc9c984fbf411" # v2.19.4
+              "with":
+                  "egress-policy": "audit"
+
+            - "name": "Git checkout"
+              "uses": "anolilab/workflows/step/checkout-with-retry@6c16895f4c3b5273b373656988505d1a8264e78b" # main
+
+            - "name": "Setup resources and environment"
+              "uses": "anolilab/workflows/step/node@acba5fb15ac98ad23dec1ad233e40e1bb79c1dae" # v19.0.4
+              "with":
+                  "node-version": "22.15"
+                  "cache-prefix": "lint"
+                  "install-node-gyp": "true"
+                  "skip-playwright": "true"
+                  "enable-nx-cache": "false"
+                  "run-npm-audit": "false"
+                  "run-signatures-audit": "false"
+
+            # `lunora codegen` runs from packages/lunora/dist/bin.mjs, so the CLI and
+            # everything it loads (@lunora/codegen and its deps) must be built first.
+            - "name": "Build packages"
+              "run": "pnpm run build:packages"
+
+            - "name": "Regenerate generated files and diff"
+              "run": "pnpm run lint:generated"
+
     # Single required check for the Lint workflow.
     "lint-required-check":
         "name": "Check Lint Run"
-        "needs": ["files-changed", "ts-lint", "prettier", "package-json-sort", "secrets", "yaml-lint"]
+        "needs":
+            [
+                "files-changed",
+                "eslint",
+                "types",
+                "fallow",
+                "api-surface",
+                "dist-production",
+                "prettier",
+                "package-json-sort",
+                "secrets",
+                "registry-items",
+                "registry-sync",
+                "node-capabilities-docs",
+                "batch-cap",
+                "yaml-lint",
+                "lint-workflows",
+                "dependency-manifests",
+                "generated-files",
+            ]
         "if": "always()"
         "runs-on": "ubuntu-latest"
         "timeout-minutes": 5

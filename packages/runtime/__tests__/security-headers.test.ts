@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import { decorateResponse, enforceOrigin, handleCorsPreflight, resolveSecurity } from "../src/security-headers";
 
@@ -20,6 +20,44 @@ describe("resolveSecurity", () => {
         expect.hasAssertions();
 
         expect(() => resolveSecurity({ cors: { allowedOrigins: ["*"], allowCredentials: true } })).toThrow(/wildcard/i);
+    });
+
+    it("warns for a custom allowedOrigins predicate, with or without credentials", () => {
+        expect.assertions(3);
+
+        const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+        // The predicate feeds the CSRF/WS origin trust even without credentials.
+        resolveSecurity({ cors: { allowedOrigins: () => true } });
+
+        expect(warn).toHaveBeenCalledWith(expect.stringContaining("predicate"));
+
+        warn.mockClear();
+        resolveSecurity({ cors: { allowCredentials: true, allowedOrigins: () => true } });
+
+        expect(warn).toHaveBeenCalledWith(expect.stringContaining("allowCredentials"));
+        expect(warn).toHaveBeenCalledTimes(1);
+
+        warn.mockRestore();
+    });
+
+    it("denies an origin when the custom predicate returns a truthy non-boolean", () => {
+        expect.assertions(2);
+
+        const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+        // The predicate is consumed truthily at three security decision points —
+        // preflight, header reflection, and the CSRF trusted-origin check — so it is
+        // narrowed once at resolve time. `indexOf` is the classic slip: it returns
+        // `-1` for "not found", which is TRUTHY and would have allowed every origin.
+        const resolved = resolveSecurity({
+            cors: { allowedOrigins: (origin) => ["https://app.example"].indexOf(origin) as unknown as boolean },
+        });
+
+        expect(resolved.cors.isAllowed("https://evil.example")).toBe(false);
+        expect(resolved.cors.isExplicitlyAllowed("https://evil.example")).toBe(false);
+
+        warn.mockRestore();
     });
 
     it("allows a wildcard origin without credentials", () => {
@@ -136,14 +174,44 @@ describe("decorateResponse", () => {
         expect(out.headers.get("content-security-policy")).toBe("default-src 'self'");
     });
 
-    it("skips the default CSP for HTML responses but keeps the other headers", () => {
+    it("applies the conservative default CSP for HTML responses (no default-src) and keeps the other headers", () => {
         expect.hasAssertions();
 
         const html = new Response("<html></html>", { headers: { "content-type": "text/html; charset=utf-8" } });
         const out = decorateResponse(html, httpsRequest(), resolved);
 
-        expect(out.headers.get("content-security-policy")).toBeNull();
+        const csp = out.headers.get("content-security-policy");
+
+        // Conservative HTML hardening; frame-ancestors mirrors the default SAMEORIGIN frameOptions.
+        expect(csp).toContain("base-uri 'none'");
+        expect(csp).toContain("object-src 'none'");
+        expect(csp).toContain("frame-ancestors 'self'");
+        expect(csp).not.toContain("default-src");
         expect(out.headers.get("x-content-type-options")).toBe("nosniff");
+    });
+
+    it("derives the HTML CSP frame-ancestors from frameOptions (DENY → 'none', disabled → omitted)", () => {
+        expect.hasAssertions();
+
+        const deny = resolveSecurity({ headers: { frameOptions: "DENY" } });
+        const denyCsp = decorateResponse(new Response("<html></html>", { headers: { "content-type": "text/html" } }), httpsRequest(), deny).headers.get(
+            "content-security-policy",
+        );
+
+        // Must NOT weaken X-Frame-Options: DENY with a looser 'self'.
+        expect(denyCsp).toContain("frame-ancestors 'none'");
+        expect(denyCsp).not.toContain("frame-ancestors 'self'");
+
+        const noFraming = resolveSecurity({ headers: { frameOptions: false } });
+        const noFramingCsp = decorateResponse(
+            new Response("<html></html>", { headers: { "content-type": "text/html" } }),
+            httpsRequest(),
+            noFraming,
+        ).headers.get("content-security-policy");
+
+        // Framing disabled → no frame-ancestors directive (framing left unrestricted), base hardening stays.
+        expect(noFramingCsp).not.toContain("frame-ancestors");
+        expect(noFramingCsp).toContain("base-uri 'none'");
     });
 
     it("applies an explicit CSP string to HTML too", () => {
@@ -218,6 +286,101 @@ describe("handleCorsPreflight", () => {
         expect(response).toBeUndefined();
     });
 
+    it("enforces the configured allowedHeaders instead of echoing the requested list", () => {
+        expect.hasAssertions();
+
+        const restricted = resolveSecurity({ cors: { allowedOrigins: ["https://app.example.com"], allowedHeaders: ["Content-Type"] } });
+
+        const response = handleCorsPreflight(
+            httpsRequest({
+                method: "OPTIONS",
+                headers: {
+                    origin: "https://app.example.com",
+                    "access-control-request-method": "POST",
+                    "access-control-request-headers": "content-type, x-evil",
+                },
+            }),
+            restricted,
+        );
+
+        const allowHeaders = response?.headers.get("access-control-allow-headers") ?? "";
+
+        expect(allowHeaders.toLowerCase()).toContain("content-type");
+        expect(allowHeaders.toLowerCase()).not.toContain("x-evil");
+    });
+
+    it("keeps the headers the SDK sends on its own when an app supplies its own allowedHeaders", () => {
+        expect.hasAssertions();
+
+        // A list written before a header existed must not block the SDK: the
+        // preflight failure reads as a network error, and a replayed offline
+        // write is retried as transient forever.
+        const custom = resolveSecurity({ cors: { allowedHeaders: ["Content-Type", "X-App-Trace"], allowedOrigins: ["https://app.example.com"] } });
+
+        const response = handleCorsPreflight(
+            httpsRequest({
+                headers: {
+                    "access-control-request-headers": "x-lunora-expect-subject, x-lunora-mutation-id, x-app-trace",
+                    "access-control-request-method": "POST",
+                    origin: "https://app.example.com",
+                },
+                method: "OPTIONS",
+            }),
+            custom,
+        );
+
+        expect((response?.headers.get("access-control-allow-headers") ?? "").toLowerCase()).toBe("x-lunora-expect-subject, x-lunora-mutation-id, x-app-trace");
+    });
+
+    it("exposes the response headers the SDK reads back", () => {
+        expect.hasAssertions();
+
+        // A browser hides every non-safelisted response header unless it is
+        // named here, and `headers.get(...)` then returns `null` with no error
+        // anywhere. So a header the client consumes but that is unexposed does
+        // not fail loudly — it silently drops the guarantee it carries:
+        // `x-d1-bookmark` is D1 read-your-writes, `x-lunora-shard-key` is what
+        // keys the replica bookmark.
+        const out = decorateResponse(
+            Response.json({ ok: true }),
+            httpsRequest({ headers: { origin: "https://app.example.com" } }),
+            resolveSecurity({ cors: { allowedOrigins: ["https://app.example.com"] } }),
+        );
+
+        const exposed = (out.headers.get("access-control-expose-headers") ?? "").toLowerCase();
+
+        expect(exposed).toContain("x-d1-bookmark");
+        expect(exposed).toContain("x-lunora-shard-key");
+        // The REST edge-cache hit indicator: documented as readable, so a browser
+        // client has to actually be able to read it.
+        expect(exposed).toContain("x-lunora-edge-cache");
+    });
+
+    it("admits `x-lunora-shard-key` at preflight, the REST surface's documented header form of `?shardKey=`", () => {
+        expect.hasAssertions();
+
+        // The allowlist has no wildcard, so a name missing from it is dropped from
+        // `access-control-allow-headers` and the browser blocks the WHOLE request —
+        // a SPA on an allowlisted origin that picked the header over the query
+        // parameter never reached the origin at all.
+        const response = handleCorsPreflight(
+            httpsRequest({
+                method: "OPTIONS",
+                headers: {
+                    origin: "https://app.example.com",
+                    "access-control-request-method": "GET",
+                    "access-control-request-headers": "x-lunora-shard-key, content-type",
+                },
+            }),
+            cors,
+        );
+
+        const allowHeaders = (response?.headers.get("access-control-allow-headers") ?? "").toLowerCase();
+
+        expect(allowHeaders).toContain("x-lunora-shard-key");
+        expect(allowHeaders).toContain("content-type");
+    });
+
     it("ignores non-preflight OPTIONS and disabled CORS", () => {
         expect.hasAssertions();
 
@@ -259,6 +422,20 @@ describe("enforceOrigin", () => {
         expect(ok).toBeUndefined();
     });
 
+    it("names the received and expected origin plus the knob in the 403 body", async () => {
+        expect.assertions(4);
+
+        const blocked = enforceOrigin(httpsRequest({ method: "POST", headers: { cookie: "session=1", origin: "https://evil.example.com" } }), resolved);
+        const body = (await blocked?.json()) as { error: { expectedOrigin: string; message: string; receivedOrigin: string } };
+
+        // "cross-origin request rejected" alone sends the reader hunting. The body has
+        // to say which origin arrived, which one the worker serves, and the fix.
+        expect(body.error.receivedOrigin).toBe("https://evil.example.com");
+        expect(body.error.expectedOrigin).toBe("https://api.example.com");
+        expect(body.error.message).toContain("security.csrf.trustedOrigins");
+        expect(body.error.message).toContain("dev proxy");
+    });
+
     it("exempts safe methods, bearer/no-cookie requests, and disabled csrf", () => {
         expect.hasAssertions();
 
@@ -297,5 +474,64 @@ describe("enforceOrigin", () => {
         const ok = enforceOrigin(httpsRequest({ method: "POST", headers: { cookie: "session=1", origin: "https://partner.example.com" } }), explicit);
 
         expect(ok).toBeUndefined();
+    });
+});
+
+/**
+ * The dev-proxy shape: the browser loads the app from the dev server (`:3000`),
+ * which proxies to wrangler (`:8787`). With `changeOrigin` the two ports differ, so
+ * a strict same-origin rule rejects the cookie-bearing WS upgrade and the app hangs
+ * on its loading state with no diagnosis.
+ */
+/* eslint-disable sonarjs/no-clear-text-protocols -- plain-http loopback URLs ARE the subject under test; the exemption only applies to them */
+describe("enforceOrigin — loopback dev exemption", () => {
+    const localRequest = (headers: Record<string, string>): Request => new Request("http://localhost:8787/_lunora/rpc", { headers, method: "POST" });
+
+    it("trusts a loopback origin when the worker itself serves on loopback", () => {
+        expect.assertions(3);
+
+        const resolved = resolveSecurity(undefined);
+
+        expect(enforceOrigin(localRequest({ cookie: "s=1", origin: "http://localhost:3000" }), resolved)).toBeUndefined();
+        expect(enforceOrigin(localRequest({ cookie: "s=1", origin: "http://127.0.0.1:5173" }), resolved)).toBeUndefined();
+        expect(enforceOrigin(localRequest({ cookie: "s=1", origin: "http://[::1]:3210" }), resolved)).toBeUndefined();
+    });
+
+    it("does NOT loosen a deployed worker — the exemption needs a loopback self origin", () => {
+        expect.assertions(1);
+
+        const resolved = resolveSecurity(undefined);
+        const blocked = enforceOrigin(httpsRequest({ method: "POST", headers: { cookie: "s=1", origin: "http://localhost:3000" } }), resolved);
+
+        expect(blocked?.status).toBe(403);
+    });
+
+    it("rejects a non-loopback origin even when the worker is local", () => {
+        expect.assertions(1);
+
+        const resolved = resolveSecurity(undefined);
+        const blocked = enforceOrigin(localRequest({ cookie: "s=1", origin: "https://evil.example.com" }), resolved);
+
+        expect(blocked?.status).toBe(403);
+    });
+
+    it("rejects a public *.localhost hostname that only looks local", () => {
+        expect.assertions(1);
+
+        // `evil.localhost` can be pointed at by public DNS — only the three canonical
+        // loopback spellings count.
+        const resolved = resolveSecurity(undefined);
+        const blocked = enforceOrigin(localRequest({ cookie: "s=1", origin: "http://evil.localhost" }), resolved);
+
+        expect(blocked?.status).toBe(403);
+    });
+
+    it("honors allowLoopback: false for a hardened local setup", () => {
+        expect.assertions(1);
+
+        const resolved = resolveSecurity({ csrf: { allowLoopback: false } });
+        const blocked = enforceOrigin(localRequest({ cookie: "s=1", origin: "http://localhost:3000" }), resolved);
+
+        expect(blocked?.status).toBe(403);
     });
 });

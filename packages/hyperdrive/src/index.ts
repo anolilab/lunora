@@ -10,4 +10,6 @@
  * {@link import("./create-hyperdrive").createHyperdrive | createHyperdrive} JSDoc.
  */
 export { createHyperdrive, fromMysql2, fromNodePg, fromPostgresJs } from "./create-hyperdrive";
+export type { ProjectOptions, PullSourceOptions } from "./source";
+export { projectSourceRow, pullSourceRows } from "./source";
 export type { HyperdriveConnection, HyperdriveLike, Mysql2Like, NodePgLike, PostgresJsLike, SqlClient } from "./types";

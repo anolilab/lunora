@@ -54,9 +54,93 @@ export default defineSchema({
         // (`createdAt < cutoff`) instead of loading every row and filtering in memory.
         .index("by_created", ["createdAt"]),
 
-    // Mirror of the better-auth user rows (id + display name), owned by
-    // `@lunora/auth`'s adapter rather than a hand-written mutation — hence
-    // `.externallyManaged()`.
+    /**
+     * A deliberately WIDE, high-volume table for exercising the Studio data
+     * browser: column pinning, horizontal column windowing, search-match
+     * highlighting, typed date-range search, and reverse-relation counts.
+     *
+     * 24 columns is past the point where the grid mounts every cell of every
+     * visible row, so the windowing is observable rather than theoretical; the
+     * `ownerId` / `channelId` refs give the data browser two forward links and
+     * give `users` / `channels` two more reverse edges to count.
+     *
+     * Fill it with `lunora seed --table demoRecords --count 250`: the seeder
+     * derives the rows from this definition, seeds the FK parents first, and
+     * gives the `*At` columns real timestamps spread over the last six months,
+     * which is what makes the grid's `2026-07`-style date search meaningful.
+     *
+     * Four columns exist for their TYPE rather than their data, because the row
+     * editor and the grid header read the declared schema and nothing else here
+     * declared anything but `string`/`number`:
+     *
+     * - `status` / `currency` are literal unions, so the row editor offers a
+     *   dropdown of the members instead of a free-text box, and a value outside
+     *   the set cannot be pasted into the grid.
+     * - `archived` is a `.nullable()` boolean, so the editor offers the THREE
+     *   states the column really has rather than a two-state checkbox that
+     *   renders a stored `null` as `false` and cannot get back to it. The header
+     *   carries the boolean glyph either way. Deliberately not `.default(false)`:
+     *   the seeder omits a defaulted column and the write layer fills it
+     *   (`applyInsertDefaults`, which keys off PRESENCE so a `false` survives),
+     *   so every row would read the same value — correct, but nothing to look at.
+     * - `attachmentKey` is a `v.storage("avatars")` key, so the grid can resolve
+     *   a signed URL and preview the object inline, and the file browser can
+     *   join the row to the bucket that actually holds it.
+     */
+    demoRecords: defineTable({
+        amount: v.number(),
+        archived: v.boolean().nullable(),
+        attachmentKey: v.optional(v.storage("avatars")),
+        category: v.string(),
+        channelId: v.id("channels"),
+        city: v.string(),
+        code: v.string(),
+        country: v.string(),
+        createdAt: v.number(),
+        currency: v.union(v.literal("EUR"), v.literal("GBP"), v.literal("USD")),
+        department: v.string(),
+        description: v.string(),
+        email: v.string(),
+        externalRef: v.string(),
+        latitude: v.number(),
+        longitude: v.number(),
+        notes: v.optional(v.string()),
+        ownerId: v.id("users"),
+        priority: v.number(),
+        quantity: v.number(),
+        region: v.string(),
+        sku: v.string(),
+        status: v.union(v.literal("blocked"), v.literal("done"), v.literal("in_review"), v.literal("open")),
+        tags: v.string(),
+        title: v.string(),
+        updatedAt: v.number(),
+    })
+        // Rows come from `lunora seed`, which bulk-inserts through the admin import
+        // endpoint — not from a mutation. Without this the insert-path advisor
+        // reports `table_without_insert` on every codegen run, which is noise
+        // rather than a finding: the advisory's own text says a table "seeded
+        // elsewhere" can be ignored, and this is the declaration that says so.
+        .externallyManaged()
+        .index("by_created", ["createdAt"])
+        .index("by_status", ["status"]),
+
+    // Per-user private notes — the playground's Row-Level Security surface.
+    // Lives in the default root DO; `notes.list` deliberately reads the WHOLE
+    // table and relies on the `rls()` read policy (see lunora/notes.ts) to
+    // narrow it to the caller's rows, so the auth-rls E2E proves the policy —
+    // not a hand-written filter — is what isolates users.
+    notes: defineTable({
+        createdAt: v.number(),
+        ownerId: v.id("users"),
+        text: v.string(),
+    }).index("by_owner", ["ownerId"]),
+
+    // Mirror of the better-auth user rows (id + display name), keyed by the
+    // better-auth id. better-auth writes its own `user` table, not this one; the
+    // worker's `databaseHooks` copy each created/updated user in through
+    // `users:mirrorAuthUser`, so the chat can render author names. That write is
+    // an explicit-id `insertManyUnsafe`, which the `table_without_insert`
+    // advisory does not count, hence `.externallyManaged()`.
     users: defineTable({
         email: v.string(),
         name: v.string(),

@@ -1,0 +1,61 @@
+import { createHash } from "node:crypto";
+import { existsSync, readFileSync } from "node:fs";
+import { join } from "node:path";
+
+import { listLunoraSourceFiles } from "./discover/ast";
+
+/**
+ * Content hash of the schema directory's TypeScript sources — everything codegen
+ * reads, minus its own `_generated/` output.
+ *
+ * Taken before codegen runs and compared against the previous run's, this is what
+ * tells a developer's save apart from a write the `postcodegen` hook made itself.
+ * Timing cannot: both look identical to a watcher, which is why every save during
+ * a multi-second hook used to be dropped outright. Content can — a formatter that
+ * rewrites a file to the same bytes leaves the hash alone, and a real edit does not.
+ *
+ * Crucially the set EXCLUDES `_generated/`, so a hook that rewrites generated
+ * output (a formatter, a codemod) does not read as a source change. That is what
+ * lets a bundler plugin watch the whole schema directory — the only way a newly
+ * created `lunora/foo.ts` is ever noticed — without the hook's own writes
+ * retriggering it forever.
+ *
+ * The file set comes from codegen's own `listLunoraSourceFiles` (plus
+ * `schema.ts`, which discovery loads separately), so "what codegen reads" is one
+ * decision rather than two that drift: a `readdirSync` walk of its own silently
+ * disagreed about symlinked sources, which is exactly the case where a
+ * regeneration must not be judged a no-op.
+ *
+ * Cheap by construction (a schema directory is a handful of files, read once per
+ * regeneration, not per watcher event). An unreadable directory hashes to a
+ * constant so a transient read error reads as "no change" rather than as an
+ * edit — degrading toward doing nothing, never toward a spurious rerun.
+ */
+const fingerprintSchemaSources = (schemaDirectory: string): string => {
+    if (!existsSync(schemaDirectory)) {
+        return "unreadable";
+    }
+
+    // Skipped files included: secret discovery still scans them, so an edit there must rerun codegen.
+    const paths = listLunoraSourceFiles(schemaDirectory, { includeSkipped: true });
+    const schemaPath = join(schemaDirectory, "schema.ts");
+
+    if (existsSync(schemaPath)) {
+        paths.push(schemaPath);
+    }
+
+    const hash = createHash("sha256");
+
+    for (const path of paths.toSorted((a, b) => a.localeCompare(b))) {
+        try {
+            hash.update(path).update("\u0000").update(readFileSync(path));
+        } catch {
+            // A file that vanished mid-walk contributes nothing; the next run sees
+            // the settled tree.
+        }
+    }
+
+    return hash.digest("hex");
+};
+
+export default fingerprintSchemaSources;

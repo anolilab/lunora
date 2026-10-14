@@ -82,4 +82,47 @@ describe(reportContainerLifecycle, () => {
 
         await expect(reportContainerLifecycle({ LUNORA_ADMIN_TOKEN: "s3cret", SHARD: namespace }, envelope)).resolves.toBeUndefined();
     });
+
+    it("routes through a jurisdiction-pinned subnamespace when configured", async () => {
+        expect.assertions(2);
+
+        const inner = fakeNamespace(async () => Response.json({ result: { recorded: true } }, { status: 200 }));
+        const jurisdictionCalls: string[] = [];
+        const namespace: ShardNamespaceLike = {
+            get: () => {
+                throw new Error("should resolve via the jurisdiction subnamespace, not the root namespace");
+            },
+            idFromName: () => {
+                throw new Error("should resolve via the jurisdiction subnamespace, not the root namespace");
+            },
+            jurisdiction: (j) => {
+                jurisdictionCalls.push(j);
+
+                return inner;
+            },
+        };
+
+        const envelope = buildContainerLifecycleEvent("transcoder", "do-1", "start");
+
+        await reportContainerLifecycle({ LUNORA_ADMIN_TOKEN: "s3cret", SHARD: namespace }, envelope, "us");
+
+        expect(jurisdictionCalls).toStrictEqual(["us"]);
+        expect(inner.getByNameCalls).toStrictEqual([ROOT_SHARD_NAME]);
+    });
+
+    it("drops the event (best-effort) when the binding can't honor the jurisdiction", async () => {
+        expect.assertions(1);
+
+        // Legacy binding without `.jurisdiction()`: applyJurisdiction throws, the
+        // best-effort wrapper swallows it — the event is never written to the
+        // un-pinned, out-of-region root shard.
+        const namespace = fakeNamespace(async () => Response.json({ result: { recorded: true } }, { status: 200 }));
+        delete (namespace as { jurisdiction?: unknown }).jurisdiction;
+
+        const envelope = buildContainerLifecycleEvent("transcoder", "do-1", "start");
+
+        await reportContainerLifecycle({ LUNORA_ADMIN_TOKEN: "s3cret", SHARD: namespace }, envelope, "eu");
+
+        expect(namespace.getByNameCalls).toStrictEqual([]);
+    });
 });

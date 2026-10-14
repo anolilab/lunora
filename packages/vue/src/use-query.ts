@@ -1,9 +1,12 @@
-import type { ArgsOf, FunctionReference, LunoraClient, ReturnOf, Unsubscribe } from "@lunora/client";
+import type { ArgsOf, FunctionReference, LunoraClient, ReturnOf, SubscriptionErrorCallback, Unsubscribe } from "@lunora/client";
 import { createQuerySubscription } from "@lunora/client/query";
 import type { MaybeRefOrGetter, Ref } from "vue";
-import { getCurrentScope, onScopeDispose, shallowRef, toValue, watch } from "vue";
+import { shallowRef, toValue, watch } from "vue";
 
+import { isBrowser } from "../../../shared/is-browser";
+import { stableWireKey } from "../../../shared/wire-key";
 import { useLunora } from "./lunora-provider";
+import onScopeDisposeOrWarn from "./scope-dispose";
 import type { UseQueryOptions } from "./types";
 
 /**
@@ -16,7 +19,9 @@ import type { UseQueryOptions } from "./types";
  * replays the last value synchronously, so multiple consumers of the same query
  * ride one server-side registration. `seed` sets the ref's value synchronously
  * before the subscription attaches, so the first read shows the SSR value with
- * no loading flash.
+ * no loading flash. `onError` receives a subscription-scoped error the server
+ * pushes (a session expiry, an RLS denial); without it the ref keeps rendering
+ * the seed as if it were live.
  *
  * Teardown is wired to the active effect scope (`onScopeDispose`), so it fires
  * on component unmount or `effectScope().stop()`. Call it inside `setup()` / an
@@ -28,25 +33,27 @@ export const subscribeToQuery = <F extends FunctionReference, T = ReturnOf<F>>(
     client: LunoraClient,
     function_: F,
     args: ArgsOf<F>,
-    options: { seed?: T; shardKey?: string } = {},
+    options: { onError?: SubscriptionErrorCallback; seed?: T; shardKey?: string } = {},
 ): Ref<T | undefined> => {
     // `shallowRef` — query results are replaced wholesale on every push, never
     // mutated in place, so deep reactivity would only add overhead.
     const data = shallowRef<T | undefined>(options.seed) as Ref<T | undefined>;
 
-    const unsubscribe: Unsubscribe = client.subscribe(
-        function_,
-        args,
-        (value) => {
-            data.value = value as T;
-        },
-        { shardKey: options.shardKey },
-    );
+    // Client-only: called during SSR this would open a live subscription that
+    // never tears down (see `use-presence.ts`'s guard rationale). The seed
+    // above already gives SSR HTML its value; skip the subscription server-side.
+    if (isBrowser()) {
+        const unsubscribe: Unsubscribe = client.subscribe(
+            function_,
+            args,
+            (value) => {
+                data.value = value as T;
+            },
+            { onError: options.onError, shardKey: options.shardKey },
+        );
 
-    if (getCurrentScope()) {
-        onScopeDispose(unsubscribe);
-    } else if (process.env.NODE_ENV !== "production") {
-        console.warn(
+        onScopeDisposeOrWarn(
+            unsubscribe,
             "[@lunora/vue] subscribeToQuery called with no active effect scope — its subscription will not be cleaned up automatically. " +
                 "Call it inside setup()/an effect scope, or call the returned teardown yourself.",
         );
@@ -62,14 +69,18 @@ export const subscribeToQuery = <F extends FunctionReference, T = ReturnOf<F>>(
  * updates on every delta the server pushes — the Vue-idiomatic equivalent of
  * React's `useQuery`. `args` may be a plain value, a `ref`, or a getter: passing
  * a reactive source makes the subscription reactive — when the args change the
- * old subscription is torn down and a fresh one opens for the new args (matching
- * `@lunora/react`/`@lunora/solid`). Pass `"skip"` (or a source resolving to
+ * old subscription is torn down, the ref resets to `undefined`, and a fresh one
+ * opens for the new args (matching `@lunora/react`/`@lunora/solid`). Pass `"skip"` (or a source resolving to
  * `"skip"`) to short-circuit: no network call, no socket. The subscription tears
  * down automatically when the owning component unmounts (or the effect scope
  * stops).
  *
  * Call inside `setup()` (or any active effect scope). For SSR seeding with no
  * loading flash, use `hydratePreloaded` instead.
+ *
+ * Pass `onError` to surface a subscription-scoped error the server pushes (an RLS
+ * denial, a query that starts failing server-side). Without it such an error is
+ * dropped and the ref just freezes at its last good value.
  */
 export const useQuery = <F extends FunctionReference>(
     function_: F,
@@ -85,17 +96,37 @@ export const useQuery = <F extends FunctionReference>(
     // `args` resolves once and the watcher never re-fires. The skip-handling,
     // subscribe, and cleanup are owned by the shared `@lunora/client/query` state
     // machine; this composable only binds it to a Vue `ref`.
+    //
+    // Key the watch on the args' CONTENT (`stableWireKey`), not on object
+    // identity: a getter such as `() => ({ id: props.id, limit: Math.min(n, 10) })`
+    // re-runs whenever any dependency ticks, and would otherwise tear the live
+    // subscription down and re-snapshot from the server — blanking the rendered
+    // value — for args that did not actually change. The live args are re-read
+    // inside the callback (matching `use-paginated-core`).
     watch(
-        () => toValue(args),
-        (current, _previous, onCleanup) => {
+        () => stableWireKey(toValue(args)),
+        (_key, _previousKey, onCleanup) => {
+            // Client-only: an `immediate: true` watcher fires once during
+            // `renderToString` with no unmount to run `onCleanup` (see
+            // `use-presence.ts`'s guard rationale) — skip the subscription
+            // server-side and leave `data` at its inert initial value.
+            if (!isBrowser()) {
+                return;
+            }
+
+            // The previous args' value must not render under the new args until
+            // the new subscription's first frame lands.
+            data.value = undefined;
+
             const unsubscribe = createQuerySubscription(
                 client,
                 function_,
-                current,
+                toValue(args),
                 {
                     onData: (value) => {
                         data.value = value;
                     },
+                    onError: options.onError,
                     onReset: () => {
                         data.value = undefined;
                     },

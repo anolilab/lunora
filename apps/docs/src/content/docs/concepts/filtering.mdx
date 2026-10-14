@@ -1,0 +1,143 @@
+---
+title: Filtering
+description: .filter() is a JavaScript predicate applied after rows are loaded — when to use it, and when to reach for an index instead.
+related:
+    - to: /docs/concepts/indexes
+    - to: /docs/concepts/queries-mutations
+    - to: /docs/concepts/pagination
+    - to: /docs/concepts/advisors
+    - to: /docs/concepts/search
+---
+
+`.filter()` narrows a query with an ordinary JavaScript predicate:
+
+```ts
+import { query, v } from "@/lunora/_generated/server";
+
+export const flagged = query.input({ channelId: v.id("channels") }).query(async ({ ctx, args: { channelId } }) => {
+    return ctx.db
+        .query("messages")
+        .withIndex("by_channel", (q) => q.eq("channelId", channelId))
+        .filter((message) => message.flagged === true)
+        .collect();
+});
+```
+
+The predicate receives the fully typed document, so anything you can express in
+TypeScript works: regular expressions, arithmetic, checks across several fields
+at once.
+
+<Callout type="info">
+    If you are coming from Convex, this is a real difference: Convex's `.filter()` takes a builder (`q.eq("field", value)`), Lunora's takes a plain predicate
+    function. See [Migrating from Convex](/docs/migrating/from-convex).
+</Callout>
+
+## Where the work happens
+
+**`.filter()` runs after rows are loaded.** Every row the query would otherwise
+return is read out of SQLite and handed to your predicate. Rows the predicate
+rejects were still read.
+
+`.withIndex()` is the opposite. It seeks a range in a B-tree, so rows outside
+the range are never touched.
+
+```ts
+// Reads every message in the table, then discards most of them.
+ctx.db
+    .query("messages")
+    .filter((m) => m.channelId === channelId)
+    .collect();
+
+// Seeks straight to the channel's messages.
+ctx.db
+    .query("messages")
+    .withIndex("by_channel", (q) => q.eq("channelId", channelId))
+    .collect();
+```
+
+Both return the same rows. Only the second one stays fast as the table grows.
+
+## Choosing between them
+
+Use **`.withIndex()`** for the selective part of the query, the condition that
+eliminates most of the table. That is almost always an equality on a foreign key,
+a tenant, a channel, a user, plus optionally a range on a time column.
+
+Use **`.filter()`** for the rest: cheap, low-selectivity conditions applied to
+the handful of rows the index already narrowed to. A boolean flag, a status
+check, a predicate too complex for an index to express.
+
+The rule of thumb: _index first, filter second, and let the index do the
+eliminating._
+
+## When a bare filter is fine
+
+Scanning is not always wrong. A table that is bounded and small by construction
+(a settings table, a list of plan tiers, an enum-like lookup table) costs
+nothing to scan, and adding an index buys nothing. The problem is not scanning;
+it is scanning a table that grows without bound.
+
+Ask whether the table has a ceiling. If it does not, the read needs an index.
+
+## How the advisors catch this
+
+The [advisors](/docs/concepts/advisors) flag the failure mode statically and at
+runtime:
+
+- **`filter_without_index`** (warn): a `query(...).filter(...)` with no
+  `.withIndex()` first, so it loads every row and filters in memory.
+- **`unindexed_foreign_key`** (info): a foreign-key column with no index leading
+  with it.
+- **`index_utilization`** (runtime): a table full-scanned many times with no
+  index, and the converse, an index with zero recorded reads.
+
+`lunora insights` surfaces the same thing from the latency side: a query that
+scans shows up as a latency outlier long before it shows up as an outage.
+
+## Composing
+
+`.filter()` chains with everything else: `.withIndex()`, `.order()`, and every
+terminal (`.collect()`, `.first()`, `.take(n)`, `.unique()`, `.paginate()`).
+Applying `.take(n)` after a filter still reads whatever the index range
+produced, because the predicate has to run before the limit can be counted.
+
+## Inside an object column
+
+A key with dots reaches into an object column: `"profile.address.city"` is `city` inside `address` inside
+`profile`. It works anywhere a column name does in a `where`:
+
+```ts
+await ctx.db.users.findMany({
+    where: { "profile.plan": "pro", "profile.address.city": { in: ["Berlin", "Paris"] } },
+});
+```
+
+The keys are typed from the nested object types, so a misspelt path is a compile error. Only paths that end
+at a string, number or boolean are offered; an array, date, bigint, bytes or whole object has no single
+comparison. A path has at most four segments, the column included.
+
+- A missing key, or a step through something that is not an object, reads as `null`, so
+  `{ "profile.address.city": null }` matches a row with no `address` at all.
+- `30` and `"30"` are different values: a number does not equal the same digits stored as text.
+- `orderBy` takes a path too (`orderBy: [{ "profile.plan": "asc" }]`), and paging with a cursor works across it.
+- It is not indexed. A declared index covers top-level columns, so a path filter reads the rows the rest of
+  the `where` selects; pair it with an indexed column.
+- On a `.global()` table the path works on every backend. SQLite, D1 and the Node host read it with
+  `json_extract`. Postgres reads it with `->` steps and a `jsonb` `null` check, and MySQL with `JSON_EXTRACT`. Both
+  use a guard so text that is not JSON reads as `null` instead of raising. The Postgres path needs Postgres 16 or
+  later, for `pg_input_is_valid`. These were run against PGlite (Postgres 18) and MySQL 8.0, including the null, array,
+  wire-encoded and non-JSON cases, in the test suite. `contains` works on a path too: it searches the leaf's own text,
+  with the same case rule as a column on that engine (SQLite ignores ASCII case; Postgres and MySQL do not). A number
+  leaf is searched by its digits. A boolean leaf is `1` or `0` on SQLite and `true` or `false` on Postgres and MySQL,
+  and an object or array leaf by its JSON text, which is spaced differently on SQLite and Postgres.
+  A range (`gt`, `gte`, `lt`, `lte`) over a path matches only the leaves of the operand's own type, the same on every
+  backend and in a row-level-security `where` evaluated in memory. `gt: 5` finds the numbers above 5 and neither the
+  text `"7"`, a boolean nor an array; `gt: "7"` finds the text leaves after it. An operand that is none of number,
+  string or boolean (a `Date`, a `bigint`) matches nothing. Ordering by a path still sorts every type together, in an
+  order that differs per engine, so keep an ordered path to one type; paging through it reaches every row either way.
+  Two text leaves compare by the engine's own string order, as a text column does.
+- A path into a [masked](/docs/concepts/masking) column is refused like the column itself, whichever path.
+
+To change one nested key without rewriting the object, patch the path:
+`ctx.db.users.patch(id, { "profile.plan": "team" })` keeps the object's other keys. See
+[Atomic updates](/docs/concepts/queries-mutations#atomic-updates).

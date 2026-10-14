@@ -2,6 +2,7 @@
 // Run `lunora codegen` to regenerate.
 
 import { blob, integer, sqliteTable, text, uniqueIndex } from "@lunora/server/drizzle";
+import type { AnySQLiteColumn } from "@lunora/server/drizzle";
 
 export const users = sqliteTable("users", {
     _id: text("_id").primaryKey(),
@@ -19,7 +20,7 @@ export const attachments = sqliteTable("attachments", {
     _creationTime: integer("_creationTime").notNull(),
     bytes: blob("bytes", { mode: "buffer" }).notNull(),
     fileKey: text("fileKey").notNull(),
-    ownerId: text("ownerId").references(() => users._id).notNull(),
+    ownerId: text("ownerId").references((): AnySQLiteColumn => users._id).notNull(),
     size: blob("size", { mode: "bigint" }).notNull(),
     tags: text("tags", { mode: "json" }).$type<Array<string>>().notNull(),
     title: text("title"),

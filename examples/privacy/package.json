@@ -1,0 +1,49 @@
+{
+    "name": "@lunora-example/privacy",
+    "version": "0.0.0",
+    "private": true,
+    "license": "FSL-1.1-Apache-2.0",
+    "type": "module",
+    "sideEffects": false,
+    "scripts": {
+        "build": "vite build",
+        "codegen": "node node_modules/lunorash/dist/bin.mjs codegen",
+        "deploy": "wrangler deploy",
+        "dev": "vite",
+        "lint:types": "tsc --noEmit",
+        "test": "vitest run",
+        "lint:eslint": "eslint . --max-warnings=0",
+        "lint:eslint:fix": "eslint . --fix"
+    },
+    "dependencies": {
+        "@lunora/privacy": "workspace:*",
+        "@lunora/react": "workspace:*",
+        "@lunora/scheduler": "workspace:*",
+        "@lunora/vite": "workspace:*",
+        "@lunora/workflow": "workspace:*",
+        "lunorash": "workspace:*",
+        "react": "catalog:frontend",
+        "react-dom": "catalog:frontend"
+    },
+    "devDependencies": {
+        "@cloudflare/vitest-plugin": "catalog:cloudflare",
+        "@cloudflare/workers-types": "catalog:cloudflare",
+        "@lunora/server": "workspace:*",
+        "@lunora/testing": "workspace:*",
+        "@types/node": "catalog:types",
+        "@types/react": "catalog:frontend",
+        "@types/react-dom": "catalog:frontend",
+        "typescript": "catalog:tsc",
+        "vite": "catalog:vite",
+        "vitest": "catalog:test",
+        "wrangler": "catalog:cloudflare"
+    },
+    "engines": {
+        "node": "^22.15.0 || >=24.11.0"
+    },
+    "lunora": {
+        "crons": [
+            "0 6 * * *"
+        ]
+    }
+}

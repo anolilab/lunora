@@ -1,0 +1,50 @@
+# Netlify configuration for the Lunora docs site.
+#
+# `build.ignore` is Netlify's "Ignored Build Step": it runs before the build and
+# its exit code decides whether the build proceeds.
+#   - exit 0  -> build is skipped (cancelled)
+#   - exit !0 -> build proceeds
+#
+# We always build. `exit 1` is the documented way to opt out of skipping
+# altogether, and it is deliberate rather than an oversight:
+#
+# A skipped deploy is not reported as "skipped". Netlify records only two
+# finished deploy states, success and error, and a cancelled deploy is an
+# error: the Deploy Preview posts the `deploy/netlify` commit status as
+# state=failure and the three GitHub App check runs (Header rules, Pages
+# changed, Redirect rules) as conclusion=failure titled "Deploy failed" — the
+# same signal a genuine docs build failure produces, with no error text to tell
+# them apart. Nothing in this file, and no other repository-side setting, can
+# turn that into a neutral or successful report. So a graph-aware skip cost
+# four red checks on every pull request outside the docs graph (see #806), and
+# a real docs breakage would have been indistinguishable from them.
+#
+# This also removes a second problem. The previous gate probed for a binary
+# under `node_modules/`, which only exists once Netlify restores a warm build
+# cache — the ignore step runs before dependencies are installed. A cold cache
+# therefore failed the probe and built, a warm cache skipped and went red, so
+# one commit could report either way depending on cache state. `exit 1` has no
+# such dependency: every deploy, warm or cold, preview or production, builds.
+#
+# The cost is one docs build per pull request. Restoring the optimisation needs
+# Netlify to report a skipped deploy as neutral; revisit if that lands.
+#
+# Deleting this key is not the same as always building: with no ignore command
+# Netlify falls back to diffing the site's base directory and skips when it is
+# unchanged, which is the same red-check outcome with a worse verdict.
+#
+# Build command, publish dir, and base directory remain configured in the
+# Netlify UI; this file pins the ignore step and the function's extra files.
+[build]
+  ignore = "exit 1"
+
+# `hb.wasm` is read from disk by harfbuzzjs (pulled in by satori for `/api/og`)
+# through a computed path, which Netlify's file tracer cannot follow, so the
+# file was never uploaded and every OG render failed. Patterns resolve against
+# the bundler's base path; both the repository-root and the `apps/docs` form
+# are listed because a pattern that matches nothing is simply ignored.
+[functions]
+  included_files = [
+    "node_modules/.pnpm/harfbuzzjs@*/node_modules/harfbuzzjs/hb.wasm",
+    "../../node_modules/.pnpm/harfbuzzjs@*/node_modules/harfbuzzjs/hb.wasm",
+  ]

@@ -27,8 +27,8 @@ import type { RateLimitConfigMap } from "@lunora/ratelimit";
  * `ratelimit.middleware`.
  */
 export const limits = {
-    /** Default per-key limit: 10 requests, refilling continuously over 60s. */
-    default: { kind: "token bucket", period: 60_000, rate: 10 },
+    /** Writes on the `send` path: 10 per caller, refilling continuously over 60s. */
+    send: { kind: "token bucket", period: 60_000, rate: 10 },
 } as const satisfies RateLimitConfigMap;
 
 /** The limit names you've configured above. */
@@ -70,12 +70,17 @@ export const ratelimit = definePlugin("ratelimit", {
     extension: defineSchemaExtension("ratelimit", {
         tables: {
             // Bare name — auto-prefixes to `ratelimit_buckets` at merge time.
+            // `externallyManaged`: rows are written by `createDbStore` (via
+            // `makeRateLimiter`), not a discoverable `ctx.db.insert(...)`, so the
+            // `table_without_insert` advisor correctly skips it.
             buckets: defineTable({
                 key: v.string(),
                 value: v.number(),
                 ts: v.number(),
                 prev: v.optional(v.number()),
-            }).index("by_key", ["key"]),
+            })
+                .index("by_key", ["key"])
+                .externallyManaged(),
         },
     }),
     middleware,

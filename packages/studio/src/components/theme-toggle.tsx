@@ -1,3 +1,4 @@
+// react-doctor-disable-next-line react-doctor/use-lazy-motion -- `m` + LazyMotion needs a provider above every consumer; this package exports individual panels that hosts mount without the studio shell, so a missing provider would throw at runtime in someone else's app
 import { motion } from "motion/react";
 import type { ReactElement } from "react";
 
@@ -65,7 +66,7 @@ const OPTIONS: ReadonlyArray<{ readonly Icon: () => ReactElement; readonly value
  * provider) and slides an aurora-free hairline indicator under the active
  * segment via a shared-layout `motion` element.
  */
-export const ThemeToggle = (): ReactElement => {
+const ThemeToggle = (): ReactElement => {
     const { theme, setTheme } = useTheme();
     const t = useT();
 
@@ -118,3 +119,4 @@ export const ThemeToggle = (): ReactElement => {
         </div>
     );
 };
+export default ThemeToggle;

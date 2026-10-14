@@ -26,7 +26,9 @@ describe("auth_api_call_without_headers", () => {
     it("flags a call with hasHeaders: false", () => {
         expect.assertions(2);
 
-        const calls: AdvisorAuthApiCall[] = [{ exportName: "createOrg", file: "orgs", hasHeaders: false, line: 10, method: "createOrganization" }];
+        const calls: AdvisorAuthApiCall[] = [
+            { scope: { kind: "export", name: "createOrg" }, file: "orgs", hasHeaders: false, line: 10, method: "createOrganization" },
+        ];
         const findings = run(calls);
 
         expect(findings).toHaveLength(1);
@@ -42,7 +44,9 @@ describe("auth_api_call_without_headers", () => {
     it("does not flag a call with hasHeaders: true", () => {
         expect.assertions(1);
 
-        const calls: AdvisorAuthApiCall[] = [{ exportName: "createOrg", file: "orgs", hasHeaders: true, line: 10, method: "createOrganization" }];
+        const calls: AdvisorAuthApiCall[] = [
+            { scope: { kind: "export", name: "createOrg" }, file: "orgs", hasHeaders: true, line: 10, method: "createOrganization" },
+        ];
 
         expect(run(calls)).toHaveLength(0);
     });
@@ -51,8 +55,8 @@ describe("auth_api_call_without_headers", () => {
         expect.assertions(3);
 
         const calls: AdvisorAuthApiCall[] = [
-            { exportName: "banSomeone", file: "admin", hasHeaders: false, line: 5, method: "banUser" },
-            { exportName: "promoteUser", file: "admin", hasHeaders: false, line: 20, method: "setRole" },
+            { scope: { kind: "export", name: "banSomeone" }, file: "admin", hasHeaders: false, line: 5, method: "banUser" },
+            { scope: { kind: "export", name: "promoteUser" }, file: "admin", hasHeaders: false, line: 20, method: "setRole" },
         ];
         const findings = run(calls);
 
@@ -68,8 +72,8 @@ describe("auth_api_call_without_headers", () => {
         // — both on line 12, same method.  Without a within-line discriminator
         // they collapse to one cacheKey and dismissing one silently hides the other.
         const calls: AdvisorAuthApiCall[] = [
-            { exportName: "bulkBan", file: "admin", hasHeaders: false, line: 12, method: "banUser" },
-            { exportName: "bulkBan", file: "admin", hasHeaders: false, line: 12, method: "banUser" },
+            { scope: { kind: "export", name: "bulkBan" }, file: "admin", hasHeaders: false, line: 12, method: "banUser" },
+            { scope: { kind: "export", name: "bulkBan" }, file: "admin", hasHeaders: false, line: 12, method: "banUser" },
         ];
         const findings = run(calls);
 

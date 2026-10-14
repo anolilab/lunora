@@ -1,5 +1,5 @@
 import type { ReactElement } from "react";
-import { useMemo, useState } from "react";
+import { useState } from "react";
 
 import { Badge } from "../../components/ui/badge";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../../components/ui/card";
@@ -81,9 +81,40 @@ const PerformanceBadge = ({ level }: { level: PerformanceLevel }): ReactElement 
 };
 
 interface QueryInsightsProps {
-    /** Enriched query stats (with `avgDurationMs` computed). */
-    readonly queryStats: ReadonlyArray<EnrichedQueryStat>;
+    /**
+     * Per-statement aggregates. Accepts the ranged entries from
+     * `getQueryInsights` (which carry p50/p95) as well as the lifetime
+     * `EnrichedQueryStat` shape, so the same table serves both.
+     */
+    readonly queryStats: ReadonlyArray<EnrichedQueryStat & { p50DurationMs?: number; p95DurationMs?: number }>;
 }
+
+/** Statements ordered by the selected column, worst first. Copies before sorting — the prop array is not ours to reorder. */
+const sortStats = (queryStats: QueryInsightsProps["queryStats"], sortField: SortField): QueryInsightsProps["queryStats"] => {
+    const copy = [...queryStats];
+
+    copy.sort((a, b) => {
+        switch (sortField) {
+            case "avgTime": {
+                return b.avgDurationMs - a.avgDurationMs;
+            }
+
+            case "execCount": {
+                return b.execCount - a.execCount;
+            }
+
+            case "rowsRead": {
+                return b.rowsRead - a.rowsRead;
+            }
+
+            default: {
+                return b.totalDurationMs - a.totalDurationMs;
+            }
+        }
+    });
+
+    return copy;
+};
 
 /**
  * Slow-query leaderboard for the Reports → Metrics panel.
@@ -108,31 +139,7 @@ export const QueryInsights = ({ queryStats }: QueryInsightsProps): ReactElement 
         }
     };
 
-    const sorted = useMemo(() => {
-        const copy = [...queryStats];
-
-        copy.sort((a, b) => {
-            switch (sortField) {
-                case "avgTime": {
-                    return b.avgDurationMs - a.avgDurationMs;
-                }
-
-                case "execCount": {
-                    return b.execCount - a.execCount;
-                }
-
-                case "rowsRead": {
-                    return b.rowsRead - a.rowsRead;
-                }
-
-                default: {
-                    return b.totalDurationMs - a.totalDurationMs;
-                }
-            }
-        });
-
-        return copy;
-    }, [queryStats, sortField]);
+    const sorted = sortStats(queryStats, sortField);
 
     const critical = queryStats.filter((q) => performanceLevel(q.avgDurationMs) === "critical").length;
     const moderate = queryStats.filter((q) => performanceLevel(q.avgDurationMs) === "warning").length;
@@ -267,6 +274,15 @@ export const QueryInsights = ({ queryStats }: QueryInsightsProps): ReactElement 
                                                 <div className="text-sm font-medium">{formatLatency(stat.avgDurationMs)}</div>
                                                 <div className="text-xs text-muted-foreground">{t("avg")}</div>
                                             </div>
+                                            {/* p95 beside the mean, because a mean hides the tail — which is
+                                                usually the thing being chased. Absent for the lifetime feed,
+                                                which has no histogram to interpolate from. */}
+                                            {stat.p95DurationMs !== undefined && (
+                                                <div className="text-right">
+                                                    <div className="text-sm font-medium">{formatLatency(stat.p95DurationMs)}</div>
+                                                    <div className="text-xs text-muted-foreground">{t("p95")}</div>
+                                                </div>
+                                            )}
                                             <div className="text-right">
                                                 <div className="text-sm font-medium">{formatCount(stat.execCount)}</div>
                                                 <div className="text-xs text-muted-foreground">{t("calls")}</div>
@@ -284,6 +300,12 @@ export const QueryInsights = ({ queryStats }: QueryInsightsProps): ReactElement 
                                             </div>
 
                                             <div className="grid grid-cols-2 gap-4 text-sm md:grid-cols-4">
+                                                {stat.p50DurationMs !== undefined && (
+                                                    <div>
+                                                        <span className="text-muted-foreground">{t("p50")}</span>
+                                                        <span className="block font-medium tabular-nums">{formatLatency(stat.p50DurationMs)}</span>
+                                                    </div>
+                                                )}
                                                 <div>
                                                     <span className="text-muted-foreground">{t("Exec count")}</span>
                                                     <span className="block font-medium tabular-nums">{formatCount(stat.execCount)}</span>

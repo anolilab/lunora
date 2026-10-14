@@ -7,17 +7,96 @@
 import { describe, expect, it } from "vitest";
 
 import { emitApi, emitFunctions } from "../src/emit";
-import type { FunctionIR, WorkflowIR } from "../src/ir";
+import type { AgentIR, FunctionIR, HttpRouteIR, WorkflowIR } from "../src/ir";
+
+const SUPPORT_AGENT: AgentIR = {
+    className: "SupportAgentWorkflow",
+    exportName: "support",
+    name: "agent-support",
+};
+
+/** A minimal `HttpRouteIR` with overridable fields, mirroring `openapi.test.ts`'s helper. */
+const makeStreamRoute = (overrides: Partial<HttpRouteIR> = {}): HttpRouteIR => {
+    return {
+        body: {},
+        exportName: "streamTokens",
+        filePath: "http",
+        method: "GET",
+        params: {},
+        path: "/api/tokens",
+        searchParams: {},
+        stream: true,
+        ...overrides,
+    };
+};
 
 describe("emitApi", () => {
+    it("emits a typed `agents.*` scheduler-target reference object when the project declares agents", () => {
+        expect.assertions(6);
+
+        const rendered = emitApi({ agents: [SUPPORT_AGENT], functions: [] });
+
+        // The flat AgentRunInput is imported (type-only) so `cronJobs()` args infer.
+        expect(rendered).toContain('import type { AgentRunInput } from "@lunora/agent";');
+        // The shared WorkflowReference interface backs the agent handle (an agent run is a workflow instance).
+        expect(rendered).toContain("export interface WorkflowReference<Params = Record<string, unknown>> {");
+        // Typed reference carries AgentRunInput.
+        expect(rendered).toContain("support: WorkflowReference<AgentRunInput>;");
+        // Runtime object carries the AGENT_* binding + stable name.
+        expect(rendered).toContain('support: { isLunoraWorkflow: true, className: "SupportAgentWorkflow", name: "agent-support" },');
+        expect(rendered).toContain("export interface AgentsRef {");
+        expect(rendered).toContain("export const agents: AgentsRef = {");
+    });
+
+    it("omits the `agents` block entirely when no agents are declared", () => {
+        expect.assertions(3);
+
+        const rendered = emitApi({ functions: [] });
+
+        expect(rendered).not.toContain("AgentsRef");
+        expect(rendered).not.toContain("AgentRunInput");
+        // The shared WorkflowReference interface only appears when a workflow/agent exists.
+        expect(rendered).not.toContain("WorkflowReference");
+    });
+
+    it("emits agent-free api output byte-identical to before the agents-ref emitter", () => {
+        expect.assertions(2);
+
+        // The agent handle is fully gated on a declared agent: passing `agents: []`
+        // (or omitting it) must yield the exact same bytes as an agent-unaware call.
+        const withEmptyAgents = emitApi({ agents: [], functions: [] });
+        const withoutAgents = emitApi({ functions: [] });
+
+        expect(withEmptyAgents).toBe(withoutAgents);
+        expect(withEmptyAgents).not.toContain("agents");
+    });
+
+    it("emits ONE shared WorkflowReference interface when both workflows and agents are declared", () => {
+        expect.assertions(4);
+
+        const workflows: ReadonlyArray<WorkflowIR> = [
+            { className: "DigestPipelineWorkflow", exportName: "digestPipeline", name: "digest-pipeline", steps: [] },
+        ];
+
+        const rendered = emitApi({ agents: [SUPPORT_AGENT], functions: [], workflows });
+
+        // The WorkflowReference interface is emitted exactly once (shared by both blocks).
+        expect(rendered.match(/export interface WorkflowReference</gu)).toHaveLength(1);
+        // Both reference objects are present.
+        expect(rendered).toContain("export const workflows: WorkflowsRef = {");
+        expect(rendered).toContain("export const agents: AgentsRef = {");
+        // Both import lines are present.
+        expect(rendered).toContain('import type * as lunoraWorkflowDefinitions from "../workflows.js";');
+    });
+
     it("emits a typed `workflows.*` reference object when the project declares workflows", () => {
         expect.assertions(5);
 
         const workflows: ReadonlyArray<WorkflowIR> = [
-            { bindingName: "WORKFLOW_DIGEST_PIPELINE", className: "DigestPipelineWorkflow", exportName: "digestPipeline", name: "digest-pipeline" },
+            { className: "DigestPipelineWorkflow", exportName: "digestPipeline", name: "digest-pipeline", steps: [] },
         ];
 
-        const rendered = emitApi([], workflows);
+        const rendered = emitApi({ functions: [], workflows });
 
         // Imports the workflow definitions so params can be inferred from `__params`.
         expect(rendered).toContain('import type * as lunoraWorkflowDefinitions from "../workflows.js";');
@@ -25,7 +104,7 @@ describe("emitApi", () => {
         // eslint-disable-next-line no-secrets/no-secrets -- generated TS generic, not a credential
         expect(rendered).toContain("digestPipeline: WorkflowReference<WorkflowParamsOf<typeof lunoraWorkflowDefinitions.digestPipeline>>;");
         // Runtime object carries the WORKFLOW_* binding + name.
-        expect(rendered).toContain('digestPipeline: { isLunoraWorkflow: true, binding: "WORKFLOW_DIGEST_PIPELINE", name: "digestPipeline" },');
+        expect(rendered).toContain('digestPipeline: { isLunoraWorkflow: true, className: "DigestPipelineWorkflow", name: "digestPipeline" },');
         expect(rendered).toContain("export const workflows: WorkflowsRef = {");
         expect(rendered).toContain("export interface WorkflowsRef {");
     });
@@ -33,7 +112,7 @@ describe("emitApi", () => {
     it("omits the `workflows` block entirely when no workflows are declared", () => {
         expect.assertions(2);
 
-        const rendered = emitApi([]);
+        const rendered = emitApi({ functions: [] });
 
         expect(rendered).not.toContain("WorkflowsRef");
         expect(rendered).not.toContain("lunoraWorkflowDefinitions");
@@ -56,10 +135,254 @@ describe("emitApi", () => {
             },
         ];
 
-        const rendered = emitApi(functions);
+        const rendered = emitApi({ functions });
 
         expect(rendered).toContain('import("./dataModel.js").Doc_channels[]');
         expect(rendered).not.toContain('import("./_generated/dataModel.js")');
+    });
+
+    it("renders a nested `v.optional()` as an optional property, not a required `T | undefined`", () => {
+        expect.assertions(4);
+
+        // A required key typed `T | undefined` obliges a caller to name every
+        // field, so `{...args.patch}` spreads explicit `undefined`s into
+        // `ctx.db.patch` — a partial update that is not partial. The handler
+        // side already had the optionality; only the api emission dropped it.
+        const functions: ReadonlyArray<FunctionIR> = [
+            {
+                args: {
+                    // Nested inside v.object(...) — where the optionality was lost.
+                    patch: {
+                        kind: "object",
+                        shape: {
+                            a: { inner: { kind: "string" }, kind: "optional" },
+                            b: { inner: { kind: "number" }, kind: "optional" },
+                            required: { kind: "string" },
+                        },
+                    },
+                    // Top level — already correct, asserted so the two stay in step.
+                    limit: { inner: { kind: "number" }, kind: "optional" },
+                },
+                exportName: "updateSettings",
+                filePath: "settings",
+                kind: "mutation",
+                returnType: "null",
+            },
+        ];
+
+        const rendered = emitApi({ functions });
+
+        expect(rendered).toContain("a?: string");
+        expect(rendered).toContain("b?: number");
+        expect(rendered).toContain("required: string");
+        expect(rendered).toContain("limit?: number");
+    });
+
+    it("renders `v.any()` as an optional property, matching what the runtime parses and `Infer` types (issue #688)", () => {
+        expect.assertions(5);
+
+        // `v.any()`'s parser returns its input unchanged, so an absent arg parses
+        // and `@lunora/values` types the key `data?: unknown`. Emitting the
+        // REQUIRED `data: unknown` made a handler's own `args` unassignable to
+        // the generated reference of a procedure declaring the identical
+        // validator: "Property 'data' is optional in type 'ObjectShapeType<…>'
+        // but required in type '{ data: unknown; id: string; }'".
+        const functions: ReadonlyArray<FunctionIR> = [
+            {
+                args: {
+                    // Nested under the `v.optional(v.object(...))` of the report.
+                    shape: {
+                        inner: {
+                            kind: "object",
+                            shape: { data: { kind: "any" }, id: { kind: "string" } },
+                        },
+                        kind: "optional",
+                    },
+                    // Top level — the same rule, asserted so the two stay in step.
+                    blob: { kind: "any" },
+                    // A sibling with no `undefined` in its type stays required.
+                    name: { kind: "string" },
+                },
+                exportName: "probeSink",
+                filePath: "probes",
+                kind: "mutation",
+                returnType: "null",
+            },
+        ];
+
+        const rendered = emitApi({ functions });
+
+        expect(rendered).toContain("shape?: { data?: unknown; id: string }");
+        expect(rendered).toContain("blob?: unknown");
+        expect(rendered).toContain("name: string");
+        expect(rendered).not.toContain("data: unknown");
+        expect(rendered).not.toContain("blob: unknown");
+    });
+
+    it("keeps a validator the IR could not resolve REQUIRED, even though it is recorded as `any`", () => {
+        expect.assertions(3);
+
+        // An expression the AST→IR step cannot follow is recorded as
+        // `{ kind: "any", sourceText }`. It is not a `v.any()` — the validator it
+        // stands for is very likely required — so it must NOT pick up the
+        // absent-tolerant treatment a genuine `v.any()` gets, at any depth.
+        // Otherwise an unreadable validator would silently let callers omit an
+        // argument the runtime rejects.
+        const functions: ReadonlyArray<FunctionIR> = [
+            {
+                args: {
+                    hoisted: { kind: "any", sourceText: "sharedValidator" },
+                    inUnion: { kind: "union", members: [{ kind: "string" }, { kind: "any", sourceText: "sharedValidator" }] },
+                    nested: { kind: "object", shape: { field: { kind: "any", sourceText: "sharedValidator" } } },
+                },
+                exportName: "probeUnresolved",
+                filePath: "probes",
+                kind: "mutation",
+                returnType: "null",
+            },
+        ];
+
+        const rendered = emitApi({ functions });
+
+        expect(rendered).toContain("hoisted: unknown");
+        expect(rendered).toContain("inUnion: string | unknown");
+        expect(rendered).toContain("nested: { field: unknown }");
+    });
+
+    it("renders a `v.union()` with an absent-tolerant member as an optional property (issue #688)", () => {
+        expect.assertions(3);
+
+        // A union tries its members, so one that accepts `undefined` — `v.any()`
+        // or a `v.optional(...)` — makes the whole field absent-tolerant. The
+        // same rule `toJsonSchema`'s `required` list has always applied.
+        const functions: ReadonlyArray<FunctionIR> = [
+            {
+                args: {
+                    loose: { kind: "union", members: [{ kind: "string" }, { kind: "any" }] },
+                    nullable: { kind: "union", members: [{ kind: "string" }, { kind: "null" }] },
+                    partial: { kind: "union", members: [{ kind: "string" }, { inner: { kind: "number" }, kind: "optional" }] },
+                },
+                exportName: "probeUnions",
+                filePath: "probes",
+                kind: "mutation",
+                returnType: "null",
+            },
+        ];
+
+        const rendered = emitApi({ functions });
+
+        expect(rendered).toContain("loose?: string | unknown");
+        expect(rendered).toContain("partial?: string | number | undefined");
+        // `v.null()` admits `null`, never an absent field — the key stays required.
+        expect(rendered).toContain("nullable: string | null");
+    });
+
+    it("renders a `v.optional()` nested inside `v.array(v.object(...))` as an optional property", () => {
+        expect.assertions(2);
+
+        // The same defect reached through an array element, which is how a
+        // batch-insert argument hits it.
+        const functions: ReadonlyArray<FunctionIR> = [
+            {
+                args: {
+                    memories: {
+                        inner: {
+                            kind: "object",
+                            shape: {
+                                category: { inner: { kind: "string" }, kind: "optional" },
+                                memory: { kind: "string" },
+                            },
+                        },
+                        kind: "array",
+                    },
+                },
+                exportName: "saveMemoryBatch",
+                filePath: "memory",
+                kind: "mutation",
+                returnType: "null",
+            },
+        ];
+
+        const rendered = emitApi({ functions });
+
+        expect(rendered).toContain("category?: string");
+        expect(rendered).toContain("memory: string");
+    });
+
+    it("rebases a relative qualifier pointing at one of the user's own modules", () => {
+        expect.assertions(3);
+
+        // The checker prints a type relative to the module it was READ in, so a
+        // handler returning a type from its own `./lib/types` renders as
+        // `import("./lib/types")`. From inside `_generated/api.ts` that means
+        // `lunora/_generated/lib/types`, which does not exist — TS2307 in a
+        // generated file, while codegen exits 0. It hid because a progress
+        // script that greps out `_generated` reads zero errors, and it only
+        // surfaces when a sibling package compiles the same file.
+        const functions: ReadonlyArray<FunctionIR> = [
+            {
+                args: {},
+                exportName: "getCurrentUser",
+                // Top level of `lunora/` — `./lib/types` is `lunora/lib/types`.
+                filePath: "auth",
+                kind: "query",
+                returnType: 'import("./lib/types").BetterAuthUser | undefined',
+            },
+        ];
+
+        const rendered = emitApi({ functions });
+
+        expect(rendered).toContain('import("../lib/types.js").BetterAuthUser');
+        expect(rendered).not.toContain('import("./lib/types")');
+        expect(rendered).not.toContain('import("./lib/types.js")');
+    });
+
+    it("rebases a relative qualifier from a nested module against that module's directory", () => {
+        expect.assertions(2);
+
+        const functions: ReadonlyArray<FunctionIR> = [
+            {
+                args: {},
+                exportName: "getStreamBody",
+                // `lunora/chat/streaming/functions.ts` — `./persistent` is
+                // `lunora/chat/streaming/persistent`, and `../core` is
+                // `lunora/chat/core`.
+                filePath: "chat/streaming/functions",
+                kind: "query",
+                returnType: 'import("./persistent").StreamBody | import("../core").WorkflowUsage',
+            },
+        ];
+
+        const rendered = emitApi({ functions });
+
+        expect(rendered).toContain('import("../chat/streaming/persistent.js").StreamBody');
+        expect(rendered).toContain('import("../chat/core.js").WorkflowUsage');
+    });
+
+    it("rebases a user qualifier and a _generated one in the same type, differently", () => {
+        expect.assertions(3);
+
+        // The two rebases are not interchangeable: `_generated/dataModel` is
+        // already inside the output directory and only needs its prefix
+        // stripped, while a user module has to climb OUT of `_generated/`.
+        // Ordering matters — once the generated prefix is stripped the
+        // specifier is indistinguishable from a user one, so a run in the wrong
+        // order sends `./dataModel.js` up a level and breaks every Doc/Id.
+        const functions: ReadonlyArray<FunctionIR> = [
+            {
+                args: {},
+                exportName: "getSkill",
+                filePath: "skills/functions",
+                kind: "query",
+                returnType: 'import("./_generated/dataModel.js").Doc_skills & import("./stats").SkillStats',
+            },
+        ];
+
+        const rendered = emitApi({ functions });
+
+        expect(rendered).toContain('import("./dataModel.js").Doc_skills');
+        expect(rendered).toContain('import("../skills/stats.js").SkillStats');
+        expect(rendered).not.toContain("_generated/dataModel");
     });
 
     it("leaves absolute `import('@scope/pkg')` qualifiers untouched", () => {
@@ -75,7 +398,7 @@ describe("emitApi", () => {
             },
         ];
 
-        const rendered = emitApi(functions);
+        const rendered = emitApi({ functions });
 
         expect(rendered).toContain('import("@lunora/server").LunoraContext');
     });
@@ -93,7 +416,7 @@ describe("emitApi", () => {
             },
         ];
 
-        const rendered = emitApi(functions);
+        const rendered = emitApi({ functions });
 
         expect(rendered).toContain('import("./dataModel.js").Doc_messages[]');
         expect(rendered).not.toContain('import("_generated/dataModel.js")');
@@ -117,10 +440,225 @@ describe("emitApi", () => {
             },
         ];
 
-        const rendered = emitApi(functions);
+        const rendered = emitApi({ functions });
 
         expect(rendered).toContain('import("./dataModel.js").Doc_messages[]');
         expect(rendered).not.toContain('import("../_generated/dataModel.js")');
+    });
+
+    it("adds the mandatory .js back to an extensionless generated qualifier", () => {
+        expect.assertions(2);
+
+        // A function file may import generated types without the extension
+        // (`from "./_generated/dataModel"`) — the repo's own convention. ts-morph
+        // prints the specifier verbatim, and an extensionless relative qualifier is
+        // a TS2835 in `_generated/api.ts`, which is consumed under NodeNext.
+        const functions: ReadonlyArray<FunctionIR> = [
+            {
+                args: {},
+                exportName: "list",
+                filePath: "messages",
+                kind: "query",
+                returnType: 'import("./_generated/dataModel").Doc_messages[]',
+            },
+        ];
+
+        const rendered = emitApi({ functions });
+
+        expect(rendered).toContain('import("./dataModel.js").Doc_messages[]');
+        expect(rendered).not.toContain('import("./dataModel")');
+    });
+
+    // The qualifier as reported: a pnpm store path, hash and all, where a module
+    // specifier belongs.
+    const STORE_QUALIFIER = 'import(".pnpm/@lunora+server@1.0.0-alpha.87/node_modules/@lunora/server/data-model")';
+
+    it("recovers a module specifier from a qualifier the checker printed as a node_modules path", () => {
+        expect.assertions(4);
+
+        // The checker prints a type it resolved inside `node_modules` as the path it
+        // found on disk — under pnpm, a store path carrying a content hash. That is
+        // not a specifier and resolves from nowhere; everything after the final
+        // `node_modules/` is the one that was wanted.
+        const functions: ReadonlyArray<FunctionIR> = [
+            {
+                args: {},
+                exportName: "list",
+                filePath: "messages",
+                kind: "query",
+                returnType: `${STORE_QUALIFIER}.LoadWith<"messages">[]`,
+            },
+            {
+                args: {},
+                exportName: "one",
+                filePath: "nested/messages",
+                kind: "query",
+                returnType: 'import("../../node_modules/@lunora/server/data-model").LoadWith<"messages">',
+            },
+        ];
+
+        const umbrella = emitApi({ functions, useUmbrella: true });
+
+        expect(umbrella).toContain('import("lunorash/server/data-model").LoadWith<"messages">[]');
+        expect(umbrella).not.toContain("node_modules");
+
+        const scoped = emitApi({ functions });
+
+        expect(scoped).toContain('import("@lunora/server/data-model").LoadWith<"messages">');
+        expect(scoped).not.toContain(".pnpm");
+    });
+
+    it("only recovers across a path boundary, and never from a @types directory", () => {
+        expect.assertions(3);
+
+        // `vendor-node_modules/` ends with the segment's text but is an ordinary
+        // directory — a word boundary matched inside it and turned a working
+        // relative path into a bare specifier. And a `@types/foo` tail is never a
+        // specifier: the declarations for `foo` live there, but the name anything
+        // imports is `foo`, so recovering the directory would invent a package.
+        const functions: ReadonlyArray<FunctionIR> = [
+            {
+                args: {},
+                exportName: "vendored",
+                filePath: "messages",
+                kind: "query",
+                returnType: 'import("../vendor-node_modules/pkg/index").Row',
+            },
+            {
+                args: {},
+                exportName: "typed",
+                filePath: "messages",
+                kind: "query",
+                returnType: 'import("../../node_modules/@types/foo/index").Row',
+            },
+            {
+                args: {},
+                exportName: "real",
+                filePath: "messages",
+                kind: "query",
+                returnType: 'import("../../node_modules/@lunora/server/data-model").Row',
+            },
+        ];
+
+        const rendered = emitApi({ functions });
+
+        expect(rendered).toContain("vendor-node_modules/pkg/index");
+        expect(rendered).toContain("@types/foo/index");
+        expect(rendered).toContain('import("@lunora/server/data-model").Row');
+    });
+
+    it("recovers in linear time on a qualifier with many node_modules runs", () => {
+        expect.assertions(1);
+
+        // The pattern this replaced — `(?:[^"]*\/)?node_modules\/` — backtracks
+        // polynomially on exactly this shape (CodeQL flagged it), and the rendered
+        // text is the user's own types, so the input is not ours to bound.
+        // Sized so the replaced pattern measurably blows the budget (~1.3s here)
+        // while the scan stays flat at well under a millisecond.
+        const pathological = `import("${"node_modules/".repeat(12_000)}`;
+
+        const started = process.hrtime.bigint();
+
+        emitApi({ functions: [{ args: {}, exportName: "slow", filePath: "messages", kind: "query", returnType: pathological }] });
+
+        const elapsedMs = Number(process.hrtime.bigint() - started) / 1e6;
+
+        expect(elapsedMs).toBeLessThan(1000);
+    });
+
+    it("rewrites base-package qualifiers to the umbrella subpath (and only for base packages)", () => {
+        expect.assertions(4);
+
+        // An umbrella-only app has no `@lunora/values` in its `package.json`, so a
+        // checker-rendered `import("@lunora/values").Id<…>` — common when a mutator's
+        // `server` impl returns `ctx.db.insert(...)` from a file that never imports
+        // `Id` — is a TS2307 in the generated file. Add-ons stay scoped: they are
+        // installed separately either way.
+        const functions: ReadonlyArray<FunctionIR> = [
+            {
+                args: {},
+                exportName: "insert",
+                filePath: "messages",
+                kind: "mutation",
+                returnType: 'import("@lunora/values").Id<"messages">',
+            },
+            {
+                args: {},
+                exportName: "notify",
+                filePath: "messages",
+                kind: "mutation",
+                returnType: 'import("@lunora/notify").Receipt',
+            },
+        ];
+
+        const umbrella = emitApi({ functions, useUmbrella: true });
+
+        expect(umbrella).toContain('import("lunorash/values").Id<"messages">');
+        expect(umbrella).toContain('import("@lunora/notify").Receipt');
+
+        const scoped = emitApi({ functions });
+
+        expect(scoped).toContain('import("@lunora/values").Id<"messages">');
+        expect(scoped).toContain('import("@lunora/notify").Receipt');
+    });
+
+    it("emits a typed api.mutators.<name> reference per custom mutator", () => {
+        expect.assertions(4);
+
+        // Finding #17 from the first third-party adoption: `serverRef` was an
+        // unchecked string because `api.mutators.*` did not exist, so 23 client
+        // mutators each restated `"mutators:insertSibling"` AND its arg type.
+        const rendered = emitApi({
+            functions: [],
+            mutators: [
+                { args: { text: { kind: "string" } }, exportName: "setText", filePath: "mutators", line: 1, returnType: "{ ok: boolean }" },
+                { args: {}, exportName: "clear", filePath: "mutators", line: 2, returnType: "void" },
+            ],
+        });
+
+        expect(rendered).toContain("    mutators: {");
+        // Sorted by export name, regardless of discovery order.
+        expect(rendered.indexOf("clear:")).toBeLessThan(rendered.indexOf("setText:"));
+        expect(rendered).toContain('setText: FunctionReference<"mutation", { text: string }, { ok: boolean }>;');
+        expect(rendered).toContain('clear: FunctionReference<"mutation", {}, void>;');
+    });
+
+    it("lets an app-registered function in mutators.ts win over a same-named mutator", () => {
+        expect.assertions(2);
+
+        // Both would render into the `mutators` namespace; a duplicate interface
+        // member is invalid TS, so the discovered function is authoritative.
+        const rendered = emitApi({
+            functions: [{ args: {}, exportName: "setText", filePath: "mutators", kind: "query", returnType: "string" }],
+            mutators: [{ args: { text: { kind: "string" } }, exportName: "setText", filePath: "mutators", line: 1, returnType: "void" }],
+        });
+
+        expect(rendered).toContain('setText: FunctionReference<"query", {}, string>;');
+        expect(rendered).not.toContain('setText: FunctionReference<"mutation"');
+    });
+
+    it("emits mutator-free api output byte-identical to a mutator-unaware call", () => {
+        expect.assertions(1);
+
+        expect(emitApi({ functions: [], mutators: [] })).toBe(emitApi({ functions: [] }));
+    });
+
+    it("imports FunctionReference only when the body references it", () => {
+        expect.assertions(3);
+
+        // The import used to be unconditional, so a project
+        // with no discovered functions — including one where discovery had failed
+        // and emitted an empty api — produced `_generated/api.ts` that fails
+        // `tsc --noEmit` under `noUnusedLocals` with TS6133. That error points at
+        // generated code the consumer cannot edit without losing type safety.
+        const empty = emitApi({ functions: [] });
+
+        expect(empty).not.toContain("FunctionReference");
+
+        const populated = emitApi({ functions: [{ args: {}, exportName: "list", filePath: "todos", kind: "query", returnType: "string" }] });
+
+        expect(populated).toContain('import type { FunctionReference } from "@lunora/client";');
+        expect(populated).toContain('list: FunctionReference<"query", {}, string>;');
     });
 
     it("quotes a leading-digit namespace key so the emitted interface stays valid TS", () => {
@@ -129,7 +667,7 @@ describe("emitApi", () => {
         // A file `lunora/2fa.ts` sanitizes to namespace `2fa` — a valid
         // `__lunoraRef` string but NOT a bare TS object key. The interface key
         // must be quoted (`"2fa": {...}`), while the runtime dispatch ref keeps
-        // the raw `2fa:...` value (built by the `anyApi` proxy from the access
+        // the raw `2fa:...` value (the reference's `__lunoraRef`
         // path), so type and runtime still agree.
         const functions: ReadonlyArray<FunctionIR> = [
             {
@@ -141,12 +679,119 @@ describe("emitApi", () => {
             },
         ];
 
-        const rendered = emitApi(functions);
+        const rendered = emitApi({ functions });
 
         expect(rendered).toContain('"2fa": {');
         expect(rendered).toContain('verify: FunctionReference<"mutation"');
         // Never emit `2fa` as a bare (invalid) object key.
         expect(rendered).not.toContain("    2fa: {");
+    });
+
+    it("nests a folder's files under the folder's key, beside a same-named file's exports", () => {
+        expect.assertions(3);
+
+        const functions: ReadonlyArray<FunctionIR> = [
+            { args: {}, exportName: "pay", filePath: "billing", kind: "mutation", returnType: "void" },
+            { args: {}, exportName: "create", filePath: "billing/invoices", kind: "mutation", returnType: "void" },
+            { args: {}, exportName: "list", filePath: "billing/invoices", kind: "query", returnType: "void" },
+        ];
+
+        expect(emitApi({ functions })).toContain(
+            [
+                "export interface ApiTypes {",
+                "    billing: {",
+                '        pay: FunctionReference<"mutation", {}, void>;',
+                "        invoices: {",
+                '            create: FunctionReference<"mutation", {}, void>;',
+                '            list: FunctionReference<"query", {}, void>;',
+                "        };",
+                "    };",
+                "}",
+            ].join("\n"),
+        );
+
+        const rendered = emitFunctions({ functions });
+
+        // The caller nests the same way; the dispatch key stays the `_`-joined namespace.
+        expect(rendered).toContain("        invoices: {\n            create: (args?: {}) => Promise<void>;");
+        expect(rendered).toContain('create: (args) => callRegistered(context, "billing_invoices:create", args),');
+    });
+
+    it("rejects an export and a folder's file that claim the same nested api path", () => {
+        expect.assertions(1);
+
+        const functions: ReadonlyArray<FunctionIR> = [
+            { args: {}, exportName: "list", filePath: "billing", kind: "query", returnType: "void" },
+            { args: {}, exportName: "all", filePath: "billing/list", kind: "query", returnType: "void" },
+        ];
+
+        expect(() => emitApi({ functions })).toThrow('the export "list" of "billing" and "billing/list" both resolve to api.billing.list');
+    });
+
+    it("emits a typed `httpStreams.*` reference block for `.stream()` routes", () => {
+        expect.assertions(6);
+
+        const httpRoutes: ReadonlyArray<HttpRouteIR> = [
+            makeStreamRoute({
+                chunkType: "{ text: string }",
+                searchParams: { prompt: { kind: "string" } },
+            }),
+        ];
+
+        const rendered = emitApi({ functions: [], httpRoutes });
+
+        // The reference type comes from the client package (same source as
+        // FunctionReference, which this fixture declares no functions for and so
+        // does not import).
+        expect(rendered).toContain('import type { HttpStreamRef } from "@lunora/client";');
+        // Namespaced like `api.*`: file `http.ts` → `httpStreams.http.streamTokens`.
+        expect(rendered).toContain("export interface HttpStreamsRef {");
+        expect(rendered).toContain("streamTokens: HttpStreamRef<{ text: string }, { prompt: string }, {}>;");
+        // The runtime object carries the verb + path the consumer opens.
+        expect(rendered).toContain("export const httpStreams: HttpStreamsRef = {");
+        expect(rendered).toContain('streamTokens: { method: "GET", path: "/api/tokens" },');
+        expect(rendered).toContain("    http: {");
+    });
+
+    it("excludes non-stream routes and omits the block entirely when no `.stream()` route exists", () => {
+        expect.assertions(4);
+
+        const rendered = emitApi({ functions: [], httpRoutes: [makeStreamRoute({ stream: false })] });
+
+        expect(rendered).not.toContain("HttpStreamsRef");
+        expect(rendered).not.toContain("HttpStreamRef");
+        // Nothing left to import as a TYPE from the client package, so that line
+        // goes away rather than dangling (`noUnusedLocals` would flag it).
+        expect(rendered).not.toContain('import type { } from "@lunora/client"');
+        expect(rendered).not.toContain("FunctionReference");
+    });
+
+    it("renders a chunkType-less stream route as `unknown` and defaults empty validator maps to `{}`", () => {
+        expect.assertions(1);
+
+        const rendered = emitApi({ functions: [], httpRoutes: [makeStreamRoute()] });
+
+        expect(rendered).toContain("streamTokens: HttpStreamRef<unknown, {}, {}>;");
+    });
+
+    it("relocates `_generated/` import qualifiers inside a stream chunk type", () => {
+        expect.assertions(2);
+
+        const rendered = emitApi({
+            functions: [],
+            httpRoutes: [makeStreamRoute({ chunkType: 'import("./_generated/dataModel.js").Doc_messages' })],
+        });
+
+        expect(rendered).toContain('import("./dataModel.js").Doc_messages');
+        expect(rendered).not.toContain('import("./_generated/dataModel.js")');
+    });
+
+    it("imports the umbrella client specifier for httpStreams when useUmbrella is set", () => {
+        expect.assertions(1);
+
+        const rendered = emitApi({ functions: [], httpRoutes: [makeStreamRoute()], useUmbrella: true });
+
+        expect(rendered).toContain('import type { HttpStreamRef } from "lunorash/client";');
     });
 
     it("rewrites deeply nested `../../_generated/X` qualifiers", () => {
@@ -162,7 +807,7 @@ describe("emitApi", () => {
             },
         ];
 
-        const rendered = emitApi(functions);
+        const rendered = emitApi({ functions });
 
         expect(rendered).toContain('import("./dataModel.js").Doc_messages[]');
         expect(rendered).not.toContain('_generated/dataModel.js");');
@@ -186,7 +831,7 @@ describe("emitFunctions Caller types", () => {
             },
         ];
 
-        const rendered = emitFunctions(functions);
+        const rendered = emitFunctions({ functions });
 
         // eslint-disable-next-line no-secrets/no-secrets -- asserting on a generated TS type string, not a secret
         expect(rendered).toContain("watch: (args?: {}) => Promise<AsyncIterable<string>>;");
@@ -209,7 +854,7 @@ describe("emitFunctions Caller types", () => {
             },
         ];
 
-        const rendered = emitFunctions(functions);
+        const rendered = emitFunctions({ functions });
 
         expect(rendered).toContain('"2fa": {');
         expect(rendered).toContain('callRegistered(context, "2fa:verify"');
@@ -229,8 +874,32 @@ describe("emitFunctions Caller types", () => {
             },
         ];
 
-        const rendered = emitFunctions(functions);
+        const rendered = emitFunctions({ functions });
 
         expect(rendered).toContain("list: (args?: {}) => Promise<string>;");
+    });
+
+    it("draws the dataModel import for a BARE `Doc<…>` and not for a qualified one", () => {
+        expect.assertions(4);
+
+        // The generated files import `Doc`/`Id` from `./dataModel.js` only when a
+        // rendered body actually references them, because an unused import fails
+        // the emitted file under `noUnusedLocals`. A handler may import its own
+        // generic `Doc` from its own module, which renders as
+        // `import("../lib/mydoc.js").Doc<"posts">` — that names its own module and
+        // needs nothing from here, so counting it would emit an import nobody uses
+        // and break the very file it was added to help.
+        const bare: ReadonlyArray<FunctionIR> = [{ args: {}, exportName: "get", filePath: "posts", kind: "query", returnType: 'Doc<"posts">' }];
+        const qualified: ReadonlyArray<FunctionIR> = [
+            { args: {}, exportName: "get", filePath: "posts", kind: "query", returnType: 'import("../lib/mydoc.js").Doc<"posts">' },
+        ];
+
+        for (const rendered of [emitApi({ functions: bare }), emitFunctions({ functions: bare })]) {
+            expect(rendered).toContain('import type { Doc } from "./dataModel.js";');
+        }
+
+        for (const rendered of [emitApi({ functions: qualified }), emitFunctions({ functions: qualified })]) {
+            expect(rendered).not.toContain('from "./dataModel.js"');
+        }
     });
 });

@@ -50,7 +50,7 @@ export const prefetchQuery = async <F extends FunctionReference>(
 ): Promise<void> => {
     const argsRecord = (args ?? {}) as Record<string, unknown>;
 
-    // eslint-disable-next-line @tanstack/query/exhaustive-deps -- not a React hook: prefetchQuery runs once server-side and the queryKey intentionally excludes the non-serializable, request-stable client.
+    // Not a React hook: prefetchQuery runs once server-side and the queryKey intentionally excludes the non-serializable, request-stable client.
     await queryClient.prefetchQuery({
         queryFn: () => client.query<F>(function_, argsRecord as ArgsOf<F>, { shardKey: options.shardKey }),
         queryKey: lunoraQueryKey(function_, argsRecord, options.shardKey),

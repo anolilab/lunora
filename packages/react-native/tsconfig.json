@@ -1,0 +1,9 @@
+{
+    "extends": "../../tsconfig.base.json",
+    "compilerOptions": {
+        "moduleResolution": "bundler",
+        "jsx": "react-jsx",
+        "types": ["node"]
+    },
+    "include": ["src/**/*", "__tests__/**/*"]
+}

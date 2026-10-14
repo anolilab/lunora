@@ -34,6 +34,26 @@ describe("payment state machine", () => {
             expect(canTransitionPayment(state, "capture")).toBe(false);
         }
     });
+
+    it("allows failed → captured: the same provider intent can be retried and succeed (regression)", () => {
+        expect.assertions(3);
+
+        // A declined Stripe PaymentIntent returns to `requires_payment_method`; a retry on the SAME
+        // `pi_` can reach `succeeded` (or `requires_capture` on a manual-capture intent). Both are
+        // forward transitions at the provider, so `failed` is not terminal.
+        expect(nextPaymentState("failed", "capture")).toBe("captured");
+        expect(nextPaymentState("failed", "authorize")).toBe("authorized");
+        expect(PAYMENT_TERMINAL_STATES.has("failed")).toBe(false);
+    });
+
+    it("allows a repeat decline on a failed payment but never a refund", () => {
+        expect.assertions(3);
+
+        expect(nextPaymentState("failed", "fail")).toBe("failed");
+        // Nothing was captured, so there is nothing to reverse.
+        expect(nextPaymentState("failed", "refund")).toBeUndefined();
+        expect(nextPaymentState("failed", "partial_refund")).toBeUndefined();
+    });
 });
 
 describe("subscription state machine", () => {
@@ -53,6 +73,18 @@ describe("subscription state machine", () => {
         expect.assertions(1);
 
         expect(nextSubscriptionState("paused", "resume")).toBe("active");
+    });
+
+    it("pauses a trial instead of rejecting the pause as illegal (regression)", () => {
+        expect.assertions(2);
+
+        // No adapter's webhook mapping writes `trialing` (subscription-event.ts routes it to
+        // `subscription.active`), but the reconcile sweep does, straight from `getSubscriptionStatus`.
+        // Stripe's trial-end `pause_collection` then lands on a `trialing` row, and rejecting it
+        // 200-acks the event and leaves the row in ACTIVE_STATES — entitled, unpaid, indefinitely.
+        expect(nextSubscriptionState("trialing", "pause")).toBe("paused");
+        // A trial that bills and rolls into a paid period, mirroring the `past_due` row.
+        expect(nextSubscriptionState("trialing", "renew")).toBe("active");
     });
 
     it("treats canceled as terminal", () => {

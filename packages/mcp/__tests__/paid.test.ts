@@ -1,0 +1,434 @@
+import { afterEach, describe, expect, it, vi } from "vitest";
+
+import { createPaidMcpServer } from "../src/paid";
+import { serveStateless } from "../src/serve-stateless";
+import type { ToolResult } from "../src/tools";
+
+vi.mock(import("../src/serve-stateless"), async (importOriginal) => {
+    const actual = await importOriginal();
+
+    return { ...actual, serveStateless: vi.fn<typeof actual.serveStateless>(actual.serveStateless) };
+});
+
+/** The worker-level x402 charge vocabulary shared by every paid tool. */
+const charge = {
+    network: "base",
+    recipient: { evm: "0x1111111111111111111111111111111111111111" },
+} as const;
+
+const NO_INPUT = { properties: {}, type: "object" } as const;
+
+const requestUrl = (input: RequestInfo | URL): string => {
+    if (typeof input === "string") {
+        return input;
+    }
+
+    return input instanceof URL ? input.href : input.url;
+};
+
+/**
+ * A facilitator double: answers `/supported` with a single `exact` kind on Base
+ * (all a paywall's `initialize()` needs) and rejects `/verify` + `/settle` — the
+ * unpaid paths under test never settle, so any settle call is a bug to surface.
+ */
+const stubFacilitator = (): ReturnType<typeof vi.fn> => {
+    const supported = { kinds: [{ network: "eip155:8453", scheme: "exact", x402Version: 2 }] };
+
+    const fetchMock = vi.fn<(input: RequestInfo | URL) => Promise<Response>>((input) => {
+        const url = requestUrl(input);
+
+        if (url.endsWith("/supported")) {
+            return Promise.resolve(Response.json(supported, { status: 200 }));
+        }
+
+        return Promise.reject(new Error(`unexpected facilitator call: ${url}`));
+    });
+
+    vi.stubGlobal("fetch", fetchMock);
+
+    return fetchMock;
+};
+
+/** A Streamable-HTTP client POST: one JSON-RPC message, dual Accept header. */
+const mcpRequest = (body: unknown, headers: Record<string, string> = {}): Request =>
+    new Request("https://worker.example/mcp", {
+        body: JSON.stringify(body),
+        headers: { accept: "application/json, text/event-stream", "content-type": "application/json", ...headers },
+        method: "POST",
+    });
+
+/** A Streamable-HTTP client POST carrying a raw (possibly unparseable) body. */
+const rawMcpRequest = (rawBody: string, headers: Record<string, string> = {}): Request =>
+    new Request("https://worker.example/mcp", {
+        body: rawBody,
+        headers: { accept: "application/json, text/event-stream", "content-type": "application/json", ...headers },
+        method: "POST",
+    });
+
+const initializeBody = {
+    id: 1,
+    jsonrpc: "2.0",
+    method: "initialize",
+    params: { capabilities: {}, clientInfo: { name: "test", version: "0.0.0" }, protocolVersion: "2025-06-18" },
+} as const;
+
+const callBody = (name: string): unknown => {
+    return { id: 2, jsonrpc: "2.0", method: "tools/call", params: { arguments: {}, name } };
+};
+
+const text = (value: string): ToolResult => {
+    return { content: [{ text: value, type: "text" }] };
+};
+
+describe("createPaidMcpServer", () => {
+    afterEach(() => {
+        vi.unstubAllGlobals();
+        vi.mocked(serveStateless).mockClear();
+    });
+
+    it("challenges an unpaid paid-tool call with 402 and never runs the handler", async () => {
+        expect.assertions(4);
+
+        const fetchMock = stubFacilitator();
+        const handler = vi.fn<() => ToolResult>(() => text("secret report"));
+
+        const mcp = createPaidMcpServer({ charge });
+        mcp.paidTool({ description: "the paid report", inputSchema: NO_INPUT, name: "premium_report", price: "$0.05" }, handler);
+
+        const response = await mcp.fetchHandler(mcpRequest(callBody("premium_report")));
+
+        expect(response.status).toBe(402);
+        expect(response.headers.get("PAYMENT-REQUIRED") ?? response.headers.get("payment-required")).not.toBeNull();
+        expect(handler).not.toHaveBeenCalled();
+        // Only /supported was hit — no verify/settle for an unpaid request.
+        expect(fetchMock).toHaveBeenCalledTimes(1);
+    });
+
+    it("does not paywall a free tool — its call never touches the facilitator", async () => {
+        expect.assertions(3);
+
+        const fetchMock = stubFacilitator();
+
+        const mcp = createPaidMcpServer({ charge });
+        mcp.tool({ description: "echo", inputSchema: NO_INPUT, name: "ping" }, () => text("pong"));
+
+        // Handshake first, then the free-tool call; a fresh stateless server per request.
+        await mcp.fetchHandler(mcpRequest(initializeBody));
+        const response = await mcp.fetchHandler(mcpRequest(callBody("ping")));
+
+        expect(response.status).toBe(200);
+
+        const payload = (await response.json()) as { result: { content: { text: string }[] } };
+
+        expect(payload.result.content[0]?.text).toBe("pong");
+        // A free tool must never be gated → the facilitator is untouched.
+        expect(fetchMock).not.toHaveBeenCalled();
+    });
+
+    it("advertises free and paid tools together over tools/list", async () => {
+        expect.assertions(2);
+
+        stubFacilitator();
+
+        const mcp = createPaidMcpServer({ charge });
+        mcp.tool({ description: "echo", inputSchema: NO_INPUT, name: "ping" }, () => text("pong"));
+        mcp.paidTool({ description: "the paid report", inputSchema: NO_INPUT, name: "premium_report", price: "$0.05" }, () => text("secret"));
+
+        await mcp.fetchHandler(mcpRequest(initializeBody));
+        const response = await mcp.fetchHandler(mcpRequest({ id: 3, jsonrpc: "2.0", method: "tools/list", params: {} }));
+
+        const payload = (await response.json()) as { result: { tools: { name: string }[] } };
+        const names = payload.result.tools.map((tool) => tool.name);
+
+        expect(names).toContain("ping");
+        expect(names).toContain("premium_report");
+    });
+
+    it("does not gate a non-call method (initialize) — the facilitator is untouched", async () => {
+        expect.assertions(2);
+
+        const fetchMock = stubFacilitator();
+
+        const mcp = createPaidMcpServer({ charge });
+        mcp.paidTool({ description: "paid", inputSchema: NO_INPUT, name: "premium_report", price: "$0.05" }, () => text("secret"));
+
+        const response = await mcp.fetchHandler(mcpRequest(initializeBody));
+
+        expect(response.status).toBe(200);
+        expect(fetchMock).not.toHaveBeenCalled();
+    });
+
+    it("refuses a JSON-RPC batch that references a paid tool (fail-closed)", async () => {
+        expect.assertions(2);
+
+        const fetchMock = stubFacilitator();
+
+        const mcp = createPaidMcpServer({ charge });
+        mcp.paidTool({ description: "paid", inputSchema: NO_INPUT, name: "premium_report", price: "$0.05" }, () => text("secret"));
+
+        const response = await mcp.fetchHandler(mcpRequest([callBody("premium_report")]));
+
+        expect(response.status).toBe(400);
+        // Refused before any facilitator or dispatch work.
+        expect(fetchMock).not.toHaveBeenCalled();
+    });
+
+    it("fails closed on an unparseable body when a tool is priced — never dispatches", async () => {
+        expect.assertions(3);
+
+        const fetchMock = stubFacilitator();
+
+        const mcp = createPaidMcpServer({ charge });
+        mcp.paidTool({ description: "paid", inputSchema: NO_INPUT, name: "premium_report", price: "$0.05" }, () => text("secret"));
+
+        const response = await mcp.fetchHandler(rawMcpRequest("{not json"));
+
+        expect(response.status).toBe(400);
+        // The underlying SDK transport (serveStateless) is never reached — this
+        // module can't tell whether the unparseable body targeted the paid tool,
+        // so it refuses before dispatch rather than let the transport's own
+        // re-parse decide.
+        expect(serveStateless).not.toHaveBeenCalled();
+        expect(fetchMock).not.toHaveBeenCalled();
+    });
+
+    it("refuses an unparseable body before dispatch even when no tool is priced", async () => {
+        expect.assertions(2);
+
+        stubFacilitator();
+
+        const mcp = createPaidMcpServer({ charge });
+        mcp.tool({ description: "echo", inputSchema: NO_INPUT, name: "ping" }, () => text("pong"));
+
+        const response = await mcp.fetchHandler(rawMcpRequest("{not json"));
+
+        // The shared bounded read owns the parse, so the JSON-RPC parse error
+        // is answered here rather than one layer down in the transport.
+        expect(response.status).toBe(400);
+        expect(serveStateless).not.toHaveBeenCalled();
+    });
+
+    it("refuses an oversized body before buffering it, like every other transport", async () => {
+        expect.assertions(3);
+
+        const fetchMock = stubFacilitator();
+
+        const mcp = createPaidMcpServer({ charge });
+        mcp.paidTool({ description: "paid", inputSchema: NO_INPUT, name: "premium_report", price: "$0.05" }, () => text("secret"));
+
+        // Declared oversize: refused on the header, before the body is read.
+        const response = await mcp.fetchHandler(rawMcpRequest("{}", { "content-length": String(64 * 1024 * 1024) }));
+
+        expect(response.status).toBe(413);
+        expect(serveStateless).not.toHaveBeenCalled();
+        expect(fetchMock).not.toHaveBeenCalled();
+    });
+
+    it("honours a custom maxRequestBytes on the paid transport", async () => {
+        expect.assertions(2);
+
+        stubFacilitator();
+
+        const mcp = createPaidMcpServer({ charge, maxRequestBytes: 16 });
+        mcp.tool({ description: "echo", inputSchema: NO_INPUT, name: "ping" }, () => text("pong"));
+
+        const response = await mcp.fetchHandler(mcpRequest(callBody("ping")));
+
+        expect(response.status).toBe(413);
+        expect(serveStateless).not.toHaveBeenCalled();
+    });
+
+    it("returns a throwing paid tool as an isError result, not a JSON-RPC protocol error", async () => {
+        expect.assertions(3);
+
+        const mcp = createPaidMcpServer({ charge });
+        mcp.tool({ description: "boom", inputSchema: NO_INPUT, name: "explode" }, () => {
+            throw new Error("handler blew up");
+        });
+
+        const response = await mcp.fetchHandler(mcpRequest(callBody("explode")));
+        const payload = (await response.json()) as { error?: unknown; result?: { content: { text: string }[]; isError?: boolean } };
+
+        // Settlement precedes dispatch, so the caller has already paid: a
+        // protocol-level error is invisible to a client that renders only tool
+        // results, and the model is shown nothing for its money.
+        expect(payload.error).toBeUndefined();
+        expect(payload.result?.isError).toBe(true);
+        expect(payload.result?.content[0]?.text).toContain("handler blew up");
+    });
+
+    describe("with a facilitator that verifies and settles", () => {
+        const payer = "0x2222222222222222222222222222222222222222";
+
+        /** Records each facilitator endpoint hit; verify and settle both succeed. */
+        const settlingFacilitator = (): string[] => {
+            const calls: string[] = [];
+
+            vi.stubGlobal(
+                "fetch",
+                vi.fn<(input: RequestInfo | URL) => Promise<Response>>((input) => {
+                    const url = requestUrl(input);
+
+                    calls.push(url.split("/").pop() ?? url);
+
+                    if (url.endsWith("/supported")) {
+                        return Promise.resolve(Response.json({ kinds: [{ network: "eip155:8453", scheme: "exact", x402Version: 2 }] }));
+                    }
+
+                    if (url.endsWith("/verify")) {
+                        return Promise.resolve(Response.json({ isValid: true, payer }));
+                    }
+
+                    if (url.endsWith("/settle")) {
+                        return Promise.resolve(Response.json({ network: "eip155:8453", payer, success: true, transaction: "0xabc" }));
+                    }
+
+                    return Promise.reject(new Error(`unexpected facilitator call: ${url}`));
+                }),
+            );
+
+            return calls;
+        };
+
+        /** Answer the tool's 402 challenge the way `@x402/fetch` (v2) does. */
+        const paymentFor = async (mcp: ReturnType<typeof createPaidMcpServer>, name: string, body: unknown = callBody(name)): Promise<string> => {
+            const challenge = await mcp.fetchHandler(mcpRequest(body));
+            const required = JSON.parse(atob(challenge.headers.get("payment-required") ?? "")) as { accepts: unknown[]; resource: unknown };
+
+            return btoa(
+                JSON.stringify({ accepted: required.accepts[0], payload: { authorization: {}, signature: "0x" }, resource: required.resource, x402Version: 2 }),
+            );
+        };
+
+        it("serves a paying client that follows the docs: PAYMENT-SIGNATURE in, result and PAYMENT-RESPONSE out", async () => {
+            expect.assertions(4);
+
+            const calls = settlingFacilitator();
+            const handler = vi.fn<() => ToolResult>(() => text("secret report"));
+            const mcp = createPaidMcpServer({ charge });
+
+            mcp.paidTool({ description: "the paid report", inputSchema: NO_INPUT, name: "premium_report", price: "$0.05" }, handler);
+
+            const payment = await paymentFor(mcp, "premium_report");
+            const response = await mcp.fetchHandler(mcpRequest(callBody("premium_report"), { "payment-signature": payment }));
+            const payload = (await response.json()) as { result?: { content: { text: string }[] } };
+
+            expect(response.headers.get("payment-response")).not.toBeNull();
+            expect(payload.result?.content[0]?.text).toBe("secret report");
+            expect(handler).toHaveBeenCalledTimes(1);
+            expect(calls.filter((call) => call === "settle")).toHaveLength(1);
+        });
+
+        // Each of these is a request the MCP transport rejects before a tool
+        // handler can run. A paid call must be rejected the same way BEFORE the
+        // paywall, or the caller is charged for a response they never get.
+        it.each([
+            ["an Accept header without text/event-stream", callBody("premium_report"), { accept: "application/json" }, 406],
+            ["a non-JSON Content-Type", callBody("premium_report"), { "content-type": "text/plain" }, 415],
+            ["a body that is not a JSON-RPC message", { method: "tools/call", params: { arguments: {}, name: "premium_report" } }, {}, 400],
+            ["a notification (no id)", { jsonrpc: "2.0", method: "tools/call", params: { arguments: {}, name: "premium_report" } }, {}, 202],
+            ["an unsupported mcp-protocol-version", callBody("premium_report"), { "mcp-protocol-version": "1999-01-01" }, 400],
+        ])("rejects %s without verifying, settling or running the tool", async (_label, body, headers, status) => {
+            expect.assertions(4);
+
+            const calls = settlingFacilitator();
+            const handler = vi.fn<() => ToolResult>(() => text("secret report"));
+            const mcp = createPaidMcpServer({ charge });
+
+            mcp.paidTool({ description: "the paid report", inputSchema: NO_INPUT, name: "premium_report", price: "$0.05" }, handler);
+
+            const payment = await paymentFor(mcp, "premium_report");
+            const response = await mcp.fetchHandler(mcpRequest(body, { ...headers, "payment-signature": payment }));
+
+            expect(response.status).toBe(status);
+            expect(response.headers.get("payment-response")).toBeNull();
+            expect(handler).not.toHaveBeenCalled();
+            expect(calls.filter((call) => call === "verify" || call === "settle")).toStrictEqual([]);
+        });
+
+        const REPORT_INPUT = {
+            additionalProperties: false,
+            properties: { quarter: { maximum: 4, minimum: 1, type: "integer" } },
+            required: ["quarter"],
+            type: "object",
+        } as const;
+
+        const argsCall = (arguments_: unknown): unknown => {
+            return { id: 2, jsonrpc: "2.0", method: "tools/call", params: { arguments: arguments_, name: "premium_report" } };
+        };
+
+        // A call whose arguments the tool's own inputSchema rejects delivers
+        // nothing, so it must be refused BEFORE the paywall — settlement is final.
+        it.each([
+            ["a missing required argument", {}],
+            ["an argument of the wrong type", { quarter: "Q1" }],
+            ["an argument out of range", { quarter: 5 }],
+            ["an undeclared argument", { extra: true, quarter: 1 }],
+        ])("refuses %s with the schema error, without verifying, settling or running the tool", async (_label, arguments_) => {
+            expect.assertions(6);
+
+            const calls = settlingFacilitator();
+            const handler = vi.fn<() => ToolResult>(() => text("secret report"));
+            const mcp = createPaidMcpServer({ charge });
+
+            mcp.paidTool({ description: "the paid report", inputSchema: REPORT_INPUT, name: "premium_report", price: "$0.05" }, handler);
+
+            const payment = await paymentFor(mcp, "premium_report", argsCall({ quarter: 1 }));
+            const response = await mcp.fetchHandler(mcpRequest(argsCall(arguments_), { "payment-signature": payment }));
+            const payload = (await response.json()) as { result?: { content: { text: string }[]; isError?: boolean } };
+
+            expect(response.status).toBe(200);
+            expect(response.headers.get("payment-response")).toBeNull();
+            expect(payload.result?.isError).toBe(true);
+            expect(payload.result?.content[0]?.text).toMatch(/^invalid arguments for tool "premium_report": /);
+            expect(handler).not.toHaveBeenCalled();
+            expect(calls.filter((call) => call === "verify" || call === "settle")).toStrictEqual([]);
+        });
+
+        it("charges and runs a call with valid arguments exactly once", async () => {
+            expect.assertions(4);
+
+            const calls = settlingFacilitator();
+            const handler = vi.fn<(arguments_: Record<string, unknown>) => ToolResult>(() => text("secret report"));
+            const mcp = createPaidMcpServer({ charge });
+
+            mcp.paidTool({ description: "the paid report", inputSchema: REPORT_INPUT, name: "premium_report", price: "$0.05" }, handler);
+
+            const payment = await paymentFor(mcp, "premium_report", argsCall({ quarter: 2 }));
+            const response = await mcp.fetchHandler(mcpRequest(argsCall({ quarter: 2 }), { "payment-signature": payment }));
+            const payload = (await response.json()) as { result?: { content: { text: string }[]; isError?: boolean } };
+
+            expect(payload.result?.isError).toBeUndefined();
+            expect(handler).toHaveBeenCalledExactlyOnceWith({ quarter: 2 });
+            expect(calls.filter((call) => call === "verify")).toHaveLength(1);
+            expect(calls.filter((call) => call === "settle")).toHaveLength(1);
+        });
+    });
+
+    it("applies the same inputSchema validation to a free tool before its handler runs", async () => {
+        expect.assertions(3);
+
+        const handler = vi.fn<() => ToolResult>(() => text("pong"));
+        const mcp = createPaidMcpServer({ charge });
+
+        mcp.tool({ description: "echo", inputSchema: { properties: { n: { type: "number" } }, required: ["n"], type: "object" }, name: "ping" }, handler);
+
+        const response = await mcp.fetchHandler(mcpRequest(callBody("ping")));
+        const payload = (await response.json()) as { result?: { content: { text: string }[]; isError?: boolean } };
+
+        expect(payload.result?.isError).toBe(true);
+        expect(payload.result?.content[0]?.text).toMatch(/^invalid arguments for tool "ping": /);
+        expect(handler).not.toHaveBeenCalled();
+    });
+
+    it("rejects registering the same tool name twice", () => {
+        expect.assertions(1);
+
+        const mcp = createPaidMcpServer({ charge });
+        mcp.tool({ description: "echo", inputSchema: NO_INPUT, name: "ping" }, () => text("pong"));
+
+        expect(() => {
+            mcp.paidTool({ description: "clash", inputSchema: NO_INPUT, name: "ping", price: "$0.01" }, () => text("x"));
+        }).toThrow(/already registered/);
+    });
+});

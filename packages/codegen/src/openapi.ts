@@ -1,9 +1,13 @@
 import type { JsonSchema } from "@lunora/values";
 
+import type { RestCachePolicy, RestFunctionKind } from "../../../shared/rest-surface";
+import { cacheControlValue, cacheVaryValue, restMethodForKind, restPathForFunction } from "../../../shared/rest-surface";
+import { moduleTagOf } from "./discover/modules";
 import { GENERATED_HEADER } from "./emit";
-import type { FunctionIR, HttpRouteIR, ValidatorIR } from "./ir";
-import sanitizeNamespace from "./paths";
-import { argsObjectSchema, LUNORA_ERROR_CODES, objectSchema, validatorIrToJsonSchema } from "./schema-ir";
+import type { ExposeCacheIR, FunctionIR, HttpRouteIR, ModuleIR, ValidatorIR } from "./ir";
+import renderJsonData from "./json-data";
+import { sanitizeNamespace } from "./paths";
+import { LUNORA_ERROR_CODES, objectSchema, validatorIrToJsonSchema } from "./schema-ir";
 
 // ─── OpenAPI document assembly ───────────────────────────────────────────────
 
@@ -22,6 +26,9 @@ const pathParameterNames = (path: string): string[] => [...path.matchAll(ROUTE_P
  */
 const toOpenApiPath = (path: string): string => path.replaceAll(ROUTE_PARAM_RE, "{$1}");
 
+/** Unwrap a `v.optional(inner)` validator to its inner validator for parameter schemas. */
+const unwrapOptional = (validator: ValidatorIR): ValidatorIR => (validator.kind === "optional" ? (validator.inner ?? validator) : validator);
+
 /** An OpenAPI parameter object built from one declared validator. */
 interface OpenApiParameter {
     description?: string;
@@ -37,7 +44,7 @@ const buildParameters = (route: HttpRouteIR): OpenApiParameter[] => {
     const parameters: OpenApiParameter[] = [];
 
     for (const [name, validator] of Object.entries(route.searchParams)) {
-        const inner = validator.kind === "optional" ? (validator.inner ?? validator) : validator;
+        const inner = unwrapOptional(validator);
 
         parameters.push({
             description: `Query parameter \`${name}\``,
@@ -49,7 +56,7 @@ const buildParameters = (route: HttpRouteIR): OpenApiParameter[] => {
     }
 
     for (const [name, validator] of Object.entries(route.params)) {
-        const inner = validator.kind === "optional" ? (validator.inner ?? validator) : validator;
+        const inner = unwrapOptional(validator);
 
         parameters.push({
             description: `Path parameter \`${name}\``,
@@ -82,8 +89,7 @@ const successResponse = (output: ValidatorIR | undefined): Record<string, unknow
 };
 
 /** Build one OpenAPI operation for a discovered HTTP route. */
-const httpRouteOperation = (route: HttpRouteIR): Record<string, unknown> => {
-    const tag = sanitizeNamespace(route.filePath);
+const httpRouteOperation = (route: HttpRouteIR, tag: string): Record<string, unknown> => {
     const parameters = buildParameters(route);
 
     const operation: Record<string, unknown> = {
@@ -121,20 +127,19 @@ const httpRouteOperation = (route: HttpRouteIR): Record<string, unknown> => {
  * Build the single RPC operation for one query/mutation/action. Every RPC call
  * is `POST /_lunora/rpc`; to list each function individually in Swagger UI (oRPC
  * pattern: one operation per procedure) we synthesise a distinct path suffix
- * `/_lunora/rpc#&lt;functionPath>` — the `#`-fragment is ignored by the transport
+ * `/_lunora/rpc#<functionPath>` — the `#`-fragment is ignored by the transport
  * (all still POST to `/_lunora/rpc`) but gives each operation a unique path key
  * so they render as separate entries. The requestBody pins `functionPath` to a
  * `const`, types `args` from the function's validators, and allows an optional
  * `shardKey`.
  */
-const rpcOperation = (definition: FunctionIR): { operation: Record<string, unknown>; pathKey: string } => {
+const rpcOperation = (definition: FunctionIR, tag: string): { operation: Record<string, unknown>; pathKey: string } => {
     const functionPath = `${sanitizeNamespace(definition.filePath)}:${definition.exportName}`;
-    const tag = sanitizeNamespace(definition.filePath);
 
     const requestSchema: JsonSchema = {
         additionalProperties: false,
         properties: {
-            args: argsObjectSchema(definition.args),
+            args: objectSchema(definition.args),
             functionPath: { const: functionPath, type: "string" },
             shardKey: { description: "Optional shard key; omitted routes to the default shard.", type: "string" },
         },
@@ -150,14 +155,9 @@ const rpcOperation = (definition: FunctionIR): { operation: Record<string, unkno
             required: true,
         },
         responses: {
-            "200": {
-                content: {
-                    "application/json": {
-                        schema: { description: "RPC result. The shape is TS-inferred from the function's return type; best-effort — any JSON." },
-                    },
-                },
-                description: "Successful RPC result (TypeScript-inferred return shape, documented best-effort).",
-            },
+            // Same `.output()`-or-placeholder rule the `httpRouter()` operations
+            // use — an RPC function that declares a return shape documents it.
+            "200": successResponse(definition.output),
             default: { $ref: ERROR_COMPONENT_REF },
         },
         summary: `${definition.kind}: ${functionPath}`,
@@ -168,10 +168,143 @@ const rpcOperation = (definition: FunctionIR): { operation: Record<string, unkno
     return { operation, pathKey: `/_lunora/rpc#${functionPath}` };
 };
 
+/**
+ * Describe the cache headers a `.expose({ cache })` endpoint answers with, as an
+ * OpenAPI `headers` block for the 200 response. Returns `{}` when the endpoint
+ * declares no caching, so it spreads away to nothing.
+ *
+ * The documented `Cache-Control` states the DECLARED scope but spells out the
+ * runtime's downgrade rule, because a caller reading the spec needs to know that
+ * a credentialed request is answered `private` regardless (see
+ * `@lunora/runtime`'s `rest-cache`).
+ */
+const cacheResponseHeaders = (cache: ExposeCacheIR | undefined, method: "get" | "post"): { headers?: Record<string, unknown> } => {
+    // Three reasons to document nothing, all of them "the runtime won't do this":
+    // caching isn't declared; the operation isn't a GET (a mutation/action is
+    // POST-only and `rest-cache` refuses to cache it); or the declaration used
+    // computed values discovery couldn't read, so any example emitted here would
+    // be invented. The spec under-documenting beats the spec contradicting the
+    // runtime — that fidelity is the whole point of deriving it from the source.
+    if (cache === undefined || method !== "get" || cache.scope === undefined || cache.maxAge === undefined) {
+        return {};
+    }
+
+    // Same two functions the runtime uses to WRITE these headers, so the example
+    // and the served value cannot disagree — including on clamping.
+    const policy: RestCachePolicy = {
+        maxAge: cache.maxAge,
+        scope: cache.scope,
+        ...(cache.staleWhileRevalidate === undefined ? {} : { staleWhileRevalidate: cache.staleWhileRevalidate }),
+        ...(cache.tag === undefined ? {} : { tag: cache.tag }),
+        ...(cache.vary === undefined ? {} : { vary: cache.vary }),
+    };
+
+    const headers: Record<string, unknown> = {
+        "Cache-Control": {
+            description:
+                policy.scope === "public"
+                    ? "Caching policy. `public` applies only to an uncredentialed request — a request carrying `Authorization` or `Cookie` is always answered `private`."
+                    : "Caching policy. Restricted to the caller's own cache; never stored by a shared/edge cache.",
+            schema: { example: cacheControlValue(policy, policy.scope), type: "string" },
+        },
+    };
+
+    if (policy.tag !== undefined) {
+        headers["Cache-Tag"] = {
+            description: "Purge tag for `ctx.cache.purge({ tags: [...] })`.",
+            schema: { example: policy.tag, type: "string" },
+        };
+    }
+
+    const vary = cacheVaryValue(policy);
+
+    if (vary !== undefined) {
+        headers.Vary = {
+            description: "Request headers this response varies by. The endpoint's own negotiated headers are merged in at runtime.",
+            schema: { example: vary, type: "string" },
+        };
+    }
+
+    return { headers };
+};
+
+/**
+ * Build the OpenAPI operation for one `.expose({ rest: true })` procedure (plan
+ * 167). Unlike the synthetic RPC operations, these are REAL REST endpoints on
+ * `/_lunora/rest/<namespace>/<fn>` — the exact path + method the runtime router
+ * mints (both derive from the shared `restPathForFunction` contract, so the spec
+ * cannot drift from the live surface). A `query` maps to `GET` with its args as
+ * query parameters; a `mutation`/`action` maps to `POST` with a JSON request body.
+ */
+const restOperation = (definition: FunctionIR, tag: string): { method: "get" | "post"; operation: Record<string, unknown>; path: string } | undefined => {
+    const functionPath = `${sanitizeNamespace(definition.filePath)}:${definition.exportName}`;
+    const path = restPathForFunction(functionPath);
+
+    if (path === undefined) {
+        return undefined;
+    }
+
+    // Single-source the transport method from the shared REST-surface contract (the
+    // same mapping the runtime router derives), so the spec cannot drift on method.
+    // `stream` is already filtered upstream, so the narrowing cast is safe here.
+    const method = restMethodForKind(definition.kind as RestFunctionKind);
+    const isQuery = method === "GET";
+
+    const operation: Record<string, unknown> = {
+        description: `Public REST endpoint for the \`${definition.kind}\` \`${functionPath}\` (opt-in via \`.expose({ rest: true })\`). Routed through the procedure, so auth / RLS / validators are enforced.`,
+        operationId: `rest_${sanitizeNamespace(path)}`,
+        responses: {
+            "200": {
+                content: {
+                    "application/json": {
+                        schema: { description: "Procedure result. The shape is TS-inferred from the return type; best-effort — any JSON." },
+                    },
+                },
+                description: "Successful result (TypeScript-inferred return shape, documented best-effort).",
+                ...cacheResponseHeaders(definition.expose?.cache, isQuery ? "get" : "post"),
+            },
+            default: { $ref: ERROR_COMPONENT_REF },
+        },
+        summary: `${method} ${path}`,
+        tags: [tag],
+        "x-lunora-function-kind": definition.kind,
+    };
+
+    if (isQuery) {
+        // A query's args ride the query string; each becomes an optional query parameter.
+        const parameters = Object.entries(definition.args).map(([name, validator]) => {
+            const inner = unwrapOptional(validator);
+
+            return {
+                description: `Argument \`${name}\` (JSON-encoded for non-string values).`,
+                in: "query" as const,
+                name,
+                required: validator.kind !== "optional",
+                schema: validatorIrToJsonSchema(inner),
+            };
+        });
+
+        if (parameters.length > 0) {
+            operation.parameters = parameters;
+        }
+
+        return { method: "get", operation, path };
+    }
+
+    operation.requestBody = {
+        content: { "application/json": { schema: objectSchema(definition.args) } },
+        required: Object.keys(definition.args).length > 0,
+    };
+
+    return { method: "post", operation, path };
+};
+
 /** Inputs the OpenAPI emitter needs from a codegen run. */
 interface OpenApiEmitInput {
     functions: ReadonlyArray<FunctionIR>;
     httpRoutes: ReadonlyArray<HttpRouteIR>;
+    /** The app's modules, passed only once it declares one; an operation in a module folder is tagged with the module instead of its file namespace. */
+    modules?: ReadonlyArray<ModuleIR>;
     /** `info.version`; defaults to `"0.0.0"` with a TODO when the project version is unknown. */
     version?: string;
 }
@@ -188,7 +321,8 @@ interface OpenApiEmitInput {
  * requestBody pinning `functionPath` + typed `args`. `internal`/`stream`
  * functions are excluded (unreachable / not invocable on the external RPC path).
  *
- * Operations are grouped into `tags` by file namespace, and every operation
+ * Operations are grouped into `tags` by module (when the file sits in a
+ * `defineModule` folder) or else by file namespace, and every operation
  * references a reusable `LunoraError` error-response component enumerating the
  * standard error codes. Borrows oRPC's per-procedure-operation + tag-grouping +
  * internal-filtering structure; the JSON Schema dialect matches `@lunora/values`
@@ -198,18 +332,23 @@ interface OpenApiEmitInput {
  */
 const buildOpenApiDocument = (input: OpenApiEmitInput): Record<string, unknown> => {
     const version = input.version ?? "0.0.0";
-    const paths: Record<string, Record<string, unknown>> = {};
+    // Null-prototype maps: route paths and methods come from app code, and a
+    // `__proto__` key must stay an ordinary entry, never reach Object.prototype.
+    const paths: Record<string, Record<string, unknown>> = Object.create(null) as Record<string, Record<string, unknown>>;
+    const pathItemFor = (path: string): Record<string, unknown> => paths[path] ?? (Object.create(null) as Record<string, unknown>);
     const tagNames = new Set<string>();
+    const modules = input.modules ?? [];
+    const tagOf = (filePath: string): string => moduleTagOf(modules, filePath);
 
     // HTTP routes: real REST paths. Multiple verbs on one path merge into the
     // same path-item object.
     for (const route of input.httpRoutes) {
         const openApiPath = toOpenApiPath(route.path);
-        const pathItem = paths[openApiPath] ?? {};
+        const pathItem = pathItemFor(openApiPath);
 
-        pathItem[route.method.toLowerCase()] = httpRouteOperation(route);
+        pathItem[route.method.toLowerCase()] = httpRouteOperation(route, tagOf(route.filePath));
         paths[openApiPath] = pathItem;
-        tagNames.add(sanitizeNamespace(route.filePath));
+        tagNames.add(tagOf(route.filePath));
     }
 
     // RPC functions: one POST operation each on a synthetic `/_lunora/rpc#<path>`.
@@ -218,16 +357,38 @@ const buildOpenApiDocument = (input: OpenApiEmitInput): Record<string, unknown> 
     const rpcFunctions = input.functions.filter((definition) => definition.visibility !== "internal" && definition.kind !== "stream");
 
     for (const definition of rpcFunctions) {
-        const { operation, pathKey } = rpcOperation(definition);
+        const { operation, pathKey } = rpcOperation(definition, tagOf(definition.filePath));
 
         paths[pathKey] = { post: operation };
-        tagNames.add(sanitizeNamespace(definition.filePath));
+        tagNames.add(tagOf(definition.filePath));
+    }
+
+    // Opt-in public REST surface (plan 167): a REAL REST path per
+    // `.expose({ rest: true })` procedure, describing exactly the live surface the
+    // runtime router serves. `internal`/`stream` are already excluded above.
+    for (const definition of rpcFunctions) {
+        if (definition.expose?.rest !== true) {
+            continue;
+        }
+
+        const rest = restOperation(definition, tagOf(definition.filePath));
+
+        if (rest === undefined) {
+            continue;
+        }
+
+        const pathItem = pathItemFor(rest.path);
+
+        pathItem[rest.method] = rest.operation;
+        paths[rest.path] = pathItem;
     }
 
     const tags = [...tagNames]
         .toSorted((a, b) => a.localeCompare(b))
         .map((name) => {
-            return { description: `Operations declared in \`lunora/${name}\`.`, name };
+            const tagged = modules.find((candidate) => candidate.name === name);
+
+            return { description: tagged?.description ?? `Operations declared in \`lunora/${name}\`.`, name };
         });
 
     const document = {
@@ -270,7 +431,9 @@ const buildOpenApiDocument = (input: OpenApiEmitInput): Record<string, unknown> 
             version,
         },
         openapi: "3.1.0",
-        paths,
+        // Plain objects again for the emitted document: `Object.fromEntries` and a
+        // spread both define data properties, so a `__proto__` key stays an entry.
+        paths: Object.fromEntries(Object.entries(paths).map(([path, item]) => [path, { ...item }])),
         tags,
     };
 
@@ -286,14 +449,14 @@ const emitOpenApi = (input: OpenApiEmitInput): string => `${JSON.stringify(build
 /**
  * Emit the OpenAPI document as an importable TS module
  * (`_generated/openapi.ts`) the worker entry imports and passes to
- * `createWorker({ openApiSpec })`. The document object literal is inlined
- * verbatim (same `JSON.stringify` form the `.json` uses), so the `.ts` and
- * `.json` are byte-identical content and regenerate together — closing the gap
- * where a Worker cannot read the JSON file at runtime. `document_` is the object
- * returned by {@link buildOpenApiDocument} (reused, never recomputed).
+ * `createWorker({ openApiSpec })`. The document is inlined as a `JSON.parse`
+ * string (see {@link renderJsonData}), so the `.ts` and `.json` carry the same
+ * content and regenerate together — closing the gap where a Worker cannot read
+ * the JSON file at runtime. `document_` is the object returned by
+ * {@link buildOpenApiDocument} (reused, never recomputed).
  */
 const emitOpenApiModule = (document_: Record<string, unknown>): string =>
-    `${GENERATED_HEADER}export const openApiSpec: Record<string, unknown> = ${JSON.stringify(document_, undefined, 4)};\n`;
+    `${GENERATED_HEADER}export const openApiSpec = ${renderJsonData(document_, "Record<string, unknown>")};\n`;
 
 export { buildOpenApiDocument, emitOpenApi, emitOpenApiModule };
 export type { OpenApiEmitInput };

@@ -35,8 +35,8 @@ export const list = query.query(async ({ ctx }): Promise<Doc<"channels">[]> => {
 export const create = mutation
     .input({
         createdAt: v.number(),
-        id: v.optional(v.string().check((value) => value.length <= 64, { message: "must be at most 64 characters", schema: { maxLength: 64 } })),
-        name: v.string().check((value) => value.length <= 128, { message: "must be at most 128 characters", schema: { maxLength: 128 } }),
+        id: v.optional(v.string().max(64)),
+        name: v.string().max(128),
     })
     .use(dbRateLimit(limits, "create", { key: (ctx) => ctx.auth.userId ?? ctx.ip ?? "anonymous" }))
     .mutation(async ({ args, ctx }): Promise<Id<"channels">> => {
@@ -57,6 +57,8 @@ export const create = mutation
         // lunora/workflows.ts). Fire-and-forget: the workflow runs on its own
         // schedule — it posts a greeting, sleeps a minute, then posts a tip.
         await ctx.workflows.get("channelWelcome").create({ params: { channelId } });
+
+        ctx.log.info("channel created", { channelId });
 
         return channelId;
     });

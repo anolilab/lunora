@@ -1,0 +1,1434 @@
+## @lunora/workflow [1.0.0-alpha.76](https://github.com/anolilab/lunora/compare/@lunora/workflow@1.0.0-alpha.75...@lunora/workflow@1.0.0-alpha.76) (2026-10-14)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.54
+* **@lunora/values:** upgraded to 1.0.0-alpha.64
+* **@lunora/server:** upgraded to 1.0.0-alpha.195
+
+## @lunora/workflow [1.0.0-alpha.75](https://github.com/anolilab/lunora/compare/@lunora/workflow@1.0.0-alpha.74...@lunora/workflow@1.0.0-alpha.75) (2026-10-12)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.53
+* **@lunora/values:** upgraded to 1.0.0-alpha.63
+* **@lunora/server:** upgraded to 1.0.0-alpha.193
+
+## @lunora/workflow [1.0.0-alpha.74](https://github.com/anolilab/lunora/compare/@lunora/workflow@1.0.0-alpha.73...@lunora/workflow@1.0.0-alpha.74) (2026-10-10)
+
+
+### Dependencies
+
+* **@lunora/values:** upgraded to 1.0.0-alpha.62
+* **@lunora/server:** upgraded to 1.0.0-alpha.190
+
+## @lunora/workflow [1.0.0-alpha.73](https://github.com/anolilab/lunora/compare/@lunora/workflow@1.0.0-alpha.72...@lunora/workflow@1.0.0-alpha.73) (2026-10-09)
+
+### ⚠ BREAKING CHANGES
+
+* **workflow:** createBatch takes the object form and reports per-instance errors (#1087)
+
+### Bug Fixes
+
+* **workflow:** createBatch takes the object form and reports per-instance errors ([#1087](https://github.com/anolilab/lunora/issues/1087)) ([295acc3](https://github.com/anolilab/lunora/commit/295acc39bceeb2f9506a85643002d367f2814064))
+
+
+### Dependencies
+
+* **@lunora/server:** upgraded to 1.0.0-alpha.189
+
+## @lunora/workflow [1.0.0-alpha.72](https://github.com/anolilab/lunora/compare/@lunora/workflow@1.0.0-alpha.71...@lunora/workflow@1.0.0-alpha.72) (2026-10-08)
+
+### Bug Fixes
+
+* **notify:** errors range, per-message urgency, channel secrets, SW hang ([#1043](https://github.com/anolilab/lunora/issues/1043)) ([f0e6b1c](https://github.com/anolilab/lunora/commit/f0e6b1cea73d9f5f05b793a1ebf79306e159c148))
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.52
+* **@lunora/values:** upgraded to 1.0.0-alpha.61
+* **@lunora/server:** upgraded to 1.0.0-alpha.186
+
+## @lunora/workflow [1.0.0-alpha.71](https://github.com/anolilab/lunora/compare/@lunora/workflow@1.0.0-alpha.70...@lunora/workflow@1.0.0-alpha.71) (2026-10-03)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.50
+* **@lunora/values:** upgraded to 1.0.0-alpha.60
+* **@lunora/server:** upgraded to 1.0.0-alpha.172
+
+## @lunora/workflow [1.0.0-alpha.70](https://github.com/anolilab/lunora/compare/@lunora/workflow@1.0.0-alpha.69...@lunora/workflow@1.0.0-alpha.70) (2026-10-02)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.49
+* **@lunora/values:** upgraded to 1.0.0-alpha.59
+* **@lunora/server:** upgraded to 1.0.0-alpha.170
+
+## @lunora/workflow [1.0.0-alpha.69](https://github.com/anolilab/lunora/compare/@lunora/workflow@1.0.0-alpha.68...@lunora/workflow@1.0.0-alpha.69) (2026-09-30)
+
+### Features
+
+* cloudflare parity 1/3 — workflows, containers, browser run, tracing, ai, bindings ([#914](https://github.com/anolilab/lunora/issues/914)) ([e5297a9](https://github.com/anolilab/lunora/commit/e5297a97527f0863457e234e739a554b466750d1))
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.48
+* **@lunora/values:** upgraded to 1.0.0-alpha.58
+* **@lunora/server:** upgraded to 1.0.0-alpha.163
+
+## @lunora/workflow [1.0.0-alpha.68](https://github.com/anolilab/lunora/compare/@lunora/workflow@1.0.0-alpha.67...@lunora/workflow@1.0.0-alpha.68) (2026-09-27)
+
+### Code Refactoring
+
+* stop exporting unused internals in add-on packages ([#875](https://github.com/anolilab/lunora/issues/875)) ([4c0ee9c](https://github.com/anolilab/lunora/commit/4c0ee9cda669e8d09c457ea8b875d29d398e39f1))
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.46
+* **@lunora/values:** upgraded to 1.0.0-alpha.57
+* **@lunora/server:** upgraded to 1.0.0-alpha.156
+
+## @lunora/workflow [1.0.0-alpha.67](https://github.com/anolilab/lunora/compare/@lunora/workflow@1.0.0-alpha.66...@lunora/workflow@1.0.0-alpha.67) (2026-09-27)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.45
+* **@lunora/values:** upgraded to 1.0.0-alpha.56
+* **@lunora/server:** upgraded to 1.0.0-alpha.154
+
+## @lunora/workflow [1.0.0-alpha.66](https://github.com/anolilab/lunora/compare/@lunora/workflow@1.0.0-alpha.65...@lunora/workflow@1.0.0-alpha.66) (2026-09-26)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.44
+* **@lunora/values:** upgraded to 1.0.0-alpha.55
+* **@lunora/server:** upgraded to 1.0.0-alpha.152
+
+## @lunora/workflow [1.0.0-alpha.65](https://github.com/anolilab/lunora/compare/@lunora/workflow@1.0.0-alpha.64...@lunora/workflow@1.0.0-alpha.65) (2026-09-26)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.43
+* **@lunora/values:** upgraded to 1.0.0-alpha.54
+* **@lunora/server:** upgraded to 1.0.0-alpha.150
+
+## @lunora/workflow [1.0.0-alpha.64](https://github.com/anolilab/lunora/compare/@lunora/workflow@1.0.0-alpha.63...@lunora/workflow@1.0.0-alpha.64) (2026-09-26)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.42
+* **@lunora/values:** upgraded to 1.0.0-alpha.53
+* **@lunora/server:** upgraded to 1.0.0-alpha.149
+
+## @lunora/workflow [1.0.0-alpha.63](https://github.com/anolilab/lunora/compare/@lunora/workflow@1.0.0-alpha.62...@lunora/workflow@1.0.0-alpha.63) (2026-09-26)
+
+
+### Dependencies
+
+* **@lunora/values:** upgraded to 1.0.0-alpha.52
+* **@lunora/server:** upgraded to 1.0.0-alpha.148
+
+## @lunora/workflow [1.0.0-alpha.62](https://github.com/anolilab/lunora/compare/@lunora/workflow@1.0.0-alpha.61...@lunora/workflow@1.0.0-alpha.62) (2026-09-25)
+
+### ⚠ BREAKING CHANGES
+
+* **queue,scheduler,workflow:** retryDeclinedMessage is now async and its message needs
+`ack`.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01SSVXdbku6XCtuRVMMEDqrE
+
+* fix(workflow): end a decline wait before the step's timeout
+
+A step's ctx.run waits out a DISPATCH_IN_PROGRESS decline in place for up to
+the claim ceiling (15 minutes). A step whose timeout is shorter than that (the
+engine default is 10 minutes) had the attempt timed out under the wait, and
+the abandoned wait kept re-dispatching next to the retry.
+
+Inside ctx.runStep the wait now reads the timeout from the config the engine
+hands the attempt (Cloudflare's default when it names none), stops two seconds
+before it, and rethrows the decline, so the attempt is charged once, to the
+decline, and the next attempt picks the wait up. A rollback is bounded the
+same way by its own config. A ctx.run in a raw ctx.step.do cannot see its
+step's timeout and stays bounded by the claim alone; the docs say so.
+
+On the real Workflows engine, with a 6s step timeout and eight declines, the
+unfixed wait dispatched from attempt 1 after attempt 2 had begun.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01SSVXdbku6XCtuRVMMEDqrE
+
+* security(queue,scheduler): authenticate a re-enqueued copy's claimed id
+
+A push consumer derives each message's replay-dedup ids from its id. The copy
+it re-enqueues on a last-delivery decline carries the replaced message's id,
+and the consumer unwrapped any body with that envelope's shape. A queue body
+is app data, often forwarded from outside (a webhook ingest doing
+send(await request.json())), so whoever controlled a body could choose the id
+its calls ran under: be answered with another live message's cached results,
+pre-fill that message's dedup slots so its calls were skipped, or, through
+failure attribution, get that message acked and dropped in a shared batch.
+The broker-assigned id could not be forged before; the envelope made it
+forgeable. The scheduler's `requeuedFrom` marker had the same hole for a job
+sent to the workpool queue by hand.
+
+A copy is now accepted only with an HMAC-SHA256 over its claimed id and
+payload, keyed by the admin token the consumer already holds to dispatch
+(WebCrypto, so workerd and Node alike; domain-separated per package). Any
+other body, including one that copies the envelope's shape or carries a MAC
+under a different key, is delivered as-is under the broker's id.
+
+- @lunora/queue: the envelope holds the id, the body as the JSON text of its
+  wire encoding (so the MAC covers exact bytes and bigint/Date/bytes survive)
+  and the MAC; it is sent as JSON. A copy that would exceed the 128 KB message
+  limit, or a body with no wire encoding, is not sent: the delayed retry and
+  the log stay. ctx.queues send/sendBatch refuse the reserved key. A
+  dead-lettered copy is readable JSON.
+- @lunora/scheduler: createQueueConsumer takes `requeue: { queue, secret }`
+  in place of `queue`; `requeuedFrom` is honoured only with a valid
+  `requeueMac`, and both fields are stripped before a QueueDispatch sees the
+  job. QueueJob no longer declares `requeuedFrom`.
+- @lunora/dispatch: signRequeue / verifyRequeue; DEFAULT_DISPATCH_TIMEOUT_MS is
+  exported for the workflow wait.
+
+Re-proved on the real workerd broker with the delay patched to 1s: deliveries
+1-3 declined, the signed copy delivered as attempt 1 under the original id,
+body and dedup id. A forged envelope sent straight through the binding is
+delivered as-is under the broker's id.
+* **queue,scheduler,workflow:** createQueueConsumer's `queue` option is now
+`requeue: { queue, secret }`, and QueueJob drops `requeuedFrom`.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01SSVXdbku6XCtuRVMMEDqrE
+
+* fix(workflow): bound a rollback's decline wait by its own timeout
+
+The previous commit said a rollback's wait was bounded by its own config. It
+was bounded by `rollbackContext.ctx.config`, and on the local Workflows engine
+that is the FORWARD step's config: a step with `timeout: "1 hour"` and
+`rollbackConfig: { timeout: "7 seconds" }` handed its rollback
+`ctx.config.timeout === "1 hour"`. So a rollback shorter than its step still
+had its wait outlive the attempt, and one longer gave up early and reported a
+compensation failed that would have completed. The rollback now reads
+`step.rollbackConfig` (Cloudflare's 10-minute default when unset), and a
+workerd test pins what the engine hands a rollback.
+
+A re-check can find the claim gone and run the call, which could take the
+runner's whole 30s and overrun the step timeout. Under a deadline each
+re-check now gets no more timeoutMs than is left, and the wait ends while at
+least a second remains.
+
+The "Uncaught (in promise)" lines the timed workerd test prints are the engine
+logging each failed step attempt: a plain throw in a raw step.do with no Lunora
+code on the path prints the same line.
+
+The Node host does not enforce step timeouts; its capability note and the
+workflow docs now say the bound charges an attempt there that the host would
+not have ended.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01SSVXdbku6XCtuRVMMEDqrE
+
+* fix(workflow): give a decline back when a late pause overran its bound
+
+The decline wait bounded each pause by the claim ceiling and the step deadline, but a timer
+can fire late. On resuming past either bound it started another dispatch anyway, with a zero
+or negative timeout, instead of returning the decline. It now re-checks both bounds after the
+pause and rethrows the decline when either has passed.
+
+The Node workflow note said rollbackConfig is ignored; the adapter ignores its retries, but
+@lunora/workflow reads rollbackConfig.timeout to end a rollback's decline wait.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01SSVXdbku6XCtuRVMMEDqrE
+
+* fix(workflow): end a decline wait only on a real overrun, not timer jitter
+
+The previous change rethrew a decline whenever the time left after a pause was under the
+one-dispatch margin. The pause is sized to leave exactly that margin, so ordinary timer jitter
+tripped it: the final re-check before a step's timeout was skipped and the attempt was spent
+early. It now gives the decline back only when the pause actually ran past the claim ceiling
+or the deadline.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01SSVXdbku6XCtuRVMMEDqrE
+
+### Bug Fixes
+
+* **queue,scheduler,workflow:** close the last-delivery and step-timeout decline edges ([#829](https://github.com/anolilab/lunora/issues/829)) ([f3caafc](https://github.com/anolilab/lunora/commit/f3caafcab18a41ad84799a40dfbc197e4fa5f5b2))
+
+
+### Dependencies
+
+* **@lunora/server:** upgraded to 1.0.0-alpha.147
+
+## @lunora/workflow [1.0.0-alpha.61](https://github.com/anolilab/lunora/compare/@lunora/workflow@1.0.0-alpha.60...@lunora/workflow@1.0.0-alpha.61) (2026-09-25)
+
+### ⚠ BREAKING CHANGES
+
+* **queue,workflow:** the id formats changed. An instance in flight when this
+deploys re-derives new ids on its next replay: a ctx.run that already applied
+under the old id can apply once more, and a parent that already spawned
+children re-spawns them under the new child ids (the old children still run
+and finish, but the parent now joins the new ones).
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01SSVXdbku6XCtuRVMMEDqrE
+
+* fix(queue,workflow): stop dispatch declines spending retry budgets
+
+A shard answers `409 DISPATCH_IN_PROGRESS` when a dispatch id is already
+running: the caller's own earlier attempt is still executing. The decline is
+retryable, so the queue consumer rethrew the batch and a workflow step threw,
+and both runtimes charged it as a failed attempt. That is reachable with
+defaults: `ctx.run` gives up after 30s with a retryable 503 while the shard
+keeps running the action, and every redelivery during that run meets the
+claim. With the default zero retry_delay a `maxRetries: 3` queue spent its
+whole budget on declines within seconds and dropped the message (no DLQ) while
+the action was still running; on the real broker a message saw attempts 1, 2
+and 3 inside two seconds and was gone. A workflow step at the engine's default
+retries errored the instance for any action over about five and a half
+minutes; on the real engine three declines against `limit: 2` errored it.
+
+Both now bound declines by the shard claim's fifteen-minute ceiling, exported
+from @lunora/dispatch as DISPATCH_CLAIM_CEILING_MS (pinned equal to
+@lunora/do's IN_FLIGHT_CLAIM_CEILING_MS) alongside `isDispatchDecline`:
+
+- Queues have no uncounted retry, so a declined message is retried with
+  `delaySeconds` equal to the ceiling. The claim cannot outlive that delay, so
+  one claim costs at most one attempt; the next delivery is served the
+  finished result or runs the call if the first attempt died. It is never
+  acked. A decline on a message's last delivery cannot be saved by a delay;
+  that case is retried anyway and logged, naming the DLQ-or-drop outcome.
+  The scheduler's queue workpool consumer had the same flaw and gets the
+  same delayed retry.
+- A workflow waits a decline out inside the call: the same id is re-dispatched
+  after 1s doubling to 30s pauses until it is served, for at most the ceiling
+  since the first decline, then the decline is rethrown to the engine's
+  ordinary retry. A step `timeout` shorter than the wait (Cloudflare's default
+  is ten minutes) can still charge one attempt.
+
+The guarantee stays at-least-once in both: a decline is never treated as done.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01SSVXdbku6XCtuRVMMEDqrE
+
+* docs(platform): state the dispatch gap in the Node queues rating
+
+The Node `queues` note rated the host "emulated" without saying that
+message.run and ctx.run POST to /_lunora/scheduler/dispatch, which
+@lunora/platform-node serves no HTTP for, so a queue handler that calls a
+Lunora function fails at runtime. The `workflows` note already disclosed the
+same gap for ctx.run; the two now agree. The platform-node docs table is
+updated in step (lint:node-capabilities-docs).
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01SSVXdbku6XCtuRVMMEDqrE
+
+* docs(queue,workflow): document dispatch declines and the dedup window
+
+The workflow docs still said two concurrent action dispatches of one id "can
+both miss the cache and both run". The shard's in-flight claim now declines
+the second with 409 DISPATCH_IN_PROGRESS; the section says so, including the
+fifteen-minute ceiling past which a still-running handler can be run over.
+
+Both pages now describe what a decline costs: a workflow waits it out inside
+the call without spending the step's retries, and a queue retries the message
+after the claim ceiling so a slow call costs at most one attempt, with the
+last-delivery case called out. The queue page also gains what it never
+stated: message.run's replay-dedup ids expire with the shard's 24-hour dedup
+window, so a redelivery later than that re-applies its calls. The workflow
+page documents the workflow-scoped id format, and the queue page notes that
+reconcile now keeps an existing consumer's tuning in step with defineQueue.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01SSVXdbku6XCtuRVMMEDqrE
+
+* chore(api): accept the dispatch and workflow surface changes
+
+@lunora/dispatch exports DISPATCH_CLAIM_CEILING_MS and isDispatchDecline;
+createRunStep's deps take dedupNamespace in place of instanceId.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01SSVXdbku6XCtuRVMMEDqrE
+
+* fix(config): retune queue consumers in place and report them apart
+
+Retuning an existing consumer rewrote the whole `queues` node through one
+applyModify, which drops every comment inside it, reorders producers and
+consumers and expands one-line entries. Retuning happens on every tuning
+drift, and the consumers that drift are the hand-tuned ones that carry
+comments. Each drifted field is now written at its own path
+(`queues.consumers[i].<key>`); the whole-block write remains only for
+appending a missing producer or consumer.
+
+A retune was also pushed into `added`, so `lunora deploy` logged a
+max_retries change as "provisioned bindings". ReconcileBindingsResult gains
+an `updated` list, and the deploy command and the Vite plugin log it on its
+own line.
+
+The five tuning `if` blocks become a CONSUMER_TUNING_KEYS table, which also
+lets QueueConsumerEntry declare its keys instead of an index signature.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01SSVXdbku6XCtuRVMMEDqrE
+
+* fix(dispatch): recognise claim declines by a shard-set header
+
+isDispatchDecline trusted the `DISPATCH_IN_PROGRESS` code, which the shard
+echoes from any handler-thrown LunoraError. An action forwarding a nested
+decline therefore made its workflow caller re-run it for fifteen minutes and
+parked its queue message for fifteen. The shard's claim path now sets
+`x-lunora-dispatch-declined: 1` on its decline, a header no handler can set on
+the dispatch response; the runner carries it onto the rebuilt error and
+isDispatchDecline requires it. SchedulerDO's uncharged re-arm keys on the same
+header, so a handler-thrown error with that code is charged as the failure it
+is.
+
+The claim ceiling, the code and the header name live in
+shared/dispatch-claim.ts, inlined into @lunora/do, @lunora/dispatch and
+@lunora/scheduler, replacing two hand-kept 900_000 literals and the
+cross-package equality test that `test:affected` would not have rerun.
+
+One decline policy, owned by @lunora/dispatch: retryDeclinedMessage retries
+past the ceiling (DISPATCH_DECLINE_RETRY_DELAY_SECONDS) and logs a decline on
+a message's last delivery. @lunora/queue and the scheduler's queue workpool
+both call it, so the workpool gains the last-delivery log;
+QueueConsumerOptions takes an optional `maxRetries` to recognise that
+delivery. Also: a declaredMaxRetries helper in the queue consumer and a
+private isDispatchFailure brand check in the runner.
+
+The queue capture record's deadLettered comment now also states that
+reconcile never removes an option taken out of defineQueue and never writes
+`env.<name>` blocks.
+
+Cleanup alongside: wait-out-decline.ts is renamed wait-out-declines.ts after
+its export; the workerd test workers mark their fake declines with the header,
+the queue one passes the decline env and fetch to every batch (smokeQueue
+makes no dispatch), and the workflow one installs its origin routing once at
+module scope.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01SSVXdbku6XCtuRVMMEDqrE
+
+* docs(queue): state what reconcile leaves alone and what a decline costs
+
+Reconcile keeps declared tuning in step but never removes an option taken
+out of defineQueue and never writes `env.<name>` blocks; the page now says
+both. It also says plainly that a declined message waits the full fifteen
+minutes even when the action behind it finishes seconds later, since the
+consumer cannot see it finish.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01SSVXdbku6XCtuRVMMEDqrE
+
+* chore(api): accept the decline policy and reconcile surface changes
+
+@lunora/dispatch exports retryDeclinedMessage, DeclinedMessageLike,
+DISPATCH_DECLINE_RETRY_DELAY_SECONDS and DEFAULT_QUEUE_MAX_RETRIES;
+ReconcileBindingsResult gains `updated`; QueueConsumerOptions gains
+`maxRetries`.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01SSVXdbku6XCtuRVMMEDqrE
+
+### Bug Fixes
+
+* **queue,workflow:** dispatch declines, workflow-scoped dedup ids, queue tuning deploy ([#817](https://github.com/anolilab/lunora/issues/817)) ([7c90b21](https://github.com/anolilab/lunora/commit/7c90b21d9218452dc8f04be13d39ab23463efebb))
+
+
+### Dependencies
+
+* **@lunora/server:** upgraded to 1.0.0-alpha.141
+
+## @lunora/workflow [1.0.0-alpha.60](https://github.com/anolilab/lunora/compare/@lunora/workflow@1.0.0-alpha.59...@lunora/workflow@1.0.0-alpha.60) (2026-09-24)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.41
+* **@lunora/values:** upgraded to 1.0.0-alpha.51
+* **@lunora/server:** upgraded to 1.0.0-alpha.139
+
+## @lunora/workflow [1.0.0-alpha.59](https://github.com/anolilab/lunora/compare/@lunora/workflow@1.0.0-alpha.58...@lunora/workflow@1.0.0-alpha.59) (2026-09-24)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.40
+* **@lunora/values:** upgraded to 1.0.0-alpha.50
+* **@lunora/server:** upgraded to 1.0.0-alpha.137
+
+## @lunora/workflow [1.0.0-alpha.58](https://github.com/anolilab/lunora/compare/@lunora/workflow@1.0.0-alpha.57...@lunora/workflow@1.0.0-alpha.58) (2026-09-23)
+
+### Bug Fixes
+
+* **agent:** carry the host's fetch into the loop, and make a handoff replay-safe ([#789](https://github.com/anolilab/lunora/issues/789)) ([4079fe8](https://github.com/anolilab/lunora/commit/4079fe805db5e868617c51896a483edb321b2c80))
+
+## @lunora/workflow [1.0.0-alpha.57](https://github.com/anolilab/lunora/compare/@lunora/workflow@1.0.0-alpha.56...@lunora/workflow@1.0.0-alpha.57) (2026-09-22)
+
+### Bug Fixes
+
+* **agent:** dispatch the loop's calls without an order-numbered dedup id ([#770](https://github.com/anolilab/lunora/issues/770)) ([589e3db](https://github.com/anolilab/lunora/commit/589e3db835c2d196790595438a5efd88863e4fe3))
+
+## @lunora/workflow [1.0.0-alpha.56](https://github.com/anolilab/lunora/compare/@lunora/workflow@1.0.0-alpha.55...@lunora/workflow@1.0.0-alpha.56) (2026-09-21)
+
+### ⚠ BREAKING CHANGES
+
+* **workflow:** `RunFunctionOptions` gains `dedupId` and `createRunStep`'s deps
+gain `instanceId`. A caller-supplied `dedupId` wins over the pin — the escape
+hatch for a non-deterministic body, and for a bare `ctx.run` inside a raw
+`ctx.step.do(...)` callback, which the positional pin cannot see is being
+retried. The docs state that gap rather than implying exactly-once, along with
+the 24-hour dedup retention window and the weaker guarantee actions get.
+
+
+Claude-Session: https://claude.ai/code/session_012fk2r14izBDQteWpxDZ2jz
+
+Co-authored-by: Claude Opus 5 <noreply@anthropic.com>
+
+### Bug Fixes
+
+* **workflow:** pin replay-dedup ids on ctx.run ([#757](https://github.com/anolilab/lunora/issues/757)) ([5eaf098](https://github.com/anolilab/lunora/commit/5eaf098a1e2dab805e98a3f97ecfc577140e80ca))
+
+
+### Dependencies
+
+* **@lunora/server:** upgraded to 1.0.0-alpha.132
+
+## @lunora/workflow [1.0.0-alpha.55](https://github.com/anolilab/lunora/compare/@lunora/workflow@1.0.0-alpha.54...@lunora/workflow@1.0.0-alpha.55) (2026-09-13)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.39
+* **@lunora/values:** upgraded to 1.0.0-alpha.49
+* **@lunora/server:** upgraded to 1.0.0-alpha.129
+
+## @lunora/workflow [1.0.0-alpha.54](https://github.com/anolilab/lunora/compare/@lunora/workflow@1.0.0-alpha.53...@lunora/workflow@1.0.0-alpha.54) (2026-09-13)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.38
+* **@lunora/values:** upgraded to 1.0.0-alpha.48
+* **@lunora/server:** upgraded to 1.0.0-alpha.128
+
+## @lunora/workflow [1.0.0-alpha.53](https://github.com/anolilab/lunora/compare/@lunora/workflow@1.0.0-alpha.52...@lunora/workflow@1.0.0-alpha.53) (2026-09-12)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.37
+* **@lunora/values:** upgraded to 1.0.0-alpha.47
+* **@lunora/server:** upgraded to 1.0.0-alpha.127
+
+## @lunora/workflow [1.0.0-alpha.52](https://github.com/anolilab/lunora/compare/@lunora/workflow@1.0.0-alpha.51...@lunora/workflow@1.0.0-alpha.52) (2026-09-12)
+
+### Documentation
+
+* align package docs with the shipped api ([#706](https://github.com/anolilab/lunora/issues/706)) ([40c24b7](https://github.com/anolilab/lunora/commit/40c24b7218d1326ced4d73c8961c6e339d89f562))
+
+
+### Dependencies
+
+* **@lunora/values:** upgraded to 1.0.0-alpha.46
+* **@lunora/server:** upgraded to 1.0.0-alpha.122
+
+## @lunora/workflow [1.0.0-alpha.51](https://github.com/anolilab/lunora/compare/@lunora/workflow@1.0.0-alpha.50...@lunora/workflow@1.0.0-alpha.51) (2026-09-12)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.36
+* **@lunora/values:** upgraded to 1.0.0-alpha.45
+* **@lunora/server:** upgraded to 1.0.0-alpha.121
+
+## @lunora/workflow [1.0.0-alpha.50](https://github.com/anolilab/lunora/compare/@lunora/workflow@1.0.0-alpha.49...@lunora/workflow@1.0.0-alpha.50) (2026-09-11)
+
+
+### Dependencies
+
+* **@lunora/values:** upgraded to 1.0.0-alpha.44
+* **@lunora/server:** upgraded to 1.0.0-alpha.118
+
+## @lunora/workflow [1.0.0-alpha.49](https://github.com/anolilab/lunora/compare/@lunora/workflow@1.0.0-alpha.48...@lunora/workflow@1.0.0-alpha.49) (2026-09-07)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.35
+* **@lunora/values:** upgraded to 1.0.0-alpha.43
+* **@lunora/server:** upgraded to 1.0.0-alpha.108
+
+## @lunora/workflow [1.0.0-alpha.48](https://github.com/anolilab/lunora/compare/@lunora/workflow@1.0.0-alpha.47...@lunora/workflow@1.0.0-alpha.48) (2026-09-06)
+
+### Bug Fixes
+
+* **client,workflow,testing:** stop losing wire-decode failures ([#644](https://github.com/anolilab/lunora/issues/644)) ([9be24dd](https://github.com/anolilab/lunora/commit/9be24dd665af62e524375eda6ecdcb9d6f1a3572))
+
+### Tests
+
+* **dispatch,queue,workflow,agent,do:** pin both halves of the ctx.run wire bracket ([#645](https://github.com/anolilab/lunora/issues/645)) ([9fd8827](https://github.com/anolilab/lunora/commit/9fd882739609734a3db51b45b27c380062e4b9ff))
+
+## @lunora/workflow [1.0.0-alpha.47](https://github.com/anolilab/lunora/compare/@lunora/workflow@1.0.0-alpha.46...@lunora/workflow@1.0.0-alpha.47) (2026-09-06)
+
+### ⚠ BREAKING CHANGES
+
+* **dispatch,scheduler:** `ctx.run(...)` now resolves the function's return value instead of the raw
+`{ result }` envelope. A caller that compensated by reading `.result` must drop that unwrap.
+
+The existing mocks all answered a bare `{ ok: 1 }`, which is exactly why this shipped green; they
+now answer a realistic `{ result: encodeWire(value) }` envelope, plus a bigint/bytes/Date/NaN
+round-trip in both directions.
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01VUuYamsU1YLmAQhtut9PLZ
+
+* fix(runtime): decode a scheduled workflow's args before create({ params })
+
+Review of the wire-bracketing change caught a regression the change itself
+introduced. `ctx.scheduler.runAt` now stores `encodeWire(args)` in one envelope
+that both dispatch targets share, but only one of them decoded it: a function
+target's args are decoded by the shard, while a workflow target never reaches the
+shard — `handleSchedulerDispatch` hands them straight to `create({ params })`.
+
+So `runAt(when, workflows.foo, { total: 5n })` started an instance whose
+`event.payload.total` was `["$lunora.wire$", "bigint", "5"]`. Before the encode
+landed it threw on `JSON.stringify` instead, which is wrong but loud; this turned
+it into a silent corruption, which is worse.
+
+The workflow branch now decodes, so the two targets are symmetric. The docblock on
+the encode named only the shard's decode and now names both, because a reader
+checking whether the round trip closes would have concluded from it that it did.
+
+The regression test drives the workflow branch with a `Date` and a bigint past
+float range and asserts what `create()` receives; it fails against the un-decoded
+version and passes with it.
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01VUuYamsU1YLmAQhtut9PLZ
+
+* fix(runtime): bracket the httpAction scheduler on the same wire as the shard
+
+`ctx.scheduler` on an httpAction context and `@lunora/scheduler`'s
+`createScheduler` write to and read from the SAME SchedulerDO records, but only
+the shard-side one encoded on write and decoded on `list()`/`get()`. So
+`ctx.scheduler.runAt(t, internal.billing.settle, { amount: 1234n })` from a
+webhook threw outright (`JSON.stringify` refuses a bigint), and a record
+scheduled from a shard read back through the httpAction's `get()` as the tagged
+`["$lunora.wire$","bigint","1234"]` tuple while `ctx.db.system.query
+("_scheduled_functions")` on the same record answered `1234n`. Both surfaces now
+encode on write and decode on read.
+
+`get()` also returned the DO's `{ record }` envelope rather than the record, and
+`{}` rather than `null` for an id that matched nothing — both breaking its
+declared `Record<string, unknown> | null` and diverging from
+`createScheduler.get()`. It unwraps now.
+
+The admin proxy behind the studio's scheduled-jobs and dead-letter panels keeps
+forwarding records verbatim, deliberately: it re-serializes with
+`JSON.stringify`, which throws on the very bigint the encode exists to carry, so
+decoding on the way through would turn any such job into a 500. `@lunora/client`
+decodes at the consumer instead (`listScheduledJobs`, `listDeadJobs`, and the
+`subscribeScheduledJobs` live push, which the proxy could never have covered).
+
+Reject a dispatch response body that is not a `{ result }` envelope. `typeof []
+=== "object"`, so a 200 body of `[1,2,3]` — or one with no `result` key — slipped
+the object guard and resolved `decodeWire(undefined)`, i.e. `undefined`, as "the
+function returned nothing". A genuine `undefined` return is emitted as
+`{"result":["$lunora.wire$","undefined"]}` with the key always present, so
+requiring it costs nothing.
+
+Route all four call-envelope producers through one
+`encodeArgsOrThrow(label, path, args)` in `shared/wire-codec.ts`. `encodeWire`
+throws on any non-plain object; three of the four sites dropped the labelled
+error the fourth had, so a bad argument left a bare unattributable `TypeError`
+from `ctx.run` / `ctx.scheduler.runAt` / `pool.enqueue` — useless on a scheduled
+job debugged from a log line.
+* **dispatch,scheduler:** `encodeWire` rejects any non-plain object INCLUDING one with a
+working `toJSON()`, which `JSON.stringify` honoured. So
+`ctx.scheduler.runAfter(60_000, internal.billing.charge, { amount: new
+Decimal("9.99") })` — which serialised before — now throws at schedule time.
+Loud rather than silently wrong; pass a plain value instead.
+
+The same wire-bracketing rationale had been restated five times across three
+files (~25 comment lines against ~15 of code), which is how the scheduler
+docblock came to be wrong without anyone noticing. One canonical note now lives
+at the dispatch runner's encode; the rest point at it.
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01VUuYamsU1YLmAQhtut9PLZ
+
+* fix(workflow): decode a scheduled workflow's params where the handler reads them
+
+Review caught that the earlier fix put the decode on the wrong side of the seam.
+Workflow `params` are JSON-serialised by Cloudflare into durable storage, so
+decoding before `create({ params })` fails creation outright on a `bigint` and
+silently flattens a `Date` back to a string — the wire form was the only shape
+that could survive that hop intact.
+
+The dispatch branch now passes the encoded args through untouched, and
+`createRunContext` decodes at `params`, which is the first point that can hand a
+handler real `bigint`/`Date`/bytes values. `decodeWire` is identity on pure JSON,
+so a directly created or spawned instance is unaffected.
+
+Both sides are pinned. The runtime test asserts the boundary still carries the
+wire form — decoding there is what breaks creation — and the workflow test
+asserts the handler receives the decoded values; it fails against the raw payload.
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01VUuYamsU1YLmAQhtut9PLZ
+
+### Bug Fixes
+
+* **dispatch,scheduler:** wire-bracket ctx.run so it returns the value, not the envelope ([#615](https://github.com/anolilab/lunora/issues/615)) ([404264a](https://github.com/anolilab/lunora/commit/404264a805812b080a8298ff33e10c70e224ca2f))
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.33
+* **@lunora/values:** upgraded to 1.0.0-alpha.41
+* **@lunora/server:** upgraded to 1.0.0-alpha.105
+
+## @lunora/workflow [1.0.0-alpha.46](https://github.com/anolilab/lunora/compare/@lunora/workflow@1.0.0-alpha.45...@lunora/workflow@1.0.0-alpha.46) (2026-09-05)
+
+### Bug Fixes
+
+* **scheduler,workflow:** give a scheduled workflow an idempotency key ([#605](https://github.com/anolilab/lunora/issues/605)) ([0f3afb4](https://github.com/anolilab/lunora/commit/0f3afb44a005861c5b06b4be0cca4576ec0ce7e8))
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.32
+* **@lunora/values:** upgraded to 1.0.0-alpha.40
+* **@lunora/server:** upgraded to 1.0.0-alpha.103
+
+## @lunora/workflow [1.0.0-alpha.45](https://github.com/anolilab/lunora/compare/@lunora/workflow@1.0.0-alpha.44...@lunora/workflow@1.0.0-alpha.45) (2026-09-04)
+
+### ⚠ BREAKING CHANGES
+
+* the KV mutual-exclusion error is raised with code `BAD_REQUEST`
+instead of `INTERNAL`, and it now fires from the admin `putValue` path as well as
+`createKv`.
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01VUuYamsU1YLmAQhtut9PLZ
+
+* fix(vite): materialize the remote wrangler config after bindings are provisioned
+
+`planViteRemoteBindings` ran at plugin-factory time, before any Vite hook. The temp
+config it writes is a copy of `wrangler.jsonc` with `"remote": true` injected on each
+eligible binding, and Lunora provisions the bindings the project's code implies from
+`wranglerValidatorPlugin`'s `config` hook — so the copy was always taken one write too
+early. Under `LUNORA_REMOTE` the cloudflare plugin was then pointed at a snapshot that
+predated the provisioning, and the dev worker booted without the binding that had just
+been written. This is the remote twin of the local defect that moving the reconcile into
+`config` closed; that move did not reach this path.
+
+Observed live against a real account on an example app: `vite dev` logged
+"inferred bindings -> AI (Workers AI) (written to .../wrangler.jsonc)", the file on disk
+gained `"ai": { "binding": "AI" }`, the materialized temp config did not, and a probe
+route reported `["DB","LUNORA_ADMIN_TOKEN","SHARD","WORKER_ENV"]`. After the change the
+same probe reports `["AI","DB","LUNORA_ADMIN_TOKEN","SHARD","WORKER_ENV"]` and the temp
+config carries `"ai": { "binding": "AI", "remote": true }`.
+
+Materialization now happens in the `config` hook, which is registered after the
+validator's and therefore runs after it (both are `enforce: "pre"`). The build gate moves
+with it, so `vite build` no longer writes a temp config it never uses. Cleanup folds into
+the same plugin because the disposer cannot be captured before the plan exists; a
+re-entered `config` hook disposes the previous generation rather than orphaning its file.
+* `remoteBindingsConfigPlugin` and `remoteBindingsCleanupPlugin` are
+replaced by a single `remoteBindingsPlugin(options, planOptions)`, which takes the plan
+inputs rather than an already-materialized plan.
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01VUuYamsU1YLmAQhtut9PLZ
+
+* fix(notify): close the register-side takeover and the dead-device blackout
+
+`ctx.push.register()` upserted a subscription with `user_id = ?` in the `DO UPDATE SET` list, so
+registering an endpoint already stored for someone else re-owned it. The id is derived from the
+endpoint, i.e. a caller-controlled key — the same precondition `unregister` was given an atomic
+`deleteOwned` for. Registering a victim's endpoint with garbage keys under your own id took their
+device dark (an encryption failure is not a gone signal, so it was never pruned either) and handed
+you `unregister` over it. Both stores now refuse a put that would move a row to a different owner —
+D1 in the `ON CONFLICT … DO UPDATE`'s own `WHERE`, memory with no await between check and write —
+and the legacy-prefix eviction inside `put`, a DELETE on a different primary key the guarded upsert
+never sees, is scoped the same way (with the CLAIM predicate, so an anonymous device that signs in
+still loses its old row).
+
+FCM dead tokens were never detected as gone. The provider forwards `body.error.message` only, and
+FCM HTTP v1 keeps `UNREGISTERED` in `error.details[].errorCode`, which it drops — so the codes
+`isGoneError` matched could not arrive and every uninstalled device stayed registered forever, was
+re-POSTed on every broadcast, and counted `failed`. Match the `NOT_FOUND` prose the transport
+actually emits, still scoped to FCM.
+
+A gone subscription also cost four POSTs and ~2.2 s of backoff before being deleted, because
+`retryMiddleware` had no `shouldRetry`; those attempts then fed a circuit breaker whose counter is
+closure state shared by every channel, so two dead devices blacked out `chat`/`webhook`/`inApp` for
+30 s — and the second device's result became `Circuit open`, which is not a gone signal, so it
+survived to repeat it. Permanent failures are no longer retried, and the breaker is per provider and
+ignores them; it still opens for five consecutive transient failures.
+
+On the retry path a gone receipt was reported `failed`, so the pruned id went back into `failedIds`
+and the narrower retry could only throw `no registered subscription` until the queue dead-lettered
+an unsubscribe. It settles as `expired` now, kinded by the id's own prefix, as does an id whose row
+is already gone.
+
+Seeded `email` columns used faker's `free_email` default, so generated rows carried deliverable
+gmail/hotmail/yahoo addresses; seed a staging database, run any user-driven mail flow, and the app
+mails real strangers from its own verified domain. They are built on the RFC 2606 reserved
+`example.com` now — goldens regenerated, since an explicit provider also shifts faker's draw.
+
+Also: the mail capture sink logs when it has nowhere to record instead of returning a success-shaped
+`uncaptured` in silence; the inbound `verify` gate proceeds only on `true`/`undefined` rather than
+on anything but `false`; the queue recipe and `idempotencyKey` docs say that consumer-side dedupe is
+the only mechanism, since no transport can reach Resend's `Idempotency-Key` request header; the
+studio seed host answers `409 fk-parents-empty` (a code its client already decoded and nothing ever
+sent) instead of returning children whose fabricated parents it drops; and `flagshipProvider`
+refuses a literal empty `authToken` as the thunk path already did.
+* `SubscriptionStore.put` must refuse a put that would move a row to a different
+owner, and `ctx.push.register()` now rejects with `FORBIDDEN` for an endpoint registered to another
+user. `@lunora/seed` generates `@example.com` addresses, changing every seeded email value.
+`handleSeedRequest` returns 409 instead of 200 for a table whose foreign-key parents were not
+supplied in `existingIds`.
+
+Test doubles were the reason two of these went unnoticed and are tightened here: the notify mock
+engine now wires the real resilience middleware through the same `attachResilience` production
+uses (a bare `createNotification` exercised none of it), the mock push provider answers each
+provider's real gone phrasing per kind, and `fakeD1` models the `ON CONFLICT … DO UPDATE … WHERE`
+refusal and each of the three `DELETE` owner predicates instead of overwriting and deleting
+unconditionally.
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01VUuYamsU1YLmAQhtut9PLZ
+
+* fix(workflow): spawn compensations under an id the engine accepts
+
+The Workflows engine validates an instance id on `create` before it does anything
+else: at most 100 characters matching `^[a-zA-Z0-9_][a-zA-Z0-9-_]*$`. `:` is not in
+that class, so `ctx.parallel`'s group-saga rollback — spawned as
+`<childId>:compensate` — was rejected on every attempt, in every deployment. The
+rejection is not a duplicate-instance error, so the durable step burned its whole
+retry budget, the catch in `compensateCompleted` logged it and moved on, and the
+group failed with the completed branches never rolled back. A `chargeCard` branch
+with `compensateWith: "refundCard"` took the money and refunded nothing.
+
+The five unit tests hard-coded the `:compensate` id against a `create` double that
+accepted any string, and the workerd smoke never spawns, so nothing caught it. The
+double now applies the engine's own id check, and a new test asserts that every id
+the package mints from a Cloudflare-shaped parent — children and compensations
+alike — satisfies that grammar, so a future suffix carrying a `:` fails there.
+
+Only the suffix is ours to constrain. The parent id it is appended to belongs to
+the host, and `@lunora/platform-node` runs this same orchestrator on
+`@visulima/workflow`, whose `generateRunId` mints `<definitionId>:<uuid>` and
+accepts no override. A test pins that a host-issued parent id the Cloudflare engine
+would refuse still fans out and compensates, so the Cloudflare grammar stays in the
+assertion that belongs to Cloudflare rather than leaking into the portable path.
+
+Also in this change:
+
+- `ctx.parallel` reads an attached child's terminal `status()` instead of waiting
+  for an event that has already been consumed. `instance.restart()` on a parent
+  that had fanned out wipes the parent's step cache AND its event map, so the
+  re-run spawn steps re-attach to children that already signalled; the joins then
+  hibernated for the branch timeout (24 hours by default) and failed the group with
+  the finished children's results sitting unread on their handles. The status read
+  costs nothing on a first spawn — only the attach path performs it — and also
+  recovers a join whose signal was lost for any other reason.
+
+- `isDuplicateInstanceError` no longer misses an `already_exists` spelling. The
+  predicate cannot be pinned against a live engine (miniflare never rejects a
+  duplicate create at all, so the attach branch is unreachable under workerd), and
+  the test now records why along with the separator variants it does defend.
+* a group-saga compensation instance is now created as
+`<childId>-compensate`, not `<childId>:compensate`. Nothing could observe the old
+id — the engine rejected it — but an app that derived the name itself must update.
+The `lunora:spawn:*` durable step now memoizes a branch outcome rather than the
+child id; a parent already in flight replays the old string and joins as before.
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01VUuYamsU1YLmAQhtut9PLZ
+
+* fix(container): key the readiness gate on the run, not on onStop
+
+`lunoraReadiness` was cleared only in `onStop`, but the base reaches that hook
+solely through `syncPendingStoppedEvents` — which `start()` never calls (only
+`startAndWaitForPorts`, `stop()` and the alarm loop do), while the monitor callback
+that observes a container exit merely records the state. So an explicit `start()`
+inside the up-to-three-minute window before the next alarm found the finished run's
+settled gate and returned early, skipping BOTH `armHardTimeout` and the `readyOn`
+probes: run 2 had no hard timeout at all and was proxied to before it reported
+ready. The hard timeout's own SIGTERM lands squarely in that window, so the
+runaway-cost backstop disarmed itself on the way out.
+
+The mirror case is why "always re-arm" is not the answer: a no-op `start()` on an
+already-running container — an isolate recycled under a live run, or a periodic
+"ensure started" call — begins no new run, and re-arming stamped a fresh generation
+that orphaned the live schedule row and pushed the total-lifetime cap out
+indefinitely.
+
+Both now hang off one synchronous observation taken before anything is started:
+the container was not running (a new run — drop the old gate, arm, probe) or it was
+(no new run — probe for this isolate, leave the armed schedule alone). Read before
+any await, so two concurrent starts of a stopped container still share one gate.
+The two sites that drop a failed gate are identity-checked, so a gate failing late
+for a run that has since ended cannot discard the current run's.
+
+The existing test called `onStop` by hand between the two starts, encoding exactly
+the assumption that does not hold; it now lets the run end the way the base does.
+The start double stubs both entry points and flips the container's `running` flag
+the way `doStartContainer` does, so a no-op start is distinguishable from a first
+start.
+
+Also in this change:
+
+- `startAndWaitForPorts()` resolves the Secrets Store env. It was the only start
+  entry that did not, despite being the path `containerFetch` routes through and the
+  one an app can call itself; `doStartContainer` reads `this.envVars`, so a container
+  started that way booted without its `secretsStore` values. Resolution moves out of
+  `containerFetch`, which now performs it only when a start is actually needed.
+
+- `hardTimeout` is documented as what it is. `stop()` sends SIGTERM and does not
+  escalate to `destroy()`, so a container that traps or ignores the signal outlives
+  its cap; the docs promised it would "never run longer than an hour, busy or not".
+  The hook docblock names the escalation an app can add.
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01VUuYamsU1YLmAQhtut9PLZ
+
+* build: regenerate the lockfile against the released manifest versions
+
+`alpha`'s release commits bumped `@lunora/observability` to alpha.56 and
+`@lunora/platform-cloudflare` to alpha.32 without updating `pnpm-lock.yaml`, so
+every CI job fails in its setup step: the workflows install with
+`--frozen-lockfile`, which refuses a lockfile whose specifiers disagree with the
+manifests. That turns roughly a dozen checks red at once, including both
+required ones, for reasons that look unrelated to the change under review.
+
+Regenerated rather than hand-edited — a text-merged lockfile passes locally and
+fails on the merge ref CI actually builds.
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01VUuYamsU1YLmAQhtut9PLZ
+
+* test(flags): reword a comment that tripped the secret-entropy rule
+
+The literal env-var reference in the new test's comment reads as a high-entropy
+string to `no-secrets`, which fails `lint:eslint` at --max-warnings=0. The
+comment says the same thing without spelling the identifier.
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01VUuYamsU1YLmAQhtut9PLZ
+
+* fix: close the id, run-identity and provisioning gaps left open
+
+`ctx.parallel`'s group-saga rollback was still unreachable, gated on length instead of the colon.
+The engine's create-time id check tests `id.length > 100` BEFORE the character class, and a branch
+id is caller-controlled right up to that ceiling — an explicit `branch(…, { id })`, or a derived
+`<parentId>-c<n>` under a long host-issued parent. Adding `-compensate` puts the rollback over it,
+`create` rejects, `compensateCompleted` logs and continues, and a completed branch that took payment
+is never refunded. An over-long compensation id now folds back under the ceiling, keeping a digest
+of the whole child id and the readable suffix. The regression test's short synthetic parent only
+ever exercised the character class; it says so now, and a 90-character branch id covers the rest.
+
+`codeTool` and `agent.asTool()` could never be used together. `codeTool` gives each script step a
+tool-call id of `${toolCallId}:${step.id}` and takes any tool in its map, so `agentAsTool`'s
+`sub-<name>-<toolCallId>` carried a colon into `create`, which rejects it — not as a duplicate, so
+it rethrows and the per-step `step.do` burns its retries. The call id is hashed into the instance id
+now (the thread key still carries it raw), and the docblock that called this "a note for whoever
+changes the shape, not a live hazard" is gone. The agent binding double applies the engine's own id
+check, which is what let this pass unnoticed.
+
+The attach path returned a child's outcome straight into the durable step cache while only the event
+path bounded it. Both channels cap at 1 MiB, and a step return the host cannot serialise aborts the
+instance rather than failing one branch, so the attach path bounds it the same way.
+
+Provisioning was reachable only through `validateWrangler`. `reconcileBindingsSafely` lived in the
+wrangler validator's `config` hook, so turning the CHECKS off — an option whose name promises
+nothing about writes — took the write back out of `config`, and the Cloudflare plugin parsed
+`wrangler.jsonc`, and `remoteBindingsPlugin` copied it, before the binding existed: the exact
+missing-`env.DB` boot that hook was moved to fix. It is its own unconditionally registered plugin
+now, still `enforce: "pre"` and still ahead of the remote-bindings copy.
+
+A re-entrant Vite `config` pass left `configPath` naming a deleted file: cleanup unlinked temp A, a
+new plan wrote temp B, and `withRemoteBindings` read the A still on the options object as a
+user-supplied path and returned unchanged. The plugin tracks what it injected, so only a path it did
+not write counts as the user's.
+
+The container's `beginStart()` snapshot was a TOCTOU across two awaits — a Secrets Store RPC, and
+the base's own pre-start work. A container exiting in that window let a new run start with
+`wasRunning === true`, so the hard timeout was never armed and (via `start()`) the readiness probes
+were skipped too: run 2 ran uncapped and was proxied to before it reported ready. The snapshot moved
+past the secrets resolution, and an `onStop` observed ACROSS the base call now demotes it. What
+remains uncovered is an exit inside `start()`'s own base call, which never syncs pending stop
+events — documented on `beginStart`, along with the hard timeout being a one-shot signal that
+nothing re-sends to a container ignoring SIGTERM.
+
+Docs and comments that overstated a guarantee: the mail queue recipe promised exactly-once for a
+mark written after the send and read from an eventually-consistent store; `register()`'s owner guard
+hard-fails browser account switching, because `subscribeToPush` reuses the browser's subscription
+and every account derives the same id, so the README now makes the sign-out `unregister` part of the
+recipe rather than an aside; the half-open breaker lets through every send already in flight, not
+"exactly one"; `isPermanentFailure` is channel-less as well as kind-less and now governs retry for
+chat/webhook/inApp; the duplicate-instance matcher is unreachable LOCALLY, not in production, which
+is why `createOrAttach` exists at all.
+* `flagshipProvider({ authToken: "" })` now throws at construction instead of
+evaluating flags against their checked-in defaults — a deployment reading an unset secret straight
+off `env` fails to boot rather than failing closed in silence. Omit `authToken` for an
+unauthenticated endpoint, or pass a thunk. A sub-agent child run's instance id is now
+`sub-<name>-<digest>` rather than `sub-<name>-<toolCallId>`, so a run in flight across the upgrade
+starts a second child instead of re-attaching.
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01VUuYamsU1YLmAQhtut9PLZ
+
+* chore(deps): regenerate the lockfile after merging alpha
+
+The merge took the branch's lockfile, which still carried the released-version
+specifiers the new root overrides replace.
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01VUuYamsU1YLmAQhtut9PLZ
+
+### Bug Fixes
+
+* make saga compensation, container restarts and push ownership actually work ([#592](https://github.com/anolilab/lunora/issues/592)) ([6fae07a](https://github.com/anolilab/lunora/commit/6fae07a056a6c93fea1fc11aa88c8d35ee031019))
+
+## @lunora/workflow [1.0.0-alpha.44](https://github.com/anolilab/lunora/compare/@lunora/workflow@1.0.0-alpha.43...@lunora/workflow@1.0.0-alpha.44) (2026-09-04)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.31
+* **@lunora/values:** upgraded to 1.0.0-alpha.39
+* **@lunora/server:** upgraded to 1.0.0-alpha.102
+
+## @lunora/workflow [1.0.0-alpha.43](https://github.com/anolilab/lunora/compare/@lunora/workflow@1.0.0-alpha.42...@lunora/workflow@1.0.0-alpha.43) (2026-09-03)
+
+### ⚠ BREAKING CHANGES
+
+* 34 public API changes across mail, storage, payment, replica,
+studio, workflow, agent, codegen, cli and the shard runtime. The full list is in
+
+### Bug Fixes
+
+* audit rounds 7-11 ([#579](https://github.com/anolilab/lunora/issues/579)) ([224a42a](https://github.com/anolilab/lunora/commit/224a42a741f524e0110da55917c79fd08c90a885))
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.30
+* **@lunora/values:** upgraded to 1.0.0-alpha.38
+* **@lunora/server:** upgraded to 1.0.0-alpha.100
+
+## @lunora/workflow [1.0.0-alpha.42](https://github.com/anolilab/lunora/compare/@lunora/workflow@1.0.0-alpha.41...@lunora/workflow@1.0.0-alpha.42) (2026-09-02)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.29
+* **@lunora/values:** upgraded to 1.0.0-alpha.37
+* **@lunora/server:** upgraded to 1.0.0-alpha.99
+
+## @lunora/workflow [1.0.0-alpha.41](https://github.com/anolilab/lunora/compare/@lunora/workflow@1.0.0-alpha.40...@lunora/workflow@1.0.0-alpha.41) (2026-09-01)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.28
+* **@lunora/values:** upgraded to 1.0.0-alpha.36
+* **@lunora/server:** upgraded to 1.0.0-alpha.98
+
+## @lunora/workflow [1.0.0-alpha.40](https://github.com/anolilab/lunora/compare/@lunora/workflow@1.0.0-alpha.39...@lunora/workflow@1.0.0-alpha.40) (2026-09-01)
+
+### ⚠ BREAKING CHANGES
+
+* **shard-engine:** close round-3 audit findings across the data path, guards, mirrors and tests (#541)
+
+### Bug Fixes
+
+* **shard-engine:** close round-3 audit findings across the data path, guards, mirrors and tests ([#541](https://github.com/anolilab/lunora/issues/541)) ([dfc2d4d](https://github.com/anolilab/lunora/commit/dfc2d4d07bf8f67214122dc7f14d83a9b1533d07))
+
+
+### Dependencies
+
+* **@lunora/server:** upgraded to 1.0.0-alpha.97
+
+## @lunora/workflow [1.0.0-alpha.39](https://github.com/anolilab/lunora/compare/@lunora/workflow@1.0.0-alpha.38...@lunora/workflow@1.0.0-alpha.39) (2026-09-01)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.27
+* **@lunora/values:** upgraded to 1.0.0-alpha.35
+* **@lunora/server:** upgraded to 1.0.0-alpha.96
+
+## @lunora/workflow [1.0.0-alpha.38](https://github.com/anolilab/lunora/compare/@lunora/workflow@1.0.0-alpha.37...@lunora/workflow@1.0.0-alpha.38) (2026-08-30)
+
+
+### Dependencies
+
+* **@lunora/values:** upgraded to 1.0.0-alpha.34
+* **@lunora/server:** upgraded to 1.0.0-alpha.94
+
+## @lunora/workflow [1.0.0-alpha.37](https://github.com/anolilab/lunora/compare/@lunora/workflow@1.0.0-alpha.36...@lunora/workflow@1.0.0-alpha.37) (2026-08-29)
+
+### ⚠ BREAKING CHANGES
+
+* eleven packages now declare peerDependencies. Consumers that
+relied on those packages resolving through hoisting must install them; the
+alternative was shipping types that fail to resolve off this repo's node_modules.
+
+`@lunora/workflow` is an optional peer of `@lunora/runtime`, so packem inlines
+its types rather than importing them — the published `@lunora/runtime` carries no
+`@lunora/workflow` dependency, as its source comments already promised.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01AWDgSnuBJaeQHfEitB2zeL
+
+* fix: satisfy eslint and the template matrix after the packem gate
+
+Two CI failures from making packem warnings fatal, each a gate that the local
+packem sweep does not cover.
+
+`@lunora/advisor` back to a real dependency on `@lunora/errors`. `ae-metrics.ts`
+imports `LunoraError` as a VALUE, and import/no-extraneous-dependencies requires
+that for anything under `src/` regardless of whether the module reaches the
+bundle. packem cannot see it because that module's value exports are
+quarantined — `src/index.ts` re-exports only its types — so the throwing code is
+tree-shaken out. The two rules disagree by construction; the packem side is now a
+commented `unused` exclusion that says which condition would end it.
+
+`@lunora/workflow` becomes a REQUIRED peer of `@lunora/runtime`. As an optional
+peer it was auto-installed anyway, and every one of the twelve templates then
+resolved `@lunora/workflow` from the npm REGISTRY instead of this checkout — the
+scaffold matrix builds its local-tarball map from required peers only, on the
+assumption that optional ones are never pulled in. Forcing the type to inline
+instead (`resolveExternals.exclude`) does not work: that option governs the JS
+bundle, and the declaration build has its own resolver, so the import survived.
+A required peer matches the other seven packages here and keeps the type
+resolvable for consumers.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01AWDgSnuBJaeQHfEitB2zeL
+
+### Build System
+
+* ship .mjs everywhere and make packem warnings fatal ([#526](https://github.com/anolilab/lunora/issues/526)) ([b3eaacc](https://github.com/anolilab/lunora/commit/b3eaacc5a31fe4634a5f4a6c59fda6fbbc8315e1))
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.26
+* **@lunora/values:** upgraded to 1.0.0-alpha.33
+* **@lunora/server:** upgraded to 1.0.0-alpha.93
+
+## @lunora/workflow [1.0.0-alpha.36](https://github.com/anolilab/lunora/compare/@lunora/workflow@1.0.0-alpha.35...@lunora/workflow@1.0.0-alpha.36) (2026-08-28)
+
+### Documentation
+
+* repair 404 package links, and document .source() in the hyperdrive readme ([#501](https://github.com/anolilab/lunora/issues/501)) ([d519ac2](https://github.com/anolilab/lunora/commit/d519ac23f2bd8ddf5a10af5db11f141e8728babf))
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.25
+* **@lunora/values:** upgraded to 1.0.0-alpha.32
+* **@lunora/server:** upgraded to 1.0.0-alpha.92
+
+## @lunora/workflow [1.0.0-alpha.35](https://github.com/anolilab/lunora/compare/@lunora/workflow@1.0.0-alpha.34...@lunora/workflow@1.0.0-alpha.35) (2026-08-26)
+
+
+### Dependencies
+
+* **@lunora/values:** upgraded to 1.0.0-alpha.31
+* **@lunora/server:** upgraded to 1.0.0-alpha.87
+
+## @lunora/workflow [1.0.0-alpha.34](https://github.com/anolilab/lunora/compare/@lunora/workflow@1.0.0-alpha.33...@lunora/workflow@1.0.0-alpha.34) (2026-08-26)
+
+
+### Dependencies
+
+* **@lunora/values:** upgraded to 1.0.0-alpha.30
+* **@lunora/server:** upgraded to 1.0.0-alpha.86
+
+## @lunora/workflow [1.0.0-alpha.33](https://github.com/anolilab/lunora/compare/@lunora/workflow@1.0.0-alpha.32...@lunora/workflow@1.0.0-alpha.33) (2026-08-26)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.24
+* **@lunora/values:** upgraded to 1.0.0-alpha.29
+* **@lunora/server:** upgraded to 1.0.0-alpha.84
+
+## @lunora/workflow [1.0.0-alpha.32](https://github.com/anolilab/lunora/compare/@lunora/workflow@1.0.0-alpha.31...@lunora/workflow@1.0.0-alpha.32) (2026-08-26)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.23
+* **@lunora/values:** upgraded to 1.0.0-alpha.28
+* **@lunora/server:** upgraded to 1.0.0-alpha.83
+
+## @lunora/workflow [1.0.0-alpha.31](https://github.com/anolilab/lunora/compare/@lunora/workflow@1.0.0-alpha.30...@lunora/workflow@1.0.0-alpha.31) (2026-08-24)
+
+### Bug Fixes
+
+* **workflow:** reject reserved names on step.name ([#447](https://github.com/anolilab/lunora/issues/447)) ([f51690d](https://github.com/anolilab/lunora/commit/f51690da43c76e134de1b9dc68468da03c4e6834))
+
+### Build System
+
+* migrate to @cloudflare/vitest-plugin v1 ([#470](https://github.com/anolilab/lunora/issues/470)) ([05c4937](https://github.com/anolilab/lunora/commit/05c49371c30d65907eec8719f27a117f9bcaaefc))
+
+
+### Dependencies
+
+* **@lunora/server:** upgraded to 1.0.0-alpha.80
+
+## @lunora/workflow [1.0.0-alpha.30](https://github.com/anolilab/lunora/compare/%40lunora%2Fworkflow%401.0.0-alpha.29...%40lunora%2Fworkflow%401.0.0-alpha.30) (2026-08-18)
+
+
+### Dependencies
+
+* **@lunora/server:** upgraded to 1.0.0-alpha.76
+
+## @lunora/workflow [1.0.0-alpha.29](https://github.com/anolilab/lunora/compare/%40lunora%2Fworkflow%401.0.0-alpha.28...%40lunora%2Fworkflow%401.0.0-alpha.29) (2026-08-14)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.22
+* **@lunora/values:** upgraded to 1.0.0-alpha.27
+
+## @lunora/workflow [1.0.0-alpha.28](https://github.com/anolilab/lunora/compare/%40lunora%2Fworkflow%401.0.0-alpha.27...%40lunora%2Fworkflow%401.0.0-alpha.28) (2026-08-11)
+
+## @lunora/workflow [1.0.0-alpha.27](https://github.com/anolilab/lunora/compare/%40lunora%2Fworkflow%401.0.0-alpha.26...%40lunora%2Fworkflow%401.0.0-alpha.27) (2026-08-11)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.21
+* **@lunora/values:** upgraded to 1.0.0-alpha.26
+
+## @lunora/workflow [1.0.0-alpha.26](https://github.com/anolilab/lunora/compare/%40lunora%2Fworkflow%401.0.0-alpha.25...%40lunora%2Fworkflow%401.0.0-alpha.26) (2026-08-10)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.20
+* **@lunora/values:** upgraded to 1.0.0-alpha.25
+
+## @lunora/workflow [1.0.0-alpha.25](https://github.com/anolilab/lunora/compare/%40lunora%2Fworkflow%401.0.0-alpha.24...%40lunora%2Fworkflow%401.0.0-alpha.25) (2026-08-09)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.18
+* **@lunora/values:** upgraded to 1.0.0-alpha.23
+
+## @lunora/workflow [1.0.0-alpha.24](https://github.com/anolilab/lunora/compare/%40lunora%2Fworkflow%401.0.0-alpha.23...%40lunora%2Fworkflow%401.0.0-alpha.24) (2026-08-09)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.17
+* **@lunora/values:** upgraded to 1.0.0-alpha.22
+
+## @lunora/workflow [1.0.0-alpha.23](https://github.com/anolilab/lunora/compare/%40lunora%2Fworkflow%401.0.0-alpha.22...%40lunora%2Fworkflow%401.0.0-alpha.23) (2026-08-07)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.16
+* **@lunora/values:** upgraded to 1.0.0-alpha.21
+
+## @lunora/workflow [1.0.0-alpha.22](https://github.com/anolilab/lunora/compare/%40lunora%2Fworkflow%401.0.0-alpha.21...%40lunora%2Fworkflow%401.0.0-alpha.22) (2026-08-07)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.15
+* **@lunora/values:** upgraded to 1.0.0-alpha.20
+
+## @lunora/workflow [1.0.0-alpha.21](https://github.com/anolilab/lunora/compare/%40lunora%2Fworkflow%401.0.0-alpha.20...%40lunora%2Fworkflow%401.0.0-alpha.21) (2026-08-04)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.14
+* **@lunora/values:** upgraded to 1.0.0-alpha.19
+
+## @lunora/workflow [1.0.0-alpha.20](https://github.com/anolilab/lunora/compare/%40lunora%2Fworkflow%401.0.0-alpha.19...%40lunora%2Fworkflow%401.0.0-alpha.20) (2026-08-04)
+
+
+### Dependencies
+
+* **@lunora/values:** upgraded to 1.0.0-alpha.18
+
+## @lunora/workflow [1.0.0-alpha.19](https://github.com/anolilab/lunora/compare/%40lunora%2Fworkflow%401.0.0-alpha.18...%40lunora%2Fworkflow%401.0.0-alpha.19) (2026-08-04)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.13
+* **@lunora/values:** upgraded to 1.0.0-alpha.17
+
+## @lunora/workflow [1.0.0-alpha.18](https://github.com/anolilab/lunora/compare/%40lunora%2Fworkflow%401.0.0-alpha.17...%40lunora%2Fworkflow%401.0.0-alpha.18) (2026-08-03)
+
+
+### Dependencies
+
+* **@lunora/values:** upgraded to 1.0.0-alpha.16
+
+## @lunora/workflow [1.0.0-alpha.17](https://github.com/anolilab/lunora/compare/%40lunora%2Fworkflow%401.0.0-alpha.16...%40lunora%2Fworkflow%401.0.0-alpha.17) (2026-08-02)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.12
+* **@lunora/values:** upgraded to 1.0.0-alpha.15
+
+## @lunora/workflow [1.0.0-alpha.16](https://github.com/anolilab/lunora/compare/%40lunora%2Fworkflow%401.0.0-alpha.15...%40lunora%2Fworkflow%401.0.0-alpha.16) (2026-08-01)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.11
+* **@lunora/values:** upgraded to 1.0.0-alpha.14
+
+## @lunora/workflow [1.0.0-alpha.15](https://github.com/anolilab/lunora/compare/%40lunora%2Fworkflow%401.0.0-alpha.14...%40lunora%2Fworkflow%401.0.0-alpha.15) (2026-07-31)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.10
+* **@lunora/values:** upgraded to 1.0.0-alpha.13
+
+## @lunora/workflow [1.0.0-alpha.14](https://github.com/anolilab/lunora/compare/%40lunora%2Fworkflow%401.0.0-alpha.13...%40lunora%2Fworkflow%401.0.0-alpha.14) (2026-07-28)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.9
+* **@lunora/values:** upgraded to 1.0.0-alpha.12
+
+## @lunora/workflow [1.0.0-alpha.13](https://github.com/anolilab/lunora/compare/%40lunora%2Fworkflow%401.0.0-alpha.12...%40lunora%2Fworkflow%401.0.0-alpha.13) (2026-07-25)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.8
+* **@lunora/values:** upgraded to 1.0.0-alpha.11
+
+## @lunora/workflow [1.0.0-alpha.12](https://github.com/anolilab/lunora/compare/%40lunora%2Fworkflow%401.0.0-alpha.11...%40lunora%2Fworkflow%401.0.0-alpha.12) (2026-07-23)
+
+
+### Dependencies
+
+* **@lunora/values:** upgraded to 1.0.0-alpha.10
+
+## @lunora/workflow [1.0.0-alpha.11](https://github.com/anolilab/lunora/compare/%40lunora%2Fworkflow%401.0.0-alpha.10...%40lunora%2Fworkflow%401.0.0-alpha.11) (2026-07-20)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.6
+* **@lunora/values:** upgraded to 1.0.0-alpha.9
+
+## @lunora/workflow [1.0.0-alpha.10](https://github.com/anolilab/lunora/compare/%40lunora%2Fworkflow%401.0.0-alpha.9...%40lunora%2Fworkflow%401.0.0-alpha.10) (2026-07-17)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.5
+* **@lunora/values:** upgraded to 1.0.0-alpha.8
+
+## @lunora/workflow [1.0.0-alpha.9](https://github.com/anolilab/lunora/compare/%40lunora%2Fworkflow%401.0.0-alpha.8...%40lunora%2Fworkflow%401.0.0-alpha.9) (2026-07-11)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.4
+* **@lunora/values:** upgraded to 1.0.0-alpha.7
+
+## @lunora/workflow [1.0.0-alpha.8](https://github.com/anolilab/lunora/compare/%40lunora%2Fworkflow%401.0.0-alpha.7...%40lunora%2Fworkflow%401.0.0-alpha.8) (2026-07-08)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.3
+* **@lunora/values:** upgraded to 1.0.0-alpha.6
+
+## @lunora/workflow [1.0.0-alpha.7](https://github.com/anolilab/lunora/compare/%40lunora%2Fworkflow%401.0.0-alpha.6...%40lunora%2Fworkflow%401.0.0-alpha.7) (2026-07-04)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.2
+* **@lunora/values:** upgraded to 1.0.0-alpha.5
+
+## @lunora/workflow [1.0.0-alpha.6](https://github.com/anolilab/lunora/compare/%40lunora%2Fworkflow%401.0.0-alpha.5...%40lunora%2Fworkflow%401.0.0-alpha.6) (2026-07-03)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.1
+* **@lunora/values:** upgraded to 1.0.0-alpha.4
+
+## @lunora/workflow [1.0.0-alpha.5](https://github.com/anolilab/lunora/compare/%40lunora%2Fworkflow%401.0.0-alpha.4...%40lunora%2Fworkflow%401.0.0-alpha.5) (2026-07-02)
+
+## @lunora/workflow [1.0.0-alpha.4](https://github.com/anolilab/lunora/compare/%40lunora%2Fworkflow%401.0.0-alpha.3...%40lunora%2Fworkflow%401.0.0-alpha.4) (2026-06-30)
+
+## @lunora/workflow [1.0.0-alpha.3](https://github.com/anolilab/lunora/compare/@lunora/workflow@1.0.0-alpha.2...@lunora/workflow@1.0.0-alpha.3) (2026-06-27)
+
+### Features
+
+* **queue:** add queues, pipelines, secrets bindings + studio queues page ([#30](https://github.com/anolilab/lunora/issues/30)) ([131460c](https://github.com/anolilab/lunora/commit/131460c5826f2ef600fa0ef81248ede91835dd0c)), closes [#29](https://github.com/anolilab/lunora/issues/29) [#31](https://github.com/anolilab/lunora/issues/31) [visulima#714](https://github.com/visulima/visulima/issues/714)
+
+
+### Dependencies
+
+* **@lunora/values:** upgraded to 1.0.0-alpha.3
+
+## @lunora/workflow [1.0.0-alpha.2](https://github.com/anolilab/lunora/compare/@lunora/workflow@1.0.0-alpha.1...@lunora/workflow@1.0.0-alpha.2) (2026-06-27)
+
+### Miscellaneous Chores
+
+* **deps:** wire fallow into every package ([896a81d](https://github.com/anolilab/lunora/commit/896a81d39a064293234bba3b734cde1036e81a67))
+* update our og pacakge image ([63e6811](https://github.com/anolilab/lunora/commit/63e6811e2dfb94bc2cc38c05292b527e884660b5))
+
+
+### Dependencies
+
+* **@lunora/values:** upgraded to 1.0.0-alpha.2
+
+## @lunora/workflow 1.0.0-alpha.1 (2026-06-21)
+
+### Features
+
+* publish all packages publicly for the initial alpha release ([91781b4](https://github.com/anolilab/lunora/commit/91781b485bf7a9891805c6851fe393de5f87ef40))
+
+### Miscellaneous Chores
+
+* lunora start ([786b573](https://github.com/anolilab/lunora/commit/786b5735d986bca4df64ccf642273a085bf7d574))
+* normalize package.json key order ([d7a25f0](https://github.com/anolilab/lunora/commit/d7a25f00e0f665dd113ad17e98081b9bd69a1989))
+
+
+### Dependencies
+
+* **@lunora/values:** upgraded to 1.0.0-alpha.1

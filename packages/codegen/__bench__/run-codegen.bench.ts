@@ -22,19 +22,66 @@ import { runCodegen } from "../src/index";
 const here = dirname(fileURLToPath(import.meta.url));
 const fixtureRoot = join(here, "..", "__tests__", "fixtures", "simple");
 
-let workdir: string;
+let warmWorkdir: string | undefined;
+
+/**
+ * A workdir with `_generated/*` already written, created on first use.
+ *
+ * tinybench's `setup`/`teardown` options are ignored by the instrumented
+ * runner outright, so the priming cannot live there.
+ *
+ * `beforeAll` DOES run under it — `AnalysisRunner` calls the suite's
+ * `beforeAll`/`afterAll` hooks around the benchmarks, in the same process as the
+ * bodies. An earlier version of this comment claimed otherwise; that was wrong,
+ * and the claim is corrected here rather than left to mislead the next reader
+ * into thinking every `beforeAll` in `__bench__` is inert. It is not.
+ *
+ * Priming lazily on first use is still the better shape, for a reason that does
+ * hold: the workdir is then owned by the code that needs it, cleanup is tied to
+ * process exit rather than to a hook whose ordering relative to repeated
+ * instrumented invocations is easy to get wrong, and a cold run stays entirely
+ * self-contained.
+ *
+ * Lazily initialising on first call sidesteps both: it runs in whichever context
+ * the bench body runs in, and it primes exactly once per context.
+ * @returns the primed workdir path
+ */
+const primedWorkdir = (): string => {
+    warmWorkdir ??= (() => {
+        const created = mkdtempSync(join(tmpdir(), "lunora-codegen-bench-warm-"));
+
+        cpSync(join(fixtureRoot, "lunora"), join(created, "lunora"), { recursive: true });
+        // Prime the on-disk output so the bench exercises the `writeIfChanged`
+        // no-op path rather than a first write.
+        runCodegen({ projectRoot: created, wranglerQueueProducers: [] });
+
+        return created;
+    })();
+
+    return warmWorkdir;
+};
+
+// Cleaned on process exit rather than in `afterAll`, which cannot see the value
+// for the same context reason. The directory is small and lives in the OS temp
+// dir, so a missed cleanup after a hard kill is harmless.
+process.on("exit", () => {
+    if (warmWorkdir !== undefined) {
+        rmSync(warmWorkdir, { force: true, recursive: true });
+    }
+});
 
 describe("runCodegen end-to-end (simple fixture)", () => {
     bench(
         "cold run — fresh workdir, full project setup",
         () => {
-            workdir = mkdtempSync(join(tmpdir(), "lunora-codegen-bench-"));
-            cpSync(join(fixtureRoot, "lunora"), join(workdir, "lunora"), { recursive: true });
+            const coldWorkdir = mkdtempSync(join(tmpdir(), "lunora-codegen-bench-"));
+
+            cpSync(join(fixtureRoot, "lunora"), join(coldWorkdir, "lunora"), { recursive: true });
 
             try {
-                runCodegen({ projectRoot: workdir });
+                runCodegen({ projectRoot: coldWorkdir, wranglerQueueProducers: [] });
             } finally {
-                rmSync(workdir, { force: true, recursive: true });
+                rmSync(coldWorkdir, { force: true, recursive: true });
             }
         },
         { iterations: 20 },
@@ -43,20 +90,8 @@ describe("runCodegen end-to-end (simple fixture)", () => {
     bench(
         "warm run — same workdir, only emit phase changes",
         () => {
-            runCodegen({ projectRoot: workdir });
+            runCodegen({ projectRoot: primedWorkdir(), wranglerQueueProducers: [] });
         },
-        {
-            iterations: 20,
-            setup: () => {
-                workdir = mkdtempSync(join(tmpdir(), "lunora-codegen-bench-warm-"));
-                cpSync(join(fixtureRoot, "lunora"), join(workdir, "lunora"), { recursive: true });
-                // Prime the on-disk output so the second pass exercises the
-                // `writeIfChanged` no-op path.
-                runCodegen({ projectRoot: workdir });
-            },
-            teardown: () => {
-                rmSync(workdir, { force: true, recursive: true });
-            },
-        },
+        { iterations: 20 },
     );
 });

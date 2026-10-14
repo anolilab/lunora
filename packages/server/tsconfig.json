@@ -1,10 +1,13 @@
 {
     "extends": "../../tsconfig.base.json",
     "compilerOptions": {
-        "outDir": "dist",
-        "rootDir": ".",
         "moduleResolution": "bundler",
         "types": ["node"]
+        // Intentionally no `outDir`/`rootDir` (unlike sibling packages): `lint:types`
+        // is `tsc --noEmit` and the real build is packem (driven by package.json
+        // exports), so neither is load-bearing here. A set `rootDir` would raise
+        // TS6059 for the `../../../shared/rest-surface` import (a file outside this
+        // package). See shared/rest-surface.ts.
     },
     "include": ["src/**/*", "__tests__/**/*", "__bench__/**/*"]
 }

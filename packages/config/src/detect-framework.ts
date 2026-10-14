@@ -1,11 +1,10 @@
-import { existsSync, readFileSync } from "node:fs";
-import { join } from "node:path";
+import { readProjectDependencyNames } from "./project-manifest";
 
 /**
  * The meta-frameworks Lunora can compose with, plus `"none"` for a standalone
  * SPA / SSR-less project (the current default). Mirrors PLAN4 §2.4.
  */
-type DetectedFramework = "astro" | "none" | "nuxt" | "react-router" | "solid-start" | "sveltekit" | "tanstack-start" | "tanstack-start-solid";
+type DetectedFramework = "astro" | "none" | "nuxt" | "react-router" | "solid-start" | "sveltekit" | "tanstack-start" | "tanstack-start-solid" | "vinext";
 
 /**
  * void's class model (PLAN4 §3). Class A is Vite-native and Lunora owns the
@@ -38,6 +37,10 @@ const FRAMEWORK_SIGNATURES: ReadonlyArray<{ class: FrameworkClass; dependency: s
     { class: "A", dependency: "@tanstack/react-start", framework: "tanstack-start" },
     { class: "A", dependency: "@tanstack/solid-start", framework: "tanstack-start-solid" },
     { class: "A", dependency: "@react-router/dev", framework: "react-router" },
+    // vinext (Next.js on Vite). Its router-selected worker entry
+    // (`vinext/server/fetch-handler`) is a clean `{ fetch(request, env, ctx) }`
+    // handler for both the App and Pages Router — class-A auto-compose either way.
+    { class: "A", dependency: "vinext", framework: "vinext" },
     { class: "A", dependency: "@solidjs/start", framework: "solid-start" },
     { class: "A", dependency: "solid-start", framework: "solid-start" },
     { class: "B", dependency: "@sveltejs/kit", framework: "sveltekit" },
@@ -48,25 +51,19 @@ const FRAMEWORK_SIGNATURES: ReadonlyArray<{ class: FrameworkClass; dependency: s
 /** The standalone (class-C) result returned when no known framework is present or detection fails. */
 const STANDALONE: FrameworkDetection = { class: "C", framework: "none" };
 
-/** Read and parse the project `package.json`, returning its merged dependency name set (empty on any failure). */
-const readDependencyNames = (root: string): ReadonlySet<string> => {
-    const packageJsonPath = join(root, "package.json");
-
-    if (!existsSync(packageJsonPath)) {
-        return new Set();
-    }
-
-    try {
-        const raw = readFileSync(packageJsonPath, "utf8");
-        const parsed = JSON.parse(raw) as { dependencies?: Record<string, unknown>; devDependencies?: Record<string, unknown> };
-
-        return new Set([...Object.keys(parsed.dependencies ?? {}), ...Object.keys(parsed.devDependencies ?? {})]);
-    } catch {
-        // A malformed / unreadable package.json must never crash a consumer —
-        // fall back to standalone behaviour.
-        return new Set();
-    }
-};
+/**
+ * Whether the project depends on the unscoped `lunorash` umbrella rather than
+ * the granular `@lunora/*` packages.
+ *
+ * Every generator that writes an import INTO the user's project has to ask:
+ * an umbrella-only install — the default for every starter template — never
+ * installs `@lunora/server`, so under pnpm's strict layout a scaffolded
+ * `from "@lunora/server"` is unresolvable and the worker stops bundling.
+ * Codegen answers the same question from its own dependency set
+ * (`dependencies.has("lunorash")`); this is that answer for every consumer
+ * that has only a project root.
+ */
+const projectUsesUmbrella = (root: string): boolean => readProjectDependencyNames(root).has("lunorash");
 
 /**
  * Detect which meta-framework a project uses by inspecting its `package.json`
@@ -77,7 +74,7 @@ const readDependencyNames = (root: string): ReadonlySet<string> => {
  * SPA flow is preserved.
  */
 const detectFramework = (root: string): FrameworkDetection => {
-    const dependencies = readDependencyNames(root);
+    const dependencies = readProjectDependencyNames(root);
 
     if (dependencies.size === 0) {
         return STANDALONE;
@@ -93,4 +90,4 @@ const detectFramework = (root: string): FrameworkDetection => {
 };
 
 export type { DetectedFramework, FrameworkClass, FrameworkDetection };
-export { detectFramework };
+export { detectFramework, projectUsesUmbrella };

@@ -1,20 +1,34 @@
 ---
 title: "@lunora/svelte"
 description: Svelte 5 bindings built on @lunora/client — live query stores, optimistic mutations, and an SSR hydration handoff.
+related:
+    - to: /docs/packages/react
+      note: "the same contract for React"
+    - to: /docs/packages/solid
+      note: "the SolidJS adapter"
+    - to: /docs/packages/vue
+      note: "the Vue adapter"
+    - to: /docs/packages/client
+      note: "the framework-neutral SDK this wraps"
+    - to: /docs/frameworks/bring-your-framework
+      note: "composition + adapter maturity"
+    - to: /docs/frameworks/reactive-loaders
+      note: "the hydrate-then-subscribe handoff"
+    - to: /docs/concepts/realtime
 ---
 
-`@lunora/svelte` is the Svelte adapter for Lunora. It's a thin, idiomatic layer
-over the framework-neutral [`@lunora/client`](/docs/packages/client) — which owns the
-WebSocket transport, subscription registry, offline queue, and delta-merge — and
-re-expresses that contract as Svelte stores you read with the `$store` idiom. A
-live query is a readable store that re-emits on every server delta; an optimistic
-mutation is a small bundle of stores plus an awaitable `mutate`.
+`@lunora/svelte` is the Svelte adapter for Lunora. It's a thin layer over the
+framework-neutral [`@lunora/client`](/docs/packages/client), which owns the
+WebSocket transport, subscription registry, offline queue, and delta-merge. The
+adapter re-expresses that contract as Svelte stores you read with the `$store`
+idiom. A live query is a readable store that re-emits on every server delta; an
+optimistic mutation is a small bundle of stores plus an awaitable `mutate`.
 
-The package is plain `.ts` over Svelte stores — no `.svelte` component compiler is
+The package is plain `.ts` over Svelte stores; no `.svelte` component compiler is
 required to build or use it.
 
 <Callout type="warn">
-    **Preview.** The Svelte adapter exists and exposes the same hydrate-then-subscribe handoff as React, but it is **preview** maturity — not yet proven
+    **Preview.** The Svelte adapter exists and exposes the same hydrate-then-subscribe handoff as React, but it is **preview** maturity and not yet proven
     end-to-end against a running app. The React adapter is the only one verified through the full live-loader path. See [Bring your
     framework](/docs/frameworks/bring-your-framework).
 </Callout>
@@ -39,6 +53,7 @@ required to build or use it.
 | `getLunoraClient`  | function | Read the `LunoraClient` from context. Throws if none was set.                              |
 | `query`            | function | Live query as a readable store (`$store`). Sharing one store shares one subscription.      |
 | `mutation`         | function | Optimistic mutation handle: `{ data, error, pending, mutate, reset }` stores.              |
+| `action`           | function | Action handle: `{ data, error, pending, call, reset }` stores. No optimistic options.      |
 | `hydratePreloaded` | function | Seed a readable store synchronously from an SSR `Preloaded` token, then attach the socket. |
 
 The table above lists the core handful. The package also exports the live
@@ -48,12 +63,12 @@ stores covered under [Additional stores](#additional-stores): `subscription`,
 
 Re-exported types from `@lunora/client`: `ArgsOf`, `ConnectionStatus`,
 `FunctionReference`, `LunoraClient`, `MutationCallOptions`, `Preloaded`,
-`ReturnOf` — plus the adapter's own `QueryStore`, `QueryStoreOptions`, and
-`MutationHandle`.
+`ReturnOf`, plus the adapter's own `QueryStore`, `QueryStoreOptions`,
+`MutationHandle`, and `ActionHandle`.
 
 <Callout type="info">
 Unlike React/Solid/Vue (which use `useLunora`), the Svelte provider accessor is
-the idiomatic `getLunoraClient`. There is no `<LunoraProvider>` component — you
+the idiomatic `getLunoraClient`. There is no `<LunoraProvider>` component; you
 publish the client with `setLunoraClient` during component init.
 </Callout>
 
@@ -61,13 +76,13 @@ publish the client with `setLunoraClient` during component init.
 
 `setLunoraClient(client)` publishes the `LunoraClient` on the Svelte component
 context. Call it once, high in the tree (typically your root `+layout.svelte` or
-`App.svelte`), during component initialisation — `setContext` must run while the
+`App.svelte`), during component initialisation: `setContext` must run while the
 component is being constructed. This is the Svelte analogue of mounting React's
 `LunoraProvider`.
 
 `getLunoraClient()` reads it from the nearest ancestor and throws if no provider
 was set, so a missing client fails loudly rather than as a later `undefined`
-dereference. Most code never calls it directly — `query` / `mutation` /
+dereference. Most code never calls it directly; `query` / `mutation` /
 `hydratePreloaded` resolve the ambient client for you.
 
 ## `query(fn, args, options?)`
@@ -75,8 +90,8 @@ dereference. Most code never calls it directly — `query` / `mutation` /
 Opens a live query as a Svelte **readable store**. Read it with the `$store`
 idiom and it stays current: a WS subscription attaches the moment the store
 gains its first subscriber, and the value re-emits on every server delta. The
-store holds `undefined` until the first response lands — the Svelte equivalent of
-React's `useQuery`.
+store holds `undefined` until the first response lands. This is the Svelte
+equivalent of React's `useQuery`.
 
 The subscription is opened lazily (inside `readable`'s start callback, on the
 first `$`-read) and torn down when the last subscriber goes away, so a store
@@ -111,7 +126,7 @@ query(client, api.messages.list, { channelId });
 ```
 
 `options` accepts `{ shardKey }` to route to a specific shard when the target
-function is `.shardBy(...)`-partitioned, and `{ onError }` — a callback invoked
+function is `.shardBy(...)`-partitioned, and `{ onError }`, a callback invoked
 when the underlying subscription reports an error.
 
 ## `mutation(fn)`
@@ -131,7 +146,7 @@ interface MutationHandle<F> {
 
 `pending` is ref-counted across overlapping invocations of the same handle, so
 read `$pending` to disable a button until the last concurrent call settles.
-`mutation` is overloaded the same way as `query` — pass `client` explicitly or
+`mutation` is overloaded the same way as `query`: pass `client` explicitly or
 omit it to use the ambient client.
 
 ```svelte
@@ -151,7 +166,7 @@ omit it to use the ambient client.
 ### Optimistic updates
 
 Optimistic updates stay client-owned and are passed **per call** in `mutate`'s
-options — the `optimistic` / `optimisticUpdate` options are applied and rolled
+options: the `optimistic` / `optimisticUpdate` options are applied and rolled
 back by the client against the live query subscriptions, exactly as in the React
 adapter. Any `query` / `hydratePreloaded` store reading the same data reflects
 the change immediately and reverts on failure.
@@ -168,17 +183,67 @@ await mutate(
 );
 ```
 
+## `action(fn)`
+
+Creates an `ActionHandle` for an action reference — the same shape as
+`MutationHandle`, with `call` in place of `mutate`:
+
+```ts
+interface ActionHandle<F> {
+    data: Readable<ReturnOf<F> | undefined>; // latest resolved value
+    error: Readable<Error | undefined>; // latest error
+    pending: Readable<boolean>; // true while any call from this handle is in flight (ref-counted)
+    call: (args, options?) => Promise<ReturnOf<F>>; // awaitable; resolves with the server value, rejects on failure
+    reset: () => void; // clear data/error back to idle
+}
+```
+
+`action` is overloaded the same way as `query` and `mutation`: pass `client`
+explicitly or omit it to use the ambient client.
+
+```svelte
+<script lang="ts">
+    import { action } from "@lunora/svelte";
+
+    import { api } from "$lib/_generated/api";
+
+    const verify = action(api.commands.run);
+    const { call, pending, error } = verify;
+</script>
+
+<button disabled={$pending} on:click={() => call({ command: "lunora", args: ["verify"] })}>Verify</button>
+{#if $error}<p>{$error.message}</p>{/if}
+```
+
+Per-call options are `{ shardKey }` only. Unlike `mutation` there are no
+`optimistic` / `optimisticUpdate` options: an optimistic update patches the
+subscription cache on the assumption a write will land, and an action is not a
+write — it runs in the Worker, may call a third party, and has no declared
+effect on any query.
+
 ## Reactive loaders — `hydratePreloaded`
 
-The SSR-seed-to-live-store handoff — the Svelte equivalent of React's
+The SSR-seed-to-live-store handoff, the Svelte equivalent of React's
 `usePreloadedQuery`. Run the query on the server with `preloadQuery` (from
 `@lunora/svelte/server`) in a SvelteKit `+page.ts` / `+layout.ts` `load`, hand the
 serializable `Preloaded` token to the client, and `hydratePreloaded` seeds the
-readable store **synchronously** with `preloaded.value` — so the first `$store`
+readable store **synchronously** with `preloaded.value`, so the first `$store`
 read during hydration returns the server value with no loading flash and no
 hydration mismatch. When the store gains its first subscriber on the client, a
 live WS subscription attaches and every subsequent delta re-emits, exactly like a
 plain `query` store.
+
+The preloaded value was read for whoever was signed in when the page loaded.
+After a sign-out or user switch retires that identity, every `hydratePreloaded`
+on the client — mounted then or later — stops using it and holds `undefined`
+until the live value arrives, so the previous user's rows are never shown to the
+next one. A same-user token refresh does not count as a switch. The store is
+typed `Readable<T | undefined>` for that reason, like `query`.
+
+Pass `{ onError }` as the third argument (after the optional `client`) to observe
+a subscription-scoped error the server pushes after hydration (a session expiry,
+an RLS denial). Without it such an error is dropped and the store keeps
+rendering the SSR snapshot as if it were live.
 
 ```svelte
 <script lang="ts">
@@ -191,20 +256,20 @@ plain `query` store.
 </script>
 
 <ul>
-    {#each $posts as p (p._id)}
+    {#each $posts ?? [] as p (p._id)}
         <li>{p.title}</li>
     {/each}
 </ul>
 ```
 
 Pass `client` as a second argument to override the ambient client. On the server
-`readable`'s start callback never runs (no subscriber), so the store just holds
-the seeded value and opens no socket — the token's `value` is the single source
+`readable`'s start callback never runs (no subscriber), so the store only holds
+the seeded value and opens no socket; the token's `value` is the single source
 of truth for the first paint.
 
 ## `@lunora/svelte/server`
 
-Server-side preload helpers, re-exported from `@lunora/client/ssr` — the
+Server-side preload helpers, re-exported from `@lunora/client/ssr`, the
 framework-neutral server contract shared by every adapter. This entry opens no
 WebSocket and touches no browser globals, so it is safe to import from a
 SvelteKit `+page.ts` / `+layout.ts` `load`.
@@ -228,43 +293,31 @@ Exports: `createServerClient`, `preloadQuery`, `serializePreloaded`,
 `deserializePreloaded`, `preloadedQueryResult`, `getServerSession`, plus the
 `Preloaded` / `ServerClientOptions` / `ServerSession` types.
 
-## `@lunora/svelte/worker`
+## Single-worker composition
 
-Single-worker composition for SvelteKit (class-B — "own CF adapter,
-hook-injection"). SvelteKit owns its Cloudflare build via
-`@sveltejs/adapter-cloudflare`, so Lunora cannot own the worker entry; instead it
-**injects** its realtime plane into the worker SvelteKit emits. Re-exports
-`withLunora` (`withFrameworkWorker` from [`@lunora/runtime`](/docs/packages/runtime)),
-which wraps the SvelteKit handler as Lunora's fallback `httpRouter` — the reserved
-`/_lunora/*` endpoints hit Lunora and everything else delegates to SvelteKit. One
-worker, one deploy.
-
-This entry is socket-free and runs on the worker — keep it out of client code.
-
-```ts
-// src/worker.ts (your CF Worker entry)
-import { withLunora } from "@lunora/svelte/worker";
-import svelteKitWorker from "../.svelte-kit/cloudflare/_worker.js"; // adapter output
-
-import { auth } from "./lunora/auth";
-
-// `shardDO` lives on `env` (per request), so pass a factory:
-export default withLunora(svelteKitWorker, (env) => ({ shardDO: env.SHARD, auth }));
-```
+SvelteKit owns its Cloudflare build via `@sveltejs/adapter-cloudflare`, so
+Lunora cannot own the worker entry; instead it **injects** its realtime plane
+into the worker SvelteKit emits, via `buildFrameworkWorker` on the generated
+app (`withFrameworkWorker` from [`@lunora/runtime`](/docs/packages/runtime)
+under the hood): the reserved `/_lunora/*` endpoints hit Lunora and
+everything else delegates to SvelteKit. One worker, one deploy. See
+[Bring your framework](/docs/frameworks/bring-your-framework) for the full
+composition and a working example.
 
 ## Additional stores
 
 Beyond `query` / `mutation`, the package exports the same store-shaped surface
 the React adapter exposes as hooks. Each resolves the ambient client by default
 or takes an explicit `client` as its first argument. Stores that own a timer or
-listener (`presence`, `rateLimit`) return a `teardown()` — call it from
+listener (`presence`, `rateLimit`) return a `teardown()`; call it from
 `onDestroy`.
 
 ### `subscription(fn, args, options?)`
 
 A raw live subscription as a pair of readable stores, `{ data, error }`. `data`
 holds the latest server push (`undefined` until the first), `error` holds the
-last subscription error. Pass `"skip"` as `args` to keep the handle but leave the
+last subscription error (a `LunoraError` carrying the server `code` when one was
+sent). Pass `"skip"` as `args` to keep the handle but leave the
 subscription dormant. Options: `{ shardKey, onError }`.
 
 ```svelte
@@ -279,14 +332,17 @@ subscription dormant. Options: `{ shardKey, onError }`.
 {#each $data ?? [] as m (m._id)}<li>{m.text}</li>{/each}
 ```
 
-### `paginatedQuery(fn, args, { initialNumItems })`
+### `paginatedQuery(fn, args, { initialNumItems, shardKey?, onError? })`
 
 A cursor-paginated live query. `args` is the function's args minus
 `paginationOpts` (the framework supplies the cursor), or `"skip"`. The handle is
-`{ results, status, isLoading, loadMore }`: `results` is the flattened items
+`{ results, status, isLoading, loadMore, error }`: `results` is the flattened items
 across every loaded page; `status` is `"LoadingFirstPage" | "LoadingMore" |
 "CanLoadMore" | "Exhausted"`; `loadMore(n)` appends the next page (a no-op unless
-`status === "CanLoadMore"`).
+`status === "CanLoadMore"`); `error` holds the last page subscription error
+(`undefined` when healthy) — a page that fails before its first frame is dropped,
+`status` returns to `"CanLoadMore"`, and `loadMore(n)` retries it. `onError` is
+called with the same error.
 
 ```svelte
 <script lang="ts">
@@ -301,16 +357,16 @@ across every loaded page; `status` is `"LoadingFirstPage" | "LoadingMore" |
 ```
 
 `infiniteQuery` is the TanStack-Query-shaped variant: `{ pages, status,
-isLoading, hasNextPage, isFetchingNextPage, fetchNextPage }`, where `pages` keeps
+isLoading, hasNextPage, isFetchingNextPage, fetchNextPage, error }`, where `pages` keeps
 each loaded page as its own inner array.
 
 ### `presence(roomId, options)`
 
-Collaborative-awareness — the client half of the server `definePresence` preset.
+Collaborative awareness: the client half of the server `definePresence` preset.
 Drives a heartbeat mutation (on call, on an interval, and on tab re-focus) and
 subscribes to the room's `listPresent` query. Options: `{ heartbeat, listPresent,
-sessionId?, data?, intervalMs?, shardKey? }` — `heartbeat` and `listPresent` are
-`api.*` references. The handle is `{ present, sessionId, setData, teardown }`.
+sessionId?, data?, intervalMs?, shardKey? }`, where `heartbeat` and `listPresent`
+are `api.*` references. The handle is `{ present, sessionId, setData, teardown }`.
 
 ```svelte
 <script lang="ts">
@@ -323,18 +379,20 @@ sessionId?, data?, intervalMs?, shardKey? }` — `heartbeat` and `listPresent` a
         listPresent: api.presence.listPresent,
         data: { name: "Ada" },
     });
+    // `room` is a plain handle, not a store — `present` is the readable on it.
+    const { present } = room;
     onDestroy(room.teardown);
 </script>
 
-{#each $room.present ?? [] as p (p.userId)}<span>{p.data?.name}</span>{/each}
+{#each $present ?? [] as p (p.userId)}<span>{p.data?.name}</span>{/each}
 ```
 
 ### `rateLimit(config, options?)`
 
-A client-side mirror of a server rate limit for instant UX — disable a button or
+A client-side mirror of a server rate limit for instant UX: disable a button or
 show a countdown without a round-trip. It runs the same token-bucket /
 fixed-window math as `@lunora/ratelimit`, but the server stays authoritative. The
-handle is `{ ok, disabled, retryAfter, check, consume, reset, teardown }` —
+handle is `{ ok, disabled, retryAfter, check, consume, reset, teardown }`, where
 `ok` / `disabled` / `retryAfter` are readable stores; `consume(count?)` records a
 local hit. Pass a stable `config` reference (a module constant). Options: `{ now?,
 tickMs? }`.
@@ -353,30 +411,135 @@ tickMs? }`.
 
 ### `auth(client?)` and `connectionStatus(client?)`
 
-`auth` returns `{ user, token, setToken }`: `user` and `token` are readable
-stores (`null` when signed out), and `setToken(jwt)` sets the token on the
-client after sign-in. `connectionStatus` returns a readable store of the
-aggregate live-socket state (`idle` → `connecting` → `connected` → `offline`),
-for driving a connection indicator.
+`auth` returns `{ status, user, token, setToken }`: `status`, `user` and `token`
+are readable stores, and `setToken(jwt)` sets the token on the client after
+sign-in. `connectionStatus` returns a readable store of the aggregate
+live-socket state (`idle` → `connecting` → `connected` → `offline`), for driving
+a connection indicator.
+
+`$status` is the auth gate — `"loading"`, `"authenticated"`, `"unauthenticated"`
+or `"unreachable"` (a credential is held but the identity endpoint could not be
+reached; gates as authenticated). Branch on it, not on `$user`: `$user` is null
+both when signed out and when a held credential's identity has not resolved, so
+a `$user` gate shows the sign-in prompt to a signed-in user on an offline
+reload. See the [`@lunora/client` reference](/docs/packages/client) for the
+table. `authGate()` returns `{ isAuthenticated, isLoading }` derived from the
+same `status`, when a boolean is all a template needs.
 
 ```svelte
 <script lang="ts">
     import { auth, connectionStatus } from "@lunora/svelte";
 
-    const { user, setToken } = auth();
-    const status = connectionStatus();
+    const { setToken, status: authStatus, user } = auth();
+    const connection = connectionStatus();
 </script>
 
-{#if $user}Signed in as {$user.name}{/if}
-<span data-status={$status}>{$status}</span>
+{#if $authStatus === "loading"}Checking…{:else if $authStatus === "unauthenticated"}Signed out{:else}Signed in as {$user?.name}{/if}
+<span data-status={$connection}>{$connection}</span>
 ```
 
-## See also
+## Agent tool events — `agentToolEvents(options)`
 
-- [@lunora/react](/docs/packages/react) — the same contract for React
-- [@lunora/solid](/docs/packages/solid) — the SolidJS adapter
-- [@lunora/vue](/docs/packages/vue) — the Vue adapter
-- [@lunora/client](/docs/packages/client) — the framework-neutral SDK this wraps
-- [Bring your framework](/docs/frameworks/bring-your-framework) — composition + adapter maturity
-- [Reactive loaders](/docs/frameworks/reactive-loaders) — the hydrate-then-subscribe handoff
-- [Real-time](/docs/concepts/realtime)
+Observes one agent thread's **tool activity**, separate from its chat
+transcript: which tools the model called, what they returned, which are parked
+on a human approval, and any in-flight `ctx.reportProgress(...)` updates.
+
+`options`: `{ api, threadKey, stream?, limit? }` — `api` is the generated `api`
+(it reads `api.agents.agentMessages`), and `stream` is the same app stream
+reference `agentChat` takes. Returns `{ events }`, a readable store read with
+`$events`. Like every store here it also accepts an explicit leading `client`
+(`agentToolEvents(client, options)`) when there is no ambient one.
+
+Each event discriminates on `type`:
+
+| `type`              | Fields                                                 | Source      |
+| ------------------- | ------------------------------------------------------ | ----------- |
+| `call`              | `toolCallId`, `toolName`, `input`, `seq`               | durable     |
+| `result`            | `toolCallId?`, `toolName?`, `output`, `status?`, `seq` | durable     |
+| `awaiting-approval` | `toolCallId?`, `toolName?`, `seq`                      | durable     |
+| `progress`          | `toolCallId`, `data`                                   | live stream |
+
+Durable events come first, oldest first by `seq`, followed by the ephemeral
+`progress` events for the in-flight turn. With no `stream` reference only the
+durable lifecycle is surfaced. The array is rebuilt on every update — treat it
+as derived, not identity-stable, and key rendered rows on `toolCallId`/`seq`.
+
+```svelte
+<script lang="ts">
+    import { agentToolEvents } from "@lunora/svelte";
+    import { api } from "$lib/_generated/api";
+
+    export let threadKey: string;
+
+    const { events } = agentToolEvents({ api, stream: api.chat.liveEvents, threadKey });
+</script>
+
+<ol>
+    {#each $events as event, index (event.type === "progress" ? `p-${index}` : event.seq)}
+        <li>{event.type}</li>
+    {/each}
+</ol>
+```
+
+## Voice agents — `voiceAgent(options)`
+
+Opens a full-duplex voice call against a voice-enabled agent — the
+`api.agents.<name>Voice` reference codegen emits. Microphone capture goes up the
+agent's WebSocket, synthesized speech comes back down, and transcripts plus
+barge-in are surfaced along the way.
+
+`options`: `{ voice, threadKey, silenceThreshold?, silenceDurationMs?,
+interruptThreshold?, interruptChunks?, createMicrophone?, createSocket?,
+createSpeaker? }`, with the usual optional leading `client`. `threadKey` is
+shared with the agent's text turns, so a voice call continues the very same
+conversation `agentChat` renders.
+
+Returns `{ status, connected, transcript, interimTranscript, audioLevel,
+isMuted, error, startCall, endCall, sendText, toggleMute }`, where every value
+is a readable store read with `$`. `status` is
+`"idle" | "listening" | "thinking" | "speaking"`.
+
+```svelte
+<script lang="ts">
+    import { onDestroy } from "svelte";
+    import { voiceAgent } from "@lunora/svelte";
+    import { api } from "$lib/_generated/api";
+
+    const call = voiceAgent({ threadKey: "thread-1", voice: api.agents.supportVoice });
+    const { audioLevel, status, transcript } = call;
+
+    onDestroy(call.endCall);
+</script>
+
+<button on:click={() => ($status === "idle" ? call.startCall() : call.endCall())}>
+    {$status === "idle" ? "Call" : "Hang up"}
+</button>
+<meter max={1} value={$audioLevel} />
+<p>{$transcript}</p>
+```
+
+### Microphone and audio lifecycle
+
+The part the type signature does not tell you:
+
+- **Nothing opens until `startCall()`.** Creating the handle touches neither the
+  microphone nor the socket. `startCall` is what calls `getUserMedia`, so it has
+  to run from a user gesture — browsers block both the permission prompt and
+  `AudioContext` resumption outside one. It is idempotent while a call is
+  active, and a denied permission lands in `error` rather than throwing at the
+  call site.
+- **`endCall()` releases everything** — the socket, the microphone tracks, and
+  the Web Audio graph — and is idempotent. **Svelte has no auto-dispose here.**
+  Unlike the other adapters nothing tears the call down for you, so call it
+  yourself: `onDestroy(call.endCall)`.
+- **`audioLevel` is the live input RMS (0–1).** It drives a mic meter, and it is
+  also what the heuristics read: `silenceThreshold` + `silenceDurationMs` decide
+  when an utterance auto-commits (defaults `0.01` / `1200`ms), and
+  `interruptThreshold` + `interruptChunks` decide when the user barges in on the
+  agent mid-sentence (defaults `0.15` / `3` consecutive chunks). These are
+  room-dependent; tune them against real hardware rather than trusting the
+  defaults.
+- **`createMicrophone` / `createSpeaker` / `createSocket` are injection seams**
+  for tests and non-DOM hosts. The defaults are `getUserMedia` + Web Audio +
+  `new WebSocket(url)`, so the primitive is inert (and mockable) anywhere those
+  are missing.

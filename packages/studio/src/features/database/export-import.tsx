@@ -1,12 +1,15 @@
+import { LunoraError } from "@lunora/errors";
 import { useLunora } from "@lunora/react";
 import type { ChangeEvent, ReactElement } from "react";
 import { useState } from "react";
 
+import { decodeWire, encodeWire } from "../../../../../shared/wire-codec";
 import { ConfirmButton } from "../../components/confirm-button";
 import { ShardInput } from "../../components/shard-input";
 import { Button } from "../../components/ui/button";
 import { Card, CardContent } from "../../components/ui/card";
 import { Textarea } from "../../components/ui/textarea";
+import { useInvalidateAdmin } from "../../hooks/use-admin-query";
 import { useT } from "../../i18n/i18n-context";
 import type { ExportRow, ImportShardResult } from "../../lib/admin";
 import { ADMIN_FUNCTIONS } from "../../lib/admin";
@@ -21,13 +24,27 @@ interface ExportImportPanelProps {
 const EXPORT_SHARD = adminRef(ADMIN_FUNCTIONS.exportShard);
 const IMPORT_SHARD = adminRef(ADMIN_FUNCTIONS.importShard);
 
-/** Serialise export rows to NDJSON — one `{table,doc}` object per line. */
-const toNdjson = (rows: ExportRow[]): string => rows.map((row) => JSON.stringify(row)).join("\n");
+/**
+ * Serialise export rows to NDJSON — one `{table,doc}` object per line.
+ *
+ * Encoded with `encodeWire`, not stringified bare. The client `decodeWire`s
+ * every admin reply, so a `v.bigint()` column reaches this panel as a real
+ * `bigint` (which `JSON.stringify` THROWS on — the whole export fails) and a
+ * `v.bytes()` column as an `ArrayBuffer` (which flattens to `{}` — the export
+ * "succeeds" and the bytes are gone). The wire codec is identity for pure JSON,
+ * so an ordinary table's NDJSON is byte-identical to before, and
+ * {@link parseNdjson} decodes symmetrically so the round trip restores types.
+ */
+const toNdjson = (rows: ExportRow[]): string => rows.map((row) => JSON.stringify(encodeWire(row))).join("\n");
 
 /**
  * Parse NDJSON back into export rows, skipping blank lines. Throws on the first
  * line that is not a valid `{table, doc}` object so the operator gets a precise
  * failure instead of a partial import.
+ *
+ * Each line is `decodeWire`d — the inverse of {@link toNdjson} — so a bigint /
+ * bytes cell is a native value again before `client.query` re-encodes it for the
+ * wire. Decoding is identity for pure JSON, so hand-written NDJSON still imports.
  */
 const parseNdjson = (text: string): ExportRow[] => {
     const rows: ExportRow[] = [];
@@ -41,16 +58,16 @@ const parseNdjson = (text: string): ExportRow[] => {
             continue;
         }
 
-        const parsed = JSON.parse(line) as unknown;
+        const parsed = decodeWire(JSON.parse(line));
 
         if (typeof parsed !== "object" || parsed === null) {
-            throw new Error(`line ${(index + 1).toString()}: expected a { table, doc } object`);
+            throw new LunoraError("INTERNAL", `line ${(index + 1).toString()}: expected a { table, doc } object`);
         }
 
         const row = parsed as Record<string, unknown>;
 
         if (typeof row.table !== "string" || typeof row.doc !== "object" || row.doc === null || Array.isArray(row.doc)) {
-            throw new Error(`line ${(index + 1).toString()}: expected a { table, doc } object`);
+            throw new LunoraError("INTERNAL", `line ${(index + 1).toString()}: expected a { table, doc } object`);
         }
 
         rows.push(row as unknown as ExportRow);
@@ -73,6 +90,7 @@ const parseNdjson = (text: string): ExportRow[] => {
  */
 export const ExportImportPanel = ({ initialShardKey }: ExportImportPanelProps): ReactElement => {
     const client = useLunora();
+    const invalidateAdmin = useInvalidateAdmin();
     const t = useT();
 
     const [shardKey, setShardKey] = useState<string>(initialShardKey ?? "");
@@ -95,9 +113,9 @@ export const ExportImportPanel = ({ initialShardKey }: ExportImportPanelProps): 
             setExportCount(result.rows.length);
         } catch (error_) {
             setError(errorMessage(error_));
-        } finally {
-            setBusy(false);
         }
+
+        setBusy(false);
     };
 
     const importShard = async (): Promise<void> => {
@@ -122,11 +140,16 @@ export const ExportImportPanel = ({ initialShardKey }: ExportImportPanelProps): 
 
             recordShard(shardKey);
             setImportResult(result);
+            // The import wrote rows to this shard, so the data browser's cached reads
+            // are now stale across every page/filter variant — drop them (path-only,
+            // all args) so they re-fetch on next view.
+            invalidateAdmin(ADMIN_FUNCTIONS.readTablePage);
+            invalidateAdmin(ADMIN_FUNCTIONS.listTables);
         } catch (error_) {
             setError(errorMessage(error_));
-        } finally {
-            setBusy(false);
         }
+
+        setBusy(false);
     };
 
     const insertedTotal = importResult === null ? 0 : Object.values(importResult.inserted).reduce((sum, count) => sum + count, 0);
@@ -145,7 +168,7 @@ export const ExportImportPanel = ({ initialShardKey }: ExportImportPanelProps): 
 
     return (
         <div className="flex flex-col gap-4" data-testid="lunora-export-import">
-            <Card className="rounded-xl border border-border bg-card shadow-xs">
+            <Card className="gap-0 py-0 rounded-xl border border-border bg-card shadow-xs">
                 <header className="border-b border-border px-4 py-3">
                     <span className="font-mono text-[11px] tracking-wide text-muted-foreground uppercase">{t("Export")}</span>
                 </header>
@@ -165,7 +188,7 @@ export const ExportImportPanel = ({ initialShardKey }: ExportImportPanelProps): 
                 </CardContent>
             </Card>
 
-            <Card className="rounded-xl border border-border bg-card shadow-xs">
+            <Card className="gap-0 py-0 rounded-xl border border-border bg-card shadow-xs">
                 <header className="border-b border-border px-4 py-3">
                     <span className="font-mono text-[11px] tracking-wide text-muted-foreground uppercase">{t("Import")}</span>
                 </header>

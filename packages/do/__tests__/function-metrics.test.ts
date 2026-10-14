@@ -1,7 +1,5 @@
-import { describe, expect, it } from "vitest";
-
-import { SCAN_DEP } from "../src/dependency-tracker";
 import {
+    ensureFunctionMetricsTables,
     FUNCTION_METRICS_BUCKET_MS,
     FUNCTION_METRICS_BUCKETS_TABLE,
     FUNCTION_METRICS_INDEX_TABLE,
@@ -15,11 +13,13 @@ import {
     readFunctionMetricScans,
     readFunctionMetricsTotals,
     recordFunctionMetric,
-} from "../src/function-metrics";
-import type { FunctionCallStat } from "../src/introspect";
+} from "@lunora/observability";
+import type { FunctionCallStat } from "@lunora/shard-engine";
+import { ConflictError, SCAN_DEP } from "@lunora/shard-engine";
+import { describe, expect, it } from "vitest";
+
 import type { ShardDOState } from "../src/shard-do";
 import { ShardDO } from "../src/shard-do";
-import { ConflictError } from "../src/transaction";
 import createSqliteExec from "./_helpers/node-sqlite";
 
 const ADMIN_TOKEN = "metrics-admin";
@@ -55,6 +55,23 @@ class ScanningShard extends ShardDO {
             onRead("comments");
             // An indexed point read of `users` must NOT count as a scan.
             onRead("users", "user-1");
+        }
+
+        return { ok: true };
+    }
+}
+
+/**
+ * A shard whose `handleRpc` throws an error message carrying PII (an email plus
+ * a digit-run, the same shape the request-log redaction test uses), to prove
+ * the function-metrics sink gets the same `redactArgs` treatment as the
+ * request-log sinks rather than persisting/caching the raw message.
+ */
+class PiiErrorShard extends ShardDO {
+    // eslint-disable-next-line class-methods-use-this -- override stub; routes by functionPath only
+    public override async handleRpc(functionPath: string): Promise<unknown> {
+        if (functionPath === "billing:charge") {
+            throw new Error("contact alice@example.com to resolve order 12345");
         }
 
         return { ok: true };
@@ -179,14 +196,14 @@ describe("function-metrics module", () => {
             recordFunctionMetric(database.sql, { durationMs: 1, errored: true, errorMessage: "x", path: "f:a", ts: base + 1 });
             recordFunctionMetric(database.sql, { durationMs: 1, errored: false, path: "f:a", ts: base + FUNCTION_METRICS_BUCKET_MS });
 
-            const buckets = readFunctionMetricBuckets(database.sql, "f:a");
+            const { buckets } = readFunctionMetricBuckets(database.sql, "f:a");
 
             // Two distinct minute windows.
             expect(buckets).toHaveLength(2);
             expect(buckets[0]).toEqual({ bucketMs: base, calls: 2, errors: 1, path: "f:a" });
             expect(buckets[1]).toEqual({ bucketMs: base + FUNCTION_METRICS_BUCKET_MS, calls: 1, errors: 0, path: "f:a" });
 
-            expect(readFunctionMetricsTotals(database.sql)).toEqual({ errors: 1, requests: 3 });
+            expect(readFunctionMetricsTotals(database.sql)).toEqual({ capped: false, errors: 1, requests: 3 });
         } finally {
             database.close();
         }
@@ -319,10 +336,10 @@ describe("function-metrics module", () => {
 
         try {
             expect(readFunctionMetrics(database.sql)).toEqual([]);
-            expect(readFunctionMetricBuckets(database.sql)).toEqual([]);
+            expect(readFunctionMetricBuckets(database.sql)).toEqual({ buckets: [], truncated: false });
             expect(readFunctionMetricScans(database.sql).size).toBe(0);
             expect(readFunctionMetricIndexHits(database.sql)).toEqual([]);
-            expect(readFunctionMetricsTotals(database.sql)).toEqual({ errors: 0, requests: 0 });
+            expect(readFunctionMetricsTotals(database.sql)).toEqual({ capped: false, errors: 0, requests: 0 });
         } finally {
             database.close();
         }
@@ -339,7 +356,7 @@ describe("function-metrics module", () => {
                 recordFunctionMetric(database.sql, { durationMs: 1, errored: false, path: `fn:${String(index)}`, ts: 1000 });
             }
 
-            // A brand-new path past the cap is dropped; an already-tracked path
+            // A brand-new path past the cap is refused; an already-tracked path
             // keeps accumulating.
             recordFunctionMetric(database.sql, { durationMs: 1, errored: false, path: "fn:flood-1", ts: 2000 });
             recordFunctionMetric(database.sql, { durationMs: 1, errored: false, path: "fn:0", ts: 2000 });
@@ -365,6 +382,30 @@ describe("function-metrics module", () => {
             }
 
             expect(readFunctionMetrics(database.sql)).toHaveLength(FUNCTION_METRICS_READ_LIMIT);
+        } finally {
+            database.close();
+        }
+    });
+
+    it("reports truncated on the all-paths bucket read once the LIMIT cuts it (OBS-03)", () => {
+        expect.assertions(2);
+
+        const database = createSqliteExec();
+
+        try {
+            ensureFunctionMetricsTables(database.sql);
+
+            for (let index = 0; index < FUNCTION_METRICS_READ_LIMIT + 50; index += 1) {
+                database.raw(
+                    `INSERT INTO "${FUNCTION_METRICS_BUCKETS_TABLE}" (path, bucket_ms, calls, errors) VALUES ('fn:a', ?, 1, 0)`,
+                    index * FUNCTION_METRICS_BUCKET_MS,
+                );
+            }
+
+            const { buckets, truncated } = readFunctionMetricBuckets(database.sql);
+
+            expect(buckets).toHaveLength(FUNCTION_METRICS_READ_LIMIT);
+            expect(truncated).toBe(true);
         } finally {
             database.close();
         }
@@ -483,6 +524,39 @@ describe("shardDO persisted metrics", () => {
         }
     });
 
+    it("redacts a PII-bearing error message at the function-metrics sink — the durable column AND getFunctionStats alike", async () => {
+        expect.assertions(4);
+
+        const database = createSqliteExec();
+
+        try {
+            const shard = new PiiErrorShard(makeState(database), { LUNORA_ADMIN_TOKEN: ADMIN_TOKEN });
+
+            await shard.fetch(userRequest("billing:charge"));
+
+            // Sink 1: the durable `__lunora_metrics.last_error_message` column —
+            // this is the sink the redaction PR missed; it must not carry the raw
+            // email/order-id even though args/identity and the request-log's own
+            // error column were already redacted.
+            const [row] = database.raw(`SELECT last_error_message FROM "${FUNCTION_METRICS_TABLE}"`) as [{ last_error_message: string }];
+
+            expect(row.last_error_message).not.toContain("alice@example.com");
+            expect(row.last_error_message).not.toContain("12345");
+
+            // Sink 2: the in-memory `functionStats` cache served by
+            // `__lunora_admin__:getFunctionStats` — fed by the SAME redacted
+            // string, so it can't drift from the durable column.
+            const response = await shard.fetch(adminRequest("__lunora_admin__:getFunctionStats"));
+            const body = await response.json<{ result: { functions: FunctionCallStat[] } }>();
+            const stat = body.result.functions.find((function_) => function_.path === "billing:charge");
+
+            expect(stat?.lastErrorMessage).not.toContain("alice@example.com");
+            expect(stat?.lastErrorMessage).not.toContain("12345");
+        } finally {
+            database.close();
+        }
+    });
+
     it("survives a simulated restart: a fresh DO instance over the same storage sees prior counts", async () => {
         expect.assertions(6);
 
@@ -540,6 +614,38 @@ describe("shardDO persisted metrics", () => {
             expect(body.result.errors).toBe(1);
             expect(body.result.cache).toBeNull();
             expect(body.result.shard).toBeTypeOf("string");
+        } finally {
+            database.close();
+        }
+    });
+
+    it("surfaces historyTruncated on getMetrics once the durable bucket table exceeds the read limit (OBS-03)", async () => {
+        expect.assertions(2);
+
+        const database = createSqliteExec();
+
+        try {
+            const shard = new CountingShard(makeState(database), { LUNORA_ADMIN_TOKEN: ADMIN_TOKEN });
+
+            ensureFunctionMetricsTables(database.sql);
+
+            // Seed past the read limit directly — reaching it through real
+            // dispatches would mean thousands of fetch() round-trips for what
+            // is purely a read-path assertion.
+            for (let index = 0; index < FUNCTION_METRICS_READ_LIMIT + 50; index += 1) {
+                database.raw(
+                    `INSERT INTO "${FUNCTION_METRICS_BUCKETS_TABLE}" (path, bucket_ms, calls, errors) VALUES ('messages:list', ?, 1, 0)`,
+                    index * FUNCTION_METRICS_BUCKET_MS,
+                );
+            }
+
+            const response = await shard.fetch(adminRequest("__lunora_admin__:getMetrics"));
+            const body = await response.json<{ result: { history: unknown[]; historyTruncated: boolean } }>();
+
+            expect(body.result.history).toHaveLength(FUNCTION_METRICS_READ_LIMIT);
+            // The chart's window silently shrinking as the app grows is exactly
+            // what this field exists to make visible to the studio panel.
+            expect(body.result.historyTruncated).toBe(true);
         } finally {
             database.close();
         }

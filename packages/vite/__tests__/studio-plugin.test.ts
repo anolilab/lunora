@@ -1,9 +1,31 @@
+import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import type { ServerResponse } from "node:http";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
 import type { ViteDevServer } from "vite";
 import { describe, expect, expectTypeOf, it, vi } from "vitest";
 
 import { buildStudioUrl, STUDIO_PATH, studioPlugin } from "../src/studio-plugin";
+import type { ResolvedLunoraPluginOptions } from "../src/types";
+
+/** The resolved plugin options the studio reads: its project root, schema dir and apiSpec. */
+const makeOptions = (overrides: Partial<ResolvedLunoraPluginOptions> = {}): ResolvedLunoraPluginOptions => {
+    return {
+        allowUnauthenticatedShardAccess: false,
+        apiSpec: "openapi",
+        cloudflare: false,
+        generatedDir: "lunora/_generated",
+        overlay: false,
+        projectRoot: process.cwd(),
+        schemaDir: "lunora",
+        shard: {},
+        studio: true,
+        target: "cloudflare",
+        validateWrangler: false,
+        ...overrides,
+    };
+};
 
 describe("buildStudioUrl", () => {
     it("prefers Vite's resolved local URL", () => {
@@ -44,12 +66,15 @@ describe("buildStudioUrl", () => {
     });
 });
 
+/** Admin token written into the project root the plugin is configured with. */
+const PROJECT_ROOT_TOKEN = "tok-from-project-root";
+
 describe("studioPlugin", () => {
     it("is a dev-only plugin with a configureServer hook", () => {
         // 2 runtime assertions; the expectTypeOf below is a compile-time check and isn't counted.
         expect.assertions(2);
 
-        const plugin = studioPlugin();
+        const plugin = studioPlugin(makeOptions());
 
         expect(plugin.name).toBe("lunora:studio");
         expect(plugin.apply).toBe("serve");
@@ -60,7 +85,7 @@ describe("studioPlugin", () => {
     it("serves static studio HTML at /__lunora and passes other paths through", () => {
         expect.assertions(7);
 
-        const plugin = studioPlugin();
+        const plugin = studioPlugin(makeOptions());
         let middleware: ((request: { url?: string }, response: ServerResponse, next: () => void) => void) | undefined;
 
         const server = {
@@ -117,13 +142,17 @@ describe("studioPlugin", () => {
         expect(server.config.logger.info).toHaveBeenCalledWith(expect.stringContaining("/__lunora"));
     });
 
-    const installMiddleware = (configuredHost: unknown): ((request: { url?: string }, response: ServerResponse, next: () => void) => void) => {
-        const plugin = studioPlugin();
+    const installMiddleware = (
+        configuredHost: unknown,
+        base = "/",
+        options: ResolvedLunoraPluginOptions = makeOptions(),
+    ): ((request: { url?: string }, response: ServerResponse, next: () => void) => void) => {
+        const plugin = studioPlugin(options);
         let middleware: ((request: { url?: string }, response: ServerResponse, next: () => void) => void) | undefined;
 
         const server = {
             config: {
-                base: "/",
+                base,
                 logger: { info: vi.fn<(message: string) => void>(), warnOnce: vi.fn<(message: string) => void>() },
                 server: { host: configuredHost },
             },
@@ -152,6 +181,87 @@ describe("studioPlugin", () => {
         return { end, response };
     };
 
+    it("serves the studio at the base-prefixed URL it announces", () => {
+        expect.assertions(3);
+
+        // This middleware runs BEFORE Vite's base middleware strips the prefix,
+        // so under `base: "/app/"` the announced `…/app/__lunora` used to fall
+        // through to the SPA fallback and serve the app's index.html instead.
+        const middleware = installMiddleware("localhost", "/app/");
+        const prefixed = makeResponse();
+
+        middleware({ url: "/app/__lunora" }, prefixed.response, vi.fn<() => void>());
+
+        expect((prefixed.end.mock.calls[0] as [string])[0]).toContain(`${STUDIO_PATH}/studio.js`);
+
+        // The document's own asset URLs are un-prefixed, so both spellings answer.
+        const bare = makeResponse();
+        const next = vi.fn<() => void>();
+
+        middleware({ url: STUDIO_PATH }, bare.response, next);
+
+        expect(next).not.toHaveBeenCalled();
+        expect(bare.end).toHaveBeenCalledTimes(1);
+    });
+
+    it("reads the schema and admin token from the plugin's projectRoot, not Vite's root", async () => {
+        expect.assertions(2);
+
+        // `lunora({ schemaDir })` has to be honest for the studio too: the schema
+        // editor answered 404 and the seed/policy endpoints wrote into `lunora/`
+        // whatever the option said, because the middleware forwarded neither.
+        const root = mkdtempSync(join(tmpdir(), "lunora-studio-root-"));
+
+        mkdirSync(join(root, "backend"), { recursive: true });
+        writeFileSync(join(root, "backend", "schema.ts"), "export default {};\n", "utf8");
+        writeFileSync(join(root, ".dev.vars"), `LUNORA_ADMIN_TOKEN=${JSON.stringify(PROJECT_ROOT_TOKEN)}\n`, "utf8");
+
+        const middleware = installMiddleware("localhost", "/", makeOptions({ projectRoot: root, schemaDir: "backend" }));
+        const { end, response } = makeResponse();
+
+        middleware({ url: STUDIO_PATH }, response, vi.fn<() => void>());
+
+        expect((end.mock.calls[0] as [string])[0]).toContain(PROJECT_ROOT_TOKEN);
+
+        const edit = makeResponse();
+
+        middleware(
+            {
+                headers: { host: "localhost:5173", "sec-fetch-site": "same-origin" },
+                method: "GET",
+                socket: { remoteAddress: "127.0.0.1" },
+                url: `${STUDIO_PATH}/schema-edit`,
+            } as unknown as { url?: string },
+            edit.response,
+            vi.fn<() => void>(),
+        );
+
+        // The handler answers asynchronously (it reads the request body first).
+        await new Promise<void>((resolve) => {
+            setTimeout(resolve, 10);
+        });
+
+        expect((edit.end.mock.calls[0] as [string])[0]).not.toContain("no-schema-file");
+    });
+
+    it("serves the token-bearing document with no-store and no ETag", () => {
+        expect.assertions(3);
+
+        const middleware = installMiddleware("localhost");
+        const { end, response } = makeResponse();
+
+        middleware({ url: STUDIO_PATH }, response, vi.fn<() => void>());
+
+        const headers = Object.fromEntries((response.setHeader as ReturnType<typeof vi.fn>).mock.calls as [string, string][]);
+
+        // The document embeds the admin token, so it must not be cacheable at
+        // all — `no-store`, and never an ETag (a cached 304 for a token-bearing
+        // document would be its own bug).
+        expect(headers["Cache-Control"]).toBe("no-store");
+        expect(headers.ETag).toBeUndefined();
+        expect(end).toHaveBeenCalledTimes(1);
+    });
+
     it("handles the static asset routes rather than passing them through", () => {
         expect.assertions(5);
 
@@ -170,6 +280,48 @@ describe("studioPlugin", () => {
             expect(end).toHaveBeenCalledTimes(1);
         }
 
+        expect(next).not.toHaveBeenCalled();
+    });
+
+    it("serves studio assets with revalidation headers and honours a matching ETag", () => {
+        // At least one assertion always runs (the 200/501 check below), so this is
+        // safe on both the built and unbuilt-studio paths — and it satisfies
+        // `vitest/prefer-expect-assertions` (which wants it as the first expression).
+        expect.hasAssertions();
+
+        const middleware = installMiddleware("localhost");
+        const next = vi.fn<() => void>();
+        const { response } = makeResponse();
+
+        middleware({ url: `${STUDIO_PATH}/studio.js` }, response, next);
+
+        // The route is owned by the plugin either way: 200 when @lunora/studio is
+        // built, 501 when it isn't (e.g. the affected-test CI env, where the studio
+        // dist isn't produced). This unconditional assertion documents both valid
+        // states AND keeps the test from reporting "no assertions" on the 501 path,
+        // where the ETag branch below legitimately can't run.
+        expect([200, 501]).toContain(response.statusCode);
+
+        // No built studio (501) → no asset bytes to cache; the ETag branch can't run.
+        // eslint-disable-next-line vitest/no-conditional-in-test -- environment guard: skip when @lunora/studio isn't built (501)
+        if (response.statusCode !== 200) {
+            return;
+        }
+
+        const headers = Object.fromEntries((response.setHeader as ReturnType<typeof vi.fn>).mock.calls as [string, string][]);
+
+        // Unhashed URL → revalidate every load so a rebuild is never shadowed.
+        // The ETag is keyed on the requested file (not just its kind) so each
+        // chunk revalidates independently — so `studio.js` yields `W/"studio.js-…"`.
+        expect(headers["Cache-Control"]).toBe("no-cache");
+        expect(headers.ETag).toMatch(/^W\/"studio\.js-/);
+
+        const second = makeResponse();
+
+        middleware({ headers: { "if-none-match": headers.ETag }, url: `${STUDIO_PATH}/studio.js` } as { url?: string }, second.response, next);
+
+        expect(second.response.statusCode).toBe(304);
+        expect(second.end).toHaveBeenCalledWith();
         expect(next).not.toHaveBeenCalled();
     });
 
@@ -282,6 +434,58 @@ describe("studioPlugin", () => {
         });
 
         expect(response.statusCode).toBe(403);
+    });
+
+    it("rejects a proxied request carrying a forwarding header on a loopback peer", () => {
+        expect.assertions(1);
+
+        // A local reverse proxy/tunnel connects from 127.0.0.1 and may rewrite
+        // Host to localhost, but it adds a forwarding header — its presence means
+        // a (possibly remote) client is being relayed, so the admin-token document
+        // must be refused rather than trusting the loopback peer + Host.
+        const { response } = callGated(undefined, {
+            headers: { host: "localhost:5173", "x-forwarded-for": "203.0.113.7" },
+            method: "GET",
+            socket: { remoteAddress: "127.0.0.1" },
+            url: STUDIO_PATH,
+        });
+
+        expect(response.statusCode).toBe(403);
+    });
+
+    it("logs a warnOnce naming the forwarding header it saw (Codespaces/devcontainers/etc. surface a reason, not just an opaque 403)", () => {
+        expect.assertions(1);
+
+        const plugin = studioPlugin(makeOptions());
+        let middleware: ((request: unknown, response: ServerResponse, next: () => void) => void) | undefined;
+        const warnOnce = vi.fn<(message: string) => void>();
+
+        const server = {
+            config: {
+                base: "/",
+                logger: { info: vi.fn<(message: string) => void>(), warnOnce },
+                server: { host: undefined },
+            },
+            httpServer: { listening: false, once: vi.fn<() => void>() },
+            middlewares: {
+                use: (function_: typeof middleware) => {
+                    middleware = function_;
+                },
+            },
+            transformIndexHtml: vi.fn<(url: string, html: string) => Promise<string>>(async (_url: string, html: string) => html),
+        } as unknown as ViteDevServer;
+
+        (plugin.configureServer as (s: ViteDevServer) => unknown)(server);
+
+        const { response } = makeResponse();
+
+        middleware?.(
+            { headers: { host: "localhost:5173", "x-forwarded-for": "203.0.113.7" }, socket: { remoteAddress: "127.0.0.1" }, url: STUDIO_PATH },
+            response,
+            vi.fn(),
+        );
+
+        expect(warnOnce).toHaveBeenCalledWith(expect.stringContaining(`"x-forwarded-for"`));
     });
 
     it("rejects a cross-origin POST to schema-edit (CSRF)", () => {

@@ -15,6 +15,7 @@ const rulesCommand: Command = {
         ["lunora rules install --overwrite", "Reinstall, replacing edited skill files"],
         ["lunora rules check", "Report which Lunora skills are installed"],
         ["lunora rules check --strict", "Exit non-zero when rules are missing (CI gate)"],
+        ["lunora rules install --dir packages/app", "Install into a specific root instead of the workspace root"],
     ],
     group: "Project",
     loader: () =>
@@ -23,6 +24,7 @@ const rulesCommand: Command = {
         }),
     name: "rules",
     options: [
+        { description: "Install/check root (default: the detected workspace root, not the current directory)", name: "dir", type: String },
         { description: "install: overwrite skill files that already exist (default: skip them)", name: "overwrite", type: Boolean },
         { description: "check: exit non-zero when the rules are missing (for CI gating)", name: "strict", type: Boolean },
     ],
@@ -30,4 +32,4 @@ const rulesCommand: Command = {
 
 export { rulesCommand };
 
-export type RulesOptions = CreateOptions<{ overwrite: boolean | undefined; strict: boolean | undefined }>;
+export type RulesOptions = CreateOptions<{ dir: string | undefined; overwrite: boolean | undefined; strict: boolean | undefined }>;

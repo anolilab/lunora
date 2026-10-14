@@ -1,8 +1,8 @@
-import type { ColumnMetaLike, DatabaseWriterLike, SchemaLike, ServerDefaultContextLike, ValidatorLike } from "@lunora/do";
+import type { ColumnMetaLike, DatabaseWriterLike, SchemaLike, ServerDefaultContextLike, ValidatorLike } from "@lunora/shard-engine";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { createD1CtxDb as createD1ContextDatabase } from "../src/d1-ctx-db";
-import createD1Exec from "./_helpers/node-sqlite-d1";
+import { createD1Exec } from "./_helpers/node-sqlite-d1";
 
 /**
  * Exercises `.serverDefault(fn)` columns on the D1 column dialect: the factory
@@ -40,6 +40,7 @@ const setup = (auth?: ServerDefaultContextLike["auth"]): DatabaseWriterLike => {
         `CREATE TABLE "notes" (
             "id" TEXT PRIMARY KEY,
             "_creationTime" INTEGER NOT NULL,
+            "_version" INTEGER,
             "ownerId" TEXT,
             "title" TEXT
         )`,

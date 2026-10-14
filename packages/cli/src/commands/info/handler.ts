@@ -4,19 +4,29 @@ import { join } from "node:path";
 import type { SchemaIR } from "@lunora/codegen";
 import { discoverSchema } from "@lunora/codegen";
 import type { LinkedProject } from "@lunora/config";
-import { readLinkedProject } from "@lunora/config";
+import { readLinkedProject, readProjectManifest } from "@lunora/config";
+import type { BindingManifest } from "@lunora/config/cloudflare";
+import { findWranglerFile } from "@lunora/config/cloudflare";
 import { parse as parseJsonc } from "jsonc-parser";
 import { Project } from "ts-morph";
 
+import { deriveBindingManifest, writeBindingManifestFile } from "../../util/binding-manifest-file";
 import type { CommandHandler } from "../../util/command";
 import { defineHandler } from "../../util/command";
+import { EXIT_CODE } from "../../util/exit-code";
 import type { Logger } from "../../util/logger";
+import type { CommandResult, OutputFormat } from "../../util/output-format";
 import type { InfoOptions } from "./index";
 
 interface InfoCommandOptions {
+    /** Report only the binding manifest — what this Worker needs provisioned. */
+    bindings?: boolean;
     cwd?: string;
-    json?: boolean;
+    /** Output format: `pretty` (default) or `json`. */
+    format?: OutputFormat;
     logger: Logger;
+    /** With {@link InfoCommandOptions.bindings}: write the manifest here instead of stdout. */
+    out?: string;
 }
 
 interface LunoraPackageInfo {
@@ -25,11 +35,16 @@ interface LunoraPackageInfo {
 }
 
 interface WranglerSummary {
-    bindings: {
-        d1: ReadonlyArray<string>;
-        durableObjects: ReadonlyArray<string>;
-        vectorize: ReadonlyArray<string>;
-    };
+    /**
+     * Every binding the config declares, as `type:name`.
+     *
+     * Derived by the same function `lunora info --bindings` and `--emit-bindings` use.
+     * This used to hand-roll its own read of three sections — d1, durable
+     * objects, vectorize — so a project with R2, KV, queues, AI or any of the
+     * other nine types was told it had none of them. A summary that silently
+     * omits two thirds of the answer is worse than no summary.
+     */
+    bindings: ReadonlyArray<string>;
     compatibilityDate: string | undefined;
     compatibilityFlags: ReadonlyArray<string>;
     main: string | undefined;
@@ -56,18 +71,6 @@ interface InfoSnapshot {
     wranglerPath: string | undefined;
 }
 
-const findWranglerFile = (projectRoot: string): string | undefined => {
-    for (const candidate of ["wrangler.jsonc", "wrangler.json"]) {
-        const fullPath = join(projectRoot, candidate);
-
-        if (existsSync(fullPath)) {
-            return fullPath;
-        }
-    }
-
-    return undefined;
-};
-
 const stringField = (record: unknown, key: string): string | undefined => {
     if (record === null || typeof record !== "object") {
         return undefined;
@@ -88,17 +91,11 @@ const arrayField = (record: unknown, key: string): ReadonlyArray<unknown> => {
     return Array.isArray(value) ? value : [];
 };
 
-const summariseWrangler = (raw: unknown): WranglerSummary => {
-    const durableObjectBindings = arrayField((raw as Record<string, unknown>).durable_objects ?? {}, "bindings");
-    const d1 = arrayField(raw, "d1_databases");
-    const vectorize = arrayField(raw, "vectorize");
+const summariseWrangler = (raw: unknown, projectRoot: string): WranglerSummary => {
+    const { manifest } = deriveBindingManifest(projectRoot);
 
     return {
-        bindings: {
-            d1: d1.map((entry) => stringField(entry, "binding") ?? "<unnamed>"),
-            durableObjects: durableObjectBindings.map((entry) => stringField(entry, "name") ?? "<unnamed>"),
-            vectorize: vectorize.map((entry) => stringField(entry, "binding") ?? "<unnamed>"),
-        },
+        bindings: (manifest?.bindings ?? []).map((requirement) => `${requirement.type}:${requirement.binding}`),
         compatibilityDate: stringField(raw, "compatibility_date"),
         compatibilityFlags: arrayField(raw, "compatibility_flags").filter((entry): entry is string => typeof entry === "string"),
         main: stringField(raw, "main"),
@@ -128,21 +125,9 @@ const summariseSchema = (schema: SchemaIR): SchemaSummary => {
 };
 
 const collectLunoraPackages = (projectRoot: string): ReadonlyArray<LunoraPackageInfo> => {
-    const pkgPath = join(projectRoot, "package.json");
+    const pkg = readProjectManifest(projectRoot);
 
-    if (!existsSync(pkgPath)) {
-        return [];
-    }
-
-    let pkg: unknown;
-
-    try {
-        pkg = JSON.parse(readFileSync(pkgPath, "utf8"));
-    } catch {
-        return [];
-    }
-
-    if (pkg === null || typeof pkg !== "object") {
+    if (pkg === undefined) {
         return [];
     }
 
@@ -150,7 +135,7 @@ const collectLunoraPackages = (projectRoot: string): ReadonlyArray<LunoraPackage
     const seen = new Map<string, string>();
 
     for (const section of sections) {
-        const block = (pkg as Record<string, unknown>)[section];
+        const block = pkg[section];
 
         if (block === null || typeof block !== "object") {
             continue;
@@ -181,7 +166,7 @@ const collectInfo = (projectRoot: string): InfoSnapshot => {
 
     if (wranglerPath) {
         try {
-            wrangler = summariseWrangler(parseJsonc(readFileSync(wranglerPath, "utf8")));
+            wrangler = summariseWrangler(parseJsonc(readFileSync(wranglerPath, "utf8")), projectRoot);
         } catch {
             wrangler = undefined;
         }
@@ -234,9 +219,7 @@ const renderText = (snapshot: InfoSnapshot, logger: Logger): void => {
         logger.info(`  main:               ${snapshot.wrangler.main ?? "<unset>"}`);
         logger.info(`  compatibility_date: ${snapshot.wrangler.compatibilityDate ?? "<unset>"}`);
         logger.info(`  compatibility_flags: ${snapshot.wrangler.compatibilityFlags.join(", ") || "<none>"}`);
-        logger.info(`  durable objects:    ${snapshot.wrangler.bindings.durableObjects.join(", ") || "<none>"}`);
-        logger.info(`  d1 databases:       ${snapshot.wrangler.bindings.d1.join(", ") || "<none>"}`);
-        logger.info(`  vectorize indexes:  ${snapshot.wrangler.bindings.vectorize.join(", ") || "<none>"}`);
+        logger.info(`  bindings:           ${snapshot.wrangler.bindings.join(", ") || "<none>"}`);
     } else {
         logger.info("wrangler: (not found)");
     }
@@ -268,31 +251,131 @@ const renderText = (snapshot: InfoSnapshot, logger: Logger): void => {
     }
 };
 
-interface InfoCommandResult {
-    code: number;
-    snapshot: InfoSnapshot;
+/**
+ * `--bindings`: what this Worker needs provisioned, and nothing else.
+ *
+ * The manifest is a pure function of the project, so answering it must not
+ * require starting a dev server or producing a bundle — a supervisor planning a
+ * multi-worker graph wants it before it starts anything. `build --emit-bindings`
+ * and `lunora dev` write the same document from the same derivation, so a
+ * deployer and a task runner cannot be told different things.
+ */
+const renderBindings = (options: { cwd: string; json: boolean; logger: Logger; out?: string }): InfoCommandResult => {
+    const { cwd, json, logger, out } = options;
+
+    // `--out` goes through the SAME writer `build --emit-bindings` and `lunora dev`
+    // use rather than re-deriving and re-serialising here. The hand-rolled copy
+    // returned before the under-provisioning warning both siblings emit, so the
+    // one caller most likely to be a machine — an IaC program consuming the
+    // manifest — was the only one never told which wrangler sections it does not
+    // model.
+    if (out !== undefined) {
+        const { error } = writeBindingManifestFile({ destination: out, logger, projectRoot: cwd });
+
+        if (error !== undefined) {
+            logger.error(error);
+
+            return { code: EXIT_CODE.USAGE, error };
+        }
+
+        return { code: 0 };
+    }
+
+    const { error, manifest } = deriveBindingManifest(cwd);
+
+    if (manifest === undefined) {
+        // "No bindings" and "I could not tell" must not look the same: a deployer
+        // acts on the first by provisioning nothing.
+        const message = error ?? "could not derive the binding manifest";
+
+        logger.error(message);
+
+        return { code: EXIT_CODE.USAGE, error: message };
+    }
+
+    if (json) {
+        return { code: 0, data: manifest };
+    }
+
+    if (manifest.bindings.length === 0) {
+        logger.info("No bindings declared.");
+    } else {
+        const width = Math.max(...manifest.bindings.map((requirement) => requirement.type.length));
+
+        logger.info(`${String(manifest.bindings.length)} binding(s):`);
+
+        for (const requirement of manifest.bindings) {
+            const detail = [requirement.resource, requirement.className, requirement.resourceId].filter((part) => part !== undefined).join(" ");
+
+            logger.info(`  ${requirement.type.padEnd(width)}  ${requirement.binding}${detail === "" ? "" : `  ${detail}`}`);
+        }
+    }
+
+    if (manifest.crons.length > 0) {
+        logger.info(`${String(manifest.crons.length)} cron trigger(s): ${manifest.crons.join(", ")}`);
+    }
+
+    if (manifest.vars.length > 0) {
+        // Names only. The manifest never carries values, which is what lets
+        // `lunora dev` write the same document into a working tree unasked.
+        logger.info(`${String(manifest.vars.length)} var(s): ${manifest.vars.join(", ")}`);
+    }
+
+    if (manifest.unknown.length > 0) {
+        logger.warn(`not modelled by the manifest: ${manifest.unknown.join(", ")} — anything they bind must be provisioned by hand.`);
+    }
+
+    return { code: 0, data: manifest };
+};
+
+/**
+ * The `--format json` payload: the full snapshot, or — under `--bindings` — the
+ * binding manifest, which is the narrower question that flag asks.
+ */
+type InfoCommandData = BindingManifest | InfoSnapshot;
+
+interface InfoCommandResult extends CommandResult<InfoCommandData> {
+    /** Absent in `--bindings` mode, which answers a narrower question than the snapshot. */
+    snapshot?: InfoSnapshot;
 }
 
 const runInfoCommand = (options: InfoCommandOptions): InfoCommandResult => {
     const cwd = options.cwd ?? process.cwd();
-    const snapshot = collectInfo(cwd);
+    const json = options.format === "json";
+    // In `--format json` mode the human/progress channel moves to stderr so
+    // stdout carries only the JSON document.
+    const { logger } = options;
 
-    if (options.json) {
-        // Write straight to stdout so `lunora info --json | jq` works — Pail
-        // prefixes (level + timestamps) would break the parser.
-        process.stdout.write(`${JSON.stringify(snapshot, undefined, 2)}\n`);
-    } else {
-        renderText(snapshot, options.logger);
+    // `--bindings` narrows this command to the one question a MACHINE asks: what
+    // does this Worker need provisioned. Same document `--emit-bindings` writes
+    // and `lunora dev` drops next to its state record, from the same derivation,
+    // so a deployer and a task runner cannot be told different things.
+    if (options.bindings === true) {
+        return renderBindings({ cwd, json, logger, out: options.out });
     }
 
-    return { code: 0, snapshot };
+    if (options.out !== undefined) {
+        const message = "--out only applies with --bindings; the full info snapshot prints to stdout under --format json.";
+
+        logger.error(message);
+
+        return { code: EXIT_CODE.USAGE, error: message };
+    }
+
+    const snapshot = collectInfo(cwd);
+
+    if (!json) {
+        renderText(snapshot, logger);
+    }
+
+    return { code: 0, data: snapshot, snapshot };
 };
 
 /** `lunora info` handler (lazy-loaded via the command's `loader`). */
-const execute: CommandHandler<InfoOptions> = defineHandler<InfoOptions>(({ cwd, logger, options }) =>
-    runInfoCommand({ cwd, json: options.json === true, logger }),
+const execute: CommandHandler<InfoOptions> = defineHandler<InfoOptions, InfoCommandData>(({ cwd, format, logger, options }) =>
+    runInfoCommand({ bindings: options.bindings === true, cwd, format, logger, out: options.out }),
 );
 
 export { execute };
-export type { InfoCommandOptions, InfoCommandResult, InfoSnapshot };
+export type { InfoCommandData, InfoCommandOptions, InfoCommandResult, InfoSnapshot };
 export { collectInfo, runInfoCommand };

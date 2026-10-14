@@ -1,0 +1,271 @@
+/**
+ * Issue #283: `lunora codegen` was not reproducible from a cold `_generated/`.
+ *
+ * Pass 1 inferred every handler's return type against a ts-morph `Project` that
+ * did not yet include the generated declarations (`Doc<…>` chief among them,
+ * for a handler whose return type is annotated against it) — so on a fresh
+ * clone, CI, or after `rm -rf lunora/_generated`, that inference collapsed to
+ * `unknown` and codegen WROTE the collapsed type into `api.ts`/`functions.ts`.
+ * A second run re-inferred against the first run's own (now-present) output
+ * and recovered.
+ *
+ * This handler's return type depends on nothing but a LOCAL relative import
+ * (`./_generated/dataModel`, never `@lunora/server` itself) so the test proves
+ * the fix without needing a resolvable `@lunora/server` in `node_modules` —
+ * every other codegen unit test in this suite runs in a checker-degraded
+ * sandbox for the same reason (see `discover-functions-any-token.test.ts`).
+ */
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+// eslint-disable-next-line import/no-namespace -- vi.spyOn needs the module namespace object to intercept run-codegen's call to emitServer
+import * as emitModule from "../src/emit";
+import { runCodegen } from "../src/index";
+
+let workdir: string;
+
+const SCHEMA = `import { defineSchema, defineTable, v } from "@lunora/server";
+
+export const schema = defineSchema({
+    notes: defineTable({ text: v.string() }),
+});
+`;
+
+// The return type depends only on \`./_generated/dataModel\`'s \`Doc<"notes">\` —
+// present from the very first pass once the fix bootstraps it, absent (module
+// not found) on a cold pass without the fix.
+const NOTES = `import type { Doc } from "./_generated/dataModel";
+import { query } from "@lunora/server";
+
+export const getNote = query({
+    args: {},
+    handler: async (): Promise<Doc<"notes"> | null> => {
+        return null;
+    },
+});
+`;
+
+describe("runCodegen — cold-start reproducibility (#283)", () => {
+    beforeEach(() => {
+        workdir = mkdtempSync(join(tmpdir(), "lunora-cold-start-"));
+        mkdirSync(join(workdir, "lunora"), { recursive: true });
+        writeFileSync(join(workdir, "lunora", "schema.ts"), SCHEMA, "utf8");
+        writeFileSync(join(workdir, "lunora", "notes.ts"), NOTES, "utf8");
+    });
+
+    afterEach(() => {
+        rmSync(workdir, { force: true, recursive: true });
+    });
+
+    it("does not collapse a Doc<T>-typed return to `unknown` on the very first pass from a cold _generated/", () => {
+        expect.assertions(2);
+
+        // Precondition: genuinely cold — no `_generated/` directory exists yet.
+        const result = runCodegen({ lint: false, projectRoot: workdir, wranglerQueueProducers: [] });
+
+        expect(result.generated.api).not.toContain('getNote: FunctionReference<"query", {}, unknown>');
+        expect(result.generated.api).toContain('getNote: FunctionReference<"query", {}, import("./dataModel.js").Doc_notes | null>;');
+    });
+
+    it("does not collapse a return inferred THROUGH api.ts on the very first pass", () => {
+        expect.assertions(2);
+
+        // The other missing declaration. `dataModel.ts`/`server.ts` can be
+        // rendered before inference because nothing in them depends on it;
+        // `api.ts` cannot, because its content IS the inference result. So a
+        // handler whose own return type reads back through the api surface — the
+        // ordinary `ctx.runQuery(api.x.y)` shape — still collapsed on a cold run
+        // and was written out collapsed, which is the half of #283 that kept
+        // consumers looping the CLI until a hash of `_generated/` stopped moving.
+        //
+        // Indexed through `keyof` rather than a `FunctionReference` so the
+        // assertion holds in this suite's checker-degraded sandbox, where
+        // `@lunora/server` does not resolve: the dependency on `api.ts` EXISTING
+        // is the same either way.
+        writeFileSync(
+            join(workdir, "lunora", "relay.ts"),
+            `import type { ApiTypes } from "./_generated/api";
+import { query } from "@lunora/server";
+
+export const names = query({
+    args: {},
+    handler: async (): Promise<keyof ApiTypes["notes"]> => "getNote",
+});
+`,
+            "utf8",
+        );
+
+        const result = runCodegen({ lint: false, projectRoot: workdir, wranglerQueueProducers: [] });
+
+        expect(result.generated.api).not.toContain('names: FunctionReference<"query", {}, unknown>');
+        expect(result.generated.api).toContain('names: FunctionReference<"query", {}, "getNote">;');
+    });
+
+    it("does not collapse a STREAMING route's chunk type on the first pass", () => {
+        expect.assertions(2);
+
+        // `route.chunkType` goes through the same `unwrapHandlerReturn` as a
+        // function return (`discover/http-routes.ts`), so `discoverHttpRoutes` has
+        // to sit inside the fixpoint alongside `discoverFunctions` and
+        // `discoverMutators`. Left outside it, a streaming route was discovered
+        // once against a cold project and never re-inferred — #283 with a smaller
+        // blast radius, and invisible because no fixpoint fixture had a route in
+        // it.
+        writeFileSync(
+            join(workdir, "lunora", "feed.ts"),
+            `import type { ApiTypes } from "./_generated/api";
+import { httpRoute } from "@lunora/server";
+
+export const feed = httpRoute.get("/api/feed").stream(async function* () {
+    yield null as unknown as keyof ApiTypes["notes"];
+});
+`,
+            "utf8",
+        );
+
+        const result = runCodegen({ lint: false, projectRoot: workdir, wranglerQueueProducers: [] });
+
+        expect(result.generated.api).not.toContain("HttpStreamRef<unknown");
+        expect(result.generated.api).toContain('HttpStreamRef<"getNote"');
+    });
+
+    it("first-pass functions.ts/api.ts output equals a second pass's (fixpoint from pass 1)", () => {
+        expect.assertions(2);
+
+        const first = runCodegen({ lint: false, projectRoot: workdir, wranglerQueueProducers: [] });
+
+        // A second, fully independent invocation (no injected `project`, so this
+        // constructs its own ts-morph Project exactly as a second `lunora codegen`
+        // process would) reading back what pass 1 wrote.
+        const second = runCodegen({ lint: false, projectRoot: workdir, wranglerQueueProducers: [] });
+
+        expect(second.generated.functions).toBe(first.generated.functions);
+        expect(second.generated.api).toBe(first.generated.api);
+    });
+
+    it("does not collapse a Doc<T> for a table added since the last run (warm but stale)", () => {
+        expect.assertions(2);
+
+        // The residual half of #283. The cold-start bootstrap only fires when a
+        // generated file is MISSING, so an everyday edit — add a table, add a
+        // handler that returns a row from it — still inferred pass 1 against the
+        // PREVIOUS run's `dataModel.ts`, which has no `Doc_projects`. That is why
+        // `lunora codegen` still needed two passes on a warm tree, and why a
+        // project ends up wrapping the CLI in a run-until-the-hash-stops-changing
+        // loop.
+        runCodegen({ lint: false, projectRoot: workdir, wranglerQueueProducers: [] });
+
+        writeFileSync(
+            join(workdir, "lunora", "schema.ts"),
+            `import { defineSchema, defineTable, v } from "@lunora/server";
+
+export const schema = defineSchema({
+    notes: defineTable({ text: v.string() }),
+    projects: defineTable({ name: v.string() }),
+});
+`,
+            "utf8",
+        );
+        writeFileSync(
+            join(workdir, "lunora", "projects.ts"),
+            `import type { Doc } from "./_generated/dataModel";
+import { query } from "@lunora/server";
+
+export const getProject = query({
+    args: {},
+    handler: async (): Promise<Doc<"projects"> | null> => {
+        return null;
+    },
+});
+`,
+            "utf8",
+        );
+
+        const result = runCodegen({ lint: false, projectRoot: workdir, wranglerQueueProducers: [] });
+
+        expect(result.generated.api).not.toContain('getProject: FunctionReference<"query", {}, unknown>');
+        expect(result.generated.api).toContain('getProject: FunctionReference<"query", {}, import("./dataModel.js").Doc_projects | null>;');
+    });
+
+    it("leaves _generated/ untouched when a later phase throws", () => {
+        expect.assertions(2);
+
+        // The declaration surface is rendered before inference, but must not be
+        // WRITTEN before it: everything from `discoverFunctions` to the emit phase
+        // can throw, and a run that committed a new `dataModel.ts` beside a stale
+        // `api.ts`/`shard.ts` leaves the project failing to compile with errors
+        // pointing at generated files rather than the real cause. Worst on a table
+        // REMOVAL, where `Doc_x` vanishes while its referrers stay.
+        runCodegen({ lint: false, projectRoot: workdir, wranglerQueueProducers: [] });
+
+        const before = readFileSync(join(workdir, "lunora", "_generated", "dataModel.ts"), "utf8");
+
+        writeFileSync(
+            join(workdir, "lunora", "schema.ts"),
+            `import { defineSchema, defineTable, v } from "@lunora/server";
+
+export const schema = defineSchema({
+    notes: defineTable({ text: v.string() }),
+    projects: defineTable({ name: v.string() }),
+});
+`,
+            "utf8",
+        );
+        writeFileSync(
+            join(workdir, "lunora", "broken.ts"),
+            `import { query, v } from "@lunora/server";
+
+export const bad = query.input({ x: v.bogusKind() }).query(async () => 1);
+`,
+            "utf8",
+        );
+
+        expect(() => runCodegen({ lint: false, projectRoot: workdir, wranglerQueueProducers: [] })).toThrow(/Unsupported validator kind/u);
+        expect(readFileSync(join(workdir, "lunora", "_generated", "dataModel.ts"), "utf8")).toBe(before);
+    });
+
+    it("does not rewrite server.ts a second time on a warm run for a project using a feature flag", () => {
+        expect.assertions(1);
+
+        // `ctx.kv` usage sets `hasKv`, so the bootstrap's schema-only render
+        // (no feature flags) genuinely differs from the final render — the
+        // exact precondition the double-write bug needed to reproduce.
+        writeFileSync(
+            join(workdir, "lunora", "cache.ts"),
+            `import { query } from "@lunora/server";
+
+export const read = query({
+    args: {},
+    handler: async ({ ctx }) => ctx.kv.get("k"),
+});
+`,
+            "utf8",
+        );
+
+        // First (cold) run creates the full \`_generated/\` output on disk,
+        // including the \`hasKv\`-narrowed \`server.ts\`.
+        runCodegen({ lint: false, projectRoot: workdir, wranglerQueueProducers: [] });
+
+        // Spies on the module's own \`emitServer\` export: the bootstrap phase
+        // calls it with only \`{ schema, useUmbrella }\` (no feature flags), the
+        // final phase with the full narrowed option set. Counting TOTAL calls
+        // across the second run is enough to prove the bootstrap one didn't
+        // fire — the final phase always calls it exactly once.
+        const emitServerSpy = vi.spyOn(emitModule, "emitServer");
+
+        // Second (warm) run: nothing changed, so the final full \`server.ts\`
+        // this run computes is byte-identical to what's already on disk. The
+        // bootstrap gate under test should skip its schema-only render
+        // entirely — without it, the bootstrap phase would overwrite the full
+        // content with a reduced one, and the final phase would immediately
+        // write it back, touching disk twice for no observable change.
+        runCodegen({ lint: false, projectRoot: workdir, wranglerQueueProducers: [] });
+
+        expect(emitServerSpy).toHaveBeenCalledTimes(1);
+
+        emitServerSpy.mockRestore();
+    });
+});

@@ -1,0 +1,248 @@
+# Lunora Swift SDK
+
+A **protocol-conformant** Swift client for a Lunora deployment, implementing the
+transport specified in [`protocol/README.md`](../../protocol/README.md):
+
+- `query` / `mutation` / `action` round-trips over `POST /_lunora/rpc`.
+- Live `subscribe` — and `stream`, which hands back an `AsyncStream` — over the WebSocket `data`/`delta`/`ack`/`error`/`resume`/
+  `settled` frames.
+- `subscribeShape` over the poke (`pokeStart`/`pokePart`/`pokeEnd`) partial-
+  replication path.
+- A full `encodeWire` / `decodeWire` value codec (bigint, bytes, `Date`,
+  `Map`/`Set`, `URL`, `NaN`/`Infinity`, `undefined`) plus the stable subscription
+  key.
+- `submit` — the offline-capable write path: cursor-gated optimistic updates
+  (`Optimistic.swift`) over the durable replay queue (`Offline.swift`).
+
+> **Not a pnpm/TS package.** This lives under `sdks/swift/` and is a standalone
+> SwiftPM package. **Foundation only** — nothing to install.
+
+```swift
+// Package.swift
+.package(path: "./sdk/swift"),
+.product(name: "LunoraApi", package: "swift"),
+```
+
+SwiftPM identifies a path dependency by its **directory name** and ignores the
+manifest's `name:`, so `package:` is spelled as whatever directory you generated
+into.
+
+## Usage
+
+HTTP and the socket are **injected**, so you keep your own client, timeouts,
+retries and socket library:
+
+```swift
+let client = LunoraClient(url: "https://my-app.example.com", post: myPoster, authToken: "…")
+client.identity = currentUserID
+// `clientID` is minted per instance. Pin a stable per-device one only when the
+// offline queue is durable — a replayed write is namespaced server-side under
+// the id that issued it.
+
+let messages = try client.query("messages:list", args: ["channel": "general"])
+_ = try client.mutation("messages:send", args: ["channel": "general", "text": "hi"])
+
+// Live subscription: attach your socket, then feed it frames.
+client.attachSocket { frame in try socket.send(Wire.stableStringify(frame)) }
+let unsubscribe = client.subscribe("messages:list", args: args, onData: render)
+```
+
+The sender receives each outbound frame as a dictionary; serialize it with
+`Wire.stableStringify`, the transport's own writer, so string escaping (a lone
+surrogate as `\udXXX`) and number spelling match what the RPC bodies send.
+`JSONSerialization` refuses a lone surrogate and spells numbers differently.
+
+`handleFrame(raw)` is what you call with each inbound WebSocket message. It
+cannot throw: a frame that is not JSON, not an object, or not shaped like any
+server frame is ignored (a non-integer `cursor` never replaces the tracked one),
+and a payload that does not decode reaches its own subscription's `onError` as
+`INVALID_FRAME`. A shape poke applies whole or not at all: one undecodable row
+leaves that shape's view, checkpoint and epoch untouched and reports
+`WIRE_DECODE_FAILED` to it. A part that is not a reset and was computed against
+a view this client does not hold — its base checkpoint, or the poke's epoch,
+differs from the shape's — re-seeds instead: the view is emptied, its checkpoint
+and epoch cleared, `onRows` told `[]`, and a cold `shape_subscribe` sent.
+`resendSubscriptions()` re-subscribes everything after a reconnect — queries and
+shape views alike — carrying each one's resume cursor or checkpoint.
+
+Every RPC failure is a `LunoraAPIError`: a body that is not JSON or not an object
+is `INTERNAL`, and a success whose `result` does not decode is
+`WIRE_DECODE_FAILED` (the call committed). `close()` also ends every live
+`stream(...)`. `dump(client)` shows the bearer token only as `<redacted>`.
+
+## Optimistic updates and offline writes
+
+`mutation` is the direct write path: one round-trip that throws when the
+deployment is unreachable. `submit` is the one that survives a dropped socket —
+it queues the write, shows a predicted value immediately, and replays in order
+once the socket is back.
+
+```swift
+// Capacity, an app version, and a durable store are all optional; the default is
+// an in-memory queue of 1000 writes.
+client.offlineQueue = LunoraOfflineQueue(maxItems: 500, persistence: myStore, version: "v2")
+
+let outcome = try client.submit(
+    LunoraSubmitOptions(
+        functionPath: "messages:send",
+        args: ["channel": "general", "text": "hi"],
+        // Names the query the write affects. The `optimistic:` shorthand is for
+        // the narrower case where the write and the subscription share a path
+        // and args (a counter, a document by id) — it patches nothing here,
+        // where `send` and `list` are different functions. Each transform is
+        // re-run on every server frame, so derive from what it is handed rather
+        // than closing over a value.
+        optimisticUpdate: { store, _ in
+            let args: Any? = ["channel": "general"]
+            let current = store.getQuery("messages:list", args: args)
+
+            store.setQuery("messages:list", args: args, value: appendPending(current))
+        },
+        // Re-checked just before a QUEUED write replays: false drops it instead
+        // of replaying a write that can only fail.
+        precondition: { channelStillExists("general") },
+        onSettled: { event in print(event.status, event.mutationID) }
+    )
+)
+
+if outcome.status == .queued {
+    // durably queued, not committed — don't report success yet
+}
+```
+
+The overlay drops the moment a frame whose `cursor` reaches the write's echoed
+`commitCursor` arrives, so the confirming frame never double-counts it; a failed
+write rolls back. `client.flushOfflineQueue(shardKey:)` replays a shard's queued
+writes when its socket returns, and `client.hydrateOfflineQueue()` restores what
+a prior session persisted, returning the shard keys to flush.
+
+A queued write whose args cannot be wire-encoded settles terminally on the first
+flush (`OFFLINE_WRITE_UNENCODABLE`) rather than being retried forever, a restored
+record whose stored args no longer decode is purged and settled
+(`OFFLINE_WRITE_UNDECODABLE`) rather than replayed with substitute arguments, and
+every discard — including one the capacity cap evicts out of a _restored_ queue,
+which has no caller left to tell — reaches `client.onMutationSettled`.
+
+A flush that comes back rate-limited — whole response or one batch slot —
+re-queues rather than dropping, reports the server's `error.data.retryAfterMs` as
+`LunoraFlushReport.retryAfterMs` (clamped at `lunoraMaxRetryAfterMs`, 60 s), and
+holds the next flush off until it passes. The `Retry-After` HEADER is not read:
+`LunoraHTTPPoster` surfaces `(status, body)` only. A batch refused for size — ANY
+413, the worker's coded `PAYLOAD_TOO_LARGE` or an edge's HTML page — is split in
+half and retried, so no write is dropped for the size of the batch it shared; a
+lone write still refused settles `PAYLOAD_TOO_LARGE`.
+
+One predicate classifies a failed replay, alone or batched: a coded envelope by
+its code alone (`SHARD_ERROR`, `SHARD_UNAVAILABLE`, the rate-limit codes and the
+refused-credential codes `UNAUTHORIZED`, `TOKEN_EXPIRED`, `UNAUTHENTICATED`
+re-queue — a token refresh fixes those — and every other code, a coded 5xx
+included, is terminal), an envelope-less reply by its status (re-queued, except
+a 413). An envelope whose `data` does not decode keeps its code; the `data` is
+dropped. A write the server committed whose result the CLIENT cannot decode
+settles `committed` with a `WIRE_DECODE_FAILED` error and no value, and is never
+retried; a server that itself answers `WIRE_DECODE_FAILED` refused the write,
+and that settles `rejected`. A client with no
+poster re-queues its writes, alone or batched — a configuration gap, not a
+verdict.
+
+`client.identity` is an opaque, **non-secret** stamp — a user id, not a bearer
+token. It is persisted with every queued write and re-checked before that write
+replays, so a restart cannot push one user's queued writes as another. Left
+nil, a write is stamped `.token(digest:)` with a digest of `client.authToken`
+instead (the reference client's, `lunoraTokenDigest`, never the token itself),
+and signed out only when there is no token either — so a write queued under one
+token is never sent with another. Under a different token it is rejected
+`OFFLINE_IDENTITY_CHANGED`; with no token at all it is held, unsettled and still
+persisted, until one is set. A flush sends each write with the token its
+identity was checked against, so a token set mid-flush applies from the next
+flush, never to the rest of the current one. Setting `identity` is what lets a
+token refresh keep the queue. A record persisted by an earlier build with a
+null stamp is rejected the same way once a token is held, since null then said
+nothing about whose write it was. `identity` may be any string: a token stamp is
+its own case, persisted as `{"tokenDigest": …}`, so no identity, however it is
+spelled, can match a token's writes, nor a token stamp an identity's.
+Changing it from one set value to another (or to nil) also evicts the previous
+session: every subscription drops its resume cursor and epoch, and every shape
+view is emptied, its `onRows` told `[]`. With `identity` unset, setting a
+different `authToken` (or clearing it) evicts the same way, since the token's
+digest is then the identity. Nothing flushes on its own when the token changes:
+call `flushOfflineQueue` after setting it, as on a reconnect.
+
+`LunoraOfflineQueue` is not internally locked: the client already holds a
+**non-recursive** `NSLock` over the registry the queue is settled against, so
+every queue method that discards a write RETURNS it for the client to report once
+unlocked. Consumer callbacks — a transform, a `precondition`, a settled listener
+— likewise run outside that lock. See [`sdks/README.md`](../README.md).
+
+## Wire types
+
+Swift's `Codable` cannot express JS's `bigint`/`Map`/`Set`/`Date` distinctions,
+so mark those explicitly; plain values map to JSON directly:
+
+| Lunora / `v.*`                         | Swift                                                    |
+| -------------------------------------- | -------------------------------------------------------- |
+| `v.string/number/boolean/object/array` | `String` / `Double` / `Bool` / `[String: Any]` / `[Any]` |
+| `v.bigint()`                           | `WireBigInt`                                             |
+| `v.bytes()`                            | `WireBytes`                                              |
+| `Date`                                 | `WireDate`                                               |
+| `Map` / `Set`                          | `WireMap` / `WireSet`                                    |
+| `URL`                                  | `WireURL`                                                |
+
+`decodeWire` returns these same wrappers so values round-trip exactly.
+
+The transport reads JSON with its own reader, `LunoraJSON.parse`, not
+`JSONSerialization`, which on Darwin is not correctly rounded (about one double in
+eleven came back one ulp off). It writes RPC bodies with `Wire.stableStringify`,
+which spells every number and string as `JSON.stringify` does — including a lone
+UTF-16 surrogate, written `\udXXX`, which a bridged `NSString` (a truncated emoji)
+can carry and `JSONSerialization` refused. An integer literal off the wire past
+±(2^53−1) decodes to the double `JSON.parse` reads; a native `Int` or `UInt64`
+that large is still refused on encode.
+
+Swift compares a lone surrogate as U+FFFD, so `"\ud800"`, `"\ud801"` and `"�"`
+are one `String` to it and three to JavaScript. `WireMap` keys and `WireSet`
+members are compared by UTF-16 unit and stay distinct. A `[String: Any]` cannot
+hold all three, so a JSON object whose keys differ only that way decodes to a
+`[WireKey: Any]`, keyed by UTF-16 code unit; every other object is still a
+`[String: Any]`. `encode`, `decode` and `stableStringify` take both, so such a
+value re-encodes to the reference's bytes and keys the same.
+
+```swift
+if let object = value as? [WireKey: Any] {
+    let named = object["id"]                     // a literal is a key
+    let lone = object[WireKey(utf16: [0xD800])]  // a key no literal can spell
+    let text = object.keys.map(\.string)         // a String view per key
+}
+```
+
+**Behaviour change.** Such an object used to be refused as invalid JSON: the frame
+was ignored and an RPC reply was `INTERNAL`. It now arrives as `[WireKey: Any]`
+where code that casts to `[String: Any]` finds nil. An `Error`'s props are still
+a `[String: Any]`, so props whose keys differ only by a lone surrogate are refused
+as a malformed frame. Generated typed results are decoded from the transport's own
+writer rather than `JSONSerialization`, which crashes on a `[WireKey: Any]` or a
+NaN instead of throwing. A model cannot hold a lone surrogate, and `JSONDecoder`
+refuses its escape, so a typed result carrying one throws a `DecodingError`, as
+any result the model cannot hold does; the untyped `client.query` still returns
+it whole. `sdks/generated-check.sh swift` runs both.
+
+### One thing to know about generated models
+
+`JSONEncoder` omits a `nil` struct property, which is right for an unset
+`v.optional()` and wrong for a required `v.nullable()` set to null — the
+validator rejects an absent key there. So the generated call site is handed the
+NULLABLE paths computed from your schema and restores those nulls after
+encoding. `sdks/README.md` records how the other ports draw the same line.
+
+## Tests
+
+The suite drives the SDK against the **shared** golden fixtures in
+`protocol/fixtures/` — the identical files the TypeScript client is tested
+against — and against `protocol/conformance-cases.json`, which lists the cases
+every SDK's suite must exercise. XCTest has no after-all hook that can fail, so
+here the manifest **drives** the run: a required name with no dispatch arm fails.
+
+```bash
+cd sdks/swift
+swift test
+```

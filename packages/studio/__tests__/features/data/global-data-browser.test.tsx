@@ -60,10 +60,11 @@ describe("globalDataBrowser", () => {
 
         render(renderBrowser(createBrowserClient()));
 
-        await screen.findByTestId("gdb-table-list");
-
         // The sidebar renders the table name and its row-count badge separately.
-        expect(screen.getByTestId("gdb-table-organizations").textContent).toBe("organizations2");
+        // (findBy: the list only populates once the async `listGlobalTables` resolves.)
+        const organizationsRow = await screen.findByTestId("gdb-table-organizations");
+
+        expect(organizationsRow.textContent).toBe("organizations2");
         expect(screen.getByTestId("gdb-table-plans").textContent).toBe("plans5");
     });
 

@@ -1,10 +1,20 @@
 {
     "extends": "../../tsconfig.base.json",
     "compilerOptions": {
-        "outDir": "dist",
-        "rootDir": ".",
+        // Intentionally no `outDir`/`rootDir` (unlike sibling packages): `dialect.ts`
+        // inlines `../../../shared/quote-identifier` (a file outside this package,
+        // bundled in at build time), and a set `rootDir` would raise TS6059 for it.
+        // `lint:types` is `tsc --noEmit` and the real build is packem, so neither is
+        // load-bearing here. See shared/quote-identifier.ts.
         "moduleResolution": "bundler",
-        "types": ["@cloudflare/workers-types", "@cloudflare/vitest-pool-workers/types", "node"]
+        // `@cloudflare/workers-types` is here for the TEST tier only, not for `src/`:
+        // the workerd suite calls Cloudflare's typed `Response.json<T>()` overload,
+        // which is not in lib.dom and which `@cloudflare/vitest-plugin/types`
+        // does not supply. `src/` itself no longer imports the provider types at all
+        // (plan 114 §5.1's ambient-types scrub) — it casts to drizzle's own
+        // `AnyD1Database`. Keep it that way: a CF import appearing under `src/` is
+        // the regression this note exists to catch.
+        "types": ["@cloudflare/workers-types", "@cloudflare/vitest-plugin/types", "node"]
     },
     "include": ["src/**/*", "__tests__/**/*", "__bench__/**/*"]
 }

@@ -43,6 +43,28 @@ describe("createWorker — global introspection endpoints", () => {
         expect(response.status).toBe(403);
     });
 
+    it("authorizes via env.LUNORA_ADMIN_TOKEN when no options.adminToken is set (the composeWorker default)", async () => {
+        expect.assertions(2);
+
+        // composeWorker passes no `adminToken`; the admin gate must fall back to
+        // `env.LUNORA_ADMIN_TOKEN` (the value the Studio + worker share via .dev.vars).
+        const worker = createWorker({ globalIntrospector: introspector(), shardDO: noopNamespace });
+        const url = "https://app.example/_lunora/admin/global/tables";
+
+        const authorized = await worker.fetch(
+            new Request(url, { headers: { authorization: `Bearer ${ADMIN_TOKEN}` }, method: "GET" }),
+            { LUNORA_ADMIN_TOKEN: ADMIN_TOKEN },
+            fakeContext,
+        );
+
+        expect(authorized.status).toBe(200);
+
+        // No bearer → still 403 even though the env token is set.
+        const rejected = await worker.fetch(new Request(url, { method: "GET" }), { LUNORA_ADMIN_TOKEN: ADMIN_TOKEN }, fakeContext);
+
+        expect(rejected.status).toBe(403);
+    });
+
     it("tables reports GLOBALS_NOT_CONFIGURED when no introspector is bound (400)", async () => {
         expect.assertions(2);
 
@@ -128,6 +150,44 @@ describe("createWorker — global introspection endpoints", () => {
 
         expect(response.status).toBe(200);
         expect(intro.readTablePage).toHaveBeenCalledWith({ filters: [{ column: "name", value: "Acme" }], table: "organizations" });
+    });
+
+    it("table wire-decodes tagged filter values so a bytes drill-down survives the query param", async () => {
+        expect.assertions(2);
+
+        const intro = introspector();
+        const worker = createWorker({ adminToken: ADMIN_TOKEN, globalIntrospector: intro, shardDO: noopNamespace });
+        // What the client puts in the param. A facet over a BLOB column hands back
+        // bytes, which `JSON.stringify` empties to `{}` — so the client wire-tags
+        // the filter list and this side has to decode it, or the drill-down binds
+        // an empty object and matches nothing.
+        const filters = encodeURIComponent(
+            JSON.stringify([
+                { column: "blob", value: ["$lunora.wire$", "bytes", "BwgJ"] },
+                { column: "name", value: "Acme" },
+            ]),
+        );
+
+        const response = await worker.fetch(
+            new Request(`https://app.example/_lunora/admin/global/table?table=blobs&filters=${filters}`, {
+                headers: { authorization: `Bearer ${ADMIN_TOKEN}` },
+                method: "GET",
+            }),
+            {},
+            fakeContext,
+        );
+
+        expect(response.status).toBe(200);
+
+        expect(intro.readTablePage).toHaveBeenCalledWith({
+            filters: [
+                { column: "blob", value: new Uint8Array([7, 8, 9]) },
+                { column: "name", value: "Acme" },
+            ],
+            limit: undefined,
+            offset: undefined,
+            table: "blobs",
+        });
     });
 
     it("facet forwards table / column / filters and returns the summary", async () => {

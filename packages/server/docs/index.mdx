@@ -1,6 +1,11 @@
 ---
 title: "@lunora/server"
 description: Authoring API — defineSchema, query, mutation, action, validators.
+related:
+    - to: /docs/packages/client
+    - to: /docs/concepts/schema
+    - to: /docs/concepts/local-first
+      note: "`defineShape` / `defineMutator`"
 ---
 
 `@lunora/server` is the authoring-side package. It provides `defineSchema`,
@@ -10,7 +15,7 @@ them from the generated `_generated/server`:
 
 ```ts
 // schema + validators from the package:
-import { defineSchema, defineTable, v } from "lunorash/server";
+import { defineSchema, defineTable, v } from "@lunora/server";
 // typed builders from codegen:
 import { action, mutation, query } from "@/lunora/_generated/server";
 ```
@@ -29,11 +34,14 @@ codegen and the runtime.
 
 Create a `TableBuilder`. Fluent methods:
 
-- `.global({ backend? })` — store in D1 (cross-shard) instead of a Durable Object
-- `.shardBy(field)` — partition by the named field
-- `.index(name, fields, { unique? })` — secondary index
-- `.searchIndex(name, { field, filterFields? })` — full-text index
-- `.public()` — exempt this table from `.rls("required")` (when secure-by-default is on)
+- `.global({ backend? })`: store in D1 (cross-shard) instead of a Durable Object
+- `.shardBy(field)`: partition by the named field
+- `.source({ binding, query, tenantBy?, idColumn?, map?, columns?, refresh?, mode? })`: materialize this table from an external Postgres/MySQL behind Cloudflare Hyperdrive. A system poll loop reads the (tenant-scoped) slice and lands it in the DO's SQLite, then `defineShape` carries it to clients. Implies `.externallyManaged()`; under `.shardBy()`, `tenantBy` is mandatory (the tenant-isolation boundary, enforced by the `external_source_unscoped` advisor lint)
+- `.index(name, fields, { unique? })`: secondary index
+- `.searchIndex(name, { field, filterFields?, language?, staged? })`: full-text index over `field` (a dot path reads a nested field); `filterFields` (≤16) are the columns `.eq()` may narrow by inside the search; `language` adds that language's stopwords to the always-on accent folding (`de`/`en`/`es`/`fr`/`it`/`nl`/`pt`); `staged: true` skips the migration-time backfill on a large table; `strategy: "native"` uses the engine's own full-text index where it has one (Postgres `tsvector` + GIN), which is faster on large corpora, but the engine ranks, so ordering no longer matches the other backends
+- `.public()`: exempt this table from `.rls("required")` (when secure-by-default is on)
+- `.softDelete({ field? })`: `delete()` flips a marker column (default `deletedAt`) instead of removing the row, and list reads hide soft-deleted rows
+- `.timestamps({ field? })`: adds an epoch-millisecond column (default `updatedAt`) stamped on insert and restamped on every update (any `patch` or `replace`, including soft delete and `restore()`) unless the write sets it. Creation time is already on every row as `_creationTime`
 
 ## Validators (`v.*`)
 
@@ -51,8 +59,8 @@ v.union(v.string(), v.number());
 v.optional(v.string());
 ```
 
-A validator throws `ValidationError` on mismatch. The runtime wraps thrown
-errors in an `args.<field>` path for fast debugging.
+A validator throws `ValidationError` on mismatch. The runtime wraps the error
+with an `args.<field>` path so it points at the field that failed.
 
 ## `query / mutation / action`
 
@@ -68,36 +76,394 @@ with a uniform `{ kind, args, handler }` shape consumed by codegen.
 ## `ctx` shape
 
 `QueryCtx`, `MutationCtx`, and `ActionCtx` share `auth`, `scheduler`, and
-`storage`. `MutationCtx.db` extends `QueryCtx.db` with mutating methods;
-`ActionCtx` drops `db` entirely — actions must read/write via mutations or
-queries called through `ctx.runQuery` / `ctx.runMutation`.
+`storage`. `MutationCtx.db` extends `QueryCtx.db` with mutating methods.
+`ActionCtx` carries a `DatabaseWriter` too — it does not drop `db` — but an
+action's own writes are **not** transactional: each autocommits as it runs, and
+a later throw rolls nothing back. A mutation dispatched through
+`ctx.runMutation` does get the same transaction a top-level one gets, which is
+what makes the "do the transactional part in a mutation, call it from the
+action" split safe. See [function context](/docs/concepts/function-context) for
+the full per-kind matrix.
 
 ### Client-supplied ids
 
 By default `ctx.db.insert(table, doc)` mints a fresh row id and **ignores** any
-client-chosen `_id`. To let the caller choose it — which an optimistic client
-needs so it can key a row before the server responds — pass a UUID via the
+client-chosen `_id`. To let the caller choose it (which an optimistic client
+needs so it can key a row before the server responds), pass a UUID via the
 options:
 
 ```ts
 ctx.db.insert("messages", doc, { clientId });
 ```
 
-`clientId` is validated for shape (a v1–v8 UUID) and still subject to the
+`clientId` is validated for shape (a v1-v8 UUID) and still subject to the
 primary-key uniqueness constraint, so a client can't collide with, overwrite, or
 forge a peer row. This is the mechanism [`@lunora/db`](/docs/packages/db#client-generated-ids)
 uses to reconcile an optimistic row with its persisted server row.
 
+### Per-table accessor (`ctx.db.<table>`)
+
+Each table exposes a typed delegate with the common read/write helpers:
+
+- `findMany(args)` / `findFirst(args)`: `args` takes `where`, `orderBy`, `with`
+  (relation loading), `select` (column projection, top-level and per-relation via
+  `with: { rel: { select: [...] } }`), `cursor` / `limit`, and `includeDeleted`.
+- `exists(where?)`: boolean existence check (reuses `findFirst`, no count scan).
+- `insert(doc, { skipDuplicates? })`: `skipDuplicates: true` resolves to `null`
+  on a unique conflict instead of throwing.
+- `upsert({ target, create, update? })` / `upsertMany({ target, rows })`:
+  insert-or-update keyed by a `.unique()` column (or tuple); returns `{ id, created }`.
+- `patch` / `replace` / `delete` (plus the `*Many` batch forms).
+
+On a `.softDelete()` table, `delete(id)` flips the marker (cascading as a soft
+delete), `restore(id)` clears it, and `hardDelete(id)` physically removes the row
+(real cascade). List reads hide soft-deleted rows; pass
+`findMany({ includeDeleted: true })` to include them.
+
+### Transactions & atomicity
+
+There is no explicit `transaction()` API: a **mutation _is_ a transaction** —
+for the tables that live in the shard. Every shard-local `ctx.db` write in a
+single mutation commits atomically and rolls back together if the handler
+throws, because they share one Durable Object storage transaction. This holds
+however the mutation was reached — a top-level RPC, `ctx.runMutation` from an
+action, or a reactor — and a `ctx.runMutation` from inside a mutation joins the
+caller's transaction rather than opening a second one.
+
+That transaction does **not** reach a [`.global()` table](/docs/tutorial/scaling):
+those rows live in D1, which has no interactive transactions, so a mutation
+that writes both a shard-local row and a global one is writing them
+separately. If the handler throws after the global write, the global write
+stays. Treat a global write as a step that can fail on its own, and order it
+last — or move the pair into a workflow step, whose replay you can make
+idempotent.
+
+To run a side effect only after the write commits, schedule it:
+`ctx.scheduler.runAfter(0, internalFn, args)`, the deterministic equivalent of
+an `afterCommit` hook (a registered function with serializable args, not an
+inline closure). Scheduling from a mutation is part of the same all-or-nothing
+unit: the job is enqueued only once the transaction commits, and a rollback
+discards it.
+
+### Determinism: what actually replays
+
+A `query` handler **can** run more than once for the same logical read: a live
+subscription re-runs its query whenever a table it reads changes, so
+non-deterministic output there (`Date.now()`, `Math.random()`) can genuinely
+flicker between re-evaluations. Compute it in an `action` and pass the value in
+as an argument, or accept that the field is allowed to differ per re-run.
+
+A `mutation` handler does **not** replay under ordinary dispatch. Two
+mechanisms cooperate to guarantee this on the DO-backed runtime:
+
+- **Idempotency dedup.** A client-issued `x-lunora-mutation-id` is deduped by
+  `(identity, mutationId)`. A replay of an unacknowledged write returns the
+  **cached** result without re-running the handler at all.
+- **OCC surfaces as an error, not a retry.** A write guarded by optimistic
+  concurrency that loses the race fails the request with a `409 Conflict`
+  response back to the caller. The runtime does not catch it and re-invoke the
+  handler internally; the caller decides whether to retry, and a retry is a
+  **new** dispatch (a fresh idempotency key if the client mints one per
+  attempt), not a replay of the one that failed.
+
+So `Date.now()` / `crypto.randomUUID()` inside an ordinary `mutation` handler
+is stable for one logical write: the handler body runs exactly once. This is
+the opposite of Convex's model (where OCC failure re-runs the handler), so a
+Convex-shaped mental model treats mutation non-determinism as unsafe when it
+is not; porting that assumption over errs safe. The one place a DO-shaped
+mental model must stay careful: a `mutation` invoked from inside a workflow
+step or a queue consumer can be **called again** if the surrounding step/
+consumer itself replays (Cloudflare Workflows re-executes a step's code on
+retry). That is a fresh `ctx.runMutation` dispatch from the step's
+perspective, not a replay this guarantee covers, so non-deterministic values
+computed inside such a step should still be treated the way an `action` value
+would be.
+
+## `defineShape(definition)` — partial replication
+
+Declare a **shape**: a named, partial replication of a table for the
+[local-first sync engine](/docs/concepts/local-first). A client subscribes by
+name + validated `args`; the DO resolves the predicate server-side and
+AND-composes it with the read policies the shape itself declares (`use`).
+Declared in `lunora/shapes.ts`.
+
+```ts title="lunora/shapes.ts"
+import { defineShape, v } from "@lunora/server";
+
+export const messagesByChannel = defineShape({
+    table: "messages",
+    args: { channelId: v.id("channels") }, // optional — omit for a parameterless shape
+    use: [tenantScoped], // the rls(...) guards whose read policies gate this shape
+    where: (ctx, { channelId }) => ({ channelId }), // runs on the DO with a trusted ctx
+    columns: ["text", "authorId", "channelId"], // optional projection; _id/_creationTime always included
+});
+```
+
+`where` returns the same `WhereInput` the RLS DSL uses, so there is no second
+predicate implementation. Because it runs with an identity the client can't
+forge, a shape is a _read-as-permission_.
+
+RLS on a shape is **opt-in through `use`**, exactly as it is on a procedure: a
+shape runs no procedure, so policies declared elsewhere in the project never
+reach it. A shape that names no guard replicates on its `where` alone — under
+`.rls("required")` that is a hard denial for a non-`.public()` table, and
+otherwise codegen refuses to boot the app when the shape's table is governed on
+read, naming the shape and the table (`use: []` acknowledges a deliberately
+ungoverned shape). See
+[Local-first sync](/docs/concepts/local-first#opting-a-shape-into-rls-use).
+
+## `defineMutator(definition)` — custom mutators
+
+Declare a **custom mutator**: a `server` implementation (authoritative, runs in
+the shard DO) paired with an optional `client` twin (optimistic, runs in the
+browser). Declared in `lunora/mutators.ts`.
+
+```ts title="lunora/mutators.ts"
+// Prefer the generated re-export: same runtime, but `ctx` is your project's typed
+// `MutationCtx` (schema-checked `ctx.db`) instead of the untyped base context.
+import { defineMutator, v } from "./_generated/server";
+
+export const sendMessage = defineMutator({
+    args: { channelId: v.id("channels"), text: v.string() },
+    server: (ctx, { channelId, text }) => ctx.db.insert("messages", { channelId, text, authorId: ctx.auth.userId }),
+});
+```
+
+Codegen emits each mutator as a typed `api.mutators.<name>` reference, so the
+browser-side twin binds to it (`serverRef: api.mutators.sendMessage`) and infers
+its args from these validators.
+
+Add `owner: "<column>"` to owner-scope the write: the mutator then requires a
+verified identity, rejects a client-supplied owner that disagrees with it, and sets
+the column to the verified value before `server` runs, so the impl never repeats
+an ownership check by hand. It takes the column name rather than a shape's `true`
+because a mutator may write several tables, so there is no single `.ownedBy(field)`
+to read it from. See
+[Owner-scoped writes](/docs/concepts/local-first#owner-scoped-writes).
+
+The `server` impl is the linearization point; its writes append to the op-log
+and poke back to subscribers. The DO is serialized, so there is **no
+server-side OCC-retry loop**. The client-side optimistic twin and the watermark
+ordering are covered in
+[Local-first sync](/docs/concepts/local-first#custom-mutators--optimistic-server-authoritative);
+the browser-side `defineMutator` / `bindMutators` live in
+[`@lunora/db`](/docs/packages/db#custom-mutators).
+
+## List endpoints
+
+`defineListArgs(config)` is the shared convention for a paginated list query: it
+returns the validator map for `.input()` plus the translation into
+`ctx.db.<table>.findMany(...)` options, so every list endpoint agrees on how
+filtering, sorting, and paging are spelled, and the generated OpenAPI describes
+them without special-casing.
+
+```ts
+import type { Doc } from "./_generated/dataModel";
+
+const listMessages = defineListArgs<Doc<"messages">>()({
+    filter: { authorId: v.id("users"), status: v.string() },
+    orderBy: ["_creationTime", "status"],
+    // defaultLimit: 25, maxLimit: 100, maxInValues: 100, maxOrderBy: 8
+});
+
+export const list = c.query
+    .input(listMessages.args)
+    .expose({ rest: true })
+    .query(({ args, ctx }) => ctx.db.messages.findMany(listMessages.toQueryArgs(args)));
+```
+
+Callers get `where`, `orderBy`, `cursor`, and `limit`. `where` accepts either a
+bare value (equality) or the operator object mirroring the `ctx.db` `where` DSL
+(`{ gte, lt, in, contains, isNull, … }`).
+
+The extra `()` is what binds the table's document type. With `Doc` bound, `filter`
+keys, `orderBy` entries, and each validator's type are checked against the table's
+real columns, so a typo, or a column renamed out from under the endpoint, is a
+**compile error** rather than a predicate that silently matches nothing.
+TypeScript has no partial type-argument inference, so binding `Doc` while still
+inferring the rest from the config needs the second call.
+
+Three constraints are deliberate:
+
+- **Keyset paging, not offset.** There is no `page` / `page_size`. Offset paging
+  re-scans from row 0 for every page and shifts rows between pages whenever the
+  data changes (which, under a live query, it always is).
+- **Filterable columns are enumerated.** `filter` is an allow-list. `v.object`
+  drops undeclared keys, so a caller cannot predicate on a column you didn't
+  publish. Keep the list to indexed columns; `@lunora/advisor`'s
+  `filter-without-index` lint flags the static cases. This bounds _which_ columns
+  are reachable, not the cost of every operator: `contains` compiles to a
+  substring position test, and `ne` / `notIn` / `isNull: false` are non-sargable
+  too, so all of them scan regardless of the index.
+- **No `AND` / `OR` / `NOT` trees.** A flat field⇒predicate map keeps every
+  filter routable to an index. Compose richer logic inside the procedure.
+
+`limit` is clamped into `[1, maxLimit]` rather than rejected, and `orderBy`
+fields outside the allow-list are refused by the validator and re-checked in
+`toQueryArgs`. `in` / `notIn` arrays are capped at `maxInValues` (default 100)
+to bound request size and the scan the predicate costs, not to stay under the
+statement's parameter ceiling, which the `where` compiler handles by binding a
+long list as one JSON parameter. `orderBy` is capped at `maxOrderBy` (default 8).
+
+`lunora introspect` emits `list` procedures built on this helper. See the
+[CLI docs](/docs/packages/cli#lunora-introspect).
+
+## Caching an exposed REST endpoint
+
+`.expose({ rest: true })` publishes a procedure at
+`/_lunora/rest/<namespace>/<fn>`. Add `cache` to have the runtime answer with
+`Cache-Control` / `Cache-Tag` / `Vary`:
+
+```ts
+export const listPublicPosts = c.query
+    .input(listPosts.args)
+    .expose({ rest: true, cache: { scope: "public", maxAge: 60, staleWhileRevalidate: 300, tag: "posts" } })
+    .query(({ args, ctx }) => ctx.db.posts.findMany(listPosts.toQueryArgs(args)));
+```
+
+Caching a procedure-backed endpoint can leak data, because the procedure runs
+under `ctx.auth` and RLS. So `scope` is enforced, not
+trusted: **a request carrying `Authorization`, `Cookie`, or
+`Cf-Access-Jwt-Assertion` is always answered `private`**, even under
+`scope: "public"`. A per-caller response therefore never reaches a shared or edge
+cache, and the worst a mis-declared `scope` costs you is a missed cache hit.
+
+That check is a header list, and it cannot be exhaustive: `resolveIdentity`
+receives the whole request, so an app may authenticate on anything. **If your
+auth reads a header not in that list, declare it:**
+
+```ts
+.expose({ rest: true, cache: { scope: "public", maxAge: 60, credentialHeaders: ["x-api-key"] } })
+```
+
+Otherwise those callers read as anonymous and their responses are cached
+`public`. The emitted `Vary` also covers `x-lunora-shard-key` and
+`x-d1-bookmark`, which select _which_ rows a request sees. Treat `Vary` as a
+courtesy to well-behaved intermediaries rather than the safety mechanism:
+Cloudflare's cache honours it only for `Accept-Encoding`, so the real protection
+is the downgrade above.
+
+Headers are only ever applied to a cacheable exchange: a `GET` (so `query`
+procedures; a `mutation` / `action` is `POST`-only) that returned 2xx. An error
+response is never cached. `tag` is purgeable through the same
+`ctx.cache.purge({ tags: [...] })` surface `httpRoute(...).cacheTag()` uses, and
+the emitted OpenAPI documents the headers a caller will observe.
+
+## `defineDocumentHistory(options)` — row-version history
+
+`.triggers()` already fires on every write with the merged row and the pre-write
+row in hand, which is exactly the pair a version history needs. This preset gives
+them somewhere to go:
+
+```ts
+// lunora/history.ts
+import { defineDocumentHistory } from "@lunora/server";
+
+export const history = defineDocumentHistory({ retentionMs: 90 * 24 * 60 * 60 * 1000 });
+
+// lunora/schema.ts — attach to each table you want versioned
+const threads = defineTable({ ... }).triggers(history.record);
+
+export const schema = defineSchema({ threads }).extend(history.extension);
+export const { listForDocument, vacuum } = history.functions;
+```
+
+`listForDocument({ documentId, before?, limit? })` returns that row's versions
+newest first. With `before`, the first entry back is the last version at or
+before that instant — a point-in-time reconstruction in one read. `vacuum` drops
+entries past `retentionMs` and reports how many, so a cron can decide whether to
+run again.
+
+Three things worth knowing before you rely on it:
+
+**It records what changed, not who.** A trigger's context carries `db` and
+`scheduler` and no identity, so there is no actor to record and the field does
+not exist. An unattributed trail that called itself an audit log would be worse
+than none.
+
+**Snapshots are redacted, at every depth.** Secret-shaped fields
+(`hashedPassword`, `apiKey`, `refreshToken`, …) are dropped before the entry is
+written — a stored credential outlives the rotation meant to retire it — and the
+filter recurses, so a credential inside a `v.object(...)` column goes too.
+Matching is by exact field name, which is the only signal a trigger has, so use
+`redact` for anything spelled differently (`api_key`, `sessionToken`).
+
+**Reads are internal.** An entry is a full row snapshot, including columns the
+table's own RLS hides, so `listForDocument` is an internal query. Wrap it in a
+procedure of your own with whatever authorization the surface needs.
+
+A snapshot over `maxSnapshotBytes` (64 KB default) is dropped and the entry is
+marked `truncated` — that a row changed, and when, is the part a trail cannot
+afford to lose. `doc` and `previous` are capped independently, so a large
+pre-write row does not discard a small post-write one.
+
+<Callout type="warn">
+    One blind spot: `insertManyUnsafe` skips triggers by design, so seed, migration, and admin-import writes leave no entry. Fine for an undo stack; if you are
+    using this for compliance, that gap has to be closed elsewhere. Note too that on an `.rls("required")` schema the merged `documentHistory_versions` table
+    needs a policy — deny client access outright, since `listForDocument` is internal and meant to be wrapped by a procedure of your own.
+</Callout>
+
+## `defineActionCache(options)` — memoising an action
+
+The section above caches a _response_ at the HTTP edge. This caches the _result_
+of an action inside the app — the model call, the third-party fetch, the
+embedding — keyed by its arguments, with a TTL:
+
+```ts
+// lunora/cache.ts
+import { defineActionCache } from "@lunora/server";
+
+export const cache = defineActionCache({ ttlMs: 60 * 60 * 1000 });
+
+// lunora/schema.ts — merges in as `actionCache_entries`
+export const schema = defineSchema({ ... }).extend(cache.extension);
+
+// Re-export so codegen registers it; schedule it from a cron for bulk cleanup.
+export const { purgeExpired } = cache.functions;
+```
+
+```ts
+export const embed = action
+    .input({ text: v.string() })
+    .action(async ({ args, ctx }) => cache.wrap(ctx, "embed", args, async () => callEmbeddingModel(args.text)));
+```
+
+`wrap(ctx, name, args, fn)` returns the stored value on a hit and runs `fn` on a
+miss. The key is a SHA-256 of `name` and the args encoded through the wire codec
+with sorted keys — call sites pass whole model requests, which are far too large
+to index directly. Because the encoding is structural, `{ a, b }` and `{ b, a }`
+are one entry, and `bigint` / `Date` / bytes arguments key distinctly instead of
+collapsing together.
+
+`invalidate(ctx, name, args)` drops one entry. `invalidateAll(ctx, name)` drops
+every entry under a name and returns `{ deleted, complete }` — call it again while
+`complete` is `false`.
+
+Expiry is lazy: a read past the TTL reports a miss and the row is overwritten by
+the same call. Each miss also reaps a few expired rows, so an app with steady
+traffic stays bounded on its own; `purgeExpired` is for reclaiming entries whose
+names went quiet.
+
+One thing it deliberately does not do: there is **no single-flight**. Two callers
+that miss at the same instant both run `fn`; the unique index on the key means one
+result is stored rather than two rows appearing. Preventing the duplicate work
+needs a lock held across an arbitrarily long external call, whose own failure mode
+— a crashed holder wedging the key — is worse than a cold start being paid twice.
+
+A result over `maxValueBytes` (512 KB by default) is returned to the caller but
+not stored, so a large answer costs a cache miss rather than a failed action.
+
+<Callout type="warn">
+    `wrap` reads and writes through the app's own `ctx.db`, so on an `.rls("required")` schema the merged `actionCache_entries` table needs a policy like any
+    other. Declare one that denies client access outright — entries are keyed by a digest and carry no ownership column, so there is nothing for a row policy to
+    scope to.
+</Callout>
+
 ## Subpaths
 
-- `@lunora/server/rls/testing` — `expectPolicy(policies)`, an in-process RLS
+- `@lunora/server/rls/testing`: `expectPolicy(policies)`, an in-process RLS
   harness that evaluates the same logic the `rls()` middleware runs (no Worker
   or Durable Object needed).
-- `@lunora/server/drizzle` — drizzle's SQLite schema-definition surface, used by
+- `@lunora/server/drizzle`: drizzle's SQLite schema-definition surface, used by
   the generated `_generated/drizzle.*` files.
-- `@lunora/server/data-model` / `@lunora/server/types` — type-only helpers.
-
-## See also
-
-- [@lunora/client](/docs/packages/client)
-- [Concepts: schema](/docs/concepts/schema)
+- `@lunora/server/data-model` / `@lunora/server/types`: type-only helpers.

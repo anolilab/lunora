@@ -52,7 +52,7 @@ const VALIDATOR_METHODS = new Set([
 
 /**
  * True when `node` is a side-effect-free `v.*` validator expression — a call on
- * `v.&lt;method>` (method in {@link VALIDATOR_METHODS}) whose arguments are
+ * `v.<method>` (method in {@link VALIDATOR_METHODS}) whose arguments are
  * themselves validator expressions or safe literals (string/number/boolean/null,
  * object literals of validators, arrays of validators). Anything else — a bare
  * identifier, a `require(...)`/`fetch(...)` call, a comma/assignment expression,
@@ -184,8 +184,17 @@ const isAllowedValidatorText = (validator: unknown): boolean => {
     return initializer !== undefined && isValidatorExpression(initializer);
 };
 
+/** Storage backends `.global()` accepts. A closed union, so it is never free text. */
+type GlobalBackend = "d1" | "hyperdrive";
+
 /** Add a new table to `defineSchema({ ... })`. */
 interface AddTableEdit {
+    /**
+     * Mark the table `.global()`. Pass `{}` for the D1 default, or a backend for
+     * an external store — `lunora introspect` uses `{ backend: "hyperdrive" }`
+     * because the rows live in the database it read.
+     */
+    readonly global?: { readonly backend?: GlobalBackend };
     readonly kind: "addTable";
     readonly table: string;
 }
@@ -234,6 +243,9 @@ type SchemaEdit = AdditiveEdit | DestructiveEdit;
 
 const ADDITIVE_KINDS = new Set<SchemaEdit["kind"]>(["addIndex", "addOptionalColumn", "addTable"]);
 
+/** Accepted `.global({ backend })` values, enforced server-side like {@link VALIDATOR_METHODS}. */
+const GLOBAL_BACKENDS = new Set<GlobalBackend>(["d1", "hyperdrive"]);
+
 /**
  * Classify an edit request. Additive edits ({@link AdditiveEdit}) apply
  * directly; everything else changes stored data and is destructive.
@@ -265,6 +277,10 @@ const isIdentifier = (value: unknown): value is string => typeof value === "stri
  */
 const validateAdditiveEdit = (edit: AdditiveEdit): ApplyFailureReason | undefined => {
     if (!isIdentifier(edit.table)) {
+        return "invalid-identifier";
+    }
+
+    if (edit.kind === "addTable" && edit.global?.backend !== undefined && !GLOBAL_BACKENDS.has(edit.global.backend)) {
         return "invalid-identifier";
     }
 
@@ -345,10 +361,8 @@ const findTableProperty = (tablesObject: ObjectLiteralExpression, table: string)
 
 /** The innermost `defineTable({ ... })` shape object for a table property. */
 const findDefineTableShape = (tableProperty: PropertyAssignment): ObjectLiteralExpression | undefined => {
-    const defineTableCall = tableProperty
-        .getInitializer()
-        ?.getDescendantsOfKind(SyntaxKind.CallExpression)
-        .find((call) => call.getExpression().getText() === "defineTable");
+    const initializer = tableProperty.getInitializer();
+    const defineTableCall = initializer === undefined ? undefined : collectCalls(initializer).find((call) => call.getExpression().getText() === "defineTable");
     const shape = defineTableCall?.getArguments()[0];
 
     return shape?.getKind() === SyntaxKind.ObjectLiteralExpression ? shape.asKindOrThrow(SyntaxKind.ObjectLiteralExpression) : undefined;
@@ -359,13 +373,19 @@ const applyAddTable = (tablesObject: ObjectLiteralExpression, edit: AddTableEdit
         return "duplicate-table";
     }
 
+    // `backend` is a closed union validated upstream, so this interpolation cannot
+    // carry arbitrary text.
+    const backend = edit.global?.backend;
+    const backendArgument = backend === undefined ? "" : `{ backend: ${JSON.stringify(backend)} }`;
+    const globalCall = edit.global === undefined ? "" : `.global(${backendArgument})`;
+
     tablesObject.addPropertyAssignment({
         initializer: `defineTable({
         // Add your column validators here.
         // Example:
         // text: v.string(),
         // createdAt: v.number(),
-    })`,
+    })${globalCall}`,
         name: edit.table,
     });
 
@@ -489,5 +509,15 @@ const applyAdditiveEdit = (source: string, edit: SchemaEdit): ApplyEditResult =>
     return { ok: true, text: sourceFile.getFullText() };
 };
 
-export type { AddIndexEdit, AdditiveEdit, AddOptionalColumnEdit, AddTableEdit, ApplyEditResult, ApplyFailureReason, DestructiveEdit, SchemaEdit };
+export type {
+    AddIndexEdit,
+    AdditiveEdit,
+    AddOptionalColumnEdit,
+    AddTableEdit,
+    ApplyEditResult,
+    ApplyFailureReason,
+    DestructiveEdit,
+    GlobalBackend,
+    SchemaEdit,
+};
 export { applyAdditiveEdit, classifyEdit };

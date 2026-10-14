@@ -1,0 +1,130 @@
+---
+title: Protect yourself from a runaway bill
+description: Set Cloudflare usage alerts well above normal with `lunora cloudflare alerts`, add the budget alert the API cannot, and check what actually reaches you.
+---
+
+A self-hosted Lunora app runs on your own Cloudflare account, and Workers and
+Durable Objects bill by usage. A retry loop, a Durable Object that never goes
+idle, or a crawler hammering an endpoint can run for weeks before the invoice
+shows it. This page sets up the alerts that tell you within a day instead.
+
+You need a Cloudflare API token with two permissions:
+
+- **Notifications Write**: creates the usage alerts.
+- **Account Analytics Read**: reads last month's usage so the thresholds sit
+  above your normal traffic, not below it.
+
+```bash
+export CLOUDFLARE_API_TOKEN=…        # the token above
+export CLOUDFLARE_ACCOUNT_ID=…       # or set account_id in wrangler.jsonc
+```
+
+## 1. See where you stand
+
+```bash
+lunora cloudflare alerts
+```
+
+This prints last month's usage for Workers requests and CPU time, Durable
+Objects requests, duration, and rows read and written, and D1 rows read and
+written. Next to each one it says whether a usage alert already covers it. If a
+figure reads `unavailable`, the reason follows it. Usually the token lacks
+Account Analytics Read, or the analytics schema has no field for that metric.
+
+## 2. Create the usage alerts
+
+Preview first:
+
+```bash
+lunora cloudflare alerts setup --email you@example.com --dry-run
+```
+
+`setup` creates two alerts on its own: **Workers requests** and **Durable
+Objects requests**. Each fires at **3× last month** by default (`--multiplier`
+changes that), rounded up to two significant figures. A threshold is never set
+below the monthly allowance included with Workers Paid: 10 million Workers
+requests, 1 million Durable Object requests. A quiet month therefore never
+gives you an alert that fires on ordinary growth.
+
+If last month's usage cannot be read, for example because the token lacks
+Account Analytics Read, `setup` writes no alert for that metric and exits
+non-zero. Falling back to the floor there would be wrong for a busy account,
+which would trip a 10-million-request alert every month. Pass
+`--threshold workers-requests=<n>` to choose the limit, or `--allow-floor` to
+accept the floor anyway.
+
+The other metered products take a limit only from you:
+
+```bash
+lunora cloudflare alerts setup --email you@example.com --threshold do-duration=500000 --dry-run
+```
+
+Durable Objects duration and storage reads/writes are billed in units that
+cannot be matched to the usage `status` shows, so `setup` will not guess one.
+Cloudflare has **no usage alert at all for D1 or for Workers CPU time**; the
+budget alert in the next step is what guards them.
+
+Cloudflare does not document the unit of a usage alert's limit either. After
+writing, `setup` reads every alert back and prints the limit Cloudflare stored.
+Compare it with the dashboard the first time.
+
+When the plan looks right:
+
+```bash
+lunora cloudflare alerts setup --email you@example.com --yes
+```
+
+Pass `--email` more than once for several recipients, or
+`--webhook <destination-id>` to deliver to a webhook destination you created in
+the dashboard. The alerts are named `Lunora usage: …`. Re-running `setup`, for
+example after a month of growth, updates those alerts in place rather than
+duplicating them. It adds new recipients to the ones already there; pass
+`--replace-recipients` to replace them, and the plan shows exactly who is added
+or removed. A product you already alert on yourself is left alone, unless your
+alert is disabled.
+
+<Callout type="info">
+    The `product` identifiers are the ones Cloudflare lists for its [Terraform provider
+    (v4.52.0)](https://github.com/cloudflare/terraform-provider-cloudflare/blob/v4.52.0/docs/resources/notification_policy.md); when your account offers its own
+    list, `setup` uses that instead. Usage alerts are only offered to Pay-as-you-go accounts. On an ineligible account `setup` says so and writes nothing.
+</Callout>
+
+## 3. Add the budget alert by hand
+
+Usage alerts watch one product each. A **budget alert** watches the whole
+account's spend in dollars, and Cloudflare offers it only in the dashboard. It
+has no API, so `lunora cloudflare alerts` can neither create one nor tell you whether you
+have one:
+
+1. In the Cloudflare dashboard, go to **Manage Account > Billing > Billable Usage**.
+2. Select **Create budget alert**.
+3. Set a USD threshold comfortably above a normal month, and add the recipients.
+
+Usage is processed daily, so a budget alert fires the day after its threshold
+is crossed.
+
+## 4. Check delivery
+
+```bash
+lunora cloudflare alerts test
+```
+
+Cloudflare's API cannot send a test notification, either to email or to a
+webhook, so this command does not pretend to. Instead it shows what the API
+does know:
+
+- when each webhook destination last received a notification and when one last
+  failed;
+- the notifications Cloudflare actually sent for the `Lunora usage: …` alerts.
+
+To test a webhook for real, create it in the dashboard (**Alerts >
+Destinations**, then **Create** on the Webhooks card) and finish with **Save
+and Test**. Email has no test send, so make sure the addresses on the alerts are
+right and that mail from Cloudflare is not filtered as spam.
+
+## In CI
+
+Every subcommand takes `--format json` and exits with a [documented
+code](/docs/exit-codes). For example, `lunora cloudflare alerts --format json` in a
+scheduled job can flag a product whose usage has grown past the alert you set
+months ago.

@@ -51,6 +51,7 @@ export const ModalShell = ({ className, children, label, onClose, panelTestId, t
 
     return (
         <div className={OVERLAY_BY_VARIANT[variant]} data-testid={testId} onClick={onOverlayClick} onKeyDown={onOverlayKeyDown} role="presentation">
+            {/* react-doctor-disable-next-line react-doctor/prefer-html-dialog -- this shell already implements the dialog contract (role, aria-modal, focus trap, escape); moving to a native dialog element changes stacking and focus behaviour across every modal in the studio and belongs in its own change */}
             <div aria-label={label} className={cn(PANEL_BY_VARIANT[variant], className)} data-testid={panelTestId} role="dialog">
                 {children}
             </div>

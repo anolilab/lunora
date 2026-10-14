@@ -22,8 +22,9 @@
  *     subscriber, so it is NOT an ownership key on its own — the heartbeat
  *     handler additionally rejects a patch whose existing row belongs to a
  *     different `userId`, so a participant can't reuse another visible
- *     `sessionId` to hijack their presence row.
- *   - `byRoom` — drives the `listPresent` / `sweep` per-room scans.
+ *     `sessionId` to hijack their presence row. Its leading `roomId` prefix also
+ *     serves the `listPresent` / `sweep` per-room scans, so no separate
+ *     `byRoom` index is needed (a standalone one would be a redundant prefix).
  */
 import { definePlugin, defineSchemaExtension, defineTable, v } from "@lunora/server";
 
@@ -58,8 +59,9 @@ export const presence = definePlugin("presence", {
                 sessionId: v.string(),
                 userId: v.optional(v.string()),
             })
-                .index("byRoomSession", ["roomId", "sessionId"])
-                .index("byRoom", ["roomId"]),
+                // `byRoomSession`'s leading `roomId` also covers the per-room
+                // `listPresent`/`sweep` scans — a separate `byRoom` would be redundant.
+                .index("byRoomSession", ["roomId", "sessionId"]),
         },
     }),
 });

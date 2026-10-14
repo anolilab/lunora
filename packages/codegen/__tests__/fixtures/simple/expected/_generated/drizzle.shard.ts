@@ -11,3 +11,17 @@ export const messages = sqliteTable("messages", {
 }, (t) => ({
     by_channel: index("by_channel").on(t.channelId),
 }));
+
+export const places = sqliteTable("places", {
+    _id: text("_id").primaryKey(),
+    _creationTime: integer("_creationTime").notNull(),
+    location: text("location").notNull(),
+    name: text("name").notNull(),
+});
+
+export const sessions = sqliteTable("sessions", {
+    _id: text("_id").primaryKey(),
+    _creationTime: integer("_creationTime").notNull(),
+    expiresAt: integer("expiresAt").notNull(),
+    token: text("token").notNull(),
+});

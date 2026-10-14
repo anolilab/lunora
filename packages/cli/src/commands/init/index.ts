@@ -5,8 +5,12 @@ const initCommand: Command = {
     description: "Scaffold a new Lunora project",
     examples: [
         ["lunora init my-app", "Scaffold with the default (vite) template"],
+        ["lunora init my-app -t next", "Scaffold a Next.js app"],
         ["lunora init my-app -t tanstack-start-react", "Scaffold a TanStack Start (React) app"],
         ["lunora init my-app -t tanstack-start-solid", "Scaffold a TanStack Start (Solid) app"],
+        ["lunora init my-app -t solid-v2", "Scaffold a Solid 2.0 SPA"],
+        ["lunora init my-app -t rspack-react", "Scaffold a React SPA on Rsbuild"],
+        ["lunora init my-app --ref alpha", "Scaffold from the alpha branch's templates"],
         ["lunora init --here", "Add Lunora to the current project"],
         ["lunora init my-app --ci github", "Scaffold + add a GitHub Actions deploy pipeline"],
         ["lunora init my-app --ci gitlab", "Scaffold + add a GitLab CI deploy pipeline"],
@@ -20,9 +24,19 @@ const initCommand: Command = {
     options: [
         {
             alias: "t",
-            defaultValue: "vite",
-            description: "Template to scaffold (vite | standalone | astro | nuxt | sveltekit | tanstack-start-react | tanstack-start-solid)",
+            // No default: when omitted, an interactive run shows the framework
+            // picker (default React overlay) and a non-interactive run errors.
+            // For React/Vue/Solid/Svelte SPAs use `--vite <framework>` (overlay);
+            // `-t` selects a bespoke template.
+            description:
+                "Template: analog | astro | expo | next | nuxt | react-router | rspack-react | solid-v2 | standalone | sveltekit | tanstack-start-react | tanstack-start-react-rspack | tanstack-start-solid | vinext | vinext-pages. Also accepts an overlay framework (react | vue | solid | svelte), same as --vite.",
             name: "template",
+            type: String,
+        },
+        {
+            description:
+                "Scaffold via the create-vite overlay for a framework (react | vue | solid | svelte | vanilla) — official create-vite base + Lunora layer",
+            name: "vite",
             type: String,
         },
         {
@@ -33,6 +47,11 @@ const initCommand: Command = {
         {
             description: "Override the remote template source (e.g. gh:owner/repo/sub#ref)",
             name: "source",
+            type: String,
+        },
+        {
+            description: "Fetch templates from a git ref (branch, tag, or commit), e.g. --ref alpha. Overrides the version-derived default",
+            name: "ref",
             type: String,
         },
         {
@@ -62,18 +81,33 @@ const initCommand: Command = {
             name: "ci",
             type: String,
         },
+        {
+            description:
+                "Add features non-interactively after scaffolding (comma-separated): ai | auth | auth-ui | backup | browser | cloudflare-access | crons | email | flags | hyperdrive | payment | presence | queue | storage | workflow",
+            name: "add",
+            type: String,
+        },
+        {
+            description: "Walk through every step (prompts + output) without writing files, installing, or running git",
+            name: "dry-run",
+            type: Boolean,
+        },
     ],
 };
 
 export { initCommand };
 
 export type InitOptions = CreateOptions<{
+    add: string | undefined;
     "allow-unsafe-source": boolean | undefined;
     ci: string | undefined;
+    "dry-run": boolean | undefined;
     from: string | undefined;
     here: boolean | undefined;
     interactive: boolean | undefined;
+    ref: string | undefined;
     source: string | undefined;
     template: string | undefined;
+    vite: string | undefined;
     yes: boolean | undefined;
 }>;

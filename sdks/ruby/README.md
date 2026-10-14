@@ -1,0 +1,212 @@
+# Lunora Ruby SDK
+
+A **protocol-conformant** Ruby client for a Lunora deployment, implementing the
+transport specified in [`protocol/README.md`](../../protocol/README.md):
+
+- `query` / `mutation` / `action` round-trips over `POST /_lunora/rpc`.
+- Live `subscribe` — and `stream`, which hands back an `Enumerator` — over the WebSocket `data`/`delta`/`ack`/`error`/`resume`/
+  `settled` frames.
+- `subscribe_shape` over the poke (`pokeStart`/`pokePart`/`pokeEnd`) partial-
+  replication path.
+- A full `encode_wire` / `decode_wire` value codec (bigint, bytes, `Date`,
+  `Map`/`Set`, `URL`, `NaN`/`Infinity`, `undefined`) plus the stable
+  subscription key.
+- `submit` — the offline-capable write path: cursor-gated optimistic updates
+  (`lunora/optimistic.rb`) over the durable replay queue (`lunora/offline.rb`).
+
+> **Not a pnpm/TS package.** This lives under `sdks/ruby/` and is a standalone
+> Ruby project. The transport is **standard-library only**; `dry-struct` and
+> `dry-types` are needed only when `lunora sdk generate` emits typed models,
+> because that is what quicktype's Ruby backend renders.
+
+## Usage
+
+HTTP and the socket are **injected**, so you keep your own client, timeouts,
+retries and socket library:
+
+```ruby
+require "lunora"
+
+client = Lunora::Client.new(
+  "https://my-app.example.com",
+  http_post: my_poster,
+  auth_token: "…",
+  identity: current_user_id,
+  # client_id is minted per instance. Pin a stable per-device one only when the
+  # offline queue is durable — a replayed write is namespaced server-side under
+  # the id that issued it.
+)
+
+messages = client.query("messages:list", { "channel" => "general" })
+client.mutation("messages:send", { "channel" => "general", "text" => "hi" })
+client.mutation("ledger:add", { "amount" => Lunora::WireBigInt.new(1000) })
+
+# Live subscription: attach your socket, then feed it frames.
+client.attach_socket(->(frame) { socket.send(JSON.generate(frame)) })
+unsubscribe = client.subscribe("messages:list", { "channel" => "general" }, method(:render))
+```
+
+`client.handle_frame(raw)` is what you call with each inbound WebSocket message;
+`client.resend_subscriptions` re-subscribes everything after a reconnect —
+queries and shape views alike — carrying each one's resume cursor or checkpoint.
+
+`handle_frame` never raises into your read loop: a frame that is not JSON, or
+JSON not shaped like a server frame, is ignored (a non-integer `cursor` is not
+tracked), and a consumer callback that raises is contained so the others still
+run. A poke applies to each shape whole or not at all — a row that does not
+decode leaves that shape's view and checkpoint untouched and reaches its error
+callback as `WIRE_DECODE_FAILED`. A poke whose `baseCheckpoint` (or epoch) does
+not match where the view is — the server diffed past rows this client never
+applied — empties the view (its callback receives `[]`), skips the ops and sends
+a cold `shape_subscribe` so the server re-seeds it.
+
+`my_poster.call(url, headers, body)` returns `[status, body]`, `body` being the
+parsed JSON response — or the raw text when it is not JSON. A body that is not a
+JSON object raises `Lunora::ApiError` `INTERNAL`, never a `NoMethodError`.
+
+`client.close` rejects every queued write and ends every `stream` enumerator
+once it has yielded what it already received. The client's `inspect` (and so
+`p`/`pp`) never shows the auth token.
+
+## Optimistic updates and offline writes
+
+`mutation` is the direct write path: one HTTP round-trip that raises when the
+deployment is unreachable. `submit` is the one that survives a dropped socket —
+it queues the write, shows a predicted value immediately, and replays in order
+once the socket is back.
+
+```ruby
+# Capacity, an app version, and a durable store are all optional; the default is
+# an in-memory queue of 1000 writes.
+client.offline_queue = Lunora::OfflineQueue.new(max_items: 500, persistence: my_store, version: "v2")
+
+client.subscribe("messages:list", { "channel" => "general" }, method(:render))
+
+outcome = client.submit(
+  "messages:send",
+  { "channel" => "general", "text" => "hi" },
+  # Names the query the write affects. `optimistic:` is the shorthand for the
+  # narrower case where the write and the subscription share a path and args
+  # (a counter, a document by id) — it patches nothing here, where `send` and
+  # `list` are different functions. Each transform is re-run on every server
+  # frame, so derive from what it is handed rather than closing over a value.
+  optimistic_update: lambda { |store, args|
+    current = store.get_query("messages:list", { "channel" => args["channel"] }) || []
+    store.set_query("messages:list", { "channel" => args["channel"] },
+                    [*current, { "text" => args["text"], "pending" => true }])
+  },
+  # Re-checked just before a QUEUED write replays: false drops it instead of
+  # replaying a write that can only fail.
+  precondition: -> { channel_still_exists?("general") },
+  on_settled: ->(event) { puts("#{event.status} #{event.mutation_id}") },
+)
+
+return if outcome.queued? # durably queued, not committed — don't report success yet
+```
+
+The overlay drops the moment a frame whose `cursor` reaches the write's echoed
+`commitCursor` arrives, so the confirming frame never double-counts it; a failed
+write rolls back. `client.flush_offline_queue(shard_key)` replays a shard's
+queued writes when its socket returns, and `client.hydrate_offline_queue`
+restores what a prior session persisted, returning the shard keys to flush.
+
+A queued write whose args cannot be wire-encoded settles terminally on the first
+flush (`OFFLINE_WRITE_UNENCODABLE`) rather than being retried forever, and every
+discard — including one the capacity cap evicts out of a _restored_ queue, which
+has no caller left to tell — reaches `client.on_mutation_settled`.
+
+The durable record holds the **wire** form of the args, so a store that
+serialises (a file, a SQLite text column) round-trips a `WireBigInt`,
+`WireBytes`, `WireDate` or `WireMap` argument unchanged. A restored record whose
+args no longer decode is purged and settled `OFFLINE_WRITE_UNDECODABLE` rather
+than replayed with substitute args.
+
+A replay the server rate-limits (`RATE_LIMITED` / `TOO_MANY_REQUESTS`) is
+re-queued, never dropped; `FlushReport#retry_after_ms` carries the envelope's
+`data.retryAfterMs`, and a flush inside that window is a no-op that reports the
+time remaining.
+
+A replay is classified the same way whether the write went out alone or in a
+batch: a coded envelope by its code alone (`SHARD_UNAVAILABLE`, `SHARD_ERROR`,
+the rate-limit codes and a refused credential — `UNAUTHORIZED`, `TOKEN_EXPIRED`,
+`UNAUTHENTICATED`, held until a token refresh: nothing flushes on its own when
+`client.auth_token` changes, so call `flush_offline_queue` after setting it, as
+on a reconnect — re-queue; every other code, a
+coded 5xx included, is terminal), a reply with no envelope as transport
+(re-queued). An envelope whose `data` does not decode is still that coded error,
+raised with `data` nil. A 413 is `PAYLOAD_TOO_LARGE` whatever its body: a batch
+splits and retries, and a single write still refused settles rejected with that
+code. A write the server committed whose result this client cannot decode
+settles `committed` with a `Lunora::ResultDecodeError` (code
+`WIRE_DECODE_FAILED`) and no value, and is never replayed; a server that itself
+answers `WIRE_DECODE_FAILED` has refused the write, which settles rejected. Should anything
+unexpected raise out of a flush, every write it had drained but not yet settled
+is put back at the front of the queue before the exception propagates.
+
+`client.identity` is an opaque, **non-secret** stamp — a user id, not a bearer
+token. It is persisted with every queued write and re-checked before that write
+replays, so a restart cannot push one user's queued writes as another. Left
+`nil`, a write is stamped with a `Lunora::TokenStamp` — a digest of
+`client.auth_token` (the reference client's, never the token itself), persisted
+as `{"tokenDigest" => …}` — and `nil` only when there is no token either, so a
+write queued under one token is never sent with another. Under a different
+token it is rejected `OFFLINE_IDENTITY_CHANGED`; with no token at all it is
+held, still queued and persisted and unsettled, in its place in line, until one
+is set. A flush sends each write with the token its identity was checked
+against, so a token set mid-flush applies from the next flush, never to the
+rest of the current one. Setting `identity` is what lets a token refresh keep
+the queue. A record persisted by an earlier build with a `nil` stamp is rejected
+the same way once a token is held, since `nil` then said nothing about whose
+write it was. `identity` may be any string: a token stamp is its own type, so no
+identity, however it is spelled, can match a token's writes, nor a token stamp
+an identity's. Changing `identity` from one set value to another (signing out
+included) drops every subscription's resume cursor and epoch and empties every
+shape view (its callback receives `[]`), and with `identity` unset setting a
+different `auth_token` (or clearing it) does the same, since the token's digest
+is then the identity. Reconnect your socket under the new credential and the
+resubscribe is a cold one.
+
+Ruby strings cannot hold a lone UTF-16 surrogate, so a token digests over the
+UTF-16 code units of its characters; bytes that are not valid in its encoding
+digest as replacement characters instead of raising.
+
+Ruby's `Mutex` is **not reentrant**, so every consumer callback — a transform, a
+`precondition`, a settled listener — runs with the client's lock released. That
+is not a style choice: an eviction that rejected a write in place once raised a
+`ThreadError` the queue's own rescue swallowed, and the write silently never
+rolled back. See [`sdks/README.md`](../README.md).
+
+## Wire types
+
+Ruby lacks JS's distinct `bigint`/`Map`/`Set`/`Date`, so mark those explicitly;
+plain values map to JSON directly:
+
+| Lunora / `v.*`                         | Ruby                                                               |
+| -------------------------------------- | ------------------------------------------------------------------ |
+| `v.string/number/boolean/object/array` | `String` / `Integer`\|`Float` / `true`\|`false` / `Hash` / `Array` |
+| `v.bigint()`                           | `Lunora::WireBigInt.new(1000)`                                     |
+| `v.bytes()`                            | `Lunora::WireBytes.new(data, "Float32Array")`                      |
+| `Date`                                 | `Lunora::WireDate.new(epoch_ms)`                                   |
+| `Map` / `Set`                          | `Lunora::WireMap.new(pairs)` / `Lunora::WireSet.new(items)`        |
+| `URL`                                  | `Lunora::WireUrl.new("https://…")`                                 |
+
+`decode_wire` returns these same wrappers so values round-trip exactly.
+
+A number off the wire is a float64 whatever its spelling: `decode_wire` turns an
+integer literal past ±(2**53 − 1) — which `JSON.stringify` writes for every
+double in [2**53, 1e21) — into the `Float` `JSON.parse` would read. An `Integer`
+you build yourself past that range is still refused on encode; wrap it in
+`WireBigInt`.
+
+## Tests
+
+The suite drives the SDK against the **shared** golden fixtures in
+`protocol/fixtures/` — the identical files the TypeScript client is tested
+against — and against `protocol/conformance-cases.json`, which lists the cases
+every SDK's suite must exercise. A `Minitest.after_run` hook aborts if a required
+case did not execute, so run the whole suite rather than one file:
+
+```bash
+cd sdks/ruby
+ruby -Ilib -e 'Dir["test/test_*.rb"].each { |f| require "./#{f}" }'
+```

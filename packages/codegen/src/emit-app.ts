@@ -1,594 +1,17 @@
-/* eslint-disable no-secrets/no-secrets -- emitted builder source: the string fragments are framework API type names (e.g. "SchedulerDeclaration<Env>"), not credentials. */
 import { GENERATED_HEADER } from "./emit";
-
-/** Which capability methods the generated `defineApp` builder exposes — one flag per package-backed feature the app actually uses. */
-interface EmitAppOptions {
-    /** App uses `@lunora/ai` / `ctx.ai` → emit `.ai()` (override the Workers AI binding backing `ctx.ai`). */
-    hasAi: boolean;
-    /** App uses `@lunora/analytics` / `ctx.analytics` → emit `.analytics()` (override the dataset backing `ctx.analytics`). */
-    hasAnalytics: boolean;
-    /** App depends on `@lunora/auth` → emit `.auth()` + the lazy build/migrate dance. */
-    hasAuth: boolean;
-    /** App uses `@lunora/browser` / `ctx.browser` → emit `.browser()`. */
-    hasBrowser: boolean;
-    /** App depends on a worker-composition framework adapter (`@lunora/astro`/`@lunora/svelte`/`@lunora/vue`) → emit `.buildFrameworkWorker(host)`. */
-    hasFramework: boolean;
-    /** Schema declares **D1-backed** `.global()` tables → emit `.global()` (D1 ctx-db + studio introspector + cross-shard relations). */
-    hasGlobal: boolean;
-    /** App uses `@lunora/hyperdrive` / `ctx.sql` → emit `.hyperdrive()`. */
-    hasHyperdrive: boolean;
-    /** Schema declares **Hyperdrive-backed** `.global({ backend: "hyperdrive" })` tables → emit `.hyperdriveGlobal()` (reactive Postgres/MySQL ctx-db over Hyperdrive). */
-    hasHyperdriveGlobal: boolean;
-    /** App uses `@lunora/images` / `ctx.images` → emit `.images()`. */
-    hasImages: boolean;
-    /** App uses `@lunora/kv` / `ctx.kv` → emit `.kv()`. */
-    hasKv: boolean;
-    /** App uses `@lunora/payment` / `ctx.payments` → emit `.payment()`. */
-    hasPayments: boolean;
-    /** App imports `@lunora/scheduler` / declares crons → emit `.scheduler()`. */
-    hasScheduler: boolean;
-    /** App uses `@lunora/storage` → emit `.storage()` (DO `ctx.storage` + studio file browser). */
-    hasStorage: boolean;
-    /** Schema declares vector indexes → emit `.vectors()` (the Vectorize index map backing `ctx.vectors`). */
-    hasVectors: boolean;
-    /** App declares Cloudflare Workflows (`defineWorkflow`) → wire `options.workflowsClient` so the studio's workflow-instance proxy can reach the CF REST API. */
-    hasWorkflow: boolean;
-    /** Project depends on the unscoped `lunorash` umbrella → import the runtime via `lunorash/runtime` instead of `@lunora/runtime`. */
-    useUmbrella: boolean;
-    /** An OpenAPI spec is emitted (`openapi.ts`) → wire `openApiSpec` into the worker. */
-    wantsOpenApi: boolean;
-    /** An OpenRPC spec is emitted (`openrpc.ts`) → wire `openRpcSpec` into the worker. */
-    wantsOpenRpc: boolean;
-}
-
-/**
- * The long-tail `ctx.*` capabilities wired straight through to the generated
- * `createShardDO` config — binding-backed ones (ai/kv/analytics/images/browser)
- * are OPTIONAL overrides (the shard already auto-resolves the conventional
- * `env.AI`/`env.KV`/… binding), while `vectors` / `hyperdrive` / `payment`
- * need explicit construction. Each method's parameter is derived from the
- * generated config type, so no per-capability type imports are needed.
- * `[flag, methodName, configKey, doc]`.
- */
-const LONG_TAIL: ReadonlyArray<readonly [keyof EmitAppOptions, string, string, string]> = [
-    ["hasAi", "ai", "ai", "Override the Workers AI binding backing `ctx.ai` (defaults to `env.AI`)."],
-    ["hasAnalytics", "analytics", "analytics", "Override the Analytics Engine dataset backing `ctx.analytics` (defaults to `env.ANALYTICS`)."],
-    ["hasBrowser", "browser", "browser", "Override the Browser Rendering binding backing `ctx.browser` (defaults to `env.BROWSER`)."],
-    [
-        "hasHyperdrive",
-        "hyperdrive",
-        "sql",
-        "Wire the Hyperdrive SQL client backing `ctx.sql` — build it with `createHyperdrive` + `fromPostgresJs`/`fromNodePg`/`fromMysql2`.",
-    ],
-    ["hasImages", "images", "images", "Override the Images binding backing `ctx.images` (defaults to `env.IMAGES`)."],
-    ["hasKv", "kv", "kv", "Override the Workers KV binding backing `ctx.kv` (defaults to `env.KV`)."],
-    ["hasPayments", "payment", "payment", "Wire the payment options backing `ctx.payments`."],
-    ["hasVectors", "vectors", "vectors", "Wire the Vectorize index map backing `ctx.vectors`."],
-];
-
-/** Whether any long-tail (`shardExtras`-backed) capability method is emitted. */
-const hasAnyLongTail = (options: EmitAppOptions): boolean => LONG_TAIL.some(([flag]) => options[flag]);
-
-/** Import lines — only what the enabled capabilities need. Add-ons via `@lunora/*`; the runtime via the umbrella subpath when the app depends on `lunora`. */
-const buildImportLines = (options: EmitAppOptions): string[] => {
-    const { hasAuth, hasFramework, hasGlobal, hasHyperdriveGlobal, hasScheduler, hasStorage, hasWorkflow, useUmbrella, wantsOpenApi, wantsOpenRpc } = options;
-    const runtimeModule = useUmbrella ? "lunorash/runtime" : "@lunora/runtime";
-
-    const runtimeTypeImports = ["ExecutionContextLike", "LunoraWorker", "Route", "ScheduledControllerLike", "ShardNamespaceLike", "WorkerOptions"];
-
-    if (hasGlobal) {
-        runtimeTypeImports.push("GlobalIntrospector");
-    }
-
-    if (hasFramework) {
-        runtimeTypeImports.push("FrameworkHostHandler");
-    }
-
-    const runtimeValueImports = [
-        ...(hasGlobal || hasHyperdriveGlobal ? ["createCrossShardRelationCapabilities"] : []),
-        "createWorker",
-        ...(hasFramework ? ["withFrameworkWorker"] : []),
-    ].join(", ");
-
-    return [
-        ...(hasAuth
-            ? [
-                  `import type { LunoraAuth, LunoraAuthOptions } from "@lunora/auth";`,
-                  `import { createAuth, createAuthAdmin, ensureMigrated, handleAuthRequest, lunoraD1Adapter } from "@lunora/auth";`,
-              ]
-            : []),
-        ...(hasGlobal
-            ? [
-                  `import type { D1CtxDbOptions, D1DatabaseLike, D1Exec } from "@lunora/d1";`,
-                  `import { createD1CtxDb, facetGlobalColumn, listGlobalTables, readGlobalTablePage } from "@lunora/d1";`,
-              ]
-            : []),
-        ...(hasHyperdriveGlobal
-            ? [
-                  `import type { HyperdriveEngine } from "@lunora/hyperdrive/global";`,
-                  `import { createHyperdriveGlobalCtxDb } from "@lunora/hyperdrive/global";`,
-                  `import type { SqlCtxDbOptions, SqlExec } from "@lunora/sql-store";`,
-              ]
-            : []),
-        ...(hasScheduler
-            ? [`import type { DurableObjectNamespaceLike } from "@lunora/scheduler";`, `import { createScheduler } from "@lunora/scheduler";`]
-            : []),
-        ...(hasStorage
-            ? [`import type { R2BucketLike, Storage } from "@lunora/storage";`, `import { createBucketStorage, createStorage } from "@lunora/storage";`]
-            : []),
-        ...(hasWorkflow ? [`import { createWorkflowsRestClient } from "@lunora/workflow";`] : []),
-        `import type { ${[...runtimeTypeImports].toSorted((a, b) => a.localeCompare(b)).join(", ")} } from "${runtimeModule}";`,
-        `import { ${runtimeValueImports} } from "${runtimeModule}";`,
-        ``,
-        ...(hasGlobal || hasHyperdriveGlobal ? [`import schema from "../schema.js";`] : []),
-        `import { LUNORA_CRONS } from "./crons.js";`,
-        `import { LUNORA_FUNCTIONS } from "./functions.js";`,
-        ...(wantsOpenApi ? [`import { openApiSpec } from "./openapi.js";`] : []),
-        ...(wantsOpenRpc ? [`import { openRpcSpec } from "./openrpc.js";`] : []),
-        `import { createShardDO } from "./shard.js";`,
-    ];
-};
-
-/** Per-capability declaration interfaces (the shapes the fluent methods accept). */
-const buildDeclarationBlocks = (options: EmitAppOptions): string[] => [
-    ...(options.hasStorage
-        ? [
-              `/** \`.storage(...)\` declaration — one bucket (required) plus optional extra named buckets and signed-URL config. Backs \`ctx.storage\` AND the studio file browser. */
-interface StorageDeclaration<Env> {
-    /** The default R2 bucket binding (the bare \`ctx.storage\`). */
-    bucket: Selector<Env, R2BucketLike>;
-    /** Extra named buckets, reached via \`ctx.storage.bucket("name")\` and the studio's bucket picker. */
-    buckets?: Record<string, Selector<Env, R2BucketLike>>;
-    /** Public base URL signed/public object URLs resolve against. */
-    publicBaseUrl?: Selector<Env, string>;
-    /** HMAC secret for signed URLs. */
-    signingSecret?: Selector<Env, string>;
-}`,
-          ]
-        : []),
-    ...(options.hasScheduler
-        ? [
-              `/** \`.scheduler(...)\` declaration — the \`SchedulerDO\` namespace plus the worker origin its callbacks dispatch back to. Backs \`ctx.scheduler\` AND the studio's scheduled-jobs view. */
-interface SchedulerDeclaration<Env> {
-    /** The \`SchedulerDO\` namespace binding (typically \`env.SCHEDULER\`). */
-    namespace: Selector<Env, DurableObjectNamespaceLike & ShardNamespaceLike>;
-    /** The worker origin the \`SchedulerDO\` dispatches HTTP job callbacks back to. */
-    origin?: Selector<Env, string>;
-}`,
-          ]
-        : []),
-    ...(options.hasGlobal
-        ? [
-              `/** \`.global(...)\` declaration — the D1 binding backing \`.global()\` tables. Backs cross-tenant \`ctx.db\` reads/writes AND the studio's global data browser. */
-interface GlobalDeclaration<Env> {
-    /** The D1 binding (typically \`env.DB\`). */
-    d1: Selector<Env, D1DatabaseLike>;
-    /** The worker origin used to fan reverse cross-backend relations across shards. Without it, such a relation throws a clear error. */
-    origin?: Selector<Env, string>;
-}`,
-          ]
-        : []),
-    ...(options.hasHyperdriveGlobal
-        ? [
-              `/** \`.hyperdriveGlobal(...)\` declaration — backs \`.global({ backend: "hyperdrive" })\` tables on a Postgres/MySQL database via Hyperdrive. Stays reactive: the writer is injected as \`globalDb\` and the broadcast hook drives live queries. */
-interface HyperdriveGlobalDeclaration<Env> {
-    /** The Hyperdrive engine — selects the Postgres or MySQL dialect. */
-    engine: HyperdriveEngine;
-    /** Build the \`SqlExec\` from \`env\` — e.g. \`buildPgExec(fromPostgresJs(postgres(env.HYPERDRIVE.connectionString)))\`. Cache the driver on the DO instance; rebuild lazily after hibernation. */
-    exec: (env: Env) => SqlExec;
-    /** The worker origin used to fan reverse cross-backend relations across shards. Without it, such a relation throws a clear error. */
-    origin?: Selector<Env, string>;
-}`,
-          ]
-        : []),
-    ...(options.hasAuth
-        ? [
-              `/** \`.auth(...)\` declaration — better-auth options plus the D1 binding its SQL adapter reads. The builder owns the lazy build + \`ensureMigrated\` dance and wires \`authHandler\` / \`resolveIdentity\` / \`authAdmin\`. */
-interface AuthDeclaration<Env> {
-    /** The D1 binding the auth SQL adapter is wired over (via \`lunoraD1Adapter\`). */
-    d1: Selector<Env, unknown>;
-    /** Build the better-auth options from \`env\` (secret, plugins, email/password, …). */
-    options: (env: Env) => LunoraAuthOptions;
-}`,
-          ]
-        : []),
-];
-
-/** Builder instance fields (private state recorded by the fluent methods). */
-const buildFieldLines = (options: EmitAppOptions): string[] => [
-    `    private adminToken?: Selector<Env, string>;`,
-    ...(options.hasAuth ? [`    private authDeclaration?: AuthDeclaration<Env>;`] : []),
-    `    private readonly extendFns: ((env: Env) => Partial<WorkerOptions>)[] = [];`,
-    ...(options.hasGlobal ? [`    private globalDeclaration?: GlobalDeclaration<Env>;`] : []),
-    ...(options.hasHyperdriveGlobal ? [`    private hyperdriveGlobalDeclaration?: HyperdriveGlobalDeclaration<Env>;`] : []),
-    `    private readonly routeMap: Record<string, Route> = {};`,
-    ...(options.hasScheduler ? [`    private schedulerDeclaration?: SchedulerDeclaration<Env>;`] : []),
-    ...(hasAnyLongTail(options) ? [`    private readonly shardExtras: Partial<ShardConfig> = {};`] : []),
-    `    private shardSelector?: Selector<Env, ShardNamespaceLike>;`,
-    ...(options.hasStorage ? [`    private storageDeclaration?: StorageDeclaration<Env>;`] : []),
-];
-
-/** Long-tail capability methods — thin pass-throughs into the generated `createShardDO` config. */
-const buildLongTailMethods = (options: EmitAppOptions): string[] =>
-    LONG_TAIL.filter(([flag]) => options[flag]).map(
-        ([, name, key, document_]) => `    /** ${document_} */
-    public ${name}(factory: NonNullable<ShardConfig["${key}"]>): this {
-        this.shardExtras.${key} = factory;
-
-        return this;
-    }`,
-    );
-
-/** Fluent capability methods (always-on ones plus the feature-gated ones). */
-const buildMethodBlocks = (options: EmitAppOptions): string[] => [
-    `    /** Bearer token gating the \`/_lunora/admin/*\` endpoints the studio calls. */
-    public admin(selector: Selector<Env, string>): this {
-        this.adminToken = selector;
-
-        return this;
-    }`,
-    ...(options.hasAuth
-        ? [
-              `    /** Wire better-auth — the builder lazily builds the instance, runs \`ensureMigrated\`, and dispatches \`/api/auth/*\` inside the worker (instrumented for the auth-failure SLO). */
-    public auth(declaration: AuthDeclaration<Env>): this {
-        this.authDeclaration = declaration;
-
-        return this;
-    }`,
-          ]
-        : []),
-    `    /** Escape hatch — merge raw \`WorkerOptions\` (anything not yet sugared) over the derived options at build time. */
-    public extend(fn: (env: Env) => Partial<WorkerOptions>): this {
-        this.extendFns.push(fn);
-
-        return this;
-    }`,
-    ...(options.hasGlobal
-        ? [
-              `    /** Back \`.global()\` (cross-tenant) tables with D1 — wires \`ctx.db\` routing, the studio global browser, and reverse cross-shard relations. */
-    public global(declaration: GlobalDeclaration<Env>): this {
-        this.globalDeclaration = declaration;
-
-        return this;
-    }`,
-          ]
-        : []),
-    ...(options.hasHyperdriveGlobal
-        ? [
-              `    /** Back \`.global({ backend: "hyperdrive" })\` tables with a Postgres/MySQL database via Hyperdrive — wires reactive \`ctx.db\` routing through the shared store core. */
-    public hyperdriveGlobal(declaration: HyperdriveGlobalDeclaration<Env>): this {
-        this.hyperdriveGlobalDeclaration = declaration;
-
-        return this;
-    }`,
-          ]
-        : []),
-    `    /** Cloudflare Email Routing entry — exposes the top-level \`email\` handler. */
-    public onEmail(handler: (env: Env) => (message: unknown, env: unknown, context: ExecutionContextLike) => Promise<void>): this {
-        this.emailHandler = handler;
-
-        return this;
-    }`,
-    `    /** Mount a custom HTTP route (e.g. an asset-serving or test endpoint). Key is \`"METHOD path"\`, \`"path"\`, or a path prefix matched by the runtime. */
-    public route(key: string, handler: Route): this {
-        this.routeMap[key] = handler;
-
-        return this;
-    }`,
-    ...(options.hasScheduler
-        ? [
-              `    /** Wire the \`SchedulerDO\` — backs \`ctx.scheduler\` and the studio's scheduled-jobs view. */
-    public scheduler(declaration: SchedulerDeclaration<Env>): this {
-        this.schedulerDeclaration = declaration;
-
-        return this;
-    }`,
-          ]
-        : []),
-    `    /** The shard Durable Object namespace (typically \`env.SHARD\`) — required: every app routes RPC + WebSocket traffic through it. */
-    public shard(selector: Selector<Env, ShardNamespaceLike>): this {
-        this.shardSelector = selector;
-
-        return this;
-    }`,
-    ...(options.hasStorage
-        ? [
-              `    /** Wire R2 storage — backs \`ctx.storage\` (incl. multi-bucket) and the studio file browser, from one declaration. */
-    public storage(declaration: StorageDeclaration<Env>): this {
-        this.storageDeclaration = declaration;
-
-        return this;
-    }`,
-          ]
-        : []),
-    ...buildLongTailMethods(options),
-];
-
-/** The body of the `createShardDO({ ... })` call — the DO-side capability factories. */
-const buildShardFactoryBody = (options: EmitAppOptions): string => {
-    const entries = [
-        ...(options.hasGlobal
-            ? [
-                  `            ...(this.globalDeclaration
-                ? {
-                      d1: (rawEnv: Record<string, unknown>, request?: { identity?: Record<string, unknown>; userId?: string | null }) => {
-                          const env = rawEnv as Env;
-                          const database = this.globalDeclaration?.d1(env);
-
-                          if (!database) {
-                              return undefined;
-                          }
-
-                          const origin = this.globalDeclaration?.origin?.(env);
-                          const crossShard = origin
-                              ? createCrossShardRelationCapabilities({ identity: request?.identity, origin, userId: request?.userId ?? undefined })
-                              : undefined;
-
-                          return createD1CtxDb({
-                              ...(crossShard ? { crossShardCounter: crossShard.crossShardCounter, crossShardReader: crossShard.crossShardReader } : {}),
-                              auth: { identity: request?.identity ?? null, userId: request?.userId ?? null },
-                              exec: buildExec(database),
-                              schema: schema as unknown as D1CtxDbOptions["schema"],
-                          });
-                      },
-                  }
-                : {}),`,
-              ]
-            : []),
-        ...(options.hasHyperdriveGlobal
-            ? [
-                  `            ...(this.hyperdriveGlobalDeclaration
-                ? {
-                      hyperdriveGlobal: (rawEnv: Record<string, unknown>, request?: { identity?: Record<string, unknown>; userId?: string | null }) => {
-                          const env = rawEnv as Env;
-                          const exec = this.hyperdriveGlobalDeclaration?.exec(env) as SqlExec | undefined;
-
-                          if (!exec) {
-                              return undefined;
-                          }
-
-                          const origin = this.hyperdriveGlobalDeclaration?.origin?.(env);
-                          const crossShard = origin
-                              ? createCrossShardRelationCapabilities({ identity: request?.identity, origin, userId: request?.userId ?? undefined })
-                              : undefined;
-
-                          return createHyperdriveGlobalCtxDb({
-                              ...(crossShard ? { crossShardCounter: crossShard.crossShardCounter, crossShardReader: crossShard.crossShardReader } : {}),
-                              auth: { identity: request?.identity ?? null, userId: request?.userId ?? null },
-                              engine: this.hyperdriveGlobalDeclaration?.engine as HyperdriveEngine,
-                              exec,
-                              schema: schema as unknown as SqlCtxDbOptions["schema"],
-                          });
-                      },
-                  }
-                : {}),`,
-              ]
-            : []),
-        ...(options.hasScheduler
-            ? [
-                  `            ...(this.schedulerDeclaration
-                ? {
-                      scheduler: (rawEnv: Record<string, unknown>) => {
-                          const env = rawEnv as Env;
-                          const namespace = this.schedulerDeclaration?.namespace(env);
-                          const origin = this.schedulerDeclaration?.origin?.(env);
-
-                          return namespace && origin ? createScheduler({ namespace, originUrl: origin }) : undefined;
-                      },
-                  }
-                : {}),`,
-              ]
-            : []),
-        ...(options.hasStorage
-            ? [`            ...(this.storageDeclaration ? { storage: (rawEnv: Record<string, unknown>) => this.resolveStorage(rawEnv as Env) } : {}),`]
-            : []),
-        ...(hasAnyLongTail(options) ? [`            ...this.shardExtras,`] : []),
-    ];
-
-    return entries.length > 0 ? `\n${entries.join("\n")}\n        ` : "";
-};
-
-/** The per-capability blocks of `buildWorkerOptions` (the worker-side fan-out). */
-const buildWorkerOptionLines = (options: EmitAppOptions): string[] => [
-    ...(options.hasScheduler
-        ? [
-              `        if (this.schedulerDeclaration) {
-            options.schedulerDO = this.schedulerDeclaration.namespace(env);
-        }`,
-          ]
-        : []),
-    ...(options.hasWorkflow
-        ? [
-              // Resolve the Workflows REST client from the request env so the studio's
-              // \`/_lunora/admin/workflows*\` proxy can read instance/step state; returns
-              // undefined (→ "not configured") until the CF account id + API token are set.
-              `        options.workflowsClient = (workflowEnv) => {
-            const source = workflowEnv as Record<string, unknown>;
-            const accountId = source["CLOUDFLARE_ACCOUNT_ID"];
-            const apiToken = source["CLOUDFLARE_API_TOKEN"];
-
-            return typeof accountId === "string" && accountId !== "" && typeof apiToken === "string" && apiToken !== ""
-                ? createWorkflowsRestClient({ accountId, apiToken })
-                : undefined;
-        };`,
-          ]
-        : []),
-    ...(options.hasGlobal
-        ? [
-              `        if (this.globalDeclaration) {
-            const database = this.globalDeclaration.d1(env);
-
-            if (database) {
-                options.d1 = database;
-                options.globalIntrospector = buildGlobalIntrospector(database);
-            }
-        }`,
-          ]
-        : []),
-    ...(options.hasStorage
-        ? [
-              `        if (this.storageDeclaration) {
-            Object.assign(options, this.buildStorageAdmin(env));
-        }`,
-          ]
-        : []),
-    ...(options.hasAuth
-        ? [
-              `        if (this.authDeclaration) {
-            options.authHandler = (request) => {
-                const auth = getAuth();
-
-                return auth ? handleAuthRequest(auth, request) : Promise.resolve(undefined);
-            };
-            options.resolveIdentity = async (request) => {
-                const auth = getAuth();
-
-                if (!auth) {
-                    return null;
-                }
-
-                const session = await auth.api.getSession({ headers: (request as Request).headers });
-
-                return session?.user?.id ? { userId: session.user.id } : null;
-            };
-            const authInstance = getAuth();
-
-            options.authAdmin = authInstance ? createAuthAdmin(authInstance) : undefined;
-        }`,
-          ]
-        : []),
-];
-
-/** The `shardDO` + spec fields the worker always (or conditionally) carries. */
-const buildBaseWorkerOptions = (options: EmitAppOptions): string[] => [
-    `            cronJobs: LUNORA_CRONS,`,
-    `            functions: LUNORA_FUNCTIONS,`,
-    ...(options.wantsOpenApi ? [`            openApiSpec,`] : []),
-    ...(options.wantsOpenRpc ? [`            openRpcSpec,`] : []),
-    `            routes: this.routeMap,`,
-    `            shardDO: this.shardSelector?.(env) ?? (undefined as unknown as ShardNamespaceLike),`,
-];
-
-/** The storage resolver + studio-admin deriver (private builder methods, DO + worker sides). */
-const buildStorageHelpers = (hasStorage: boolean): string =>
-    hasStorage
-        ? `
-    /** Resolve the storage capability (single or multi-bucket) for the DO side. */
-    private resolveStorage(env: Env): Storage | undefined {
-        const declaration = this.storageDeclaration;
-
-        if (!declaration) {
-            return undefined;
-        }
-
-        const defaultBucket = declaration.bucket(env);
-
-        if (!defaultBucket) {
-            return undefined;
-        }
-
-        const make = (bucket: R2BucketLike): Storage =>
-            createStorage({ bucket, publicBaseUrl: declaration.publicBaseUrl?.(env), signingSecret: declaration.signingSecret?.(env) });
-        const extraEntries = Object.entries(declaration.buckets ?? {})
-            .map(([name, selector]) => [name, selector(env)] as const)
-            .filter((entry): entry is [string, R2BucketLike] => Boolean(entry[1]));
-
-        if (extraEntries.length === 0) {
-            return make(defaultBucket);
-        }
-
-        const map: Record<string, Storage> = { default: make(defaultBucket) };
-
-        for (const [name, bucket] of extraEntries) {
-            map[name] = make(bucket);
-        }
-
-        return createBucketStorage(map, { default: "default" });
-    }
-
-    /** Derive the studio file-browser admin functions from the same buckets \`.storage()\` declared. */
-    private buildStorageAdmin(env: Env): Partial<WorkerOptions> {
-        const declaration = this.storageDeclaration;
-
-        if (!declaration) {
-            return {};
-        }
-
-        const defaultBucket = declaration.bucket(env);
-
-        if (!defaultBucket) {
-            return {};
-        }
-
-        const make = (bucket: R2BucketLike): Storage =>
-            createStorage({ bucket, publicBaseUrl: declaration.publicBaseUrl?.(env), signingSecret: declaration.signingSecret?.(env) });
-        const buckets: Record<string, Storage> = { default: make(defaultBucket) };
-
-        for (const [name, selector] of Object.entries(declaration.buckets ?? {})) {
-            const bucket = selector(env);
-
-            if (bucket) {
-                buckets[name] = make(bucket);
-            }
-        }
-
-        const pick = (name?: string): Storage => buckets[name !== undefined && name !== "" ? name : "default"] ?? buckets.default;
-        const hasSigning = Boolean(declaration.publicBaseUrl?.(env) && declaration.signingSecret?.(env));
-
-        return {
-            storageBuckets: Object.keys(buckets),
-            storageDelete: (key: string, opts?: { bucket?: string }) => pick(opts?.bucket).delete(key),
-            storageList: (prefix?: string, opts?: { bucket?: string; cursor?: string; limit?: number }) => pick(opts?.bucket).list(prefix, opts),
-            storageSignedUrl: hasSigning
-                ? (key: string, opts?: { bucket?: string; expiresInSeconds?: number }) => pick(opts?.bucket).getSignedUrl(key, { expiresInSeconds: opts?.expiresInSeconds })
-                : undefined,
-            storageUpload: (key: string, body: ArrayBuffer, opts?: { bucket?: string; contentType?: string }) => pick(opts?.bucket).upload(key, body, opts),
-        };
-    }
-`
-        : "";
-
-/** The D1 `exec` adapter + global-table introspector (module-level helpers, DO/worker shared). */
-const buildGlobalHelpers = (hasGlobal: boolean): string =>
-    hasGlobal
-        ? `
-/** Adapt the raw D1 binding to \`@lunora/d1\`'s \`D1Exec\` (reads via \`all\`, writes via \`run\`). */
-const buildExec = (database: D1DatabaseLike): D1Exec => ({
-    all: async (sql, parameters) => {
-        const result = await database
-            .prepare(sql)
-            .bind(...parameters)
-            .all<Record<string, unknown>>();
-
-        return result.results;
-    },
-    run: async (sql, parameters) => {
-        await database
-            .prepare(sql)
-            .bind(...parameters)
-            .run();
-    },
-});
-
-/** Introspect \`.global()\` (D1-backed) tables for the studio's global data browser. */
-const buildGlobalIntrospector = (database: D1DatabaseLike): GlobalIntrospector => {
-    const exec = buildExec(database);
-
-    return {
-        facetColumn: (options) => facetGlobalColumn(exec, schema as never, options),
-        listTables: () => listGlobalTables(exec, schema as never),
-        readTablePage: (options) => readGlobalTablePage(exec, schema as never, options),
-    };
-};
-`
-        : "";
+import { buildDeclarationBlocks, buildFieldLines, buildMethodBlocks, buildShardFactoryBody } from "./emit/app-builder";
+import type { EmitAppOptions, ResolvedAppOptions } from "./emit/app-helpers";
+import { buildGlobalHelpers, buildSchedulerHelper, buildStorageHelpers } from "./emit/app-helpers";
+import buildImportLines from "./emit/app-imports";
+import { buildBaseWorkerOptions, buildWorkerOptionLines } from "./emit/app-worker-options";
 
 /** The `export type { ... }` list — only the declaration types that were emitted. */
-const buildExportedTypes = (options: EmitAppOptions): string =>
+const buildExportedTypes = (options: ResolvedAppOptions): string =>
     [
         ...(options.hasAuth ? ["AuthDeclaration"] : []),
         "ComposedApp",
         ...(options.hasGlobal ? ["GlobalDeclaration"] : []),
+        "LunoraConfig",
         ...(options.hasScheduler ? ["SchedulerDeclaration"] : []),
         "Selector",
         ...(options.hasStorage ? ["StorageDeclaration"] : []),
@@ -611,26 +34,98 @@ const buildExportedTypes = (options: EmitAppOptions): string =>
  * it can import the add-on packages the app installed (`@lunora/auth`,
  * `@lunora/storage`, …) directly.
  */
-const emitApp = (options: EmitAppOptions): string => {
+
+/**
+ * Why the auth request instance is constructed before `ensureMigrated` (the
+ * emitted comment is deliberately short — it ships into every user's generated
+ * tree, where a description of another package's internals would rot unnoticed).
+ *
+ * `ensureMigrated` finishes by calling better-auth's
+ * `invalidateSchemaChecks(database)`. That call is a NO-OP until something has
+ * registered a schema check for the binding: it reads a `WeakMap` entry only
+ * `createSchemaCheck` writes, and returns silently when there is none.
+ *
+ * The adapter-backed request instance is the only thing that registers one
+ * (`@lunora/auth`'s `withAuthSchemaCheck`, keyed on the raw D1 binding — the same
+ * object `ensureMigrated` invalidates). Building it AFTER the migration therefore
+ * left that invalidation inert: a mismatch verdict observed against the
+ * pre-migration schema stayed cached for the life of the isolate even though the
+ * migration had just fixed it.
+ *
+ * The cost of the reorder is one pre-migration introspection sweep, and the
+ * `console.error` better-auth's eager check logs on a first boot against an
+ * unmigrated database. That is noise on a healthy cold start, not a fault.
+ *
+ * Verified against better-auth 1.7.3; `@better-auth/core/db/internal` is an
+ * internal subpath, so re-check on a minor bump.
+ */
+const emitApp = (rawOptions: EmitAppOptions): string => {
+    // `hasVectors` arrives as the platform gate's VERDICT and is consumed as
+    // "emit `.vectors()`" — the AND with the app's own declaration happens once,
+    // here, exactly as `emitServer` and `emitShard` make it against their
+    // `schema`. Normalising up front keeps the three emitters on one convention
+    // instead of leaving the conjunction to whichever call site remembered to
+    // make it. The `vectors` usage flag (an `@lunora/bindings/vectors` import)
+    // does not decide the method — no `appMethod` hangs off that row.
+    const hasVectors = (rawOptions.hasVectors ?? true) && (rawOptions.vectorIndexCount ?? 0) > 0;
+    const options: ResolvedAppOptions = { ...rawOptions, hasVectors };
     const { hasAuth } = options;
 
     const declarationBlocks = buildDeclarationBlocks(options);
     const workerOptionLines = buildWorkerOptionLines(options);
 
     // The auth lazy-init dance is woven through `build()` and `buildWorkerOptions`.
-    const authState = hasAuth ? `        let auth: LunoraAuth | null = null;\n` : "";
+    const authState = hasAuth ? `        let auth: LunoraAuth | null = null;\n        let authInit: Promise<void> | null = null;\n` : "";
     const ensureAuthBlock = hasAuth
         ? `
-        const ensureAuth = async (env: Env): Promise<void> => {
-            if (!this.authDeclaration || auth) {
+        const initAuth = async (env: Env): Promise<void> => {
+            if (!this.authDeclaration) {
                 return;
             }
 
-            auth = createAuth({ ...this.authDeclaration.options(env), database: lunoraD1Adapter(this.authDeclaration.d1(env) as never) });
+            const d1 = this.authDeclaration.d1;
+
+            // DO-backed mode builds no instance here: better-auth runs inside the
+            // object, which materialises its own schema (the Kysely migrator below is
+            // dialect-bound and cannot target DO storage).
+            if (!d1) {
+                return;
+            }
+
             // Apply the better-auth schema lazily on first request (raw-D1 Kysely
             // migrator). For production run the migrate command ahead of deploy.
-            await ensureMigrated(createAuth({ ...this.authDeclaration.options(env), database: this.authDeclaration.d1(env) as never }));
+            // The migration instance takes the RAW binding: better-auth migrates
+            // only through Kysely and rejects the adapter the request instance uses.
+            //
+            // CONSTRUCTED BEFORE THE MIGRATION, ASSIGNED AFTER IT. Both halves matter:
+            // building it first gives \`ensureMigrated\`'s schema-check invalidation a
+            // registered check to invalidate, and assigning it only afterwards keeps a
+            // concurrent request from serving \`/api/auth/*\` against tables the
+            // migrator has not created yet. See \`emit-app.ts\` in @lunora/codegen for
+            // the full reasoning.
+            //
+            // On a first boot against an unmigrated database this means better-auth's
+            // eager schema check runs BEFORE the migration, so one
+            // "the auth tables do not match…" line on a cold start is expected.
+            const requestAuth = createAuth({ ...this.authDeclaration.options(env), database: lunoraD1Adapter(d1(env) as never) });
+
+            await ensureMigrated(createAuth({ ...this.authDeclaration.options(env), database: d1(env) as never }));
+
+            auth = requestAuth;
         };
+
+        // Single-flighted on the PROMISE, not on \`auth\`. Every \`fetch\` awaits this
+        // and the body above is async, so a per-isolate cold start runs it once
+        // rather than once per concurrent request — better-auth's migrator emits a
+        // bare \`CREATE TABLE\` (no IF NOT EXISTS), so a second concurrent run on a
+        // fresh database fails with \`table user already exists\` and, because this is
+        // awaited ahead of the router, 500s every route. Evicted on failure so a
+        // transient error retries instead of being replayed forever.
+        const ensureAuth = (env: Env): Promise<void> =>
+            (authInit ??= initAuth(env).catch((error: unknown) => {
+                authInit = null;
+                throw error;
+            }));
 `
         : "";
     const ensureAuthCall = hasAuth ? `\n                await ensureAuth(env);` : "";
@@ -646,6 +141,22 @@ const emitApp = (options: EmitAppOptions): string => {
             host ? withFrameworkWorker(host, (hostEnv) => this.buildWorkerOptions(hostEnv as Env, ${getAuthArgument})) : createWorker(this.buildWorkerOptions(env, ${getAuthArgument}));`
         : `        const buildWorker = (env: Env): LunoraWorker => createWorker(this.buildWorkerOptions(env, ${getAuthArgument}));`;
     const assembleParameter = options.hasFramework ? `host?: FrameworkHostHandler` : ``;
+
+    // Auto-wire the worker's `email()` handler for `defineAgent({ onEmail })`
+    // agents: received mail starts a durable run via `dispatchAgentEmail`
+    // (`@lunora/agent/inbound`). Emitted as the DEFAULT `composed.email`, ahead of
+    // the manual `.onEmail(...)` override below, so a hand-registered handler still
+    // wins. Empty when no `onEmail` agent is declared — email-free (and agent-free)
+    // output stays byte-identical.
+    const emailAgents = options.emailAgents ?? [];
+    const emailAgentsBlock =
+        emailAgents.length > 0
+            ? `        composed.email = dispatchAgentEmail([
+${emailAgents.map((agent) => `            { agent: lunoraAgentDefinitions.${agent.exportName}, className: ${JSON.stringify(agent.className)} },`).join("\n")}
+        ]);
+
+`
+            : "";
 
     // Public terminals: always `build()`; `.buildFrameworkWorker(host)` only when
     // a worker-composition framework adapter is a dependency.
@@ -667,7 +178,19 @@ const emitApp = (options: EmitAppOptions): string => {
 
 /** Read a value off the per-request \`env\`. Returns \`undefined\` to leave the capability unconfigured (its \`ctx.*\`/admin surface stays a clear-error stub). */
 type Selector<Env, T> = (env: Env) => T | undefined;
-${hasAnyLongTail(options) ? `\n/** The generated \`createShardDO\` config — the long-tail \`.ai()\` / \`.kv()\` / … methods pass straight through to it. */\ntype ShardConfig = NonNullable<Parameters<typeof createShardDO>[0]>;\n` : ""}
+
+/** The generated \`createShardDO\` config — \`.observability()\`, \`.maxRelationKeys()\` and the long-tail \`.ai()\` / \`.kv()\` / … methods pass straight through to it. */
+type ShardConfig = NonNullable<Parameters<typeof createShardDO>[0]>;
+${
+    options.jurisdiction
+        ? `
+// Module scope, so every isolate loading this script (the worker and each Durable
+// Object class it exports) knows the schema's jurisdiction before a request runs.
+// \`@lunora/mail\` reads it to pin its shard RPC like every other DO path.
+declareAppJurisdiction(${JSON.stringify(options.jurisdiction)});
+`
+        : ""
+}
 ${declarationBlocks.join("\n\n")}${declarationBlocks.length > 0 ? "\n\n" : ""}/** The composed app: a Cloudflare module worker (\`fetch\` / \`scheduled\` / optional \`email\`) plus the \`ShardDO\` class binding. */
 interface ComposedApp extends LunoraWorker {
     /** Cloudflare Email Routing entry — present only when \`.onEmail(...)\` was configured. */
@@ -682,7 +205,7 @@ interface ComposedApp extends LunoraWorker {
  * worker-side \`createWorker\` options — constructing the worker lazily on the
  * first request so per-isolate singletons are built once.
  */
-class AppBuilder<Env extends Record<string, unknown>> {
+class AppBuilder<Env extends object> {
 ${buildFieldLines(options).join("\n")}
 
     private emailHandler?: (env: Env) => (message: unknown, env: unknown, context: ExecutionContextLike) => Promise<void>;
@@ -719,18 +242,49 @@ ${buildWorkerLine}
                 worker ??= buildWorker(rawEnv as Env);
 
                 return worker.serverQuery(request, rawEnv, reference, args, options);
-            },
+            },${
+                // Emitted for a framework-hosted app even with no push queues of its
+                // own: `withFrameworkWorker` hands the FRAMEWORK host's `queue` back
+                // out of the composed worker, and without this key wrangler never sees
+                // it. On workerd a consumer that returns without throwing implicitly
+                // acks, so the host's messages were not merely unprocessed — they were
+                // acked and destroyed.
+                options.hasQueue || options.hasFramework
+                    ? `
+            queue: async (batch: unknown, rawEnv: unknown, context: ExecutionContextLike): Promise<void> => {
+                worker ??= buildWorker(rawEnv as Env);
+
+                return worker.queue?.(batch, rawEnv, context);
+            },`
+                    : ""
+            }
         };
 
-        if (this.emailHandler) {
+${emailAgentsBlock}        if (this.emailHandler) {
             const handler = this.emailHandler;
 
             composed.email = (message, rawEnv, context) => handler(rawEnv as Env)(message, rawEnv, context);
         }
+${
+    options.hasFramework
+        ? `
+        // A framework host may export its own \`email\` (Nitro's \`cloudflare-module\`
+        // does). Nothing in Lunora serves one, so when the app registered no handler
+        // of its own the host's is the only one there is — forward to it rather than
+        // dropping the entry.
+        if (!composed.email && host && typeof host === "object" && typeof host.email === "function") {
+            composed.email = (message, rawEnv, context) => {
+                worker ??= buildWorker(rawEnv as Env);
 
+                return worker.email?.(message, rawEnv, context) ?? Promise.resolve();
+            };
+        }
+`
+        : ""
+}
         return composed;
     }
-${buildStorageHelpers(options.hasStorage)}
+${buildSchedulerHelper(options)}${buildStorageHelpers(options.hasStorage)}
     /** Fan the recorded declarations into the worker-side \`createWorker\` options. */
     private buildWorkerOptions(env: Env, ${getAuthParameter}): WorkerOptions {
         const options: WorkerOptions = {
@@ -742,15 +296,49 @@ ${buildBaseWorkerOptions(options).join("\n")}
         }
 
 ${workerOptionLines.join("\n\n")}${workerOptionLines.length > 0 ? "\n\n" : ""}        for (const fn of this.extendFns) {
-            Object.assign(options, fn(env));
+            Object.assign(options, fn(env, { ...options }));
         }
 
         return options;
     }
 }
 ${buildGlobalHelpers(options.hasGlobal)}
-/** Start composing the app. Chain the capability methods, then \`.build()\`. */
-const defineApp = <Env extends Record<string, unknown>>(): AppBuilder<Env> => new AppBuilder<Env>();
+/**
+ * Shape of the project's root \`lunora.config.*\`.
+ *
+ * Declared HERE, not in a package, so the \`app\` hook is typed against THIS
+ * project's builder with no annotation to keep in step — and so the config file
+ * needs only a type-only import, which is erased. That matters: the hook is
+ * bundled into the worker, and a runtime import in that file ships with it.
+ */
+interface LunoraConfig<Env extends object = object> {
+    /** Codegen's static advisor. \`minSeverity\` is the lowest level it reports and writes into \`_generated/shard.ts\`; an \`"error"\` is never dropped, so the gate that fails codegen stays on. \`accept\` demotes a reviewed ERROR to INFO when its rule, file and export all match. A literal, for the same reason as \`target\`. */
+    advisor?: { accept?: ReadonlyArray<{ exportName: string; file: string; reason: string; rule: string }>; minSeverity?: "error" | "info" | "warn" };
+    /** Receives this project's \`defineApp()\` builder and returns it — where a Vite-first app makes the builder calls its generated entry cannot derive. */
+    app?: (app: AppBuilder<Env>) => AppBuilder<Env>;
+    /** Codegen's source walk. \`exclude\` adds globs (relative to \`lunora/\`, e.g. \`"seed/**"\`) to skip on top of the built-in test-file patterns. A literal array of strings, for the same reason as \`target\`. */
+    codegen?: { exclude?: string[] };
+    /** Host the shard, scheduler and shard registry in ONE Durable Object class (\`merge: true\`, plan 462) — before the first deploy only. A literal, for the same reason as \`target\`. */
+    durableObjects?: { merge?: boolean };
+    /** Opt into remote-binding dev without \`--remote\` or \`LUNORA_REMOTE\` on every run. A literal, for the same reason as \`target\`. */
+    remote?: boolean;
+    /** Sibling Workers the app calls through service bindings — key → its folder and, for RPC, the exported \`WorkerEntrypoint\` class (\`rpc: false\` binds that class but calls it with plain \`fetch\`, without importing the service's sources). Becomes \`ctx.services.<key>\` in actions, a wrangler \`services[]\` entry, one \`lunora dev\` session and a services-first \`lunora deploy\`. Literals, for the same reason as \`target\`. */
+    services?: Record<string, { dir: string; entrypoint?: string; rpc?: false }>;
+    /** Deploy target id — \`lunora deploy\`/\`verify\` read it when no \`--target\` is passed. Must be a literal: \`runCodegen\` resolves it synchronously by PARSING this file, so a computed value is not seen — \`lunora verify\` reports \`platform_unreadable_target\` rather than defaulting in silence. */
+    target?: string;
+}
+
+/**
+ * Start composing the app. Chain the capability methods, then \`.build()\`.
+ *
+ * \`Env\` is constrained to \`object\`, not \`Record<string, unknown>\`: an \`interface Env\`
+ * — which is what wrangler's generated \`worker-configuration.d.ts\` gives you, and
+ * what any app with its own bindings declares — is NOT assignable to an index
+ * signature, so the stricter bound forced every real app to write
+ * \`type AppEnv = Env & Record<string, unknown>\`. The builder only ever reads \`env\`
+ * through the selectors you pass it, so the looser bound costs nothing.
+ */
+const defineApp = <Env extends object>(): AppBuilder<Env> => new AppBuilder<Env>();
 
 export { AppBuilder, defineApp };
 export type { ${buildExportedTypes(options)} };
@@ -758,4 +346,4 @@ export type { ${buildExportedTypes(options)} };
 };
 
 export { emitApp };
-export type { EmitAppOptions };
+export type { EmitAppOptions } from "./emit/app-helpers";

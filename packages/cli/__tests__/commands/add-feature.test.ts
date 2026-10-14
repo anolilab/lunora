@@ -1,11 +1,13 @@
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join, resolve } from "node:path";
+import { basename, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { runAddFeature } from "../../src/commands/add/handler";
+import { deriveBucketName } from "../../src/commands/add/storage";
+import { EXIT_CODE } from "../../src/util/exit-code";
 import type { Logger } from "../../src/util/logger";
 
 const makeLogger = (): { lines: string[]; logger: Logger } => {
@@ -70,7 +72,14 @@ describe("runAddFeature", () => {
     it("`add auth --provider clerk` applies the auth-clerk item", async () => {
         expect.assertions(2);
 
-        const result = await runAddFeature({ cwd: workdir, feature: "auth", from: registryRoot, logger: makeLogger().logger, provider: "clerk" });
+        const result = await runAddFeature({
+            confirm: async () => true,
+            cwd: workdir,
+            feature: "auth",
+            from: registryRoot,
+            logger: makeLogger().logger,
+            provider: "clerk",
+        });
 
         expect(result.items).toStrictEqual(["auth-clerk"]);
         expect(existsSync(join(workdir, "lunora", "auth", "clerk.ts"))).toBe(true);
@@ -90,6 +99,32 @@ describe("runAddFeature", () => {
         expect(result.items).toStrictEqual(["auth-auth0"]);
     });
 
+    it("asks before applying items from a custom --from registry root", async () => {
+        expect.assertions(3);
+
+        // `--from` points at a registry the user named, exactly like `--source`:
+        // the item's files, deps and wrangler bindings are whatever that root
+        // ships. `lunora add` used to auto-confirm the apply whenever `--source`
+        // was unset, so the `--from` half wrote them silently.
+        const prompts: string[] = [];
+        const result = await runAddFeature({
+            confirm: async (message: string) => {
+                prompts.push(message);
+
+                return false;
+            },
+            cwd: workdir,
+            feature: "email",
+            from: registryRoot,
+            logger: makeLogger().logger,
+        });
+
+        expect(prompts).toHaveLength(1);
+        // The prompt was shown and declined — a deliberate abort, not a failure.
+        expect(result.code).toBe(EXIT_CODE.CANCELLED);
+        expect(existsSync(join(workdir, "lunora", "mail", "index.ts"))).toBe(false);
+    });
+
     it("rejects when run outside a Lunora project", async () => {
         expect.assertions(2);
 
@@ -99,7 +134,7 @@ describe("runAddFeature", () => {
             const { lines, logger } = makeLogger();
             const result = await runAddFeature({ cwd: empty, feature: "auth", from: registryRoot, logger, yes: true });
 
-            expect(result.code).toBe(1);
+            expect(result.code).toBe(EXIT_CODE.USAGE);
             expect(lines.join("\n")).toMatch(/not a Lunora project/);
         } finally {
             rmSync(empty, { force: true, recursive: true });
@@ -112,17 +147,161 @@ describe("runAddFeature", () => {
         const { lines, logger } = makeLogger();
         const result = await runAddFeature({ cwd: workdir, feature: "   ", from: registryRoot, logger });
 
-        expect(result.code).toBe(1);
+        expect(result.code).toBe(EXIT_CODE.USAGE);
         expect(lines.join("\n")).toMatch(/requires a feature/);
     });
 
-    it("`add storage` passes a bare registry item name straight through", async () => {
-        expect.assertions(2);
+    /** The `bucket_name` of the first `UPLOADS` r2 binding written to wrangler.jsonc. */
+    const readBucketName = (dir: string): string | undefined => {
+        const text = readFileSync(join(dir, "wrangler.jsonc"), "utf8");
+        const match = /"bucket_name":\s*"([^"]+)"/u.exec(text);
 
-        const result = await runAddFeature({ cwd: workdir, feature: "storage", from: registryRoot, logger: makeLogger().logger });
+        return match?.[1];
+    };
+
+    it("`add storage` applies the item and writes the prompted bucket name", async () => {
+        expect.assertions(3);
+
+        const result = await runAddFeature({
+            confirm: async () => true,
+            cwd: workdir,
+            feature: "storage",
+            from: registryRoot,
+            logger: makeLogger().logger,
+            promptText: async () => "my-cool-bucket",
+        });
 
         expect(result.items).toStrictEqual(["storage"]);
         expect(existsSync(join(workdir, "lunora", "storage", "index.ts"))).toBe(true);
+        expect(readBucketName(workdir)).toBe("my-cool-bucket");
+    });
+
+    it("`add storage --bucket` skips the prompt and writes the given (sanitized) name", async () => {
+        expect.assertions(1);
+
+        await runAddFeature({
+            bucket: "My_App Uploads!",
+            confirm: async () => true,
+            cwd: workdir,
+            feature: "storage",
+            from: registryRoot,
+            logger: makeLogger().logger,
+            // A prompt here would throw — proving --bucket bypasses it.
+            promptText: async () => {
+                throw new Error("should not prompt when --bucket is given");
+            },
+        });
+
+        expect(readBucketName(workdir)).toBe("my-app-uploads");
+    });
+
+    it("`add storage --yes` uses the project-derived default without prompting", async () => {
+        expect.assertions(1);
+
+        await runAddFeature({
+            cwd: workdir,
+            feature: "storage",
+            from: registryRoot,
+            logger: makeLogger().logger,
+            promptText: async () => {
+                throw new Error("should not prompt with --yes");
+            },
+            yes: true,
+        });
+
+        // The default is the project name (the temp dir) suffixed with `-uploads`, sanitized.
+        expect(readBucketName(workdir)).toBe(deriveBucketName(basename(workdir)));
+    });
+
+    /** The first matching `key: value` string pair written to wrangler.jsonc. */
+    const readBindingValue = (dir: string, key: string): string | undefined => {
+        const text = readFileSync(join(dir, "wrangler.jsonc"), "utf8");
+        const match = new RegExp(String.raw`"${key}":\s*"([^"]+)"`, "u").exec(text);
+
+        return match?.[1];
+    };
+
+    it("`add email` writes the prompted destination address into the send_email binding", async () => {
+        expect.assertions(2);
+
+        const result = await runAddFeature({
+            confirm: async () => true,
+            cwd: workdir,
+            feature: "email",
+            from: registryRoot,
+            logger: makeLogger().logger,
+            promptText: async () => "support@my-app.com",
+        });
+
+        expect(result.items).toStrictEqual(["mail"]);
+        expect(readBindingValue(workdir, "destination_address")).toBe("support@my-app.com");
+    });
+
+    it("`add email` keeps the placeholder (with a warning) when the typed address is invalid", async () => {
+        expect.assertions(2);
+
+        const { lines, logger } = makeLogger();
+
+        await runAddFeature({ confirm: async () => true, cwd: workdir, feature: "email", from: registryRoot, logger, promptText: async () => "not-an-email" });
+
+        expect(readBindingValue(workdir, "destination_address")).toBe("REPLACE_ME@example.com");
+        expect(lines.join("\n")).toMatch(/doesn't look like an email/);
+    });
+
+    it("`add auth` writes the prompted D1 database name (leaving the id placeholder)", async () => {
+        expect.assertions(3);
+
+        const result = await runAddFeature({
+            confirm: async () => true,
+            cwd: workdir,
+            feature: "auth",
+            from: registryRoot,
+            logger: makeLogger().logger,
+            promptText: async () => "my-db",
+            provider: "auth",
+        });
+
+        expect(result.items).toStrictEqual(["auth"]);
+        expect(readBindingValue(workdir, "database_name")).toBe("my-db");
+        // The id can only come from `wrangler d1 create`, so the placeholder stays.
+        expect(readBindingValue(workdir, "database_id")).toBe("<replace-with-d1-create-id>");
+    });
+
+    it("`add auth --db` skips the prompt and writes the given (sanitized) database name", async () => {
+        expect.assertions(1);
+
+        await runAddFeature({
+            confirm: async () => true,
+            cwd: workdir,
+            db: "My App DB",
+            feature: "auth",
+            from: registryRoot,
+            logger: makeLogger().logger,
+            promptText: async () => {
+                throw new Error("should not prompt when --db is given");
+            },
+            provider: "auth",
+        });
+
+        expect(readBindingValue(workdir, "database_name")).toBe("my-app-db");
+    });
+
+    it("`add --provider clerk` still names the D1 database (clerk pulls in base auth via requires)", async () => {
+        expect.assertions(2);
+
+        const result = await runAddFeature({
+            confirm: async () => true,
+            cwd: workdir,
+            feature: "auth",
+            from: registryRoot,
+            logger: makeLogger().logger,
+            promptText: async () => "clerk-db",
+            provider: "clerk",
+        });
+
+        expect(result.items).toStrictEqual(["auth-clerk"]);
+        // The transform reaches the base `auth` manifest expanded from `requires`.
+        expect(readBindingValue(workdir, "database_name")).toBe("clerk-db");
     });
 
     it("errors clearly on an unknown bare registry item", async () => {

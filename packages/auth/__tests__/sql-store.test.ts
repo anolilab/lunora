@@ -6,7 +6,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { lunoraAuthAdapter } from "../src/adapter";
 import { createAuth } from "../src/create-auth";
 import type { SqlExecutor } from "../src/sql-store";
-import { createSqlAuthStore } from "../src/sql-store";
+import { createSqlAuthStore, d1Executor } from "../src/sql-store";
 import type { AuthRow, AuthStore, AuthWhereClause } from "../src/store";
 import { createMemoryAuthStore } from "../src/store";
 
@@ -75,15 +75,21 @@ describe("createSqlAuthStore — CRUD over node:sqlite", () => {
         await expect(store.count("users", [clause("age", 25, "gt")])).resolves.toBe(1);
     });
 
-    it("folds an OR connector across clauses", async () => {
-        expect.assertions(1);
+    it("groups OR connectors as alternatives, still ANDed with the AND clauses", async () => {
+        expect.assertions(3);
 
         const store = createSqlAuthStore(executor);
         await store.create("users", { age: 30, email: "ada@example.com", id: "u1" });
         await store.create("users", { age: 20, email: "bob@example.com", id: "u2" });
 
-        // id = u1 OR age = 20 → both rows.
-        await expect(store.count("users", [clause("id", "u1"), clause("age", 20, "eq", "OR")])).resolves.toBe(2);
+        // An all-OR list is a plain disjunction.
+        await expect(store.count("users", [clause("id", "u1", "eq", "OR"), clause("age", 20, "eq", "OR")])).resolves.toBe(2);
+        // With an AND clause present the OR group is ANDed with it, not folded
+        // into it: `id = u1 AND age = 20` matches nothing. The clause matrix at
+        // the bottom of this file has the note on why this is not
+        // "id = u1 OR age = 20", and pins it against the memory store too.
+        await expect(store.count("users", [clause("id", "u1"), clause("age", 20, "eq", "OR")])).resolves.toBe(0);
+        await expect(store.count("users", [clause("id", "u1"), clause("age", 30, "eq", "OR")])).resolves.toBe(1);
     });
 
     it("honours case-insensitive equality via LOWER()", async () => {
@@ -258,8 +264,43 @@ describe("memory and SQL stores agree on the clause matrix", () => {
         { expected: [], name: "contains non-string value", where: [clause("email", 123, "contains")] },
         { expected: ["u1"], name: "eq insensitive", where: [{ ...clause("email", "ada@example.com"), mode: "insensitive" }] },
         { expected: [], name: "eq sensitive (case mismatch)", where: [clause("email", "ada@example.com")] },
-        { expected: ["u2"], name: "AND fold", where: [clause("role", "user"), clause("age", 20)] },
-        { expected: ["u1", "u2", "u3"], name: "OR fold", where: [clause("id", "u1"), clause("age", 20, "eq", "OR")] },
+        { expected: ["u2"], name: "AND group", where: [clause("role", "user"), clause("age", 20)] },
+
+        /*
+         * How a `connector: "OR"` clause combines with the rest of the list.
+         *
+         * better-auth hands an adapter a FLAT clause list in which each clause
+         * carries its own connector, and every persistent adapter it ships
+         * resolves that the same way: partition into an AND group and an OR
+         * group, then require both — the OR clauses are an alternative among
+         * THEMSELVES, not an escape hatch from the AND clauses.
+         * `@better-auth/kysely-adapter@1.7.1` pushes each group into its own
+         * `.where()` (two `.where()` calls are ANDed), `@better-auth/drizzle-adapter`
+         * ends in `and(andClause, orClause)`, and `@better-auth/prisma-adapter`
+         * emits `{ AND: […], OR: […] }` — Prisma ANDs those too.
+         *
+         * Both Lunora stores used to fold the list left-associatively instead, so
+         * `[A, B(OR), C(OR)]` became `A OR B OR C`: strictly BROADER than every
+         * adapter above. On a credential lookup that is an authentication bypass
+         * in shape — a row failing the primary condition can still be returned
+         * because a secondary one matched. (`@better-auth/memory-adapter` folds
+         * left too, but it is the only one, and it re-evaluates `where[0]` in the
+         * same loop; it is not the contract to mirror.)
+         *
+         * Nothing in better-auth 1.7.1 or in this repo emits `connector: "OR"`
+         * today — every occurrence is `"AND"` — so these pin the semantics before
+         * a plugin that does arrives, not a live break. They belong in this table
+         * rather than a suite of their own because the defect was the two stores
+         * disagreeing, which is exactly what the table exists to catch.
+         */
+        { expected: [], name: "OR group under a failing AND clause", where: [clause("id", "u1"), clause("age", 20, "eq", "OR")] },
+        {
+            expected: ["u2"],
+            name: "OR group under a passing AND clause",
+            where: [clause("role", "user"), clause("id", "u2", "eq", "OR"), clause("id", "u3", "eq", "OR")],
+        },
+        { expected: ["u2", "u3"], name: "all-OR list", where: [clause("id", "u2", "eq", "OR"), clause("id", "u3", "eq", "OR")] },
+        { expected: [], name: "all-OR list, no alternative holds", where: [clause("id", "nobody", "eq", "OR"), clause("age", 99, "eq", "OR")] },
     ];
 
     const idsFrom = async (store: AuthStore, where: AuthWhereClause[]): Promise<string[]> => {
@@ -295,5 +336,297 @@ describe("memory and SQL stores agree on the clause matrix", () => {
         }
 
         db.close();
+    });
+});
+
+describe("incrementOne — atomic guarded counter (both stores)", () => {
+    // The rate-limit counter shape better-auth's `storage: "database"` limiter
+    // rides: one row per `key`, an integer `count`, and a `lastRequest` stamp.
+    const RATE_LIMIT_DDL = `CREATE TABLE "rateLimit" ("key" TEXT PRIMARY KEY, "count" REAL, "lastRequest" REAL)`;
+
+    interface StoreHandle {
+        close: () => void;
+        store: AuthStore;
+    }
+
+    const stores: { make: () => StoreHandle; name: string }[] = [
+        {
+            make: () => {
+                return { close: () => undefined, store: createMemoryAuthStore() };
+            },
+            name: "memory",
+        },
+        {
+            make: () => {
+                const db = new DatabaseSync(":memory:");
+                db.exec(RATE_LIMIT_DDL);
+
+                return {
+                    close: () => {
+                        db.close();
+                    },
+                    store: createSqlAuthStore(executorFor(db)),
+                };
+            },
+            name: "sql",
+        },
+    ];
+
+    it.each(stores)("$name: applies the delta + set and returns the post-increment row", async ({ make }) => {
+        expect.assertions(2);
+
+        const { close, store } = make();
+
+        try {
+            await store.create("rateLimit", { count: 1, key: "k", lastRequest: 0 });
+
+            const updated = await store.incrementOne("rateLimit", [clause("key", "k")], { count: 1 }, { lastRequest: 5 });
+
+            expect(updated?.count).toBe(2);
+            expect(updated?.lastRequest).toBe(5);
+        } finally {
+            close();
+        }
+    });
+
+    it.each(stores)("$name: increments a NULL counter from 0 (delta, not NULL)", async ({ make }) => {
+        expect.assertions(1);
+
+        const { close, store } = make();
+
+        try {
+            // A row whose counter column is NULL: SQLite's `count = count + ?` would
+            // leave it NULL (`NULL + N = NULL`), diverging from the memory store which
+            // treats a non-numeric/absent counter as 0. `COALESCE(count, 0) + ?` keeps
+            // both backends advancing identically.
+            await store.create("rateLimit", { count: null, key: "k", lastRequest: 0 });
+
+            const updated = await store.incrementOne("rateLimit", [clause("key", "k")], { count: 1 });
+
+            expect(updated?.count).toBe(1);
+        } finally {
+            close();
+        }
+    });
+
+    it.each(stores)("$name: returns undefined when the guard predicate excludes the row", async ({ make }) => {
+        expect.assertions(2);
+
+        const { close, store } = make();
+
+        try {
+            await store.create("rateLimit", { count: 5, key: "k", lastRequest: 0 });
+
+            // Guard `count < 5` fails (count is 5) → no mutation, undefined result.
+            const blocked = await store.incrementOne("rateLimit", [clause("key", "k"), clause("count", 5, "lt")], { count: 1 });
+
+            expect(blocked).toBeUndefined();
+
+            const [row] = await store.read("rateLimit", { where: [clause("key", "k")] });
+
+            // The guard blocked the write, so `count` is unchanged.
+            expect(row?.count).toBe(5);
+        } finally {
+            close();
+        }
+    });
+
+    it.each(stores)("$name: returns undefined for a key that does not exist", async ({ make }) => {
+        expect.assertions(1);
+
+        const { close, store } = make();
+
+        try {
+            await expect(store.incrementOne("rateLimit", [clause("key", "absent")], { count: 1 })).resolves.toBeUndefined();
+        } finally {
+            close();
+        }
+    });
+
+    it.each(stores)("$name: N concurrent increments on one key sum to N (no lost updates)", async ({ make }) => {
+        expect.assertions(2);
+
+        const { close, store } = make();
+        const CONCURRENCY = 50;
+
+        try {
+            await store.create("rateLimit", { count: 0, key: "k", lastRequest: 0 });
+
+            // Fire all increments at once. A read-then-write implementation would
+            // let racers observe the same `count` and clobber each other (final <
+            // N); the single-statement guarded increment cannot, so the tally is
+            // exact — the regression that proves atomicity.
+            const results = await Promise.all(Array.from({ length: CONCURRENCY }, () => store.incrementOne("rateLimit", [clause("key", "k")], { count: 1 })));
+
+            const [row] = await store.read("rateLimit", { where: [clause("key", "k")] });
+
+            expect(row?.count).toBe(CONCURRENCY);
+            // Every call matched the (unconditional) guard, so none returned undefined.
+            expect(results.every((result) => result !== undefined)).toBe(true);
+        } finally {
+            close();
+        }
+    });
+});
+
+describe("createSqlAuthStore — `_creationTime` on `defineTable`-backed tables", () => {
+    /** The DDL `defineTable` produces for a global (D1) table: framework columns better-auth never writes. */
+    const createLunoraTable = (db: DatabaseSync): void => {
+        db.exec(`CREATE TABLE "rateLimit" ("id" TEXT PRIMARY KEY, "_creationTime" REAL NOT NULL, "key" TEXT, "count" INTEGER)`);
+    };
+
+    it("fills `_creationTime` in so the insert does not breach NOT NULL", async () => {
+        expect.assertions(2);
+
+        const db = new DatabaseSync(":memory:");
+
+        try {
+            createLunoraTable(db);
+
+            const before = Date.now();
+
+            await createSqlAuthStore(executorFor(db)).create("rateLimit", { count: 0, id: "r1", key: "/sign-up/email" });
+
+            const [row] = db.prepare(`SELECT * FROM "rateLimit"`).all() as Record<string, unknown>[];
+
+            expect(row?.["key"]).toBe("/sign-up/email");
+            expect(row?.["_creationTime"]).toBeGreaterThanOrEqual(before);
+        } finally {
+            db.close();
+        }
+    });
+
+    it("leaves an explicitly supplied `_creationTime` alone", async () => {
+        expect.assertions(1);
+
+        const db = new DatabaseSync(":memory:");
+
+        try {
+            createLunoraTable(db);
+
+            await createSqlAuthStore(executorFor(db)).create("rateLimit", { _creationTime: 42, count: 0, id: "r1", key: "k" });
+
+            const [row] = db.prepare(`SELECT * FROM "rateLimit"`).all() as Record<string, unknown>[];
+
+            expect(row?.["_creationTime"]).toBe(42);
+        } finally {
+            db.close();
+        }
+    });
+
+    it("does not mistake a CHECK expression that merely names the column for the column", async () => {
+        expect.assertions(1);
+
+        const db = new DatabaseSync(":memory:");
+
+        try {
+            // The DDL TEXT contains `_creationTime`; the table does not have the
+            // column. A substring test over `sqlite_master.sql` says yes here and
+            // the insert then dies with `table has no column named _creationTime`.
+            db.exec(`CREATE TABLE "rateLimit" ("id" TEXT PRIMARY KEY, "kind" TEXT CHECK ("kind" <> '_creationTime'))`);
+
+            await createSqlAuthStore(executorFor(db)).create("rateLimit", { id: "r1", kind: "k" });
+
+            expect((db.prepare(`SELECT COUNT(*) AS n FROM "rateLimit"`).get() as { n: number }).n).toBe(1);
+        } finally {
+            db.close();
+        }
+    });
+
+    it("does not memoise a probe that failed, so a table created later is still seen", async () => {
+        expect.assertions(2);
+
+        const db = new DatabaseSync(":memory:");
+
+        try {
+            const store = createSqlAuthStore(executorFor(db));
+
+            // The table does not exist yet — `ensureMigrated` has not run. Caching
+            // that "answer" would pin the store to "no `_creationTime`" for the
+            // isolate's life, which is the outage this fill-in exists to prevent.
+            await expect(store.create("rateLimit", { id: "r0", key: "k" })).rejects.toThrow(/no such table/iu);
+
+            createLunoraTable(db);
+
+            await store.create("rateLimit", { count: 0, id: "r1", key: "k" });
+
+            expect((db.prepare(`SELECT COUNT(*) AS n FROM "rateLimit"`).get() as { n: number }).n).toBe(1);
+        } finally {
+            db.close();
+        }
+    });
+
+    it("does not invent the column on a table that has none — better-auth's own migrator makes those", async () => {
+        expect.assertions(1);
+
+        const db = new DatabaseSync(":memory:");
+
+        try {
+            // `lunoraDoAdapter`'s tables come from `./do-schema.ts`, which mirrors
+            // better-auth's own DDL. Adding `_creationTime` there is `no such column`.
+            db.exec(`CREATE TABLE "rateLimit" ("id" TEXT PRIMARY KEY, "key" TEXT, "count" INTEGER)`);
+
+            await createSqlAuthStore(executorFor(db)).create("rateLimit", { count: 0, id: "r1", key: "k" });
+
+            expect((db.prepare(`SELECT COUNT(*) AS n FROM "rateLimit"`).get() as { n: number }).n).toBe(1);
+        } finally {
+            db.close();
+        }
+    });
+});
+
+describe("d1Executor", () => {
+    /** A D1-shaped double that records the prepared statements and what `batch` was handed. */
+    const binding = (withBatch: boolean): { batched: unknown[][]; binding: Parameters<typeof d1Executor>[0] } => {
+        const batched: unknown[][] = [];
+        const prepared = (sql: string) => {
+            return {
+                bind: (...values: unknown[]) => {
+                    return {
+                        all: () => Promise.resolve({ results: [] }),
+                        run: () => Promise.resolve({ sql, values }),
+                        sql,
+                        values,
+                    };
+                },
+            };
+        };
+
+        return {
+            batched,
+            binding: {
+                ...(withBatch
+                    ? {
+                          batch: (statements: unknown[]) => {
+                              batched.push(statements);
+
+                              return Promise.resolve([]);
+                          },
+                      }
+                    : {}),
+                prepare: prepared,
+            },
+        };
+    };
+
+    it("forwards a batch to the binding as the prepared statements, in order", async () => {
+        expect.assertions(3);
+
+        const { batched, binding: d1 } = binding(true);
+
+        await d1Executor(d1).batch?.([
+            { params: [1], sql: "CREATE TABLE a (x)" },
+            { params: ["b"], sql: "INSERT INTO a VALUES (?)" },
+        ]);
+
+        expect(batched).toHaveLength(1);
+        expect((batched[0] as { sql: string }[]).map((statement) => statement.sql)).toEqual(["CREATE TABLE a (x)", "INSERT INTO a VALUES (?)"]);
+        expect((batched[0] as { values: unknown[] }[]).map((statement) => statement.values)).toEqual([[1], ["b"]]);
+    });
+
+    it("offers no batch when the binding has none, so callers keep the statement-at-a-time path", () => {
+        expect.assertions(1);
+
+        expect(d1Executor(binding(false).binding).batch).toBeUndefined();
     });
 });

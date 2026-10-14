@@ -1,5 +1,7 @@
 import { bench, describe } from "vitest";
 
+import { stableStringify } from "../../../shared/stable-key";
+
 /**
  * `applyOptimisticUpdates` fans out across every active subscription on every
  * optimistic mutation. The original implementation re-serialized each
@@ -11,28 +13,6 @@ import { bench, describe } from "vitest";
  * (200 active subscriptions, a moderately-nested args record) so the win is
  * demonstrable. Pure-Node, no workerd.
  */
-
-const compareEntryKeys = ([a]: [string, unknown], [b]: [string, unknown]): number => {
-    if (a < b) {
-        return -1;
-    }
-
-    return a > b ? 1 : 0;
-};
-
-const stableStringify = (value: unknown): string => {
-    if (value === null || typeof value !== "object") {
-        return JSON.stringify(value);
-    }
-
-    if (Array.isArray(value)) {
-        return `[${value.map((entry) => stableStringify(entry)).join(",")}]`;
-    }
-
-    const entries = Object.entries(value as Record<string, unknown>).toSorted(compareEntryKeys);
-
-    return `{${entries.map(([k, v]) => `${JSON.stringify(k)}:${stableStringify(v)}`).join(",")}}`;
-};
 
 interface SubState {
     args: Record<string, unknown>;

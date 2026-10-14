@@ -1,9 +1,11 @@
 import type { JsonSchema } from "@lunora/values";
 
+import { moduleTagOf } from "./discover/modules";
 import { GENERATED_HEADER } from "./emit";
-import type { FunctionIR } from "./ir";
-import sanitizeNamespace from "./paths";
-import { argsObjectSchema, LUNORA_ERROR_CODES } from "./schema-ir";
+import type { FunctionIR, ModuleIR } from "./ir";
+import renderJsonData from "./json-data";
+import { sanitizeNamespace } from "./paths";
+import { LUNORA_ERROR_CODES, objectSchema, validatorIrToJsonSchema } from "./schema-ir";
 
 // ─── OpenRPC document assembly ───────────────────────────────────────────────
 //
@@ -23,8 +25,8 @@ const OPENRPC_VERSION = "1.3.2";
  * `result` is documented permissively with a note — mirroring the OpenAPI
  * emitter's success-response fallback.
  */
-const inferredResultSchema = (): JsonSchema => {
-    return { description: "Result is TS-inferred from the function's return type (no `.output()` declared); best-effort — any JSON." };
+const inferredResultSchema: JsonSchema = {
+    description: "Result is TS-inferred from the function's return type (no `.output()` declared); best-effort — any JSON.",
 };
 
 /**
@@ -40,7 +42,7 @@ const inferredResultSchema = (): JsonSchema => {
  * (OpenRPC has no first-class tag grouping), and the standard `LunoraError`
  * codes are enumerated under `errors` so clients can switch on `error.code`.
  */
-const rpcMethod = (definition: FunctionIR): Record<string, unknown> => {
+const rpcMethod = (definition: FunctionIR, tag: string): Record<string, unknown> => {
     const namespace = sanitizeNamespace(definition.filePath);
     const functionPath = `${namespace}:${definition.exportName}`;
 
@@ -61,24 +63,31 @@ const rpcMethod = (definition: FunctionIR): Record<string, unknown> => {
                 // object; `required` reflects whether the function declares any
                 // arguments at all.
                 required: Object.keys(definition.args).length > 0,
-                schema: argsObjectSchema(definition.args),
+                schema: objectSchema(definition.args),
             },
         ],
         result: {
             name: "result",
-            schema: inferredResultSchema(),
+            // `.output()` is the only declared return shape; without it the type
+            // is TS-inferred and absent from the IR, so the schema stays the
+            // permissive placeholder. Downstream generators (`lunora sdk
+            // generate`) key off exactly this: a described-but-untyped schema
+            // becomes an untyped return rather than an empty model.
+            schema: definition.output ? validatorIrToJsonSchema(definition.output) : inferredResultSchema,
         },
         summary: `${definition.kind}: ${functionPath}`,
         "x-lunora-function-kind": definition.kind,
         // OpenRPC has no first-class tag grouping; surface the file namespace as
-        // an `x-tags` extension so tooling can group methods by source file.
-        "x-tags": [{ name: namespace }],
+        // an `x-tags` extension so tooling can group methods by module (or source file).
+        "x-tags": [{ name: tag }],
     };
 };
 
 /** Inputs the OpenRPC emitter needs from a codegen run. */
 interface OpenRpcEmitInput {
     functions: ReadonlyArray<FunctionIR>;
+    /** The app's modules, passed only once it declares one; a method in a module folder is tagged with the module instead of its file namespace. */
+    modules?: ReadonlyArray<ModuleIR>;
     /** `info.version`; defaults to `"0.0.0"` with a TODO when the project version is unknown. */
     version?: string;
 }
@@ -108,7 +117,10 @@ const buildOpenRpcDocument = (input: OpenRpcEmitInput): Record<string, unknown> 
     // not invocable over the external RPC envelope.
     const rpcFunctions = input.functions.filter((definition) => definition.visibility !== "internal" && definition.kind !== "stream");
 
-    const methods = rpcFunctions.map((definition) => rpcMethod(definition)).toSorted((a, b) => (a.name as string).localeCompare(b.name as string));
+    const modules = input.modules ?? [];
+    const methods = rpcFunctions
+        .map((definition) => rpcMethod(definition, moduleTagOf(modules, definition.filePath)))
+        .toSorted((a, b) => (a.name as string).localeCompare(b.name as string));
 
     const document = {
         info: {
@@ -132,13 +144,14 @@ const emitOpenRpc = (input: OpenRpcEmitInput): string => `${JSON.stringify(build
 /**
  * Emit the OpenRPC document as an importable TS module
  * (`_generated/openrpc.ts`) the worker entry imports and passes to
- * `createWorker({ openRpcSpec })`. The document object literal is inlined
- * verbatim (same `JSON.stringify` form the `.json` uses), so the `.ts` and
- * `.json` are byte-identical content and regenerate together. `document_` is
+ * `createWorker({ openRpcSpec })`. The document is inlined as a `JSON.parse`
+ * string (see {@link renderJsonData}), so the `.ts` and `.json` carry the same
+ * content and regenerate together; its `methods` array grows with every
+ * procedure, which as a literal fails `tsc` with TS2590 (#823). `document_` is
  * the object returned by {@link buildOpenRpcDocument} (reused, never recomputed).
  */
 const emitOpenRpcModule = (document_: Record<string, unknown>): string =>
-    `${GENERATED_HEADER}export const openRpcSpec: Record<string, unknown> = ${JSON.stringify(document_, undefined, 4)};\n`;
+    `${GENERATED_HEADER}export const openRpcSpec = ${renderJsonData(document_, "Record<string, unknown>")};\n`;
 
 export { buildOpenRpcDocument, emitOpenRpc, emitOpenRpcModule, OPENRPC_VERSION };
 export type { OpenRpcEmitInput };

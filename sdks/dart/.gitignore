@@ -1,0 +1,8 @@
+# Written by `dart pub get`.
+.dart_tool/
+
+# Not committed: this package declares no dependencies, so the lock resolves to
+# nothing and pins nothing — and pub's own guidance is that a library commits no
+# lockfile. `dart pub get --offline` regenerates both of these without reaching
+# the network.
+pubspec.lock

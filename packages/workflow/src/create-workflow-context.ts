@@ -8,31 +8,33 @@
  * Node-safe (structural binding types only) so it's unit-testable with
  * plain-object env doubles.
  */
+import { resolveWorkflowHandle } from "../../../shared/workflow-binding";
 import createWorkflows from "./create-workflows";
 import type { WorkflowBindingLike, Workflows } from "./types";
 
 /** Wiring info for one declared workflow, emitted by codegen into the generated shard. */
 export interface WorkflowBindingSpec {
-    /** The Cloudflare `Workflow` binding name, e.g. `WORKFLOW_ORDER_PIPELINE`. */
-    binding: string;
+    /** The workflow's export key — its generated class name, e.g. `OrderPipelineWorkflow`. */
+    className: string;
     /** The `lunora/workflows.ts` export name, e.g. `orderPipeline`. */
     exportName: string;
 }
 
 /**
- * Build the `ctx.workflows` handle for a request: resolve every spec's
- * `env[binding]` into the `exportName → Workflow binding` map and wrap it in
- * {@link createWorkflows}. A spec whose binding is absent from `env` is skipped
+ * Build the `ctx.workflows` handle for a request: resolve every spec's key off
+ * the invoking context's `exports` (Cloudflare) or `env` (other hosts) into the
+ * `exportName → Workflow binding` map and wrap it in {@link createWorkflows}. A
+ * spec whose workflow is absent from both is skipped
  * here — the helpful "no workflow named …" error is raised lazily by
  * `workflows.get(name)` when the missing workflow is actually used.
  */
-export const createWorkflowContext = (env: Record<string, unknown>, specs: ReadonlyArray<WorkflowBindingSpec>): Workflows => {
+export const createWorkflowContext = (env: Record<string, unknown>, specs: ReadonlyArray<WorkflowBindingSpec>, exports?: unknown): Workflows => {
     const bindings: Record<string, WorkflowBindingLike> = {};
 
     for (const spec of specs) {
-        const binding = env[spec.binding] as WorkflowBindingLike | undefined;
+        const binding = resolveWorkflowHandle<WorkflowBindingLike>(env, exports, spec.className, ["create", "createBatch", "get"]);
 
-        if (binding && typeof binding.create === "function" && typeof binding.createBatch === "function" && typeof binding.get === "function") {
+        if (binding !== undefined) {
             bindings[spec.exportName] = binding;
         }
     }

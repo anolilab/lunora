@@ -1,0 +1,289 @@
+import { describe, expect, it } from "vitest";
+
+import type { SchemaLike, SqlCursor, SqlExec } from "../src/ctx-db";
+import { createShardCtxDb as createShardContextDatabase, runShardMigrations } from "../src/ctx-db";
+
+/**
+ * The FTS5 production path can't run under `node:sqlite` (no fts5 module), so
+ * this asserts the *emitted SQL* instead of its results: a recording `SqlExec`
+ * double that reports FTS5 available (the create/drop probe succeeds), returns
+ * canned rows for any MATCH query, and captures every statement + params. We
+ * verify the virtual-table DDL, the rowid-keyed write sync, and the
+ * MATCH/JOIN/ORDER-BY-rank search query. Behavioral correctness of the query
+ * surface is covered by the LIKE-scan suite in `ctx-db.search.test.ts`.
+ */
+
+const COMPANION = '"docs__fts_by_body"';
+const MAP = '"docs__fts_by_body__ids"';
+/** Drops the document's rows a previous build wrote (positive rowids), by `__id__`. */
+const DROP_UNMAPPED = `DELETE FROM ${COMPANION} WHERE ${COMPANION}."rowid" > 0 AND CAST(${COMPANION}."__id__" AS TEXT) = ?`;
+/** Drops the document's mapped row — only if it still holds this document. */
+const DROP_MAPPED = `DELETE FROM ${COMPANION} WHERE ${COMPANION}."rowid" = (SELECT ${MAP}."__rowid__" FROM ${MAP} WHERE ${MAP}."__id__" = ?) AND ${COMPANION}."__id__" = ?`;
+const CLAIM_ROWID = `INSERT OR REPLACE INTO ${MAP} ("__rowid__", "__id__") SELECT MIN(COALESCE((SELECT MIN(${MAP}."__rowid__") FROM ${MAP}), 0), 0) - 1, ? WHERE 1 = 1`;
+/** The statement that writes a document's searchable entry, at the rowid the map holds for it. */
+const WRITE_ENTRY = `INSERT OR REPLACE INTO ${COMPANION} (rowid, "__text__", "__id__") SELECT ${MAP}."__rowid__", ?, ${MAP}."__id__" FROM ${MAP} WHERE ${MAP}."__id__" = ?`;
+const PURGE_MAPPING = `DELETE FROM ${MAP} WHERE ${MAP}."__id__" = ?`;
+
+interface Recorded {
+    params: unknown[];
+    sql: string;
+}
+
+/**
+ * A row the MATCH query returns. `__text__` is the analyzed token stream the
+ * companion stored, and it is required rather than optional: the real query
+ * selects it and the shared scorer ranks on it, so a double that omitted it
+ * would score every row zero and quietly exercise a path production never
+ * takes.
+ */
+interface MatchRow {
+    __doc__: string;
+    __text__: string;
+    _creationTime: number;
+    id: string;
+}
+
+const cursor = <Row>(rows: Row[]): SqlCursor<Row> => {
+    return {
+        one() {
+            if (rows.length !== 1) {
+                throw new Error(`expected exactly one row, received ${String(rows.length)}`);
+            }
+
+            return rows[0]!;
+        },
+        [Symbol.iterator]() {
+            return rows[Symbol.iterator]();
+        },
+        toArray() {
+            return rows;
+        },
+    };
+};
+
+const createRecordingFts = (matchRows: MatchRow[]): { sql: SqlExec; statements: Recorded[] } => {
+    const statements: Recorded[] = [];
+
+    /*
+     * The one piece of real state the double keeps: the backfill-progress row
+     * per companion. Everything else here is stateless canned rows, but the
+     * reader refuses a search whose index is not recorded complete — so a
+     * double that dropped the write and answered the read with nothing would
+     * report every index as mid-backfill and make every search below throw.
+     */
+    const searchState = new Map<string, unknown[]>();
+
+    const exec = <Row = Record<string, unknown>>(query: string, ...params: unknown[]): SqlCursor<Row> => {
+        const sql = query.replaceAll(/\s+/gu, " ").trim();
+
+        statements.push({ params, sql });
+
+        if (sql.startsWith(`INSERT INTO "__lunora_search_state"`)) {
+            searchState.set(String(params[0]), params);
+        }
+
+        // The FTS5 probe (`CREATE VIRTUAL TABLE … fts5`) and all DDL/DML succeed
+        // by returning no rows. A search reads the vocabulary view and joins
+        // back to the document table; the canned rows stand in for that join's
+        // result so the reader can decode it. The id-probe and by-id reads
+        // resolve to the canned rows so the patch/delete table-resolution path
+        // (`tableNameFromId` + `get`) reaches the FTS write-sync.
+        //
+        // OCC-guarded patch/delete (finding 40) probes changes() after the
+        // write; in this single-writer double the row always matches the CAS
+        // snapshot, so report one changed row.
+        const routes: { pattern: RegExp; rows: () => Row[] }[] = [
+            { pattern: /^SELECT changes\(\) AS changed$/u, rows: () => [{ changed: 1 }] as unknown as Row[] },
+            {
+                pattern: /^SELECT "cursor", "done", "profile" FROM "__lunora_search_state"/u,
+                rows: () => {
+                    const stored = searchState.get(String(params[0]));
+
+                    return (stored ? [{ cursor: stored[1], done: stored[2], profile: stored[3] }] : []) as unknown as Row[];
+                },
+            },
+            // The migration-time backfill probes whether the shadow already
+            // carries rows (always "no" here, so the backfill runs) and then
+            // scans the source table — the canned rows stand in for a table that
+            // already held data when the search index was declared.
+            { pattern: /^SELECT COUNT\(\*\) AS count FROM /u, rows: () => [{ count: 0 }] as unknown as Row[] },
+            // "Does the source table hold anything?" — what decides whether a
+            // `staged` index has a walk to skip. The canned rows ARE that table,
+            // so an empty `matchRows` answers "empty" and a seeded one "not".
+            { pattern: /^SELECT 1 FROM "docs" LIMIT 1$/u, rows: () => matchRows as unknown as Row[] },
+            { pattern: /^SELECT id, _creationTime, "__doc__" FROM "docs" ORDER BY id ASC/u, rows: () => matchRows as unknown as Row[] },
+            { pattern: /__fts_by_body__vocab/u, rows: () => matchRows as unknown as Row[] },
+            // `lookupById` folds every table into one UNION-ALL probe tagged
+            // with `AS __t__`; resolve it to the canned rows (more specific
+            // than the generic `LIMIT 1` probe below, so it must come first)
+            // so the patch/delete table-resolution path reaches the FTS
+            // write-sync.
+            {
+                pattern: / AS __t__,.* WHERE id = \? LIMIT 1$/u,
+                rows: () =>
+                    matchRows.map((row) => {
+                        return { __t__: "docs", ...(row as unknown as Record<string, unknown>) };
+                    }) as unknown as Row[],
+            },
+            { pattern: /WHERE id = \? LIMIT 1$/u, rows: () => (matchRows.length > 0 ? [{ 1: 1 }] : []) as unknown as Row[] },
+            { pattern: /^SELECT id, _creationTime, __doc__ FROM .* WHERE id = \?$/u, rows: () => matchRows as unknown as Row[] },
+        ];
+
+        const matched = routes.find((route) => route.pattern.test(sql));
+
+        return cursor(matched ? matched.rows() : []);
+    };
+
+    return { sql: { exec }, statements };
+};
+
+const searchSchema: SchemaLike = {
+    tables: {
+        docs: {
+            indexes: [],
+            searchIndexes: [{ field: "body", filterFields: ["channel"], name: "by_body" }],
+            shape: {
+                body: { kind: "string" },
+                channel: { kind: "string" },
+                title: { kind: "string" },
+            },
+        },
+    },
+};
+
+describe("ctx-db search — FTS5 path (emitted SQL)", () => {
+    it("creates one FTS5 virtual table per search index during migration", () => {
+        expect.assertions(1);
+
+        const { sql, statements } = createRecordingFts([]);
+
+        runShardMigrations(sql, searchSchema);
+
+        expect(
+            statements.some(
+                (statement) => statement.sql === 'CREATE VIRTUAL TABLE IF NOT EXISTS "docs__fts_by_body" USING fts5("__text__", "__id__" UNINDEXED)',
+            ),
+        ).toBe(true);
+    });
+
+    it("backfills rows that predate the search index into the fresh shadow", () => {
+        expect.assertions(2);
+
+        const { sql, statements } = createRecordingFts([
+            { __doc__: JSON.stringify({ body: "hello world", channel: "x", title: "first" }), __text__: "hello world", _creationTime: 1, id: "d1" },
+            { __doc__: JSON.stringify({ body: "hello words", channel: "x", title: "second" }), __text__: "hello words", _creationTime: 2, id: "d2" },
+        ]);
+
+        runShardMigrations(sql, searchSchema);
+
+        const inserts = statements.filter((statement) => statement.sql === WRITE_ENTRY);
+
+        expect(inserts).toHaveLength(2);
+        expect(inserts.map((statement) => statement.params)).toStrictEqual([
+            ["hello world", "d1"],
+            ["hello words", "d2"],
+        ]);
+    });
+
+    it("leaves a staged search index empty for an out-of-band backfill", () => {
+        expect.assertions(2);
+
+        const stagedSchema: SchemaLike = {
+            tables: {
+                docs: {
+                    ...searchSchema.tables["docs"]!,
+                    searchIndexes: [{ field: "body", filterFields: ["channel"], name: "by_body", staged: true }],
+                },
+            },
+        };
+        const { sql, statements } = createRecordingFts([
+            { __doc__: JSON.stringify({ body: "hello world", channel: "x", title: "first" }), __text__: "hello world", _creationTime: 1, id: "d1" },
+        ]);
+
+        runShardMigrations(sql, stagedSchema);
+
+        expect(
+            statements.some(
+                (statement) => statement.sql === 'CREATE VIRTUAL TABLE IF NOT EXISTS "docs__fts_by_body" USING fts5("__text__", "__id__" UNINDEXED)',
+            ),
+        ).toBe(true);
+        // Only the text-less sentinel: no document entry.
+        expect(statements.some((statement) => statement.sql === WRITE_ENTRY)).toBe(false);
+    });
+
+    it("syncs indexed text on insert by replacing the row at the document's mapped rowid", async () => {
+        expect.assertions(1);
+
+        const { sql, statements } = createRecordingFts([]);
+
+        runShardMigrations(sql, searchSchema);
+
+        const writer = createShardContextDatabase({ idGenerator: () => "d1", schema: searchSchema, sql });
+        const before = statements.length;
+
+        await writer.insert("docs", { body: "hello world", channel: "x", title: "a" });
+
+        // The only by-`__id__` purge is over the positive rowid range — a previous
+        // build's rows — which is empty once they have been rewritten.
+        expect(statements.slice(before).filter((statement) => statement.sql.includes("docs__fts_by_body"))).toStrictEqual([
+            { params: ["d1"], sql: DROP_UNMAPPED },
+            { params: ["d1", "d1"], sql: DROP_MAPPED },
+            { params: ["d1"], sql: CLAIM_ROWID },
+            { params: ["hello world", "d1"], sql: WRITE_ENTRY },
+        ]);
+    });
+
+    it("clears the FTS row on delete (no re-insert)", async () => {
+        expect.assertions(2);
+
+        const { sql, statements } = createRecordingFts([{ __doc__: JSON.stringify({ body: "bye", title: "a" }), __text__: "bye", _creationTime: 1, id: "d1" }]);
+
+        runShardMigrations(sql, searchSchema);
+
+        const writer = createShardContextDatabase({ idGenerator: () => "d1", schema: searchSchema, sql });
+
+        await writer.insert("docs", { body: "bye", channel: "x", title: "a" });
+
+        const before = statements.length;
+
+        await writer.delete("d1");
+
+        const ftsWritesAfter = statements.slice(before).filter((statement) => statement.sql.includes("docs__fts_by_body"));
+
+        expect(ftsWritesAfter.map((statement) => statement.sql)).toStrictEqual([DROP_UNMAPPED, DROP_MAPPED, PURGE_MAPPING]);
+        expect(ftsWritesAfter.map((statement) => statement.params)).toStrictEqual([["d1"], ["d1", "d1"], ["d1"]]);
+    });
+
+    it("scores in SQL from the vocabulary view, bounded by the caller's limit", async () => {
+        expect.assertions(4);
+
+        const matchRows: MatchRow[] = [
+            { __doc__: JSON.stringify({ body: "hello world", channel: "x", title: "first" }), __text__: "hello world", _creationTime: 1, id: "d1" },
+            { __doc__: JSON.stringify({ body: "hello words", channel: "x", title: "second" }), __text__: "hello words", _creationTime: 2, id: "d2" },
+        ];
+        const { sql, statements } = createRecordingFts(matchRows);
+
+        runShardMigrations(sql, searchSchema);
+
+        const writer = createShardContextDatabase({ schema: searchSchema, sql });
+
+        await writer
+            .query("docs")
+            .withSearchIndex("by_body", (q) => q.search("body", "hello wor").eq("channel", "x"))
+            .take(5);
+
+        const read = statements.find((statement) => statement.sql.includes("__vocab") && statement.sql.startsWith("SELECT"));
+
+        // One branch per term — an exact equality for every term but the last,
+        // a half-open range for the one the user is still typing — UNION'd
+        // rather than OR'd, because SQLite silently drops a range constraint
+        // OR'd with an equality on this module.
+        expect(read?.sql).toContain('FROM "docs__fts_by_body__vocab" WHERE "term" = ?');
+        expect(read?.sql).toContain('WHERE "term" >= ? AND "term" < ?');
+        // The score is summed per term in SQL and the caller's limit bounds the
+        // read directly: no bm25 window, nothing re-ranked in memory. `wor` is
+        // bounded above by `wos`, its last character incremented.
+        expect(read?.sql).toContain('ORDER BY s."__score__" DESC, m._creationTime DESC, m.id ASC LIMIT 5');
+        expect(read?.params).toStrictEqual(["hello", "wor", "wos", "x"]);
+    });
+});

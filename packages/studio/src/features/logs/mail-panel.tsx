@@ -1,57 +1,21 @@
-import { useLunora } from "@lunora/react";
-import type { ChangeEvent, MouseEvent, ReactElement } from "react";
-import { useEffect, useMemo, useState } from "react";
+import type { ReactElement } from "react";
 
+import ErrorAlert from "../../components/error-alert";
 import { Badge } from "../../components/ui/badge";
 import { Button } from "../../components/ui/button";
 import { EmptyState } from "../../components/ui/empty-state";
 import { Input } from "../../components/ui/input";
 import { ScrollArea } from "../../components/ui/scroll-area";
 import { Separator } from "../../components/ui/separator";
-import { useAutoRefresh } from "../../hooks/use-auto-refresh";
 import { useT } from "../../i18n/i18n-context";
-import type { CapturedMail, CapturedMailResult, SendTestMailResult } from "../../lib/admin";
-import { ADMIN_FUNCTIONS } from "../../lib/admin";
-import { adminRef, callOptions, copyToClipboard, errorMessage, fireAndForget, formatTimestamp } from "../../lib/internal";
+import { formatTimestamp } from "../../lib/internal";
+import { useMailCapture } from "./hooks/use-mail-capture";
+import { recipientText } from "./mail-selection";
 
 interface MailPanelProps {
     /** Newest-N to load (default 100). */
     readonly limit?: number;
 }
-
-const GET_CAPTURED_MAIL = adminRef(ADMIN_FUNCTIONS.getCapturedMail);
-const CLEAR_CAPTURED_MAIL = adminRef(ADMIN_FUNCTIONS.clearCapturedMail);
-const SEND_TEST_MAIL = adminRef(ADMIN_FUNCTIONS.sendTestMail);
-
-/**
- * Matches the first `http(s)` URL in a body, stopping at whitespace, quotes, or
- * angle/closing brackets. Intentionally mirrors `@lunora/mail`'s `extractLink`
- * pattern (same char class) but is duplicated here rather than imported: the
- * studio bundle stays decoupled from the `@lunora/mail` runtime (it shares only
- * plain strings/types with the server, never the package). Non-global because
- * the panel only needs the first link.
- */
-const LINK_PATTERN = /https?:\/\/[^\s"'<>)]+/i;
-
-/** First `http(s)` URL in `text`, or `undefined` when none — used to deep-link from a captured message. */
-const firstLink = (text: string | undefined): string | undefined => {
-    if (text === undefined) {
-        return undefined;
-    }
-
-    const match = LINK_PATTERN.exec(text);
-
-    return match?.[0];
-};
-
-/** The first link in a captured message: HTML body first, then the plain-text body. */
-const selectedLink = (mail: CapturedMail | undefined): string | undefined => {
-    if (mail === undefined) {
-        return undefined;
-    }
-
-    return firstLink(mail.html) ?? firstLink(mail.text);
-};
 
 /** Which body of the selected message the preview pane shows. */
 type PreviewTab = "headers" | "html" | "text";
@@ -68,22 +32,14 @@ const PREVIEW_CSP = "<meta http-equiv=\"Content-Security-Policy\" content=\"defa
 /** Prepend the preview CSP meta so the sandboxed iframe makes no external requests. */
 const withPreviewCsp = (html: string): string => `${PREVIEW_CSP}${html}`;
 
-/** Join a recipient field (string or list) into one display string. */
-const recipientText = (value: string | string[] | undefined): string => {
-    if (value === undefined) {
-        return "";
-    }
-
-    return Array.isArray(value) ? value.join(", ") : value;
-};
-
 /**
  * Dev mail catcher — a unified inbox of every email the app sent. `@lunora/mail`'s
  * capture transport (wired in dev) intercepts each send and persists it to the
  * root-shard mailbox instead of delivering, so verification / forgot-password and
- * any app mail show up here with nothing leaving the machine. Reads the
- * `__lunora_admin__:getCapturedMail` RPC over the {@link useLunora} client;
- * gated by the server's `LUNORA_ADMIN_TOKEN`.
+ * any app mail show up here with nothing leaving the machine. The inbox model —
+ * the `__lunora_admin__:getCapturedMail` read, its poll, the clear / send-test
+ * actions, and the selection state — lives in {@link useMailCapture}; this
+ * component is markup and copy.
  *
  * The inbox is a single root-shard table with no write-flush to subscribe to, so
  * it polls on a fixed interval (paused while the tab is hidden) — new captured
@@ -91,89 +47,25 @@ const recipientText = (value: string | string[] | undefined): string => {
  * sandboxed iframe (no script execution) so captured markup can't run in the studio.
  */
 const MailPanel = ({ limit = 100 }: MailPanelProps): ReactElement => {
-    const client = useLunora();
     const t = useT();
-
-    const [entries, setEntries] = useState<CapturedMail[]>([]);
-    const [error, setError] = useState<null | string>(null);
-    const [selectedId, setSelectedId] = useState<null | string>(null);
-    const [tab, setTab] = useState<PreviewTab>("html");
-    const [filter, setFilter] = useState<string>("");
-
-    const refresh = async (): Promise<void> => {
-        setError(null);
-
-        try {
-            const next = (await client.query(GET_CAPTURED_MAIL, { limit }, callOptions(""))) as CapturedMailResult;
-
-            setEntries(next.entries);
-        } catch (error_) {
-            setEntries([]);
-            setError(errorMessage(error_));
-        }
-    };
-
-    const clearInbox = async (): Promise<void> => {
-        setError(null);
-
-        try {
-            await client.query(CLEAR_CAPTURED_MAIL, {}, callOptions(""));
-            setSelectedId(null);
-            await refresh();
-        } catch (error_) {
-            setError(errorMessage(error_));
-        }
-    };
-
-    const sendTest = async (): Promise<void> => {
-        setError(null);
-
-        try {
-            (await client.query(SEND_TEST_MAIL, {}, callOptions(""))) as SendTestMailResult;
-            await refresh();
-        } catch (error_) {
-            setError(errorMessage(error_));
-        }
-    };
-
-    useEffect(() => {
-        fireAndForget(refresh());
-    }, [refresh]);
-
-    const reload = (): void => {
-        fireAndForget(refresh());
-    };
-
-    // Poll for newly-captured mail so the inbox stays live without a manual refresh.
-    useAutoRefresh(reload, true);
-
-    const onClear = (): void => {
-        fireAndForget(clearInbox());
-    };
-
-    const onSendTest = (): void => {
-        fireAndForget(sendTest());
-    };
-
-    const onFilterChange = (event: ChangeEvent<HTMLInputElement>): void => {
-        setFilter(event.currentTarget.value);
-    };
-
-    const onSelectMessage = (event: MouseEvent<HTMLButtonElement>): void => {
-        const { id } = event.currentTarget.dataset;
-
-        if (id !== undefined) {
-            setSelectedId(id);
-        }
-    };
-
-    const onSelectTab = (event: MouseEvent<HTMLButtonElement>): void => {
-        const next = event.currentTarget.dataset["tab"];
-
-        if (next === "headers" || next === "html" || next === "text") {
-            setTab(next);
-        }
-    };
+    const {
+        entries,
+        error,
+        errorSource,
+        filter,
+        isLoading,
+        link,
+        onClear,
+        onCopyLink,
+        onFilterChange,
+        onOpenLink,
+        onSelectMessage,
+        onSelectTab,
+        onSendTest,
+        selected,
+        tab,
+        visible,
+    } = useMailCapture({ limit });
 
     const tabTitle = (value: PreviewTab): string => {
         if (value === "html") {
@@ -185,42 +77,6 @@ const MailPanel = ({ limit = 100 }: MailPanelProps): ReactElement => {
         }
 
         return t("Headers");
-    };
-
-    // Client-side substring filter over subject + recipient, AND-combined with the
-    // server-loaded window. An empty query passes everything through unchanged.
-    const visible = useMemo<CapturedMail[]>(() => {
-        const needle = filter.trim().toLowerCase();
-
-        if (needle === "") {
-            return entries;
-        }
-
-        return entries.filter((entry) => `${entry.subject} ${recipientText(entry.to)}`.toLowerCase().includes(needle));
-    }, [entries, filter]);
-
-    // Keep a valid selection across refreshes/filters: default to the newest visible message.
-    const selected = useMemo<CapturedMail | undefined>(() => {
-        if (visible.length === 0) {
-            return undefined;
-        }
-
-        return visible.find((entry) => entry.id === selectedId) ?? visible[0];
-    }, [visible, selectedId]);
-
-    // First actionable link in the selected message, for the copy / open buttons.
-    const link = selectedLink(selected);
-
-    const onCopyLink = (): void => {
-        if (link !== undefined) {
-            copyToClipboard(link);
-        }
-    };
-
-    const onOpenLink = (): void => {
-        if (link !== undefined && "window" in globalThis) {
-            globalThis.window.open(link, "_blank", "noopener");
-        }
     };
 
     return (
@@ -239,13 +95,9 @@ const MailPanel = ({ limit = 100 }: MailPanelProps): ReactElement => {
                 )}
             </div>
 
-            {error !== null && (
-                <p className="text-sm text-destructive" data-testid="mail-error" role="alert">
-                    {error}
-                </p>
-            )}
+            {error !== null && <ErrorAlert error={errorSource} testId="mail-error" />}
 
-            {error === null && entries.length === 0 && (
+            {error === null && !isLoading && entries.length === 0 && (
                 <EmptyState
                     description={t("Email your app sends in dev is captured here — nothing is delivered.")}
                     icon={

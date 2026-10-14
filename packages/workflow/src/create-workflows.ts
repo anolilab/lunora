@@ -3,14 +3,76 @@
  * bindings. Node-safe (structural binding types), so it's exercised by unit
  * tests with plain-object doubles.
  */
-import type { LunoraWorkflowsOptions, WorkflowBindingLike, WorkflowCreateOptions, WorkflowHandle, WorkflowInstanceLike, Workflows } from "./types";
+import { LunoraError } from "@lunora/errors";
+
+import { BRANCH_MARKER_REJECTION, hasBranchMarker } from "../../../shared/branch-marker";
+import { eventDefinitionProblem } from "./define-event";
+import type {
+    LunoraWorkflowsOptions,
+    WorkflowBatchDeleteResult,
+    WorkflowBindingLike,
+    WorkflowCreateBatchOptions,
+    WorkflowCreateBatchResult,
+    WorkflowCreateOptions,
+    WorkflowEventDefinition,
+    WorkflowHandle,
+    WorkflowInstanceLike,
+    Workflows,
+} from "./types";
+
+/**
+ * Reject any public create whose params carry the reserved branch-marker key.
+ * `__lunoraBranch` is an internal join-callback marker that `ctx.parallel`
+ * injects and a child trusts to address its parent's instance/binding/event; a
+ * caller-supplied marker (forwarding client-controlled args into a create) would
+ * let a forged marker reach a child's `event.payload` and spoof events into an
+ * arbitrary workflow instance. Closing it at the trust boundary keeps user params
+ * free of the reserved key while leaving `createParallel`'s own injection intact.
+ */
+const rejectReservedParams = (options?: WorkflowCreateOptions): void => {
+    if (hasBranchMarker(options?.params)) {
+        throw new LunoraError("BAD_REQUEST", `@lunora/workflow: params ${BRANCH_MARKER_REJECTION}`);
+    }
+};
 
 /** Wrap a single Cloudflare `Workflow` binding in the {@link WorkflowHandle} surface. */
 const handleFor = (binding: WorkflowBindingLike): WorkflowHandle => {
     return {
-        create: async (options?: WorkflowCreateOptions): Promise<WorkflowInstanceLike> => binding.create(options),
-        createBatch: async (batch: ReadonlyArray<WorkflowCreateOptions>): Promise<WorkflowInstanceLike[]> => binding.createBatch(batch),
+        create: async (options?: WorkflowCreateOptions): Promise<WorkflowInstanceLike> => {
+            rejectReservedParams(options);
+
+            return binding.create(options);
+        },
+        createBatch: async (options: WorkflowCreateBatchOptions): Promise<WorkflowCreateBatchResult> => {
+            // Every params object the batch creates is checked, whichever form carries it.
+            const entries: ReadonlyArray<WorkflowCreateOptions> = "instances" in options ? options.instances : [{ params: options.params }];
+
+            for (const entry of entries) {
+                rejectReservedParams(entry);
+            }
+
+            return binding.createBatch(options);
+        },
+        deleteBatch: async (instanceIds: ReadonlyArray<string>): Promise<WorkflowBatchDeleteResult> => binding.deleteBatch(instanceIds),
         get: async (id: string): Promise<WorkflowInstanceLike> => binding.get(id),
+        sendEvent: async <Payload>(instanceId: string, event: WorkflowEventDefinition<Payload>, payload: Payload): Promise<void> => {
+            // The trust boundary, mirroring `rejectReservedParams` above: the brand
+            // on `WorkflowEventDefinition` is a public boolean, so a definition-shaped
+            // object built from untrusted data would otherwise reach the wire — and a
+            // reserved `lunora:` type could forge a `ctx.parallel` branch outcome into
+            // a parent instance.
+            const problem = eventDefinitionProblem(event);
+
+            if (problem !== undefined) {
+                throw new LunoraError("BAD_REQUEST", `@lunora/workflow: sendEvent ${problem}`);
+            }
+
+            const instance = await binding.get(instanceId);
+
+            // Parse before the send: a bad payload fails the caller's request rather
+            // than waking the workflow on a value its `ctx.waitForEvent` will reject.
+            await instance.sendEvent({ payload: event.payload.parse(payload), type: event.type });
+        },
     };
 };
 
@@ -31,7 +93,7 @@ const createWorkflows = (options: LunoraWorkflowsOptions): Workflows => {
                 const known = Object.keys(bindings);
                 const suffix = known.length === 0 ? "no workflows are declared" : `known workflows: ${known.join(", ")}`;
 
-                throw new Error(`@lunora/workflow: no workflow named "${name}" (${suffix})`);
+                throw new LunoraError("INTERNAL", `@lunora/workflow: no workflow named "${name}" (${suffix})`);
             }
 
             return handleFor(binding) as WorkflowHandle<Params>;

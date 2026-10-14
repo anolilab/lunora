@@ -30,10 +30,21 @@ describe("table_without_insert", () => {
         expect(run([]).map((finding) => finding.metadata.table)).toStrictEqual(["channels", "messages"]);
     });
 
+    it("ignores an insert in dead code, but counts one reached from code outside any export", () => {
+        expect.assertions(1);
+
+        const inserts: AdvisorInsertWrite[] = [
+            { file: "messages", line: 1, scope: { callers: [], kind: "helper", name: "dead" }, table: "messages" },
+            { file: "channels", line: 1, scope: { callers: [], kind: "helper", name: "viaRoute", untracked: true }, table: "channels" },
+        ];
+
+        expect(run(inserts).map((finding) => finding.metadata.table)).toStrictEqual(["messages"]);
+    });
+
     it("flags only the tables with no discovered insert", () => {
         expect.assertions(2);
 
-        const inserts: AdvisorInsertWrite[] = [{ exportName: "send", file: "messages", line: 1, table: "messages" }];
+        const inserts: AdvisorInsertWrite[] = [{ scope: { kind: "export", name: "send" }, file: "messages", line: 1, table: "messages" }];
         const findings = run(inserts);
 
         expect(findings).toHaveLength(1);
@@ -49,7 +60,7 @@ describe("table_without_insert", () => {
     it("ignores inserts whose table argument wasn't a string literal", () => {
         expect.assertions(1);
 
-        const inserts: AdvisorInsertWrite[] = [{ exportName: "dynamic", file: "f", line: 1, table: "" }];
+        const inserts: AdvisorInsertWrite[] = [{ scope: { kind: "export", name: "dynamic" }, file: "f", line: 1, table: "" }];
 
         expect(run(inserts)).toHaveLength(2);
     });

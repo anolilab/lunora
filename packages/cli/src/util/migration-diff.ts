@@ -27,7 +27,17 @@
  * uses, so a generated migration is byte-identical to what the runtime would
  * auto-provision.
  */
-import { columnRef, frameworkColumnDdl, physicalIndexName, quoteIdentifier, sqlAffinityForKind } from "@lunora/d1/dialect";
+import type { FieldSnapshot } from "@lunora/codegen";
+import {
+    columnRef,
+    frameworkColumnDdl,
+    MAX_D1_TABLE_COLUMNS,
+    OCC_VERSION_COLUMN,
+    physicalIndexName,
+    quoteIdentifier,
+    sqlAffinityForKind,
+} from "@lunora/d1/dialect";
+import { LunoraError } from "@lunora/errors";
 
 /** Compact snapshot of a single global table — what we persist + diff. */
 interface TableSnapshot {
@@ -38,6 +48,20 @@ interface TableSnapshot {
 }
 
 interface ColumnSnapshot {
+    /**
+     * The column's full validator shape — the SAME {@link FieldSnapshot} the
+     * deploy gate diffs (`shared/schema-snapshot.ts`), not a second parallel
+     * format.
+     *
+     * `sqlType` alone is lossy: `bigint`, `array`, `record`, `id`, `literal` and
+     * `string` all map to the TEXT affinity, so `v.string()` → `v.bigint()` was
+     * byte-identical here and `migrate generate` answered "no schema changes
+     * detected" for a change `lunora prepare` blocks as breaking.
+     *
+     * Optional so a `.snapshot.json` written before this existed still parses —
+     * it simply gets no deep check until the next generate rewrites it.
+     */
+    field?: FieldSnapshot;
     /** True when the column accepts NULL (validator wrapped in v.optional). */
     nullable: boolean;
     /** SQLite type affinity, derived from the validator. */
@@ -93,18 +117,56 @@ const renderColumnDefinition = (name: string, column: ColumnSnapshot): string =>
     return parts.join(" ");
 };
 
-/** Emit `CREATE TABLE` SQL for a new global table. */
+/**
+ * Emit `CREATE TABLE` SQL for a new global table.
+ *
+ * Refuses a table past D1's column ceiling rather than writing SQL that
+ * `lunora migrate up` will reject: the runtime auto-provisioner checks the same
+ * number, and a migration file is the worse place to find out — the failure
+ * lands later, against a database, with none of the schema context that names
+ * which table and field to split.
+ */
 const renderCreateTable = (table: TableSnapshot): string => {
     const columns = Object.entries(table.columns).map(([columnName, column]) => `    ${renderColumnDefinition(columnName, column)}`);
-    const lines = [...frameworkColumnDdl().map((column) => `    ${column}`), ...columns].join(",\n");
+    // The runtime auto-provisioner adds an optimistic-concurrency row version
+    // alongside the dialect's framework columns, and the guarded-write CAS reads
+    // it. Emitting it here too keeps a hand-applied migration file and the
+    // auto-provisioner agreeing on both the physical shape and the column budget
+    // — off the one shared `OCC_VERSION_COLUMN`, so the name cannot drift.
+    const frameworkColumns = [...frameworkColumnDdl(), `${quoteIdentifier(OCC_VERSION_COLUMN)} INTEGER`];
+    const total = frameworkColumns.length + columns.length;
+
+    if (total > MAX_D1_TABLE_COLUMNS) {
+        throw new LunoraError(
+            "VALIDATION_ERROR",
+            `table "${table.name}" needs ${String(total)} columns, over D1's ${String(MAX_D1_TABLE_COLUMNS)}-column limit — split the table, or move the extra fields into one object field`,
+        );
+    }
+
+    const lines = [...frameworkColumns.map((column) => `    ${column}`), ...columns].join(",\n");
 
     return `CREATE TABLE IF NOT EXISTS ${quoteIdentifier(table.name)} (\n${lines}\n);`;
 };
 
 const renderDropTable = (tableName: string): string => `DROP TABLE IF EXISTS ${quoteIdentifier(tableName)};`;
 
-const renderAddColumn = (tableName: string, columnName: string, column: ColumnSnapshot): string =>
-    `ALTER TABLE ${quoteIdentifier(tableName)} ADD COLUMN ${renderColumnDefinition(columnName, column)};`;
+/**
+ * `ALTER TABLE … ADD COLUMN`, always nullable. SQLite rejects `ADD COLUMN … NOT NULL` without a default on a table
+ * that already has rows, and D1 is SQLite, so a NOT NULL add fails exactly when it matters. The runtime
+ * auto-provisioner makes the same choice (see `alterGlobalTableDrift` in `@lunora/sql-store`), and the declared
+ * `notNull` is still enforced on write. Existing rows read the new column as NULL until they are written, so for a
+ * required column the statement is followed by a comment that says so and gives the backfill to run. The snapshot
+ * records no default value, so the value is left for the author to fill in rather than guessed.
+ */
+const renderAddColumn = (tableName: string, columnName: string, column: ColumnSnapshot): string => {
+    const statement = `ALTER TABLE ${quoteIdentifier(tableName)} ADD COLUMN ${renderColumnDefinition(columnName, { ...column, nullable: true })};`;
+
+    if (column.nullable) {
+        return statement;
+    }
+
+    return `${statement}\n-- ${quoteIdentifier(tableName)}.${quoteIdentifier(columnName)} is required, so rows written before it read NULL. Backfill them:\n-- UPDATE ${quoteIdentifier(tableName)} SET ${quoteIdentifier(columnName)} = <value> WHERE ${quoteIdentifier(columnName)} IS NULL;`;
+};
 
 const renderCreateIndex = (tableName: string, index: IndexSnapshot): string => {
     const fields = index.fields.map((field) => columnRef(field)).join(", ");
@@ -115,21 +177,55 @@ const renderCreateIndex = (tableName: string, index: IndexSnapshot): string => {
 
 const renderDropIndex = (tableName: string, indexName: string): string => `DROP INDEX IF EXISTS ${physicalIndexName(tableName, indexName)};`;
 
+/**
+ * The column's shape with `optional` stripped — that flag is the same fact as
+ * {@link ColumnSnapshot.nullable}, which is reported on its own line, so leaving
+ * it in would make one nullability edit print twice. `undefined` for a snapshot
+ * written before the shape was recorded.
+ */
+const shapeForm = (column: ColumnSnapshot): string | undefined =>
+    // `optional: undefined` drops that key from the JSON without moving any
+    // other — `JSON.stringify` omits undefined values and a re-assignment keeps
+    // the original key position, so the form stays order-stable.
+    column.field === undefined ? undefined : JSON.stringify({ ...column.field, optional: undefined });
+
+/** Where the D1 table-rebuild recipe for dropping a `NOT NULL` lives. */
+const RELAX_NOT_NULL_DOCS = "https://lunora.sh/docs/concepts/migrations#relaxing-not-null-on-a-d1-table";
+
 /** Surface type/nullability changes on an existing column as unsupported deltas. */
 const diffExistingColumn = (tableName: string, columnName: string, old: ColumnSnapshot, column: ColumnSnapshot, unsupported: UnsupportedEntry[]): void => {
+    const previousShape = shapeForm(old);
+    const shape = shapeForm(column);
+
     if (old.sqlType !== column.sqlType) {
         unsupported.push({
             kind: "columnTypeChange",
             summary: `column type change on ${tableName}.${columnName}: ${old.sqlType} → ${column.sqlType} (write SQL manually)`,
         });
+    } else if (previousShape !== undefined && shape !== undefined && previousShape !== shape) {
+        // Same affinity, different validator — the case a `{nullable, sqlType}`
+        // snapshot could not see at all.
+        const detail =
+            old.field?.kind === column.field?.kind
+                ? `${String(column.field?.kind)} shape/constraints changed`
+                : `${String(old.field?.kind)} → ${String(column.field?.kind)}`;
+
+        unsupported.push({
+            kind: "columnTypeChange",
+            summary: `column type change on ${tableName}.${columnName}: ${detail} (write SQL manually)`,
+        });
     }
 
     if (old.nullable !== column.nullable) {
+        // SQLite cannot drop a column constraint in place, so relaxing one means a
+        // table rebuild; the guide carries the recipe.
+        const remedy = column.nullable ? `rebuild the table — ${RELAX_NOT_NULL_DOCS}` : "write SQL manually";
+
         unsupported.push({
             kind: "columnTypeChange",
             summary: `nullability change on ${tableName}.${columnName}: ${
                 old.nullable ? "NULL" : "NOT NULL"
-            } → ${column.nullable ? "NULL" : "NOT NULL"} (write SQL manually)`,
+            } → ${column.nullable ? "NULL" : "NOT NULL"} (${remedy})`,
         });
     }
 };
@@ -255,7 +351,7 @@ const diffSnapshots = (previous: SchemaSnapshot | undefined, next: SchemaSnapsho
     }
 
     // Tables removed.
-    for (const [tableName] of Object.entries(previousTables)) {
+    for (const tableName of Object.keys(previousTables)) {
         if (next.tables[tableName] === undefined) {
             entries.push({
                 kind: "dropTable",

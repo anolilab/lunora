@@ -2,10 +2,12 @@ import type { AdvisorShardTraffic } from "@lunora/advisor";
 import { useLunora } from "@lunora/react";
 import { useNavigate } from "@tanstack/react-router";
 import type { ReactElement } from "react";
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useEffectEvent, useMemo, useRef, useState } from "react";
 
 import { ShardInput } from "../../components/shard-input";
 import { Button } from "../../components/ui/button";
+import { useAdminQuery } from "../../hooks/use-admin-query";
+import { useShardKey } from "../../hooks/use-shard-key";
 import type { TFunction } from "../../i18n/i18n-context";
 import { useT } from "../../i18n/i18n-context";
 import type {
@@ -18,15 +20,15 @@ import type {
     ShardTrafficResult,
     TableIndexesResult,
     TableInfo,
+    TablesIndexesResult,
 } from "../../lib/admin";
 import { ADMIN_FUNCTIONS } from "../../lib/admin";
-import { adminRef, callOptions, errorMessage, fireAndForget } from "../../lib/internal";
+import { adminRef, callOptions, fireAndForget, formatBytes } from "../../lib/internal";
 import { recordShard } from "../../lib/shard-history";
-import useLiveShardSeed from "../data/hooks/use-live-shard-seed";
 import type { AdvisorRow } from "./advisor-view";
 import { AdvisorView, advisoryRow } from "./advisor-view";
 import { ApplyIndexButton } from "./apply-index-button";
-import { hasIndexMetadata } from "./compose-index-sql";
+import { hasIndexMetadata } from "./compose-index-declaration";
 import type { Insight } from "./derive-insights";
 import { deriveInsights } from "./derive-insights";
 import type { DeclaredIndex } from "./derive-runtime-advisories";
@@ -47,11 +49,9 @@ interface InsightsPanelProps {
     readonly loadShardTraffic?: (table: string) => Promise<ShardTrafficResult>;
 }
 
-const GET_ADVISORIES = adminRef(ADMIN_FUNCTIONS.getAdvisories);
-const GET_FUNCTION_STATS = adminRef(ADMIN_FUNCTIONS.getFunctionStats);
-const GET_METRICS = adminRef(ADMIN_FUNCTIONS.getMetrics);
 const LIST_TABLES = adminRef(ADMIN_FUNCTIONS.listTables);
 const LIST_TABLE_INDEXES = adminRef(ADMIN_FUNCTIONS.listTableIndexes);
+const LIST_TABLES_INDEXES = adminRef(ADMIN_FUNCTIONS.listTablesIndexes);
 
 /** A 0–1 rate as a one-decimal percentage. */
 const percent = (rate: number): string => `${(rate * 100).toFixed(1)}%`;
@@ -79,6 +79,7 @@ const insightTitle = (t: TFunction, insight: Insight): string =>
         "low-cache-hit-rate": t("Low cache hit rate"),
         "missing-index": t("Missing index"),
         "slow-function": t("Slow function"),
+        "storage-headroom": t("Storage headroom"),
     })[insight.kind];
 
 /**
@@ -100,6 +101,9 @@ const insightDetail = (t: TFunction, insight: Insight): string =>
             tables: tableList(insight.tables ?? []),
         }),
         "slow-function": t("Slowest call took {duration}.", { duration: seconds(insight.value) }),
+        "storage-headroom": t("{size} of the 10 GiB per-shard ceiling — plan a .shardBy() migration while it still has runway.", {
+            size: formatBytes(insight.value),
+        }),
     })[insight.kind];
 
 interface AddIndexButtonProps {
@@ -132,105 +136,88 @@ const AddIndexButton = ({ onJump, table }: AddIndexButtonProps): ReactElement =>
  * tabs over a findings table (via {@link AdvisorView}). It pulls the `getMetrics`
  * health snapshot and `getFunctionStats` per-function table for one shard, then
  * maps the issues {@link deriveInsights} detects (low cache hit rate, high
- * eviction, slow functions, missing indexes, error spikes) into rows. A
- * `missing-index` row carries an inline "add the index" jump to the Schema tab.
- * Both reads are best-effort — one failing still yields the other's insights.
+ * eviction, slow functions, missing indexes, error spikes, storage headroom)
+ * into rows. A `missing-index` row carries an inline "add the index" jump to the
+ * Schema tab. Both reads are best-effort — one failing still yields the other's
+ * insights.
  */
 export const InsightsPanel = ({ initialShardKey, loadShardTraffic }: InsightsPanelProps): ReactElement => {
     const client = useLunora();
     const navigate = useNavigate();
     const t = useT();
 
-    const [shardKey, setShardKey] = useState<string>(initialShardKey ?? "");
-    const [metrics, setMetrics] = useState<MetricsSnapshot | null>(null);
-    const [functions, setFunctions] = useState<FunctionCallStat[] | null>(null);
-    const [advisories, setAdvisories] = useState<AdvisoryFinding[] | null>(null);
-    // Runtime-lint inputs the dead-index advisory reconciles: the per-(table,
-    // index) recorded reads from getMetrics and every declared index from
-    // listTables + listTableIndexes. Both best-effort — absent on an older
-    // worker, where the runtime lints simply find nothing.
-    const [indexHits, setIndexHits] = useState<MetricsIndexHit[] | null>(null);
+    const { queryShardKey, setShardKey, shardKey } = useShardKey(initialShardKey);
+
+    // Runtime-lint inputs the dead-index advisory reconciles: every declared index
+    // from listTables + listTableIndexes. Best-effort — absent on an older worker,
+    // where the runtime lints simply find nothing.
     const [declaredIndexes, setDeclaredIndexes] = useState<DeclaredIndex[] | null>(null);
     // The cross-shard request distribution feeding the hot_shard lint. Fanned
     // out on demand (not on the metrics hot path) and best-effort — null when
     // the worker predates the shard-traffic endpoint, so hot_shard stays quiet.
     const [shardTraffic, setShardTraffic] = useState<AdvisorShardTraffic[] | null>(null);
-    const [error, setError] = useState<null | string>(null);
+
+    // The most recently requested enumeration shard. `enumerateShard` runs
+    // fire-and-forget from both the shard-change effect and the visibility handler,
+    // so a slower request for a previous shard can resolve last; every state write
+    // is gated on this ref still naming the shard it was issued for, so a stale
+    // completion can't overwrite the current shard's `declaredIndexes`/`shardTraffic`.
+    const latestEnumeratedShard = useRef<string>("");
+
+    // The three simple shard-scoped reads, each live so a write-flush re-pushes
+    // without a manual refresh. `metrics`/`functions`/`advisories` are best-effort:
+    // a partial snapshot still yields useful insights, so a single failure doesn't
+    // blank the panel — only a failure of BOTH runtime reads surfaces a hard error.
+    const metricsQuery = useAdminQuery<MetricsSnapshot>(ADMIN_FUNCTIONS.getMetrics, {}, { live: true, shardKey: queryShardKey });
+    const functionsQuery = useAdminQuery<FunctionStatsResult>(ADMIN_FUNCTIONS.getFunctionStats, {}, { live: true, shardKey: queryShardKey });
+    const advisoriesQuery = useAdminQuery<AdvisoriesResult>(ADMIN_FUNCTIONS.getAdvisories, {}, { live: true, shardKey: queryShardKey });
+
+    const metrics: MetricsSnapshot | null = metricsQuery.data ?? null;
+    const functions: FunctionCallStat[] | null = functionsQuery.data?.functions ?? null;
+    const advisories: AdvisoryFinding[] | null = advisoriesQuery.data?.advisories ?? null;
+    // The recorded per-(table, index) reads from the metrics snapshot — the other
+    // half of the dead-index reconciliation (a declared index absent here is dead).
+    const indexHits: MetricsIndexHit[] | null = metricsQuery.data?.indexHits ?? null;
+
+    // Surface an error only when BOTH runtime reads fail — a partial snapshot still
+    // yields useful insights. The static advisories are additive: a worker that
+    // predates the RPC simply reports none, never an error.
+    const error = metricsQuery.error !== null && functionsQuery.error !== null ? metricsQuery.error : null;
 
     // Default the shard-traffic fan-out to the client's admin RPC; an injected
     // override lets tests drive a skewed distribution without a worker.
     const fanShardTraffic = loadShardTraffic ?? ((table: string): Promise<ShardTrafficResult> => client.shardTraffic(table));
 
-    const refresh = async (shard: string): Promise<void> => {
-        const [snapshot, stats, advisorySnapshot] = await Promise.allSettled([
-            client.query(GET_METRICS, {}, callOptions(shard)) as Promise<MetricsSnapshot>,
-            client.query(GET_FUNCTION_STATS, {}, callOptions(shard)) as Promise<FunctionStatsResult>,
-            client.query(GET_ADVISORIES, {}, callOptions(shard)) as Promise<AdvisoriesResult>,
-        ]);
+    // Fan the cross-shard traffic feed out so the hot_shard lint can see
+    // cross-shard skew — the one input a single shard's snapshot can't supply.
+    // Off the metrics hot path and best-effort: a rejection (older worker / no
+    // admin token) leaves hot_shard dormant rather than blanking the panel.
+    // Driven by any one table's live shard set — a DO holds every table, so each
+    // shard's getMetrics request total is the same regardless of which table
+    // seeds the fan-out; we dedupe by shardKey to be safe.
+    const loadShardTrafficFeed = async (tableNames: ReadonlyArray<string>, shard: string): Promise<void> => {
+        // The fan-out needs ANY live table to enumerate the shard set; with no
+        // tables there's nothing to seed it, so skip the call entirely rather
+        // than POST an empty `table` the worker rejects with a 400.
+        const seedTable = tableNames[0];
 
-        // Surface an error only when BOTH runtime reads fail — a partial
-        // snapshot still yields useful insights, so one failure shouldn't
-        // blank it. The static advisories are additive: a worker that
-        // predates the RPC simply reports none, never an error.
-        if (snapshot.status === "rejected" && stats.status === "rejected") {
-            setError(errorMessage(snapshot.reason));
-        } else {
-            setError(null);
-            recordShard(shard);
-        }
-
-        setMetrics(snapshot.status === "fulfilled" ? snapshot.value : null);
-        setFunctions(stats.status === "fulfilled" ? stats.value.functions : null);
-        setAdvisories(advisorySnapshot.status === "fulfilled" ? advisorySnapshot.value.advisories : null);
-        setIndexHits(snapshot.status === "fulfilled" ? (snapshot.value.indexHits ?? null) : null);
-
-        // Enumerate the declared indexes for the dead-index reconciliation:
-        // the recorded-reads feed only carries USED indexes, so a declared
-        // index absent from it is dead. Best-effort and independent of the
-        // metrics reads — a worker without listTables / listTableIndexes (or
-        // without an admin token for them) just yields no declared indexes,
-        // so the dead-index check stays quiet rather than failing the panel.
-        let tableNames: string[] = [];
-
-        try {
-            const tables = (await client.query(LIST_TABLES, {}, callOptions(shard))) as TableInfo[];
-
-            tableNames = tables.map((table) => table.name);
-
-            const indexResults = await Promise.allSettled(
-                tables.map(
-                    async (table) =>
-                        [table.name, (await client.query(LIST_TABLE_INDEXES, { table: table.name }, callOptions(shard))) as TableIndexesResult] as const,
-                ),
-            );
-
-            const declared: DeclaredIndex[] = [];
-
-            for (const result of indexResults) {
-                if (result.status === "fulfilled") {
-                    const [name, payload] = result.value;
-
-                    declared.push(...declaredIndexesFor(name, payload.indexes));
-                }
+        if (seedTable === undefined || seedTable === "") {
+            if (latestEnumeratedShard.current === shard) {
+                setShardTraffic(null);
             }
 
-            setDeclaredIndexes(declared);
-        } catch {
-            // listTables unavailable (older worker / no admin token) — no
-            // declared-index enumeration, so the dead-index check is dormant.
-            setDeclaredIndexes(null);
+            return;
         }
 
-        // Fan the cross-shard traffic feed out so the hot_shard lint can see
-        // cross-shard skew — the one input a single shard's snapshot can't
-        // supply. Off the metrics hot path and best-effort: a rejection (older
-        // worker / no admin token) leaves hot_shard dormant rather than
-        // blanking the panel. Driven by any one table's live shard set — a DO
-        // holds every table, so each shard's getMetrics request total is the
-        // same regardless of which table seeds the fan-out; we dedupe by
-        // shardKey to be safe.
         try {
-            const traffic = await fanShardTraffic(tableNames[0] ?? "");
+            const traffic = await fanShardTraffic(seedTable);
+
+            // A newer shard enumeration superseded this one mid-flight — drop the
+            // result rather than overwrite the current shard's traffic.
+            if (latestEnumeratedShard.current !== shard) {
+                return;
+            }
+
             const byShard = new Map<string, AdvisorShardTraffic>();
 
             for (const entry of traffic.shards) {
@@ -242,26 +229,146 @@ export const InsightsPanel = ({ initialShardKey, loadShardTraffic }: InsightsPan
             setShardTraffic([...byShard.values()]);
         } catch {
             // shard-traffic endpoint unavailable — leave hot_shard dormant.
-            setShardTraffic(null);
+            if (latestEnumeratedShard.current === shard) {
+                setShardTraffic(null);
+            }
         }
     };
 
-    // Drive the initial load and re-load whenever `shardKey` changes (debounced),
-    // mirroring the `useLiveShardSeed` protocol used by function-stats, audit-panel,
-    // and logs-panel. Previously the panel only reloaded on mount + visibility change,
-    // so typing a different shard key never re-fetched — operators saw stale data for
-    // whatever shard was loaded at mount.
-    useLiveShardSeed(shardKey, refresh);
+    // Per-table fan-out fallback: one `listTableIndexes` call per table, kept
+    // for a worker predating the batched `listTablesIndexes` RPC. `Promise.allSettled`
+    // so ONE table's rejected call doesn't drop every other table's declared
+    // indexes — a partial reply degrades gracefully rather than going dormant.
+    const fetchDeclaredIndexesPerTable = async (tableNames: ReadonlyArray<string>, shard: string): Promise<DeclaredIndex[]> => {
+        const indexResults = await Promise.allSettled(
+            tableNames.map(
+                async (name) => [name, (await client.query(LIST_TABLE_INDEXES, { table: name }, callOptions(shard))) as TableIndexesResult] as const,
+            ),
+        );
+
+        const declared: DeclaredIndex[] = [];
+
+        for (const result of indexResults) {
+            if (result.status === "fulfilled") {
+                const [name, payload] = result.value;
+
+                declared.push(...declaredIndexesFor(name, payload.indexes));
+            }
+        }
+
+        return declared;
+    };
+
+    // Enumerate the declared indexes (listTables + one batched listTablesIndexes
+    // call) and fan out the cross-shard traffic feed for `shard` — the two
+    // imperative, multi-step flows that don't fit a single live read. The live
+    // `metricsQuery` already owns the recorded-reads (`indexHits`) half of the
+    // dead-index reconciliation; this supplies the declared-index half.
+    // Best-effort and independent of the metrics reads — a worker without
+    // listTables / listTablesIndexes (or without an admin token for them) just
+    // yields no declared indexes, so the dead-index check stays quiet rather than
+    // failing the panel. `recordShard` runs only on a successful read, mirroring
+    // the old refresh.
+    //
+    // AN EFFECT EVENT, not a `useCallback`: it reads `fanShardTraffic` /
+    // `loadShardTrafficFeed` / `fetchDeclaredIndexesPerTable`, render-fresh
+    // closures over `loadShardTraffic` and `client`. A memoized callback pinned
+    // to `[client]` would keep whichever of those closures was in scope the
+    // render it was (re)created — so an injected `loadShardTraffic` override
+    // changing later, with `client` unchanged, would silently keep fanning out
+    // through the STALE override. An effect event always resolves through the
+    // latest committed closures without becoming a reactive dependency itself,
+    // so callers (the effect below, and `refreshOnVisible`) don't re-run just
+    // because it was called.
+    const enumerateShard = useEffectEvent(async (shard: string): Promise<void> => {
+        // Claim this as the latest enumeration; any earlier in-flight call now
+        // sees a ref mismatch after its awaits and drops its (stale) writes.
+        latestEnumeratedShard.current = shard;
+
+        let tableNames: string[] = [];
+
+        try {
+            const tables = (await client.query(LIST_TABLES, {}, callOptions(shard))) as TableInfo[];
+
+            if (latestEnumeratedShard.current !== shard) {
+                return;
+            }
+
+            recordShard(shard);
+            tableNames = tables.map((table) => table.name);
+
+            let declared: DeclaredIndex[] = [];
+
+            if (tableNames.length > 0) {
+                try {
+                    // One RPC for every table instead of one per table — the
+                    // fan-out this collapses used to cost a full admin RPC PER
+                    // table on every shard change and `visibilitychange` refresh.
+                    const batched = (await client.query(LIST_TABLES_INDEXES, { tables: tableNames }, callOptions(shard))) as TablesIndexesResult;
+
+                    if (latestEnumeratedShard.current !== shard) {
+                        return;
+                    }
+
+                    for (const [name, indexes] of Object.entries(batched.indexesByTable)) {
+                        declared.push(...declaredIndexesFor(name, indexes));
+                    }
+                } catch {
+                    // Older worker without listTablesIndexes — fall back to the
+                    // per-table fan-out so the dead-index check still works.
+                    declared = await fetchDeclaredIndexesPerTable(tableNames, shard);
+
+                    if (latestEnumeratedShard.current !== shard) {
+                        return;
+                    }
+                }
+            }
+
+            setDeclaredIndexes(declared);
+        } catch {
+            // listTables unavailable (older worker / no admin token) — no
+            // declared-index enumeration, so the dead-index check is dormant.
+            if (latestEnumeratedShard.current === shard) {
+                setDeclaredIndexes(null);
+            }
+        }
+
+        await loadShardTrafficFeed(tableNames, shard);
+    });
+
+    // Drive the imperative enumeration + traffic fan-out on the debounced shard —
+    // the live reads (metrics/function-stats/advisories) re-fetch via their own
+    // cache key. Previously the panel only reloaded on mount + visibility change, so
+    // typing a different shard key never re-fetched the enumeration either.
+    // `enumerateShard` is an effect event, so it's deliberately omitted below —
+    // listing it would be listing a value that's stable by construction and
+    // exists precisely so it ISN'T a reactive dependency.
+    useEffect(() => {
+        // react-doctor-disable-next-line react-hooks-js/set-state-in-effect -- drives an imperative enumeration over the debounced shard — an async load, not derived state
+        fireAndForget(enumerateShard(queryShardKey));
+    }, [queryShardKey]);
 
     // Auto-refresh when the tab regains focus. The studio is a standalone app
     // (not a Vite HMR client), so it can't hear codegen reloads directly — but
     // tabbing back from your editor after a schema save (by which point the dev
     // worker has reloaded with the new `LUNORA_ADVISORIES`) re-pulls everything,
     // so advisories land fresh without a manual Refresh.
+    //
+    // The refresh itself is an EFFECT EVENT: it reads five values that change on
+    // nearly every render, and listing them as deps tore down and re-registered
+    // the `visibilitychange` listener each time. An effect event always sees the
+    // latest values without being a dep, so the listener is bound once.
+    const refreshOnVisible = useEffectEvent((): void => {
+        metricsQuery.refetch();
+        functionsQuery.refetch();
+        advisoriesQuery.refetch();
+        fireAndForget(enumerateShard(queryShardKey));
+    });
+
     useEffect(() => {
         const onVisible = (): void => {
             if (document.visibilityState === "visible") {
-                fireAndForget(refresh(shardKey));
+                refreshOnVisible();
             }
         };
 
@@ -270,17 +377,24 @@ export const InsightsPanel = ({ initialShardKey, loadShardTraffic }: InsightsPan
         return () => {
             document.removeEventListener("visibilitychange", onVisible);
         };
-    }, [refresh, shardKey]);
+    }, []);
 
     // Deep-link the "add the index" jump: open the Schema tab with the scanned
     // table pre-selected (`/schema?table=<name>`) so the operator lands on its
     // index list. The schema route reads the `table` search param and
     // auto-expands it.
-    const jumpToSchemaIndex = (table: string): void => {
-        fireAndForget(navigate({ search: { table }, to: "/schema" }));
-    };
+    const jumpToSchemaIndex = useCallback(
+        (table: string): void => {
+            fireAndForget(navigate({ search: { table }, to: "/schema" }));
+        },
+        [navigate],
+    );
 
-    const insights = deriveInsights(metrics, functions);
+    // Memoized, not a bare call: `insights` and `runtimeRows` below are deps of
+    // the `rows` memo, so a fresh array identity on every render made that memo
+    // inert — `deriveRuntimeAdvisories` re-ran the whole lint set, and every
+    // action element was rebuilt, on each render of the panel.
+    const insights = useMemo(() => deriveInsights(metrics, functions), [functions, metrics]);
 
     // Tables the `missing-index` insight already reports on. The runtime
     // `index_utilization` hot-scan lint reads the SAME `scannedTables` signal, so
@@ -288,20 +402,28 @@ export const InsightsPanel = ({ initialShardKey, loadShardTraffic }: InsightsPan
     // layer). The insight owns the hot-scan story (it's the causal, latency-aware
     // view with the inline "add index" jump); the runtime lint suppresses its
     // hot-scan finding for those tables and keeps only its unique dead-index half.
-    const missingIndexTables = new Set(insights.filter((insight) => insight.kind === "missing-index").flatMap((insight) => insight.tables ?? []));
+    const missingIndexTables = useMemo(
+        // react-doctor-disable-next-line react-doctor/js-combine-iterations -- two passes over the advisor insights for one shard — a findings list, built once per fetch
+        () => new Set(insights.filter((insight) => insight.kind === "missing-index").flatMap((insight) => insight.tables ?? [])),
+        [insights],
+    );
 
     // Runtime advisor lints (dead index + hot scan + hot shard) over the recorded
     // metrics. Same verbatim advisory mapping as the static getAdvisories findings
     // — no new i18n. The shardTraffic feed (fanned out above) flows in so hot_shard
     // fires on a genuine cross-shard skew; hot-scan findings for tables the
     // missing-index insight already owns are suppressed so a hot table renders once.
-    const runtimeRows = deriveRuntimeAdvisories({
-        declaredIndexes: declaredIndexes ?? [],
-        functions,
-        indexHits,
-        shardTraffic,
-        suppressHotScanTables: missingIndexTables,
-    });
+    const runtimeRows = useMemo(
+        () =>
+            deriveRuntimeAdvisories({
+                declaredIndexes: declaredIndexes ?? [],
+                functions,
+                indexHits,
+                shardTraffic,
+                suppressHotScanTables: missingIndexTables,
+            }),
+        [declaredIndexes, functions, indexHits, missingIndexTables, shardTraffic],
+    );
 
     const rows = useMemo<AdvisorRow[]>(() => {
         const insightRows = insights.map((insight) => {
@@ -323,10 +445,11 @@ export const InsightsPanel = ({ initialShardKey, loadShardTraffic }: InsightsPan
         //
         // For `unindexed_foreign_key` / `unindexed_relation_target` findings (and
         // any other finding that carries `suggestedIndex` metadata), attach an
-        // "Apply index" action that composes the `CREATE INDEX` SQL and copies it
-        // to the operator's clipboard on confirm. This is the Item 5 "create all
-        // missing indexes" apply control — per-finding rather than bulk, guarded
-        // by ConfirmButton.
+        // action that composes the `.index(...)` schema declaration and copies it
+        // to the operator's clipboard on confirm — per-finding rather than bulk,
+        // guarded by ConfirmButton. It copies rather than applies: the index has
+        // to be declared in `lunora/schema.ts`, which is what the migration
+        // system tracks and what nothing here can write.
         const indexAdvisoryLints = new Set(["unindexed_foreign_key", "unindexed_relation_target"]);
         const staticRows: AdvisorRow[] = (advisories ?? []).map((finding) => {
             const base = advisoryRow(finding);
@@ -345,11 +468,14 @@ export const InsightsPanel = ({ initialShardKey, loadShardTraffic }: InsightsPan
         });
 
         return [...staticRows, ...runtimeRows, ...insightRows];
+        // react-doctor-disable-next-line react-doctor/exhaustive-deps -- `advisories` IS `advisoriesQuery.data?.advisories`, destructured above and listed in the deps
     }, [advisories, insights, jumpToSchemaIndex, runtimeRows, t]);
 
     const toolbar = <ShardInput onChange={setShardKey} testId="in-shard-input" value={shardKey} />;
 
-    return <AdvisorView error={error} rows={rows} testId="lunora-insights" toolbar={toolbar} />;
+    return (
+        <AdvisorView error={error} errorSource={error === null ? undefined : metricsQuery.errorSource} rows={rows} testId="lunora-insights" toolbar={toolbar} />
+    );
 };
 
 export type { InsightsPanelProps };

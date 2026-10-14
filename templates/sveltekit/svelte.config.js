@@ -8,10 +8,11 @@ import { vitePreprocess } from "@sveltejs/vite-plugin-svelte";
  * Lunora does NOT replace that build (SvelteKit is a Class-B framework — it owns
  * its own CF adapter). The adapter overwrites whatever `wrangler.jsonc`'s `main`
  * points at, so `main` stays on the adapter's own `_worker.js`. `src/worker.ts`
- * imports that emitted handler, wraps it with `withLunora` (see
- * `@lunora/svelte/worker`), and `lunora deploy` bundles `src/worker.ts` as the
- * deploy entry (overriding `main`) so the deployed Worker is the composed single
- * worker: SvelteKit + Lunora realtime under `/_lunora/*`.
+ * imports that emitted handler and folds it in via the generated `defineApp()`
+ * builder's `.buildFrameworkWorker(...)`, and `lunora deploy` bundles
+ * `src/worker.ts` as the deploy entry (overriding `main`) so the deployed
+ * Worker is the composed single worker: SvelteKit + Lunora realtime under
+ * `/_lunora/*`.
  *
  * @type {import("@sveltejs/kit").Config}
  */

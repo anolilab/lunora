@@ -1,8 +1,8 @@
-import type { Preloaded } from "@lunora/client";
+import type { Preloaded, SubscriptionErrorCallback } from "@lunora/client";
 import { act, render, screen, waitFor } from "@testing-library/react";
 import type { ReactElement } from "react";
 import { renderToString } from "react-dom/server";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import { LunoraProvider } from "../src/lunora-provider";
 import usePreloadedQuery, { hydratePreloaded } from "../src/use-preloaded-query";
@@ -24,6 +24,38 @@ const Display = ({ token }: { token: Preloaded }): ReactElement => {
 };
 
 describe("usePreloadedQuery", () => {
+    it("forwards a server-pushed subscription error to onError", async () => {
+        expect.hasAssertions();
+
+        const mock = createMockClient(() => {
+            return { count: 1 };
+        });
+        const onError = vi.fn<SubscriptionErrorCallback>();
+
+        const WithError = (): ReactElement => {
+            const data = usePreloadedQuery(preloaded("posts:list", { count: 1 }), { onError });
+
+            return <div data-testid="display">{JSON.stringify(data)}</div>;
+        };
+
+        render(
+            <LunoraProvider client={mock.asClient}>
+                <WithError />
+            </LunoraProvider>,
+        );
+
+        await waitFor(() => {
+            expect(mock.subscribe).toHaveBeenCalledTimes(1);
+        });
+
+        await act(async () => {
+            mock.emitError("posts:list", { code: "UNAUTHORIZED", message: "session expired" });
+        });
+
+        // Without this the SSR snapshot keeps rendering as if it were live.
+        expect(onError).toHaveBeenCalledWith({ code: "UNAUTHORIZED", message: "session expired" });
+    });
+
     it("renders the preloaded value immediately with no initial HTTP fetch", () => {
         expect.assertions(2);
 
@@ -69,6 +101,36 @@ describe("usePreloadedQuery", () => {
         // post-emit update lands on a later commit — waitFor lets it flush.
         await waitFor(() => {
             expect(screen.getByTestId("display").textContent).toBe(JSON.stringify({ count: 5 }));
+        });
+    });
+
+    it("a live push of null replaces the preloaded value instead of falling back to it", async () => {
+        expect.hasAssertions();
+
+        const mock = createMockClient(() => {
+            return { count: 1 };
+        });
+
+        render(
+            <LunoraProvider client={mock.asClient}>
+                <Display token={preloaded("posts:list", { count: 1 })} />
+            </LunoraProvider>,
+        );
+
+        await waitFor(() => {
+            expect(mock.subscribe).toHaveBeenCalledTimes(1);
+        });
+
+        // The document is deleted / access revoked: the server legitimately
+        // re-evaluates the query to `null`. A `data ?? value` fallback would
+        // coalesce that `null` back to the stale preloaded `{ count: 1 }` — the
+        // deleted post would keep rendering forever. `null` must pass through.
+        await act(async () => {
+            mock.emit("posts:list", null);
+        });
+
+        await waitFor(() => {
+            expect(screen.getByTestId("display").textContent).toBe(JSON.stringify(null));
         });
     });
 

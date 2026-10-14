@@ -1,6 +1,6 @@
 {
     "name": "@lunora/storage",
-    "version": "0.0.0",
+    "version": "1.0.0-alpha.130",
     "description": "R2-backed storage for Lunora: typed buckets and signed URLs",
     "keywords": [
         "cloudflare",
@@ -25,7 +25,7 @@
         "directory": "packages/storage"
     },
     "files": [
-        "dist",
+        "./dist",
         "__assets__",
         "README.md",
         "LICENSE.md"
@@ -40,28 +40,46 @@
             "types": "./dist/index.d.ts",
             "import": "./dist/index.mjs"
         },
+        "./upload": {
+            "types": "./dist/upload.d.ts",
+            "import": "./dist/upload.mjs"
+        },
         "./package.json": "./package.json"
+    },
+    "publishConfig": {
+        "access": "public"
     },
     "scripts": {
         "test:bench": "vitest bench --run --config vitest.bench.config.ts",
         "build": "pnpm exec packem build --development",
         "build:prod": "pnpm exec packem build --production",
-        "lint:eslint": "eslint .",
+        "lint:eslint": "eslint . --max-warnings=0",
         "lint:eslint:fix": "eslint . --fix",
-        "lint:prettier": "prettier --check .",
-        "lint:prettier:fix": "prettier --write .",
+        "lint:prettier": "prettier --check . --ignore-path ../../.prettierignore",
+        "lint:prettier:fix": "prettier --write . --ignore-path ../../.prettierignore",
         "lint:types": "tsc --noEmit",
         "test": "vitest run",
-        "test:coverage": "vitest run --coverage"
+        "test:coverage": "vitest run --coverage",
+        "fallow:audit": "fallow audit",
+        "fallow:dead-code": "fallow dead-code",
+        "fallow:health": "fallow health --score"
+    },
+    "dependencies": {
+        "@lunora/errors": ">=1.0.0-alpha.51 <2.0.0-0",
+        "@lunora/platform": "1.0.0-alpha.62",
+        "@visulima/storage": "catalog:storage",
+        "aws4fetch": "catalog:storage"
     },
     "devDependencies": {
-        "@cloudflare/vitest-pool-workers": "catalog:cloudflare",
+        "@cloudflare/vitest-plugin": "catalog:cloudflare",
         "@cloudflare/workers-types": "catalog:cloudflare",
         "@codspeed/vitest-plugin": "catalog:test",
         "@types/node": "catalog:types",
         "@visulima/packem": "catalog:build",
+        "@visulima/storage-client": "catalog:storage",
         "@vitest/coverage-v8": "catalog:test",
         "esbuild": "catalog:build",
+        "fallow": "catalog:lint",
         "typescript": "catalog:tsc",
         "vitest": "catalog:test",
         "wrangler": "catalog:cloudflare"

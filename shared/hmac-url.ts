@@ -1,0 +1,177 @@
+/**
+ * Canonical HMAC-SHA256 signed-URL primitives shared by `@lunora/storage`
+ * (`buildSignedUrl`/`verifySignedUrl`) and `@lunora/bindings` images
+ * (`buildSignedImageUrl`/`verifySignedImageUrl`). Both mint Worker-resolved
+ * signed URLs with the same crypto envelope — base64url codec, a bounded
+ * per-secret `CryptoKey` cache, host extraction, and sign/verify over a
+ * canonical string — differing only in what each binds into that canonical
+ * (storage: method + content-type; images: transform) and how it assembles the
+ * URL.
+ *
+ * This is a cryptographic verification path, so it must have exactly ONE
+ * definition rather than byte-similar copies that can drift: a future fix to the
+ * base64url padding or the constant-time verify applied to one file and not the
+ * other would be a silent security divergence. Mirrors `shared/constant-time-equal.ts`.
+ *
+ * Callers keep their own `canonicalize` (the only real per-package difference)
+ * and decode the inbound signature themselves — `verifyCanonical` takes already
+ * base64url-decoded bytes so each caller can map a malformed signature to its
+ * own "malformed" (vs "bad_signature") diagnostic before calling in.
+ *
+ * Like `shared/constant-time-equal.ts`, this is deliberately **not** a package:
+ * consumers import it by relative path and the bundler (packem/rollup) inlines
+ * it — no runtime dependency edge. Keep it genuinely zero-dependency
+ * (relative/built-in imports only) or inlining breaks. Consumers must drop
+ * `outDir`/`rootDir` from their `tsconfig.json` (a set `rootDir` raises TS6059
+ * for this out-of-package file under `tsc --noEmit`).
+ */
+import { fromBase64Url, toBase64Url } from "./base64";
+import { memoizePromise } from "./promise-memo";
+
+const textEncoder = new TextEncoder();
+
+/** Upper bound on a signed-URL TTL — 7 days, matching common CDN/object-store ceilings. */
+const MAX_SIGNED_URL_TTL_SECONDS: number = 7 * 24 * 60 * 60;
+
+// Hoisted to module scope so the literal isn't recompiled on every call.
+const SCHEME_PREFIX_RE = /^[a-z][a-z0-9+\-.]*:\/\//i;
+
+// Matches any C0 control character (codes 0-31 inclusive), which covers CR and
+// LF among others. Built from code points rather than a \u escape literal in
+// the regex source, so the intent stays unambiguous in review and no
+// editor/tool can silently turn the escape text into a literal control byte
+// sitting inside this source file.
+const CONTROL_CHAR_CODES: number[] = Array.from({ length: 32 }, (_, index) => index);
+const CONTROL_CHAR_RE = new RegExp(`[${CONTROL_CHAR_CODES.map((code) => String.fromCodePoint(code)).join("")}]`, "u");
+
+// The signing secret is effectively constant per process, so the imported
+// (non-extractable) CryptoKey is memoized by secret value: this removes one
+// `crypto.subtle.importKey` from the verify hot path on every request. Caching
+// the Promise (not the resolved key) also coalesces concurrent imports. The
+// cache is bounded (FIFO eviction) so a multi-tenant app cycling through many
+// per-tenant secrets can't accumulate unbounded memory. 64 distinct
+// secrets/isolate is well above any realistic use, and isolates recycle anyway.
+const KEY_CACHE_MAX = 64;
+const keyCache = new Map<string, Promise<CryptoKey>>();
+
+// `memoizePromise` rather than a bare `set`: a rejected import used to stay in
+// the map, so one failed `importKey` poisoned that secret for the isolate's
+// whole life and every later verify against it failed with the original error.
+// It carries the FIFO bound too, evicting on the insert path.
+const importHmacKey = async (secret: string): Promise<CryptoKey> =>
+    memoizePromise(
+        keyCache,
+        secret,
+        async () => crypto.subtle.importKey("raw", textEncoder.encode(secret), { hash: "SHA-256", name: "HMAC" }, false, ["sign", "verify"]),
+        KEY_CACHE_MAX,
+    );
+
+/**
+ * Extract `host[:port]` from a full URL or a bare host/base form. Tolerates a
+ * host-only string by trying `URL` first and falling back to splitting off the
+ * path. Case is preserved; lowercasing (DNS is case-insensitive) is the caller's
+ * job inside `canonicalize`.
+ */
+const extractHost = (input: string): string => {
+    try {
+        return new URL(input).host;
+    } catch {
+        const noScheme = input.replace(SCHEME_PREFIX_RE, "");
+
+        return noScheme.split("/")[0] ?? "";
+    }
+};
+
+/**
+ * Reject a free-text value bound into an HMAC canonical if it contains any C0
+ * control character (codes 0-31), which includes CR and LF. The canonical is
+ * newline-delimited (`field\nfield\n...`), so a non-terminal free-text field
+ * (e.g. a signed-URL `key`) that itself contains a raw newline can shift where
+ * later fields (e.g. `exp`) get re-split on verify: two different `(key, exp)`
+ * pairs can then canonicalize to byte-identical strings under the SAME valid
+ * signature. Call this on every non-terminal free-text canonical field before
+ * signing, and again on the decoded value before verifying (inside the
+ * existing malformed-input `catch`, so a rejected value surfaces as
+ * `"malformed"` rather than an uncaught throw).
+ */
+const assertCanonicalSafe = (value: string): void => {
+    if (CONTROL_CHAR_RE.test(value)) {
+        throw new TypeError("hmac-url: value must not contain control characters (including CR/LF)");
+    }
+};
+
+/**
+ * Predicate form of the same C0-control-character check `assertCanonicalSafe`
+ * throws on. The canonical home for "is this value canonical-unsafe" so
+ * callers that need a boolean (rather than a thrown `TypeError`) — e.g.
+ * `@lunora/storage`'s `validateKey`, which raises its own `LunoraError` — share
+ * this single detector instead of re-deriving `CONTROL_CHAR_RE` from scratch.
+ */
+const hasControlChar = (value: string): boolean => CONTROL_CHAR_RE.test(value);
+
+// A base-URL pathname consisting only of slashes (`"/"`, `"//"`, …) is not a
+// "path" for the signed-URL subpath-base guard — the URL builders collapse any
+// run of trailing slashes to the bare origin when the URL is minted, so e.g.
+// `https://cdn.test//` must be accepted like the bare origin.
+const ONLY_SLASHES_RE = /^\/+$/u;
+
+/**
+ * True when `path` is a run of one or more slashes (`"/"`, `"//"`, …) — the
+ * trailing-slash carve-out both signed-URL builders apply to their
+ * no-subpath-base guard. Single definition so the two guards cannot diverge on
+ * what counts as "no path".
+ */
+const isOnlySlashesPath = (path: string): boolean => ONLY_SLASHES_RE.test(path);
+
+/**
+ * Validate a signed-URL TTL against the shared posture: a positive finite
+ * number, at most `maxSeconds`. Returns a human-readable problem (without a
+ * package prefix) or `undefined` when valid. Zero-dep by design — each caller
+ * throws its own error type (`LunoraError` in storage, `TypeError` in images)
+ * around the returned message.
+ */
+const validateTtlSeconds = (value: number, maxSeconds: number): string | undefined => {
+    if (!Number.isFinite(value) || value <= 0) {
+        return "expiresInSeconds must be a positive finite number";
+    }
+
+    if (value > maxSeconds) {
+        const wholeDays = maxSeconds % 86_400 === 0 ? ` (${String(maxSeconds / 86_400)} days)` : "";
+
+        return `expiresInSeconds must not exceed ${String(maxSeconds)} seconds${wholeDays}`;
+    }
+
+    return undefined;
+};
+
+/** Sign `canonical` with the secret's HMAC key, returning the base64url signature. */
+const signCanonical = async (secret: string, canonical: string): Promise<string> => {
+    const cryptoKey = await importHmacKey(secret);
+    const signature = await crypto.subtle.sign("HMAC", cryptoKey, textEncoder.encode(canonical));
+
+    return toBase64Url(new Uint8Array(signature));
+};
+
+/**
+ * Constant-time verify (via `crypto.subtle.verify`) of already base64url-decoded
+ * `sigBytes` over `canonical`. The caller decodes the inbound signature itself
+ * (mapping a decode throw to its own "malformed" diagnostic) and passes the
+ * bytes here.
+ */
+const verifyCanonical = async (secret: string, canonical: string, sigBytes: Uint8Array): Promise<boolean> => {
+    const cryptoKey = await importHmacKey(secret);
+
+    return crypto.subtle.verify("HMAC", cryptoKey, sigBytes as unknown as BufferSource, textEncoder.encode(canonical));
+};
+
+export {
+    assertCanonicalSafe,
+    extractHost,
+    fromBase64Url,
+    hasControlChar,
+    isOnlySlashesPath,
+    MAX_SIGNED_URL_TTL_SECONDS,
+    signCanonical,
+    validateTtlSeconds,
+    verifyCanonical,
+};

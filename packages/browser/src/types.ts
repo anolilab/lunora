@@ -8,11 +8,242 @@
  *
  * It is intentionally opaque: callers never touch the binding directly, they
  * hand it to {@link LunoraBrowserOptions.binding} and the Playwright layer
- * consumes it. Typed as a non-empty marker so an arbitrary value (e.g. `{}`)
- * doesn't silently type-check where a binding is required.
+ * consumes it. `fetch` is REQUIRED (the real binding is a `Fetcher`, so it
+ * always has one) so the marker actually excludes an arbitrary value like `{}` —
+ * a bare object fails to type-check where a binding is required, catching the
+ * misuse at the call site instead of deferring to an opaque launch error.
  */
 export interface BrowserBindingLike {
-    readonly fetch?: (...args: never[]) => unknown;
+    readonly fetch: typeof fetch;
+
+    /**
+     * Browser Run Quick Actions over the binding (`env.BROWSER.quickAction`,
+     * compatibility date `2026-03-24` or later). Optional: an older binding, or
+     * one typed as a plain `Fetcher`, lacks it, and only
+     * {@link Browser.quickAction} needs it. Method syntax on purpose — the real
+     * `BrowserRun` declares one overload per action, which only a bivariant
+     * method parameter accepts.
+     */
+    // eslint-disable-next-line @typescript-eslint/method-signature-style -- see above: a property signature rejects the real overloaded binding
+    quickAction?(action: QuickActionName, options: { url: string }): Promise<Response>;
+}
+
+/**
+ * The Browser Run Quick Actions reachable through the binding. `accessibilityTree`
+ * is newer than the `@cloudflare/workers-types` overloads, so it is listed here
+ * rather than derived from them.
+ */
+export type QuickActionName = "accessibilityTree" | "content" | "json" | "links" | "markdown" | "pdf" | "scrape" | "screenshot" | "snapshot";
+
+/**
+ * The page representations `/snapshot` can return in one call. Browser Run's
+ * default is `["content", "screenshot"]` and it requires at least two.
+ */
+export type SnapshotFormat = "accessibilityTree" | "content" | "markdown" | "screenshot";
+
+/**
+ * Per-action Quick Action options, forwarded to the binding as-is. The target
+ * is the `url` argument of {@link Browser.quickAction}, so `url` and `html` are
+ * not accepted here: an inline `html` document would bypass the URL guard.
+ * See https://developers.cloudflare.com/browser-run/quick-actions/ for every
+ * action's fields.
+ */
+export interface QuickActionOptions {
+    [key: string]: unknown;
+    /** `snapshot` only: which representations to return (at least two). */
+    formats?: ReadonlyArray<SnapshotFormat>;
+    html?: never;
+    /** `accessibilityTree` only: return just the semantically meaningful nodes. */
+    interestingOnly?: boolean;
+    url?: never;
+}
+
+/**
+ * Cloudflare account credentials for the Browser Run REST API. The `/crawl`
+ * endpoint has no binding method, so {@link Browser.crawl} and its siblings
+ * call `api.cloudflare.com` with a bearer token instead.
+ */
+export interface BrowserRestApiOptions {
+    accountId: string;
+    /** API token with `Browser Rendering - Edit`. A secret — keep it in `.dev.vars` / `wrangler secret`. */
+    apiToken: string;
+}
+
+/**
+ * Output formats a crawl can return per page.
+ */
+export type CrawlFormat = "html" | "json" | "markdown";
+
+/**
+ * Options for {@link Browser.crawl}, mirroring the `/crawl` request body.
+ * See https://developers.cloudflare.com/browser-run/quick-actions/crawl-endpoint/.
+ */
+export interface CrawlOptions {
+    /**
+     * The Content Signals `use` level you declare. A site whose robots.txt sets
+     * a stricter level rejects the crawl with a 400. Default `full`.
+     */
+    contentUse?: "full" | "reference";
+    /** Purposes the crawl is for, checked against the site's Content Signals. Default: all three. */
+    crawlPurposes?: ReadonlyArray<"ai-input" | "ai-train" | "search">;
+    /** Maximum link depth from the starting URL. */
+    depth?: number;
+    /** Per-page output formats. Default `["html"]`. */
+    formats?: ReadonlyArray<CrawlFormat>;
+    /** Maximum number of pages to crawl (Browser Run default 10, maximum 100,000). */
+    limit?: number;
+    options?: {
+        excludePatterns?: ReadonlyArray<string>;
+        /** Refused when `allowedHosts` is configured: the crawler would leave the allowlist. */
+        includeExternalLinks?: boolean;
+        includePatterns?: ReadonlyArray<string>;
+        /** Refused when `allowedHosts` is configured: subdomains are not exact allowlist matches. */
+        includeSubdomains?: boolean;
+    };
+    /** `false` fetches HTML without executing JavaScript. Default `true`. */
+    render?: boolean;
+    /** Where pages are discovered from. Default `all`. */
+    source?: "all" | "links" | "sitemaps";
+}
+
+/**
+ * Status of a whole crawl job.
+ */
+export type CrawlJobStatus = "cancelled_by_user" | "cancelled_due_to_limits" | "cancelled_due_to_timeout" | "completed" | "errored" | "running";
+
+/**
+ * Status of one crawled URL.
+ */
+export type CrawlRecordStatus = "cancelled" | "completed" | "disallowed" | "errored" | "queued" | "skipped";
+
+/**
+ * One crawled page. Only the formats the crawl asked for are present.
+ */
+export interface CrawlRecord {
+    html?: string;
+    json?: unknown;
+    markdown?: string;
+    metadata?: { status?: number; title?: string; url?: string };
+    status: CrawlRecordStatus;
+    url: string;
+}
+
+/**
+ * A crawl job and one page of its records, as `GET /crawl/{id}` returns it.
+ */
+export interface CrawlJob {
+    browserSecondsUsed?: number;
+    /** Pass back as {@link CrawlResultOptions.cursor} for the next page; absent on the last one. */
+    cursor?: number | string;
+    finished: number;
+    id: string;
+    records: CrawlRecord[];
+    status: CrawlJobStatus;
+    total: number;
+}
+
+/**
+ * Paging and filtering for {@link Browser.crawlResult}.
+ */
+export interface CrawlResultOptions {
+    cursor?: number | string;
+    limit?: number;
+    status?: CrawlRecordStatus;
+}
+
+/**
+ * The crawl configuration Browser Run echoes in crawl lifecycle events.
+ */
+export interface BrowserRunCrawlEventConfig {
+    depth: number;
+    formats: CrawlFormat[];
+    limit: number;
+    render: boolean;
+    source: "all" | "links" | "sitemaps";
+    url: string;
+}
+
+/**
+ * Envelope fields shared by every Browser Run Queues event.
+ */
+export interface BrowserRunEventEnvelope {
+    metadata: { accountId: string; eventSchemaVersion: number; eventSubscriptionId: string; eventTimestamp: string };
+    source: { type: "browserRun" };
+}
+
+/**
+ * A crawl lifecycle event delivered to a Queue by an account-level subscription
+ * (`wrangler queues subscription create --source browserRun --events
+ * crawl.started,crawl.updated,crawl.finished`). Narrow on `type`. It carries
+ * status, not page content — fetch that with {@link Browser.crawlResult}.
+ * See https://developers.cloudflare.com/queues/event-subscriptions/events-schemas/.
+ */
+export type BrowserRunCrawlEvent =
+    | (BrowserRunEventEnvelope & {
+          payload: {
+              completed: number;
+              crawlConfig: BrowserRunCrawlEventConfig;
+              createdAt: string;
+              errored: number;
+              finishedAt: string;
+              jobId: string;
+              jobStatus: CrawlJobStatus;
+              skipped: number;
+              total: number;
+          };
+          type: "cf.browserRun.crawl.finished";
+      })
+    | (BrowserRunEventEnvelope & {
+          payload: { crawlConfig: BrowserRunCrawlEventConfig; createdAt: string; jobId: string };
+          type: "cf.browserRun.crawl.started";
+      })
+    | (BrowserRunEventEnvelope & {
+          payload: { crawlStatus: CrawlRecordStatus; httpStatus: number; jobId: string; url: string };
+          type: "cf.browserRun.crawl.updated";
+      });
+
+/**
+ * Minimal projection of the Playwright `APIResponse` that {@link RouteLike.fetch}
+ * resolves: the status and headers the redirect guard reads.
+ */
+export interface RouteResponseLike {
+    /** Response headers, names lower-cased (as Playwright reports them). */
+    headers: () => Record<string, string>;
+    status: () => number;
+}
+
+/**
+ * Minimal projection of a Playwright `Route` (the argument a `context.route`
+ * handler receives). Only the members the SSRF guard drives are declared.
+ *
+ * Playwright calls the handler only for the FIRST request of a redirect chain:
+ * the hops Chromium follows on its own never reach it. So the guard fetches a
+ * navigation itself ({@link RouteLike.fetch} with `maxRedirects: 0`), checks a
+ * redirect's `Location` before anything requests it, and answers the browser
+ * with {@link RouteLike.fulfill}.
+ *
+ * Generic over the response type so the real `Route` (whose `fulfill` takes only
+ * Playwright's own `APIResponse`) satisfies the projection: `fulfill` accepts
+ * exactly what `fetch` returned.
+ */
+export interface RouteLike<TResponse extends RouteResponseLike = RouteResponseLike> {
+    /** Reject the intercepted request (fail-closed); `errorCode` is a Playwright abort reason. */
+    abort: (errorCode?: string) => Promise<void>;
+    /** Allow the intercepted request to proceed. */
+    continue: () => Promise<void>;
+    /** Perform the request without following redirects past `maxRedirects`, and return the response unfulfilled. */
+    fetch: (options?: { headers?: Record<string, string>; maxRedirects?: number; method?: string; postData?: string; url?: string }) => Promise<TResponse>;
+    /** Answer the request with `response` (a {@link RouteLike.fetch} result) or a synthetic body. */
+    fulfill: (options: { body?: string; contentType?: string; headers?: Record<string, string>; response?: TResponse; status?: number }) => Promise<void>;
+
+    /** The intercepted request: its URL, the frame it navigates, and whether it is a navigation. */
+    request: () => {
+        frame?: () => unknown;
+        headers?: () => Record<string, string>;
+        isNavigationRequest?: () => boolean;
+        method?: () => string;
+        url: () => string;
+    };
 }
 
 /**
@@ -24,10 +255,13 @@ export interface PageLike {
     /** Return the page's serialized HTML after the navigation settles. */
     content: () => Promise<string>;
     /** Run a function in the page context and return its (serializable) result. */
-    evaluate: <T>(function_: (...args: never[]) => T) => Promise<T>;
+    evaluate: <T>(function_: () => T) => Promise<T>;
 
     /** Navigate to a URL; resolves once the configured wait condition is met. */
-    goto: (url: string, options?: { timeout?: number; waitUntil?: string }) => Promise<unknown>;
+    goto: (url: string, options?: { timeout?: number; waitUntil?: "commit" | "domcontentloaded" | "load" | "networkidle" }) => Promise<unknown>;
+    /** The page's top-level frame, compared against a request's frame to tell a page navigation from an iframe's. */
+    mainFrame?: () => unknown;
+
     /** Render the page to a PDF buffer. */
     pdf: (options?: Record<string, unknown>) => Promise<Uint8Array>;
     /** Render the page to a PNG/JPEG buffer. */
@@ -37,21 +271,42 @@ export interface PageLike {
 }
 
 /**
- * Minimal projection of a Playwright `BrowserContext`. Only `newPage` is used;
- * declared structurally for the same test-double reason as {@link PageLike}.
+ * Minimal projection of a Playwright `BrowserContext`; declared structurally for
+ * the same test-double reason as {@link PageLike}.
  */
 export interface BrowserContextLike {
     newPage: () => Promise<PageLike>;
+
+    /**
+     * Register a request interceptor for every page of the context (Playwright
+     * `context.route`). The SSRF guard installs itself here. The handler is generic
+     * so that it accepts the real `Route` (see {@link RouteLike}).
+     */
+    route: (pattern: string, handler: <TResponse extends RouteResponseLike>(route: RouteLike<TResponse>) => unknown) => Promise<void>;
 }
 
 /**
- * Minimal projection of a Playwright `Browser` (the value `launch` resolves to).
- * Only `newContext`/`close` are used; declared structurally for the same
- * test-double reason as {@link PageLike}.
+ * Minimal projection of a Playwright `Browser` (the value `launch` resolves to);
+ * declared structurally for the same test-double reason as {@link PageLike}.
  */
 export interface BrowserLike {
     close: () => Promise<void>;
-    newContext: () => Promise<BrowserContextLike>;
+    /** The contexts already open on the browser — on a re-attached session, other callers' too. */
+    contexts?: () => BrowserContextLike[];
+    /** Open a context. The guard passes `serviceWorkers: "block"`: a service worker fetches outside every route handler. */
+    newContext: (options?: { serviceWorkers?: "allow" | "block" }) => Promise<BrowserContextLike>;
+
+    /**
+     * The Browser Rendering session this browser is attached to, when the
+     * runtime exposes it.
+     *
+     * Optional because this is a structural projection, not a re-declaration of
+     * the upstream Playwright type — but without it there is no way to learn
+     * the id of a session you just held open with `launch(fn, { keepAlive })`,
+     * which makes {@link Browser.connect} unreachable except by guessing from
+     * {@link Browser.sessions}.
+     */
+    sessionId?: () => string | undefined;
 }
 
 /* eslint-disable no-secrets/no-secrets -- the entropy scanner trips on the repeated `@cloudflare/playwright` package name in these doc comments, not a credential */
@@ -66,7 +321,34 @@ export interface BrowserLike {
  */
 export type BrowserLaunchLike = (binding: BrowserBindingLike, options?: Record<string, unknown>) => Promise<BrowserLike>;
 
-/** Options shared by the page-driving helpers ({@link Browser.screenshot} etc.). */
+/**
+ * One live Browser Run session, as `@cloudflare/playwright`'s `sessions()`
+ * reports it. `connectionId` is set while a worker is connected. Sessions accept
+ * several concurrent connections, so a set `connectionId` does not stop
+ * {@link Browser.connect}; it only tells you the browser is shared.
+ */
+export interface BrowserSession {
+    connectionId?: string;
+    sessionId: string;
+    startTime?: number;
+}
+
+/**
+ * Structural projection of `@cloudflare/playwright`'s `connect` export —
+ * re-attaches to an existing session rather than starting a new browser.
+ * Injected like {@link BrowserLaunchLike} so the peer dep stays optional.
+ */
+export type BrowserConnectLike = (binding: BrowserBindingLike, sessionId: string) => Promise<BrowserLike>;
+
+/**
+ * Structural projection of `@cloudflare/playwright`'s `sessions` export — lists
+ * the account's live Browser Rendering sessions for this binding.
+ */
+export type BrowserSessionsLike = (binding: BrowserBindingLike) => Promise<ReadonlyArray<BrowserSession>>;
+
+/**
+ * Options shared by the page-driving helpers ({@link Browser.screenshot} etc.).
+ */
 export interface NavigateOptions {
     /**
      * Hard timeout in milliseconds for the navigation + operation. Clamped to a
@@ -82,7 +364,9 @@ export interface NavigateOptions {
     waitUntil?: "commit" | "domcontentloaded" | "load" | "networkidle";
 }
 
-/** Options for {@link Browser.screenshot}. */
+/**
+ * Options for {@link Browser.screenshot}.
+ */
 export interface ScreenshotOptions extends NavigateOptions {
     /** Capture the full scrollable page rather than just the viewport. */
     fullPage?: boolean;
@@ -96,7 +380,9 @@ export interface ScreenshotOptions extends NavigateOptions {
     viewport?: { height: number; width: number };
 }
 
-/** Options for {@link Browser.pdf}. */
+/**
+ * Options for {@link Browser.pdf}.
+ */
 export interface PdfOptions extends NavigateOptions {
     /** Paper format (`A4`, `Letter`, …) forwarded to Playwright. */
     format?: string;
@@ -110,7 +396,46 @@ export interface PdfOptions extends NavigateOptions {
     viewport?: { height: number; width: number };
 }
 
+/**
+ * Options for `createBrowser`: the binding, the injected `@cloudflare/playwright` exports,
+ * the URL guards, and the REST credentials `/crawl` needs.
+ */
 export interface LunoraBrowserOptions {
+    /**
+     * Strict host allowlist. When set, a navigation URL is refused unless its
+     * hostname exactly matches one of these entries (case-insensitive,
+     * trailing-dot-normalized, IPv6 brackets stripped, a Unicode name compared in
+     * its punycode form). Entries are hosts, not origins: ports and schemes are
+     * not restricted, so `example.com` admits `https://example.com:8443/` too.
+     * This is the only guard
+     * that fully closes DNS rebinding: a public hostname that resolves to a
+     * private/metadata IP can still be pinned out if it isn't on the list. Set it
+     * whenever you pass client-controlled URLs to the browser.
+     *
+     * **`allowedHosts: []` allows NOTHING.** An empty list is a configured
+     * allowlist with no members, so every navigation, redirect hop and http(s)
+     * sub-resource is refused with a `FORBIDDEN` naming the empty list — it is
+     * never read as "no allowlist configured". To run without an allowlist, omit
+     * the option; that is the guarded default described below. (The allowlist arm
+     * is not relaxed by {@link LunoraBrowserOptions.allowPrivateTargets}, so an
+     * empty list refuses private targets too.)
+     *
+     * Leaving it unset (the default) is NOT unguarded: it turns
+     * {@link LunoraBrowserOptions.resolveDns} on, so every host is resolved over
+     * DoH and refused if it maps to a private address. Setting an allowlist —
+     * empty or not — turns that re-check off by default (the allowlist is the
+     * stronger guard, and may deliberately name an internal host); `resolveDns:
+     * true` forces both.
+     *
+     * Every browser this factory launches also gets the list as Browser Run
+     * session guardrails (`guardrails.allowedDomains`), so Cloudflare enforces it
+     * on every request the session makes, including the sub-resource redirects
+     * the Lunora-side guard cannot see. Guardrails accept at most 50 entries, so a
+     * longer list is refused at launch. Quick Actions and crawls have no guardrails: for those the list is
+     * checked against the starting URL only.
+     */
+    allowedHosts?: string[];
+
     /**
      * Opt out of the SSRF guard that, by default, refuses to navigate to a
      * private / internal / loopback / link-local host (RFC1918, `127.0.0.0/8`,
@@ -127,14 +452,64 @@ export interface LunoraBrowserOptions {
     binding: BrowserBindingLike;
 
     /**
+     * The `@cloudflare/playwright` `connect` function, injected like
+     * {@link LunoraBrowserOptions.launch}. Required for {@link Browser.connect}.
+     */
+    connect?: BrowserConnectLike;
+
+    /**
      * The `@cloudflare/playwright` `launch` function. Injected rather than
      * imported at module top so the optional peer dep stays out of the bundle
-     * for non-browser apps and tests can pass a double. The generated worker
-     * passes the real function; omitting it makes the helper throw on first use
-     * with a clear "install `@cloudflare/playwright`" error.
+     * for non-browser apps and tests can pass a double.
+     *
+     * The APP passes the real function, not codegen: the generated shard builds
+     * `ctx.browser` from a `config.browser` thunk and falls back to a throwing
+     * stub, so `createShardDO({ browser: (env) => createBrowser({ binding:
+     * env.BROWSER, launch }) })` is what wires it. Omitting `launch` makes the
+     * helper throw on first use with a clear "install `@cloudflare/playwright`"
+     * error.
      */
     launch?: BrowserLaunchLike;
+
+    /**
+     * Best-effort DNS-rebinding re-check. When `true` (and `allowPrivateTargets`
+     * is `false`), the factory resolves the URL's hostname over Cloudflare DoH
+     * (`https://cloudflare-dns.com/dns-query`) and refuses to navigate if any
+     * resolved A/AAAA record is a private/internal address — closing the gap
+     * where a public hostname resolves to a private IP after the string guard
+     * passes.
+     *
+     * **On by default when no {@link LunoraBrowserOptions.allowedHosts} is set**,
+     * because a `scrape`/`screenshot` action that forwards a client-supplied URL
+     * is the common shape and the string guard alone lets
+     * `http://127.0.0.1.nip.io:8787/…` through to an internal service. It costs
+     * one DNS round-trip per navigation and is TOCTOU-imperfect (the browser
+     * re-resolves independently). A lookup that fails (timeout, network error)
+     * or answers with no address is refused too: the name's nameserver can cause
+     * either on purpose, so neither may wave a request through.
+     *
+     * Configuring `allowedHosts` at all — an empty list included, since that
+     * refuses every navigation outright — turns it OFF by default: an exact-origin
+     * allowlist is the stronger guard and may deliberately name an internal host
+     * (reachable over a Tunnel / private-network binding) that a resolved-address
+     * check would refuse. Set this explicitly to `true` to run both, or to
+     * `false` for trusted, non-caller-supplied URLs where the round-trip matters.
+     */
+    resolveDns?: boolean;
     /* eslint-enable no-secrets/no-secrets */
+
+    /**
+     * Account id + API token for the Browser Run REST API. Required only for
+     * {@link Browser.crawl}, {@link Browser.crawlResult} and
+     * {@link Browser.cancelCrawl}, which have no binding method.
+     */
+    restApi?: BrowserRestApiOptions;
+
+    /**
+     * The `@cloudflare/playwright` `sessions` function, injected like
+     * {@link LunoraBrowserOptions.launch}. Required for {@link Browser.sessions}.
+     */
+    sessions?: BrowserSessionsLike;
 
     /**
      * Default navigation timeout (ms) applied when a per-call `timeoutMs` is not
@@ -154,19 +529,101 @@ export interface LunoraBrowserOptions {
  * rate-limited).
  */
 export interface Browser {
+    /** Cancel a running crawl job. Needs {@link LunoraBrowserOptions.restApi}. */
+    cancelCrawl: (jobId: string) => Promise<void>;
+
+    /**
+     * Re-attach to an existing session and hand the browser to `fn`.
+     *
+     * Get the id either by reading it inside the call that opened the session
+     * (`launch(async (browser) => browser.sessionId?.(), { keepAlive: 600 })`)
+     * and persisting it, or by picking a free one out of
+     * {@link Browser.sessions}.
+     *
+     * Several workers may be connected to one session at once. Open your own
+     * context (`browser.newContext()`) per caller so pages, cookies and storage
+     * stay apart, and close that context when you are done.
+     *
+     * **A session id is a bearer secret.** Browser Run has no way to tag a
+     * session with an owner, so whoever holds the id can drive the browser, read
+     * its pages and cookies, and close it. Keep ids server-side, keyed by the
+     * identity of the caller that opened the session, and never send one to a
+     * client or accept one from it.
+     *
+     * The browser handed to `fn` carries the same SSRF guard as every other
+     * entry point, locked as on {@link Browser.launch}, on the contexts already
+     * open in the session and on every one opened from it.
+     *
+     * The session is deliberately **left open** afterwards — closing it is the
+     * whole thing you are avoiding. `close: true` closes the browser itself, for
+     * every connected client, so pass it only from the flow that owns the
+     * session; otherwise let `keepAlive` lapse.
+     *
+     * This is what makes agent-style browsing possible: a model calls
+     * `navigate`, then `click`, then `extract` as three separate action
+     * invocations, and the page has to survive between them. With only the
+     * per-call lifecycle each step got a fresh browser, so `click` ran against
+     * a blank page — silently, which is the worst shape for that bug.
+     */
+    connect: <T>(sessionId: string, function_: (browser: BrowserLike) => Promise<T>, options?: { close?: boolean }) => Promise<T>;
+
     /** Serialized HTML of `url` after navigation settles. */
     content: (url: string, options?: NavigateOptions) => Promise<string>;
 
     /**
-     * Low-level escape hatch: launch a raw Playwright `Browser` and hand it to
-     * `fn` (e.g. for multi-page flows or APIs not surfaced here). The browser is
-     * **always closed** when `fn` resolves or throws — do not retain references
-     * to it past the callback.
+     * Start an asynchronous Browser Run crawl from `url` and return its job id.
+     * Poll with {@link Browser.crawlResult}, or subscribe a Queue to crawl events
+     * (see {@link BrowserRunCrawlEvent}). The crawler respects robots.txt and
+     * Content Signals. `url` passes the same guards as a navigation; pages the
+     * crawler discovers afterwards are outside Lunora's reach, which is why
+     * `includeExternalLinks` / `includeSubdomains` are refused under
+     * `allowedHosts`. Needs {@link LunoraBrowserOptions.restApi}: `/crawl` is
+     * REST-only.
      */
-    launch: <T>(function_: (browser: BrowserLike) => Promise<T>) => Promise<T>;
+    crawl: (url: string, options?: CrawlOptions) => Promise<string>;
+
+    /** Read a crawl job's status and one page of its records. Needs {@link LunoraBrowserOptions.restApi}. */
+    crawlResult: (jobId: string, options?: CrawlResultOptions) => Promise<CrawlJob>;
+
+    /**
+     * Low-level escape hatch: launch a Playwright `Browser` and hand it to `fn`
+     * (e.g. for multi-page flows or APIs not surfaced here). Every context opened
+     * from it carries the SSRF guard: a navigation is checked, fetched by the
+     * guard, and a redirect lands on a page that navigates to its checked target,
+     * so wait for the final URL (`page.waitForURL`) before reading a redirected page.
+     * The guard is locked in place: `unrouteAll()`, `unroute()` without a
+     * handler, `routeFromHAR()`, `routeWebSocket()` and the CDP-session methods
+     * throw `FORBIDDEN`, and `continue()` in your own route handlers falls
+     * through to the guard.
+     *
+     * The browser is **always closed** when `fn` resolves or throws — unless
+     * `keepAlive` is a number of seconds **between 10 and 600**, which holds the
+     * session open for that long so a later {@link Browser.connect} can
+     * re-attach. `0`, a negative value and `NaN` all mean "do not keep alive"
+     * and take the always-close path (a held session is billed, so the
+     * ambiguous values fall to the safe side); a positive value outside the
+     * 10–600s window Browser Rendering accepts throws `BAD_REQUEST` rather than
+     * being sent on for the provider to refuse. Do not retain references to the
+     * browser past the callback either way.
+     */
+    launch: <T>(function_: (browser: BrowserLike) => Promise<T>, options?: { keepAlive?: number }) => Promise<T>;
 
     /** Render `url` to a PDF buffer. */
     pdf: (url: string, options?: PdfOptions) => Promise<Uint8Array>;
+
+    /**
+     * Run a Browser Run Quick Action on `url` through the binding — one request,
+     * no Playwright session: `markdown`, `snapshot` (several `formats` at once),
+     * `accessibilityTree`, `links`, `json` (AI extraction), and the rest.
+     *
+     * Returns Browser Run's `Response` untouched: binary for `screenshot`/`pdf`,
+     * JSON otherwise, and an error JSON body with a non-2xx status on failure.
+     * `url` passes the same guards as a navigation, but Quick Actions have no
+     * request interception or guardrails, so redirects and sub-resources are not
+     * re-checked. Needs a binding with `quickAction` (compatibility date
+     * `2026-03-24` or later).
+     */
+    quickAction: (action: QuickActionName, url: string, options?: QuickActionOptions) => Promise<Response>;
 
     /**
      * Navigate to `url`, run `fn` inside the page context, and return its
@@ -177,4 +634,11 @@ export interface Browser {
 
     /** Render `url` to an image buffer (PNG by default). */
     screenshot: (url: string, options?: ScreenshotOptions) => Promise<Uint8Array>;
+
+    /**
+     * List the live Browser Run sessions for this binding, so a caller can pick
+     * one to {@link Browser.connect} to. An entry with a `connectionId` already
+     * has a worker connected; connecting as well shares that browser.
+     */
+    sessions: () => Promise<ReadonlyArray<BrowserSession>>;
 }

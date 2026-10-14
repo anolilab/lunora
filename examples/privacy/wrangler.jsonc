@@ -1,0 +1,49 @@
+{
+    "$schema": "node_modules/wrangler/config-schema.json",
+    "name": "lunora-example-privacy",
+    "main": "src/server/index.ts",
+    "compatibility_date": "2026-10-01",
+    "compatibility_flags": ["nodejs_compat"],
+    "durable_objects": {
+        "bindings": [
+            { "name": "SHARD", "class_name": "ShardDO" },
+            // The erasure tombstones, kept out of the shard so a point-in-time restore of the shard cannot delete them.
+            { "name": "PRIVACY_TOMBSTONES", "class_name": "PrivacyTombstonesDO" },
+        ],
+    },
+    "migrations": [
+        { "tag": "v1", "new_sqlite_classes": ["ShardDO"] },
+        { "tag": "v2", "new_sqlite_classes": ["PrivacyTombstonesDO"] },
+    ],
+    "observability": {
+        "enabled": true,
+        "head_sampling_rate": 1,
+    },
+    "upload_source_maps": true,
+    "exports": {
+        "PrivacyErasureWorkflow": {
+            "type": "workflow",
+            "limits": {
+                "steps": 25000,
+            },
+            "name": "privacy-erasure",
+        },
+        "PrivacyExportWorkflow": {
+            "type": "workflow",
+            "limits": {
+                "steps": 25000,
+            },
+            "name": "privacy-export",
+        },
+        "PrivacyRestoreWorkflow": {
+            "type": "workflow",
+            "limits": {
+                "steps": 25000,
+            },
+            "name": "privacy-restore",
+        },
+    },
+    "triggers": {
+        "crons": ["0 6 * * *"],
+    },
+}

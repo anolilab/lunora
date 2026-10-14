@@ -1,4 +1,6 @@
-import type { SubscriptionRegistry, SubscriptionState } from "./subscription";
+import { applyOptimisticLayer } from "./optimistic-layers";
+import type { SubscriptionState } from "./subscription";
+import { SubscriptionRegistry } from "./subscription";
 import type { ArgsOf, FunctionReference, ReturnOf } from "./types";
 
 /**
@@ -7,10 +9,10 @@ import type { ArgsOf, FunctionReference, ReturnOf } from "./types";
  * many subscribed queries at once (Convex's `OptimisticLocalStore` model).
  *
  * `getQuery` reads the current value (server value or any still-pending
- * optimistic override) of a subscribed query; `setQuery` writes an optimistic
- * override on top. Every write is collected as a rollback closure so the whole
- * batch unwinds atomically when the mutation settles or the server advances
- * past it — the same per-subscription rollback machinery the legacy
+ * optimistic override) of a subscribed query; `setQuery` registers a constant
+ * optimistic layer on top. The whole batch rebases onto incoming deltas and
+ * settles together — confirmed on the mutation's commit cursor, or rolled back
+ * on failure — the same per-subscription layer machinery the single-query
  * per-call `optimistic` transform uses, generalized to N queries.
  */
 export interface OptimisticLocalStore {
@@ -41,39 +43,39 @@ export interface OptimisticLocalStore {
 export type OptimisticUpdate<Args> = (localStore: OptimisticLocalStore, args: Args) => void;
 
 /**
- * Build an {@link OptimisticLocalStore} bound to a subscription registry, the
- * mutation's shard key, and the `writeOptimisticToState` primitive. Returns the
- * store plus the ordered rollback closures every `setQuery` produced, so the
- * caller can unwind the whole batch (LIFO) if the mutation later fails — and
- * leave them in place to be GC'd alongside the subscription on success.
+ * Build an {@link OptimisticLocalStore} bound to a subscription registry and the
+ * mutation's shard key. Each `setQuery(value)` registers a constant-value layer
+ * on its target subscription (via `applyOptimisticLayer`): the predicted value
+ * survives incoming server deltas (re-clamped, masking concurrent changes to that
+ * query — not merged) and drops gaplessly on the mutation's commit cursor, like
+ * the single-query per-call `optimistic` path. Returns the store plus the ordered
+ * `confirm` (success) and `rollback` (failure) closures every `setQuery` produced,
+ * so the caller settles the whole batch when the mutation does.
  */
 export const createLocalStore = (
     subscriptions: SubscriptionRegistry,
     shardKey: string | undefined,
-    write: (state: SubscriptionState, next: unknown) => () => void,
-    stableStringify: (value: unknown) => string,
-): { rollbacks: (() => void)[]; store: OptimisticLocalStore } => {
+): { confirms: ((commitCursor: number | undefined) => void)[]; rollbacks: (() => void)[]; store: OptimisticLocalStore } => {
+    const confirms: ((commitCursor: number | undefined) => void)[] = [];
     const rollbacks: (() => void)[] = [];
 
     // Resolve the live subscription for one (fn, args) pair on the mutation's
-    // shard. Subscriptions are keyed by stable-stringified args, so an
-    // optimistic patch only lands on the exact query variant it names.
-    const findState = (functionRef: string, argsKey: string): SubscriptionState | undefined => {
-        for (const state of subscriptions.all()) {
-            if (state.fn.__lunoraRef === functionRef && state.shardKey === shardKey && state.argsKey === argsKey) {
-                return state;
-            }
-        }
-
-        return undefined;
-    };
+    // shard via the registry's own composite key — an O(1) lookup that also
+    // shares the registry's `shardKey ?? ""` normalization, so a mutation fired
+    // with `undefined` matches a subscription registered with `""` (and vice
+    // versa). Mirrors the single-query `applyOptimisticUpdates` path, which was
+    // likewise converted off an O(N) scan with a strict-`===` shardKey compare.
+    const findState = (functionRef: string, args: Record<string, unknown>): SubscriptionState | undefined =>
+        subscriptions.get(SubscriptionRegistry.key(functionRef, args, shardKey));
 
     const store: OptimisticLocalStore = {
         getAllQueries: <F extends FunctionReference>(function_: F): { args: ArgsOf<F>; value: ReturnOf<F> | undefined }[] => {
             const matches: { args: ArgsOf<F>; value: ReturnOf<F> | undefined }[] = [];
 
             for (const state of subscriptions.all()) {
-                if (state.fn.__lunoraRef === function_.__lunoraRef && state.shardKey === shardKey) {
+                // Normalize both sides (`?? ""`) so the shard filter matches the
+                // registry key semantics `findState` relies on above.
+                if (state.fn.__lunoraRef === function_.__lunoraRef && (state.shardKey ?? "") === (shardKey ?? "")) {
                     matches.push({ args: state.args as ArgsOf<F>, value: state.lastValue as ReturnOf<F> | undefined });
                 }
             }
@@ -81,20 +83,25 @@ export const createLocalStore = (
             return matches;
         },
         getQuery: <F extends FunctionReference>(function_: F, args: ArgsOf<F>): ReturnOf<F> | undefined => {
-            const state = findState(function_.__lunoraRef, stableStringify(args ?? {}));
+            const state = findState(function_.__lunoraRef, args ?? {});
 
             return state?.lastValue as ReturnOf<F> | undefined;
         },
         setQuery: <F extends FunctionReference>(function_: F, args: ArgsOf<F>, value: ReturnOf<F> | undefined): void => {
-            const state = findState(function_.__lunoraRef, stableStringify(args ?? {}));
+            const state = findState(function_.__lunoraRef, args ?? {});
 
             if (!state) {
                 return;
             }
 
-            rollbacks.push(write(state, value));
+            const handle = applyOptimisticLayer(state, () => value);
+
+            if (handle) {
+                confirms.push(handle.confirm);
+                rollbacks.push(handle.rollback);
+            }
         },
     };
 
-    return { rollbacks, store };
+    return { confirms, rollbacks, store };
 };

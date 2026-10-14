@@ -1,14 +1,13 @@
 import type { SchedulerStatus } from "@lunora/client";
 import { useLunora } from "@lunora/react";
 import type { ReactElement } from "react";
-import { useEffect, useState } from "react";
 
 import { Card, CardContent } from "../../components/ui/card";
 import { EmptyState } from "../../components/ui/empty-state";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "../../components/ui/table";
+import { useClientQuery } from "../../hooks/use-admin-query";
 import { useAutoRefresh } from "../../hooks/use-auto-refresh";
 import { useT } from "../../i18n/i18n-context";
-import { errorMessage, fireAndForget } from "../../lib/internal";
 
 interface SchedulerPoolsPanelProps {
     /** Load the workpool backlog status. Defaults to `client.schedulerStatus`. */
@@ -38,32 +37,18 @@ export const SchedulerPoolsPanel = ({ loadStatus }: SchedulerPoolsPanelProps = {
     const client = useLunora();
     const t = useT();
 
-    const [status, setStatus] = useState<null | SchedulerStatus>(null);
-    const [error, setError] = useState<null | string>(null);
+    // The scheduler status is HTTP-only (no admin-RPC path), so it's a
+    // `useClientQuery` over the supplied loader (or `client.schedulerStatus`).
+    // Most-backed-up pools first so the saturated ones surface at the top.
+    const statusQuery = useClientQuery(["lunora-scheduler-status", loadStatus === undefined], async () => {
+        const next = await (loadStatus ?? (() => client.schedulerStatus()))();
 
-    const load = loadStatus ?? (() => client.schedulerStatus());
-
-    const refresh = async (): Promise<void> => {
-        setError(null);
-
-        try {
-            const next = await load();
-
-            // Most-backed-up pools first so the saturated ones surface at the top.
-            setStatus({ ...next, pools: next.pools.toSorted((a, b) => b.queued - a.queued) });
-        } catch (error_) {
-            setStatus(null);
-            setError(errorMessage(error_));
-        }
-    };
-
-    useEffect(() => {
-        fireAndForget(refresh());
-        // eslint-disable-next-line react-hooks/exhaustive-deps -- run once on mount
-    }, []);
+        return { ...next, pools: next.pools.toSorted((a, b) => b.queued - a.queued) };
+    });
+    const { data: status, error } = statusQuery;
 
     useAutoRefresh(() => {
-        fireAndForget(refresh());
+        statusQuery.refetch();
     }, true);
 
     return (
@@ -74,7 +59,7 @@ export const SchedulerPoolsPanel = ({ loadStatus }: SchedulerPoolsPanelProps = {
                 </p>
             )}
 
-            {status !== null && (
+            {status !== undefined && (
                 <div className="flex gap-3" data-testid="pools-totals">
                     <StatTile label={t("backlog")} testId="pools-backlog" value={status.backlog} />
                     <StatTile label={t("in flight")} testId="pools-inflight" value={status.inFlight} />
@@ -82,7 +67,7 @@ export const SchedulerPoolsPanel = ({ loadStatus }: SchedulerPoolsPanelProps = {
                 </div>
             )}
 
-            {status !== null && status.pools.length === 0 && (
+            {status?.pools.length === 0 && (
                 <EmptyState
                     description={t("Pools created with createWorkpool appear here once they have activity.")}
                     icon={
@@ -103,7 +88,7 @@ export const SchedulerPoolsPanel = ({ loadStatus }: SchedulerPoolsPanelProps = {
                 />
             )}
 
-            {status !== null && status.pools.length > 0 && (
+            {status !== undefined && status.pools.length > 0 && (
                 <Card className="overflow-hidden py-0">
                     <CardContent className="px-0">
                         <Table data-testid="pools-table">

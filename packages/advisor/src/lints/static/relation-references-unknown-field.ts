@@ -23,6 +23,19 @@ const missingColumns = (
     holder: AdvisorTable,
     relation: AdvisorRelation,
 ): ColumnProblem[] => {
+    // A many-to-many relation wires the join table's two keys to the `_id` of each side, which always exists.
+    if (relation.through !== undefined) {
+        const join = byName.get(relation.through.table);
+
+        return join === undefined
+            ? []
+            : [relation.through.from, relation.through.to]
+                  .filter((column) => !columnsOf(join).has(column))
+                  .map((column) => {
+                      return { column, owner: join.name, side: "field" as const };
+                  });
+    }
+
     const target = byName.get(relation.table);
 
     if (!target) {

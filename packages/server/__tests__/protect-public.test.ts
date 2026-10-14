@@ -1,3 +1,4 @@
+import { LunoraError } from "@lunora/errors";
 import { describe, expect, it } from "vitest";
 
 import { initLunora } from "../src/builder/index";
@@ -17,7 +18,7 @@ const trace =
 const reject =
     <Context>(message: string): Middleware<Context, Context> =>
     () => {
-        throw Object.assign(new Error(message), { code: "FORBIDDEN", name: "LunoraError", status: 403 });
+        throw new LunoraError("FORBIDDEN", message, { status: 403 });
     };
 
 describe("protectPublic", () => {

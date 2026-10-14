@@ -1,4 +1,5 @@
 import type { CodegenOptions } from "@lunora/codegen";
+import { LunoraError } from "@lunora/errors";
 
 /**
  * The `--api-spec` flag's accepted values, mirroring `@lunora/codegen`'s
@@ -27,7 +28,7 @@ const parseApiSpec = (value: unknown): ApiSpec | undefined => {
         return value as ApiSpec;
     }
 
-    throw new Error(`invalid --api-spec "${value}" — expected one of: ${API_SPEC_HELP}`);
+    throw new LunoraError("INTERNAL", `invalid --api-spec "${value}" — expected one of: ${API_SPEC_HELP}`);
 };
 
 export type { ApiSpec };

@@ -1,5 +1,5 @@
 /**
- * One `httpRoute.&lt;verb&gt;("/admin/…")` REST route on an admin/privileged-looking
+ * One `httpRoute.<verb>("/admin/…")` REST route on an admin/privileged-looking
  * path, with whether its handler references an auth/admin guard — the input the
  * `admin_route_without_guard` lint consumes. Produced by the codegen feeder;
  * runtime callers don't supply it, so the lint finds nothing there.

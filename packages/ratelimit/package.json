@@ -1,7 +1,7 @@
 {
     "name": "@lunora/ratelimit",
-    "version": "0.0.0",
-    "description": "Rate limiting: token-bucket / fixed-window / sliding-window algorithms, deny list, sharding, pluggable stores, and procedure middleware",
+    "version": "1.0.0-alpha.129",
+    "description": "Rate limiting: token-bucket / fixed-window / sliding-window algorithms, deny list, pluggable stores, and procedure middleware",
     "keywords": [
         "cloudflare",
         "durable-objects",
@@ -25,7 +25,7 @@
         "directory": "packages/ratelimit"
     },
     "files": [
-        "dist",
+        "./dist",
         "__assets__",
         "README.md",
         "LICENSE.md"
@@ -42,28 +42,47 @@
         },
         "./package.json": "./package.json"
     },
+    "publishConfig": {
+        "access": "public"
+    },
     "scripts": {
         "build": "pnpm exec packem build --development",
         "build:prod": "pnpm exec packem build --production",
-        "lint:eslint": "pnpm exec eslint .",
+        "lint:eslint": "pnpm exec eslint . --max-warnings=0",
         "lint:eslint:fix": "pnpm exec eslint . --fix",
-        "lint:prettier": "pnpm exec prettier --check .",
-        "lint:prettier:fix": "pnpm exec prettier --write .",
+        "lint:prettier": "prettier --check . --ignore-path ../../.prettierignore",
+        "lint:prettier:fix": "prettier --write . --ignore-path ../../.prettierignore",
         "lint:types": "pnpm exec tsc --noEmit",
         "test": "pnpm exec vitest run",
         "test:coverage": "pnpm exec vitest run --coverage",
-        "test:bench": "vitest bench --run --config vitest.bench.config.ts"
+        "test:bench": "vitest bench --run --config vitest.bench.config.ts",
+        "fallow:audit": "fallow audit",
+        "fallow:dead-code": "fallow dead-code",
+        "fallow:health": "fallow health --score"
+    },
+    "dependencies": {
+        "@lunora/errors": ">=1.0.0-alpha.51 <2.0.0-0"
     },
     "devDependencies": {
+        "@cloudflare/vitest-plugin": "catalog:cloudflare",
+        "@cloudflare/workers-types": "catalog:cloudflare",
         "@codspeed/vitest-plugin": "catalog:test",
-        "@lunora/server": "workspace:*",
-        "@lunora/values": "workspace:*",
+        "@lunora/d1": "1.0.0-alpha.176",
+        "@lunora/server": "1.0.0-alpha.196",
+        "@lunora/shard-engine": "1.0.0-alpha.125",
+        "@lunora/values": "1.0.0-alpha.64",
         "@types/node": "catalog:types",
         "@visulima/packem": "catalog:build",
         "@vitest/coverage-v8": "catalog:test",
         "esbuild": "catalog:build",
+        "fallow": "catalog:lint",
         "typescript": "catalog:tsc",
-        "vitest": "catalog:test"
+        "vitest": "catalog:test",
+        "wrangler": "catalog:cloudflare"
+    },
+    "peerDependencies": {
+        "@lunora/server": ">=1.0.0-alpha.24 <2.0.0-0",
+        "@lunora/values": ">=1.0.0-alpha.7 <2.0.0-0"
     },
     "engines": {
         "node": "^22.15.0 || >=24.11.0"

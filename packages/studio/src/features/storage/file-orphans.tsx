@@ -13,13 +13,20 @@ interface OrphanedObjectsSectionProps {
     readonly onCheck: () => void;
 
     /**
-     * Record `v.storage()` fields pointing at a missing object. `undefined` until
-     * the operator runs the check (it walks the whole bucket, so it isn't automatic);
-     * an empty array means the check ran and found none.
+     * Record `v.storage()` fields pointing at a missing object. `undefined` means
+     * there is NO verdict — the check hasn't been run (it walks the whole bucket, so
+     * it isn't automatic), was truncated, or failed. An empty array means the check
+     * ran to completion and found none, which is the only input that earns the
+     * all-clear.
      */
     readonly references: ReadonlyArray<DanglingReference> | undefined;
     readonly t: TFunction;
-    /** `true` when the scan was clipped by a bound — the list below is partial. */
+
+    /**
+     * `true` when the scan was clipped by a bound. With `references` present the
+     * list below is partial; with none, the check never ran against a complete key
+     * set and produced no verdict at all.
+     */
     readonly truncated: boolean;
 }
 
@@ -70,7 +77,19 @@ export const OrphanedObjectsSection = ({ busy, onCheck, references, t, truncated
             </Button>
         </div>
 
-        {references?.length === 0 && (
+        {/* The truncation notice lives OUTSIDE the results branch: the case it exists
+            for is a scan that produced no rows precisely because it checked nothing,
+            and nesting it under `length > 0` made it unreachable exactly there. */}
+        {truncated && (
+            <p className="text-xs text-warning" data-testid="fb-orphans-truncated">
+                {references === undefined || references.length === 0
+                    ? t("The bucket is larger than the scan's key limit, so dangling references could not be checked.")
+                    : t("Showing the first {count} dangling references — the scan was truncated.", { count: references.length })}
+            </p>
+        )}
+
+        {/* Only a completed check that found nothing earns the all-clear. */}
+        {references?.length === 0 && !truncated && (
             <EmptyState
                 description={t("Every record's file reference points at an object that exists in the bucket.")}
                 testId="fb-orphans-empty"
@@ -79,18 +98,11 @@ export const OrphanedObjectsSection = ({ busy, onCheck, references, t, truncated
         )}
 
         {references !== undefined && references.length > 0 && (
-            <>
-                {truncated && (
-                    <p className="text-xs text-warning" data-testid="fb-orphans-truncated">
-                        {t("Showing the first {count} dangling references — the scan was truncated.", { count: references.length })}
-                    </p>
-                )}
-                <ul className="flex flex-col gap-1.5" data-testid="fb-orphans-list">
-                    {references.map((reference) => (
-                        <DanglingRow key={`${reference.table}·${reference.id}·${reference.column}`} reference={reference} t={t} />
-                    ))}
-                </ul>
-            </>
+            <ul className="flex flex-col gap-1.5" data-testid="fb-orphans-list">
+                {references.map((reference) => (
+                    <DanglingRow key={`${reference.table}·${reference.id}·${reference.column}`} reference={reference} t={t} />
+                ))}
+            </ul>
         )}
     </section>
 );

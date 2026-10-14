@@ -104,13 +104,19 @@ All functions that require a component lifecycle (presence, rate-limit) return a
 | `query`            | `useQuery`            | Live readable store — updates on every server delta.                                   |
 | `mutation`         | `useMutation`         | Optimistic mutation handle (`data`, `error`, `pending`, `mutate`, `reset` stores).     |
 | `subscription`     | `useSubscription`     | Raw subscription readable — unbounded live stream.                                     |
-| `paginatedQuery`   | `usePaginatedQuery`   | Cursor-paginated query with `loadMore`, `status`, and `results` stores.                |
+| `paginatedQuery`   | `usePaginatedQuery`   | Cursor-paginated query with `loadMore`, `status`, `results`, and `error` stores.       |
 | `infiniteQuery`    | `useInfiniteQuery`    | Infinite-scroll variant of `paginatedQuery`.                                           |
-| `auth`             | `useAuth`             | Reactive auth stores (`user`, `token`) plus `setToken`.                                |
+| `auth`             | `useAuth`             | Reactive auth stores (`user`, `token`, `status`) plus `setToken`.                      |
 | `presence`         | `usePresence`         | Collaborative-awareness — heartbeat + live present-members readable + `teardown`.      |
+| `flag`             | `useFlag`             | Live OpenFeature flag readable store — holds `default` until the server answers.       |
+| `flags`            | `useFlags`            | Batch variant — a readable store of one value per key in the defaults map.             |
 | `rateLimit`        | `useRateLimit`        | Client-side rate-limit mirror — `ok`, `disabled`, `retryAfter` readables + `teardown`. |
 | `connectionStatus` | `useConnectionStatus` | Reactive connection state store.                                                       |
 | `hydratePreloaded` | `usePreloadedQuery`   | Seed a query store from an SSR `Preloaded` token, then go live.                        |
+| `agentToolEvents`  | `useAgentToolEvents`  | One agent thread's tool lifecycle as a readable store of discriminated events.         |
+| `voiceAgent`       | `useVoiceAgent`       | Full-duplex voice call — stores for status/transcript/level + call controls.           |
+
+`voiceAgent` opens nothing until `startCall()` — that call is what requests the microphone, so it must run from a user gesture. Unlike the other adapters there is **no auto-dispose**: call `onDestroy(call.endCall)` yourself to release the socket, the mic tracks and the Web Audio graph.
 
 ## Related
 

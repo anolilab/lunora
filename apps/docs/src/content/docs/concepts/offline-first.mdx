@@ -3,25 +3,43 @@ title: Offline-first
 description: Persist reads and writes to disk so the app boots, renders, and accepts edits with no network.
 ---
 
-Lunora's transport is online-first by default: reads hydrate from a live
-WebSocket and writes go straight to your Worker. Two opt-in client options turn
-that into an **offline-first** experience, where the app boots from disk, renders
-cached reads before a socket opens, and accepts writes while disconnected:
+Lunora's transport is online-first over the wire — reads hydrate from a live
+WebSocket and writes go straight to your Worker — with two durable client stores
+underneath, so the app boots from disk, renders cached reads before a socket
+opens, and accepts writes while disconnected:
 
-- **`queryCache`** — a durable read cache. Query results are persisted as their
+- **`queryCache`**: a durable read cache. Query results are persisted as their
   subscriptions advance and replayed on construction, so a reload renders the
   last-seen data immediately, then resumes the live subscription from the
   persisted cursor (no full snapshot refetch).
-- **`persistence`** — a durable store for the offline mutation outbox. Mutations
+- **`persistence`**: a durable store for the offline mutation outbox. Mutations
   issued while disconnected survive a reload and flush, exactly once, on
   reconnect.
 
-Both are off by default; current behaviour is unchanged until you pass an
-adapter.
+<Callout type="warn">
+    **Both are ON by default in a browser.** Leaving either option unset auto-probes IndexedDB and, where it exists, uses it — so a bare `new LunoraClient({
+    url })` already writes query results and a mutation outbox to disk on the viewer's machine. Outside a browser (SSR, Workers, Node without `indexedDB`) the
+    probe finds nothing and both stay in memory. Nothing is ever sent anywhere new; the concern is **local at-rest data** on a shared or unmanaged machine.
 
-## Enable persistent reads and writes
+    Pass `false` to opt out — that is the documented off switch, and it is per-store:
 
-Pass IndexedDB adapters for both stores when you construct the client:
+    ```ts
+    // no query results and no outbox on disk, in any environment
+    const client = new LunoraClient({ url, persistence: false, queryCache: false });
+    ```
+
+    An explicit adapter is always used as-is. The `persistence` auto-default is also suppressed when an `outbox` (the `@lunora/db` path) already owns the
+    durable write path, so the queue is never persisted twice.
+
+</Callout>
+
+The rest of this page is about getting more out of those stores — an explicit
+adapter, hydration-gated rendering, and the identity rules below.
+
+## Passing the adapters explicitly
+
+The auto-probe picks the same IndexedDB adapters this does. Name them when you
+want the dependency to be visible at the call site, or to configure one:
 
 ```ts
 import { LunoraClient, createIndexedDbPersistence, createIndexedDbQueryCache } from "lunorash/client";
@@ -35,7 +53,8 @@ const client = new LunoraClient({
 });
 ```
 
-Both adapters share a single `lunora` IndexedDB database, so there is nothing
+Each adapter opens its own IndexedDB database (`lunora-outbox`,
+`lunora-query-cache`; override either with `databaseName`), so there is nothing
 else to wire up. For tests or SSR you can swap in the in-memory variants
 (`createInMemoryPersistence()` / `createInMemoryQueryCache()`), which implement
 the same contract without touching IndexedDB.
@@ -67,11 +86,110 @@ Each cached query stores `{ identity, value, serverCursor, ts }`, keyed by
 entries evicted first) and written with a short debounce as values advance, so a
 chatty subscription doesn't thrash the disk.
 
-The `identity` field is a fingerprint of the auth token at write time. On boot
-the client only hydrates entries whose identity matches the **current** token.
+The `identity` field is a fingerprint of the auth identity at write time. On boot
+the client only hydrates entries whose identity matches the **current** one.
 A signed-out cache never leaks into a new session, and an identity change clears
 the cache outright. The offline outbox is gated by the same rule, so queued
 writes are never replayed under a different user.
+
+By default the fingerprint is a hash of the bearer token, so a **token refresh**
+(same user, new JWT) reads as an identity change and would discard queued
+writes. Pass a stable subject (the user id) so a refresh during an offline
+window keeps them:
+
+```ts
+client.setAuthToken(accessToken, user.id); // identity keyed on user.id, not the token bytes
+
+client.onTokenExpired(async () => {
+    const { token, userId } = await refreshSession();
+
+    client.setAuthToken(token, userId); // the same subject keeps writes held for the refresh
+});
+```
+
+The subject is **sticky**: a later `setAuthToken(refreshedToken)` that omits it
+keeps the established subject, and establishing the subject for the first time on
+an unchanged token (e.g. the user id resolves a tick after the token was set)
+re-stamps in-flight queued writes rather than dropping them. A real user switch
+(the token _and_ subject both change) still drops the previous user's writes; pass
+`null` to clear the subject on an explicit sign-out. Prefer passing a stable id
+consistently, and avoid a `user?.id` that's transiently `undefined` across a reload
+boundary, since a value queued under the token-hash and replayed under the subject
+after a reload can still mismatch.
+
+### Offline reads need a bearer token
+
+The read cache seeds offline only when the client itself holds the credential
+the rows were cached under. A **cookie session** is not that: the cookie is
+`HttpOnly`, so the client can neither read it nor prove it still has it, and
+offline the `/get-session` round trip that would resolve the subject never
+answers. Such entries are cached under `subj:<id>` with no credential, and a
+cold offline start has nothing to match them against — so it renders empty and
+fills in once the app is back online.
+
+This is deliberate, not a gap to work around. The alternative — remembering the
+last resolved subject and seeding on that label — hands the cached rows to
+whoever opens the browser profile, with nothing on the client evidencing they
+are that subject. Re-checking once connectivity returns does not repair it: the
+check can only run in the state where the offline seed was never needed, so a
+session revoked server-side stays readable offline for as long as the app stays
+offline.
+
+If you want offline-first reads, give the client a bearer token:
+
+```ts
+client.setAuthToken(accessToken, user.id);
+```
+
+The offline write outbox is unaffected — queued writes replay under their own
+identity gate regardless of how the session is carried.
+
+## Surviving a breaking deploy
+
+Set `persistenceVersion` to invalidate persisted writes and cached reads across a
+breaking change to a function signature or query shape. Bump it on deploy; on the
+next boot, any persisted write or cached read stamped with a different version is
+dropped (and purged) instead of replayed/hydrated against the new schema:
+
+```ts
+new LunoraClient({ url, persistence: createIndexedDbPersistence(), persistenceVersion: "2024-06-30" });
+```
+
+Omit it to disable version gating (records are never invalidated by version).
+**Adopting it is itself an invalidation event:** records written before you set
+`persistenceVersion` carry no version, so the first boot after enabling it purges
+all currently-queued offline writes (and cached reads). Enable it on a build where
+that clean slate is acceptable (typically the same breaking deploy you're
+protecting against), not purely speculatively.
+
+## Multiple tabs
+
+The durable outbox is shared across a profile's tabs. To avoid every tab
+re-queuing and replaying the same persisted writes on reconnect, the standalone
+client elects a single **leader** (via the Web Locks API) that owns hydration;
+when the leader tab closes, another takes over. Server-side idempotency keeps
+replays exactly-once regardless, so this is an efficiency guard, not a
+correctness one. (Where Web Locks are unavailable, as in React Native and SSR, a
+single context hydrates directly.) One trade-off: because only the leader hydrates
+the _pre-existing_ persisted queue, writes left over from a prior session can sit
+until the leader flushes them. If the leader is a backgrounded/offline tab while a
+foreground tab is online, those carried-over writes wait for the leader (the writes
+stay durable and replay exactly-once; only their latency is affected). New writes
+made in any tab flush over that tab's own socket. Apps with heavy multi-tab offline
+use should prefer [`@lunora/db`](/docs/packages/db) collections, whose outbox is
+fully leader-coordinated.
+
+## Sync status
+
+Beyond connection status, surface how many writes are waiting to sync:
+
+```ts
+client.pendingCount(); // number of queued offline writes not yet sent
+const off = client.onPendingChange((n) => setBadge(n === 0 ? "Synced" : `Syncing ${n}…`));
+```
+
+A `@lunora/db` app reads `db.pendingCount()` (its writes ride the unified outbox,
+not the built-in queue).
 
 ## Connection status UI
 
@@ -164,19 +282,196 @@ you writing sync glue:
    (or a `resume` ack when nothing in your read-set changed) instead of a full
    snapshot, so the cached value you already rendered stays on screen and is
    patched forward.
-2. **Writes flush exactly once.** Queued mutations are deduped by `mutationKey`
+2. **Writes flush exactly once.** Queued mutations are deduped by `mutationId`
    and replayed on reconnect; the idempotency key means a retry after a flaky
    ack is a no-op server-side, not a duplicate.
-3. **Optimistic rows settle.** A mutation's optimistic patch renders instantly,
-   is superseded by the authoritative server row on acknowledgement, and rolls
-   back if the server rejects it with a coded conflict.
+3. **Optimistic patches rebase, then settle gaplessly.** An optimistic patch —
+   one `setQuery` of an `optimisticUpdate`, or the per-call `optimistic`
+   shortcut, which targets only the subscription registered under the mutation's
+   own reference and args — is recorded as a layer on the query it names, not
+   applied once-and-forgotten.
+   An unrelated server delta that lands while the write is still pending (queued
+   offline, or in flight) is re-folded _under_ the layer instead of clobbering
+   it, so your change never flickers away and back. The layer is dropped, with
+   no double-count and no flicker, the moment a frame whose `cursor` reaches the
+   write's committed cursor arrives (the server echoes that cursor on the
+   mutation response), so the drop is keyed on server-confirmed state rather than
+   RPC-response timing, which races the WebSocket broadcast. A coded rejection
+   rolls the layer back.
 4. **Identity is the trust boundary.** A token change between sessions drops both
    the cached reads and the queued writes rather than replaying them under the
-   new identity.
+   new identity. A replay is sent with the token its identity check judged, never
+   one swapped in afterwards. A replay refused for its token (`TOKEN_EXPIRED` or
+   `UNAUTHENTICATED`) stays queued, and so do the writes behind it: `onTokenExpired`
+   fires once, nothing is re-sent under the refused token, and the write goes out
+   again after `setAuthToken` hands the client a fresh one. It survives that
+   refresh only if you pass the same subject, `setAuthToken(freshToken, user.id)`:
+   with no subject the identity is the token hash, a refresh reads as a user
+   switch, and the held writes are rejected `OFFLINE_IDENTITY_CHANGED`. Under a
+   cookie session there is no token to replace, so the write is re-sent on a
+   backoff with whatever cookie the browser holds by then. In `@lunora/db`, if no
+   fresh token arrives within a minute, or the fresh one is refused too, the write
+   is rejected (a cookie write is rejected when the minute runs out):
+   `onWriteRejected` receives the refusal's code and the optimistic row rolls
+   back. `UNAUTHORIZED` is the app's own verdict on the write ("Sign in
+   to post"), so it is rejected straight away, never held.
+
+## Write ordering
+
+Lunora does not funnel `client.mutation` calls through a single ordered queue.
+Writes are concurrent, and the optimistic model above reconciles them by **commit
+cursor** rather than by a strict per-client sequence number, which buys the same
+gapless, no-double-count rebasing without making every write wait for the one
+before it.
+
+Three of the four ways to issue a write are ordered anyway:
+
+| How you write                                    | Ordered? | Why                                                                                                                                                              |
+| ------------------------------------------------ | -------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `await mutation(A)`, then `await mutation(B)`    | Yes      | B isn't sent until A resolves.                                                                                                                                   |
+| Queued offline, replayed on reconnect            | Yes      | The outbox is FIFO and the flush sends its chunks sequentially, preserving submission order across the whole replay.                                             |
+| [`@lunora/db`](/docs/packages/db) mutators       | Yes      | Each write carries a monotonic `mutationId`; the DO applies it only when it equals `watermark + 1`, halts the batch on a gap, and the client resends from there. |
+| `mutation(A); mutation(B);` (online, un-awaited) | **No**   | Two independent requests. The DO applies them in _arrival_ order, which can differ from call order.                                                              |
+
+Only the last row is unordered, and it only bites when those two writes are
+**causally dependent**: B assumes A has already committed. If that's your case,
+take whichever of these fits:
+
+- **Await the first.** `await mutation(A)` before issuing B. The simplest answer,
+  and the right one when B genuinely can't start until A lands.
+- **Make it one mutation.** Move both effects into a single server-side handler.
+  They then commit in one serialized transaction, which is strictly stronger than
+  ordering two calls: it's atomic, so a failure rolls back both instead of leaving
+  A applied and B rejected.
+- **Use [`@lunora/db`](/docs/packages/db) mutators.** The collection layer's outbox
+  is strictly ordered already, so a chain of fire-and-forget writes applies in call
+  order without you awaiting anything.
+
+An opt-in `{ ordered: true }` mode for plain mutations is deliberately not
+shipped; see [Design boundaries](/docs/non-goals#also-deliberately-absent).
+
+## Stale offline writes (`.dropStalePatches()`)
+
+Queued writes replay in order, and by default the replay wins: a write composed
+offline on Monday overwrites an edit someone else made on Tuesday, because
+arrival order decides, not authorship. The newer edit is gone with nothing to
+show it existed.
+
+Opt a table into judging a patch against what its author could actually see:
+
+```ts
+// lunora/schema.ts
+documents: defineTable({ title: v.string(), body: v.string() }).dropStalePatches(),
+```
+
+The client stamps every write with its **CDC baseline** — the changelog cursor
+its live queries had reached when the write was composed — and replays that
+cursor verbatim off the offline queue. The shard reads the row's post-image as of
+that cursor out of `__cdc_log` and compares the fields the patch writes against
+what is on disk now. If any of them moved, the patch is dropped.
+
+So two clients editing **different** fields of one row both win, and two editing
+the **same** field means the later-composed write survives.
+
+### Three things to know before turning it on
+
+**The whole patch is dropped, never part of it.** Applying the fresh half and
+discarding the stale half would produce a row no mutation ever wrote —
+`status: "shipped"` landing while `shippedAt` is thrown away — and a handler's
+invariants live across the fields of one `patch` call.
+
+**A drop is silent to the caller.** No row change, no CDC entry, no broadcast, no
+triggers: indistinguishable from a patch that was never issued, and the mutation
+still resolves successfully. Each drop is logged (table, row, fields) so it is
+traceable. If the caller must be _told_ its write did not land, compare in the
+handler and throw instead.
+
+**It fails open.** No baseline (a client with no live query, or one older than
+this feature), no changelog entry at or below it (retention trimmed it, or the
+row is newer than the cursor), or CDC off, and the write applies exactly as it
+would without the flag. Discarding writes because retention ran would trade a
+rare lost edit for a common one.
+
+Requires CDC, and is rejected on `.global()` tables — a D1-backed table has no
+per-shard changelog to establish a baseline from, so the flag would be inert.
+
+## Surfacing rejected writes
+
+A queued write that the server ultimately rejects (a coded conflict, a validation
+or RLS denial) rolls its optimistic row back. For a write you `await` directly,
+that surfaces as the rejected `mutation()` Promise. But a write queued in one
+session and replayed in the next, after a reload, has no awaiter left, and the
+same is true for a write the queue evicts on overflow or discards on an identity
+change. Without a signal, the optimistic row would vanish, which users read as
+data loss.
+
+`onMutationSettled` is the durable channel for exactly this. It fires once per
+queued write that reaches a terminal verdict (`committed` or `rejected`), and
+includes replays whose original Promise is gone (`hadAwaiter: false`):
+
+```ts
+client.onMutationSettled((event) => {
+    if (event.status === "rejected" && !event.hadAwaiter) {
+        // A queued change couldn't be saved and no caller is awaiting it —
+        // tell the user instead of silently dropping the rolled-back row.
+        toast.error(`Couldn't save your change (${event.code ?? "error"}).`);
+    }
+});
+```
+
+`event` carries the `functionPath`, `args`, `shardKey`, and, on rejection, the
+`code` (e.g. `CONFLICT`, `OFFLINE_QUEUE_OVERFLOW`, `OFFLINE_IDENTITY_CHANGED`)
+and `error`. Causally dependent writes that the server rejects in turn each
+surface their own event, in FIFO order. The [`@lunora/db`](/docs/packages/db)
+collection layer exposes the same idea as `onWriteRejected`.
+
+## Conflicts on replay
+
+A queued write replays by calling its mutation again on the shard, against the
+data as it is **now**, not as it was when the write was queued. So the handler is
+where a conflict gets resolved, and the client does not rewrite arguments.
+
+A replay that the handler rejects with a `CONFLICT` (a unique-index breach or an
+optimistic-concurrency conflict) is terminal. The write is dropped, its optimistic
+value rolls back, and the caller's promise rejects with `code: "CONFLICT"`. The
+client does not retry it. The `onMutationSettled` event in
+[Surfacing rejected writes](#surfacing-rejected-writes) reports the same code.
+
+To keep an offline create from failing on a duplicate, make the handler merge
+instead of conflicting. Two calls cover most cases:
+
+```ts
+import { mutation, v } from "@/lunora/_generated/server";
+
+// Keep the existing row when the email is already taken. The replay resolves
+// to null instead of CONFLICT, so the queued write settles as committed.
+export const addUser = mutation.input({ email: v.string(), name: v.string() }).mutation(async ({ args, ctx }) => {
+    return ctx.db.users.insert({ email: args.email, name: args.name }, { skipDuplicates: true });
+});
+
+// Create or update by a unique field. Returns { created, id }.
+export const saveUser = mutation.input({ email: v.string(), name: v.string() }).mutation(async ({ args, ctx }) => {
+    return ctx.db.users.upsert({
+        create: { email: args.email, name: args.name },
+        target: "email",
+    });
+});
+```
+
+`skipDuplicates` keeps the row that is already there. `upsert` lets the write
+overwrite it, through the `update` field, when that is the intent. Pick one per
+mutation and state it in the handler, because a replayed write cannot ask the user
+which one they wanted.
+
+A merge that depends on what the user typed offline, such as a draft that should be
+kept next to the server copy, is not something the handler can express. The handler
+sees only the arguments it was queued with. Such a case needs the application to
+catch the rejection and re-issue the write, and the client has no built-in path for
+that yet.
 
 ## See also
 
-- [@lunora/db](/docs/packages/db) — the same outbox + optimistic model as a
+- [@lunora/db](/docs/packages/db): the same outbox + optimistic model as a
   TanStack DB collection layer, generated from your schema.
-- [Real-time](/docs/concepts/realtime) — how subscriptions and deltas flow.
-- [@lunora/client](/docs/packages/client) — the transport these options configure.
+- [Real-time](/docs/concepts/realtime): how subscriptions and deltas flow.
+- [@lunora/client](/docs/packages/client): the transport these options configure.

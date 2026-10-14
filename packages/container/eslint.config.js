@@ -33,14 +33,30 @@ export default createConfig(
         files: ["**/__tests__/**/*.{ts,tsx}", "**/*.test.{ts,tsx}", "**/*.spec.{ts,tsx}"],
         rules: {
             "@typescript-eslint/naming-convention": "off",
+            "@typescript-eslint/no-empty-object-type": "off",
             "@typescript-eslint/no-explicit-any": "off",
             "@typescript-eslint/no-non-null-assertion": "off",
             "@typescript-eslint/no-unnecessary-condition": "off",
             "@typescript-eslint/require-await": "off",
+            // `env`/`SELF` from `cloudflare:test` carry upstream @deprecated JSDoc
+            // aliases in the pool types; the workerd suite must use them anyway.
+            "e18e/prefer-static-regex": "off",
             "import/no-extraneous-dependencies": "off",
+            "sonarjs/deprecation": "off",
             "unicorn/no-null": "off",
             "unicorn/prevent-abbreviations": "off",
             "vitest/prefer-expect-assertions": "off",
+        },
+    },
+    // `@cloudflare/containers` is an intentionally-bundled devDependency, not a
+    // runtime dep: packem inlines its (patched) source into `dist/do` (see
+    // packem.config.ts), so a consuming worker never installs it. The workerd-only
+    // `src/do/**` is the sole importer, so allow the devDependency there rather
+    // than demote it to a `dependencies` edge that would defeat the bundling.
+    {
+        files: ["src/do/**/*.{ts,tsx}"],
+        rules: {
+            "import/no-extraneous-dependencies": "off",
         },
     },
     // Behavior-breaking autofixers — kept off (not style). sort-objects reorders the
@@ -49,6 +65,15 @@ export default createConfig(
     {
         rules: {
             "perfectionist/sort-objects": "off",
+        },
+    },
+    // `jsdoc/text-escaping` escapes `<` and `&` in doc comments into HTML entities and
+    // offers no way to exempt code spans, so its autofix turns `Doc<T>` into `Doc&lt;T>` —
+    // which is then what every reader sees on hover. Last in the list so it applies to
+    // every file, including the scoped blocks above.
+    {
+        rules: {
+            "jsdoc/text-escaping": "off",
         },
     },
 );

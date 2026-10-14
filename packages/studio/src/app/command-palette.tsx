@@ -1,20 +1,30 @@
 import { Dialog } from "@base-ui/react/dialog";
 import { useNavigate } from "@tanstack/react-router";
 import type { ReactElement } from "react";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 import { useT } from "../i18n/i18n-context";
 import { fireAndForget } from "../lib/internal";
+import { useShortcuts } from "../lib/shortcuts";
 import { cn } from "../lib/utils";
 
-/** A navigable destination shown in the palette. */
+/**
+ * One palette entry: a navigable destination, or an action to run.
+ *
+ * `run` exists because not everything the palette should reach is a page. The
+ * operation console has no route and no button — the keyboard chord was the only
+ * way in, which makes it undiscoverable, and unreachable at all once an operator
+ * rebinds the key and forgets what to.
+ */
 interface CommandItem {
     /** Localised domain label, shown as a muted suffix to disambiguate. */
     readonly group: string;
     /** Localised sub-page label, the primary search target. */
     readonly label: string;
-    /** Router path to navigate to on select (e.g. `/logs`). */
-    readonly to: string;
+    /** Run on select. Mutually exclusive with `to`. */
+    readonly run?: () => void;
+    /** Router path to navigate to on select (e.g. `/logs`). Mutually exclusive with `run`. */
+    readonly to?: string;
 }
 
 interface CommandPaletteProps {
@@ -79,6 +89,17 @@ const CommandRow = ({ active, index, item, onActivate, onSelect }: CommandRowPro
     );
 };
 
+/** Items whose label or group contains `query` (case-insensitive); every item when the query is blank. */
+const matchingItems = (items: ReadonlyArray<CommandItem>, query: string): ReadonlyArray<CommandItem> => {
+    const needle = query.trim().toLowerCase();
+
+    if (needle === "") {
+        return items;
+    }
+
+    return items.filter((item) => item.label.toLowerCase().includes(needle) || item.group.toLowerCase().includes(needle));
+};
+
 /**
  * Command palette (⌘K / Ctrl-K) — Supabase-style global search. Rendered inside
  * the studio shell so its selection can drive the router's `useNavigate`. Opens
@@ -91,19 +112,33 @@ const CommandRow = ({ active, index, item, onActivate, onSelect }: CommandRowPro
 const CommandPalette = ({ items }: CommandPaletteProps): ReactElement => {
     const t = useT();
     const navigate = useNavigate();
+    const { palette: paletteKey } = useShortcuts();
 
     const [open, setOpen] = useState<boolean>(false);
     const [query, setQuery] = useState<string>("");
     const [activeIndex, setActiveIndex] = useState<number>(0);
     const inputRef = useRef<HTMLInputElement>(null);
 
-    // Open on ⌘K / Ctrl-K and on the top-bar button's window event.
+    // Open on ⌘/Ctrl + the bound key (K by default) and on the top-bar button's window event.
     useEffect(() => {
         const onKeyDown = (event: KeyboardEvent): void => {
-            if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "k") {
-                event.preventDefault();
-                setOpen(true);
+            if (!(event.metaKey || event.ctrlKey) || event.key.toLowerCase() !== paletteKey) {
+                return;
             }
+
+            // The same bail the console shortcut has, and now needed for the same
+            // reason: while the key was hardcoded to `k` this was safe, because ⌘K
+            // is not an editing shortcut. Rebindable, it is — an operator who binds
+            // the palette to `a` would otherwise lose ⌘A everywhere in the studio,
+            // including inside the SQL editor and every row-editor field.
+            const { target } = event;
+
+            if (target instanceof HTMLElement && (target.isContentEditable || ["INPUT", "SELECT", "TEXTAREA"].includes(target.tagName))) {
+                return;
+            }
+
+            event.preventDefault();
+            setOpen(true);
         };
 
         const onOpen = (): void => {
@@ -117,17 +152,9 @@ const CommandPalette = ({ items }: CommandPaletteProps): ReactElement => {
             globalThis.removeEventListener("keydown", onKeyDown);
             globalThis.removeEventListener(OPEN_EVENT, onOpen);
         };
-    }, []);
+    }, [paletteKey]);
 
-    const filtered = useMemo<ReadonlyArray<CommandItem>>(() => {
-        const needle = query.trim().toLowerCase();
-
-        if (needle === "") {
-            return items;
-        }
-
-        return items.filter((item) => item.label.toLowerCase().includes(needle) || item.group.toLowerCase().includes(needle));
-    }, [items, query]);
+    const filtered = matchingItems(items, query);
 
     // Reset state each time the palette opens so it never reopens mid-filter.
     const onOpenChange = (next: boolean): void => {
@@ -141,7 +168,18 @@ const CommandPalette = ({ items }: CommandPaletteProps): ReactElement => {
 
     const select = (item: CommandItem): void => {
         onOpenChange(false);
-        fireAndForget(navigate({ to: item.to }));
+
+        // An action runs in place; a destination navigates. Closing first either
+        // way, so a toggle does not fight the dialog for focus.
+        if (item.run !== undefined) {
+            item.run();
+
+            return;
+        }
+
+        if (item.to !== undefined) {
+            fireAndForget(navigate({ to: item.to }));
+        }
     };
 
     const onInputChange = (event: React.ChangeEvent<HTMLInputElement>): void => {
@@ -221,7 +259,7 @@ const CommandPalette = ({ items }: CommandPaletteProps): ReactElement => {
                                     active={index === activeIndex}
                                     index={index}
                                     item={item}
-                                    key={item.to}
+                                    key={item.to ?? `${item.group}:${item.label}`}
                                     onActivate={setActiveIndex}
                                     onSelect={select}
                                 />

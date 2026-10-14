@@ -19,26 +19,22 @@ const relationReferencesUnknownTable: Lint = {
     name: "relation_references_unknown_table",
     remediation: "Fix the target table name in the relation, or add the missing table to the schema.",
     run: (context) => {
-        const findings = [];
         const tableNames = new Set(context.schema.tables.map((table) => table.name));
 
-        for (const table of context.schema.tables) {
-            for (const relation of table.relations) {
-                if (tableNames.has(relation.table)) {
-                    continue;
-                }
-
-                findings.push(
-                    emit(relationReferencesUnknownTable, {
-                        cacheKey: `relation_references_unknown_table:${table.name}:${relation.name}`,
-                        detail: `Relation "${relation.name}" on table "${table.name}" targets table "${relation.table}", which does not exist in the schema.`,
-                        metadata: { relation: relation.name, table: table.name, target: relation.table },
-                    }),
-                );
-            }
-        }
-
-        return findings;
+        // A many-to-many relation names two tables: its target and the join table it goes through.
+        return context.schema.tables.flatMap((table) =>
+            table.relations.flatMap((relation) =>
+                [{ name: relation.table, role: "" }, ...(relation.through === undefined ? [] : [{ name: relation.through.table, role: ":through" }])]
+                    .filter(({ name }) => !tableNames.has(name))
+                    .map(({ name, role }) =>
+                        emit(relationReferencesUnknownTable, {
+                            cacheKey: `relation_references_unknown_table:${table.name}:${relation.name}${role}`,
+                            detail: `Relation "${relation.name}" on table "${table.name}" targets table "${name}", which does not exist in the schema.`,
+                            metadata: { relation: relation.name, table: table.name, target: name },
+                        }),
+                    ),
+            ),
+        );
     },
     source: "static",
     title: "Relation references unknown table",

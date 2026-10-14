@@ -8,20 +8,58 @@
  * import for all cascade-related types.
  */
 
-import type { AdvisorRelation, AdvisorSchema } from "@lunora/advisor";
+import type { AdvisorKeyedRelation, AdvisorSchema } from "@lunora/advisor";
+
+import type { ColumnMeta } from "./admin";
+
+/**
+ * Build the cascade graph's input from what the studio can actually see: the
+ * `describeTables` column metadata every data-browser session already loads.
+ *
+ * `ColumnMeta.ref` names the FK target of a `v.id("target")` column, which is
+ * the edge the impact walk follows, and `ColumnMeta.onDelete` carries the action
+ * the writer will actually apply to the child rows. Both come from codegen's
+ * relation graph, so the preview can label each edge `cascade` / `restrict` /
+ * `set null` exactly. `onDelete` stays absent when the schema declared no action
+ * for that FK, and the preview says so rather than guessing.
+ */
+const advisorSchemaFromColumns = (columnsByTable: Readonly<Record<string, ReadonlyArray<ColumnMeta>>>): AdvisorSchema => {
+    return {
+        tables: Object.entries(columnsByTable).map(([name, columns]) => {
+            return {
+                fields: columns.map((column) => column.name),
+                indexes: [],
+                name,
+                relations: columns
+                    .filter((column) => column.ref !== undefined)
+                    .map((column): AdvisorKeyedRelation => {
+                        return { field: column.name, kind: "one", name: column.name, onDelete: column.onDelete, references: column.ref as string, table: name };
+                    }),
+            };
+        }),
+    };
+};
 
 /**
  * Build a map from `parentTable → relations that point at it from child tables`.
  * A cascade impact walk starts at the deleted table and follows these "who
  * references me?" edges — the inverse of the FK direction.
  *
- * Only `cascade` and `restrict` relations are included; `set null` rows are not
- * deleted (the FK field is nulled), so they don't appear in a cascade impact
- * tree. The map is keyed by the **referenced** table (the parent being deleted)
- * and values are the relations declared on the **referencing** (child) table.
+ * `set null` relations are excluded: those rows are not deleted (the FK field is
+ * nulled), so they are not part of a delete's impact. Everything else is kept —
+ * `cascade` and `restrict` because they decide whether the child row dies or
+ * blocks the delete, and an edge with NO declared action because that is the
+ * case an operator most needs to see: the child row survives holding an FK to a
+ * row that no longer exists. The map is keyed by the **referenced** table (the
+ * parent being deleted) and values are the relations declared on the
+ * **referencing** (child) table.
  */
-const buildCascadeMap = (schema: AdvisorSchema): Map<string, AdvisorRelation[]> => {
-    const map = new Map<string, AdvisorRelation[]>();
+const buildCascadeMap = (schema: AdvisorSchema): Map<string, AdvisorKeyedRelation[]> => {
+    const map = new Map<string, AdvisorKeyedRelation[]>();
+    // `childTable:field` pairs already recorded per parent. The same edge declared
+    // twice is still ONE edge; without this the preview renders a duplicate node
+    // for it, doubling the apparent blast radius of the delete.
+    const seen = new Set<string>();
 
     for (const advisorTable of schema.tables) {
         for (const relation of advisorTable.relations) {
@@ -31,13 +69,23 @@ const buildCascadeMap = (schema: AdvisorSchema): Map<string, AdvisorRelation[]> 
             }
 
             // `set null` relations don't delete child rows — the FK field is set to
-            // null instead. Exclude them: only cascade and restrict affect row existence.
-            if (relation.onDelete === "set null" || relation.onDelete === undefined) {
+            // null instead — so they are not part of the delete's impact. An edge
+            // with no declared action IS kept: those rows are left pointing at a
+            // deleted parent, which is exactly what the preview exists to show.
+            if (relation.onDelete === "set null") {
                 continue;
             }
 
             // The relation's `references` is the referenced (parent) table.
             const parent = relation.references;
+            const edgeKey = `${parent}\u0000${advisorTable.name}\u0000${relation.field}`;
+
+            if (seen.has(edgeKey)) {
+                continue;
+            }
+
+            seen.add(edgeKey);
+
             const existing = map.get(parent) ?? [];
 
             // Include the relation with the child's table name so the walker knows
@@ -78,5 +126,5 @@ const walkCascade = <T extends { children: T[] }>(root: T, predicate: (node: T) 
     return results;
 };
 
-export type { AdvisorRelation, AdvisorSchema, AdvisorTable } from "@lunora/advisor";
-export { buildCascadeMap, walkCascade };
+export type { AdvisorKeyedRelation, AdvisorSchema } from "@lunora/advisor";
+export { advisorSchemaFromColumns, buildCascadeMap, walkCascade };

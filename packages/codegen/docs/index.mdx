@@ -1,11 +1,178 @@
 ---
 title: "@lunora/codegen"
 description: "Emits _generated/{api,server,dataModel}.ts from your schema.ts."
+related:
+    - to: /docs/packages/vite
+      note: "runs codegen on schema changes during dev"
+    - to: /docs/packages/cli
+      note: "the `lunora codegen` command"
+    - to: /docs/packages/values
+      note: "the `v.*` validators the parser understands"
 ---
 
-`@lunora/codegen` emits the `_generated/{api,server,dataModel}.ts` files from your `schema.ts`.
+`@lunora/codegen` reads your backend and writes the types that make it
+type-safe end to end. It parses `lunora/schema.ts` plus every function file
+under `lunora/`, then writes `lunora/_generated/` so the rest of your app gets
+typed access to its own queries, mutations, actions, and tables.
 
-<Callout type="info">
-    Reference documentation for this package is in progress. In the meantime, see the [getting started guide](/docs/getting-started) and the
-    [concepts](/docs/concepts/schema) section.
-</Callout>
+You rarely call this package directly. The [`@lunora/vite`](/docs/packages/vite)
+plugin runs it on every schema change, and the [`lunora codegen`](/docs/packages/cli)
+command runs it once on demand. Both share this same core, so the output is
+identical regardless of how it was produced.
+
+## What it generates
+
+The core outputs, always written:
+
+- `api.ts`: the typed `api.<file>.<function>` (and `internal.*`) function
+  references your client and server code call through.
+- `server.ts`: the `query` / `mutation` / `action` / `internalQuery` /
+  `internalMutation` / `internalAction` / `definePolicy` procedure builders,
+  bound to your schema.
+- `dataModel.ts`: the `Doc<"messages">` / `Id<"users">` types derived from your
+  tables.
+
+It also emits `app.ts`, `functions.ts`, `shard.ts`, and the Drizzle schemas
+below, plus `crons.ts`, `containers.ts`, `workflows.ts`, `vectors.ts`,
+`seed.ts`, and the OpenAPI / OpenRPC spec files, each only when you use the
+matching feature.
+
+### The Drizzle schemas
+
+`drizzle.shard.ts` and `drizzle.global.ts` mirror your tables as Drizzle
+`sqliteTable` definitions, split by where the rows live: `.global()` tables (D1)
+go in `drizzle.global.ts`, everything else (the default root shard and
+`.shardBy()` tables) in `drizzle.shard.ts`. A project with no table on one side
+gets an empty module, not a missing file.
+
+They exist for the escape hatch: `ctx.db` covers the typed path, and when you
+need raw Drizzle — a `@lunora/d1` `client.drizzle` query against your global
+tables, a hand-written join, a Drizzle Studio config — you import the table
+objects instead of redeclaring them.
+
+```ts
+import { drizzle } from "drizzle-orm/d1";
+import { eq } from "drizzle-orm";
+
+import { users } from "./lunora/_generated/drizzle.global.js";
+
+const rows = await drizzle(env.DB).select().from(users).where(eq(users.email, email));
+```
+
+`searchIndexes` are not emitted — Drizzle has no `sqliteTable` abstraction for
+FTS5 virtual tables, and the runtime handles that plumbing outside Drizzle.
+Nothing you write has to import these files; ignore them if you never reach for
+Drizzle directly.
+
+## When it runs
+
+<Tabs items={["Vite plugin", "CLI"]}>
+
+```ts tab="Vite plugin"
+// vite.config.ts — codegen runs on startup and on every schema change
+import { lunora } from "@lunora/vite";
+
+export default defineConfig({ plugins: [lunora()] });
+```
+
+```bash tab="CLI"
+lunora codegen                 # one-shot
+lunora codegen --api-spec both # also emit OpenAPI + OpenRPC
+```
+
+</Tabs>
+
+Under `lunora dev`, codegen runs in watch mode: save a function or change the
+schema and the regenerated types are in the module graph before you switch
+windows.
+
+## Don't edit `_generated/`
+
+These files are derived from your schema and overwritten on every run, so any
+hand edit is lost the next time codegen runs. Change `schema.ts` or your
+function files instead, then let codegen catch up.
+
+Commit `lunora/_generated/`. The output is deterministic, so a stale committed
+copy is a real diff — but no command checks that for you: `lunora verify` runs
+codegen as a **dry run** (writing nothing) and `lunora prepare` silently
+overwrites the files. The schema-drift gate both run measures a different
+artifact, the committed `.lunora-schema.json` baseline. To gate the generated
+types in CI, regenerate and diff:
+
+```bash
+lunora codegen
+git diff --exit-code lunora/_generated
+```
+
+## The `.js` extension exception
+
+The emitted modules are consumed under NodeNext, where relative imports need a
+file extension. So codegen deliberately writes `.js` into the imports it
+generates:
+
+```ts
+import { api } from "./_generated/api.js";
+```
+
+This is the one place in a Lunora project where hand-written `.js` extensions
+are correct. Your own `lunora/` source still omits extensions like the rest of
+the codebase.
+
+## Calling it programmatically
+
+If you need codegen in your own tooling, `runCodegen` takes a single options
+object and returns the result, including any static schema advisories found this
+run:
+
+```ts
+import { formatAdvisories, runCodegen } from "@lunora/codegen";
+
+const result = runCodegen({ projectRoot: process.cwd() });
+
+console.log(`wrote _generated/ -> ${result.outputDirectory}`);
+
+if (result.advisories.length > 0) {
+    console.warn(formatAdvisories(result.advisories));
+}
+```
+
+Common options:
+
+- `projectRoot` (required): the directory containing the `lunora/` folder.
+- `dryRun`: run discovery and emit (so parse errors still surface) without
+  writing files. `outputDirectory` is still the path that would have been
+  written.
+- `lint`: run the static schema advisor (default `true`); when `false`,
+  `result.advisories` is empty. To keep the advisor but drop its lower levels,
+  set `advisor.minSeverity` in `lunora.config.ts` instead (see below).
+- `apiSpec`: `"openapi"` (default), `"openrpc"`, `"both"`, or `"none"`.
+- `lunoraDirectory`: override the `lunora` subdirectory name.
+
+## Trimming advisories (`advisor.minSeverity`)
+
+Codegen writes every static advisory into `_generated/shard.ts`, where the
+studio's Advisors table reads it, and returns the same list in
+`result.advisories`. Several INFO rules fire once per procedure, so in a growing
+project most of those advisories are INFO. Set a floor in `lunora.config.ts` to
+leave them out:
+
+```ts
+// lunora.config.ts
+import type { LunoraConfig } from "./lunora/_generated/app";
+
+export default {
+    advisor: { minSeverity: "warn" },
+} satisfies LunoraConfig;
+```
+
+`minSeverity` is `"info"` (the default, everything), `"warn"` or `"error"`.
+Findings below it are dropped from `result.advisories`, and so from the terminal
+and the dev overlay, and from the generated shard. It changes emission and
+display only. An ERROR is at or above every floor, so the gate that fails
+`lunora codegen`, `lunora deploy` and `vite build` on ERROR-level advisories
+cannot be turned off this way. `lint: false` is still the only way to skip the
+advisor entirely.
+
+Write it as a string literal, like `target`: codegen reads it by parsing the
+file. An unknown level or a computed value filters nothing and adds one
+`advisor_min_severity_invalid` WARN saying why.

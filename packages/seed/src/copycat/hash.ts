@@ -10,6 +10,8 @@
  * with an optional module-level key for those who do want output variation.
  */
 
+import { cyrb53 } from "@lunora/values";
+
 /* eslint-disable no-bitwise -- cyrb53 and the key-folding are defined over XOR and unsigned shifts; the bit ops ARE the algorithm */
 
 /** Module-level salt mixed into every hash; overridden by {@link setHashKey}. */
@@ -33,6 +35,12 @@ const compareStrings = (a: string, b: string): number => {
  * `{ a: 1, b: 2 }` and `{ b: 2, a: 1 }` hash identically (copycat parity).
  * `bigint` is serialized as its decimal string (plain `JSON.stringify` throws on
  * it); `undefined` becomes the literal `"undefined"` so it is distinguishable.
+ *
+ * This is an INTENTIONAL fork of the canonical `shared/stable-key.ts` encoder —
+ * do not consolidate the two. copycat's deterministic-seed hash domain depends on
+ * this exact encoding: `undefined` must stay distinguishable (the shared encoder
+ * skips `undefined` object fields), `bigint` must serialize, and outputs must
+ * never start with `U+0000` (see {@link STRING_DOMAIN_TAG}). Different contracts.
  */
 const stableStringify = (input: unknown): string => {
     if (input === undefined) {
@@ -61,31 +69,6 @@ const stableStringify = (input: unknown): string => {
 };
 
 /**
- * A cyrb53 string hash — fast, well-distributed, 53-bit, with good avalanche
- * behaviour. Public-domain (bryc). Two independent accumulators seeded from
- * `seed` are mixed and combined; we down-fold the 53-bit result to an unsigned
- * 32-bit integer for faker's seed.
- */
-const cyrb53 = (text: string, seed: number): number => {
-    let h1 = 0xde_ad_be_ef ^ seed;
-    let h2 = 0x41_c6_ce_57 ^ seed;
-
-    for (let index = 0; index < text.length; index += 1) {
-        const ch = text.codePointAt(index) ?? 0;
-
-        h1 = Math.imul(h1 ^ ch, 2_654_435_761);
-        h2 = Math.imul(h2 ^ ch, 1_597_334_677);
-    }
-
-    h1 = Math.imul(h1 ^ (h1 >>> 16), 2_246_822_507);
-    h1 ^= Math.imul(h2 ^ (h2 >>> 13), 3_266_489_909);
-    h2 = Math.imul(h2 ^ (h2 >>> 16), 2_246_822_507);
-    h2 ^= Math.imul(h1 ^ (h1 >>> 13), 3_266_489_909);
-
-    return 4_294_967_296 * (2_097_151 & h2) + (h1 >>> 0);
-};
-
-/**
  * Domain sentinel for the raw-string fast path. A bare string is hashed
  * directly (skipping {@link stableStringify}) for speed, but that means a string
  * input whose text happens to equal a non-string's serialized form would collide
@@ -110,25 +93,9 @@ const hashInput = (input: unknown): number => {
 };
 
 /**
- * Derive a reproducible 4-word key from a `secret` string (copycat parity). Use
- * a secret of 14+ characters. The returned key can be handed to
- * {@link setHashKey} to shift every generated value to a private, secret-specific
- * mapping.
- */
-const generateHashKey = (secret: string): Uint32Array => {
-    const key = new Uint32Array(4);
-
-    for (let index = 0; index < 4; index += 1) {
-        key[index] = cyrb53(secret, index + 1) % 0x1_00_00_00_00;
-    }
-
-    return key;
-};
-
-/**
  * Override the global hash salt so generated values shift to a different (but
  * still deterministic) mapping. Accepts a string secret or a {@link Uint32Array}
- * key from {@link generateHashKey}. Pass `0` / an empty string to reset.
+ * key. Pass `0` / an empty string to reset.
  */
 const setHashKey = (key: number | string | Uint32Array): void => {
     if (typeof key === "number") {
@@ -155,4 +122,4 @@ const setHashKey = (key: number | string | Uint32Array): void => {
 
 /* eslint-enable no-bitwise */
 
-export { generateHashKey, hashInput, setHashKey, stableStringify };
+export { hashInput, setHashKey };

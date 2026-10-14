@@ -1,23 +1,26 @@
 import type { SchedulerStatus } from "@lunora/client";
 import { useLunora } from "@lunora/react";
 import type { ReactElement, ReactNode } from "react";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 import ConnectionBadge from "../../components/connection-badge";
 import { LiveError } from "../../components/live-status";
 import { Badge } from "../../components/ui/badge";
 import { Card } from "../../components/ui/card";
-import useLiveAdmin from "../../hooks/use-live-admin";
+import { useAdminQuery } from "../../hooks/use-admin-query";
 import type { TFunction } from "../../i18n/i18n-context";
 import { useT } from "../../i18n/i18n-context";
 import type { AuthMetrics, FunctionCallStat, LogEntry, LogsResult, MetricsSnapshot, MigrationStatusRow } from "../../lib/admin";
 import { ADMIN_FUNCTIONS } from "../../lib/admin";
-import { adminRef, callOptions, errorMessage, fireAndForget, formatTimestamp } from "../../lib/internal";
+import { adminRef, callOptions, errorMessage, fireAndForget } from "../../lib/internal";
 import { loadRecentShards } from "../../lib/shard-history";
 import { cn } from "../../lib/utils";
+import HealthDigest from "./health-digest";
 import { shardsToAggregate } from "./metrics-aggregate";
 import type { ShardSloResult, SloTotals } from "./slo-aggregate";
 import { dedupeMigrations, mergeFunctionStats, sumShardMetrics } from "./slo-aggregate";
+import type { SloLevel } from "./slo-format";
+import { rateLevel, ratePercent, REQUEST_ERROR_CRIT, REQUEST_ERROR_WARN } from "./slo-format";
 import { Sparkline } from "./sparkline";
 
 interface HealthPanelProps {
@@ -39,28 +42,12 @@ const MIN_FANOUT_INTERVAL_MS = 2000;
 
 /** Functions shown in the "by error rate" list, worst first. */
 const TOP_FUNCTION_LIMIT = 5;
-
-/** SLO thresholds (fraction 0..1). Below `warn` is healthy; at/above `crit` is breaching. */
-const REQUEST_ERROR_WARN = 0.01;
-const REQUEST_ERROR_CRIT = 0.05;
 // Auth failures tolerate a higher floor — users mistype passwords — so the bands are wider.
 const AUTH_FAIL_WARN = 0.1;
 const AUTH_FAIL_CRIT = 0.3;
 // Scheduler backlog is an absolute job count, not a rate.
 const BACKLOG_WARN = 1;
 const BACKLOG_CRIT = 50;
-
-type SloLevel = "crit" | "ok" | "warn";
-
-/** Classify a 0..1 rate against its warn/crit thresholds. */
-const rateLevel = (rate: number, warn: number, crit: number): SloLevel => {
-    if (rate >= crit) {
-        return "crit";
-    }
-
-    return rate >= warn ? "warn" : "ok";
-};
-
 /** Classify an absolute count (e.g. backlog) against warn/crit thresholds. `0` is always healthy. */
 const countLevel = (count: number, warn: number, crit: number): SloLevel => {
     if (count >= crit) {
@@ -68,22 +55,6 @@ const countLevel = (count: number, warn: number, crit: number): SloLevel => {
     }
 
     return count >= warn ? "warn" : "ok";
-};
-
-/** Map an SLO level to a Badge variant, so a breach reads red at a glance. */
-const LEVEL_VARIANT: Record<SloLevel, "default" | "destructive" | "secondary"> = {
-    crit: "destructive",
-    ok: "secondary",
-    warn: "default",
-};
-
-/** A 0..1 rate as a percentage string, or `—` when the denominator is zero (no traffic yet). */
-const ratePercent = (numerator: number, denominator: number): string => {
-    if (denominator === 0) {
-        return "—";
-    }
-
-    return `${((numerator / denominator) * 100).toFixed(1)}%`;
 };
 
 /**
@@ -262,6 +233,16 @@ const loadSloData = async (client: ReturnType<typeof useLunora>, rootShard: stri
     };
 };
 
+/** Attempts and failures as parallel series for the auth sparkline. */
+const authSeries = (auth: AuthMetrics | null | undefined): { attempts: number[]; failures: number[] } => {
+    const buckets = auth?.history ?? [];
+
+    return {
+        attempts: buckets.map((bucket) => bucket.attempts),
+        failures: buckets.map((bucket) => bucket.failures),
+    };
+};
+
 /**
  * App-level health & SLO overview. On top of the original single-shard snapshot
  * (recent errors, request/error counts, shards seen) it composes the
@@ -278,6 +259,7 @@ const loadSloData = async (client: ReturnType<typeof useLunora>, rootShard: stri
  * live: a root-shard `getMetrics` subscription drives a full cross-shard re-pull
  * on every write-flush (coalesced so a burst yields at most one in-flight pull).
  */
+// react-doctor-disable-next-line react-doctor/prefer-useReducer -- the eight values are independent reads that arrive from separate queries at separate times, so one reducer would serialise updates that genuinely are not one transition
 export const HealthPanel = ({ initialShardKey }: HealthPanelProps): ReactElement => {
     const client = useLunora();
     const t = useT();
@@ -290,28 +272,26 @@ export const HealthPanel = ({ initialShardKey }: HealthPanelProps): ReactElement
     const [auth, setAuth] = useState<AuthMetrics | null>(null);
     const [scheduler, setScheduler] = useState<SchedulerStatus | null>(null);
     const [migrations, setMigrations] = useState<MigrationStatusRow[]>([]);
-    // Always-on live channel; this only holds a rejection message (e.g. missing
-    // admin token) so the overview can say why it stopped updating.
-    const [liveError, setLiveError] = useState<string | undefined>(undefined);
 
     // Recently-visited shard keys the studio remembers — read once on mount.
     const [recentShards] = useState<string[]>(loadRecentShards);
 
-    // Guard against overlapping refreshes (a live push landing mid-fan-out) and
-    // setState after unmount.
+    // Guard against overlapping refreshes (a live push landing mid-fan-out).
     const inFlightRef = useRef(false);
-    const mountedRef = useRef(true);
+    // Bumped whenever `refresh` is replaced (a new shard prop or client) and on
+    // unmount. A fan-out from an older generation neither paints nor keeps holding
+    // `inFlightRef`, so the new shard's first load is not skipped behind it.
+    const generationRef = useRef(0);
 
-    useEffect(() => {
-        mountedRef.current = true;
-
-        return () => {
-            mountedRef.current = false;
-        };
-    }, []);
+    // Cadence cap for the live fan-out: a cross-shard re-pull is expensive, so a
+    // burst of write-flush pushes runs at most one fan-out per interval (leading +
+    // one trailing), on top of the `inFlightRef` concurrency guard.
+    const lastFanOutRef = useRef(0);
+    const trailingTimerRef = useRef<null | ReturnType<typeof setTimeout>>(null);
 
     const rootShard = initialShardKey ?? "";
 
+    // react-doctor-disable-next-line react-doctor/react-compiler-no-manual-memoization -- identity is behaviour: an effect and the fan-out timer depend on this, so a fresh one re-fires them every render
     const refresh = useCallback(async (): Promise<void> => {
         if (inFlightRef.current) {
             return;
@@ -319,15 +299,15 @@ export const HealthPanel = ({ initialShardKey }: HealthPanelProps): ReactElement
 
         inFlightRef.current = true;
 
+        const generation = generationRef.current;
+
         // Per-shard signals (metrics, function stats, migrations) sum across the
         // best-effort "shards we know about" set — DOs aren't enumerable, so it's
         // root + current + recently-visited. The global signals (logs buffer, auth
         // metrics, scheduler backlog) live on the root shard / worker, read once.
         const result = await loadSloData(client, rootShard, shardsToAggregate(rootShard, recentShards));
 
-        if (!mountedRef.current) {
-            inFlightRef.current = false;
-
+        if (generation !== generationRef.current) {
             return;
         }
 
@@ -341,17 +321,23 @@ export const HealthPanel = ({ initialShardKey }: HealthPanelProps): ReactElement
         setScheduler(result.scheduler);
 
         inFlightRef.current = false;
+        // react-doctor-disable-next-line react-doctor/exhaustive-deps -- `rootShard` is derived from the prop and listed in the deps
     }, [client, recentShards, rootShard]);
 
     useEffect(() => {
         fireAndForget(refresh());
-    }, [refresh]);
 
-    // Cadence cap for the live fan-out: a cross-shard re-pull is expensive, so a
-    // burst of write-flush pushes runs at most one fan-out per interval (leading +
-    // one trailing), on top of the `inFlightRef` concurrency guard.
-    const lastFanOutRef = useRef(0);
-    const trailingTimerRef = useRef<null | ReturnType<typeof setTimeout>>(null);
+        return () => {
+            generationRef.current += 1;
+            inFlightRef.current = false;
+
+            // A pending trailing run holds the previous `refresh`, i.e. the previous shard.
+            if (trailingTimerRef.current !== null) {
+                clearTimeout(trailingTimerRef.current);
+                trailingTimerRef.current = null;
+            }
+        };
+    }, [refresh]);
 
     const scheduleFanOut = (): void => {
         const elapsed = Date.now() - lastFanOutRef.current;
@@ -366,50 +352,47 @@ export const HealthPanel = ({ initialShardKey }: HealthPanelProps): ReactElement
 
         // Within the cooldown: coalesce the rest of the burst into one trailing run
         // at the interval edge (only if one isn't already scheduled).
-        trailingTimerRef.current ??= setTimeout(() => {
-            trailingTimerRef.current = null;
-            lastFanOutRef.current = Date.now();
-            fireAndForget(refresh());
-        }, MIN_FANOUT_INTERVAL_MS - elapsed);
+        // An explicit `if`, not `??=`: React Compiler cannot lower `??=`, and one
+        // unsupported operator bails the WHOLE component out of auto-memoization.
+        // The ref is `null | Timeout`, so the two forms are equivalent, and the
+        // compiler bail-out costs more than the extra line reads.
+        // eslint-disable-next-line @typescript-eslint/prefer-nullish-coalescing -- `??=` is unsupported by React Compiler's HIR lowering; see above
+        if (trailingTimerRef.current === null) {
+            trailingTimerRef.current = setTimeout(() => {
+                trailingTimerRef.current = null;
+                lastFanOutRef.current = Date.now();
+                fireAndForget(refresh());
+            }, MIN_FANOUT_INTERVAL_MS - elapsed);
+        }
     };
 
-    useEffect(
-        () => () => {
-            if (trailingTimerRef.current !== null) {
-                clearTimeout(trailingTimerRef.current);
-            }
-        },
-        [],
-    );
+    // Live channel: always on. A root-shard `getMetrics` subscription (re-pushed on
+    // every write-flush) drives a cross-shard re-pull, rate-limited by
+    // `scheduleFanOut` and the `inFlightRef` concurrency guard. `liveError` holds a
+    // rejection message (e.g. missing admin token) so the overview can say why it
+    // stopped updating; the one-shot seed `data` is otherwise unused here — its
+    // only role is to tick `scheduleFanOut` when a fresh push lands.
+    const { data: liveMetrics, liveError } = useAdminQuery<MetricsSnapshot>(ADMIN_FUNCTIONS.getMetrics, {}, { live: true, shardKey: rootShard });
 
-    // Live channel: always on. A root-shard `getMetrics` push (every write-flush)
-    // drives a cross-shard re-pull, rate-limited by `scheduleFanOut` and the
-    // `inFlightRef` concurrency guard.
-    useLiveAdmin(
-        ADMIN_FUNCTIONS.getMetrics,
-        {},
-        rootShard,
-        () => {
-            setLiveError(undefined);
-            scheduleFanOut();
-        },
-        true,
-        setLiveError,
-    );
+    // Each fresh `getMetrics` push (one-shot seed or a live write-flush) schedules a
+    // coalesced cross-shard fan-out. Folding a stream of pushes into the fan-out
+    // cadence can only happen as each value lands, so this stays an effect.
+    useEffect(() => {
+        if (liveMetrics === undefined) {
+            return;
+        }
+
+        scheduleFanOut();
+        // `scheduleFanOut` reads only refs + the stable `refresh`; re-run per push.
+        // eslint-disable-next-line react-hooks/exhaustive-deps -- intentionally keyed on the live push, not the (stable) scheduler closure.
+    }, [liveMetrics]);
 
     // Entries arrive newest-first from the buffer.
     const recentErrors = entries.filter((entry) => entry.level === "error");
     const topErrors = recentErrors.slice(0, RECENT_ERROR_LIMIT);
 
     const trend = requestErrorSeries(totals?.history);
-    const authTrend = useMemo(() => {
-        const buckets = auth?.history ?? [];
-
-        return {
-            attempts: buckets.map((bucket) => bucket.attempts),
-            failures: buckets.map((bucket) => bucket.failures),
-        };
-    }, [auth?.history]);
+    const authTrend = authSeries(auth);
 
     // Functions that have run, worst error-rate first, then by call volume.
     const worstFunctions = functions
@@ -491,6 +474,11 @@ export const HealthPanel = ({ initialShardKey }: HealthPanelProps): ReactElement
                         {metricsError}
                     </div>
                 )}
+                {metricsError === null && totals?.historyTruncated === true && (
+                    <div className="border-t border-border bg-warning/5 px-4 py-2 text-sm text-muted-foreground" data-testid="hl-history-truncated">
+                        {t("Showing a partial request/error history — one or more shards have more data than the trend chart can display.")}
+                    </div>
+                )}
             </Card>
 
             {/* Service-level KPIs — status-coloured, with trend sparklines. */}
@@ -532,71 +520,7 @@ export const HealthPanel = ({ initialShardKey }: HealthPanelProps): ReactElement
             </div>
 
             {/* Functions by error rate + recent errors, side by side. */}
-            <div className="grid gap-3 lg:grid-cols-2">
-                <Card className="gap-0 py-0" data-testid="hl-functions">
-                    <header className="border-b border-border px-4 py-3">
-                        <span className="font-mono text-[11px] tracking-wide text-muted-foreground uppercase">{t("Functions by error rate")}</span>
-                    </header>
-                    {worstFunctions.length === 0 ? (
-                        <p className="px-4 py-8 text-center text-sm text-muted-foreground" data-testid="hl-functions-empty">
-                            {t("No function activity yet.")}
-                        </p>
-                    ) : (
-                        <ul className="divide-y divide-border">
-                            {worstFunctions.map((stat) => (
-                                <li className="flex flex-wrap items-center justify-between gap-2 px-4 py-2 text-xs" data-testid="hl-fn-row" key={stat.path}>
-                                    <span className="truncate font-mono text-foreground">{stat.path}</span>
-                                    <span className="flex shrink-0 items-center gap-2">
-                                        <span className="tabular-nums text-muted-foreground">{t("{count} calls", { count: stat.calls.toString() })}</span>
-                                        <Badge variant={LEVEL_VARIANT[rateLevel(stat.errors / stat.calls, REQUEST_ERROR_WARN, REQUEST_ERROR_CRIT)]}>
-                                            {ratePercent(stat.errors, stat.calls)}
-                                        </Badge>
-                                    </span>
-                                </li>
-                            ))}
-                        </ul>
-                    )}
-                </Card>
-
-                <Card className="gap-0 py-0">
-                    <header className="flex items-center justify-between gap-2 border-b border-border px-4 py-3">
-                        <span className="font-mono text-[11px] tracking-wide text-muted-foreground uppercase">{t("Recent errors")}</span>
-                        <Badge data-testid="hl-error-count" variant={recentErrors.length > 0 ? "destructive" : "outline"}>
-                            {recentErrors.length}
-                        </Badge>
-                    </header>
-
-                    {logsError !== null && (
-                        <p className="px-4 py-8 text-center text-sm text-destructive" data-testid="hl-logs-error" role="alert">
-                            {logsError}
-                        </p>
-                    )}
-
-                    {logsError === null && topErrors.length === 0 && (
-                        <p className="px-4 py-8 text-center text-sm text-muted-foreground" data-testid="hl-errors-empty">
-                            {t("No recent errors.")}
-                        </p>
-                    )}
-
-                    {topErrors.length > 0 && (
-                        <ul className="divide-y divide-border">
-                            {topErrors.map((entry, index) => (
-                                <li
-                                    className="flex flex-col gap-0.5 px-4 py-2 text-xs"
-                                    data-testid="hl-error-row"
-                                    key={`${entry.timestamp.toString()}-${index.toString()}`}
-                                >
-                                    <span className="flex items-center gap-2">
-                                        <time className="shrink-0 text-muted-foreground">{formatTimestamp(entry.timestamp)}</time>
-                                        {entry.functionPath !== undefined && <span className="truncate font-mono text-foreground">{entry.functionPath}</span>}
-                                    </span>
-                                    <span className="text-destructive">{entry.message}</span>
-                                </li>
-                            ))}
-                        </ul>
-                    )}
-                </Card>
-            </div>
+            <HealthDigest errorCount={recentErrors.length} logsError={logsError} topErrors={topErrors} worstFunctions={worstFunctions} />
 
             {/* Shards seen. */}
             <Card className="gap-0 py-0">

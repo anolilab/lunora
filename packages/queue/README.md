@@ -1,0 +1,67 @@
+<!-- START_PACKAGE_OG_IMAGE_PLACEHOLDER -->
+
+<a href="https://www.anolilab.com/open-source" align="center">
+
+  <img src="__assets__/package-og.svg" alt="queue" />
+
+</a>
+
+<h3 align="center">Cloudflare Queues for Lunora: defineQueue producers + consumers, the ctx.queues surface, and the generated queue() worker handler</h3>
+
+<!-- END_PACKAGE_OG_IMAGE_PLACEHOLDER -->
+
+# @lunora/queue
+
+Cloudflare Queues for Lunora: declare a queue with `defineQueue`, enqueue from a
+mutation or action via `ctx.queues.<name>.send(...)`, and process delivered
+batches in a push handler (or expose the queue to an external HTTP pull
+consumer).
+
+```ts
+// lunora/queues.ts
+import { defineQueue } from "@lunora/queue";
+
+import { api } from "./_generated/api";
+
+export const emailQueue = defineQueue<{ to: string }>({
+    handler: async (ctx, batch) => {
+        for (const message of batch.messages) {
+            await message.run(api.email.send, { to: message.body.to });
+            message.ack();
+        }
+    },
+});
+```
+
+`message.run(...)` is `ctx.run(...)` pinned to that message. Call it inside the
+batch loop: when the dispatched function fails deterministically (`400`, `403`,
+`404`, `422`), the consumer acks just that message and retries the rest instead
+of letting one poison message retry — and eventually dead-letter — the whole
+batch.
+
+```ts
+// inside a mutation/action
+await ctx.queues.emailQueue.send({ to: user.email });
+```
+
+For one event with several consumers, declare a topic and subscribe to it.
+Each subscription is its own queue, with its own retries and dead-letter queue:
+
+```ts
+// lunora/queues.ts
+export const signups = defineTopic<{ userId: string }>();
+export const welcomeEmail = defineSubscription(signups, { handler: async (ctx, batch) => {} });
+
+// inside a mutation/action
+await ctx.topics.signups.publish({ userId });
+```
+
+Codegen emits the typed `ctx.queues` producer and the worker `queue()` dispatch;
+`@lunora/config` reconciles the wrangler `queues.producers[]` /
+`queues.consumers[]` entries from the same definition. Scaffold a new queue with
+`vis generate lunora-queue --name=email`.
+
+## License
+
+The lunora `@lunora/queue` package is open-sourced software licensed under the
+[FSL-1.1-Apache-2.0 license](./LICENSE.md).

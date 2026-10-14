@@ -36,7 +36,21 @@ const resolveCount = (input: unknown, range: Range): number => {
     return seeded(["__count__", input], () => faker.number.int({ max, min }));
 };
 
-const capitalizeWord = (word: string): string => (word.length === 0 ? word : word.charAt(0).toUpperCase() + word.slice(1));
+/**
+ * Domain every generated address is built on.
+ *
+ * Faker's default is one of `gmail.com` / `hotmail.com` / `yahoo.com`, so seeded
+ * rows carried DELIVERABLE addresses belonging to real strangers: seed a staging
+ * database (or `lunora seed --prod`), let any user-driven mail flow run — a welcome
+ * job, a digest, an `@lunora/auth` verification on a seeded account — and the app
+ * mails them from its own verified domain. `example.com` is reserved by RFC 2606
+ * for exactly this, and accepts no mail.
+ *
+ * No opt-out knob: a caller who genuinely wants a specific domain overrides the
+ * column, which is what every README and docs example already does
+ * (`users: { email: ({ index }) => ... }`).
+ */
+const RESERVED_EMAIL_DOMAIN = "example.com";
 
 /** Character-class probes for {@link copycat.scramble}, hoisted to avoid per-call recompilation. */
 const LOWER_ALPHA = /[a-z]/;
@@ -48,10 +62,6 @@ const copycat = {
         return seeded(input, () => faker.datatype.boolean());
     },
 
-    char(input: unknown): string {
-        return seeded(input, () => faker.string.alpha(1));
-    },
-
     city(input: unknown): string {
         return seeded(input, () => faker.location.city());
     },
@@ -60,24 +70,8 @@ const copycat = {
         return seeded(input, () => faker.location.country());
     },
 
-    countryCode(input: unknown): string {
-        return seeded(input, () => faker.location.countryCode());
-    },
-
-    /** ISO-8601 date string between `min`/`max` (default years 1980–2020). */
-    dateString(input: unknown, options?: { max?: Date; min?: Date }): string {
-        const min = options?.min ?? new Date("1980-01-01T00:00:00.000Z");
-        const max = options?.max ?? new Date("2020-01-01T00:00:00.000Z");
-
-        return seeded(input, () => faker.date.between({ from: min, to: max }).toISOString());
-    },
-
-    digit(input: unknown): string {
-        return seeded(input, () => String(faker.number.int({ max: 9, min: 0 })));
-    },
-
     email(input: unknown): string {
-        return seeded(input, () => faker.internet.email().toLowerCase());
+        return seeded(input, () => faker.internet.email({ provider: RESERVED_EMAIL_DOMAIN }).toLowerCase());
     },
 
     firstName(input: unknown): string {
@@ -94,26 +88,14 @@ const copycat = {
         return seeded(input, () => faker.person.fullName());
     },
 
-    hex(input: unknown): string {
-        return seeded(input, () => faker.string.hexadecimal({ casing: "lower", length: 1, prefix: "" }));
-    },
-
     int(input: unknown, options?: { max?: number; min?: number }): number {
         const { max = 1000, min = 0 } = options ?? {};
 
         return seeded(input, () => faker.number.int({ max, min }));
     },
 
-    ipv4(input: unknown): string {
-        return seeded(input, () => faker.internet.ipv4());
-    },
-
     lastName(input: unknown): string {
         return seeded(input, () => faker.person.lastName());
-    },
-
-    mac(input: unknown): string {
-        return seeded(input, () => faker.internet.mac());
     },
 
     /** Pick the array element corresponding to `input`. Returns `undefined` for an empty array. */
@@ -176,23 +158,8 @@ const copycat = {
         return seeded(input, () => faker.lorem.slug());
     },
 
-    /** Pick a deterministic subset (size within `range`) of `values`, no repeats. */
-    someOf<T>(input: unknown, range: Range, values: ReadonlyArray<T>): T[] {
-        const count = Math.min(resolveCount(["__some__", input], range), values.length);
-
-        return seeded(input, () => faker.helpers.arrayElements(values as T[], count));
-    },
-
     streetAddress(input: unknown): string {
         return seeded(input, () => faker.location.streetAddress());
-    },
-
-    streetName(input: unknown): string {
-        return seeded(input, () => faker.location.street());
-    },
-
-    timezone(input: unknown): string {
-        return seeded(input, () => faker.location.timeZone());
     },
 
     /**
@@ -222,17 +189,11 @@ const copycat = {
         return seeded(input, () => faker.string.uuid());
     },
 
-    word(input: unknown, options?: { capitalize?: boolean }): string {
-        const word = seeded(input, () => faker.lorem.word());
-
-        return options?.capitalize === true ? capitalizeWord(word) : word;
-    },
-
-    words(input: unknown, options?: { max?: number; min?: number }): string {
-        return seeded(input, () => faker.lorem.words(options ? { max: options.max ?? 5, min: options.min ?? 2 } : undefined));
+    word(input: unknown): string {
+        return seeded(input, () => faker.lorem.word());
     },
 };
 
 export { copycat };
 
-export { generateHashKey, hashInput, setHashKey } from "./hash";
+export { hashInput, setHashKey } from "./hash";

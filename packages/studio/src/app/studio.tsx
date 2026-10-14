@@ -11,13 +11,14 @@ import {
     useRouterState,
     useSearch,
 } from "@tanstack/react-router";
-import type { ReactElement, ReactNode } from "react";
-import { createContext, use, useEffect } from "react";
+import type { ComponentType, ReactElement, ReactNode } from "react";
+import { createContext, lazy, Suspense, use, useEffect } from "react";
 
 import BrandMark from "../components/brand-mark";
 import { ErrorBoundary } from "../components/error-boundary";
+import { OperationConsoleProvider, useOperationConsole } from "../components/operation-console-provider";
 import RulesBanner from "../components/rules-banner";
-import { ThemeToggle } from "../components/theme-toggle";
+import { EnsureThemeProvider } from "../components/theme-provider";
 import { Badge } from "../components/ui/badge";
 import { Input } from "../components/ui/input";
 import { Popover, PopoverContent, PopoverTrigger } from "../components/ui/popover";
@@ -34,91 +35,157 @@ import {
     SidebarMenuButton,
     SidebarMenuItem,
     SidebarProvider,
-    SidebarTrigger,
     useSidebar,
 } from "../components/ui/sidebar";
 import { Skeleton } from "../components/ui/skeleton";
-import { InsightsPanel } from "../features/advisors/insights-panel";
-import RlsPanel from "../features/advisors/rls-panel";
-import SecurityAdvisorPanel from "../features/advisors/security-advisor-panel";
-import { AnalyticsPanel } from "../features/analytics/analytics-panel";
-import ApiTab from "../features/api/api-tab";
-import { AuthConfigPanel } from "../features/auth/auth-config-panel";
-import { AuthSessionsPanel } from "../features/auth/auth-sessions-panel";
-import { OrganizationsPanel } from "../features/auth/organizations-panel";
-import { UsersPanel } from "../features/auth/users-panel";
-import { TableEditor } from "../features/data/table-editor";
-import { ExportImportPanel } from "../features/database/export-import";
-import { MigrationsPanel } from "../features/database/migrations";
-import { PitrPanel } from "../features/database/pitr-panel";
-import { FunctionRunner } from "../features/functions/function-runner";
-import { FunctionStatsPanel } from "../features/functions/function-stats";
+// Home stays a static (eager) import so the landing route paints synchronously;
+// every other feature panel is a route-level `React.lazy` boundary defined below
+// so it — and its heavy deps (`@xyflow/react`, `recharts`, the SQL editor, the
+// data grid) — loads in its own on-demand `chunk-*.js`, not in Home's first load.
+import type { AnalyticsPanelProps } from "../features/analytics/analytics-panel";
 import { HomePanel } from "../features/home/home-panel";
-import { AuditPanel } from "../features/logs/audit-panel";
-import { LogDrainsPanel } from "../features/logs/log-drains-panel";
-import { LogsPanel } from "../features/logs/logs-panel";
-import { MailPanel } from "../features/logs/mail-panel";
+import OperationConsole from "../features/logs/operation-console";
 import type { SchedulePanelProps } from "../features/logs/schedule-panel";
-import { SchedulePanel } from "../features/logs/schedule-panel";
-import SubscriptionsPanel from "../features/logs/subscriptions-panel";
-import { PaymentsPanel } from "../features/payments/payments-panel";
-import { PermissionsPanel } from "../features/permissions/permissions-panel";
-import DashboardsPanel from "../features/reports/dashboards-panel";
-import { HealthPanel } from "../features/reports/health-panel";
-import { MetricsPanel } from "../features/reports/metrics-panel";
-import { SchemaViewer } from "../features/schema/schema-viewer";
-import { SettingsPanel } from "../features/settings/settings-panel";
-import { SqlEditorPanel } from "../features/sql/sql-editor-panel";
-import { FileBrowser } from "../features/storage/file-browser";
-import { StorageRulesPanel } from "../features/storage/storage-rules-panel";
-import { VectorBrowser } from "../features/vectors/vector-browser";
-import WorkflowsPanel from "../features/workflows/workflows-panel";
+import type { PrivacyRequestsSource } from "../features/privacy/privacy-requests-source";
 import useStudioFeatures from "../hooks/use-studio-features";
 import { useT } from "../i18n/i18n-context";
 import { StudioI18nProvider } from "../i18n/i18n-provider";
-import type { StudioFeaturesResult } from "../lib/admin";
+import { validateDataViewSearch, validateSchemaVersionSearch } from "../lib/data-view-params";
 import { fireAndForget } from "../lib/internal";
 import type { FunctionDescriptor } from "../lib/types";
 import { cn } from "../lib/utils";
 import { CommandPalette, openCommandPalette } from "./command-palette";
+import { useNavLabels } from "./nav-labels";
+import type { NavGroup, NavGroupKey, StudioTab } from "./nav-types";
+import StudioHeader from "./studio-header";
+import type { TabVerdict } from "./tab-gates";
+import { gateTab, resolveNav, UnsupportedPanel } from "./tab-gates";
+import useConsoleShortcut from "./use-console-shortcut";
 
-/** Identifier for each built-in studio tab. */
-type StudioTab =
-    | "analytics"
-    | "api"
-    | "audit"
-    | "authConfig"
-    | "authSessions"
-    | "dashboards"
-    | "data"
-    | "drains"
-    | "export"
-    | "files"
-    | "functions"
-    | "health"
-    | "home"
-    | "insights"
-    | "logs"
-    | "mail"
-    | "metrics"
-    | "migrations"
-    | "organizations"
-    | "payments"
-    | "permissions"
-    | "pitr"
-    | "realtime"
-    | "rls"
-    | "schedule"
-    | "schema"
-    | "security"
-    | "settings"
-    | "sql"
-    | "storageRules"
-    | "users"
-    | "vectors"
-    | "workflows";
+// Route-level lazy panels. Each becomes its own on-demand `chunk-*.js` under
+// `dist/standalone/` (esbuild `splitting` in `scripts/build-standalone.mjs`),
+// so a user landing on Home never downloads the SQL editor, the data grid, the
+// schema diagram (`@xyflow/react`), the reports charts (`recharts`), or the
+// other ~30 panels — they load only when their tab is visited. The `React.lazy`
+// identities live at module scope so they stay stable across router rebuilds;
+// the routed `<Outlet>` is wrapped in `<Suspense>` (see {@link StudioLayout}).
+//
+// `React.lazy` wants a `{ default }` module; {@link lazyNamed} unwraps a named
+// export to that shape (preserving the component's props), so the many
+// named-export panels stay one-liners. Default-exporting panels pass straight to
+// `lazy`. The literal `import("…")` specifier MUST stay inline in the loader —
+// esbuild's code-splitting keys off the static string, so never hoist it to a
+// variable.
+const lazyNamed = <P, K extends string>(load: () => Promise<Record<K, ComponentType<P>>>, key: K) =>
+    lazy(() =>
+        load().then((loaded) => {
+            return { default: loaded[key] };
+        }),
+    );
+
+const InsightsPanel = lazyNamed(() => import("../features/advisors/insights-panel"), "InsightsPanel");
+const RlsPanel = lazy(() => import("../features/advisors/rls-panel"));
+const AdvisorHealthPanel = lazy(() => import("../features/advisors/advisor-health-panel"));
+const SecurityAdvisorPanel = lazy(() => import("../features/advisors/security-advisor-panel"));
+const AgentsPanel = lazy(() => import("../features/agents/agents-panel"));
+const AnalyticsPanel = lazyNamed(() => import("../features/analytics/analytics-panel"), "AnalyticsPanel");
+const ApiTab = lazy(() => import("../features/api/api-tab"));
+const ArchitecturePanel = lazy(() => import("../features/architecture/architecture-panel"));
+const AuthAuditPanel = lazy(() => import("../features/auth/auth-audit-panel"));
+const AuthConfigPanel = lazy(() => import("../features/auth/auth-config-panel"));
+const AuthSessionsPanel = lazy(() => import("../features/auth/auth-sessions-panel"));
+const OrganizationsPanel = lazy(() => import("../features/auth/organizations-panel"));
+const UsersPanel = lazyNamed(() => import("../features/auth/users-panel"), "UsersPanel");
+const ContainersPanel = lazy(() => import("../features/containers/containers-panel"));
+const DeploymentHealthPanel = lazyNamed(() => import("../features/health/deployment-health-panel"), "DeploymentHealthPanel");
+const TableEditor = lazyNamed(() => import("../features/data/table-editor"), "TableEditor");
+const ExportImportPanel = lazyNamed(() => import("../features/database/export-import"), "ExportImportPanel");
+const MigrationsRoutePanel = lazy(() => import("../features/database/migrations-route"));
+
+/**
+ * Per-route search-param validators. A route absent from this map takes no typed
+ * search params; `createRoute` accepts `undefined` for `validateSearch`.
+ *
+ * `/data` carries the whole data-browser view (table / tier / shard / search /
+ * sort / filters); `/migrations` carries the selected schema version, so a
+ * specific diff is a shareable link. A lookup rather than a branch per route:
+ * adding one is a one-line data change, and it sidesteps the
+ * route-property-order lint that blocked a spread.
+ */
+const SEARCH_VALIDATORS: Partial<Record<StudioTab, (search: Record<string, unknown>) => unknown>> = {
+    data: validateDataViewSearch,
+    migrations: validateSchemaVersionSearch,
+};
+const PitrPanel = lazyNamed(() => import("../features/database/pitr-panel"), "PitrPanel");
+const PrivacyRequestsPanel = lazyNamed(() => import("../features/privacy/privacy-requests-panel"), "PrivacyRequestsPanel");
+const FlagsPanel = lazy(() => import("../features/flags/flags-panel"));
+const ReactorsPanel = lazy(() => import("../features/reactors/reactors-panel"));
+const FunctionRunner = lazyNamed(() => import("../features/functions/function-runner"), "FunctionRunner");
+const FunctionStatsPanel = lazyNamed(() => import("../features/functions/function-stats"), "FunctionStatsPanel");
+const IssuesPanel = lazy(() => import("../features/issues/issues-panel"));
+const AuditPanel = lazyNamed(() => import("../features/logs/audit-panel"), "AuditPanel");
+const LogDrainsPanel = lazy(() => import("../features/logs/log-drains-panel"));
+// `logs-panel` re-exports several types alongside the component, which trips the
+// generic prop inference in `lazyNamed` (it mis-infers the panel's props). The
+// explicit unwrap keeps `LogsPanel`'s exact props type.
+const LogsPanel = lazy(() =>
+    import("../features/logs/logs-panel").then((m) => {
+        return { default: m.LogsPanel };
+    }),
+);
+const MailPanel = lazyNamed(() => import("../features/logs/mail-panel"), "MailPanel");
+const SchedulePanel = lazyNamed(() => import("../features/logs/schedule-panel"), "SchedulePanel");
+const SubscriptionsPanel = lazy(() => import("../features/logs/subscriptions-panel"));
+const SyncClientPanel = lazy(() => import("../features/logs/sync-client-panel"));
+const KvBrowser = lazyNamed(() => import("../features/kv/kv-browser"), "KvBrowser");
+const NotificationsPanel = lazy(() => import("../features/notifications/notifications-panel"));
+const PaymentsPanel = lazyNamed(() => import("../features/payments/payments-panel"), "PaymentsPanel");
+const PermissionsPanel = lazyNamed(() => import("../features/permissions/permissions-panel"), "PermissionsPanel");
+const QueuesPanel = lazy(() => import("../features/queues/queues-panel"));
+const DashboardsPanel = lazy(() => import("../features/reports/dashboards-panel"));
+const FanoutPanel = lazy(() => import("../features/reports/fanout-panel"));
+const HealthPanel = lazyNamed(() => import("../features/reports/health-panel"), "HealthPanel");
+const MetricsPanel = lazyNamed(() => import("../features/reports/metrics-panel"), "MetricsPanel");
+const SchemaViewer = lazyNamed(() => import("../features/schema/schema-viewer"), "SchemaViewer");
+const SettingsPanel = lazyNamed(() => import("../features/settings/settings-panel"), "SettingsPanel");
+const SqlEditorPanel = lazyNamed(() => import("../features/sql/sql-editor-panel"), "SqlEditorPanel");
+const FileBrowser = lazyNamed(() => import("../features/storage/file-browser"), "FileBrowser");
+const StorageRulesPanel = lazy(() => import("../features/storage/storage-rules-panel"));
+const TracesPanel = lazy(() => import("../features/traces/traces-panel"));
+const EvalsPanel = lazy(() => import("../features/evals/evals-panel"));
+const AiUsagePanel = lazy(() => import("../features/ai-usage/ai-usage-panel"));
+const VectorBrowser = lazyNamed(() => import("../features/vectors/vector-browser"), "VectorBrowser");
+const WorkflowsPanel = lazy(() => import("../features/workflows/workflows-panel"));
 
 interface StudioProps {
+    /**
+     * Resolve one Analytics tab panel by its key (`"volume"`, `"latency"`,
+     * `"hotShards"`). Supply a runner that calls an action in your app which
+     * builds the statement server-side and runs it through `ctx.analyticsSql`:
+     *
+     * ```ts
+     * // lunora/studio-analytics.ts
+     * export const usagePanel = action.input({ panel: v.string() }).action(async ({ args, ctx }) => {
+     *     assertAdmin(ctx); // your own admin check: this reads account analytics
+     *     if (!isFunctionUsagePanel(args.panel)) throw new LunoraError("BAD_REQUEST", "unknown panel");
+     *     const { params, query } = functionUsageQuery(args.panel);
+     *     return ctx.analyticsSql.query(query, params);
+     * });
+     * ```
+     *
+     * The action MUST be admin-gated and MUST take the panel key, never SQL: an
+     * action running caller-supplied SQL could read every dataset in the account.
+     * Without a runner the Analytics tab renders an empty state and issues no
+     * request.
+     *
+     * Pass a STABLE reference — a module-level function, or one held in a
+     * `useCallback`/ref. It is read while building the tab router, so a fresh
+     * inline arrow on every render rebuilds the router and remounts the panel
+     * tree, losing in-progress query state. The same holds for `scheduledLoad`,
+     * `scheduledCancel` and `scheduledCron`.
+     */
+    readonly analyticsSqlQuery?: AnalyticsPanelProps["runQuery"];
+
     /**
      * URL path prefix the studio is mounted under, passed to the router as its
      * `basepath`. Defaults to `/` (mounted at the origin root). The `@lunora/vite`
@@ -131,13 +198,23 @@ interface StudioProps {
     /**
      * App-owned top-bar + sidebar-footer chrome (theme toggle, admin-token
      * popover, rules banner). The batteries-included `StudioApp` supplies
-     * this; composing `&lt;Studio>` bare omits those affordances. See {@link StudioChrome}.
+     * this; composing `<Studio>` bare omits those affordances. See {@link StudioChrome}.
      */
     readonly chrome?: StudioChrome;
 
     /**
-     * Make the data tab editable (insert/edit/delete rows). Off by default so
-     * the studio is read-only unless the host opts in; see {@link TableEditor}.
+     * Show the data tab's write controls (insert/edit/delete rows). Off by
+     * default; see {@link TableEditor}.
+     *
+     * **This HIDES THE CONTROLS. It does not make anything read-only.** The
+     * write RPCs are gated server-side by `LUNORA_ADMIN_TOKEN` alone — one
+     * all-or-nothing check in `handleAdminRpc`, with no read/write scoping — and
+     * `renderStudioHtml({ adminToken })` already ships that bearer to the
+     * browser. So a viewer handed a studio deployed with `dataEditable: false`
+     * still holds a credential that can write; the buttons are simply absent
+     * from the page. Treat it as an affordance switch for a trusted operator,
+     * never as an authorization boundary. The same holds for
+     * {@link StudioProps.schemaEditable} and {@link StudioProps.runAsIdentity}.
      */
     readonly dataEditable?: boolean;
 
@@ -175,12 +252,24 @@ interface StudioProps {
     readonly openRpcSpec?: unknown;
 
     /**
+     * The app's data-subject request source for the Privacy requests page, built
+     * from the app's own admin functions (`listOpenPrivacyRequests`,
+     * `retryPrivacyRequest`). Without one the page renders a "not configured" state
+     * and issues no request. Pass a STABLE reference, as for `analyticsSqlQuery`.
+     */
+    readonly privacyRequests?: PrivacyRequestsSource;
+
+    /**
      * Allow the function runner to execute a function AS a chosen authenticated
      * identity (the "Run as identity" tool), so an operator can test auth + RLS
      * behavior. Security-sensitive: it forges identity on an admin-gated RPC, so
      * the host MUST set this only on a trusted loopback-dev gate (the same gate
      * as `dataEditable`) — never in a production/static deploy. Off by default;
      * see {@link FunctionRunner}.
+     *
+     * Like {@link StudioProps.dataEditable}, leaving it off only hides the tool.
+     * The RPC behind it stays reachable to anyone holding the admin token the
+     * page already carries — the gate is the token, not this flag.
      */
     readonly runAsIdentity?: boolean;
 
@@ -204,12 +293,15 @@ interface StudioProps {
     readonly scheduledLoad?: SchedulePanelProps["scheduledLoad"];
 
     /**
-     * Enable the visual schema editor overlay on the schema diagram (add table /
-     * column / index, written back to `lunora/schema.ts` + codegen). Off by default
-     * so the diagram stays read-only unless a host opts in. Like {@link
-     * StudioProps.dataEditable}, only the loopback-only dev hosts set this — the
-     * write path needs the project's filesystem + toolchain, so a static deploy
-     * leaves it off.
+     * Show the visual schema editor overlay on the schema diagram (add table /
+     * column / index, written back to `lunora/schema.ts` + codegen). Off by
+     * default. Only the loopback-only dev hosts set this — the write path needs
+     * the project's filesystem + toolchain, so a static deploy leaves it off.
+     *
+     * Like {@link StudioProps.dataEditable}, it hides the overlay rather than
+     * making the diagram read-only: what actually stops a schema write in a
+     * static deploy is that the host has no filesystem to write to, not this
+     * flag.
      */
     readonly schemaEditable?: boolean;
 }
@@ -222,7 +314,7 @@ type StudioShellProps = Omit<StudioProps, "i18n" | "locale">;
  * token state, the rules banner) but which renders *inside* the router-owned
  * {@link StudioLayout} (the header and sidebar footer). The layout is a route
  * component with no props, so it reads this from context rather than threading
- * it through the router. Absent (composing `&lt;Studio>` bare) the layout simply
+ * it through the router. Absent (composing `<Studio>` bare) the layout simply
  * omits those affordances.
  */
 interface StudioChrome {
@@ -235,15 +327,6 @@ interface StudioChrome {
 const StudioChromeContext = createContext<StudioChrome | null>(null);
 
 /**
- * Stable identifier for each sidebar domain; the display label is localised.
- * Domains group the pages by concern — Overview · Database · Functions · Auth ·
- * Storage · Observability (live logs + metrics) · Advisors · Operations (jobs,
- * mail, drains, payments) · Settings — so the data/SQL surfaces sit together and
- * monitoring is separated from the things you run.
- */
-type NavGroupKey = "advisors" | "auth" | "database" | "functions" | "observability" | "operations" | "overview" | "settings" | "storage";
-
-/**
  * 16px line glyphs (drawn at a 24-unit grid) keyed by tab. Inline so the
  * studio ships no icon-font/asset dependency; they inherit `currentColor`
  * from the active/hover nav state in the scoped stylesheet.
@@ -251,37 +334,60 @@ type NavGroupKey = "advisors" | "auth" | "database" | "functions" | "observabili
 const TAB_ICONS: Record<StudioTab, ReactNode> = {
     analytics: <path d="M5 20V10m6.5 10V4M18 20v-7M3 20h18" />,
     api: <path d="m9 8-4 4 4 4m6-8 4 4-4 4M13 5l-2 14" />,
+    architecture: <path d="M4 4h6v5H4V4Zm10 0h6v5h-6V4ZM9 15h6v5H9v-5ZM7 9v3h10V9M12 12v3" />,
     audit: <path d="M7 4h7l4 4v11a1 1 0 0 1-1 1H7a1 1 0 0 1-1-1V5a1 1 0 0 1 1-1Zm6 0v5h5M9 13h6M9 16h6M9 10h2" />,
+    authAudit: <path d="M12 3 5 6v5c0 4.5 3 7.8 7 9 4-1.2 7-4.5 7-9V6l-7-3Zm-3 8h6m-6 3h6" />,
     authConfig: (
         <path d="M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6Zm7.4-3a7.4 7.4 0 0 0-.1-1.2l2-1.6-2-3.4-2.4 1a7.3 7.3 0 0 0-2-1.2l-.4-2.6h-3.6l-.4 2.6a7.3 7.3 0 0 0-2 1.2l-2.4-1-2 3.4 2 1.6a7.4 7.4 0 0 0 0 2.4l-2 1.6 2 3.4 2.4-1a7.3 7.3 0 0 0 2 1.2l.4 2.6h3.6l.4-2.6a7.3 7.3 0 0 0 2-1.2l2.4 1 2-3.4-2-1.6a7.4 7.4 0 0 0 .1-1.2Z" />
     ),
+    agents: (
+        <path d="M12 8V5m0 0a2 2 0 1 0 0-4 2 2 0 0 0 0 4ZM6 8h12a2 2 0 0 1 2 2v6a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2v-6a2 2 0 0 1 2-2Zm3 5h.01M15 13h.01M9 21h6" />
+    ),
     authSessions: <path d="M12 21a9 9 0 1 0 0-18 9 9 0 0 0 0 18Zm0-13.5V12l4 2" />,
+    containers: <path d="M3 7.5 12 3l9 4.5v9L12 21l-9-4.5v-9Zm0 0 9 4.5m0 0 9-4.5m-9 4.5V21" />,
     dashboards: <path d="M4 5h7v6H4V5Zm9 0h7v4h-7V5ZM4 14h7v5H4v-5Zm9-1h7v6h-7v-6Z" />,
+    deploymentHealth: <path d="M12 3 5 6v5c0 4.5 3 7.8 7 9 4-1.2 7-4.5 7-9V6l-7-3Zm-3 8 2 3 4-5" />,
     drains: <path d="M5 5h14M7 5v6a5 5 0 0 0 10 0V5M10 16h4v3h-4zM12 19v2" />,
     data: (
         <path d="M5 6c0-1.4 3.1-2.5 7-2.5s7 1.1 7 2.5-3.1 2.5-7 2.5S5 7.4 5 6Zm0 0v12c0 1.4 3.1 2.5 7 2.5s7-1.1 7-2.5V6M5 12c0 1.4 3.1 2.5 7 2.5s7-1.1 7-2.5" />
     ),
     export: <path d="M12 3v11m0 0 4-4m-4 4-4-4M4 17v2a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-2" />,
+    fanout: (
+        <path d="M12 5a2 2 0 1 0 0-4 2 2 0 0 0 0 4Zm-7 16a2 2 0 1 0 0-4 2 2 0 0 0 0 4Zm14 0a2 2 0 1 0 0-4 2 2 0 0 0 0 4ZM12 7v3.5M12 10.5 6 17m6-6.5 6 6.5" />
+    ),
     files: <path d="M4 7a2 2 0 0 1 2-2h3l2 2.5h7a2 2 0 0 1 2 2V18a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V7Z" />,
+    flags: <path d="M6 21V4m0 0h11l-2 3 2 3H6" />,
     functions: <path d="m9 8-4 4 4 4m6-8 4 4-4 4" />,
+    evals: <path d="M4 19V5m0 14h16M8 15l3-4 3 3 4-6M8 15v.01" />,
+    aiUsage: <path d="M12 3v3m0 12v3M5.6 5.6l2.1 2.1m8.6 8.6 2.1 2.1M3 12h3m12 0h3M5.6 18.4l2.1-2.1m8.6-8.6 2.1-2.1M12 9a3 3 0 1 0 0 6 3 3 0 0 0 0-6Z" />,
     health: <path d="M3 12h4l2 6 4-14 2 8h6" />,
     home: <path d="M3 11.5 12 4l9 7.5M5 10v9a1 1 0 0 0 1 1h4v-6h4v6h4a1 1 0 0 0 1-1v-9" />,
     insights: <path d="M12 3a6 6 0 0 0-3.6 10.8c.5.4.8.9.9 1.5l.2 1.2h5l.2-1.2c.1-.6.4-1.1.9-1.5A6 6 0 0 0 12 3ZM9.5 20.5h5M10 18h4" />,
+    issues: <path d="M10.3 4.3 2.5 18a2 2 0 0 0 1.7 3h15.6a2 2 0 0 0 1.7-3L13.7 4.3a2 2 0 0 0-3.4 0ZM12 9v4m0 3v.01" />,
+    kv: <path d="M5 5h14v4H5V5Zm0 5h14v4H5v-4Zm0 5h14v4H5v-4Z" />,
     logs: <path d="M5 6h14M5 10h14M5 14h9M5 18h11" />,
     mail: <path d="M4 5h16v14H4V5Zm0 1.5 8 6 8-6" />,
     payments: <path d="M3 7h18v10H3V7Zm0 3h18M7 14h4" />,
     metrics: <path d="M5 20V10m6.5 10V4M18 20v-7M3 20h18" />,
     migrations: <path d="M4 12a8 8 0 0 1 13.7-5.6L20 8M20 4v4h-4M20 12a8 8 0 0 1-13.7 5.6L4 16m0 4v-4h4" />,
+    notifications: (
+        <path d="M15 17h5l-1.4-1.4A2 2 0 0 1 18 14.2V11a6 6 0 0 0-4-5.7V5a2 2 0 1 0-4 0v.3A6 6 0 0 0 6 11v3.2a2 2 0 0 1-.6 1.4L4 17h5m6 0v1a3 3 0 1 1-6 0v-1m6 0H9" />
+    ),
     organizations: <path d="M3 21V8l6-4 6 4v13M9 21v-5h2v5M15 11h6v10M18 14v.01M18 17v.01M6 9v.01M6 12v.01M6 15v.01" />,
     permissions: <path d="M12 3 5 6v5c0 4.5 3 7.8 7 9 4-1.2 7-4.5 7-9V6l-7-3Zm-3 8 2.2 2.2L15 9.5M8.5 16h7" />,
     pitr: <path d="M12 21a9 9 0 1 0-9-9M12 7.5V12l3 2M3 12l-2-2m2 2 2-2" />,
+    privacyRequests: <path d="M12 3 5 6v5c0 4.5 3 7.8 7 9 4-1.2 7-4.5 7-9V6l-7-3Zm-3 8h6m-6 3h4" />,
+    queues: <path d="M4 6h16M4 10h16M4 14h10M4 18h10m4-2 3 2-3 2v-4Z" />,
+    reactors: <path d="M4 4v6h6M20 20v-6h-6M20 9a8 8 0 0 0-14.7-3M4 15a8 8 0 0 0 14.7 3" />,
     realtime: <path d="M5 12a7 7 0 0 1 14 0M8 12a4 4 0 0 1 8 0M12 12v8m0-8a1 1 0 1 0 0-2 1 1 0 0 0 0 2Z" />,
     rls: <path d="M12 3 5 6v5c0 4.5 3 7.8 7 9 4-1.2 7-4.5 7-9V6l-7-3ZM8.5 10h7M8.5 13h7" />,
     schedule: <path d="M12 21a9 9 0 1 0 0-18 9 9 0 0 0 0 18Zm0-13.5V12l4 2" />,
     schema: <path d="M4 5h16v14H4V5Zm0 5h16M10 10v9M4 14.5h16" />,
     sql: <path d="M4 5h16v14H4V5Zm3 4 3 3-3 3m6 0h4" />,
     storageRules: <path d="M7 10V7a5 5 0 0 1 10 0v3m-11 0h12a1 1 0 0 1 1 1v8a1 1 0 0 1-1 1H6a1 1 0 0 1-1-1v-8a1 1 0 0 1 1-1Zm6 4v2" />,
+    advisorHealth: <path d="M3 12h4l2-5 3 10 2-5h5" />,
     security: <path d="M12 3 5 6v5c0 4.5 3 7.8 7 9 4-1.2 7-4.5 7-9V6l-7-3Zm-2.5 8.5 2 2 4-4" />,
+    traces: <path d="M3 6h9M6 12h12M10 18h7" />,
     settings: (
         <path d="M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6Zm7.4-3a7.4 7.4 0 0 0-.1-1.2l2-1.6-2-3.4-2.4 1a7.3 7.3 0 0 0-2-1.2l-.4-2.6H10.5l-.4 2.6a7.3 7.3 0 0 0-2 1.2l-2.4-1-2 3.4 2 1.6a7.4 7.4 0 0 0 0 2.4l-2 1.6 2 3.4 2.4-1a7.3 7.3 0 0 0 2 1.2l.4 2.6h3.6l.4-2.6a7.3 7.3 0 0 0 2-1.2l2.4 1 2-3.4-2-1.6a7.4 7.4 0 0 0 .1-1.2Z" />
     ),
@@ -292,9 +398,6 @@ const TAB_ICONS: Record<StudioTab, ReactNode> = {
     workflows: <path d="M5 5h5v5H5V5Zm9 9h5v5h-5v-5ZM7.5 10v2a2 2 0 0 0 2 2H14m2.5-4V8a2 2 0 0 0-2-2H10" />,
 };
 
-/** One icon-rail domain and the sub-pages its secondary nav lists. */
-type NavGroup = { readonly key: NavGroupKey; readonly tabs: ReadonlyArray<StudioTab> };
-
 /**
  * Icon-rail domains, top to bottom, each owning the sub-pages its secondary nav
  * lists — the two-level Supabase model (`STUDIO-REDESIGN-PLAN.md` §2). `settings`
@@ -304,41 +407,32 @@ type NavGroup = { readonly key: NavGroupKey; readonly tabs: ReadonlyArray<Studio
 const NAV_GROUPS: readonly [NavGroup, ...NavGroup[]] = [
     { key: "overview", tabs: ["home", "dashboards"] },
     { key: "database", tabs: ["data", "sql", "schema", "migrations", "vectors", "pitr", "export"] },
-    { key: "functions", tabs: ["functions", "api", "workflows"] },
-    { key: "auth", tabs: ["users", "organizations", "authSessions", "authConfig"] },
-    { key: "storage", tabs: ["files", "storageRules"] },
-    { key: "observability", tabs: ["logs", "audit", "realtime", "metrics", "analytics", "health"] },
-    { key: "advisors", tabs: ["security", "rls", "permissions", "insights"] },
-    { key: "operations", tabs: ["schedule", "mail", "drains", "payments"] },
+    { key: "functions", tabs: ["functions", "api", "architecture", "workflows", "agents", "queues"] },
+    { key: "auth", tabs: ["users", "organizations", "authSessions", "authAudit", "authConfig"] },
+    { key: "storage", tabs: ["files", "storageRules", "kv"] },
+    {
+        key: "observability",
+        tabs: [
+            "issues",
+            "logs",
+            "traces",
+            "evals",
+            "aiUsage",
+            "audit",
+            "realtime",
+            "reactors",
+            "fanout",
+            "containers",
+            "metrics",
+            "analytics",
+            "health",
+            "deploymentHealth",
+        ],
+    },
+    { key: "advisors", tabs: ["advisorHealth", "security", "rls", "permissions", "insights"] },
+    { key: "operations", tabs: ["schedule", "mail", "drains", "notifications", "payments", "flags", "privacyRequests"] },
     { key: "settings", tabs: ["settings"] },
 ];
-
-/**
- * Optional, package-backed tabs and the feature flag that gates each. A tab
- * listed here is hidden from the nav (and its panel made unreachable) when the
- * deployment doesn't wire up the backing package — so an app with no
- * `@lunora/payment` never shows the Payments page, the way auth panels gate on
- * capabilities. Tabs absent from this map are always shown (core surfaces). The
- * flags come from `useStudioFeatures` (the `__lunora_admin__:studioFeatures` RPC,
- * statically discovered by codegen). `storage` gates both the file browser and
- * the access-rules view; `scheduler` gates the scheduled-jobs view.
- */
-const TAB_FEATURE: Partial<Record<StudioTab, keyof StudioFeaturesResult>> = {
-    files: "storage",
-    mail: "mail",
-    payments: "payments",
-    schedule: "scheduler",
-    storageRules: "storage",
-    vectors: "vectors",
-    workflows: "workflows",
-};
-
-/** True when a tab is shown for the given feature flags: always, unless its gating flag is off. */
-const isTabVisible = (tab: StudioTab, features: StudioFeaturesResult): boolean => {
-    const feature = TAB_FEATURE[tab];
-
-    return feature === undefined || features[feature];
-};
 
 const TabIcon = ({ tab }: { readonly tab: StudioTab }): ReactElement => (
     <svg
@@ -355,14 +449,28 @@ const TabIcon = ({ tab }: { readonly tab: StudioTab }): ReactElement => (
     </svg>
 );
 
+/**
+ * Compile-time route-coverage guard: the identity call typechecks only when
+ * `tabs` contains every {@link StudioTab}. The route table is built from
+ * {@link TABS} while the sidebar renders from {@link NAV_GROUPS}, so a tab
+ * missing from `TABS` still shows its nav link but the click falls through to
+ * {@link NotFoundRedirect} and bounces to Home (how `/fanout` regressed). A
+ * missing tab now fails `tsc` at the `TABS` declaration instead.
+ */
+const exhaustiveRouteTabs = <const T extends ReadonlyArray<StudioTab>>(tabs: ([StudioTab] extends [T[number]] ? unknown : never) & T): T => tabs;
+
 /** Flat list of every tab, in sidebar order; drives the route table. */
-const TABS = [
+const TABS = exhaustiveRouteTabs([
     "home",
     "data",
     "sql",
     "functions",
     "api",
+    "architecture",
     "workflows",
+    "agents",
+    "queues",
+    "containers",
     "schema",
     "migrations",
     "vectors",
@@ -371,33 +479,46 @@ const TABS = [
     "users",
     "organizations",
     "authSessions",
+    "authAudit",
     "authConfig",
     "files",
     "storageRules",
+    "kv",
     "dashboards",
     "metrics",
     "analytics",
     "health",
+    "deploymentHealth",
+    "advisorHealth",
     "security",
     "rls",
     "permissions",
     "insights",
+    "issues",
     "logs",
+    "traces",
+    "evals",
+    "aiUsage",
+    "reactors",
     "realtime",
+    "fanout",
     "mail",
+    "notifications",
     "payments",
     "audit",
     "schedule",
     "drains",
+    "flags",
+    "privacyRequests",
     "settings",
-] as const;
+]);
 
 /**
  * Tabs that own the full panel height (a flush full-height table/query sidebar +
  * an internally-scrolling grid), rather than the default top-aligned, page-scrolled
  * content. The Table editor and SQL editor render as full-height database consoles.
  */
-const FULL_HEIGHT_TABS = new Set<StudioTab>(["api", "data", "sql"]);
+const FULL_HEIGHT_TABS = new Set<StudioTab>(["api", "data", "migrations", "sql"]);
 
 /** Resolve the active tab from a router pathname (`/logs` → `logs`); unknown paths fall back to `home`. */
 const tabFromPathname = (pathname: string): StudioTab => {
@@ -455,9 +576,15 @@ interface StudioSidebarProps {
     readonly groupLabel: Record<NavGroupKey, string>;
     readonly groups: ReadonlyArray<{ readonly key: NavGroupKey; readonly tabs: ReadonlyArray<StudioTab> }>;
     readonly selectTab: (event: React.MouseEvent<HTMLButtonElement>) => void;
+    /** Each page's tooltip: its description, or for an unavailable page, why. */
     readonly tabDescription: Record<StudioTab, string>;
     readonly tabLabel: Record<StudioTab, string>;
+    /** Pages the worker's host cannot serve; they render dimmed. */
+    readonly unavailable: Partial<Record<StudioTab, string>>;
 }
+
+/** Dims a nav entry whose page the host cannot serve. It stays clickable: its route explains why. */
+const UNAVAILABLE_TAB = "opacity-50";
 
 /**
  * One domain in the **collapsed** icon rail: a single icon that opens a hover
@@ -472,6 +599,7 @@ const CollapsedGroupNav = ({
     selectTab,
     tabDescription,
     tabLabel,
+    unavailable,
 }: {
     readonly current: StudioTab;
     readonly group: { readonly key: NavGroupKey; readonly tabs: ReadonlyArray<StudioTab> };
@@ -479,6 +607,7 @@ const CollapsedGroupNav = ({
     readonly selectTab: (event: React.MouseEvent<HTMLButtonElement>) => void;
     readonly tabDescription: Record<StudioTab, string>;
     readonly tabLabel: Record<StudioTab, string>;
+    readonly unavailable: Partial<Record<StudioTab, string>>;
 }): ReactElement => (
     <Popover>
         <PopoverTrigger
@@ -495,9 +624,13 @@ const CollapsedGroupNav = ({
             {group.tabs.map((tab) => (
                 <button
                     aria-current={current === tab ? "page" : undefined}
-                    className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-start text-[13px] text-foreground outline-none transition-colors hover:bg-accent focus-visible:bg-accent aria-[current=page]:bg-accent aria-[current=page]:font-medium [&_svg]:opacity-70 aria-[current=page]:[&_svg]:opacity-100"
+                    className={cn(
+                        "flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-start text-[13px] text-foreground outline-none transition-colors hover:bg-accent focus-visible:bg-accent aria-[current=page]:bg-accent aria-[current=page]:font-medium [&_svg]:opacity-70 aria-[current=page]:[&_svg]:opacity-100",
+                        unavailable[tab] !== undefined && UNAVAILABLE_TAB,
+                    )}
                     data-tab={tab}
                     data-testid={`dash-tab-${tab}`}
+                    data-unsupported={unavailable[tab] === undefined ? undefined : "true"}
                     key={tab}
                     onClick={selectTab}
                     title={tabDescription[tab]}
@@ -513,7 +646,7 @@ const CollapsedGroupNav = ({
 
 /**
  * The bottom-pinned profile / connection card. Without app-owned `chrome`
- * (composing `&lt;Studio>` bare) it's a static avatar; with it, it's the trigger
+ * (composing `<Studio>` bare) it's a static avatar; with it, it's the trigger
  * for the admin-token popover. Extracted from {@link StudioSidebar} to keep that
  * component's branching shallow.
  */
@@ -591,10 +724,20 @@ const SidebarFooterProfile = ({
  * presentation: **expanded** shows the full labelled nav (each row's one-line
  * description as a hover tooltip); **collapsed** shows one icon per domain, each
  * opening a hover flyout of that domain's pages — so every page stays reachable
- * from the narrow icon rail. Rendered inside `&lt;SidebarProvider>` so it can call
+ * from the narrow icon rail. Rendered inside `<SidebarProvider>` so it can call
  * {@link useSidebar}.
  */
-const StudioSidebar = ({ chrome, connected, current, groupLabel, groups, selectTab, tabDescription, tabLabel }: StudioSidebarProps): ReactElement => {
+const StudioSidebar = ({
+    chrome,
+    connected,
+    current,
+    groupLabel,
+    groups,
+    selectTab,
+    tabDescription,
+    tabLabel,
+    unavailable,
+}: StudioSidebarProps): ReactElement => {
     const t = useT();
     const { state } = useSidebar();
     const collapsed = state === "collapsed";
@@ -630,6 +773,7 @@ const StudioSidebar = ({ chrome, connected, current, groupLabel, groups, selectT
                               selectTab={selectTab}
                               tabDescription={tabDescription}
                               tabLabel={tabLabel}
+                              unavailable={unavailable}
                           />
                       ))
                     : groups.map((group) => (
@@ -640,9 +784,13 @@ const StudioSidebar = ({ chrome, connected, current, groupLabel, groups, selectT
                                       {group.tabs.map((tab) => (
                                           <SidebarMenuItem key={tab}>
                                               <SidebarMenuButton
-                                                  className="data-active:text-foreground dark:data-active:text-royal-amethyst data-active:shadow-[inset_2px_0_0_0_var(--royal-amethyst)]"
+                                                  className={cn(
+                                                      "data-active:text-foreground dark:data-active:text-royal-amethyst data-active:shadow-[inset_2px_0_0_0_var(--royal-amethyst)]",
+                                                      unavailable[tab] !== undefined && UNAVAILABLE_TAB,
+                                                  )}
                                                   data-tab={tab}
                                                   data-testid={`dash-tab-${tab}`}
+                                                  data-unsupported={unavailable[tab] === undefined ? undefined : "true"}
                                                   isActive={current === tab}
                                                   onClick={selectTab}
                                                   title={tabDescription[tab]}
@@ -673,125 +821,86 @@ const StudioSidebar = ({ chrome, connected, current, groupLabel, groups, selectT
 };
 
 /**
+ * Skeleton shown while a route resolves — the brief first paint after mount, a
+ * lazy panel's chunk streaming in (the {@link Suspense} fallback below), and any
+ * future panel with a router loader — so the content area never flashes empty.
+ * Renders inside the layout's panel region during navigation.
+ */
+const RoutePending = (): ReactElement => (
+    <div className="flex flex-col gap-4" data-testid="dash-pending">
+        <div className="flex items-center gap-2">
+            <Skeleton className="h-8 w-40" />
+            <Skeleton className="h-8 w-24" />
+        </div>
+        <Skeleton className="h-72 w-full" />
+    </div>
+);
+
+/**
+ * The routed panel, behind the tab's gate: a skeleton while a capability-gated
+ * page waits for the worker to say which host it is, the reason when the host
+ * cannot serve it, otherwise the panel itself.
+ */
+const GatedOutlet = ({ title, verdict }: { readonly title: string; readonly verdict: TabVerdict }): ReactElement => {
+    if (verdict.kind === "pending") {
+        return <RoutePending />;
+    }
+
+    if (verdict.kind === "unavailable") {
+        return <UnsupportedPanel reason={verdict.reason} title={title} />;
+    }
+
+    return <Outlet />;
+};
+
+/**
  * Persistent shell rendered by the router's root route: the grouped sidebar
- * ({@link StudioSidebar}) and the routed panel area (`&lt;Outlet />`). The active
+ * ({@link StudioSidebar}) and the routed panel area (`<Outlet />`). The active
  * tab is derived from the URL, so deep links and the browser back/forward
  * buttons drive which panel shows.
  */
-const StudioLayout = (): ReactElement => {
+const StudioLayoutShell = (): ReactElement => {
     const t = useT();
     const navigate = useNavigate();
     const pathname = useRouterState({ select: (state) => state.location.pathname });
     const current = tabFromPathname(pathname);
     const fullHeight = FULL_HEIGHT_TABS.has(current);
 
+    // The operation console (plan 204): a dockable tape of every admin RPC this
+    // studio issued. Toggled with ⌘/Ctrl+` — recording is always on regardless,
+    // because a tape you have to arm before the bug is a tape that misses it.
+    // The open/focus state lives in a provider above this layout so an
+    // `ErrorAlert` rendered deep inside a panel can open it on a specific entry.
+    // `StudioLayout` always mounts the provider above this component, so the
+    // context is present; the optional read is for the type, not a real branch.
+    const operationConsole = useOperationConsole();
+    const toggleConsole = operationConsole?.toggle;
+
+    useConsoleShortcut(toggleConsole);
+
     // Which optional package-backed pages this deployment enables. Defaults to
     // everything-shown until the RPC settles, so the nav never flickers a page in
     // then out — it only ever drops a page once the worker reports it disabled.
     const features = useStudioFeatures();
+    const { groupLabel, tabDescription, tabLabel } = useNavLabels();
 
-    // The nav, command palette, and active-domain lookup all run off the filtered
-    // groups so a disabled feature's tab disappears from every entry point. A
-    // group whose every tab is gated off collapses out of the rail entirely.
-    const visibleGroups = NAV_GROUPS.map((group) => {
-        return { ...group, tabs: group.tabs.filter((tab) => isTabVisible(tab, features)) };
-    }).filter((group) => group.tabs.length > 0);
+    // The nav, command palette, and active-domain lookup all run off the gated
+    // groups (see `TAB_GATES`): a page the app does not wire disappears from every
+    // entry point, and one the host cannot serve stays in the nav, dimmed, with
+    // its reason as the tooltip — but leaves the palette.
+    const { unavailable, visibleGroups } = resolveNav(NAV_GROUPS, features, t);
+    const navDescription = { ...tabDescription, ...unavailable };
+    const verdict = gateTab(current, features, t);
+    const hidden = verdict.kind === "hidden";
 
     // Landing on (or deep-linking to) a now-hidden tab bounces to Home, so a
     // disabled feature's panel is unreachable even by typing its URL — the same
     // backstop `NotFoundRedirect` gives unknown paths.
     useEffect(() => {
-        if (!isTabVisible(current, features)) {
+        if (hidden) {
             fireAndForget(navigate({ replace: true, to: "/home" }));
         }
-    }, [current, features, navigate]);
-
-    // Memoised on `t` (stable per locale) so the maps re-localise when the active
-    // locale changes but aren't rebuilt on every unrelated render.
-    const tabLabel = {
-        analytics: t("Analytics"),
-        api: t("API"),
-        audit: t("Audit"),
-        authConfig: t("Configuration"),
-        authSessions: t("Sessions"),
-        dashboards: t("Dashboards"),
-        data: t("Data"),
-        drains: t("Log drains"),
-        export: t("Export / Import"),
-        files: t("Files"),
-        functions: t("Functions"),
-        health: t("Health"),
-        home: t("Home"),
-        insights: t("Performance"),
-        logs: t("Logs"),
-        metrics: t("Metrics"),
-        migrations: t("Migrations"),
-        organizations: t("Organizations"),
-        pitr: t("Time Travel"),
-        mail: t("Mail"),
-        payments: t("Payments"),
-        permissions: t("Permissions"),
-        realtime: t("Realtime"),
-        rls: t("RLS Policies"),
-        schedule: t("Scheduled"),
-        schema: t("Schema"),
-        security: t("Security"),
-        settings: t("Settings"),
-        sql: t("SQL editor"),
-        storageRules: t("Access Rules"),
-        users: t("Users"),
-        vectors: t("Vectors"),
-        workflows: t("Workflows"),
-    };
-
-    const groupLabel = {
-        advisors: t("Advisors"),
-        auth: t("Auth"),
-        database: t("Database"),
-        functions: t("Functions"),
-        observability: t("Observability"),
-        operations: t("Operations"),
-        overview: t("Overview"),
-        settings: t("Settings"),
-        storage: t("Storage"),
-    };
-
-    // One-line section descriptions for the page header.
-    const tabDescription = {
-        analytics: t("Usage and latency from Analytics Engine — request volume, p50/p95, and hot shards."),
-        api: t("Interactive OpenAPI reference and copy-paste snippets for your functions."),
-        audit: t("A durable log of admin state-changing operations."),
-        authConfig: t("Enabled plugins and session config (read-only)."),
-        authSessions: t("Browse and revoke active sessions across all users."),
-        dashboards: t("Chart widgets backed by saved read-only SQL queries."),
-        data: t("Browse and edit rows across your shard and global tables."),
-        drains: t("Forward logs to Logpush, Tail Workers, or a webhook collector."),
-        export: t("Export a shard to NDJSON, or import rows from it."),
-        files: t("Browse objects in your R2 storage buckets."),
-        functions: t("Run registered queries, mutations, and actions."),
-        health: t("At-a-glance connection, error, and shard signals."),
-        home: t("Connection, health, and advisor summary for your deployment."),
-        insights: t("Surface slow functions, error spikes, and cache problems."),
-        logs: t("A live stream of recent function logs."),
-        metrics: t("Per-shard health and aggregate metrics."),
-        migrations: t("Review migration status and run them."),
-        organizations: t("Browse and manage organizations, members, and invitations."),
-        pitr: t("Restore a shard to a point in the last 30 days."),
-        mail: t("Email your app sent, captured in dev."),
-        payments: t("Synced customers, subscriptions, and webhook events."),
-        permissions: t("Inspect access policies per table, and probe a function as any identity."),
-        realtime: t("Active WebSocket subscriptions on this shard."),
-        rls: t("Inspect row-level-security policies and roles, per table."),
-        schedule: t("Inspect and cancel scheduled jobs."),
-        schema: t("Inspect each table and its columns."),
-        security: t("Review admin gates, credentials, and log redaction."),
-        settings: t("Read-only deployment config — vars, secrets, and bindings."),
-        sql: t("Run read-only SQL against a shard."),
-        storageRules: t("Inspect storage access rules — per bucket, operation, and key prefix."),
-        users: t("Manage auth users — roles, bans, sessions, and identity."),
-        vectors: t("Browse Vectorize indexes and run similarity searches."),
-        workflows: t("Inspect declared Cloudflare Workflows and their bindings."),
-    };
+    }, [hidden, navigate]);
 
     const selectTab = (event: React.MouseEvent<HTMLButtonElement>): void => {
         fireAndForget(navigate({ to: `/${event.currentTarget.dataset.tab ?? ""}` }));
@@ -812,10 +921,25 @@ const StudioLayout = (): ReactElement => {
 
     // Every navigable destination, in sidebar order, for the ⌘K command palette.
     const commandItems = visibleGroups.flatMap((group) =>
-        group.tabs.map((tab) => {
-            return { group: groupLabel[group.key], label: tabLabel[tab], to: `/${tab}` };
-        }),
+        group.tabs
+            .filter((tab) => unavailable[tab] === undefined)
+            .map((tab) => {
+                return { group: groupLabel[group.key], label: tabLabel[tab], to: `/${tab}` };
+            }),
     );
+
+    /*
+     * The operation console is reachable by keyboard chord only — no route, no
+     * button — so without this entry it is undiscoverable, and unreachable
+     * entirely once an operator rebinds the key and forgets what to. Appended
+     * rather than mixed into the nav list: it acts rather than navigates.
+     *
+     * Omitted when the console provider is not mounted, which is also when the
+     * chord binds nothing — an entry that silently did nothing would be worse
+     * than no entry.
+     */
+    const paletteItems =
+        toggleConsole === undefined ? commandItems : [...commandItems, { group: t("Operations"), label: t("Toggle operation console"), run: toggleConsole }];
 
     // The app-owned chrome (theme + admin token + rules banner) renders inside this
     // router-owned layout; absent when `<Studio>` is composed bare.
@@ -823,8 +947,8 @@ const StudioLayout = (): ReactElement => {
     const connected = chrome !== null && chrome.token !== "";
 
     return (
-        <SidebarProvider className="min-h-0 flex-1" data-testid="lunora-studio">
-            <CommandPalette items={commandItems} />
+        <SidebarProvider className="min-h-0 flex-1" data-platform={features.platform?.id} data-testid="lunora-studio">
+            <CommandPalette items={paletteItems} />
 
             <StudioSidebar
                 chrome={chrome}
@@ -833,48 +957,15 @@ const StudioLayout = (): ReactElement => {
                 groupLabel={groupLabel}
                 groups={visibleGroups}
                 selectTab={selectTab}
-                tabDescription={tabDescription}
+                tabDescription={navDescription}
                 tabLabel={tabLabel}
+                unavailable={unavailable}
             />
 
             <SidebarInset className="overflow-hidden md:peer-data-[variant=inset]:rounded-xl md:peer-data-[variant=inset]:shadow-sm">
                 {/* Top bar — sidebar toggle + breadcrumb, centred ⌘K search, and the
                     connection / theme cluster. Mirrors the reference dashboard header. */}
-                <header className="flex h-11 shrink-0 items-center gap-2 border-b border-border px-4" data-testid="dash-app-header">
-                    <SidebarTrigger className="-ms-1" />
-                    <nav aria-label={t("Breadcrumb")} className="flex items-center gap-1.5 text-[13px]">
-                        <span className="text-muted-foreground">{groupLabel[activeGroup.key]}</span>
-                        <svg
-                            aria-hidden="true"
-                            className="size-3.5 text-muted-foreground/60"
-                            fill="none"
-                            stroke="currentColor"
-                            strokeWidth={1.7}
-                            viewBox="0 0 24 24"
-                        >
-                            <path d="m9 6 6 6-6 6" strokeLinecap="round" strokeLinejoin="round" />
-                        </svg>
-                        <span className="font-medium text-foreground">{tabLabel[current]}</span>
-                    </nav>
-
-                    <button
-                        className="mx-auto hidden h-8 w-72 items-center gap-2 rounded-lg border border-border bg-muted/40 px-3 text-xs text-muted-foreground transition-colors hover:bg-muted md:flex"
-                        data-testid="dash-app-search"
-                        onClick={openCommandPalette}
-                        type="button"
-                    >
-                        <svg aria-hidden="true" className="size-3.5" fill="none" stroke="currentColor" strokeWidth={1.8} viewBox="0 0 24 24">
-                            <circle cx="11" cy="11" r="7" />
-                            <path d="m21 21-4.3-4.3" strokeLinecap="round" />
-                        </svg>
-                        {t("Search…")}
-                        <kbd className="ms-auto rounded border border-border bg-background px-1 font-sans text-[10px] text-muted-foreground">⌘K</kbd>
-                    </button>
-
-                    <div className="ms-auto flex items-center gap-1.5 md:ms-0">
-                        <ThemeToggle />
-                    </div>
-                </header>
+                <StudioHeader domain={groupLabel[activeGroup.key]} onOpenCommandPalette={openCommandPalette} page={tabLabel[current]} />
 
                 {chrome?.rulesInstalled === false && <RulesBanner />}
 
@@ -899,9 +990,24 @@ const StudioLayout = (): ReactElement => {
                             label={tabLabel[current]}
                             retryLabel={t("Try again")}
                         >
-                            <Outlet />
+                            {/* Every routed panel except Home is a `React.lazy` boundary, so its
+                                chunk streams in behind this Suspense fallback; Home (the index
+                                route) is eager and paints without suspending. */}
+                            <Suspense fallback={<RoutePending />}>
+                                <GatedOutlet title={tabLabel[current]} verdict={verdict} />
+                            </Suspense>
                         </ErrorBoundary>
                     </div>
+                    {/* The operation console docks under whatever panel is open — it is a
+                        companion to the current page, not a destination of its own. */}
+                    {operationConsole?.open === true && (
+                        <OperationConsole
+                            focusSeq={operationConsole.focusSeq}
+                            onClose={operationConsole.close}
+                            onShownChange={operationConsole.setShown}
+                            shown={operationConsole.shown}
+                        />
+                    )}
                 </div>
             </SidebarInset>
         </SidebarProvider>
@@ -909,22 +1015,21 @@ const StudioLayout = (): ReactElement => {
 };
 
 /**
- * Skeleton shown while a route resolves — the brief first paint after mount and
- * any future panel with a router loader — so the content area never flashes
- * empty. Renders inside the layout's panel region during navigation.
+ * The root route component: the console provider wrapped around the shell.
+ *
+ * Split in two because {@link StudioLayoutShell} CONSUMES the console context
+ * (for the ⌘/Ctrl+` toggle and to render the drawer) — a component cannot read a
+ * context it provides itself, and every panel under the routed outlet needs to
+ * reach the same provider to offer "show in console" on a failure.
  */
-const RoutePending = (): ReactElement => (
-    <div className="flex flex-col gap-4" data-testid="dash-pending">
-        <div className="flex items-center gap-2">
-            <Skeleton className="h-8 w-40" />
-            <Skeleton className="h-8 w-24" />
-        </div>
-        <Skeleton className="h-72 w-full" />
-    </div>
+const StudioLayout = (): ReactElement => (
+    <OperationConsoleProvider>
+        <StudioLayoutShell />
+    </OperationConsoleProvider>
 );
 
 /**
- * Schema tab wrapper that lifts the optional `?table=&lt;name>` search param off
+ * Schema tab wrapper that lifts the optional `?table=<name>` search param off
  * the URL and forwards it to {@link SchemaViewer} as `initialTable`. This is the
  * landing target of the Insights "add the index" deep-link: navigating to
  * `/schema?table=posts` auto-expands `posts`'s index list. Read with
@@ -959,7 +1064,9 @@ const NotFoundRedirect = (): null => {
  * rebuilt only when those change.
  */
 const buildRouter = ({
+    analyticsSqlQuery,
     basePath,
+    privacyRequests,
     dataEditable = false,
     functions,
     initialShardKey,
@@ -974,16 +1081,29 @@ const buildRouter = ({
     const rootRoute = createRootRoute({ component: StudioLayout });
 
     const panels: Record<StudioTab, ReactElement> = {
-        analytics: <AnalyticsPanel />,
+        agents: <AgentsPanel initialShardKey={initialShardKey} />,
+        analytics: <AnalyticsPanel runQuery={analyticsSqlQuery} />,
         api: <ApiTab functions={functions} initialShardKey={initialShardKey} openApiSpec={openApiSpec} openRpcSpec={openRpcSpec} />,
+        architecture: <ArchitecturePanel />,
         audit: <AuditPanel initialShardKey={initialShardKey} />,
+        authAudit: <AuthAuditPanel />,
         authConfig: <AuthConfigPanel />,
         authSessions: <AuthSessionsPanel />,
+        containers: <ContainersPanel />,
         dashboards: <DashboardsPanel initialShardKey={initialShardKey} />,
-        data: <TableEditor editable={dataEditable} initialShardKey={initialShardKey} />,
+        // "Generate rows" runs on the dev host's `/__lunora/seed` route, which only
+        // the filesystem-backed dev hosts mount — the same hosts, and the only ones,
+        // that set `schemaEditable`. `dataEditable` alone would offer it on any
+        // deploy that enables row edits, where the request can only 404.
+        data: <TableEditor canGenerateRows={dataEditable && schemaEditable} editable={dataEditable} initialShardKey={initialShardKey} />,
+        deploymentHealth: <DeploymentHealthPanel />,
         drains: <LogDrainsPanel />,
         export: <ExportImportPanel initialShardKey={initialShardKey} />,
+        fanout: <FanoutPanel initialShardKey={initialShardKey} />,
         files: <FileBrowser />,
+        kv: <KvBrowser />,
+        flags: <FlagsPanel initialShardKey={initialShardKey} />,
+        reactors: <ReactorsPanel initialShardKey={initialShardKey} />,
         functions: (
             <div className="flex flex-col gap-8">
                 <FunctionStatsPanel functions={functions} initialShardKey={initialShardKey} />
@@ -993,18 +1113,33 @@ const buildRouter = ({
         health: <HealthPanel initialShardKey={initialShardKey} />,
         home: <HomePanel initialShardKey={initialShardKey} />,
         insights: <InsightsPanel initialShardKey={initialShardKey} />,
+        issues: <IssuesPanel initialShardKey={initialShardKey} />,
         logs: <LogsPanel initialShardKey={initialShardKey} />,
+        traces: <TracesPanel initialShardKey={initialShardKey} />,
+        evals: <EvalsPanel initialShardKey={initialShardKey} />,
+        aiUsage: <AiUsagePanel initialShardKey={initialShardKey} />,
         metrics: <MetricsPanel initialShardKey={initialShardKey} />,
-        migrations: <MigrationsPanel initialShardKey={initialShardKey} />,
+        migrations: <MigrationsRoutePanel initialShardKey={initialShardKey} />,
+        notifications: <NotificationsPanel />,
         organizations: <OrganizationsPanel />,
         permissions: <PermissionsPanel functions={functions} runAsIdentity={runAsIdentity} schemaEditable={schemaEditable} />,
         pitr: <PitrPanel initialShardKey={initialShardKey} />,
+        privacyRequests: <PrivacyRequestsPanel source={privacyRequests} />,
         mail: <MailPanel />,
         payments: <PaymentsPanel />,
-        realtime: <SubscriptionsPanel initialShardKey={initialShardKey} />,
+        queues: <QueuesPanel />,
+        realtime: (
+            <div className="flex flex-col gap-8">
+                {/* Server's view of the live connections… */}
+                <SubscriptionsPanel initialShardKey={initialShardKey} />
+                {/* …paired with the client's own belief, so a disagreement is visible. */}
+                <SyncClientPanel />
+            </div>
+        ),
         rls: <RlsPanel />,
         schedule: <SchedulePanel loadCronJobs={scheduledCron} scheduledCancel={scheduledCancel} scheduledLoad={scheduledLoad} />,
         schema: <SchemaRoutePanel initialShardKey={initialShardKey} schemaEditable={schemaEditable} />,
+        advisorHealth: <AdvisorHealthPanel />,
         security: <SecurityAdvisorPanel />,
         settings: <SettingsPanel initialShardKey={initialShardKey} />,
         sql: <SqlEditorPanel initialShardKey={initialShardKey} />,
@@ -1022,11 +1157,15 @@ const buildRouter = ({
         path: "/",
     });
 
+    // Routes that keep state in the URL validate + normalise it at the router
+    // boundary, so malformed or legacy links are sanitised once and each panel
+    // reads a typed, trustworthy search instead of a raw record.
     const tabRoutes = TABS.map((tab) =>
         createRoute({
             component: () => panels[tab],
             getParentRoute: () => rootRoute,
             path: `/${tab}`,
+            validateSearch: SEARCH_VALIDATORS[tab],
         }),
     );
 
@@ -1057,6 +1196,7 @@ const buildRouter = ({
  * so navigation state survives unrelated re-renders.
  */
 const StudioShell = ({
+    analyticsSqlQuery,
     basePath,
     chrome,
     dataEditable,
@@ -1064,6 +1204,7 @@ const StudioShell = ({
     initialShardKey,
     openApiSpec,
     openRpcSpec,
+    privacyRequests,
     runAsIdentity,
     schemaEditable,
     scheduledCancel,
@@ -1074,7 +1215,9 @@ const StudioShell = ({
     // individual props, not the unstable `props` identity), so navigation state
     // survives unrelated re-renders.
     const router = buildRouter({
+        analyticsSqlQuery,
         basePath,
+        privacyRequests,
         dataEditable,
         functions,
         initialShardKey,
@@ -1104,37 +1247,15 @@ const StudioShell = ({
  * (`StudioApp` owns one for the top bar too) or the shared default — instead
  * of nesting a second, redundant provider.
  */
-export const Studio = ({
-    basePath,
-    chrome,
-    dataEditable,
-    functions,
-    i18n,
-    initialShardKey,
-    locale,
-    openApiSpec,
-    openRpcSpec,
-    runAsIdentity,
-    schemaEditable,
-    scheduledCancel,
-    scheduledCron,
-    scheduledLoad,
-}: StudioProps): ReactElement => {
+export const Studio = ({ i18n, locale, ...shellProps }: StudioProps): ReactElement => {
+    // The header's <ThemeToggle> needs a theme context. `StudioApp` mounts one;
+    // a bare `<Studio>` embed (a public export) gets its own here — inherit-or-own,
+    // exactly like the i18n provider below.
     const shell = (
-        <StudioShell
-            basePath={basePath}
-            chrome={chrome}
-            dataEditable={dataEditable}
-            functions={functions}
-            initialShardKey={initialShardKey}
-            openApiSpec={openApiSpec}
-            openRpcSpec={openRpcSpec}
-            runAsIdentity={runAsIdentity}
-            scheduledCancel={scheduledCancel}
-            scheduledCron={scheduledCron}
-            scheduledLoad={scheduledLoad}
-            schemaEditable={schemaEditable}
-        />
+        <EnsureThemeProvider>
+            {/* eslint-disable-next-line react/jsx-props-no-spreading -- forwarding a closed, typed prop set: hand-writing this list is how `scheduledCron` went missing one layer up. The spread still lands as individual props, so the shell's own memoisation keys on each one, not on this object's identity. */}
+            <StudioShell {...shellProps} />
+        </EnsureThemeProvider>
     );
 
     if (i18n === undefined && locale === undefined) {
@@ -1148,4 +1269,6 @@ export const Studio = ({
     );
 };
 
-export type { StudioChrome, StudioProps, StudioTab };
+export type { StudioChrome, StudioProps };
+
+export { type StudioTab } from "./nav-types";

@@ -14,14 +14,37 @@ const recordKey = (provider: ProviderId, id: string): string => `${provider}:${i
 export interface PaymentStore {
     getCustomerByReference: (provider: ProviderId, referenceId: string) => Promise<Customer | undefined>;
     getPaymentSession: (provider: ProviderId, id: string) => Promise<PaymentSession | undefined>;
+    /** A payment session for `subscriptionId` that names an owner (non-blank `referenceId`), if any. */
+    getPaymentSessionBySubscription: (provider: ProviderId, subscriptionId: string) => Promise<PaymentSession | undefined>;
     getSubscription: (provider: ProviderId, id: string) => Promise<Subscription | undefined>;
     listSubscriptionsByReference: (referenceId: string) => Promise<Subscription[]>;
 
     /**
+     * Usage events that still owe an upstream forward, oldest first, at most `limit`.
+     *
+     * "Owes a forward" is narrower than `reportedToProvider === false`: only an
+     * ADDITIVE event with a positive `quantity` qualifies. A `"set"` event's
+     * upstream delta was measured against the period total at the moment it was
+     * recorded and is not recoverable afterwards, and a non-positive quantity was
+     * never sent, so neither is a retry candidate — returning them would make the
+     * sweep re-send the same rows forever (or double-count on an additive meter).
+     *
+     * Read by `reconcile` to retry a forward the provider rejected transiently;
+     * without it a single 5xx loses that metered unit upstream for good, which for
+     * a provider that owns entitlements under-bills and over-entitles the customer.
+     */
+    listUnreportedUsage: (provider: ProviderId, limit: number) => Promise<UsageEvent[]>;
+
+    /**
      * Claims a provider event id for processing. Resolves `true` the first time an event is seen
      * and `false` for a duplicate — the inbound-idempotency primitive.
+     *
+     * `type` is recorded on the claim row so the `events` table is a readable audit log rather than
+     * bare ids and timestamps: a real delivery passes its `WebhookActionType`, and the
+     * internal claim markers (`sync.ts`'s orphan-retry bound, the local-refund ledger) pass a
+     * `marker.*` label so they are distinguishable from provider traffic in the studio.
      */
-    markEventProcessed: (provider: ProviderId, eventId: string) => Promise<boolean>;
+    markEventProcessed: (provider: ProviderId, eventId: string, type: string) => Promise<boolean>;
     /** Flag a recorded usage event as forwarded to the provider's metering API. */
     markUsageReported: (provider: ProviderId, idempotencyKey: string) => Promise<void>;
 
@@ -39,14 +62,80 @@ export interface PaymentStore {
      * is rolled back on failure. A no-op if the id was never claimed.
      */
     releaseEvent: (provider: ProviderId, eventId: string) => Promise<void>;
-    /** Sum recorded usage `quantity` for a `(referenceId, featureId)` pair since `since` (epoch ms). */
+
+    /**
+     * The period total for a `(referenceId, featureId)` pair since `since` (epoch ms).
+     *
+     * NOT a plain sum: events are folded in `createdAt` order (ties broken by
+     * `idempotencyKey`, so every store agrees on the same order for events stamped
+     * in the same millisecond). An `"add"` event increments the running total; a
+     * `"set"` event RESETS it to that event's `quantity`, discarding everything
+     * earlier in the period. Use {@link foldUsage} so the two implementations
+     * cannot drift.
+     *
+     * This fold is what lets `track({ mode: "set" })` be append-only. Reconciling by
+     * writing `target - current` instead would be a read-modify-write across two
+     * un-transacted store calls: two interleaved `set`s would both read the same
+     * total, both append a delta, and leave the period over- or under-counted —
+     * inflating `balance = limit - used`. Here a concurrent pair simply resolves
+     * last-writer-wins, and a replayed `set` is idempotent by construction.
+     */
     sumUsage: (referenceId: string, featureId: string, since: number) => Promise<number>;
+
+    /** Period usage totals for many features in one read — the batch form of {@link PaymentStore.sumUsage}. */
+    sumUsageByFeature: (referenceId: string, featureIds: ReadonlyArray<string>, since: number) => Promise<ReadonlyMap<string, number>>;
     upsertCustomer: (customer: Customer) => Promise<void>;
     upsertPaymentSession: (session: PaymentSession) => Promise<void>;
     upsertSubscription: (subscription: Subscription) => Promise<void>;
 }
 
-/** In-memory {@link PaymentStore} for tests and local development. Not durable. */
+/**
+ * Fold usage events into a period total: `"add"` increments, `"set"` resets to its
+ * own `quantity` and discards everything before it.
+ *
+ * Sorting is part of the contract, not an optimisation — `createdAt` first, then
+ * `idempotencyKey` as a deterministic tiebreak so two events stamped in the same
+ * millisecond fold identically in every store and on every replay. Callers pass
+ * only the events already filtered to the `(referenceId, featureId, >= since)`
+ * window.
+ *
+ * Exported so {@link MemoryPaymentStore} and the database-backed store share ONE
+ * definition: a divergence between them would show up as a metered limit that
+ * enforces differently in tests than in production.
+ */
+export const foldUsage = (events: ReadonlyArray<Pick<UsageEvent, "createdAt" | "idempotencyKey" | "mode" | "quantity">>): number => {
+    const ordered = events.toSorted((a, b) => a.createdAt - b.createdAt || a.idempotencyKey.localeCompare(b.idempotencyKey));
+    let total = 0;
+
+    for (const event of ordered) {
+        total = event.mode === "set" ? event.quantity : total + event.quantity;
+    }
+
+    return total;
+};
+
+/**
+ * The owner a row keeps: the stored `referenceId` wins unless it is blank. Owner attribution comes
+ * from checkout metadata the provider does not always echo, so an incoming value only fills a gap.
+ */
+export const ownerOf = (stored: string | undefined, incoming: string | undefined): string => (stored?.trim() ? stored : (incoming ?? ""));
+
+/**
+ * Overlay the provider's view of a subscription on the stored row: provider truth for the
+ * lifecycle, the store for owner, `createdAt` and `lastEventAt` (a status read is not an event).
+ */
+export const overlayProviderSubscription = (existing: Subscription | undefined, current: Subscription): Subscription => {
+    return {
+        ...current,
+        createdAt: existing?.createdAt ?? current.createdAt,
+        lastEventAt: existing?.lastEventAt,
+        referenceId: ownerOf(existing?.referenceId, current.referenceId),
+    };
+};
+
+/**
+ * In-memory {@link PaymentStore} for tests and local development. Not durable.
+ */
 export class MemoryPaymentStore implements PaymentStore {
     private readonly customers = new Map<string, Customer>();
 
@@ -66,6 +155,14 @@ export class MemoryPaymentStore implements PaymentStore {
         return Promise.resolve(this.sessions.get(recordKey(provider, id)));
     }
 
+    public getPaymentSessionBySubscription(provider: ProviderId, subscriptionId: string): Promise<PaymentSession | undefined> {
+        return Promise.resolve(
+            [...this.sessions.values()].find(
+                (session) => session.provider === provider && session.subscriptionId === subscriptionId && session.referenceId.trim() !== "",
+            ),
+        );
+    }
+
     public getSubscription(provider: ProviderId, id: string): Promise<Subscription | undefined> {
         return Promise.resolve(this.subscriptions.get(recordKey(provider, id)));
     }
@@ -74,7 +171,15 @@ export class MemoryPaymentStore implements PaymentStore {
         return Promise.resolve([...this.subscriptions.values()].filter((subscription) => subscription.referenceId === referenceId));
     }
 
-    public markEventProcessed(provider: ProviderId, eventId: string): Promise<boolean> {
+    public listUnreportedUsage(provider: ProviderId, limit: number): Promise<UsageEvent[]> {
+        const pending = [...this.usageEvents.values()]
+            .filter((event) => event.provider === provider && !event.reportedToProvider && event.mode !== "set" && event.quantity > 0)
+            .toSorted((a, b) => a.createdAt - b.createdAt || a.idempotencyKey.localeCompare(b.idempotencyKey));
+
+        return Promise.resolve(pending.slice(0, Math.max(0, limit)));
+    }
+
+    public markEventProcessed(provider: ProviderId, eventId: string, _type: string): Promise<boolean> {
         const key = recordKey(provider, eventId);
 
         if (this.processedEvents.has(key)) {
@@ -116,15 +221,27 @@ export class MemoryPaymentStore implements PaymentStore {
     }
 
     public sumUsage(referenceId: string, featureId: string, since: number): Promise<number> {
-        let total = 0;
+        const window: UsageEvent[] = [];
 
         for (const event of this.usageEvents.values()) {
             if (event.referenceId === referenceId && event.featureId === featureId && event.createdAt >= since) {
-                total += event.quantity;
+                window.push(event);
             }
         }
 
-        return Promise.resolve(total);
+        return Promise.resolve(foldUsage(window));
+    }
+
+    public sumUsageByFeature(referenceId: string, featureIds: ReadonlyArray<string>, since: number): Promise<ReadonlyMap<string, number>> {
+        const buckets = new Map<string, UsageEvent[]>(featureIds.map((featureId) => [featureId, []]));
+
+        for (const event of this.usageEvents.values()) {
+            if (event.referenceId === referenceId && event.createdAt >= since) {
+                buckets.get(event.featureId)?.push(event);
+            }
+        }
+
+        return Promise.resolve(new Map([...buckets].map(([featureId, window]) => [featureId, foldUsage(window)])));
     }
 
     public upsertCustomer(customer: Customer): Promise<void> {

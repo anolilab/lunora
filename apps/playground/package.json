@@ -10,16 +10,22 @@
         "codegen": "node node_modules/lunorash/dist/bin.mjs codegen",
         "deploy": "wrangler deploy",
         "dev": "vite",
-        "lint:eslint": "eslint .",
+        "lint:eslint": "eslint . --max-warnings=0",
         "lint:eslint:fix": "eslint . --fix",
-        "lint:types": "node node_modules/lunorash/dist/bin.mjs codegen && tsc --noEmit",
-        "test": "vitest run"
+        "lint:types": "node node_modules/lunorash/dist/bin.mjs codegen && tsc --noEmit && tsc --noEmit -p tsconfig.generated.json",
+        "test": "vitest run",
+        "fallow:audit": "fallow audit",
+        "fallow:dead-code": "fallow dead-code",
+        "fallow:health": "fallow health --score"
     },
     "dependencies": {
         "@lunora/auth": "workspace:*",
+        "@lunora/auth-ui": "workspace:*",
+        "@lunora/bindings": "workspace:*",
         "@lunora/d1": "workspace:*",
         "@lunora/db": "workspace:*",
         "@lunora/mail": "workspace:*",
+        "@lunora/queue": "workspace:*",
         "@lunora/ratelimit": "workspace:*",
         "@lunora/react": "workspace:*",
         "@lunora/scheduler": "workspace:*",
@@ -39,9 +45,11 @@
         "@cloudflare/workers-types": "catalog:cloudflare",
         "@lunora/codegen": "workspace:*",
         "@lunora/config": "workspace:*",
+        "@lunora/payment": "workspace:*",
         "@types/node": "catalog:types",
         "@types/react": "catalog:frontend",
         "@types/react-dom": "catalog:frontend",
+        "fallow": "catalog:lint",
         "typescript": "catalog:tsc",
         "vite": "catalog:vite",
         "vitest": "catalog:test",
@@ -49,5 +57,15 @@
     },
     "engines": {
         "node": "^22.15.0 || >=24.11.0"
+    },
+    "lunora": {
+        "queueTuning": {
+            "queues": {
+                "notifications": {
+                    "max_retries": 3,
+                    "dead_letter_queue": "notifications-dlq"
+                }
+            }
+        }
     }
 }

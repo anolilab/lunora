@@ -1,10 +1,19 @@
 import type { FunctionReference, LunoraClient, Unsubscribe } from "@lunora/client";
-import { act, render, screen, waitFor } from "@testing-library/react";
+import { act, configure, render, screen, waitFor } from "@testing-library/react";
 import type { ReactElement } from "react";
 import { describe, expect, it, vi } from "vitest";
 
 import { LunoraProvider } from "../src/lunora-provider";
 import { usePaginatedQuery } from "../src/use-paginated-query";
+
+// The reactive pagination updates settle asynchronously; the 1s default
+// `waitFor` timeout flakes under parallel CI load (a later page not yet
+// applied). Give async assertions generous headroom — and raise vitest's own
+// per-test timeout above it, so the test budget (default 5s) can't expire
+// mid-`waitFor` and re-introduce the flake (seen on node 24 under load).
+// eslint-disable-next-line vitest/require-hook -- intentional module-level RTL config; must apply before any render
+configure({ asyncUtilTimeout: 15_000 });
+vi.setConfig({ testTimeout: 20_000 });
 
 const makeRef = (ref: string): FunctionReference => {
     return { __lunoraRef: ref };
@@ -103,6 +112,7 @@ const createReactiveBackend = (initial: string[]) => {
         getAuthToken: vi.fn<() => string | null>(() => null),
         mutation: vi.fn<() => Promise<unknown>>(),
         onAuthTokenChange: vi.fn<() => Unsubscribe>(() => () => undefined),
+        onIdentityChange: vi.fn<() => Unsubscribe>(() => () => undefined),
         query,
         setAuthToken: vi.fn<(token: string | null) => void>(),
         subscribe,
@@ -144,8 +154,14 @@ const renderTwoPages = async (backend: ReturnType<typeof createReactiveBackend>)
         </LunoraProvider>,
     );
 
+    // `loadMore` is a no-op until the hook reports `CanLoadMore`: the next-page
+    // cursor it reads is published in a post-commit effect, so the first page's
+    // rows can render a tick before the cursor lands. Gating only on rendered
+    // rows can therefore fire `loadMore` too early under CI load, dropping the
+    // call so page 2 never loads (a hard timeout, not a slow settle). Wait for
+    // the status instead.
     await waitFor(() => {
-        expect(screen.getByTestId("results").textContent).not.toBe("");
+        expect(screen.getByTestId("status").textContent).toBe("CanLoadMore");
     });
 
     act(() => {
@@ -230,10 +246,16 @@ describe("usePaginatedQuery — reactive ranges", () => {
             </LunoraProvider>,
         );
 
-        // Page 1 = (null, b] = {a, b}. Open a tiny page 2 so page 1 becomes bounded.
+        // Page 1 = (null, b] = {a, b}. Open a tiny page 2 so page 1 becomes
+        // bounded. Wait for `CanLoadMore` (not just the rendered rows): the
+        // next-page cursor is published in a post-commit effect, so firing
+        // `loadMore` on the rows-rendered tick can drop it and page 2 never
+        // loads.
         await waitFor(() => {
-            expect(screen.getByTestId("results").textContent).toBe("a,b");
+            expect(screen.getByTestId("status").textContent).toBe("CanLoadMore");
         });
+
+        expect(screen.getByTestId("results").textContent).toBe("a,b");
 
         act(() => {
             loadMore(2);
@@ -292,6 +314,76 @@ describe("usePaginatedQuery — reactive ranges", () => {
         await waitFor(() => {
             // Feed stays correct after the merge: just {c, d}.
             expect(screen.getByTestId("results").textContent).toBe("c,d");
+        });
+    });
+});
+
+// Identical content, different property insertion order — the reset-key stability probe.
+const ORDER_A: Record<string, unknown> = { x: 1, y: 2 };
+const ORDER_B: Record<string, unknown> = { y: 2, x: 1 };
+
+interface ArgsHarnessProps {
+    args: Record<string, unknown>;
+    onLoadMore?: (loadMore: (numberItems: number) => void) => void;
+}
+
+/** Like {@link Harness} but with caller-supplied base args, so a test can re-render with a reordered-but-equal args object. */
+const ArgsHarness = ({ args, onLoadMore }: ArgsHarnessProps): ReactElement => {
+    const { loadMore, results, status } = usePaginatedQuery(makeRef("items:list"), args, { initialNumItems: 2 });
+
+    onLoadMore?.(loadMore);
+
+    return (
+        <div>
+            <span data-testid="status">{status}</span>
+            <span data-testid="results">{(results as string[]).join(",")}</span>
+        </div>
+    );
+};
+
+describe("usePaginatedCore — reset key stability", () => {
+    it("re-rendering with base args of identical content but different key order keeps loaded pages", async () => {
+        expect.hasAssertions();
+
+        const backend = createReactiveBackend(["a", "b", "c", "d", "e", "f"]);
+
+        let loadMore: (numberItems: number) => void = (_numberItems) => undefined;
+        // eslint-disable-next-line react-perf/jsx-no-new-function-as-prop -- test-harness callback passed as a prop
+        const capture = (next: (numberItems: number) => void): void => {
+            loadMore = next;
+        };
+
+        const view = render(
+            <LunoraProvider client={backend.asClient}>
+                <ArgsHarness args={ORDER_A} onLoadMore={capture} />
+            </LunoraProvider>,
+        );
+
+        await waitFor(() => {
+            expect(screen.getByTestId("status").textContent).toBe("CanLoadMore");
+        });
+
+        act(() => {
+            loadMore(2);
+        });
+
+        await waitFor(() => {
+            expect(screen.getByTestId("results").textContent).toBe("a,b,c,d");
+        });
+
+        // Re-render with the SAME base args by content but a different property
+        // insertion order. The reset key is built from the stable query-key
+        // encoding (order-insensitive), so this is a no-op — the two loaded pages
+        // survive. A raw `JSON.stringify(baseArgs)` reset key would differ here
+        // and collapse the feed back to page one ("a,b").
+        view.rerender(
+            <LunoraProvider client={backend.asClient}>
+                <ArgsHarness args={ORDER_B} onLoadMore={capture} />
+            </LunoraProvider>,
+        );
+
+        await waitFor(() => {
+            expect(screen.getByTestId("results").textContent).toBe("a,b,c,d");
         });
     });
 });

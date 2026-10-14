@@ -1,7 +1,7 @@
 /* eslint-disable unicorn/prevent-abbreviations -- "API", "Fn", and "Docs" are the domain terms for this API-docs panel; the file name and default-export name are fixed by the studio's tab wiring. */
 import { useLunora } from "@lunora/react";
 import type { ReactElement } from "react";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useState } from "react";
 
 import { Button } from "../../components/ui/button";
 import { EmptyState } from "../../components/ui/empty-state";
@@ -40,15 +40,6 @@ interface SnippetInput {
     readonly kind: FunctionKind;
 }
 
-/**
- * `@lunora/react` ships `useQuery`/`useMutation`/`useSubscription` but no
- * `useAction` — actions have no hook, so the React tab falls back to the client
- * snippet for them (and the panel notes why). Exposed so the panel and its tests
- * read the same fact; flip to `true` and add a `useAction` branch below if a hook
- * is ever added to the barrel.
- */
-const REACT_HAS_ACTION_HOOK: boolean = false;
-
 /** The client method each function kind is invoked through. */
 const CLIENT_METHOD: Record<FunctionKind, string> = {
     action: "action",
@@ -84,7 +75,7 @@ const buildReactSnippet = (input: SnippetInput): string => {
 
     switch (input.kind) {
         case "action": {
-            return buildClientSnippet(input);
+            return `const { call: ${input.fn} } = useAction(${reference});`;
         }
         case "mutation": {
             return `const ${input.fn} = useMutation(${reference});`;
@@ -182,7 +173,6 @@ const FunctionDoc = ({ file, fn, kind }: FunctionDocProps): ReactElement => {
     };
 
     const code = snippetForTab(tab, input);
-    const actionFellBack = kind === "action" && tab === "react" && !REACT_HAS_ACTION_HOOK;
 
     return (
         <div className="flex flex-col gap-3" data-testid="api-fn-doc">
@@ -212,12 +202,6 @@ const FunctionDoc = ({ file, fn, kind }: FunctionDocProps): ReactElement => {
             </div>
 
             <SnippetBlock code={code} label={tabLabel[tab]} testId={`api-snippet-${tab}`} />
-
-            {actionFellBack && (
-                <p className="text-xs text-muted-foreground" data-testid="api-action-note">
-                    {t("Actions have no React hook — call them through the client.")}
-                </p>
-            )}
         </div>
     );
 };
@@ -273,6 +257,25 @@ interface FunctionGroup {
     readonly items: ReadonlyArray<{ fn: string; kind: FunctionKind; path: string }>;
 }
 
+/** Group function descriptors by their file segment, files sorted, functions sorted within each file — a stable, scannable rail. */
+const groupByFile = (functionList: ReadonlyArray<FunctionDescriptor>): ReadonlyArray<FunctionGroup> => {
+    const byFile = new Map<string, { fn: string; kind: FunctionKind; path: string }[]>();
+
+    for (const descriptor of functionList) {
+        const { file, fn } = splitPath(descriptor.path);
+        const bucket = byFile.get(file) ?? [];
+
+        bucket.push({ fn, kind: descriptor.kind, path: descriptor.path });
+        byFile.set(file, bucket);
+    }
+
+    return [...byFile.entries()]
+        .map(([file, items]) => {
+            return { file, items: items.toSorted((a, b) => a.fn.localeCompare(b.fn)) };
+        })
+        .toSorted((a, b) => a.file.localeCompare(b.file));
+};
+
 /**
  * Per-resource "how to call this from your app" browser, generated from the
  * registered functions and tables the studio already has — no new endpoints.
@@ -320,23 +323,7 @@ const ApiDocsPanel = ({ functions, initialShardKey }: ApiDocsPanelProps): ReactE
 
     // Group function descriptors by their file segment, files sorted, functions
     // sorted within each file — a stable, scannable rail.
-    const grouped = useMemo<ReadonlyArray<FunctionGroup>>(() => {
-        const byFile = new Map<string, { fn: string; kind: FunctionKind; path: string }[]>();
-
-        for (const descriptor of functionList) {
-            const { file, fn } = splitPath(descriptor.path);
-            const bucket = byFile.get(file) ?? [];
-
-            bucket.push({ fn, kind: descriptor.kind, path: descriptor.path });
-            byFile.set(file, bucket);
-        }
-
-        return [...byFile.entries()]
-            .map(([file, items]) => {
-                return { file, items: items.toSorted((a, b) => a.fn.localeCompare(b.fn)) };
-            })
-            .toSorted((a, b) => a.file.localeCompare(b.file));
-    }, [functionList]);
+    const grouped = groupByFile(functionList);
 
     const tableNames = (tables ?? []).map((table) => table.name).toSorted((a, b) => a.localeCompare(b));
 
@@ -417,5 +404,5 @@ const ApiDocsPanel = ({ functions, initialShardKey }: ApiDocsPanelProps): ReactE
 };
 
 export type { ApiDocsPanelProps };
-export { buildClientSnippet, buildCliSnippet, buildReactSnippet, buildTableSnippet, REACT_HAS_ACTION_HOOK, splitPath };
+export { buildClientSnippet, buildCliSnippet, buildReactSnippet, buildTableSnippet, splitPath };
 export default ApiDocsPanel;

@@ -1,0 +1,155 @@
+import { MoveRight } from "lucide-react";
+import type { ComponentPropsWithoutRef, FC, ReactNode } from "react";
+
+import { Action } from "@/kit/action";
+import { cn } from "@/lib/utils";
+
+/**
+ * Layout primitives. These carry the whole spatial system: nothing else in the
+ * app should set a page gutter, a section rhythm, or a max width.
+ *
+ * The system is a 12-column grid inside a capped shell, separated by 1px
+ * hairlines rather than gaps or shadows. Gutters and section rhythm are fluid
+ * (they read `--site-gutter` / `--site-section-gap`); the type scale is not.
+ */
+
+/**
+ * Capped, gutter-padded container. Every band's content sits in one of these,
+ * including the navbar, so the bar and the sections under it share one edge.
+ *
+ * Padding falls away at `lg`, where content meets the page's vertical guide
+ * lines exactly. A full-width grid inside a Shell therefore drops its own side
+ * borders at `lg` (`lg:border-x-0`) or it doubles those lines.
+ *
+ * A grid that needs edge-to-edge dividers goes *inside* a Shell rather than
+ * being one: put the padding on the Shell and the grid within it, or the outer
+ * cells sit inside the padding while the grid's own border sits outside it and
+ * their dividers stop short of the edge they should meet.
+ */
+const Shell: FC<ComponentPropsWithoutRef<"div">> = ({ children, className, ...rest }) => (
+    // eslint-disable-next-line react/jsx-props-no-spreading -- forwarding native div attributes
+    <div className={cn("mx-auto w-full max-w-shell px-5 lg:px-0", className)} {...rest}>
+        {children}
+    </div>
+);
+
+/**
+ * A full-bleed horizontal band. `tone` picks the surface.
+ *
+ * Padding is asymmetric: a full `section` above, a smaller `section-end` below.
+ * Matching them doubles the rhythm and leaves a screen of empty canvas between
+ * every two bands, which is why the bottom is not simply `pt-section`.
+ *
+ * It was zero for a while, on the theory that the hatched spacer was itself the
+ * separation and a band's last row meeting it read as one join. In practice a
+ * trailing button or caption lands hard against that divider and reads as a
+ * layout bug — it did in four separate bands before this was given a value.
+ */
+// `light` shares `canvas` on purpose: the tone changes what `--site-canvas`
+// resolves to rather than painting a different colour.
+const TONE_SURFACE = {
+    canvas: "bg-canvas",
+    deep: "bg-canvas-deep",
+    light: "bg-canvas",
+    surface: "bg-surface",
+};
+
+const Section: FC<{
+    children: ReactNode;
+    className?: string;
+    id?: string;
+    tone?: "canvas" | "deep" | "light" | "surface";
+}> = ({ children, className, id, tone = "canvas" }) => (
+    // `light` re-scopes the whole `--site-*` palette inside the band rather than
+    // swapping a background colour: ink, hairlines, wash and accents all flip
+    // together, so nothing inside needs to know which tone it landed in. The
+    // theme layer publishes its tokens through `@theme inline`, which is what
+    // lets an attribute on a subtree override them at all — under a plain
+    // `@theme` the values are inlined at build time and this does nothing.
+    //
+    // `data-nav-theme` is separate because the navbar is fixed: it reads the
+    // band currently under it to pick its own ink, and light ink over a light
+    // band is the one combination that disappears.
+    <section
+        className={cn("relative border-t border-hairline pt-section pb-section-end", TONE_SURFACE[tone], className)}
+        data-nav-theme={tone === "light" ? "light" : "dark"}
+        data-site-theme={tone === "light" ? "light" : undefined}
+        id={id}
+    >
+        {children}
+    </section>
+);
+
+/**
+ * Mono uppercase micro-label. Two tracking steps: `kicker` (0.12em) for labels
+ * that sit beside content, `micro` (0.18em) for the smallest standalone meta.
+ */
+const Kicker: FC<{
+    children: ReactNode;
+    className?: string;
+    size?: "kicker" | "micro";
+    tone?: "accent" | "faint" | "muted";
+}> = ({ children, className, size = "kicker", tone = "faint" }) => (
+    <span
+        className={cn(
+            "font-mono uppercase",
+            size === "kicker" ? "text-kicker" : "text-micro",
+            tone === "accent" && "text-accent",
+            tone === "muted" && "text-ink-muted",
+            tone === "faint" && "text-ink-faint",
+            className,
+        )}
+    >
+        {children}
+    </span>
+);
+
+/**
+ * The section header.
+ *
+ * Left column carries a category label — it says what kind of thing the section
+ * is, which the title itself rarely does. The copy column carries the title and
+ * an optional lead paragraph. `note` adds a right-aligned aside, used on index
+ * pages where the section needs a pointer ("Start with the adapter built for
+ * your project") more than a lead.
+ *
+ * `action` puts a link in the right column instead of a note: use it when the
+ * section is a sample of something larger and the reader should be able to
+ * reach the whole of it ("Browse all docs"). A section that is complete in
+ * itself takes a note, or neither.
+ */
+const SectionHeader: FC<{
+    /** Trailing link to the fuller version of what this section samples. */
+    action?: { label: string; to: string };
+    children?: ReactNode;
+    className?: string;
+    /** Category label for the left column — "Animation library", "Add-ons". */
+    label?: string;
+    note?: ReactNode;
+    title: ReactNode;
+}> = ({ action, children, className, label, note, title }) => (
+    <header className={cn("mb-[clamp(2.5rem,1.5rem+3vw,4.5rem)] grid grid-cols-1 gap-x-col-gap gap-y-5 md:grid-cols-12", className)}>
+        {label ? (
+            <div className="flex flex-col gap-1.5 md:col-span-2">
+                <Kicker tone="faint">{label}</Kicker>
+            </div>
+        ) : null}
+        <div className={cn("flex flex-col gap-3.5", label ? "md:col-span-6" : "md:col-span-8")}>
+            <h2 className="text-h2 font-bold text-balance text-ink">{title}</h2>
+            {children}
+        </div>
+        {note || action ? (
+            <div className="flex flex-col items-start gap-3 md:col-span-4 md:items-end md:self-end">
+                {note ? <p className="text-body text-ink-muted md:text-right">{note}</p> : null}
+                {action ? (
+                    <Action to={action.to}>
+                        {action.label}
+                        <MoveRight className="size-4" />
+                    </Action>
+                ) : null}
+            </div>
+        ) : null}
+    </header>
+);
+
+export { Kicker, Section, SectionHeader, Shell };

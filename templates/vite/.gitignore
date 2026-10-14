@@ -1,6 +1,0 @@
-node_modules
-dist
-.wrangler
-.lunora/
-.lunora-cache
-lunora/_generated

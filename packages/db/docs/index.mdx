@@ -7,8 +7,8 @@ description: Optimistic, offline-first client data layer on TanStack DB.
 data layer: live, indexed client collections for reads, and a durable, retried
 **offline outbox** for writes. A sent message renders instantly, survives a
 reload or an offline window, is superseded by the real server row on
-acknowledgement, and rolls back if the server rejects it — without you
-hand-writing any sync glue.
+acknowledgement, and rolls back if the server rejects it. You write none of that
+sync glue yourself.
 
 It sits on top of `@lunora/client`'s transport (the same WebSocket subscriptions
 and RPC the React hooks use). You keep your schema and functions exactly as they
@@ -16,7 +16,7 @@ are; `@lunora/db` binds them to collections.
 
 ## Install
 
-`@lunora/db` peer-depends on the TanStack packages, so install them alongside it:
+`@lunora/db` peer-depends on `@tanstack/db` and `@tanstack/offline-transactions`, so install them alongside it; the React examples below also need `@tanstack/react-db`:
 
 <Tabs items={["pnpm","npm","yarn","bun"]}>
 
@@ -52,7 +52,7 @@ The generator reads `schema.ts` and `_generated/api.ts` and wires each table:
 
 - **reads** from the table's `list` query,
 - **`scopeBy`** for sharded tables (from their `shardBy`),
-- **writes** from the mutation that calls `ctx.db.insert("<table>", …)` — attributed
+- **writes** from the mutation that calls `ctx.db.insert("<table>", …)`, attributed
   by behaviour, with `toArgs` mapped from the mutation's real arguments.
 
 The result is a ready-to-use `createCollections(client)`:
@@ -96,7 +96,8 @@ export const createCollections = (client: LunoraClient) =>
 ```
 
 Build it once (it owns the outbox, so keep a single instance) and use it in your
-components:
+components. The collections it returns are the single source of truth per table.
+See [One source of truth per table](#one-source-of-truth-per-table):
 
 ```tsx
 import { useLiveQuery } from "@tanstack/react-db";
@@ -113,9 +114,36 @@ function Chat({ channelId }: { channelId: Id<"channels"> }) {
 
     const send = (text: string) => db.actions.messages({ channelId, text, userId: me });
 
-    return /* … */;
+    return; /* … */
 }
 ```
+
+## One source of truth per table
+
+Each table's rows live in exactly one place: the collection `defineCollections`
+created for it. Keep a **single `db` instance** and never mirror a collection's
+rows into a parallel store of your own: a hand-rolled cache, a global store, or
+a second `createCollection`. The two can only diverge: an optimistic write, a
+rollback, or an incoming sync delta is applied to the Lunora collection, not to
+your copy.
+
+The failure is quiet. Code that reads the copy doesn't error; it reads **stale**
+rows. A derived index (a tree, a search index, an undo capture) built from the
+copy runs against data that no longer matches what the UI renders through
+`useLiveQuery`, so the symptom is "this command does nothing" or a confusing
+refusal, not a crash. When Lunora collections are the live read path, make them
+the _only_ read path:
+
+- Read through `db.collections.*` / `useLiveQuery` everywhere. Don't re-export
+  rows from your own store into code that is supposed to be Lunora-backed.
+- Don't copy a collection out to "cache" it; it already is the live, indexed
+  cache. Copy only for a concrete snapshot you pass by value (an export, a
+  payload).
+- When adopting Lunora over an existing store, delete the old read paths rather
+  than keeping both. Code left on the old path is precisely what silently misses
+  rows after a migration.
+- Build derived indexes from the same collection you render from, so an index and
+  the UI that consumes it can't disagree.
 
 ## Reads — live, indexed queries
 
@@ -136,7 +164,7 @@ const { data } = useLiveQuery((q) =>
 );
 ```
 
-No extra server round-trip — the author name and ordering are derived from the
+No extra server round-trip: the author name and ordering are derived from the
 two synced collections.
 
 ## Writes — optimistic + durable outbox
@@ -145,10 +173,10 @@ Each `insert` binding produces an action under `db.actions.<table>`. Calling it:
 
 1. **inserts the optimistic row immediately** (so the UI updates with no latency),
 2. **persists the write to a durable outbox** (IndexedDB) and sends it via your
-   Lunora mutation, retrying with backoff until it succeeds — so a write made
+   Lunora mutation, retrying with backoff until it succeeds, so a write made
    offline is never lost and replays on reconnect,
 3. **supersedes the optimistic row** with the real server row on acknowledgement
-   (matched by id — see [client ids](#client-generated-ids)),
+   (matched by id, see [client ids](#client-generated-ids)),
 4. **rolls the optimistic row back** if the server _rejects_ the mutation (a
    validation or conflict error). Transient network/HTTP failures are retried,
    not rolled back.
@@ -161,15 +189,53 @@ const { id, transaction } = db.actions.messages({ channelId, text, userId });
 await transaction.isPersisted.promise;
 ```
 
+### Surfacing rejected writes
+
+Awaiting `transaction.isPersisted.promise` only works for the caller that
+holds the `transaction`. A write made in one session and replayed in the next
+(after a reload), or any fire-and-forget `db.actions.*` call, has no such
+awaiter, so a permanent rejection would roll the optimistic row back with no UI
+signal. Pass `onWriteRejected` to get an aggregate, fire-and-forget-safe channel
+that fires once per **permanently** rejected write (a coded application error:
+validation, RLS denial, conflict). Transient failures (offline, 5xx) are retried
+by the outbox, not reported here:
+
+```ts
+const db = defineCollections(client, defs, {
+    onWriteRejected: ({ collection, row, error, code }) => {
+        toast.error(`Couldn't save your ${collection} change: ${error.message}`);
+        // `code` is the server's machine-readable reason (e.g. "CONFLICT") so you
+        // can branch; `row` is the optimistic row being rolled back (re-open a
+        // draft, etc.). The callback fires as the write is rejected — the row
+        // rollback follows it, so read `row`/`error` here rather than the
+        // collection's post-rollback state.
+        //
+        // A write whose target collection was removed/renamed in a deploy arrives
+        // here too, with `code: "UNKNOWN_MUTATION_FN"`. So does one queued under a
+        // user who is no longer signed in — identity is the trust boundary, so it
+        // is dropped rather than replayed under whoever holds the bearer now.
+    },
+    onStorageFailure: ({ code, message }) => {
+        // The durable outbox couldn't persist (IndexedDB blocked in private mode,
+        // quota exceeded, …) — the write won't survive a reload. Warn the user.
+        toast.warning(`Your change may not be saved offline (${code}).`);
+    },
+});
+```
+
+`onStorageFailure` is the collection-layer counterpart to the standalone client's
+`offlineQueue.onPersistenceError`; `onLeadershipChange(isLeader)` is also
+available (informational: only the leader tab drains the outbox).
+
 This is the same durable-outbox and reconciliation model `@lunora/client`
-exposes directly — see [Offline-first](/docs/concepts/offline-first) for the
-lower-level `persistence` + `queryCache` options, the service-worker app-shell
-recipe, and the connection-status APIs, if you want offline reads and writes
-without adopting the full TanStack DB collection layer.
+exposes directly. If you want offline reads and writes without adopting the
+TanStack DB collection layer, see [Offline-first](/docs/concepts/offline-first)
+for the lower-level `persistence` + `queryCache` options, the service-worker
+app-shell recipe, and the connection-status APIs.
 
 ## Scoped (sharded) collections
 
-A `scopeBy` field makes a collection re-pointable — for a [sharded](/docs/concepts/sharding)
+A `scopeBy` field makes a collection re-pointable. For a [sharded](/docs/concepts/sharding)
 query like `messages.list({ channelId })`, call `db.scope.<table>(args)` to switch
 which shard it syncs, or with no args to detach:
 
@@ -178,12 +244,107 @@ db.scope.messages({ channelId }); // sync this channel
 db.scope.messages(); // detach (e.g. on unmount)
 ```
 
+Name the table's `.shardBy(...)` column in `scopeBy`: the scoped value **is** the
+shard key. `scope({ channelId })` subscribes to that channel's shard, re-scoping
+moves the subscription, and each `insert` goes to the shard its own row's
+`channelId` names — captured when the write is queued, so an offline write
+replays to its own shard even after the app has re-scoped.
+
+Scope args or an inserted row without the field throw a `BAD_REQUEST`
+`LunoraError` rather than fall back to the default shard. The throw is
+synchronous — out of `db.scope.<table>(…)` or `db.actions.<table>(…)` itself,
+before any optimistic row or queued write exists — so it never reaches
+`onWriteRejected`, which reports the server's verdicts on writes that were sent.
+Treat it like any other invalid argument: fix the call.
+
+An explicit `shardKey` takes precedence and pins every scope to one shard — set
+both only when all scopes live on one shard (a per-tenant shard scoped by a
+non-shard column).
+
+Each scoped shard is its own Durable Object, reached over its own WebSocket. The
+client closes a shard's socket a few seconds after the last subscription on it
+goes away, so moving between channels does not accumulate open connections.
+
+Naming a non-default shard is gated on the worker: configure `authorizeShard`
+(or, only when every table is protected by row-level security,
+`allowUnauthenticatedShardAccess: true`). Without either, the worker refuses
+scoped subscriptions and writes with a `403` `FORBIDDEN_SHARD`.
+
+## Upgrading: scoped collections now use their shard
+
+Earlier alphas sent every subscription and insert of a `scopeBy` collection
+without its own `shardKey` to the **default shard** (`__root__`). They now go to
+the shard the scoped value names. Two things to do when you upgrade:
+
+**1. Authorize shard access.** A scoped collection now names a shard, so the
+worker needs `authorizeShard` (or `allowUnauthenticatedShardAccess: true`) — see
+above. Without it every scoped subscription and write fails with `403`
+`FORBIDDEN_SHARD`.
+
+**2. Move the rows already written.** Rows written before the upgrade are still
+in the default shard, where scoped reads no longer look. There is no read
+fallback to the default shard; move them:
+
+```bash
+# 1. Dump the table. Run this BEFORE the upgraded client writes to any channel
+#    shard: an export reaches a table's registered shards, and falls back to the
+#    default shard only while none are registered. Check the file holds your rows.
+#    (The export route needs a `queryCoordinator` on the worker.)
+lunora export --tables messages --out messages.ndjson
+
+# 2. Re-import it. Import buckets every row by the table's `.shardBy` field, so
+#    each lands in its channel's shard, with its `_id` kept. It only appends: a
+#    row whose `_id` already exists in that shard's table is skipped and counted
+#    as a conflict, so a re-run is safe.
+lunora import messages.ndjson
+```
+
+Import does not delete anything, so the old copies stay in the default shard.
+Once the import reports no errors, remove them with a one-off mutation run
+against the default shard, e.g. one that deletes up to 500 rows of the table per
+call (`ctx.db.query("messages").take(500)`, then `ctx.db.delete` each):
+
+```bash
+lunora run cleanup:purgeRootMessages --shard __root__   # repeat until it deletes 0
+```
+
+(`__root__` is the default shard unless your worker sets `defaultShardKey`.)
+
+Offline writes an older build queued, and that replay after the upgrade, go to
+the shard their row names, not the default shard. Idempotency is per shard, so
+if such a write had in fact committed on the default shard before its tab died
+(sent, never acknowledged), the replay writes it again in its row's shard. For
+an `insert` binding that forwards the row's `_id` (the documented `toArgs`),
+both copies share that `_id`: the default shard's copy is one of the rows the
+steps above export, and the import skips it because the row's shard already
+holds that `_id`. A custom mutation with other side effects should be
+idempotent on its own arguments if it can be replayed across the upgrade.
+
+## When collections load
+
+Each collection chooses _when_ it starts syncing. Together with `scopeBy` that
+gives the lazy / partial / eager load taxonomy declaratively:
+
+```ts
+defineCollections(client, {
+    // lazy (default): syncs on the first useLiveQuery subscriber
+    messages: { list: api.messages.list, scopeBy: "channelId" }, // + partial: only the scoped channel
+    // eager: syncs at boot — for small "instant" reference data you want warm
+    labels: { list: api.labels.list, load: "eager" },
+});
+```
+
+`load: "eager"` maps to TanStack DB's `startSync`. Even eager, a collection
+pauses syncing while it has no subscribers (TanStack's `gcTime` lifecycle), so
+it's "warm while referenced", not pinned in memory forever. `load` has no effect
+on a `scopeBy` collection (nothing to sync until you `scope` it).
+
 ## Client-generated ids
 
 For the optimistic row and the persisted server row to reconcile by key, the
 client must choose the row id up front. The `insert` binding generates a UUID,
 hands it to `optimistic` (as the row's `_id`) and forwards it to the mutation via
-`toArgs` — your mutation persists it with the validated `clientId` option:
+`toArgs`; your mutation persists it with the validated `clientId` option:
 
 ```ts title="lunora/messages.ts"
 import { v } from "@lunora/values";
@@ -202,16 +363,180 @@ is validated for shape; uniqueness is still enforced by the primary key, so a
 client can't collide with, overwrite, or forge a peer row. Without `clientId`,
 Lunora mints the id as usual. See [`ctx.db.insert`](/docs/packages/server#client-supplied-ids).
 
+## Shapes — partial replication
+
+The `insert`/outbox path above syncs **whole tables** through each table's `list`
+query. For [partial replication](/docs/concepts/local-first#shapes--partial-replication)
+(replicating only the rows a client needs, scoped by a server-resolved
+predicate), point a collection at a [shape](/docs/packages/server#defineshapedefinition--partial-replication)
+instead of a `list`, via `lunoraCollectionOptions`:
+
+```ts
+import { lunoraCollectionOptions } from "@lunora/db/collections";
+import { createCollection } from "@tanstack/db";
+
+const { config, scope, checkpoints } = lunoraCollectionOptions({
+    client,
+    shape: { name: "messagesByChannel", args: { channelId } },
+    scopeBy: "channelId", // the `.shardBy` column — each scope syncs that channel's shard
+});
+
+const messages = createCollection(config);
+scope({ channelId: "general" }); // re-point a scoped collection (or call with no args to detach)
+```
+
+`lunoraCollectionOptions` is the reusable core `defineCollections` is built on:
+it returns `{ config, scope, checkpoints }`. Pass exactly one of `list` (full
+table) or `shape` (partial replication). The `checkpoints` registry resolves
+optimistic-overlay drops against the server's confirmed watermarks; it's what
+`bindMutators` uses below. On a `scopeBy` collection it follows the scope — safe
+to destructure once, as above, before anything is scoped — and `bindMutators`
+must then be given the same `scopeBy` (or pin one shard with `shardKey`), so its
+pushes reach the shard those checkpoints gate on (it throws at bind time
+otherwise).
+
+## Custom mutators
+
+For optimistic writes that run a local body first and a server-authoritative
+impl second (rather than the `insert`-binding outbox), use the
+[custom-mutator](/docs/concepts/local-first#custom-mutators--optimistic-server-authoritative)
+runtime on the `@lunora/db/mutators` subpath. Declare the optimistic body with
+`defineMutator` (its `serverRef` points at the server `defineMutator` it pushes
+to; pass the generated `api.mutators.<name>` reference so a rename or typo is a
+type error, not a runtime failure), then bind the set to your client +
+collections:
+
+```ts
+import { bindMutators, defineMutator } from "@lunora/db/mutators";
+
+import { api } from "../lunora/_generated/api";
+
+const mutators = {
+    sendMessage: defineMutator({
+        serverRef: api.mutators.sendMessage, // generated reference → checked at compile time
+        // `args` is inferred from the server mutator's validators, so the shape is
+        // declared once (server-side) instead of restated here.
+        apply: ({ collections }, { channelId, text }) => {
+            collections.messages.insert({ _id: crypto.randomUUID(), channelId, text });
+        },
+    }),
+};
+
+// `scopeBy` routes each call to the shard its own `channelId` names — the shard the
+// scoped `messages` collection above syncs, so the echo resolves `checkpoints`.
+const send = bindMutators(client, { checkpoints, collections, scopeBy: "channelId" }, mutators);
+
+// Calling a bound handle applies the optimistic overlay + pushes the server write.
+const tx = send.sendMessage({ channelId: "general", text: "hi" });
+await tx.isPersisted.promise; // resolves on confirm, rejects on rollback
+```
+
+A mutator bound with `scopeBy` pushes to the shard named by that call's args, not
+by the collection's current scope, and keeps a separate `clientSeq` line per
+shard. Pin every push to one shard with `shardKey` instead (it takes precedence).
+A call whose args lack the `scopeBy` field throws synchronously, before any
+optimistic write — a caller error, like any other bad argument.
+
+Each call opens a TanStack DB optimistic transaction, runs `apply` against the
+local collections, and pushes the authoritative write under a monotonic
+per-client `clientSeq`. The rebase is free: TanStack re-derives pending overlays
+over the latest synced base on every sync tick. Pass the `checkpoints` registry
+from `lunoraCollectionOptions` so the overlay is held until the server echoes the
+matching watermark (no flicker); omit it to drop the overlay as soon as the write
+is accepted.
+
+#### Typing the collections map
+
+`Collection` is invariant in its row type, so the shared map type can't accept a
+generated collection without a cast, and hands `apply` a row type too wide to be
+useful. Bind your map once with `initMutators` and both ends are typed:
+
+```ts
+import { initMutators } from "@lunora/db/mutators";
+
+const { bindMutators, defineMutator } = initMutators<{
+    messages: typeof channelMessagesCollection;
+}>();
+
+const sendMessage = defineMutator({
+    apply: ({ collections }, args) => {
+        // `collections.messages` is `Collection<Doc<"messages"> & Row>` here.
+        collections.messages.insert({ _id: crypto.randomUUID(), ...args });
+    },
+    serverRef: api.mutators.sendMessage,
+});
+```
+
+#### Handling rejected writes
+
+`onWriteRejected` is the aggregate failure channel, symmetric with the outbox hook
+of the same name. It also makes a fire-and-forget call safe: a bound handle returns
+a transaction whose `isPersisted` rejects when the server refuses the write, so a
+call you neither await nor `.catch` leaves an unhandled rejection. With the hook
+set, `bindMutators` reports the failure and consumes it; a caller that does await
+still observes it.
+
+```ts
+bindMutators(client, { collections, onWriteRejected: ({ error, mutator }) => notify(mutator, error) }, mutators);
+```
+
+### Framework hooks
+
+The framework adapters wrap a bound handle in a small `{ mutate, pending, error,
+isError, reset }` hook; reads stay on the existing `useLiveQuery`:
+
+| Framework | Import                               | Helper                  |
+| --------- | ------------------------------------ | ----------------------- |
+| React     | `useMutator` from `@lunora/react`    | `useMutator(handle)`    |
+| Vue       | `useMutator` from `@lunora/vue`      | `useMutator(handle)`    |
+| Solid     | `createMutator` from `@lunora/solid` | `createMutator(handle)` |
+| Svelte    | `mutator` from `@lunora/svelte`      | `mutator(handle)`       |
+
+```tsx
+import { useMutator } from "@lunora/react";
+
+const { mutate, pending, error } = useMutator(send.sendMessage);
+// <button disabled={pending} onClick={() => mutate({ channelId, text })}>Send</button>
+```
+
+`pending` is ref-counted across overlapping invocations of the same hook, so it
+clears only once every concurrent call settles.
+
 ## Manual binding
 
 `defineCollections(client, defs)` is the underlying API. Each entry is:
 
-- `list` — the Lunora query that lists the rows (the sync source). **Required.**
-- `getKey?` — row key extractor; defaults to `row._id`.
-- `scopeBy?` — a field that scopes the list (a shard key); makes the collection
-  re-pointable via `db.scope.<table>`.
-- `insert?` — `{ mutation, optimistic, toArgs }` to make the table writable
+- `list`: the Lunora query that lists the rows (the sync source). **Required.**
+- `getKey?`: row key extractor; defaults to `row._id`.
+- `scopeBy?`: the table's `.shardBy(...)` column; makes the collection
+  re-pointable via `db.scope.<table>`, and — unless `shardKey` is set — routes
+  the subscription to the scoped value's shard and each `insert` to its row's
+  shard (see [Scoped (sharded) collections](#scoped-sharded-collections)).
+- `shardKey?`: pins the `list` subscription — and the confirmed-mutation
+  watermark its frames advance the checkpoint gate from, and the `insert`
+  writes — to one shard's Durable Object. Takes precedence over `scopeBy`.
+  **A `.shardBy()`'d table needs one of the two.** Without either the overlay gate compares against
+  the default `""` watermark bucket, which that shard's sequence line never
+  advances, so optimistic rows are held or dropped against a watermark that is
+  not theirs, and the writes themselves land in the default shard while the
+  subscription reads another — committed, ack'd, and invisible. Silent
+  staleness, with no error anywhere. Each queued write captures the shard key it
+  was made under, so a write that outlives a reload still follows its own shard.
+- `load?`: `"eager"` to sync at boot, or `"lazy"` (default) to sync on first use
+  (see [When collections load](#when-collections-load)).
+- `insert?`: `{ mutation, optimistic, toArgs }` to make the table writable
   through the outbox.
+
+A `CollectionDef` may also carry `onError?`, notified when its `list`
+subscription errors (the read side), distinct from `onWriteRejected` (the write
+side) below.
+
+An optional third argument carries layer-wide options:
+
+- `onWriteRejected?`: fires once per **permanently** rejected write, _as_ it is
+  rejected (the optimistic-row rollback follows), so read the event's `row` /
+  `error` directly rather than the collection's post-rollback state (see
+  [Surfacing rejected writes](#surfacing-rejected-writes)).
 
 It returns `{ collections, actions, scope, executor }`. The row and action-input
 types are inferred from each binding's `list` return and `optimistic` input, so
@@ -220,6 +545,6 @@ types are inferred from each binding's `list` return and `optimistic` input, so
 ## Advisor
 
 Because the data layer keys writes off `ctx.db.insert` attribution, codegen runs
-a [`table_without_insert`](/docs/packages/studio) advisory: an `INFO` nudge for any
+a [`table_without_insert`](/docs/packages/advisor) advisory: an `INFO` nudge for any
 schema table no function inserts into. It's a confirm-intent signal (the table
 may be read-only, seeded by a migration, or written elsewhere), not an error.

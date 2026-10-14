@@ -56,6 +56,29 @@ describe("handlePolicyScaffoldRequest", () => {
         expect(readFileSync(join(lunoraDirectory, "invoices.policies.ts"), "utf8")).toContain("when: () => false");
     });
 
+    it("writes the stub but skips codegen when the codegen switch is off", () => {
+        expect.assertions(3);
+
+        // Same gate the schema editor reads: `lunora dev --no-codegen` travels as
+        // LUNORA_CODEGEN=0, and a scaffold that regenerated anyway rewrote the
+        // generated tree the flag had just excluded.
+        process.env.LUNORA_CODEGEN = "0";
+
+        try {
+            const result = handlePolicyScaffoldRequest({
+                body: { kind: "scaffoldPolicy", name: "invoices", table: "invoices" },
+                method: "POST",
+                projectRoot,
+            });
+
+            expect(result.status).toBe(200);
+            expect(existsSync(join(lunoraDirectory, "invoices.policies.ts"))).toBe(true);
+            expect(existsSync(join(lunoraDirectory, "_generated"))).toBe(false);
+        } finally {
+            delete process.env.LUNORA_CODEGEN;
+        }
+    });
+
     it("refuses to overwrite an existing policy file", () => {
         expect.assertions(2);
 
@@ -129,6 +152,15 @@ describe("handlePolicyScaffoldRequest", () => {
         expect.assertions(1);
 
         expect(handlePolicyScaffoldRequest({ body: { name: "x" }, method: "POST", projectRoot }).status).toBe(400);
+    });
+
+    it("rejects a POST body of literal null with a 400 (not a 500 TypeError)", () => {
+        expect.assertions(2);
+
+        const result = handlePolicyScaffoldRequest({ body: null, method: "POST", projectRoot });
+
+        expect(result.status).toBe(400);
+        expect(result.body).toStrictEqual({ error: "invalid-edit", ok: false });
     });
 
     it("rejects an unsupported HTTP method", () => {

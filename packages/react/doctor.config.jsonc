@@ -1,0 +1,12 @@
+{
+    // `@codspeed/vitest-plugin` is consumed by the shared bench config at the repo
+    // root (`tools/get-bench-config.ts`, imported by `vitest.bench.config.ts`) and
+    // is declared as a per-package devDependency across every benched `@lunora/*`
+    // package by convention. React Doctor's dead-code pass only scans this package
+    // dir, so it can't see the out-of-package importer and reports the dep as
+    // unused. There is no per-dependency ignore and no inline location for a
+    // package.json finding, so scope the rule off for this package only.
+    "rules": {
+        "deslop/unused-dev-dependency": "off",
+    },
+}

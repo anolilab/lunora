@@ -1,8 +1,8 @@
+import type { SocketAttachment, SubscriptionEnvelope } from "@lunora/shard-engine";
 import { beforeEach, describe, expect, it } from "vitest";
 
 import type { ShardDOState } from "../src/shard-do";
 import { ShardDO } from "../src/shard-do";
-import type { SocketAttachment, SubscriptionEnvelope } from "../src/types";
 
 /**
  * Minimal WebSocket double mirroring the `serializeAttachment` /
@@ -235,5 +235,36 @@ describe("shardDO connection-lifecycle dispatch", () => {
         await shard.driveClose(ws);
 
         expect(shard.dispatched).toHaveLength(0);
+    });
+
+    it("answers every connect with the user the socket was authenticated as", async () => {
+        expect.assertions(1);
+
+        const shard = new LifecycleShard(state, {});
+        const ws = createFakeWebSocket();
+
+        shard.registerSocket(ws, attachment({ userId: "user-42" }));
+
+        // Re-sent on a context change: answered again, hooks still fire once.
+        await shard.driveMessage(ws, connectEnvelope());
+        await shard.driveMessage(ws, connectEnvelope({ roomId: "room-1" }));
+
+        expect(ws.sent.map((raw) => JSON.parse(raw) as unknown)).toStrictEqual([
+            { subject: "user-42", type: "identity" },
+            { subject: "user-42", type: "identity" },
+        ]);
+    });
+
+    it("answers an anonymous socket's connect with an explicit null subject", async () => {
+        expect.assertions(1);
+
+        const shard = new LifecycleShard(state, {});
+        const ws = createFakeWebSocket();
+
+        shard.registerSocket(ws, attachment({ identity: undefined, userId: undefined }));
+
+        await shard.driveMessage(ws, connectEnvelope());
+
+        expect(ws.sent.map((raw) => JSON.parse(raw) as unknown)).toStrictEqual([{ subject: null, type: "identity" }]);
     });
 });

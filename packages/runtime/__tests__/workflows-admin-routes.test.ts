@@ -81,16 +81,37 @@ describe("workflows admin routes", () => {
         expect(calls[0]).toStrictEqual({ args: { action: "pause", instanceId: "i1", workflowName: "orders" }, method: "setInstanceStatus" });
     });
 
-    it("rejects with 501 WORKFLOWS_NOT_CONFIGURED when no client is resolvable", async () => {
+    it("returns a 200 `configured: false` sentinel from the instances list when no client is resolvable", async () => {
+        expect.assertions(2);
+
+        // The list is the one workflows endpoint the studio fetches on mount, so an
+        // unconfigured worker answers with a 200 empty page (not a 501) — the studio
+        // renders its "set credentials" state without the browser logging a failed
+        // request. Mirrors the OpenAPI/OpenRPC introspection routes.
+        const routes = buildWorkflowsAdminRoutes({ assertAdmin: allow, resolveWorkflowsClient: () => undefined });
+
+        const response = await routes[WORKFLOWS_INSTANCES_PATH]?.(
+            get(WORKFLOWS_INSTANCES_PATH, "?name=orders"),
+            {},
+            new URL(`https://app.test${WORKFLOWS_INSTANCES_PATH}?name=orders`),
+        );
+
+        expect(response?.status).toBe(200);
+        await expect(response?.json()).resolves.toStrictEqual({ configured: false, instances: [], page: 1, perPage: 0, totalCount: 0 });
+    });
+
+    it("rejects the instance-detail endpoint with 501 WORKFLOWS_NOT_CONFIGURED when no client is resolvable", async () => {
         expect.assertions(1);
 
+        // Detail/status keep throwing — they're only reachable once instances exist,
+        // so they never fire (or log) while inspection is unconfigured.
         const routes = buildWorkflowsAdminRoutes({ assertAdmin: allow, resolveWorkflowsClient: () => undefined });
 
         await expect(
-            routes[WORKFLOWS_INSTANCES_PATH]?.(
-                get(WORKFLOWS_INSTANCES_PATH, "?name=orders"),
+            routes[WORKFLOWS_INSTANCE_PATH]?.(
+                get(WORKFLOWS_INSTANCE_PATH, "?name=orders&id=i1"),
                 {},
-                new URL(`https://app.test${WORKFLOWS_INSTANCES_PATH}?name=orders`),
+                new URL(`https://app.test${WORKFLOWS_INSTANCE_PATH}?name=orders&id=i1`),
             ),
         ).rejects.toMatchObject({ code: "WORKFLOWS_NOT_CONFIGURED", status: 501 });
     });

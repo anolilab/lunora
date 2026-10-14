@@ -7,192 +7,245 @@
  * cursor logic is identical to the DO path: it reuses the shared keyset/order
  * helpers from `@lunora/do`, but compiles `WHERE` through the drizzle-emitting
  * `compileWhereSql` with a `WhereSqlStrategy` (column refs + value
- * serialization) so the generated `ctx.db.&lt;table>` facade (1.2.7) is
+ * serialization) so the generated `ctx.db.<table>` facade (1.2.7) is
  * backend-agnostic.
  */
 /* eslint-disable unicorn/prevent-abbreviations -- "d1-ctx-db" is the established public module name: src/index.ts and every test import it as "./d1-ctx-db.js", and it deliberately mirrors @lunora/do's "ctx-db.ts" twin. Renaming would break those importers. */
 
 /* eslint-disable no-restricted-syntax -- `sql\`…\`` here is the drizzle tagged-template SQL builder, not a string conversion; the rule misfires on the inner TemplateLiteral. */
+import { LunoraError } from "@lunora/errors";
+// eslint-disable-next-line import/no-extraneous-dependencies -- @lunora/search-core is a devDependency on purpose: packem inlines it into this bundle, so it is not a published runtime dep
+import {
+    assertSearchWithinCap,
+    createSearchAnalyzer,
+    createSearchBuilder,
+    finishSearchPage,
+    MAX_SEARCH_TERMS,
+    planSearchPage,
+    resolveSearchScan,
+    searchPageScan,
+} from "@lunora/search-core";
 import type {
     AggregateIndexDefinitionLike,
     AggregateOptions,
     AggregateResult,
     AggregateTally,
-    ColumnMetaLike,
+    CdcChange,
+    CrossShardReadArgs,
     DatabaseWriterLike,
     GroupByEntry,
     GroupByOptions,
+    NullPlacement,
+    PatchWriteOptions,
+    QueryArgs,
+    QueryPage,
     RankIndexDefinitionLike,
     RankPage,
     RankResult,
     SchedulerLike,
     SchemaLike,
     ServerDefaultContextLike,
+    SortDirection,
     TableDefinitionLike,
     TableReaderLike,
     TriggerContextLike,
     TriggerEventLike,
     TriggerOpLike,
     TriggerTimingLike,
-    ValidatorLike,
     WhereInput,
     WhereSqlStrategy,
-} from "@lunora/do";
+} from "@lunora/shard-engine";
 import {
     aggregateSqlFunction,
     aggregateTableName,
     applyOnDelete,
+    applySelect,
     assertFlatPredicate,
+    assertNoExplicitUndefined,
+    assertPatchAllowed,
     assertValidClientId,
-    buildFtsMatch,
-    buildSeekWhere,
+    CDC_LOG_TABLE,
+    CDC_LOG_TABLE_SEQ_INDEX,
+    cdcForkedError,
+    cdcTrimmedError,
     coerceAggregateNumber,
     compileWhereSql,
+    composeReadPredicate,
     ConflictError,
     CountRlsUnsupportedError,
-    decodeCursor,
+    CURSOR_PREFIX,
+    cursorBelowRetainedFloor,
+    describeRelationWrites,
     encodeAggregateKey,
     encodeCursor,
     encodePartitionKey,
+    fanOutScalarCounts,
     foldAggregateTally,
-    ftsTableName,
     hasTrigger,
+    isPushableWhere,
     matchesRankStaticWhere,
     matchesStaticWhere,
     mergeWhere,
     normalizeCountArgument,
     normalizeIdStructurally,
-    normalizeOrderKeys,
     NotFoundError,
     NotUniqueError,
+    nullsFirstOf,
+    nullsOrderSuffix,
+    patchDependsOnRow,
     RANK_TIEBREAK,
+    rankPivotConditionSql,
     rankTableName,
     readAggregateValue,
+    relationHooks,
     renderSql,
+    resolvePatch,
     resolveRankPartition,
+    resolveRankSeekTuple,
     resolveRelationPredicates,
     resolveWith,
     runRowValidators,
     runTriggers,
-    scoreDocument,
     selectIndexForAggregate,
     selectIndexForCount,
     selectIndexForGroupBy,
+    serverInList,
+    softDeleteScope,
     sortColumnName,
-    stringifySearchText,
+    stripReservedPatchFields,
     throwingScheduler,
-    tokenizeSearch,
-} from "@lunora/do";
-import type { SQL } from "drizzle-orm";
-import { sql } from "drizzle-orm";
+    tiebreakDirectionFor,
+    whereOfFilter,
+    WORKERD_SQLITE_LIMITS,
+} from "@lunora/shard-engine";
+import { SQL, sql } from "drizzle-orm";
 
-import type { SqlDialect, SqlRunResult } from "./dialect";
-import { effectiveColumnKind, sqliteDecode, sqliteEncode } from "./value-codec";
+import { evictOldestEntry } from "../../../shared/evict-oldest";
+import { readFieldPath } from "../../../shared/json-field-path";
+import { decodeWire, encodeWire, needsWireEncoding } from "../../../shared/wire-codec";
+import { runSqlGlobalTableMigrations } from "./ctx-db-global-provisioning";
+import { runSqlAggregateMigrations, runSqlRankMigrations } from "./ctx-db-migrations";
+import type { SearchStage } from "./ctx-db-search";
+import { createSearchSync, runSqlSearch, runSqlSearchMigrations } from "./ctx-db-search";
+import { migrateSearchState } from "./ctx-db-search-state";
+import type { SqlDialect } from "./dialect";
+import createPointReadBatcher from "./point-read-batcher";
+import type { SqlCtxExec } from "./sql-exec";
+import {
+    BACKFILL_BATCH_SIZE,
+    columnRefSql,
+    createIndexIfNotExists,
+    decodeRow,
+    decodeRows,
+    fieldRefSql,
+    forEachRowPaged,
+    nextRowVersion,
+    nullSafeEqualsSql,
+    OCC_VERSION_COLUMN,
+    pathContainsNeedle,
+    pathInList,
+    pathTextReference,
+    pathTypeGuardSql,
+    queryAll,
+    queryBatch,
+    queryRun,
+    serializeColumnValue,
+    serializeDocumentColumn,
+    serializeFieldValue,
+    tableColumns,
+} from "./sql-exec";
+import { effectiveColumnKind, sqliteDecode } from "./value-codec";
 
-/** Logical field → physical column name (`_id`/`id` → `id`; everything else, incl. `_creationTime`, is itself). */
-const physicalColumn = (field: string): string => (field === "_id" || field === "id" ? "id" : field);
-
-/** Logical-field → physical column reference as a drizzle {@link SQL}; the engine's dialect quotes it at render time (`_id`/`id` → `id`). */
-const columnRefSql = (field: string): SQL => sql`${sql.identifier(physicalColumn(field))}`;
-
-/** Order fields that already provide a stable tiebreak (no extra `id ASC` needed). */
+/** Order fields that already provide a stable tiebreak (no extra `id` term needed). */
 const ID_ORDER_FIELDS = new Set(["_id", "id"]);
 
+/** Exhaustiveness guard for the {@link orderTermsFor} switch: a dialect it does not spell out is a compile error here. */
+const assertNeverDialect = (name: never): never => {
+    throw new LunoraError("INTERNAL", `no ORDER BY NULL placement for dialect "${String(name)}"`);
+};
+
+/** One ORDER BY key as {@link orderTermsFor} reads it. */
+type OrderTermKey = { direction: SortDirection; field: string; nullable?: boolean; nulls?: NullPlacement };
+
 /**
- * NULL-safe equality for a bound value, rendered per engine: SQLite `IS`,
- * Postgres `IS NOT DISTINCT FROM`, MySQL's `&lt;=>` null-safe-equal operator. A bare
- * `col IS &lt;literal>` is SQLite-only — it is a syntax error on Postgres/MySQL — so
- * every cross-dialect equality predicate (the OCC guard and the rank seek/before
- * builders) must route through this rather than emitting `IS` directly.
+ * The ORDER BY terms for one key, with each dialect's NULL placement spelled out.
+ *
+ * `buildSeekWhere` is shared and dialect-blind: its NULL-aware pivot assumes the
+ * SQLite/MySQL default, NULLs FIRST ascending and LAST descending. Postgres is
+ * the mirror (`DESC` implies NULLS FIRST), so an ORDER BY that leans on the
+ * engine default puts the NULL group on the side the seek does NOT expect. The
+ * visible failure is a `desc` page over a nullable column: the seek's
+ * `OR col IS NULL` arm re-selects the NULL group, Postgres sorts it back to the
+ * top of every page, and with at least `limit` NULL rows the cursor stops
+ * advancing and pagination loops on the same page forever.
+ *
+ * Stating the placement here rather than branching `pivotCondition` on a dialect
+ * keeps the seek builder pure and dialect-blind, and fixes the `asc` and
+ * null-pivot shapes in the same stroke — they disagreed with the seek on
+ * Postgres too, just less visibly.
+ *
+ * A nullable key only: on a non-nullable column the clause is noise that can cost the index.
+ * Postgres always spells the placement out (its default is the mirror of the seek's); SQLite only when
+ * the caller asked for a non-default placement; MySQL has no `NULLS` clause in its grammar, so a
+ * requested placement becomes a leading `(col IS NULL)` key — NULL rows are `1`, so ascending puts
+ * them last and descending first. MySQL's default needs nothing, as it already sorts the seek's way.
+ * @returns the ORDER BY terms for the key, in order
  */
-const nullSafeEqualsSql = (engine: SqlDialect["name"], reference: SQL, value: unknown): SQL => {
-    if (engine === "postgres") {
-        return sql`${reference} IS NOT DISTINCT FROM ${value}`;
-    }
+const orderTermsFor = (dialect: SqlDialect, key: OrderTermKey): SQL[] => {
+    const direction = key.direction === "desc" ? "DESC" : "ASC";
+    const nullable = key.nullable === true;
+    const term = (placement: string): SQL => sql`${fieldRefSql(dialect, key.field)} ${sql.raw(`${direction}${placement}`)}`;
 
-    if (engine === "mysql") {
-        return sql`${reference} <=> ${value}`;
-    }
+    switch (dialect.name) {
+        case "mysql": {
+            const column = term("");
 
-    return sql`${reference} IS ${value}`;
+            if (!nullable || key.nulls === undefined) {
+                return [column];
+            }
+
+            return [sql`(${fieldRefSql(dialect, key.field)} IS NULL) ${sql.raw(key.nulls === "first" ? "DESC" : "ASC")}`, column];
+        }
+        case "postgres": {
+            return [term(nullable ? nullsOrderSuffix(nullsFirstOf(key)) : "")];
+        }
+        case "sqlite": {
+            return [term(nullable && key.nulls !== undefined ? nullsOrderSuffix(nullsFirstOf(key)) : "")];
+        }
+        default: {
+            return assertNeverDialect(dialect.name);
+        }
+    }
 };
 
 /**
- * Drizzle `ORDER BY` list — the SQL-object twin of `@lunora/do`'s string
- * `compileOrderBy`: each key as `&lt;col> ASC|DESC`, with an `id ASC` tiebreak
- * appended unless an id field is already ordered (keeps paging deterministic).
+ * Drizzle `ORDER BY` list — the SQL-object twin of `@lunora/shard-engine`'s
+ * string `compileOrderByText`: each key as `<col> ASC|DESC`, with an `id`
+ * tiebreak appended unless an id field is already ordered (keeps paging
+ * deterministic).
+ *
+ * The tiebreak follows the last key's direction, via the shared
+ * `tiebreakDirectionFor`. Declared indexes here now carry the same
+ * `(<fields>, _creationTime, id)` sort keys the DO builds (see
+ * `indexSortKeys` below), and `normalizeOrderKeys` splices `_creationTime` in
+ * ahead of the tiebreak, so an ordered read is an index walk on this backend
+ * too — a single direction throughout is what keeps it one.
+ *
+ * NULL placement is the other half of that agreement — see {@link orderTermsFor}.
  */
-const compileOrderBySql = (keys: ReadonlyArray<{ direction?: string; field: string }>): SQL => {
-    const parts = keys.map((key) => sql`${columnRefSql(key.field)} ${sql.raw(key.direction === "desc" ? "DESC" : "ASC")}`);
+const compileOrderBySql = (keys: ReadonlyArray<OrderTermKey>, dialect: SqlDialect): SQL => {
+    const parts = keys.flatMap((key) => orderTermsFor(dialect, key));
 
     if (!keys.some((key) => ID_ORDER_FIELDS.has(key.field))) {
-        parts.push(sql`${columnRefSql("id")} ASC`);
+        // No adaptation: the helper reads `direction` off the last key and
+        // nothing else, so the keys go in as they are.
+        const tiebreak = tiebreakDirectionFor(keys);
+
+        parts.push(sql`${columnRefSql("id")} ${sql.raw(tiebreak === "desc" ? "DESC" : "ASC")}`);
     }
 
     return sql.join(parts, sql`, `);
 };
-
-/**
- * Run a composable drizzle {@link SQL} read through the (string-based) exec:
- * render it for the dialect's engine — quoting + placeholders handled by drizzle
- * — then run the resulting `{ sql, params }`. The exec interface is unchanged, so
- * D1/PlanetScale execs need no edits; the per-engine `?`→`$N` / `"…"`→backtick
- * rewrites become redundant once every site is on this path.
- */
-const queryAll = (exec: SqlCtxExec, dialect: SqlDialect, query: SQL): Promise<Record<string, unknown>[]> => {
-    const { params, sql: text } = renderSql(dialect.name, query);
-
-    return exec.all(text, params);
-};
-
-/** Write twin of {@link queryAll}: render a drizzle {@link SQL} for the engine and run it. */
-const queryRun = (exec: SqlCtxExec, dialect: SqlDialect, query: SQL): Promise<SqlRunResult | void> => {
-    const { params, sql: text } = renderSql(dialect.name, query);
-
-    return exec.run(text, params);
-};
-
-/**
- * Create an index idempotently across engines. SQLite/Postgres support
- * `CREATE [UNIQUE] INDEX IF NOT EXISTS`; **MySQL does not** (only `CREATE TABLE`
- * takes `IF NOT EXISTS`), so it creates unconditionally and swallows the
- * "duplicate key name" error (errno 1061) a re-run raises.
- */
-const createIndexIfNotExists = async (
-    exec: SqlCtxExec,
-    dialect: SqlDialect,
-    spec: { columns: SQL; name: string; table: string; unique: boolean },
-): Promise<void> => {
-    const unique = spec.unique ? sql`UNIQUE ` : sql``;
-
-    if (dialect.name === "mysql") {
-        try {
-            await queryRun(exec, dialect, sql`CREATE ${unique}INDEX ${sql.identifier(spec.name)} ON ${sql.identifier(spec.table)} (${spec.columns})`);
-        } catch (error) {
-            if ((error as { errno?: number }).errno !== 1061) {
-                throw error;
-            }
-        }
-
-        return;
-    }
-
-    await queryRun(exec, dialect, sql`CREATE ${unique}INDEX IF NOT EXISTS ${sql.identifier(spec.name)} ON ${sql.identifier(spec.table)} (${spec.columns})`);
-};
-
-/**
- * Async SQL surface the D1 ORM needs: `all` for reads, `run` for writes.
- * Satisfied by a `D1Session`/`D1Client` in production and a `node:sqlite`
- * adapter in tests, so the query logic runs against a real SQLite engine.
- */
-interface SqlCtxExec {
-    all: (sql: string, parameters: ReadonlyArray<unknown>) => Promise<Record<string, unknown>[]>;
-    // `void` for D1/node:sqlite (the result is ignored on those paths); a
-    // `SqlRunResult` ({ rowsAffected }) for engines whose OCC needs the affected
-    // count (MySQL, which has no `RETURNING`). The union lets a PlanetScale
-    // `SqlExec` satisfy this without forcing the D1 execs to report a count.
-    run: (sql: string, parameters: ReadonlyArray<unknown>) => Promise<SqlRunResult | void>;
-}
 
 interface SqlCtxDbOptions {
     /**
@@ -213,6 +266,26 @@ interface SqlCtxDbOptions {
      * legacy behaviour.
      */
     cdc?: boolean;
+
+    /**
+     * How long `.global()` changelog entries are kept, in milliseconds. Absent
+     * (the default) means forever — the log grows for the life of the database.
+     *
+     * Opt-in for the same reason the shard-local windows are, and the reason is
+     * not caution: this log's streaming-export consumers hold opaque cursors
+     * issued outside this deployment, and nothing here can see where they sit.
+     * A default window would be a guess whose failure mode is silent data loss
+     * in someone's warehouse. A deployment that wants the log bounded states a
+     * window it knows covers its consumers; `.global()` shape pollers are then
+     * protected exactly, by the floor this read path reports rather than by the
+     * window. See `sweepSqlCdcRetention`.
+     *
+     * Time rather than rows because the log is SHARED: every shard in every
+     * region writes it, so a row count is not a bound any single consumer can
+     * reason about, while "older than N" is exactly what they compare their own
+     * lag against.
+     */
+    cdcRetentionMs?: number;
     clock?: () => number;
 
     /**
@@ -231,8 +304,11 @@ interface SqlCtxDbOptions {
      * RLS). Absent it, loading such a relation throws a clear "not supported"
      * error (legacy behaviour). The forward direction (shard-local parent →
      * global child) and same-backend relations never touch this.
+     *
+     * Takes {@link CrossShardReadArgs}, not `QueryArgs`: the hop is JSON, so the
+     * RLS filters are handed over as data (see that type's docblock).
      */
-    crossShardReader?: DatabaseWriterLike["findMany"];
+    crossShardReader?: (table: string, args: CrossShardReadArgs) => Promise<QueryPage>;
 
     /**
      * The SQL dialect that shapes every statement (identifier quoting, value
@@ -255,6 +331,42 @@ interface SqlCtxDbOptions {
     maxRelationKeys?: number;
 
     /**
+     * Object identifying the database this store provisions, so the one-shot
+     * `CREATE TABLE/INDEX IF NOT EXISTS` sweep is shared by every ctx-db built
+     * against it instead of repeating per instance.
+     *
+     * Hosts build a ctx-db **per request** (the writer captures the caller's
+     * identity and D1 bookmark), so without this the sweep — one round trip per
+     * global table plus one per index — runs again on the first `.global()`
+     * access of every request. On a 50-table schema that is ~1s in `lunora dev`
+     * and a real latency floor in production.
+     *
+     * WHAT TO PASS: something that outlives the request AND names one database
+     * (and one configuration). The D1 binding off `env` and the declaration
+     * object a host builds once both qualify; the result of a per-request
+     * factory does not — it keys the memo on a fresh object every time and
+     * shares nothing (which is silent, and looks exactly like not passing it).
+     *
+     * INVARIANT, unenforced: one scope ⇒ one `schema`, `dialect` and `cdc`. The
+     * memoised run closes over the FIRST writer's, so a later writer sharing a
+     * scope with `cdc: true` behind one with `cdc: false` never gets
+     * `__cdc_log`. Hosts pass app-level constants for all three, which is why
+     * this is a note rather than a composite key.
+     *
+     * Two behaviours change with a shared memo, both benign and both worth
+     * knowing: the DDL runs in the FIRST writer's D1 session, so a later
+     * session's first read is no longer implicitly pinned behind a write of its
+     * own (on a replicated binding that can mean one transient stale read on a
+     * freshly-provisioned database); and a database reset out from under a live
+     * isolate is no longer healed by the next request, since the entry lives as
+     * long as the scope does.
+     *
+     * Omit it and the memo stays per ctx-db — slower, never wrong, and what the
+     * tests want (they pair a fresh database with a reused schema object).
+     */
+    provisionScope?: object;
+
+    /**
      * Scheduler exposed to global-table trigger handlers as `ctx.scheduler`.
      * Absent it, `ctx.scheduler` is a stub that throws on use — pass one when
      * triggers on `.global()` tables need to enqueue follow-up work.
@@ -265,121 +377,6 @@ interface SqlCtxDbOptions {
 
 /** Cap on re-entrant trigger writes before we treat it as a self-triggering loop. */
 const MAX_TRIGGER_DEPTH = 50;
-
-/**
- * Structural shape of a `.searchIndex()` declaration. Kept local (not imported
- * from `@lunora/do`) because that file owns the FTS surface and doesn't export
- * the type — mirrored byte-for-byte so a parity test could compare the two.
- */
-interface SearchIndexDefinitionLike {
-    readonly field: string;
-    readonly filterFields?: ReadonlyArray<string>;
-    readonly name: string;
-}
-
-/** SQLite storage encode for `.global()` column values — the shared `@lunora/sql-store` codec (SQLite has no boolean, so true/false → 1/0). */
-const serializeColumnValue = sqliteEncode;
-
-/**
- * Memoized per-`SqlCtxExec` FTS5 capability probe. D1's SQLite ships FTS5;
- * `node:sqlite` (used in tests) does not. We create and drop a throwaway virtual
- * table once per handle and cache the resolving promise — the exec handle is
- * stable for the ctx-db's lifetime, so this runs at most once per binding. The
- * cached value is a `Promise` so concurrent first-callers share the single probe
- * rather than racing two CREATE/DROP round-trips.
- */
-const ftsAvailabilityCache = new WeakMap<SqlCtxExec, Promise<boolean>>();
-
-const isFtsAvailable = (exec: SqlCtxExec): Promise<boolean> => {
-    const cached = ftsAvailabilityCache.get(exec);
-
-    if (cached !== undefined) {
-        return cached;
-    }
-
-    const probe = (async (): Promise<boolean> => {
-        let available: boolean;
-
-        try {
-            await exec.run(`CREATE VIRTUAL TABLE IF NOT EXISTS "__lunora_fts_probe" USING fts5(x)`, []);
-            available = true;
-        } catch {
-            available = false;
-        } finally {
-            // Always attempt the DROP so the probe table never lingers — if the
-            // CREATE threw, the IF EXISTS makes the DROP a no-op.
-            try {
-                await exec.run(`DROP TABLE IF EXISTS "__lunora_fts_probe"`, []);
-            } catch {
-                // The probe table cleanup is best-effort; swallow so the
-                // availability decision still propagates.
-            }
-        }
-
-        return available;
-    })();
-
-    ftsAvailabilityCache.set(exec, probe);
-
-    return probe;
-};
-
-/** A table's fields paired with their column meta, skipping fields that declare none. */
-const tableColumns = (definition: TableDefinitionLike): [string, ColumnMetaLike][] => {
-    const columns: [string, ColumnMetaLike][] = [];
-
-    for (const [field, validator] of Object.entries(definition.shape)) {
-        const column = validator._meta?.column;
-
-        if (column) {
-            columns.push([field, column]);
-        }
-    }
-
-    return columns;
-};
-
-/**
- * Decode a SELECTed row back into a document: `id` → `_id`, `_creationTime`
- * preserved, and every column run through the shared {@link sqliteDecode} so the
- * stored form is reversed back into its JS shape. Exported so the data-browser
- * (`introspect.ts`) and admin export/import paths share the exact same decode.
- *
- * The decode is engine-agnostic: every backend stores SQLite-shaped values
- * (boolean → 1/0, JSON → text, bigint → decimal string), and `sqliteDecode` is
- * robust to a driver returning either the stored string OR a natively-parsed
- * value (e.g. mysql2 returns JSON columns pre-parsed) — so the same decoder is
- * correct on SQLite, Postgres and MySQL.
- */
-const decodeGlobalRow = (definition: TableDefinitionLike, row: Record<string, unknown>): Record<string, unknown> => {
-    const decoded: Record<string, unknown> = {};
-
-    for (const [field, validator] of Object.entries(definition.shape)) {
-        const raw = row[field];
-
-        if (raw === undefined) {
-            continue;
-        }
-
-        decoded[field] = sqliteDecode(raw, effectiveColumnKind(validator));
-    }
-
-    decoded["_id"] = row["id"];
-    decoded["_creationTime"] = row["_creationTime"];
-
-    return decoded;
-};
-
-/** Decode a SELECTed row back into a document, or `null` when the row is absent. */
-
-const decodeRow = (definition: TableDefinitionLike, row: Record<string, unknown> | undefined): Record<string, unknown> | null => {
-    if (!row) {
-        // eslint-disable-next-line unicorn/no-null -- a missing row decodes to `null`, the value writer.get() returns per the public DatabaseWriterLike contract.
-        return null;
-    }
-
-    return decodeGlobalRow(definition, row);
-};
 
 /**
  * Fill any field absent from `document` that declares a `.default()` literal or
@@ -416,6 +413,16 @@ const applyInsertDefaults = (
     }
 
     return result;
+};
+
+/**
+ * One `EXPLAIN` row as a line of text. SQLite and D1 report a `detail` column, Postgres one
+ * `QUERY PLAN` column; MySQL reports a wide table row, joined so no column is dropped.
+ */
+const planStepText = (step: Record<string, unknown>): string => {
+    const text = step["detail"] ?? step["QUERY PLAN"];
+
+    return typeof text === "string" ? text : Object.values(step).map(String).join(" | ");
 };
 
 /** Recompute every `.$onUpdateFn()` field the caller did not set explicitly, mutating `target` in place. */
@@ -488,12 +495,11 @@ const createTableNameCache = (): {
         set: (id, table) => {
             if (map.has(id)) {
                 map.delete(id);
-            } else if (map.size >= TABLE_NAME_CACHE_CAPACITY) {
-                const oldest = map.keys().next().value;
-
-                if (oldest !== undefined) {
-                    map.delete(oldest);
-                }
+            } else {
+                // New key: bound the cache before inserting. The move-to-tail on
+                // `get` above is what makes this LRU; the eviction itself is the
+                // shared FIFO primitive.
+                evictOldestEntry(map, TABLE_NAME_CACHE_CAPACITY);
             }
 
             map.set(id, table);
@@ -525,21 +531,15 @@ const tableNameFromId = async (
         return cached;
     }
 
-    const candidates: string[] = [];
-
-    for (const [tableName, definition] of Object.entries(schema.tables)) {
-        // Skip tables that don't live in D1 — `.shardBy()` is spread across
-        // many DOs and would never have a D1 row to find. The default root
-        // mode is also DO-side; we only need to probe `.global()` tables.
-        // (Schemas authored before the `.global()` flag existed don't set
-        // shardMode at all — preserve the legacy "probe every table" behaviour
-        // there so existing fixtures keep working.)
-        if (definition.shardMode !== undefined && definition.shardMode.kind !== "global") {
-            continue;
-        }
-
-        candidates.push(tableName);
-    }
+    // Skip tables that don't live in D1 — `.shardBy()` is spread across many
+    // DOs and would never have a D1 row to find. The default root mode is also
+    // DO-side; we only need to probe `.global()` tables. (Schemas authored
+    // before the `.global()` flag existed don't set shardMode at all — preserve
+    // the legacy "probe every table" behaviour there so existing fixtures keep
+    // working.)
+    const candidates = Object.entries(schema.tables)
+        .filter(([, definition]) => definition.shardMode === undefined || definition.shardMode.kind === "global")
+        .map(([tableName]) => tableName);
 
     // Fire every probe at once; the first non-empty result wins.
     const probes = await Promise.all(
@@ -565,173 +565,46 @@ const tableNameFromId = async (
 // eslint-disable-next-line unicorn/no-null -- GroupByEntry.value / AggregateResult are `number | null`; an empty reduction is null.
 const aggregateScalar = (value: unknown): null | number => (value === null || value === undefined ? null : Number(value));
 
-/** Map raw `GROUP BY` result rows into `GroupByEntry` records, rebuilding each group's key tuple. */
-const mapGroupByRows = (by: ReadonlyArray<string>, rows: ReadonlyArray<Record<string, unknown>>): GroupByEntry[] =>
+/**
+ * Map raw `GROUP BY` result rows into `GroupByEntry` records, rebuilding each
+ * group's key tuple.
+ *
+ * Each group value is reversed through the same {@link sqliteDecode} every row
+ * read uses. Without it the key carried the raw STORAGE form: SQLite has no
+ * boolean, so a `v.boolean()` column grouped into `0`/`1` keys while the
+ * companion-indexed path (which decodes its key tuple through `decodeWire`)
+ * handed back `false`/`true` — the answer's TYPE depended on whether an
+ * aggregate index happened to cover the request, and a caller's
+ * `groups.find((group) => group.key.flag === true)` was `undefined` on the scan.
+ */
+const mapGroupByRows = (definition: TableDefinitionLike, by: ReadonlyArray<string>, rows: ReadonlyArray<Record<string, unknown>>): GroupByEntry[] =>
     rows.map((row) => {
         const key: Record<string, unknown> = {};
 
         for (const field of by) {
+            const validator = definition.shape[field];
+
             // eslint-disable-next-line unicorn/no-null -- GroupByEntry.key mirrors SQL group values; an absent grouped column is null in the result shape.
-            key[field] = row[field] ?? null;
+            key[field] = sqliteDecode(row[field] ?? null, validator && effectiveColumnKind(validator));
         }
 
         return { key, value: aggregateScalar((row as { value: unknown }).value) };
     });
 
-/** Decode a result set into documents, dropping any row that fails to decode. */
-const decodeRows = (definition: TableDefinitionLike, rows: ReadonlyArray<Record<string, unknown>>): Record<string, unknown>[] => {
-    const documents: Record<string, unknown>[] = [];
-
-    for (const row of rows) {
-        const decoded = decodeRow(definition, row);
-
-        if (decoded) {
-            documents.push(decoded);
-        }
-    }
-
-    return documents;
-};
-
-/** The staged `.withSearchIndex().search()` query the D1 reader executes. */
-interface SearchStage {
-    definition: SearchIndexDefinitionLike;
-    field: string;
-    filters: { field: string; value: unknown }[];
-    hasQuery: boolean;
-    indexName: string;
-    query: string;
-}
-
 /**
- * Run a search via the FTS5 shadow table: MATCH the query against the indexed
- * text column, JOIN back to the document table on the stored id, narrow by any
- * `.eq()` filter fields (real columns in the D1 dialect), and order by FTS5's
- * `rank` (bm25 — best first). Mirrors the DO twin, swapping the JSON-blob SELECT
- * for the column-per-field `m.*` and `columnRef` filter quoting.
+ * Whether none of the fields a rank index reads (partition / sort / static
+ * `where`) differ between two row versions — the fast path that lets a patch of
+ * an unrelated field skip the rank companion's DELETE+INSERT. Twin of
+ * `@lunora/do`'s `rankIndexFieldsUnchanged` (replicated rather than imported —
+ * it is a private helper there). This is also what keeps `restore()`'s forced
+ * rank re-add correct: a marker-clearing patch touches no rank field, so the
+ * patch-path sync skips and `restore()` performs the single re-INSERT.
  */
-const searchViaFts = async (
-    exec: SqlCtxExec,
-    dialect: SqlDialect,
-    definition: TableDefinitionLike,
-    tableName: string,
-    search: SearchStage,
-    limit: number | undefined,
-): Promise<Record<string, unknown>[]> => {
-    const tokens = tokenizeSearch(search.query);
+const rankIndexFieldsUnchanged = (index: RankIndexDefinitionLike, previous: Record<string, unknown>, next: Record<string, unknown>): boolean => {
+    const fields = [...(index.partitionBy ?? []), ...index.sortBy.map((key) => key.field), ...(index.where ? Object.keys(index.where) : [])];
 
-    if (tokens.length === 0) {
-        return [];
-    }
-
-    const ftName = ftsTableName(tableName, search.indexName);
-    // MATCH must target the FTS table (by name or an indexed column), never the
-    // bare alias `f` — `f MATCH ?` is a "no such column: f" error in SQLite.
-    // We match the indexed `__text__` column so the alias join still works.
-    const conditions: SQL[] = [sql`f.${sql.identifier("__text__")} MATCH ${buildFtsMatch(tokens)}`];
-
-    for (const filter of search.filters) {
-        conditions.push(sql`m.${columnRefSql(filter.field)} = ${serializeColumnValue(filter.value)}`);
-    }
-
-    // `f.rank` is FTS5's bm25 relevance (best first); the `_creationTime DESC`
-    // tiebreak matches the scan fallback so equal-rank rows order newest-first
-    // on both engines.
-    let query = sql`SELECT m.* FROM ${sql.identifier(ftName)} f JOIN ${sql.identifier(tableName)} m ON m.${sql.identifier("id")} = f.${sql.identifier("__id__")} WHERE ${sql.join(conditions, sql` AND `)} ORDER BY f.rank, m.${sql.identifier("_creationTime")} DESC`;
-
-    if (typeof limit === "number") {
-        query = sql`${query} LIMIT ${sql.raw(String(Math.max(0, Math.floor(limit))))}`;
-    }
-
-    const rows = await queryAll(exec, dialect, query);
-
-    return decodeRows(definition, rows);
-};
-
-/**
- * Portable fallback for engines without FTS5 (the `node:sqlite` test runner):
- * pull candidate rows (narrowed by `.eq()` filters in SQL), tokenize the indexed
- * field in JS, and rank with `scoreDocument`. Matches the FTS path's AND +
- * prefix-on-last-token semantics; relevance order is term-frequency, ties broken
- * by creation time (newest first).
- */
-const searchViaScan = async (
-    exec: SqlCtxExec,
-    dialect: SqlDialect,
-    definition: TableDefinitionLike,
-    tableName: string,
-    search: SearchStage,
-    limit: number | undefined,
-): Promise<Record<string, unknown>[]> => {
-    const tokens = tokenizeSearch(search.query);
-
-    if (tokens.length === 0) {
-        return [];
-    }
-
-    const conditions = search.filters.map((filter) => sql`${columnRefSql(filter.field)} = ${serializeColumnValue(filter.value)}`);
-
-    let query = sql`SELECT * FROM ${sql.identifier(tableName)}`;
-
-    if (conditions.length > 0) {
-        query = sql`${query} WHERE ${sql.join(conditions, sql` AND `)}`;
-    }
-
-    const rows = await queryAll(exec, dialect, query);
-    const scored: { creationTime: number; doc: Record<string, unknown>; score: number }[] = [];
-
-    for (const record of decodeRows(definition, rows)) {
-        const score = scoreDocument(stringifySearchText(record[search.field]), tokens);
-
-        if (score > 0) {
-            scored.push({ creationTime: typeof record["_creationTime"] === "number" ? record["_creationTime"] : 0, doc: record, score });
-        }
-    }
-
-    scored.sort((a, b) => b.score - a.score || b.creationTime - a.creationTime);
-
-    const documents = scored.map((entry) => entry.doc);
-
-    return typeof limit === "number" ? documents.slice(0, Math.max(0, Math.floor(limit))) : documents;
-};
-
-/**
- * Builder passed to `.withSearchIndex(name, q => …)`: `.search(field, query)`
- * stages the full-text match (exactly once), `.eq(field, value)` narrows by a
- * declared filter field. Mirrors the DO `createSearchBuilder` guards verbatim.
- */
-const createSearchBuilder = (
-    search: SearchStage,
-    tableName: string,
-): { eq: (field: string, value: unknown) => unknown; search: (field: string, query: string) => unknown } => {
-    const builder = {
-        eq: (field: string, value: unknown) => {
-            if (!search.definition.filterFields?.includes(field)) {
-                throw new Error(`field "${field}" is not a filter field of search index "${search.indexName}" on table "${tableName}"`);
-            }
-
-            search.filters.push({ field, value });
-
-            return builder;
-        },
-        search: (field: string, query: string) => {
-            if (field !== search.definition.field) {
-                throw new Error(`search index "${search.indexName}" on table "${tableName}" indexes "${search.definition.field}", not "${field}"`);
-            }
-
-            // Mutate the caller-owned stage in place (same object the reader
-            // executes); alias to a local so the param itself isn't reassigned.
-            const stage = search;
-
-            stage.field = field;
-            stage.query = query;
-            stage.hasQuery = true;
-
-            return builder;
-        },
-    };
-
-    return builder;
+    // `where` keys may be dotted paths into an object column; read them the way the SQL and the matcher do.
+    return fields.every((field) => readFieldPath(previous, field) === readFieldPath(next, field));
 };
 
 /**
@@ -744,32 +617,98 @@ const createSearchBuilder = (
 /** Join AND-conditions into one SQL, parenthesizing only when there's more than one. */
 const andBranch = (conditions: SQL[]): SQL => (conditions.length === 1 ? (conditions[0] as SQL) : sql`(${sql.join(conditions, sql` AND `)})`);
 
+/** Comma-joined quoted identifier list (column lists, SELECT lists). */
+const identifierList = (names: ReadonlyArray<string>): SQL =>
+    sql.join(
+        names.map((name) => sql`${sql.identifier(name)}`),
+        sql`, `,
+    );
+
+/** Comma-joined bound-value list (`VALUES (…)` tuples, `IN (…)` lists). */
+const bindList = (values: ReadonlyArray<unknown>): SQL =>
+    sql.join(
+        values.map((value) => sql`${value}`),
+        sql`, `,
+    );
+
+/**
+ * Refuse, on Postgres, a top-level string the caller is writing that holds
+ * U+0000.
+ *
+ * Postgres `text` cannot store the character at all, and the driver raised a
+ * raw "invalid byte sequence … 0x00" for it. Checked on the fields the caller
+ * WRITES — an insert's document, a patch's delta, a replacement — never on the
+ * merged row: SQLite and MySQL store the character, so a row holding one must
+ * stay patchable and re-importable there. A NUL nested in an object or array is
+ * stored as JSON's `\u0000` escape and needs no check.
+ */
+const assertStorableStrings = (engine: SqlDialect["name"], written: Record<string, unknown>): void => {
+    if (engine !== "postgres") {
+        return;
+    }
+
+    for (const [field, value] of Object.entries(written)) {
+        if (typeof value === "string" && value.includes("\0")) {
+            throw new LunoraError("BAD_REQUEST", `"${field}" holds a NUL character (U+0000), which a Postgres text column cannot store`);
+        }
+    }
+};
+
+/**
+ * A rank-table value in a form every driver binds as the BLOB it came from. A
+ * `v.bytes()` sort key is read back as `number[]` from the D1 binding and as an
+ * `ArrayBuffer` from a decoded cursor; bound as-is, drizzle expands the array
+ * into a value list and node:sqlite refuses the buffer. Sort columns hold no
+ * other array — `sqliteEncode` stores arrays as JSON text.
+ */
+const bindableRankValue = (value: unknown): unknown => {
+    if (value instanceof ArrayBuffer) {
+        return new Uint8Array(value);
+    }
+
+    return Array.isArray(value) ? Uint8Array.from(value as number[]) : value;
+};
+
 const buildRankBeforeBranches = (
     engine: SqlDialect["name"],
     index: RankIndexDefinitionLike,
     sortColumns: ReadonlyArray<string>,
     own: Record<string, unknown>,
     rowId: string,
-): SQL | undefined => {
+): SQL => {
     const branches: SQL[] = [];
 
     for (let pivot = 0; pivot < sortColumns.length + 1; pivot += 1) {
-        const conditions: SQL[] = sortColumns
-            .slice(0, pivot)
-            .map((prefixColumn) => nullSafeEqualsSql(engine, sql`${sql.identifier(prefixColumn)}`, own[prefixColumn]));
         const column = sortColumns[pivot];
         const sortKey = index.sortBy[pivot];
+        // Each pivot's comparison comes from the shared `rankPivotConditionSql`,
+        // which owns the NULL cases: `col < NULL` is UNKNOWN, and NULL rows sort
+        // ahead of a non-null pivot ascending, so a bare comparator both
+        // under-counts and mis-reads a NULL-valued row's own position. The
+        // `__id__` tiebreak closes the tuple and is never NULL.
+        const isSortPivot = pivot < sortColumns.length && column !== undefined && sortKey !== undefined;
+        const direction = sortKey?.direction === "desc" ? "desc" : "asc";
+        const pivotCondition = isSortPivot
+            ? rankPivotConditionSql(column, bindableRankValue(own[column]), direction, false)
+            : sql`${sql.identifier(RANK_TIEBREAK)} < ${rowId}`;
 
-        if (pivot < sortColumns.length && column !== undefined && sortKey !== undefined) {
-            conditions.push(sql`${sql.identifier(column)} ${sql.raw(sortKey.direction === "desc" ? ">" : "<")} ${own[column]}`);
-        } else {
-            conditions.push(sql`${sql.identifier(RANK_TIEBREAK)} < ${rowId}`);
+        if (pivotCondition === undefined) {
+            continue;
         }
+
+        const conditions: SQL[] = sortColumns
+            .slice(0, pivot)
+            .map((prefixColumn) => nullSafeEqualsSql(engine, sql`${sql.identifier(prefixColumn)}`, bindableRankValue(own[prefixColumn])));
+
+        conditions.push(pivotCondition);
 
         branches.push(andBranch(conditions));
     }
 
-    return branches.length > 0 ? sql.join(branches, sql` OR `) : undefined;
+    // Never `undefined`: an absent clause counts the WHOLE partition, and "every
+    // pivot was a NULL at the start of its ordering" means nothing sorts before
+    // this row at all.
+    return branches.length > 0 ? sql.join(branches, sql` OR `) : sql`1 = 0`;
 };
 
 /**
@@ -791,6 +730,14 @@ const buildRankCursorSeek = (
     const branches: SQL[] = [];
 
     for (const [pivot, col] of columns.entries()) {
+        // Shared with the DO twin — see `rankPivotConditionSql` for why a bare
+        // `>`/`<` at the pivot drops every row once a sort column holds NULL.
+        const pivotCondition = rankPivotConditionSql(col.column, bindableRankValue(decoded[pivot]), col.direction, true);
+
+        if (pivotCondition === undefined) {
+            continue;
+        }
+
         const conditions: SQL[] = [];
 
         for (let prefix = 0; prefix < pivot; prefix += 1) {
@@ -800,11 +747,17 @@ const buildRankCursorSeek = (
                 continue;
             }
 
-            conditions.push(nullSafeEqualsSql(engine, sql`${sql.identifier(prefixCol.column)}`, decoded[prefix]));
+            conditions.push(nullSafeEqualsSql(engine, sql`${sql.identifier(prefixCol.column)}`, bindableRankValue(decoded[prefix])));
         }
 
-        conditions.push(sql`${sql.identifier(col.column)} ${sql.raw(col.direction === "desc" ? "<" : ">")} ${decoded[pivot]}`);
+        conditions.push(pivotCondition);
         branches.push(andBranch(conditions));
+    }
+
+    if (branches.length === 0) {
+        // The cursor sits at the end of the ordering on every pivot: no row
+        // resumes after it.
+        return sql`(1 = 0)`;
     }
 
     return sql`(${sql.join(branches, sql` OR `)})`;
@@ -813,24 +766,33 @@ const buildRankCursorSeek = (
 /**
  * The rankPage column tuple in sort order: `[partition, ...sortColumns, id]`.
  * Partition and id sort ascending; each sort column follows its index direction.
+ *
+ * `nullable` marks the columns the seek has to place NULLs for: `__partition__`
+ * is the canonical-JSON key tuple and `__id__` is store-minted, so only the
+ * `__sort_k<i>__` columns can hold one (`syncRankIndexEntry` writes
+ * `record[field] ?? null`). It drives the ORDER BY's `NULLS FIRST/LAST` — the
+ * seek assumes SQLite's placement, which Postgres does not share.
  */
-const rankPageColumns = (index: RankIndexDefinitionLike, sortColumns: ReadonlyArray<string>): { column: string; direction: "asc" | "desc" }[] => {
+const rankPageColumns = (
+    index: RankIndexDefinitionLike,
+    sortColumns: ReadonlyArray<string>,
+): { column: string; direction: "asc" | "desc"; nullable: boolean }[] => {
     // A rank index with no sort columns degenerates the cursor tuple to
     // `[__partition__, RANK_TIEBREAK]`, which lets `buildRankCursorSeek` silently
     // mismatch and return a wrong/empty page. The schema builder already requires
     // a non-empty `sortBy` (packages/server/src/schema.ts), so this is a
     // belt-and-suspenders guard that fails loudly instead of paginating wrong.
     if (index.sortBy.length === 0) {
-        throw new Error(`rankIndex "${index.name}" requires at least one "sortBy" column for stable pagination`);
+        throw new LunoraError("INTERNAL", `rankIndex "${index.name}" requires at least one "sortBy" column for stable pagination`);
     }
 
-    const columns: { column: string; direction: "asc" | "desc" }[] = [{ column: "__partition__", direction: "asc" }];
+    const columns: { column: string; direction: "asc" | "desc"; nullable: boolean }[] = [{ column: "__partition__", direction: "asc", nullable: false }];
 
     for (const [i, sortKey] of index.sortBy.entries()) {
-        columns.push({ column: sortColumns[i] ?? sortColumnName(i), direction: sortKey.direction });
+        columns.push({ column: sortColumns[i] ?? sortColumnName(i), direction: sortKey.direction, nullable: true });
     }
 
-    columns.push({ column: RANK_TIEBREAK, direction: "asc" });
+    columns.push({ column: RANK_TIEBREAK, direction: "asc", nullable: false });
 
     return columns;
 };
@@ -857,14 +819,9 @@ const hydrateRankRows = async (
     }
 
     const fetched = await Promise.all(
-        chunks.map(async (chunk) => {
-            const list = sql.join(
-                chunk.map((value) => sql`${value}`),
-                sql`, `,
-            );
-
-            return queryAll(exec, dialect, sql`SELECT * FROM ${sql.identifier(tableName)} WHERE ${sql.identifier("id")} IN (${list})`);
-        }),
+        chunks.map(async (chunk) =>
+            queryAll(exec, dialect, sql`SELECT * FROM ${sql.identifier(tableName)} WHERE ${sql.identifier("id")} IN (${bindList(chunk)})`),
+        ),
     );
 
     const byId = new Map<string, Record<string, unknown>>();
@@ -888,9 +845,22 @@ const hydrateRankRows = async (
     return documents;
 };
 
-/** Base64-encode a rankPage continuation cursor (the `[partition, ...sortValues, id]` tuple) as JSON. */
+/**
+ * Base64-encode a rankPage continuation cursor (the `[partition, ...sortValues, id]`
+ * tuple) as JSON, behind the shared cursor marker.
+ *
+ * The marker is not decoration: `decodeCursor` refuses anything without it, so
+ * a mint site that forgets it produces cursors its own reader rejects. This one
+ * did, and only the rank pagination test caught it.
+ */
 const encodeRankCursor = (cursorValues: ReadonlyArray<unknown>): string => {
-    const json = JSON.stringify(cursorValues);
+    // A `v.bytes()` sort key is a BLOB, which reaches here in whatever shape the
+    // driver hands back (`number[]` from the D1 binding, a view elsewhere) and
+    // has no JSON form: the array was later bound as a list, the view stringified
+    // to `{}`, and either way the next page restarted from the first. Normalised
+    // to an `ArrayBuffer` and wire-tagged, `decodeCursor` restores it.
+    const values = cursorValues.map((value) => sqliteDecode(value, "bytes"));
+    const json = JSON.stringify(needsWireEncoding(values) ? encodeWire(values) : values);
     const bytes = new TextEncoder().encode(json);
     let binary = "";
 
@@ -898,347 +868,156 @@ const encodeRankCursor = (cursorValues: ReadonlyArray<unknown>): string => {
         binary += String.fromCodePoint(byte);
     }
 
-    return btoa(binary);
-};
-
-/** Fixed page size for the keyset-paged table scans the backfill helpers use. */
-const BACKFILL_BATCH_SIZE = 500;
-
-/**
- * Stream every row of `tableName` to `onDoc` in `id`-keyset order, decoding each
- * row into a document first. Pages by the last row's `id` (not OFFSET) so an
- * unbounded table never has to fit in a single result buffer. Rows that fail to
- * decode are skipped. Shared by the aggregate- and rank-counter backfills.
- */
-const forEachRowPaged = async (
-    exec: SqlCtxExec,
-    dialect: SqlDialect,
-    definition: TableDefinitionLike,
-    tableName: string,
-    onDoc: (document: Record<string, unknown>) => void,
-): Promise<void> => {
-    let cursorId: string | undefined;
-    let hasMore = true;
-
-    while (hasMore) {
-        const pageRows =
-            cursorId === undefined
-                ? // eslint-disable-next-line no-await-in-loop -- keyset paging is inherently sequential: each page's WHERE depends on the prior page's last id.
-                  await queryAll(
-                      exec,
-                      dialect,
-                      sql`SELECT * FROM ${sql.identifier(tableName)} ORDER BY ${sql.identifier("id")} ASC LIMIT ${sql.raw(String(BACKFILL_BATCH_SIZE))}`,
-                  )
-                : // eslint-disable-next-line no-await-in-loop -- keyset paging is inherently sequential: each page's WHERE depends on the prior page's last id.
-                  await queryAll(
-                      exec,
-                      dialect,
-                      sql`SELECT * FROM ${sql.identifier(tableName)} WHERE ${sql.identifier("id")} > ${cursorId} ORDER BY ${sql.identifier("id")} ASC LIMIT ${sql.raw(String(BACKFILL_BATCH_SIZE))}`,
-                  );
-
-        for (const row of pageRows) {
-            const decoded = decodeRow(definition, row);
-
-            if (decoded) {
-                onDoc(decoded);
-            }
-        }
-
-        cursorId = pageRows.at(-1)?.["id"] as string | undefined;
-        hasMore = pageRows.length === BACKFILL_BATCH_SIZE;
-    }
+    return CURSOR_PREFIX + btoa(binary);
 };
 
 /**
- * SQLite affinity for a column. Resolves the *effective* validator kind (so
- * `v.optional(inner)` stores as `inner` would) and defers to the shared dialect
- * (`@lunora/d1/dialect`) — the same mapping the `lunora migrate generate` SQL
- * emitter uses, so auto-provisioned and hand-migrated tables stay identical.
- */
-const globalColumnAffinity = (validator: ValidatorLike, dialect: SqlDialect): string => dialect.columnType(effectiveColumnKind(validator));
-
-/**
- * Auto-provision every `.global()` table from the schema: `CREATE TABLE IF NOT
- * EXISTS` with the physical `id`/`_creationTime` columns plus a typed column per
- * declared field, then its secondary and `.unique()` indexes. This is the D1
- * twin of `@lunora/do`'s `runShardMigrations` (which self-creates shard-local
- * tables) — it makes the schema the single source of truth for global tables
- * too, so a fresh database serves them without a hand-applied migration. The
- * column set and dialect match exactly what this module reads and writes
- * (`columnRef`, `serializeColumnValue`, `decodeGlobalRow`).
+ * Whether a column of this validator **could** hold a `bigint` — i.e. whether
+ * `sqliteEncode` may have stored an order-preserving key there rather than a
+ * value SQL can reduce.
  *
- * Idempotent (`CREATE TABLE/INDEX IF NOT EXISTS`); additive only — it never
- * drops or retypes an existing column, so destructive schema changes still need
- * an explicit migration.
+ * `sqliteEncode` keys off the RUNTIME type, so a `v.any()` / `v.union()` /
+ * `v.from()` column holding a bigint is stored as a padded key exactly like a
+ * declared one; gating on the declared kind alone is how the shard twin wrote
+ * ~1e39 into a companion, one declaration away. Both the min/max write path
+ * (which decides whether to reduce in SQL or fold in JS) and
+ * {@link assertReducibleBySql} (which refuses a read outright) take this test —
+ * they have to agree, because a column the writer treats as keyed is exactly
+ * one the reader must not reduce.
+ *
+ * The widening only pays off because `sqliteDecode` reverses those columns'
+ * keys too — it did not at first, and the fold then coerced 40 characters of
+ * padding to `undefined` and left the companion holding a stale extreme. Widening
+ * the detector and widening the decoder are one change, not two.
+ *
+ * `mayHoldProjectedValue` in `@lunora/shard-engine`'s `sql-projection.ts` is the
+ * same rule for the DO plane, over `bigint` + `bytes` rather than `bigint` alone.
+ * They belong together — beside the codec pair the two planes already share, in
+ * `sql-projection.ts` — but the widths differ, so merging them is its own change.
+ * @returns `true` when a value in this column may be a `bigint` key
  */
-/** Build the column DDL for a global table as a drizzle `SQL`: framework columns plus a typed column per declared field. */
-const globalTableColumnsDdl = (definition: SchemaLike["tables"][string], dialect: SqlDialect): SQL => {
-    const fieldColumns: SQL[] = [];
-
-    for (const [field, validator] of Object.entries(definition.shape)) {
-        if (!validator._meta?.column) {
-            continue;
-        }
-
-        // Required, non-optional fields get NOT NULL; optional ones stay nullable
-        // so an insert that omits them can't trip a constraint.
-        const notNull = validator._meta.column.notNull && validator.kind !== "optional" ? " NOT NULL" : "";
-
-        fieldColumns.push(sql`${sql.identifier(field)} ${sql.raw(`${globalColumnAffinity(validator, dialect)}${notNull}`)}`);
+const mayHoldBigintKey = (validator: SchemaLike["tables"][string]["shape"][string] | undefined): boolean => {
+    if (validator === undefined) {
+        return false;
     }
 
-    const frameworkColumns = dialect.frameworkColumns().map((column) => sql`${sql.identifier(column.name)} ${sql.raw(column.type)}`);
+    const kind = effectiveColumnKind(validator);
 
-    return sql.join([...frameworkColumns, ...fieldColumns], sql`, `);
+    return kind === "any" || kind === "bigint" || kind === "from" || kind === "union";
 };
 
-/** Create a global table's declared secondary indexes and its synthesized `.unique()` column indexes. */
-const createGlobalTableIndexes = async (exec: SqlCtxExec, tableName: string, definition: SchemaLike["tables"][string], dialect: SqlDialect): Promise<void> => {
-    // Index column reference as drizzle SQL, with a key prefix where the engine
-    // demands it (MySQL can't index its now-unbounded TEXT string columns without
-    // one). Framework columns (id/_creationTime — absent from `shape`) are already
-    // index-safe types, so they get no prefix.
-    const indexRef = (field: string): SQL => {
-        const reference = columnRefSql(field);
-        const validator = definition.shape[field];
-        const prefix = validator && dialect.indexKeyPrefix ? dialect.indexKeyPrefix(effectiveColumnKind(validator)) : undefined;
-
-        return prefix === undefined ? reference : sql`${reference}(${sql.raw(String(prefix))})`;
-    };
-
-    for (const index of definition.indexes) {
-        const expressions = sql.join(
-            index.fields.map((field) => indexRef(field)),
-            sql`, `,
+/**
+ * Refuse a SQL-side reduce or group over a column stored as an order-preserving
+ * key rather than as its value.
+ *
+ * A `v.bigint()` column holds the zero-padded key `bigintSqlKey`
+ * ({@link file://./value-codec.ts}) builds, so
+ * `SUM` over it coerces to nonsense (1.5e40 for a couple of small amounts),
+ * `MIN`/`MAX` hand back the padded string, and a `GROUP BY` key comes back as 40
+ * characters of padding. All three look like answers, and `SUM` past 2^53 used
+ * instead to escape as a raw driver `RangeError`.
+ *
+ * The test is {@link mayHoldBigintKey}, not the declared kind: `sqliteEncode`
+ * keys off the RUNTIME type, so a `bigint` written into a `v.any()` /
+ * `v.union()` / `v.from()` column is stored as the identical key. Reading the
+ * declared kind saw only `"any"` and let the scan reduce the padding — `sum` of
+ * two small amounts came back as `2e+39`. Refusing per COLUMN over-matches (an
+ * untyped column that only ever holds plain numbers is refused too), and that
+ * is the side to be wrong on: the alternative returned a confident wrong
+ * number, and the companion the error names answers both cases exactly.
+ *
+ * The maintained `__agg_` companion is what the error names instead. It is exact
+ * per contribution — `coerceAggregateNumber` refuses any single `bigint` past
+ * 2^53 outright — but its running total accumulates in a REAL column, so a sum
+ * of in-range values can still cross 2^53 and round there. The message says so
+ * rather than promising exactness the companion cannot give. Applied at every SQL-reducing entry point —
+ * `aggregate`'s scan and both halves of `groupBy` — matching the shard twin's
+ * `assertReducibleBySql`, which shipped guarding one and not its sibling.
+ * @throws LunoraError `BAD_REQUEST` when `field` may hold an order-preserving key
+ */
+const assertReducibleBySql = (definition: SchemaLike["tables"][string], field: string, label: string): void => {
+    if (mayHoldBigintKey(definition.shape[field])) {
+        throw new LunoraError(
+            "BAD_REQUEST",
+            `${label}: "${field}" may hold an order-preserving key rather than a value SQL can reduce or group — declare an aggregateIndex covering this (by, field, op) so the maintained companion answers it instead (its running total is a REAL, so it stays exact only while the total is inside 2^53)`,
         );
-
-        // eslint-disable-next-line no-await-in-loop -- DDL runs sequentially on the shared D1 connection.
-        await createIndexIfNotExists(exec, dialect, {
-            columns: expressions,
-            name: `${tableName}_${index.name}`,
-            table: tableName,
-            unique: index.unique ?? false,
-        });
-    }
-
-    // `.unique()` columns synthesize a UNIQUE index so the engine enforces the
-    // constraint (the write layer maps breaches to ConflictError), mirroring the
-    // DO twin's `migrateSecondaryIndexes`.
-    for (const [field, column] of tableColumns(definition)) {
-        if (!column.unique) {
-            continue;
-        }
-
-        // eslint-disable-next-line no-await-in-loop -- DDL runs sequentially on the shared D1 connection.
-        await createIndexIfNotExists(exec, dialect, { columns: indexRef(field), name: `${tableName}_unique_${field}`, table: tableName, unique: true });
     }
 };
 
-const runSqlGlobalTableMigrations = async (exec: SqlCtxExec, schema: SchemaLike, dialect: SqlDialect): Promise<void> => {
-    for (const [tableName, definition] of Object.entries(schema.tables)) {
-        if (definition.shardMode?.kind !== "global") {
-            continue;
-        }
+/** Applies {@link assertReducibleBySql} to every field a `groupBy` scan hands to SQL: the `by` keys and the reducer's own field. */
+const assertGroupByReducibleBySql = (
+    definition: SchemaLike["tables"][string],
+    tableName: string,
+    by: ReadonlyArray<string>,
+    agg: { field?: string; op: string },
+): void => {
+    for (const field of by) {
+        assertReducibleBySql(definition, field, `groupBy(${tableName}, { by: [..."${field}"] })`);
+    }
 
-        const columns = globalTableColumnsDdl(definition, dialect);
-
-        // eslint-disable-next-line no-await-in-loop -- DDL runs sequentially on the single shared D1 connection; the table must exist before its indexes below.
-        await queryRun(exec, dialect, sql`CREATE TABLE IF NOT EXISTS ${sql.identifier(tableName)} (${columns})`);
-        // eslint-disable-next-line no-await-in-loop -- DDL runs sequentially; indexes follow the table.
-        await createGlobalTableIndexes(exec, tableName, definition, dialect);
+    if (agg.field !== undefined) {
+        assertReducibleBySql(definition, agg.field, `groupBy(${tableName}, { agg: { op: "${agg.op}", field: "${agg.field}" } })`);
     }
 };
 
 /**
- * Materialize the `__agg_&lt;index>` companion tables for every declared
- * `aggregateIndex` on a global table. Global tables in Lunora ship their own
- * DDL — counter tables are opt-in so production hosts can decide where they
- * live. Tests and dev hosts can call this once after their schema migration to
- * unlock O(1) counts.
+ * The two changelog identifiers, imported from `@lunora/shard-engine` rather than
+ * re-declared. The `.global()` log and the DO log are the same table under two
+ * dialects, and a name that differed between them would break every consumer
+ * that reads both — so the shared thing is shared, and only the DIALECT
+ * differences (the MySQL key prefix below, the `SELECT` forms) live here.
+ */
+/* The changelog identifiers come from `@lunora/shard-engine` — see the import. */
+
+/** Single-row table holding the `.global()` sweep lease — the fleet's only retention coordination. */
+const CDC_SWEEP_TABLE = "__cdc_sweep";
+
+/** The lease row's fixed key. One log, one sweeper, one row. */
+const CDC_SWEEP_ROW = "global";
+
+/**
+ * How long a winning sweeper holds the lease, and therefore roughly how often
+ * the FLEET sweeps in total — not how often each shard does.
  *
- * Idempotent (`CREATE TABLE IF NOT EXISTS`).
+ * A shard-local sweep can pick its own interval because it is alone. Here the
+ * interval has to be a property of the log, or a deployment's sweep rate would
+ * scale with its shard count.
  */
-const runSqlAggregateMigrations = async (exec: SqlCtxExec, schema: SchemaLike, dialect: SqlDialect): Promise<void> => {
-    const { integer, key, real } = dialect.companionTypes;
-
-    for (const [tableName, definition] of Object.entries(schema.tables)) {
-        const indexes = definition.aggregateIndexes;
-
-        if (!indexes || indexes.length === 0) {
-            continue;
-        }
-
-        for (const index of indexes) {
-            const aggTable = aggregateTableName(tableName, index.name);
-
-            // `__value__` is op-aware now (count / running sum / extreme — NULL
-            // for an empty min/max group) and `__count__` tracks the row count
-            // (avg divisor + empty-group detection). It is nullable; the pre-
-            // reducer-aware shape declared it `NOT NULL`.
-            // eslint-disable-next-line no-await-in-loop -- DDL statements run sequentially on the single shared connection.
-            await queryRun(
-                exec,
-                dialect,
-                sql`CREATE TABLE IF NOT EXISTS ${sql.identifier(aggTable)} (${sql.identifier("__key__")} ${sql.raw(key)} PRIMARY KEY, ${sql.identifier("__value__")} ${sql.raw(real)}, ${sql.identifier("__count__")} ${sql.raw(integer)} NOT NULL DEFAULT 0)`,
-            );
-
-            // Alpha-era companion-rebuild caveat (SQLite/D1 only): a binding that
-            // materialized this table before `__count__` existed gets the column
-            // added here (defaulted 0). `CREATE TABLE IF NOT EXISTS` won't reshape
-            // an existing table, so we pragma-check then ALTER. Fresh PG/MySQL
-            // tables are created with `__count__` already, so this legacy reshape
-            // is skipped off SQLite.
-            if (dialect.name === "sqlite") {
-                // eslint-disable-next-line no-await-in-loop -- DDL runs sequentially on the shared connection.
-                const columns = await queryAll(exec, dialect, sql`PRAGMA table_info(${sql.identifier(aggTable)})`);
-
-                if (!columns.some((column) => column["name"] === "__count__")) {
-                    // eslint-disable-next-line no-await-in-loop -- DDL runs sequentially on the shared connection.
-                    await queryRun(
-                        exec,
-                        dialect,
-                        sql`ALTER TABLE ${sql.identifier(aggTable)} ADD COLUMN ${sql.identifier("__count__")} ${sql.raw(integer)} NOT NULL DEFAULT 0`,
-                    );
-                }
-            }
-        }
-    }
-};
+const CDC_SWEEP_LEASE_MS = 60_000;
 
 /**
- * A rank btree index column. MySQL can't index a full VARCHAR(768)/TEXT column in
- * a *composite* index (3072-byte key limit), so VARCHAR/TEXT key columns get a
- * 191-char utf8mb4 prefix (keeps several columns under the cap); SQLite/Postgres
- * — and number/real columns everywhere — index in full.
- */
-const rankIndexColumn = (dialect: SqlDialect, column: string, direction: "ASC" | "DESC", needsPrefix: boolean): SQL => {
-    const reference = dialect.name === "mysql" && needsPrefix ? sql`${sql.identifier(column)}(191)` : sql`${sql.identifier(column)}`;
-
-    return sql`${reference} ${sql.raw(direction)}`;
-};
-
-/** The rank btree key tuple in sort order: `__partition__`, the sort columns, then `__id__` — each prefixed where MySQL's type demands it. */
-const rankBtreeColumns = (dialect: SqlDialect, index: RankIndexDefinitionLike, definition: SchemaLike["tables"][string]): SQL[] => {
-    // __partition__/__id__ are the VARCHAR(768) `key` type → always prefixed on MySQL.
-    const columns: SQL[] = [rankIndexColumn(dialect, "__partition__", "ASC", true)];
-
-    for (const [i, sortKey] of index.sortBy.entries()) {
-        const validator = definition.shape[sortKey.field];
-        const needsPrefix = validator !== undefined && dialect.indexKeyPrefix?.(effectiveColumnKind(validator)) !== undefined;
-
-        columns.push(rankIndexColumn(dialect, sortColumnName(i), sortKey.direction === "desc" ? "DESC" : "ASC", needsPrefix));
-    }
-
-    columns.push(rankIndexColumn(dialect, "__id__", "ASC", true));
-
-    return columns;
-};
-
-/** Each rank sort column is typed by its source field's kind (the same type + serialized form the main table uses), so it accepts the stored sort key and orders correctly. A generic BLOB would reject the value on Postgres (BYTEA is strict). */
-const rankSortColumnDefs = (dialect: SqlDialect, index: RankIndexDefinitionLike, definition: SchemaLike["tables"][string]): SQL[] =>
-    index.sortBy.map((sortKey, i) => {
-        const validator = definition.shape[sortKey.field];
-        const columnType = dialect.columnType(validator ? effectiveColumnKind(validator) : undefined);
-
-        return sql`${sql.identifier(sortColumnName(i))} ${sql.raw(columnType)}`;
-    });
-
-/**
- * Materialize the `__rank_&lt;index>` companion tables for every declared
- * `rankIndex` on a global table. Mirrors `runSqlAggregateMigrations` — same
- * opt-in pattern so production hosts decide whether to spend the DDL.
+ * Rows one `.global()` sweep pass may delete.
  *
- * Idempotent (`CREATE TABLE IF NOT EXISTS` + `createIndexIfNotExists`).
+ * Same REASON as the shard-local `SHARD_CDC_SWEEP_MAX_ROWS` in `@lunora/do` — an
+ * unbounded first sweep over an accumulated backlog aborts and retries forever —
+ * but deliberately a fifth of its value, and named apart from it so neither
+ * reads as a re-export of the other. That sweep deletes from the shard's own
+ * workerd SQLite; this one goes over the network to D1 or PlanetScale, where the
+ * same row count is a much larger statement.
  */
-const runSqlRankMigrations = async (exec: SqlCtxExec, schema: SchemaLike, dialect: SqlDialect): Promise<void> => {
-    const { key } = dialect.companionTypes;
-
-    for (const [tableName, definition] of Object.entries(schema.tables)) {
-        const indexes = definition.rankIndexes;
-
-        if (!indexes || indexes.length === 0) {
-            continue;
-        }
-
-        for (const index of indexes) {
-            const rankTable = rankTableName(tableName, index.name);
-            const sortColumnDefs = rankSortColumnDefs(dialect, index, definition);
-            const columnPart = sortColumnDefs.length > 0 ? sql`, ${sql.join(sortColumnDefs, sql`, `)}` : sql``;
-
-            // eslint-disable-next-line no-await-in-loop -- DDL runs sequentially on the shared connection; the table must exist before its index below.
-            await queryRun(
-                exec,
-                dialect,
-                sql`CREATE TABLE IF NOT EXISTS ${sql.identifier(rankTable)} (${sql.identifier("__id__")} ${sql.raw(key)} PRIMARY KEY, ${sql.identifier("__partition__")} ${sql.raw(key)} NOT NULL${columnPart})`,
-            );
-
-            const orderedColumns = rankBtreeColumns(dialect, index, definition);
-            const btreeName = `${tableName}__rank_${index.name}__btree`;
-
-            // eslint-disable-next-line no-await-in-loop -- DDL runs sequentially on the shared D1 connection (the CREATE INDEX follows its CREATE TABLE).
-            await createIndexIfNotExists(exec, dialect, {
-                columns: sql.join(orderedColumns, sql`, `),
-                name: btreeName,
-                table: rankTable,
-                unique: false,
-            });
-        }
-    }
-};
+const GLOBAL_CDC_SWEEP_MAX_ROWS = 10_000;
 
 /**
- * Materialize the `__fts_&lt;index>` FTS5 shadow tables for every declared
- * `.searchIndex()` on a global table. Mirrors `runSqlAggregateMigrations` — same
- * opt-in pattern so production hosts decide whether to spend the DDL. Only runs
- * on engines that ship FTS5 (D1 does; the `node:sqlite` test runner doesn't,
- * where `.search()` transparently falls back to a scan). `__text__` holds the
- * indexed field; `__id__` (UNINDEXED) joins back to the row.
+ * Minimum spacing between LEASE ATTEMPTS on one isolate.
  *
- * Idempotent (`CREATE VIRTUAL TABLE IF NOT EXISTS`).
+ * The lease is what stops the fleet sweeping N times; this is what stops a busy
+ * isolate paying a compare-and-set on every single `.global()` write. It is
+ * module-level, so it is per-isolate and deliberately approximate — many
+ * isolates means many attempts, but each is one small conditional `UPDATE` that
+ * mostly matches nothing, and the lease makes the ones that do match harmless.
  */
-const runSqlSearchMigrations = async (exec: SqlCtxExec, schema: SchemaLike, dialect: SqlDialect): Promise<void> => {
-    // fts5 is a SQLite/D1 feature. On engines without it (`node:sqlite`,
-    // Postgres, MySQL) the probe fails and this no-ops — `.search()` then
-    // transparently falls back to a portable scan.
-    if (!(await isFtsAvailable(exec))) {
-        return;
-    }
+const CDC_SWEEP_ATTEMPT_MS = 30_000;
 
-    for (const [tableName, definition] of Object.entries(schema.tables)) {
-        const indexes = definition.searchIndexes;
-
-        if (!indexes || indexes.length === 0) {
-            continue;
-        }
-
-        for (const index of indexes) {
-            const ftName = ftsTableName(tableName, index.name);
-
-            // eslint-disable-next-line no-await-in-loop -- DDL statements run sequentially on the single shared connection.
-            await queryRun(
-                exec,
-                dialect,
-                sql`CREATE VIRTUAL TABLE IF NOT EXISTS ${sql.identifier(ftName)} USING fts5(${sql.identifier("__text__")}, ${sql.identifier("__id__")} UNINDEXED)`,
-            );
-        }
-    }
-};
-
-/** Reserved append-only changelog table backing CDC streaming export for global tables (CDC consumers only — D1 point-in-time recovery is the platform's Time Travel, not a changelog replay). */
-const CDC_LOG_TABLE = "__cdc_log";
-
-/** One change-data-capture entry: a committed mutation, in monotonic `seq` order. Mirrors the DO twin. */
-interface CdcChange {
-    /** Post-image document for insert/update; absent for delete (the `id` identifies the removed row). */
-    doc?: Record<string, unknown>;
-    id: string;
-    op: "delete" | "insert" | "update";
-    /** Monotonic per-database cursor — strictly increasing, never reused. */
-    seq: number;
-    table: string;
-    /** Wall-clock millis when the change committed (the ctx-db `clock`). */
-    ts: number;
-}
+/**
+ * When this isolate last tried to claim the sweep lease. See
+ * {@link CDC_SWEEP_ATTEMPT_MS}.
+ *
+ * One counter for the whole isolate, deliberately: an app has a single global
+ * changelog, so "this isolate" and "this log" are the same scope. A worker that
+ * ever bound two `.global()` backends would share the throttle between them and
+ * sweep at most one per window — key this by store at that point, not before.
+ */
+let lastSweepAttemptAt = 0;
 
 /** Create the `__cdc_log` table. Idempotent; only run when CDC is enabled. */
 const runSqlCdcMigration = async (exec: SqlCtxExec, dialect: SqlDialect): Promise<void> => {
@@ -1252,9 +1031,203 @@ const runSqlCdcMigration = async (exec: SqlCtxExec, dialect: SqlDialect): Promis
         dialect,
         sql`CREATE TABLE IF NOT EXISTS ${sql.identifier(CDC_LOG_TABLE)} (${sql.identifier("seq")} ${sql.raw(autoincrementPrimaryKey)}, ${sql.identifier("ts")} ${sql.raw(real)} NOT NULL, ${sql.identifier("table")} ${sql.raw(key)} NOT NULL, ${sql.identifier("id")} ${sql.raw(key)} NOT NULL, ${sql.identifier("op")} ${sql.raw(key)} NOT NULL, ${sql.identifier("doc")} ${sql.raw(text)})`,
     );
+
+    // `("table", seq)` covers both the filter and the ordering of every
+    // table-scoped changelog read (the `.global()` shape delta path); without it
+    // that read scans the whole log in commit order and discards other tables'
+    // rows. Mirrors the DO twin's `CDC_LOG_TABLE_SEQ_INDEX`.
+    //
+    // The key prefix is what makes this legal on MySQL. `key` is `VARCHAR(768)`
+    // there precisely because 768 utf8mb4 characters is InnoDB's limit for a
+    // SINGLE-column index (768 × 4 = 3072 bytes) — so adding `seq` to it puts the
+    // composite key over that limit and the migration fails outright with
+    // ER_TOO_LONG_KEY. A prefix bounds `table`'s contribution; it costs nothing in
+    // selectivity because the column holds a table name, not user data. Engines
+    // that index text directly (SQLite, Postgres) return no prefix and index the
+    // whole column.
+    const tablePrefix = dialect.indexKeyPrefix?.("string");
+
+    await createIndexIfNotExists(exec, dialect, {
+        columns: sql`${tablePrefix === undefined ? sql`${sql.identifier("table")}` : sql`${sql.identifier("table")}(${sql.raw(String(tablePrefix))})`}, ${sql.identifier("seq")}`,
+        name: CDC_LOG_TABLE_SEQ_INDEX,
+        table: CDC_LOG_TABLE,
+        unique: false,
+    });
+
+    // The sweep lease. One row, and it is the whole of the cross-shard
+    // coordination: see {@link sweepSqlCdcRetention}.
+    await queryRun(
+        exec,
+        dialect,
+        sql`CREATE TABLE IF NOT EXISTS ${sql.identifier(CDC_SWEEP_TABLE)} (${sql.identifier("id")} ${sql.raw(key)} NOT NULL PRIMARY KEY, ${sql.identifier("lease_until")} ${sql.raw(real)} NOT NULL)`,
+    );
+
+    // Seed it expired so the first writer to look can claim it. `DO NOTHING` on
+    // conflict: every shard in the fleet runs this migration, and the row must
+    // survive their races without any of them resetting a live lease.
+    await queryRun(
+        exec,
+        dialect,
+        sql`INSERT INTO ${sql.identifier(CDC_SWEEP_TABLE)} (${sql.identifier("id")}, ${sql.identifier("lease_until")}) VALUES (${CDC_SWEEP_ROW}, ${0}) ${
+            // MySQL has no `DO NOTHING`; the conventional no-op assignment is the
+            // same trick the upsert builder above uses for its dialect split.
+            dialect.name === "mysql"
+                ? sql`ON DUPLICATE KEY UPDATE ${sql.identifier("id")} = ${sql.identifier("id")}`
+                : sql`ON CONFLICT(${sql.identifier("id")}) DO NOTHING`
+        }`,
+    );
 };
 
-/** Append one committed mutation to the changelog (post-image JSON, or NULL for delete). */
+/**
+ * Try to become the fleet's sweeper for one window.
+ *
+ * The `.global()` changelog differs from the shard-local one in exactly one way
+ * that matters here: it has no owner. Every shard writes it, from every region,
+ * and none of them is the one that should trim it. Left to themselves they would
+ * all trim it at once — N concurrent unbounded `DELETE`s against one D1 database.
+ *
+ * A lease row settles it without a registry: whoever wins the compare-and-set
+ * sweeps, everyone else returns immediately, and the lease doubles as the
+ * interval (a winner holds it for {@link CDC_SWEEP_LEASE_MS}, so the fleet
+ * sweeps about that often in total rather than once per shard). A sweeper that
+ * dies mid-pass loses nothing: the lease simply expires and the next writer
+ * picks up where the `ts` cutoff says to.
+ */
+const acquireSqlCdcSweepLease = async (exec: SqlCtxExec, dialect: SqlDialect, now: number): Promise<boolean> => {
+    const claim = sql`UPDATE ${sql.identifier(CDC_SWEEP_TABLE)} SET ${sql.identifier("lease_until")} = ${now + CDC_SWEEP_LEASE_MS} WHERE ${sql.identifier("id")} = ${CDC_SWEEP_ROW} AND ${sql.identifier("lease_until")} <= ${now}`;
+
+    // Same compare-and-set idiom as the OCC write path: `RETURNING` where the
+    // engine has it, affected-rows where it does not (MySQL).
+    if (dialect.supportsReturning) {
+        const claimed = await queryAll(exec, dialect, sql`${claim} RETURNING ${sql.identifier("id")}`);
+
+        return claimed.length > 0;
+    }
+
+    const result = await queryRun(exec, dialect, claim);
+
+    return (dialect.affectedRows ? dialect.affectedRows(result ?? { rowsAffected: 0 }) : 0) > 0;
+};
+
+/**
+ * Delete `.global()` changelog entries older than `retentionMs`, at most
+ * {@link GLOBAL_CDC_SWEEP_MAX_ROWS} per pass, and only if this writer wins the lease.
+ *
+ * **Time, not rows.** The shard-local twin bounds its log by row count because
+ * one shard owns it and a row count is a memory bound on that one object. This
+ * log is shared, so a row count means nothing to any individual consumer — but
+ * "older than N" is directly what every consumer needs to reason about, and it
+ * is the unit an operator can compare against their own connector's lag.
+ *
+ * **Which consumers this can strand, and what protects each:**
+ *
+ * - `.global()` shape pollers hold in-memory cursors this store cannot see. They
+ *   are protected EXACTLY rather than approximately: {@link readSqlCdcChangedTables}
+ *   reports the retained floor, and a poller below it treats the tick as "no
+ *   visibility" and re-reads every shape. That is the same self-healing path a
+ *   changelog error already takes, so a trimmed poller is slow for one tick, not
+ *   wrong. No cursor registry, no assumption about how far behind a shard can be.
+ * - Streaming-export / warehouse consumers hold opaque cursors issued outside
+ *   this deployment. Nothing here can see them, so nothing here guesses:
+ *   {@link readSqlCdcChanges} refuses a page below the floor rather than serving
+ *   the surviving tail, and retention stays OFF unless an operator states a
+ *   window they know covers their connector.
+ */
+const sweepSqlCdcRetention = async (exec: SqlCtxExec, dialect: SqlDialect, retentionMs: number, now: number): Promise<void> => {
+    if (!(await acquireSqlCdcSweepLease(exec, dialect, now))) {
+        return;
+    }
+
+    const cutoff = now - retentionMs;
+
+    // Bounded per pass for the same reason the shard-local sweep is: the first
+    // sweep after an operator enables retention faces the entire accumulated
+    // log, and an unbounded DELETE that aborts leaves no progress behind.
+    //
+    // The bounded select is wrapped in a derived table, which looks redundant
+    // and is not: MySQL rejects a `LIMIT` inside an `IN (subquery)` outright
+    // ("This version of MySQL doesn't yet support 'LIMIT & IN/ALL/ANY/SOME
+    // subquery'"), so the direct form throws on every Hyperdrive-MySQL
+    // deployment while working fine on SQLite and Postgres. Materialising the
+    // subquery through a derived table is the one form all three accept —
+    // MySQL's own `DELETE … ORDER BY … LIMIT` would need a dialect split,
+    // since Postgres has no such syntax. Postgres requires the alias, so it is
+    // not optional either.
+    await queryRun(
+        exec,
+        dialect,
+        sql`
+            DELETE FROM ${sql.identifier(CDC_LOG_TABLE)} WHERE ${sql.identifier("seq")} IN (
+                        SELECT ${sql.identifier("seq")} FROM (
+                            SELECT ${sql.identifier("seq")} FROM ${sql.identifier(CDC_LOG_TABLE)} WHERE ${sql.identifier("ts")} <= ${cutoff} ORDER BY ${sql.identifier("seq")} ASC LIMIT ${sql.raw(String(GLOBAL_CDC_SWEEP_MAX_ROWS))}
+                        ) AS ${sql.identifier("expired")}
+                    )
+        `,
+    );
+};
+
+/** Oldest `seq` still retained in the `.global()` changelog, or `undefined` when it is empty. */
+const readSqlCdcFloor = async (exec: SqlCtxExec, dialect: SqlDialect): Promise<number | undefined> => {
+    const rows = await queryAll(exec, dialect, sql`SELECT MIN(${sql.identifier("seq")}) AS ${sql.identifier("seq")} FROM ${sql.identifier(CDC_LOG_TABLE)}`);
+    const floor = Number(rows[0]?.["seq"] ?? Number.NaN);
+
+    return Number.isFinite(floor) ? floor : undefined;
+};
+
+/**
+ * High-watermark of the `.global()` changelog — the largest `seq` ever
+ * ALLOCATED, which is what makes it a witness rather than a reading. `0` when
+ * nothing has been written, `undefined` on an engine that cannot answer.
+ *
+ * SQLite reads it from `sqlite_sequence`, the AUTOINCREMENT bookkeeping row,
+ * which a `DELETE` does not touch — so it survives the retention sweep clearing
+ * the row that carries the current maximum, and `MAX(seq)` does not (it reports
+ * NULL for a fully swept log). That difference is the whole point: a watermark
+ * that a trim can lower would accuse every healthy consumer of holding a rewound
+ * cursor.
+ *
+ * `undefined` on Postgres and MySQL, so the guard below simply does not run
+ * there. Both DO have a sequence, but reading it means dialect-specific
+ * catalogue SQL against engines this package has no suite for, and MySQL's
+ * `information_schema` AUTO_INCREMENT is a cached estimate rather than a fact —
+ * a wrong watermark here refuses a consumer that is perfectly in sync. The one
+ * engine `.global()` runs on for D1 is SQLite, which is where the restore
+ * semantics this guards against (Time Travel) live; `dropIndexIfShapeChanged` in
+ * `ctx-db-migrations.ts` is scoped the same way for the same reason.
+ */
+const readSqlCdcWatermark = async (exec: SqlCtxExec, dialect: SqlDialect): Promise<number | undefined> => {
+    if (dialect.name !== "sqlite") {
+        return undefined;
+    }
+
+    const rows = await queryAll(
+        exec,
+        dialect,
+        sql`SELECT ${sql.identifier("seq")} AS ${sql.identifier("seq")} FROM ${sql.identifier("sqlite_sequence")} WHERE ${sql.identifier("name")} = ${CDC_LOG_TABLE}`,
+    );
+    const head = Number(rows[0]?.["seq"] ?? Number.NaN);
+
+    // No bookkeeping row means no row was ever inserted, so the true watermark is
+    // `0` — the same answer the shard plane's `readCdcCursor` gives for an empty
+    // log, and the one `cdcForkedError` is written against.
+    return Number.isFinite(head) ? head : 0;
+};
+
+/** Serialize a changelog post-image, tagging the leaves JSON cannot carry. Identity for a pure-JSON document. */
+const encodeCdcDocJson = (doc: Record<string, unknown>): string => JSON.stringify(needsWireEncoding(doc) ? encodeWire(doc) : doc);
+
+/**
+ * Append one committed mutation to the changelog (post-image JSON, or NULL for
+ * delete).
+ *
+ * The post-image is a decoded document — a `v.bigint()` column is a real
+ * `bigint` and a `v.bytes()` column an `ArrayBuffer` — so it goes through
+ * `encodeWire` before `JSON.stringify`, exactly as the DO twin's
+ * `encodeDocJson` does. A bare `JSON.stringify` throws on the former and
+ * silently records `{}` for the latter, and it throws AFTER the row is already
+ * committed. `needsWireEncoding` keeps the common pure-JSON document on the
+ * allocation-free path and byte-identical to what it was before.
+ */
 const appendSqlCdcChange = async (
     exec: SqlCtxExec,
     ts: number,
@@ -1269,7 +1242,7 @@ const appendSqlCdcChange = async (
         dialect,
         sql`INSERT INTO ${sql.identifier(CDC_LOG_TABLE)} (${sql.identifier("ts")}, ${sql.identifier("table")}, ${sql.identifier("id")}, ${sql.identifier("op")}, ${sql.identifier("doc")}) VALUES (${ts}, ${table}, ${id}, ${op}, ${
             // eslint-disable-next-line unicorn/no-null -- SQL NULL is the correct post-image for a delete; the `id` identifies the removed row.
-            doc === undefined ? null : JSON.stringify(doc)
+            doc === undefined ? null : encodeCdcDocJson(doc)
         })`,
     );
 };
@@ -1286,6 +1259,62 @@ const readSqlCdcChanges = async (
     const sinceSeq = options.sinceSeq ?? 0;
     const limit = Math.max(1, Math.min(options.limit ?? 1000, 10_000));
 
+    // Retention-gap guard, mirroring the shard-local `runShardCdcSync`. Without
+    // it a consumer resuming below a swept floor is handed the surviving tail
+    // with an advanced cursor and no indication anything was skipped — a
+    // warehouse table permanently missing the trimmed range, reported nowhere.
+    // `+ 1` because a consumer sitting exactly at `floor - 1` has seen
+    // everything below the floor.
+    //
+    // Unconditional, unlike `readSqlCdcChangedTables`, which reads the floor only
+    // when retention is configured. That reader runs on the 2s shape poll and its
+    // consumers self-heal by re-reading; this one serves opaque warehouse cursors
+    // that cannot. Skipping the probe when retention is currently off would
+    // disarm the guard for a deployment that swept and then turned retention
+    // back off — one round trip per export page is not worth trading a silent
+    // gap for.
+    //
+    // Read BEFORE the watermark below, though its verdict comes second: this is
+    // the probe that touches `__cdc_log` itself, so a caller pointed at a
+    // database where the changelog was never created still gets an error naming
+    // `__cdc_log` rather than one naming `sqlite_sequence`, which SQLite has not
+    // created either.
+    const floor = await readSqlCdcFloor(exec, dialect);
+
+    // Rollback guard, ahead of the retention guard because it is the only one
+    // that says the cursor itself is meaningless rather than merely out of range.
+    //
+    // No consumer can legitimately hold a `seq` above the high-watermark: `seq`
+    // is allocated monotonically and the watermark outlives a sweep (see
+    // {@link readSqlCdcWatermark}), and the only cursor this module ever hands
+    // out is the `seq` of a row it actually returned. A cursor above it is
+    // therefore proof that the log rolled back underneath the consumer — on D1,
+    // a Time Travel restore, which rewinds the entire database and every durable
+    // record of the pre-restore timeline inside it.
+    //
+    // The consumer's own cursor is the only surviving witness, and unlike the
+    // shard plane there is no second one: the `.global()` changelog has no
+    // archive, and no epoch row (which a restore would rewind anyway — the
+    // shard's exists to be RE-MINTED once a witness has proved the fork, and
+    // there is no channel here to carry a re-minted epoch to a consumer; see the
+    // PR description). So this witness is acted on where it is presented.
+    //
+    // Serving the empty page this read would otherwise produce tells the consumer
+    // it is caught up. The store's post-restore writes then climb back through
+    // seqs it has already passed and are skipped one by one, silently and
+    // permanently — a warehouse table missing everything written after the
+    // restore, reported nowhere. So refuse, and carry the surviving watermark so
+    // a resynchronisation knows where the timeline it is on actually starts.
+    const watermark = await readSqlCdcWatermark(exec, dialect);
+
+    if (watermark !== undefined && sinceSeq > watermark) {
+        throw cdcForkedError(watermark, sinceSeq, "global");
+    }
+
+    if (floor !== undefined && cursorBelowRetainedFloor(floor, sinceSeq)) {
+        throw cdcTrimmedError(floor, sinceSeq, "global");
+    }
+
     const rows = await queryAll(
         exec,
         dialect,
@@ -1296,15 +1325,279 @@ const readSqlCdcChanges = async (
         const { doc } = row;
         const base = { id: String(row.id), op: String(row.op) as CdcChange["op"], seq: Number(row.seq), table: String(row.table), ts: Number(row.ts) };
 
-        return typeof doc === "string" ? { ...base, doc: JSON.parse(doc) as Record<string, unknown> } : base;
+        // `decodeWire` mirrors the `encodeWire` on the append side, so a
+        // `v.bigint()` / `v.bytes()` post-image comes back as the real value
+        // rather than its tagged form. Identity for a pure-JSON document.
+        return typeof doc === "string" ? { ...base, doc: decodeWire(JSON.parse(doc)) as Record<string, unknown> } : base;
     });
 
     return { changes, cursor: changes.at(-1)?.seq ?? sinceSeq };
 };
 
-/** Drop changelog entries at or below a checkpointed `throughSeq` (retention). */
-const trimSqlCdcChanges = async (exec: SqlCtxExec, throughSeq: number, dialect: SqlDialect): Promise<void> => {
-    await queryRun(exec, dialect, sql`DELETE FROM ${sql.identifier(CDC_LOG_TABLE)} WHERE ${sql.identifier("seq")} <= ${throughSeq}`);
+/**
+ * How long a hole in the `.global()` changelog's `seq` holds the poll cursor
+ * back — see "Late commits" on {@link readSqlCdcChangedTables}. Far above an
+ * append's commit latency, well below `GLOBAL_SHAPE_RESYNC_MS`.
+ */
+const CDC_LATE_COMMIT_WINDOW_MS = 10_000;
+
+/** How far below the head a cold or resync poll looks for a hole. */
+// ponytail: fixed tail; an append overtaken by more than this many commits falls back to the resync.
+const CDC_LATE_COMMIT_SCAN_ROWS = 1000;
+
+/**
+ * Two scalar columns locating the first live hole above `lower`: `gap` is the
+ * first row newer than `cutoff` whose predecessor `seq` is missing, `below` the
+ * last row before that hole. Both are uncorrelated, so each is evaluated once
+ * per statement. The plain `v.seq > lower` sits beside the arithmetic form so
+ * the scan stays a primary-key range.
+ */
+const lateCommitCap = (lower: SQL, cutoff: number): SQL => {
+    const log = sql.identifier(CDC_LOG_TABLE);
+    const gap = sql`(SELECT MIN(v.seq) FROM ${log} v WHERE v.seq > ${lower} AND v.seq - 1 > ${lower} AND v.ts > ${cutoff} AND NOT EXISTS (SELECT 1 FROM ${log} p WHERE p.seq = v.seq - 1))`;
+
+    return sql`${gap} AS ${sql.identifier("gap")}, (SELECT MAX(q.seq) FROM ${log} q WHERE q.seq > ${lower} AND q.seq < ${gap}) AS ${sql.identifier("below")}`;
+};
+
+/** Lower `cursor` to just under the hole {@link lateCommitCap} found, if any — to `fallback` when no row precedes the hole. */
+const capAtLateCommit = (cursor: number, row: Record<string, unknown> | undefined, fallback: number): number => {
+    const gap = Number(row?.["gap"] ?? Number.NaN);
+
+    if (!Number.isFinite(gap)) {
+        return cursor;
+    }
+
+    const below = Number(row?.["below"] ?? Number.NaN);
+
+    return Math.min(cursor, Number.isFinite(below) ? below : fallback);
+};
+
+/**
+ * Which tables the changelog recorded a write to after `sinceSeq`, plus the
+ * cursor to resume from. Metadata only — it reads no `doc`, so its cost is a
+ * grouped scan over an index range rather than the size of the documents in it.
+ *
+ * The `.global()` shape poll asks this once per tick for the whole shard, and a
+ * shape whose table is absent from the answer skips its membership read
+ * entirely.
+ *
+ * **One statement, and the cursor comes out of the same rows as the tables.**
+ * Reading the head separately — in either order — opens a window where a write
+ * commits between the two round trips and ends up absent from `tables` while
+ * sitting at or below the adopted `cursor`, which loses it for good. Deriving
+ * the cursor as the max `seq` actually returned closes that window by
+ * construction: the caller can never advance past a row this scan did not see.
+ *
+ * **Late commits.** Postgres and MySQL allocate `seq` at INSERT, not at commit,
+ * so an append holding `N` can commit after one holding `N + 1`. A poll that
+ * adopts `N + 1` while `N` is still in flight skips `N` until the next resync
+ * pass. So on those engines the cursor stops below the first HOLE in `seq`
+ * rather than at the highest row seen: a hole is an allocated `seq` that is not
+ * (yet) visible, which is exactly what an in-flight append looks like. Tables
+ * above the hole are still reported, so nothing is delayed — rows past the
+ * cursor are just reported again next tick.
+ *
+ * A hole can also be permanent (a failed append burns its `seq`), and a cursor
+ * pinned under one forever would re-report everything above it on every tick.
+ * So a hole only holds the cursor while the first row after it is younger than
+ * {@link CDC_LATE_COMMIT_WINDOW_MS}: that row's append started before its own
+ * `seq` was allocated, which is after the hole's, so once it is that old the
+ * hole's owner has either committed (and is visible) or never will. An append
+ * slower than the window falls back to the resync interval, as before. A MySQL
+ * `auto_increment_increment` above 1 makes every step a hole, which holds the
+ * cursor one window behind the head: correct, just less narrowing.
+ *
+ * D1 skips all of this: single writer, `AUTOINCREMENT`, and `withSession` gives
+ * both reads one snapshot, so there is no hole to wait for — and D1 bills rows
+ * read.
+ */
+const readSqlCdcChangedTables = async (
+    exec: SqlCtxExec,
+    sinceSeq: number,
+    dialect: SqlDialect,
+    options: { cursorOnly?: boolean; now?: number; retained?: boolean } = {},
+): Promise<{ cursor: number; floor?: number; tables: string[] }> => {
+    const log = sql.identifier(CDC_LOG_TABLE);
+    const guarded = dialect.name !== "sqlite";
+    const cutoff = (options.now ?? Date.now()) - CDC_LATE_COMMIT_WINDOW_MS;
+
+    if (options.cursorOnly) {
+        // The caller is reading everything this pass regardless, so the table
+        // list would be discarded — and on the cold-instance case that produces
+        // it, computing it means grouping the entire changelog. `MAX(seq)` over
+        // the primary key answers what is actually wanted, and the hole search is
+        // bounded to the log's tail for the same reason. Never below `sinceSeq`:
+        // the `seq` before the log's first row is missing too, and is no hole.
+        const tail = sql`GREATEST((SELECT MAX(seq) FROM ${log}) - ${sql.raw(String(CDC_LATE_COMMIT_SCAN_ROWS))}, ${sinceSeq})`;
+        const head = await queryAll(exec, dialect, sql`SELECT MAX(seq) AS seq${guarded ? sql`, ${lateCommitCap(tail, cutoff)}` : sql``} FROM ${log}`);
+        const rawCursor = Number(head[0]?.["seq"] ?? sinceSeq);
+
+        return { cursor: capAtLateCommit(Number.isFinite(rawCursor) ? rawCursor : sinceSeq, head[0], sinceSeq), tables: [] };
+    }
+
+    const rows = await queryAll(
+        exec,
+        dialect,
+        sql`SELECT ${sql.identifier("table")} AS ${sql.identifier("table")}, MAX(seq) AS seq${guarded ? sql`, ${lateCommitCap(sql`${sinceSeq}`, cutoff)}` : sql``} FROM ${log} WHERE seq > ${sinceSeq} GROUP BY ${sql.identifier("table")}`,
+    );
+
+    let cursor = sinceSeq;
+    const tables: string[] = [];
+
+    for (const row of rows) {
+        const seq = Number(row["seq"]);
+
+        if (Number.isFinite(seq) && seq > cursor) {
+            cursor = seq;
+        }
+
+        tables.push(String(row["table"]));
+    }
+
+    // Every row carries the same uncorrelated cap, so the first is as good as any.
+    cursor = capAtLateCommit(cursor, rows[0], sinceSeq);
+
+    // The retained floor, so a caller can tell "nothing changed" from "what
+    // changed was swept away". Read AFTER the scan, not before: the floor only
+    // ever rises, so a sweep interleaving between the two makes this report a
+    // gap that has only just opened — one wasted full pass. Reading it first
+    // would let a sweep land after it and hide a gap that is real.
+    //
+    // Only when retention is configured. With no sweep the floor never moves off
+    // the log's first row, so the gap it detects cannot occur — and this is a
+    // read on a two-second poll, which is the wrong place to spend a round trip
+    // proving something that is true by construction.
+    const floor = options.retained === true ? await readSqlCdcFloor(exec, dialect) : undefined;
+
+    return { cursor, tables, ...(floor === undefined ? {} : { floor }) };
+};
+
+/** SQLite phrases `SQLITE_TOOBIG` as "string or blob too big"; D1, workerd and `node:sqlite` all surface that same text. */
+const SQLITE_ROW_TOO_BIG_RE = /string or blob too big/iu;
+
+/** Postgres' wording for a heap tuple that will not fit its page (`ERROR: row is too big: size 8168, maximum size 8160`). */
+const PG_ROW_TOO_BIG_RE = /row is too big/iu;
+
+/**
+ * Does `error` say the row this write tried to store is over the engine's
+ * per-row ceiling, and if so, what is that ceiling called? Returns `undefined`
+ * when the error is anything else.
+ *
+ * Recognised per dialect, because only the wording is shared with the
+ * shard-local plane:
+ *
+ * - **SQLite** (D1, workerd, `node:sqlite`) phrases `SQLITE_TOOBIG` as "string
+ *   or blob too big" — the same text the `lunora-row-too-big` solutions entry
+ *   in `@lunora/errors` keys on.
+ * - **MySQL** raises `ER_TOO_BIG_ROWSIZE`. Drivers disagree on which field
+ *   carries it — mysql2 sets `errno`, others only the symbolic `code` — so
+ *   accept either, the way `createIndexIfNotExists` already accepts
+ *   `ER_DUP_KEYNAME`.
+ * - **Postgres** raises `program_limit_exceeded` (SQLSTATE 54000) with "row is
+ *   too big"; the code alone is too broad (it also covers target-list and
+ *   argument-count limits), so the message is what decides.
+ */
+const rowTooBigLimit = (dialect: SqlDialect, error: unknown): string | undefined => {
+    const { code, errno } = error as { code?: unknown; errno?: unknown };
+    const message = error instanceof Error ? error.message : "";
+
+    switch (dialect.name) {
+        case "mysql": {
+            return errno === 1118 || code === "ER_TOO_BIG_ROWSIZE"
+                ? "InnoDB's per-row ceiling — roughly 8 KB, half a 16 KB page, for the part of the row stored inline"
+                : undefined;
+        }
+        case "postgres": {
+            return PG_ROW_TOO_BIG_RE.test(message) ? "the 8 KB heap page a tuple must fit once its wide columns have been TOASTed out" : undefined;
+        }
+        default: {
+            return SQLITE_ROW_TOO_BIG_RE.test(message) ? "the storage engine's per-row ceiling (2 MB on D1)" : undefined;
+        }
+    }
+};
+
+/**
+ * Row-size overflow is the one storage-engine limit a caller can act on, so it
+ * must survive the wire. None of the three engines raises a `LunoraError`, and
+ * `toErrorBody` redacts every foreign throw to `INTERNAL` / "Internal error" /
+ * 500 — leaving the operator a redacted 500 for a document they can simply move
+ * to R2. `PAYLOAD_TOO_LARGE` is catalogued non-internal (413), so this message
+ * reaches the client with the limit named.
+ *
+ * The shard-local plane does the same thing in its own `runWrite`
+ * (`@lunora/shard-engine`); the recogniser is not shared because the engine
+ * ceilings and their error shapes are not.
+ */
+const throwIfRowTooBig = (dialect: SqlDialect, error: unknown, table: string): void => {
+    const limit = rowTooBigLimit(dialect, error);
+
+    if (limit === undefined) {
+        return;
+    }
+
+    throw new LunoraError(
+        "PAYLOAD_TOO_LARGE",
+        `document is too large to store in "${table}": a single row cannot exceed ${limit}. The limit is on the STORED bytes, which are UTF-8. Keep the payload in R2 (ctx.storage) and store a reference on the row.`,
+    );
+};
+
+/**
+ * Reads-and-decides a `patchIf` or an operator `patch` makes before giving up with `ConflictError`.
+ * Each miss means another writer changed the row in between, so a run of this
+ * length is sustained contention on one row, not bad luck.
+ */
+const OCC_RETRY_ATTEMPTS = 16;
+
+/** The column `patchIf`'s read evaluates its `where` into; double-underscored so no schema field can take the name. */
+const PATCH_IF_MATCH_COLUMN = "__lunora_patch_if_match__";
+
+/**
+ * Remap a write's raw engine error to the coded one a caller can act on, then
+ * rethrow — the single `catch` body every write path shares.
+ *
+ * A UNIQUE-index breach is a {@link ConflictError} (`CONFLICT`, 409): the caller
+ * lost a race or wrote a duplicate, both of which they can answer. A row over
+ * the engine's ceiling is {@link throwIfRowTooBig}'s `PAYLOAD_TOO_LARGE`.
+ * Anything else is rethrown untouched — guessing at an unrecognised engine error
+ * is how a redacted 500 becomes a wrong 409.
+ *
+ * Takes `dialect` rather than a pre-destructured `isUniqueViolation`, matching
+ * `throwIfRowTooBig`: the two used to disagree, which is why the identical catch
+ * body could not simply be lifted out.
+ */
+const mapWriteError = (dialect: SqlDialect, error: unknown, table: string): never => {
+    if (dialect.isUniqueViolation(error)) {
+        throw new ConflictError(`unique constraint violation on "${table}"`, "unique");
+    }
+
+    throwIfRowTooBig(dialect, error, table);
+
+    throw error;
+};
+
+/**
+ * The provisioning sweep in flight (or completed) for a given
+ * {@link SqlCtxDbOptions.provisionScope}, so per-request ctx-dbs built against
+ * the same database share one run. Weak so a scope that goes out of scope takes
+ * its entry with it; a rejected run is evicted so the next call retries.
+ */
+const provisioningByScope = new WeakMap<object, Promise<void>>();
+
+/**
+ * The server `in` renderer, with one change for path values. Their items are SQL fragments (see
+ * `serializeFieldValue`), which the column form's wide branch cannot unpack, so a list holding one goes to
+ * {@link pathInList} whatever its length.
+ */
+const pathAwareInList = (engine: "mysql" | "postgres") => {
+    const serverIn = serverInList(engine);
+
+    return (reference: SQL, items: ReadonlyArray<unknown>, negated: boolean, budget?: number): SQL => {
+        if (items.some((item) => item instanceof SQL)) {
+            return pathInList(engine, reference, items, negated);
+        }
+
+        return serverIn(reference, items, negated, budget);
+    };
 };
 
 const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
@@ -1315,27 +1608,105 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
     // locals shadow the module-level SQLite helpers/imports. `@lunora/hyperdrive/global`
     // injects a Postgres/MySQL dialect; absent one, this is the SQLite default.
     const { dialect } = options;
-    const { isUniqueViolation } = dialect;
-    // Value encode stays the shared SQLite codec (`serializeColumnValue`) on every
-    // engine — storage is SQLite-shaped everywhere. Identifier quoting and
-    // placeholder numbering are drizzle's job (rendered per-engine via renderSql),
-    // so the strategy only carries the one per-engine WHERE difference: MySQL has
-    // no `||` string concat, so `contains` uses `CONCAT`.
-    const whereSqlStrategy: WhereSqlStrategy = {
-        fieldRef: columnRefSql,
-        serialize: serializeColumnValue,
-        // MySQL has no `||` string concat; the rest use the portable form compileWhereSql defaults to.
-        ...(dialect.name === "mysql" ? { likeContains: (reference, term) => sql`${reference} LIKE CONCAT('%', ${term}, '%')` } : {}),
+    // Value encode stays the shared SQLite codec on every engine — storage is
+    // SQLite-shaped everywhere. Identifier quoting and placeholder numbering are
+    // drizzle's job (rendered per-engine via renderSql), so the base only carries
+    // the per-engine WHERE differences: the substring test's position function,
+    // and (on D1) the bound-parameter budget. `serialize` is per-TABLE — see
+    // {@link whereSqlStrategyFor}.
+    const whereSqlStrategyBase: Omit<WhereSqlStrategy, "serialize"> = {
+        fieldRef: (field) => fieldRefSql(dialect, field),
+        rangeTypeGuard: (field, type) => pathTypeGuardSql(dialect, field, type),
+        // `contains` keeps whatever case behaviour each engine's substring test
+        // already gives callers, which is NOT the same across the three: SQLite is
+        // ASCII-case-insensitive (the compiler's `instr(lower(…), lower(…))`
+        // default), while Postgres (`strpos`) and MySQL (`LOCATE`) are both
+        // byte-exact. MySQL's `LOCATE` follows the column collation and
+        // `@lunora/hyperdrive`'s dialect pins every character column to
+        // `utf8mb4_0900_bin` — a column's collation beats a bound literal's — so it
+        // is case-SENSITIVE there, not case-insensitive as this comment used to say.
+        // Left as-is deliberately: there is no majority to fold toward, and making
+        // MySQL insensitive would silently widen every shipped `contains` filter.
+        ...(dialect.name === "mysql"
+            ? {
+                  containsExpr: (reference, term) => {
+                      const text = pathTextReference(reference);
+
+                      // A path searches its leaf's text for the term's text, the same substring test a column gets.
+                      return text === undefined ? sql`LOCATE(${term}, ${reference}) > 0` : sql`LOCATE(${pathContainsNeedle("mysql", term)}, ${text}) > 0`;
+                  },
+              }
+            : {}),
+        ...(dialect.name === "postgres"
+            ? {
+                  containsExpr: (reference, term) => {
+                      const text = pathTextReference(reference);
+
+                      // A path searches its leaf's text for the term's text, the same substring test a column gets.
+                      return text === undefined ? sql`strpos(${reference}, ${term}) > 0` : sql`strpos(${text}, ${pathContainsNeedle("postgres", term)}) > 0`;
+                  },
+              }
+            : {}),
+        // The compiler defaults `inList` to SQLite's bounded `json_each` form,
+        // because D1 is the same Workerd build as a Durable Object and caps a
+        // statement at 100 bound parameters. The other two engines bind
+        // thousands and have no `json_each`, so they take a literal list up to
+        // a bound and one array/JSON parameter past it.
+        ...(dialect.name === "sqlite" ? {} : { inList: pathAwareInList(dialect.name) }),
+    };
+
+    /** One `WhereSqlStrategy` per table definition — see {@link whereSqlStrategyFor}. Definitions come from `defineSchema` and never mutate, so the entry is valid for the ctx-db's life. */
+    const whereStrategyByDefinition = new WeakMap<TableDefinitionLike, WhereSqlStrategy>();
+
+    /**
+     * The `where` strategy for one table: the engine base above, plus a
+     * value encode that knows which COLUMN it is filling.
+     *
+     * That last part is not a nicety. `v.any()` / `v.union()` / `v.from()` store
+     * as TEXT on every engine, so a number or boolean written to one is kept in
+     * the marked, self-describing form `serializeDocumentColumn` writes —
+     * `sqliteEncode` cannot infer that from the value alone, and the kind-blind
+     * binding this replaced bound a bare `42` against a column holding the marked
+     * text. Nothing matched: `where: { un: 42 }` returned no rows, `{ un: { gt: 5 } }`
+     * returned no rows, and — because a keyset cursor's pivot binds through this
+     * same strategy — page 2 of a `.paginate()` ordered on such a column came back
+     * EMPTY, silently dropping every row after the first page. The identical
+     * operations against the DO row store are correct, so moving a table to
+     * `.global()` changed the answers.
+     *
+     * What this does NOT fix: the marked form is JSON text, so SQLite orders an
+     * untyped column's numbers LEXICOGRAPHICALLY (`1.5, 10, 100, 2, 9`). Ranges
+     * and cursors are now consistent WITH that order — the same order `ORDER BY`
+     * uses, which is what makes paging return every row — but it is not numeric
+     * order. Making it numeric means an order-preserving stored encoding for an
+     * untyped column, i.e. a storage-format change with a migration, so it is
+     * stated here rather than half-done.
+     */
+    const whereSqlStrategyFor = (definition: TableDefinitionLike): WhereSqlStrategy => {
+        const cached = whereStrategyByDefinition.get(definition);
+
+        if (cached !== undefined) {
+            return cached;
+        }
+
+        const strategy: WhereSqlStrategy = {
+            ...whereSqlStrategyBase,
+            serialize: (value, field) => serializeFieldValue(dialect, field, value, (bound) => serializeDocumentColumn(definition, field, bound)),
+        };
+
+        whereStrategyByDefinition.set(definition, strategy);
+
+        return strategy;
     };
 
     /** NULL-safe equality for the OCC guard, bound to this ctx-db's engine (see the module-level {@link nullSafeEqualsSql}). */
     const nullSafeEquals = (reference: SQL, value: unknown): SQL => nullSafeEqualsSql(dialect.name, reference, value);
 
     /**
-     * Build an `INSERT … VALUES … &lt;conflict clause>` upsert as a drizzle SQL for
-     * the aggregate counters. SQLite/Postgres emit `ON CONFLICT(&lt;key>) DO UPDATE
+     * Build an `INSERT … VALUES … <conflict clause>` upsert as a drizzle SQL for
+     * the aggregate counters. SQLite/Postgres emit `ON CONFLICT(<key>) DO UPDATE
      * SET …`; MySQL emits `ON DUPLICATE KEY UPDATE …` (keyed off `dialect.name`).
-     * The `set` callback returns `{ &lt;unquoted column>: &lt;update expression> }`
+     * The `set` callback returns `{ <unquoted column>: <update expression> }`
      * pairs, building expressions from `excluded(col)` (the proposed row) and
      * `current(col)` (the existing row — qualified with the table name on Postgres,
      * where a bare reference is ambiguous between the target and `excluded`).
@@ -1347,14 +1718,8 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
         table: string;
         values: ReadonlyArray<unknown>;
     }): SQL => {
-        const columnList = sql.join(
-            config.columns.map((column) => sql`${sql.identifier(column)}`),
-            sql`, `,
-        );
-        const valueList = sql.join(
-            config.values.map((value) => sql`${value}`),
-            sql`, `,
-        );
+        const columnList = identifierList(config.columns);
+        const valueList = bindList(config.values);
         const excluded = (column: string): SQL => (dialect.name === "mysql" ? sql`VALUES(${sql.identifier(column)})` : sql`excluded.${sql.identifier(column)}`);
         // Postgres can't resolve a bare existing-row column in the SET RHS (it's in
         // both the target and `excluded` scopes) — qualify with the table name.
@@ -1375,6 +1740,13 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
     const clock = options.clock ?? (() => Date.now());
     const generateId = options.idGenerator ?? (() => crypto.randomUUID());
     const cdcEnabled = options.cdc ?? false;
+    // Positive-and-finite only: a zero or negative window would mean "delete
+    // everything ever written", which is never what an operator means by a
+    // retention setting and is not a state this should be able to reach by typo.
+    const cdcRetentionMs =
+        typeof options.cdcRetentionMs === "number" && Number.isFinite(options.cdcRetentionMs) && options.cdcRetentionMs > 0
+            ? options.cdcRetentionMs
+            : undefined;
     // Resolved request auth for `.serverDefault(fn)` column factories; defaults
     // to the anonymous slice when the writer is built without a caller identity.
     // eslint-disable-next-line unicorn/no-null -- the auth slice models the anonymous caller as null identity/userId (mirrors `ServerDefaultContext`)
@@ -1390,8 +1762,33 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
      * inside the row write's transaction and so is atomic.
      */
     const recordCdc = async (table: string, id: string, op: CdcChange["op"], doc?: Record<string, unknown>): Promise<void> => {
-        if (cdcEnabled) {
-            await appendSqlCdcChange(exec, clock(), table, id, op, doc, dialect);
+        if (!cdcEnabled) {
+            return;
+        }
+
+        await appendSqlCdcChange(exec, clock(), table, id, op, doc, dialect);
+
+        if (cdcRetentionMs === undefined) {
+            return;
+        }
+
+        const now = clock();
+
+        // Per-isolate throttle before the fleet-wide lease: the lease is a write,
+        // and attempting it on every changelog append would double this path's
+        // cost. See {@link CDC_SWEEP_ATTEMPT_MS}.
+        if (now - lastSweepAttemptAt < CDC_SWEEP_ATTEMPT_MS) {
+            return;
+        }
+
+        lastSweepAttemptAt = now;
+
+        try {
+            await sweepSqlCdcRetention(exec, dialect, cdcRetentionMs, now);
+        } catch {
+            // Retention is maintenance. A failed sweep must never surface on a
+            // write whose row and changelog entry have already committed — the
+            // log simply stays larger until a later pass claims the lease.
         }
     };
     const scheduler = options.scheduler ?? throwingScheduler;
@@ -1410,17 +1807,36 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
     // once per ctx-db, lazily, before any path that can touch a companion. The
     // cached value is the resolving `Promise` so concurrent first-callers share
     // the single round-trip rather than racing duplicate DDL (mirrors the
-    // `isFtsAvailable` probe). CREATE IF NOT EXISTS is idempotent, so running it
-    // once per instance is cheap.
-    let migratedPromise: Promise<void> | undefined;
+    // dialect's fts5 flag).
+    //
+    // "Once per ctx-db" is only cheap when the ctx-db outlives the request — and
+    // it does not: hosts build one per request so the writer can carry the
+    // caller's identity and bookmark. `provisionScope` lifts the memo onto the
+    // database it provisions ({@link SqlCtxDbOptions.provisionScope}), which is
+    // what makes the sweep once-per-isolate rather than once-per-request.
+    //
+    // A caller that passes no scope gets a private one. That is not a special
+    // case in disguise: the entry then lives exactly as long as this closure
+    // holds the key, which IS a per-ctx-db memo — same lifetime as the `let` it
+    // replaces, one mechanism instead of two.
+    const provisionScope = options.provisionScope ?? {};
 
     const ensureMigrated = async (): Promise<void> => {
-        migratedPromise ??= (async (): Promise<void> => {
+        const cached = provisioningByScope.get(provisionScope);
+
+        if (cached) {
+            return cached;
+        }
+
+        const run = (async (): Promise<void> => {
             // Base `.global()` tables first — the companion migrations below and
             // every read/write path assume they exist.
             await runSqlGlobalTableMigrations(exec, schema, dialect);
             await runSqlAggregateMigrations(exec, schema, dialect);
             await runSqlRankMigrations(exec, schema, dialect);
+            // The search companions record their backfill progress, so the state
+            // table has to exist before the first page runs.
+            await migrateSearchState(exec, dialect);
             await runSqlSearchMigrations(exec, schema, dialect);
 
             if (cdcEnabled) {
@@ -1429,13 +1845,18 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
         })().catch((error: unknown) => {
             // Don't cache a rejection — a transient DDL failure (e.g. a dropped
             // connection) would otherwise poison every later call on this
-            // ctx-db. Clear the cache so the next call retries the idempotent
+            // scope. Clear the cache so the next call retries the idempotent
             // CREATE-IF-NOT-EXISTS migrations.
-            migratedPromise = undefined;
+            provisioningByScope.delete(provisionScope);
             throw error;
         });
 
-        return migratedPromise;
+        // Recorded synchronously (the IIFE above has only run to its first
+        // await), so concurrent first-callers single-flight onto this run — and
+        // so the `delete` above can never drop a fresher entry than its own.
+        provisioningByScope.set(provisionScope, run);
+
+        return run;
     };
 
     /**
@@ -1468,7 +1889,7 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
     const backfilled = new Map<string, boolean>();
 
     /**
-     * Whether `table` has a corresponding `__agg_&lt;index>` companion table on
+     * Whether `table` has a corresponding `__agg_<index>` companion table on
      * the D1 binding. Global tables ship with their own DDL — counter tables
      * are opt-in: if the user hasn't defined one, we silently fall back to a
      * SCAN-based count. The same opt-in shape is what `runSqlAggregateMigrations`
@@ -1533,18 +1954,70 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
 
         await queryRun(exec, dialect, sql`DELETE FROM ${sql.identifier(aggTable)}`);
 
+        const inserts: SQL[] = [];
+
         for (const [encoded, tally] of tallies) {
-            // eslint-disable-next-line no-await-in-loop -- counter rows are inserted sequentially on the single shared D1 connection; SqlCtxExec exposes no batch API here.
-            await queryRun(
-                exec,
-                dialect,
+            inserts.push(
                 sql`INSERT INTO ${sql.identifier(aggTable)} (${sql.identifier("__key__")}, ${sql.identifier("__value__")}, ${sql.identifier("__count__")}) VALUES (${encoded}, ${tally.value}, ${tally.count})`,
             );
         }
 
+        // One round trip for the whole backfill when the exec exposes `batch`
+        // (rows are keyed by distinct `__key__`, so order across them doesn't
+        // matter); a sequential `run()` loop otherwise.
+        await queryBatch(exec, dialect, inserts);
+
         backfilled.set(cacheKey, true);
 
         return true;
+    };
+
+    /**
+     * Reduce one group's extreme in JS, off the decoded rows, for a column
+     * {@link mayHoldBigintKey} matches — through {@link foldAggregateTally}, the
+     * same fold both backfills seed a group with, so a recomputed extreme cannot
+     * disagree with a rebuilt one.
+     *
+     * Pages by keyset on `id` like {@link ensureRankBackfilled} rather than
+     * selecting the group in one statement: the fold reads every surviving row,
+     * and one write against a 200k-row group otherwise put 200k rows in the
+     * isolate — for a predicate most matching columns never need.
+     * @returns the surviving extreme, or `null` when the group has no numeric row
+     */
+    const foldGroupExtreme = async (
+        definition: SchemaLike["tables"][string],
+        tableName: string,
+        index: AggregateIndexDefinitionLike,
+        conditions: SQL[],
+    ): Promise<null | number> => {
+        // Single-group, so the tally key is the empty string and only `value` is
+        // read — the caller pins `__count__` from its own tracked tally.
+        const tallies = new Map<string, AggregateTally>();
+        let cursorId: string | undefined;
+        let hasMore = true;
+
+        while (hasMore) {
+            const seek = cursorId === undefined ? conditions : [...conditions, sql`${sql.identifier("id")} > ${cursorId}`];
+            const pageWhere = seek.length > 0 ? sql` WHERE ${sql.join(seek, sql` AND `)}` : sql``;
+            // `id` rides along only as the keyset cursor; the fold reads just the
+            // reduced column, and `decodeRow` skips whatever the projection left out.
+            // eslint-disable-next-line no-await-in-loop -- keyset paging is inherently sequential: each page's WHERE depends on the prior page's last id.
+            const pageRows = await queryAll(
+                exec,
+                dialect,
+                sql`SELECT ${sql.identifier("id")}, ${columnRefSql(index.field ?? "")} FROM ${sql.identifier(tableName)}${pageWhere} ORDER BY ${sql.identifier("id")} ASC LIMIT ${sql.raw(String(BACKFILL_BATCH_SIZE))}`,
+            );
+
+            for (const decoded of decodeRows(definition, pageRows)) {
+                foldAggregateTally(tallies, "", index, decoded);
+            }
+
+            cursorId = pageRows.at(-1)?.["id"] as string | undefined;
+            hasMore = pageRows.length === BACKFILL_BATCH_SIZE;
+        }
+
+        // eslint-disable-next-line unicorn/no-null -- an extreme-less group stores NULL, matching what both backfills seed
+        return tallies.get("")?.value ?? null;
     };
 
     /**
@@ -1553,28 +2026,53 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
      * dialect. Runs AFTER the physical row write, so it sees the post-write
      * source and returns the surviving extreme (`null` when none survives). The
      * caller pins `__count__` from its own tracked tally.
+     *
+     * A column that may hold an order-preserving key goes to
+     * {@link foldGroupExtreme} rather than to `MIN`/`MAX`. Not
+     * `ORDER BY <col> LIMIT 1` either: the key is order-preserving only against
+     * other keys, and SQLite orders every TEXT after every numeric — so on a
+     * mixed `v.any()` column the extreme would be decided by storage class rather
+     * than by magnitude.
      */
     const recomputeExtreme = async (tableName: string, index: AggregateIndexDefinitionLike, document: Record<string, unknown>): Promise<null | number> => {
-        const sqlFunction = aggregateSqlFunction(index.op);
         const field = index.field ?? "";
         const conditions: SQL[] = [];
+        const definition = schema.tables[tableName];
+        // Column-aware, for the same reason `whereSqlStrategyFor` is: an untyped
+        // (`v.any()`/`v.union()`/`v.from()`) `by` or static-`where` column stores a
+        // number in a marked form only the column's kind can reproduce, and a
+        // kind-blind binding here scoped the recompute to no rows at all.
+        const serialize = (key: string, value: unknown): unknown =>
+            serializeFieldValue(dialect, key, value, (bound) => (definition ? serializeDocumentColumn(definition, key, bound) : serializeColumnValue(bound)));
 
         for (const key of index.by ?? []) {
             // eslint-disable-next-line unicorn/no-null -- canonical key tuple: a missing by-field is matched as NULL, mirroring encodeAggregateKey's null-fill
-            const value = serializeColumnValue(document[key] ?? null);
+            const value = serialize(key, document[key] ?? null);
 
             conditions.push(value === null ? sql`${columnRefSql(key)} IS NULL` : sql`${columnRefSql(key)} = ${value}`);
         }
 
         for (const [key, expected] of Object.entries(index.where ?? {})) {
             const literal = expected !== null && typeof expected === "object" && !Array.isArray(expected) ? (expected as { eq: unknown }).eq : expected;
-            const value = serializeColumnValue(literal);
+            const value = serialize(key, literal);
+            // A static `where` key may be a dotted path into an object column.
+            const reference = fieldRefSql(dialect, key);
 
-            conditions.push(value === null ? sql`${columnRefSql(key)} IS NULL` : sql`${columnRefSql(key)} = ${value}`);
+            conditions.push(value === null ? sql`${reference} IS NULL` : sql`${reference} = ${value}`);
         }
 
-        const query = sql`SELECT ${sql.raw(sqlFunction)}(${columnRefSql(field)}) AS value FROM ${sql.identifier(tableName)}`;
-        const rows = await queryAll(exec, dialect, conditions.length > 0 ? sql`${query} WHERE ${sql.join(conditions, sql` AND `)}` : query);
+        const whereSql = conditions.length > 0 ? sql` WHERE ${sql.join(conditions, sql` AND `)}` : sql``;
+
+        if (definition && mayHoldBigintKey(definition.shape[field])) {
+            return foldGroupExtreme(definition, tableName, index, conditions);
+        }
+
+        const sqlFunction = aggregateSqlFunction(index.op);
+        const rows = await queryAll(
+            exec,
+            dialect,
+            sql`SELECT ${sql.raw(sqlFunction)}(${columnRefSql(field)}) AS ${sql.identifier("value")} FROM ${sql.identifier(tableName)}${whereSql}`,
+        );
 
         return aggregateScalar(rows[0]?.["value"]);
     };
@@ -1623,54 +2121,10 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
             return;
         }
 
-        if (op === "count") {
+        if (op === "count" || op === "sum" || op === "avg") {
             // Track the group keys we touched so an emptied group can be pruned
-            // (count steps both the removes and the adds key on a `by`-changing
-            // update; only the removes side can reach 0).
-            const touched = new Set<string>();
-
-            for (const [document, delta] of [
-                [removes, -1],
-                [adds, 1],
-            ] as const) {
-                if (!document) {
-                    continue;
-                }
-
-                const encoded = encodeAggregateKey(index.by ?? [], document);
-
-                touched.add(encoded);
-
-                // eslint-disable-next-line no-await-in-loop -- sequential counter step on the shared connection
-                await queryRun(
-                    exec,
-                    dialect,
-                    upsertSql({
-                        columns: ["__key__", "__value__", "__count__"],
-                        conflictKey: "__key__",
-                        set: (excluded, current) => {
-                            return {
-                                __count__: sql`${current("__count__")} + ${excluded("__count__")}`,
-                                __value__: sql`${current("__value__")} + ${excluded("__value__")}`,
-                            };
-                        },
-                        table: aggTable,
-                        values: [encoded, delta, delta],
-                    }),
-                );
-            }
-
-            for (const encoded of touched) {
-                // eslint-disable-next-line no-await-in-loop -- sequential prune on the shared connection (see above).
-                await pruneEmptyGroup(aggTable, encoded);
-            }
-
-            return;
-        }
-
-        if (op === "sum" || op === "avg") {
-            // Same prune-after-step contract as count: a group whose last row
-            // left drops to `__count__ <= 0` and must be removed, not zeroed.
+            // (a `by`-changing update steps both the removes and the adds key;
+            // only the removes side can reach `__count__ <= 0`).
             const touched = new Set<string>();
 
             for (const [document, sign] of [
@@ -1681,7 +2135,9 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
                     continue;
                 }
 
-                const numeric = coerceAggregateNumber(document[field]);
+                // count steps `__value__` by ±1; sum/avg step it by the row's
+                // numeric field value (skipping rows without one).
+                const numeric = op === "count" ? 1 : coerceAggregateNumber(document[field]);
 
                 if (numeric === undefined) {
                     continue;
@@ -1701,7 +2157,13 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
                         set: (excluded, current) => {
                             return {
                                 __count__: sql`${current("__count__")} + ${excluded("__count__")}`,
-                                __value__: sql`COALESCE(${current("__value__")}, 0) + ${excluded("__value__")}`,
+                                // count's `__value__` is never NULL (seeded with the
+                                // delta); a sum/avg group seeded by a valueless row can
+                                // be, hence the COALESCE on that side only.
+                                __value__:
+                                    op === "count"
+                                        ? sql`${current("__value__")} + ${excluded("__value__")}`
+                                        : sql`COALESCE(${current("__value__")}, 0) + ${excluded("__value__")}`,
                             };
                         },
                         table: aggTable,
@@ -1711,7 +2173,7 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
             }
 
             for (const encoded of touched) {
-                // eslint-disable-next-line no-await-in-loop -- sequential prune on the shared D1 connection (see above).
+                // eslint-disable-next-line no-await-in-loop -- sequential prune on the shared connection (see above).
                 await pruneEmptyGroup(aggTable, encoded);
             }
 
@@ -1725,7 +2187,7 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
             const existingRows = await queryAll(
                 exec,
                 dialect,
-                sql`SELECT ${sql.identifier("__value__")} AS value, ${sql.identifier("__count__")} AS count FROM ${sql.identifier(aggTable)} WHERE ${sql.identifier("__key__")} = ${encoded}`,
+                sql`SELECT ${sql.identifier("__value__")} AS ${sql.identifier("value")}, ${sql.identifier("__count__")} AS ${sql.identifier("count")} FROM ${sql.identifier(aggTable)} WHERE ${sql.identifier("__key__")} = ${encoded}`,
             );
             const existing = existingRows[0] as { count: number; value: null | number } | undefined;
             const existingValue = aggregateScalar(existing?.value);
@@ -1860,9 +2322,12 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
 
     /**
      * Lazy backfill of a rank companion. Mirrors the aggregate counter twin —
-     * `ensureBackfilled`. TRUNCATE then re-insert; cached per ctx-db. Pages
-     * the source table via keyset cursor on `id` so an unbounded table never
-     * has to fit in a single SELECT.
+     * `ensureBackfilled`. TRUNCATE then re-insert; cached per ctx-db.
+     *
+     * Bounded end to end, not just on the read: the source table is paged by
+     * keyset cursor on `id`, and the tuples that page produces are flushed
+     * before the next one is read, so neither the buffered `SQL` objects nor the
+     * dispatched batch ever grows to the row count.
      */
     const ensureRankBackfilled = async (tableName: string, index: RankIndexDefinitionLike): Promise<boolean> => {
         const cacheKey = `${tableName}::rank::${index.name}`;
@@ -1893,17 +2358,37 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
         await queryRun(exec, dialect, sql`DELETE FROM ${sql.identifier(rankTable)}`);
 
         const sortColumns = index.sortBy.map((_, i) => sortColumnName(i));
-        const insertColumnList = sql.join(
-            ["__id__", "__partition__", ...sortColumns].map((column) => sql`${sql.identifier(column)}`),
-            sql`, `,
-        );
+        const insertColumnList = identifierList(["__id__", "__partition__", ...sortColumns]);
 
-        // Collect the rank tuples during the keyset scan, then insert them
-        // sequentially below (the scan callback can't itself await on the
-        // shared connection).
-        const rankTuples: unknown[][] = [];
+        // One INSERT per source row, flushed a page at a time. The aggregate
+        // twin buffers its whole insert list because that list is `unique(by)`
+        // keys, not rows; a rank tuple is per ROW, so buffering the same way put
+        // the entire table — plus one drizzle `SQL` object per row — in the
+        // isolate and handed the engine an N-statement batch, on a path that
+        // runs lazily inside a request (every first write, and every first
+        // `rank()`/`rankPage()`, against a table with a declared rankIndex).
+        //
+        // `forEachRowPaged` awaits an async `onDoc`, so the flush happens from
+        // inside the walk: the writes go to the companion table while the walk
+        // pages the source, and the peak is one page of tuples either way.
+        let pending: SQL[] = [];
 
-        await forEachRowPaged(exec, dialect, definition, tableName, (document) => {
+        const flush = async (): Promise<void> => {
+            if (pending.length === 0) {
+                return;
+            }
+
+            const batch = pending;
+
+            pending = [];
+
+            // Rows are keyed by distinct `__id__`, so order across a batch
+            // doesn't matter; a `run()`-per-statement loop when the exec has no
+            // `batch` seam.
+            await queryBatch(exec, dialect, batch);
+        };
+
+        await forEachRowPaged(exec, dialect, definition, tableName, async (document) => {
             if (index.where && !matchesRankStaticWhere(document, index.where)) {
                 return;
             }
@@ -1912,18 +2397,16 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
             // eslint-disable-next-line unicorn/no-null -- SQL bind value: an absent sort-key column must bind `null`, not undefined.
             const sortValues = index.sortBy.map((key) => serializeColumnValue(document[key.field] ?? null));
 
-            rankTuples.push([document["_id"], partitionKey, ...sortValues]);
-        });
-
-        for (const tuple of rankTuples) {
-            const valueList = sql.join(
-                tuple.map((value) => sql`${value}`),
-                sql`, `,
+            pending.push(
+                sql`INSERT INTO ${sql.identifier(rankTable)} (${insertColumnList}) VALUES (${bindList([document["_id"], partitionKey, ...sortValues])})`,
             );
 
-            // eslint-disable-next-line no-await-in-loop -- rank rows are inserted sequentially on the single shared D1 connection; SqlCtxExec exposes no batch API here.
-            await queryRun(exec, dialect, sql`INSERT INTO ${sql.identifier(rankTable)} (${insertColumnList}) VALUES (${valueList})`);
-        }
+            if (pending.length >= BACKFILL_BATCH_SIZE) {
+                await flush();
+            }
+        });
+
+        await flush();
 
         rankBackfilled.set(cacheKey, true);
 
@@ -1955,14 +2438,38 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
         id: string,
         previous: Record<string, unknown> | undefined,
         next: Record<string, unknown> | undefined,
+        // eslint-disable-next-line sonarjs/cognitive-complexity -- rank companion sync: fast-path + soft-delete + per-index branches are inherent
     ): Promise<void> => {
-        const indexes = schema.tables[tableName]?.rankIndexes;
+        const definition = schema.tables[tableName];
+        const indexes = definition?.rankIndexes;
 
         if (!indexes || indexes.length === 0) {
             return;
         }
 
+        // A soft-deleted `next` row must never (re-)enter the rank companion:
+        // `delete()`'s soft path drops the entry, and any later write into the
+        // still-deleted row (admin fix-up, `$onUpdateFn` stamp, `onSetNull`
+        // cascade) must not resurrect it into `rank()`/`rankPage()`. `restore()`
+        // clears the marker *before* re-adding, so its INSERT still runs.
+        /* eslint-disable @typescript-eslint/no-unnecessary-condition -- the schema type over-narrows softDeleteMode; this guard defends the real runtime shape */
+        const softField = definition?.softDeleteMode?.field;
+        const nextFieldValue = softField === undefined || next === undefined ? undefined : next[softField];
+        const nextSoftDeleted = nextFieldValue !== null && nextFieldValue !== undefined;
+        /* eslint-enable @typescript-eslint/no-unnecessary-condition */
+
         for (const index of indexes) {
+            // Fast path: both images exist and no field THIS index reads
+            // (partition / sort / static `where`) changed — the companion entry
+            // is already correct, so skip the DELETE+INSERT pair entirely
+            // (mirrors the DO twin). Besides the write saving, this is what makes
+            // `restore()`'s forced re-add correct (a marker-clearing patch leaves
+            // every rank field unchanged, so the patch-path sync skips and the
+            // forced `restore()` INSERT is the sole re-add — no duplicate PK).
+            if (previous !== undefined && next !== undefined && rankIndexFieldsUnchanged(index, previous, next)) {
+                continue;
+            }
+
             // eslint-disable-next-line no-secrets/no-secrets -- false positive: this is a function name referenced in a comment, not a secret.
             // The pre-write `ensureRankBackfilledForTable` hook always runs
             // immediately before this sync, populating `rankBackfilled` with
@@ -1985,60 +2492,31 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
                 await queryRun(exec, dialect, sql`DELETE FROM ${sql.identifier(rankTable)} WHERE ${sql.identifier("__id__")} = ${id}`);
             }
 
-            if (next) {
+            if (next && !nextSoftDeleted) {
                 if (index.where && !matchesRankStaticWhere(next, index.where)) {
                     continue;
                 }
 
                 const sortColumns = index.sortBy.map((_, i) => sortColumnName(i));
-                const columnList = sql.join(
-                    ["__id__", "__partition__", ...sortColumns].map((column) => sql`${sql.identifier(column)}`),
-                    sql`, `,
-                );
+                const columnList = identifierList(["__id__", "__partition__", ...sortColumns]);
                 const partitionKey = encodePartitionKey(index.partitionBy ?? [], next);
                 // eslint-disable-next-line unicorn/no-null -- SQL bind value: an absent sort-key column must bind `null`, not undefined.
                 const sortValues = index.sortBy.map((key) => serializeColumnValue(next[key.field] ?? null));
-                const valueList = sql.join(
-                    [id, partitionKey, ...sortValues].map((value) => sql`${value}`),
-                    sql`, `,
-                );
 
-                // eslint-disable-next-line no-await-in-loop -- sequential companion INSERT on the shared D1 connection (see above).
-                await queryRun(exec, dialect, sql`INSERT INTO ${sql.identifier(rankTable)} (${columnList}) VALUES (${valueList})`);
-            }
-        }
-    };
-
-    /**
-     * Keep the FTS5 shadow tables in step with a row write. A no-op when the
-     * table declares no search indexes or when FTS5 is unavailable (the scan
-     * fallback reads the live table, so nothing to mirror). Delete then insert
-     * makes it idempotent across insert/update; `document === undefined` deletes
-     * only (row removal). The DO twin gates on the same availability probe.
-     */
-    const syncSearch = async (tableName: string, id: string, document: Record<string, unknown> | undefined): Promise<void> => {
-        const indexes = schema.tables[tableName]?.searchIndexes;
-
-        if (!indexes || indexes.length === 0 || !(await isFtsAvailable(exec))) {
-            return;
-        }
-
-        for (const index of indexes) {
-            const ftName = ftsTableName(tableName, index.name);
-
-            // eslint-disable-next-line no-await-in-loop -- FTS syncs run sequentially on the single shared D1 connection so DELETE/INSERT pairs don't interleave across indexes.
-            await queryRun(exec, dialect, sql`DELETE FROM ${sql.identifier(ftName)} WHERE ${sql.identifier("__id__")} = ${id}`);
-
-            if (document) {
                 // eslint-disable-next-line no-await-in-loop -- sequential companion INSERT on the shared D1 connection (see above).
                 await queryRun(
                     exec,
                     dialect,
-                    sql`INSERT INTO ${sql.identifier(ftName)} (${sql.identifier("__text__")}, ${sql.identifier("__id__")}) VALUES (${stringifySearchText(document[index.field])}, ${id})`,
+                    sql`INSERT INTO ${sql.identifier(rankTable)} (${columnList}) VALUES (${bindList([id, partitionKey, ...sortValues])})`,
                 );
             }
         }
     };
+
+    // Search companions (fts5 shadow or portable inverted table) are maintained
+    // by `ctx-db-search`, which owns both layouts; the writer only needs the
+    // hook.
+    const syncSearch = createSearchSync({ dialect, exec, schema });
 
     /**
      * Precomputed `(table → timing → op)` matcher: matches the DO ctx-db
@@ -2094,11 +2572,7 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
         try {
             await queryRun(exec, dialect, query);
         } catch (error) {
-            if (isUniqueViolation(error)) {
-                throw new ConflictError(`unique constraint violation on "${table}"`, "unique");
-            }
-
-            throw error;
+            mapWriteError(dialect, error, table);
         }
     };
 
@@ -2116,15 +2590,76 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
     };
 
     /**
+     * The statement behind {@link runGuardedWrite}, reporting a CAS miss as
+     * `false` instead of throwing. `condition`, when given, is ANDed into the
+     * same `WHERE`, so the write applies only while the stored row both still
+     * holds the snapshot's version and matches it — one statement, decided by
+     * the engine (`patchIf`).
+     */
+    const tryGuardedWrite = async (
+        table: string,
+        verb: "DELETE" | "UPDATE",
+        setClause: SQL | undefined,
+        snapshot: Record<string, unknown>,
+        condition?: SQL,
+    ): Promise<boolean> => {
+        const versionRef = sql`${sql.identifier(OCC_VERSION_COLUMN)}`;
+        const guardClause = sql.join(
+            [
+                nullSafeEquals(sql`${sql.identifier("id")}`, snapshot["id"]),
+                // eslint-disable-next-line unicorn/no-null -- SQL bind value: `?? null` so a row written before this column existed (or a driver that omits it) compares against SQL NULL.
+                nullSafeEquals(versionRef, snapshot[OCC_VERSION_COLUMN] ?? null),
+                ...(condition === undefined ? [] : [sql`(${condition})`]),
+            ],
+            sql` AND `,
+        );
+        const base =
+            verb === "UPDATE"
+                ? sql`UPDATE ${sql.identifier(table)} SET ${setClause}, ${versionRef} = ${nextRowVersion.sql(versionRef)} WHERE ${guardClause}`
+                : sql`DELETE FROM ${sql.identifier(table)} WHERE ${guardClause}`;
+
+        try {
+            if (dialect.supportsReturning) {
+                // SQLite/Postgres: a `RETURNING "id"` row proves the CAS matched;
+                // an empty set means a concurrent write changed the row.
+                const returned = await queryAll(exec, dialect, sql`${base} RETURNING ${sql.identifier("id")}`);
+
+                return returned.length > 0;
+            }
+
+            // MySQL: no RETURNING — the affected-row count is the CAS signal.
+            const result = await queryRun(exec, dialect, base);
+
+            return (dialect.affectedRows ? dialect.affectedRows(result ?? { rowsAffected: 0 }) : 0) > 0;
+        } catch (error) {
+            return mapWriteError(dialect, error, table);
+        }
+    };
+
+    /**
      * Run an optimistic-concurrency-guarded write — the D1 twin of the DO
      * dialect's `runGuardedWrite`. D1 stores rows as real columns (no `__doc__`
      * blob) and `SqlCtxExec.run` returns no rows-affected count, so the CAS is
-     * expressed as `WHERE "id" IS ? AND "&lt;col>" IS ? ... RETURNING "id"` run via
-     * `exec.all` (both D1 and node:sqlite support `RETURNING`). The bound values
-     * are the RAW column values captured at read time ({@link rawRow}) so the
-     * comparison is faithful; `IS` gives NULL-safe equality. An empty RETURNING
-     * set means a concurrent write committed during the intervening `await` and
-     * changed the row — surfaced as a {@link ConflictError}.
+     * expressed as `WHERE "id" IS ? AND "_version" IS ? ... RETURNING "id"` run
+     * via `exec.all` (both D1 and node:sqlite support `RETURNING`). The bound
+     * values are the RAW column values captured at read time ({@link rawRow});
+     * `IS` gives NULL-safe equality, which is what makes a row written before
+     * {@link OCC_VERSION_COLUMN} existed (version `NULL`) still guardable. An
+     * empty RETURNING set means a concurrent write committed during the
+     * intervening `await` and changed the row — surfaced as a
+     * {@link ConflictError}.
+     *
+     * The guard binds TWO parameters at any table width. Comparing every
+     * physical column instead — which is what this did — cost `2N+2` parameters
+     * on an `UPDATE` and blew D1's 100-per-statement ceiling from 50 declared
+     * fields up, so a table that provisioned and inserted fine lost every update
+     * to a redacted "Internal error". The version bump rides in the `SET` list
+     * as `COALESCE("_version", 0) + 1`, an expression rather than a bound value,
+     * so it costs nothing against that budget either.
+     *
+     * Bumping on every guarded write also gives MySQL a real affected-rows
+     * signal: a `patch` that writes back identical field values would otherwise
+     * report 0 rows changed and read as a phantom conflict.
      *
      * `snapshot` of `undefined` means there was nothing on disk at read time
      * (only happens on the delete path when the row was already gone); the
@@ -2140,44 +2675,86 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
             return;
         }
 
-        const guardClause = sql.join(
-            Object.keys(snapshot).map((column) => nullSafeEquals(sql`${sql.identifier(column)}`, snapshot[column])),
-            sql` AND `,
-        );
-        const base =
-            verb === "UPDATE"
-                ? sql`UPDATE ${sql.identifier(table)} SET ${setClause} WHERE ${guardClause}`
-                : sql`DELETE FROM ${sql.identifier(table)} WHERE ${guardClause}`;
-
-        const occConflict = (): never => {
+        if (!(await tryGuardedWrite(table, verb, setClause, snapshot))) {
             throw new ConflictError(`optimistic concurrency conflict on "${table}" — the row changed during this mutation; refetch and retry`, "occ");
-        };
-
-        try {
-            if (dialect.supportsReturning) {
-                // SQLite/Postgres: a `RETURNING "id"` row proves the CAS matched;
-                // an empty set means a concurrent write changed the row.
-                const returned = await queryAll(exec, dialect, sql`${base} RETURNING ${sql.identifier("id")}`);
-
-                if (returned.length === 0) {
-                    occConflict();
-                }
-            } else {
-                // MySQL: no RETURNING — the affected-row count is the CAS signal.
-                const result = await queryRun(exec, dialect, base);
-                const affected = dialect.affectedRows ? dialect.affectedRows(result ?? { rowsAffected: 0 }) : 0;
-
-                if (affected === 0) {
-                    occConflict();
-                }
-            }
-        } catch (error) {
-            if (isUniqueViolation(error)) {
-                throw new ConflictError(`unique constraint violation on "${table}"`, "unique");
-            }
-
-            throw error;
         }
+    };
+
+    /**
+     * The version columns a {@link runGuardedWrite} `UPDATE` of `snapshot` leaves
+     * on the row: `_version` bumped as its `SET` does, and `_creationTime` as
+     * written. The search companion's write lands only while the row still holds
+     * them.
+     */
+    const writtenBy = (snapshot: Record<string, unknown> | undefined, creationTime: unknown = snapshot?.["_creationTime"]): Record<string, unknown> => {
+        return { _creationTime: creationTime, [OCC_VERSION_COLUMN]: nextRowVersion.value(snapshot?.[OCC_VERSION_COLUMN]) };
+    };
+
+    /**
+     * The update pipeline `patch` and `patchIf` share, applied to the RAW
+     * `snapshot` read just before: merge, `onUpdate`, refinements, the
+     * before-update trigger, one guarded UPDATE (with `condition` ANDed in when
+     * given), then companions, CDC and the after-update trigger. Returns the
+     * written document, or `undefined` when the guarded UPDATE matched no row —
+     * the row moved since `snapshot`, or no longer matches `condition`.
+     */
+    const writePatch = async (
+        tableName: string,
+        definition: TableDefinitionLike,
+        id: string,
+        patch: Record<string, unknown>,
+        snapshot: Record<string, unknown> | undefined,
+        condition?: SQL,
+        patchOptions?: PatchWriteOptions,
+    ): Promise<Record<string, unknown> | undefined> => {
+        const existing = decodeRow(definition, snapshot);
+
+        if (!existing || snapshot === undefined) {
+            throw new LunoraError("INTERNAL", `document not found: ${id}`);
+        }
+
+        // Atomic field operators resolve against THIS read; the version check below
+        // rejects the write if the row has moved since, and `patch` re-reads.
+        const effectivePatch = resolvePatch(definition, patch, existing);
+        const merged: Record<string, unknown> = { ...existing, ...stripReservedPatchFields(effectivePatch), _id: id };
+
+        applyOnUpdate(definition, effectivePatch, merged, auth);
+
+        // The caller's authorization verdict, taken on the row this attempt actually produces.
+        assertPatchAllowed(patchOptions, existing, merged);
+
+        // Refinement checks fire on the merged row so a patch that flips
+        // a field to an invalid value is rejected before D1 sees it.
+        runRowValidators(definition, merged, true);
+
+        if (hasMatchingTrigger(tableName, "before", "update")) {
+            await fireTriggers("before", "update", { doc: { ...merged }, id, op: "update", previous: existing, table: tableName });
+        }
+
+        await ensureBackfilledForTable(tableName);
+        await ensureRankBackfilledForTable(tableName);
+
+        const fields = Object.keys(definition.shape);
+        const assignments = sql.join(
+            // eslint-disable-next-line unicorn/no-null -- SQL bind value: an absent column must bind `null`, not undefined.
+            fields.map((field) => sql`${sql.identifier(field)} = ${serializeDocumentColumn(definition, field, merged[field] ?? null)}`),
+            sql`, `,
+        );
+
+        if (!(await tryGuardedWrite(tableName, "UPDATE", assignments, snapshot, condition))) {
+            return undefined;
+        }
+
+        await syncAggregates(tableName, existing, merged);
+        await syncRanks(tableName, id, existing, merged);
+        await syncSearch(tableName, id, { document: merged, previous: existing, written: writtenBy(snapshot) });
+        await recordCdc(tableName, id, "update", merged);
+
+        if (hasMatchingTrigger(tableName, "after", "update")) {
+            await fireTriggers("after", "update", { doc: merged, id, op: "update", previous: existing, table: tableName });
+        }
+
+        return merged;
     };
 
     /** Serialize a document into the ordered `[id, _creationTime, ...fields]` column tuple. */
@@ -2193,7 +2770,7 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
             // Raw (unquoted) column names — the INSERT quotes them via `sql.identifier`.
             columns: ["id", "_creationTime", ...fields],
             // eslint-disable-next-line unicorn/no-null -- SQL bind value: an absent column must bind `null`, not undefined.
-            values: [id, creationTime, ...fields.map((field) => serializeColumnValue(document[field] ?? null))],
+            values: [id, creationTime, ...fields.map((field) => serializeDocumentColumn(definition, field, document[field] ?? null))],
         };
     };
 
@@ -2232,7 +2809,7 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
             const rowsIndexed = await queryAll(
                 exec,
                 dialect,
-                sql`SELECT ${sql.identifier("__value__")} AS value, ${sql.identifier("__count__")} AS count FROM ${sql.identifier(aggTable)} WHERE ${sql.identifier("__key__")} = ${encoded}`,
+                sql`SELECT ${sql.identifier("__value__")} AS ${sql.identifier("value")}, ${sql.identifier("__count__")} AS ${sql.identifier("count")} FROM ${sql.identifier(aggTable)} WHERE ${sql.identifier("__key__")} = ${encoded}`,
             );
 
             if (rowsIndexed.length === 0) {
@@ -2244,18 +2821,38 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
             return [{ key: { ...planned.partial }, value: readAggregateValue(agg.op, { count: row.count, value: aggregateScalar(row.value) }) }];
         }
 
-        // Open group key → enumerate every companion row.
+        // A partially-constraining request (`where` pins a strict subset of the
+        // index's `by`-tuple → `partialKeys.length > 0` but not the full length,
+        // since the fully-specified case returned above) can't be answered by
+        // enumerating the whole companion: that would leak the groups the `where`
+        // filters out (indexed/scan divergence). Fall back to the SQL `GROUP BY`
+        // scan, which compiles and honours the `where`. The static-`where`-carry
+        // case (a partial key sourced from the index's own baked-in `where`, on a
+        // field the request never mentioned) also falls back here — the companion
+        // is scoped to that value, so it likewise can't answer an unfiltered
+        // request over it; the scan is the correct, complete answer either way.
+        if (partialKeys.length > 0) {
+            return undefined;
+        }
+
+        // Fully open group key (no constraint) → enumerate every companion row.
         const rowsIndexed = await queryAll(
             exec,
             dialect,
-            sql`SELECT ${sql.identifier("__key__")} AS key, ${sql.identifier("__value__")} AS value, ${sql.identifier("__count__")} AS count FROM ${sql.identifier(aggTable)}`,
+            sql`SELECT ${sql.identifier("__key__")} AS ${sql.identifier("key")}, ${sql.identifier("__value__")} AS ${sql.identifier("value")}, ${sql.identifier("__count__")} AS ${sql.identifier("count")} FROM ${sql.identifier(aggTable)}`,
         );
 
         return rowsIndexed.map((row) => {
             const typed = row as { count: number; key: string; value: null | number };
 
             return {
-                key: JSON.parse(typed.key) as Record<string, unknown>,
+                // `encodeAggregateKey` writes `JSON.stringify(encodeWire(ordered))`,
+                // so a bare `JSON.parse` hands back the wire-tagged ARRAY rather
+                // than the value — a `v.bigint()` group key came out as
+                // `["$lunora.wire$","bigint","42"]`. The shard twin decodes it;
+                // this side did not, so one query returned different key shapes
+                // depending on backend and index materialisation.
+                key: decodeWire(JSON.parse(typed.key)) as Record<string, unknown>,
                 value: readAggregateValue(agg.op, { count: typed.count, value: aggregateScalar(typed.value) }),
             };
         });
@@ -2274,9 +2871,60 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
     };
 
     const crossBackendUnsupported = (childTable: string): never => {
-        throw new Error(
+        throw new LunoraError(
+            "INTERNAL",
             `cross-backend relation: a global table cannot load the shard-local relation '${childTable}' (it spans every shard) — wire a cross-shard reader to support it`,
         );
+    };
+
+    /**
+     * SECURITY (RLS across the fan-out): the cross-shard hop is a JSON envelope,
+     * so the two carriers the relation loader uses to enforce the CHILD table's
+     * read policy can't ride along as-is — and dropping them silently returns
+     * every child row for the FK, since the serving shard reads through its RAW
+     * ctx-db. Convert both to data (see {@link CrossShardReadArgs}):
+     *
+     * - `baseWhere` (this hop's policy filter) is ANDed into `where`.
+     * - `relationBaseWhere` (a function, for NESTED `with` levels) is projected
+     *   into a table → filter map. Projecting every schema table is cheaper than
+     *   walking the `with` tree and can't miss a hop; `readBase` is memoized
+     *   upstream, and tables with no restricting policy simply don't appear.
+     *
+     * `relationMask` has the same problem and NO such projection: a mask policy
+     * isn't serializable (a custom `MaskFn` is a closure over the request, and
+     * `"hash"` needs the caller context). THIS hop's own rows are still masked —
+     * the relation loader applies the mask to whatever the fetcher returns — but a
+     * nested `with` is hydrated on the serving shard, past the mask's reach. So a
+     * masked read that would cross with nested relations is REFUSED rather than
+     * served in the clear, matching how the mask middleware already fails closed
+     * on `aggregate`/`groupBy` over a masked column.
+     */
+    const toCrossShardArgs = (childTable: string, childArgs: Parameters<DatabaseWriterLike["findMany"]>[1]): CrossShardReadArgs => {
+        if (childArgs?.relationMask !== undefined && childArgs.with !== undefined && Object.keys(childArgs.with).length > 0) {
+            throw new LunoraError(
+                "MASK_UNSUPPORTED",
+                `masking cannot follow a nested \`with\` across the cross-shard relation hop to "${childTable}" — the nested rows are hydrated on the serving shard, where the mask policy does not exist. Read the nested relation at its own (masked) call site instead.`,
+            );
+        }
+
+        const relationPolicies: Record<string, WhereInput> = {};
+
+        if (childArgs?.relationBaseWhere) {
+            for (const table of Object.keys(schema.tables)) {
+                const policy = childArgs.relationBaseWhere(table);
+
+                if (policy !== undefined) {
+                    relationPolicies[table] = policy;
+                }
+            }
+        }
+
+        return {
+            orderBy: childArgs?.orderBy,
+            relationPolicies,
+            where: mergeWhere(childArgs?.baseWhere, childArgs?.where),
+            with: childArgs?.with,
+        };
     };
 
     // Backend-routed child fetch for the relation pre-resolver, available to the
@@ -2289,7 +2937,7 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
             return writer.findMany(childTable, childArgs);
         }
 
-        return crossShardReader ? crossShardReader(childTable, childArgs) : crossBackendUnsupported(childTable);
+        return crossShardReader ? crossShardReader(childTable, toCrossShardArgs(childTable, childArgs)) : crossBackendUnsupported(childTable);
     };
 
     /**
@@ -2315,13 +2963,93 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
             tableName: predicateTable,
         });
 
+    /**
+     * Point-read coalescer for `get`. Rows come back keyed by id so a missing
+     * id resolves to `null` rather than shifting the result order.
+     */
+    const pointReads = createPointReadBatcher<Record<string, unknown>>(async (table, ids) => {
+        const rows = await queryAll(exec, dialect, sql`SELECT * FROM ${sql.identifier(table)} WHERE ${sql.identifier("id")} IN (${bindList(ids)})`);
+        const byId = new Map<string, Record<string, unknown>>();
+
+        for (const row of rows) {
+            const { id } = row;
+
+            if (typeof id === "string") {
+                byId.set(id, row);
+            }
+        }
+
+        return byId;
+    });
+
+    /**
+     * Compile a `findMany` read down to its SQL. The predicate, ordering and page size come from
+     * {@link composeReadPredicate}, so this only emits them as text. Shared by `findMany` and
+     * `explain`, so the statement a plan describes is the one a read runs.
+     */
+    const compileFindMany = async (tableName: string, definition: TableDefinitionLike, args: QueryArgs) => {
+        const { fetchLimit, limit, orderKeys, predicate } = await composeReadPredicate(definition, args, {
+            fetcher: relationPredicateFetcher,
+            maxRelationKeys,
+            schema,
+            tableName,
+        });
+
+        const whereCondition = compileWhereSql(predicate, whereSqlStrategyFor(definition));
+        const orderBy = compileOrderBySql(orderKeys, dialect);
+
+        let query = sql`SELECT * FROM ${sql.identifier(tableName)}`;
+
+        if (whereCondition) {
+            query = sql`${query} WHERE ${whereCondition}`;
+        }
+
+        query = sql`${query} ORDER BY ${orderBy}`;
+
+        if (fetchLimit !== undefined) {
+            query = sql`${query} LIMIT ${sql.raw(String(fetchLimit))}`;
+        }
+
+        return { limit, orderKeys, query };
+    };
+
+    const relationWrites = describeRelationWrites(schema);
+
     const writer: DatabaseWriterLike = {
+        relationWrites,
+
+        /**
+         * Which tables the changelog saw a write to after `sinceSeq` (see
+         * {@link DatabaseWriterLike.cdcChangedTables}) — `undefined` when this
+         * store has CDC disabled, since there is then no log to answer from and
+         * the caller must fall back to re-reading. A missing/never-migrated log
+         * table reports the same way rather than throwing: "no visibility" is a
+         * state the caller already handles, and a poll tick is the wrong place
+         * to surface a migration problem.
+         */
+        async cdcChangedTables(
+            sinceSeq: number,
+            readOptions?: { cursorOnly?: boolean },
+        ): Promise<{ cursor: number; floor?: number; tables: string[] } | undefined> {
+            if (!cdcEnabled) {
+                return undefined;
+            }
+
+            try {
+                await ensureMigrated();
+
+                return await readSqlCdcChangedTables(exec, sinceSeq, dialect, { ...readOptions, now: clock(), retained: cdcRetentionMs !== undefined });
+            } catch {
+                return undefined;
+            }
+        },
+
         // eslint-disable-next-line sonarjs/cognitive-complexity -- routes count/sum/avg/min/max through the indexed companion vs scan fallback; the branching reads clearer inline than split across per-op helpers
         async aggregate(tableName, aggOptions: AggregateOptions): Promise<AggregateResult> {
             const definition = schema.tables[tableName];
 
             if (!definition) {
-                throw new Error(`unknown table: ${tableName}`);
+                throw new LunoraError("INTERNAL", `unknown table: ${tableName}`);
             }
 
             // Ensure the companion tables exist so the indexed fast-path can
@@ -2343,10 +3071,13 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
             }
 
             if (!aggOptions.field) {
-                throw new Error(`aggregate(${tableName}, { op: "${aggOptions.op}" }): "field" is required for non-count reducers`);
+                throw new LunoraError("INTERNAL", `aggregate(${tableName}, { op: "${aggOptions.op}" }): "field" is required for non-count reducers`);
             }
 
-            const effective = mergeWhere(aggOptions.baseWhere, aggOptions.where);
+            // Soft delete: aggregate over LIVE rows only; force the scan path (the
+            // indexed companion counts deleted rows too).
+            const aggScope = softDeleteScope(definition.softDeleteMode, undefined);
+            const effective = mergeWhere(mergeWhere(aggOptions.baseWhere, aggOptions.where), aggScope);
             // Rewrite any relation-crossing predicate to a flat semijoin clause
             // before compiling. The resolver returns `effective` unchanged when
             // there is none, so `hasRelation` skips the no-op fetch and disables
@@ -2361,7 +3092,7 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
             // counter is materialized answers sum/avg/min/max in one row lookup.
             // We only attempt it when no baseWhere is set; the RLS predicate
             // falls through to the SQL scan below.
-            if (definition.aggregateIndexes && !aggOptions.baseWhere && !hasRelation) {
+            if (definition.aggregateIndexes && !aggOptions.baseWhere && !hasRelation && !aggScope) {
                 const planned = selectIndexForAggregate(definition.aggregateIndexes, aggOptions.op, aggOptions.field, aggOptions.where);
 
                 if (planned) {
@@ -2373,7 +3104,7 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
                         const rows = await queryAll(
                             exec,
                             dialect,
-                            sql`SELECT ${sql.identifier("__value__")} AS value, ${sql.identifier("__count__")} AS count FROM ${sql.identifier(aggTable)} WHERE ${sql.identifier("__key__")} = ${encoded}`,
+                            sql`SELECT ${sql.identifier("__value__")} AS ${sql.identifier("value")}, ${sql.identifier("__count__")} AS ${sql.identifier("count")} FROM ${sql.identifier(aggTable)} WHERE ${sql.identifier("__key__")} = ${encoded}`,
                         );
                         const row = rows[0] as { count: number; value: null | number } | undefined;
 
@@ -2382,9 +3113,11 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
                 }
             }
 
-            const whereCondition = compileWhereSql(resolved, whereSqlStrategy);
+            assertReducibleBySql(definition, aggOptions.field, `aggregate(${tableName}, { op: "${aggOptions.op}", field: "${aggOptions.field}" })`);
+
+            const whereCondition = compileWhereSql(resolved, whereSqlStrategyFor(definition));
             const aggregateFunction = sql.raw(aggregateSqlFunction(aggOptions.op));
-            const query = sql`SELECT ${aggregateFunction}(${columnRefSql(aggOptions.field)}) AS value FROM ${sql.identifier(tableName)}`;
+            const query = sql`SELECT ${aggregateFunction}(${columnRefSql(aggOptions.field)}) AS ${sql.identifier("value")} FROM ${sql.identifier(tableName)}`;
             const rows = await queryAll(exec, dialect, whereCondition ? sql`${query} WHERE ${whereCondition}` : query);
             const value = rows[0]?.["value"];
 
@@ -2396,7 +3129,7 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
             const definition = schema.tables[tableName];
 
             if (!definition) {
-                throw new Error(`unknown table: ${tableName}`);
+                throw new LunoraError("INTERNAL", `unknown table: ${tableName}`);
             }
 
             // Ensure the `__agg_` companion exists so the indexed count path
@@ -2409,7 +3142,9 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
                 throw new CountRlsUnsupportedError(tableName);
             }
 
-            const effective = mergeWhere(countOptions.baseWhere, countOptions.where);
+            // Soft delete: a `count()` reflects LIVE rows; force the scan path.
+            const countScope = softDeleteScope(definition.softDeleteMode, undefined);
+            const effective = mergeWhere(mergeWhere(countOptions.baseWhere, countOptions.where), countScope);
             // Rewrite any relation-crossing predicate to a flat semijoin clause
             // before compiling. `hasRelation` (resolver returned a new tree)
             // disables the indexed counter, which can't honour a relation filter.
@@ -2419,7 +3154,7 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
             // Indexed path: same planner as the DO dialect (see ctx-db.ts).
             // We only attempt the counter when no baseWhere is set; otherwise
             // we route uniformly through SQL so the RLS predicate participates.
-            if (definition.aggregateIndexes && !countOptions.baseWhere && !hasRelation) {
+            if (definition.aggregateIndexes && !countOptions.baseWhere && !hasRelation && !countScope) {
                 const planned = selectIndexForCount(definition.aggregateIndexes, countOptions.where);
 
                 if (planned) {
@@ -2431,7 +3166,7 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
                         const rows = await queryAll(
                             exec,
                             dialect,
-                            sql`SELECT ${sql.identifier("__value__")} AS value FROM ${sql.identifier(aggTable)} WHERE ${sql.identifier("__key__")} = ${encoded}`,
+                            sql`SELECT ${sql.identifier("__value__")} AS ${sql.identifier("value")} FROM ${sql.identifier(aggTable)} WHERE ${sql.identifier("__key__")} = ${encoded}`,
                         );
 
                         return Number(rows[0]?.["value"] ?? 0);
@@ -2439,14 +3174,14 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
                 }
             }
 
-            const whereCondition = compileWhereSql(resolved, whereSqlStrategy);
-            const query = sql`SELECT COUNT(*) AS count FROM ${sql.identifier(tableName)}`;
+            const whereCondition = compileWhereSql(resolved, whereSqlStrategyFor(definition));
+            const query = sql`SELECT COUNT(*) AS ${sql.identifier("count")} FROM ${sql.identifier(tableName)}`;
             const rows = await queryAll(exec, dialect, whereCondition ? sql`${query} WHERE ${whereCondition}` : query);
 
             return Number(rows[0]?.["count"] ?? 0);
         },
 
-        async delete(id, expectedTable) {
+        async delete(id, expectedTable, deleteOptions) {
             const tableName = await resolveTableName(id, expectedTable);
 
             if (!tableName) {
@@ -2465,6 +3200,16 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
 
             const snapshot = await rawRow(tableName, id);
             const existing = decodeRow(definition, snapshot);
+            // Soft delete unless `hard` was forced; `softField` undefined ⇒ legacy
+            // physical path. A delete cascades as a delete (soft→soft, hard→hard).
+            const hard = deleteOptions?.hard === true;
+            const softField = !hard && definition.softDeleteMode ? definition.softDeleteMode.field : undefined;
+
+            // Idempotent: re-soft-deleting an already-soft-deleted (or absent) row
+            // is a no-op so the cascade + companion sync don't fire spuriously.
+            if (softField && (!existing || (existing[softField] !== null && existing[softField] !== undefined))) {
+                return;
+            }
 
             // `before` fires ahead of cascade resolution so a throwing guard
             // aborts the delete before any holder rows are touched.
@@ -2483,16 +3228,19 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
                 deletedReference: (references) => existing?.[references],
                 findHolders: async (holderTable, field, value) => {
                     if (schema.tables[holderTable]?.shardMode?.kind === "shardBy") {
-                        throw new Error(
+                        throw new LunoraError(
+                            "INTERNAL",
                             `cross-backend cascade from global '${tableName}' into shardBy '${holderTable}' is not supported — would require Query Coordinator fan-out across shards`,
                         );
                     }
 
-                    const holders = await writer.findMany(holderTable, { where: { [field]: value } });
+                    // A hard delete must see soft-deleted holders to remove them; a
+                    // soft delete skips already-deleted holders.
+                    const holders = await writer.findMany(holderTable, { includeDeleted: hard, where: { [field]: value } });
 
                     return holders.page;
                 },
-                onCascade: (_holderTable, holderId) => writer.delete(holderId),
+                onCascade: (_holderTable, holderId) => writer.delete(holderId, undefined, deleteOptions),
                 onRestrict: (message) => {
                     throw new ConflictError(message, "restrict");
                 },
@@ -2504,6 +3252,43 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
 
             await ensureBackfilledForTable(tableName);
             await ensureRankBackfilledForTable(tableName);
+
+            if (softField && existing) {
+                // Soft delete: keep the row, stamp the marker via an all-column
+                // UPDATE (same encoding as `patch`). Companions re-sync to the
+                // merged row; read scoping (not companion removal) hides it.
+                const marker = { [softField]: clock() };
+                const merged: Record<string, unknown> = { ...existing, ...marker };
+
+                // The marker is this write's explicit field; every other `$onUpdateFn` column restamps like any other update.
+                applyOnUpdate(definition, marker, merged, auth);
+                const assignments = sql.join(
+                    Object.keys(definition.shape).map(
+                        // eslint-disable-next-line unicorn/no-null -- SQL bind value: an absent column binds `null`, matching the patch path.
+                        (field) => sql`${sql.identifier(field)} = ${serializeDocumentColumn(definition, field, merged[field] ?? null)}`,
+                    ),
+                    sql`, `,
+                );
+
+                await runGuardedWrite(tableName, "UPDATE", assignments, snapshot);
+
+                // The rank companion has no marker column to filter on, so a soft
+                // delete REMOVES the rank entry (like a physical delete); search +
+                // aggregates stay maintained (search hides via the read filter).
+                // `restore()` re-adds the rank entry through the patch path.
+                await syncAggregates(tableName, existing, merged);
+                await syncRanks(tableName, id, existing, undefined);
+                await syncSearch(tableName, id, { document: merged, previous: existing, written: writtenBy(snapshot) });
+                await recordCdc(tableName, id, "update", merged);
+
+                // `delete()` was called → fire the DELETE triggers (the flag flip
+                // is the storage detail of how the delete is recorded).
+                if (hasMatchingTrigger(tableName, "after", "delete")) {
+                    await fireTriggers("after", "delete", { id, op: "delete", previous: existing, table: tableName });
+                }
+
+                return;
+            }
 
             await runGuardedWrite(tableName, "DELETE", undefined, snapshot);
 
@@ -2543,79 +3328,109 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
             const definition = schema.tables[tableName];
 
             if (!definition) {
-                throw new Error(`unknown table: ${tableName}`);
+                throw new LunoraError("INTERNAL", `unknown table: ${tableName}`);
             }
 
             // The primary list read — provision the global tables first so a
             // fresh database returns an empty page instead of `no such table`.
             await ensureMigrated();
 
-            const orderKeys = normalizeOrderKeys(args.orderBy);
-            const seek = args.cursor ? buildSeekWhere(orderKeys, decodeCursor(args.cursor)) : undefined;
+            /**
+             * Grouped aggregate counter for `_count` relation loading. For
+             * local D1 children, issues one `SELECT :whereField AS __fk__,
+             * COUNT(*) … GROUP BY :whereField` and returns all tallies in a
+             * single round-trip. For shard-local (cross-shard reverse
+             * direction), fans out parallel scalar `crossShardCounter` calls
+             * since the coordinator interface doesn't expose grouped counts.
+             *
+             * CORRECTNESS: `policyWhere` may contain relation predicates (e.g.
+             * `{author:{is:W}}`). These are resolved via `resolveAggregateRelations`
+             * BEFORE `compileWhereSql` so they are rewritten into flat IN clauses
+             * rather than compiled raw as scalar equality (which never matches).
+             * The cross-shard fan-out path routes through `crossShardCounter`,
+             * which uses the full `count()` method and resolves predicates
+             * internally — so only the local D1 path needs this step.
+             */
+            const relationGroupedCounter = async (
+                childTable: string,
+                whereField: string,
+                values: unknown[],
+                policyWhere?: WhereInput,
+            ): Promise<Map<unknown, number>> => {
+                if (isShardLocalTarget(childTable)) {
+                    // Cross-shard reverse direction: parallel scalar counts per FK value.
+                    if (!crossShardCounter) {
+                        return crossBackendUnsupported(childTable);
+                    }
 
-            // Relation reads routed by the child's backend (shard-local child of
-            // this global parent → injected cross-shard reader; global/same-
-            // backend → local D1 writer). Shared with the aggregate/count paths
-            // as the top-level `relationPredicateFetcher`; aliased here for the
-            // nested `with` load.
-            const relationFetcher = relationPredicateFetcher;
-            const relationCounter: DatabaseWriterLike["count"] = (childTable, where) => {
-                if (!isShardLocalTarget(childTable)) {
-                    return writer.count(childTable, where);
+                    return fanOutScalarCounts(crossShardCounter, childTable, whereField, values, policyWhere);
                 }
 
-                return crossShardCounter ? crossShardCounter(childTable, where) : crossBackendUnsupported(childTable);
+                // Local D1 child: one grouped SQL query.
+                const childDefinition = schema.tables[childTable];
+
+                if (!childDefinition) {
+                    throw new LunoraError("INTERNAL", `unknown table: ${childTable}`);
+                }
+
+                // Build WHERE: whereField IN (values) [AND policyWhere] [AND softDeleteScope].
+                // Then resolve any relation predicates before SQL compilation — without
+                // this, a relation predicate in policyWhere is compiled as scalar equality
+                // and silently returns 0 for every group (fail-closed but wrong).
+                const softScope = softDeleteScope(childDefinition.softDeleteMode, undefined);
+                const inFilter: WhereInput = { [whereField]: { in: values } };
+                const combined = mergeWhere(mergeWhere(inFilter, policyWhere), softScope);
+                // resolveAggregateRelations rewrites relation-crossing predicates (e.g.
+                // {author:{is:W}}) into flat IN clauses — consistent with count() /
+                // findMany(). Pass `undefined` for relationBaseWhere (no nested policy
+                // threading, matching what the old scalar counter did).
+                const resolvedCombined = await resolveAggregateRelations(combined, childTable, undefined);
+                const whereCondition = compileWhereSql(resolvedCombined, whereSqlStrategyFor(childDefinition));
+
+                // `physicalColumn` maps `_id`/`id` → `id`; all other fields are themselves.
+                const fieldRef = columnRefSql(whereField);
+
+                let groupQuery = sql`SELECT ${fieldRef} AS __fk__, COUNT(*) AS ${sql.identifier("count")} FROM ${sql.identifier(childTable)}`;
+
+                if (whereCondition) {
+                    groupQuery = sql`${groupQuery} WHERE ${whereCondition}`;
+                }
+
+                groupQuery = sql`${groupQuery} GROUP BY ${fieldRef}`;
+
+                const groupRows = await queryAll(exec, dialect, groupQuery);
+                const result = new Map<unknown, number>();
+
+                for (const row of groupRows) {
+                    // JS SameValueZero Map lookup: safe for string ids; numeric FK
+                    // values must arrive from SQL as the same JS type as parent[parentField]
+                    // (the SQL→JS key-equality invariant introduced by the grouped path).
+                    result.set(row["__fk__"], Number(row["count"] ?? 0));
+                }
+
+                return result;
             };
 
-            // RLS (3.2) / aggregates (3.1) inject `baseWhere` we AND-merge
-            // before the keyset seek so policy + cursor compose cleanly.
-            let predicate: undefined | WhereInput = mergeWhere(args.baseWhere, args.where);
-
-            // Rewrite relation-crossing predicates into flat `IN`/`NOT IN` via a
-            // backend-routed child fetch before compiling. `relationBaseWhere` is
-            // threaded through so a child table's RLS read filter applies on the
-            // hop (the `with`-load `resolveWith` calls below omit it — a separate
-            // pre-existing gap; the pre-resolver does not depend on that).
-            predicate = await resolveRelationPredicates(predicate, {
-                fetcher: relationFetcher,
-                maxRelationKeys,
-                relationBaseWhere: args.relationBaseWhere,
-                schema,
-                tableName,
-            });
-
-            if (seek) {
-                predicate = predicate ? { AND: [predicate, seek] } : seek;
-            }
-
-            const whereCondition = compileWhereSql(predicate, whereSqlStrategy);
-            const orderBy = compileOrderBySql(orderKeys);
-
-            let query = sql`SELECT * FROM ${sql.identifier(tableName)}`;
-
-            if (whereCondition) {
-                query = sql`${query} WHERE ${whereCondition}`;
-            }
-
-            query = sql`${query} ORDER BY ${orderBy}`;
-
-            const limit = typeof args.limit === "number" ? Math.max(0, Math.floor(args.limit)) : undefined;
-
-            if (limit !== undefined) {
-                // Over-fetch by one row to learn whether another page exists.
-                query = sql`${query} LIMIT ${sql.raw(String(limit + 1))}`;
-            }
+            const { limit, orderKeys, query } = await compileFindMany(tableName, definition, args);
 
             const rows = await queryAll(exec, dialect, query);
             const documents = decodeRows(definition, rows);
 
             if (limit === undefined) {
                 if (args.with) {
-                    await resolveWith({ counter: relationCounter, fetcher: relationFetcher, parents: documents, schema, tableName, with: args.with });
+                    await resolveWith({
+                        fetcher: relationPredicateFetcher,
+                        groupedCounter: relationGroupedCounter,
+                        parents: documents,
+                        ...relationHooks(args),
+                        schema,
+                        tableName,
+                        with: args.with,
+                    });
                 }
 
                 // eslint-disable-next-line unicorn/no-null -- findMany's public return uses `continueCursor: string | null`; an unpaged result has no cursor.
-                return { continueCursor: null, isDone: true, page: documents };
+                return { continueCursor: null, isDone: true, page: applySelect(documents, args.select, args.with) };
             }
 
             const hasMore = documents.length > limit;
@@ -2623,15 +3438,43 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
             const last = page.at(-1);
 
             if (args.with) {
-                await resolveWith({ counter: relationCounter, fetcher: relationFetcher, parents: page, schema, tableName, with: args.with });
+                await resolveWith({
+                    fetcher: relationPredicateFetcher,
+                    groupedCounter: relationGroupedCounter,
+                    parents: page,
+                    ...relationHooks(args),
+                    schema,
+                    tableName,
+                    with: args.with,
+                });
             }
 
             return {
+                // The cursor is encoded from `last` (the full, unprojected row), so
+                // `applySelect` only trims the returned payload — paging is intact.
                 // eslint-disable-next-line unicorn/no-null -- public return shape: `continueCursor` is `string | null`; `null` marks the final page.
                 continueCursor: hasMore && last ? encodeCursor(last, orderKeys) : null,
                 isDone: !hasMore,
-                page,
+                page: applySelect(page, args.select, args.with),
             };
+        },
+
+        async explain(tableName, args = {}) {
+            const definition = schema.tables[tableName];
+
+            if (!definition) {
+                throw new LunoraError("INTERNAL", `unknown table: ${tableName}`);
+            }
+
+            await ensureMigrated();
+
+            const { query } = await compileFindMany(tableName, definition, args);
+            // SQLite and D1 spell it `EXPLAIN QUERY PLAN`; Postgres and MySQL, plain `EXPLAIN`.
+            const prefix = dialect.name === "sqlite" ? "EXPLAIN QUERY PLAN" : "EXPLAIN";
+            const steps = await queryAll(exec, dialect, sql`${sql.raw(prefix)} ${query}`);
+            const { params, sql: text } = renderSql(dialect.name, query);
+
+            return { params, plan: steps.map((step) => planStepText(step)), sql: text };
         },
 
         async get(id, expectedTable) {
@@ -2649,16 +3492,18 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
                 return null;
             }
 
-            const rows = await queryAll(exec, dialect, sql`SELECT * FROM ${sql.identifier(tableName)} WHERE ${sql.identifier("id")} = ${id}`);
-
-            return decodeRow(definition, rows[0]);
+            // Coalesced: every `get` issued in this tick against `tableName`
+            // becomes ONE `IN (…)` round-trip. `Promise.all(ids.map(ctx.db.get))`
+            // is the idiomatic join, and against a remote store each of those
+            // would otherwise be its own network hop.
+            return decodeRow(definition, await pointReads.load(tableName, id));
         },
 
         async groupBy(tableName, groupOptions: GroupByOptions): Promise<ReadonlyArray<GroupByEntry>> {
             const definition = schema.tables[tableName];
 
             if (!definition) {
-                throw new Error(`unknown table: ${tableName}`);
+                throw new LunoraError("INTERNAL", `unknown table: ${tableName}`);
             }
 
             // Ensure the `__agg_` companion exists so the indexed groupBy path
@@ -2671,10 +3516,12 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
             aggregateSqlFunction(agg.op);
 
             if (agg.op !== "count" && !agg.field) {
-                throw new Error(`groupBy(${tableName}, { agg: { op: "${agg.op}" } }): "field" is required for non-count reducers`);
+                throw new LunoraError("INTERNAL", `groupBy(${tableName}, { agg: { op: "${agg.op}" } }): "field" is required for non-count reducers`);
             }
 
-            const effective = mergeWhere(groupOptions.baseWhere, groupOptions.where);
+            // Soft delete: group over LIVE rows only; force the scan path.
+            const groupScope = softDeleteScope(definition.softDeleteMode, undefined);
+            const effective = mergeWhere(mergeWhere(groupOptions.baseWhere, groupOptions.where), groupScope);
             // Rewrite any relation-crossing predicate to a flat semijoin clause
             // before compiling. `hasRelation` disables the indexed companion,
             // which can't honour a relation filter and would over-aggregate.
@@ -2686,7 +3533,7 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
             // already in the reducer-aware companion table — covers every op
             // (count/sum/avg/min/max) now that `__value__`/`__count__` are
             // maintained per op. baseWhere falls through to scan so RLS composes.
-            if (definition.aggregateIndexes && !groupOptions.baseWhere && !hasRelation) {
+            if (definition.aggregateIndexes && !groupOptions.baseWhere && !hasRelation && !groupScope) {
                 const indexed = await tryIndexedGroupBy(tableName, definition.aggregateIndexes, agg, groupOptions);
 
                 if (indexed !== undefined) {
@@ -2694,21 +3541,26 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
                 }
             }
 
-            const whereCondition = compileWhereSql(resolved, whereSqlStrategy);
+            // Whatever the companion above would have answered is exactly what
+            // the scan refuses here: every field this hands to SQL — the `by`
+            // keys AND the reducer's field.
+            assertGroupByReducibleBySql(definition, tableName, groupOptions.by, agg);
+
+            const whereCondition = compileWhereSql(resolved, whereSqlStrategyFor(definition));
 
             const select: SQL[] = groupOptions.by.map((field) => sql`${columnRefSql(field)} AS ${sql.identifier(field)}`);
 
             if (agg.op === "count") {
-                select.push(sql`COUNT(*) AS value`);
+                select.push(sql`COUNT(*) AS ${sql.identifier("value")}`);
             } else {
                 // `agg.field` is asserted present for non-count reducers by the
                 // guard above; re-check locally so the column ref stays typed
                 // without a non-null assertion.
                 if (!agg.field) {
-                    throw new Error(`groupBy(${tableName}, { agg: { op: "${agg.op}" } }): "field" is required for non-count reducers`);
+                    throw new LunoraError("INTERNAL", `groupBy(${tableName}, { agg: { op: "${agg.op}" } }): "field" is required for non-count reducers`);
                 }
 
-                select.push(sql`${sql.raw(aggregateSqlFunction(agg.op))}(${columnRefSql(agg.field)}) AS value`);
+                select.push(sql`${sql.raw(aggregateSqlFunction(agg.op))}(${columnRefSql(agg.field)}) AS ${sql.identifier("value")}`);
             }
 
             const groupBy = sql.join(
@@ -2726,7 +3578,7 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
 
             const rows = await queryAll(exec, dialect, query);
 
-            return mapGroupByRows(groupOptions.by, rows);
+            return mapGroupByRows(definition, groupOptions.by, rows);
         },
 
         /**
@@ -2744,12 +3596,14 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
             const definition = schema.tables[tableName];
 
             if (!definition) {
-                throw new Error(`unknown table: ${tableName}`);
+                throw new LunoraError("INTERNAL", `unknown table: ${tableName}`);
             }
 
             // Companion DDL must exist before the sync hooks below run an
             // INSERT against the fts/agg/rank tables.
             await ensureMigrated();
+
+            assertStorableStrings(dialect.name, document);
 
             const withDefaults = applyInsertDefaults(definition, document, auth);
 
@@ -2772,7 +3626,12 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
                 id = generateId();
                 usedExplicitId = false;
             }
-            const creationTime = typeof withDefaults["_creationTime"] === "number" ? withDefaults["_creationTime"] : clock();
+            // Like `_id` above, a document-supplied `_creationTime` is only honored
+            // under the trusted-import `allowExplicitId` opt-in. The default mutation
+            // path (and the optimistic `clientId` path) mints from `clock()` so a
+            // raw-forwarded client payload can't backdate/forward-date the row —
+            // sync reconciles by `clientId`, not by a client-chosen time.
+            const creationTime = insertOptions?.allowExplicitId && typeof withDefaults["_creationTime"] === "number" ? withDefaults["_creationTime"] : clock();
 
             const documentWithMeta: Record<string, unknown> = { ...withDefaults, _creationTime: creationTime, _id: id };
 
@@ -2788,16 +3647,8 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
             await ensureRankBackfilledForTable(tableName);
 
             const { columns, values } = columnTuple(definition, id, creationTime, withDefaults);
-            const columnList = sql.join(
-                columns.map((column) => sql`${sql.identifier(column)}`),
-                sql`, `,
-            );
-            const valueList = sql.join(
-                values.map((value) => sql`${value}`),
-                sql`, `,
-            );
 
-            await runWrite(tableName, sql`INSERT INTO ${sql.identifier(tableName)} (${columnList}) VALUES (${valueList})`);
+            await runWrite(tableName, sql`INSERT INTO ${sql.identifier(tableName)} (${identifierList(columns)}) VALUES (${bindList(values)})`);
 
             // A caller-pinned id may collide with a stale cache entry from a
             // prior delete/re-insert in this ctx-db lifetime; point the cache
@@ -2810,7 +3661,8 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
 
             await syncAggregates(tableName, undefined, documentWithMeta);
             await syncRanks(tableName, id, undefined, documentWithMeta);
-            await syncSearch(tableName, id, documentWithMeta);
+            // eslint-disable-next-line unicorn/no-null -- an inserted row's version starts at SQL NULL
+            await syncSearch(tableName, id, { document: documentWithMeta, written: { _creationTime: creationTime, [OCC_VERSION_COLUMN]: null } });
             await recordCdc(tableName, id, "insert", documentWithMeta);
 
             if (hasMatchingTrigger(tableName, "after", "insert")) {
@@ -2824,61 +3676,142 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
             return normalizeIdStructurally(schema, tableName, id);
         },
 
-        async patch(id, patch, expectedTable) {
+        async patch(id, patch, expectedTable, patchOptions) {
+            // A key present with value `undefined` is a silent-data-loss footgun:
+            // `runRowValidators` skips it (`v.optional(x).parse(undefined)` is
+            // fine) and `serializeColumnValue(merged[field] ?? null)` then wrote
+            // SQL NULL, so `patch(id, { bio: undefined })` cleared the column with
+            // no error. The shard twin has refused this since it was found there;
+            // sharing its guard rather than restating it is what keeps the two
+            // from drifting again.
+            assertNoExplicitUndefined("patch", patch);
+            assertStorableStrings(dialect.name, patch);
             const tableName = await resolveTableName(id, expectedTable);
 
             if (!tableName) {
-                throw new Error(`document not found: ${id}`);
+                throw new LunoraError("INTERNAL", `document not found: ${id}`);
             }
 
             const definition = schema.tables[tableName];
 
             if (!definition) {
-                throw new Error(`document not found: ${id}`);
+                throw new LunoraError("INTERNAL", `document not found: ${id}`);
             }
 
-            // Capture the RAW stored row alongside the decoded `existing` — the
-            // raw values seed the optimistic-concurrency CAS below, before the
-            // before-update trigger's `await` window can let a concurrent write
-            // slip in.
-            const snapshot = await rawRow(tableName, id);
-            const existing = decodeRow(definition, snapshot);
+            // Each attempt reads the RAW stored row alongside the decoded `existing`: the raw values
+            // seed the optimistic-concurrency CAS, before the before-update trigger's `await` window
+            // can let a concurrent write slip in. A plain patch that loses the version check is a real
+            // conflict. An operator patch (`{ increment: 1 }`) is a function of the row, not a value the
+            // caller saw, so it re-reads and re-resolves: concurrent counters must not throw.
+            const attempts = patchDependsOnRow(definition, patch) ? OCC_RETRY_ATTEMPTS : 1;
 
-            if (!existing) {
-                throw new Error(`document not found: ${id}`);
+            for (let attempt = 0; attempt < attempts; attempt += 1) {
+                // eslint-disable-next-line no-await-in-loop -- each attempt re-reads the row a lost race moved
+                const snapshot = await rawRow(tableName, id);
+
+                // eslint-disable-next-line no-await-in-loop -- see above
+                if (await writePatch(tableName, definition, id, patch, snapshot, undefined, patchOptions)) {
+                    return;
+                }
             }
 
-            const merged: Record<string, unknown> = { ...existing, ...patch, _id: id };
+            throw new ConflictError(`optimistic concurrency conflict on "${tableName}" — the row changed during this mutation; refetch and retry`, "occ");
+        },
 
-            applyOnUpdate(definition, patch, merged, auth);
+        /**
+         * Conditional patch — see `DatabaseWriterLike.patchIf`. One statement
+         * decides: `UPDATE … WHERE id = ? AND _version IS ? AND (<where>)`, on D1,
+         * Postgres and MySQL alike (MySQL reads the affected-row count).
+         *
+         * The read before it fetches the row and evaluates `where` in the same
+         * `SELECT`, so a non-matching row returns without firing a trigger. When
+         * the UPDATE then misses, the row moved after that read: it is read and
+         * decided again, a bounded number of times, then `ConflictError`.
+         */
+        async patchIf(tableName, id, args) {
+            assertNoExplicitUndefined("patchIf", args.patch);
+            assertStorableStrings(dialect.name, args.patch);
 
-            // Refinement checks fire on the merged row so a patch that flips
-            // a field to an invalid value is rejected before D1 sees it.
-            runRowValidators(definition, merged);
+            const definition = schema.tables[tableName];
 
-            if (hasMatchingTrigger(tableName, "before", "update")) {
-                await fireTriggers("before", "update", { doc: { ...merged }, id, op: "update", previous: existing, table: tableName });
+            if (!definition) {
+                throw new LunoraError("INTERNAL", `unknown table: ${tableName}`);
             }
 
-            await ensureBackfilledForTable(tableName);
-            await ensureRankBackfilledForTable(tableName);
+            const condition = compileWhereSql(args.where, whereSqlStrategyFor(definition)) ?? sql`1 = 1`;
 
-            const fields = Object.keys(definition.shape);
-            const assignments = sql.join(
-                // eslint-disable-next-line unicorn/no-null -- SQL bind value: an absent column must bind `null`, not undefined.
-                fields.map((field) => sql`${sql.identifier(field)} = ${serializeColumnValue(merged[field] ?? null)}`),
-                sql`, `,
+            for (let attempt = 0; attempt < OCC_RETRY_ATTEMPTS; attempt += 1) {
+                // eslint-disable-next-line no-await-in-loop -- each attempt re-reads the row a lost race moved
+                const [read] = await queryAll(
+                    exec,
+                    dialect,
+                    sql`SELECT *, CASE WHEN (${condition}) THEN 1 ELSE 0 END AS ${sql.identifier(PATCH_IF_MATCH_COLUMN)} FROM ${sql.identifier(tableName)} WHERE ${sql.identifier("id")} = ${id}`,
+                );
+
+                if (read === undefined) {
+                    // eslint-disable-next-line unicorn/no-null -- no such row: nothing to match, nothing written
+                    return { applied: false, doc: null };
+                }
+
+                const { [PATCH_IF_MATCH_COLUMN]: match, ...snapshot } = read;
+
+                if (Number(match) !== 1) {
+                    // eslint-disable-next-line unicorn/no-null -- `doc` is `Record | null`, matching `get`
+                    return { applied: false, doc: decodeRow(definition, snapshot) ?? null };
+                }
+
+                // eslint-disable-next-line no-await-in-loop -- see above
+                const merged = await writePatch(tableName, definition, id, args.patch, snapshot, condition, { verify: args.verify });
+
+                if (merged) {
+                    return { applied: true, doc: merged };
+                }
+            }
+
+            throw new ConflictError(
+                `patchIf on "${tableName}" lost the row to concurrent writes ${String(OCC_RETRY_ATTEMPTS)} times in a row; retry the operation`,
+                "occ",
             );
+        },
 
-            await runGuardedWrite(tableName, "UPDATE", assignments, snapshot);
+        async restore(id, expectedTable) {
+            const tableName = await resolveTableName(id, expectedTable);
 
-            await syncAggregates(tableName, existing, merged);
-            await syncRanks(tableName, id, existing, merged);
-            await syncSearch(tableName, id, merged);
-            await recordCdc(tableName, id, "update", merged);
+            if (!tableName) {
+                throw new LunoraError("INTERNAL", `document not found: ${id}`);
+            }
 
-            if (hasMatchingTrigger(tableName, "after", "update")) {
-                await fireTriggers("after", "update", { doc: merged, id, op: "update", previous: existing, table: tableName });
+            const definition = schema.tables[tableName];
+            const field = definition?.softDeleteMode?.field;
+
+            if (!definition || !field) {
+                throw new LunoraError("INTERNAL", `ctx.db.restore: table "${tableName}" is not a .softDelete() table`);
+            }
+
+            // Snapshot the raw row before the patch so we know whether it was
+            // actually soft-deleted (drives the rank re-add) and have its sort
+            // fields to rebuild the rank-companion entry.
+            const snapshot = await rawRow(tableName, id);
+            const wasDeleted = snapshot?.[field] !== null && snapshot?.[field] !== undefined;
+
+            // eslint-disable-next-line unicorn/no-null -- clearing the soft-delete marker writes SQL NULL into the column
+            await writer.patch(id, { [field]: null }, expectedTable);
+
+            // Soft delete dropped this row's rank-companion entry; `patch`'s rank
+            // sync skips re-adding it (rank fields unchanged, so its fast path
+            // treats the entry as present), so force a pure INSERT
+            // (`previous=undefined`) — only when restoring an actually soft-deleted
+            // row, to avoid a duplicate on a no-op restore. Re-add the RESTORED
+            // image (marker cleared): `snapshot` predates the patch and still
+            // carries the marker, and `syncRanks`' soft-delete guard would skip a
+            // still-deleted `next`.
+            if (wasDeleted) {
+                const row = decodeRow(definition, snapshot);
+
+                if (row !== null) {
+                    // eslint-disable-next-line unicorn/no-null -- the restored image clears the soft-delete marker, matching what `patch` persisted.
+                    await syncRanks(tableName, id, undefined, { ...row, [field]: null });
+                }
             }
         },
 
@@ -2886,7 +3819,7 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
             const definition = schema.tables[tableName];
 
             if (!definition) {
-                throw new Error(`unknown table: ${tableName}`);
+                throw new LunoraError("INTERNAL", `unknown table: ${tableName}`);
             }
 
             const LEGACY_READER_ERROR = "the legacy query()/withIndex() reader is not available on the D1 (global) backend; use findMany";
@@ -2895,31 +3828,170 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
             // is the public read surface there. Only `.withSearchIndex()` is
             // supported, so a staged search runs and every other terminal op
             // throws the same legacy-reader error the bare `query()` used to.
+            // Predicates pushed on by `.filter()`. RLS installs one of these on
+            // every restricted read, so a search reader that refused them would
+            // make `.withSearchIndex()` unusable on any table with a read policy.
+            //
+            // Every one of them runs over every returned row. A `whereFilter` that
+            // `isPushableWhere` proves exact on this engine is ALSO ANDed into the
+            // search SQL (`pushedWhere`), so it does not widen the read; any other
+            // predicate makes a bounded read scan the whole relevance window, as
+            // it does on the shard reader.
+            const searchFilters: ((document: Record<string, unknown>) => boolean)[] = [];
+            let inMemoryFilters = 0;
+            let pushedWhere: undefined | WhereInput;
+
+            // MySQL text equality follows the column collation, and a table
+            // created before `@lunora/hyperdrive` pinned `utf8mb4_0900_bin` keeps a
+            // case-folding, PAD SPACE one — so string comparisons stay in memory
+            // there. ponytail: probe the column collation to push them on MySQL too.
+            const exactText = dialect.name !== "mysql";
+
+            // The pushed `where` joins the main table as `m`, beside the search
+            // companion, so every column it names is qualified.
+            const mainTableStrategy: WhereSqlStrategy = {
+                ...whereSqlStrategyFor(definition),
+                fieldRef: (field) => sql`m.${columnRefSql(field)}`,
+                // `isPushableWhere` keeps every path out of this `where`, and the inherited guard would not carry the `m.` qualifier.
+                rangeTypeGuard: () => {
+                    throw new LunoraError("INTERNAL", "a path range is never pushed into a search");
+                },
+            };
+
+            const passesSearchFilters = (document: Record<string, unknown>): boolean => searchFilters.every((predicate) => predicate(document));
+
             const runSearch = async (stage: SearchStage, limit: number | undefined): Promise<Record<string, unknown>[]> => {
-                // Ensure the fts5 shadow table exists before a MATCH reads it;
-                // on a no-fts5 engine the scan fallback reads the live table.
+                // Ensure the search companion exists (and is backfilled) before
+                // reading it — the fts5 shadow, or the portable inverted table.
                 await ensureMigrated();
 
-                return (await isFtsAvailable(exec))
-                    ? searchViaFts(exec, dialect, definition, tableName, stage, limit)
-                    : searchViaScan(exec, dialect, definition, tableName, stage, limit);
+                // Relevance order bounds the read: the caller's limit when there
+                // is one, `MAX_SEARCH_SCAN` otherwise. An in-memory filter
+                // narrows *within* that window rather than widening the read, so
+                // it reads the full window and trims after. A pushed one is in
+                // the SQL already, so the caller's limit stands.
+                // Placeholders the search statement binds besides the policy: up to
+                // two per term (the portable layout tests each term twice), plus
+                // its staged `.eq()` filters. The policy's `in` lists are budgeted
+                // against what is left of D1's per-statement cap.
+                const searchParams = 2 * MAX_SEARCH_TERMS + stage.filters.length;
+                const compiled = pushedWhere === undefined ? undefined : compileWhereSql(pushedWhere, mainTableStrategy, undefined, searchParams);
+                // A policy too wide to fit beside the search at all (dozens of
+                // equality branches) is filtered in memory instead of failing.
+                const tooWide =
+                    compiled !== undefined &&
+                    dialect.name === "sqlite" &&
+                    renderSql(dialect.name, compiled).params.length + searchParams > WORKERD_SQLITE_LIMITS.boundParams;
+                const scope = tooWide ? undefined : compiled;
+                const selective = inMemoryFilters > 0 || tooWide;
+                const rows = await runSqlSearch(
+                    exec,
+                    dialect,
+                    definition,
+                    tableName,
+                    scope === undefined ? stage : { ...stage, scope },
+                    resolveSearchScan(selective ? undefined : limit),
+                );
+
+                // An unbounded read asked for one row past the cap; a full
+                // window means the caller would get a prefix that looks whole.
+                if (!selective && limit === undefined) {
+                    assertSearchWithinCap(rows);
+                }
+
+                const kept = rows.filter((row) => passesSearchFilters(row));
+
+                return limit === undefined ? kept : kept.slice(0, limit);
             };
 
             const buildReader = (stage: SearchStage | undefined): TableReaderLike => {
                 const reader: TableReaderLike = {
+                    /**
+                     * Lazy row iteration, paging through `paginate` exactly as the
+                     * shard reader does — so `for await` behaves the same on a
+                     * `.global()` table as on a sharded one, and hits the same
+                     * directed `LEGACY_READER_ERROR` when the chain is not a
+                     * search stage (via `paginate` below). Without this the
+                     * public `TableReader` type promised an iterator that only
+                     * one backend had.
+                     */
+                    // eslint-disable-next-line generator-star-spacing -- prettier owns this spacing and formats it as `async *[…]`; the rule wants `async* […]`, and prettier runs last
+                    async *[Symbol.asyncIterator]() {
+                        if (!stage) {
+                            throw new LunoraError("INTERNAL", LEGACY_READER_ERROR);
+                        }
+
+                        // Runs the same unbounded read `.collect()` runs, rather
+                        // than paging.
+                        //
+                        // Paging here could not terminate honestly. A page is
+                        // capped at `MAX_SEARCH_SCAN`, and a page sized to the
+                        // cap cannot fetch the probe row that tells "exactly
+                        // that many matches" from "ten times as many" — so
+                        // `planSearchPage` refuses it rather than reporting a
+                        // false `isDone`. A `for await` built on paging would
+                        // therefore die at the cap with a `BAD_REQUEST` it
+                        // cannot act on, while `.collect()` on the same query
+                        // raises the cap error. The unbounded read gives one
+                        // answer for both.
+                        //
+                        // Nothing is given up: the page size was the cap, so
+                        // the old loop already read the whole window in one
+                        // query and a `break` saved nothing. Relevance order is
+                        // why — a scored search has to rank its whole window
+                        // before it knows which row is first.
+                        yield* await runSearch(stage, undefined);
+                    },
                     async collect() {
                         if (!stage) {
-                            throw new Error(LEGACY_READER_ERROR);
+                            throw new LunoraError("INTERNAL", LEGACY_READER_ERROR);
                         }
 
                         return runSearch(stage, undefined);
                     },
-                    filter() {
-                        throw new Error(LEGACY_READER_ERROR);
+                    // eslint-disable-next-line @typescript-eslint/require-await -- declared `() => Promise<...>` so every caller can uniformly `await`/`.rejects` it; `async` here (rather than a bare throw) is what turns this into a rejected promise instead of a synchronous throw
+                    async collectWithScores() {
+                        // The three search layouts (`search-layout.ts`) compute and
+                        // order by `__score__` in SQL exactly like the sharded FTS5
+                        // path does, but none of them selects it back out of the
+                        // final row set — the same discard `.global()`'s `collect()`
+                        // has always done. Surfacing it needs plumbing through all
+                        // three layouts, not just this reader, so — like
+                        // `withGeoIndex()` below — this fails closed with a clear
+                        // error instead of a confusing "not a function" for now.
+                        throw new LunoraError(
+                            // A backend limitation the caller can act on, not a
+                            // fault in Lunora. `INTERNAL` made it a 500 that read
+                            // as a bug and could not be branched on; the
+                            // `*_UNSUPPORTED` codes are how every other
+                            // topology limit in the catalogue is expressed.
+                            "GLOBAL_SEARCH_SCORES_UNSUPPORTED",
+                            `collectWithScores() is not supported on \`.global()\` tables (table "${tableName}") — relevance scores are not yet surfaced on this backend; use .collect() instead`,
+                        );
+                    },
+                    filter(predicate) {
+                        // Chainable on the bare reader (like `order()` below): RLS
+                        // installs a predicate at query() time, BEFORE the caller
+                        // can stage `.withSearchIndex()`. `searchFilters` is
+                        // scoped to the whole query() call, so a pre-stage
+                        // predicate carries into the search stage; a non-search
+                        // chain still surfaces LEGACY_READER_ERROR at its
+                        // terminal.
+                        searchFilters.push(predicate);
+
+                        const where = whereOfFilter(predicate);
+
+                        if (where !== undefined && isPushableWhere(where, definition.shape, exactText)) {
+                            pushedWhere = mergeWhere(pushedWhere, where);
+                        } else {
+                            inMemoryFilters += 1;
+                        }
+
+                        return reader;
                     },
                     async first() {
                         if (!stage) {
-                            throw new Error(LEGACY_READER_ERROR);
+                            throw new LunoraError("INTERNAL", LEGACY_READER_ERROR);
                         }
 
                         const rows = await runSearch(stage, 1);
@@ -2934,24 +4006,29 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
                         // the same legacy-reader error at its terminal.
                         return reader;
                     },
-                    // eslint-disable-next-line @typescript-eslint/require-await -- TableReaderLike.paginate returns a Promise; search queries don't support pagination on either backend
-                    async paginate() {
-                        if (stage) {
-                            throw new Error("pagination is not supported on search queries; use .take(n) or .collect()");
+                    async paginate(pageOptions) {
+                        if (!stage) {
+                            throw new LunoraError("INTERNAL", LEGACY_READER_ERROR);
                         }
 
-                        throw new Error(LEGACY_READER_ERROR);
+                        // Cursor decoding, the bounded-page refusal and the cap
+                        // are the shared policy in `search-query`, so both
+                        // backends page identically; one row past the page is
+                        // fetched so `hasMore` is observed, not guessed.
+                        const plan = planSearchPage(pageOptions);
+
+                        return finishSearchPage(await runSearch(stage, searchPageScan(plan)), plan);
                     },
                     async take(limit) {
                         if (!stage) {
-                            throw new Error(LEGACY_READER_ERROR);
+                            throw new LunoraError("INTERNAL", LEGACY_READER_ERROR);
                         }
 
                         return runSearch(stage, limit);
                     },
                     async unique() {
                         if (!stage) {
-                            throw new Error(LEGACY_READER_ERROR);
+                            throw new LunoraError("INTERNAL", LEGACY_READER_ERROR);
                         }
 
                         // Over-fetch one past the single row we expect: 0 → null,
@@ -2965,15 +4042,25 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
                         // eslint-disable-next-line unicorn/no-null -- documented `unique()` result shape (Doc | null) returned to callers
                         return rows[0] ?? null;
                     },
+                    withGeoIndex() {
+                        // Geospatial (`.geoIndex()` / `.near()` / `.within()`) is a
+                        // sharded DO-SQLite feature; `.global()` tables have no
+                        // geohash companion, so codegen types this `never` and the
+                        // runtime refuses it rather than returning wrong results.
+                        throw new LunoraError(
+                            "INTERNAL",
+                            `geo indexes are not supported on \`.global()\` tables (table "${tableName}") — geospatial queries run only on sharded tables`,
+                        );
+                    },
                     withIndex() {
-                        throw new Error(LEGACY_READER_ERROR);
+                        throw new LunoraError("INTERNAL", LEGACY_READER_ERROR);
                     },
                     withSearchIndex(indexName, search) {
                         // eslint-disable-next-line sonarjs/no-nested-functions -- the .find predicate sits inside the reader builder's terminal; hoisting it out for one lookup would be more indirection than it saves
                         const searchDefinition = (definition.searchIndexes ?? []).find((index) => index.name === indexName);
 
                         if (!searchDefinition) {
-                            throw new Error(`unknown search index "${indexName}" on table "${tableName}"`);
+                            throw new LunoraError("INTERNAL", `unknown search index "${indexName}" on table "${tableName}"`);
                         }
 
                         const searchStage: SearchStage = {
@@ -2985,10 +4072,10 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
                             query: "",
                         };
 
-                        search(createSearchBuilder(searchStage, tableName) as Parameters<typeof search>[0]);
+                        search(createSearchBuilder(searchStage, tableName, createSearchAnalyzer(searchDefinition.language)));
 
                         if (!searchStage.hasQuery) {
-                            throw new Error(`search index "${indexName}" on table "${tableName}" requires a .search(field, query) call`);
+                            throw new LunoraError("INTERNAL", `search index "${indexName}" on table "${tableName}" requires a .search(field, query) call`);
                         }
 
                         return buildReader(searchStage);
@@ -3005,13 +4092,13 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
             const definition = schema.tables[tableName];
 
             if (!definition) {
-                throw new Error(`unknown table: ${tableName}`);
+                throw new LunoraError("INTERNAL", `unknown table: ${tableName}`);
             }
 
             const index = definition.rankIndexes?.find((i) => i.name === indexName);
 
             if (!index) {
-                throw new Error(`unknown rankIndex "${indexName}" on table "${tableName}"`);
+                throw new LunoraError("INTERNAL", `unknown rankIndex "${indexName}" on table "${tableName}"`);
             }
 
             // Same RLS coupling-seam semantics as count(): position is a
@@ -3044,7 +4131,7 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
 
             const rankTable = rankTableName(tableName, index.name);
             const sortColumns = index.sortBy.map((_, i) => sortColumnName(i));
-            const selectList = sql.join([sql`${sql.identifier("__partition__")}`, ...sortColumns.map((column) => sql`${sql.identifier(column)}`)], sql`, `);
+            const selectList = identifierList(["__partition__", ...sortColumns]);
             const ownRows = await queryAll(
                 exec,
                 dialect,
@@ -3083,7 +4170,7 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
             const beforeRows = await queryAll(
                 exec,
                 dialect,
-                sql`SELECT COUNT(*) AS c FROM ${sql.identifier(rankTable)} WHERE ${sql.identifier("__partition__")} = ${partitionKey}${beforeClause ? sql` AND (${beforeClause})` : sql``}`,
+                sql`SELECT COUNT(*) AS c FROM ${sql.identifier(rankTable)} WHERE ${sql.identifier("__partition__")} = ${partitionKey} AND (${beforeClause})`,
             );
             const totalRows = await queryAll(
                 exec,
@@ -3104,13 +4191,13 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
             const definition = schema.tables[tableName];
 
             if (!definition) {
-                throw new Error(`unknown table: ${tableName}`);
+                throw new LunoraError("INTERNAL", `unknown table: ${tableName}`);
             }
 
             const index = definition.rankIndexes?.find((i) => i.name === indexName);
 
             if (!index) {
-                throw new Error(`unknown rankIndex "${indexName}" on table "${tableName}"`);
+                throw new LunoraError("INTERNAL", `unknown rankIndex "${indexName}" on table "${tableName}"`);
             }
 
             // Ensure the `__rank_` companion exists so the indexed rankPage path
@@ -3134,32 +4221,39 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
             // ascending except the sort columns, which follow their index.
             const rankColumns = rankPageColumns(index, sortColumns);
             const orderBy = sql.join(
-                rankColumns.map((col) => sql`${sql.identifier(col.column)} ${sql.raw(col.direction === "desc" ? "DESC" : "ASC")}`),
+                rankColumns.flatMap((col) => orderTermsFor(dialect, { direction: col.direction, field: col.column, nullable: col.nullable })),
                 sql`, `,
             );
 
             const whereClauses: SQL[] = [];
 
-            if (partitionFromWhere) {
+            // A pre-encoded `partitionKey` from the cross-shard coordinator pins
+            // the partition directly; shard-local callers omit it and the
+            // partition resolves from `where`. This side read only the `where`
+            // form, so a coordinator-issued page silently scanned every partition.
+            if (typeof rankPageOptions.partitionKey === "string") {
+                whereClauses.push(sql`${sql.identifier("__partition__")} = ${rankPageOptions.partitionKey}`);
+            } else if (partitionFromWhere) {
                 whereClauses.push(sql`${sql.identifier("__partition__")} = ${encodePartitionKey(index.partitionBy ?? [], partitionFromWhere)}`);
             }
 
-            if (rankPageOptions.cursor) {
-                const seek = buildRankCursorSeek(dialect.name, rankColumns, decodeCursor(rankPageOptions.cursor));
+            // `after` wins over `cursor`, sharing the shard twin's resolver: the
+            // cross-shard coordinator forwards a structured `{ partitionKey,
+            // sortValues, rowId }` key, and this side read only `cursor`. A caller
+            // paging with `after` got page one every time — an `after` loop never
+            // terminated — with no error, because both fields sit on the SHARED
+            // `RankPageOptions` and the facade forwards the object verbatim.
+            const seekTuple = resolveRankSeekTuple(rankPageOptions);
+
+            if (seekTuple !== undefined) {
+                const seek = buildRankCursorSeek(dialect.name, rankColumns, seekTuple);
 
                 if (seek !== undefined) {
                     whereClauses.push(seek);
                 }
             }
 
-            const selectColumns = sql.join(
-                [
-                    sql`${sql.identifier(RANK_TIEBREAK)}`,
-                    sql`${sql.identifier("__partition__")}`,
-                    ...sortColumns.map((column) => sql`${sql.identifier(column)}`),
-                ],
-                sql`, `,
-            );
+            const selectColumns = identifierList([RANK_TIEBREAK, "__partition__", ...sortColumns]);
 
             let query = sql`SELECT ${selectColumns} FROM ${sql.identifier(rankTable)}`;
 
@@ -3189,17 +4283,19 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
             return { continueCursor, isDone: !hasMore, page: documents };
         },
 
-        async replace(id, document, expectedTable) {
+        async replace(id, document, expectedTable, replaceOptions) {
+            assertNoExplicitUndefined("replace", document);
+            assertStorableStrings(dialect.name, document);
             const tableName = await resolveTableName(id, expectedTable);
 
             if (!tableName) {
-                throw new Error(`document not found: ${id}`);
+                throw new LunoraError("INTERNAL", `document not found: ${id}`);
             }
 
             const definition = schema.tables[tableName];
 
             if (!definition) {
-                throw new Error(`document not found: ${id}`);
+                throw new LunoraError("INTERNAL", `document not found: ${id}`);
             }
 
             // Always snapshot the RAW stored row — it seeds the optimistic-
@@ -3210,13 +4306,28 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
             const snapshot = await rawRow(tableName, id);
 
             if (snapshot === undefined) {
-                throw new Error(`document not found: ${id}`);
+                throw new LunoraError("INTERNAL", `document not found: ${id}`);
             }
 
             const needsPrevious =
                 hasTrigger(schema, tableName, "update") || (definition.aggregateIndexes ?? []).length > 0 || (definition.rankIndexes ?? []).length > 0;
             const previous = needsPrevious ? (decodeRow(definition, snapshot) ?? undefined) : undefined;
-            const creationTime = typeof document["_creationTime"] === "number" ? document["_creationTime"] : clock();
+            // `_creationTime` is when the row was INSERTED, so a rewrite carries
+            // the stored one forward — the same thing `patch` does. Minting a
+            // fresh `clock()` here moved every replaced row to the end of every
+            // `_creationTime`-ordered index and past every live keyset cursor, so
+            // a paginating client saw it twice or never.
+            //
+            // A client-supplied `_creationTime` is honored only under the
+            // trusted-replay `allowExplicitId` opt-in (CDC replay, data-migration
+            // rewrite — both replay a row's original creation time); a forged one
+            // on the default mutation path cannot overwrite the persisted
+            // timestamp.
+            const replayed = replaceOptions?.allowExplicitId && typeof document["_creationTime"] === "number" ? document["_creationTime"] : undefined;
+            const stored = typeof snapshot["_creationTime"] === "number" ? snapshot["_creationTime"] : undefined;
+            // `clock()` is the last resort, for a row with no readable stored
+            // timestamp; the `??` chain keeps it unevaluated on the normal paths.
+            const creationTime = replayed ?? stored ?? clock();
             const replaced: Record<string, unknown> = { ...document, _creationTime: creationTime, _id: id };
 
             applyOnUpdate(definition, document, replaced, auth);
@@ -3237,7 +4348,7 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
                 [
                     sql`${sql.identifier("_creationTime")} = ${creationTime}`,
                     // eslint-disable-next-line unicorn/no-null -- SQL bind value: an absent column must bind `null`, not undefined.
-                    ...fields.map((field) => sql`${sql.identifier(field)} = ${serializeColumnValue(replaced[field] ?? null)}`),
+                    ...fields.map((field) => sql`${sql.identifier(field)} = ${serializeDocumentColumn(definition, field, replaced[field] ?? null)}`),
                 ],
                 sql`, `,
             );
@@ -3246,7 +4357,7 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
 
             await syncAggregates(tableName, previous, replaced);
             await syncRanks(tableName, id, previous, replaced);
-            await syncSearch(tableName, id, replaced);
+            await syncSearch(tableName, id, { document: replaced, previous, written: writtenBy(snapshot, creationTime) });
             await recordCdc(tableName, id, "update", replaced);
 
             if (hasMatchingTrigger(tableName, "after", "update")) {
@@ -3260,15 +4371,7 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
     return writer;
 };
 
-export {
-    createSqlCtxDb,
-    decodeGlobalRow,
-    readSqlCdcChanges,
-    runSqlAggregateMigrations,
-    runSqlCdcMigration,
-    runSqlGlobalTableMigrations,
-    runSqlRankMigrations,
-    runSqlSearchMigrations,
-    trimSqlCdcChanges,
-};
-export type { SqlCtxDbOptions, SqlCtxExec };
+export { createSqlCtxDb, readSqlCdcChangedTables, readSqlCdcChanges, readSqlCdcFloor, runSqlCdcMigration, sweepSqlCdcRetention };
+export type { SqlCtxDbOptions };
+
+export { decodeGlobalRow, type SqlCtxExec } from "./sql-exec";

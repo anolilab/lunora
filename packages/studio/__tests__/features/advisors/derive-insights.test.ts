@@ -137,6 +137,25 @@ describe(deriveInsights, () => {
         expect(noConflicts.some((insight) => insight.kind === "high-write-contention")).toBe(false);
     });
 
+    it("flags a shard closing on the per-DO storage ceiling, and escalates past half", () => {
+        expect.assertions(4);
+
+        const sized = (databaseSize: null | number): ShardMetrics => {
+            return { ...metrics(null), databaseSize };
+        };
+
+        // Under 1 GiB is silence — the whole point is that the signal means something.
+        expect(deriveInsights(sized(1_073_741_823), null)).toStrictEqual([]);
+
+        expect(deriveInsights(sized(2_000_000_000), null)).toStrictEqual([{ kind: "storage-headroom", severity: "warning", value: 2_000_000_000 }]);
+
+        // Past half the 10 GiB ceiling the migration itself is expensive, so it stops being a warning.
+        expect(deriveInsights(sized(6_000_000_000), null)).toStrictEqual([{ kind: "storage-headroom", severity: "error", value: 6_000_000_000 }]);
+
+        // A runtime that cannot report a size reads as unknown, never as headroom.
+        expect(deriveInsights(sized(null), null)).toStrictEqual([]);
+    });
+
     it("sorts errors before warnings before info", () => {
         expect.assertions(1);
 

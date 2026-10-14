@@ -6,12 +6,16 @@
  * admin gate, option registry, and request helpers through injected deps, so the
  * module imports no runtime values from `create-worker` (only its types).
  */
+import { EMPTY_ARCHITECTURE } from "../../../shared/architecture-manifest";
+import { decodeWire } from "../../../shared/wire-codec";
 import type { CronJobDispatch, CronJobInfo, FunctionDescriptor, FunctionRegistryLike, GlobalFilterClause, GlobalIntrospector } from "./create-worker";
 import { describeArguments } from "./describe-args";
 import { LunoraError } from "./errors";
+import { assertMethod } from "./method-guard";
 
 const FUNCTIONS_PATH = "/_lunora/admin/functions";
 const CRON_JOBS_PATH = "/_lunora/admin/cron-jobs";
+const ARCHITECTURE_PATH = "/_lunora/admin/architecture";
 const OPENAPI_PATH = "/_lunora/admin/openapi";
 const OPENRPC_PATH = "/_lunora/admin/openrpc";
 const GLOBAL_TABLES_PATH = "/_lunora/admin/global/tables";
@@ -24,6 +28,14 @@ const GLOBAL_FACET_PATH = "/_lunora/admin/global/facet";
  * absent / malformed / non-array input yields `undefined` (no filtering) rather
  * than a 400, and each entry is kept only when its `column` is a string; the
  * value is bound server-side so a bad shape can never inject SQL.
+ *
+ * The values are wire-decoded, because the facet that produced them is
+ * wire-encoded: a `v.bytes()` value the client just decoded back into an
+ * `ArrayBuffer` would otherwise arrive here as `{}` and drill down to nothing.
+ * `decodeWire` is the identity for plain-JSON values, so an ordinary string or
+ * number filter is unaffected; a malformed tagged payload throws, and this
+ * function's contract is to degrade to "no filtering" rather than 400, so it is
+ * caught alongside the parse.
  * @returns the parsed filter clauses, or `undefined` when absent/malformed.
  */
 const parseGlobalFilters = (raw: string | undefined): GlobalFilterClause[] | undefined => {
@@ -34,7 +46,7 @@ const parseGlobalFilters = (raw: string | undefined): GlobalFilterClause[] | und
     let parsed: unknown;
 
     try {
-        parsed = JSON.parse(raw);
+        parsed = decodeWire(JSON.parse(raw));
     } catch {
         return undefined;
     }
@@ -90,6 +102,7 @@ interface IntrospectionAdminRouteDeps {
     /** Admin-token gate (throws 403) — used by the spec routes, which serve a default even when unconfigured. */
     assertAdmin: (request: Request) => void;
     options: {
+        architecture?: unknown;
         cronJobs?: Record<string, ReadonlyArray<CronJobDispatch>>;
         functions?: FunctionRegistryLike;
         globalIntrospector?: GlobalIntrospector;
@@ -106,9 +119,7 @@ const buildIntrospectionAdminRoutes = (deps: IntrospectionAdminRouteDeps): Recor
     const { assertAdmin, options, parsePaging, queryParameter, requireAdminOption } = deps;
 
     const handleFunctionsList = (request: Request): Response => {
-        if (request.method !== "GET") {
-            throw new LunoraError("Functions endpoint requires GET", { code: "METHOD_NOT_ALLOWED", status: 405 });
-        }
+        assertMethod(request, "GET", "Functions");
 
         const registry = requireAdminOption(request, options.functions, {
             code: "FUNCTIONS_NOT_CONFIGURED",
@@ -132,9 +143,7 @@ const buildIntrospectionAdminRoutes = (deps: IntrospectionAdminRouteDeps): Recor
     };
 
     const handleCronJobs = (request: Request): Response => {
-        if (request.method !== "GET") {
-            throw new LunoraError("Cron-jobs endpoint requires GET", { code: "METHOD_NOT_ALLOWED", status: 405 });
-        }
+        assertMethod(request, "GET", "Cron-jobs");
 
         const registry = requireAdminOption(request, options.cronJobs, {
             code: "CRON_JOBS_NOT_CONFIGURED",
@@ -162,10 +171,18 @@ const buildIntrospectionAdminRoutes = (deps: IntrospectionAdminRouteDeps): Recor
         return Response.json({ jobs }, { headers: { "content-type": "application/json" }, status: 200 });
     };
 
+    const handleArchitecture = (request: Request): Response => {
+        assertMethod(request, "GET", "Architecture");
+
+        assertAdmin(request);
+
+        // Codegen emits the manifest only once the app declares a module; until
+        // then answer an empty-but-valid one so the studio shows how to opt in.
+        return Response.json(options.architecture ?? EMPTY_ARCHITECTURE, { headers: { "content-type": "application/json" }, status: 200 });
+    };
+
     const handleOpenApi = (request: Request): Response => {
-        if (request.method !== "GET") {
-            throw new LunoraError("OpenAPI endpoint requires GET", { code: "METHOD_NOT_ALLOWED", status: 405 });
-        }
+        assertMethod(request, "GET", "OpenAPI");
 
         assertAdmin(request);
 
@@ -175,9 +192,7 @@ const buildIntrospectionAdminRoutes = (deps: IntrospectionAdminRouteDeps): Recor
     };
 
     const handleOpenRpc = (request: Request): Response => {
-        if (request.method !== "GET") {
-            throw new LunoraError("OpenRPC endpoint requires GET", { code: "METHOD_NOT_ALLOWED", status: 405 });
-        }
+        assertMethod(request, "GET", "OpenRPC");
 
         assertAdmin(request);
 
@@ -185,9 +200,7 @@ const buildIntrospectionAdminRoutes = (deps: IntrospectionAdminRouteDeps): Recor
     };
 
     const handleGlobalTables = async (request: Request): Promise<Response> => {
-        if (request.method !== "GET") {
-            throw new LunoraError("Global-tables endpoint requires GET", { code: "METHOD_NOT_ALLOWED", status: 405 });
-        }
+        assertMethod(request, "GET", "Global-tables");
 
         const introspector = requireAdminOption(request, options.globalIntrospector, {
             code: "GLOBALS_NOT_CONFIGURED",
@@ -198,9 +211,7 @@ const buildIntrospectionAdminRoutes = (deps: IntrospectionAdminRouteDeps): Recor
     };
 
     const handleGlobalTablePage = async (request: Request): Promise<Response> => {
-        if (request.method !== "GET") {
-            throw new LunoraError("Global-table endpoint requires GET", { code: "METHOD_NOT_ALLOWED", status: 405 });
-        }
+        assertMethod(request, "GET", "Global-table");
 
         const introspector = requireAdminOption(request, options.globalIntrospector, {
             code: "GLOBALS_NOT_CONFIGURED",
@@ -220,9 +231,7 @@ const buildIntrospectionAdminRoutes = (deps: IntrospectionAdminRouteDeps): Recor
     };
 
     const handleGlobalFacet = async (request: Request): Promise<Response> => {
-        if (request.method !== "GET") {
-            throw new LunoraError("Global-facet endpoint requires GET", { code: "METHOD_NOT_ALLOWED", status: 405 });
-        }
+        assertMethod(request, "GET", "Global-facet");
 
         const introspector = requireAdminOption(request, options.globalIntrospector, {
             code: "GLOBALS_NOT_CONFIGURED",
@@ -256,6 +265,7 @@ const buildIntrospectionAdminRoutes = (deps: IntrospectionAdminRouteDeps): Recor
         [GLOBAL_FACET_PATH]: handleGlobalFacet,
         [GLOBAL_TABLE_PATH]: handleGlobalTablePage,
         [GLOBAL_TABLES_PATH]: handleGlobalTables,
+        [ARCHITECTURE_PATH]: handleArchitecture,
         [OPENAPI_PATH]: handleOpenApi,
         [OPENRPC_PATH]: handleOpenRpc,
     };

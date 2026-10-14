@@ -1,14 +1,12 @@
-# https://help.github.com/en/categories/automating-your-workflow-with-github-actions
-
 "name": "Tests"
 
-# PRs + the merge queue only — never `push`. A push to a release branch only
-# happens via a merged PR that already ran this suite, so a push trigger would
-# just re-run everything a second time. Modeled on visulima/visulima.
+# Automatic runs on PRs and the merge queue only, never `push`: a release branch only
+# moves via a merged PR that already ran this suite. `workflow_dispatch` stays for
+# manual runs.
 "on": # yamllint disable-line rule:truthy
     "pull_request":
         "types": ["opened", "synchronize", "reopened"]
-        "branches": ["main", "alpha", "next", "beta"]
+        "branches": ["main", "alpha", "next", "beta", "feat/**", "fix/**"]
     "merge_group": # yamllint disable-line rule:empty-values
     "workflow_dispatch": # yamllint disable-line rule:empty-values
 
@@ -25,9 +23,13 @@
         "runs-on": "ubuntu-latest"
         "timeout-minutes": 5
         "outputs":
-            "packages": "${{ steps.changes.outputs.packages || steps.changes_retry.outputs.packages }}"
-            "e2e": "${{ steps.changes.outputs.e2e || steps.changes_retry.outputs.e2e }}"
-            "codecov": "${{ steps.changes.outputs.codecov || steps.changes_retry.outputs.codecov }}"
+            "packages": "${{ steps.changes.outputs.packages }}"
+            "e2e": "${{ steps.changes.outputs.e2e }}"
+            "templates": "${{ steps.changes.outputs.templates }}"
+            "templates_expo": "${{ steps.changes.outputs.templates_expo }}"
+            "worker_size": "${{ steps.changes.outputs.worker_size }}"
+            "sdks": "${{ steps.changes.outputs.sdks }}"
+            "celld": "${{ steps.changes.outputs.celld }}"
         "steps":
             - "name": "Harden Runner"
               "uses": "step-security/harden-runner@9af89fc71515a100421586dfdb3dc9c984fbf411" # v2.19.4
@@ -35,28 +37,12 @@
                   "egress-policy": "audit"
 
             - "name": "Git checkout"
-              "uses": "actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd" # v6.0.2
-              "with":
-                  "persist-credentials": false
+              "uses": "anolilab/workflows/step/checkout-with-retry@6c16895f4c3b5273b373656988505d1a8264e78b" # main
 
-            # dorny/paths-filter occasionally 401s on the rotating GITHUB_TOKEN;
-            # fall back to a retry whose outputs the job reads via `||`.
+            # checkout-with-retry absorbs the transient mid-checkout GITHUB_TOKEN 401,
+            # so this call needs no retry handling of its own.
             - "name": "Check for file changes"
               "id": "changes"
-              "continue-on-error": true
-              "uses": "dorny/paths-filter@fbd0ab8f3e69293af611ebaee6363fc25e6d187d" # v4.0.1
-              "with":
-                  "token": "${{ github.token }}"
-                  "filters": ".github/file-filters.yml"
-
-            - "name": "Wait before retrying path filter"
-              "if": "steps.changes.outcome == 'failure'"
-              "shell": "bash"
-              "run": "sleep 30"
-
-            - "name": "Check for file changes (retry)"
-              "if": "steps.changes.outcome == 'failure'"
-              "id": "changes_retry"
               "uses": "dorny/paths-filter@fbd0ab8f3e69293af611ebaee6363fc25e6d187d" # v4.0.1
               "with":
                   "token": "${{ github.token }}"
@@ -67,11 +53,31 @@
         "if": "needs.files-changed.outputs.packages == 'true'"
         "needs": "files-changed"
         "runs-on": "ubuntu-latest"
-        "timeout-minutes": 30
+        # 45, not 30. The 22.15 leg runs `test:affected:coverage`, and a change to
+        # pnpm-lock.yaml / pnpm-workspace.yaml makes *every* package affected -- so
+        # this leg runs the whole suite under v8 coverage. That is ~25 min for
+        # @lunora/codegen alone, which left no room for the studio step after it and
+        # cancelled the job at 30 min with every test passing.
+        #
+        # 60, not 45: by 2026-10 a full-suite 22.15 leg took 41-43 min when it
+        # passed, so a slow runner hit 45 during the Codecov upload, after
+        # `test:coverage` had already succeeded for every project.
+        "timeout-minutes": 60
         "strategy":
             "fail-fast": false
             "matrix":
-                "node_version": ["22.15", "24.11"]
+                # Both legs are the `engines` bounds, deliberately: `^22.15.0 || >=24.11.0`.
+                #
+                # `fts5` declares whether the leg's `node:sqlite` carries the FTS5 module,
+                # which is a property of the Node build, not of SQLite: it was switched on
+                # in 22.16.0 (nodejs/node#57621), so the engines-floor leg does not have it
+                # and every FTS5 suite skips itself there. The step below probes the real
+                # build and fails on any disagreement with what is declared here.
+                "include":
+                    - "node_version": "22.15"
+                      "fts5": "absent"
+                    - "node_version": "24.11"
+                      "fts5": "present"
         "steps":
             - "name": "Harden Runner"
               "uses": "step-security/harden-runner@9af89fc71515a100421586dfdb3dc9c984fbf411" # v2.19.4
@@ -79,15 +85,10 @@
                   "egress-policy": "audit"
 
             - "name": "Git checkout"
-              "uses": "actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd" # v6.0.2
+              # Full history so `vis affected` can resolve the PR base.
+              "uses": "anolilab/workflows/step/checkout-with-retry@6c16895f4c3b5273b373656988505d1a8264e78b" # main
               "with":
-                  "persist-credentials": false
-                  # Full history so `vis affected` can resolve the PR base.
-                  "fetch-depth": 0
-              "env":
-                  "GIT_COMMITTER_NAME": "GitHub Actions Shell"
-                  "GIT_AUTHOR_NAME": "GitHub Actions Shell"
-                  "EMAIL": "github-actions[bot]@users.noreply.github.com"
+                  "fetch-depth": "0"
 
             - "name": "Setup resources and environment"
               "uses": "anolilab/workflows/step/node@acba5fb15ac98ad23dec1ad233e40e1bb79c1dae" # v19.0.4
@@ -100,18 +101,73 @@
                   "run-npm-audit": "false"
                   "run-signatures-audit": "false"
 
-            # `vis affected` builds upstream deps only via dependsOn; build the
-            # affected packages explicitly so their dist exists for the test run
-            # (workerd-pool suites stay off — see below).
+            # The FTS5-backed search suites in d1, sql-store and shard-engine gate on a
+            # runtime probe, so on a build without the module they skip and the leg still
+            # reports green — a whole capability leaving CI with nothing to show for it.
+            #
+            # This makes it legible instead: every leg writes what it will cover into the
+            # run summary, so a green run says which Node exercised FTS5, and the leg fails
+            # if the build disagrees with the matrix — Node dropping the module, or a
+            # version bump that silently moves which leg carries it.
+            #
+            # Before the build, not after: a mismatch is a matrix bug, and there is no
+            # reason to spend twenty minutes compiling to find out.
+            # The node -e script is JavaScript, its `${}` is not shell.
+            # jactionlint ignore=SC2016
+            - "name": "Report FTS5 coverage for this leg"
+              "shell": "bash"
+              "run": |
+                  # Asserted against the matrix, not against this leg: if the FTS5 leg is
+                  # ever dropped, no leg would probe `present` and every leg would still
+                  # pass. Failing here means removing it has to be deliberate.
+                  grep -qE '^ +"fts5": "present"$' .github/workflows/test.yml || {
+                      echo "::error file=.github/workflows/test.yml::No matrix leg declares an FTS5-carrying Node, so the FTS5 search suites would run nowhere. Keep one leg on a Node >= 22.16."
+                      exit 1
+                  }
+
+                  actual="$(node -e '
+                      const { DatabaseSync } = require("node:sqlite");
+                      const database = new DatabaseSync(":memory:");
+                      try {
+                          database.prepare(`CREATE VIRTUAL TABLE "probe" USING fts5(x)`).all();
+                          console.log("present");
+                      } catch {
+                          console.log("absent");
+                      } finally {
+                          database.close();
+                      }
+                  ')"
+
+                  if [ "${actual}" = "present" ]; then
+                      echo "- FTS5 on node ${{ matrix.node_version }} ($(node -v)): **exercised** — the FTS5 shadow-table suites ran on this leg." >> "${GITHUB_STEP_SUMMARY}"
+                  else
+                      echo "- FTS5 on node ${{ matrix.node_version }} ($(node -v)): **not exercised** — this build's \`node:sqlite\` has no FTS5 (added in 22.16.0), so those suites skipped here." >> "${GITHUB_STEP_SUMMARY}"
+                  fi
+
+                  if [ "${actual}" != "${{ matrix.fts5 }}" ]; then
+                      echo "::error file=.github/workflows/test.yml::node $(node -v) reports FTS5 '${actual}' but this matrix leg declares '${{ matrix.fts5 }}'. Update the leg — and keep one leg declaring the module present."
+                      exit 1
+                  fi
+
+            # `vis affected` builds upstream deps only via dependsOn, so build the
+            # affected packages explicitly to give the test run their dist.
             - "name": "Build affected packages"
               "run": "pnpm run build:affected:packages"
 
-            # workerd is intentionally OFF (no LUNORA_WORKERD_TESTS): the v8
-            # coverage provider collects via node:inspector, which the
-            # @cloudflare/vitest-pool-workers runtime does not implement, and the
-            # workerd-pool suites currently hang the runner. They run in a
-            # dedicated job once fixed. studio/d1/playground are excluded in the
-            # `test*` scripts for the same hang reason.
+            # LUNORA_WORKERD_TESTS stays unset here: workerd suites hang under coverage
+            # (see the test-workerd job), so they run there instead.
+            #
+            # studio is excluded from the coverage scripts only — its component suite
+            # still stalls under v8 coverage (packages/studio/vitest.config.ts) — and is
+            # covered by the dedicated step below.
+            #
+            # lunora-playground is NOT excluded. It was, on the belief that it hung like
+            # e2e; it does not. Its `runCodegen` smoke test parses the app with ts-morph
+            # and takes ~15s cold, and the app's vitest config used to grant 30s only
+            # when `CI` was set — so a local run tripped a 10s timeout that read as a
+            # hang. The budget is unconditional now (apps/playground/vitest.config.ts)
+            # and the suite runs here, on the leg without coverage. It has no
+            # `test:coverage` script, so the 22.15 leg simply has nothing to run for it.
             - "name": "Run affected tests"
               "shell": "bash"
               "run": |
@@ -121,17 +177,284 @@
                       pnpm run test:affected
                   fi
 
+            # The component tests import other packages' dist, which the affected build
+            # only produces when those packages changed. `vis run build` walks upstream
+            # deps via dependsOn, so everything studio imports exists for the run.
+            - "name": "Build @lunora/studio dependencies"
+              "run": |
+                  pnpm exec vis run build --query "project=studio"
+            # Both studio projects — DOM-free `unit` and jsdom `component` — no coverage.
+            - "name": "Run studio tests"
+              "run": |
+                  pnpm --filter "@lunora/studio" run test
+
             - "name": "Upload coverage to Codecov"
               "if": "matrix.node_version == '22.15' && (github.event_name == 'merge_group' || github.event.pull_request.head.repo.full_name == github.repository)"
               "continue-on-error": true
-              "uses": "codecov/codecov-action@5a1091511ad55cbe89839c7260b706298ca349f7" # v5.5.1
+              "uses": "codecov/codecov-action@0fb7174895f61a3b6b78fc075e0cd60383518dac" # v5.5.5
               "with":
                   "token": "${{ secrets.CODECOV_TOKEN }}"
                   "fail_ci_if_error": false
 
+    # The `workerd` vitest projects, run against real workerd and gated behind
+    # LUNORA_WORKERD_TESTS=1. Coverage MUST stay off: the v8 provider collects via
+    # node:inspector, which workerd does not implement, and these suites hang the
+    # runner with it on — hence the plain `test` script here. One matrix leg per
+    # package so a slow suite cannot starve the others.
+    "test-workerd":
+        "name": "Workerd integration (${{ matrix.package }})"
+        "if": "needs.files-changed.outputs.packages == 'true'"
+        "needs": "files-changed"
+        "runs-on": "ubuntu-latest"
+        "timeout-minutes": 20
+        "strategy":
+            "fail-fast": false
+            "matrix":
+                "package":
+                    [
+                        "packages/auth",
+                        "packages/browser",
+                        "packages/client",
+                        "packages/container",
+                        "packages/d1",
+                        "packages/do",
+                        "packages/payment",
+                        "packages/queue",
+                        "packages/ratelimit",
+                        "packages/runtime",
+                        "packages/scheduler",
+                        "packages/server",
+                        "packages/sql-store",
+                        "packages/storage",
+                        "packages/workflow",
+                        "packages/x402",
+                        "examples/privacy",
+                    ]
+        "steps":
+            - "name": "Harden Runner"
+              "uses": "step-security/harden-runner@9af89fc71515a100421586dfdb3dc9c984fbf411" # v2.19.4
+              "with":
+                  "egress-policy": "audit"
+
+            - "name": "Git checkout"
+              "uses": "anolilab/workflows/step/checkout-with-retry@6c16895f4c3b5273b373656988505d1a8264e78b" # main
+
+            - "name": "Setup resources and environment"
+              "uses": "anolilab/workflows/step/node@acba5fb15ac98ad23dec1ad233e40e1bb79c1dae" # v19.0.4
+              "with":
+                  "node-version": "22.15"
+                  "cache-prefix": "test-workerd"
+                  "install-node-gyp": "true"
+                  "skip-playwright": "true"
+                  "enable-nx-cache": "false"
+                  "run-npm-audit": "false"
+                  "run-signatures-audit": "false"
+
+            # The matrix is a hand-typed list of directories (16 packages, one example),
+            # duplicated verbatim in test.yml and nightly.yml, with nothing tying either
+            # copy to the packages/* and examples/* that actually declare a `workerd`
+            # vitest project. Drop one from either copy and its workerd suites stop
+            # running with every check green. Each leg asserts its own directory still
+            # declares the project, and that the leg count equals the number of
+            # directories that do — together that makes the matrix and the filesystem
+            # the same set, not merely the same size.
+            - "name": "Assert the matrix matches the packages declaring a workerd project"
+              "run": |
+                  declared="$(grep -l 'name: "workerd"' packages/*/vitest.config.ts examples/*/vitest.config.ts | sed 's|/vitest.config.ts||' | sort)"
+                  count="$(printf '%s\n' "$declared" | wc -l | tr -d ' ')"
+                  if ! printf '%s\n' "$declared" | grep -qx "${{ matrix.package }}"; then
+                    echo "${{ matrix.package }}/vitest.config.ts declares no \`workerd\` project — this leg would run nothing." >&2
+                    echo "Declared: $(printf '%s' "$declared" | tr '\n' ' ')" >&2
+                    exit 1
+                  fi
+                  if [ "$count" != "${{ strategy.job-total }}" ]; then
+                    echo "$count packages declare a workerd project but the matrix has ${{ strategy.job-total }} legs." >&2
+                    echo "Declared: $(printf '%s' "$declared" | tr '\n' ' ')" >&2
+                    echo "Fix the matrix in .github/workflows/test.yml AND .github/workflows/nightly.yml." >&2
+                    exit 1
+                  fi
+
+            # `vis run build` walks upstream deps via dependsOn, so the package's dist
+            # and everything it imports exists. `pnpm --filter "pkg..."` does not build
+            # deps reliably. An example is an app, not a library: only its dependencies
+            # are built (`name^...`), since its suites import their dist, not its own.
+            - "name": "Build package and dependencies"
+              "run": |
+                  project="$(node -p "require('./${{ matrix.package }}/project.json').name")"
+                  case "${{ matrix.package }}" in
+                    examples/*) pnpm exec vis run build --filter "${project}^..." ;;
+                    *) pnpm exec vis run build --query "project=${project}" ;;
+                  esac
+
+            - "name": "Run workerd suites"
+              "env":
+                  "LUNORA_WORKERD_TESTS": "1"
+              "run": |
+                  pnpm --filter "$(node -p "require('./${{ matrix.package }}/package.json').name")" run test --project workerd
+
+    # The `@lunora/platform` and `@lunora/shard-engine` conformance suites against a
+    # live single-node celld (`@lunora/platform-celld`, project `celld`), gated
+    # behind LUNORA_CELLD_TESTS=1 for the workerd reasons: it needs the celld binary
+    # and localhost loopback, and contributes no coverage. The binary is a pinned
+    # release asset checked against its sha256 — the release publishes no checksum
+    # file or attestation of its own, so the pin is the integrity check. Bump
+    # CELLD_VERSION and CELLD_SHA256 together, alongside the ratings in
+    # CELLD_CAPABILITIES. With the gate on, a missing binary fails the spawn in
+    # `beforeAll`, so the job cannot go green having run nothing. The two-node
+    # fleet test needs an S3-compatible bucket; moto's server provides one (it
+    # implements the conditional writes celld's ownership records depend on),
+    # and on CI a missing endpoint fails the test rather than skipping it.
+    "test-celld":
+        "name": "celld integration (@lunora/platform-celld)"
+        "if": "needs.files-changed.outputs.celld == 'true'"
+        "needs": "files-changed"
+        "runs-on": "ubuntu-latest"
+        "timeout-minutes": 20
+        "env":
+            "CELLD_VERSION": "v0.6.1"
+            "CELLD_SHA256": "79a8253cff5d4e8a4a9f7a2611e393390f7fe9025f00e88467875b007c44866b"
+            "MOTO_VERSION": "5.2.3"
+        "steps":
+            - "name": "Harden Runner"
+              "uses": "step-security/harden-runner@9af89fc71515a100421586dfdb3dc9c984fbf411" # v2.19.4
+              "with":
+                  "egress-policy": "audit"
+
+            - "name": "Git checkout"
+              "uses": "anolilab/workflows/step/checkout-with-retry@6c16895f4c3b5273b373656988505d1a8264e78b" # main
+
+            - "name": "Setup resources and environment"
+              "uses": "anolilab/workflows/step/node@acba5fb15ac98ad23dec1ad233e40e1bb79c1dae" # v19.0.4
+              "with":
+                  "node-version": "22.15"
+                  "cache-prefix": "test-celld"
+                  "install-node-gyp": "true"
+                  "skip-playwright": "true"
+                  "enable-nx-cache": "false"
+                  "run-npm-audit": "false"
+                  "run-signatures-audit": "false"
+
+            - "name": "Install celld"
+              "run": |
+                  curl -fsSL -o celld.gz "https://github.com/denoland/celld/releases/download/${CELLD_VERSION}/celld-x86_64-unknown-linux-gnu.gz"
+                  echo "${CELLD_SHA256}  celld.gz" | sha256sum --check --strict
+                  gunzip celld.gz
+                  install -m 0755 celld "${RUNNER_TEMP}/celld"
+                  echo "LUNORA_CELLD_BIN=${RUNNER_TEMP}/celld" >> "$GITHUB_ENV"
+
+            - "name": "Start an S3-compatible endpoint for the fleet test"
+              "run": |
+                  pipx install "moto[server]==${MOTO_VERSION}"
+                  moto_server -p 19000 > "${RUNNER_TEMP}/moto.log" 2>&1 &
+                  for _ in $(seq 1 30); do curl -sf -o /dev/null http://127.0.0.1:19000/ && exit 0; sleep 1; done
+                  cat "${RUNNER_TEMP}/moto.log" >&2
+                  exit 1
+
+            - "name": "Build package and dependencies"
+              "run": |
+                  pnpm exec vis run build --query "project=platform-celld"
+
+            - "name": "Run celld suites"
+              "env":
+                  "LUNORA_CELLD_TESTS": "1"
+                  "LUNORA_CELLD_S3_ENDPOINT": "http://127.0.0.1:19000"
+                  # The runner's Docker engine, on its default socket, backs the containers check.
+                  "LUNORA_CELLD_CONTAINERS": "1"
+              "run": |
+                  pnpm --filter "@lunora/platform-celld" run test --project celld
+
+    # `@lunora/hyperdrive`'s MySQL suites — the only gate proving the SQL the store
+    # core renders for a `.global()` MySQL backend actually executes. mysqld comes
+    # from `mysql-memory-server`, provisioned from npm like pglite and workerd
+    # rather than from a service container, so the job needs no `services:` block.
+    #
+    # The point of the job is that the suites cannot report green having run
+    # nothing. They skip when the binary is unobtainable, and no CI job had ever
+    # declared that mysqld was expected — so a suite that had never been observed
+    # to run reported success on every PR. `LUNORA_MYSQL_TESTS=1` turns that skip
+    # into a failure (`__tests__/_helpers/mysql-mem.ts`), and the assertion below
+    # closes the other half: a run that executes zero cases, or skips any, fails
+    # here instead of passing quietly.
+    "test-mysql":
+        "name": "MySQL integration (@lunora/hyperdrive)"
+        "if": "needs.files-changed.outputs.packages == 'true'"
+        "needs": "files-changed"
+        "runs-on": "ubuntu-latest"
+        "timeout-minutes": 20
+        "steps":
+            - "name": "Harden Runner"
+              "uses": "step-security/harden-runner@9af89fc71515a100421586dfdb3dc9c984fbf411" # v2.19.4
+              "with":
+                  # `mysql-memory-server` fetches mysqld from cdn.mysql.com on first use.
+                  "egress-policy": "audit"
+
+            - "name": "Git checkout"
+              "uses": "anolilab/workflows/step/checkout-with-retry@6c16895f4c3b5273b373656988505d1a8264e78b" # main
+
+            - "name": "Setup resources and environment"
+              "uses": "anolilab/workflows/step/node@acba5fb15ac98ad23dec1ad233e40e1bb79c1dae" # v19.0.4
+              "with":
+                  "node-version": "22.15"
+                  "cache-prefix": "test-mysql"
+                  "install-node-gyp": "true"
+                  "skip-playwright": "true"
+                  "enable-nx-cache": "false"
+                  "run-npm-audit": "false"
+                  "run-signatures-audit": "false"
+
+            # The run step names its suites by path, so a fourth one added against the
+            # same harness would not be picked up and nothing else would notice — the
+            # same hazard the workerd matrix assertion above exists for.
+            - "name": "Assert the run covers every suite using the MySQL harness"
+              "run": |
+                  declared="$(grep -rl '_helpers/mysql-mem' packages/hyperdrive/__tests__/*.test.ts | sort | tr '\n' ' ')"
+                  expected='packages/hyperdrive/__tests__/create-hyperdrive.test.ts packages/hyperdrive/__tests__/global-collation-parity.test.ts packages/hyperdrive/__tests__/global-json-paths.test.ts packages/hyperdrive/__tests__/global-mysql.integration.test.ts packages/hyperdrive/__tests__/global-null-placement.test.ts '
+                  if [ "$declared" != "$expected" ]; then
+                    echo "::error file=.github/workflows/test.yml::Suites using the MySQL harness are [$declared] but this job runs [$expected]. Update the run step below."
+                    exit 1
+                  fi
+
+            - "name": "Build package and dependencies"
+              "run": |
+                  pnpm exec vis run build --query "project=hyperdrive"
+
+            - "name": "Run the MySQL suites against a real mysqld"
+              "env":
+                  "LUNORA_MYSQL_TESTS": "1"
+              "run": |
+                  pnpm --filter "@lunora/hyperdrive" run test \
+                      __tests__/create-hyperdrive.test.ts \
+                      __tests__/global-collation-parity.test.ts \
+                      __tests__/global-json-paths.test.ts \
+                      __tests__/global-mysql.integration.test.ts \
+                      __tests__/global-null-placement.test.ts \
+                      --reporter=default --reporter=json --outputFile.json=test-results/mysql.json
+
+            # The node -e script is JavaScript, its `${}` is not shell.
+            # jactionlint ignore=SC2016
+            - "name": "Assert the suites executed their cases"
+              "run": |
+                  node -e '
+                      const { appendFileSync, readFileSync } = require("node:fs");
+
+                      const report = JSON.parse(readFileSync("packages/hyperdrive/test-results/mysql.json", "utf8"));
+                      const passed = report.numPassedTests;
+                      const skipped = report.numPendingTests + report.numTodoTests;
+
+                      appendFileSync(
+                          process.env.GITHUB_STEP_SUMMARY,
+                          `- MySQL parity on \`@lunora/hyperdrive\`: **${passed} cases executed** against a real mysqld (${skipped} skipped).\n`,
+                      );
+
+                      if (passed === 0 || skipped > 0) {
+                          console.error(`::error::The MySQL suites passed ${passed} and skipped ${skipped} cases. This job exists so the gate cannot pass by skipping.`);
+                          process.exit(1);
+                      }
+                  '
+
     "e2e":
         "name": "E2E (Playwright + Miniflare)"
-        "if": "needs.files-changed.outputs.e2e == 'true' && vars.CI_E2E_SKIP != 'true'"
+        "if": "needs.files-changed.outputs.e2e == 'true'"
         "needs": "files-changed"
         "runs-on": "ubuntu-latest"
         "timeout-minutes": 30
@@ -142,14 +465,9 @@
                   "egress-policy": "audit"
 
             - "name": "Git checkout"
-              "uses": "actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd" # v6.0.2
+              "uses": "anolilab/workflows/step/checkout-with-retry@6c16895f4c3b5273b373656988505d1a8264e78b" # main
               "with":
-                  "persist-credentials": false
-                  "fetch-depth": 0
-              "env":
-                  "GIT_COMMITTER_NAME": "GitHub Actions Shell"
-                  "GIT_AUTHOR_NAME": "GitHub Actions Shell"
-                  "EMAIL": "github-actions[bot]@users.noreply.github.com"
+                  "fetch-depth": "0"
 
             - "name": "Setup resources and environment"
               "uses": "anolilab/workflows/step/node@acba5fb15ac98ad23dec1ad233e40e1bb79c1dae" # v19.0.4
@@ -162,14 +480,17 @@
                   "run-npm-audit": "false"
                   "run-signatures-audit": "false"
 
-            # The E2E global setup boots the playground's Vite dev server, which
-            # imports lunorash / @lunora/* from their built dist and runs the
-            # `lunora` CLI bin — so the packages must be built first.
-            - "name": "Build packages"
-              "run": "pnpm run build:packages"
+            # E2E global setup boots the playground's dev server, which imports the
+            # packages from dist and runs the `lunora` bin — so they must be built.
+            # The build (CPU/disk) and the browser download (network) bottleneck on
+            # different resources, so `parallel:` overlaps them; both finish before
+            # the suite starts.
+            - "parallel":
+                  - "name": "Build packages"
+                    "run": "pnpm run build:packages"
 
-            - "name": "Install Playwright browsers"
-              "run": "pnpm --filter @lunora/e2e exec playwright install chromium firefox"
+                  - "name": "Install Playwright browsers"
+                    "run": "pnpm --filter @lunora/e2e exec playwright install chromium firefox"
 
             - "name": "Run E2E suite"
               "env":
@@ -177,19 +498,425 @@
                   "LUNORA_E2E": "true"
               "run": "pnpm e2e"
 
+            # The showcase examples in a real browser: separate config and report,
+            # reusing the packages and Chromium this job already provisioned.
+            - "name": "Run examples E2E suite"
+              "env":
+                  "CI": "true"
+              "run": "pnpm run e2e:examples"
+
             - "name": "Upload Playwright report on failure"
               "if": "failure()"
               "uses": "actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02" # v4.6.2
               "with":
                   "name": "playwright-report"
-                  "path": "tests/e2e/playwright-report"
+                  "path": |
+                      tests/e2e/playwright-report
+                      tests/e2e/playwright-report-examples
                   "retention-days": 7
+
+    # Scaffold every template, install it, add the auth-ui payload, build, typecheck.
+    # Path-gated because a real `pnpm install` per template is slow, but it is the only
+    # gate proving a `lunora init` scaffold still installs, and the only one that puts a
+    # compiler on the copy-in auth-ui payload — no template imports it, so a build alone
+    # tree-shakes it away first.
+    "templates":
+        "name": "Template scaffold matrix"
+        "if": "needs.files-changed.outputs.templates == 'true'"
+        "needs": "files-changed"
+        "runs-on": "ubuntu-latest"
+        "timeout-minutes": 60
+        "steps":
+            - "name": "Harden Runner"
+              "uses": "step-security/harden-runner@9af89fc71515a100421586dfdb3dc9c984fbf411" # v2.19.4
+              "with":
+                  "egress-policy": "audit"
+
+            - "name": "Git checkout"
+              "uses": "anolilab/workflows/step/checkout-with-retry@6c16895f4c3b5273b373656988505d1a8264e78b" # main
+
+            - "name": "Setup resources and environment"
+              "uses": "anolilab/workflows/step/node@acba5fb15ac98ad23dec1ad233e40e1bb79c1dae" # v19.0.4
+              "with":
+                  "node-version": "22.15"
+                  "cache-prefix": "templates"
+                  "install-node-gyp": "true"
+                  "skip-playwright": "true"
+                  "enable-nx-cache": "false"
+                  "run-npm-audit": "false"
+                  "run-signatures-audit": "false"
+
+            # The matrix packs `packages/*/dist` into tarballs and shells out to the
+            # built CLI, so everything publishable must be built — and built `:prod`:
+            # the development build keeps `react/jsx-dev-runtime`, which kills a Next
+            # production prerender with `jsxDEV is not a function`. Users install the
+            # production build, so that is what to test.
+            - "name": "Build packages (production artifacts)"
+              "run": "pnpm run build:packages:prod"
+
+            # Expo runs in its own leg below, on a narrower filter: its `pnpm install`
+            # pulls the react-native/expo graph that no other template shares, and
+            # editing `templates/next` cannot break it.
+            - "name": "Run the template scaffold matrix"
+              "run": "pnpm run test:templates"
+              "env":
+                  "SMOKE_SKIP_TEMPLATES": "expo"
+
+            - "name": "Upload scaffold logs on failure"
+              "if": "failure()"
+              "uses": "actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02" # v4.6.2
+              "with":
+                  "name": "template-smoke-logs"
+                  "path": ".template-smoke-logs"
+                  "retention-days": 7
+                  "if-no-files-found": "ignore"
+
+    # The Expo leg of the same matrix, split out by cost. Its `pnpm install` pulls the
+    # react-native/expo graph and no other template shares it, so it runs on
+    # `templates_expo` — its own tree, the packages it consumes, `shared/`, the harness
+    # and the lockfiles — and not on an edit to a sibling template that cannot reach it.
+    #
+    # Same script, scoped with its positional arg. The matrix job above skips `expo` via
+    # `SMOKE_SKIP_TEMPLATES`, so the two legs partition the templates rather than
+    # overlapping, and `templates/expo` is covered by exactly one of them.
+    "templates-expo":
+        "name": "Template scaffold matrix (expo)"
+        "if": "needs.files-changed.outputs.templates_expo == 'true'"
+        "needs": "files-changed"
+        "runs-on": "ubuntu-latest"
+        "timeout-minutes": 30
+        "steps":
+            - "name": "Harden Runner"
+              "uses": "step-security/harden-runner@9af89fc71515a100421586dfdb3dc9c984fbf411" # v2.19.4
+              "with":
+                  "egress-policy": "audit"
+
+            - "name": "Git checkout"
+              "uses": "anolilab/workflows/step/checkout-with-retry@6c16895f4c3b5273b373656988505d1a8264e78b" # main
+
+            - "name": "Setup resources and environment"
+              "uses": "anolilab/workflows/step/node@acba5fb15ac98ad23dec1ad233e40e1bb79c1dae" # v19.0.4
+              "with":
+                  "node-version": "22.15"
+                  "cache-prefix": "templates-expo"
+                  "install-node-gyp": "true"
+                  "skip-playwright": "true"
+                  "enable-nx-cache": "false"
+                  "run-npm-audit": "false"
+                  "run-signatures-audit": "false"
+
+            # Same prerequisite as the matrix job: the harness packs `packages/*/dist`
+            # into tarballs, and the production build is what users install.
+            - "name": "Build packages (production artifacts)"
+              "run": "pnpm run build:packages:prod"
+
+            - "name": "Run the expo scaffold leg"
+              "run": "pnpm run test:templates expo"
+
+            - "name": "Upload scaffold logs on failure"
+              "if": "failure()"
+              "uses": "actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02" # v4.6.2
+              "with":
+                  "name": "template-smoke-logs-expo"
+                  "path": ".template-smoke-logs"
+                  "retention-days": 7
+                  "if-no-files-found": "ignore"
+
+    # Weighs the Worker a `templates/standalone` app deploys against the ceiling in
+    # `worker-size.json`. Nothing else in CI measures bytes, and noticing late means a
+    # user's deploy rejected by Cloudflare over a dependency added here weeks earlier.
+    #
+    # Its own job, not a `postinstall` gate: a failing postinstall turns every job red
+    # in its setup step, with the cause invisible in the job that reports it.
+    "worker-size":
+        "name": "Worker size budget"
+        "if": "needs.files-changed.outputs.packages == 'true' || needs.files-changed.outputs.templates == 'true' || needs.files-changed.outputs.worker_size == 'true'"
+        "needs": "files-changed"
+        "runs-on": "ubuntu-latest"
+        "timeout-minutes": 30
+        "steps":
+            - "name": "Harden Runner"
+              "uses": "step-security/harden-runner@9af89fc71515a100421586dfdb3dc9c984fbf411" # v2.19.4
+              "with":
+                  "egress-policy": "audit"
+
+            - "name": "Git checkout"
+              "uses": "anolilab/workflows/step/checkout-with-retry@6c16895f4c3b5273b373656988505d1a8264e78b" # main
+
+            - "name": "Setup resources and environment"
+              "uses": "anolilab/workflows/step/node@acba5fb15ac98ad23dec1ad233e40e1bb79c1dae" # v19.0.4
+              "with":
+                  "node-version": "22.15"
+                  "cache-prefix": "worker-size"
+                  "install-node-gyp": "true"
+                  "skip-playwright": "true"
+                  "enable-nx-cache": "false"
+                  "run-npm-audit": "false"
+                  "run-signatures-audit": "false"
+
+            # `:prod` because the reference app bundles the workspace `dist/`, and the
+            # development build measures ~25% heavier — a number nobody deploys.
+            - "name": "Build packages (production artifacts)"
+              "run": "pnpm run build:packages:prod"
+
+            - "name": "Weigh the reference Worker"
+              "run": "pnpm run worker-size:check"
+
+    # The non-JS SDKs against `protocol/fixtures/*.json`, the same golden frames the
+    # TypeScript client is tested against. Nothing else runs them: `sdks/` is not a pnpm
+    # workspace, so `pnpm run test` cannot see it.
+    #
+    # Every SDK is dependency-free by design (its transport is injected), so each leg is
+    # just "install the toolchain, run the suite" — and then generates, builds and calls
+    # an SDK, which is the check that `lunora sdk generate` really does leave a consumer
+    # with nothing to install. One leg per language so a failure names the language.
+    "sdk-conformance":
+        "name": "SDK conformance (${{ matrix.sdk.language }})"
+        "if": "needs.files-changed.outputs.sdks == 'true'"
+        "needs": "files-changed"
+        "runs-on": "${{ matrix.sdk.runner }}"
+        # Per-leg, not one shared ceiling: the Linux legs finish in ~3 minutes, while
+        # macOS does strictly more work on a slower runner and has ranged from 9m53s to
+        # 15m28s for the same commit. One shared value would either cancel macOS or let
+        # a genuinely hung Linux leg burn macOS-sized time.
+        "timeout-minutes": "${{ matrix.sdk.timeoutMinutes }}"
+        "strategy":
+            "fail-fast": false
+            "matrix":
+                "sdk":
+                    - "language": "python"
+                      "runner": "ubuntu-latest"
+                      "timeoutMinutes": 15
+                    - "language": "go"
+                      "runner": "ubuntu-latest"
+                      "timeoutMinutes": 15
+                    - "language": "ruby"
+                      "runner": "ubuntu-latest"
+                      "timeoutMinutes": 15
+                    - "language": "rust"
+                      "runner": "ubuntu-latest"
+                      "timeoutMinutes": 15
+                    - "language": "java"
+                      "runner": "ubuntu-latest"
+                      "timeoutMinutes": 15
+                    - "language": "kotlin"
+                      "runner": "ubuntu-latest"
+                      "timeoutMinutes": 15
+                    - "language": "dart"
+                      "runner": "ubuntu-latest"
+                      "timeoutMinutes": 15
+                    - "language": "swift"
+                      # Swift ships with the macOS image, so this leg needs no
+                      # third-party setup action.
+                      "runner": "macos-latest"
+                      # 30 against the Linux legs' 15 — see the spread noted above.
+                      # It also runs under the thread sanitizer (SDK_TEST_TSAN
+                      # below), which is most of the difference.
+                      "timeoutMinutes": 30
+        "steps":
+            - "name": "Harden Runner"
+              "uses": "step-security/harden-runner@9af89fc71515a100421586dfdb3dc9c984fbf411" # v2.19.4
+              "with":
+                  "egress-policy": "audit"
+
+            - "name": "Git checkout"
+              "uses": "anolilab/workflows/step/checkout-with-retry@6c16895f4c3b5273b373656988505d1a8264e78b" # main
+
+            # A fourth hardcoded copy of the language list — `sdks/lint-all.sh`,
+            # `sdks/generated-check.sh` and `sdks/run-all.sh` hold the other three —
+            # and the only one no script can see. A ninth SDK missed here is never
+            # conformance-tested at all, with every leg green. `strategy.job-total` is
+            # this matrix's size, so compare it against what is on disk; the three
+            # scripts reconcile themselves against the same directories.
+            - "name": "Assert the matrix covers every SDK on disk"
+              "run": |
+                  on_disk="$(find sdks -mindepth 1 -maxdepth 1 -type d ! -name smoke | wc -l | tr -d ' ')"
+                  if [ "$on_disk" != "${{ strategy.job-total }}" ]; then
+                    echo "sdks/ holds $on_disk ports but the sdk-conformance matrix has ${{ strategy.job-total }} legs." >&2
+                    echo "Add the missing language to the matrix in .github/workflows/test.yml, and to ALL in" >&2
+                    echo "sdks/lint-all.sh, sdks/generated-check.sh and sdks/run-all.sh." >&2
+                    exit 1
+                  fi
+                  echo "matrix covers all $on_disk SDKs"
+
+            - "name": "Setup python"
+              "if": "matrix.sdk.language == 'python'"
+              "uses": "actions/setup-python@e797f83bcb11b83ae66e0230d6156d7c80228e7c" # v6.0.0
+              "with":
+                  "python-version": "3.13"
+
+            - "name": "Setup go"
+              "if": "matrix.sdk.language == 'go'"
+              "uses": "actions/setup-go@44694675825211faa026b3c33043df3e48a5fa00" # v6.0.0
+              "with":
+                  "go-version": "1.22"
+
+            # The Ruby transport is dependency-free like the others, but quicktype's
+            # Ruby backend renders Dry::Struct models with no option to avoid it, so
+            # the generated-code check alone needs the gems.
+            - "name": "Setup java"
+              "if": "matrix.sdk.language == 'java'"
+              "uses": "actions/setup-java@c5195efecf7bdfc987ee8bae7a71cb8b11521c00" # v4.7.1
+              "with":
+                  "distribution": "temurin"
+                  "java-version": "21"
+
+            # setup-java gives the JVM; the compiler comes straight from the pinned
+            # JetBrains release, keeping a third-party action SHA out of the chain.
+            - "name": "Setup java for kotlin"
+              "if": "matrix.sdk.language == 'kotlin'"
+              "uses": "actions/setup-java@c5195efecf7bdfc987ee8bae7a71cb8b11521c00" # v4.7.1
+              "with":
+                  "distribution": "temurin"
+                  "java-version": "21"
+
+            - "name": "Install the Kotlin compiler"
+              "if": "matrix.sdk.language == 'kotlin'"
+              "run": |
+                  curl -fsSL -o /tmp/kotlin.zip https://github.com/JetBrains/kotlin/releases/download/v2.1.0/kotlin-compiler-2.1.0.zip
+                  # JetBrains' published checksum, verified by hand against a
+                  # downloaded copy — a tampered or truncated archive must not
+                  # reach `unzip`.
+                  echo 'b6698d5728ad8f9edcdd01617d638073191d8a03139cc538a391b4e3759ad297  /tmp/kotlin.zip' | sha256sum --check --strict
+                  unzip -q /tmp/kotlin.zip -d /tmp/kotlin
+                  echo "/tmp/kotlin/kotlinc/bin" >> "$GITHUB_PATH"
+
+            # An exact SDK version, not "stable": `dart format`'s style follows the
+            # language version, so a moving toolchain reformats the transport out from
+            # under a green PR. This is the whole dart install — format and analyze
+            # ship with the SDK, so it has no linter step below.
+            - "name": "Setup dart"
+              "if": "matrix.sdk.language == 'dart'"
+              "uses": "dart-lang/setup-dart@7654d458321ee25acccccfdb86cd48bd95768ff1" # v1.8.0
+              "with":
+                  "sdk": "3.13.0"
+
+            - "name": "Setup ruby"
+              "if": "matrix.sdk.language == 'ruby'"
+              "uses": "ruby/setup-ruby@90be1154f987f4dc0fe0dd0feedac9e473aa4ba8" # v1.286.0
+              "with":
+                  "ruby-version": "3.3"
+
+            - "name": "Install the gems the generated ruby models require"
+              "if": "matrix.sdk.language == 'ruby'"
+              "run": "gem install dry-struct dry-types --no-document"
+
+            # Each leg installs its own linter, pinned by version (or SHA-256 where the
+            # tool ships as a downloaded artifact) so a new release cannot change the
+            # rule set under a green PR.
+            #
+            # Two legs install nothing here, for opposite reasons. Dart's linter IS the
+            # SDK, already pinned above. swift-format publishes no binary and no
+            # versioned package, so that leg uses the toolchain's own copy and asserts
+            # the version against SWIFT_FORMAT_VERSION in `sdks/lint-all.sh` — a runner
+            # image whose Swift moves then fails by name rather than silently linting
+            # against a rule set nobody chose.
+            - "name": "Install ruff"
+              "if": "matrix.sdk.language == 'python'"
+              "run": "python -m pip install --disable-pip-version-check ruff==0.16.2"
+
+            - "name": "Install rubocop"
+              "if": "matrix.sdk.language == 'ruby'"
+              "run": "gem install rubocop -v 1.89.0 --no-document"
+
+            - "name": "Install rustfmt and clippy"
+              "if": "matrix.sdk.language == 'rust'"
+              "run": "rustup component add rustfmt clippy"
+
+            - "name": "Install ktlint"
+              "if": "matrix.sdk.language == 'kotlin'"
+              "run": |
+                  curl -fsSL -o /tmp/ktlint https://github.com/pinterest/ktlint/releases/download/1.8.0/ktlint
+                  echo 'a3fd620207d5c40da6ca789b95e7f823c54e854b7fade7f613e91096a3706d75  /tmp/ktlint' | sha256sum --check --strict
+                  install -m 0755 /tmp/ktlint /usr/local/bin/ktlint
+
+            # Shipped as a jar; the wrapper is what puts the command on PATH for
+            # `lint-all.sh` and for a developer's shell alike.
+            - "name": "Install google-java-format"
+              "if": "matrix.sdk.language == 'java'"
+              "run": |
+                  curl -fsSL -o /tmp/google-java-format.jar \
+                    https://repo1.maven.org/maven2/com/google/googlejavaformat/google-java-format/1.36.1/google-java-format-1.36.1-all-deps.jar
+                  echo '25b400f003089d23cc5320cdaf1a16cabee19b8aa3434d0ff021b3d9f42154b4  /tmp/google-java-format.jar' | sha256sum --check --strict
+                  printf '#!/usr/bin/env bash\nexec java -jar /tmp/google-java-format.jar "$@"\n' > /usr/local/bin/google-java-format
+                  chmod +x /usr/local/bin/google-java-format
+
+            # The same script a developer runs: a command list kept in this matrix
+            # instead drifts from the local check, which is how conformance coverage
+            # drifted before `protocol/conformance-cases.json` existed.
+            - "name": "Lint and format-check the ${{ matrix.sdk.language }} SDK"
+              # SDK_LINT_REQUIRE_TOOLS turns "tool not installed" from a SKIP into a
+              # failure. A SKIP is honest locally; here the install steps just ran, so
+              # a missing tool means one broke — and a check that did not run must not
+              # report green.
+              "env":
+                  "SDK_LINT_REQUIRE_TOOLS": "1"
+              "run": "bash sdks/lint-all.sh ${{ matrix.sdk.language }}"
+
+            - "name": "Run the ${{ matrix.sdk.language }} conformance suite"
+              # The same script a developer runs, for the same reason the lint step
+              # above runs `lint-all.sh`. A per-language command list kept in this
+              # matrix instead drifts from the local one — this one already had, in
+              # three places — and a guard added to the runner then protects local
+              # runs only. `run-all.sh` is what fails a leg that exited 0 having
+              # executed no cases; invoked this way, that assertion is live here.
+              #
+              # One language per leg, so the eight still run in parallel and a
+              # failure still names the language.
+              #
+              # SDK_TEST_TSAN is the swift leg's thread sanitizer — the one flag CI
+              # wants and a local run does not, expressed as a switch rather than as
+              # a second command. The script prints it on the summary line, so a
+              # green leg says which build ran. Harmless on the other seven.
+              "env":
+                  "SDK_TEST_TSAN": "1"
+              "run": "bash sdks/run-all.sh ${{ matrix.sdk.language }}"
+
+            # The generated surface hardcodes the runtime's call signatures, and nothing
+            # else pins that coupling: change a signature and every suite above still
+            # passes while every generated SDK is broken.
+            #
+            # So every leg generates, builds AND calls. Building alone is demonstrably
+            # not enough: Java once emitted a surface that compiled and threw `cannot
+            # encode` on first invocation, Ruby one whose every method raised
+            # NoMethodError — both with the compile gate green throughout.
+            - "name": "Setup node"
+              "uses": "anolilab/workflows/step/node@acba5fb15ac98ad23dec1ad233e40e1bb79c1dae" # v19.0.4
+              "with":
+                  "node-version": "22.15"
+                  "cache-prefix": "sdk-generate"
+                  "skip-playwright": "true"
+                  "enable-nx-cache": "false"
+                  "run-npm-audit": "false"
+                  "run-signatures-audit": "false"
+
+            # vis, not `pnpm --filter '@lunora/cli...'`: the CLI closure includes studio,
+            # whose bundle imports `@lunora/bindings/analytics`, and under the pnpm
+            # filter that bundle ran before bindings' dist existed. vis orders the
+            # closure from `dependsOn: ["^build"]`.
+            - "name": "Build the generator"
+              "run": |
+                  pnpm exec vis run build --query "project=cli"
+
+            # One script, the same one a developer runs — same drift argument as the
+            # lint step above.
+            #
+            # It generates into `mktemp -d`, outside the checkout: the generator copies
+            # the transport into its output, and that promise cannot be tested anywhere
+            # the repo's own `sdks/<lang>` is resolvable. It then assembles the consumer
+            # project a real user writes (a go.mod `replace`, a cargo path dependency,
+            # `.package(path:)`) and runs a call through it.
+            #
+            # The script passes `--from sdks` because the default fetch is pinned to the
+            # CLI's release tag, and most transports do not exist at any released tag.
+            - "name": "Generate a self-contained ${{ matrix.sdk.language }} SDK and call it"
+              "run": "bash sdks/generated-check.sh ${{ matrix.sdk.language }}"
 
     # Single required check: green when every dependent job passed or was
     # skipped (so a no-package-change PR with all jobs skipped still passes).
     "test-required-check":
         "name": "Check Test Run"
-        "needs": ["files-changed", "test", "e2e"]
+        "needs": ["files-changed", "test", "test-workerd", "test-celld", "test-mysql", "e2e", "templates", "templates-expo", "worker-size", "sdk-conformance"]
         "if": "always()"
         "runs-on": "ubuntu-latest"
         "timeout-minutes": 5

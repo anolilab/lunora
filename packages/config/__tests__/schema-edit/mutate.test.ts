@@ -79,6 +79,18 @@ describe("applyAdditiveEdit", () => {
         ]);
     });
 
+    it("keeps the existing columns when adding one to a chain-less table", () => {
+        expect.assertions(1);
+
+        // A `defineTable({ … })` with no chain is the initializer node itself, so
+        // a descendants-only lookup found no shape and rewrote the table empty.
+        const chainless = `import { defineSchema, defineTable, v } from "@lunora/server";\n\nexport default defineSchema({\n    todos: defineTable({\n        text: v.string(),\n        done: v.boolean(),\n    }),\n});\n`;
+        const text = textOf(applyAdditiveEdit(chainless, { column: "due", kind: "addOptionalColumn", table: "todos", validator: "v.number()" }));
+        const parsed = parseSchema(text);
+
+        expect(parsed.ok ? parsed.tables[0]?.columns.map((column) => column.name) : undefined).toStrictEqual(["text", "done", "due"]);
+    });
+
     it("refuses destructive edits without touching the source", () => {
         expect.assertions(1);
 
@@ -94,6 +106,28 @@ describe("applyAdditiveEdit", () => {
         );
         expect(reasonOf(applyAdditiveEdit(SCHEMA, { fields: ["text"], kind: "addIndex", name: "by_text", table: "todos" }))).toBe("duplicate-index");
         expect(reasonOf(applyAdditiveEdit(SCHEMA, { column: "x", kind: "addOptionalColumn", table: "ghost", validator: "v.string()" }))).toBe("unknown-table");
+    });
+
+    it("marks a new table .global() with the requested backend", () => {
+        expect.assertions(2);
+
+        const text = textOf(applyAdditiveEdit(SCHEMA, { global: { backend: "hyperdrive" }, kind: "addTable", table: "invoices" }));
+
+        expect(text).toContain('.global({ backend: "hyperdrive" })');
+        // And the parser reads it back — `.global({ … })` used to look non-global.
+        expect(parseSchema(text)).toMatchObject({ tables: expect.arrayContaining([expect.objectContaining({ global: true, name: "invoices" })]) });
+    });
+
+    it("emits a bare .global() when no backend is named", () => {
+        expect.assertions(1);
+
+        expect(textOf(applyAdditiveEdit(SCHEMA, { global: {}, kind: "addTable", table: "invoices" }))).toContain(".global()");
+    });
+
+    it("refuses a backend outside the allow-list", () => {
+        expect.assertions(1);
+
+        expect(reasonOf(applyAdditiveEdit(SCHEMA, { global: { backend: "sqlite" as never }, kind: "addTable", table: "invoices" }))).toBe("invalid-identifier");
     });
 
     it("rejects a validator that is not a v.* expression (code injection)", () => {

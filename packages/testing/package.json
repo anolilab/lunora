@@ -1,6 +1,6 @@
 {
     "name": "@lunora/testing",
-    "version": "0.0.0",
+    "version": "1.0.0-alpha.260",
     "description": "Testing toolkit for Lunora: an in-memory harness for queries, mutations, and actions",
     "keywords": [
         "cloudflare",
@@ -25,7 +25,7 @@
         "directory": "packages/testing"
     },
     "files": [
-        "dist",
+        "./dist",
         "README.md",
         "LICENSE.md",
         "__assets__"
@@ -40,31 +40,59 @@
             "types": "./dist/index.d.ts",
             "import": "./dist/index.mjs"
         },
+        "./playwright": {
+            "types": "./dist/playwright.d.ts",
+            "import": "./dist/playwright.mjs"
+        },
         "./package.json": "./package.json"
+    },
+    "publishConfig": {
+        "access": "public"
     },
     "scripts": {
         "build": "pnpm exec packem build --development",
         "build:prod": "pnpm exec packem build --production",
-        "lint:eslint": "eslint .",
+        "lint:eslint": "eslint . --max-warnings=0",
         "lint:eslint:fix": "eslint . --fix",
-        "lint:prettier": "prettier --check .",
-        "lint:prettier:fix": "prettier --write .",
+        "lint:prettier": "prettier --check . --ignore-path ../../.prettierignore",
+        "lint:prettier:fix": "prettier --write . --ignore-path ../../.prettierignore",
         "lint:types": "tsc --noEmit",
         "test": "vitest run",
-        "test:coverage": "vitest run --coverage"
+        "test:coverage": "vitest run --coverage",
+        "fallow:audit": "fallow audit",
+        "fallow:dead-code": "fallow dead-code",
+        "fallow:health": "fallow health --score"
     },
     "dependencies": {
-        "@lunora/do": "workspace:*",
-        "@lunora/mail": "workspace:*",
-        "@lunora/server": "workspace:*"
+        "@lunora/agent": "1.0.0-alpha.201",
+        "@lunora/bindings": "1.0.0-alpha.109",
+        "@lunora/errors": ">=1.0.0-alpha.51 <2.0.0-0",
+        "@lunora/mail": "1.0.0-alpha.106",
+        "@lunora/notify": "1.0.0-alpha.79",
+        "@lunora/queue": "1.0.0-alpha.103",
+        "@lunora/scheduler": "1.0.0-alpha.122",
+        "@lunora/server": "1.0.0-alpha.196",
+        "@visulima/notification": "catalog:notify"
     },
     "devDependencies": {
+        "@lunora/observability": "1.0.0-alpha.135",
+        "@lunora/ratelimit": "1.0.0-alpha.129",
+        "@lunora/shard-engine": "1.0.0-alpha.125",
         "@types/node": "catalog:types",
         "@visulima/packem": "catalog:build",
         "@vitest/coverage-v8": "catalog:test",
         "esbuild": "catalog:build",
+        "fallow": "catalog:lint",
         "typescript": "catalog:tsc",
         "vitest": "catalog:test"
+    },
+    "peerDependencies": {
+        "@playwright/test": "^1.61.1"
+    },
+    "peerDependenciesMeta": {
+        "@playwright/test": {
+            "optional": true
+        }
     },
     "engines": {
         "node": "^22.15.0 || >=24.11.0"

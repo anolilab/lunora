@@ -1,228 +1,130 @@
 # AGENTS.md
 
-This file provides guidance to AI coding agents when working with code in this repository.
+Lunora is a type-safe, real-time backend framework on Cloudflare Workers +
+Durable Objects with a Vite-first DX: chainable `query`/`mutation`/`action`
+builders, one Durable Object per app by default, opt-in sharding
+(`.shardBy(key)`) and global replication (`.global()`), types inferred end to
+end from server to client.
 
-## Repository Overview
+The repo is a pnpm monorepo of 58 packages — 55 published (`@lunora/*` plus the
+unscoped `lunorash` umbrella), 3 internal — orchestrated by `@visulima/vis`.
 
-Lunora is a pnpm monorepo for the Lunora framework — a type-safe, real-time backend on Cloudflare Workers + Durable Objects with a Vite-first DX. Packages live under `packages/<name>/`. Apps (examples, docs site, studio) live under `apps/<name>/`.
+**Research the codebase before editing. Never change code you haven't read.**
 
-**Package manager**: pnpm v11.5.3 (enforced via `packageManager`). **Monorepo orchestration**: @visulima/vis. **Node**: ^22.15.0 || >=24.11.0.
+## Deeper context — read on demand
 
-## Build & Test Commands
+Everything below is what applies to _every_ change. These files hold the rest;
+open one only when the task calls for it.
+
+| When you need to…                                                   | Read                       |
+| ------------------------------------------------------------------- | -------------------------- |
+| decide **which package owns a change**, or cross a package boundary | `.agents/docs/packages.md` |
+| scaffold a package/query/table, or touch git hooks or release       | `.agents/docs/workflow.md` |
+| work on the documentation & marketing site                          | `apps/docs/AGENTS.md`      |
+| know what is planned or in flight                                   | `plans/README.md`          |
+| write or regenerate a non-JS SDK                                    | `sdks/README.md`           |
+
+## Layout
+
+pnpm workspaces are `apps/*`, `packages/*`, `examples/*`, `tests/*`. The rest of
+the top level is **not** a workspace — that is the part that surprises:
+`shared/` (bundler-inlined source, see below), `templates/*` (whole-project
+starters fetched remotely by `lunora init`), `registry/*` (copy-in items for
+`lunora registry add`), `sdks/` (8 non-JS clients with their own toolchains),
+plus `protocol/`, `scripts/`, `api-snapshots/`, `plans/`, `plugins/`,
+`patches/`, `marketing/`.
+
+Every package has the same shape: `src/index.ts`, `__tests__/` (Vitest), and its
+own `vitest.config.ts`, `tsconfig.json` (extends `tsconfig.base.json`),
+`project.json` (vis tags), `.releaserc.json`. All ESM, `"sideEffects": false`.
+
+## Commands
 
 ```bash
-# Build
-pnpm run build                    # All targets (dev)
-pnpm run build:packages           # Just packages
-pnpm run build:affected           # Only changed projects
+pnpm run build                    # :packages / :affected also exist
+pnpm run test                     # :coverage / :affected
+pnpm run lint:eslint              # :fix; also lint:prettier, lint:types, lint:affected:*
+pnpm --filter "@lunora/runtime" run test    # single package
 
-# Test
-pnpm run test                     # All tests
-pnpm run test:coverage            # With coverage
-pnpm run test:affected            # Only changed projects
-
-# Single package (use pnpm --filter)
-pnpm --filter "@lunora/runtime" run test
-pnpm --filter "@lunora/runtime" run lint:types
-
-# Lint
-pnpm run lint:eslint              # ESLint all
-pnpm run lint:eslint:fix          # ESLint fix all
-pnpm run lint:prettier            # Prettier check
-pnpm run lint:prettier:fix        # Prettier fix
-pnpm run lint:types               # TypeScript type check
-pnpm run lint:affected:eslint     # Only changed
-pnpm run lint:affected:types      # Only changed
+# Gates with their own CI jobs that lint/test do NOT cover
+pnpm run api:check                # public API vs api-snapshots/*.api.md (api:update to accept)
+pnpm run dist:check               # built dist/ is production-clean
+pnpm run lint:package-json        # package.json key order (:fix)
+pnpm run lint:registry:sync       # registry/auth-ui-* in sync with packages/auth-ui
+pnpm run test:templates           # templates/* scaffold, install, build, typecheck
+pnpm run test:workerd             # the `workerd` vitest projects (15 packages) — see below
+pnpm run test:celld               # platform + engine TCK against a live celld (needs the `celld` binary)
+pnpm run e2e                      # Playwright suite in tests/e2e
+bash sdks/run-all.sh              # 8 non-JS SDK conformance suites (lint-all.sh, generated-check.sh too)
 ```
 
-> Note: `dist/` is gitignored and built on demand. A raw `pnpm --filter … run
-test` / `lint:types` does NOT rebuild workspace dependencies, so if an upstream
-> `@lunora/*` package's source changed you may hit stale-`dist` errors
-> (`X is not a function`, "missing export"). Build first — `pnpm run
-build:packages` once, or `pnpm --filter "@lunora/<pkg>..." run build` (the
-> trailing `...` includes dependencies) — or use `pnpm run test:affected` /
-> `pnpm run lint:affected:types`, which build dependencies for you.
+## Gotchas that go green locally and red in CI
 
-## Commit Convention
+- **Stale `dist/`.** `dist/` is gitignored and built on demand; a raw `pnpm --filter … run test` / `lint:types` does not rebuild workspace deps, so upstream source changes surface as `X is not a function` or a missing export. Build first (`pnpm run build:packages`, or `--filter "@lunora/<pkg>..."` with the trailing `...`), or use the `:affected` scripts, which build deps for you.
+- **`api:check` needs a fresh build.** It reads `dist/`; running `api:update` against a stale build writes a wrong snapshot.
+- **`package.json` key order** is enforced by one CI job and nothing else — ESLint, Prettier, `lint:types`, `api:check`, `dist:check` are all blind to it. Classic failure: `peerDependencies` placed above `devDependencies`. Run `pnpm run lint:package-json` after editing any manifest.
+- **`pnpm run test` does not run the `workerd` suites.** Fifteen packages declare a second, `LUNORA_WORKERD_TESTS=1`-gated vitest project that only their own CI job runs, and the gate is permanent: coverage collects through `node:inspector`, which workerd does not implement, so `test:coverage` **hangs** with them on — and sandboxed environments cannot open the localhost loopback the runtime needs to boot at all. A full local sweep therefore goes green over a broken Durable Object or D1 path; `node:sqlite` does not reproduce workerd's SQLite (it builds with `SQLITE_DQS=0`, so a bare double-quoted column that resolves to nothing raises there and is a silent string literal on workerd). Run `pnpm run test:workerd` before pushing anything touching SQL, storage, or a Durable Object.
+- **Never `pnpm -r run test`.** Every package's vitest in parallel fails a different arbitrary set each run (resource contention, not real failures). Use `pnpm run test`, `test:affected`, or one `--filter`.
+- **Never text-merge `pnpm-lock.yaml`.** Discard a conflicted lockfile and regenerate (`pnpm install --lockfile-only`). CI builds `refs/pull/N/merge`, not your branch head, so a hand-resolved lockfile fails there and nowhere else.
+- **Prettier before ESLint** when fixing by hand. The reverse lets Prettier reformat lines ESLint just fixed and reintroduce the violations.
 
-Angular-style conventional commits, enforced by hooks:
+## Conventions
 
-```
-<type>(<scope>): <subject>
-```
-
-Types: `feat`, `fix`, `perf`, `docs`, `dx`, `refactor`, `test`, `workflow`, `build`, `ci`, `chore`, `types`, `wip`, `release`, `deps`, `revert`. Scope is typically the package name (e.g., `feat(runtime): add durable-object client`). Subject: imperative, lowercase, no period, max 50 chars.
-
-## Branch Strategy
-
-- **alpha**: Primary development branch — most PRs target this (default branch)
-- **main**: Stable releases
-- **next/beta**: Pre-release channels
-- Feature branches: `feat/name`, `fix/issue-number`
-
-## Architecture Overview
-
-Lunora exposes a typed, chainable functional API (the `query`/`mutation`/`action` procedure builders) on top of Cloudflare Workers and Durable Objects:
-
-- **Default topology**: A single Durable Object per app. Easiest to reason about, sufficient for most apps.
-- **Opt-in sharding**: `.shardBy(key)` partitions state across many DOs by user/tenant/room.
-- **Opt-in global replication**: `.global()` replicates a function/state across regions for low-latency reads.
-- **Vite-first DX**: a Vite plugin powers codegen, type sync between server and client, and the dev server.
-- **Type-safe end-to-end**: functions, queries, mutations, and subscriptions infer types from server to client.
-
-## Package Structure
-
-### Naming
-
-The CLI binary is `lunora`. The npm scope is `@lunora/*`. The "main" server package is **`@lunora/server`** (directory `packages/server/`) — it exports `defineSchema`, `query`, `mutation`, `action`, and the function-context types. When the docs or plan refer to the "main runtime package", it means `@lunora/server`.
-
-There is no scoped `@lunora/lunora`, but there **is** an unscoped umbrella package named **`lunorash`** (directory `packages/lunora/` — the npm name is `lunorash` because the unscoped `lunora` name is taken on npm; the directory and CLI bin stay `lunora`) — it re-exports the base packages (`@lunora/server` + subpaths, `@lunora/values`, `@lunora/runtime`, `@lunora/do`, `@lunora/client`) through subpaths (`lunorash/server`, `lunorash/values`, `lunorash/runtime`, `lunorash/do`, `lunorash/client`) and ships the `lunora` CLI bin (delegating to `@lunora/cli`), so an app can depend on the single `lunorash` package instead of the base packages. Codegen detects an umbrella dependency (a declared `lunorash` dep) and emits `lunorash/*` imports in `_generated/*` (including `lunorash/client` for `FunctionReference`) instead of `@lunora/*` — opt-in and backward-compatible; granular `@lunora/*` projects are unchanged. Opt-in add-ons (`@lunora/auth`, `@lunora/mail`, `@lunora/storage`, framework adapters, the Vite plugin, …) stay separate installs. The OG-image generator (`scripts/generate-package-og-images.js`) special-cases the unscoped `lunorash` name.
-
-### Packages
-
-| Package              | Role                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
-| -------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `lunorash`           | **Unscoped umbrella** (dir `packages/lunora/`, CLI bin `lunora`; npm name `lunorash` since `lunora` is taken on npm). One install for the base: re-exports `@lunora/server` (+ subpaths), `@lunora/values`, `@lunora/runtime`, `@lunora/do`, `@lunora/client` via subpaths (`lunorash/server`, …) and ships the `lunora` CLI bin. Codegen emits `lunorash/*` imports when a project depends on it (else `@lunora/*`). Add-ons/adapters/Vite plugin stay separate.                 |
-| `@lunora/server`     | Main API: `defineSchema`, `defineTable`, `query`, `mutation`, `action`.                                                                                                                                                                                                                                                                                                                                                                                                           |
-| `@lunora/values`     | `v.*` validators, return-type inference.                                                                                                                                                                                                                                                                                                                                                                                                                                          |
-| `@lunora/runtime`    | Worker entry: RPC router, shard resolver, query coordinator.                                                                                                                                                                                                                                                                                                                                                                                                                      |
-| `@lunora/do`         | `ShardDO` (SQLite, OCC, hibernated WS subscriptions) and `SessionDO`.                                                                                                                                                                                                                                                                                                                                                                                                             |
-| `@lunora/d1`         | D1 adapter for `.global()` tables; wraps the Sessions API for read-your-writes.                                                                                                                                                                                                                                                                                                                                                                                                   |
-| `@lunora/codegen`    | Emits `_generated/{api,server,dataModel}.ts` from `schema.ts`.                                                                                                                                                                                                                                                                                                                                                                                                                    |
-| `@lunora/client`     | Browser SDK: WebSocket, optimistic updates, offline queue.                                                                                                                                                                                                                                                                                                                                                                                                                        |
-| `@lunora/react`      | `useQuery` / `useMutation` / `useSubscription` / `useAuth`.                                                                                                                                                                                                                                                                                                                                                                                                                       |
-| `@lunora/vue`        | Vue adapter: live composables (`useQuery` / `useMutation`), optimistic mutations, reactive loaders.                                                                                                                                                                                                                                                                                                                                                                               |
-| `@lunora/solid`      | SolidJS adapter: live queries, optimistic mutations, reactive loaders.                                                                                                                                                                                                                                                                                                                                                                                                            |
-| `@lunora/svelte`     | Svelte adapter: live stores, optimistic mutations, reactive loaders.                                                                                                                                                                                                                                                                                                                                                                                                              |
-| `@lunora/astro`      | Astro integration: single-worker composition plus reactive-loader server helpers.                                                                                                                                                                                                                                                                                                                                                                                                 |
-| `@lunora/db`         | TanStack DB binding: `defineCollections` wires Lunora queries/mutations into live, indexed client collections + a durable offline-transactions outbox (optimistic, retried, client-id-keyed). Peer-deps `@tanstack/db` + `@tanstack/offline-transactions`. Scaffolded by `vis generate lunora-collections`.                                                                                                                                                                       |
-| `@lunora/vite`       | Vite plugin over `@cloudflare/vite-plugin` — codegen, wrangler validator, error overlay.                                                                                                                                                                                                                                                                                                                                                                                          |
-| `@lunora/cli`        | CLI subcommands: `init`, `dev`, `deploy`, `codegen`, `run`, `reset`, `migrate`.                                                                                                                                                                                                                                                                                                                                                                                                   |
-| `@lunora/auth`       | Auth built on **better-auth**, D1-backed (`lunoraD1Adapter`, or any pluggable `AuthStore`): email/password + OAuth (`genericOAuth`), session policies (`sessionPresets`), `handleAuthRequest` routing `/api/auth/*`. Curated plugins re-exported from `@lunora/auth/plugins`: **passkey/WebAuthn**, 2FA, magic-link, email-OTP, admin, organization, JWT, OIDC provider, SIWE, username, anonymous, multi-session.                                                                |
-| `@lunora/mail`       | Resend adapter, TSX templates, queue-backed sends.                                                                                                                                                                                                                                                                                                                                                                                                                                |
-| `@lunora/storage`    | R2 typed buckets, signed URLs.                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
-| `@lunora/scheduler`  | `runAfter` / `runAt` + Cron Triggers via `SchedulerDO`.                                                                                                                                                                                                                                                                                                                                                                                                                           |
-| `@lunora/container`  | Cloudflare Containers: `defineContainer` (in `lunora/containers.ts`) → generated container DO classes + typed `ctx.containers` (`.get`/`.any`/`.pool`); Dockerfile / registry / Railpack `{ build }` image sources; `@lunora/container/do` (the `LunoraContainer` base) and `@lunora/container/bridge` (container→Lunora RPC client) subpaths.                                                                                                                                    |
-| `@lunora/ai`         | Workers AI helper on Vercel AI SDK v6 + `workers-ai-provider`: `createAi({ binding: env.AI })` → `ctx.ai` (codegen-wired on ActionCtx when used); `model()`/`embeddingModel()` take a Workers AI id or any AI SDK model (provider-agnostic); re-exports `generateText`/`streamText`/`embed`/`tool`; raw `run()` escape hatch.                                                                                                                                                     |
-| `@lunora/advisor`    | Schema & query lints (splinter-style advisors) feeding the studio Advisors table — 8 static rules over `defineSchema` + discovered query reads & insert writes (unindexed-FK, duplicate/empty index, unknown index/relation field/table, filter-without-index, table-without-insert) + planned runtime rules over scan attribution.                                                                                                                                               |
-| `@lunora/config`     | **Internal.** Shared CLI+Vite config/scaffolding layer: `wrangler.jsonc` validator + binding inference/reconciliation, the `.dev.vars` grammar + auto-scaffolder, and the interactive prompt helper. Used by `@lunora/cli` and `@lunora/vite`. Published for transparency; consumers depend on the CLI or Vite plugin and let those call into it.                                                                                                                                 |
-| `@lunora/studio`     | The Lunora Studio: a local admin UI for your schema, data, logs, and advisors. Embedded by the CLI/Vite via `@lunora/config`'s studio-host.                                                                                                                                                                                                                                                                                                                                       |
-| `@lunora/mcp`        | Model Context Protocol server exposing a Lunora deployment to AI agents (list functions/tables, run query/mutation/action).                                                                                                                                                                                                                                                                                                                                                       |
-| `@lunora/ratelimit`  | Rate limiting: token-bucket / fixed-window / sliding-window algorithms, deny list, sharding, pluggable stores, and procedure middleware.                                                                                                                                                                                                                                                                                                                                          |
-| `@lunora/vectors`    | Cloudflare Vectorize adapter: typed vector indexes and similarity search.                                                                                                                                                                                                                                                                                                                                                                                                         |
-| `@lunora/testing`    | Testing toolkit: an in-memory harness for queries/mutations/actions (`lunoraTest`) plus E2E mail-catcher helpers re-exported from `@lunora/mail/testing`.                                                                                                                                                                                                                                                                                                                         |
-| `@lunora/seed`       | Snaplet-style deterministic seeding: introspects `defineSchema`, generates realistic fake data (field-name heuristics + validator kinds), resolves FK parents in topological order, and supports per-table counts + per-field overrides. Adapters: `seed(harness, schema, opts)` (`@lunora/seed/testing`), the `lunora seed` CLI (→ admin import RPC). Built on an **internal** rebuilt `copycat` over `@faker-js/faker` (input-hashed → stable values); copycat is not exported. |
-| `@lunora/analytics`  | Cloudflare Analytics Engine: typed `writeDataPoint` and SQL-API read client wired as `ctx.analytics` on QueryCtx/MutationCtx/ActionCtx.                                                                                                                                                                                                                                                                                                                                           |
-| `@lunora/browser`    | Cloudflare Browser Rendering: `ctx.browser` (action-only) — launch a headless browser, navigate pages, capture screenshots or PDFs, and scrape HTML.                                                                                                                                                                                                                                                                                                                              |
-| `@lunora/hyperdrive` | Bring-your-own Postgres/MySQL via Cloudflare Hyperdrive: driver-agnostic `ctx.sql` (action-only); adapters for `node-postgres`, `postgres.js`, and `mysql2`.                                                                                                                                                                                                                                                                                                                      |
-| `@lunora/images`     | Cloudflare Images: `ctx.images` transforms (resize / format / optimize), signed and unsigned delivery-URL helpers.                                                                                                                                                                                                                                                                                                                                                                |
-| `@lunora/kv`         | Typed Workers KV: scoped key helpers and `ctx.kv` with JSON get/put/delete/list and optional metadata typing.                                                                                                                                                                                                                                                                                                                                                                     |
-| `@lunora/payment`    | Provider-agnostic payments: Stripe-first adapter, webhook sync, subscription/payment state machine, entitlements, idempotency, and money helpers. Polar adapter included; additional providers via `PaymentAdapter`.                                                                                                                                                                                                                                                              |
-| `@lunora/workflow`   | Durable workflows over Cloudflare Workflows: `defineWorkflow` + generated `WorkflowEntrypoint` classes, `ctx.workflows` binding surface, and a step-scoped run context.                                                                                                                                                                                                                                                                                                           |
-
-### Layout
-
-Every package follows the same shape:
-
-- `src/index.ts` — main export
-- `__tests__/` — Vitest tests (`.test.ts` or `.spec.ts`)
-- `vitest.config.ts` — per-package test config
-- `tsconfig.json` — extends `../../tsconfig.base.json`
-- `project.json` — vis metadata with tags (e.g., `type:package`, `category:runtime`)
-- `package.json` — ESM (`"type": "module"`), `"sideEffects": false`, conditional exports
-- `.releaserc.json` — extends `@anolilab/semantic-release-preset/pnpm` (multi-semantic-release picks it up)
+- **On pre-release branches, do not preserve backward compatibility.** On `alpha` / `next` / `beta` the packages are `1.0.0-alpha.*`: change the API, delete the old path, update all call sites in the same change — no deprecated aliases, no `legacy*` shims, no dual code paths. Note the break in the commit body so semantic-release records it. **On `main` the opposite holds** — keep the API working, deprecate before removing, land removals on a pre-release branch. Check `git branch --show-current` before deciding; a change targeting both is written the `main` way.
+- **Build what is asked.** Simplest implementation that meets the current requirement; no config knobs, extension points, or abstractions with a single implementation until a second one exists.
+- **Reach for a maintained dependency before hand-rolling**, and pin its version in the right catalog (below). Exceptions: the zero-dep packages (`@lunora/errors`, `@lunora/fingerprint`, `@lunora/platform`), `shared/`, and anything that would not survive the Workers runtime.
+- **Never skip verification** — no `--no-verify`, no `.skip`ped tests, no silenced type errors or disabled lint rules to get something green.
 
 ### Module imports — no `.js` extensions
 
-Every package compiles with `"moduleResolution": "bundler"` (see `tsconfig.base.json`). Relative imports must therefore be written **without** a file extension — `import { x } from "./foo"`, never `import { x } from "./foo.js"`. Hand-written `.js` extensions are redundant clutter; do not add them and strip any you encounter.
+Everything compiles with `"moduleResolution": "bundler"`. Write relative imports **without** an extension — `from "./foo"`, never `"./foo.js"` — and strip any you encounter.
 
-**The one exception is `@lunora/codegen`.** Its emitter (`packages/codegen/src/emit.ts`) deliberately writes `.js` extensions into the code it _generates_, because the emitted `_generated/*` files are consumed under NodeNext where the extension is mandatory. So `.js` is correct and required inside: codegen template/string literals, the `_generated/` output, golden fixtures, and the test assertions that verify emitted output. Leave those alone — only the codegen package's own real `import`/`export` statements follow the no-extension rule.
-
-When stripping extensions in bulk, use an AST-aware codemod (e.g. ts-morph, already a dependency) rather than a regex — only real import/export/dynamic-`import()`/`require()`/`vi.mock()` specifiers should change, never extension-bearing strings inside comments, assertions, or template-literal code fixtures.
+**The one exception is `@lunora/codegen`**, whose emitter deliberately writes `.js` into the code it _generates_ (consumed under NodeNext). So `.js` is correct inside codegen template literals, `_generated/` output, golden fixtures, and assertions over emitted output. Only codegen's own `import`/`export` statements follow the rule. Bulk-stripping needs an AST codemod (ts-morph is already a dependency), never a regex — extension-bearing strings in comments and fixtures must not change.
 
 ### Exports — no mixed default + named
 
-**Never mix a default export with named exports in the same file.** If a file has more than one export, use **named exports only** (no `export default`). A `default` export is allowed only when it is the file's _sole_ export. This keeps import sites uniform (`import { x } from "./m"`) and avoids the default-vs-named ambiguity.
+**Never mix a default export with named exports in the same file.** More than one export ⇒ named only. A `default` is allowed only as a file's _sole_ export.
 
-When a third-party API insists on a default export (e.g. `@visulima/cerebro`'s lazy command `loader: () => import("./handler")` expects the module's default to be the execute function), do **not** add a `default` alongside the file's named exports. Instead export everything named and adapt at the call site — `loader: () => import("./handler").then((m) => ({ default: m.execute }))`.
+When a third-party API insists on a default (e.g. `@visulima/cerebro`'s `loader: () => import("./handler")`), adapt at the call site — `.then((m) => ({ default: m.execute }))` — rather than adding a `default` alongside named exports.
 
-### Vis Tags on `project.json`
+### Platform parity — state the mapping when you add a feature
 
-Each package has tags for categorization:
+Every new `ctx.*` surface or binding states its per-target mapping, or its explicit non-support, **in the same change that adds it**:
 
-- `type:package` — marks it as a publishable package
-- `category:<slug>` — e.g., `category:runtime`, `category:client`, `category:vite-plugin`, `category:codegen`, `category:cli`
+- Rate it `"native" | "emulated" | "unsupported"` in `PlatformCapabilities` (`@lunora/platform`) for each target in the matrix.
+- If it is host-backed, say which contract carries it — or add one. A feature that reaches past `ShardHost` / `SocketHost` / `ShardDirectory` / `ShardKvStore` / `SchedulerHost` into a provider API is a porting blocker, and the time to notice is while writing it.
+- `"unsupported"` is a fine answer: codegen omits the surface and emits a `platform_unsupported_feature` diagnostic. Silence is what makes the second host discover the gap at runtime.
+
+This is a process control, not paperwork — codegen trusts the matrix to decide whether an app can target a host, and it is only honest if updated by the person who already knows the answer. Two contracts have shipped wrong in exactly this way.
 
 ### Dependency Catalog
 
-Shared dependency versions are managed via pnpm catalogs in `pnpm-workspace.yaml`. Packages reference versions as `catalog:test`, `catalog:lint`, `catalog:dev`, `catalog:tsc`, `catalog:types`, etc. **Never** hard-code a version that already lives in a catalog.
+Shared dependency versions live in pnpm catalogs in `pnpm-workspace.yaml`, referenced as `catalog:test`, `catalog:lint`, `catalog:dev`, `catalog:tsc`, `catalog:types`. **Never** hard-code a version that already lives in a catalog.
 
-### Pre-commit Hooks
+### Top-level `shared/` — bundler-inlined source (not a package)
 
-Git hooks are **vis-native** (no husky). The committed hook scripts live in `.vis/hooks/` and run via a generated dispatcher at `.vis/hooks/_/` (gitignored). The root `prepare` script (`vis hook install`) wires `core.hooksPath` at it on every `pnpm install`, so the hooks fire after a fresh clone. The pre-commit stage runs two `@visulima/vis` commands (configured in `vis.config.ts`):
+`shared/` holds tiny, dependency-free helpers that several packages need but that must **not** create a runtime dependency edge between them (e.g. `shared/stable-key.ts`, used by `@lunora/client`, `@lunora/react`, `@lunora/do`).
 
-- `vis secrets --staged` — gitleaks-compatible scan over staged files; excludes from `secrets.walk.excludePatterns`.
-- `vis staged` — runs the per-glob commands declared in the top-level `staged` block (Prettier + ESLint on code, Prettier on Markdown).
+- **Not a package.** Consumers import by relative path (`../../../shared/<file>`) and the bundler inlines it into each `dist`. Keep these files genuinely zero-dependency (relative or built-in imports only) or inlining breaks.
+- **Outside per-package ESLint** (Prettier-formatted and type-checked transitively) — follow the no-extension and named-export-only rules by hand.
+- A package importing `shared/*` must drop `outDir`/`rootDir` from its `tsconfig.json`; a set `rootDir` raises TS6059 under `tsc --noEmit`.
+- **Don't reach for `shared/` first.** Prefer a real `@lunora/*` package when a dependency edge is acceptable.
 
-The pre-commit script uses `set -e`, so a secret detection aborts before staged-file linting runs. If hooks aren't firing, run `pnpm exec vis hook install` (or `vis hook validate` to diagnose).
+## Commits & branches
 
-### Release
+Conventional commits, enforced by a `commit-msg` hook running commitlint. Format `<type>(<scope>): <subject>`; scope is usually the package name.
 
-Independent per-package versioning via `multi-semantic-release`. All publishable packages under `packages/` ship a `.releaserc.json` extending `@anolilab/semantic-release-preset/pnpm`. Conventional Commits drive version bumps; the `semantic-release.yml` workflow generates per-package changelogs and publishes on push to `alpha` / `main` / `next` / `beta`. Do not author `release` commits manually.
+The type must be one of — anything else is **rejected by the hook**, so do not reach for `dx`, `workflow`, `types`, `wip`, or `release`:
 
-### Internal scaffolding (`vis generate`)
-
-The CLI no longer ships a `lunora new` subcommand. Internal scaffolding — adding a query/mutation/action/table/cron to `lunora/`, or scaffolding a fresh `@lunora/<name>` workspace package — is done with `vis generate`. Templates live at `.vis/templates/lunora-*.ts` and are discovered automatically.
-
-```bash
-vis generate lunora-query --name=listMessages              # → lunora/listMessages.ts
-vis generate lunora-mutation --name=sendMessage
-vis generate lunora-action --name=syncWithStripe
-vis generate lunora-table --name=invoices                  # AST-merges into lunora/schema.ts (creates it if missing)
-vis generate lunora-cron --name='clear presence'           # AST-appends to lunora/crons.ts (creates it if missing)
-vis generate lunora-container --name=transcoder            # → lunora/containers.ts + containers/<name>/Dockerfile, wires the worker entry
-vis generate lunora-workflow --name=orderPipeline          # appends to lunora/workflows.ts (creates it if missing), wires the worker entry
-vis generate lunora-step --name=chargeOrder                # appends to lunora/steps.ts (creates it if missing); reusable defineStep, run via ctx.runStep
-vis generate lunora-collections                            # → lunora/collections.ts (@lunora/db, wired from schema + functions)
-vis generate lunora-package --name=foo --description='…'   # → packages/foo/
-vis generate --list                                         # show all available generators
+```
+build  chore  ci  deps  docs  feat  fix
+perf   refactor  revert  security  style  test  translation
 ```
 
-**Heads-up on the `--name` flag:** vis's CLI parser treats space-separated `--name listMessages` as `--name=true` + a stray positional. **Always use the `--name=value` form.** Same for any other string option on `vis generate`.
+Subject: imperative, lowercase, no trailing period. **Body lines wrap at 100 characters** and the header is capped at 100 — an over-long body line is the usual reason a hook-blocked commit surprises you. House style keeps the subject under ~50. Never author `release` commits by hand; semantic-release writes those.
 
-End-user scaffolding (`lunora init`) is unaffected — it fetches whole-project templates remotely via `giget` from `gh:anolilab/lunora/templates/<type>#alpha`.
+Branches: **`alpha`** is the default and the target for most PRs; `main` carries stable releases; `next` / `beta` are pre-release channels; feature branches are `feat/name` / `fix/issue-number`.
 
-Research the codebase before editing. Never change code you haven't read.
+## Agent worktree isolation
 
-## Agent Worktree Isolation
-
-When spawning sub-agents via the Agent tool in this repo, default to `isolation: "worktree"` so the agent works on an isolated git worktree and cannot stomp on uncommitted changes in the main checkout.
-
-**Apply worktree isolation to:**
-
-- Any agent that edits, writes, or refactors code (`general-purpose`, `pro-workflow:orchestrator`, `pro-workflow:debugger`, `coderabbit:code-reviewer` when it auto-fixes, etc.)
-- Long-running implementation tasks where the user may continue working in the main tree in parallel
-
-**Skip worktree isolation for:**
-
-- Read-only research/search agents (`Explore`, `Plan`, `pro-workflow:planner`, `pro-workflow:reviewer`, `pro-workflow:scout`, `general-purpose` when used purely for research)
-- Quick one-shot lookups where the install/vis-cache overhead outweighs the benefit
-
-**Costs to be aware of:**
-
-- Each worktree needs a fresh `pnpm install` before builds/tests run (pnpm store is shared, but `node_modules` is per-worktree).
-- vis cache (`.vis/`) starts cold per worktree — first `build:affected` / `test:affected` runs won't be cached.
-- A branch checked out in another worktree can't be checked out simultaneously in the main tree.
-- Empty (no-change) worktrees are auto-cleaned by the Agent tool; otherwise the path + branch are returned and must be cleaned up with `git worktree remove`.
-
-**Repo-local git config (apply once with `git config`):**
-
-- `rerere.enabled = true` — record-and-reuse merge conflict resolutions, so rebases inside a worktree don't make you re-solve the same conflict.
-- `worktree.guessRemote = true` — `git worktree add -b <branch>` auto-tracks the matching remote branch if one exists.
-- `.worktrees/` is gitignored so worktrees placed inside the repo never leak into `git status`.
-
-**Useful commands:**
-
-- `git worktree list` — show all active worktrees.
-- `git worktree prune` — clean up stale worktree records (after `rm -rf` of a worktree dir).
-- `git worktree remove <path>` — remove a worktree cleanly (refuses if dirty; add `--force` to override).
+When spawning sub-agents in this repo, default to `isolation: "worktree"` for anything that edits code, so the agent cannot stomp uncommitted changes in the main checkout. Skip it for read-only research — each worktree needs a fresh `pnpm install` and starts with a cold vis cache. Clean up with `git worktree remove <path>` (empty ones auto-clean); `.worktrees/` is gitignored.

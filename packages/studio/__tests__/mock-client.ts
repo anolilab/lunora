@@ -9,7 +9,12 @@ import type {
     GlobalFilterClause,
     GlobalTableInfo,
     GlobalTablePage,
+    KvKeyListResult,
+    KvNamespaceSummary,
+    KvValueResult,
     LunoraClient,
+    PipelineLogPage,
+    PipelineLogQuery,
     ScheduleRecord,
     ShardTrafficResult,
     StorageListPage,
@@ -20,12 +25,21 @@ import { vi } from "vitest";
 
 interface MockClientHooks {
     action: ReturnType<typeof vi.fn>;
+    addAuthOrgMember: ReturnType<typeof vi.fn>;
+    addAuthOrgTeamMember: ReturnType<typeof vi.fn>;
     asClient: LunoraClient;
     banAuthUser: ReturnType<typeof vi.fn>;
     cancelAuthOrgInvitation: ReturnType<typeof vi.fn>;
     cancelScheduledJob: ReturnType<typeof vi.fn>;
+    createAuthOrganization: ReturnType<typeof vi.fn>;
+    createAuthOrgRole: ReturnType<typeof vi.fn>;
+    createAuthOrgTeam: ReturnType<typeof vi.fn>;
+    createAuthSignUpInvitation: ReturnType<typeof vi.fn>;
     createAuthUser: ReturnType<typeof vi.fn>;
+    deleteAuthOrganization: ReturnType<typeof vi.fn>;
+    deleteAuthOrgRole: ReturnType<typeof vi.fn>;
     deleteAuthPasskey: ReturnType<typeof vi.fn>;
+    deleteKvKey: ReturnType<typeof vi.fn>;
     deleteStorageObject: ReturnType<typeof vi.fn>;
     disableAuthTwoFactor: ReturnType<typeof vi.fn>;
     /** Push a value to every live subscriber registered for `reference`. */
@@ -35,33 +49,49 @@ interface MockClientHooks {
     /** Push a job list to every live `subscribeScheduledJobs` subscriber. */
     emitJobs: (jobs: ScheduleRecord[]) => void;
     facetGlobalColumn: ReturnType<typeof vi.fn>;
+    fetchArchitecture: ReturnType<typeof vi.fn>;
     fetchOpenApi: ReturnType<typeof vi.fn>;
     fetchOpenRpc: ReturnType<typeof vi.fn>;
     getAuthCapabilities: ReturnType<typeof vi.fn>;
+    getAuthConfig: ReturnType<typeof vi.fn>;
     getCronJobs: ReturnType<typeof vi.fn>;
+    getKvValue: ReturnType<typeof vi.fn>;
     impersonateAuthUser: ReturnType<typeof vi.fn>;
+    inviteAuthOrgMember: ReturnType<typeof vi.fn>;
     listAuthAccounts: ReturnType<typeof vi.fn>;
     listAuthOrganizations: ReturnType<typeof vi.fn>;
     listAuthOrgInvitations: ReturnType<typeof vi.fn>;
     listAuthOrgMembers: ReturnType<typeof vi.fn>;
+    listAuthOrgRoles: ReturnType<typeof vi.fn>;
+    listAuthOrgTeamMembers: ReturnType<typeof vi.fn>;
+    listAuthOrgTeams: ReturnType<typeof vi.fn>;
     listAuthPasskeys: ReturnType<typeof vi.fn>;
     listAuthSessions: ReturnType<typeof vi.fn>;
+    listAuthSignUpInvitations: ReturnType<typeof vi.fn>;
     listAuthUsers: ReturnType<typeof vi.fn>;
     listFunctions: ReturnType<typeof vi.fn>;
     listGlobalTables: ReturnType<typeof vi.fn>;
+    listKvKeys: ReturnType<typeof vi.fn>;
+    listKvNamespaces: ReturnType<typeof vi.fn>;
     listScheduledJobs: ReturnType<typeof vi.fn>;
     listStorageBuckets: ReturnType<typeof vi.fn>;
     listStorageObjects: ReturnType<typeof vi.fn>;
     listVectorIndexes: ReturnType<typeof vi.fn>;
     mutation: ReturnType<typeof vi.fn>;
+    putKvValue: ReturnType<typeof vi.fn>;
     query: ReturnType<typeof vi.fn>;
+    queryLogArchive: ReturnType<typeof vi.fn>;
     queryVectorIndex: ReturnType<typeof vi.fn>;
     readGlobalTablePage: ReturnType<typeof vi.fn>;
     removeAuthOrgMember: ReturnType<typeof vi.fn>;
+    removeAuthOrgTeam: ReturnType<typeof vi.fn>;
+    removeAuthOrgTeamMember: ReturnType<typeof vi.fn>;
     removeAuthUser: ReturnType<typeof vi.fn>;
     revokeAuthSession: ReturnType<typeof vi.fn>;
+    revokeAuthSignUpInvitation: ReturnType<typeof vi.fn>;
     revokeAuthUserSessions: ReturnType<typeof vi.fn>;
     runCronJob: ReturnType<typeof vi.fn>;
+    setAuthOrgMemberRole: ReturnType<typeof vi.fn>;
     setAuthUserPassword: ReturnType<typeof vi.fn>; // gitleaks:allow -- mock method name, not a secret
     setAuthUserRole: ReturnType<typeof vi.fn>;
     shardTraffic: ReturnType<typeof vi.fn>;
@@ -70,6 +100,9 @@ interface MockClientHooks {
     subscribeScheduledJobs: ReturnType<typeof vi.fn>;
     unbanAuthUser: ReturnType<typeof vi.fn>;
     unlinkAuthAccount: ReturnType<typeof vi.fn>;
+    updateAuthOrganization: ReturnType<typeof vi.fn>;
+    updateAuthOrgRole: ReturnType<typeof vi.fn>;
+    updateAuthOrgTeam: ReturnType<typeof vi.fn>;
     updateAuthUser: ReturnType<typeof vi.fn>;
     uploadStorageObject: ReturnType<typeof vi.fn>;
 }
@@ -96,9 +129,14 @@ interface MockClientImpls {
     action?: Impl;
     cancelScheduledJob?: (id: string) => { cancelled: boolean };
     facetGlobalColumn?: (options: { column: string; filters?: GlobalFilterClause[]; limit?: number; table: string }) => GlobalFacetResult;
+    fetchArchitecture?: () => Record<string, unknown>;
     fetchOpenApi?: () => Record<string, unknown>;
     fetchOpenRpc?: () => Record<string, unknown>;
     getCronJobs?: () => CronJobInfo[];
+    /** The KV namespaces the browser lists. Defaults to `[]`. */
+    kvNamespaces?: KvNamespaceSummary[];
+    /** Seed entries per namespace binding → key → stored entry. Mutated in place by put/delete. */
+    kvSeed?: Record<string, Record<string, { expiration?: number; metadata?: unknown; value: string }>>;
     listAuthSessions?: (options: { limit?: number; offset?: number; userId?: string }) => AuthPage<AuthSession>;
     listAuthUsers?: (options: ListAuthUsersOptions) => AuthPage<AuthUser>;
     listFunctions?: () => FunctionDescriptor[];
@@ -109,6 +147,7 @@ interface MockClientImpls {
     listVectorIndexes?: () => VectorIndexSummary[];
     mutation?: Impl;
     query?: Impl;
+    queryLogArchive?: (query?: PipelineLogQuery) => PipelineLogPage;
     queryVectorIndex?: (options: { name: string; text: string; topK?: number }) => VectorQueryMatch[];
     readGlobalTablePage?: (options: { filters?: GlobalFilterClause[]; limit?: number; offset?: number; table: string }) => GlobalTablePage;
     runCronJob?: (name: string) => { name: string; ran: boolean };
@@ -121,6 +160,9 @@ export const createMockClient = (impls: MockClientImpls = {}): MockClientHooks =
     const mutation = makeMethod(impls.mutation);
     const action = makeMethod(impls.action);
     const listFunctions = vi.fn<() => Promise<FunctionDescriptor[]>>(async () => impls.listFunctions?.() ?? []);
+    const fetchArchitecture = vi.fn<() => Promise<Record<string, unknown>>>(
+        async () => impls.fetchArchitecture?.() ?? { edges: [], nodes: [], modules: [], unresolved: [], version: 1 },
+    );
     const fetchOpenApi = vi.fn<() => Promise<Record<string, unknown>>>(async () => impls.fetchOpenApi?.() ?? { openapi: "3.1.0", paths: {} });
     const fetchOpenRpc = vi.fn<() => Promise<Record<string, unknown>>>(async () => impls.fetchOpenRpc?.() ?? { methods: [], openrpc: "1.3.2" });
     const listScheduledJobs = vi.fn<() => Promise<ScheduleRecord[]>>(async () => impls.listScheduledJobs?.() ?? []);
@@ -150,9 +192,48 @@ export const createMockClient = (impls: MockClientImpls = {}): MockClientHooks =
         async (table: string) => impls.shardTraffic?.(table) ?? { failed: 0, ok: 0, shards: [] },
     );
     const listGlobalTables = vi.fn<() => Promise<GlobalTableInfo[]>>(async () => impls.listGlobalTables?.() ?? []);
+
+    // In-memory KV store, seeded from `impls.kvSeed` and mutated in place by
+    // put/delete so create → list → edit → delete round-trips the way the real
+    // introspector does.
+    const kvStore: Record<string, Record<string, { expiration?: number; metadata?: unknown; value: string }>> = impls.kvSeed ?? {};
+    const listKvNamespaces = vi.fn<() => Promise<KvNamespaceSummary[]>>(async () => impls.kvNamespaces ?? []);
+    const listKvKeys = vi.fn<(options: { cursor?: string; limit?: number; namespace: string; prefix?: string }) => Promise<KvKeyListResult>>(
+        async (options: { cursor?: string; limit?: number; namespace: string; prefix?: string }) => {
+            const entries = kvStore[options.namespace] ?? {};
+            const keys = Object.keys(entries)
+                .filter((name) => (options.prefix === undefined ? true : name.startsWith(options.prefix)))
+                .toSorted((a, b) => a.localeCompare(b))
+                .map((name) => {
+                    return { expiration: entries[name]?.expiration, metadata: entries[name]?.metadata, name };
+                });
+
+            return { keys, listComplete: true };
+        },
+    );
+    const getKvValue = vi.fn<(options: { key: string; namespace: string }) => Promise<KvValueResult>>(async (options: { key: string; namespace: string }) => {
+        const entry = kvStore[options.namespace]?.[options.key];
+
+        return { metadata: entry?.metadata ?? null, value: entry?.value ?? null };
+    });
+    const putKvValue = vi.fn<
+        (options: { expiration?: number; expirationTtl?: number; key: string; metadata?: unknown; namespace: string; value: string }) => Promise<void>
+    >(async (options: { expiration?: number; expirationTtl?: number; key: string; metadata?: unknown; namespace: string; value: string }) => {
+        const bucket = kvStore[options.namespace] ?? {};
+
+        kvStore[options.namespace] = bucket;
+        bucket[options.key] = { expiration: options.expiration, metadata: options.metadata, value: options.value };
+    });
+    const deleteKvKey = vi.fn<(options: { key: string; namespace: string }) => Promise<void>>(async (options: { key: string; namespace: string }) => {
+        delete kvStore[options.namespace]?.[options.key];
+    });
+
     const listVectorIndexes = vi.fn<() => Promise<VectorIndexSummary[]>>(async () => impls.listVectorIndexes?.() ?? []);
     const queryVectorIndex = vi.fn<(options: { name: string; text: string; topK?: number }) => Promise<VectorQueryMatch[]>>(
         async (options: { name: string; text: string; topK?: number }) => impls.queryVectorIndex?.(options) ?? [],
+    );
+    const queryLogArchive = vi.fn<(logQuery?: PipelineLogQuery) => Promise<PipelineLogPage>>(
+        async (logQuery?: PipelineLogQuery) => impls.queryLogArchive?.(logQuery) ?? { rows: [] },
     );
     const readGlobalTablePage = vi.fn<
         (options: { filters?: GlobalFilterClause[]; limit?: number; offset?: number; table: string }) => Promise<GlobalTablePage>
@@ -214,8 +295,80 @@ export const createMockClient = (impls: MockClientImpls = {}): MockClientHooks =
     const listAuthOrgInvitations = vi.fn<() => Promise<{ rows: Record<string, unknown>[]; total: number }>>(async () => {
         return { rows: [] as Record<string, unknown>[], total: 0 };
     });
+    const listAuthSignUpInvitations = vi.fn<() => Promise<{ rows: Record<string, unknown>[]; total: number }>>(async () => {
+        return { rows: [] as Record<string, unknown>[], total: 0 };
+    });
+    const createAuthSignUpInvitation = vi.fn<() => Promise<Record<string, unknown>>>(async () => {
+        return {};
+    });
+    const revokeAuthSignUpInvitation = vi.fn<() => Promise<undefined>>(async () => undefined);
     const removeAuthOrgMember = vi.fn<() => Promise<undefined>>(async () => undefined);
     const cancelAuthOrgInvitation = vi.fn<() => Promise<undefined>>(async () => undefined);
+    const getAuthConfig = vi.fn<() => Promise<Record<string, unknown>>>(async () => {
+        return {
+            capabilities: { accounts: true, admin: true, inviteOnly: false, organization: false, passkey: false, twoFactor: false },
+            emailAndPassword: true,
+            organization: { enabled: false, roles: false, teams: false },
+            plugins: [] as string[],
+            rateLimit: { enabled: false },
+            session: {},
+            socialProviders: [] as string[],
+            userFields: [] as Record<string, unknown>[],
+        };
+    });
+    const createAuthOrganization = vi.fn<(input: Record<string, unknown>) => Promise<Record<string, unknown>>>(async (input) => {
+        return { id: "org_new", ...input };
+    });
+    const updateAuthOrganization = vi.fn<(input: { organizationId: string }) => Promise<Record<string, unknown>>>(async (input) => {
+        return { id: input.organizationId };
+    });
+    const deleteAuthOrganization = vi.fn<() => Promise<undefined>>(async () => undefined);
+    const addAuthOrgMember = vi.fn<(input: { userId: string }) => Promise<Record<string, unknown>>>(async (input) => {
+        return { id: "mem_new", userId: input.userId };
+    });
+    const inviteAuthOrgMember = vi.fn<(input: { email: string }) => Promise<Record<string, unknown>>>(async (input) => {
+        return { email: input.email, id: "inv_new" };
+    });
+    const setAuthOrgMemberRole = vi.fn<(input: { memberId: string; role: string | string[] }) => Promise<Record<string, unknown>>>(async (input) => {
+        return {
+            id: input.memberId,
+            role: input.role,
+        };
+    });
+    const listAuthOrgTeams = vi.fn<() => Promise<{ rows: Record<string, unknown>[]; total: number }>>(async () => {
+        return { rows: [] as Record<string, unknown>[], total: 0 };
+    });
+    const createAuthOrgTeam = vi.fn<(input: { name: string }) => Promise<Record<string, unknown>>>(async (input) => {
+        return { id: "team_new", name: input.name };
+    });
+    const updateAuthOrgTeam = vi.fn<(input: { name: string; teamId: string }) => Promise<Record<string, unknown>>>(async (input) => {
+        return {
+            id: input.teamId,
+            name: input.name,
+        };
+    });
+    const removeAuthOrgTeam = vi.fn<() => Promise<undefined>>(async () => undefined);
+    const listAuthOrgTeamMembers = vi.fn<() => Promise<{ rows: Record<string, unknown>[]; total: number }>>(async () => {
+        return { rows: [] as Record<string, unknown>[], total: 0 };
+    });
+    const addAuthOrgTeamMember = vi.fn<(input: { teamId: string; userId: string }) => Promise<Record<string, unknown>>>(async (input) => {
+        return {
+            id: "tm_new",
+            teamId: input.teamId,
+            userId: input.userId,
+        };
+    });
+    const removeAuthOrgTeamMember = vi.fn<() => Promise<undefined>>(async () => undefined);
+    const listAuthOrgRoles = vi.fn<() => Promise<{ rows: Record<string, unknown>[]; total: number }>>(async () => {
+        return { rows: [] as Record<string, unknown>[], total: 0 };
+    });
+    const createAuthOrgRole = vi.fn<(input: { role: string }) => Promise<Record<string, unknown>>>(async (input) => {
+        return { id: "role_new", role: input.role };
+    });
+    const updateAuthOrgRole = vi.fn<(input: { roleId: string }) => Promise<Record<string, unknown>>>(async (input) => {
+        return { id: input.roleId };
+    });
+    const deleteAuthOrgRole = vi.fn<() => Promise<undefined>>(async () => undefined);
 
     // Live-subscription registry: `subscribe` records each value + error
     // callback by functionPath; `emit` / `emitError` fan out to those callbacks
@@ -270,19 +423,40 @@ export const createMockClient = (impls: MockClientImpls = {}): MockClientHooks =
     };
 
     const authAdminMethods = {
+        addAuthOrgMember,
+        addAuthOrgTeamMember,
         banAuthUser,
         cancelAuthOrgInvitation,
+        createAuthOrganization,
+        createAuthOrgRole,
+        createAuthOrgTeam,
         createAuthUser,
+        deleteAuthOrganization,
+        deleteAuthOrgRole,
         deleteAuthPasskey,
         disableAuthTwoFactor,
         getAuthCapabilities,
+        getAuthConfig,
         impersonateAuthUser,
+        inviteAuthOrgMember,
         listAuthAccounts,
+        createAuthSignUpInvitation,
         listAuthOrgInvitations,
+        listAuthSignUpInvitations,
+        revokeAuthSignUpInvitation,
         listAuthOrgMembers,
+        listAuthOrgRoles,
+        listAuthOrgTeamMembers,
+        listAuthOrgTeams,
         listAuthOrganizations,
         listAuthPasskeys,
         removeAuthOrgMember,
+        removeAuthOrgTeam,
+        removeAuthOrgTeamMember,
+        setAuthOrgMemberRole,
+        updateAuthOrganization,
+        updateAuthOrgRole,
+        updateAuthOrgTeam,
         removeAuthUser,
         revokeAuthSession,
         revokeAuthUserSessions,
@@ -300,21 +474,40 @@ export const createMockClient = (impls: MockClientImpls = {}): MockClientHooks =
         // mock has no socket, so it reports a stable "idle" and never notifies.
         connectionStatus: () => "idle" as const,
         onConnectionStatus: (_listener: () => void) => () => {},
+        // Stable per-instance id. The deployment-health panel puts it in its query
+        // key so a rebuilt client (admin-token change) re-keys instead of serving
+        // the previous client's cached result; a mock is one instance per test, so
+        // a constant keeps that key stable across renders.
+        clientIdentifier: () => "mock-client",
+        deleteKvKey,
+        // The API try-it console reads both when it dispatches a plain REST
+        // route: `url` is the worker origin the request is resolved against, and
+        // `getAuthToken` supplies the admin bearer. Stable, non-empty values so a
+        // test asserts on what the console actually forwards.
+        getAuthToken: () => "mock-admin-token",
         deleteStorageObject,
         facetGlobalColumn,
+        fetchArchitecture,
         fetchOpenApi,
         fetchOpenRpc,
         getCronJobs,
+        getKvValue,
         listAuthSessions,
         listAuthUsers,
         listFunctions,
         listGlobalTables,
+        listKvKeys,
+        listKvNamespaces,
         listScheduledJobs,
         listStorageBuckets,
         listStorageObjects,
         listVectorIndexes,
+        canQueueOffline: () => true,
         mutation,
+        onIdentityChange: () => () => undefined,
+        putKvValue,
         query,
+        queryLogArchive,
         queryVectorIndex,
         readGlobalTablePage,
         runCronJob,
@@ -323,6 +516,8 @@ export const createMockClient = (impls: MockClientImpls = {}): MockClientHooks =
         subscribe,
         subscribeScheduledJobs,
         uploadStorageObject,
+        /** The worker origin a REST try-it request is resolved against. */
+        url: "http://127.0.0.1:8787",
         ...authAdminMethods,
     } as unknown as LunoraClient;
 
@@ -330,24 +525,31 @@ export const createMockClient = (impls: MockClientImpls = {}): MockClientHooks =
         action,
         asClient,
         cancelScheduledJob,
+        deleteKvKey,
         deleteStorageObject,
         emit,
         emitError,
         emitJobs,
         facetGlobalColumn,
+        fetchArchitecture,
         fetchOpenApi,
         fetchOpenRpc,
         getCronJobs,
+        getKvValue,
         listAuthSessions,
         listAuthUsers,
         listFunctions,
         listGlobalTables,
+        listKvKeys,
+        listKvNamespaces,
         listScheduledJobs,
         listStorageBuckets,
         listStorageObjects,
         listVectorIndexes,
         mutation,
+        putKvValue,
         query,
+        queryLogArchive,
         queryVectorIndex,
         readGlobalTablePage,
         runCronJob,

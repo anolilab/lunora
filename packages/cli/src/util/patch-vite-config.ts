@@ -9,11 +9,12 @@
  * - `export default defineConfig({})` (no plugins key yet)
  * - `export default { plugins: [...] }` / `export default {}`
  *
- * Idempotent: returns `changed: false` when `lunora(` already appears in the
- * source or when no recognisable config shape can be found.
+ * Idempotent: returns `changed: false` when the parsed config already CALLS
+ * `lunora(...)` or when no recognisable config shape can be found.
  */
+// eslint-disable-next-line import/no-named-as-default -- magic-string's default export IS the MagicString class; this is the documented, idiomatic import
 import MagicString from "magic-string";
-import type { ObjectLiteralExpression } from "ts-morph";
+import type { ObjectLiteralExpression, SourceFile } from "ts-morph";
 import { Project, SyntaxKind } from "ts-morph";
 
 interface PatchViteConfigResult {
@@ -24,19 +25,14 @@ interface PatchViteConfigResult {
 
 const LUNORA_CALL = "lunora()";
 const LUNORA_IMPORT = 'import { lunora } from "@lunora/vite";';
-
-/** Hoisted regex — matches a `lunora(` call anywhere in the source. */
-const LUNORA_CALL_RE = /\blunora\s*\(/u;
-
-/** Hoisted check for the lunora/vite import specifier. */
-const LUNORA_VITE_DOUBLE = '"@lunora/vite"';
-const LUNORA_VITE_SINGLE = "'@lunora/vite'";
+const LUNORA_VITE_SPECIFIER = "@lunora/vite";
+const LUNORA_PLUGIN = "lunora";
 
 /**
  * Locate the config object inside a ts-morph SourceFile for a defineConfig
  * call expression whose first argument is an object literal.
  */
-const findDefineConfigObject = (sf: ReturnType<InstanceType<typeof Project>["createSourceFile"]>): ObjectLiteralExpression | undefined => {
+const findDefineConfigObject = (sf: SourceFile): ObjectLiteralExpression | undefined => {
     for (const statement of sf.getStatements()) {
         if (statement.getKind() !== SyntaxKind.ExportAssignment) {
             continue;
@@ -68,7 +64,7 @@ const findDefineConfigObject = (sf: ReturnType<InstanceType<typeof Project>["cre
  * Locate a plain `export default { ... }` object literal (no defineConfig
  * wrapper).
  */
-const findPlainExportObject = (sf: ReturnType<InstanceType<typeof Project>["createSourceFile"]>): ObjectLiteralExpression | undefined => {
+const findPlainExportObject = (sf: SourceFile): ObjectLiteralExpression | undefined => {
     for (const statement of sf.getStatements()) {
         if (statement.getKind() !== SyntaxKind.ExportAssignment) {
             continue;
@@ -85,50 +81,35 @@ const findPlainExportObject = (sf: ReturnType<InstanceType<typeof Project>["crea
 };
 
 /**
- * Build an in-memory ts-morph project and return the config object for the
- * given source text, or undefined when no recognisable shape is found.
+ * Whether the config already CALLS `lunora(...)` — parsed, so a comment or a
+ * string naming the plugin is not a call.
+ *
+ * This decides whether the file is left alone, and the caller then reports the
+ * plugin present. A substring match therefore handed a project whose config
+ * merely mentions `lunora()` — a commented-out line, a note explaining the
+ * plugin — a dev server with no Lunora plugin in it at all, and said the config
+ * was already wired.
  */
-const findConfigObject = (sourceText: string): ObjectLiteralExpression | undefined => {
-    const project = new Project({
+const callsLunoraPlugin = (sf: SourceFile): boolean =>
+    sf.getDescendantsOfKind(SyntaxKind.CallExpression).some((call) => call.getExpression().getText() === LUNORA_PLUGIN);
+
+/** Whether the config already imports `@lunora/vite` — parsed, for the same reason as {@link callsLunoraPlugin}, and quote style comes free. */
+const importsLunoraVite = (sf: SourceFile): boolean =>
+    sf.getImportDeclarations().some((declaration) => declaration.getModuleSpecifierValue() === LUNORA_VITE_SPECIFIER);
+
+/** Parse the config source into a single in-memory ts-morph SourceFile. */
+const parseConfigSource = (sourceText: string): SourceFile =>
+    new Project({
         compilerOptions: { allowJs: true },
         useInMemoryFileSystem: true,
-    });
-
-    const sf = project.createSourceFile("vite.config.ts", sourceText, { overwrite: true });
-
-    return findDefineConfigObject(sf) ?? findPlainExportObject(sf);
-};
+    }).createSourceFile("vite.config.ts", sourceText, { overwrite: true });
 
 /**
- * Find the last top-level import declaration and return the position
- * immediately after it. Returns 0 when there are no imports so the new
- * import is prepended at the top.
+ * Splice the import for lunora/vite into `ms`: immediately after the last
+ * top-level import, or prepended at the top when there are none.
  */
-const importInsertPosition = (sourceText: string): number => {
-    const project = new Project({
-        compilerOptions: { allowJs: true },
-        useInMemoryFileSystem: true,
-    });
-
-    const sf = project.createSourceFile("vite.config.ts", sourceText, { overwrite: true });
-    const imports = sf.getImportDeclarations();
-
-    if (imports.length === 0) {
-        return 0;
-    }
-
-    const last = imports[imports.length - 1];
-
-    if (last === undefined) {
-        return 0;
-    }
-
-    return last.getEnd();
-};
-
-/** Splice the import for lunora/vite into `ms` at the right position. */
-const addImport = (ms: MagicString, source: string): void => {
-    const insertAt = importInsertPosition(source);
+const addImport = (ms: MagicString, sf: SourceFile): void => {
+    const insertAt = sf.getImportDeclarations().at(-1)?.getEnd() ?? 0;
 
     if (insertAt === 0) {
         ms.prepend(`${LUNORA_IMPORT}\n`);
@@ -142,7 +123,7 @@ const addImport = (ms: MagicString, source: string): void => {
  * When the array is empty, fills it; otherwise prepends before the first
  * element.
  */
-const patchPluginsArray = (ms: MagicString, configObject: ObjectLiteralExpression): void => {
+const patchPluginsArray = (ms: MagicString, configObject: ObjectLiteralExpression): string | undefined => {
     const pluginsProp = configObject.getProperty("plugins");
 
     if (pluginsProp === undefined) {
@@ -152,35 +133,45 @@ const patchPluginsArray = (ms: MagicString, configObject: ObjectLiteralExpressio
 
         if (properties.length === 0) {
             ms.appendLeft(openBrace, ` plugins: [${LUNORA_CALL}] `);
-        } else {
-            const firstProp = properties[0];
 
-            if (firstProp !== undefined) {
-                ms.appendLeft(firstProp.getStart(), `plugins: [${LUNORA_CALL}],\n    `);
-            }
+            return undefined;
         }
 
-        return;
+        const firstProp = properties[0];
+
+        if (firstProp === undefined) {
+            return "could not locate the start of the Vite config object's first property";
+        }
+
+        ms.appendLeft(firstProp.getStart(), `plugins: [${LUNORA_CALL}],\n    `);
+
+        return undefined;
     }
 
     // Property exists — find its array literal and prepend lunora().
     const arrayLit = pluginsProp.getDescendantsOfKind(SyntaxKind.ArrayLiteralExpression)[0];
 
     if (arrayLit === undefined) {
-        return;
+        return "the Vite config's `plugins` is not an array literal — add `lunora()` to it by hand";
     }
 
     const elements = arrayLit.getElements();
 
     if (elements.length === 0) {
         ms.appendLeft(arrayLit.getStart() + 1, LUNORA_CALL);
-    } else {
-        const firstElement = elements[0];
 
-        if (firstElement !== undefined) {
-            ms.appendLeft(firstElement.getStart(), `${LUNORA_CALL}, `);
-        }
+        return undefined;
     }
+
+    const firstElement = elements[0];
+
+    if (firstElement === undefined) {
+        return "could not locate the first entry of the Vite config's `plugins` array";
+    }
+
+    ms.appendLeft(firstElement.getStart(), `${LUNORA_CALL}, `);
+
+    return undefined;
 };
 
 /**
@@ -191,24 +182,33 @@ const patchPluginsArray = (ms: MagicString, configObject: ObjectLiteralExpressio
  * Returns `{ code: source, changed: false, reason }` for any no-op path.
  */
 const patchViteConfig = (source: string): PatchViteConfigResult => {
-    if (LUNORA_CALL_RE.test(source)) {
+    const sf = parseConfigSource(source);
+
+    if (callsLunoraPlugin(sf)) {
         return { changed: false, code: source, reason: "lunora plugin already present" };
     }
 
-    const configObject = findConfigObject(source);
+    const configObject = findDefineConfigObject(sf) ?? findPlainExportObject(sf);
 
     if (configObject === undefined) {
         return { changed: false, code: source, reason: "could not locate a Vite config plugins array to patch" };
     }
 
     const ms = new MagicString(source);
-    const alreadyImported = source.includes(LUNORA_VITE_DOUBLE) || source.includes(LUNORA_VITE_SINGLE);
 
-    if (alreadyImported) {
-        patchPluginsArray(ms, configObject);
-    } else {
-        addImport(ms, source);
-        patchPluginsArray(ms, configObject);
+    if (!importsLunoraVite(sf)) {
+        addImport(ms, sf);
+    }
+
+    // The splice can decline (a `plugins` that is not an array literal — a spread,
+    // a helper call, an imported constant). That used to be a bare `return` from
+    // the splice, leaving `changed: true` over a `code` identical to the input:
+    // the caller wrote the file back and reported the config patched, and the
+    // project's dev server then ran with no Lunora plugin at all.
+    const declined = patchPluginsArray(ms, configObject);
+
+    if (declined !== undefined) {
+        return { changed: false, code: source, reason: declined };
     }
 
     return { changed: true, code: ms.toString() };

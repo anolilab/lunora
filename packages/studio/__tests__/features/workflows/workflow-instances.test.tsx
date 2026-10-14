@@ -1,6 +1,6 @@
-import type { WorkflowInstanceDetail, WorkflowInstanceStatus, WorkflowInstanceSummary } from "@lunora/client";
+import type { WorkflowInstanceAction, WorkflowInstanceDetail, WorkflowInstanceStatus, WorkflowInstanceSummary } from "@lunora/client";
 import { LunoraProvider } from "@lunora/react";
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import type { ReactElement, ReactNode } from "react";
 import { describe, expect, it, vi } from "vitest";
 
@@ -28,7 +28,7 @@ describe("workflowInstanceHistory", () => {
     it("lists instances for the workflow on mount", async () => {
         expect.assertions(2);
 
-        const loadInstances = vi.fn(async () => INSTANCES);
+        const loadInstances = vi.fn<(args: { name: string; status?: WorkflowInstanceStatus }) => Promise<WorkflowInstanceSummary[]>>(async () => INSTANCES);
         render(withProvider(createMockClient(), <WorkflowInstanceHistory loadInstances={loadInstances} workflowName="orders" />));
 
         await screen.findByTestId("workflow-instance-i1");
@@ -38,9 +38,9 @@ describe("workflowInstanceHistory", () => {
     });
 
     it("reloads with a status filter when the dropdown changes", async () => {
-        expect.assertions(1);
+        expect.hasAssertions();
 
-        const loadInstances = vi.fn(async () => INSTANCES);
+        const loadInstances = vi.fn<(args: { name: string; status?: WorkflowInstanceStatus }) => Promise<WorkflowInstanceSummary[]>>(async () => INSTANCES);
         render(withProvider(createMockClient(), <WorkflowInstanceHistory loadInstances={loadInstances} workflowName="orders" />));
 
         await screen.findByTestId("workflow-instance-i1");
@@ -54,7 +54,7 @@ describe("workflowInstanceHistory", () => {
     it("opens a step timeline when an instance's Steps button is clicked", async () => {
         expect.assertions(2);
 
-        const loadDetail = vi.fn(async () => DETAIL);
+        const loadDetail = vi.fn<(args: { id: string; name: string }) => Promise<WorkflowInstanceDetail>>(async () => DETAIL);
         render(
             withProvider(createMockClient(), <WorkflowInstanceHistory loadDetail={loadDetail} loadInstances={async () => INSTANCES} workflowName="orders" />),
         );
@@ -70,7 +70,7 @@ describe("workflowInstanceHistory", () => {
     it("shows the not-configured state when the proxy reports WORKFLOWS_NOT_CONFIGURED", async () => {
         expect.assertions(1);
 
-        const loadInstances = vi.fn(async () => {
+        const loadInstances = vi.fn<(args: { name: string; status?: WorkflowInstanceStatus }) => Promise<WorkflowInstanceSummary[]>>(async () => {
             throw Object.assign(new Error("unconfigured"), { code: "WORKFLOWS_NOT_CONFIGURED" });
         });
         render(withProvider(createMockClient(), <WorkflowInstanceHistory loadInstances={loadInstances} workflowName="orders" />));
@@ -81,12 +81,14 @@ describe("workflowInstanceHistory", () => {
     });
 
     it("runs a lifecycle action and reloads when a handler is supplied", async () => {
-        expect.assertions(2);
+        expect.hasAssertions();
 
-        const loadInstances = vi.fn(async () => INSTANCES);
-        const runAction = vi.fn(async () => {
-            return { status: "paused" as WorkflowInstanceStatus };
-        });
+        const loadInstances = vi.fn<(args: { name: string; status?: WorkflowInstanceStatus }) => Promise<WorkflowInstanceSummary[]>>(async () => INSTANCES);
+        const runAction = vi.fn<(args: { action: WorkflowInstanceAction; id: string; name: string }) => Promise<{ status: WorkflowInstanceStatus }>>(
+            async () => {
+                return { status: "paused" as WorkflowInstanceStatus };
+            },
+        );
         render(withProvider(createMockClient(), <WorkflowInstanceHistory loadInstances={loadInstances} runAction={runAction} workflowName="orders" />));
 
         fireEvent.click(await screen.findByTestId("workflow-instance-pause-i1"));
@@ -112,9 +114,11 @@ describe("workflowInstanceHistory", () => {
     it("hides lifecycle actions when readOnly, even with a handler supplied", async () => {
         expect.assertions(1);
 
-        const runAction = vi.fn(async () => {
-            return { status: "paused" as WorkflowInstanceStatus };
-        });
+        const runAction = vi.fn<(args: { action: WorkflowInstanceAction; id: string; name: string }) => Promise<{ status: WorkflowInstanceStatus }>>(
+            async () => {
+                return { status: "paused" as WorkflowInstanceStatus };
+            },
+        );
         render(
             withProvider(
                 createMockClient(),
@@ -125,5 +129,92 @@ describe("workflowInstanceHistory", () => {
         await screen.findByTestId("workflow-instance-i1");
 
         expect(screen.queryByTestId("workflow-instance-pause-i1")).toBeNull();
+    });
+});
+
+describe("workflowInstanceHistory after switching workflow", () => {
+    it("keeps the current workflow's instances when the previous workflow's list lands late", async () => {
+        expect.assertions(2);
+
+        const pending = new Map<string, (instances: WorkflowInstanceSummary[]) => void>();
+        const loadInstances = async ({ name }: { name: string }): Promise<WorkflowInstanceSummary[]> =>
+            new Promise((resolve) => {
+                pending.set(name, resolve);
+            });
+
+        const { rerender } = render(withProvider(createMockClient(), <WorkflowInstanceHistory loadInstances={loadInstances} workflowName="orders" />));
+
+        rerender(withProvider(createMockClient(), <WorkflowInstanceHistory loadInstances={loadInstances} workflowName="refunds" />));
+
+        await act(async () => {
+            pending.get("refunds")?.([{ id: "refund-1", status: "complete" }]);
+            await Promise.resolve();
+        });
+        await act(async () => {
+            pending.get("orders")?.([{ id: "order-1", status: "running" }]);
+            await Promise.resolve();
+        });
+
+        expect(screen.getByTestId("workflow-instance-refund-1")).toBeDefined();
+        expect(screen.queryByTestId("workflow-instance-order-1")).toBeNull();
+    });
+
+    it("drops an instance's step timeline that lands after switching workflow", async () => {
+        expect.assertions(1);
+
+        let finishDetail: (detail: WorkflowInstanceDetail) => void = () => {};
+        const loadDetail = async (): Promise<WorkflowInstanceDetail> =>
+            new Promise((resolve) => {
+                finishDetail = resolve;
+            });
+        const loadInstances = async (): Promise<WorkflowInstanceSummary[]> => INSTANCES;
+
+        const { rerender } = render(
+            withProvider(createMockClient(), <WorkflowInstanceHistory loadDetail={loadDetail} loadInstances={loadInstances} workflowName="orders" />),
+        );
+
+        fireEvent.click(await screen.findByTestId("workflow-instance-steps-i1"));
+        rerender(withProvider(createMockClient(), <WorkflowInstanceHistory loadDetail={loadDetail} loadInstances={loadInstances} workflowName="refunds" />));
+        await screen.findByTestId("workflow-instance-i1");
+
+        await act(async () => {
+            finishDetail(DETAIL);
+            await Promise.resolve();
+        });
+
+        // `i1`'s steps belong to `orders`; the panel now shows `refunds`.
+        expect(screen.queryByTestId("workflow-instance-detail")).toBeNull();
+    });
+
+    it("does not reload the previous workflow's list when an action started there finishes", async () => {
+        expect.assertions(2);
+
+        let finishAction: () => void = () => {};
+        const runAction = async (): Promise<{ status: WorkflowInstanceStatus }> =>
+            new Promise((resolve) => {
+                finishAction = () => {
+                    resolve({ status: "paused" });
+                };
+            });
+        const loadInstances = async ({ name }: { name: string }): Promise<WorkflowInstanceSummary[]> =>
+            name === "orders" ? [{ id: "order-1", status: "running" }] : [{ id: "refund-1", status: "complete" }];
+
+        const { rerender } = render(
+            withProvider(createMockClient(), <WorkflowInstanceHistory loadInstances={loadInstances} runAction={runAction} workflowName="orders" />),
+        );
+
+        fireEvent.click(await screen.findByTestId("workflow-instance-pause-order-1"));
+        rerender(withProvider(createMockClient(), <WorkflowInstanceHistory loadInstances={loadInstances} runAction={runAction} workflowName="refunds" />));
+        await screen.findByTestId("workflow-instance-refund-1");
+
+        await act(async () => {
+            finishAction();
+            await new Promise((resolve) => {
+                setTimeout(resolve, 20);
+            });
+        });
+
+        expect(screen.getByTestId("workflow-instance-refund-1")).toBeDefined();
+        expect(screen.queryByTestId("workflow-instance-order-1")).toBeNull();
     });
 });

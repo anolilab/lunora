@@ -5,7 +5,9 @@
  * provider-agnostic vocabulary every adapter normalizes onto.
  */
 
-/** ISO-4217 currency code (uppercase, 3 letters). Not enumerated — provider coverage varies. */
+/**
+ * ISO-4217 currency code (uppercase, 3 letters). Not enumerated — provider coverage varies.
+ */
 // eslint-disable-next-line sonarjs/redundant-type-aliases -- a documented semantic alias, intentional
 export type CurrencyCode = string;
 
@@ -13,19 +15,24 @@ export type CurrencyCode = string;
  * Money as integer minor units + currency. Always carry the two together.
  *
  * `minorUnits` is a `bigint`, which is **not** JSON-serializable — cross the RPC/wire boundary
- * with the `toMoneyJSON` / `fromMoneyJSON` helpers (see `./money`).
+ * with the `toMoneyJSON` / `fromMoneyJSON` helpers (see `./money`). The database store persists it
+ * as a `number` column and rejects an amount outside the safe-integer range (±(2^53 − 1)).
  */
 export interface Money {
     readonly currency: CurrencyCode;
     readonly minorUnits: bigint;
 }
 
-/** Stable provider identifier (Medusa-style). Scoped to what Convex ships: Stripe + Polar. */
-export type ProviderId = "polar" | "stripe";
+/**
+ * Stable provider identifier (Medusa-style). Ships Stripe/Polar/Autumn/Dodo plus Creem, an EU-friendly MoR.
+ */
+export type ProviderId = "autumn" | "creem" | "dodopayments" | "polar" | "stripe";
 
-/** What a provider can do — encoded in types so tax/UX assumptions aren't tribal knowledge. */
+/**
+ * What a provider can do — encoded in types so tax/UX assumptions aren't tribal knowledge.
+ */
 export interface ProviderCapabilities {
-    /** True for Polar / Lemon Squeezy / Paddle; false for Stripe (PSP). Drives tax/invoice ownership. */
+    /** True for Polar / Lemon Squeezy / Paddle; false for Stripe (PSP) and Autumn (runs on your own Stripe). Drives tax/invoice ownership. */
     readonly merchantOfRecord: boolean;
     /** Native hosted customer/billing portal. */
     readonly portal: boolean;
@@ -33,10 +40,14 @@ export interface ProviderCapabilities {
     readonly usageMetering: boolean;
 }
 
-/** Lifecycle state of a one-time payment session. */
+/**
+ * Lifecycle state of a one-time payment session.
+ */
 export type PaymentState = "authorized" | "canceled" | "captured" | "failed" | "initiated" | "partially_refunded" | "refunded";
 
-/** Lifecycle state of a subscription. */
+/**
+ * Lifecycle state of a subscription.
+ */
 export type SubscriptionState = "active" | "canceled" | "past_due" | "paused" | "trialing";
 
 export interface Customer {
@@ -59,6 +70,12 @@ export interface PaymentSession {
     readonly referenceId: string;
     readonly refundedAmount: Money;
     readonly state: PaymentState;
+
+    /**
+     * The provider subscription this payment started or renewed, when the event carried one. A
+     * subscription row created without an owner takes this session's `referenceId`.
+     */
+    readonly subscriptionId?: string;
     readonly updatedAt: number;
 }
 
@@ -69,7 +86,25 @@ export interface Subscription {
     /** Start of the current billing period — the window `check` sums metered usage over. */
     readonly currentPeriodStart?: number;
     readonly id: string;
+
+    /**
+     * Provider time (epoch ms) of the newest webhook applied to this row — see
+     * {@link WebhookAction.occurredAt}. An older event arriving later is ignored as `"stale"`.
+     * Absent until an event that carries a time lands; `reconcile` and the facade leave it as stored.
+     */
+    readonly lastEventAt?: number;
+    /** The primary (first) price/product id — `priceIds[0]`. Display and single-item plan changes. */
     readonly priceId: string;
+
+    /**
+     * EVERY price/product id the subscription bills, not just the primary one. A Stripe subscription
+     * can carry an add-on or a metered price alongside the base plan, and a customer paying for one is
+     * entitled to it — so entitlements test membership here (see `hasActivePrice`).
+     *
+     * Optional because the webhook path and any pre-existing stored row carry only `priceId`; absent
+     * reads as `[priceId]`, which is exactly right for the single-item case every other provider has.
+     */
+    readonly priceIds?: ReadonlyArray<string>;
     readonly provider: ProviderId;
     readonly quantity: number;
     readonly referenceId: string;
@@ -83,10 +118,19 @@ export interface CustomerRef {
     readonly referenceId: string;
 }
 
-export interface CheckoutInput {
-    readonly cancelUrl: string;
-    /** Existing provider customer id, if known. */
-    readonly customerId?: string;
+/**
+ * What the facade's `createCheckout` takes. The provider customer is always derived from the store
+ * for the authorized `referenceId`, never supplied by the caller.
+ */
+export interface CheckoutRequest {
+    /** Where an abandoned checkout returns to. Creem has no cancel URL, so its adapter ignores it. */
+    readonly cancelUrl?: string;
+
+    /**
+     * Customer email, used when the reference has no provider customer yet. Some Merchant-of-Record
+     * providers (e.g. Dodo Payments) require an email to mint a customer, so pass it on first checkout.
+     */
+    readonly email?: string;
     /** Outbound idempotency key for the provider call; auto-derived when omitted. */
     readonly idempotencyKey?: string;
     readonly metadata?: Record<string, string>;
@@ -97,6 +141,14 @@ export interface CheckoutInput {
     readonly successUrl: string;
 }
 
+/**
+ * What an adapter's `createCheckout` takes: the facade's {@link CheckoutRequest} plus the stored
+ * provider customer for the reference.
+ */
+export interface CheckoutInput extends CheckoutRequest {
+    readonly customerId?: string;
+}
+
 export interface CheckoutResult {
     readonly id: string;
     readonly provider: ProviderId;
@@ -105,44 +157,84 @@ export interface CheckoutResult {
 
 /**
  * `attach` input — subscribe a reference to a plan. A thin, plan-oriented skin over
- * {@link CheckoutInput}: `mode` defaults to `"subscription"` (the common case), so callers pass
+ * {@link CheckoutRequest}: `mode` defaults to `"subscription"` (the common case), so callers pass
  * just `{ referenceId, priceId, successUrl, cancelUrl }`.
  */
-export interface AttachInput extends Omit<CheckoutInput, "mode"> {
-    readonly mode?: CheckoutInput["mode"];
+export interface AttachInput extends Omit<CheckoutRequest, "mode"> {
+    readonly mode?: CheckoutRequest["mode"];
 }
 
 export interface PortalInput {
     readonly customerId: string;
+    /** The authorized reference the portal is opened for. */
+    readonly referenceId: string;
     readonly returnUrl: string;
 }
 
-/** A single durable usage record — one metered event for a `(referenceId, featureId)` pair. */
+/**
+ * A single durable usage record — one metered event for a `(referenceId, featureId)` pair.
+ */
 export interface UsageEvent {
     readonly createdAt: number;
     readonly featureId: string;
     /** Caller-stable dedupe key — recording the same key twice is a no-op (exactly-once `track`). */
     readonly idempotencyKey: string;
+
+    /**
+     * How the period total absorbs this event: `"add"` (the default, and the value
+     * assumed for rows written before this field existed) increments it, `"set"`
+     * RESETS it to `quantity` and discards everything recorded earlier in the
+     * period.
+     *
+     * The ledger stays append-only either way — a `"set"` is a marker, not a
+     * computed delta — which is what makes `track({ mode: "set" })` safe to call
+     * concurrently. `PaymentStore.sumUsage` (via `foldUsage`) applies the fold.
+     */
+    readonly mode?: "add" | "set";
     readonly provider: ProviderId;
+
+    /** For `"add"`, the increment. For `"set"`, the absolute period total this event declares. */
     readonly quantity: number;
     readonly referenceId: string;
     /** Whether the event was successfully forwarded to the provider's metering API. */
     readonly reportedToProvider: boolean;
 }
 
-/** `track` input — record metered usage for a reference's feature. */
+/**
+ * `track` input — record metered usage for a reference's feature.
+ */
 export interface TrackInput {
     readonly featureId: string;
     /** Caller-supplied dedupe key; a fresh one is generated when omitted (so each call records). */
     readonly idempotencyKey?: string;
-    /** `"add"` (default) increments usage by `quantity`; `"set"` reconciles the period total to `quantity`. */
+
+    /**
+     * `"add"` (default) increments usage by `quantity`; `"set"` reconciles the period total to `quantity`.
+     *
+     * Both are a single append: a `"set"` records the absolute target as a marker that the period fold
+     * resets to, rather than reading the current total and appending a delta. Concurrent `"set"` calls
+     * for the same reference therefore resolve last-writer-wins instead of over- or under-counting, and
+     * a replayed `"set"` is idempotent — neither mode needs a serialized context or a per-reference lock.
+     *
+     * `"set"` reconciles the LOCAL period total only, so `track` rejects it with `VALIDATION_ERROR` on a
+     * provider that meters usage upstream: those meters are additive and cannot take a period total, and
+     * a set that LOWERS usage has no negative delta to forward — the provider would keep billing the
+     * higher figure while the local ledger holds the lower one. Use `"add"` with a metered provider.
+     */
     readonly mode?: "add" | "set";
-    /** Usage amount to add, or the absolute period total when `mode` is `"set"` (defaults to `1`). */
+
+    /**
+     * Usage amount to add, or the absolute period total when `mode` is `"set"` (defaults to `1`).
+     * Must be a non-negative safe integer — a negative value would drive the summed period usage
+     * below zero and hand the reference an unbounded metered balance, so it is rejected.
+     */
     readonly quantity?: number;
     readonly referenceId: string;
 }
 
-/** Result of a `track` call. */
+/**
+ * Result of a `track` call.
+ */
 export interface TrackResult {
     /** True when this call inserted a new usage event; false when deduplicated by idempotency key. */
     readonly recorded: boolean;
@@ -164,7 +256,9 @@ export interface CheckInput {
     readonly referenceId: string;
 }
 
-/** Result of a `check` call. */
+/**
+ * Result of a `check` call.
+ */
 export interface CheckResult {
     /** Whether the reference may consume `quantity` units of the feature right now. */
     readonly allowed: boolean;
@@ -178,12 +272,16 @@ export interface CheckResult {
     readonly used?: number;
 }
 
-/** One feature's resolved allowance for a reference — a {@link CheckResult} tagged with its feature. */
+/**
+ * One feature's resolved allowance for a reference — a {@link CheckResult} tagged with its feature.
+ */
 export interface FeatureBalance extends CheckResult {
     readonly featureId: string;
 }
 
-/** Input the adapter forwards to the provider's metering API (Stripe Meter Events / Polar ingestion). */
+/**
+ * Input the adapter forwards to the provider's metering API (Stripe Meter Events / Polar ingestion).
+ */
 export interface ReportUsageInput {
     /** Provider customer id, when known (Stripe meter events key on it). */
     readonly customerId?: string;
@@ -210,6 +308,41 @@ export interface RefundInput {
     readonly sessionId: string;
 }
 
+/**
+ * What an adapter's `refundPayment` returns: the provider-shaped session, plus the provider's own id
+ * for the refund it just issued.
+ */
+export interface RefundResult extends PaymentSession {
+    /**
+     * The provider accepted the refund but has NOT moved the money yet — Dodo answers
+     * `refunds.create` with `pending`/`review` and settles later via `refund.succeeded`, or never,
+     * via `refund.failed`. The facade leaves its ledger untouched for one of these and lets the
+     * confirming webhook carry the money, because a `refund.failed` reverses nothing. Absent (the
+     * default) means the refund is already settled. Stripe reports one whenever the refund's status
+     * is not yet `succeeded`.
+     */
+    readonly pending?: boolean;
+
+    /** What THIS refund moved, as the provider reports it — not the session's cumulative total. */
+    readonly refundedAmount: Money;
+
+    /**
+     * The provider's CUMULATIVE refunded-to-date total after this refund, when its response carries
+     * one (Stripe's charge `amount_refunded`). The facade then records `max(stored, refundedTotal)`
+     * rather than adding this refund to the stored total — the provider's own `charge.refunded` can
+     * land mid-call and book this refund first. Absent on a per-refund (delta) provider.
+     */
+    readonly refundedTotal?: Money;
+
+    /**
+     * The provider's id for THIS refund — Stripe and Polar `Refund.id`, Dodo `refund_id`. It is the
+     * identity the facade keys its local refund marker on, so two in-flight refunds of the same
+     * amount on one session stay distinct. `undefined` only where a provider reports no id, which
+     * falls the marker back to the (colliding) amount.
+     */
+    readonly refundId?: string;
+}
+
 export interface CancelSubscriptionOptions {
     /** Cancel at period end instead of immediately. */
     readonly atPeriodEnd?: boolean;
@@ -217,11 +350,28 @@ export interface CancelSubscriptionOptions {
 }
 
 export interface SubscriptionPatch {
+    /**
+     * Outbound idempotency key, passed through when given. Honoured by the Stripe adapter only — no
+     * other provider's plan-change endpoint accepts a key at all (see the `idempotency` module
+     * docblock). Omitted, the update is sent un-keyed: it sets an ABSOLUTE price/quantity, so a retry
+     * of an applied change is a no-op, whereas a key derived from the target would make A → B → A
+     * inside Stripe's 24h window replay the first A response and leave the subscription on B.
+     */
+    readonly idempotencyKey?: string;
     readonly priceId?: string;
+
+    /**
+     * How the change is billed. Honoured by the Creem adapter only; other adapters bill per their own
+     * endpoint defaults. `immediate` (the default) charges the prorated difference now; `next-invoice`
+     * defers it to the next invoice; `none` changes the plan or seats without billing the difference.
+     */
+    readonly proration?: "immediate" | "next-invoice" | "none";
     readonly quantity?: number;
 }
 
-/** Normalized webhook outcome — the *core state transition* a provider event implies. */
+/**
+ * Normalized webhook outcome — the *core state transition* a provider event implies.
+ */
 export type WebhookActionType =
     | "payment.authorized"
     | "payment.captured"
@@ -261,19 +411,47 @@ export interface WebhookAction {
     readonly customerId?: string;
     /** Provider event id — the inbound idempotency key. */
     readonly eventId: string;
+
+    /**
+     * When the provider says the event happened (epoch ms), if its payload carries it. `sync.ts`
+     * ignores a subscription event older than the last one it applied to that row, so a late
+     * redelivery cannot roll a `past_due` subscription back to `active`. Absent = always applied.
+     */
+    readonly occurredAt?: number;
     readonly priceId?: string;
+
+    /**
+     * EVERY price/product id the subscription bills, when the adapter could establish the whole set.
+     * `sync.ts` applies it as a WHOLESALE replacement, so it must be complete or absent — never a
+     * subset, which would silently drop prices the stored row already had.
+     *
+     * `undefined` leaves the stored set standing (see {@link Subscription.priceIds}). That is the
+     * single-price providers' case, and the fail-closed answer for a provider whose embedded item
+     * list is paginated and whose event carries only the first page.
+     */
+    readonly priceIds?: ReadonlyArray<string>;
     readonly provider: ProviderId;
     readonly quantity?: number;
+
     /** Raw provider event, retained for the events log / debugging. */
     readonly raw?: unknown;
     readonly referenceId?: string;
+
+    /**
+     * Provider id of the refund this event reports (refund actions only). Carries the per-refund
+     * identity the sync layer matches against the marker `refundPayment` left behind, so a second
+     * facade refund of the same amount is not mistaken for the first one's confirmation.
+     */
+    readonly refundId?: string;
     readonly sessionId?: string;
     readonly subscriptionId?: string;
     readonly type: WebhookActionType;
 }
 
-/** Result of applying a webhook action to the store. */
+/**
+ * Result of applying a webhook action to the store.
+ */
 export interface ApplyResult {
     readonly applied: boolean;
-    readonly reason?: "duplicate" | "illegal_transition" | "invalid_refund_amount" | "ok" | "unhandled";
+    readonly reason?: "duplicate" | "illegal_transition" | "invalid_refund_amount" | "ok" | "orphaned" | "stale" | "unhandled" | "unstorable";
 }

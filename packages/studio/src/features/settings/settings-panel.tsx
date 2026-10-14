@@ -1,22 +1,22 @@
-import { useLunora } from "@lunora/react";
 import type { ReactElement } from "react";
-import { useCallback, useEffect, useMemo, useState } from "react";
 
+import ErrorAlert from "../../components/error-alert";
 import { Badge } from "../../components/ui/badge";
 import { Card, CardContent } from "../../components/ui/card";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "../../components/ui/table";
+import { useAdminQuery } from "../../hooks/use-admin-query";
+import type { TFunction } from "../../i18n/i18n-context";
 import { useT } from "../../i18n/i18n-context";
-import type { SettingEntry, SettingsResult } from "../../lib/admin";
+import type { DeployInfo, SettingEntry, SettingsResult } from "../../lib/admin";
 import { ADMIN_FUNCTIONS } from "../../lib/admin";
 import { CLOUDFLARE_WORKERS_URL } from "../../lib/cf-links";
-import { adminRef, callOptions, errorMessage, fireAndForget } from "../../lib/internal";
+import type { Shortcuts } from "../../lib/shortcuts";
+import { resetShortcuts, setShortcut, useShortcuts } from "../../lib/shortcuts";
 
 interface SettingsPanelProps {
     /** Shard key the settings read targets on first load. Defaults to the root shard. */
     readonly initialShardKey?: string;
 }
-
-const GET_SETTINGS = adminRef(ADMIN_FUNCTIONS.getSettings);
 
 /** Badge tone per setting kind, so secrets read as the most guarded. */
 const KIND_VARIANT: Record<SettingEntry["kind"], "destructive" | "outline" | "secondary"> = {
@@ -25,11 +25,38 @@ const KIND_VARIANT: Record<SettingEntry["kind"], "destructive" | "outline" | "se
     var: "secondary",
 };
 
+/** The deployment facts that are actually present, as label/value rows. Absent fields are omitted rather than rendered blank. */
+const toDeployRows = (deploy: DeployInfo | undefined, t: TFunction): { label: string; value: string }[] => {
+    if (deploy === undefined) {
+        return [];
+    }
+
+    const rows: { label: string; value: string }[] = [];
+
+    if (deploy.workerUrl !== undefined) {
+        rows.push({ label: t("URL"), value: deploy.workerUrl });
+    }
+
+    if (deploy.environment !== undefined) {
+        rows.push({ label: t("Environment"), value: deploy.environment });
+    }
+
+    if (deploy.deploymentId !== undefined) {
+        rows.push({ label: t("Deployment"), value: deploy.deploymentId });
+    }
+
+    if (deploy.versionTag !== undefined) {
+        rows.push({ label: t("Version"), value: deploy.versionTag });
+    }
+
+    return rows;
+};
+
 /**
  * Read-only **Settings** view of the deployment's config: the Worker vars,
  * secrets, and bindings exposed via `env`, plus best-effort deploy metadata.
- * Reads the `__lunora_admin__:getSettings` RPC over the {@link useLunora} client
- * (gated by the server's `LUNORA_ADMIN_TOKEN`).
+ * Reads the `__lunora_admin__:getSettings` RPC via {@link useAdminQuery} (gated
+ * by the server's `LUNORA_ADMIN_TOKEN`).
  *
  * Strictly view-only: secret values are masked server-side and never returned
  * raw, and there is no editing here. The infrastructure plane lives in
@@ -37,61 +64,70 @@ const KIND_VARIANT: Record<SettingEntry["kind"], "destructive" | "outline" | "se
  * you can edit there. Deployment config is static at runtime (it only changes on
  * redeploy), so this loads once on mount — there is no live channel or poll.
  */
+
+/**
+ * One rebindable shortcut: its label, its fixed modifier, and a capture box.
+ *
+ * Only the KEY is rebindable, never the modifiers. Those carry constraints the
+ * operator cannot see — the console is Ctrl-only because macOS owns ⌘` as
+ * "cycle this app's windows" — so offering them as a choice would offer bindings
+ * that silently never fire.
+ */
+const ShortcutRow = ({ modifier, name, label }: { readonly label: string; readonly modifier: string; readonly name: keyof Shortcuts }): ReactElement => {
+    const shortcuts = useShortcuts();
+
+    const onKeyDown = (event: React.KeyboardEvent<HTMLInputElement>): void => {
+        // Tab, Shift-Tab and Escape are NOT consumed: swallowing them made this box
+        // a keyboard trap (WCAG 2.1.2) — a keyboard or screen-reader user who
+        // focused it could not leave without a pointer.
+        if (["Escape", "Tab"].includes(event.key)) {
+            return;
+        }
+
+        // A binding that needs Shift can never fire: `useConsoleShortcut` requires
+        // `!event.shiftKey`, so storing `?` would produce a shortcut the operator
+        // cannot trigger and cannot see is broken.
+        if (event.shiftKey) {
+            event.preventDefault();
+
+            return;
+        }
+
+        event.preventDefault();
+        setShortcut(name, event.key);
+    };
+
+    return (
+        <div className="contents" data-testid={`set-shortcut-${name}`}>
+            <dt className="text-muted-foreground">{label}</dt>
+            <dd className="flex items-center gap-1.5">
+                <kbd className="rounded border border-border px-1.5 py-0.5 font-mono text-[11px] text-muted-foreground">{modifier}</kbd>
+                <input
+                    aria-label={label}
+                    className="h-7 w-12 rounded-md border border-border bg-background text-center font-mono text-xs uppercase outline-none focus-visible:border-ring"
+                    data-testid={`set-shortcut-input-${name}`}
+                    onKeyDown={onKeyDown}
+                    readOnly
+                    value={shortcuts[name]}
+                />
+            </dd>
+        </div>
+    );
+};
+
 export const SettingsPanel = ({ initialShardKey }: SettingsPanelProps): ReactElement => {
-    const client = useLunora();
     const t = useT();
 
-    const [result, setResult] = useState<SettingsResult | null>(null);
-    const [error, setError] = useState<null | string>(null);
-    const [loading, setLoading] = useState<boolean>(false);
+    // Deployment config is static at runtime (it only changes on redeploy), so a
+    // plain one-shot read with no live channel.
+    const {
+        data: result,
+        error,
+        errorSource,
+        isLoading: loading,
+    } = useAdminQuery<SettingsResult>(ADMIN_FUNCTIONS.getSettings, {}, { shardKey: initialShardKey ?? "" });
 
-    const refresh = useCallback(async (): Promise<void> => {
-        setLoading(true);
-        setError(null);
-
-        try {
-            const settings = (await client.query(GET_SETTINGS, {}, callOptions(initialShardKey ?? ""))) as SettingsResult;
-
-            setResult(settings);
-        } catch (error_) {
-            setResult(null);
-            setError(errorMessage(error_));
-        } finally {
-            setLoading(false);
-        }
-    }, [client, initialShardKey]);
-
-    useEffect(() => {
-        fireAndForget(refresh());
-    }, [refresh]);
-
-    const deployRows = useMemo<{ label: string; value: string }[]>(() => {
-        const deploy = result?.deploy;
-
-        if (deploy === undefined) {
-            return [];
-        }
-
-        const rows: { label: string; value: string }[] = [];
-
-        if (deploy.workerUrl !== undefined) {
-            rows.push({ label: t("URL"), value: deploy.workerUrl });
-        }
-
-        if (deploy.environment !== undefined) {
-            rows.push({ label: t("Environment"), value: deploy.environment });
-        }
-
-        if (deploy.deploymentId !== undefined) {
-            rows.push({ label: t("Deployment"), value: deploy.deploymentId });
-        }
-
-        if (deploy.versionTag !== undefined) {
-            rows.push({ label: t("Version"), value: deploy.versionTag });
-        }
-
-        return rows;
-    }, [result, t]);
+    const deployRows = toDeployRows(result?.deploy, t);
 
     const settings = result?.settings ?? [];
 
@@ -113,11 +149,7 @@ export const SettingsPanel = ({ initialShardKey }: SettingsPanelProps): ReactEle
                 {t("View-only — values are masked. Edit vars, secrets, and bindings in wrangler or the Cloudflare dashboard.")}
             </p>
 
-            {error !== null && (
-                <p className="text-sm text-destructive" data-testid="set-error" role="alert">
-                    {error}
-                </p>
-            )}
+            {error !== null && <ErrorAlert error={errorSource} testId="set-error" />}
 
             {deployRows.length > 0 && (
                 <Card className="py-0" data-testid="set-deploy">
@@ -138,6 +170,31 @@ export const SettingsPanel = ({ initialShardKey }: SettingsPanelProps): ReactEle
                     </CardContent>
                 </Card>
             )}
+
+            {/* Browser preferences, not deployment config — everything above this
+                card is served by the worker and read-only; everything in it lives
+                in this browser and is the only thing on the page an operator can
+                actually change. */}
+            <Card className="py-0" data-testid="set-preferences">
+                <header className="flex items-center justify-between border-b border-border px-4 py-3">
+                    <span className="font-mono text-[11px] tracking-wide text-muted-foreground uppercase">{t("Keyboard shortcuts")}</span>
+                    <button
+                        className="rounded px-1 text-[11px] text-muted-foreground outline-none transition-colors hover:text-foreground focus-visible:text-foreground"
+                        data-testid="set-shortcut-reset"
+                        onClick={resetShortcuts}
+                        type="button"
+                    >
+                        {t("Reset")}
+                    </button>
+                </header>
+                <CardContent className="py-3">
+                    <dl className="grid grid-cols-[10rem_minmax(0,1fr)] items-center gap-x-4 gap-y-2 text-sm">
+                        <ShortcutRow label={t("Command palette")} modifier="⌘/Ctrl" name="palette" />
+                        <ShortcutRow label={t("Operation console")} modifier="Ctrl" name="console" />
+                    </dl>
+                    <p className="pt-3 text-xs text-muted-foreground">{t("Stored in this browser. Focus a box and press a key to rebind it.")}</p>
+                </CardContent>
+            </Card>
 
             <Card className="py-0">
                 <header className="border-b border-border px-4 py-3">

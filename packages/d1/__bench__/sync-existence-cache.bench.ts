@@ -1,7 +1,7 @@
 import { DatabaseSync } from "node:sqlite";
 
 import type { AggregateIndexDefinitionLike, DatabaseWriterLike, RankIndexDefinitionLike, SchemaLike, ValidatorLike } from "@lunora/do";
-import { bench, describe } from "vitest";
+import { beforeAll, bench, describe } from "vitest";
 
 import type { D1Exec } from "../src/d1-ctx-db";
 import { createD1CtxDb as createD1ContextDatabase, runD1AggregateMigrations, runD1RankMigrations } from "../src/d1-ctx-db";
@@ -107,13 +107,21 @@ const buildWriter = async (): Promise<{ counting: CountingExec; writer: Database
 
 // Warm writer: the first insert primes the existence cache; benched writes
 // thereafter hit the cache and issue zero sqlite_master probes.
-const warm = await buildWriter();
+let warm: { counting: CountingExec; writer: DatabaseWriterLike };
 let warmSeq = 0;
 
-await warm.writer.insert("todos", { _id: "warmup", priority: "medium", projectId: "p0", seq: -1 }, { allowExplicitId: true });
-warm.counting.reset();
-
 describe("d1 write — sync existence cache", () => {
+    // Build + prime the warm writer in beforeAll: CodSpeed's instrumented runner
+    // does not pick up module-top-level await state (async migrations + the
+    // warmup insert), so the warm bench would otherwise run against an
+    // unprimed/absent writer. beforeAll is honored by both the plain `vitest
+    // bench` runner and CodSpeed's analysis runner.
+    beforeAll(async () => {
+        warm = await buildWriter();
+        await warm.writer.insert("todos", { _id: "warmup", priority: "medium", projectId: "p0", seq: -1 }, { allowExplicitId: true });
+        warm.counting.reset();
+    });
+
     bench("warm insert (cached existence — zero sqlite_master probes)", async () => {
         warmSeq += 1;
         await warm.writer.insert("todos", { _id: `w${String(warmSeq)}`, priority: "medium", projectId: "p1", seq: warmSeq }, { allowExplicitId: true });

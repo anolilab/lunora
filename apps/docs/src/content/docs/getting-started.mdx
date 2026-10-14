@@ -1,6 +1,9 @@
 ---
 title: Getting started
 description: Scaffold a Lunora app and run the dev loop in under a minute.
+related:
+    - to: /docs/concepts/schema
+    - to: /docs/deployment
 ---
 
 The fastest way to start a Lunora project is the official template. It wires
@@ -9,14 +12,41 @@ all pointing at a `wrangler.jsonc` you can deploy straight to your own account.
 
 <Callout type="warn">
     Lunora is in **alpha**. Install from the `@alpha` dist-tag (the commands below already do) and expect breaking changes until the first stable release. The
-    npm package is `lunorash` — the unscoped `lunora` name is taken on npm — but the CLI binary it installs is still `lunora`.
+    npm package is `lunorash` (the unscoped `lunora` name is taken on npm), but the CLI binary it installs is still `lunora`.
+
+    Note `npm view <pkg> version` reports `0.0.0` for every `@lunora/*` package: that is the placeholder on `latest`. The real version lives on the `alpha`
+    dist-tag (`npm view <pkg> dist-tags`). Reading `latest` makes a released package look unpublished.
+
+</Callout>
+
+<Callout type="info">
+    **Using pnpm's `minimumReleaseAge`?** The packages release independently and often, so a maturation window will hold back some of them and leave you with a
+    set that no longer resolves together:
+
+    ```
+    ERR_PNPM_NO_MATURE_MATCHING_VERSION  Version 1.0.0-alpha.39 (released 2 hours ago)
+    of @lunora/seed does not meet the minimumReleaseAge constraint
+    ```
+
+    Exclude the scope rather than turning the window off everywhere:
+
+    ```yaml
+    # pnpm-workspace.yaml
+    minimumReleaseAge: 1440
+    minimumReleaseAgeExclude:
+        - "@lunora/*"
+        - lunorash
+    ```
+
 </Callout>
 
 ## Requirements
 
-- **Node** `^22.14.0 || >=24.10.0`
-- **pnpm** `>=10.32.1`
-- A Cloudflare account (the Free plan works for development)
+- **Node** `^22.15.0 || >=24.11.0`: the range every published Lunora package declares in `engines`.
+- **A package manager**: pnpm `>=10.32.1`, or npm, yarn, or bun. The scaffolded app pins none of them; the tabs below cover all four.
+- A Cloudflare account, only needed to keep a deployment. Local dev needs none,
+  and `lunora deploy --temporary` publishes a live URL without one (the Free plan
+  works once you're ready to claim it).
 
 <Steps>
 
@@ -48,11 +78,33 @@ bunx lunorash@alpha init my-app
 
 Then install and start the dev loop:
 
-```bash
+<Tabs items={["pnpm", "npm", "yarn", "bun"]}>
+
+```bash tab="pnpm"
 cd my-app
 pnpm install
 pnpm dev
 ```
+
+```bash tab="npm"
+cd my-app
+npm install
+npm run dev
+```
+
+```bash tab="yarn"
+cd my-app
+yarn install
+yarn dev
+```
+
+```bash tab="bun"
+cd my-app
+bun install
+bun run dev
+```
+
+</Tabs>
 
 The CLI lays down the standard layout:
 
@@ -63,8 +115,8 @@ my-app/
 │   ├── messages.ts        # query / mutation / action
 │   └── _generated/        # codegen output (don't edit)
 ├── src/
-│   ├── server/index.ts    # createWorker + ShardDO subclass
-│   └── client/main.tsx    # LunoraProvider + your React app
+│   ├── server.ts          # defineApp() worker entry + ShardDO export
+│   └── main.tsx           # LunoraProvider + your React app
 ├── wrangler.jsonc         # DO + D1 + R2 bindings
 └── vite.config.ts         # lunora() Vite plugin
 ```
@@ -88,19 +140,37 @@ trigger codegen and a typed-API hot reload within ~200 ms.
 
 ### Deploy
 
-```bash
+<Tabs items={["pnpm", "npm", "yarn", "bun"]}>
+
+```bash tab="pnpm"
 pnpm lunora deploy
 ```
 
-This calls `wrangler deploy`, runs pending D1 migrations, and publishes the
-Worker. Everything lives on your account, reachable through your own
+```bash tab="npm"
+npx lunora deploy
+```
+
+```bash tab="yarn"
+yarn lunora deploy
+```
+
+```bash tab="bun"
+bun run lunora deploy
+```
+
+</Tabs>
+
+This runs codegen, validates `wrangler.jsonc`, and calls `wrangler deploy` to
+publish the Worker. Data migrations run only with `--migrate` (plus
+`--migrate-yes` in production); the D1 schema SQL `lunora migrate generate` emits
+is never applied for you. Everything lives on your account, reachable through your own
 `*.workers.dev` hostname or a custom domain.
+
+<Callout type="info">
+    No account yet? `pnpm lunora deploy --temporary` deploys to a Wrangler-provisioned short-lived account: your Worker is live for ~60 minutes, then you claim
+    it to make it permanent or it's deleted.
+</Callout>
 
 </Step>
 
 </Steps>
-
-## See also
-
-- [Concepts: schema](/docs/concepts/schema)
-- [Deployment](/docs/deployment)

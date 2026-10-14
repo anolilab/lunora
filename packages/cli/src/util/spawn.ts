@@ -1,15 +1,75 @@
 import { spawn as nodeSpawn } from "node:child_process";
+import { StringDecoder } from "node:string_decoder";
+
+import { LunoraError } from "@lunora/errors";
+
+/**
+ * Matches any character that would make cmd.exe re-split, redirect, or otherwise
+ * reinterpret an unquoted argument: whitespace (re-split), the command
+ * separators / redirection operators (`& | < > ^`), an env-var `%`, and a
+ * literal `"` (which toggles cmd's quote state). Wrapping such a value in double
+ * quotes neutralises the separators/redirection so an argument like
+ * `C:\Dev&Ops\dist` can't spawn `Ops\dist` as a second command.
+ */
+const NEEDS_CMD_QUOTING = /[\s"%&<>^|]/u;
+
+/**
+ * Escapes `value` for the child's CommandLineToArgvW re-parse inside the double quotes that
+ * `quote` wraps it in: a run of backslashes right before a `"` (an embedded quote, or the closing
+ * quote appended after the value) is doubled, and each embedded `"` becomes `\"`. Without this,
+ * `C:\path\` before the closing quote would escape it and re-split the value mid-argument.
+ *
+ * One pass, so a long run of backslashes costs linear time: the regex pair this replaces scanned
+ * the run again from every position in it (CodeQL js/polynomial-redos).
+ */
+const escapeForCommandLineToArgv = (value: string): string => {
+    let escaped = "";
+    let backslashes = 0;
+
+    for (const character of value) {
+        if (character === "\\") {
+            backslashes += 1;
+        } else {
+            escaped += character === '"' ? `${"\\".repeat(backslashes * 2 + 1)}"` : `${"\\".repeat(backslashes)}${character}`;
+            backslashes = 0;
+        }
+    }
+
+    return escaped + "\\".repeat(backslashes * 2);
+};
 
 export interface SpawnDescriptor {
     args: ReadonlyArray<string>;
 
     /**
+     * Capture the child's stderr (in addition to streaming it to the parent).
+     * Needed when a tool reports the *expected* outcome as an error there —
+     * `wrangler vectorize create-metadata-index` writes "already exists" to
+     * stderr, and without this the caller can only see a bare exit code and
+     * would warn on every re-run. Composes with `stdoutToStderr`, so a caller
+     * can keep stdout clean for `--format json` and still read the reason.
+     */
+    captureStderr?: boolean;
+
+    /**
      * Capture the child's stdout (in addition to streaming it to the parent), so
      * the caller can parse it — used by `deploy` to read the deployed URL from
      * `wrangler deploy` output. Each chunk is still teed to the parent's stdout
-     * so the user sees live progress. Mutually exclusive with `stdoutToStderr`.
+     * so the user sees live progress. Mutually exclusive with `stdoutToStderr`
+     * and `captureStdoutSilently`.
      */
     captureStdout?: boolean;
+
+    /**
+     * Capture the child's stdout WITHOUT teeing it to the parent's stdout —
+     * for output that is parsed, never displayed (e.g. `wrangler secret list
+     * --format json`). Unlike `captureStdout`, nothing is written to
+     * `process.stdout`, so it can't interleave with — and corrupt — a
+     * caller's own stdout (notably `lunora deploy --format json`, which must
+     * emit exactly one JSON document). Mutually exclusive with `captureStdout`
+     * and `stdoutToStderr`.
+     */
+    captureStdoutSilently?: boolean;
     command: string;
     cwd?: string;
     env?: Readonly<Record<string, string>>;
@@ -32,7 +92,9 @@ export interface SpawnDescriptor {
 
 export interface SpawnResult {
     code: number;
-    /** The captured stdout, present only when the descriptor set `captureStdout`. */
+    /** The captured stderr, present only when the descriptor set `captureStderr`. */
+    stderr?: string;
+    /** The captured stdout, present only when the descriptor set `captureStdout` or `captureStdoutSilently`. */
     stdout?: string;
 }
 
@@ -42,40 +104,123 @@ export interface SpawnResult {
  */
 export type Spawner = (descriptor: SpawnDescriptor) => Promise<SpawnResult>;
 
+/**
+ * Map a command + args onto what `child_process.spawn` can actually execute on
+ * this platform. On Windows the package-manager CLIs (`pnpm`, `npx`, `yarn`,
+ * `bun`) are `.cmd`/`.ps1` shims that `spawn()` cannot start without a shell —
+ * since Node's CVE-2024-27980 hardening the call fails outright (`EINVAL`, or
+ * `ENOENT` for the extensionless name) and the child never gets a PID. Node
+ * itself (`process.execPath`) is a real executable and needs no shell. With
+ * `shell: true` Node joins command + args verbatim for cmd.exe, so any argument
+ * carrying a cmd metacharacter (whitespace, `& | < > ^ % "`) is double-quoted
+ * here — with CommandLineToArgvW-safe escaping of embedded quotes and trailing
+ * backslashes — so a `--config` temp path under a spaced user dir, or a value
+ * like `C:\Dev&Ops\dist`, can't be re-split or run as a second command;
+ * everything else passes through untouched. POSIX platforms return the input
+ * unchanged.
+ */
+export const spawnShellCompat = (
+    command: string,
+    args: ReadonlyArray<string>,
+    platform: NodeJS.Platform = process.platform,
+): { args: string[]; command: string; shell: boolean } => {
+    if (platform !== "win32" || command === process.execPath) {
+        return { args: [...args], command, shell: false };
+    }
+
+    // An empty argument must still reach the child as an empty token; unquoted it
+    // would vanish when cmd.exe re-splits, shifting every following positional.
+    // Otherwise only quote when a metacharacter is present so ordinary args pass
+    // through untouched.
+    const quote = (value: string): string => {
+        if (value === "") {
+            return `""`;
+        }
+
+        if (!NEEDS_CMD_QUOTING.test(value)) {
+            return value;
+        }
+
+        return `"${escapeForCommandLineToArgv(value)}"`;
+    };
+
+    return { args: args.map((argument) => quote(argument)), command: quote(command), shell: true };
+};
+
 export const defaultSpawner: Spawner = (descriptor) =>
     new Promise<SpawnResult>((resolve, reject) => {
         const hasInput = typeof descriptor.input === "string";
         const wantCapture = descriptor.captureStdout === true;
+        const wantSilentCapture = descriptor.captureStdoutSilently === true;
         // When the caller pipes input we need a writable stdin handle — "inherit"
-        // gives us the parent's stdin which we can't write to. stderr always stays
-        // inherited so errors land where the user can see them. stdout is normally
+        // gives us the parent's stdin which we can't write to. stderr is inherited
+        // so errors land where the user can see them, unless `captureStderr` pipes
+        // it (still teed to the parent below). stdout is normally
         // inherited; in `--format json` mode it is mapped to the parent's stderr fd
         // (2) so the child's human output never pollutes the JSON on stdout; and in
-        // capture mode it is piped so we can buffer + tee it.
+        // either capture mode it is piped so we can buffer it (and, for
+        // `captureStdout` only, tee it to the parent too).
         let stdout: "inherit" | "pipe" | number = "inherit";
 
-        if (wantCapture) {
+        if (wantCapture || wantSilentCapture) {
             stdout = "pipe";
         } else if (descriptor.stdoutToStderr) {
             stdout = 2;
         }
-        const child = nodeSpawn(descriptor.command, [...descriptor.args], {
+        const exec = spawnShellCompat(descriptor.command, descriptor.args);
+        const child = nodeSpawn(exec.command, exec.args, {
             cwd: descriptor.cwd ?? process.cwd(),
             env: descriptor.env ? { ...process.env, ...descriptor.env } : process.env,
-            stdio: [hasInput ? "pipe" : "inherit", stdout, "inherit"],
+            shell: exec.shell,
+            stdio: [hasInput ? "pipe" : "inherit", stdout, descriptor.captureStderr === true ? "pipe" : "inherit"],
         });
 
+        // Decoders, not `chunk.toString()`: a multi-byte character split across
+        // two chunks would otherwise decode as two replacement characters.
+        const stdoutDecoder = new StringDecoder("utf8");
+        const stderrDecoder = new StringDecoder("utf8");
         let captured = "";
+        let capturedError = "";
 
-        if (wantCapture && child.stdout) {
+        if (descriptor.captureStderr === true && child.stderr) {
+            child.stderr.on("data", (chunk: Buffer) => {
+                capturedError += stderrDecoder.write(chunk);
+                // Tee to the parent so the user still sees the tool's own output.
+                process.stderr.write(chunk);
+            });
+        }
+
+        if ((wantCapture || wantSilentCapture) && child.stdout) {
             child.stdout.on("data", (chunk: Buffer) => {
-                captured += chunk.toString("utf8");
-                // Tee to the parent so the user still sees live deploy progress.
-                process.stdout.write(chunk);
+                captured += stdoutDecoder.write(chunk);
+
+                if (wantCapture) {
+                    // Tee to the parent so the user still sees live deploy progress.
+                    process.stdout.write(chunk);
+                }
+                // `captureStdoutSilently`: buffer only — this output is parsed,
+                // never displayed, and must never reach the parent's stdout.
             });
         }
 
         child.on("error", (error) => {
+            // The single chokepoint for "that program isn't installed": every
+            // shell-out in the CLI goes through this spawner, and Node reports a
+            // command that isn't on PATH as an `ENOENT` on the child (no PID, no
+            // exit code). Re-coding it gives the failure a machine-readable
+            // identity — and, through the exit-code taxonomy, its own exit code
+            // — instead of a bare `spawn wrangler ENOENT` that exits 1 like
+            // every other failure.
+            if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+                reject(
+                    new LunoraError("LOCAL_DEPENDENCY_MISSING", `\`${descriptor.command}\` is not installed or not on your PATH — nothing was run.`, {
+                        cause: error,
+                    }),
+                );
+
+                return;
+            }
+
             reject(error);
         });
 
@@ -83,10 +228,19 @@ export const defaultSpawner: Spawner = (descriptor) =>
             // A signal-killed child reports `code === null`; treat that as a
             // failure (non-zero) rather than silently passing — e.g. an
             // OOM-killed `tsc` must not read as a clean type-check.
-            resolve({ code: code ?? (signal ? 1 : 0), stdout: wantCapture ? captured : undefined });
+            resolve({
+                code: code ?? (signal ? 1 : 0),
+                stderr: descriptor.captureStderr === true ? capturedError + stderrDecoder.end() : undefined,
+                stdout: wantCapture || wantSilentCapture ? captured + stdoutDecoder.end() : undefined,
+            });
         });
 
         if (hasInput && child.stdin) {
+            // A child that exits before draining stdin (e.g. `wrangler secret put`
+            // failing auth preflight) emits EPIPE on this stream; without a listener
+            // that is an uncaught exception. Swallow it — the `exit` handler above
+            // reports the child's real nonzero code, which is the actionable error.
+            child.stdin.on("error", () => {});
             // End the write so the child sees EOF and exits its read loop.
             // Most CLIs (wrangler secret put included) read until EOF.
             child.stdin.end(descriptor.input);

@@ -162,6 +162,12 @@
             "skillPath": "skills/remotion/SKILL.md",
             "computedHash": "006f8413941b59eff54a7ce64851b8a2fb79e7a3a5f1a895e97a48f01482553d"
         },
+        "security-audit": {
+            "source": "cloudflare/security-audit-skill",
+            "sourceType": "github",
+            "skillPath": "skills/security-audit/SKILL.md",
+            "computedHash": "c2f7d0fc241dfc20c7348b646766410237054f47d2306007ffa5493449fb65c7"
+        },
         "seo": {
             "source": "addyosmani/web-quality-skills",
             "sourceType": "autoskills-registry",

@@ -1,11 +1,18 @@
-import { mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { readDevServerState, writeDevServerState } from "@lunora/config";
+import { CLOUDFLARE_CLI_CONFIG_WARNING_ENV } from "@lunora/config/cloudflare";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import type { DevCommandOptions } from "../../src/commands/dev/handler";
-import { planDevCommand, runDevCommand } from "../../src/commands/dev/handler";
+import { negatableDevFlags, runDevCommand } from "../../src/commands/dev/handler";
+import { detectDevFlavor } from "../../src/commands/dev/lifecycle";
+import { startCelldWorker } from "../../src/commands/dev/own-dev-server";
+import { planDevCommand, resolveInspectorPort, resolveWorkerPort } from "../../src/commands/dev/plan";
+import { defaultWorkerSpawner } from "../../src/commands/dev/supervise";
+import type { DevCommandOptions } from "../../src/commands/dev/types";
+import { EXIT_CODE } from "../../src/util/exit-code";
 import type { Logger } from "../../src/util/logger";
 
 const silentLogger = (): Logger => {
@@ -25,6 +32,9 @@ describe("lunora dev", () => {
     });
 
     afterEach(() => {
+        // Unconditional: a failed assertion would skip a trailing unstub in a test
+        // body, leaking LUNORA_CODEGEN into every test that follows.
+        vi.unstubAllEnvs();
         rmSync(workdir, { force: true, recursive: true });
     });
 
@@ -39,6 +49,145 @@ describe("lunora dev", () => {
             expect(plan.wrangler.args.join(" ")).toContain("dev");
             expect(plan.wrangler.args.join(" ")).not.toContain("vite");
             expect(plan.studioEnabled).toBe(true);
+        });
+
+        it("runs each lunora.config service in the same `wrangler dev`, the app's config first", () => {
+            expect.assertions(1);
+
+            writeFileSync(join(workdir, "wrangler.jsonc"), `{ "name": "app", "main": "src/index.ts" }\n`);
+            writeFileSync(join(workdir, "lunora.config.ts"), `export default { services: { parser: { dir: "./services/parser" } } };\n`);
+            mkdirSync(join(workdir, "services", "parser"), { recursive: true });
+            writeFileSync(join(workdir, "services", "parser", "wrangler.jsonc"), `{ "name": "parser", "main": "src/index.ts" }\n`);
+
+            const { args } = planDevCommand({ cwd: workdir, logger: silentLogger() }).wrangler;
+
+            expect(args.slice(args.indexOf("--config"))).toStrictEqual([
+                "--config",
+                join(workdir, "wrangler.jsonc"),
+                "--config",
+                join(workdir, "services", "parser", "wrangler.jsonc"),
+            ]);
+        });
+
+        it("runs a service's custom build in the service's folder, from a copy the plan cleans up", () => {
+            expect.assertions(4);
+
+            writeFileSync(join(workdir, "wrangler.jsonc"), `{ "name": "app", "main": "src/index.ts" }\n`);
+            writeFileSync(join(workdir, "lunora.config.ts"), `export default { services: { rusty: { dir: "./services/rusty" } } };\n`);
+            mkdirSync(join(workdir, "services", "rusty"), { recursive: true });
+            writeFileSync(
+                join(workdir, "services", "rusty", "wrangler.jsonc"),
+                `{ "name": "rusty", "main": "build/worker/shim.mjs", "build": { "command": "./build.sh" } }\n`,
+            );
+
+            const plan = planDevCommand({ cwd: workdir, logger: silentLogger() });
+            const { args } = plan.wrangler;
+            const serviceConfig = args.at(-1) as string;
+
+            // wrangler runs a secondary config's build in the process cwd (the app),
+            // so the service runs from a copy whose build.cwd is its own folder.
+            expect(serviceConfig).not.toBe(join(workdir, "services", "rusty", "wrangler.jsonc"));
+            expect(JSON.parse(readFileSync(serviceConfig, "utf8")).build.cwd).toBe(join(workdir, "services", "rusty"));
+            expect(args[args.indexOf(serviceConfig) - 1]).toBe("--config");
+
+            plan.serviceConfigCleanup?.();
+
+            expect(existsSync(serviceConfig)).toBe(false);
+        });
+
+        it("passes --local to wrangler dev when asked, before the services' configs", () => {
+            expect.assertions(2);
+
+            expect(planDevCommand({ cwd: workdir, logger: silentLogger() }).wrangler.args).not.toContain("--local");
+            expect(planDevCommand({ cwd: workdir, local: true, logger: silentLogger() }).wrangler.args).toContain("--local");
+        });
+
+        it("plans an attached run with --no-worker, keeping codegen + studio", () => {
+            expect.assertions(4);
+
+            // `lunora dev` assumed it owned the dev process,
+            // so a repo whose task runner already supervises seven workers had
+            // no way to run the Lunora one as a node in that graph. Attached
+            // mode keeps the parts only Lunora can provide and drops the spawn.
+            const plan = planDevCommand({ cwd: workdir, logger: silentLogger(), worker: false });
+
+            expect(plan.workerEnabled).toBe(false);
+            expect(plan.runsCodegenWatch).toBe(true);
+            expect(plan.studioEnabled).toBe(true);
+            // The plan still records where the externally-owned worker will be,
+            // so studio and the printed hints point at the right origin.
+            expect(plan.workerOrigin).toContain(String(plan.workerPort));
+        });
+
+        it("refuses --no-worker on the vite flavor instead of parking on nothing", () => {
+            expect.assertions(3);
+
+            // The gate lives on the shared run path, so a flavor-agnostic
+            // `workerEnabled: false` would have suppressed the FRAMEWORK dev
+            // server too — and the vite plan sets codegen and studio to false
+            // because Vite runs them in-process. The process would have parked
+            // having started literally nothing, while logging that codegen was
+            // running.
+            writeFileSync(join(workdir, "package.json"), JSON.stringify({ devDependencies: { "@lunora/vite": "^1.0.0" } }), "utf8");
+
+            const messages: string[] = [];
+            const logger = { ...silentLogger(), warn: (message: string) => messages.push(message) };
+            const plan = planDevCommand({ cwd: workdir, logger, worker: false });
+
+            expect(plan.flavor).toBe("vite");
+            expect(plan.workerEnabled).toBe(true);
+            expect(messages.some((message) => message.includes("--no-worker does not apply"))).toBe(true);
+        });
+
+        it("keeps the worker enabled by default", () => {
+            expect.assertions(1);
+
+            expect(planDevCommand({ cwd: workdir, logger: silentLogger() }).workerEnabled).toBe(true);
+        });
+
+        it("maps every negatable flag off the parsed options, --no-worker included", () => {
+            expect.assertions(2);
+
+            // The command mapped `codegen` and `studio` and silently omitted
+            // `worker`, so `--no-worker` — declared, documented and forwarded to the
+            // daemon — was inert on the foreground path: `lunora dev` spawned its own
+            // `wrangler dev` and the externally-owned one died with EADDRINUSE.
+            expect(negatableDevFlags({ codegen: false, studio: undefined, worker: false })).toStrictEqual({
+                codegen: false,
+                studio: undefined,
+                worker: false,
+            });
+
+            // An absent flag stays `undefined` — every reader treats that as "on".
+            expect(negatableDevFlags({ codegen: undefined, studio: undefined, worker: undefined })).toStrictEqual({
+                codegen: undefined,
+                studio: undefined,
+                worker: undefined,
+            });
+        });
+
+        it("adds a framework redirect hint (wrangler plan unchanged) in a Vite project", () => {
+            expect.assertions(4);
+
+            // A meta-framework project: `@lunora/vite` runs the worker inside Vite.
+            writeFileSync(join(workdir, "package.json"), JSON.stringify({ devDependencies: { "@react-router/dev": "^7.0.0" } }), "utf8");
+
+            const plan = planDevCommand({ cwd: workdir, logger: silentLogger() });
+
+            expect(plan.frameworkHint).toContain("react-router");
+            expect(plan.frameworkHint).toContain("lunora dev");
+            // The wrangler spawn is unchanged — the hint never replaces it.
+            expect(plan.wrangler.args.join(" ")).toContain("wrangler dev");
+            expect(plan.wrangler.tag).toBe("wrangler");
+        });
+
+        it("adds no hint for a standalone project (no framework)", () => {
+            expect.assertions(2);
+
+            const plan = planDevCommand({ cwd: workdir, logger: silentLogger() });
+
+            expect(plan.frameworkHint).toBeUndefined();
+            expect(plan.wrangler.args.join(" ")).toContain("wrangler dev");
         });
 
         it("flags the worker as a dev deployment via `--var WORKER_ENV:development`", () => {
@@ -70,13 +219,84 @@ describe("lunora dev", () => {
             expect(plan.studioPort).toBe(7000);
         });
 
+        it("routes a resolved inspector port into wrangler --inspector-port", () => {
+            expect.assertions(2);
+
+            const plan = planDevCommand({ cwd: workdir, inspectorPort: 9235, logger: silentLogger() });
+
+            expect(plan.wrangler.args.join(" ")).toContain("--inspector-port 9235");
+            // Still on the same `wrangler dev` invocation as the worker port.
+            expect(plan.wrangler.args.join(" ")).toContain("wrangler dev --port");
+        });
+
+        it("leaves --inspector-port out of the argv when nothing resolved one", () => {
+            expect.assertions(1);
+
+            // Wrangler's own 9229-and-upward probe stays in charge for every
+            // project that pinned nothing — forcing a default here would take a
+            // port away from whatever already holds it.
+            const plan = planDevCommand({ cwd: workdir, logger: silentLogger() });
+
+            expect(plan.wrangler.args).not.toContain("--inspector-port");
+        });
+
+        it("refuses --inspector-port on the vite flavor and names the knob that works there", () => {
+            expect.assertions(2);
+
+            // `wrangler dev` is never spawned on this flavor, so the flag has no
+            // argv to reach: say where the port is set instead of dropping it.
+            writeFileSync(join(workdir, "package.json"), JSON.stringify({ devDependencies: { "@lunora/vite": "^1.0.0" } }), "utf8");
+
+            const messages: string[] = [];
+            const logger = { ...silentLogger(), warn: (message: string) => messages.push(message) };
+            const plan = planDevCommand({ cwd: workdir, inspectorPort: 9235, logger });
+
+            expect(plan.wrangler.args).not.toContain("--inspector-port");
+            expect(messages.join(" ")).toContain("cloudflare: { inspectorPort: 9235 }");
+        });
+
+        it("pins the worker to 127.0.0.1 when the host has no IPv6 loopback", () => {
+            expect.assertions(3);
+
+            // Simulate a host without `::1`: workerd's default `[::1]` bind would
+            // abort with `Cannot assign requested address` — so `--ip 127.0.0.1`.
+            const plan = planDevCommand({ cwd: workdir, hasIpv6Loopback: () => false, logger: silentLogger() });
+
+            expect(plan.wrangler.args.join(" ")).toContain("--ip 127.0.0.1");
+            // Placed before `--var` so it applies to the same `wrangler dev` invocation.
+            expect(plan.wrangler.args.join(" ")).toContain("wrangler dev --port");
+            expect(plan.ipv4LoopbackForced).toBe(true);
+        });
+
+        it("leaves wrangler's default bind when the host has IPv6 loopback", () => {
+            expect.assertions(2);
+
+            const plan = planDevCommand({ cwd: workdir, hasIpv6Loopback: () => true, logger: silentLogger() });
+
+            expect(plan.wrangler.args).not.toContain("--ip");
+            expect(plan.ipv4LoopbackForced).toBe(false);
+        });
+
+        it("respects an explicit `dev.ip` in wrangler config over the loopback auto-detect", () => {
+            expect.assertions(2);
+
+            // The user pinned their own bind — the auto `--ip 127.0.0.1` must not
+            // override it, even on a host without IPv6 loopback.
+            writeFileSync(join(workdir, "wrangler.jsonc"), JSON.stringify({ dev: { ip: "0.0.0.0" }, name: "app" }), "utf8");
+
+            const plan = planDevCommand({ cwd: workdir, hasIpv6Loopback: () => false, logger: silentLogger() });
+
+            expect(plan.wrangler.args).not.toContain("--ip");
+            expect(plan.ipv4LoopbackForced).toBe(false);
+        });
+
         it("reflects the --no-studio / --no-codegen toggles", () => {
             expect.assertions(2);
 
             const plan = planDevCommand({ codegen: false, cwd: workdir, studio: false, logger: silentLogger() });
 
             expect(plan.studioEnabled).toBe(false);
-            expect(plan.codegenEnabled).toBe(false);
+            expect(plan.runsCodegenWatch).toBe(false);
         });
 
         it("leaves remote mode off and adds no --config when --remote is absent", () => {
@@ -97,15 +317,15 @@ describe("lunora dev", () => {
                 cwd: workdir,
                 logger: silentLogger(),
                 // Injected materializer stands in for the real temp-config writer.
-                materializeRemote: () => {
+                materializeDev: () => {
                     return {
                         cleanup: () => {},
                         configPath: generatedConfig,
-                        enabled: true,
                         remoteBindings: [
                             { binding: "DB", kind: "D1", path: [0], section: "d1_databases" },
                             { binding: "SEARCH", kind: "Vectorize", path: [0], section: "vectorize" },
                         ],
+                        withheld: [],
                     };
                 },
                 remote: true,
@@ -123,8 +343,8 @@ describe("lunora dev", () => {
             const plan = planDevCommand({
                 cwd: workdir,
                 logger: silentLogger(),
-                materializeRemote: () => {
-                    return { cleanup: () => {}, enabled: true, reason: "no remote-eligible bindings to proxy", remoteBindings: [] };
+                materializeDev: () => {
+                    return { cleanup: () => {}, reason: "no remote-eligible bindings to proxy", remoteBindings: [], withheld: [] };
                 },
                 remote: true,
             });
@@ -134,6 +354,262 @@ describe("lunora dev", () => {
             expect(plan.wrangler.args).not.toContain("--config");
         });
 
+        it("runs the local copy without the AI binding when remote is off and Cloudflare is logged out", () => {
+            expect.assertions(4);
+
+            const localConfig = join(workdir, ".wrangler.lunora-remote.local.jsonc");
+            const plan = planDevCommand({
+                cwd: workdir,
+                logger: silentLogger(),
+                materializeDev: () => {
+                    return { cleanup: () => {}, configPath: localConfig, remoteBindings: [], withheld: ["AI"] };
+                },
+            });
+
+            expect(plan.remote.enabled).toBe(false);
+            expect(plan.remote.withheld).toStrictEqual(["AI"]);
+            expect(plan.wrangler.args).toContain("--config");
+            expect(plan.wrangler.args).toContain(localConfig);
+        });
+
+        it("writes no dev config with --local, since wrangler then starts no remote proxy session", () => {
+            expect.assertions(2);
+
+            let materialized = false;
+            const plan = planDevCommand({
+                cwd: workdir,
+                local: true,
+                logger: silentLogger(),
+                materializeDev: () => {
+                    materialized = true;
+
+                    return { cleanup: () => {}, remoteBindings: [], withheld: ["AI"] };
+                },
+            });
+
+            expect(materialized).toBe(false);
+            expect(plan.wrangler.args).not.toContain("--config");
+        });
+
+        it("plans `vite dev` for a project on @lunora/vite (flavor: vite)", () => {
+            expect.assertions(6);
+
+            writeFileSync(join(workdir, "package.json"), JSON.stringify({ devDependencies: { "@lunora/vite": "workspace:*" }, name: "app" }), "utf8");
+
+            expect(detectDevFlavor(workdir)).toBe("vite");
+
+            const plan = planDevCommand({ cwd: workdir, logger: silentLogger() });
+
+            expect(plan.flavor).toBe("vite");
+            expect(plan.wrangler.tag).toBe("vite");
+            expect(plan.wrangler.args.join(" ")).toContain("vite dev");
+            // The Vite plugin already runs studio + codegen inside the dev server.
+            expect(plan.studioEnabled).toBe(false);
+            expect(plan.runsCodegenWatch).toBe(false);
+        });
+
+        it("delegates to the project's dev script for a project on @lunora/rspack", () => {
+            expect.assertions(4);
+
+            // `@lunora/rspack/rsbuild` spawns `wrangler dev` itself and proxies
+            // `/_lunora/*` to it, so the CLI must get out of the way exactly as it
+            // does for `@lunora/vite`. Falling through to the `wrangler` flavor ran
+            // ONLY the worker and never started the client dev server — worse than
+            // either half on its own, and silent about it.
+            writeFileSync(
+                join(workdir, "package.json"),
+                JSON.stringify({ devDependencies: { "@lunora/rspack": "workspace:*" }, name: "app", scripts: { dev: "rsbuild dev" } }),
+                "utf8",
+            );
+
+            expect(detectDevFlavor(workdir)).toBe("vite");
+
+            const plan = planDevCommand({ cwd: workdir, logger: silentLogger() });
+
+            expect(plan.flavor).toBe("vite");
+            expect(plan.wrangler.args.join(" ")).toContain("run dev");
+            // The plugin owns studio + codegen inside the dev server.
+            expect(plan.runsCodegenWatch).toBe(false);
+        });
+
+        it("runs the project's dev script for the vite flavor (meta-framework CLIs)", () => {
+            expect.assertions(3);
+
+            // An Astro project: bare `vite dev` cannot boot it — the dev script
+            // (`astro dev`) is the source of truth for the dev server command.
+            writeFileSync(
+                join(workdir, "package.json"),
+                JSON.stringify({
+                    devDependencies: { "@lunora/vite": "workspace:*" },
+                    name: "app",
+                    packageManager: "pnpm@11.0.0",
+                    scripts: { dev: "astro dev" },
+                }),
+                "utf8",
+            );
+
+            const plan = planDevCommand({ cwd: workdir, logger: silentLogger() });
+
+            expect(plan.wrangler.tag).toBe("vite");
+            expect(plan.wrangler.command).toBe("pnpm");
+            expect(plan.wrangler.args).toStrictEqual(["run", "dev"]);
+        });
+
+        it("falls back to `vite dev` when the dev script would re-enter lunora", () => {
+            expect.assertions(1);
+
+            // `scripts.dev: "lunora dev"` + the vite flavor would spawn this CLI
+            // forever — the guard falls back to the direct vite exec instead.
+            writeFileSync(
+                join(workdir, "package.json"),
+                JSON.stringify({
+                    devDependencies: { "@lunora/vite": "workspace:*" },
+                    name: "app",
+                    scripts: { dev: "lunora dev" },
+                }),
+                "utf8",
+            );
+
+            const plan = planDevCommand({ cwd: workdir, logger: silentLogger() });
+
+            expect(plan.wrangler.args.join(" ")).toContain("vite dev");
+        });
+
+        it("forwards remote mode to the vite child as LUNORA_REMOTE env", () => {
+            expect.assertions(2);
+
+            const plan = planDevCommand({ cwd: workdir, flavor: "vite", logger: silentLogger(), remote: true });
+
+            expect(plan.wrangler.env).toStrictEqual({ LUNORA_REMOTE: "1" });
+            expect(plan.remote.enabled).toBe(true);
+        });
+
+        it("honours LUNORA_CODEGEN=0 on the wrangler flavor too, where the CLI owns the watcher", () => {
+            expect.assertions(2);
+
+            // The env var is documented as the flag's other spelling. The CLI's own
+            // watcher read only `options.codegen`, so on the flavor where the CLI —
+            // not the plugin — owns codegen, setting it did nothing at all.
+            vi.stubEnv("LUNORA_CODEGEN", "0");
+
+            expect(planDevCommand({ cwd: workdir, flavor: "wrangler", logger: silentLogger() }).runsCodegenWatch).toBe(false);
+
+            vi.unstubAllEnvs();
+
+            expect(planDevCommand({ cwd: workdir, flavor: "wrangler", logger: silentLogger() }).runsCodegenWatch).toBe(true);
+        });
+
+        it("forwards --no-codegen to the vite child as LUNORA_CODEGEN=0", () => {
+            expect.assertions(3);
+
+            // On this flavor `@lunora/vite` owns the codegen watch, inside a child
+            // process that re-parses its own argv — so `codegenEnabled: false`
+            // alone left the flag inert and `_generated/**` kept being rewritten
+            // on every save.
+            const plan = planDevCommand({ codegen: false, cwd: workdir, flavor: "vite", logger: silentLogger() });
+
+            expect(plan.wrangler.env).toStrictEqual({ LUNORA_CODEGEN: "0" });
+            expect(plan.runsCodegenWatch).toBe(false);
+
+            const enabled = planDevCommand({ cwd: workdir, flavor: "vite", logger: silentLogger() });
+
+            expect(enabled.wrangler.env).toBeUndefined();
+        });
+
+        it.each([
+            ["sveltekit", { "@sveltejs/kit": "^2.0.0" }],
+            ["nuxt", { nuxt: "^4.0.0" }],
+        ])("plans the two-process framework-worker stack for %s (front-door dev + wrangler sidecar)", (_name, dependencies) => {
+            expect.assertions(7);
+
+            // Class-B frameworks whose dev server can't host ShardDO. They also
+            // declare `@lunora/vite` (their dev server uses it for codegen), but
+            // the framework check wins so the flavor is `framework-worker`.
+            writeFileSync(
+                join(workdir, "package.json"),
+                JSON.stringify({
+                    dependencies,
+                    devDependencies: { "@lunora/vite": "workspace:*" },
+                    name: "app",
+                    packageManager: "pnpm@11.0.0",
+                    scripts: { dev: "vite" },
+                }),
+                "utf8",
+            );
+
+            expect(detectDevFlavor(workdir)).toBe("framework-worker");
+
+            const plan = planDevCommand({ cwd: workdir, hasIpv6Loopback: () => true, logger: silentLogger() });
+
+            expect(plan.flavor).toBe("framework-worker");
+            // Primary child = the framework's own dev server (front door + HMR).
+            expect(plan.wrangler.tag).toBe("vite");
+            // Sidecar = `wrangler dev` on the dev-only config, owning ShardDO.
+            expect(plan.sidecar?.tag).toBe("worker");
+            expect(plan.sidecar?.args.join(" ")).toContain("dev --config wrangler.dev.jsonc");
+            // Codegen/studio are owned by the framework's own @lunora/vite plugin.
+            expect(plan.runsCodegenWatch).toBe(false);
+            expect(plan.studioEnabled).toBe(false);
+        });
+
+        it("runs each lunora.config service beside the SvelteKit / Nuxt sidecar, after its own config", () => {
+            expect.assertions(2);
+
+            writeFileSync(
+                join(workdir, "package.json"),
+                JSON.stringify({
+                    dependencies: { "@sveltejs/kit": "^2.0.0" },
+                    devDependencies: { "@lunora/vite": "workspace:*" },
+                    name: "app",
+                    scripts: { dev: "vite" },
+                }),
+                "utf8",
+            );
+            writeFileSync(join(workdir, "lunora.config.ts"), `export default { services: { parser: { dir: "./services/parser" } } };\n`);
+            mkdirSync(join(workdir, "services", "parser"), { recursive: true });
+            writeFileSync(join(workdir, "services", "parser", "wrangler.jsonc"), `{ "name": "parser", "main": "src/index.ts" }\n`);
+
+            const args = planDevCommand({ cwd: workdir, hasIpv6Loopback: () => true, logger: silentLogger() }).sidecar?.args.join(" ") ?? "";
+
+            const service = `--config ${join(workdir, "services", "parser", "wrangler.jsonc")}`;
+
+            expect(args).toContain(service);
+            // The sidecar's own config stays first, so wrangler keeps it as the primary Worker.
+            expect(args.indexOf(service)).toBeGreaterThan(args.indexOf("--config wrangler.dev.jsonc"));
+        });
+
+        it("respects the sidecar's OWN `dev.ip` (wrangler.dev.jsonc), not the deploy wrangler.jsonc, on a no-::1 host", () => {
+            expect.assertions(2);
+
+            // Class-B framework-worker setup: the sidecar actually runs
+            // `wrangler dev --config wrangler.dev.jsonc`, so its loopback
+            // override must be resolved from THAT file, not the deploy
+            // `wrangler.jsonc` (whose `main` doesn't even exist in dev).
+            writeFileSync(
+                join(workdir, "package.json"),
+                JSON.stringify({
+                    dependencies: { "@sveltejs/kit": "^2.0.0" },
+                    devDependencies: { "@lunora/vite": "workspace:*" },
+                    name: "app",
+                    packageManager: "pnpm@11.0.0",
+                    scripts: { dev: "vite" },
+                }),
+                "utf8",
+            );
+            // The deploy config has no `dev.ip` pinned.
+            writeFileSync(join(workdir, "wrangler.jsonc"), JSON.stringify({ main: "dist/worker.js", name: "app" }), "utf8");
+            // The sidecar's OWN config pins its bind explicitly.
+            writeFileSync(join(workdir, "wrangler.dev.jsonc"), JSON.stringify({ dev: { ip: "0.0.0.0" }, main: "lunora/server.ts", name: "app" }), "utf8");
+
+            const plan = planDevCommand({ cwd: workdir, hasIpv6Loopback: () => false, logger: silentLogger() });
+
+            // The user's own `dev.ip` in wrangler.dev.jsonc wins — the auto
+            // `--ip 127.0.0.1` must not override it, even on a host with no
+            // IPv6 loopback.
+            expect(plan.sidecar?.args).not.toContain("--ip");
+            expect(plan.sidecar?.args.join(" ")).not.toContain("127.0.0.1");
+        });
+
         it("threads the materializer's cleanup disposer onto the remote plan", () => {
             expect.assertions(1);
 
@@ -141,13 +617,123 @@ describe("lunora dev", () => {
             const plan = planDevCommand({
                 cwd: workdir,
                 logger: silentLogger(),
-                materializeRemote: () => {
-                    return { cleanup, configPath: join(workdir, "w.jsonc"), enabled: true, remoteBindings: [] };
+                materializeDev: () => {
+                    return { cleanup, configPath: join(workdir, "w.jsonc"), remoteBindings: [], withheld: [] };
                 },
                 remote: true,
             });
 
             expect(plan.remote.cleanup).toBe(cleanup);
+        });
+    });
+
+    describe("resolveWorkerPort", () => {
+        it("uses an explicit worker port and never probes", async () => {
+            expect.assertions(2);
+
+            let probed = false;
+            const port = await resolveWorkerPort(
+                {
+                    findFreePort: async () => {
+                        probed = true;
+
+                        return 9999;
+                    },
+                    logger: silentLogger(),
+                    workerPort: 4000,
+                },
+                workdir,
+            );
+
+            expect(port).toBe(4000);
+            expect(probed).toBe(false);
+        });
+
+        it("respects a `dev.port` pinned in the wrangler config over the free-port probe", async () => {
+            expect.assertions(1);
+
+            writeFileSync(join(workdir, "wrangler.jsonc"), JSON.stringify({ dev: { port: 4321 }, name: "app" }), "utf8");
+
+            const port = await resolveWorkerPort({ findFreePort: async () => 9999, logger: silentLogger() }, workdir);
+
+            expect(port).toBe(4321);
+        });
+
+        it("falls back to a probed free port when nothing is pinned", async () => {
+            expect.assertions(1);
+
+            const port = await resolveWorkerPort({ findFreePort: async () => 8801, logger: silentLogger() }, workdir);
+
+            expect(port).toBe(8801);
+        });
+
+        it("refuses to drift off 8787 when .dev.vars pins the worker origin to it", async () => {
+            expect.assertions(3);
+
+            writeFileSync(join(workdir, ".dev.vars"), ["AUTH_URL=http://localhost:8787", "BETTER_AUTH_URL=http://127.0.0.1:8787", ""].join("\n"), "utf8");
+
+            const failure = await resolveWorkerPort({ findFreePort: async () => 8788, logger: silentLogger() }, workdir).catch((error: unknown) => error);
+
+            expect(failure).toBeInstanceOf(Error);
+            expect((failure as Error).message).toContain("AUTH_URL, BETTER_AUTH_URL");
+            expect((failure as Error).message).toContain("--worker-port 8788");
+        });
+
+        it("drifts silently when .dev.vars names no origin on the busy port", async () => {
+            expect.assertions(1);
+
+            writeFileSync(join(workdir, ".dev.vars"), ["AUTH_SECRET=not-a-url", "PUBLIC_URL=http://localhost:5173", ""].join("\n"), "utf8");
+
+            const port = await resolveWorkerPort({ findFreePort: async () => 8788, logger: silentLogger() }, workdir);
+
+            expect(port).toBe(8788);
+        });
+
+        it("lets an explicit --worker-port through even when .dev.vars pins 8787", async () => {
+            expect.assertions(1);
+
+            writeFileSync(join(workdir, ".dev.vars"), "AUTH_URL=http://localhost:8787\n", "utf8");
+
+            const port = await resolveWorkerPort({ findFreePort: async () => 8788, logger: silentLogger(), workerPort: 8790 }, workdir);
+
+            expect(port).toBe(8790);
+        });
+    });
+
+    describe("resolveInspectorPort", () => {
+        it("uses an explicit inspector port", () => {
+            expect.assertions(1);
+
+            expect(resolveInspectorPort({ inspectorPort: 9235, logger: silentLogger() }, workdir)).toBe(9235);
+        });
+
+        it("falls back to `dev.inspector_port` in the wrangler config", () => {
+            expect.assertions(1);
+
+            writeFileSync(join(workdir, "wrangler.jsonc"), JSON.stringify({ dev: { inspector_port: 9240 }, name: "app" }), "utf8");
+
+            expect(resolveInspectorPort({ logger: silentLogger() }, workdir)).toBe(9240);
+        });
+
+        it("lets an explicit --inspector-port win over the wrangler config", () => {
+            expect.assertions(1);
+
+            // Same precedence as `--worker-port` over `dev.port` — the whole
+            // point of the flag is that it beats the file, not the reverse.
+            writeFileSync(join(workdir, "wrangler.jsonc"), JSON.stringify({ dev: { inspector_port: 9240 }, name: "app" }), "utf8");
+
+            expect(resolveInspectorPort({ inspectorPort: 9235, logger: silentLogger() }, workdir)).toBe(9235);
+        });
+
+        it("resolves nothing when neither the flag nor the config names a port", () => {
+            expect.assertions(2);
+
+            writeFileSync(join(workdir, "wrangler.jsonc"), JSON.stringify({ dev: { port: 8788 }, name: "app" }), "utf8");
+
+            // `undefined`, never a default: the argv must stay exactly as it was
+            // so wrangler keeps its own upward probe.
+            expect(resolveInspectorPort({ logger: silentLogger() }, workdir)).toBeUndefined();
+            expect(resolveInspectorPort({ logger: silentLogger() }, join(workdir, "no-wrangler-here"))).toBeUndefined();
         });
     });
 
@@ -167,12 +753,16 @@ describe("lunora dev", () => {
 
             const result = await runDevCommand({
                 cwd: workdir,
+                // Deterministic port so the origin assertion below doesn't depend
+                // on whether 8787 is free on the test host.
+                findFreePort: async () => 8787,
                 logger: silentLogger(),
                 startCodegen: () => {
                     return {
-                        close: () => {
+                        close: async () => {
                             codegenClosed = true;
                         },
+                        ready: Promise.resolve(),
                         watchAvailable: true,
                     };
                 },
@@ -194,6 +784,404 @@ describe("lunora dev", () => {
             expect(result.plan.workerOrigin).toBe("http://localhost:8787");
         });
 
+        it("warns about a cloudflare.config.ts once, claiming the guard before any child is spawned", async () => {
+            expect.assertions(4);
+
+            vi.stubEnv(CLOUDFLARE_CLI_CONFIG_WARNING_ENV, "");
+            writeFileSync(join(workdir, "cloudflare.config.ts"), "export default {};\n", "utf8");
+
+            const warnings: string[] = [];
+            const claimedAt: Record<string, string | undefined> = {};
+
+            try {
+                await runDevCommand({
+                    cwd: workdir,
+                    findFreePort: async () => 8787,
+                    logger: { ...silentLogger(), warn: (message: string) => warnings.push(message) },
+                    // Each child inherits process.env as it is when it is spawned.
+                    startCodegen: () => {
+                        claimedAt.codegen = process.env[CLOUDFLARE_CLI_CONFIG_WARNING_ENV];
+
+                        return { close: async () => {}, ready: Promise.resolve(), watchAvailable: true };
+                    },
+                    startStudio: async () => {
+                        return { close: async () => {}, url: "http://127.0.0.1:6173" };
+                    },
+                    startWorker: () => {
+                        claimedAt.worker = process.env[CLOUDFLARE_CLI_CONFIG_WARNING_ENV];
+
+                        return { exited: Promise.resolve(0), kill: () => {} };
+                    },
+                });
+            } finally {
+                vi.unstubAllEnvs();
+            }
+
+            const cfWarnings = warnings.filter((message) => message.includes("cloudflare.config.ts"));
+
+            expect(cfWarnings).toHaveLength(1);
+            expect(cfWarnings[0]).toContain("https://github.com/anolilab/lunora/issues/964");
+            expect(claimedAt.codegen).toBe("1");
+            expect(claimedAt.worker).toBe("1");
+        });
+
+        // celld has no Vite integration and refuses Cloudflare-only wrangler
+        // keys, so its dev server runs on the projected config — as the
+        // `celld` binary itself, not through the package manager — even in a
+        // project whose dependencies would otherwise pick the Vite flavor.
+        it("serves a celld-target app on a celld dev session over the projected config", async () => {
+            expect.assertions(4);
+
+            writeFileSync(join(workdir, "wrangler.jsonc"), JSON.stringify({ main: "src/server.ts", name: "app", observability: { enabled: true } }), "utf8");
+
+            const started: { port: number; projectRoot: string }[] = [];
+            let stopped = 0;
+
+            const result = await runDevCommand({
+                codegen: false,
+                cwd: workdir,
+                findFreePort: async () => 8790,
+                flavor: "vite",
+                logger: silentLogger(),
+                // The session (services first, restart on edit) has its own suite in `@lunora/config`.
+                startCelldSession: async (options) => {
+                    started.push({ port: options.port, projectRoot: options.projectRoot });
+
+                    return {
+                        // The app crashes once it is up, which ends `lunora dev` the way a worker exit does.
+                        exited: Promise.resolve(1),
+                        stop: async () => {
+                            stopped += 1;
+                        },
+                    };
+                },
+                startStudio: async () => {
+                    return { close: async () => {}, url: "http://127.0.0.1:6173" };
+                },
+                startWorker: () => {
+                    throw new Error("the celld target runs a dev session, not a bare worker process");
+                },
+                target: "celld",
+                waitForInterrupt: async () => EXIT_CODE.SUCCESS,
+            });
+
+            expect(result.code).toBe(1);
+            expect(started).toStrictEqual([{ port: 8790, projectRoot: workdir }]);
+            // Marked as development, as `wrangler dev --var WORKER_ENV:development` does.
+            expect(JSON.parse(readFileSync(join(workdir, ".celld.wrangler.json"), "utf8"))).toStrictEqual({
+                main: "src/server.ts",
+                name: "app",
+                vars: { WORKER_ENV: "development" },
+            });
+            // A crashed app is already gone; only a stop the user asks for stops the session.
+            expect(stopped).toBe(0);
+        });
+
+        it("stops the celld session when the worker is killed", async () => {
+            expect.assertions(1);
+
+            const worker = await startCelldWorker({
+                logger: silentLogger(),
+                port: 8790,
+                projectRoot: workdir,
+                start: async () => {
+                    return { exited: new Promise<number>(() => {}), stop: async () => {} };
+                },
+            });
+
+            worker.kill("SIGTERM");
+
+            await expect(worker.exited).resolves.toBe(0);
+        });
+
+        it("stops before anything is served when the celld session cannot start", async () => {
+            expect.assertions(1);
+
+            writeFileSync(join(workdir, "wrangler.jsonc"), JSON.stringify({ main: "src/server.ts", name: "app" }), "utf8");
+
+            const result = await runDevCommand({
+                codegen: false,
+                cwd: workdir,
+                findFreePort: async () => 8790,
+                logger: silentLogger(),
+                startCelldSession: async () => {
+                    throw new Error("celld dev exited with code 1 before it was ready");
+                },
+                startStudio: async () => {
+                    return { close: async () => {}, url: "http://127.0.0.1:6173" };
+                },
+                target: "celld",
+            });
+
+            expect(result.code).toBe(EXIT_CODE.FAILURE);
+        });
+
+        it("carries `dev.inspector_port` from the wrangler config into the spawned wrangler argv", async () => {
+            expect.assertions(2);
+
+            // The resolution lives one level above `planDevCommand`, so a flag
+            // that resolves correctly and never reaches the spawn is the failure
+            // mode this covers end to end.
+            writeFileSync(join(workdir, "wrangler.jsonc"), JSON.stringify({ dev: { inspector_port: 9235 }, name: "app" }), "utf8");
+
+            let spawned: string | undefined;
+
+            const result = await runDevCommand({
+                cwd: workdir,
+                findFreePort: async () => 8787,
+                logger: silentLogger(),
+                startCodegen: () => {
+                    return { close: async () => {}, ready: Promise.resolve(), watchAvailable: true };
+                },
+                startStudio: async () => {
+                    return { close: async () => {}, url: "http://127.0.0.1:6173" };
+                },
+                startWorker: (descriptor) => {
+                    spawned = descriptor.args.join(" ");
+
+                    return { exited: Promise.resolve(0), kill: () => {} };
+                },
+            });
+
+            expect(result.code).toBe(0);
+            expect(spawned).toContain("--inspector-port 9235");
+        });
+
+        it("provisions the bindings the code implies before starting the wrangler worker", async () => {
+            expect.assertions(2);
+
+            // `@lunora/vite` reconciles bindings on every dev-server start, but the
+            // wrangler flavor (standalone / expo / next — no `@lunora/vite` in
+            // dependencies) called no reconciler at all: a newly exported
+            // SchedulerDO got its binding only at `lunora deploy`, so `lunora dev`
+            // ran a worker missing it until then.
+            mkdirSync(join(workdir, "src", "server"), { recursive: true });
+            writeFileSync(
+                join(workdir, "src", "server", "index.ts"),
+                "export const ShardDO = class {};\nexport const SchedulerDO = class {};\nexport default { fetch() {} };\n",
+                "utf8",
+            );
+            mkdirSync(join(workdir, "lunora"), { recursive: true });
+            writeFileSync(
+                join(workdir, "lunora", "schema.ts"),
+                'import { defineSchema, defineTable, v } from "@lunora/server";\n\nexport const schema = defineSchema({ messages: defineTable({ channelId: v.id("channels") }).shardBy("channelId") });\n',
+                "utf8",
+            );
+            writeFileSync(
+                join(workdir, "wrangler.jsonc"),
+                `{
+    "name": "x",
+    "main": "src/server/index.ts",
+    "compatibility_date": "2026-04-07",
+    "compatibility_flags": ["nodejs_compat"]
+}
+`,
+                "utf8",
+            );
+
+            const result = await runDevCommand({
+                cwd: workdir,
+                findFreePort: async () => 8787,
+                logger: silentLogger(),
+                startCodegen: () => {
+                    return { close: async () => {}, ready: Promise.resolve(), watchAvailable: true };
+                },
+                startStudio: async () => {
+                    return { close: async () => {}, url: "http://127.0.0.1:6173" };
+                },
+                startWorker: () => {
+                    return { exited: Promise.resolve(0), kill: () => {} };
+                },
+            });
+
+            expect(result.code).toBe(0);
+
+            const written = readFileSync(join(workdir, "wrangler.jsonc"), "utf8");
+
+            expect(written).toContain("SchedulerDO");
+        });
+
+        it("provisions bindings BEFORE materializing the --remote wrangler config", async () => {
+            expect.assertions(3);
+
+            // The temp `--remote` config is a copy of `wrangler.jsonc`, and the
+            // spawned wrangler runs with `--config <that copy>`. Taken before
+            // provisioning, the copy is a binding short — so `lunora dev --remote`
+            // ran a worker without the binding it had just written to disk. Same
+            // ordering defect the Vite plugin's remote path had.
+            mkdirSync(join(workdir, "src", "server"), { recursive: true });
+            writeFileSync(
+                join(workdir, "src", "server", "index.ts"),
+                "export const ShardDO = class {};\nexport const SchedulerDO = class {};\nexport default { fetch() {} };\n",
+                "utf8",
+            );
+            mkdirSync(join(workdir, "lunora"), { recursive: true });
+            writeFileSync(
+                join(workdir, "lunora", "schema.ts"),
+                'import { defineSchema, defineTable, v } from "@lunora/server";\n\nexport const schema = defineSchema({ messages: defineTable({ channelId: v.id("channels") }).shardBy("channelId") });\n',
+                "utf8",
+            );
+            writeFileSync(
+                join(workdir, "wrangler.jsonc"),
+                `{
+    "name": "x",
+    "main": "src/server/index.ts",
+    "compatibility_date": "2026-04-07",
+    "compatibility_flags": ["nodejs_compat"]
+}
+`,
+                "utf8",
+            );
+
+            // Stands in for the real temp-config writer, and records what
+            // `wrangler.jsonc` looked like AT THE MOMENT it was copied.
+            let snapshotAtMaterialize: string | undefined;
+
+            const result = await runDevCommand({
+                cwd: workdir,
+                findFreePort: async () => 8787,
+                logger: silentLogger(),
+                materializeDev: ({ projectRoot }) => {
+                    snapshotAtMaterialize = readFileSync(join(projectRoot, "wrangler.jsonc"), "utf8");
+
+                    return { cleanup: () => {}, configPath: join(workdir, "w.remote.jsonc"), remoteBindings: [], withheld: [] };
+                },
+                remote: true,
+                startCodegen: () => {
+                    return { close: async () => {}, ready: Promise.resolve(), watchAvailable: true };
+                },
+                startStudio: async () => {
+                    return { close: async () => {}, url: "http://127.0.0.1:6173" };
+                },
+                startWorker: () => {
+                    return { exited: Promise.resolve(0), kill: () => {} };
+                },
+            });
+
+            expect(result.code).toBe(0);
+            expect(readFileSync(join(workdir, "wrangler.jsonc"), "utf8")).toContain("SchedulerDO");
+            // The copy wrangler is actually spawned with must carry it too.
+            expect(snapshotAtMaterialize).toContain("SchedulerDO");
+        });
+
+        it("logs the framework redirect hint but still spawns the worker", async () => {
+            expect.assertions(3);
+
+            // A class-A framework WITHOUT `@lunora/vite` still takes the wrangler
+            // flavor (the worker runs inside the framework's own Vite dev server,
+            // so `lunora dev` gives just the worker + a redirect hint). SvelteKit /
+            // Nuxt are class-B and take the two-process `framework-worker` flavor
+            // instead — covered separately below.
+            writeFileSync(join(workdir, "package.json"), JSON.stringify({ dependencies: { "@tanstack/react-start": "^1.0.0" } }), "utf8");
+
+            const warnings: string[] = [];
+            let workerSpawned = false;
+
+            const result = await runDevCommand({
+                cwd: workdir,
+                logger: { ...silentLogger(), warn: (message) => warnings.push(message) },
+                startCodegen: () => {
+                    return { close: async () => {}, ready: Promise.resolve(), watchAvailable: true };
+                },
+                startStudio: async () => {
+                    return { close: async () => {}, url: "http://127.0.0.1:6173" };
+                },
+                startWorker: () => {
+                    workerSpawned = true;
+
+                    return { exited: Promise.resolve(0), kill: () => {} };
+                },
+                studio: false,
+            });
+
+            expect(result.code).toBe(0);
+            expect(workerSpawned).toBe(true);
+            expect(warnings.some((line) => line.includes("tanstack-start") && line.includes("lunora dev"))).toBe(true);
+        });
+
+        it("framework-worker: spawns the framework dev server + wrangler sidecar and tears the sidecar down on exit", async () => {
+            expect.assertions(4);
+
+            // SvelteKit (class-B): two-process dev — the framework's own dev
+            // server (front door) + a `wrangler dev` sidecar owning ShardDO.
+            writeFileSync(
+                join(workdir, "package.json"),
+                JSON.stringify({
+                    dependencies: { "@sveltejs/kit": "^2.0.0" },
+                    devDependencies: { "@lunora/vite": "workspace:*" },
+                    name: "app",
+                    packageManager: "pnpm@11.0.0",
+                    scripts: { dev: "vite" },
+                }),
+                "utf8",
+            );
+
+            const spawned: string[] = [];
+            let sidecarKilled = false;
+            let resolveSidecar: (code: number) => void = () => {};
+            const sidecarExited = new Promise<number>((resolve) => {
+                resolveSidecar = resolve;
+            });
+
+            const startWorker: NonNullable<DevCommandOptions["startWorker"]> = (descriptor) => {
+                spawned.push(descriptor.tag);
+
+                // The sidecar runs until killed; killing it resolves its exit so
+                // the orchestrator's `allSettled` teardown can complete.
+                if (descriptor.tag === "worker") {
+                    return {
+                        exited: sidecarExited,
+                        kill: () => {
+                            sidecarKilled = true;
+                            resolveSidecar(0);
+                        },
+                    };
+                }
+
+                // The framework dev server (primary) exits cleanly straight away.
+                return { exited: Promise.resolve(0), kill: () => {} };
+            };
+
+            const result = await runDevCommand({ cwd: workdir, logger: silentLogger(), startWorker });
+
+            expect(result.code).toBe(0);
+            expect(spawned).toContain("vite"); // framework dev server (front door)
+            expect(spawned).toContain("worker"); // wrangler sidecar (ShardDO)
+            expect(sidecarKilled).toBe(true); // primary exit tore the sidecar down
+        });
+
+        it("fills empty .dev.vars secrets + the admin token before the worker boots", async () => {
+            expect.assertions(2);
+
+            let filledCwd: string | undefined;
+
+            const result = await runDevCommand({
+                cwd: workdir,
+                // fillSecrets seam: assert it runs against the project cwd during startup.
+                fillSecrets: ({ cwd }) => {
+                    filledCwd = cwd;
+
+                    return { addedKeys: ["LUNORA_ADMIN_TOKEN"], filledKeys: [], status: "filled" };
+                },
+                logger: silentLogger(),
+                startCodegen: () => {
+                    return { close: async () => {}, ready: Promise.resolve(), watchAvailable: true };
+                },
+                startStudio: async () => {
+                    return { close: async () => {}, url: "http://127.0.0.1:6173" };
+                },
+                startWorker: () => {
+                    return { exited: Promise.resolve(0), kill: () => {} };
+                },
+                studio: false,
+            });
+
+            // The filler ran against the project cwd, and the worker still booted.
+            // (key/status behaviour is exercised in @lunora/config's fillDevSecrets tests.)
+            expect(filledCwd).toBe(workdir);
+            expect(result.code).toBe(0);
+        });
+
         it("unlinks the materialized remote temp config when the worker exits", async () => {
             expect.assertions(1);
 
@@ -203,19 +1191,19 @@ describe("lunora dev", () => {
                 cwd: workdir,
                 logger: silentLogger(),
                 // Stub the materializer so remote mode is "on" with a disposer we can observe.
-                materializeRemote: () => {
+                materializeDev: () => {
                     return {
                         cleanup: () => {
                             cleaned = true;
                         },
                         configPath: join(workdir, "wrangler.remote.jsonc"),
-                        enabled: true,
                         remoteBindings: [],
+                        withheld: [],
                     };
                 },
                 remote: true,
                 startCodegen: () => {
-                    return { close: () => {}, watchAvailable: true };
+                    return { close: async () => {}, ready: Promise.resolve(), watchAvailable: true };
                 },
                 startStudio: async () => {
                     return { close: async () => {}, url: "http://127.0.0.1:6173" };
@@ -243,14 +1231,14 @@ describe("lunora dev", () => {
                     ensureEnv: async () => {
                         throw new Error("boom");
                     },
-                    materializeRemote: () => {
+                    materializeDev: () => {
                         return {
                             cleanup: () => {
                                 cleaned = true;
                             },
                             configPath: join(workdir, "wrangler.remote.jsonc"),
-                            enabled: true,
                             remoteBindings: [],
+                            withheld: [],
                         };
                     },
                     remote: true,
@@ -262,6 +1250,198 @@ describe("lunora dev", () => {
 
             // The `finally` teardown ran the disposer despite the throw.
             expect(cleaned).toBe(true);
+        });
+
+        it("never writes the remote temp config when the target is rejected", async () => {
+            expect.assertions(2);
+
+            // `buildDevPlan` writes the temp config, and `resolveRunnableTargetOrError`
+            // used to throw AFTER it — leaving the file orphaned in the project
+            // root (where the templates' exact-name `.wrangler` ignore misses it),
+            // recovered only by a disposer registered in between. The target now
+            // resolves first, so a rejected `--target` never reaches the write:
+            // nothing to orphan and nothing to clean up.
+            let materialized = false;
+
+            await expect(
+                runDevCommand({
+                    cwd: workdir,
+                    logger: silentLogger(),
+                    materializeDev: () => {
+                        materialized = true;
+
+                        return {
+                            cleanup: () => {},
+                            configPath: join(workdir, "wrangler.remote.jsonc"),
+                            remoteBindings: [],
+                            withheld: [],
+                        };
+                    },
+                    remote: true,
+                    startWorker: () => {
+                        return { exited: Promise.resolve(0), kill: () => {} };
+                    },
+                    target: "not-a-registered-target",
+                }),
+            ).rejects.toThrow(/target/iu);
+
+            expect(materialized).toBe(false);
+        });
+
+        it("records the running server in .lunora/dev.json and clears it on exit", async () => {
+            expect.assertions(4);
+
+            let resolveExit: (code: number) => void = () => {};
+            const exited = new Promise<number>((resolve) => {
+                resolveExit = resolve;
+            });
+
+            const runPromise = runDevCommand({
+                cwd: workdir,
+                // Deterministic port so the recorded URL assertion is host-independent.
+                findFreePort: async () => 8787,
+                logger: silentLogger(),
+                startCodegen: () => {
+                    return { close: async () => {}, ready: Promise.resolve(), watchAvailable: true };
+                },
+                startStudio: async () => {
+                    return { close: async () => {}, url: "http://127.0.0.1:6173" };
+                },
+                startWorker: () => {
+                    return { exited, kill: () => {} };
+                },
+            });
+
+            // Let startup complete (scaffold offer + spawn + state write).
+            await new Promise((resolve) => {
+                setTimeout(resolve, 25);
+            });
+
+            const state = readDevServerState(workdir);
+
+            expect(state?.pid).toBe(process.pid);
+            expect(state?.url).toBe("http://localhost:8787");
+            expect(state?.mode).toBe("cli");
+
+            resolveExit(0);
+            await runPromise;
+
+            // The record is cleared on shutdown.
+            expect(readDevServerState(workdir)).toBeUndefined();
+        });
+
+        it("claims a provisional record for the vite flavor and hands off via env", async () => {
+            expect.assertions(4);
+
+            writeFileSync(join(workdir, "package.json"), JSON.stringify({ devDependencies: { "@lunora/vite": "workspace:*" }, name: "app" }), "utf8");
+
+            let resolveExit: (code: number) => void = () => {};
+            const exited = new Promise<number>((resolve) => {
+                resolveExit = resolve;
+            });
+            let childEnvironment: Record<string, string> | undefined;
+
+            const runPromise = runDevCommand({
+                cwd: workdir,
+                logger: silentLogger(),
+                startWorker: (descriptor) => {
+                    childEnvironment = descriptor.env ? { ...descriptor.env } : undefined;
+
+                    return { exited, kill: () => {} };
+                },
+            });
+
+            // Let startup complete (claim + scaffold offer + spawn).
+            await new Promise((resolve) => {
+                setTimeout(resolve, 25);
+            });
+
+            // The provisional record carries this CLI's pid until the vite
+            // dev-state plugin (in the child) supersedes it.
+            const state = readDevServerState(workdir);
+
+            expect(state?.pid).toBe(process.pid);
+            expect(state?.url).toBe("http://localhost:5173");
+            // The handoff env names the record the plugin may supersede.
+            expect(childEnvironment?.LUNORA_DEV_HANDOFF_PID).toBe(String(process.pid));
+
+            resolveExit(0);
+            await runPromise;
+
+            // The provisional record is cleared on shutdown.
+            expect(readDevServerState(workdir)).toBeUndefined();
+        });
+
+        it("reports an already-running dev server instead of double-starting (lockfile)", async () => {
+            expect.assertions(3);
+
+            // A live record owned by another process (the test runner's parent).
+            writeDevServerState(workdir, { mode: "cli", pid: process.ppid, url: "http://localhost:8787" });
+
+            let spawned = false;
+            const warns: string[] = [];
+            const logger: Logger = {
+                error: () => {},
+                info: () => {},
+                success: () => {},
+                warn: (message) => warns.push(message),
+            };
+
+            const result = await runDevCommand({
+                cwd: workdir,
+                logger,
+                startWorker: () => {
+                    spawned = true;
+
+                    return { exited: Promise.resolve(0), kill: () => {} };
+                },
+            });
+
+            expect(result.code).toBe(0);
+            expect(spawned).toBe(false);
+            expect(warns.some((line) => line.includes("already running"))).toBe(true);
+        });
+
+        it("supersedes the background parent's provisional record (does not self-detect as already-running)", async () => {
+            expect.assertions(3);
+
+            // The auto-background daemon inherits DEV_HANDOFF_PID = its parent's
+            // PID, and that parent wrote a provisional record (its own, live PID)
+            // before spawning the daemon. The daemon must claim OVER it and start,
+            // not report "already running" and bail — which is how `lunora dev`
+            // launches under AI-agent auto-background. Use `process.ppid` as the
+            // live "parent" PID (the same trick as the lockfile test above).
+            writeDevServerState(workdir, { mode: "cli", pid: process.ppid, url: "http://localhost:5173" });
+            const previous = process.env.LUNORA_DEV_HANDOFF_PID;
+            process.env.LUNORA_DEV_HANDOFF_PID = String(process.ppid);
+
+            let spawned = false;
+            const warns: string[] = [];
+            const logger: Logger = { error: () => {}, info: () => {}, success: () => {}, warn: (message) => warns.push(message) };
+
+            try {
+                const result = await runDevCommand({
+                    codegen: false,
+                    cwd: workdir,
+                    logger,
+                    startWorker: () => {
+                        spawned = true;
+
+                        return { exited: Promise.resolve(0), kill: () => {} };
+                    },
+                    studio: false,
+                });
+
+                expect(result.code).toBe(0);
+                expect(spawned).toBe(true); // claimed over the parent's provisional record and started
+                expect(warns.some((line) => line.includes("already running"))).toBe(false);
+            } finally {
+                if (previous === undefined) {
+                    delete process.env.LUNORA_DEV_HANDOFF_PID;
+                } else {
+                    process.env.LUNORA_DEV_HANDOFF_PID = previous;
+                }
+            }
         });
 
         it("logs an actionable .dev.vars hint when the scaffolder is declined non-interactively", async () => {
@@ -284,7 +1464,7 @@ describe("lunora dev", () => {
                 },
                 logger,
                 startCodegen: () => {
-                    return { close: () => {}, watchAvailable: true };
+                    return { close: async () => {}, ready: Promise.resolve(), watchAvailable: true };
                 },
                 startStudio: async () => {
                     return { close: async () => {}, url: "http://127.0.0.1:6173" };
@@ -301,6 +1481,320 @@ describe("lunora dev", () => {
             expect(hintLogged).toBe(true);
             // The interactive path must not be blocked — worker still exited cleanly.
             expect(infos.some((line) => line.includes("hint:"))).toBe(true);
+        });
+    });
+
+    describe("--emit-bindings", () => {
+        /**
+         * The other half of "Lunora is one participant, not the session":
+         * `build --emit-bindings` tells a deployer what to provision, and this
+         * tells a task runner the same thing plus where the running server is,
+         * so a multi-worker repo stops restating both in a config that drifts.
+         */
+        const runWithManifest = async (destination: string | undefined): Promise<number | undefined> => {
+            const result = await runDevCommand({
+                cwd: workdir,
+                ...(destination === undefined ? {} : { emitBindings: destination }),
+                findFreePort: async () => 8787,
+                logger: silentLogger(),
+                probeReady: async () => true,
+                startCodegen: () => {
+                    return { close: async () => {}, ready: Promise.resolve(), watchAvailable: true };
+                },
+                startWorker: () => {
+                    return { exited: Promise.resolve(0), kill: () => {} };
+                },
+                studio: false,
+            });
+
+            return result.code;
+        };
+
+        it("writes the requirements plus where the dev server serves", async () => {
+            expect.assertions(3);
+
+            writeFileSync(
+                join(workdir, "wrangler.jsonc"),
+                JSON.stringify({
+                    compatibility_date: "2026-01-01",
+                    d1_databases: [{ binding: "DB", database_name: "app" }],
+                    main: "src/index.ts",
+                    name: "app",
+                }),
+                "utf8",
+            );
+
+            const destination = join(workdir, "dev-manifest.json");
+
+            await runWithManifest(destination);
+
+            const manifest = JSON.parse(readFileSync(destination, "utf8")) as {
+                bindings: { binding: string }[];
+                dev?: { origin: string; statusFile: string };
+            };
+
+            expect(manifest.bindings.map((binding) => binding.binding)).toContain("DB");
+            expect(manifest.dev?.origin).toBe("http://localhost:8787");
+            // Named, not inlined: the manifest is written before readiness is
+            // known, so it points at the record that carries it.
+            expect(manifest.dev?.statusFile).toContain("dev.json");
+        });
+
+        it("omits the origin on the vite flavor rather than publishing a guess", async () => {
+            expect.assertions(2);
+
+            // Vite resolves its own port, possibly after this file is written, so
+            // the plan's `workerOrigin` is a pre-listen default there. Emitting it
+            // would aim a supervisor's proxy at a port nothing is listening on —
+            // `statusFile` carries the real URL once Vite records it.
+            writeFileSync(join(workdir, "wrangler.jsonc"), JSON.stringify({ compatibility_date: "2026-01-01", main: "src/index.ts", name: "app" }), "utf8");
+
+            const destination = join(workdir, "dev-manifest.json");
+
+            await runDevCommand({
+                cwd: workdir,
+                emitBindings: destination,
+                flavor: "vite",
+                logger: silentLogger(),
+                startCodegen: () => {
+                    return { close: async () => {}, ready: Promise.resolve(), watchAvailable: true };
+                },
+                startWorker: () => {
+                    return { exited: Promise.resolve(0), kill: () => {} };
+                },
+                studio: false,
+            });
+
+            const manifest = JSON.parse(readFileSync(destination, "utf8")) as { dev?: { origin?: string; statusFile: string } };
+
+            expect(manifest.dev?.origin).toBeUndefined();
+            expect(manifest.dev?.statusFile).toContain("dev.json");
+        });
+
+        it("fails the run when a NAMED destination cannot be derived", async () => {
+            expect.assertions(2);
+
+            // An empty requirements document reads as "this Worker needs
+            // nothing", and a supervisor acting on it provisions nothing — worse
+            // than no file, because it looks authoritative. Naming a path means
+            // something is waiting on it, so this is fatal.
+            const destination = join(workdir, "dev-manifest.json");
+            const code = await runWithManifest(destination);
+
+            expect(code).toBe(EXIT_CODE.USAGE);
+            expect(existsSync(destination)).toBe(false);
+        });
+
+        it("writes the manifest with no flag at all", async () => {
+            expect.assertions(2);
+
+            // The flag had to be discovered before it could help, and a
+            // supervisor that never finds it hand-maintains a second copy of
+            // these bindings. The file carries no secrets (vars are key names)
+            // and lands in the already-gitignored `.lunora/`, same as dev.json.
+            writeFileSync(
+                join(workdir, "wrangler.jsonc"),
+                JSON.stringify({
+                    compatibility_date: "2026-01-01",
+                    d1_databases: [{ binding: "DB", database_name: "app" }],
+                    main: "src/index.ts",
+                    name: "app",
+                }),
+                "utf8",
+            );
+
+            await runWithManifest(undefined);
+
+            const manifest = JSON.parse(readFileSync(join(workdir, ".lunora", "dev-bindings.json"), "utf8")) as {
+                bindings: { binding: string }[];
+                dev?: { origin?: string };
+            };
+
+            expect(manifest.bindings.map((binding) => binding.binding)).toContain("DB");
+            expect(manifest.dev?.origin).toBe("http://localhost:8787");
+        });
+
+        it("advertises the manifest in the banner only when one was written", async () => {
+            expect.assertions(2);
+
+            // A default nobody is told about helps nobody — that was the whole
+            // reason for defaulting it. But naming a path that does not exist is
+            // worse than saying nothing, so a project with no wrangler config
+            // must not get the line.
+            const withConfig: string[] = [];
+
+            writeFileSync(join(workdir, "wrangler.jsonc"), JSON.stringify({ compatibility_date: "2026-01-01", main: "src/index.ts", name: "app" }), "utf8");
+            await runDevCommand({
+                cwd: workdir,
+                findFreePort: async () => 8787,
+                logger: { ...silentLogger(), info: (message: string) => withConfig.push(message) },
+                probeReady: async () => true,
+                startCodegen: () => {
+                    return { close: async () => {}, ready: Promise.resolve(), watchAvailable: true };
+                },
+                startWorker: () => {
+                    return { exited: Promise.resolve(0), kill: () => {} };
+                },
+                studio: false,
+            });
+
+            expect(withConfig.join("\n")).toContain("dev-bindings.json");
+
+            rmSync(join(workdir, "wrangler.jsonc"));
+            rmSync(join(workdir, ".lunora"), { force: true, recursive: true });
+
+            const withoutConfig: string[] = [];
+
+            await runDevCommand({
+                cwd: workdir,
+                findFreePort: async () => 8787,
+                logger: { ...silentLogger(), info: (message: string) => withoutConfig.push(message) },
+                probeReady: async () => true,
+                startCodegen: () => {
+                    return { close: async () => {}, ready: Promise.resolve(), watchAvailable: true };
+                },
+                startWorker: () => {
+                    return { exited: Promise.resolve(0), kill: () => {} };
+                },
+                studio: false,
+            });
+
+            expect(withoutConfig.join("\n")).not.toContain("dev-bindings.json");
+        });
+
+        it("does not fail a project that has no wrangler config when nobody asked", async () => {
+            expect.assertions(2);
+
+            // Defaulting the hard error would break every project without a
+            // wrangler config. Unasked, the manifest is a courtesy.
+            const code = await runWithManifest(undefined);
+
+            expect(code).toBe(0);
+            expect(existsSync(join(workdir, ".lunora", "dev-bindings.json"))).toBe(false);
+        });
+    });
+
+    describe("readiness probe wiring", () => {
+        /**
+         * Which flavors get a `readyAt` stamp from the CLI, and which delegate.
+         *
+         * This is the test whose absence let `--no-worker` ship without one: the
+         * probe was started after the attached-mode early return, so the flavor
+         * whose entire purpose is being supervised externally reported "starting"
+         * forever, and the poll loop in the monorepo docs never terminated.
+         */
+        const runWithProbe = async (overrides: Partial<DevCommandOptions>): Promise<{ origins: string[] }> => {
+            const origins: string[] = [];
+
+            await runDevCommand({
+                cwd: workdir,
+                findFreePort: async () => 8787,
+                logger: silentLogger(),
+                probeReady: async (origin) => {
+                    origins.push(origin);
+
+                    return true;
+                },
+                startCodegen: () => {
+                    return { close: async () => {}, ready: Promise.resolve(), watchAvailable: true };
+                },
+                startWorker: () => {
+                    return { exited: Promise.resolve(0), kill: () => {} };
+                },
+                studio: false,
+                ...overrides,
+            });
+
+            return { origins };
+        };
+
+        it("probes the worker origin on the wrangler flavor", async () => {
+            expect.assertions(1);
+
+            const { origins } = await runWithProbe({ flavor: "wrangler" });
+
+            expect(origins).toContain("http://localhost:8787");
+        });
+
+        it("does not probe a managed worker before it has been spawned", async () => {
+            expect.assertions(1);
+
+            // The probe cannot tell OUR worker from anything else already
+            // listening on that origin. Started before the spawn, a stale server
+            // or an unrelated process holding the port answers immediately,
+            // `readyAt` is stamped for it, and every dependent task is pointed at
+            // the wrong server while wrangler is still failing to bind.
+            const order: string[] = [];
+
+            await runDevCommand({
+                cwd: workdir,
+                findFreePort: async () => 8787,
+                logger: silentLogger(),
+                probeReady: async () => {
+                    order.push("probe");
+
+                    return true;
+                },
+                startCodegen: () => {
+                    return { close: async () => {}, ready: Promise.resolve(), watchAvailable: true };
+                },
+                startWorker: () => {
+                    order.push("spawn");
+
+                    return { exited: Promise.resolve(0), kill: () => {} };
+                },
+                studio: false,
+            });
+
+            expect(order.indexOf("spawn")).toBeLessThan(order.indexOf("probe"));
+        });
+
+        it("probes under --no-worker, where an external runner owns the worker", async () => {
+            expect.assertions(1);
+
+            // `--no-worker` parks the process without spawning wrangler, but this
+            // process still owns `.lunora/dev.json` — so it still owes a
+            // readiness answer about the origin it recorded.
+            const { origins } = await runWithProbe({
+                flavor: "wrangler",
+                // Attached mode parks until interrupted; end it immediately so the
+                // test observes what was wired before the park, not a hang.
+                waitForInterrupt: async () => 0,
+                worker: false,
+            });
+
+            expect(origins).toContain("http://localhost:8787");
+        });
+
+        it("does not probe on the vite flavor — the plugin writes the authoritative record", async () => {
+            expect.assertions(1);
+
+            // `workerOrigin` is a pre-listen guess there (Vite picks its own
+            // port), so probing it would stamp readiness for the wrong origin.
+            const { origins } = await runWithProbe({ flavor: "vite" });
+
+            expect(origins).toHaveLength(0);
+        });
+    });
+
+    describe("defaultWorkerSpawner", () => {
+        it("reports a signal-killed worker as a failure, not exit 0", async () => {
+            expect.assertions(1);
+
+            const worker = defaultWorkerSpawner(
+                { args: ["-e", "process.kill(process.pid, 'SIGKILL')"], command: process.execPath, cwd: workdir, tag: "wrangler" },
+                silentLogger(),
+            );
+
+            await expect(worker.exited).resolves.toBe(1);
+        });
+
+        it("passes a real exit code through", async () => {
+            expect.assertions(1);
+
+            const worker = defaultWorkerSpawner({ args: ["-e", "process.exit(0)"], command: process.execPath, cwd: workdir, tag: "wrangler" }, silentLogger());
+
+            await expect(worker.exited).resolves.toBe(0);
         });
     });
 });

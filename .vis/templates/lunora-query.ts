@@ -35,7 +35,7 @@ export default createTemplate({
         return {
             files: {
                 lunora: {
-                    [`${fileName}.ts`]: `import { query, v } from "lunorash/server";
+                    [`${fileName}.ts`]: `import { query, v } from "#lunora/_generated/server.js";
 
 /**
  * ${raw} query.

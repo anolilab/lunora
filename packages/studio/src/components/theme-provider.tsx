@@ -1,3 +1,4 @@
+import { LunoraError } from "@lunora/errors";
 import type { ReactNode } from "react";
 import { createContext, use, useEffect, useState } from "react";
 
@@ -63,16 +64,30 @@ const ThemeProvider = ({ children, defaultTheme = "system" }: ThemeProviderProps
     return <ThemeContext value={value}>{children}</ThemeContext>;
 };
 
+/**
+ * Render `children` under a theme context, creating a {@link ThemeProvider}
+ * only when the host didn't already mount one. `StudioApp` owns a provider (so
+ * its login page and scoped root share the preference), but the composable
+ * `<Studio>` is a public export an embedder mounts bare — without this its
+ * header `<ThemeToggle>` would throw. Mirrors the inherit-or-own pattern the
+ * i18n provider uses.
+ */
+const EnsureThemeProvider = ({ children }: { readonly children: ReactNode }): ReactNode => {
+    const existing = use(ThemeContext);
+
+    return existing === null ? <ThemeProvider>{children}</ThemeProvider> : children;
+};
+
 /** Read the theme context. Throws if used outside {@link ThemeProvider}. */
 const useTheme = (): ThemeContextValue => {
     const context = use(ThemeContext);
 
     if (context === null) {
-        throw new Error("useTheme must be used within a <ThemeProvider>");
+        throw new LunoraError("INTERNAL", "useTheme must be used within a <ThemeProvider>");
     }
 
     return context;
 };
 
 export type { ThemeContextValue, ThemeProviderProps };
-export { ThemeProvider, useTheme };
+export { EnsureThemeProvider, ThemeProvider, useTheme };

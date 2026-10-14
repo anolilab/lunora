@@ -1,8 +1,9 @@
 "use client";
 
-import type { ArgsOf, FunctionReference, ReturnOf } from "@lunora/client";
+import type { ArgsOf, FunctionReference, ReturnOf, SubscriptionError, SubscriptionErrorCallback } from "@lunora/client";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
+import { randomSessionId } from "../../../shared/random-session-id";
 import { useLunora } from "./lunora-provider";
 
 /**
@@ -56,6 +57,13 @@ interface UsePresenceOptions<H extends HeartbeatReference, L extends ListPresent
     listPresent: L;
 
     /**
+     * Called when the `listPresent` subscription reports an error (a session
+     * expiry, an RLS denial). Without it — and without reading `error` — such a
+     * failure is invisible and `present` freezes at its last value.
+     */
+    onError?: SubscriptionErrorCallback;
+
+    /**
      * Stable id for this presence row. Defaults to a fresh per-mount id (one row
      * per tab). Pass a user/connection id to control deduping.
      */
@@ -65,6 +73,8 @@ interface UsePresenceOptions<H extends HeartbeatReference, L extends ListPresent
 }
 
 interface UsePresenceResult<L extends ListPresentReference> {
+    /** The `listPresent` subscription's last error, or `undefined`. */
+    error: SubscriptionError | undefined;
     /** The present members for the room, as `listPresent` returns them. `undefined` until the first push. */
     present: ReturnOf<L> | undefined;
     /** This mount's session id (generated when not supplied). */
@@ -73,22 +83,7 @@ interface UsePresenceResult<L extends ListPresentReference> {
     setData: (data: Record<string, unknown> | undefined) => void;
 }
 
-/** A best-effort unique id for a presence session — `crypto.randomUUID` when available, else a random fallback. */
-const makeSessionId = (): string => {
-    // Guard the whole `crypto` reference, not just `randomUUID`: some SSR /
-    // older runtimes leave `crypto` undefined, where reading `.randomUUID` off
-    // it throws a TypeError instead of falling through. `typeof crypto` (rather
-    // than `globalThis.crypto !== undefined`) is the form the lib's
-    // non-nullable `Crypto` typing leaves intact — mirrors `offline-queue.ts`.
-    if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
-        return crypto.randomUUID();
-    }
-
-    // Non-security id — just needs to be unique per tab for a presence row.
-    // eslint-disable-next-line sonarjs/pseudo-random -- presence session id, not a credential
-    return `sess-${Math.random().toString(36).slice(2)}-${String(Date.now())}`;
-};
-
+/** A best-effort unique id for a presence session — `crypto.randomUUID` when available, else a `crypto.getRandomValues` fallback. */
 const DEFAULT_INTERVAL_MS = 10_000;
 
 export const usePresence = <H extends HeartbeatReference, L extends ListPresentReference>(
@@ -100,13 +95,37 @@ export const usePresence = <H extends HeartbeatReference, L extends ListPresentR
     const { heartbeat, intervalMs = DEFAULT_INTERVAL_MS, listPresent, shardKey } = options;
 
     // One session id per mount unless the caller pins one.
-    const generatedSessionId = useMemo(() => options.sessionId ?? makeSessionId(), [options.sessionId]);
+    // react-doctor-disable-next-line react-doctor/react-compiler-no-manual-memoization -- load-bearing: `randomSessionId()` mints a fresh random id; it must run once per mount (keyed on `options.sessionId`), never per render, or every render would generate a new presence-row id. Keep the explicit `useMemo` so the identity is stable even if the compiler bails this function.
+    const generatedSessionId = useMemo(() => options.sessionId ?? randomSessionId(), [options.sessionId]);
 
-    const [present, setPresent] = useState<ReturnOf<L> | undefined>(undefined);
+    // The list and error are stored with the room they belong to (client +
+    // query + room + shard) and returned only while that room is current, so a
+    // room change reads as "no members yet" from its first render instead of
+    // listing the previous room's members until the new subscription answers.
+    // `shardKey ?? ""`: the client routes an absent shard key and `""` to the same (root) shard.
+    const roomKey = JSON.stringify([listPresent.__lunoraRef, roomId, shardKey ?? ""]);
+    const [listState, setListState] = useState<{
+        client: typeof client;
+        error: SubscriptionError | undefined;
+        key: string;
+        present: ReturnOf<L> | undefined;
+    }>();
+    const current = listState?.client === client && listState.key === roomKey ? listState : undefined;
+
+    // The subscribe effect keys on the query ref + room + shard, so an inline
+    // `onError` must not change its identity — read the latest through a ref.
+    const onErrorRef = useRef(options.onError);
+
+    useEffect(() => {
+        onErrorRef.current = options.onError;
+    });
 
     // Latest awareness data, read at heartbeat time so `setData` never resets the
     // interval or re-subscribes.
     const dataRef = useRef<Record<string, unknown> | undefined>(options.data);
+
+    // True only between mount and unmount; `setData` must not heartbeat during render or SSR.
+    const mountedRef = useRef(false);
 
     // Stash the live inputs so the heartbeat callback stays stable (its identity
     // doesn't churn the interval effect) while still seeing the latest values.
@@ -116,6 +135,7 @@ export const usePresence = <H extends HeartbeatReference, L extends ListPresentR
         inputsRef.current = { client, heartbeat, roomId, sessionId: generatedSessionId, shardKey };
     });
 
+    // react-doctor-disable-next-line react-doctor/react-compiler-no-manual-memoization -- load-bearing: `sendHeartbeat` is a dependency of the interval effect below; a stable identity keeps the interval from being torn down and re-armed on every render. It reads all live inputs from `inputsRef`, so the empty dep list is correct. Keep the explicit `useCallback`.
     const sendHeartbeat = useCallback((): void => {
         const { client: c, heartbeat: hb, roomId: room, sessionId: sid, shardKey: sk } = inputsRef.current;
         const args = {
@@ -128,34 +148,64 @@ export const usePresence = <H extends HeartbeatReference, L extends ListPresentR
         c.mutation(hb, args, { shardKey: sk }).catch(() => undefined);
     }, []);
 
+    // react-doctor-disable-next-line react-doctor/react-compiler-no-manual-memoization -- load-bearing: `setData` is part of the hook's public return and builds on the stable `sendHeartbeat`; keeping it explicitly memoized preserves a steady identity for consumers that place it in their own effect deps.
     const setData = useCallback(
         (next: Record<string, unknown> | undefined): void => {
             dataRef.current = next;
-            sendHeartbeat();
+
+            if (mountedRef.current) {
+                sendHeartbeat();
+            }
         },
         [sendHeartbeat],
     );
 
+    useEffect(() => {
+        mountedRef.current = true;
+
+        return () => {
+            mountedRef.current = false;
+        };
+    }, []);
+
     // Heartbeat: immediately, on an interval, and whenever the tab regains
     // visibility. Cleared on unmount so no timer leaks.
+    //
+    // `document` is guarded (`typeof document !== "undefined"`, matching
+    // vue/solid/svelte/angular's presence) rather than read bare: React Native
+    // has no `document` global at all, so an unguarded read throws a
+    // ReferenceError on mount (RN-01) instead of just skipping the
+    // visibility-driven heartbeat, which is a web-only refinement anyway (the
+    // interval heartbeat still covers RN).
+    //
+    // Re-armed when the heartbeat target (client, room, session, shard) changes,
+    // so a new room is joined at once rather than on the next interval tick.
+    // `sendHeartbeat` reads those from `inputsRef`, which the effect above has
+    // already refreshed by the time this one runs.
+    // react-doctor-disable-next-line react-doctor/exhaustive-deps -- intentional: `client`/`roomId`/`generatedSessionId`/`shardKey` are read through `inputsRef`; they are listed so a change of target sends an immediate heartbeat and restarts the interval.
     useEffect(() => {
         sendHeartbeat();
 
         const handle = setInterval(sendHeartbeat, intervalMs);
 
         const onVisible = (): void => {
-            if (document.visibilityState === "visible") {
+            if (typeof document !== "undefined" && document.visibilityState === "visible") {
                 sendHeartbeat();
             }
         };
 
-        document.addEventListener("visibilitychange", onVisible);
+        if (typeof document !== "undefined") {
+            document.addEventListener("visibilitychange", onVisible);
+        }
 
         return () => {
             clearInterval(handle);
-            document.removeEventListener("visibilitychange", onVisible);
+
+            if (typeof document !== "undefined") {
+                document.removeEventListener("visibilitychange", onVisible);
+            }
         };
-    }, [sendHeartbeat, intervalMs]);
+    }, [sendHeartbeat, intervalMs, client, roomId, generatedSessionId, shardKey]);
 
     // Register this room/session as the socket's connection context so the
     // server's presence `onDisconnect` hook can delete the row the instant the
@@ -181,19 +231,39 @@ export const usePresence = <H extends HeartbeatReference, L extends ListPresentR
             { roomId } as ArgsOf<L>,
             (value) => {
                 if (!cancelled) {
-                    setPresent(value);
+                    setListState({ client, error: undefined, key: roomKey, present: value });
                 }
             },
-            { shardKey },
+            {
+                onError: (subscriptionError) => {
+                    if (!cancelled) {
+                        setListState((previous) => {
+                            return {
+                                client,
+                                error: subscriptionError,
+                                key: roomKey,
+                                present: previous?.client === client && previous.key === roomKey ? previous.present : undefined,
+                            };
+                        });
+                    }
+
+                    onErrorRef.current?.(subscriptionError);
+                },
+                shardKey,
+            },
         );
 
         return () => {
             cancelled = true;
             unsubscribe();
+            // A retired subscription's list must not come back when the hook
+            // returns to this room before the next one answered.
+            setListState(undefined);
         };
-    }, [client, listPresent.__lunoraRef, roomId, shardKey]);
+        // react-doctor-disable-next-line react-doctor/exhaustive-deps -- intentional: the subscription re-attaches on the query's stable `__lunoraRef` (not the whole `listPresent` object, which the caller may recreate each render with the same target) plus room/shard/client. `onErrorRef` is a stable ref carrying the latest handler. `client` is a dependency, so a provider `client` swap re-attaches to the new client.
+    }, [client, listPresent.__lunoraRef, roomId, roomKey, shardKey]);
 
-    return { present, sessionId: generatedSessionId, setData };
+    return { error: current?.error, present: current?.present, sessionId: generatedSessionId, setData };
 };
 
 export type { HeartbeatReference, ListPresentReference, UsePresenceOptions, UsePresenceResult };

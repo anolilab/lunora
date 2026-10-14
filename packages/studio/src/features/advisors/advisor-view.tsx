@@ -1,6 +1,7 @@
 import type { ReactElement, ReactNode } from "react";
-import { useMemo, useState } from "react";
+import { useState } from "react";
 
+import ErrorAlert from "../../components/error-alert";
 import { Card, CardContent } from "../../components/ui/card";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "../../components/ui/table";
 import type { TFunction } from "../../i18n/i18n-context";
@@ -27,6 +28,8 @@ interface AdvisorRow {
 interface AdvisorViewProps {
     /** Error message from the load, if any. */
     readonly error?: null | string;
+    /** The raw thrown value behind `error` (a `LunoraClientError` carries hint/docsUrl), rendered via the `ErrorAlert` component. */
+    readonly errorSource?: unknown;
     /** Findings to display; `null` before the first load completes. */
     readonly rows: AdvisorRow[] | null;
     /** Scopes the `data-testid`s (`{testId}-tab-error`, …). */
@@ -101,6 +104,17 @@ const levelCount = (t: TFunction, level: AdvisorLevel, count: number): string =>
 const emptyTitle = (t: TFunction, level: AdvisorLevel): string =>
     ({ error: t("No errors detected"), info: t("No suggestions"), warning: t("No warnings detected") })[level];
 
+/** Count the advisories at each level, so the level tabs can show their totals. */
+const tallyByLevel = (rows: AdvisorRow[] | null): Record<AdvisorLevel, number> => {
+    const tally: Record<AdvisorLevel, number> = { error: 0, info: 0, warning: 0 };
+
+    for (const row of rows ?? []) {
+        tally[row.level] += 1;
+    }
+
+    return tally;
+};
+
 /**
  * Shared Advisor content — a 1-to-1 of Supabase Studio's Advisor layout: a row of
  * severity tabs (Errors / Warnings / Info) with per-level counts, a toolbar, and a
@@ -108,19 +122,11 @@ const emptyTitle = (t: TFunction, level: AdvisorLevel): string =>
  * findings, with a centered per-tab empty state. The Security and Performance
  * advisors both render through this so they stay visually identical.
  */
-export const AdvisorView = ({ error = null, rows, testId, toolbar }: AdvisorViewProps): ReactElement => {
+export const AdvisorView = ({ error = null, errorSource, rows, testId, toolbar }: AdvisorViewProps): ReactElement => {
     const t = useT();
     const [active, setActive] = useState<AdvisorLevel>("error");
 
-    const counts = useMemo<Record<AdvisorLevel, number>>(() => {
-        const tally: Record<AdvisorLevel, number> = { error: 0, info: 0, warning: 0 };
-
-        for (const row of rows ?? []) {
-            tally[row.level] += 1;
-        }
-
-        return tally;
-    }, [rows]);
+    const counts = tallyByLevel(rows);
 
     const visible = (rows ?? []).filter((row) => row.level === active);
 
@@ -155,11 +161,7 @@ export const AdvisorView = ({ error = null, rows, testId, toolbar }: AdvisorView
             {/* Toolbar (rendered only when a panel supplies controls, e.g. a shard selector). */}
             {toolbar !== undefined && <div className="flex flex-wrap items-center gap-2">{toolbar}</div>}
 
-            {error !== null && (
-                <p className="text-sm text-destructive" data-testid={`${testId}-error`} role="alert">
-                    {error}
-                </p>
-            )}
+            {error !== null && <ErrorAlert error={errorSource ?? error} testId={`${testId}-error`} />}
 
             {/* Findings table for the active tab. */}
             <Card className="overflow-hidden py-0">

@@ -4,23 +4,37 @@
     "compilerOptions": {
         "noEmit": true,
         "moduleResolution": "bundler",
-        "types": ["node"],
+        "types": [
+            "node"
+        ],
         "paths": {
-            "@lunora/auth/plugins": ["../packages/auth/dist/plugins.d.ts"],
-            "@lunora/*": ["../packages/*/dist/index.d.ts"],
-            "better-auth/plugins/generic-oauth": ["../packages/auth/node_modules/better-auth/dist/plugins/generic-oauth/index.d.mts"]
+            "@lunora/auth/plugins": [
+                "../packages/auth/dist/plugins.d.ts"
+            ],
+            "@lunora/flags/providers/*": [
+                "../packages/flags/dist/providers/*.d.ts"
+            ],
+            "@lunora/*": [
+                "../packages/*/dist/index.d.ts"
+            ],
+            "better-auth/plugins/generic-oauth": [
+                "../packages/auth/node_modules/better-auth/dist/plugins/generic-oauth/index.d.mts"
+            ]
         }
     },
-    "// exclude": "Function templates that import the per-app builders (`mutation`/`query`/`action`/`internal*`) from `./_generated/server` — the path codegen emits in a real project — can't be checked here: that relative path only exists after codegen, and ambient declarations can't stub a relative specifier (same reason `crons/crons.ts`, which imports `./_generated/api`, is excluded). Items that import only published `@lunora/*` surfaces stay in and are checked against the mapped dist declarations above.",
+    "// exclude": "Why each entry below is excluded, and why the rest are now checked: see registry/TYPECHECK.md.",
     "exclude": [
         "**/node_modules/**",
-        "crons/crons.ts",
-        "crons/jobs.ts",
-        "backup/backup.ts",
-        "mail/mail.ts",
-        "presence/presence.ts",
-        "ratelimit/ratelimit.ts",
-        "storage/storage.ts"
+        "auth-emails/**",
+        "auth-ui-react/**",
+        "auth-ui-vue/**",
+        "auth-ui-svelte/**",
+        "auth-ui-solid/**",
+        "auth-ui-solid-v2/**",
+        "auth-ui-angular/**",
+        "crons/crons.ts"
     ],
-    "include": ["**/*.ts"]
+    "include": [
+        "**/*.ts"
+    ]
 }

@@ -1,0 +1,8 @@
+{
+    "version": 1,
+    "indentation": { "spaces": 4 },
+    "lineLength": 160,
+    "respectsExistingLineBreaks": true,
+    "lineBreakBeforeEachArgument": false,
+    "indentConditionalCompilationBlocks": false
+}

@@ -16,7 +16,7 @@ export interface ShardInputProps {
 
 /**
  * Shard-key text field shared by every shard-scoped panel. Backed by a
- * `&lt;datalist>` of recently-used shard keys (see {@link loadRecentShards}) so an
+ * `<datalist>` of recently-used shard keys (see {@link loadRecentShards}) so an
  * operator can pick a shard they've visited instead of retyping it — the closest
  * to a shard picker possible without server-side shard enumeration, which
  * Durable Objects don't support. Panels remain responsible for recording a shard

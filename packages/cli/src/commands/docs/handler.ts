@@ -10,7 +10,7 @@ interface DocsCommandOptions {
     logger: Logger;
     /** Inject the opener so tests don't spawn a browser. */
     opener?: OpenUrlOptions["opener"];
-    /** Optional path under the docs site (e.g. "addons/studio"). */
+    /** Optional path under the docs site (e.g. "packages/studio"). */
     section?: string;
 }
 
@@ -19,7 +19,7 @@ interface DocsCommandResult {
     url: string;
 }
 
-const DEFAULT_DOCS_URL = "https://lunora.anolilab.dev/docs";
+const DEFAULT_DOCS_URL = "https://lunora.sh/docs";
 
 /** Strip leading and trailing `/` characters without a backtracking regex. */
 const trimSlashes = (value: string): string => {

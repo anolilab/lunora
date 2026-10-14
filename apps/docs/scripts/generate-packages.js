@@ -16,33 +16,18 @@ import { existsSync, readdirSync, readFileSync, statSync, writeFileSync } from "
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
+import { format, resolveConfig } from "prettier";
+
+import { CATEGORY_COLORS, CATEGORY_TITLES, categorySlugForPackageDir, categoryTitleForSlug, humanizeSlug } from "./package-categories.js";
+
 const scriptDir = dirname(fileURLToPath(import.meta.url));
 const webRoot = resolve(scriptDir, "..");
 const repoRoot = resolve(webRoot, "..", "..");
 
-// Category tag slug → display name
-const categoryMap = {
-    runtime: "Core Runtime",
-    client: "Client & UI",
-    "vite-plugin": "Build & Tooling",
-    codegen: "Codegen",
-    cli: "CLI",
-    "dev-tools": "Dev Tools",
-    advisor: "Advisor",
-    "add-on": "Add-ons",
-};
-
-// Category → accent color
-const categoryColors = {
-    "Core Runtime": "sky-sapphire",
-    "Client & UI": "royal-amethyst",
-    "Build & Tooling": "sky-sapphire",
-    Codegen: "crimson-energy",
-    CLI: "royal-amethyst",
-    "Dev Tools": "sky-sapphire",
-    Advisor: "crimson-energy",
-    "Add-ons": "crimson-energy",
-};
+// Category tag slug → display name and display name → accent color both live
+// in package-categories.js, shared with copy-package-docs.js so the packages
+// index and the docs sidebar cannot drift apart.
+const categoryColors = CATEGORY_COLORS;
 
 // Load curated metadata
 const metadataPath = join(webRoot, "src", "data", "packages-metadata.json");
@@ -72,7 +57,6 @@ function discoverPackages() {
         }
 
         const packageJsonPath = join(pkgPath, "package.json");
-        const projectJsonPath = join(pkgPath, "project.json");
 
         if (!existsSync(packageJsonPath)) {
             continue;
@@ -90,22 +74,16 @@ function discoverPackages() {
             continue;
         }
 
-        let category = null;
+        // Category comes from the project.json `category:*` tag; an unknown
+        // slug still surfaces (humanized title) so new categories can't
+        // silently drop a package from the index.
+        const categorySlug = categorySlugForPackageDir(pkgPath);
 
-        if (existsSync(projectJsonPath)) {
-            const projectJson = JSON.parse(readFileSync(projectJsonPath, "utf-8"));
-            const tags = projectJson.tags || [];
-            const categoryTag = tags.find((t) => t.startsWith("category:"));
-
-            if (categoryTag) {
-                const categorySlug = categoryTag.replace("category:", "");
-                category = categoryMap[categorySlug] || null;
-            }
+        if (!categorySlug) {
+            continue; // Skip packages without a category tag
         }
 
-        if (!category) {
-            continue; // Skip packages without a mapped category tag
-        }
+        const category = categoryTitleForSlug(categorySlug);
 
         const npmName = packageJson.name;
         const slug = slugFromNpmName(npmName);
@@ -141,13 +119,6 @@ function discoverPackages() {
     return packages;
 }
 
-function humanizeSlug(slug) {
-    return slug
-        .split("-")
-        .map((word) => word.charAt(0).toUpperCase() + word.slice(1))
-        .join(" ");
-}
-
 // Add external packages from metadata (not in the monorepo, like packem)
 function addExternalPackages(packages) {
     const discoveredSlugs = new Set(packages.map((p) => p.slug));
@@ -177,7 +148,7 @@ function addExternalPackages(packages) {
 
 // Sort packages: by category order, then alphabetically within category
 function sortPackages(packages) {
-    const categoryOrder = Object.values(categoryMap);
+    const categoryOrder = Object.values(CATEGORY_TITLES);
 
     return packages.sort((a, b) => {
         const catA = categoryOrder.indexOf(a.category);
@@ -259,7 +230,14 @@ addExternalPackages(packages);
 const sorted = sortPackages(packages);
 
 const outputPath = join(webRoot, "src", "data", "packages.ts");
-writeFileSync(outputPath, generateTypeScript(sorted));
+
+// Format before writing. This script emits raw `JSON.stringify` output and runs
+// as the first step of `apps/docs`'s `build`, so without this every build
+// rewrote the committed file with unformatted source — dirtying the working tree
+// and failing `lint:prettier` on a file nobody had edited.
+const prettierConfig = await resolveConfig(outputPath);
+
+writeFileSync(outputPath, await format(generateTypeScript(sorted), { ...prettierConfig, filepath: outputPath }));
 
 console.log(`Generated ${outputPath} with ${sorted.length} packages`);
 

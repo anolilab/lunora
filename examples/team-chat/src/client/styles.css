@@ -1,0 +1,427 @@
+/*
+ * team-chat — "technical instrument"
+ *
+ * Shared chassis across the Lunora examples: layered near-black surfaces,
+ * hairline rules, mono-forward chrome, one saturated accent per app. Every font
+ * already ships on a developer's machine, so nothing is fetched over the network
+ * and the example works offline in Miniflare.
+ *
+ * Accent: cyan (signal, presence, things in flight).
+ */
+
+:root {
+    --bg: #0b0d11;
+    --panel: #11141a;
+    --raised: #171b23;
+    --line: #232833;
+    --line-bright: #323947;
+
+    --text: #e6e9ef;
+    --dim: #8f98a8;
+    --faint: #5d6675;
+
+    --accent: #4cc9f0;
+    --accent-soft: #12303c;
+    --danger: #ff6b6b;
+    --ok: #4ec9a5;
+
+    --mono: ui-monospace, "SF Mono", "JetBrains Mono", "Cascadia Code", Menlo, Consolas, monospace;
+    --sans: "Helvetica Neue", "Segoe UI", Roboto, sans-serif;
+
+    --r-sm: 3px;
+    --r: 6px;
+    --r-lg: 10px;
+
+    /* Mechanical motion: fast, decisive, no bounce. */
+    --ease: cubic-bezier(0.2, 0, 0, 1);
+    --fast: 120ms;
+    --base: 200ms;
+    --slow: 340ms;
+
+    color-scheme: dark;
+}
+
+* {
+    box-sizing: border-box;
+    margin: 0;
+    padding: 0;
+}
+
+html,
+body {
+    height: 100%;
+}
+
+body {
+    background:
+        radial-gradient(110% 70% at 50% -8%, rgb(76 201 240 / 6%), transparent 62%), repeating-linear-gradient(var(--line) 0 1px, transparent 1px 56px),
+        repeating-linear-gradient(90deg, var(--line) 0 1px, transparent 1px 56px), var(--bg);
+    color: var(--text);
+    font-family: var(--sans);
+    font-size: 14px;
+    line-height: 1.5;
+    -webkit-font-smoothing: antialiased;
+}
+
+button,
+input,
+select,
+textarea {
+    font: inherit;
+    color: inherit;
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-radius: var(--r);
+    padding: 7px 11px;
+    transition:
+        border-color var(--fast) var(--ease),
+        background var(--fast) var(--ease),
+        transform var(--fast) var(--ease),
+        color var(--fast) var(--ease);
+}
+
+button {
+    font-family: var(--mono);
+    font-size: 12px;
+    letter-spacing: 0.04em;
+    cursor: pointer;
+}
+
+button:hover {
+    border-color: var(--line-bright);
+    background: var(--raised);
+}
+
+button:active {
+    transform: translateY(1px);
+}
+
+button:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+}
+
+button[aria-pressed="true"] {
+    border-color: var(--accent);
+    color: var(--accent);
+}
+
+input:focus,
+select:focus,
+textarea:focus {
+    border-color: var(--accent);
+}
+
+input::placeholder,
+textarea::placeholder {
+    color: var(--faint);
+}
+
+:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 2px;
+}
+
+.primary {
+    background: var(--accent);
+    border-color: var(--accent);
+    color: #0a0b0e;
+    font-weight: 600;
+}
+
+.primary:hover {
+    background: var(--accent);
+    filter: brightness(1.1);
+}
+
+.link {
+    border: none;
+    background: none;
+    padding: 0;
+    color: var(--dim);
+    text-decoration: underline;
+    text-underline-offset: 3px;
+}
+
+.link:hover {
+    background: none;
+    color: var(--accent);
+}
+
+.muted {
+    color: var(--dim);
+    font-size: 13px;
+}
+
+.error {
+    font-family: var(--mono);
+    font-size: 12px;
+    color: var(--danger);
+}
+
+h1 {
+    font-size: 19px;
+    letter-spacing: -0.01em;
+}
+
+h2 {
+    font-family: var(--mono);
+    font-size: 11px;
+    font-weight: 500;
+    letter-spacing: 0.16em;
+    text-transform: uppercase;
+    color: var(--dim);
+}
+
+@keyframes rise {
+    from {
+        opacity: 0;
+        transform: translateY(8px);
+    }
+}
+
+@keyframes fade-in {
+    from {
+        opacity: 0;
+    }
+}
+
+@keyframes dialog-in {
+    from {
+        opacity: 0;
+        transform: translateY(-6px) scale(0.985);
+    }
+}
+
+@keyframes live-pulse {
+    50% {
+        opacity: 0.35;
+    }
+}
+
+/* Motion is decoration here, never information, so all of it can go. */
+@media (prefers-reduced-motion: reduce) {
+    *,
+    *::before,
+    *::after {
+        animation-duration: 1ms !important;
+        animation-iteration-count: 1 !important;
+        transition-duration: 1ms !important;
+    }
+}
+
+/* ─── shell ──────────────────────────────────────────────────────── */
+
+.signin {
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+    max-width: 380px;
+    margin: 14vh auto;
+    padding: 0 18px;
+    animation: rise var(--slow) var(--ease);
+}
+
+.card {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-radius: var(--r-lg);
+    padding: 16px;
+}
+
+.shell {
+    display: grid;
+    grid-template-columns: 232px 1fr;
+    height: 100vh;
+}
+
+.sidebar {
+    display: flex;
+    flex-direction: column;
+    gap: 9px;
+    border-right: 1px solid var(--line);
+    padding: 16px 13px;
+    background: color-mix(in srgb, var(--panel) 70%, transparent);
+    backdrop-filter: blur(6px);
+    overflow-y: auto;
+}
+
+.sidebar header strong {
+    font-family: var(--mono);
+    font-size: 11px;
+    letter-spacing: 0.16em;
+    text-transform: uppercase;
+    color: var(--accent);
+}
+
+.sidebar ul {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    list-style: none;
+}
+
+.sidebar li button {
+    position: relative;
+    width: 100%;
+    border: none;
+    background: none;
+    text-align: left;
+    color: var(--dim);
+    font-family: var(--sans);
+    font-size: 13px;
+}
+
+.sidebar li button::before {
+    content: "";
+    position: absolute;
+    inset: 6px auto 6px 0;
+    width: 2px;
+    border-radius: 2px;
+    background: var(--accent);
+    opacity: 0;
+    transition: opacity var(--fast) var(--ease);
+}
+
+.sidebar li button:hover {
+    color: var(--text);
+    background: var(--raised);
+}
+
+.sidebar li button[aria-pressed="true"] {
+    background: var(--raised);
+    color: var(--text);
+}
+
+.sidebar li button[aria-pressed="true"]::before {
+    opacity: 1;
+}
+
+.sidebar input {
+    width: 100%;
+    font-size: 13px;
+}
+
+.sidebar footer {
+    display: flex;
+    flex-direction: column;
+    gap: 5px;
+    margin-top: auto;
+    align-items: flex-start;
+    padding-top: 12px;
+    border-top: 1px solid var(--line);
+    font-size: 12px;
+}
+
+/* ─── channel ────────────────────────────────────────────────────── */
+
+.channel,
+.empty {
+    display: flex;
+    flex-direction: column;
+    gap: 13px;
+    min-height: 0;
+    padding: 16px 20px;
+}
+
+.channel-header {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    flex-wrap: wrap;
+    padding-bottom: 13px;
+    border-bottom: 1px solid var(--line);
+}
+
+.channel-header h1 {
+    margin-right: auto;
+    font-family: var(--mono);
+    font-size: 15px;
+    letter-spacing: 0.02em;
+}
+
+.channel-header input {
+    font-family: var(--mono);
+    font-size: 12px;
+}
+
+/* Presence reads as live instrumentation: small, monospaced, quietly breathing. */
+.presence {
+    display: flex;
+    gap: 4px;
+    list-style: none;
+}
+
+.presence li {
+    display: grid;
+    place-items: center;
+    width: 27px;
+    height: 27px;
+    border: 1px solid var(--accent);
+    border-radius: 999px;
+    background: var(--accent-soft);
+    color: var(--accent);
+    font-family: var(--mono);
+    font-size: 10px;
+    letter-spacing: 0.04em;
+    animation: live-pulse 2.6s var(--ease) infinite;
+}
+
+.messages {
+    display: flex;
+    flex-direction: column;
+    gap: 11px;
+    flex: 1;
+    list-style: none;
+    overflow-y: auto;
+    padding-right: 4px;
+}
+
+.messages li {
+    animation: rise var(--base) var(--ease) backwards;
+}
+
+.messages li strong {
+    font-family: var(--mono);
+    font-size: 12px;
+    color: var(--accent);
+}
+
+.messages li p {
+    white-space: pre-wrap;
+    margin-top: 2px;
+}
+
+.badge {
+    margin-left: 6px;
+    border: 1px solid var(--line);
+    border-radius: 999px;
+    padding: 0 7px;
+    font-family: var(--mono);
+    font-size: 10px;
+    color: var(--faint);
+}
+
+.composer {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding-top: 12px;
+    border-top: 1px solid var(--line);
+}
+
+.composer input[name="content"] {
+    flex: 1;
+}
+
+.composer input[type="file"] {
+    max-width: 190px;
+    border: none;
+    background: none;
+    font-family: var(--mono);
+    font-size: 11px;
+    color: var(--faint);
+}

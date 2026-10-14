@@ -1,6 +1,6 @@
 import { useLunora } from "@lunora/react";
 import type { ChangeEvent, MouseEvent, ReactElement } from "react";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useState } from "react";
 
 import { Button } from "../../components/ui/button";
 import { Card, CardContent } from "../../components/ui/card";
@@ -8,13 +8,13 @@ import { EmptyState } from "../../components/ui/empty-state";
 import { Input } from "../../components/ui/input";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "../../components/ui/table";
 import { Textarea } from "../../components/ui/textarea";
+import { useAdminQuery } from "../../hooks/use-admin-query";
 import { useT } from "../../i18n/i18n-context";
 import type { CreateWorkflowInstanceResult, WorkflowInstanceStatusResult, WorkflowMetadata, WorkflowsResult } from "../../lib/admin";
 import { ADMIN_FUNCTIONS } from "../../lib/admin";
-import { adminRef, callOptions, errorMessage, fireAndForget } from "../../lib/internal";
+import { adminRef, callOptions, errorMessage, fireAndForget, jsonRowReplacer } from "../../lib/internal";
 import { WorkflowInstanceHistory } from "./workflow-instances";
 
-const LIST_WORKFLOWS = adminRef(ADMIN_FUNCTIONS.listWorkflows);
 const CREATE_WORKFLOW_INSTANCE = adminRef(ADMIN_FUNCTIONS.createWorkflowInstance);
 const GET_WORKFLOW_INSTANCE_STATUS = adminRef(ADMIN_FUNCTIONS.getWorkflowInstanceStatus);
 
@@ -38,10 +38,19 @@ const formatPayload = (instance: ObservedInstance): string => {
     }
 
     try {
-        return JSON.stringify(instance.output);
+        return JSON.stringify(instance.output, jsonRowReplacer);
     } catch {
         return "(unserializable)";
     }
+};
+
+/** The effective selection: the operator's pick while it still exists, else the first declared workflow. Derived rather than synced in an effect, so a codegen that drops the selected workflow re-defaults on the next render. */
+const effectiveExportName = (workflows: ReadonlyArray<WorkflowMetadata>, selectedExport: string): string => {
+    if (workflows.some((workflow) => workflow.exportName === selectedExport)) {
+        return selectedExport;
+    }
+
+    return workflows[0]?.exportName ?? "";
 };
 
 /**
@@ -63,8 +72,8 @@ const WorkflowsPanel = (): ReactElement => {
     const client = useLunora();
     const t = useT();
 
-    const [data, setData] = useState<WorkflowsResult | null>(null);
-    const [error, setError] = useState<null | string>(null);
+    // Deployment-wide metadata (root shard), so no shard selector is needed.
+    const { data, error } = useAdminQuery<WorkflowsResult>(ADMIN_FUNCTIONS.listWorkflows, {});
 
     const [selectedExport, setSelectedExport] = useState("");
     const [instanceIdInput, setInstanceIdInput] = useState("");
@@ -75,43 +84,19 @@ const WorkflowsPanel = (): ReactElement => {
     const [instances, setInstances] = useState<ObservedInstance[]>([]);
     const [refreshingId, setRefreshingId] = useState<null | string>(null);
 
-    const refresh = useCallback(async (): Promise<void> => {
-        try {
-            // Deployment-wide metadata (root shard), so no shard selector is needed.
-            const result = (await client.query(LIST_WORKFLOWS, {}, callOptions(""))) as WorkflowsResult;
-
-            // Defensive: an older worker (or a stand-in) may omit the array —
-            // treat anything but an array as empty rather than throw.
-            setData({ workflows: Array.isArray(result.workflows) ? result.workflows : [] });
-            setError(null);
-        } catch (error_: unknown) {
-            setError(errorMessage(error_));
-        }
-    }, [client]);
-
-    useEffect(() => {
-        fireAndForget(refresh());
-    }, [refresh]);
-
-    const workflows = useMemo<WorkflowMetadata[]>(
-        () => (data === null ? [] : [...data.workflows].toSorted((a, b) => a.exportName.localeCompare(b.exportName))),
-        [data],
-    );
+    const loaded = data !== undefined;
+    const workflows: WorkflowMetadata[] = Array.isArray(data?.workflows)
+        ? [...data.workflows].toSorted((a, b) => a.exportName.localeCompare(b.exportName))
+        : [];
 
     // Derive the effective selection rather than syncing it in an effect: fall
     // back to the first declared workflow until the user picks one (and re-default
     // if the current pick disappears after a codegen).
-    const selectedExportName = useMemo<string>(() => {
-        if (workflows.some((workflow) => workflow.exportName === selectedExport)) {
-            return selectedExport;
-        }
-
-        return workflows[0]?.exportName ?? "";
-    }, [workflows, selectedExport]);
+    const selectedExportName = effectiveExportName(workflows, selectedExport);
 
     // The metadata row for the active selection — its deployed `name` is what the
     // REST instance-history proxy addresses.
-    const selectedWorkflow = useMemo(() => workflows.find((workflow) => workflow.exportName === selectedExportName), [workflows, selectedExportName]);
+    const selectedWorkflow = workflows.find((workflow) => workflow.exportName === selectedExportName);
 
     // Merge a freshly observed instance into the table, replacing any prior row
     // for the same (workflow, id) so a refresh updates in place rather than dupes.
@@ -158,9 +143,9 @@ const WorkflowsPanel = (): ReactElement => {
             setInstanceIdInput("");
         } catch (error_: unknown) {
             setStartError(errorMessage(error_));
-        } finally {
-            setStarting(false);
         }
+
+        setStarting(false);
     };
 
     const startInstance = (): void => {
@@ -176,9 +161,9 @@ const WorkflowsPanel = (): ReactElement => {
             upsertInstance({ error: result.error, exportName, id: result.id, output: result.output, status: result.status });
         } catch (error_: unknown) {
             setStartError(errorMessage(error_));
-        } finally {
-            setRefreshingId(null);
         }
+
+        setRefreshingId(null);
     };
 
     const onSelectedExportChange = (event: ChangeEvent<HTMLSelectElement>): void => {
@@ -215,7 +200,7 @@ const WorkflowsPanel = (): ReactElement => {
                 )}
             </p>
 
-            {data !== null && workflows.length === 0 ? (
+            {loaded && workflows.length === 0 ? (
                 <EmptyState
                     description={t("No defineWorkflow is declared in lunora/workflows.ts in this deployment. Add one to run a durable, multi-step workflow.")}
                     testId="workflows-empty"
@@ -230,7 +215,6 @@ const WorkflowsPanel = (): ReactElement => {
                                     <TableHead>{t("Export")}</TableHead>
                                     <TableHead>{t("Name")}</TableHead>
                                     <TableHead>{t("Class")}</TableHead>
-                                    <TableHead>{t("Binding")}</TableHead>
                                 </TableRow>
                             </TableHeader>
                             <TableBody>
@@ -239,7 +223,6 @@ const WorkflowsPanel = (): ReactElement => {
                                         <TableCell className="font-mono text-xs">{workflow.exportName}</TableCell>
                                         <TableCell className="font-mono text-xs text-muted-foreground">{workflow.name}</TableCell>
                                         <TableCell className="font-mono text-xs text-muted-foreground">{workflow.className}</TableCell>
-                                        <TableCell className="font-mono text-xs text-muted-foreground">{workflow.binding}</TableCell>
                                     </TableRow>
                                 ))}
                             </TableBody>

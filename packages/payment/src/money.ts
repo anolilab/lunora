@@ -44,19 +44,39 @@ const assertSameCurrency = (a: Money, b: Money): void => {
     }
 };
 
-/** True when the currency has no minor unit (e.g. JPY). */
+/**
+ * True when the currency has no minor unit (e.g. JPY).
+ */
 export const isZeroDecimalCurrency = (currency: CurrencyCode): boolean => exponentFor(currency.toUpperCase()) === 0n;
 
-/** Construct money. Currency is normalized to uppercase; never use floats for amounts. */
+/**
+ * Construct money. Currency is normalized to uppercase; never use floats for amounts.
+ */
 export const money = (minorUnits: bigint | number, currency: CurrencyCode): Money => {
-    const units = typeof minorUnits === "bigint" ? minorUnits : BigInt(Math.trunc(minorUnits));
+    if (typeof minorUnits === "number" && !Number.isSafeInteger(minorUnits)) {
+        throw new LunoraPaymentError("VALIDATION_ERROR", `money(): \`minorUnits\` must be a bigint or a safe integer (got ${String(minorUnits)})`);
+    }
+
+    const units = typeof minorUnits === "bigint" ? minorUnits : BigInt(minorUnits);
 
     return { currency: currency.toUpperCase(), minorUnits: units };
 };
 
+/**
+ * Money from a provider's numeric minor-unit amount, rounded first: providers document integers, but
+ * a stray fractional value must not throw out of a parse path. Non-finite input still throws
+ * `VALIDATION_ERROR` via {@link money}.
+ */
+export const moneyFromMinor = (minorUnits: number, currency: CurrencyCode): Money => money(Math.round(minorUnits), currency);
+
+/**
+ * Zero in the given currency.
+ */
 export const zeroMoney = (currency: CurrencyCode): Money => money(0n, currency);
 
-/** Localized currency string for display (e.g. `$19.99`). For UI only — never for arithmetic. */
+/**
+ * Localized currency string for display (e.g. `$19.99`). For UI only — never for arithmetic.
+ */
 export const formatMoney = (value: Money, locale = "en-US"): string => {
     const exponent = Number(exponentFor(value.currency.toUpperCase()));
     const amount = Number(value.minorUnits) / 10 ** exponent;
@@ -69,24 +89,35 @@ export const formatMoney = (value: Money, locale = "en-US"): string => {
     }
 };
 
+/**
+ * Sum of two same-currency amounts. Throws `CURRENCY_MISMATCH` otherwise.
+ */
 export const addMoney = (a: Money, b: Money): Money => {
     assertSameCurrency(a, b);
 
     return fromDinero(add(toDinero(a), toDinero(b)));
 };
 
+/**
+ * Difference of two same-currency amounts. Throws `CURRENCY_MISMATCH` otherwise.
+ */
 export const subtractMoney = (a: Money, b: Money): Money => {
     assertSameCurrency(a, b);
 
     return fromDinero(subtract(toDinero(a), toDinero(b)));
 };
 
-/** Compares two same-currency amounts, returning -1, 0, or 1. */
+/**
+ * Compares two same-currency amounts, returning -1, 0, or 1.
+ */
 export const compareMoney = (a: Money, b: Money): -1 | 0 | 1 => {
     assertSameCurrency(a, b);
 
     return compare(toDinero(a), toDinero(b));
 };
+
+/** The larger of two same-currency amounts. */
+export const maxMoney = (a: Money, b: Money): Money => (compareMoney(a, b) > 0 ? a : b);
 
 /**
  * Split an amount across integer ratios, distributing the remainder to the smallest unit so the
@@ -94,16 +125,27 @@ export const compareMoney = (a: Money, b: Money): -1 | 0 | 1 => {
  */
 export const allocateMoney = (amount: Money, ratios: ReadonlyArray<bigint>): Money[] => allocate(toDinero(amount), [...ratios]).map((part) => fromDinero(part));
 
+/**
+ * True when the amount is exactly zero minor units.
+ */
 export const isZeroMoney = (a: Money): boolean => a.minorUnits === 0n;
 
-/** JSON-safe wire form of money (bigint encoded as a decimal string). */
+/**
+ * JSON-safe wire form of money (bigint encoded as a decimal string).
+ */
 export interface MoneyJSON {
     readonly currency: CurrencyCode;
     readonly minorUnits: string;
 }
 
+/**
+ * Encode money for the wire — `minorUnits` becomes a decimal string.
+ */
 export const toMoneyJSON = (m: Money): MoneyJSON => {
     return { currency: m.currency, minorUnits: m.minorUnits.toString() };
 };
 
+/**
+ * Decode the wire form back to a `bigint`-backed {@link Money}.
+ */
 export const fromMoneyJSON = (json: MoneyJSON): Money => money(BigInt(json.minorUnits), json.currency);

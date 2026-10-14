@@ -4,6 +4,7 @@
  * so a transport built in its own module reuses the exact same length +
  * CR/LF/comma + bracket checks rather than re-implementing them.
  */
+import { LunoraError } from "@lunora/errors";
 
 /** RFC 5321 caps the entire mailbox path at 320 chars; reject anything longer. */
 const MAX_EMAIL_LENGTH = 320;
@@ -22,7 +23,7 @@ const ADDRESS_PATTERN = /^([^<]*)<([^>]*)>\s*$/;
  */
 const assertSafeAddressField = (field: "email" | "name", value: string): void => {
     if (value.includes("\r") || value.includes("\n") || value.includes(",")) {
-        throw new Error(`@lunora/mail: address ${field} must not contain CR, LF, or comma`);
+        throw new LunoraError("INTERNAL", `@lunora/mail: address ${field} must not contain CR, LF, or comma`);
     }
 };
 
@@ -34,18 +35,18 @@ const assertSafeAddressField = (field: "email" | "name", value: string): void =>
  */
 const assertSafeHeaderValue = (label: string, value: string): void => {
     if (value.includes("\r") || value.includes("\n")) {
-        throw new Error(`@lunora/mail: ${label} must not contain CR or LF`);
+        throw new LunoraError("INTERNAL", `@lunora/mail: ${label} must not contain CR or LF`);
     }
 };
 
-/** Validate the bracketed `name &lt;email>` form captured by `ADDRESS_PATTERN`. */
+/** Validate the bracketed `name <email>` form captured by `ADDRESS_PATTERN`. */
 const toBracketedAddress = (name: string, email: string): { email: string; name?: string } => {
     if (name.length > MAX_NAME_LENGTH) {
-        throw new Error(`@lunora/mail: address name must be <= ${String(MAX_NAME_LENGTH)} characters`);
+        throw new LunoraError("INTERNAL", `@lunora/mail: address name must be <= ${String(MAX_NAME_LENGTH)} characters`);
     }
 
     if (email.length > MAX_EMAIL_LENGTH) {
-        throw new Error(`@lunora/mail: address email must be <= ${String(MAX_EMAIL_LENGTH)} characters`);
+        throw new LunoraError("INTERNAL", `@lunora/mail: address email must be <= ${String(MAX_EMAIL_LENGTH)} characters`);
     }
 
     if (name) {
@@ -62,7 +63,7 @@ const toBareAddress = (input: string): { email: string } => {
     const email = input.trim();
 
     if (email.length > MAX_EMAIL_LENGTH) {
-        throw new Error(`@lunora/mail: address email must be <= ${String(MAX_EMAIL_LENGTH)} characters`);
+        throw new LunoraError("INTERNAL", `@lunora/mail: address email must be <= ${String(MAX_EMAIL_LENGTH)} characters`);
     }
 
     assertSafeAddressField("email", email);
@@ -86,12 +87,24 @@ const toAddress = (input: string): { email: string; name?: string } => {
     return toBareAddress(input);
 };
 
+/**
+ * Normalize an optional recipient field. An empty list collapses to `undefined`
+ * so "no recipients" is indistinguishable from "field absent": providers test
+ * `cc`/`bcc` for *presence* (`!== undefined`), so a surviving `[]` reads as a
+ * cc/bcc send — the Cloudflare provider rejects it outright and the failure
+ * arrives as an undifferentiated "send failed" with the binding never called.
+ * `cc: []` is what `cc: extras.filter(...)` produces, so this is a live path.
+ */
 const toAddressList = (input: string | string[] | undefined): { email: string; name?: string }[] | undefined => {
     if (input === undefined) {
         return undefined;
     }
 
     const list = Array.isArray(input) ? input : [input];
+
+    if (list.length === 0) {
+        return undefined;
+    }
 
     return list.map((entry) => toAddress(entry));
 };
@@ -101,9 +114,17 @@ const toAddressList = (input: string | string[] | undefined): { email: string; n
  * rejection that the transports apply, but discard the parsed result. Called
  * from `buildPayload` so custom transports and the queue path get the exact same
  * validation — without changing the string wire shape the payload carries.
+ *
+ * Also enforces the one recipient rule here rather than in each transport: a
+ * message with no `to` is undeliverable, and `queue()` would otherwise accept it,
+ * report `{ queued: true }`, and leave a poison message to retry its way to the
+ * dead-letter queue.
  */
 const assertSafeAddresses = (payload: { bcc?: string | string[]; cc?: string | string[]; from?: string; replyTo?: string; to?: string | string[] }): void => {
-    toAddressList(payload.to);
+    if (toAddressList(payload.to) === undefined) {
+        throw new LunoraError("INTERNAL", "@lunora/mail: at least one recipient is required");
+    }
+
     toAddressList(payload.cc);
     toAddressList(payload.bcc);
 
@@ -116,4 +137,4 @@ const assertSafeAddresses = (payload: { bcc?: string | string[]; cc?: string | s
     }
 };
 
-export { assertSafeAddresses, assertSafeHeaderValue, MAX_EMAIL_LENGTH, MAX_NAME_LENGTH, toAddress, toAddressList };
+export { assertSafeAddresses, assertSafeHeaderValue, toAddress, toAddressList };

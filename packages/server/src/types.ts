@@ -1,10 +1,14 @@
+/* eslint-disable no-secrets/no-secrets -- JSDoc names the `RegisteredFunction<ArgsValidator, …>` type, not a credential. */
+
+// The declared analysis languages and storage strategies. Inlined by the
+// bundler from `shared/search` rather than depended on, so the schema builder
+// still stands up without the DO runtime — it just no longer restates the
+// unions that the engines validate against.
+import type { SearchLanguage, SearchStrategy } from "@lunora/search-core";
 import type { Id, Infer, InferValidatorMap, Validator, ValidatorMap } from "@lunora/values";
 
-// Cache the namespace proxies and the per-function reference objects so that
-// `api.foo.bar` returns the *same* object on every access. React hooks
-// (`useMutation`, `useQuery`) put the reference in dependency arrays; a fresh
-// identity per render would re-run effects every render and loop forever.
-const namespaceCache = new Map<PropertyKey, Record<string, unknown>>();
+import type { RestCachePolicy } from "../../../shared/rest-surface";
+import type { MutationStorage, ReadOnlyStorage, Storage, StorageMetadata } from "./storage/context";
 
 /** Map of validators describing a function's args record. Alias of `@lunora/values`' shared {@link ValidatorMap}. */
 type ArgsValidator = ValidatorMap;
@@ -15,8 +19,113 @@ type InferArgs<A extends ArgsValidator> = InferValidatorMap<A>;
 /** Storage backend for a `.global()` table: D1 (default) or a Postgres/MySQL database via Cloudflare Hyperdrive (PlanetScale, Neon, …). */
 type GlobalBackend = "d1" | "hyperdrive";
 
+/**
+ * Cloudflare Durable Object data-residency jurisdiction declared via
+ * `defineSchema(...).jurisdiction("…")`. Restricts where every DO the app
+ * reaches runs and persists data (GDPR, FedRAMP, US data residency). Widening
+ * union — Cloudflare adds values over time.
+ * @see https://developers.cloudflare.com/durable-objects/reference/data-location/
+ */
+type DurableObjectJurisdiction = "eu" | "fedramp" | "us";
+
 /** How a table is routed at runtime. */
 type ShardMode = { backend?: GlobalBackend; kind: "global" } | { field: string; kind: "shardBy" } | { kind: "root" };
+
+/** Poll cadence for a sourced table — `"manual"` (pull only on an explicit trigger) or a fixed interval. */
+type ExternalSourceRefresh = "manual" | { everyMs: number };
+
+/**
+ * Delete-detection mode for external-source ingest (plan 077 / 136).
+ *
+ * `"full-pull"` (the default) reads the **whole** tenant membership each tick and
+ * diffs it, so it observes upstream deletes for free — but costs a full read per tick
+ * (the Phase-0 bench put the ceiling at ~10k rows).
+ *
+ * `"incremental"` pulls **only rows past a durable watermark** (`cursor`), cheap for
+ * large low-churn tables above the full-pull cap. Because an absent row then means
+ * "unchanged", not "deleted", incremental requires a delete-visibility path: either a
+ * `reconcileEveryMs` periodic full-pull sweep, or a `softDeleteColumn` whose
+ * tombstones the pull returns. `defineSchema` throws (and the
+ * `external_source_incremental_no_delete_path` advisor lint fails the build) when an
+ * incremental source declares neither.
+ */
+type ExternalSourceMode = "full-pull" | "incremental";
+
+/**
+ * Incremental-ingest cursor (plan 136): the monotonic watermark column plus the
+ * watermark-parameterized pull query. `column` names the field in the pulled rows
+ * whose max becomes the next watermark (e.g. `"updated_at"`). `query` is a second
+ * SQL that returns only rows changed since the watermark — the watermark binds as
+ * the parameter AFTER `tenantBy`'s params (e.g. Postgres
+ * `... WHERE tenant_id = $1 AND updated_at >= $2 ORDER BY updated_at`). Prefer `>=`
+ * with the idempotent upsert apply so rows sharing the boundary timestamp are never
+ * skipped (re-pulling them is a no-op).
+ */
+interface ExternalSourceCursor {
+    /** The monotonic watermark column in the pulled rows; its max advances the stored watermark. */
+    column: string;
+    /** The incremental pull SQL. `tenantBy`'s params bind first, then the watermark as the trailing param. */
+    query: string;
+}
+
+/**
+ * Config for `.source(...)` (plan 077): declares a table as **materialized from an
+ * external Postgres/MySQL behind Cloudflare Hyperdrive**, not written by user
+ * mutations. A system-driven poll loop reads the tenant slice and lands it in the
+ * DO's SQLite (via the validated CDC writer), after which `defineShape` carries it
+ * to clients unchanged. Orthogonal to `shardMode` — a sourced table almost always
+ * also `.shardBy()`s, in which case `tenantBy` is the mandatory tenant-isolation
+ * boundary (enforced by the `external_source_unscoped` advisor lint).
+ */
+interface ExternalSourceDefinition {
+    /** The wrangler Hyperdrive binding name the poll loop reads from. */
+    binding: string;
+
+    /** Project the materialized rows to these columns (passed to the membership diff). Omit ⇒ the full mapped document. */
+    columns?: ReadonlyArray<string>;
+
+    /** **Required for `mode: "incremental"`**: the watermark column + watermark-parameterized pull query (plan 136). Rejected on a `"full-pull"` source. */
+    cursor?: ExternalSourceCursor;
+
+    /** Column whose value becomes the Lunora `_id`. Defaults to `"id"`. */
+    idColumn?: string;
+
+    /** Transform an external row into the stored document body. Omit ⇒ every selected column except `idColumn` is copied. */
+    map?: (row: Record<string, unknown>) => Record<string, unknown>;
+
+    /** Delete-detection mode. `"full-pull"` (the default) diffs the whole membership; `"incremental"` pulls past a `cursor` watermark. */
+    mode?: ExternalSourceMode;
+
+    /** The full tenant-membership query, with driver-native placeholders (`$1` / `?`). `tenantBy` binds its params. */
+    query: string;
+
+    /**
+     * **Incremental delete-visibility (plan 136)**: run a full-pull sweep at most
+     * this often (millis) to GC upstream deletes an incremental slice can't see.
+     * One of `reconcileEveryMs` / `softDeleteColumn` is required for incremental;
+     * rejected on a `"full-pull"` source.
+     */
+    reconcileEveryMs?: number;
+
+    /** Poll cadence, or `"manual"`. Omit ⇒ the runtime's size-scaled default. */
+    refresh?: ExternalSourceRefresh;
+
+    /**
+     * **Incremental delete-visibility (plan 136)**: the upstream soft-delete
+     * tombstone column (e.g. `"deleted_at"`). When set, the incremental pull must
+     * return tombstoned rows and the ingest turns each into a local delete — an
+     * alternative to `reconcileEveryMs`. Rejected on a `"full-pull"` source.
+     */
+    softDeleteColumn?: string;
+
+    /**
+     * **Mandatory under `.shardBy()`**: map this DO's shard key → the query's bound
+     * params, so a tenant DO can only ever pull its own rows. An unscoped sourced +
+     * sharded table replicates the whole multitenant table into every shard — the
+     * `external_source_unscoped` advisor lint fails the build when this is absent.
+     */
+    tenantBy?: (shardKey: string) => ReadonlyArray<unknown>;
+}
 
 interface IndexDefinition {
     fields: ReadonlyArray<string>;
@@ -25,9 +134,86 @@ interface IndexDefinition {
 }
 
 interface SearchIndexDefinition {
+    /** Indexed text column; a dot-separated path (`"properties.name"`) reads a nested field. */
     field: string;
+    /** Columns `.eq()` may narrow by inside the search builder. At most 16. */
     filterFields?: ReadonlyArray<string>;
+
+    /**
+     * Text analysis for this index. Accent folding is always applied — it is
+     * what makes `café` and `cafe` the same token on every backend, which they
+     * otherwise are not. Naming a language additionally drops that language's
+     * stopwords from both documents and queries.
+     *
+     * Analysis is baked into the stored index, so changing this rebuilds it:
+     * the runtime records which profile a companion was built with and
+     * re-indexes when it no longer matches.
+     */
+    language?: SearchLanguage;
     name: string;
+
+    /**
+     * Skip the migration-time backfill. By default, creating the index's
+     * companion also indexes the rows already in the table, so a search index
+     * added to a populated table works immediately. On a very large table that
+     * scan is expensive to run inside a deploy: `staged: true` maintains the
+     * index on write only and leaves the initial population to an out-of-band
+     * run.
+     *
+     * That run is mandatory, not optional — until it happens, every row written
+     * BEFORE the deploy is unsearchable. Drive it against a deployment with
+     * `lunora run '__lunora_admin__:backfillSearch' --args '{"maxPages":20}'`,
+     * repeating until the response reports `done: true`; progress is durable, so
+     * each call resumes where the last stopped.
+     */
+    staged?: boolean;
+
+    /**
+     * How the index is stored and matched.
+     *
+     * `"portable"` (default) keeps one implementation on every backend, with
+     * identical matching *and* ranking — the invariant the rest of the search
+     * docs rest on.
+     *
+     * `"native"` hands matching to the engine's own full-text index where it has
+     * one (Postgres `tsvector` + GIN today; ignored elsewhere). It scales far
+     * better on large corpora and common terms, because the portable path
+     * aggregates every matching token row before ranking. The trade: the engine
+     * ranks, so results are ordered by its formula rather than the shared
+     * scorer. Matching still agrees — the vector is built from the same analyzed
+     * tokens — but a `.global()` table using it will not return rows in the same
+     * order as the sharded twin.
+     */
+    strategy?: SearchStrategy;
+}
+
+/**
+ * A geospatial index declared via `.geoIndex(name, { field })`. The runtime
+ * maintains a geohash companion table over the `v.geoPoint()` column `field` so
+ * `withGeoIndex(name, q => q.near(point, radius) | q.within(bbox))` resolves a
+ * proximity / bounding-box read as a geohash-prefix range scan plus a Haversine
+ * refine/sort on the candidate rows.
+ *
+ * - `field` — the `v.geoPoint()` column whose lat/lng feed the geohash.
+ * - `precision` — geohash character length on the companion (default 9, ~4.8 m cells); higher precision narrows each cell.
+ */
+interface GeoIndexDefinition {
+    field: string;
+    name: string;
+    precision?: number;
+}
+
+/**
+ * Declarative table-level TTL declared via `.ttl(field, { after? })`. A DO
+ * alarm-driven sweep deletes (or, when the table also `.softDelete()`s,
+ * soft-deletes) rows whose expiry timestamp has passed.
+ *
+ * - `field` — an epoch-millisecond column. Without `after`, its value is the absolute expiry instant; with `after`, `field` is a base timestamp and the row expires `after` milliseconds later (`field + after`).
+ * - `after` — optional millisecond offset added to `field` to derive the expiry.
+ */
+interface TtlDefinition {
+    after?: number;
+    field: string;
 }
 
 /** Reducer applied by an aggregate index. */
@@ -95,23 +281,54 @@ interface RankIndexDefinition {
 type OnDeleteAction = "cascade" | "restrict" | "set null";
 
 /**
- * A declared relation between two tables, recorded by `.relations((r) => …)`.
+ * The join table behind a many-to-many relation, declared by
+ * `r.many(target, { through: { table, from, to } })`.
  *
- * - `one` (many-to-one): the FK column `field` lives on **this** table and
- * points at `table`.`references` (default `_id`). Loads a single doc.
- * - `many` (one-to-many): the FK column `field` lives on the **target** table
- * and points back at this table's `references` (default `_id`). Loads an array.
+ * - `table` — the join table, one row per linked pair.
+ * - `from` — the join table's `v.id` column pointing at the table that declares the relation.
+ * - `to` — the join table's `v.id` column pointing at the relation's target table.
+ */
+interface RelationThrough {
+    from: string;
+    table: string;
+    to: string;
+}
+
+/**
+ * A relation backed by one foreign-key column: `one` (many-to-one) or `many` (one-to-many).
+ *
+ * - `one`: the FK column `field` lives on **this** table and points at
+ * `table`.`references` (default `_id`). Loads a single doc.
+ * - `many`: the FK column `field` lives on the **target** table and points back
+ * at this table's `references` (default `_id`). Loads an array.
  *
  * `onDelete` is meaningful only on `one`: it is the action applied to the
  * holder rows when the referenced parent row is deleted.
  */
-interface RelationDefinition {
+interface KeyedRelationDefinition {
     field: string;
     kind: "many" | "one";
     onDelete?: OnDeleteAction;
     references: string;
     table: string;
+    through?: never;
 }
+
+/**
+ * A many-to-many relation: the link lives in the `through` join table, whose `from` column points at this
+ * table's `_id` and whose `to` column points at `table`'s `_id`. Loads an array of `table` rows.
+ *
+ * It has no `field`/`references`/`onDelete` of its own: the two foreign keys are the join table's, and a delete
+ * on either side cascades through the `onDelete` of the join table's own `r.one(...)` relations.
+ */
+interface ThroughRelationDefinition {
+    kind: "many";
+    table: string;
+    through: RelationThrough;
+}
+
+/** A declared relation between two tables, recorded by `.relations((r) => …)`: a single-key relation or a many-to-many one. */
+type RelationDefinition = KeyedRelationDefinition | ThroughRelationDefinition;
 
 /** Distance metric used by a Vectorize index. */
 type VectorMetric = "cosine" | "dot-product" | "euclidean";
@@ -133,6 +350,8 @@ interface TableVectorIndex {
     field: string;
     metadata?: ReadonlyArray<string>;
     metric: VectorMetric;
+    /** Declared embedding model; see `VectorizeOptions.model`. */
+    model?: string;
     name: string;
 }
 
@@ -144,6 +363,42 @@ interface TableDefinition<Shape extends Record<string, Validator> = Record<strin
      * without scanning the underlying table.
      */
     aggregateIndexes: ReadonlyArray<AggregateIndexDefinition>;
+
+    /**
+     * Set by `.commitOrdered()` (named `commitOrderedMode`, not `commitOrdered`,
+     * so the data field doesn't collide with the fluent `.commitOrdered()`
+     * builder method — same convention as `shardBy()`/`shardMode`). When `true`,
+     * every write to a row stamps `_commitSeq`: a per-shard integer allocated
+     * once per mutation and strictly increasing in commit order. Absent/`false`
+     * ⇒ rows carry no `_commitSeq`, as before.
+     */
+    commitOrderedMode?: boolean;
+
+    /**
+     * `.dropStalePatches()` — drop a `patch` whose fields moved since the caller's
+     * CDC baseline rather than clobbering the newer value. See the builder method
+     * for the rule, the whole-patch granularity, and why it fails open.
+     */
+    dropStalePatchesMode?: boolean;
+
+    /**
+     * Set by `.source(...)` (named `externalSource`, not `source`, so the data
+     * field doesn't collide with the fluent `.source()` builder method — same
+     * convention as `shardBy()`/`shardMode`). When present, the table is
+     * materialized from an external Hyperdrive-backed database by a system poll
+     * loop rather than user mutations. Implies `isExternallyManaged`.
+     */
+    externalSource?: ExternalSourceDefinition;
+
+    /**
+     * Geospatial indexes declared via `.geoIndex(name, { field })`. The runtime
+     * maintains a geohash companion over the named `v.geoPoint()` column so
+     * `withGeoIndex(name, q => q.near(point, radius) | q.within(bbox))` resolves
+     * a proximity/bounding-box read as a geohash-prefix range scan plus a
+     * Haversine refine/sort. Empty unless `.geoIndex()` was called.
+     */
+    geoIndexes: ReadonlyArray<GeoIndexDefinition>;
+
     indexes: ReadonlyArray<IndexDefinition>;
 
     /**
@@ -165,6 +420,27 @@ interface TableDefinition<Shape extends Record<string, Validator> = Record<strin
     isPublic?: boolean;
 
     /**
+     * Set by `.memory()` (named `memoryMode`, not `memory`, so the data field
+     * doesn't collide with the fluent `.memory()` builder method — same
+     * convention as `shardBy()`/`shardMode`). When `true`, the table's rows are
+     * cleared every time the Durable Object is reconstructed, and its writes
+     * never reach the CDC changelog. Absent/`false` ⇒ an ordinary durable table.
+     */
+    memoryMode?: boolean;
+
+    /**
+     * Set by `.ownedBy(field)` — the column holding the owning user's id (named
+     * `ownerField`, a data field, rather than colliding with the fluent
+     * `.ownedBy()` builder method — same convention as `shardBy()`/`shardMode`).
+     *
+     * A shape over this table with `owner: true` derives its predicate from this
+     * field, so "only the owner may replicate these rows" is declared once on the
+     * table instead of being restated in every shape's `where`. Absent ⇒ the table
+     * has no single owning column and a shape must spell its predicate out.
+     */
+    ownerField?: string;
+
+    /**
      * Rank indexes declared via `.rankIndex(name, opts)`. The runtime maintains
      * a sorted companion table per declared rank with a btree on
      * `(partition, sortBy)` so `rank(row)` returns the row's 1-based position
@@ -179,9 +455,25 @@ interface TableDefinition<Shape extends Record<string, Validator> = Record<strin
      * `.relations((r) => …)` builder method doesn't collide with this field.
      */
     relationMap: Record<string, RelationDefinition>;
+
     searchIndexes: ReadonlyArray<SearchIndexDefinition>;
+
     shape: Shape;
+
     shardMode: ShardMode;
+
+    /**
+     * Set by `.softDelete()` (named `softDeleteMode`, not `softDelete`, so the
+     * data field doesn't collide with the fluent `.softDelete()` builder method —
+     * same convention as `shardBy()`/`shardMode`). When present, the table carries
+     * a nullable timestamp column (`field`, default `deletedAt`):
+     * `ctx.db.<table>.delete()` flips it instead of physically removing the row,
+     * and **list reads** (`findMany`/`findFirst`/`query()`/`count`/`aggregate`/
+     * relation loads) hide rows whose `field` is set unless
+     * `includeDeleted: true` is passed. By-id `get`/`patch`/`replace` and
+     * `restore` are unaffected. Absent ⇒ deletes are physical, as before.
+     */
+    softDeleteMode?: { field: string };
 
     /**
      * Declared lifecycle triggers keyed by accessor name; empty unless
@@ -190,6 +482,16 @@ interface TableDefinition<Shape extends Record<string, Validator> = Record<strin
      * field — same reasoning as {@link TableDefinition.relationMap}.
      */
     triggerMap: Record<string, TriggerDefinition>;
+
+    /**
+     * Set by `.ttl(field, { after })` — the declarative auto-expiry policy. A DO
+     * alarm-driven sweep deletes rows whose expiry timestamp has passed (or
+     * soft-deletes them when the table also `.softDelete()`s). Named `ttlPolicy`
+     * (a data field) rather than colliding with the fluent `.ttl()` builder
+     * method — same convention as `shardBy()`/`shardMode`. Absent ⇒ rows never
+     * auto-expire.
+     */
+    ttlPolicy?: TtlDefinition;
     vectorIndexes: ReadonlyArray<TableVectorIndex>;
 }
 
@@ -204,6 +506,8 @@ interface VectorIndexDefinition {
     readonly kind: "vectorIndex";
     readonly metadata?: (row: Record<string, unknown>) => Record<string, unknown>;
     readonly metric: VectorMetric;
+    /** Declared embedding model; see `VectorIndexOptions.model`. */
+    readonly model?: string;
     readonly select: (row: Record<string, unknown>) => string;
     readonly table: string;
 }
@@ -235,9 +539,75 @@ type FunctionKind = "action" | "mutation" | "query" | "stream";
  */
 type FunctionVisibility = "internal" | "public";
 
+/**
+ * x402 payment tag attached by the `.x402({ price })` builder modifier. Marks a
+ * public procedure as paid: the origin worker answers an unpaid client RPC with
+ * HTTP 402, verifies + settles the payment, and only then dispatches to the
+ * shard. The runtime reads only `price` from here — the network, recipient, and
+ * facilitator live in the worker-level x402 charge config, so `@lunora/runtime`
+ * never has to import `@lunora/x402` (and its viem/solana deps).
+ */
+interface X402ProcedureConfig {
+    /**
+     * USD-denominated price: a number of dollars (`0.01`) or a decimal string
+     * (`"0.01"`, or the `"$0.01"` shorthand). Resolved to the network
+     * stablecoin's base units (USDC has 6 decimals) at challenge time.
+     */
+    readonly price: number | string;
+}
+
+/**
+ * HTTP caching for an exposed REST endpoint, declared as
+ * `.expose({ rest: true, cache: { scope: "public", maxAge: 60 } })`. The runtime
+ * turns this into `Cache-Control` / `Cache-Tag` / `Vary` response headers, and a
+ * `cache.tag` is purgeable through `ctx.cache.purge({ tags: [...] })`.
+ *
+ * This is NOT equivalent to `httpRoute(...).cacheControl()`, which writes whatever
+ * value the author passes with no credential downgrade. That is the unguarded
+ * escape hatch; this is the guarded surface.
+ *
+ * Caching a procedure whose result depends on the caller is how a REST cache
+ * turns into a data leak, so `scope` is enforced at runtime rather than trusted:
+ * a request that carries credentials (an `Authorization` header or any `Cookie`)
+ * is ALWAYS answered `private`, even under `scope: "public"` — see
+ * {@link https://developer.mozilla.org/docs/Web/HTTP/Headers/Cache-Control MDN}
+ * for what `private` forbids. So a per-user response can never be stored in a
+ * shared/edge cache, and the worst a mis-declared `scope` can cost is a missed
+ * cache hit. `scope: "public"` additionally emits `Vary: authorization, cookie`
+ * so an intermediary can't hand a stored anonymous variant to a signed-in caller.
+ *
+ * Only ever applied to a cacheable exchange: a `GET` (so `query` procedures — a
+ * `mutation` / `action` is `POST`-only) that produced a 2xx.
+ */
+type RestCacheConfig = RestCachePolicy;
+
+/**
+ * Opt-in public-surface tag attached by the `.expose({ rest: true })` builder
+ * modifier (plan 167). Marks a procedure as deliberately published over the
+ * public REST surface: the runtime mints a `/_lunora/rest/<namespace>/<fn>` route
+ * that dispatches THROUGH the procedure (so `ctx.auth` / RLS / validators are
+ * enforced), and the generated OpenAPI describes it. Everything is default-closed
+ * — a procedure without this tag is unreachable over REST.
+ */
+interface ExposeConfig {
+    /** Opt this endpoint's responses into HTTP caching. Omit to leave them uncached. */
+    readonly cache?: RestCacheConfig;
+
+    /** Publish this procedure over the public REST surface. */
+    readonly rest?: boolean;
+}
+
 interface RegisteredFunction<A extends ArgsValidator, R, Kind extends FunctionKind> {
     readonly args: A;
+
+    /**
+     * Set by the `.expose({ rest: true })` builder modifier. Marks the procedure
+     * as published on the public REST surface (plan 167). Absent on procedures that
+     * are reachable only via typed RPC (the default).
+     */
+    readonly expose?: ExposeConfig;
     readonly handler: (context: unknown, args: InferArgs<A>) => Promise<R> | R;
+
     readonly kind: Kind;
 
     /**
@@ -247,15 +617,168 @@ interface RegisteredFunction<A extends ArgsValidator, R, Kind extends FunctionKi
      * Absent on ordinary registrations.
      */
     readonly lifecycle?: LifecycleEventKind;
+
     readonly visibility?: FunctionVisibility;
+
+    /**
+     * Set by the `.x402({ price })` builder modifier. Marks the procedure as paid
+     * so the origin worker gates it behind an x402 402-challenge before dispatch.
+     * Absent on unpaid functions.
+     */
+    readonly x402?: X402ProcedureConfig;
 }
 
 type RegisteredQuery<A extends ArgsValidator, R> = RegisteredFunction<A, R, "query">;
 type RegisteredMutation<A extends ArgsValidator, R> = RegisteredFunction<A, R, "mutation">;
 type RegisteredAction<A extends ArgsValidator, R> = RegisteredFunction<A, R, "action">;
 
+/**
+ * Structural mirror of `@lunora/client`'s `FunctionReference` — the handle the
+ * generated `api` / `internal` objects hand you, carrying `<file>:<function>`
+ * in `__lunoraRef`. Redeclared here so `@lunora/server` needs no dependency on
+ * the client package, exactly as {@link Scheduler} avoids one on
+ * `@lunora/scheduler`. `RegisteredFunction` has no `__lunoraRef`, so the two
+ * shapes never overlap.
+ */
+interface FunctionHandle<Kind extends "action" | "mutation" | "query" | "stream", Args, Return> {
+    /** Phantom marker carrying the type parameters; never present at runtime. */
+    readonly __lunoraPhantom?: { args: Args; kind: Kind; returns: Return };
+    readonly __lunoraRef: string;
+}
+
+/*
+ * `ctx.run*` accepts EITHER handle shape.
+ *
+ * `_generated/api.ts` types every entry as a `FunctionReference`, but these
+ * were declared to take `RegisteredQuery` — the server-side registration
+ * object — so the documented example (`ctx.runQuery(api.todos.list, args)`,
+ * straight out of this package's own JSDoc) did not typecheck. There was no
+ * user-side fix short of a cast at every call site; on the first large port it
+ * was ~370 errors and the single largest class remaining.
+ *
+ * Overloads rather than a union parameter: `Args` cannot be inferred backwards
+ * through `InferArgs<A>`, so the two shapes need separate inference sites. The
+ * registration overload comes first so importing a module directly keeps its
+ * existing, more precise behaviour.
+ */
+
+/**
+ * `ctx.runQuery` — overloaded, see the note above.
+ *
+ * A single generic signature over the reference would be nicer (TS will not
+ * contextually type a parameter against a multi-signature type, so a hand-built
+ * ctx object must annotate its `(reference, args)` explicitly — see
+ * `@lunora/testing`'s harness). It does not work: a concrete
+ * `RegisteredQuery<{…}, number>` is not assignable to a
+ * `RegisteredFunction<ArgsValidator, …>` constraint, because `handler`'s args
+ * are in a contravariant position. Two inference sites it is.
+ */
+
+/**
+ * Options for `ctx.runQuery`.
+ *
+ * Lunora's answer to Convex's `useStaleSnapshot`, and deliberately NOT a port of
+ * it. Convex needs that flag because a mutation there validates its whole read
+ * set at commit, so merely *reading* a hot append-only table manufactures OCC
+ * conflicts. Lunora has no such conflict class: its OCC is a compare-and-swap on
+ * the `__doc__` of each row a mutation actually WRITES (see `runGuardedWrite`),
+ * so a read costs a mutation nothing and there is nothing for a stale snapshot
+ * to relieve.
+ *
+ * What a read does cost here is REACTIVITY. Every table a live query touches
+ * enters its read footprint, and every write to any of those tables re-runs the
+ * subscription. A query that reads one hot table — an append-only audit log, a
+ * counter, a feed — therefore re-runs on every append even when the append
+ * cannot change its result. That is Lunora's version of the pressure Convex is
+ * relieving, and {@link RunQueryOptions.untracked} is the release valve.
+ */
+interface RunQueryOptions {
+    /**
+     * Run the query without recording its reads in the CALLER's read footprint.
+     * The subscription therefore does not re-run when the tables that query
+     * touched change.
+     *
+     * The result is exactly as fresh as a tracked call — same SQLite, same
+     * instant, no snapshot involved. The only thing given up is the invalidation
+     * edge, so use it when the read genuinely should not wake the subscriber
+     * (a monotonic counter rendered once, a config row, an audit tail whose
+     * growth is irrelevant to the result) — and never for data whose change
+     * should reach the client, which is what makes the subscription stale
+     * indefinitely rather than merely late.
+     *
+     * Scoped to the sub-query and nothing else: the untracked call runs on its
+     * own context, so a read interleaved on the caller's `ctx.db` while it is in
+     * flight still tracks normally. That is why this is an option on
+     * `ctx.runQuery` rather than a `ctx.db.untracked(...)` scope — a
+     * writer-wide flag would silently swallow a concurrent read's dependency
+     * (compare `meterExempt`'s documented interleaving caveat, which is
+     * tolerable for a resource meter and would not be here).
+     *
+     * No effect outside a subscription: a one-shot query records no footprint,
+     * so there is nothing to opt out of.
+     */
+    untracked?: boolean;
+}
+
+interface RunQuery {
+    <A extends ArgsValidator, R>(reference: RegisteredQuery<A, R>, args: InferArgs<A>, options?: RunQueryOptions): Promise<R>;
+    <Args, R>(reference: FunctionHandle<"query", Args, R>, args: Args, options?: RunQueryOptions): Promise<R>;
+}
+
+/** `ctx.runMutation` — overloaded for the same reason as {@link RunQuery}. */
+interface RunMutation {
+    <A extends ArgsValidator, R>(reference: RegisteredMutation<A, R>, args: InferArgs<A>): Promise<R>;
+    <Args, R>(reference: FunctionHandle<"mutation", Args, R>, args: Args): Promise<R>;
+}
+
+/** `ctx.runAction` — overloaded for the same reason as {@link RunQuery}. */
+interface RunAction {
+    <A extends ArgsValidator, R>(reference: RegisteredAction<A, R>, args: InferArgs<A>): Promise<R>;
+    <Args, R>(reference: FunctionHandle<"action", Args, R>, args: Args): Promise<R>;
+}
+
 /** Which side of the WebSocket lifecycle a hook fires on. */
-type LifecycleEventKind = "connect" | "disconnect";
+
+/**
+ * Which lifecycle moment a hook fires on.
+ *
+ * `connect`/`disconnect` are per-SOCKET and fire many times over a shard's life.
+ * `init` is per-INSTANCE and fires once per cold start, before any handler runs
+ * — see {@link ShardInitEvent}. `reactor` is per-WRITE-FLUSH and fires only when
+ * a watched read's result changed — see `onQueryChange`. `whisper` is per-TOPIC
+ * and decides whether a socket may join or broadcast to one — see `onWhisper`
+ * and {@link WhisperEvent}; unlike the other four it is a query, and its return
+ * value is the verdict.
+ */
+type LifecycleEventKind = "connect" | "disconnect" | "init" | "reactor" | "whisper";
+
+/**
+ * The event a whisper authorizer (`onWhisper`) receives as its second argument.
+ *
+ * Everything on it is either server-stamped from the socket's attachment
+ * (`connectionId`, `shardKey`, `userId`, `context`) or the client-supplied
+ * `topic` the verdict is about. The verified caller identity is also on
+ * `ctx.auth` — the authorizer runs under the socket's own identity.
+ */
+interface WhisperEvent {
+    /**
+     * Which side of the channel is being authorized: `"subscribe"` when the
+     * socket asks to JOIN the topic (and so to receive every message on it),
+     * `"send"` when it asks to BROADCAST to it. Checked separately because they
+     * are separate powers — a read-only observer is a coherent thing to allow.
+     */
+    readonly action: "send" | "subscribe";
+    /** Stable per-socket id, the same one `onConnect` saw. */
+    readonly connectionId: string;
+    /** App-supplied connection context from the client `connect` envelope (e.g. `{ roomId }`). */
+    readonly context?: Record<string, unknown>;
+    /** The shard this socket is bound to — the outer boundary the topic lives inside. */
+    readonly shardKey: string;
+    /** The topic name the client asked for. Client-supplied: validate it, never trust its shape. */
+    readonly topic: string;
+    /** Verified user id resolved at upgrade, or `null` for an anonymous socket. */
+    readonly userId: string | null;
+}
 
 /**
  * The event a connection-lifecycle hook receives as its second argument. It is
@@ -276,13 +799,30 @@ interface LifecycleEvent {
 
 /**
  * A registered connection-lifecycle hook — an internal mutation tagged with the
- * lifecycle side it fires on. Produced by `onConnect` / `onDisconnect`.
+ * lifecycle side it fires on. Produced by `onConnect` / `onDisconnect` /
+ * `onShardInit`.
  */
 type RegisteredLifecycleHook = RegisteredFunction<Record<string, never>, void, "mutation"> & { readonly lifecycle: LifecycleEventKind };
 
 /**
+ * The event an `onShardInit` hook receives.
+ *
+ * Deliberately thin, and deliberately NOT a {@link LifecycleEvent}: there is no
+ * socket here. An init hook fires because the Durable Object was constructed,
+ * not because anyone connected — so there is no `connectionId` to report and no
+ * user to attribute it to. The hook runs as a trusted system dispatch with no
+ * request identity, exactly like a cron tick; `ctx.auth` is anonymous and RLS
+ * does not apply. Derive whatever you need from `shardKey` and the shard's own
+ * durable tables, never from an ambient caller — there isn't one.
+ */
+interface ShardInitEvent {
+    /** The shard this Durable Object instance serves. */
+    readonly shardKey: string;
+}
+
+/**
  * A streaming query registration. Unlike {@link RegisteredFunction} the handler
- * returns an `AsyncIterable&lt;R>` synchronously (it does NOT `Promise&lt;R>`); the
+ * returns an `AsyncIterable<R>` synchronously (it does NOT `Promise<R>`); the
  * runtime drives it frame by frame and forwards each chunk to the caller. The
  * third `signal` argument is wired to the caller's cancel signal so the handler
  * can stop early — break out of the loop or check `signal.aborted` between
@@ -290,9 +830,47 @@ type RegisteredLifecycleHook = RegisteredFunction<Record<string, never>, void, "
  */
 interface RegisteredStream<A extends ArgsValidator, R> {
     readonly args: A;
+
+    /**
+     * Present when the stream was declared `durable`. Chunks are persisted per
+     * run before they reach a socket, the producer outlives the socket that
+     * opened it, and a reconnecting (or second) client attaches to the same run
+     * and replays what it missed. See {@link DurableStreamOptions}.
+     */
+    readonly durable?: DurableStreamOptions;
     readonly handler: (context: unknown, args: InferArgs<A>, signal: AbortSignal) => AsyncIterable<R>;
     readonly kind: "stream";
     readonly visibility?: FunctionVisibility;
+}
+
+/**
+ * Durability settings for a `.stream()` procedure.
+ *
+ * A run is identified by the socket's verified identity plus the function path
+ * and arguments, so two clients of the SAME user calling the same stream with
+ * the same arguments observe one producer and one transcript. That identity is
+ * the feature: it is what makes a reload resume rather than re-generate, and
+ * what lets a second tab watch the same answer. A different identity always gets
+ * its own run.
+ *
+ * Sharing applies to a run still in flight. Once a run finishes, a later caller
+ * asking the same question gets a fresh one — a transcript is the record of one
+ * execution, not a cached response.
+ *
+ * **What an attach does not do:** it replays a transcript, it does not re-run the
+ * handler — so the procedure's middleware chain (`.use(rls(...))`, rate limits,
+ * any custom guard) runs once, for the caller that started the run. That is why
+ * the run key is identity-scoped: a guard that has already passed for one user
+ * must never be skipped for another.
+ */
+interface DurableStreamOptions {
+    /**
+     * How long a finished transcript is kept before it is trimmed, in
+     * milliseconds. Defaults to 24 hours — long enough to survive a reload and
+     * a commute, short enough that a chatty shard doesn't accumulate
+     * transcripts forever.
+     */
+    readonly ttlMs?: number;
 }
 
 // --- Context types -----------------------------------------------------------
@@ -313,14 +891,28 @@ interface ScheduledFunctionDoc {
     attempts?: number;
     /** When the job was enqueued (epoch ms). */
     enqueuedAt: number;
-    /** Fully-qualified path of the function to invoke. */
-    functionPath: string;
+
+    /**
+     * Fully-qualified `ns:fn` path of the function to invoke. Absent when the job
+     * targets a durable workflow/agent instead — exactly one of `functionPath` /
+     * {@link ScheduledFunctionDoc.workflow} is set on any given row.
+     */
+    functionPath?: string;
     /** The job's id (the `_scheduled_functions` row id). */
     id: string;
+    /** Logical workpool the job is concurrency-gated by, when any. */
+    pool?: string;
     /** When the job is scheduled to fire (epoch ms). */
     scheduledFor: number;
     /** Routing hint forwarded so dispatch lands on the right shard. */
     shardKey?: string;
+
+    /**
+     * The workflow/agent export key (its generated class name) a fresh durable instance is started from
+     * on fire (the {@link ScheduledFunctionDoc.args} become its `params`). Set
+     * instead of {@link ScheduledFunctionDoc.functionPath}.
+     */
+    workflow?: string;
 }
 
 /** Maps each system table name to the document shape its reads return. */
@@ -344,7 +936,7 @@ interface SystemQuery<T extends SystemTableName> {
  * Read-only reader over Lunora's system tables (`_scheduled_functions`,
  * `_storage`), exposed as `ctx.db.system`. Mirrors Convex's `ctx.db.system`.
  *
- * **Best-effort and eventually consistent.** Unlike `ctx.db.&lt;table>` — which
+ * **Best-effort and eventually consistent.** Unlike `ctx.db.<table>` — which
  * reads the shard's transactional SQLite snapshot — the data behind these tables
  * lives OUTSIDE the shard (scheduled functions in the `SchedulerDO`, storage
  * objects in R2). Every `collect()` / `get()` reaches across to that source.
@@ -377,6 +969,37 @@ interface SystemDatabaseReader {
  * actual SQL implementation lives in `@lunora/do`; these are signatures only.
  */
 interface DatabaseReader {
+    /**
+     * The throwing sibling of {@link DatabaseReader.normalizeId}: brand `id` as an
+     * {@link Id} for `tableName`, or throw `BAD_REQUEST` when it is not structurally
+     * an id. Pure — it never reads the database, so a valid id for a row that
+     * doesn't exist still returns.
+     *
+     * This is the **parse boundary** for an id that arrived as a plain `string`: a
+     * wire payload, a mutator's args, a change plan computed on the client. The
+     * alternative is `value as Id<"table">` at every such call site — an assertion,
+     * not a check, and one that has to be repeated for every table a helper is
+     * generic over:
+     *
+     * ```ts
+     * for (const patch of plan.patches) {
+     *     await ctx.db.patch(ctx.db.asId("nodes", patch.id), patch.fields);
+     * }
+     * ```
+     *
+     * Ids are opaque strings, so the check is exactly `normalizeId`'s: it rejects
+     * empty, whitespace-bearing, and NUL-bearing values, not "an id that isn't in
+     * this table". Use it to get the brand honestly, and `get()` to learn whether
+     * the row exists.
+     */
+    asId: <T extends string>(tableName: T, id: string) => Id<T>;
+
+    /**
+     * The first row of `tableName` matching `args.where`, or `null`. Routed like
+     * every table-addressed read: a `.global()` table is read from its global
+     * backend, where `query(table).withIndex(...)` is not available.
+     */
+    findFirst: (tableName: string, args?: { where?: Record<string, unknown> }) => Promise<Record<string, unknown> | null>;
     get: <T extends string>(id: Id<T>) => Promise<Record<string, unknown> | null>;
 
     /**
@@ -388,6 +1011,30 @@ interface DatabaseReader {
      */
     normalizeId: <T extends string>(tableName: T, id: string) => Id<T> | null;
     query: (tableName: string) => TableReader;
+
+    /**
+     * Walk the relation graph out of one row: follow the foreign keys the
+     * schema's `v.id("target")` columns already declare, breadth-first, and
+     * return each reached row with its `depth`, the edge names walked to reach
+     * it (`path`), the ids along the way (`pathIds`), and a depth-decaying
+     * `score`.
+     *
+     * This is the read a keyword or vector search cannot do: "everything
+     * connected to this customer" is a property of the edges, not of the text.
+     * Depth 1 (the default) is the direct neighbourhood; a multi-hop expansion
+     * is the same call with a higher `depth`.
+     *
+     * ```ts
+     * const { nodes } = await ctx.db.related({ table: "customers", id }, { depth: 2 });
+     * ```
+     *
+     * Every hop is a normal `ctx.db` read, so row-level security, column
+     * masking, soft-delete scoping and subscription dependency tracking all
+     * apply per hop. `depth` is capped at 4 and `limit` at 200; a
+     * `v.array(v.id(...))` column is followed outward only (there is no
+     * array-containment filter to find its holders with).
+     */
+    related: (start: RelatedStart, options?: RelatedOptions) => Promise<RelatedPage>;
 
     /**
      * Best-effort, read-only reader over Lunora's system tables
@@ -432,16 +1079,143 @@ interface PaginationResult<T = Record<string, unknown>> {
     splitCursor?: null | string;
 }
 
+/** Which way foreign-key edges are followed by {@link DatabaseReader.related}. */
+type RelatedDirection = "both" | "in" | "out";
+
+/** An explicit `{ table, id }` start node for {@link DatabaseReader.related}. */
+interface RelatedStartReference {
+    id: string;
+    table: string;
+}
+
+/**
+ * Where a traversal starts: a loaded document (recognised by its `_id`, whose
+ * table the reader resolves), or an explicit `{ table, id }`.
+ *
+ * The document arm requires `_id`, which is what makes the two arms actually
+ * distinguishable: against a bare `Record<string, unknown>` the union collapses
+ * — `{ table, id }` is assignable to it — so a misspelled `{ tabel, id }` used
+ * to type-check and fail only at runtime.
+ */
+type RelatedStart = (Record<string, unknown> & { _id: string }) | RelatedStartReference;
+
+/** Options for {@link DatabaseReader.related}. */
+interface RelatedOptions {
+    /** Opaque cursor from a prior page's `continueCursor`; `null`/omitted starts at the first page. */
+    cursor?: null | string;
+
+    /**
+     * How many hops to expand. `1` (the default) is the direct neighbourhood.
+     * Must be an integer in `1 … 4`; anything else is refused rather than
+     * clamped, because a silently-shortened walk looks like a graph with fewer
+     * edges than it has.
+     */
+    depth?: number;
+
+    /**
+     * Which way foreign keys are followed. `"out"` follows the ids the start
+     * row HOLDS (ticket → customer), `"in"` the rows that point AT it (customer
+     * → tickets), `"both"` (the default) does both.
+     */
+    direction?: RelatedDirection;
+
+    /**
+     * Restrict the walk to these edge-type names — `"<table>.<column>"`, e.g.
+     * `"tickets.customerId"`. Omitted ⇒ every `v.id(...)` column the schema
+     * declares. An unknown name is refused, so a typo cannot silently widen the
+     * traversal.
+     */
+    edges?: ReadonlyArray<string>;
+
+    /** Maximum nodes per page. Default 50, capped at 200. */
+    limit?: number;
+}
+
+/** One row reached by {@link DatabaseReader.related}, with how it was reached. */
+interface RelatedNode<T = Record<string, unknown>> {
+    /** Hops from the start node; always `>= 1`. */
+    depth: number;
+    /** The reached row. */
+    document: T;
+    /** Edge-type names walked from the start node to this one, in order. Length equals `depth`. */
+    path: ReadonlyArray<string>;
+    /** Document ids from the start node to this one inclusive. Length equals `depth + 1`. */
+    pathIds: ReadonlyArray<string>;
+    /** Depth-decaying relevance: `1` at depth 1, halving each hop (`0.5 ** (depth - 1)`). */
+    score: number;
+    /** The table {@link RelatedNode.document} lives in. */
+    table: string;
+}
+
+/** One page of a {@link DatabaseReader.related} traversal — the {@link PaginationResult} envelope, with `nodes` instead of `page`. */
+interface RelatedPage<T = Record<string, unknown>> {
+    /** Cursor to pass back for the next page, or `null` once `isDone`. */
+    continueCursor: null | string;
+    /** `true` when this page is the last one. */
+    isDone: boolean;
+    /** The reached nodes, nearest first. */
+    nodes: RelatedNode<T>[];
+}
+
 /**
  * The fluent `ctx.db.query(table)` reader. Generic over the document type
- * `Row` so the generated `ctx.db` can bind it to `Doc&lt;table>` (the chain and
- * every terminal then resolve typed rows — no `as unknown as Doc&lt;...>` casts).
- * Defaults to the untyped `Record&lt;string, unknown>` shape for the base
- * (schema-agnostic) `@lunora/server` reader.
+ * `Row` so the generated `ctx.db` can bind it to `Doc<table>` (the chain and
+ * every terminal then resolve typed rows — no `as unknown as Doc<...>` casts),
+ * and over the table's declared index names so `.withIndex()` / `.withSearchIndex()`
+ * / `.withGeoIndex()` reject a name the table does not declare.
+ *
+ * All four default to the untyped shape for the base (schema-agnostic)
+ * `@lunora/server` reader, which is also the wide `(table: string) => TableReader`
+ * overload the generated `ctx.db` intersects in — so a caller holding a runtime
+ * string (e.g. `@lunora/ratelimit`'s `createDbStore`) is unaffected.
+ *
+ * The index-name parameters are what make a stale index name a compile error.
+ * They resolve to `never` for a table that declares none of that kind, so the
+ * only way to satisfy the call is to declare the index. Before this, a renamed
+ * or dropped index left its call sites typechecking, and the query either threw
+ * at runtime or silently degraded to a full table scan — the second being the
+ * worse outcome, since it stays green in tests and surfaces months later as a
+ * latency regression.
+ *
+ * **Why `with*` are method signatures and everything else is a property.**
+ * Narrowing a parameter makes the enclosing type contravariant in it, so as
+ * function properties these would make a BOUND reader
+ * (`TableReader<Doc, "by_x">`, what `ctx.db.query(t)` returns) unassignable to
+ * the unbound `TableReader<Doc>` — quietly breaking every helper factored as
+ * `(reader: TableReader<Doc<"users">>) => …`, which is the obvious way to share
+ * query logic. A method signature is bivariant in its parameters, which keeps
+ * that direction working while the narrow parameter still rejects an undeclared
+ * name at the call site. Both directions are pinned in `types.test-d.ts`.
  */
-interface TableReader<Row = Record<string, unknown>> {
+interface TableReader<
+    Row = Record<string, unknown>,
+    Indexes extends string = string,
+    SearchIndexes extends string = string,
+    GeoIndexes extends string = string,
+> {
+    /**
+     * Iterate rows lazily: `for await (const row of ctx.db.query("t").withIndex(…))`.
+     *
+     * Pages through the result set behind the scenes and yields row by row, so
+     * a consumer that stops early stops the reads too. `.collect()` is still the
+     * right terminal when you want the whole set; this exists for the cases
+     * where you cannot know up front how far you need to read.
+     *
+     * That is what merged/ordered index streams need. Reimplementing Convex's
+     * `convex-helpers/server/stream` in userland previously meant materialising
+     * each branch with a bounded `.take(1024)` before merging, so asking a
+     * merged stream for ONE row read up to 1,024 rows per branch. The k-way merge itself is application code and stays there — only
+     * the laziness had to come from the database layer.
+     *
+     * Iteration pages through `.paginate()`, so it follows the same order —
+     * which is `.collect()`'s order whenever the sort key is unique. Under a
+     * TIED sort key (an unindexed read whose rows share `_creationTime`) the
+     * two can disagree, because the tie-break is left to SQLite. Read through
+     * an index when order matters, exactly as you would for `.paginate()`.
+     */
+    [Symbol.asyncIterator]: () => AsyncIterator<Row>;
     collect: () => Promise<Row[]>;
-    filter: (predicate: (document: Row) => boolean) => TableReader<Row>;
+    filter: (predicate: (document: Row) => boolean) => TableReader<Row, Indexes, SearchIndexes, GeoIndexes>;
     first: () => Promise<Row | null>;
 
     /**
@@ -451,7 +1225,7 @@ interface TableReader<Row = Record<string, unknown>> {
      * terminal (`collect`/`first`/`take`/`paginate`/`unique`). Mirrors Convex's
      * `.order("asc" | "desc")`.
      */
-    order: (direction: "asc" | "desc") => TableReader<Row>;
+    order: (direction: "asc" | "desc") => TableReader<Row, Indexes, SearchIndexes, GeoIndexes>;
     paginate: (options: PaginationOptions) => Promise<PaginationResult<Row>>;
     take: (limit: number) => Promise<Row[]>;
 
@@ -460,7 +1234,26 @@ interface TableReader<Row = Record<string, unknown>> {
      * and throws when more than one row matches. Mirrors Convex's `.unique()`.
      */
     unique: () => Promise<Row | null>;
-    withIndex: (indexName: string, range?: (q: IndexRangeBuilder) => IndexRangeBuilder) => TableReader<Row>;
+
+    /**
+     * Restrict the query to a declared `.geoIndex()`. The builder's
+     * `.near(point, radiusMeters)` returns rows within `radiusMeters` of `point`,
+     * ordered nearest-first; `.within(bbox)` returns rows inside the
+     * latitude/longitude bounding box. Both resolve as a geohash-prefix range
+     * scan over the index's companion followed by a Haversine refine. Pair with
+     * `.take(n)` to cap results (`.paginate()` is not supported on a geo query).
+     */
+    // eslint-disable-next-line @typescript-eslint/method-signature-style -- deliberate: a method signature is BIVARIANT in its parameters, a function property is not. Written as a property, narrowing the index-name parameter would make a bound `TableReader<Doc, "by_x">` unassignable to a helper typed `TableReader<Doc>` — a silent breaking change to a published type. The narrow parameter still rejects an undeclared name at the call site.
+    withGeoIndex(indexName: GeoIndexes, build: (q: GeoFilterBuilder) => GeoFilterBuilder): TableReader<Row, Indexes, SearchIndexes, GeoIndexes>;
+
+    /**
+     * Restrict the query to a declared `.index()`. `indexName` is constrained to
+     * this table's declared index names (`never` when it declares none), so a
+     * renamed, dropped, or mistyped index is a compile error rather than a
+     * runtime throw or a silent full-table scan.
+     */
+    // eslint-disable-next-line @typescript-eslint/method-signature-style -- deliberate: a method signature is BIVARIANT in its parameters, a function property is not. Written as a property, narrowing the index-name parameter would make a bound `TableReader<Doc, "by_x">` unassignable to a helper typed `TableReader<Doc>` — a silent breaking change to a published type. The narrow parameter still rejects an undeclared name at the call site.
+    withIndex(indexName: Indexes, range?: (q: IndexRangeBuilder) => IndexRangeBuilder): TableReader<Row, Indexes, SearchIndexes, GeoIndexes>;
 
     /**
      * Restrict the query to a declared `.searchIndex()`. The builder's
@@ -469,7 +1262,8 @@ interface TableReader<Row = Record<string, unknown>> {
      * field. Results come back ordered by relevance — pair with `.take(n)`
      * (`.paginate()` is not supported on a search query).
      */
-    withSearchIndex: (indexName: string, search: (q: SearchFilterBuilder) => SearchFilterBuilder) => TableReader<Row>;
+    // eslint-disable-next-line @typescript-eslint/method-signature-style -- deliberate: a method signature is BIVARIANT in its parameters, a function property is not. Written as a property, narrowing the index-name parameter would make a bound `TableReader<Doc, "by_x">` unassignable to a helper typed `TableReader<Doc>` — a silent breaking change to a published type. The narrow parameter still rejects an undeclared name at the call site.
+    withSearchIndex(indexName: SearchIndexes, search: (q: SearchFilterBuilder) => SearchFilterBuilder): TableReader<Row, Indexes, SearchIndexes, GeoIndexes>;
 }
 
 interface IndexRangeBuilder {
@@ -488,6 +1282,33 @@ interface SearchFilterBuilder {
     search: (field: string, query: string) => SearchFilterBuilder;
 }
 
+/** A latitude/longitude point (WGS84 decimal degrees) accepted by geo queries. */
+interface GeoPointInput {
+    lat: number;
+    lng: number;
+}
+
+/**
+ * An axis-aligned latitude/longitude bounding box: `sw` is the south-west
+ * (min lat, min lng) corner, `ne` the north-east (max lat, max lng) corner.
+ */
+interface GeoBoundingBox {
+    ne: GeoPointInput;
+    sw: GeoPointInput;
+}
+
+/**
+ * Builder passed to {@link TableReader.withGeoIndex}. Call exactly one of
+ * `.near(...)` / `.within(...)` — the two are mutually exclusive proximity vs
+ * bounding-box modes.
+ */
+interface GeoFilterBuilder {
+    /** Rows within `radiusMeters` of `point`, resolved nearest-first. Call exactly once. */
+    near: (point: GeoPointInput, radiusMeters: number) => GeoFilterBuilder;
+    /** Rows whose point falls inside the bounding `box`. Call exactly once. */
+    within: (box: GeoBoundingBox) => GeoFilterBuilder;
+}
+
 /**
  * Options shared by the batch-write methods (`insertMany`/`deleteMany`/
  * `patchMany`) — a per-call payload cap. The default cap (500) rejects an
@@ -500,8 +1321,39 @@ interface BatchWriteOptions {
     limit?: number;
 }
 
+/** Options accepted by {@link DatabaseWriter.insertMany} and the per-table facade. */
+interface InsertManyOptions extends BatchWriteOptions {
+    /**
+     * When `true`, a UNIQUE-constraint breach for a row resolves to `null`
+     * instead of throwing — the rest of the batch is still inserted. Skipped rows
+     * keep their input-order slot with `null` in the returned array. Mirrors
+     * better-drizzle's `createMany({ skipDuplicates: true })`.
+     */
+    skipDuplicates?: boolean;
+}
+
+/** What {@link DatabaseWriter.patchIf} resolves: whether the patch applied, and the row as it now stands (`null` when there is no such row). */
+interface PatchIfResult {
+    applied: boolean;
+    doc: Record<string, unknown> | null;
+}
+
 interface DatabaseWriter extends DatabaseReader {
     delete: <T extends string>(id: Id<T>) => Promise<void>;
+
+    /**
+     * Delete EVERY row in `tableName`, chunking internally until the table is
+     * empty — the erasure primitive.
+     *
+     * Unlike `deleteWhere(tableName, {})` there is **no batch cap**: a
+     * `BATCH_LIMIT_EXCEEDED` at row 501 of an account deletion is a bug, not a
+     * safety rail. Rows still go through the single-row delete pipeline, so
+     * triggers, cascades, companions, CDC, and live subscriptions stay correct.
+     *
+     * On a `.softDelete()` table the default flips the marker column; pass
+     * `{ hard: true }` to remove the rows physically (what GDPR erasure means).
+     */
+    deleteAll: (tableName: string, options?: { chunkSize?: number; hard?: boolean }) => Promise<{ deleted: number }>;
 
     /**
      * Delete many rows by id in one call. Each id is deleted through the full
@@ -515,6 +1367,17 @@ interface DatabaseWriter extends DatabaseReader {
      * span, so the prior deletes persist; the in-memory test harness mirrors the span.)
      */
     deleteMany: <T extends string>(ids: ReadonlyArray<Id<T>>, options?: BatchWriteOptions) => Promise<{ deleted: number }>;
+
+    /**
+     * Delete every row matching `where` in one call. Matching rows are resolved
+     * first, then each row is deleted through the single-row delete pipeline
+     * (triggers, companion sync, CDC, broadcast) so reactive subscriptions and
+     * search/aggregate companions stay correct.
+     *
+     * **Atomic within a mutation:** the DO wraps a mutation's dispatch in a
+     * BEGIN/COMMIT span, so a mid-batch failure rolls back the whole mutation.
+     */
+    deleteWhere: (tableName: string, where: Record<string, unknown>, options?: BatchWriteOptions) => Promise<{ deleted: number }>;
 
     /**
      * Insert a document, returning its server id.
@@ -532,12 +1395,23 @@ interface DatabaseWriter extends DatabaseReader {
      * row gets defaults, validators, triggers, and a per-row RLS check — but the
      * caller pays one round-trip instead of N.
      *
+     * Pass `{ skipDuplicates: true }` to turn UNIQUE-constraint breaches into
+     * `null` results for that row instead of failing the whole batch; the rest of
+     * the batch is still inserted and order is preserved.
+     *
      * **Atomic within a mutation:** the DO wraps a mutation's dispatch in a
      * BEGIN/COMMIT span, so a mid-batch failure (an invalid or RLS-denied row)
      * rolls back the whole mutation. (In an action there is no transaction span,
      * so the prior inserts persist; the in-memory test harness mirrors the span.)
      */
-    insertMany: <T extends string>(tableName: T, documents: ReadonlyArray<Record<string, unknown>>, options?: BatchWriteOptions) => Promise<Id<T>[]>;
+    insertMany: {
+        <T extends string>(
+            tableName: T,
+            documents: ReadonlyArray<Record<string, unknown>>,
+            options: BatchWriteOptions & { skipDuplicates: true },
+        ): Promise<(Id<T> | null)[]>;
+        <T extends string>(tableName: T, documents: ReadonlyArray<Record<string, unknown>>, options?: InsertManyOptions): Promise<Id<T>[]>;
+    };
 
     /**
      * **Trusted** bulk insert: one multi-row `INSERT` that **skips per-row
@@ -560,16 +1434,84 @@ interface DatabaseWriter extends DatabaseReader {
     patch: <T extends string>(id: Id<T>, patch: Record<string, unknown>) => Promise<void>;
 
     /**
+     * Conditional patch: apply `args.patch` to row `id` of `tableName` only while
+     * the row as currently stored matches `args.where`, decided atomically with
+     * the write. Use it for compare-and-set and admission checks, where reading
+     * the row, deciding, and then calling `patch` lets two concurrent callers
+     * both act on the same stale read.
+     *
+     * ```ts
+     * const { applied } = await ctx.db.patchIf("seats", seatId, { where: { holder: null }, patch: { holder: userId } });
+     * ```
+     *
+     * Resolves `{ applied: true, doc }` with the row as written, or
+     * `{ applied: false, doc }` with the row left untouched (`doc` is `null` when
+     * there is no such row). `where` takes the same flat column filters as
+     * `findMany`; relation filters are not supported. Triggers, validators,
+     * companions, CDC and live queries see an applied patch exactly as they see
+     * `patch`.
+     *
+     * Platform mapping (`conditionalWrites` in `PlatformCapabilities`):
+     * - shard-local tables: Cloudflare `storage.sql`, Node `better-sqlite3` and
+     *   celld's SQLite decide in one synchronous step; native everywhere.
+     * - `.global()` tables: one conditional `UPDATE` through `@lunora/sql-store`
+     *   on D1 (Cloudflare, celld), the Node host's SQLite file, or Postgres/MySQL
+     *   over Hyperdrive.
+     * - A backend without a conditional write refuses with `INTERNAL` instead of
+     *   reading and then writing.
+     */
+    patchIf: <T extends string>(tableName: T, id: Id<T>, args: { patch: Record<string, unknown>; where: Record<string, unknown> }) => Promise<PatchIfResult>;
+
+    /**
      * Patch many rows by id in one call. Each `{ id, patch }` is applied like a
-     * single `patch()` (per-row triggers + RLS).
+     * single `patch()` (per-row triggers + RLS). Returns the number of rows
+     * actually patched.
      *
      * **Atomic within a mutation:** the DO wraps a mutation's dispatch in a
      * BEGIN/COMMIT span, so a mid-batch failure rolls back the whole mutation.
      * (In an action there is no transaction span, so the prior patches persist;
      * the in-memory test harness mirrors the span.)
      */
-    patchMany: <T extends string>(patches: ReadonlyArray<{ id: Id<T>; patch: Record<string, unknown> }>, options?: BatchWriteOptions) => Promise<void>;
+    patchMany: <T extends string>(
+        patches: ReadonlyArray<{ id: Id<T>; patch: Record<string, unknown> }>,
+        options?: BatchWriteOptions,
+    ) => Promise<{ patched: number }>;
+
+    /**
+     * Patch every row matching `where` with the same `patch` in one call. The
+     * matching rows are resolved first, then each row is updated through the
+     * single-row patch pipeline (OCC, triggers, companion sync, CDC, broadcast)
+     * so reactive subscriptions and search/aggregate companions stay correct.
+     *
+     * **Atomic within a mutation:** the DO wraps a mutation's dispatch in a
+     * BEGIN/COMMIT span, so a mid-batch failure rolls back the whole mutation.
+     */
+    patchWhere: (
+        tableName: string,
+        args: { patch: Record<string, unknown>; where: Record<string, unknown> },
+        options?: BatchWriteOptions,
+    ) => Promise<{ patched: number }>;
     replace: <T extends string>(id: Id<T>, document: Record<string, unknown>) => Promise<void>;
+
+    /**
+     * Erase every shard-local table — the account-deletion / tenant-teardown
+     * primitive. Sweeps the schema's non-`.global()` tables with
+     * {@link DatabaseWriter.deleteAll}`({ hard: true })` and returns the per-table
+     * counts.
+     *
+     * `.global()` tables are skipped by design: their rows live in D1 and are shared
+     * across shards, so "wipe this shard" must not reach them. Restrict the sweep
+     * with `options.tables`, or spare one with `options.exclude` (e.g. an audit log
+     * that must outlive the data).
+     *
+     * ```ts
+     * export const deleteAccount = internalMutation({ handler: async ({ ctx }) => ctx.db.wipeShard() });
+     * ```
+     */
+    wipeShard: (options?: { chunkSize?: number; exclude?: ReadonlyArray<string>; tables?: ReadonlyArray<string> }) => Promise<{
+        deleted: number;
+        tables: Record<string, number>;
+    }>;
 }
 
 /** Authenticated identity surfaced into every context. */
@@ -580,23 +1522,85 @@ interface AuthState {
 
 /**
  * A pending scheduled invocation as surfaced by {@link Scheduler.list} /
- * {@link Scheduler.get}. A clean public mirror of `@lunora/scheduler`'s internal
- * `ScheduleRecord` — re-declared here so the public ctx surface carries no
- * dependency on the scheduler package's internal types.
+ * {@link Scheduler.get}. A clean public mirror of `@lunora/scheduler`'s
+ * `ScheduleRecord`, re-declared so the public ctx surface names its own type
+ * rather than re-exporting the scheduler's. It must stay field-for-field
+ * identical: `__tests__/scheduler-mirror.test.ts` asserts mutual assignability
+ * against the real `ScheduleRecord` and fails `lint:types` if either side moves.
  */
+interface RetryPolicy {
+    /** Backoff growth across attempts. Default `"exponential"`. */
+    backoff?: "exponential" | "linear";
+    /** Base delay in milliseconds for the first retry. Default `30_000`. */
+    baseMs?: number;
+    /** Maximum number of dispatch attempts before dead-lettering. Default `5`. */
+    maxAttempts?: number;
+    /** Optional ceiling clamping the computed backoff delay. */
+    maxMs?: number;
+}
+
 interface ScheduledJob {
     args: Record<string, unknown>;
     /** Number of dispatch attempts already made (absent until the first retry). */
     attempts?: number;
     /** When the job was enqueued (epoch ms). */
     enqueuedAt: number;
-    functionPath: string;
+
+    /**
+     * The `ns:fn` path of the function to dispatch on fire. Absent when the job
+     * targets a durable workflow/agent instead — see {@link ScheduledJob.workflow}.
+     * Exactly one of `functionPath` / `workflow` is set.
+     */
+    functionPath?: string;
     id: string;
+    /** Scheduler/workpool instance the job was enqueued through. Absent for the default instance. */
+    instanceName?: string;
+    /** Logical workpool the job is concurrency-gated by. Absent for plain `runAfter`/`runAt` jobs. */
+    pool?: string;
+    /** Per-job retry policy; absent means the scheduler's built-in defaults. */
+    retry?: RetryPolicy;
     /** When the job is scheduled to fire (epoch ms). */
     scheduledFor: number;
     /** Routing hint forwarded so dispatch lands on the right shard. */
     shardKey?: string;
+
+    /**
+     * The workflow/agent export key a fresh durable instance is started
+     * from on fire (the {@link ScheduledJob.args} become its `params`). Set
+     * instead of {@link ScheduledJob.functionPath}.
+     */
+    workflow?: string;
 }
+
+/**
+ * A schedulable durable-workflow reference — the generated `workflows.<name>` /
+ * `agents.<name>` object, which carries its export key (the generated class name) and
+ * stable name. Structural mirror of `@lunora/scheduler`'s `WorkflowReference` so
+ * `ctx.scheduler` can target a workflow/agent without a dependency on
+ * `@lunora/scheduler` / `@lunora/workflow`. A scheduled workflow target starts a
+ * fresh instance on fire (the args become its `params`).
+ */
+interface SchedulableWorkflowReference {
+    /** The workflow/agent export key — its generated class name (present on a generated ref). */
+    readonly className?: string;
+    readonly isLunoraWorkflow: true;
+    /** The workflow/agent export/stable name (present on a generated ref). */
+    readonly name?: string;
+}
+
+/**
+ * What `ctx.scheduler.runAfter` / `runAt` accept as a target:
+ *
+ * - a generated `internal.<file>.<fn>` / `api.<file>.<fn>` reference to a
+ * mutation or action — the form the docs and the setup skills use, and the one
+ * `@lunora/scheduler` has always resolved at runtime (it reads `__lunoraRef`);
+ * - the equivalent `"file:fn"` path string;
+ * - a generated `workflows.<name>` / `agents.<name>` reference, which starts a
+ * fresh durable instance on fire.
+ *
+ * A `query` is not schedulable — a deferred job exists to have an effect.
+ */
+type SchedulableTarget = FunctionHandle<"action" | "mutation", unknown, unknown> | SchedulableWorkflowReference | string;
 
 interface Scheduler {
     /** Cancel a pending job by id. `cancelled` is `false` when no such job exists. */
@@ -605,8 +1609,15 @@ interface Scheduler {
     get: (id: string) => Promise<ScheduledJob | null>;
     /** List all pending scheduled jobs. */
     list: () => Promise<ScheduledJob[]>;
-    runAfter: (delayMs: number, functionPath: string, args?: Record<string, unknown>) => Promise<string>;
-    runAt: (timestampMs: number, functionPath: string, args?: Record<string, unknown>) => Promise<string>;
+
+    /**
+     * Schedule a one-shot run `delayMs` from now; see {@link SchedulableTarget}
+     * for the accepted targets. A workflow/agent reference starts a fresh
+     * durable instance on fire (the args become its `params`).
+     */
+    runAfter: (delayMs: number, target: SchedulableTarget, args?: Record<string, unknown>) => Promise<string>;
+    /** Like {@link Scheduler.runAfter} but fires at an absolute epoch-ms timestamp. */
+    runAt: (timestampMs: number, target: SchedulableTarget, args?: Record<string, unknown>) => Promise<string>;
 }
 
 // --- Durable workflows -------------------------------------------------------
@@ -627,24 +1638,66 @@ interface WorkflowStatusResult {
     status: WorkflowInstanceStatus;
 }
 
+/** Options accepted by {@link WorkflowHandle.createBatch}: explicit `instances`, or `count` sharing one `params`/`retention`. Mirrors `@lunora/workflow`'s `WorkflowCreateBatchOptions`. */
+type WorkflowCreateBatchOptions<Params = Record<string, unknown>> =
+    | { instances: ReadonlyArray<WorkflowCreateOptions<Params>> }
+    | { count: number; params?: Params; retention?: { errorRetention?: string; successRetention?: string } };
+
+/** One instance a batch did not create; `index` is its input position. Mirrors `@lunora/workflow`'s `WorkflowCreateBatchError`. */
+interface WorkflowCreateBatchError {
+    code: number;
+    id?: string;
+    index: number;
+    message: string;
+}
+
+/** Result of {@link WorkflowHandle.createBatch}. Mirrors `@lunora/workflow`'s `WorkflowCreateBatchResult`. */
+interface WorkflowCreateBatchResult {
+    created: WorkflowInstance[];
+    errors: WorkflowCreateBatchError[];
+}
+
 /** Options accepted by {@link WorkflowHandle.create}. Mirrors `@lunora/workflow`'s `WorkflowCreateOptions`. */
 interface WorkflowCreateOptions<Params = Record<string, unknown>> {
     /** Unique-within-the-workflow instance id. Generated by Cloudflare when omitted. */
     id?: string;
     /** The event payload the instance is triggered with — surfaced as `event.payload`. */
     params?: Params;
-    /** Instance retention policy (defaults to the account maximum). */
+    /** Instance retention policy (defaults to the workflow's `defaultRetention`, else the plan default). */
     retention?: { errorRetention?: string; successRetention?: string };
+}
+
+/**
+ * One declared external event a workflow waits on. Mirrors `@lunora/workflow`'s
+ * `WorkflowEventDefinition` — the value `defineWorkflowEvent` returns, taken by
+ * both {@link WorkflowInstance.sendEvent} and the workflow's `ctx.waitForEvent`.
+ */
+interface WorkflowEventDefinition<Payload = unknown> {
+    readonly isLunoraWorkflowEvent: true;
+    readonly payload: Validator<Payload>;
+    readonly type: string;
+}
+
+/** One event `WorkflowInstance.subscribe()` streams. Mirrors `@lunora/workflow`'s `WorkflowInstanceEventLike`. */
+interface WorkflowInstanceEvent {
+    [field: string]: unknown;
+    eventId: number;
+    instanceId: string;
+    timestamp: number;
+    type: string;
 }
 
 /** A live handle to a single workflow instance. Mirrors `@lunora/workflow`'s `WorkflowInstanceLike`. */
 interface WorkflowInstance {
+    delete: () => Promise<void>;
     readonly id: string;
     pause: () => Promise<void>;
     restart: () => Promise<void>;
     resume: () => Promise<void>;
     sendEvent: (event: { payload: unknown; type: string }) => Promise<void>;
     status: () => Promise<WorkflowStatusResult>;
+    /** Stream the instance's events — its full history first, then new ones as it runs. */
+    subscribe: (options?: { cursor?: number; filter?: string[] }) => Promise<{ next: () => Promise<IteratorResult<WorkflowInstanceEvent, void>> }>;
     terminate: () => Promise<void>;
 }
 
@@ -655,10 +1708,14 @@ interface WorkflowInstance {
 interface WorkflowHandle<Params = Record<string, unknown>> {
     /** Start a new instance (optionally with an id + params). */
     create: (options?: WorkflowCreateOptions<Params>) => Promise<WorkflowInstance>;
-    /** Start many instances in one batched RPC. */
-    createBatch: (batch: ReadonlyArray<WorkflowCreateOptions<Params>>) => Promise<WorkflowInstance[]>;
+    /** Start many instances in one batched RPC; per-instance failures come back in `errors`, not dropped. */
+    createBatch: (options: WorkflowCreateBatchOptions<Params>) => Promise<WorkflowCreateBatchResult>;
+    /** Delete up to 100 instances and their stored state; ids that do not exist come back as per-instance errors. */
+    deleteBatch: (instanceIds: ReadonlyArray<string>) => Promise<{ deleted: { id: string }[]; errors: { code: number; id: string; message: string }[] }>;
     /** Get a handle to an existing instance by id. */
     get: (id: string) => Promise<WorkflowInstance>;
+    /** Deliver a declared event (`defineWorkflowEvent`) to one instance; the payload is validated before the send. */
+    sendEvent: <Payload>(instanceId: string, event: WorkflowEventDefinition<Payload>, payload: Payload) => Promise<void>;
 }
 
 /**
@@ -670,6 +1727,50 @@ interface WorkflowHandle<Params = Record<string, unknown>> {
 interface Workflows {
     /** Resolve the handle for a declared workflow by export name. */
     get: <Params = Record<string, unknown>>(name: string) => WorkflowHandle<Params>;
+}
+
+// --- Workers Cache (action-only) --------------------------------------------
+
+/**
+ * Programmatic cache purge surface exposed on {@link ActionCtx}. Actions run
+ * in the Worker (not the DO), so they can reach the Worker's `ctx.cache.purge`.
+ * Queries and mutations do not expose this — they run inside the Durable Object.
+ */
+interface CachePurge {
+    /**
+     * Purge cached responses matching the given tags, or everything when
+     * `purgeEverything` is true. Only available in action handlers.
+     */
+    purge: (options: { purgeEverything?: boolean; tags?: string[] }) => Promise<unknown>;
+}
+
+// --- Secrets Store (core built-in) -------------------------------------------
+
+/**
+ * Structural projection of workers-types' `SecretsStoreSecret` binding — the
+ * per-secret `secrets_store_secrets[]` binding whose `.get()` resolves the
+ * secret value (or throws if it does not exist). Mirrored structurally so the
+ * runtime resolves it without a workerd type dependency.
+ */
+interface SecretsStoreSecretLike {
+    get: () => Promise<string>;
+}
+
+/**
+ * `ctx.secrets` — read account-level secrets bound via Cloudflare Secrets Store.
+ * A core built-in (always present on every context, like `ctx.log`): a binding
+ * named in wrangler's `secrets_store_secrets[]` is read by its binding name.
+ *
+ * ```ts
+ * const apiKey = await ctx.secrets.get("STRIPE_KEY");
+ * ```
+ *
+ * The lookup is async (the platform fetches and decrypts on first read);
+ * reading an undeclared name throws a directed error naming the bound secrets.
+ */
+interface Secrets {
+    /** Resolve a Secrets Store secret by its wrangler binding name. */
+    get: (name: string) => Promise<string>;
 }
 
 // --- Lifecycle triggers ------------------------------------------------------
@@ -799,12 +1900,12 @@ interface TriggerRankPageOptions {
 /**
  * Portable, table/id-addressed ORM writer handed to trigger handlers via
  * `ctx.db`. Mirrors `@lunora/do`'s runtime `DatabaseWriterLike` surface — it is
- * **not** the generated per-table `ctx.db.&lt;table>` facade (which can't be typed
+ * **not** the generated per-table `ctx.db.<table>` facade (which can't be typed
  * from inside `defineTable`, where the full schema isn't known).
  *
  * `aggregate`/`groupBy`/`count`/`rank`/`rankPage` route through the same
  * trigger-maintained counter and rank tables the user-facing reader uses, so
- * a handler's `ctx.db.&lt;table>.aggregate(...)` observes the just-staged write
+ * a handler's `ctx.db.<table>.aggregate(...)` observes the just-staged write
  * within the same DO transaction (the counter step happens before the trigger
  * fires).
  */
@@ -862,94 +1963,6 @@ interface TriggerBuilder<Shape extends Record<string, Validator> = Record<string
     beforeUpdate: (handler: TriggerHandler<TriggerUpdateEvent<Shape>>) => TriggerDefinition;
 }
 
-/**
- * Per-file metadata returned by {@link ReadOnlyStorage.getMetadata}. A clean
- * public mirror of `@lunora/storage`'s `ObjectMetadata` — re-declared here so
- * the ctx surface carries no dependency on the storage package's types. Matches
- * the columns Convex surfaces for `ctx.storage.getMetadata` / `_storage`.
- */
-interface StorageMetadata {
-    /** The object's `Content-Type`, when recorded. */
-    contentType?: string;
-    /** Custom metadata set at upload time, if any. */
-    customMetadata?: Record<string, string>;
-    /** The object's key. */
-    key: string;
-    /** Hex-encoded SHA-256 of the body, when R2 carries a checksum. */
-    sha256?: string;
-    /** Body length in bytes. */
-    size: number;
-    /** When the object was last written (epoch ms), when reported. */
-    uploaded?: number;
-}
-
-/**
- * Read-only projection of `Storage` exposed on `QueryCtx` / `MutationCtx`.
- *
- * Queries are pure reads, and mutations run inside a transactional scope —
- * neither is allowed to perform side-effectful R2 writes (`upload`) or
- * deletes (`delete`). They can, however, **read** existing objects and
- * resolve signed URLs (the URL signing itself is HMAC-only — no R2 round
- * trip), so the read-only surface keeps `download` and `getSignedUrl`. The
- * full {@link Storage} surface stays on `ActionCtx`.
- */
-interface ReadOnlyStorage<Buckets extends string = string> {
-    /**
-     * Select a named bucket (declared via `v.storage("name")`). The returned
-     * accessor's operations target that bucket — `ctx.storage.bucket("avatars")
-     * .download(key)`. The bare `ctx.storage` targets the default bucket.
-     */
-    bucket: (name: Buckets) => ReadOnlyStorage<Buckets>;
-
-    /** The bucket this accessor's operations target (the default for the bare `ctx.storage`). */
-    readonly bucketName: string;
-
-    /** Fetch the body of an existing object. Returns `null` when absent. */
-    download: (key: string) => Promise<ReadableStream | null>;
-
-    /**
-     * Read a file's metadata (size, content-type, sha256, upload time, custom
-     * metadata) without fetching its body. Returns `null` when the object is
-     * absent. Mirrors Convex's `ctx.storage.getMetadata`.
-     */
-    getMetadata: (key: string) => Promise<StorageMetadata | null>;
-    /** Resolve a short-lived signed URL for an existing object. */
-    getSignedUrl: (key: string, options?: { expiresInSeconds?: number }) => Promise<string>;
-    /** Public URL pointing at the configured base for `key`. */
-    getUrl: (key: string) => string;
-}
-
-interface Storage<Buckets extends string = string> extends ReadOnlyStorage<Buckets> {
-    /** Select a named bucket; the returned accessor exposes the full read/write surface. */
-    bucket: (name: Buckets) => Storage<Buckets>;
-
-    delete: (key: string) => Promise<void>;
-
-    /**
-     * Mint a short-lived signed `PUT` URL a client can upload directly to,
-     * optionally pinning the `Content-Type` the uploader must send. Mirrors
-     * Convex's `storage.generateUploadUrl`.
-     */
-    generateUploadUrl: (key: string, options?: { contentType?: string; expiresInSeconds?: number }) => Promise<string>;
-
-    /**
-     * Upload `body` to `key` from the server, returning the stored object's key
-     * and etag. Mirrors Convex's `storage.store`. Accepts the same guard fields
-     * as `@lunora/storage`'s `UploadOptions` so `maxSize` /
-     * `allowedContentTypes` enforcement isn't lost behind the Convex-style alias.
-     */
-    store: (
-        key: string,
-        body: ReadableStream | ArrayBuffer | Blob,
-        options?: {
-            allowedContentTypes?: ReadonlyArray<string>;
-            contentType?: string;
-            customMetadata?: Record<string, string>;
-            maxSize?: number;
-        },
-    ) => Promise<{ etag: string; key: string }>;
-}
-
 interface VectorMatch {
     id: string;
     metadata?: Record<string, unknown>;
@@ -989,11 +2002,11 @@ interface VectorRecord {
 
 /**
  * Read-only vector surface exposed on {@link QueryCtx}. Mirrors the read half
- * of `@lunora/vectors`' `LunoraVectors` so the live adapter is assignable.
+ * of `@lunora/bindings/vectors`' `LunoraVectors` so the live adapter is assignable.
  */
-interface VectorSearchReader {
-    getByIds: (indexName: string, ids: ReadonlyArray<string>) => Promise<ReadonlyArray<VectorRecord>>;
-    query: (indexName: string, input: VectorQueryInput) => Promise<VectorMatches>;
+interface VectorSearchReader<IndexName extends string = string> {
+    getByIds: (indexName: IndexName, ids: ReadonlyArray<string>) => Promise<ReadonlyArray<VectorRecord>>;
+    query: (indexName: IndexName, input: VectorQueryInput) => Promise<VectorMatches>;
 }
 
 /**
@@ -1001,10 +2014,35 @@ interface VectorSearchReader {
  * is queued post-commit by default; `upsertNow` forces a synchronous write.
  * `db.delete` on a vectorized table auto-propagates the matching `deleteByIds`.
  */
-interface VectorSearch extends VectorSearchReader {
-    deleteByIds: (indexName: string, ids: ReadonlyArray<string>) => Promise<void>;
-    upsert: (indexName: string, input: VectorUpsertInput) => Promise<void>;
-    upsertNow: (indexName: string, input: VectorUpsertInput) => Promise<void>;
+interface VectorSearch<IndexName extends string = string> extends VectorSearchReader<IndexName> {
+    deleteByIds: (indexName: IndexName, ids: ReadonlyArray<string>) => Promise<void>;
+    upsert: (indexName: IndexName, input: VectorUpsertInput) => Promise<void>;
+    upsertNow: (indexName: IndexName, input: VectorUpsertInput) => Promise<void>;
+}
+
+/**
+ * Structured, filterable key/value fields attached to a log line — the second
+ * argument of a `ctx.log.<level>(message, fields)` call, or the fields bound by
+ * `ctx.log.with(fields)`. They travel to an `ObservabilitySink`'s `onLog` and,
+ * for a network sink, become OTLP log-record attributes a log pipeline (or the
+ * Cloud log viewer) can filter and index on. Primitive values pass through;
+ * objects/arrays are JSON-encoded at the sink boundary.
+ */
+type LogFields = Record<string, unknown>;
+
+/**
+ * One `ctx.log` severity method. Two call forms:
+ *
+ * - **Structured** — `ctx.log.info("order placed", { orderId, total })`: a message string plus a `fields` object. The fields are indexed as attributes.
+ * - **Console-style** — `ctx.log.info("state", value, other)`: any number of values, joined into the display message exactly like `console.log`.
+ *
+ * The structured form is matched when the second argument is a plain object;
+ * otherwise the call is treated as console-style, so existing `console`-shaped
+ * calls keep working unchanged.
+ */
+interface LunoraLogMethod {
+    (message: string, fields?: LogFields): void;
+    (...args: unknown[]): void;
 }
 
 /**
@@ -1013,41 +2051,422 @@ interface VectorSearch extends VectorSearchReader {
  * `ObservabilitySink`'s `onLog` (where you route it in production) and, in
  * development, to the dev server terminal via the CLI / Vite plugin formatter.
  * Mirrors the `console` method names so it's a drop-in for `console.log` inside a
- * handler, but with attribution and a routable transport.
+ * handler, but with attribution, structured fields, and a routable transport.
  *
- * Accepts any number of values per call, exactly like `console`; objects are
- * rendered into the human-readable message. The raw, un-rendered arguments are
- * preserved ONLY on the in-process `onLog` sink (which you opt into and control);
- * the rendered message — not the structured args — is what reaches the dev
- * terminal and the platform's Workers Logs.
+ * Six severities spanning the OpenTelemetry ramp: `trace`, `debug`, `info` (and
+ * its `log` alias), `warn`, `error`, `fatal`.
+ *
+ * Two ways to attach structured {@link LogFields}: pass them per call
+ * (`ctx.log.info(message, fields)`) or bind them once with {@link with} for a
+ * child logger that stamps every line. The rendered `message` and the structured
+ * `fields` reach the dev terminal and the platform's Workers Logs; the raw,
+ * un-rendered console-style arguments are preserved ONLY on the in-process
+ * `onLog` sink (which you opt into and control).
  *
  * Attribution follows the dispatched function: a log emitted inside an internal
  * function invoked via `ctx.runQuery`/`runMutation`/`runAction` is attributed to
  * the outer request entrypoint, since the composed call reuses its context.
  */
 interface LunoraLogger {
-    readonly debug: (...args: unknown[]) => void;
-    readonly error: (...args: unknown[]) => void;
-    readonly info: (...args: unknown[]) => void;
-    readonly log: (...args: unknown[]) => void;
-    readonly warn: (...args: unknown[]) => void;
+    readonly debug: LunoraLogMethod;
+    readonly error: LunoraLogMethod;
+
+    /**
+     * Emit a **structured event** instead of a log line — OpenTelemetry's Events
+     * API, on the wire as `LogRecord.eventName` (plus an `event.name` attribute
+     * for collectors predating that field).
+     *
+     * ```ts
+     * ctx.log.event("checkout.completed", { plan: user.plan, total, currency });
+     * ```
+     *
+     * The difference from `ctx.log.info("checkout completed", { … })` is what a
+     * backend can do with it. A log line's payload is its message: prose, written
+     * for a human, free to be reworded next sprint — so "how many checkouts
+     * completed, by plan, this hour" degrades into a substring search over
+     * English. An event's payload is its `fields` under a **stable name**, which a
+     * collector can index, group, and alert on directly.
+     *
+     * Rule of thumb: `log.*` for narration you'd read while debugging, `event` for
+     * anything you'd ever put on a dashboard. And for facts about the request as a
+     * whole, prefer `ctx.span` — one wide event beats a dozen
+     * events, however well named.
+     */
+    readonly event: (name: string, fields?: LogFields) => void;
+    readonly fatal: LunoraLogMethod;
+    readonly info: LunoraLogMethod;
+    readonly log: LunoraLogMethod;
+    readonly trace: LunoraLogMethod;
+    readonly warn: LunoraLogMethod;
+
+    /**
+     * Return a child logger that stamps `fields` onto every line it emits,
+     * merged under any per-call fields (per-call wins on a key clash). Chainable
+     * — `ctx.log.with({ requestId }).with({ step })` accumulates both. Use it to
+     * bind request-scoped context once instead of repeating it per call.
+     */
+    readonly with: (fields: LogFields) => LunoraLogger;
+}
+
+/**
+ * Handle the enclosing `ctx.trace` span hands its body, so the body can attach
+ * attributes only known *after* it resolves (an AI call's token usage / dollar
+ * cost, a downstream status, a computed count). Declared structurally here to
+ * mirror `shared/span-event.ts`'s `SpanHandle` and `@lunora/do`'s implementation;
+ * a cross-package assignability guard in `@lunora/testing` fails the build if the
+ * three drift apart. Start attributes are snapshotted before the body runs;
+ * handle writes are merged over them at record time, post-hoc winning on a clash.
+ */
+
+/**
+ * One AI **evaluation** verdict — a scorer's `{name, score, label?}` — to attach
+ * to a generation span via {@link SpanHandle.recordEvaluation}. Declared
+ * structurally to mirror `shared/evaluation-attributes.ts`'s `EvaluationInput`
+ * without a dependency edge.
+ */
+interface SpanEvaluation {
+    /** Optional categorical label (e.g. `"pass"` / `"fail"`), emitted as `.label`. */
+    label?: string;
+    /** Scorer name — the key's name segment; non-`[A-Za-z0-9._-]` chars become `_`. */
+    name: string;
+    /** Numeric score (typically `[0, 1]`), emitted as `.score`. */
+    score: number;
+}
+
+interface SpanHandle {
+    /**
+     * Record a timestamped event on the enclosing span — a retry, a cache miss, a
+     * state transition. Prefer this over an extra `ctx.log` line for anything that
+     * only makes sense *relative to this span*: it rides the span's own export, so
+     * it costs no additional record and can never be separated from its context.
+     */
+    addEvent: (name: string, attributes?: LogFields) => void;
+
+    /**
+     * Link this span to one in another trace — how a queue consumer points back at
+     * the request that enqueued its message without collapsing every producer into
+     * one giant trace.
+     */
+    addLink: (link: SpanLink) => void;
+
+    /**
+     * Attach an AI **evaluation** verdict to this (generation) span as the
+     * `gen_ai.evaluation.<name>.score` / `.label` OpenTelemetry attributes, so a
+     * scorer's grade rides the same trace as the generation it graded. Convenience
+     * over {@link SpanHandle.setAttributes} that owns the key format; privacy-safe —
+     * only the name, score, and optional label are emitted. Throws on an empty name
+     * or a non-finite score.
+     */
+    recordEvaluation: (evaluation: SpanEvaluation) => void;
+
+    /**
+     * Record a **handled** exception as the OTel-conventional `exception` span
+     * event (`exception.type` / `exception.message` / `exception.stacktrace`),
+     * without marking the span failed.
+     *
+     * For an error you swallowed — a retried request, a fallback that worked. An
+     * error that escapes the span body is recorded automatically and *does* set
+     * the error status, so don't call this for one you're re-throwing.
+     */
+    recordException: (error: unknown) => void;
+
+    /** Set one attribute on the enclosing span (merged at record time; post-hoc wins on key clash). */
+    setAttribute: (key: string, value: LogFields[string]) => void;
+    /** Merge attributes onto the enclosing span (post-hoc wins on key clash). */
+    setAttributes: (fields: LogFields) => void;
+
+    /**
+     * The W3C ids of the span this handle refers to (32-hex trace, 16-hex span).
+     *
+     * On `ctx.span` these are the DISPATCH's ids — the trace the whole request
+     * belongs to. Use it to echo a trace id back to a caller so a user can quote
+     * it in a bug report, to build a `traceparent` for a hand-rolled outbound
+     * call, or to parent a third-party library's spans onto this request.
+     */
+    spanContext: () => SpanContextIds;
+}
+
+/**
+ * A span's W3C ids plus the trace's settled sampling verdict.
+ *
+ * `sampled` is the propagated head decision — absent means none reached this
+ * tier, which every consumer reads as keep. It rides with the ids because
+ * everything that announces this span downstream from them (a hand-built
+ * `traceparent`, an `@opentelemetry/api` `SpanContext`) needs the flag in the
+ * same breath: claiming SAMPLED on a trace that was sampled out leaves a
+ * collector holding the middle of a trace nobody kept.
+ */
+interface SpanContextIds {
+    /** The trace's settled W3C `sampled` verdict; absent when none was propagated. */
+    sampled?: boolean;
+    /** This span's id (16-hex). */
+    spanId: string;
+    /** The trace this span belongs to (32-hex). */
+    traceId: string;
+}
+
+/**
+ * A causal reference to a span in another trace (OTel `Span.links`). Ids are
+ * lowercase hex — 32 chars for `traceId`, 16 for `spanId`.
+ */
+interface SpanLink {
+    /** Attributes describing the relationship, e.g. `{ "link.kind": "enqueued_by" }`. */
+    attributes?: LogFields;
+    spanId: string;
+    traceId: string;
+}
+
+/** OTel `SpanKind`. Drives a collector's service map — see {@link SpanOptions.kind}. */
+type SpanKind = "client" | "consumer" | "internal" | "producer" | "server";
+
+/** Options accepted by `ctx.trace(name, fn, options)` beyond a plain attribute bag. */
+interface SpanOptions {
+    /** Start attributes, snapshotted before the body runs. */
+    attributes?: LogFields;
+
+    /**
+     * OTel `SpanKind`, default `"internal"`. Set `"client"` for a call OUT to
+     * another service and `"producer"`/`"consumer"` for queue hops: a collector
+     * builds its service map from this, so leaving everything `"internal"` yields
+     * a trace with no topology.
+     */
+    kind?: SpanKind;
+
+    /** Links to spans in other traces, known at span start. */
+    links?: SpanLink[];
+}
+
+/**
+ * Span factory on every function `ctx`. Wraps a sub-operation so it becomes its
+ * own **span** nested under the dispatch's RPC span, giving a trace real shape:
+ * without it a slow request is one opaque bar, with it you see which part was
+ * slow.
+ *
+ * ```ts
+ * const charge = await ctx.trace("stripe.charge", () => stripe.charges.create(…), { orderId });
+ * ```
+ *
+ * **Nesting is explicit.** The body receives a tracer bound to its own span;
+ * calling *that* is what makes a child:
+ *
+ * ```ts
+ * await ctx.trace("fulfil", async (trace) => {
+ *     // Children of "fulfil" — including under Promise.all, where an ambient
+ *     // "currently open span" would mis-record these as nested inside each other.
+ *     await Promise.all([trace("reserve.stock", …), trace("email.receipt", …)]);
+ * });
+ * ```
+ *
+ * Calling `ctx.trace` again inside a body (rather than the passed tracer) is not
+ * an error — that span is simply parented to the dispatch instead of to the
+ * enclosing span, which is flatter but never wrong.
+ *
+ * Spans share the dispatch's trace id with its `ctx.log` lines and any container
+ * the handler calls (the same `traceparent` is propagated), so one trace spans
+ * worker, shard, and container.
+ *
+ * The span is recorded when the body settles, and the body's value is returned
+ * unchanged. A throw is recorded as an error span and then **re-thrown** — this
+ * is instrumentation, never flow control. Recording is best-effort: a failing
+ * sink can't turn a working handler into a broken one.
+ *
+ * **Post-hoc attributes.** The body also receives a {@link SpanHandle} as its
+ * second argument. The `attributes` passed here are stamped at span start (and
+ * snapshotted, so a later mutation can't rewrite them); anything the body sets
+ * through the handle — `span.setAttribute(k, v)` / `span.setAttributes({…})` — is
+ * merged over that snapshot when the span is recorded, so a value known only once
+ * the body has resolved (an AI call's token usage / dollar cost, a computed
+ * count) still lands on the span. Post-hoc wins on a key clash. The handle is a
+ * trailing parameter, so every existing `(trace) => …` body keeps working
+ * unchanged.
+ * @param name Span name, e.g. `"stripe.charge"`. Prefer a low-cardinality name
+ * and put the varying part in `attributes` — a name built from an id makes every
+ * span its own group in a collector.
+ * @param function_ The body to time, receiving a tracer bound to this span for any
+ * nested spans and the enclosing span's {@link SpanHandle} for post-hoc
+ * attributes. May be sync or async; the result is awaited.
+ * @param attributes Either a plain attribute bag to stamp on the span at start
+ * (normalized like a log line's `fields`), or a {@link SpanOptions} object when
+ * you need `kind` or `links`. It is read as options only when *every* key is one
+ * of `attributes`/`kind`/`links` AND a `kind`, if present, actually names a
+ * {@link SpanKind}; `{ attributes: { kind: "premium" } }` is the explicit form if
+ * your own attributes happen to be named that.
+ * @param identity Adapter-only: record the span under ids the caller has ALREADY
+ * published (see {@link SpanIdentity}). A handler never passes this — it exists
+ * so the `@opentelemetry/api` bridge, which must hand a library a `SpanContext`
+ * synchronously, is recorded under the id it handed out rather than a phantom.
+ */
+type LunoraTracer = <T>(
+    name: string,
+    function_: (trace: LunoraTracer, span: SpanHandle) => Promise<T> | T,
+    attributes?: LogFields | SpanOptions,
+    identity?: SpanIdentity,
+) => Promise<T>;
+
+/**
+ * Caller-supplied ids for one `ctx.trace` span — the tracer's fourth argument.
+ *
+ * For adapters that must publish a span's identity BEFORE the body runs: the
+ * `@opentelemetry/api` bridge returns a `SpanContext` synchronously from
+ * `startSpan` and a library builds a `traceparent` from it, so the span has to be
+ * recorded under the id already announced or every downstream span parents to an
+ * id that never reaches the collector. `parentSpanId` lets such an adapter
+ * express its own parent/child structure without an ambient span stack.
+ *
+ * Both ids are required: an adapter that has published one has published the
+ * other, and `identity` is itself optional — omitting it, not passing a partial
+ * object, is how a caller says "no adapter involved".
+ */
+interface SpanIdentity {
+    /** Parent to this span id instead of the enclosing `ctx.trace` / dispatch span. */
+    parentSpanId: string;
+    /** Record the span under this id (16-hex) instead of a freshly minted one. */
+    spanId: string;
+}
+
+/**
+ * `ctx.span` — a handle onto **this request's own span**, and with it the
+ * wide-event API.
+ *
+ * ```ts
+ * export const checkout = mutation({ handler: async (ctx, args) => {
+ *     ctx.span.setAttributes({ "user.plan": user.plan, "cart.items": cart.length });
+ *     const payment = await charge(cart);
+ *     ctx.span.setAttributes({ "payment.provider": payment.provider, "payment.total": payment.total });
+ *     if (payment.retried) ctx.span.addEvent("payment.retried", { attempts: payment.attempts });
+ *     return payment;
+ * }});
+ * ```
+ *
+ * **Why this instead of more log lines.** The usual way to make a handler
+ * observable is to sprinkle `ctx.log.info` through it, which costs one record per
+ * call, scatters one request's facts across a dozen rows, and forces every
+ * question to be answered by correlating them back together. The wide-event
+ * pattern inverts that: accumulate the facts as you learn them, and emit **one**
+ * richly-attributed record per unit of work. Cost is flat — one span per request
+ * no matter how much you attach — and every question ("p99 checkout latency for
+ * pro-plan users with >10 items") becomes a single filter over one table instead
+ * of a join across log lines.
+ *
+ * **This is plain OpenTelemetry, not a Lunora convention.** The attributes land
+ * on the span the dispatch already emits, and are additionally exported as an
+ * OTel Event record named `lunora.dispatch`, correlated by `trace_id`/`span_id`.
+ * Any OTLP backend groups and aggregates them with no special configuration.
+ *
+ * **`span` vs `trace`.** `ctx.trace(name, fn)` creates a NEW child span to time a
+ * sub-operation; `ctx.span` attaches to the one that already exists for the
+ * request. Use `trace` for "how long did this part take", `span` for "what was
+ * true about this request". Inside a `ctx.trace` body, the handle passed as the
+ * body's second argument is that child span's equivalent of this.
+ *
+ * Attributes are normalized exactly like `ctx.log` fields, and recording is
+ * best-effort — a telemetry failure never breaks the handler.
+ */
+type LunoraWideEvent = SpanHandle;
+
+/**
+ * Application metrics on every function `ctx` — the third signal alongside
+ * `ctx.log` and `ctx.trace`. Each call records one measurement that flows to an
+ * `ObservabilitySink`'s `onMetric`, and from `otlpSink` to a collector's
+ * `/v1/metrics`.
+ *
+ * ```ts
+ * ctx.metrics.count("orders.placed", 1, { plan: user.plan });
+ * ctx.metrics.record("checkout.latency_ms", Date.now() - started);
+ * ctx.metrics.gauge("cart.items", cart.items.length);
+ * ```
+ *
+ * Pick the instrument by the question you want to answer: `count` for "how many"
+ * (summed over time), `gauge` for "how many right now" (replaces the last
+ * reading), `record` for "what's the distribution" (percentiles, not just a
+ * mean).
+ *
+ * `attributes` are the metric's dimensions. Keep them **low-cardinality** — an
+ * attribute valued by user id or order id creates a distinct time series per id,
+ * which is how a metrics backend gets expensive. Put identifiers on a log line or
+ * a span instead.
+ *
+ * No pre-aggregation happens: one call is one exported measurement, with counter
+ * deltas for the collector to sum. In a hot loop, sum locally and record once
+ * rather than calling per iteration.
+ */
+interface LunoraMetrics {
+    /**
+     * Add to a monotonic counter (default `1`) — requests served, retries,
+     * bytes sent. The collector sums successive deltas.
+     */
+    readonly count: (name: string, value?: number, attributes?: LogFields) => void;
+
+    /**
+     * Report a point-in-time reading that replaces the previous one — queue
+     * depth, cache size, connections open.
+     */
+    readonly gauge: (name: string, value: number, attributes?: LogFields) => void;
+
+    /**
+     * Observe one sample of a distribution — latency, payload size. Use this,
+     * not a counter, when percentiles matter.
+     */
+    readonly record: (name: string, value: number, attributes?: LogFields) => void;
 }
 
 // eslint-disable-next-line unicorn/prevent-abbreviations -- public API name re-exported by src/index.ts; renaming would break consumers
 interface QueryCtx {
     readonly auth: AuthState;
-
     readonly db: DatabaseReader;
 
     /**
-     * The caller's IP for this request — Cloudflare's trusted `CF-Connecting-IP`,
-     * forwarded server-side (never read from a client header). `undefined` when
-     * unknown: a live-subscription re-run, a server-initiated dispatch, or
-     * non-Cloudflare hosting. A convenient rate-limit key for anonymous traffic.
+     * The validated, typed environment. Populated only when the project declares
+     * a `defineEnv(...)` contract in `lunora/env.ts`; codegen then narrows this to
+     * the validated `InferEnv` shape so `ctx.env.STRIPE_KEY` is parsed and
+     * coercion-aware. Absent (optional) without a contract — declare
+     * `lunora/env.ts` to populate and type it.
+     */
+    readonly env?: Record<string, unknown>;
+
+    /**
+     * The caller's IP for this request, or `undefined` when nothing trustworthy
+     * says who called.
+     *
+     * Populated only from Cloudflare's `CF-Connecting-IP`, forwarded server-side,
+     * and only while running ON Cloudflare — that is the one place the edge stamps
+     * the header over anything the client sent. On any other host it is a header
+     * the caller typed, so the runtime resolves nothing rather than hand a handler
+     * an attacker-chosen address; a rate limit keyed on a forgeable `ip` is worse
+     * than no limit, because it reads as enforced. `undefined` therefore covers: a
+     * live-subscription re-run, a server-initiated dispatch, and ANY non-Cloudflare
+     * host. A convenient rate-limit key for anonymous traffic on Cloudflare;
+     * elsewhere, key on something the caller cannot choose.
      */
     readonly ip?: string;
+
     /** Structured, function-attributed logger; see {@link LunoraLogger}. */
     readonly log: LunoraLogger;
+
+    /**
+     * Static metadata declared on this procedure with `.meta(...)`, merged
+     * across calls and deep-frozen. Present so middleware can read the policy it
+     * is meant to enforce (`ctx.meta.rateLimit`, …) instead of having it
+     * hard-wired at each `.use()` site; absent when the procedure never called
+     * `.meta()`.
+     */
+    readonly meta?: Readonly<Record<string, unknown>>;
+
+    /** Application counters, gauges, and histograms; see {@link LunoraMetrics}. */
+
+    readonly metrics: LunoraMetrics;
+    /** `ctx.newId()`: see `createStableIdFactory`. Derived, not random, when the call carries a replay key. */
+    readonly newId: () => string;
+
+    /**
+     * Wall-clock time (epoch ms) the function began, captured once so the whole
+     * handler sees a single stable value. Query/mutation handlers must be
+     * deterministic — they may be re-run on subscription re-evaluation (an OCC
+     * conflict surfaces as a `409` to the caller, not an internal retry) — so
+     * read time through `ctx.now` instead of `Date.now()` (the latter is flagged
+     * by the `nondeterministic_query_mutation` advisor). Actions may use `Date.now()`.
+     */
+    readonly now: number;
 
     /**
      * Compose a read-only subquery in-process, reusing this query's read
@@ -1057,36 +2476,91 @@ interface QueryCtx {
      * `runMutation` on a `QueryCtx` (writes are not allowed from a query).
      * Mirrors Convex's `ctx.runQuery`.
      */
-    readonly runQuery: <A extends ArgsValidator, R>(reference: RegisteredQuery<A, R>, args: InferArgs<A>) => Promise<R>;
+    readonly runQuery: RunQuery;
+    /** Read account-level secrets from Cloudflare Secrets Store; see {@link Secrets}. */
+    readonly secrets: Secrets;
+    /** Attach facts to THIS request's span — the wide event; see {@link LunoraWideEvent}. */
+    readonly span: LunoraWideEvent;
     readonly storage: ReadOnlyStorage;
+    /** Wrap a sub-operation in its own nested span; see {@link LunoraTracer}. */
+    readonly trace: LunoraTracer;
     readonly vectors: VectorSearchReader;
 }
 
 // eslint-disable-next-line unicorn/prevent-abbreviations -- public API name re-exported by src/index.ts; renaming would break consumers
 interface MutationCtx {
     readonly auth: AuthState;
-
     readonly db: DatabaseWriter;
 
     /**
-     * The caller's IP for this request — Cloudflare's trusted `CF-Connecting-IP`,
-     * forwarded server-side (never read from a client header). `undefined` when
-     * unknown: a live-subscription re-run, a server-initiated dispatch, or
-     * non-Cloudflare hosting. A convenient rate-limit key for anonymous traffic.
+     * The validated, typed environment. Populated only when the project declares
+     * a `defineEnv(...)` contract in `lunora/env.ts`; codegen then narrows this to
+     * the validated `InferEnv` shape so `ctx.env.STRIPE_KEY` is parsed and
+     * coercion-aware. Absent (optional) without a contract — declare
+     * `lunora/env.ts` to populate and type it.
+     */
+    readonly env?: Record<string, unknown>;
+
+    /**
+     * The caller's IP for this request, or `undefined` when nothing trustworthy
+     * says who called. Identical to {@link QueryCtx.ip} — see there for which
+     * host populates it and why every other one deliberately does not.
      */
     readonly ip?: string;
+
     /** Structured, function-attributed logger; see {@link LunoraLogger}. */
     readonly log: LunoraLogger;
+
+    /**
+     * Static metadata declared on this procedure with `.meta(...)`, merged
+     * across calls and deep-frozen. Present so middleware can read the policy it
+     * is meant to enforce (`ctx.meta.rateLimit`, …) instead of having it
+     * hard-wired at each `.use()` site; absent when the procedure never called
+     * `.meta()`.
+     */
+    readonly meta?: Readonly<Record<string, unknown>>;
+
+    /** Application counters, gauges, and histograms; see {@link LunoraMetrics}. */
+
+    readonly metrics: LunoraMetrics;
+    /** `ctx.newId()`: see `createStableIdFactory`. Derived, not random, when the call carries a replay key. */
+    readonly newId: () => string;
+
+    /**
+     * Wall-clock time (epoch ms) the function began, captured once so the whole
+     * handler sees a single stable value. Mutation handlers must be deterministic
+     * — an OCC conflict surfaces as a `409` to the caller rather than an internal
+     * retry, but a caller's own retry is a fresh dispatch — so read time through
+     * `ctx.now` instead of `Date.now()` (the latter is flagged by the
+     * `nondeterministic_query_mutation` advisor). Actions may use `Date.now()`.
+     */
+    readonly now: number;
+
+    /**
+     * The origin (`scheme://host[:port]`) the request behind this dispatch reached
+     * the worker on: the base for an absolute URL back to this app, such as a
+     * signed storage URL, with no per-environment value to configure.
+     *
+     * The runtime reads it off the request URL, never off a client header, and
+     * forwards it to the shard with the dispatch. `undefined` wherever no request
+     * is behind the call: a scheduled or workflow run, a queue consumer, a
+     * server-initiated dispatch. A query has no `origin` at all: a live query
+     * re-runs with no request behind it, and its cached result is shared across
+     * callers on every host, so a query that builds such a URL needs a configured
+     * base.
+     */
+    readonly origin?: string;
 
     /**
      * Compose a submutation in-process, reusing this mutation's `db` writer.
      * Executes the referenced mutation's handler directly — no fresh DO RPC —
      * so its writes apply through the same shard invocation as the enclosing
-     * mutation. Note: writes are not wrapped in a SQL transaction, so a partial
-     * failure does not roll back earlier writes (the same as a top-level
-     * mutation). Mirrors Convex's `ctx.runMutation`.
+     * mutation. The submutation joins the enclosing mutation's transaction
+     * (SQLite in a Durable Object has no savepoints, so it rides the open span):
+     * its writes commit or roll back together with the caller's, and a throw that
+     * escapes the outer handler rolls back both. Mirrors Convex's `ctx.runMutation`.
      */
-    readonly runMutation: <A extends ArgsValidator, R>(reference: RegisteredMutation<A, R>, args: InferArgs<A>) => Promise<R>;
+    readonly runMutation: RunMutation;
 
     /**
      * Compose a read-only subquery in-process, reusing this mutation's `db`.
@@ -1094,9 +2568,15 @@ interface MutationCtx {
      * it observes this mutation's in-flight writes. Mirrors Convex's
      * `ctx.runQuery`.
      */
-    readonly runQuery: <A extends ArgsValidator, R>(reference: RegisteredQuery<A, R>, args: InferArgs<A>) => Promise<R>;
+    readonly runQuery: RunQuery;
     readonly scheduler: Scheduler;
-    readonly storage: ReadOnlyStorage;
+    /** Read account-level secrets from Cloudflare Secrets Store; see {@link Secrets}. */
+    readonly secrets: Secrets;
+    /** Attach facts to THIS request's span — the wide event; see {@link LunoraWideEvent}. */
+    readonly span: LunoraWideEvent;
+    readonly storage: MutationStorage;
+    /** Wrap a sub-operation in its own nested span; see {@link LunoraTracer}. */
+    readonly trace: LunoraTracer;
     readonly vectors: VectorSearch;
 
     /** Start / resume / inspect durable workflows; see {@link Workflows}. */
@@ -1107,118 +2587,163 @@ interface MutationCtx {
 interface ActionCtx {
     readonly auth: AuthState;
 
+    /**
+     * Programmatic Workers Cache purge; see {@link CachePurge}.
+     *
+     * **HTTP actions only.** It is the Worker that holds the `cache` binding, and
+     * only `HttpActionCtx` is built there — an `action` reached over RPC runs
+     * inside the Durable Object like a query or a mutation, so `ctx.cache` is
+     * `undefined` for it. Declared here because `HttpActionCtx` is a `Pick` of
+     * this interface. Optional because Workers Cache is only present when
+     * enabled in `wrangler.jsonc`; always branch on it.
+     */
+    readonly cache?: CachePurge;
+
     readonly db: DatabaseWriter;
+
+    /**
+     * The validated, typed environment. Populated only when the project declares
+     * a `defineEnv(...)` contract in `lunora/env.ts`; codegen then narrows this to
+     * the validated `InferEnv` shape so `ctx.env.STRIPE_KEY` is parsed and
+     * coercion-aware. Absent (optional) without a contract — declare
+     * `lunora/env.ts` to populate and type it.
+     */
+    readonly env?: Record<string, unknown>;
+
     readonly fetch: typeof globalThis.fetch;
 
     /**
-     * The caller's IP for this request — Cloudflare's trusted `CF-Connecting-IP`,
-     * forwarded server-side (never read from a client header). `undefined` when
-     * unknown: a live-subscription re-run, a server-initiated dispatch, or
-     * non-Cloudflare hosting. A convenient rate-limit key for anonymous traffic.
+     * The caller's IP for this request, or `undefined` when nothing trustworthy
+     * says who called. Identical to {@link QueryCtx.ip} — see there for which
+     * host populates it and why every other one deliberately does not.
      */
     readonly ip?: string;
+
     /** Structured, function-attributed logger; see {@link LunoraLogger}. */
     readonly log: LunoraLogger;
-    readonly runAction: <A extends ArgsValidator, R>(reference: RegisteredAction<A, R>, args: InferArgs<A>) => Promise<R>;
-    readonly runMutation: <A extends ArgsValidator, R>(reference: RegisteredMutation<A, R>, args: InferArgs<A>) => Promise<R>;
-    readonly runQuery: <A extends ArgsValidator, R>(reference: RegisteredQuery<A, R>, args: InferArgs<A>) => Promise<R>;
+
+    /**
+     * Static metadata declared on this procedure with `.meta(...)`, merged
+     * across calls and deep-frozen. Present so middleware can read the policy it
+     * is meant to enforce (`ctx.meta.rateLimit`, …) instead of having it
+     * hard-wired at each `.use()` site; absent when the procedure never called
+     * `.meta()`.
+     */
+    readonly meta?: Readonly<Record<string, unknown>>;
+
+    /** Application counters, gauges, and histograms; see {@link LunoraMetrics}. */
+
+    readonly metrics: LunoraMetrics;
+    /** `ctx.newId()`: see `createStableIdFactory`. Derived, not random, when the call carries a replay key. */
+    readonly newId: () => string;
+
+    /**
+     * Wall-clock time (epoch ms) the action began, captured once for convenience
+     * and parity with query/mutation `ctx.now`. Actions run exactly once, so they
+     * may also use ambient `Date.now()` freely.
+     */
+    readonly now: number;
+
+    /**
+     * The origin the request behind this dispatch reached the worker on, or
+     * `undefined` when no request is behind it. Identical to
+     * {@link MutationCtx.origin}.
+     */
+    readonly origin?: string;
+    readonly runAction: RunAction;
+    readonly runMutation: RunMutation;
+    readonly runQuery: RunQuery;
     readonly scheduler: Scheduler;
+    /** Read account-level secrets from Cloudflare Secrets Store; see {@link Secrets}. */
+    readonly secrets: Secrets;
+    /** Attach facts to THIS request's span — the wide event; see {@link LunoraWideEvent}. */
+    readonly span: LunoraWideEvent;
     readonly storage: Storage;
+    /** Wrap a sub-operation in its own nested span; see {@link LunoraTracer}. */
+    readonly trace: LunoraTracer;
     readonly vectors: VectorSearch;
 
     /** Start / resume / inspect durable workflows; see {@link Workflows}. */
     readonly workflows: Workflows;
 }
 
-// --- Generated API surface ---------------------------------------------------
-
-/**
- * Stand-in returned by codegen so projects can `import { api } from "./_generated/api"`.
- * The runtime value is opaque; the types are filled in by generated declarations.
- */
-type AnyApi = Record<string, Record<string, RegisteredFunction<ArgsValidator, unknown, FunctionKind>>>;
-
-const anyApi: AnyApi = new Proxy(
-    {},
-    {
-        get(_target, namespace: PropertyKey) {
-            const cached = namespaceCache.get(namespace);
-
-            if (cached) {
-                return cached;
-            }
-
-            const refCache = new Map<PropertyKey, { __lunoraRef: string }>();
-            const nsProxy = new Proxy(
-                {},
-                {
-                    get(_inner, functionName: PropertyKey) {
-                        const cachedRef = refCache.get(functionName);
-
-                        if (cachedRef) {
-                            return cachedRef;
-                        }
-
-                        const ref = { __lunoraRef: `${String(namespace)}:${String(functionName)}` };
-
-                        refCache.set(functionName, ref);
-
-                        return ref;
-                    },
-                },
-            );
-
-            namespaceCache.set(namespace, nsProxy);
-
-            return nsProxy;
-        },
-    },
-);
-
-export { anyApi };
-
 export type {
     ActionCtx,
     AggregateIndexDefinition,
     AggregateOp,
-    AnyApi,
     ArgsValidator,
     AuthState,
+    CachePurge,
     DatabaseReader,
     DatabaseWriter,
+    DurableObjectJurisdiction,
+    DurableStreamOptions,
+    ExposeConfig,
+    ExternalSourceCursor,
+    ExternalSourceDefinition,
+    ExternalSourceMode,
+    ExternalSourceRefresh,
     FunctionKind,
     FunctionVisibility,
+    GeoBoundingBox,
+    GeoFilterBuilder,
+    GeoIndexDefinition,
+    GeoPointInput,
     GlobalBackend,
     IndexDefinition,
     IndexRangeBuilder,
     InferArgs,
+    KeyedRelationDefinition,
     LifecycleEvent,
     LifecycleEventKind,
+    LogFields,
     LunoraLogger,
+    LunoraLogMethod,
+    LunoraMetrics,
+    LunoraTracer,
+    LunoraWideEvent,
     MutationCtx,
     OnDeleteAction,
     PaginationOptions,
     PaginationResult,
+    PatchIfResult,
     QueryCtx,
     RankIndexDefinition,
     RankSortKey,
-    ReadOnlyStorage,
     RegisteredAction,
     RegisteredFunction,
     RegisteredLifecycleHook,
     RegisteredMutation,
     RegisteredQuery,
     RegisteredStream,
+    RelatedDirection,
+    RelatedNode,
+    RelatedOptions,
+    RelatedPage,
+    RelatedStart,
+    RelatedStartReference,
     RelationDefinition,
+    RelationThrough,
+    RestCacheConfig,
+    RetryPolicy,
+    RunQueryOptions,
     ScheduledFunctionDoc,
     ScheduledJob,
     Scheduler,
     Schema,
     SearchFilterBuilder,
     SearchIndexDefinition,
+    Secrets,
+    SecretsStoreSecretLike,
+    ShardInitEvent,
     ShardMode,
-    Storage,
-    StorageMetadata,
+    SpanContextIds,
+    SpanEvaluation,
+    SpanHandle,
+    SpanIdentity,
+    SpanKind,
+    SpanLink,
+    SpanOptions,
     SystemDatabaseReader,
     SystemDoc,
     SystemQuery,
@@ -1226,6 +2751,7 @@ export type {
     TableDefinition,
     TableReader,
     TableVectorIndex,
+    ThroughRelationDefinition,
     TriggerAggregateOptions,
     TriggerBuilder,
     TriggerCtx,
@@ -1246,6 +2772,7 @@ export type {
     TriggerRow,
     TriggerTiming,
     TriggerUpdateEvent,
+    TtlDefinition,
     VectorEmbedder,
     VectorIndexDefinition,
     VectorMatch,
@@ -1256,10 +2783,33 @@ export type {
     VectorSearch,
     VectorSearchReader,
     VectorUpsertInput,
+    WhisperEvent,
     WorkflowCreateOptions,
+    WorkflowEventDefinition,
     WorkflowHandle,
     WorkflowInstance,
+    WorkflowInstanceEvent,
     WorkflowInstanceStatus,
     Workflows,
     WorkflowStatusResult,
+    X402ProcedureConfig,
 };
+
+export type {
+    MutationStorage,
+    ReadOnlyStorage,
+    Storage,
+    StorageListOptions,
+    StorageListResult,
+    StorageMetadata,
+    StorageMultipartUpload,
+    StorageMultipartUploadOptions,
+    StorageObjectBody,
+    StorageObjectHead,
+    StorageRange,
+    StorageUploadBody,
+    StorageUploadedPart,
+    StorageUploadOptions,
+    StorageUploadResult,
+} from "./storage/context";
+export type { SearchLanguage, SearchStrategy } from "@lunora/search-core";

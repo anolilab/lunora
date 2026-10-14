@@ -1,0 +1,30 @@
+{
+    // A third program, for the Solid 2 port. It exists for the same reason
+    // `tsconfig.solid.json` does — a program holds one `jsx`/`jsxImportSource`
+    // pair — plus one more: Solid 2 is a different major of the same package,
+    // and this package authors BOTH ports side by side.
+    //
+    // `solid-js` therefore cannot mean the same thing in both programs. The
+    // 2.x copy is installed under the alias `solid-js-v2` (see the `solid2`
+    // catalog), and `paths` points this program's `solid-js` at it — so the
+    // port's source can `import … from "solid-js"` exactly as it will in a
+    // user's project, while `tsconfig.solid.json` next door still resolves the
+    // 1.x copy. `@solidjs/web` needs no mapping: it exists only on the 2.x line.
+    "extends": "./tsconfig.json",
+    "compilerOptions": {
+        "jsx": "preserve",
+        "jsxImportSource": "@solidjs/web",
+        "types": ["node"],
+        // No `baseUrl` (deprecated in TS 6): under `moduleResolution: bundler`
+        // these paths resolve relative to this file.
+        "paths": {
+            "solid-js": ["./node_modules/solid-js-v2"],
+            "solid-js/*": ["./node_modules/solid-js-v2/*"]
+        }
+    },
+    // Source only. The port's render tests live in `tests/auth-ui-solid-v2`,
+    // because this remap does not survive into a test run — see that package's
+    // vitest config.
+    "include": ["src/solid-v2/**/*", "src/core/**/*"],
+    "exclude": []
+}

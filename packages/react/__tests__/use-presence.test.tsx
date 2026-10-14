@@ -1,6 +1,9 @@
-import type { FunctionReference } from "@lunora/client";
+import type { FunctionReference, SubscriptionErrorCallback } from "@lunora/client";
 import { act, render, screen, waitFor } from "@testing-library/react";
-import type { ReactElement } from "react";
+import type { ReactElement, Ref } from "react";
+import { createRef, useImperativeHandle } from "react";
+import { createRoot } from "react-dom/client";
+import { renderToString } from "react-dom/server";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { LunoraProvider } from "../src/lunora-provider";
@@ -26,6 +29,25 @@ const Roster = ({ roomId = "room-1" }: { roomId?: string }): ReactElement => {
     );
 };
 
+type SetData = (data: Record<string, unknown> | undefined) => void;
+type SetDataHandle = { setData: SetData };
+
+// Exposes the mounted hook's `setData` through a ref so a test can call it after mount or after unmount.
+const SetDataCapture = ({ ref }: { ref: Ref<SetDataHandle> }): ReactElement => {
+    const { setData } = usePresence("room-1", {
+        heartbeat: HEARTBEAT,
+        intervalMs: 1000,
+        listPresent: LIST_PRESENT,
+        sessionId: "sess-fixed",
+    });
+
+    useImperativeHandle(ref, () => {
+        return { setData };
+    }, [setData]);
+
+    return <div />;
+};
+
 describe("usePresence", () => {
     beforeEach(() => {
         vi.useFakeTimers({ shouldAdvanceTime: true });
@@ -33,6 +55,45 @@ describe("usePresence", () => {
 
     afterEach(() => {
         vi.useRealTimers();
+    });
+
+    it("surfaces a listPresent subscription error on `error` and through `onError`", async () => {
+        expect.hasAssertions();
+
+        const mock = createMockClient();
+        const onError = vi.fn<SubscriptionErrorCallback>();
+
+        const Probe = (): ReactElement => {
+            const { error } = usePresence("room-1", {
+                heartbeat: HEARTBEAT,
+                intervalMs: 1000,
+                listPresent: LIST_PRESENT,
+                onError,
+                sessionId: "sess-fixed",
+            });
+
+            return <div data-testid="probe">{error?.message ?? ""}</div>;
+        };
+
+        render(
+            <LunoraProvider client={mock.asClient}>
+                <Probe />
+            </LunoraProvider>,
+        );
+
+        await waitFor(() => {
+            expect(mock.subscribe).toHaveBeenCalledTimes(1);
+        });
+
+        await act(async () => {
+            mock.emitError("presence:listPresent", { code: "UNAUTHORIZED", message: "room closed" });
+        });
+
+        await waitFor(() => {
+            expect(screen.getByTestId("probe").textContent).toBe("room closed");
+        });
+
+        expect(onError).toHaveBeenCalledWith({ code: "UNAUTHORIZED", message: "room closed" });
     });
 
     it("heartbeats on mount and again on each interval tick", async () => {
@@ -90,16 +151,18 @@ describe("usePresence", () => {
         expect(screen.getByTestId("roster").textContent).toBe(JSON.stringify(members));
     });
 
-    it("generates a fallback session id when globalThis.crypto is unavailable (no throw)", () => {
+    it("mints a session id from getRandomValues when crypto.randomUUID is unavailable", () => {
         expect.hasAssertions();
 
         const mock = createMockClient();
         const originalCrypto = globalThis.crypto;
 
-        // Simulate an SSR / older runtime that leaves `crypto` undefined: reading
-        // `.randomUUID` off it would throw a TypeError if the guard only checked
-        // the method and not the `crypto` object itself.
-        Object.defineProperty(globalThis, "crypto", { configurable: true, value: undefined });
+        // A non-secure origin (a plain-HTTP LAN dev/preview server) leaves
+        // `crypto.randomUUID` undefined while still shipping `getRandomValues`.
+        Object.defineProperty(globalThis, "crypto", {
+            configurable: true,
+            value: { getRandomValues: (array: Uint8Array) => array.fill(171) },
+        });
 
         const Anon = (): ReactElement => {
             const { sessionId } = usePresence("room-anon", { heartbeat: HEARTBEAT, intervalMs: 1000, listPresent: LIST_PRESENT });
@@ -116,10 +179,143 @@ describe("usePresence", () => {
 
             const id = screen.getByTestId("anon").textContent;
 
-            expect(id).toMatch(/^sess-/);
+            // The non-`randomUUID` arm hex-encodes 16 bytes (shared/random-session-id.ts).
+            // There is deliberately no arm below it: a runtime with no Web Crypto throws
+            // rather than mint a `Date.now()` string two sessions can share.
+            expect(id).toMatch(/^[\da-f]{32}$/);
         } finally {
             Object.defineProperty(globalThis, "crypto", { configurable: true, value: originalCrypto });
         }
+    });
+
+    it("mounts and still heartbeats on an interval when `document` is unavailable, e.g. React Native (RN-01)", async () => {
+        expect.hasAssertions();
+
+        const mock = createMockClient();
+
+        // React Native has no `document` global at all — not even `undefined`,
+        // the identifier is simply never declared. A bare `document.visibilityState`
+        // read (or `document.addEventListener`) throws a ReferenceError on mount
+        // without the `typeof document !== "undefined"` guard. `react-dom`
+        // creates elements via the container's `ownerDocument`, not the bare
+        // global, so rendering into a container created BEFORE deleting the
+        // global still works here — letting this test isolate exactly the
+        // hook's own (formerly unguarded) `document` reads.
+        const container = globalThis.document.createElement("div");
+
+        globalThis.document.body.append(container);
+
+        const originalDocument = globalThis.document;
+
+        // @ts-expect-error -- intentionally deleting a required global to simulate React Native
+        delete globalThis.document;
+
+        const root = createRoot(container);
+
+        try {
+            expect(() => {
+                // eslint-disable-next-line testing-library/no-unnecessary-act -- this is raw `react-dom/client`'s `root.render`, not an RTL util call (the rule name-matches "render" regardless of origin); `act` here is load-bearing so the mount's effects (the heartbeat) flush synchronously before the assertion below.
+                act(() => {
+                    root.render(
+                        <LunoraProvider client={mock.asClient}>
+                            <Roster />
+                        </LunoraProvider>,
+                    );
+                });
+            }).not.toThrow();
+
+            // The interval heartbeat (not the visibility-driven one, which is
+            // itself guarded and simply skipped) fires synchronously as part of
+            // mount — asserted here, before `document` is restored, so this
+            // stays proof of the mount-time behavior specifically. (Skip RTL's
+            // `waitFor`: it resolves its own default container from `document`,
+            // which is exactly what this test has deleted.)
+            expect(mock.mutation).toHaveBeenCalledTimes(1);
+        } finally {
+            Object.defineProperty(globalThis, "document", { configurable: true, value: originalDocument, writable: true });
+            root.unmount();
+            container.remove();
+        }
+    });
+
+    it("setData called during render sends no heartbeat before mount", () => {
+        expect.hasAssertions();
+
+        const mock = createMockClient();
+
+        // Server rendering runs the body with no effects, the same pre-mount path a render-time call takes.
+        const Probe = (): ReactElement => {
+            const { setData } = usePresence("room-1", {
+                heartbeat: HEARTBEAT,
+                intervalMs: 1000,
+                listPresent: LIST_PRESENT,
+                sessionId: "sess-fixed",
+            });
+
+            setData({ status: "typing" });
+
+            return <div />;
+        };
+
+        renderToString(
+            <LunoraProvider client={mock.asClient}>
+                <Probe />
+            </LunoraProvider>,
+        );
+
+        expect(mock.mutation).not.toHaveBeenCalled();
+    });
+
+    it("setData while mounted sends a heartbeat carrying the new data", async () => {
+        expect.hasAssertions();
+
+        const mock = createMockClient();
+        const captured = createRef<SetDataHandle>();
+
+        render(
+            <LunoraProvider client={mock.asClient}>
+                <SetDataCapture ref={captured} />
+            </LunoraProvider>,
+        );
+
+        await waitFor(() => {
+            expect(mock.mutation).toHaveBeenCalledTimes(1);
+        });
+
+        act(() => {
+            captured.current?.setData({ status: "typing" });
+        });
+
+        expect(mock.mutation).toHaveBeenCalledTimes(2);
+        expect(mock.mutation.mock.calls[1]?.[1]).toMatchObject({ roomId: "room-1", sessionId: "sess-fixed", data: { status: "typing" } });
+    });
+
+    it("setData after unmount sends no heartbeat", async () => {
+        expect.hasAssertions();
+
+        const mock = createMockClient();
+        const captured = createRef<SetDataHandle>();
+
+        const view = render(
+            <LunoraProvider client={mock.asClient}>
+                <SetDataCapture ref={captured} />
+            </LunoraProvider>,
+        );
+
+        await waitFor(() => {
+            expect(mock.mutation).toHaveBeenCalledTimes(1);
+        });
+
+        // Keep the handle from before unmount: React detaches the ref, so a fresh read would be null.
+        const setData = captured.current?.setData;
+
+        view.unmount();
+
+        const callsAtUnmount = mock.mutation.mock.calls.length;
+
+        setData?.({ status: "typing" });
+
+        expect(mock.mutation).toHaveBeenCalledTimes(callsAtUnmount);
     });
 
     it("stops heart-beating after unmount and releases the subscription", async () => {

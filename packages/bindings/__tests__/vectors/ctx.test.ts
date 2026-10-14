@@ -1,0 +1,797 @@
+import { describe, expect, it, vi } from "vitest";
+
+import type { SchemaLike, VectorSearchLike } from "../../src/vectors/context";
+import { createContextVectors, createVectorSyncHook } from "../../src/vectors/context";
+import createVectors from "../../src/vectors/create-vectors";
+import type { VectorizeDeleteMutation, VectorizeIndexLike, VectorizeMatches, VectorizeUpsertMutation, VectorizeVector } from "../../src/vectors/types";
+
+const fakeIndex = (overrides: Partial<VectorizeIndexLike> = {}): VectorizeIndexLike => {
+    return {
+        deleteByIds: vi.fn<VectorizeIndexLike["deleteByIds"]>(async (ids: ReadonlyArray<string>): Promise<VectorizeDeleteMutation> => {
+            return { count: ids.length, mutationId: `delete-${String(ids.length)}` };
+        }),
+        getByIds: vi.fn<VectorizeIndexLike["getByIds"]>(async (ids: ReadonlyArray<string>): Promise<ReadonlyArray<VectorizeVector>> =>
+            ids.map((id) => {
+                return { id, metadata: { k: id }, values: [1, 2] };
+            }),
+        ),
+        insert: vi.fn<VectorizeIndexLike["insert"]>(async (vectors): Promise<VectorizeUpsertMutation> => {
+            return { mutationId: `insert-${String(vectors.length)}` };
+        }),
+        query: vi.fn<VectorizeIndexLike["query"]>(async (): Promise<VectorizeMatches> => {
+            return {
+                count: 1,
+                matches: [{ id: "row-1", metadata: { title: "Hi" }, score: 0.9, values: [0.1] }],
+            };
+        }),
+        upsert: vi.fn<VectorizeIndexLike["upsert"]>(async (vectors): Promise<VectorizeUpsertMutation> => {
+            return { mutationId: `upsert-${String(vectors.length)}` };
+        }),
+        ...overrides,
+    };
+};
+
+describe("createContextVectors", () => {
+    it("upsert + upsertNow both call lunora.upsert inline and return void", async () => {
+        expect.assertions(4);
+
+        const index = fakeIndex();
+        const lunora = createVectors({ indexes: { docs: index } });
+        const context = createContextVectors(lunora);
+        const embed = async (value: string): Promise<ReadonlyArray<number>> => [value.length];
+
+        await expect(context.upsert("docs", { embed, id: "a", input: "hello", metadata: { t: 1 } })).resolves.toBeUndefined();
+        await expect(context.upsertNow("docs", { embed, id: "b", input: "yo" })).resolves.toBeUndefined();
+
+        expect(index.upsert).toHaveBeenCalledTimes(2);
+        expect(index.upsert).toHaveBeenNthCalledWith(1, [{ id: "a", metadata: { t: 1 }, namespace: undefined, values: [5] }]);
+    });
+
+    it("upsert defers through deferAfterCommit while upsertNow stays inline", async () => {
+        expect.assertions(4);
+
+        const index = fakeIndex();
+        const lunora = createVectors({ indexes: { docs: index } });
+        const queued: (() => Promise<void>)[] = [];
+        const context = createContextVectors(lunora, {
+            deferAfterCommit: async (work) => {
+                queued.push(work);
+            },
+        });
+        const embed = async (value: string): Promise<ReadonlyArray<number>> => [value.length];
+
+        // A mutation that upserts and then throws must leave NOTHING in
+        // Vectorize — the row it describes is about to be rolled back.
+        await context.upsert("docs", { embed, id: "a", input: "hello" });
+
+        expect(index.upsert).not.toHaveBeenCalled();
+
+        await context.upsertNow("docs", { embed, id: "b", input: "yo" });
+
+        expect(index.upsert).toHaveBeenCalledTimes(1);
+        expect(index.upsert).toHaveBeenCalledWith([{ id: "b", metadata: undefined, namespace: undefined, values: [2] }]);
+
+        await queued[0]?.();
+
+        expect(index.upsert).toHaveBeenCalledWith([{ id: "a", metadata: undefined, namespace: undefined, values: [5] }]);
+    });
+
+    it("resolves the namespace before deferring, so a root-instance misuse throws to the caller", async () => {
+        expect.assertions(2);
+
+        const index = fakeIndex();
+        const lunora = createVectors({ indexes: { docs: index } });
+        const queued: (() => Promise<void>)[] = [];
+        const context = createContextVectors(lunora, {
+            deferAfterCommit: async (work) => {
+                queued.push(work);
+            },
+            shardedIndexNames: ["docs"],
+        });
+        const embed = async (value: string): Promise<ReadonlyArray<number>> => [value.length];
+
+        // Thrown from inside the deferral this would surface after the commit,
+        // as a log line nobody is holding, instead of failing the handler.
+        await expect(context.upsert("docs", { embed, id: "a", input: "hello" })).rejects.toThrow("has no shard key");
+
+        expect(queued).toStrictEqual([]);
+    });
+
+    it("query maps Vectorize matches to the server match shape", async () => {
+        expect.assertions(1);
+
+        const lunora = createVectors({ indexes: { docs: fakeIndex() } });
+        const context = createContextVectors(lunora);
+
+        const result = await context.query("docs", { vector: [0.1, 0.2] });
+
+        expect(result).toEqual({ count: 1, matches: [{ id: "row-1", metadata: { title: "Hi" }, score: 0.9 }] });
+    });
+
+    it("query requests metadata so it surfaces on matches", async () => {
+        expect.assertions(1);
+
+        const index = fakeIndex();
+        const lunora = createVectors({ indexes: { docs: index } });
+        const context = createContextVectors(lunora);
+
+        await context.query("docs", { vector: [0.1] });
+
+        // Default is "indexed" (not "all"): indexed metadata still surfaces on
+        // matches without leaking every stored field by default.
+        expect(index.query).toHaveBeenCalledWith([0.1], expect.objectContaining({ returnMetadata: "indexed" }));
+    });
+
+    it("getByIds maps Vectorize vectors to the server record shape", async () => {
+        expect.assertions(1);
+
+        const lunora = createVectors({ indexes: { docs: fakeIndex() } });
+        const context = createContextVectors(lunora);
+
+        const records = await context.getByIds("docs", ["a"]);
+
+        expect(records).toEqual([{ id: "a", metadata: { k: "a" }, values: [1, 2] }]);
+    });
+
+    it("deleteByIds forwards and returns void", async () => {
+        expect.assertions(2);
+
+        const index = fakeIndex();
+        const lunora = createVectors({ indexes: { docs: index } });
+        const context = createContextVectors(lunora);
+
+        await expect(context.deleteByIds("docs", ["a", "b"])).resolves.toBeUndefined();
+        expect(index.deleteByIds).toHaveBeenCalledWith(["a", "b"]);
+    });
+});
+
+describe("createContextVectors — namespace default (tenant isolation, plan 255)", () => {
+    it("the 1-arg form forwards `undefined` (no behaviour change)", async () => {
+        expect.assertions(1);
+
+        const index = fakeIndex();
+        const lunora = createVectors({ indexes: { docs: index } });
+        const context = createContextVectors(lunora);
+
+        await context.query("docs", { vector: [0.1] });
+
+        expect(index.query).toHaveBeenCalledWith([0.1], expect.objectContaining({ namespace: undefined }));
+    });
+
+    it("query defaults to the constructor namespace when the input has none, for an index listed in shardedIndexNames", async () => {
+        expect.assertions(1);
+
+        const index = fakeIndex();
+        const lunora = createVectors({ indexes: { docs: index } });
+        const context = createContextVectors(lunora, { namespace: "tenant-a", shardedIndexNames: ["docs"] });
+
+        await context.query("docs", { vector: [0.1] });
+
+        expect(index.query).toHaveBeenCalledWith([0.1], expect.objectContaining({ namespace: "tenant-a" }));
+    });
+
+    it("query stays namespace-less for an index NOT in shardedIndexNames, even with a constructor namespace set", async () => {
+        expect.assertions(1);
+
+        // A namespace default applies only to indexes `shardedIndexNames`
+        // lists — `ctx.vectors` is one flat facade over every index, so a
+        // per-tenant instance's own shard key must not leak onto a query
+        // against a root-scoped index (that index's vectors were never
+        // written under any tenant namespace, so a scoped query there would
+        // silently find nothing).
+        const index = fakeIndex();
+        const lunora = createVectors({ indexes: { global_docs: index } });
+        const context = createContextVectors(lunora, { namespace: "tenant-a", shardedIndexNames: ["docs"] });
+
+        await context.query("global_docs", { vector: [0.1] });
+
+        expect(index.query).toHaveBeenCalledWith([0.1], expect.objectContaining({ namespace: undefined }));
+    });
+
+    it("an explicit input.namespace wins over the constructor default", async () => {
+        expect.assertions(1);
+
+        const index = fakeIndex();
+        const lunora = createVectors({ indexes: { docs: index } });
+        const context = createContextVectors(lunora, { namespace: "tenant-a", shardedIndexNames: ["docs"] });
+
+        await context.query("docs", { namespace: "tenant-b", vector: [0.1] });
+
+        expect(index.query).toHaveBeenCalledWith([0.1], expect.objectContaining({ namespace: "tenant-b" }));
+    });
+
+    it("an explicit input.namespace works even for an index NOT in shardedIndexNames (override is unconditional)", async () => {
+        expect.assertions(1);
+
+        const index = fakeIndex();
+        const lunora = createVectors({ indexes: { global_docs: index } });
+        const context = createContextVectors(lunora, { namespace: "tenant-a", shardedIndexNames: ["docs"] });
+
+        await context.query("global_docs", { namespace: "tenant-b", vector: [0.1] });
+
+        expect(index.query).toHaveBeenCalledWith([0.1], expect.objectContaining({ namespace: "tenant-b" }));
+    });
+
+    it("query throws when the root instance (no constructor namespace) targets a sharded index with no explicit namespace", async () => {
+        expect.assertions(2);
+
+        // No `namespace` in the constructor options = this DO instance is the
+        // root/default DO (no shard key). "docs" IS in `shardedIndexNames`, so
+        // there is no safe default and no override — a namespace-less query
+        // here would search every tenant's vectors (Vectorize indexes are
+        // account-global). This is the root-shard fail-open this plan closes.
+        const index = fakeIndex();
+        const lunora = createVectors({ indexes: { docs: index } });
+        const context = createContextVectors(lunora, { shardedIndexNames: ["docs"] });
+
+        await expect(context.query("docs", { vector: [0.1] })).rejects.toThrow(/no shard key/);
+        expect(index.query).not.toHaveBeenCalled();
+    });
+
+    it("query from the root instance stays namespace-less for an index NOT in shardedIndexNames (no throw)", async () => {
+        expect.assertions(1);
+
+        // The root instance legitimately owns root-scoped (non-sharded)
+        // indexes — only a call against a SHARDED index is ambiguous enough
+        // to throw.
+        const index = fakeIndex();
+        const lunora = createVectors({ indexes: { global_docs: index } });
+        const context = createContextVectors(lunora, { shardedIndexNames: ["docs"] });
+
+        await context.query("global_docs", { vector: [0.1] });
+
+        expect(index.query).toHaveBeenCalledWith([0.1], expect.objectContaining({ namespace: undefined }));
+    });
+
+    it("upsert/upsertNow default to the constructor namespace when the input has none, for a sharded index", async () => {
+        expect.assertions(2);
+
+        const index = fakeIndex();
+        const lunora = createVectors({ indexes: { docs: index } });
+        const context = createContextVectors(lunora, { namespace: "tenant-a", shardedIndexNames: ["docs"] });
+        const embed = async (value: string): Promise<ReadonlyArray<number>> => [value.length];
+
+        await context.upsert("docs", { embed, id: "a", input: "hello" });
+        await context.upsertNow("docs", { embed, id: "b", input: "yo" });
+
+        expect(index.upsert).toHaveBeenNthCalledWith(1, [{ id: "a", metadata: undefined, namespace: "tenant-a", values: [5] }]);
+        expect(index.upsert).toHaveBeenNthCalledWith(2, [{ id: "b", metadata: undefined, namespace: "tenant-a", values: [2] }]);
+    });
+
+    it("upsert honors an explicit input.namespace over the constructor default", async () => {
+        expect.assertions(1);
+
+        const index = fakeIndex();
+        const lunora = createVectors({ indexes: { docs: index } });
+        const context = createContextVectors(lunora, { namespace: "tenant-a", shardedIndexNames: ["docs"] });
+        const embed = async (value: string): Promise<ReadonlyArray<number>> => [value.length];
+
+        await context.upsert("docs", { embed, id: "a", input: "hello", namespace: "tenant-b" });
+
+        expect(index.upsert).toHaveBeenCalledWith([{ id: "a", metadata: undefined, namespace: "tenant-b", values: [5] }]);
+    });
+
+    it("upsert throws from the root instance against a sharded index with no explicit namespace", async () => {
+        expect.assertions(1);
+
+        const index = fakeIndex();
+        const lunora = createVectors({ indexes: { docs: index } });
+        const context = createContextVectors(lunora, { shardedIndexNames: ["docs"] });
+        const embed = async (value: string): Promise<ReadonlyArray<number>> => [value.length];
+
+        await expect(context.upsert("docs", { embed, id: "a", input: "hello" })).rejects.toThrow(/no shard key/);
+    });
+
+    it("getByIds under a default namespace returns only the matching records for a sharded index (fails pre-fix: returns all)", async () => {
+        expect.assertions(1);
+
+        const index = fakeIndex({
+            getByIds: vi.fn<VectorizeIndexLike["getByIds"]>(async (ids: ReadonlyArray<string>): Promise<ReadonlyArray<VectorizeVector>> =>
+                ids.map((id) => {
+                    return { id, namespace: id === "a" ? "tenant-a" : "tenant-b", values: [1, 2] };
+                }),
+            ),
+        });
+        const lunora = createVectors({ indexes: { docs: index } });
+        const context = createContextVectors(lunora, { namespace: "tenant-a", shardedIndexNames: ["docs"] });
+
+        const records = await context.getByIds("docs", ["a", "b"]);
+
+        expect(records).toEqual([{ id: "a", metadata: undefined, namespace: "tenant-a", values: [1, 2] }]);
+    });
+
+    it("getByIds fails closed on a record with no namespace at all", async () => {
+        expect.assertions(1);
+
+        const index = fakeIndex({
+            getByIds: vi.fn<VectorizeIndexLike["getByIds"]>(async (ids: ReadonlyArray<string>): Promise<ReadonlyArray<VectorizeVector>> =>
+                ids.map((id) => {
+                    return { id, values: [1, 2] };
+                }),
+            ),
+        });
+        const lunora = createVectors({ indexes: { docs: index } });
+        const context = createContextVectors(lunora, { namespace: "tenant-a", shardedIndexNames: ["docs"] });
+
+        const records = await context.getByIds("docs", ["a"]);
+
+        expect(records).toEqual([]);
+    });
+
+    it("getByIds with no default namespace passes every record through unfiltered", async () => {
+        expect.assertions(1);
+
+        const index = fakeIndex({
+            getByIds: vi.fn<VectorizeIndexLike["getByIds"]>(async (ids: ReadonlyArray<string>): Promise<ReadonlyArray<VectorizeVector>> =>
+                ids.map((id) => {
+                    return { id, namespace: id === "a" ? "tenant-a" : "tenant-b", values: [1, 2] };
+                }),
+            ),
+        });
+        const lunora = createVectors({ indexes: { docs: index } });
+        const context = createContextVectors(lunora);
+
+        const records = await context.getByIds("docs", ["a", "b"]);
+
+        expect(records).toEqual([
+            { id: "a", metadata: undefined, namespace: "tenant-a", values: [1, 2] },
+            { id: "b", metadata: undefined, namespace: "tenant-b", values: [1, 2] },
+        ]);
+    });
+
+    it("getByIds accepts an explicit trailing namespace argument that wins over the constructor default (the @lunora/ai/rag facade path)", async () => {
+        expect.assertions(1);
+
+        // `@lunora/ai/rag`'s `RagVectors.getByIds` calls with a THIRD
+        // positional `namespace` argument — this must not be silently
+        // dropped, or RAG's own explicit namespace (its `effectiveNamespace`)
+        // never reaches Vectorize and its head-read always misses.
+        const index = fakeIndex({
+            getByIds: vi.fn<VectorizeIndexLike["getByIds"]>(async (ids: ReadonlyArray<string>): Promise<ReadonlyArray<VectorizeVector>> =>
+                ids.map((id) => {
+                    return { id, namespace: "tenant-b", values: [1, 2] };
+                }),
+            ),
+        });
+        const lunora = createVectors({ indexes: { docs: index } });
+        const context = createContextVectors(lunora, { namespace: "tenant-a", shardedIndexNames: ["docs"] });
+
+        const records = await context.getByIds("docs", ["a"], "tenant-b");
+
+        expect(records).toEqual([{ id: "a", metadata: undefined, namespace: "tenant-b", values: [1, 2] }]);
+    });
+
+    it("getByIds throws from the root instance against a sharded index with no explicit namespace", async () => {
+        expect.assertions(1);
+
+        const index = fakeIndex();
+        const lunora = createVectors({ indexes: { docs: index } });
+        const context = createContextVectors(lunora, { shardedIndexNames: ["docs"] });
+
+        await expect(context.getByIds("docs", ["a"])).rejects.toThrow(/no shard key/);
+    });
+
+    it("deleteByIds under a default namespace only deletes the matching subset for a sharded index (fails pre-fix: deletes all)", async () => {
+        expect.assertions(2);
+
+        const index = fakeIndex({
+            getByIds: vi.fn<VectorizeIndexLike["getByIds"]>(async (ids: ReadonlyArray<string>): Promise<ReadonlyArray<VectorizeVector>> =>
+                ids.map((id) => {
+                    return { id, namespace: id === "a" ? "tenant-a" : "tenant-b", values: [1, 2] };
+                }),
+            ),
+        });
+        const lunora = createVectors({ indexes: { docs: index } });
+        const context = createContextVectors(lunora, { namespace: "tenant-a", shardedIndexNames: ["docs"] });
+
+        await context.deleteByIds("docs", ["a", "b"]);
+
+        expect(index.getByIds).toHaveBeenCalledWith(["a", "b"]);
+        expect(index.deleteByIds).toHaveBeenCalledWith(["a"]);
+    });
+
+    it("deleteByIds under a default namespace is a no-op (skips the underlying delete) when nothing matches", async () => {
+        expect.assertions(1);
+
+        const index = fakeIndex({
+            getByIds: vi.fn<VectorizeIndexLike["getByIds"]>(async (ids: ReadonlyArray<string>): Promise<ReadonlyArray<VectorizeVector>> =>
+                ids.map((id) => {
+                    return { id, namespace: "tenant-b", values: [1, 2] };
+                }),
+            ),
+        });
+        const lunora = createVectors({ indexes: { docs: index } });
+        const context = createContextVectors(lunora, { namespace: "tenant-a", shardedIndexNames: ["docs"] });
+
+        await context.deleteByIds("docs", ["a"]);
+
+        expect(index.deleteByIds).not.toHaveBeenCalled();
+    });
+
+    it("deleteByIds with no default namespace passes every id through unfiltered (no getByIds pre-read)", async () => {
+        expect.assertions(2);
+
+        const index = fakeIndex();
+        const lunora = createVectors({ indexes: { docs: index } });
+        const context = createContextVectors(lunora);
+
+        await context.deleteByIds("docs", ["a", "b"]);
+
+        expect(index.getByIds).not.toHaveBeenCalled();
+        expect(index.deleteByIds).toHaveBeenCalledWith(["a", "b"]);
+    });
+
+    it("deleteByIds accepts an explicit trailing namespace argument that wins over the constructor default (the @lunora/ai/rag facade path)", async () => {
+        expect.assertions(1);
+
+        const index = fakeIndex({
+            getByIds: vi.fn<VectorizeIndexLike["getByIds"]>(async (ids: ReadonlyArray<string>): Promise<ReadonlyArray<VectorizeVector>> =>
+                ids.map((id) => {
+                    return { id, namespace: "tenant-b", values: [1, 2] };
+                }),
+            ),
+        });
+        const lunora = createVectors({ indexes: { docs: index } });
+        const context = createContextVectors(lunora, { namespace: "tenant-a", shardedIndexNames: ["docs"] });
+
+        await context.deleteByIds("docs", ["a"], "tenant-b");
+
+        expect(index.deleteByIds).toHaveBeenCalledWith(["a"]);
+    });
+
+    it("deleteByIds throws from the root instance against a sharded index with no explicit namespace", async () => {
+        expect.assertions(2);
+
+        const index = fakeIndex();
+        const lunora = createVectors({ indexes: { docs: index } });
+        const context = createContextVectors(lunora, { shardedIndexNames: ["docs"] });
+
+        await expect(context.deleteByIds("docs", ["a"])).rejects.toThrow(/no shard key/);
+        expect(index.getByIds).not.toHaveBeenCalled();
+    });
+});
+
+const fakeVectorSearch = (): VectorSearchLike & { deletes: [string, ReadonlyArray<string>][]; upserts: [string, unknown][] } => {
+    const upserts: [string, unknown][] = [];
+    const deletes: [string, ReadonlyArray<string>][] = [];
+
+    return {
+        deleteByIds: vi.fn<VectorSearchLike["deleteByIds"]>(async (indexName, ids) => {
+            deletes.push([indexName, ids]);
+        }),
+        deletes,
+        getByIds: vi.fn<VectorSearchLike["getByIds"]>(async () => []),
+        query: vi.fn<VectorSearchLike["query"]>(async () => {
+            return { count: 0, matches: [] };
+        }),
+        upsert: vi.fn<VectorSearchLike["upsert"]>(async (indexName, input) => {
+            upserts.push([indexName, input]);
+        }),
+        upsertNow: vi.fn<VectorSearchLike["upsertNow"]>(async (indexName, input) => {
+            upserts.push([indexName, input]);
+        }),
+        upserts,
+    };
+};
+
+const embed = async (value: string): Promise<ReadonlyArray<number>> => [value.length];
+
+describe("createVectorSyncHook", () => {
+    it("embeds Shape A source field and upserts on insert", async () => {
+        expect.assertions(1);
+
+        const vectors = fakeVectorSearch();
+        const schema: SchemaLike = {
+            tables: {
+                messages: { vectorIndexes: [{ embed, field: "body", metadata: ["author"], name: "messages-body" }] },
+            },
+            vectorIndexes: {},
+        };
+        const hook = createVectorSyncHook({ schema, vectors });
+
+        await hook({ doc: { author: "ann", body: "hi there", ignored: 1 }, id: "m1", op: "insert", table: "messages" });
+
+        expect(vectors.upserts).toEqual([["messages-body", { embed, id: "m1", input: "hi there", metadata: { author: "ann" } }]]);
+    });
+
+    it("uses Shape B select(row) and metadata(row) on update", async () => {
+        expect.assertions(1);
+
+        const vectors = fakeVectorSearch();
+        const schema: SchemaLike = {
+            tables: { docs: {} },
+            vectorIndexes: {
+                "docs-fulltext": {
+                    embed,
+                    metadata: (row) => {
+                        return { title: row.title };
+                    },
+                    select: (row) => `${row.title as string} ${row.body as string}`,
+                    table: "docs",
+                },
+            },
+        };
+        const hook = createVectorSyncHook({ schema, vectors });
+
+        await hook({ doc: { body: "B", title: "T" }, id: "d1", op: "update", table: "docs" });
+
+        expect(vectors.upserts).toEqual([["docs-fulltext", { embed, id: "d1", input: "T B", metadata: { title: "T" } }]]);
+    });
+
+    it("deletes the row id from every index sourced from the table", async () => {
+        expect.assertions(1);
+
+        const vectors = fakeVectorSearch();
+        const schema: SchemaLike = {
+            tables: { docs: { vectorIndexes: [{ embed, field: "body", name: "docs-body" }] } },
+            vectorIndexes: { "docs-fulltext": { embed, select: (row) => String(row.body), table: "docs" } },
+        };
+        const hook = createVectorSyncHook({ schema, vectors });
+
+        await hook({ id: "d1", op: "delete", table: "docs" });
+
+        expect(vectors.deletes).toEqual([
+            ["docs-body", ["d1"]],
+            ["docs-fulltext", ["d1"]],
+        ]);
+    });
+
+    it("purges Shape A indexes when the source field is nullish (clear-field)", async () => {
+        expect.assertions(2);
+
+        const vectors = fakeVectorSearch();
+        const schema: SchemaLike = {
+            tables: { messages: { vectorIndexes: [{ embed, field: "body", name: "messages-body" }] } },
+            vectorIndexes: {},
+        };
+        const hook = createVectorSyncHook({ schema, vectors });
+
+        await hook({ doc: { body: null }, id: "m1", op: "update", table: "messages" });
+
+        // No upsert, and the stale vector is deleted rather than silently left
+        // searchable (Finding 50).
+        expect(vectors.upserts).toEqual([]);
+        expect(vectors.deletes).toEqual([["messages-body", ["m1"]]]);
+    });
+
+    it("purges instead of embedding when the source text is empty or whitespace, for both index shapes", async () => {
+        expect.assertions(3);
+
+        const vectors = fakeVectorSearch();
+        const embedCalls: string[] = [];
+        const counting = async (value: string): Promise<ReadonlyArray<number>> => {
+            embedCalls.push(value);
+
+            return [value.length];
+        };
+        const schema: SchemaLike = {
+            tables: { docs: { vectorIndexes: [{ embed: counting, field: "body", name: "docs-body" }] } },
+            vectorIndexes: { "docs-title": { embed: counting, select: (row) => String(row.title), table: "docs" } },
+        };
+        const hook = createVectorSyncHook({ schema, vectors });
+
+        await hook({ doc: { body: "", title: " \n\t " }, id: "d1", op: "update", table: "docs" });
+
+        // Nothing reaches the embedder — an empty input is refused there on every
+        // attempt — and neither index keeps a vector for text the row no longer has.
+        expect(embedCalls).toHaveLength(0);
+        expect(vectors.upserts).toHaveLength(0);
+        expect(vectors.deletes).toStrictEqual([
+            ["docs-body", ["d1"]],
+            ["docs-title", ["d1"]],
+        ]);
+    });
+
+    it("threads the namespace onto upserts for tenant isolation", async () => {
+        expect.assertions(1);
+
+        const vectors = fakeVectorSearch();
+        const schema: SchemaLike = {
+            tables: { messages: { vectorIndexes: [{ embed, field: "body", name: "messages-body" }] } },
+            vectorIndexes: {},
+        };
+        const hook = createVectorSyncHook({ namespace: "tenant-acme", schema, vectors });
+
+        await hook({ doc: { body: "hi" }, id: "m1", op: "insert", table: "messages" });
+
+        expect(vectors.upserts).toEqual([["messages-body", { embed, id: "m1", input: "hi", metadata: undefined, namespace: "tenant-acme" }]]);
+    });
+
+    it("no-ops for tables without any vector index", async () => {
+        expect.assertions(2);
+
+        const vectors = fakeVectorSearch();
+        const schema: SchemaLike = { tables: { plain: {} }, vectorIndexes: {} };
+        const hook = createVectorSyncHook({ schema, vectors });
+
+        await hook({ doc: { a: 1 }, id: "x", op: "insert", table: "plain" });
+
+        expect(vectors.upserts).toEqual([]);
+        expect(vectors.deletes).toEqual([]);
+    });
+
+    it("throws a descriptive error when an inline source field is non-string", async () => {
+        expect.assertions(2);
+
+        const vectors = fakeVectorSearch();
+        const schema: SchemaLike = {
+            tables: { messages: { vectorIndexes: [{ embed, field: "body", name: "messages-body" }] } },
+            vectorIndexes: {},
+        };
+        const hook = createVectorSyncHook({ schema, vectors });
+
+        // A JSON column holding an object would otherwise embed "[object Object]"
+        // and silently produce an unsearchable vector.
+        await expect(hook({ doc: { body: { nested: true } }, id: "m1", op: "insert", table: "messages" })).rejects.toThrow(/expects a string source/);
+        // The bad write must not partially fan out.
+        expect(vectors.upserts).toEqual([]);
+    });
+
+    it("leaves a partially applied fan-out in place and re-throws the original error", async () => {
+        expect.assertions(3);
+
+        const original = new Error("embedder boom");
+        const vectors = fakeVectorSearch();
+
+        // Second upsert (standalone) rejects after the first inline upsert.
+        vi.mocked(vectors.upsertNow).mockImplementation(async (indexName, input) => {
+            vectors.upserts.push([indexName, input]);
+
+            if (indexName === "docs-fulltext") {
+                throw original;
+            }
+        });
+
+        const schema: SchemaLike = {
+            tables: { docs: { vectorIndexes: [{ embed, field: "body", name: "docs-body" }] } },
+            vectorIndexes: { "docs-fulltext": { embed, select: (row) => String(row.body), table: "docs" } },
+        };
+        const hook = createVectorSyncHook({ schema, vectors });
+
+        await expect(hook({ doc: { body: "hi" }, id: "d1", op: "insert", table: "docs" })).rejects.toBe(original);
+
+        // The hook runs AFTER the row committed, so the row survives this failure.
+        // Purging the index that DID apply would trade a partially indexed row for
+        // an unsearchable one; re-running the idempotent write is the recovery.
+        expect(vectors.deletes).not.toContainEqual(["docs-body", ["d1"]]);
+        expect(vectors.deletes).not.toContainEqual(["docs-fulltext", ["d1"]]);
+    });
+
+    it("leaves the prior vector alone when an UPDATE fan-out fails partway", async () => {
+        expect.assertions(3);
+
+        const original = new Error("embedder boom");
+        const vectors = fakeVectorSearch();
+
+        vi.mocked(vectors.upsertNow).mockImplementation(async (indexName, input) => {
+            if (indexName === "docs-fulltext") {
+                throw original;
+            }
+
+            vectors.upserts.push([indexName, input]);
+        });
+
+        const schema: SchemaLike = {
+            tables: { docs: { vectorIndexes: [{ embed, field: "body", name: "docs-body" }] } },
+            vectorIndexes: { "docs-fulltext": { embed, select: (row) => String(row.body), table: "docs" } },
+        };
+        const hook = createVectorSyncHook({ allowSharedNamespace: true, schema, vectors });
+
+        await expect(hook({ doc: { body: "edited" }, id: "d1", op: "update", table: "docs" })).rejects.toBe(original);
+
+        // The edited row is committed. `docs-body` holds the new vector and
+        // `docs-fulltext` still holds the prior one — stale in one index, correct
+        // in the other. Deleting either would make the live row unsearchable there.
+        expect(vectors.deletes).not.toContainEqual(["docs-body", ["d1"]]);
+        expect(vectors.deletes).not.toContainEqual(["docs-fulltext", ["d1"]]);
+    });
+
+    it("warns once when a metadata index is synced without a namespace", async () => {
+        expect.assertions(3);
+
+        const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+        const vectors = fakeVectorSearch();
+        const schema: SchemaLike = {
+            tables: { messages: { vectorIndexes: [{ embed, field: "body", metadata: ["author"], name: "warn-no-ns" }] } },
+            vectorIndexes: {},
+        };
+        const hook = createVectorSyncHook({ schema, vectors });
+
+        await hook({ doc: { author: "ann", body: "hi" }, id: "m1", op: "insert", table: "messages" });
+
+        expect(warn).toHaveBeenCalledTimes(1);
+        expect(warn).toHaveBeenCalledWith(expect.stringContaining('index "warn-no-ns" syncs vectors without a namespace'));
+
+        // A second sync of the same index does not warn again (one-time per process).
+        await hook({ doc: { author: "bob", body: "yo" }, id: "m2", op: "insert", table: "messages" });
+
+        expect(warn).toHaveBeenCalledTimes(1);
+
+        warn.mockRestore();
+    });
+
+    it("warns for a Shape B metadata index synced without a namespace", async () => {
+        expect.assertions(1);
+
+        const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+        const vectors = fakeVectorSearch();
+        const schema: SchemaLike = {
+            tables: { docs: {} },
+            vectorIndexes: {
+                "warn-standalone": {
+                    embed,
+                    metadata: (row) => {
+                        return { title: row.title };
+                    },
+                    select: (row) => String(row.title),
+                    table: "docs",
+                },
+            },
+        };
+        const hook = createVectorSyncHook({ schema, vectors });
+
+        await hook({ doc: { title: "T" }, id: "d1", op: "insert", table: "docs" });
+
+        expect(warn).toHaveBeenCalledTimes(1);
+
+        warn.mockRestore();
+    });
+
+    it("does not warn when allowSharedNamespace is set", async () => {
+        expect.assertions(1);
+
+        const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+        const vectors = fakeVectorSearch();
+        const schema: SchemaLike = {
+            tables: { messages: { vectorIndexes: [{ embed, field: "body", metadata: ["author"], name: "warn-opt-out" }] } },
+            vectorIndexes: {},
+        };
+        const hook = createVectorSyncHook({ allowSharedNamespace: true, schema, vectors });
+
+        await hook({ doc: { author: "ann", body: "hi" }, id: "m1", op: "insert", table: "messages" });
+
+        expect(warn).not.toHaveBeenCalled();
+
+        warn.mockRestore();
+    });
+
+    it("does not warn when a namespace is provided", async () => {
+        expect.assertions(1);
+
+        const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+        const vectors = fakeVectorSearch();
+        const schema: SchemaLike = {
+            tables: { messages: { vectorIndexes: [{ embed, field: "body", metadata: ["author"], name: "warn-with-ns" }] } },
+            vectorIndexes: {},
+        };
+        const hook = createVectorSyncHook({ namespace: "tenant-acme", schema, vectors });
+
+        await hook({ doc: { author: "ann", body: "hi" }, id: "m1", op: "insert", table: "messages" });
+
+        expect(warn).not.toHaveBeenCalled();
+
+        warn.mockRestore();
+    });
+
+    it("warns for an index without metadata when namespace is absent (vectors leak too)", async () => {
+        expect.assertions(2);
+
+        const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+        const vectors = fakeVectorSearch();
+        const schema: SchemaLike = {
+            tables: { messages: { vectorIndexes: [{ embed, field: "body", name: "warn-no-metadata" }] } },
+            vectorIndexes: {},
+        };
+        const hook = createVectorSyncHook({ schema, vectors });
+
+        await hook({ doc: { body: "hi" }, id: "m1", op: "insert", table: "messages" });
+
+        // The cross-tenant exposure is the vectors themselves (ids/scores leak),
+        // not just metadata — so a namespace-less sync warns even with no
+        // metadata declared (Finding 49).
+        expect(warn).toHaveBeenCalledTimes(1);
+        expect(warn).toHaveBeenCalledWith(expect.stringContaining('index "warn-no-metadata" syncs vectors without a namespace'));
+
+        warn.mockRestore();
+    });
+});

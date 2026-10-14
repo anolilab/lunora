@@ -52,6 +52,10 @@ yarn add @lunora/solid
 pnpm add @lunora/solid
 ```
 
+Requires `solid-js@^1.9.0 || ^2.0.0-rc.0` as a peer. A single build serves both
+majors and the public API is identical on either; on Solid 2.0 the surrounding
+imports move (`solid-js/web` → `@solidjs/web`, `solid-js/store` → `solid-js`).
+
 ## Usage
 
 ```tsx
@@ -91,21 +95,27 @@ render(
 
 ## API
 
-| Primitive                                           | React equivalent      | Description                                                                      |
-| --------------------------------------------------- | --------------------- | -------------------------------------------------------------------------------- |
-| `LunoraProvider`                                    | `LunoraProvider`      | Context component — wraps your app tree with the `LunoraClient`.                 |
-| `useLunora`                                         | `useLunora`           | Read the ambient `LunoraClient` from the nearest `LunoraProvider`.               |
-| `createQuery`                                       | `useQuery`            | Live query signal — returns `() => T \| undefined`, re-subscribes on arg change. |
-| `createMutation`                                    | `useMutation`         | Optimistic mutation handle (`data`, `error`, `pending`, `mutate`, `reset`).      |
-| `createSubscription`                                | `useSubscription`     | Raw subscription signal — unbounded live stream.                                 |
-| `createPaginatedQuery`                              | `usePaginatedQuery`   | Cursor-paginated query with `loadMore`, `status`, and `results` signals.         |
-| `createInfiniteQuery`                               | `useInfiniteQuery`    | Infinite-scroll variant of `createPaginatedQuery`.                               |
-| `createAuth`                                        | `useAuth`             | Reactive auth state (`token`, `user` signals + `setToken`).                      |
-| `Authenticated` / `AuthLoading` / `Unauthenticated` | —                     | Auth-gate components rendering `children` per identity state.                    |
-| `createPresence`                                    | `usePresence`         | Collaborative-awareness — heartbeat + live present-members signal.               |
-| `createRateLimit`                                   | `useRateLimit`        | Client-side rate-limit mirror — `ok`, `disabled`, `retryAfter` as signals.       |
-| `createConnectionStatus`                            | `useConnectionStatus` | Reactive connection state signal.                                                |
-| `hydratePreloaded`                                  | `usePreloadedQuery`   | Seed a query synchronously from an SSR `Preloaded` token, then go live.          |
+| Primitive                                           | React equivalent      | Description                                                                       |
+| --------------------------------------------------- | --------------------- | --------------------------------------------------------------------------------- |
+| `LunoraProvider`                                    | `LunoraProvider`      | Context component — wraps your app tree with the `LunoraClient`.                  |
+| `useLunora`                                         | `useLunora`           | Read the ambient `LunoraClient` from the nearest `LunoraProvider`.                |
+| `createQuery`                                       | `useQuery`            | Live query signal — returns `() => T \| undefined`, re-subscribes on arg change.  |
+| `createMutation`                                    | `useMutation`         | Optimistic mutation handle (`data`, `error`, `pending`, `mutate`, `reset`).       |
+| `createSubscription`                                | `useSubscription`     | Raw subscription signal — unbounded live stream.                                  |
+| `createPaginatedQuery`                              | `usePaginatedQuery`   | Cursor-paginated query with `loadMore`, `status`, `results`, and `error` signals. |
+| `createInfiniteQuery`                               | `useInfiniteQuery`    | Infinite-scroll variant of `createPaginatedQuery`.                                |
+| `createAuth`                                        | `useAuth`             | Reactive auth state (`token`, `user`, `status` signals + `setToken`).             |
+| `Authenticated` / `AuthLoading` / `Unauthenticated` | —                     | Auth-gate components rendering `children` per identity state.                     |
+| `createPresence`                                    | `usePresence`         | Collaborative-awareness — heartbeat + live present-members signal.                |
+| `createFlag`                                        | `useFlag`             | Live OpenFeature flag accessor — returns `default` until the server answers.      |
+| `createFlags`                                       | `useFlags`            | Batch variant — an accessor of one value per key in the defaults map.             |
+| `createRateLimit`                                   | `useRateLimit`        | Client-side rate-limit mirror — `ok`, `disabled`, `retryAfter` as signals.        |
+| `createConnectionStatus`                            | `useConnectionStatus` | Reactive connection state signal.                                                 |
+| `hydratePreloaded`                                  | `usePreloadedQuery`   | Seed a query synchronously from an SSR `Preloaded` token, then go live.           |
+| `createAgentToolEvents`                             | `useAgentToolEvents`  | One agent thread's tool lifecycle as an `Accessor` of discriminated events.       |
+| `createVoiceAgent`                                  | `useVoiceAgent`       | Full-duplex voice call — accessors for status/transcript/level + call controls.   |
+
+`createVoiceAgent` opens nothing until `startCall()` — that call is what requests the microphone, so it must run from a user gesture. `endCall()` releases the socket, the mic tracks and the Web Audio graph, and `onCleanup` runs it for you when the owning root is disposed.
 
 ## Related
 

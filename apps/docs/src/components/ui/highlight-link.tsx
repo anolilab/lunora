@@ -22,8 +22,8 @@ const sharedClassName = (mode: "dark" | "light", className?: ClassValue) =>
     cn(
         "group border-background/10 relative block w-full overflow-hidden border border-l-2 p-5 transition duration-700 before:absolute before:top-0 before:right-0 before:bottom-0 before:left-0 before:-translate-x-full before:transition before:duration-500 hover:before:translate-x-0",
         {
-            "border-l-black text-black hover:border-black hover:text-white hover:before:bg-black": mode === "light",
-            "border-l-white text-white hover:border-white hover:text-black hover:before:bg-white": mode === "dark",
+            "border-l-on-panel text-on-panel hover:border-on-panel hover:text-ink hover:before:bg-on-panel": mode === "light",
+            "border-l-hairline-strong text-ink hover:border-hairline-strong hover:text-on-panel hover:before:bg-panel": mode === "dark",
         },
         className,
     );

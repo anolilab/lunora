@@ -2,6 +2,11 @@
     "$schema": "./schema/registry.schema.json",
     "items": [
         {
+            "description": "Workers AI for Lunora — bring LLMs to your functions with `ctx.ai`, powered by @lunora/ai (Vercel AI SDK over Cloudflare Workers AI). Scaffolds a summarise action and a sentiment analysis action as examples.",
+            "name": "ai",
+            "title": "AI"
+        },
+        {
             "description": "Cookie-session authentication for Lunora — email/password sign-up/sign-in on top of @lunora/auth (a thin wrapper over better-auth), with the auth instance + request handler wired into your project and verification / forgot-password mail routed through @lunora/mail (captured into the studio Mail tab in dev).",
             "name": "auth",
             "title": "Auth"
@@ -17,6 +22,11 @@
             "title": "Auth — Clerk"
         },
         {
+            "description": "Styled transactional email templates for the Lunora auth flows — verify address, reset password, magic link, one-time code, organization invitation, and the security notices that follow a change. Rendered server-side by @lunora/mail, so they are the same mail whichever frontend framework you use.",
+            "name": "auth-emails",
+            "title": "Auth — Email templates"
+        },
+        {
             "description": "Passwordless magic-link sign-in for Lunora auth. Wires better-auth's magicLink plugin on top of the base `auth` item and delivers the sign-in link through @lunora/mail (captured into the studio Mail tab in dev).",
             "name": "auth-magic-link",
             "title": "Auth — Magic link"
@@ -27,9 +37,49 @@
             "title": "Auth — Email OTP"
         },
         {
-            "description": "Managed point-in-time recovery — a cron-driven `snapshot` internalAction exports a configured set of tables to timestamped NDJSON in a dedicated R2 bucket, and a cron-driven `prune` internalAction ages snapshots out by retention window. Pairs with `lunora backup restore` (nearest snapshot + `--to` CDC replay).",
+            "description": "Copy-in, user-owned Angular auth screens on top of the base `auth` item and @lunora/angular: sign in/up, forgot/reset password, magic link, email OTP, two-factor (verify + setup), account & security settings, and organizations. Framework-agnostic controllers under lunora/auth-ui/core, thin Angular views under lunora/auth-ui/angular, and minimal token-aligned CSS — no Tailwind. Edit anything; upgrades are 3-way merged.",
+            "name": "auth-ui-angular",
+            "title": "Auth UI — Angular"
+        },
+        {
+            "description": "Copy-in, user-owned React auth screens on top of the base `auth` item and @lunora/react: sign in/up, forgot/reset password, magic link, email OTP, two-factor (verify + setup), account & security settings, and organizations. Framework-agnostic controllers under lunora/auth-ui/core, thin React views under lunora/auth-ui/react, and minimal token-aligned CSS — no Tailwind. Edit anything; upgrades are 3-way merged.",
+            "name": "auth-ui-react",
+            "title": "Auth UI — React"
+        },
+        {
+            "description": "Copy-in, user-owned Solid auth screens on top of the base `auth` item and @lunora/solid: sign in/up, forgot/reset password, magic link, email OTP, two-factor (verify + setup), account & security settings, and organizations. Framework-agnostic controllers under lunora/auth-ui/core, thin Solid views under lunora/auth-ui/solid, and minimal token-aligned CSS — no Tailwind. Edit anything; upgrades are 3-way merged.",
+            "name": "auth-ui-solid",
+            "title": "Auth UI — Solid"
+        },
+        {
+            "description": "Copy-in, user-owned Solid 2 auth screens on top of the base `auth` item and @lunora/solid: sign in/up, forgot/reset password, magic link, email OTP, two-factor (verify + setup), account & security settings, and organizations. Same framework-agnostic controllers under lunora/auth-ui/core as every other port, with the views written for the Solid 2 line — @solidjs/web JSX, `onSettled`, split-phase effects, context-as-provider — and minimal token-aligned CSS, no Tailwind. Edit anything; upgrades are 3-way merged. For Solid 1.x use `auth-ui-solid`.",
+            "name": "auth-ui-solid-v2",
+            "title": "Auth UI — Solid 2"
+        },
+        {
+            "description": "Copy-in, user-owned Svelte auth screens on top of the base `auth` item and @lunora/svelte: sign in/up, forgot/reset password, magic link, email OTP, two-factor (verify + setup), account & security settings, and organizations. Framework-agnostic controllers under lunora/auth-ui/core, thin Svelte views under lunora/auth-ui/svelte, and minimal token-aligned CSS — no Tailwind. Edit anything; upgrades are 3-way merged.",
+            "name": "auth-ui-svelte",
+            "title": "Auth UI — Svelte"
+        },
+        {
+            "description": "Copy-in, user-owned Vue auth screens on top of the base `auth` item and @lunora/vue: sign in/up, forgot/reset password, magic link, email OTP, two-factor (verify + setup), account & security settings, and organizations. Framework-agnostic controllers under lunora/auth-ui/core, thin Vue views under lunora/auth-ui/vue, and minimal token-aligned CSS — no Tailwind. Edit anything; upgrades are 3-way merged.",
+            "name": "auth-ui-vue",
+            "title": "Auth UI — Vue"
+        },
+        {
+            "description": "Off-platform scheduled snapshots with retention — a cron-driven `snapshot` internalAction exports a configured set of tables to timestamped NDJSON in a dedicated R2 bucket, and a cron-driven `prune` internalAction ages snapshots out by retention window. Restore with `lunora backup restore <id|file>`, which imports a snapshot boundary; for in-place time-travel to an arbitrary moment use native PITR (`lunora backup pitr`). Reads through a shard-local `ctx.db`, so on a `.shardBy()` deployment it covers the default shard only.",
             "name": "backup",
             "title": "Backup"
+        },
+        {
+            "description": "Cloudflare Browser Rendering for Lunora — headless browser screenshots, PDFs, and HTML scraping via ctx.browser in actions. Powered by @cloudflare/playwright over the BROWSER binding.",
+            "name": "browser",
+            "title": "Browser rendering"
+        },
+        {
+            "description": "Cloudflare Zero Trust identity for Lunora — feed the Access identity into ctx.auth via a resolveIdentity adapter, in either shape Access comes in: a policy attached to the Worker (identity arrives on the execution context; the form the scaffolded file ships in) or a hostname-scoped Access application (verify the Cf-Access-Jwt-Assertion JWT against your team JWKS; uncomment it and the CF_ACCESS_* env vars apply). Gating the Studio on an Access group is a separate opt-in wiring (accessAdminGate), not scaffolded here.",
+            "name": "cloudflare-access",
+            "title": "Cloudflare Access"
         },
         {
             "description": "Code-first cron starter for Lunora — a lunora/crons.ts that declares recurring jobs with cronJobs() (interval / daily / weekly / monthly / raw cron) plus an illustrative internal function they fire, discovered by codegen and synced into wrangler.jsonc.",
@@ -37,9 +87,24 @@
             "title": "Crons"
         },
         {
+            "description": "OpenFeature feature flags for Lunora — declare a `defineFlags` provider in lunora/flags.ts and codegen wires `ctx.flags` onto every query, mutation, and action context. Ships with an in-memory provider; swap to Cloudflare Flagship for production.",
+            "name": "flags",
+            "title": "Feature flags"
+        },
+        {
+            "description": "Bring-your-own Postgres or MySQL to Lunora actions via Cloudflare Hyperdrive — a SqlClient over postgres.js, node-postgres, or mysql2. Includes createHyperdrive() binding reader and adapter helpers, plus a parameterised internalAction to copy.",
+            "name": "hyperdrive",
+            "title": "Hyperdrive"
+        },
+        {
             "description": "Transactional email for Lunora — a sendEmail action (plus a fire-and-forget queueEmail) built on @lunora/mail's Cloudflare Email Workers transport, with CR/LF + header-injection-safe address handling and a dev mail catcher that surfaces every send in the studio.",
             "name": "mail",
             "title": "Mail"
+        },
+        {
+            "description": "Provider-agnostic payments for Lunora — Stripe-first checkout, metered usage tracking, entitlement checks, billing portal, and subscription queries built on @lunora/payment. Scaffolds the checkout / track / check / portal / subscriptions / webhook functions; the payment tables ship in the package as a schema extension. The provider adapter is wired into createShardDO (see docs).",
+            "name": "payment",
+            "title": "Payment"
         },
         {
             "description": "Collaborative-awareness presence (who's here + cursors) — a TTL'd room/session table wired into your Lunora schema, with reactive listPresent and a heartbeat upsert.",
@@ -47,14 +112,29 @@
             "title": "Presence"
         },
         {
+            "description": "Cloudflare Queues for Lunora — declare push or pull consumers with `defineQueue`, and codegen wires typed `ctx.queues.<name>.send(...)` on mutation/action context plus the `queue()` Worker export. Scaffolds a sample email queue with a push consumer.",
+            "name": "queue",
+            "title": "Queues"
+        },
+        {
             "description": "Durable, ORM-backed rate limiting (token-bucket / fixed-window / sliding-window) wired into your Lunora schema and procedures.",
             "name": "ratelimit",
             "title": "Rate limit"
         },
         {
+            "description": "Pauses the Worker when a Cloudflare usage alert fires. A verified billing usage alert posted to /_lunora/spend-alert sets a flag in an R2 bucket; while it is set, user traffic gets 503 and cron jobs are skipped. Nothing resumes the app automatically.",
+            "name": "spend-guard",
+            "title": "Spend guard"
+        },
+        {
             "description": "R2-backed file storage for Lunora — direct-upload + worker-signed-URL helpers built on @lunora/storage over an R2 bucket binding, exposed as actions/queries so codegen surfaces them as api.storage.*.",
             "name": "storage",
             "title": "Storage"
+        },
+        {
+            "description": "Durable, long-running workflows for Lunora — declare a `defineWorkflow` export in lunora/workflows.ts with steps inspired by Temporal (step.do, step.sleep, fan-out via `branch()`). Codegen generates the WorkflowEntrypoint class and wires a typed `ctx.workflows.get(\"<name>\")` handle (`create` / `createBatch`) on mutation/action context.",
+            "name": "workflow",
+            "title": "Workflows"
         }
     ]
 }

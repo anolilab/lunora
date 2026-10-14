@@ -1,6 +1,9 @@
 ---
 title: "@lunora/vite"
 description: The recommended dev-time experience — codegen, HMR, overlay.
+related:
+    - to: /docs/packages/cli
+    - to: /docs/getting-started
 ---
 
 `@lunora/vite` is a Vite plugin factory. A single `lunora()` call wires up
@@ -20,22 +23,46 @@ export default defineConfig({
 
 ## Options
 
-| Option             | Default               | Purpose                                                                        |
-| ------------------ | --------------------- | ------------------------------------------------------------------------------ |
-| `schemaDir`        | `"lunora"`            | Directory containing `schema.ts` + function files                              |
-| `generatedDir`     | `"lunora/_generated"` | Where to emit `api.ts`, `server.ts`, `dataModel.ts`                            |
-| `apiSpec`          | `"openapi"`           | API spec emitted into `_generated/`: `"openapi"`/`"openrpc"`/`"both"`/`"none"` |
-| `studio`           | `true`                | Serve the Lunora studio at `/__lunora` during dev, or `false` to skip          |
-| `cloudflare`       | `true`                | Pass options to `@cloudflare/vite-plugin`, or `false` to skip                  |
-| `overlay`          | `true`                | Inject `@visulima/vite-overlay` for runtime errors, or `false` to skip         |
-| `validateWrangler` | `true`                | Cross-check `wrangler.jsonc` bindings against the schema                       |
-| `projectRoot`      | `process.cwd()`       | Override for monorepo setups                                                   |
+| Option                            | Default         | Purpose                                                                                                                    |
+| --------------------------------- | --------------- | -------------------------------------------------------------------------------------------------------------------------- |
+| `schemaDir`                       | `"lunora"`      | Directory containing `schema.ts` + function files                                                                          |
+| `apiSpec`                         | `"openapi"`     | API spec emitted into `_generated/`: `"openapi"`/`"openrpc"`/`"both"`/`"none"`                                             |
+| `target`                          | `"cloudflare"`  | Deploy target the emitted `ctx.*` surface is tailored to; defaults to `target` in `lunora.config.*`                        |
+| `studio`                          | `true`          | Serve the Lunora studio at `/__lunora` during dev, or `false` to skip                                                      |
+| `cloudflare`                      | `true`          | Pass options to `@cloudflare/vite-plugin`, or `false` to skip                                                              |
+| `overlay`                         | `true`          | Inject `@visulima/vite-overlay` for runtime errors; `false` to skip, or an options object to forward                       |
+| `validateWrangler`                | `true`          | Cross-check `wrangler.jsonc` bindings against the schema                                                                   |
+| `allowUnauthenticatedShardAccess` | `false`         | Let the composed class-A worker serve a client-named non-default shard / fan-out without an `authorizeShard` callback      |
+| `shard`                           | `{}`            | Shard DO config baked into the composed class-A entry: `cdc`, `reactiveCache`, `maxRelationKeys`, `relationExistsPushDown` |
+| `projectRoot`                     | `process.cwd()` | Override for monorepo setups                                                                                               |
+
+Generated files always land in `<schemaDir>/_generated`.
+
+### `shard` — class-A only
+
+A class-A app (TanStack Start, vinext, React Router, SolidStart) has no
+hand-written worker entry, so it never calls the generated `defineApp()` builder
+and has no `createShardDO(config)` of its own. `shard` is how it configures the
+shard Durable Object instead — the plugin bakes it into the entry it composes:
+
+```ts
+lunora({
+    shard: {
+        cdc: true, // record a post-image to __cdc_log on every write
+        reactiveCache: true, // or { maxEntries, maxBytes } to tune the caps
+    },
+});
+```
+
+Ignored for class B/C, which pass their own config through `defineApp()` (or
+`createShardDO`) in their worker entry — an explicit argument there is
+unaffected by this option.
 
 ## Codegen lifecycle
 
 The plugin watches `<schemaDir>/**/*.ts`. On any change it parses the
 schema with `ts-morph`, regenerates `_generated/*.ts`, and the Vite module
-graph picks up the new types — your editor sees the change before you can
+graph picks up the new types, so your editor sees the change before you can
 swap windows.
 
 ## Wrangler validator
@@ -50,7 +77,46 @@ During dev the plugin mounts the Lunora studio at `/__lunora` so you can browse
 your schema, data, logs, and advisors without leaving the dev server. Set
 `studio: false` to turn it off.
 
-## See also
+## Error overlay
 
-- [@lunora/cli](/docs/packages/cli)
-- [Getting started](/docs/getting-started)
+The plugin injects [`@visulima/vite-overlay`](https://www.npmjs.com/package/@visulima/vite-overlay)
+so runtime and codegen failures show up in the browser instead of only the
+terminal. On top of it Lunora registers **solution finders** that recognise
+framework-specific failures and render a fix hint in the overlay:
+
+- a missing or non-object-literal `defineSchema(...)`
+- a reserved or duplicate table name
+- an invalid `.jurisdiction(...)` value
+- a non-literal `unique` index flag
+- a container/workflow class that isn't re-exported by your worker entry
+- runtime unique-constraint and optimistic-concurrency (`ConflictError`) conflicts
+
+Pass an options object to forward overlay configuration, including your own
+`solutionFinders`, which run alongside Lunora's (each error resolves to the
+highest-`priority` finder that recognises it):
+
+```ts
+lunora({
+    overlay: {
+        solutionFinders: [myCustomFinder],
+    },
+});
+```
+
+Set `overlay: false` to disable it entirely.
+
+## Dev-server state & AI agents
+
+While `vite dev` runs, the plugin registers the server in `.lunora/dev.json`
+(URL, PID, start time; per-checkout, gitignored, secret-free) and removes the
+record on shutdown. That record is what lets `lunora dev status`, `lunora dev
+stop`, and `lunora dev logs` manage a Vite-based project, and what
+`lunora dev --background` blocks on before reporting the URL and PID. An AI
+agent can then start, health-check (`GET /_lunora/status` on the worker), and
+stop your dev server without parsing terminal output or leaking zombie
+processes.
+
+When an AI agent is detected (or `LUNORA_LOG_JSON=1` is set), the worker's
+structured log events pass through as raw single-line JSON instead of the
+pretty `[lunora]` terminal rendering, so machine consumers can parse them
+directly. Set `LUNORA_AGENT_MODE=0` to opt out of agent detection.

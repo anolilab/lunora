@@ -1,0 +1,62 @@
+{
+    "migrationIds": [],
+    "tables": {
+        "messages": {
+            "fields": {
+                "authorName": {
+                    "kind": "string",
+                    "optional": false
+                },
+                "createdAt": {
+                    "kind": "number",
+                    "optional": false
+                },
+                "text": {
+                    "kind": "string",
+                    "optional": false
+                },
+                "userId": {
+                    "kind": "string",
+                    "optional": false
+                }
+            },
+            "indexes": {
+                "by_created": {
+                    "fields": ["createdAt"],
+                    "unique": false
+                }
+            },
+            "relations": {},
+            "shardMode": "root"
+        },
+        "ratelimit_buckets": {
+            "fields": {
+                "key": {
+                    "kind": "string",
+                    "optional": false
+                },
+                "value": {
+                    "kind": "number",
+                    "optional": false
+                },
+                "ts": {
+                    "kind": "number",
+                    "optional": false
+                },
+                "prev": {
+                    "kind": "number",
+                    "optional": true
+                }
+            },
+            "indexes": {
+                "by_key": {
+                    "fields": ["key"],
+                    "unique": false
+                }
+            },
+            "relations": {},
+            "shardMode": "root"
+        }
+    },
+    "version": 1
+}

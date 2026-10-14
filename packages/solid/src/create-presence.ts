@@ -1,7 +1,9 @@
-import type { ArgsOf, FunctionReference, ReturnOf } from "@lunora/client";
-import { createSignal, onCleanup, onMount } from "solid-js";
+import type { ArgsOf, FunctionReference, ReturnOf, SubscriptionError, SubscriptionErrorCallback } from "@lunora/client";
+import { createSignal } from "solid-js";
 
+import { randomSessionId } from "../../../shared/random-session-id";
 import { useLunora } from "./context";
+import { onMounted } from "./solid-compat";
 
 /**
  * `createPresence` — collaborative-awareness primitive, the client half of the
@@ -35,6 +37,13 @@ interface CreatePresenceOptions<H extends HeartbeatReference, L extends ListPres
     listPresent: L;
 
     /**
+     * Called when the `listPresent` subscription reports an error (a session
+     * expiry, an RLS denial). Without it — and without reading `error` — such a
+     * failure is invisible and `present` is cleared until a later frame arrives.
+     */
+    onError?: SubscriptionErrorCallback;
+
+    /**
      * Stable id for this presence row. Defaults to a fresh per-mount id.
      * Pass a user/connection id to control deduping across tabs.
      */
@@ -44,6 +53,8 @@ interface CreatePresenceOptions<H extends HeartbeatReference, L extends ListPres
 }
 
 interface CreatePresenceResult<L extends ListPresentReference> {
+    /** The `listPresent` subscription's last error, or `undefined`. */
+    error: () => SubscriptionError | undefined;
     /** The present members for the room. `undefined` until the first push. */
     present: () => ReturnOf<L> | undefined;
     /** This mount's session id (generated when not supplied). */
@@ -51,18 +62,6 @@ interface CreatePresenceResult<L extends ListPresentReference> {
     /** Replace the awareness `data` sent with subsequent heartbeats, and heartbeat immediately. */
     setData: (data: Record<string, unknown> | undefined) => void;
 }
-
-/** Best-effort unique id for a presence session. */
-const makeSessionId = (): string => {
-    // eslint-disable-next-line n/no-unsupported-features/node-builtins -- crypto is a browser global, not just a Node built-in; guarded for SSR environments
-    if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
-        // eslint-disable-next-line n/no-unsupported-features/node-builtins -- same guard as above
-        return crypto.randomUUID();
-    }
-
-    // eslint-disable-next-line sonarjs/pseudo-random -- presence session id, not a credential
-    return `sess-${Math.random().toString(36).slice(2)}-${String(Date.now())}`;
-};
 
 const DEFAULT_INTERVAL_MS = 10_000;
 
@@ -73,13 +72,16 @@ const createPresence = <H extends HeartbeatReference, L extends ListPresentRefer
     const client = useLunora();
     const { heartbeat, intervalMs = DEFAULT_INTERVAL_MS, listPresent, shardKey } = options;
 
-    const sessionId = options.sessionId ?? makeSessionId();
+    const sessionId = options.sessionId ?? randomSessionId();
 
     const [present, setPresent] = createSignal<ReturnOf<L> | undefined>(undefined);
+    const [error, setError] = createSignal<SubscriptionError | undefined>(undefined);
 
     // Latest awareness data — updated by `setData`; read at heartbeat time so
     // changing data never resets the interval or closes the subscription.
     let latestData: Record<string, unknown> | undefined = options.data;
+    // True only between mount and teardown; `setData` must not heartbeat before then.
+    let mounted = false;
 
     const sendHeartbeat = (): void => {
         const args = {
@@ -93,10 +95,15 @@ const createPresence = <H extends HeartbeatReference, L extends ListPresentRefer
 
     const setData = (next: Record<string, unknown> | undefined): void => {
         latestData = next;
-        sendHeartbeat();
+
+        if (mounted) {
+            sendHeartbeat();
+        }
     };
 
-    onMount(() => {
+    onMounted(() => {
+        mounted = true;
+
         // Heartbeat immediately on mount.
         sendHeartbeat();
 
@@ -127,11 +134,19 @@ const createPresence = <H extends HeartbeatReference, L extends ListPresentRefer
             { roomId } as ArgsOf<L>,
             (value) => {
                 setPresent(() => value);
+                setError(undefined);
             },
-            { shardKey },
+            {
+                onError: (subscriptionError) => {
+                    setError(subscriptionError);
+                    options.onError?.(subscriptionError);
+                },
+                shardKey,
+            },
         );
 
-        onCleanup(() => {
+        return () => {
+            mounted = false;
             clearInterval(intervalHandle);
 
             if (typeof document !== "undefined") {
@@ -140,10 +155,10 @@ const createPresence = <H extends HeartbeatReference, L extends ListPresentRefer
 
             releaseConnectionContext();
             unsubscribe();
-        });
+        };
     });
 
-    return { present, sessionId, setData };
+    return { error, present, sessionId, setData };
 };
 
 export type { CreatePresenceOptions, CreatePresenceResult, HeartbeatReference, ListPresentReference };

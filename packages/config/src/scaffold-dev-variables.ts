@@ -1,17 +1,17 @@
+/* eslint-disable no-secrets/no-secrets -- JSDoc quotes the `KEY="<placeholder>"` .dev.vars grammar, not a credential. */
+
 import { randomBytes } from "node:crypto";
-import { existsSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, linkSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
-import {
-    DEV_VARS_EXAMPLE_FILE,
-    DEV_VARS_FILE,
-    DEV_VARS_NEWLINE,
-    parseDevVariableEntries,
-    splitDevVariableLine,
-    unquoteDevVariable,
-} from "./dev-variables-format";
+import { LunoraError } from "@lunora/errors";
+
+import { DEV_VARS_EXAMPLE_FILE, DEV_VARS_FILE, DEV_VARS_NEWLINE, parseDevVariableEntries, parseDevVariableLine } from "./dev-variables-format";
 import type { SecretEntry } from "./package-secrets-registry";
-import { secretsForPackages } from "./package-secrets-registry";
+import { CORE_SECRETS, MINTABLE_SECRET_KEYS, secretsForPackages } from "./package-secrets-registry";
+
+/** Core (always-scaffolded) secrets followed by the package-specific ones for the detected capabilities. */
+const requiredSecrets = (packageNames: ReadonlyArray<string>): SecretEntry[] => [...CORE_SECRETS, ...secretsForPackages(packageNames)];
 
 /**
  * Scaffolding `.dev.vars` from `.dev.vars.example`.
@@ -31,9 +31,6 @@ import { secretsForPackages } from "./package-secrets-registry";
 
 /** Bytes of entropy per generated secret — 32 bytes → 64 hex chars (matches `openssl rand -hex 32`). */
 const SECRET_BYTES = 32;
-
-/** A key whose value is a secret we should generate rather than copy from the example. */
-const SECRET_KEY = /(?:KEY|PASSWORD|SECRET|TOKEN)$/u;
 
 /**
  * Markers that flag a value as a fill-me-in placeholder rather than a usable
@@ -109,19 +106,62 @@ const isPlaceholderValue = (value: string): boolean => {
     });
 };
 
-const isPlaceholder = (rawValue: string): boolean => isPlaceholderValue(unquoteDevVariable(rawValue.trim()));
-
 /** Default secret generator — 64 hex chars, like `openssl rand -hex 32`. */
 const defaultRandomHex = (bytes: number): string => randomBytes(bytes).toString("hex");
 
 /**
- * The fresh secret to substitute for an example `key=value` entry, or `undefined`
- * when the example value should be used as-is (non-secret key, or a value the
- * example already pins to something real). The single rule both the full-file
- * generate and the missing-key augment share.
+ * True for a secret key the registry says Lunora can mint locally (a random
+ * 32-byte hex, like `openssl rand -hex 32`) — `AUTH_SECRET`,
+ * `LUNORA_ADMIN_TOKEN`, `STORAGE_SIGNING_SECRET`, …
+ *
+ * Registry membership, NOT the key's name shape, is the rule. A secret-looking
+ * key nothing in the registry declares (`OPENAI_API_KEY`,
+ * `GITHUB_CLIENT_SECRET`, a project's own `*_TOKEN`) is provider-issued as far
+ * as Lunora knows, so minting for it would write a value the provider rejects at
+ * runtime — over the developer's own half-filled `.dev.vars` — and hide the gap
+ * from `lunora env doctor`, whose job is to report it as unfilled.
  */
-const generatedSecretFor = (key: string, rawValue: string, randomHex: (bytes: number) => string): string | undefined =>
-    SECRET_KEY.test(key) && isPlaceholder(rawValue) ? randomHex(SECRET_BYTES) : undefined;
+const isMintableSecretKey = (key: string): boolean => MINTABLE_SECRET_KEYS.has(key);
+
+/**
+ * The fresh secret to substitute for an example `key=value` entry, or `undefined`
+ * when the example value should be used as-is (non-secret key, a provider-issued
+ * key we cannot mint locally, or a value the example already pins to something
+ * real). The single rule both the full-file generate and the missing-key augment
+ * share.
+ *
+ * Only {@link isMintableSecretKey mintable} secret keys are regenerated:
+ * provider-issued placeholders (e.g. `RESEND_API_KEY`, `STRIPE_SECRET_KEY`) and
+ * every key outside the registry (`OPENAI_API_KEY`, a project's own
+ * `*_CLIENT_SECRET`) are left verbatim so they stay detectable as unfilled by
+ * `lunora env doctor` — minting a random value for one would be actively wrong
+ * (the provider would reject it) and would hide the misconfiguration.
+ */
+const generatedSecretFor = (key: string, value: string, randomHex: (bytes: number) => string): string | undefined =>
+    isMintableSecretKey(key) && isPlaceholderValue(value) ? randomHex(SECRET_BYTES) : undefined;
+
+/** Mint a fresh strong secret value — 64 hex chars (32 bytes), like `openssl rand -hex 32`. */
+const generateSecretValue = (randomHex: (bytes: number) => string = defaultRandomHex): string => randomHex(SECRET_BYTES);
+
+/**
+ * The content's lines with every mintable placeholder secret replaced by a
+ * fresh generated value (recorded into `filledKeys`); comments and every other
+ * line are preserved verbatim. Shared by the full-file scaffold and the
+ * in-place fill.
+ */
+const fillSecretLines = (content: string, randomHex: (bytes: number) => string, filledKeys: string[]): string[] =>
+    content.split(DEV_VARS_NEWLINE).map((line) => {
+        const parsed = parseDevVariableLine(line);
+        const secret = parsed ? generatedSecretFor(parsed.key, parsed.value, randomHex) : undefined;
+
+        if (!parsed || secret === undefined) {
+            return line;
+        }
+
+        filledKeys.push(parsed.key);
+
+        return `${parsed.key}="${secret}"`;
+    });
 
 /**
  * The outcome of planning a scaffold — a discriminated union so the orchestrator
@@ -148,21 +188,8 @@ const planDevVariablesScaffold = (input: {
         return { status: "no-example" };
     }
 
-    const randomHex = input.randomHex ?? defaultRandomHex;
     const generatedKeys: string[] = [];
-
-    const lines = input.exampleContent.split(DEV_VARS_NEWLINE).map((line) => {
-        const parsed = splitDevVariableLine(line);
-        const secret = parsed ? generatedSecretFor(parsed.key, parsed.value, randomHex) : undefined;
-
-        if (!parsed || secret === undefined) {
-            return line;
-        }
-
-        generatedKeys.push(parsed.key);
-
-        return `${parsed.key}="${secret}"`;
-    });
+    const lines = fillSecretLines(input.exampleContent, input.randomHex ?? defaultRandomHex, generatedKeys);
 
     return { content: lines.join("\n"), generatedKeys, status: "generate" };
 };
@@ -175,6 +202,30 @@ interface AugmentPlan {
     /** Keys present in the example but absent from the current `.dev.vars`. */
     missingKeys: string[];
 }
+
+/**
+ * Render `value` for interpolation into a double-quoted `.dev.vars` entry.
+ *
+ * `parseDevVariableLine` runs dotenv's own parser, which EXPANDS `\n` and `\r`
+ * inside a double-quoted example value. Re-emitting that expansion verbatim
+ * would put a physical line break inside the entry, and every rewrite here is
+ * line-oriented (`env set` / `env unset` replace whole lines), so the tail would
+ * be left behind as an orphaned fragment. Re-escaping puts the value back in the
+ * form dotenv expands to exactly what it read.
+ *
+ * A literal `"` or `\` has no such form — dotenv does not unescape `\"`, so
+ * there is no way to spell one inside a double-quoted value. Rather than emit a
+ * line whose quote closes early and silently truncates the value, those render
+ * empty for the developer to fill in, which is what an example placeholder is
+ * for anyway.
+ */
+const renderExampleValue = (value: string): string => {
+    if (value.includes('"') || value.includes("\\")) {
+        return "";
+    }
+
+    return value.replaceAll("\r", String.raw`\r`).replaceAll("\n", String.raw`\n`);
+};
 
 /**
  * Plan how to top up an existing `.dev.vars` from the example: every example key
@@ -196,7 +247,7 @@ const planDevVariablesAugment = (input: {
     const missingKeys: string[] = [];
 
     for (const line of input.exampleContent.split(DEV_VARS_NEWLINE)) {
-        const parsed = splitDevVariableLine(line);
+        const parsed = parseDevVariableLine(line);
 
         if (!parsed || present.has(parsed.key)) {
             continue;
@@ -207,7 +258,7 @@ const planDevVariablesAugment = (input: {
         missingKeys.push(parsed.key);
 
         if (secret === undefined) {
-            additions.push(`${parsed.key}="${unquoteDevVariable(parsed.value)}"`);
+            additions.push(`${parsed.key}="${renderExampleValue(parsed.value)}"`);
         } else {
             generatedKeys.push(parsed.key);
             additions.push(`${parsed.key}="${secret}"`);
@@ -252,21 +303,30 @@ interface EnsureDevVariablesResult {
 const generatedSuffix = (keys: string[]): string => (keys.length > 0 ? ` (generated ${keys.join(", ")})` : "");
 
 /**
- * Atomically create `.dev.vars`: write the content to a sibling temp file with
- * exclusive-create (`wx`), then `rename` it over the target. The rename is atomic
- * within one filesystem, so a concurrent `lunora dev` / Vite dev server can never
- * observe a half-written file or clobber a peer's freshly generated secrets. The
- * temp lives in the same directory so the rename never crosses devices (`EXDEV`).
- * On any failure the temp file is removed before the error propagates.
+ * The sibling temp path a pid-suffixed write stages through. It lives in the
+ * target's directory, so the rename never crosses devices (`EXDEV`).
  */
-const atomicCreateDevVariables = (path: string, content: string): void => {
-    const temporaryPath = `${path}.tmp-${String(process.pid)}`;
+const temporaryPathFor = (path: string): string => `${path}.tmp-${String(process.pid)}`;
+
+/**
+ * Atomically write `path`: write the content to a sibling temp file, then
+ * `rename` it over the target. The rename is atomic within one filesystem, so
+ * a reader can never observe a half-written file, and an interrupt mid-write
+ * can't truncate the target. The temp lives in the same directory so the
+ * rename never crosses devices (`EXDEV`); on any failure it is removed before
+ * the error propagates, and the content is never logged or thrown.
+ *
+ * `mode: 0o600` for secret-bearing files so they are owner-only, not
+ * world-readable on a shared host (Node otherwise defaults to 0o666 → 0o644
+ * under the usual umask); `rename` preserves the temp file's mode. This
+ * overwrites `path` by design; for a create that must not replace a peer's
+ * file, use {@link createExclusively}.
+ */
+const atomicWrite = (path: string, content: string, options: { mode?: number } = {}): void => {
+    const temporaryPath = temporaryPathFor(path);
 
     try {
-        // `mode: 0o600` so the freshly generated secrets are owner-only, not
-        // world-readable on a shared host (Node otherwise defaults to 0o666 →
-        // 0o644 under the usual umask). `rename` preserves the temp file's mode.
-        writeFileSync(temporaryPath, content, { encoding: "utf8", flag: "wx", mode: 0o600 });
+        writeFileSync(temporaryPath, content, { encoding: "utf8", ...options });
         renameSync(temporaryPath, path);
     } catch (error) {
         rmSync(temporaryPath, { force: true });
@@ -276,30 +336,169 @@ const atomicCreateDevVariables = (path: string, content: string): void => {
 };
 
 /**
- * Append lines to an existing `.dev.vars`, atomically and owner-only.
- *
- * Mirrors {@link atomicCreateDevVariables}: build the full new content, write it
- * to a sibling temp file (`mode: 0o600`), then `rename` over the target. The
- * read happens immediately before the write so a concurrent peer's appends are
- * picked up rather than clobbered — a plain read-modify-write would race two
- * `lunora dev` / Vite processes into last-writer-wins (the exact scenario the
- * create path defends against). A trailing newline is inserted only if needed.
+ * Exclusive create without hard links, for filesystems that refuse `link`
+ * (`EPERM` / `ENOTSUP`). A `wx` open fails with `EEXIST` when a peer already
+ * created `path`, so the create stays exclusive.
  */
-const appendDevVariables = (path: string, additions: string[]): void => {
-    const existing = readFileSync(path, "utf8");
-    const separator = existing.length > 0 && !existing.endsWith("\n") ? "\n" : "";
-    const content = `${existing}${separator}${additions.join("\n")}\n`;
-
-    const temporaryPath = `${path}.tmp-${String(process.pid)}`;
-
+const createDirectlyExclusively = (path: string, content: string): boolean => {
     try {
-        writeFileSync(temporaryPath, content, { encoding: "utf8", mode: 0o600 });
-        renameSync(temporaryPath, path);
+        writeFileSync(path, content, { encoding: "utf8", flag: "wx", mode: 0o600 });
+
+        return true;
     } catch (error) {
-        rmSync(temporaryPath, { force: true });
+        if ((error as NodeJS.ErrnoException).code === "EEXIST") {
+            return false;
+        }
 
         throw error;
     }
+};
+
+/**
+ * Create `path` with `content` only if nothing is there. Returns `false` when
+ * a peer already created it. The content goes to a sibling temp file, which is
+ * then hard-linked to `path`: `link` fails with `EEXIST` when `path` exists, so
+ * the create is exclusive on the final path. A `rename` here would silently
+ * replace a peer's (possibly secret-bearing) file that landed after the
+ * caller's existence check. The temp file is removed on every path, and the
+ * hard link shares the temp file's inode, so `mode: 0o600` carries over.
+ * Where the filesystem has no hard links (`EPERM` / `ENOTSUP`), it falls back
+ * to {@link createDirectlyExclusively}.
+ */
+const createExclusively = (path: string, content: string): boolean => {
+    const temporaryPath = temporaryPathFor(path);
+
+    try {
+        writeFileSync(temporaryPath, content, { encoding: "utf8", flag: "wx", mode: 0o600 });
+
+        try {
+            linkSync(temporaryPath, path);
+
+            return true;
+        } catch (error) {
+            const { code } = error as NodeJS.ErrnoException;
+
+            if (code === "EEXIST") {
+                return false;
+            }
+
+            if (code === "EPERM" || code === "ENOTSUP") {
+                return createDirectlyExclusively(path, content);
+            }
+
+            throw error;
+        }
+    } finally {
+        rmSync(temporaryPath, { force: true });
+    }
+};
+
+/**
+ * Atomically (over)write a `.dev.vars`-shaped file, owner-only. For a file
+ * holding secrets a torn write would destroy every other local value alongside
+ * the new one, and the new value itself has no other recoverable copy if it
+ * was never disclosed anywhere else (Cloudflare secrets are write-only).
+ * Exported so a caller writing to a `.dev.vars`-shaped path outside this
+ * module (`lunora deploy`'s minted-secret disclosure) reuses this instead of
+ * hand-rolling another copy of the pattern.
+ */
+const writeDevVariablesFileAtomically = (path: string, content: string): void => {
+    atomicWrite(path, content, { mode: 0o600 });
+};
+
+/** Retry budget for {@link appendDevVariables}'s compare-and-swap loop. */
+const APPEND_MAX_ATTEMPTS = 5;
+
+/** The bits of file identity we compare before trusting our read was still current at rename time. */
+interface FileFingerprint {
+    mtimeMs: number;
+    size: number;
+}
+
+/** `undefined` when the path doesn't exist (e.g. it was deleted between attempts). */
+const fingerprintOf = (path: string): FileFingerprint | undefined => {
+    try {
+        const stats = statSync(path);
+
+        return { mtimeMs: stats.mtimeMs, size: stats.size };
+    } catch {
+        return undefined;
+    }
+};
+
+const sameFingerprint = (a: FileFingerprint | undefined, b: FileFingerprint | undefined): boolean => {
+    if (a === undefined || b === undefined) {
+        return false;
+    }
+
+    return a.mtimeMs === b.mtimeMs && a.size === b.size;
+};
+
+/**
+ * Append lines to an existing `.dev.vars`, atomically and owner-only, via a
+ * compare-and-swap retry loop.
+ *
+ * Mirrors {@link atomicWrite} in shape (sibling temp file, `mode:
+ * 0o600`, atomic `rename`), but a plain read-modify-write is not enough here:
+ * two concurrent `lunora dev` / Vite processes could both read the same old
+ * content, each append their own additions, and the second `rename` would
+ * silently discard the first writer's lines. To close that window:
+ *
+ * 1. Each attempt reads the file and fingerprints it (`mtimeMs` + `size`).
+ * 2. `buildAdditions(existing)` re-derives the lines to append from that fresh
+ * read (the caller re-runs its planner, e.g. {@link planDevVariablesAugment},
+ * so a peer's already-landed keys are recognised as present and skipped).
+ * 3. The new content is written to an attempt-unique temp file (pid + random
+ * suffix, so two processes never collide on the temp path itself).
+ * 4. The target is re-fingerprinted immediately before the rename. If it
+ * changed since step 1, a peer won the race — discard the temp file and
+ * retry from a fresh read/merge instead of clobbering their append.
+ *
+ * Returns the additions actually written (from the attempt that won), or `[]`
+ * if a fresh read showed nothing left to add (a peer already added everything
+ * this call wanted). Throws after {@link APPEND_MAX_ATTEMPTS} losing attempts;
+ * the error names only the path, never file content or additions.
+ */
+const appendDevVariables = (path: string, buildAdditions: (existing: string) => string[]): string[] => {
+    for (let attempt = 0; attempt < APPEND_MAX_ATTEMPTS; attempt += 1) {
+        const beforeFingerprint = fingerprintOf(path);
+        const existing = readFileSync(path, "utf8");
+        const additions = buildAdditions(existing);
+
+        if (additions.length === 0) {
+            return [];
+        }
+
+        const separator = existing.length > 0 && !existing.endsWith("\n") ? "\n" : "";
+        const content = `${existing}${separator}${additions.join("\n")}\n`;
+
+        const temporaryPath = `${path}.tmp-${String(process.pid)}-${randomBytes(6).toString("hex")}`;
+
+        try {
+            writeFileSync(temporaryPath, content, { encoding: "utf8", mode: 0o600 });
+
+            // Re-check the target's identity right before the swap: if it moved
+            // since our read, another writer won the race — discard our temp file
+            // and retry from a fresh read/merge instead of clobbering their append.
+            const beforeRenameFingerprint = fingerprintOf(path);
+
+            if (!sameFingerprint(beforeFingerprint, beforeRenameFingerprint)) {
+                rmSync(temporaryPath, { force: true });
+
+                continue;
+            }
+
+            renameSync(temporaryPath, path);
+
+            return additions;
+        } catch (error) {
+            rmSync(temporaryPath, { force: true });
+
+            throw error;
+        }
+    }
+
+    throw new LunoraError("INTERNAL", `Failed to append to ${path} after ${String(APPEND_MAX_ATTEMPTS)} attempts — a concurrent writer kept winning the race.`);
 };
 
 /**
@@ -341,14 +540,12 @@ const ensureDevVariables = async (deps: EnsureDevVariablesDeps): Promise<EnsureD
             return { addedKeys: [], generatedKeys: [], status: "declined" };
         }
 
-        // Re-check right before the write: another process may have created the
-        // file since the `existsSync` above. If so, bail rather than overwrite the
-        // peer's (possibly secret-bearing) file.
-        if (existsSync(devVariablesPath)) {
+        // Create exclusively: a peer can create the file after the existence check
+        // above, and `createExclusively` refuses to replace it.
+        if (!createExclusively(devVariablesPath, plan.content)) {
             return { addedKeys: [], generatedKeys: [], status: "skipped-exists" };
         }
 
-        atomicCreateDevVariables(devVariablesPath, plan.content);
         deps.info(`Created ${DEV_VARS_FILE}${generatedSuffix(plan.generatedKeys)}.`);
 
         return { addedKeys: [], generatedKeys: plan.generatedKeys, status: "generated" };
@@ -372,10 +569,29 @@ const ensureDevVariables = async (deps: EnsureDevVariablesDeps): Promise<EnsureD
         return { addedKeys: [], generatedKeys: [], status: "declined" };
     }
 
-    appendDevVariables(devVariablesPath, augment.additions);
-    deps.info(`Updated ${DEV_VARS_FILE} — added ${list}${generatedSuffix(augment.generatedKeys)}.`);
+    // Re-plan from whatever `.dev.vars` looks like on each attempt: a concurrent
+    // writer may have already landed some (or all) of these keys between our
+    // initial read above and the rename, and re-running the (pure) planner
+    // against the fresh content naturally treats those keys as already-present
+    // and skips them, instead of clobbering the peer's append.
+    const written = appendDevVariables(
+        devVariablesPath,
+        (currentContent) => planDevVariablesAugment({ existingContent: currentContent, exampleContent, randomHex: deps.randomHex }).additions,
+    );
+    const writtenKeys = written.map((line) => parseDevVariableLine(line)?.key).filter((key): key is string => key !== undefined);
 
-    return { addedKeys: augment.missingKeys, generatedKeys: augment.generatedKeys, status: "augmented" };
+    // A concurrent writer may have landed every missing key between our plan and
+    // the CAS append, leaving nothing for us to write. Report that as an
+    // unchanged file rather than logging a dangling "added ." line.
+    if (writtenKeys.length === 0) {
+        return { addedKeys: [], generatedKeys: [], status: "exists" };
+    }
+
+    const writtenGeneratedKeys = augment.generatedKeys.filter((key) => writtenKeys.includes(key));
+
+    deps.info(`Updated ${DEV_VARS_FILE} — added ${writtenKeys.join(", ")}${generatedSuffix(writtenGeneratedKeys)}.`);
+
+    return { addedKeys: writtenKeys, generatedKeys: writtenGeneratedKeys, status: "augmented" };
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -385,7 +601,7 @@ const ensureDevVariables = async (deps: EnsureDevVariablesDeps): Promise<EnsureD
 /**
  * The block of text that represents a single {@link SecretEntry} in a
  * `.dev.vars.example` file: a comment block (description + docs URL) followed
- * by the `KEY="&lt;placeholder>"` assignment.
+ * by the `KEY="<placeholder>"` assignment.
  *
  * Written through the dev-variables-format grammar so the format stays
  * consistent with every other reader/writer. The value is always a placeholder
@@ -410,7 +626,7 @@ const secretEntryBlock = (entry: SecretEntry): string => {
  * in the output is the entry's `placeholderValue`.
  */
 const buildPackageSecretsBlock = (packageNames: ReadonlyArray<string>, existingKeys: ReadonlySet<string>): string => {
-    const entries = secretsForPackages(packageNames).filter((entry) => !existingKeys.has(entry.key));
+    const entries = requiredSecrets(packageNames).filter((entry) => !existingKeys.has(entry.key));
 
     if (entries.length === 0) {
         return "";
@@ -441,32 +657,137 @@ const ensureDevVariablesExample = (cwd: string, packageNames: ReadonlyArray<stri
     }
 
     const separator = existing.length > 0 && !existing.endsWith("\n") ? "\n" : "";
-    const newContent = `${existing}${separator}\n${block}\n`;
 
-    const temporaryPath = `${examplePath}.tmp-${String(process.pid)}`;
-
-    try {
-        // `.dev.vars.example` is committed and public — no need for 0o600.
-        writeFileSync(temporaryPath, newContent, { encoding: "utf8" });
-        renameSync(temporaryPath, examplePath);
-    } catch (error) {
-        rmSync(temporaryPath, { force: true });
-
-        throw error;
-    }
+    // `.dev.vars.example` is committed and public — no need for 0o600.
+    atomicWrite(examplePath, `${existing}${separator}\n${block}\n`);
 
     // Return the keys we actually added.
-    return secretsForPackages(packageNames)
+    return requiredSecrets(packageNames)
         .filter((entry) => !existingKeys.has(entry.key))
         .map((entry) => entry.key);
 };
 
-export type { AugmentPlan, EnsureDevVariablesDeps, EnsureDevVariablesResult, EnsureDevVariablesStatus, ScaffoldPlan };
+interface DevSecretsFillPlan {
+    /** {@link CORE_SECRETS} keys appended because they were absent (each generated). */
+    addedKeys: string[];
+    /** The full new file content to write. */
+    content: string;
+    /** Existing empty/placeholder secret-keyed entries filled with fresh values. */
+    filledKeys: string[];
+}
+
+/**
+ * Plan the in-place generation of dev secrets for a `.dev.vars`. First, every
+ * line whose key is {@link isMintableSecretKey mintable} — registry membership,
+ * NOT the key's name shape — and whose value is empty or a placeholder gets a
+ * freshly generated value, so a `lunora add`-scaffolded `.dev.vars` (which
+ * writes each secret blank) becomes usable on `lunora dev` / `vite dev` without
+ * the user running `openssl` by hand. A provider-issued key (`OPENAI_API_KEY`,
+ * `STRIPE_SECRET_KEY`) is left verbatim so `lunora env doctor` can still report
+ * it as unfilled. Second, any {@link CORE_SECRETS} key absent from
+ * the file is appended (generated) — notably `LUNORA_ADMIN_TOKEN`, which the
+ * local Studio needs to call the worker's admin gate in dev (without it the
+ * Studio shows its login gate).
+ *
+ * Pure (given `randomHex`): real (non-placeholder) values are never touched, and
+ * comments + non-secret entries are preserved verbatim.
+ */
+const planDevSecretsFill = (input: { existingContent: string; randomHex?: (bytes: number) => string }): DevSecretsFillPlan => {
+    const randomHex = input.randomHex ?? defaultRandomHex;
+    const filledKeys: string[] = [];
+
+    // 1. Fill empty/placeholder secret-keyed values in place.
+    const lines = fillSecretLines(input.existingContent, randomHex, filledKeys);
+
+    // 2. Append any missing core secret (a present-but-empty one is already
+    //    handled by the fill pass — every CORE_SECRETS key is secret-named).
+    const present = new Set(parseDevVariableEntries(input.existingContent).map((entry) => entry.key));
+    const addedKeys: string[] = [];
+    const additions: string[] = [];
+
+    for (const entry of CORE_SECRETS) {
+        if (present.has(entry.key)) {
+            continue;
+        }
+
+        addedKeys.push(entry.key);
+        additions.push(`# ${entry.description}`, `${entry.key}="${randomHex(SECRET_BYTES)}"`);
+    }
+
+    const body = lines.join("\n");
+
+    if (additions.length === 0) {
+        return { addedKeys, content: body, filledKeys };
+    }
+
+    const separator = body === "" || body.endsWith("\n") ? "" : "\n";
+
+    return { addedKeys, content: `${body}${separator}${additions.join("\n")}\n`, filledKeys };
+};
+
+interface FillDevSecretsResult {
+    /** Core secret keys appended (generated) because they were missing. */
+    addedKeys: string[];
+    /** Existing empty/placeholder secrets filled with generated values. */
+    filledKeys: string[];
+    /** `created` = no `.dev.vars` existed; `filled` = topped up an existing one; `unchanged` = nothing to do. */
+    status: "created" | "filled" | "unchanged";
+}
+
+/**
+ * Generate any missing/empty dev secrets in the project's `.dev.vars`, in place.
+ *
+ * Complements {@link ensureDevVariables} (which scaffolds `.dev.vars` from
+ * `.dev.vars.example`). A `lunora add`-scaffolded project writes secrets blank
+ * straight into `.dev.vars` (no example) and never includes `LUNORA_ADMIN_TOKEN`
+ * — so the worker boots with empty secrets and the Studio shows its login gate.
+ * This fills those gaps at dev startup, so both `lunora dev` and the
+ * `@lunora/vite` dev server give a working project with zero manual `openssl`.
+ *
+ * Never overwrites a real (non-placeholder) value. Two writers, on purpose: when
+ * the file does not exist yet, the create goes through {@link createExclusively}
+ * and loses to a peer that creates it first; when it exists, the fill rewrites
+ * it through {@link atomicWrite} (temp + rename, owner-only) with the keys it
+ * just read and planned against.
+ */
+const fillDevSecrets = (deps: { cwd: string; info?: (message: string) => void; randomHex?: (bytes: number) => string }): FillDevSecretsResult => {
+    const devVariablesPath = join(deps.cwd, DEV_VARS_FILE);
+    const exists = existsSync(devVariablesPath);
+    const existingContent = exists ? readFileSync(devVariablesPath, "utf8") : "";
+
+    const plan = planDevSecretsFill({ existingContent, randomHex: deps.randomHex });
+
+    if (plan.filledKeys.length === 0 && plan.addedKeys.length === 0) {
+        return { addedKeys: [], filledKeys: [], status: "unchanged" };
+    }
+
+    if (exists) {
+        atomicWrite(devVariablesPath, plan.content, { mode: 0o600 });
+    } else if (!createExclusively(devVariablesPath, plan.content)) {
+        // A peer created `.dev.vars` after the read above. Leave its file alone; it
+        // fills its own keys.
+        return { addedKeys: [], filledKeys: [], status: "unchanged" };
+    }
+
+    const generated = [...plan.filledKeys, ...plan.addedKeys];
+
+    deps.info?.(`Generated ${String(generated.length)} dev secret(s) in ${DEV_VARS_FILE}: ${generated.join(", ")}`);
+
+    return { addedKeys: plan.addedKeys, filledKeys: plan.filledKeys, status: exists ? "filled" : "created" };
+};
+
+export type { AugmentPlan, DevSecretsFillPlan, EnsureDevVariablesDeps, EnsureDevVariablesResult, EnsureDevVariablesStatus, FillDevSecretsResult, ScaffoldPlan };
 export {
     buildPackageSecretsBlock,
     ensureDevVariables,
     ensureDevVariablesExample as ensureDevVarsExample,
+    fillDevSecrets,
+    generateSecretValue,
+    isMintableSecretKey,
     isPlaceholderValue,
+    planDevSecretsFill,
     planDevVariablesAugment,
     planDevVariablesScaffold,
+    requiredSecrets,
+    writeDevVariablesFileAtomically,
 };

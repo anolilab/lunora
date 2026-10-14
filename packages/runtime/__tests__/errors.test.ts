@@ -59,15 +59,23 @@ describe("lunoraError", () => {
         // Structurally identical to what `@lunora/do` throws — the runtime
         // does not take a hard dependency on that package, so we recognise
         // the shape (name + numeric status + string code) instead.
-        const conflict = Object.assign(new Error("stale version"), {
-            code: "CONFLICT",
-            name: "ConflictError",
-            status: 409,
-        });
+        const conflict = new LunoraError("stale version", { code: "CONFLICT", status: 409 });
         const response = toErrorResponse(conflict);
 
         expect(response.status).toBe(409);
-        await expect(response.json()).resolves.toEqual({ error: { code: "CONFLICT", message: "stale version" } });
+        // The runtime edge now attaches the code's catalog hint (matchObject
+        // ignores the extra `hint` key added for `CONFLICT`).
+        await expect(response.json()).resolves.toMatchObject({ error: { code: "CONFLICT", message: "stale version" } });
+    });
+
+    it("attaches the catalog hint for a non-internal code", async () => {
+        expect.assertions(1);
+
+        const response = toErrorResponse(new LunoraError("boom", { code: "CONFLICT", status: 409 }));
+
+        // `expect.anything()` matches the (defined) `hint` array without pinning
+        // its exact contents to the catalog.
+        await expect(response.json()).resolves.toMatchObject({ error: { hint: expect.anything() } });
     });
 
     it("toErrorResponse maps a structural LunoraError shape (name + code + status) to its status", async () => {
@@ -77,11 +85,7 @@ describe("lunoraError", () => {
         // cross-package error mirroring LunoraError's shape) lets the runtime
         // route it without an `instanceof` check, so the DO package stays
         // free of a runtime dep on `@lunora/server`.
-        const countUnsupported = Object.assign(new Error("count() is not supported in an RLS-restricted context"), {
-            code: "COUNT_RLS_UNSUPPORTED",
-            name: "LunoraError",
-            status: 422,
-        });
+        const countUnsupported = new LunoraError("count() is not supported in an RLS-restricted context", { code: "COUNT_RLS_UNSUPPORTED", status: 422 });
         const response = toErrorResponse(countUnsupported);
 
         expect(response.status).toBe(422);

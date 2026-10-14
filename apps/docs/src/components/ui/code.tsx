@@ -81,7 +81,7 @@ export const Code: FC<
             >
                 <ScrollArea
                     className={cn(
-                        "relative flex max-h-[600px] flex-col overflow-hidden rounded-[11px] bg-white text-sm leading-5 font-medium tracking-normal shadow-md md:text-sm md:leading-[22px]",
+                        "relative flex max-h-[600px] flex-col overflow-hidden rounded-[11px] bg-panel text-sm leading-5 font-medium tracking-normal shadow-md md:text-sm md:leading-[22px]",
                         classes?.scrollArea,
                     )}
                 >
@@ -135,7 +135,7 @@ export const CodePreview: FC<
                 </div>
                 <TabsContent value="preview">{preview}</TabsContent>
                 <TabsContent className="rounded-xl bg-gray-100 p-3" value="code">
-                    <ScrollArea className="relative flex max-h-[600px] flex-col overflow-hidden rounded-[11px] bg-white text-sm leading-5 font-medium tracking-normal shadow-md md:text-sm md:leading-[22px]">
+                    <ScrollArea className="relative flex max-h-[600px] flex-col overflow-hidden rounded-[11px] bg-panel text-sm leading-5 font-medium tracking-normal shadow-md md:text-sm md:leading-[22px]">
                         {renderCode(code, highlighted)}
                     </ScrollArea>
                 </TabsContent>

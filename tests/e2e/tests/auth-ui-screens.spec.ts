@@ -1,0 +1,296 @@
+import { expect, test } from "../fixtures/lunora.js";
+import { BASE_URL } from "../origin";
+
+/**
+ * The copy-in auth screens (`lunora add auth-ui`) in a real browser, against the
+ * real Miniflare-backed worker — the layer jsdom component tests can't reach:
+ * a genuine form submit, a genuine `/api/auth/*` round trip, and the session
+ * cookie flipping the app to its authenticated view.
+ *
+ * `?authui=1` mounts them beside the playground's hand-rolled login (see
+ * `AuthUiDemo.tsx`), so the other specs keep driving that form.
+ *
+ * Failure modes covered:
+ *   - sign-up through the card → session → authenticated view
+ *   - sign-in through the card for an existing user
+ *   - client-side validation stops an empty submit before any request
+ *   - a bad password surfaces the mapped error on the card, not a blank screen
+ */
+
+test.beforeEach(async ({ resetServer }) => {
+    await resetServer();
+});
+
+/**
+ * Pre-create a user through the API. Absolute URL + explicit `Origin` because
+ * better-auth rejects cross-origin posts — without it the sign-up quietly fails
+ * and the card, correctly, reports invalid credentials later.
+ */
+const signUpViaApi = async (page: import("@playwright/test").Page, email: string, password: string): Promise<void> => {
+    const response = await page.request.post(`${BASE_URL}/api/auth/sign-up/email`, {
+        data: { email, name: email, password },
+        headers: { Origin: BASE_URL },
+    });
+
+    expect(response.status()).toBe(200);
+};
+
+const fill = async (page: import("@playwright/test").Page, label: string, value: string): Promise<void> => {
+    await page.getByLabel(label, { exact: true }).fill(value);
+};
+
+/** Scoped to the card's form: the demo's nav has its own "Show …" buttons. */
+const submit = async (page: import("@playwright/test").Page, name: string): Promise<void> => {
+    await page.locator("form").getByRole("button", { name, exact: true }).click();
+};
+
+test("sign-up card creates an account and lands in the authenticated view", async ({ page }) => {
+    await page.goto("/?authui=1");
+
+    await page.getByRole("button", { name: "Show sign up", exact: true }).click();
+    await expect(page.getByRole("heading", { name: "Create account" })).toBeVisible();
+
+    const email = `authui-signup-${Date.now()}@lunora.test`;
+
+    await fill(page, "Name", "Auth UI Tester");
+    await fill(page, "Email", email);
+    await fill(page, "Password", "test-password-1234"); // gitleaks:allow
+    await submit(page, "Create account");
+
+    // The session cookie lands and <App> swaps to the chat view.
+    await expect(page.getByRole("heading", { name: "Channels" })).toBeVisible();
+});
+
+test("sign-in card authenticates an existing user", async ({ page }) => {
+    const email = `authui-signin-${Date.now()}@lunora.test`;
+    const password = "test-password-1234"; // gitleaks:allow
+
+    await signUpViaApi(page, email, password);
+    // Start from a clean jar so the card, not the cookie, does the signing in.
+    await page.context().clearCookies();
+
+    await page.goto("/?authui=1");
+    await expect(page.getByRole("heading", { name: "Sign in" })).toBeVisible();
+
+    await fill(page, "Email", email);
+    await fill(page, "Password", password);
+    await submit(page, "Sign in");
+
+    await expect(page.getByRole("heading", { name: "Channels" })).toBeVisible();
+});
+
+test("submitting an empty form validates client-side instead of calling the API", async ({ page }) => {
+    await page.goto("/?authui=1");
+
+    let authRequests = 0;
+
+    page.on("request", (request) => {
+        if (request.url().includes("/api/auth/sign-in")) {
+            authRequests += 1;
+        }
+    });
+
+    await submit(page, "Sign in");
+
+    await expect(page.getByText("Email is required.")).toBeVisible();
+    expect(authRequests).toBe(0);
+});
+
+test("a wrong password surfaces the mapped error on the card", async ({ page }) => {
+    const email = `authui-badpw-${Date.now()}@lunora.test`;
+
+    await signUpViaApi(page, email, "test-password-1234"); // gitleaks:allow
+    await page.context().clearCookies();
+
+    await page.goto("/?authui=1");
+    await fill(page, "Email", email);
+    await fill(page, "Password", "wrong-password-9999"); // gitleaks:allow
+    await submit(page, "Sign in");
+
+    // `mapAuthError` turns better-auth's code into the card's banner copy.
+    await expect(page.getByRole("alert")).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Channels" })).toBeHidden();
+});
+
+/*
+ * The signed-in half. `?authui=account` swaps the chat view for the account
+ * cards (see `AuthUiAccount.tsx`), which is the only way these reach a browser —
+ * the four specs above sign in and land in chat, and the jsdom suite never makes
+ * a real `/api/auth/*` call.
+ *
+ * Only plugin-free cards are covered: the playground's client is a bare
+ * `createAuthClient`, so passkeys, two-factor and organizations have no server
+ * half here.
+ */
+
+/** Sign up through the API, then land on the account screen with that session. */
+const signInToAccount = async (page: import("@playwright/test").Page, email: string, password: string): Promise<void> => {
+    await signUpViaApi(page, email, password);
+    await page.goto("/?authui=account");
+    await expect(page.getByRole("heading", { name: "Profile" })).toBeVisible();
+};
+
+test("profile card saves a new display name", async ({ page }) => {
+    const email = `authui-profile-${Date.now()}@lunora.test`;
+
+    await signInToAccount(page, email, "test-password-1234"); // gitleaks:allow
+
+    await fill(page, "Name", "Renamed Tester");
+    await page.locator("form").getByRole("button", { name: "Save changes", exact: true }).click();
+
+    await expect(page.getByText("Your profile has been updated.")).toBeVisible();
+
+    // Survives a reload, so it was persisted rather than only shown optimistically.
+    await page.reload();
+    await expect(page.getByLabel("Name", { exact: true })).toHaveValue("Renamed Tester");
+});
+
+test("change-password card rotates the password and the old one stops working", async ({ page }) => {
+    const email = `authui-changepw-${Date.now()}@lunora.test`;
+    const oldPassword = "test-password-1234"; // gitleaks:allow
+    const newPassword = "test-password-5678"; // gitleaks:allow
+
+    await signInToAccount(page, email, oldPassword);
+
+    await fill(page, "Current password", oldPassword);
+    await fill(page, "New password", newPassword);
+    await fill(page, "Confirm password", newPassword);
+    await page.locator("form").getByRole("button", { name: "Change password", exact: true }).click();
+
+    await expect(page.getByText("Your password has been changed.")).toBeVisible();
+
+    // The rotation was real: the old password no longer signs in.
+    await page.context().clearCookies();
+    await page.goto("/?authui=1");
+    await fill(page, "Email", email);
+    await fill(page, "Password", oldPassword);
+    await submit(page, "Sign in");
+
+    await expect(page.getByRole("alert")).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Channels" })).toBeHidden();
+});
+
+test("sessions card revokes the other sessions and leaves this one signed in", async ({ page, request }) => {
+    const email = `authui-sessions-${Date.now()}@lunora.test`;
+    const password = "test-password-1234"; // gitleaks:allow
+
+    await signUpViaApi(page, email, password);
+
+    /*
+     * A SECOND session for the same account, in its own cookie jar (the `request`
+     * fixture's, which the page's context does not share). Without one there is
+     * nothing whose revocation could be observed: the card lists a single row,
+     * the click has nothing to do, and the only post-click assertion — that the
+     * Profile heading is still there — was already true before it. That version
+     * of this test stayed green with `revokeOthers` replaced by a stub.
+     */
+    const second = await request.post(`${BASE_URL}/api/auth/sign-in/email`, {
+        data: { email, password },
+        headers: { Origin: BASE_URL },
+    });
+
+    expect(second.status()).toBe(200);
+
+    await page.goto("/?authui=account");
+    await expect(page.getByRole("heading", { name: "Profile" })).toBeVisible();
+
+    const card = page.locator(".lunora-auth-card").filter({ has: page.getByRole("heading", { name: "Active sessions" }) });
+    const rows = card.locator(".lunora-auth-list__item");
+
+    await expect(rows).toHaveCount(2);
+    await card.getByRole("button", { name: "Sign out other sessions", exact: true }).click();
+
+    // The card refetches after the mutation, so the other row really is gone
+    // server-side rather than hidden optimistically.
+    await expect(rows).toHaveCount(1);
+
+    // Revoking *other* sessions must not revoke this one.
+    await expect(page.getByRole("heading", { name: "Profile" })).toBeVisible();
+    await page.reload();
+    await expect(page.getByRole("heading", { name: "Profile" })).toBeVisible();
+
+    /*
+     * …and the revoked one is genuinely dead, not merely dropped from the list.
+     * `disableCookieCache` because `@lunora/auth` turns better-auth's signed
+     * session cookie cache on with a 60s maxAge (see `createAuth`'s hardened
+     * defaults), so a plain `get-session` would keep answering from that cookie
+     * for a minute after the row is gone and make this pass for the wrong
+     * reason.
+     */
+    const orphaned = await request.get(`${BASE_URL}/api/auth/get-session?disableCookieCache=true`, { headers: { Origin: BASE_URL } });
+
+    expect(await orphaned.text()).not.toContain(email);
+});
+
+test("sign-out button clears the session and returns to the sign-in card", async ({ page }) => {
+    const email = `authui-signout-${Date.now()}@lunora.test`;
+
+    await signInToAccount(page, email, "test-password-1234"); // gitleaks:allow
+
+    await page.getByRole("button", { name: "Sign out", exact: true }).click();
+
+    await expect(page.getByRole("heading", { name: "Sign in" })).toBeVisible();
+});
+
+/*
+ * `<UserButton>` is the one new component whose behaviour is browser-shaped
+ * rather than form-shaped: a disclosure with Escape and outside-click handling,
+ * and focus returned to the trigger. jsdom exercises the same code, but focus
+ * and real event ordering are exactly what it models loosely — so it is worth a
+ * pass here and the rest of the new cards are not.
+ */
+test("user button opens, closes on Escape, and returns focus to the trigger", async ({ page }) => {
+    const email = `authui-userbutton-${Date.now()}@lunora.test`;
+
+    await signInToAccount(page, email, "test-password-1234"); // gitleaks:allow
+
+    const trigger = page.getByRole("button", { name: email, exact: true });
+
+    await expect(trigger).toHaveAttribute("aria-expanded", "false");
+
+    await trigger.click();
+
+    await expect(trigger).toHaveAttribute("aria-expanded", "true");
+    // The menu shows who is signed in, which is the whole reason it exists.
+    await expect(page.getByText(email).first()).toBeVisible();
+
+    await page.keyboard.press("Escape");
+
+    await expect(trigger).toHaveAttribute("aria-expanded", "false");
+    // Focus must come back, or a keyboard user is stranded where the menu was.
+    await expect(trigger).toBeFocused();
+});
+
+test("user button closes on an outside click without stealing focus back", async ({ page }) => {
+    const email = `authui-outside-${Date.now()}@lunora.test`;
+
+    await signInToAccount(page, email, "test-password-1234"); // gitleaks:allow
+
+    const trigger = page.getByRole("button", { name: email, exact: true });
+
+    await trigger.click();
+    await expect(trigger).toHaveAttribute("aria-expanded", "true");
+
+    // Clicking elsewhere is the user moving on, so the menu closes. The focus
+    // half of that contract (it is deliberately *not* yanked back, unlike
+    // Escape) is left to the jsdom suite: asserting it here would be asserting
+    // how a browser blurs on mousedown over a non-focusable element, which is
+    // not our behaviour to pin.
+    // The open menu overlays the cards directly beneath the trigger, so click
+    // the last one in the column — an element that is genuinely outside it.
+    await page.getByRole("heading", { name: "Delete account" }).click();
+
+    await expect(trigger).toHaveAttribute("aria-expanded", "false");
+});
+
+test("signing out from the user button clears the session", async ({ page }) => {
+    const email = `authui-menu-signout-${Date.now()}@lunora.test`;
+
+    await signInToAccount(page, email, "test-password-1234"); // gitleaks:allow
+
+    await page.getByRole("button", { name: email, exact: true }).click();
+    // Scoped to the menu: <SignOutButton> further down the page has the same name.
+    await page.locator(".lunora-auth-userbutton__menu").getByRole("button", { name: "Sign out", exact: true }).click();
+
+    await expect(page.getByRole("heading", { name: "Profile" })).toBeHidden();
+});

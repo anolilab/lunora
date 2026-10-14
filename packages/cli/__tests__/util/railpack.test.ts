@@ -1,3 +1,7 @@
+import { mkdtempSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+
 import { describe, expect, it } from "vitest";
 
 import type { Logger } from "../../src/util/logger";
@@ -11,6 +15,14 @@ const silentLogger = (): { errors: string[]; logger: Logger } => {
         errors,
         logger: { error: (message) => errors.push(message), info: () => {}, success: () => {}, warn: () => {} },
     };
+};
+
+/** A cwd whose nearest package.json declares npm, so `detectPackageManager` resolves npm. */
+const npmProjectCwd = (): string => {
+    const dir = mkdtempSync(join(tmpdir(), "lunora-cli-railpack-npm-"));
+    writeFileSync(join(dir, "package.json"), `{ "packageManager": "npm@10.9.0" }\n`, "utf8");
+
+    return dir;
 };
 
 describe(buildRailpackImages, () => {
@@ -47,6 +59,26 @@ describe(buildRailpackImages, () => {
         expect(calls).toHaveLength(4);
         expect(calls[0]?.descriptor).toMatchObject({ args: ["build", "./services/transcoder", "--name", "lunora-transcoder:build"], command: "railpack" });
         expect(calls[1]?.descriptor).toMatchObject({ args: ["exec", "wrangler", "containers", "push", "lunora-transcoder:build"], command: "pnpm" });
+    });
+
+    it("pushes through npx when the project declares npm (build stays on the railpack binary)", async () => {
+        expect.assertions(3);
+
+        const { calls, spawner } = createRecordingSpawner();
+        const { logger } = silentLogger();
+
+        const result = await buildRailpackImages({
+            cwd: npmProjectCwd(),
+            logger,
+            railpackAvailable: () => true,
+            spawner,
+            targets: [{ buildDir: "./services/transcoder", exportName: "transcoder" }],
+        });
+
+        expect(result.code).toBe(0);
+        // The Railpack build is its own binary — only the wrangler push routes through the manager.
+        expect(calls[0]?.descriptor).toMatchObject({ args: ["build", "./services/transcoder", "--name", "lunora-transcoder:build"], command: "railpack" });
+        expect(calls[1]?.descriptor).toMatchObject({ args: ["--", "wrangler", "containers", "push", "lunora-transcoder:build"], command: "npx" });
     });
 
     it("blocks when Railpack/BuildKit is unavailable, without spawning", async () => {

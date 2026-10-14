@@ -1,0 +1,159 @@
+import { describe, expect, it } from "vitest";
+
+import { MAX_BATCH_ENTRIES } from "../../../shared/batch-wire";
+import { groupBatchCallsByShard } from "../src/batch";
+
+describe("groupBatchCallsByShard", () => {
+    it("groups entries by shardKey, defaulting to the root shard, preserving id + fields", () => {
+        expect.assertions(3);
+
+        const groups = groupBatchCallsByShard(
+            [
+                { args: { a: 1 }, functionPath: "docs:x", id: 0, shardKey: "t1" },
+                { functionPath: "docs:y", id: 1 },
+                { clientId: "c", clientSeq: 3, functionPath: "docs:z", id: 2, mutationId: "m", shardKey: "t1" },
+            ],
+            "__root__",
+        );
+
+        expect([...groups.keys()].toSorted((a, b) => a.localeCompare(b))).toStrictEqual(["__root__", "t1"]);
+        expect(groups.get("t1")?.map((e) => [e.id, e.functionPath])).toStrictEqual([
+            [0, "docs:x"],
+            [2, "docs:z"],
+        ]);
+        expect(groups.get("t1")?.[1]).toStrictEqual({
+            args: {},
+            baselineSeq: undefined,
+            clientId: "c",
+            clientSeq: 3,
+            functionPath: "docs:z",
+            id: 2,
+            mutationId: "m",
+        });
+    });
+
+    // Each entry carries its OWN `.dropStalePatches()` baseline: a batch holds
+    // writes composed at different cursors, so one outer header cannot speak for
+    // all of them. Dropping it here would strand every batched replay with no
+    // baseline, which applies the write unchanged.
+    it("preserves each entry's own baselineSeq", () => {
+        expect.assertions(1);
+
+        const groups = groupBatchCallsByShard(
+            [
+                { baselineSeq: 10, functionPath: "docs:x", id: 0 },
+                { baselineSeq: 42, functionPath: "docs:y", id: 1 },
+                { functionPath: "docs:z", id: 2 },
+            ],
+            "__root__",
+        );
+
+        expect(groups.get("__root__")?.map((entry) => entry.baselineSeq)).toStrictEqual([10, 42, undefined]);
+    });
+
+    it("drops a non-numeric baselineSeq instead of rejecting the batch", () => {
+        // Narrowed like `clientSeq`: an older or malformed client still batches,
+        // it just gets no stale-patch protection on those entries.
+        expect.assertions(1);
+
+        const groups = groupBatchCallsByShard([{ baselineSeq: "10", functionPath: "docs:x", id: 0 }], "__root__");
+
+        expect(groups.get("__root__")?.[0]?.baselineSeq).toBeUndefined();
+    });
+
+    it("falls back id to the array index when a call omits it", () => {
+        expect.assertions(1);
+
+        const groups = groupBatchCallsByShard([{ functionPath: "docs:a" }, { functionPath: "docs:b" }], "__root__");
+
+        expect(groups.get("__root__")?.map((e) => e.id)).toStrictEqual([0, 1]);
+    });
+
+    it("rejects a reserved admin / relation prefix with FORBIDDEN", () => {
+        expect.assertions(2);
+
+        expect(() => groupBatchCallsByShard([{ functionPath: "__lunora_admin__:getMetrics", id: 0 }], "__root__")).toThrow(
+            expect.objectContaining({ code: "FORBIDDEN", status: 403 }),
+        );
+        expect(() => groupBatchCallsByShard([{ functionPath: "__lunora_relation__:read", id: 0 }], "__root__")).toThrow(
+            expect.objectContaining({ code: "FORBIDDEN", status: 403 }),
+        );
+    });
+
+    it("rejects a non-string functionPath with BAD_REQUEST", () => {
+        expect.assertions(1);
+
+        expect(() => groupBatchCallsByShard([{ id: 0 }], "__root__")).toThrow(expect.objectContaining({ code: "BAD_REQUEST", status: 400 }));
+    });
+
+    it("rejects a non-object `args` (string/number/array) with BAD_REQUEST, matching the single-call envelope", () => {
+        expect.assertions(3);
+
+        // Parity with `parseEnvelope`: a non-object `args` must be a clean 400 at
+        // the batch boundary, not forwarded to the shard as a malformed envelope.
+        expect(() => groupBatchCallsByShard([{ args: "x", functionPath: "docs:x", id: 0 }], "__root__")).toThrow(
+            expect.objectContaining({ code: "BAD_REQUEST", status: 400 }),
+        );
+        expect(() => groupBatchCallsByShard([{ args: 5, functionPath: "docs:x", id: 0 }], "__root__")).toThrow(
+            expect.objectContaining({ code: "BAD_REQUEST", status: 400 }),
+        );
+        expect(() => groupBatchCallsByShard([{ args: [1, 2], functionPath: "docs:x", id: 0 }], "__root__")).toThrow(
+            expect.objectContaining({ code: "BAD_REQUEST", status: 400 }),
+        );
+    });
+
+    it("rejects a batch over the entry cap with BAD_REQUEST (DoS guard)", () => {
+        expect.assertions(1);
+
+        const tooMany = Array.from({ length: MAX_BATCH_ENTRIES + 1 }, (_, index) => {
+            return { functionPath: "docs:x", id: index };
+        });
+
+        expect(() => groupBatchCallsByShard(tooMany, "__root__")).toThrow(expect.objectContaining({ code: "BAD_REQUEST", status: 400 }));
+    });
+
+    it("rejects a null / non-object call entry with BAD_REQUEST instead of a TypeError", () => {
+        expect.assertions(3);
+
+        // A JSON `null` in `calls[]` must surface as a clean 400, not a 500 TypeError.
+        expect(() => groupBatchCallsByShard([null], "__root__")).toThrow(expect.objectContaining({ code: "BAD_REQUEST", status: 400 }));
+        expect(() => groupBatchCallsByShard(["not-an-object"], "__root__")).toThrow(expect.objectContaining({ code: "BAD_REQUEST", status: 400 }));
+        expect(() => groupBatchCallsByShard([[{ functionPath: "docs:x" }]], "__root__")).toThrow(expect.objectContaining({ code: "BAD_REQUEST", status: 400 }));
+    });
+
+    it("rejects duplicate ids, which make the response un-demuxable", () => {
+        expect.assertions(1);
+
+        expect(() =>
+            groupBatchCallsByShard(
+                [
+                    { functionPath: "docs:x", id: 7 },
+                    { functionPath: "docs:y", id: 7 },
+                ],
+                "__root__",
+            ),
+        ).toThrow(expect.objectContaining({ code: "BAD_REQUEST", status: 400 }));
+    });
+
+    it("rejects an id that collides with another entry's positional fallback", () => {
+        expect.assertions(1);
+
+        // The second entry has no id and falls back to its index (1), which the
+        // first entry already claimed.
+        expect(() => groupBatchCallsByShard([{ functionPath: "docs:x", id: 1 }, { functionPath: "docs:y" }], "__root__")).toThrow(
+            expect.objectContaining({ code: "BAD_REQUEST", status: 400 }),
+        );
+    });
+
+    it("rejects a non-numeric id rather than silently renumbering it to the index", () => {
+        expect.assertions(2);
+
+        expect(() => groupBatchCallsByShard([{ functionPath: "docs:x", id: "seven" }], "__root__")).toThrow(
+            expect.objectContaining({ code: "BAD_REQUEST", status: 400 }),
+        );
+
+        expect(() => groupBatchCallsByShard([{ functionPath: "docs:x", id: null }], "__root__")).toThrow(
+            expect.objectContaining({ code: "BAD_REQUEST", status: 400 }),
+        );
+    });
+});

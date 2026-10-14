@@ -7,8 +7,10 @@
  * reconcile against and `env diff` needs to compare. The command runner is
  * injectable so tests can stub the wrangler invocation.
  */
-import type { ExecFileException } from "node:child_process";
-import { execFile } from "node:child_process";
+import { resolveDeployDriver, resolveProjectTarget } from "@lunora/config";
+
+import { detectPackageManager, toolchainExecArgs } from "./detect-package-manager";
+import { defaultSpawner } from "./spawn";
 
 interface SecretListRunnerResult {
     code: number;
@@ -38,21 +40,32 @@ interface ListRemoteSecretsResult {
     ok: boolean;
 }
 
-/** Map an execFile error to an exit code (0 on success, the child's code, else 1). */
-const execCode = (error: ExecFileException | null): number => {
-    if (!error) {
-        return 0;
+/**
+ * Runs `wrangler secret list` through {@link defaultSpawner} rather than a bare
+ * `execFile`, so it gets the same Windows `.cmd`-shim handling (`spawnShellCompat`,
+ * used inside `defaultSpawner`) every other spawned command in this CLI relies
+ * on — `execFile` on a package-manager shim (`pnpm`/`npx`/`yarn`/`bun`) fails
+ * outright on Windows (`EINVAL`/`ENOENT`, no PID) since Node's CVE-2024-27980
+ * hardening. A spawn error (the child never started) is reported as a failed
+ * result rather than a thrown rejection, matching the previous `execFile`-based
+ * runner's contract.
+ *
+ * Uses `captureStdoutSilently`, not `captureStdout`: this output is parsed
+ * (secret *names* only — Cloudflare never returns values), never displayed, so
+ * it must not be teed to the parent's stdout. `offerMissingSecrets` runs this
+ * on every real deploy, including `--format json`, where the parent process
+ * writes a single JSON document to stdout — a teed `secret list` payload ahead
+ * of it would corrupt that document for CI's `JSON.parse(stdout)`.
+ */
+const defaultRunner: SecretListRunner = async (command, args, cwd) => {
+    try {
+        const result = await defaultSpawner({ args, captureStderr: true, captureStdoutSilently: true, command, cwd });
+
+        return { code: result.code, stderr: result.stderr ?? "", stdout: result.stdout ?? "" };
+    } catch (error: unknown) {
+        return { code: 1, stderr: error instanceof Error ? error.message : String(error), stdout: "" };
     }
-
-    return typeof error.code === "number" ? error.code : 1;
 };
-
-const defaultRunner: SecretListRunner = (command, args, cwd) =>
-    new Promise<SecretListRunnerResult>((resolve) => {
-        execFile(command, [...args], { cwd }, (error, stdout, stderr) => {
-            resolve({ code: execCode(error), stderr, stdout });
-        });
-    });
 
 /**
  * Parse `wrangler secret list --format json` output into a sorted name list.
@@ -80,18 +93,20 @@ const parseSecretNames = (stdout: string): ReadonlyArray<string> | undefined => 
 };
 
 const listRemoteSecrets = async (inputs: ListRemoteSecretsInputs): Promise<ListRemoteSecretsResult> => {
-    const args = ["exec", "wrangler", "secret", "list", "--format", "json"];
+    // The toolchain is the target's, not always wrangler's — resolving from the
+    // project keeps a non-default target from shelling out to the wrong CLI.
+    const driver = resolveDeployDriver(resolveProjectTarget(inputs.cwd));
+    const listCommand = driver.toolchain?.secretList?.({ environment: inputs.env, temporary: inputs.temporary });
 
-    if (inputs.env !== undefined) {
-        args.push("--env", inputs.env);
+    if (listCommand === undefined) {
+        return { error: `deploy target "${driver.id}" has no secret store to list`, names: [], ok: false };
     }
 
-    if (inputs.temporary) {
-        args.push("--temporary");
-    }
-
+    // Run the host tool through the project's package manager (pnpm/npm/yarn/bun),
+    // detected from its lock file / `packageManager` field — never hardcoded.
+    const { args, command } = toolchainExecArgs(detectPackageManager(inputs.cwd), listCommand);
     const runner = inputs.runner ?? defaultRunner;
-    const result = await runner("pnpm", args, inputs.cwd);
+    const result = await runner(command, args, inputs.cwd);
 
     if (result.code !== 0) {
         return { error: result.stderr.trim() || `wrangler secret list exited ${String(result.code)}`, names: [], ok: false };
@@ -106,5 +121,5 @@ const listRemoteSecrets = async (inputs: ListRemoteSecretsInputs): Promise<ListR
     return { names, ok: true };
 };
 
-export type { ListRemoteSecretsInputs, ListRemoteSecretsResult, SecretListRunner };
+export type { ListRemoteSecretsInputs, ListRemoteSecretsResult };
 export { listRemoteSecrets, parseSecretNames };

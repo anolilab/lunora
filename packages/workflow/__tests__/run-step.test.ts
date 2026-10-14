@@ -1,3 +1,5 @@
+import { createDispatchRunner } from "@lunora/dispatch";
+import { LunoraError } from "@lunora/errors";
 import { v, ValidationError } from "@lunora/values";
 import { describe, expect, it, vi } from "vitest";
 
@@ -6,6 +8,7 @@ import type { NativeNonRetryableErrorConstructor } from "../src/errors";
 import { isNonRetryableError, NonRetryableError } from "../src/errors";
 import { createRunStep } from "../src/run-step";
 import type {
+    RunFunctionOptions,
     WorkflowLogger,
     WorkflowRunFunction,
     WorkflowStepConfigLike,
@@ -49,6 +52,7 @@ const make = (overrides?: { nonRetryableErrorClass?: NativeNonRetryableErrorCons
     const run = vi.fn<WorkflowRunFunction>(async () => undefined);
     const runStep = createRunStep({
         env: { BUCKET: "bucket" },
+        dedupNamespace: "orderPipeline/inst-1",
         log: noopLog,
         nonRetryableErrorClass: overrides?.nonRetryableErrorClass,
         run,
@@ -57,6 +61,22 @@ const make = (overrides?: { nonRetryableErrorClass?: NativeNonRetryableErrorCons
 
     return { calls: fake.calls, run, runStep };
 };
+
+/**
+ * Produce a real dispatch failure through `@lunora/dispatch`'s own error path
+ * (rather than hand-constructing a `LunoraError`) so it carries the same
+ * dispatch-origin brand a genuine `ctx.run` failure would — the thing
+ * `isDeterministicDispatchFailure` now checks in addition to `status`.
+ */
+const realDispatchFailure = async (status: number, code: string, message: string): Promise<unknown> =>
+    createDispatchRunner({
+        env: { LUNORA_ADMIN_TOKEN: "tok", LUNORA_ORIGIN_URL: "https://app.example.com" },
+        fetchImpl: async () => Response.json({ error: { code, message } }, { status }),
+        label: "@lunora/workflow",
+    })({ __lunoraRef: "flaky" }).then(
+        () => undefined,
+        (error: unknown) => error,
+    );
 
 describe("createRunStep", () => {
     it("validates args, runs the body, and returns the result", async () => {
@@ -166,6 +186,102 @@ describe("createRunStep", () => {
         expect(isNonRetryableError(error)).toBe(false);
     });
 
+    it("converts a deterministic dispatch failure (status 400) to a non-retryable error, portable and native", async () => {
+        // A `ctx.run` dispatch that failed with a deterministic status (the
+        // dispatched function's own validation, say) fails identically on every
+        // retry — the step must fail fast instead of burning its retry budget
+        // re-running the handler's side effects.
+        expect.assertions(4);
+
+        const dispatchFailure = await realDispatchFailure(400, "VALIDATION_ERROR", "bad args");
+        const flaky = defineStep("flaky", {
+            args: {},
+            handler: async () => {
+                throw dispatchFailure;
+            },
+        });
+
+        // Portable (no native constructor injected — Node test doubles).
+        const { runStep: portableRunStep } = make();
+        const portableError = await portableRunStep(flaky, {}).then(
+            () => undefined,
+            (error_: unknown) => error_,
+        );
+
+        expect(isNonRetryableError(portableError)).toBe(true);
+        expect((portableError as Error).cause).toBe(dispatchFailure);
+
+        // Native (constructor injected — mirrors the `src/do` boundary).
+        class FakeNative extends Error {
+            public constructor(message: string, _name?: string) {
+                super(message);
+                this.name = "NonRetryableError";
+            }
+        }
+        const { runStep: nativeRunStep } = make({ nonRetryableErrorClass: FakeNative });
+        const nativeError = await nativeRunStep(flaky, {}).then(
+            () => undefined,
+            (error_: unknown) => error_,
+        );
+
+        expect(nativeError).toBeInstanceOf(FakeNative);
+        expect((nativeError as Error).message).toBe("bad args");
+    });
+
+    it("keeps a Lunora-shaped 404 that did NOT come from a dispatch retryable — rethrown unchanged", async () => {
+        // Same allowlisted status (404) as a deterministic dispatch failure, but
+        // this is a plain `LunoraError` a step body threw directly (e.g. a
+        // genuine storage lookup miss) — it never carries the dispatch-origin
+        // brand, so it must stay retryable rather than being misclassified as a
+        // dispatch failure just because the status matches.
+        expect.assertions(2);
+
+        const notFound = new LunoraError("STORAGE_OBJECT_NOT_FOUND", "object missing", { status: 404 });
+        const flakyNotFound = defineStep("flakyNotFound", {
+            args: {},
+            handler: async () => {
+                throw notFound;
+            },
+        });
+
+        const { runStep } = make();
+        const error = await runStep(flakyNotFound, {}).then(
+            () => undefined,
+            (error_: unknown) => error_,
+        );
+
+        expect(error).toBe(notFound);
+        expect(isNonRetryableError(error)).toBe(false);
+    });
+
+    it("keeps a 429 (rate limit) and a 500 dispatch failure retryable — rethrown unchanged", async () => {
+        expect.assertions(2);
+
+        const rateLimited = new LunoraError("RATE_LIMITED", "slow down", { status: 429 });
+        const flakyRateLimited = defineStep("flakyRateLimited", {
+            args: {},
+            handler: async () => {
+                throw rateLimited;
+            },
+        });
+
+        const { runStep: runStepA } = make();
+
+        await expect(runStepA(flakyRateLimited, {})).rejects.toBe(rateLimited);
+
+        const upstream500 = new LunoraError("INTERNAL", "upstream blew up", { status: 500 });
+        const flaky500 = defineStep("flaky500", {
+            args: {},
+            handler: async () => {
+                throw upstream500;
+            },
+        });
+
+        const { runStep: runStepB } = make();
+
+        await expect(runStepB(flaky500, {})).rejects.toBe(upstream500);
+    });
+
     it("exposes attempt / env / run on the step context", async () => {
         expect.assertions(5);
 
@@ -176,8 +292,13 @@ describe("createRunStep", () => {
             handler: async (ctx) => {
                 expect(ctx.attempt).toBe(3);
                 expect(ctx.env).toEqual({ BUCKET: "bucket" });
-                expect(ctx.run).toBe(run);
                 expect(ctx.step.name).toBe("probe");
+
+                // `ctx.run` is the dedup-pinned wrapper, not the bare runner —
+                // it delegates each call with this step's replay-dedup id.
+                await ctx.run({ __lunoraRef: "a:b" });
+
+                expect(run).toHaveBeenCalledWith({ __lunoraRef: "a:b" }, undefined, { dedupId: "orderPipeline/inst-1#step0.1" });
 
                 return "done";
             },
@@ -204,7 +325,7 @@ describe("createRunStep", () => {
     it("forwards a rollback handler to native do and maps its context", async () => {
         expect.assertions(4);
 
-        const { calls, run, runStep } = make();
+        const { calls, runStep } = make();
         const rollback = vi.fn<(context: unknown) => Promise<undefined>>(async (_context: unknown) => undefined);
         const publish = defineStep("publish", {
             args: { key: v.string() },
@@ -236,7 +357,9 @@ describe("createRunStep", () => {
             error: failure,
             log: noopLog,
             output: "published",
-            run,
+            // The dedup-pinned wrapper over `run`, not the runner itself — its own
+            // ids are pinned by the "pins the rollback's own ids" case below.
+            run: expect.any(Function),
         });
     });
 
@@ -283,5 +406,161 @@ describe("createRunStep", () => {
         });
 
         await expect(runStep(step, {})).rejects.toBe(portable);
+    });
+});
+
+describe("durable step names", () => {
+    it("runs one StepDefinition repeatedly, and honors a per-call `name` override", async () => {
+        expect.assertions(4);
+
+        // Cloudflare keys a durable step by (name, type, occurrence) — `step.count`
+        // is "how many times step.do has been called with this name in the current
+        // run" — so a loop reusing one step name is a supported pattern and each
+        // occurrence caches independently. `name` is an opt-in override for callers
+        // who want distinct, addressable step names (e.g. for `instance.restart`).
+        const { calls, runStep } = make();
+        const greet = defineStep("greet", {
+            args: { name: v.string() },
+            handler: async (_ctx, { name }) => `hello ${name}`,
+        });
+
+        await expect(runStep(greet, { name: "ada" })).resolves.toBe("hello ada");
+        await expect(runStep(greet, { name: "bob" })).resolves.toBe("hello bob");
+        await expect(runStep(greet, { name: "cy" }, { name: "greet:2" })).resolves.toBe("hello cy");
+        expect(calls.map((call) => call.name)).toStrictEqual(["greet", "greet", "greet:2"]);
+    });
+
+    it("rejects a reserved framework name from either the override or the definition, without dispatching", async () => {
+        expect.assertions(3);
+
+        const { calls, runStep } = make();
+        const greet = defineStep("greet", { args: {}, handler: async () => "ok" });
+        // The resolved name is checked, so omitting the override does not slip past.
+        const reserved = defineStep("lunora:spawn:x", { args: {}, handler: async () => "ok" });
+
+        // `lunora:*` is the fan-out protocol's own durable-step namespace.
+        await expect(runStep(greet, {}, { name: "lunora:spawn:x" })).rejects.toThrow(/reserved/);
+        await expect(runStep(reserved, {})).rejects.toThrow(/reserved/);
+        expect(calls).toStrictEqual([]);
+    });
+});
+
+/**
+ * A fake native step that re-invokes the callback `attempts` times, the way
+ * Cloudflare retries a failing step body IN PLACE — the workflow body is not
+ * replayed between attempts. Returns the last attempt's result.
+ */
+const makeRetryingStep = (attempts: number): WorkflowStepLike =>
+    ({
+        do: async (name: string, a: unknown, b?: unknown) => {
+            const callback = (typeof a === "function" ? a : b) as (context: WorkflowStepContextLike) => Promise<unknown>;
+            let last: unknown;
+
+            for (let attempt = 1; attempt <= attempts; attempt += 1) {
+                // eslint-disable-next-line no-await-in-loop -- attempts are sequential by definition
+                last = await callback({ attempt, config: {}, step: { count: 1, name } });
+            }
+
+            return last;
+        },
+        sleep: vi.fn<(name: string, duration: number | string) => Promise<void>>(),
+        sleepUntil: vi.fn<(name: string, timestamp: Date | number) => Promise<void>>(),
+        waitForEvent: vi.fn<(name: string, options: { timeout?: number | string; type: string }) => Promise<{ payload: Readonly<unknown>; type: string }>>(),
+    }) as unknown as WorkflowStepLike;
+
+/** The `dedupId` each recorded `ctx.run` call carried, in call order. */
+const dedupIds = (run: ReturnType<typeof vi.fn>): (string | undefined)[] =>
+    (run.mock.calls as unknown as [unknown, unknown, RunFunctionOptions | undefined][]).map((call) => call[2]?.dedupId);
+
+describe("createRunStep — replay-dedup ids", () => {
+    it("re-issues the same dedup id on a retried attempt, so the mutation applies once", async () => {
+        expect.assertions(1);
+
+        // The shard dedups a dispatch on `(identity, mutationId)`, and every
+        // server-initiated dispatch shares the one `"system:"` identity — so this
+        // id is the only thing standing between a retried step body and a second
+        // charge.
+        const run = vi.fn<WorkflowRunFunction>(async () => undefined);
+        const runStep = createRunStep({ dedupNamespace: "orderPipeline/inst-1", env: {}, log: noopLog, run, step: makeRetryingStep(2) });
+        const charge = defineStep("charge", {
+            args: {},
+            handler: async (context) => {
+                await context.run({ __lunoraRef: "payments:charge" });
+
+                return "ok";
+            },
+        });
+
+        await runStep(charge, {});
+
+        expect(dedupIds(run)).toStrictEqual(["orderPipeline/inst-1#step0.1", "orderPipeline/inst-1#step0.1"]);
+    });
+
+    it("gives each step call, and each call inside it, a distinct id — including two calls of one step name", async () => {
+        expect.assertions(1);
+
+        // Two ids that collide are worse than none: the shard answers the second
+        // call with the FIRST one's cached result and never executes it.
+        const run = vi.fn<WorkflowRunFunction>(async () => undefined);
+        const runStep = createRunStep({ dedupNamespace: "orderPipeline/inst-1", env: {}, log: noopLog, run, step: makeRetryingStep(1) });
+        const charge = defineStep("charge", {
+            args: {},
+            handler: async (context) => {
+                await context.run({ __lunoraRef: "payments:charge" });
+                await context.run({ __lunoraRef: "payments:receipt" });
+
+                return "ok";
+            },
+        });
+
+        await runStep(charge, {});
+        await runStep(charge, {});
+
+        expect(dedupIds(run)).toStrictEqual([
+            "orderPipeline/inst-1#step0.1",
+            "orderPipeline/inst-1#step0.2",
+            "orderPipeline/inst-1#step1.1",
+            "orderPipeline/inst-1#step1.2",
+        ]);
+    });
+
+    it("pins the rollback's own ids — stable across a retried rollback, distinct from the forward step", async () => {
+        expect.assertions(1);
+
+        // A rollback is a second durable replay with its own retry budget, so the
+        // refund it issues needs the same treatment the forward call gets. It must
+        // NOT reuse the forward call's id either, or the refund would dedup against
+        // the charge and silently never run.
+        const run = vi.fn<WorkflowRunFunction>(async () => undefined);
+        const fake = makeFakeStep();
+        const runStep = createRunStep({ dedupNamespace: "orderPipeline/inst-1", env: {}, log: noopLog, run, step: fake.step });
+        const charge = defineStep("charge", {
+            args: {},
+            handler: async (context) => {
+                await context.run({ __lunoraRef: "payments:charge" });
+
+                return "ok";
+            },
+            rollback: async (context) => {
+                await context.run({ __lunoraRef: "payments:refund" });
+            },
+        });
+
+        await runStep(charge, {});
+
+        const rollback = fake.calls[0]?.rollback?.rollback;
+        const rollbackContext = (attempt: number) => {
+            return {
+                ctx: { attempt, config: {}, step: { count: 1, name: "charge" } },
+                error: new Error("later step failed"),
+                output: "ok",
+                stepName: "charge",
+            };
+        };
+
+        await rollback?.(rollbackContext(1));
+        await rollback?.(rollbackContext(2));
+
+        expect(dedupIds(run)).toStrictEqual(["orderPipeline/inst-1#step0.1", "orderPipeline/inst-1#step0rollback.1", "orderPipeline/inst-1#step0rollback.1"]);
     });
 });

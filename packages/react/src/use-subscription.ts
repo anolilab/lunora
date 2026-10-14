@@ -2,16 +2,25 @@
 
 import type { ArgsOf, FunctionReference, ReturnOf } from "@lunora/client";
 import { createQuerySubscription } from "@lunora/client/query";
+import { LunoraError } from "@lunora/errors";
 import { useEffect, useRef, useState } from "react";
 
 import { useLunora } from "./lunora-provider";
-import { stableStringify } from "./query-key";
+import { stableWireKey } from "./query-key";
 import type { UseQueryOptions, UseSubscriptionResult } from "./types";
+
+/** The result before the current subscription has answered; one object so its identity is stable across renders. */
+const EMPTY: UseSubscriptionResult<unknown> = Object.freeze({ data: undefined, error: undefined });
 
 /**
  * Subscribe to a real-time stream from the server. Unlike `useQuery`, this
  * hook does not issue an initial HTTP fetch — it only delivers values that
  * the server pushes over the WS.
+ *
+ * A server-pushed error lands on `error` as a `LunoraError` carrying the
+ * server's `code` (a bare `Error` only when the server sent no code), so
+ * consumers can branch on the error kind; `onError` receives the raw
+ * `SubscriptionError` in addition.
  */
 const useSubscription = <F extends FunctionReference>(
     function_: F,
@@ -19,10 +28,26 @@ const useSubscription = <F extends FunctionReference>(
     options: UseQueryOptions = {},
 ): UseSubscriptionResult<ReturnOf<F>> => {
     const client = useLunora();
-    const [state, setState] = useState<UseSubscriptionResult<ReturnOf<F>>>({ data: undefined, error: undefined });
 
     const skipped = args === "skip";
-    const serialized = skipped ? "skip" : stableStringify(args);
+    const serialized = skipped ? "skip" : stableWireKey(args);
+
+    // Each result is stored with the subscription it came from (client + fn +
+    // args + shard) and returned only while that subscription is still the
+    // current one. New args therefore read as "no data, no error" from their
+    // first render instead of showing the previous args' result until the new
+    // subscription answers, and no reset `setState` is needed.
+    // `shardKey ?? ""`: the client routes an absent shard key and `""` to the same (root) shard.
+    const key = JSON.stringify([function_.__lunoraRef, serialized, options.shardKey ?? ""]);
+    const [state, setState] = useState<{ client: typeof client; key: string; result: UseSubscriptionResult<ReturnOf<F>> } | undefined>(undefined);
+
+    // The subscribe effect keys off the serialized args, so an inline `onError`
+    // must not change its identity — read the latest handler through a ref.
+    const onErrorRef = useRef(options.onError);
+
+    useEffect(() => {
+        onErrorRef.current = options.onError;
+    });
 
     // Latest subscribe inputs. The dependency array keys off `fn.__lunoraRef`
     // and the serialized args, which already capture every meaningful change;
@@ -36,13 +61,11 @@ const useSubscription = <F extends FunctionReference>(
         subscribeRef.current = { args, fn: function_ };
     });
 
+    // react-doctor-disable-next-line react-doctor/no-cascading-set-state -- intentional: the `setState` calls here fire in mutually-exclusive callbacks (onData, deferred onError) across the subscription lifecycle, not as a synchronous cascade within one render.
     useEffect(() => {
         if (skipped) {
-            // Args transitioned to "skip" — tear down any prior subscription
-            // (handled by the previous effect's cleanup) and clear stale data so
-            // the UI reflects "no subscription, no data", matching Solid/Vue.
-            setState({ data: undefined, error: undefined });
-
+            // "skip" tears down any prior subscription (the previous effect's
+            // cleanup); the render-time key check already reports no data.
             return () => {};
         }
 
@@ -65,14 +88,19 @@ const useSubscription = <F extends FunctionReference>(
                         return;
                     }
 
-                    setState({ data: value, error: undefined });
+                    setState({ client, key, result: { data: value, error: undefined } });
                 },
                 onError: (error) => {
-                    const normalized = new Error(error.message);
+                    // Preserve the server-supplied `code` (matching Vue/Svelte's
+                    // subscription primitives) so consumers can branch on the
+                    // error kind instead of only seeing a flat message.
+                    const normalized = error.code === undefined ? new Error(error.message) : new LunoraError(error.code, error.message);
+
+                    onErrorRef.current?.(error);
 
                     queueMicrotask(() => {
                         if (!cancelled) {
-                            setState({ data: undefined, error: normalized });
+                            setState({ client, key, result: { data: undefined, error: normalized } });
                         }
                     });
                 },
@@ -83,10 +111,14 @@ const useSubscription = <F extends FunctionReference>(
         return () => {
             cancelled = true;
             unsubscribe();
+            // A retired subscription's result must not come back: after a skip,
+            // or a round trip through other args that never answered, the same
+            // key would match it again (and it may predate a sign-out).
+            setState(undefined);
         };
-    }, [client, function_.__lunoraRef, serialized, options.shardKey, skipped]);
+    }, [client, function_.__lunoraRef, key, serialized, options.shardKey, skipped]);
 
-    return state;
+    return state?.client === client && state.key === key ? state.result : (EMPTY as UseSubscriptionResult<ReturnOf<F>>);
 };
 
 export default useSubscription;

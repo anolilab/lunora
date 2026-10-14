@@ -119,4 +119,29 @@ describe("createWorker — admin PITR endpoint", () => {
 
         expect(response.status).toBe(405);
     });
+
+    it("mints the static admin bearer onto the fan-out when an Access grant authorized a bearer-less request", async () => {
+        expect.assertions(3);
+
+        // Access-authorized admin: `adminGate` grants, but the request carries no
+        // `Authorization` bearer (it presented a Cf-Access JWT, consumed at the
+        // edge). The orchestration fan-out must still reach the shard with a
+        // bearer the per-shard admin gate trusts — minted from `adminToken`.
+        const captured: Captured[] = [];
+        const worker = createWorker({
+            adminGate: async () => true,
+            adminToken: ADMIN_TOKEN,
+            shardDO: capturingNamespace(captured),
+        });
+
+        const response = await worker.fetch(
+            new Request(PITR_URL, { body: JSON.stringify({ args: {}, functionPath: "__lunora_admin__:getPitrBookmark" }), method: "POST" }),
+            {},
+            fakeContext,
+        );
+
+        expect(response.status).toBe(200);
+        expect(captured).toHaveLength(1);
+        expect(captured[0]?.authorization).toBe(`Bearer ${ADMIN_TOKEN}`);
+    });
 });

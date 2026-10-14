@@ -1,0 +1,162 @@
+import { FlagshipServerProvider } from "@cloudflare/flagship/server";
+import { LunoraError } from "@lunora/errors";
+
+import type { FlagsProviderFactory } from "../types";
+
+/**
+ * Flagship provider in **binding mode** (recommended for Workers): evaluations
+ * go through the wrangler binding — no HTTP, no auth token.
+ */
+interface FlagshipBindingOptions {
+    /**
+     * The name of the Flagship binding on the Worker `env` (e.g. `"FLAGS"`). The
+     * factory resolves `env[binding]` at request time. Configure a matching
+     * `flagship` binding in `wrangler.jsonc` with this binding name and your app id.
+     */
+    binding: string;
+    /** Max cached entries when `cacheTtl` is set (default 1000). */
+    cacheMaxSize?: number;
+    /** Opt-in per-context TTL cache, in ms. Enables caching when greater than 0. */
+    cacheTtl?: number;
+    /** Surface Flagship SDK logs (default false). */
+    logging?: boolean;
+}
+
+/**
+ * Flagship provider in **HTTP mode** (non-binding Workers or other server
+ * runtimes): evaluations go to the Flagship API over HTTP.
+ */
+interface FlagshipHttpOptions {
+    /** Account id for multi-tenant routing (required with `appId`). */
+    accountId?: string;
+    /** Flagship app id; the SDK builds the evaluation URL (mutually exclusive with `endpoint`). */
+    appId?: string;
+
+    /**
+     * Bearer token added as an `Authorization: Bearer` header to every request.
+     * Either the literal token, or a thunk resolved against the Worker `env` at
+     * construction (`(env) => env.FLAGSHIP_TOKEN`) so the secret never has to be
+     * inlined in source. A thunk resolving to anything but a non-empty string
+     * throws from the bind (`createFlags` logs it and evaluations fall back to
+     * their caller-supplied defaults): `Bearer undefined` would otherwise make
+     * every evaluation fall back with nothing said.
+     */
+    authToken?: ((env: Record<string, unknown>) => unknown) | string;
+    /** Base URL override (only used with `appId`). */
+    baseUrl?: string;
+    cacheMaxSize?: number;
+    cacheTtl?: number;
+    /** Full evaluation URL (mutually exclusive with `appId`). */
+    endpoint?: string;
+    logging?: boolean;
+    /** Retry attempts on transient errors (default 1, max 10). */
+    retries?: number;
+    /** Delay between retries in ms (default 1000, max 30000). */
+    retryDelay?: number;
+    /** Request timeout in ms (default 5000). */
+    timeout?: number;
+}
+
+/** Options for `flagshipProvider` — binding mode or HTTP mode. */
+type FlagshipProviderOptions = FlagshipBindingOptions | FlagshipHttpOptions;
+
+const isBindingOptions = (options: FlagshipProviderOptions): options is FlagshipBindingOptions => "binding" in options && typeof options.binding === "string";
+
+/**
+ * Builds a Cloudflare Flagship OpenFeature provider for `defineFlags({ provider })`.
+ * Flagship is Lunora's first-class default; the same `defineFlags` accepts any
+ * OpenFeature provider, so apps can swap it out without touching call sites.
+ *
+ * ```ts
+ * // Binding mode (recommended) — reads env.FLAGS at request time:
+ * flagshipProvider({ binding: "FLAGS" })
+ *
+ * // HTTP mode — the token is a literal, or a thunk read off the Worker env:
+ * flagshipProvider({ appId: "app-abc", accountId: "acct", authToken: "tok" })
+ * flagshipProvider({ appId: "app-abc", accountId: "acct", authToken: (env) => env.FLAGSHIP_TOKEN })
+ * ```
+ */
+const flagshipProvider = (options: FlagshipProviderOptions): FlagsProviderFactory => {
+    if (isBindingOptions(options)) {
+        const { binding: bindingName, ...rest } = options;
+
+        return (env: Record<string, unknown>): FlagshipServerProvider => {
+            const binding = env[bindingName];
+
+            if (binding === undefined || binding === null) {
+                throw new LunoraError(
+                    "INTERNAL",
+                    `flagshipProvider: no binding "${bindingName}" found on env. Add a \`flagship\` binding to wrangler.jsonc, ` +
+                        `e.g. { "flagship": [{ "binding": "${bindingName}", "app_id": "your-app-id" }] }.`,
+                );
+            }
+
+            return new FlagshipServerProvider({ binding: binding as never, ...rest });
+        };
+    }
+
+    // `appId`/`endpoint` need no env, so — unlike the binding and `authToken`
+    // checks below — they are known here and refused at `defineFlags` time,
+    // where the throw reaches the developer directly. The env-dependent
+    // refusals cannot run this early; they throw from inside the factory, which
+    // `createFlags` catches, logs (see `reportBindFailure`), and falls back to
+    // the caller's default for.
+    const { appId, endpoint } = options;
+
+    if (appId === undefined && endpoint === undefined) {
+        throw new LunoraError(
+            "INTERNAL",
+            "flagshipProvider: HTTP mode requires either `appId` (the SDK builds the evaluation URL) or `endpoint` (a full evaluation URL). " +
+                'Pass exactly one, or use binding mode: `flagshipProvider({ binding: "FLAGS" })`.',
+        );
+    }
+
+    if (appId !== undefined && endpoint !== undefined) {
+        throw new LunoraError("INTERNAL", "flagshipProvider: `appId` and `endpoint` are mutually exclusive in HTTP mode — pass exactly one.");
+    }
+
+    // The literal half of the empty-token refusal the thunk path enforces below. A
+    // config that reads the secret straight off `env` (rather than through a thunk) is an
+    // empty string whenever the secret is unset, and passing that through means
+    // every evaluation fails closed to its checked-in default with the reason
+    // visible only in `details.*`. Eager, like the shape refusals above: a literal
+    // is knowable before any env exists. Only an OMITTED `authToken` means "no token".
+    if (options.authToken === "") {
+        throw new LunoraError(
+            "INTERNAL",
+            "flagshipProvider: `authToken` is an empty string — omit it for an unauthenticated endpoint, or pass a thunk so the secret is read off the Worker env at request time.",
+        );
+    }
+
+    // Defer construction to the factory so the isolate-level memo owns its
+    // lifetime — and so an `authToken` thunk can read the Worker `env`, which is
+    // the only place a deployment's secret exists.
+    const { authToken, ...rest } = options;
+
+    return (env: Record<string, unknown>): FlagshipServerProvider => {
+        if (typeof authToken !== "function") {
+            return new FlagshipServerProvider({ ...rest, ...(authToken === undefined ? {} : { authToken }) });
+        }
+
+        // A thunk was written to supply a token, so resolving to nothing is a
+        // misconfigured deployment, not "no auth": the unset secret would go out
+        // as `Bearer undefined` and every evaluation would fail closed to its
+        // default. Throwing here makes `createFlags` log the bind failure rather
+        // than let the fleet drift onto checked-in defaults unremarked. Only an
+        // OMITTED `authToken` means "no token".
+        const resolved = authToken(env);
+
+        if (typeof resolved !== "string" || resolved.length === 0) {
+            throw new LunoraError(
+                "INTERNAL",
+                "flagshipProvider: `authToken` resolved to an empty or non-string value — check that the env var the thunk reads is set. " +
+                    "An unset secret would send `Bearer undefined`, and every evaluation would silently fall back to its default.",
+            );
+        }
+
+        return new FlagshipServerProvider({ ...rest, authToken: resolved });
+    };
+};
+
+export { flagshipProvider };
+export type { FlagshipBindingOptions, FlagshipHttpOptions, FlagshipProviderOptions };

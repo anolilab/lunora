@@ -91,9 +91,65 @@ export const send = mutation
 
 The builder chain is `<builder>.input(validators).<kind>(handler)`, plus `.use(middleware)` and `.output(validator)`. `internalQuery` / `internalMutation` / `internalAction` are the same builders but kept off the public `api`. Run `lunora codegen` (or the Vite plugin) to (re)generate `_generated/` after a schema change.
 
-> **Determinism:** `query` and `mutation` handlers must be deterministic — they may be re-run on OCC retry or subscription re-evaluation. Compute time, randomness, and network results in an `action` (e.g. `Date.now()`, `crypto.randomUUID()`, `fetch`) and pass them into the mutation as arguments.
+> **Determinism:** `query` and `mutation` handlers must be deterministic — they may be re-run on subscription re-evaluation (an OCC conflict surfaces as a `409` to the caller, not an internal retry). Read the current time from **`ctx.now`** (epoch ms, captured once per execution — also on `ActionCtx`) instead of `Date.now()`; compute randomness and network results in an `action` (`crypto.randomUUID()`, `fetch`) and pass them into the mutation as arguments. The `nondeterministic_query_mutation` advisor flags `Date.now()`/`Math.random()`/`fetch` in query/mutation handlers.
+
+### Local-first sync engine
+
+`defineShape` declares a **partial replication shape** (a named table view with a server-resolved `where` predicate, AND-composed with RLS) and `defineMutator` declares a **custom mutator** (an authoritative `server` impl plus an optional optimistic `client` twin). Both are discovered by codegen and drive the [local-first sync engine](https://lunora.sh/docs/concepts/local-first) — clients subscribe to shapes over the poke diff protocol and push optimistic writes rebased over the server's authoritative result. The client-side runtime lives in [`@lunora/db`](https://www.npmjs.com/package/@lunora/db).
 
 > This README covers the basics. For the full API, options, and guides, see the **[documentation](https://lunora.sh/docs/packages/server)**.
+
+### Caching with Workers Cache
+
+Lunora supports Cloudflare Workers Cache for HTTP actions (`httpRoute`). RPC queries and mutations are `POST /_lunora/rpc` and are not cacheable at the edge by design.
+
+**Enable Workers Cache** in `wrangler.jsonc`:
+
+```jsonc
+{
+    "cache": { "enabled": true },
+}
+```
+
+The dev server and CLI automatically bump `compatibility_date` to the minimum required when cache is enabled — you do not need to set it manually.
+
+**Set cache headers declaratively** on an `httpRoute`:
+
+```ts
+import { httpRoute, v } from "@lunora/server";
+
+export const getProduct = httpRoute
+    .get("/api/products/:id")
+    .params({ id: v.string() })
+    .cacheControl("public, max-age=300, stale-while-revalidate=3600")
+    .cacheTag("products")
+    .handler(async ({ ctx, params }) => {
+        return { id: params.id, name: "Widget" };
+    });
+```
+
+**Purge cache by tag** from an HTTP action handler:
+
+```ts
+import { httpAction, httpRouter } from "@lunora/server";
+
+export const app = httpRouter();
+
+app.post(
+    "/admin/refresh-products",
+    httpAction(async (ctx) => {
+        if (!ctx.cache) {
+            return new Response("Workers Cache is not enabled in wrangler.jsonc", { status: 501 });
+        }
+
+        await ctx.cache.purge({ tags: ["products"] });
+
+        return Response.json({ ok: true });
+    }),
+);
+```
+
+The `ctx.cache.purge` API accepts `{ tags?: string[]; purgeEverything?: boolean }`. Only **HTTP action** handlers expose `ctx.cache`: the Worker holds the cache binding and builds `HttpActionCtx`. Queries, mutations, and actions reached over RPC all run inside the Durable Object, where `ctx.cache` is `undefined`.
 
 ## Related
 

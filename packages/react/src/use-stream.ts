@@ -4,10 +4,9 @@ import type { ArgsOf, FunctionReference, ReturnOf } from "@lunora/client";
 import { useEffect, useReducer, useRef } from "react";
 
 import { useLunora } from "./lunora-provider";
-import { stableStringify } from "./query-key";
-
-/** The lifecycle of a stream the hook is observing. */
-type UseStreamStatus = "complete" | "error" | "idle" | "streaming";
+import { stableWireKey } from "./query-key";
+import type { StreamAction, StreamState, UseStreamStatus } from "./stream-state";
+import { consumeStream, streamReducer } from "./stream-state";
 
 interface UseStreamResult<T> {
     /** Force-cancel the stream and resolve the iterator. Safe to call multiple times. */
@@ -19,44 +18,17 @@ interface UseStreamResult<T> {
 }
 
 interface UseStreamOptions {
+    /**
+     * Opt into resume-on-reconnect for a stream the server declared `durable`.
+     * The hook keeps the chunks it already has and the socket re-attaches to the
+     * same run, so a dropped connection mid-generation continues instead of
+     * surfacing `STREAM_DISCONNECTED`. Has no effect on an ephemeral stream.
+     */
+    durable?: boolean;
     /** Forwarded to `client.stream()` — caps the in-flight chunk buffer. */
     maxBuffer?: number;
     shardKey?: string;
 }
-
-interface State<T> {
-    chunks: T[];
-    error: Error | undefined;
-    status: UseStreamStatus;
-}
-
-type Action<T> = { chunk: T; type: "chunk" } | { type: "complete" } | { error: Error; type: "error" } | { type: "reset" } | { type: "start" };
-
-const reducer = function <T>(state: State<T>, action: Action<T>): State<T> {
-    switch (action.type) {
-        case "chunk": {
-            // Append immutably so consumers comparing by identity see a change.
-            return { chunks: [...state.chunks, action.chunk], error: undefined, status: "streaming" };
-        }
-        case "complete": {
-            return { ...state, status: "complete" };
-        }
-        case "error": {
-            return { ...state, error: action.error, status: "error" };
-        }
-        case "reset": {
-            return { chunks: [], error: undefined, status: "idle" };
-        }
-        case "start": {
-            // Distinct from `chunk` so the UI can render "loading" before the
-            // first frame arrives without conflating it with the idle state.
-            return { ...state, status: "streaming" };
-        }
-        default: {
-            return state;
-        }
-    }
-};
 
 /**
  * Subscribe to a streaming query. Returns the chunks pushed so far plus a
@@ -73,10 +45,14 @@ const useStream = <F extends FunctionReference<"stream">>(
     options: UseStreamOptions = {},
 ): UseStreamResult<ReturnOf<F>> => {
     const client = useLunora();
-    const [state, dispatch] = useReducer<State<ReturnOf<F>>, [Action<ReturnOf<F>>]>(reducer<ReturnOf<F>>, { chunks: [], error: undefined, status: "idle" });
+    const [state, dispatch] = useReducer<StreamState<ReturnOf<F>>, [StreamAction<ReturnOf<F>>]>(streamReducer<ReturnOf<F>>, {
+        chunks: [],
+        error: undefined,
+        status: "idle",
+    });
 
     const skipped = args === "skip";
-    const serialized = skipped ? "skip" : stableStringify(args);
+    const serialized = skipped ? "skip" : stableWireKey(args);
 
     // Stash the live cancel handle so unmount + manual cancel call into the
     // same function. The reducer doesn't own it because cancel is a side
@@ -85,66 +61,32 @@ const useStream = <F extends FunctionReference<"stream">>(
 
     useEffect(() => {
         if (skipped) {
+            // Args transitioned to "skip" — the previous effect's cleanup already
+            // cancelled the iterator, so no `complete`/`error` will ever fire.
+            // Reset to idle with empty chunks so the hook doesn't stay stuck in
+            // its last status over stale chunks, mirroring useSubscription's skip
+            // teardown.
+            dispatch({ type: "reset" });
+
             return () => {};
         }
 
         dispatch({ type: "reset" });
         dispatch({ type: "start" });
 
-        let stillMounted = true;
-        let cancelled = false;
-        const iterable = client.stream(function_, args, { maxBuffer: options.maxBuffer, shardKey: options.shardKey });
-        const cancel = (): void => {
-            if (cancelled) {
-                return;
-            }
-
-            cancelled = true;
-            iterable.cancel();
-        };
+        const { cancel, cleanup } = consumeStream(
+            client.stream(function_, args, { durable: options.durable, maxBuffer: options.maxBuffer, shardKey: options.shardKey }),
+            dispatch,
+        );
 
         cancelRef.current = cancel;
 
-        // Run the consumer loop in a background async IIFE so the effect body
-        // stays synchronous; the cancel handle is what the cleanup uses. The
-        // IIFE owns its own try/catch so any error already lands in the reducer;
-        // the trailing `.catch` is a belt-and-braces guard that can never fire.
-        (async () => {
-            try {
-                for await (const chunk of iterable) {
-                    // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- `stillMounted` is flipped to `false` by the cleanup closure between awaits; TS's static flow analysis can't see the async mutation, so this guard is real, not dead.
-                    if (!stillMounted) {
-                        return;
-                    }
-
-                    dispatch({ chunk, type: "chunk" });
-                }
-
-                // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- `stillMounted` may have been flipped to `false` by the cleanup closure while the iterator was awaiting; the guard is real, not dead.
-                if (stillMounted) {
-                    dispatch({ type: "complete" });
-                }
-            } catch (error: unknown) {
-                // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- `stillMounted` may have been flipped to `false` by the cleanup closure while the iterator was awaiting; the guard is real, not dead.
-                if (!stillMounted) {
-                    return;
-                }
-
-                const normalized = error instanceof Error ? error : new Error(String(error));
-
-                dispatch({ error: normalized, type: "error" });
-            }
-        })().catch(() => {
-            // Unreachable: the IIFE's own try/catch already routes errors into
-            // the reducer. This satisfies no-floating-promises.
-        });
-
         return () => {
-            stillMounted = false;
-            cancel();
+            cleanup();
             cancelRef.current = undefined;
         };
-    }, [client, function_.__lunoraRef, serialized, skipped, options.shardKey, options.maxBuffer]);
+        // react-doctor-disable-next-line react-doctor/exhaustive-deps -- intentional: the stream re-opens on the query's stable `__lunoraRef` and the serialized args (a content hash) rather than the raw `function_`/`args` object identity, so a caller recreating them with the same value doesn't tear down and re-open the stream. `client` is provider-stable.
+    }, [client, function_.__lunoraRef, serialized, skipped, options.shardKey, options.maxBuffer, options.durable]);
 
     return {
         cancel: () => {
@@ -156,5 +98,7 @@ const useStream = <F extends FunctionReference<"stream">>(
     };
 };
 
-export type { UseStreamOptions, UseStreamResult, UseStreamStatus };
+export type { UseStreamOptions, UseStreamResult };
 export { useStream };
+
+export { type UseStreamStatus } from "./stream-state";

@@ -1,4 +1,4 @@
-// Minimal wrangler config used ONLY by `@cloudflare/vitest-pool-workers`
+// Minimal wrangler config used ONLY by `@cloudflare/vitest-plugin`
 // to boot the test Worker in a real workerd runtime.
 //
 // IMPORTANT: this file is not deployed. It exists so the pool can resolve
@@ -14,7 +14,15 @@
         "bindings": [
             { "name": "SHARD", "class_name": "TestShardDO" },
             { "name": "SESSION", "class_name": "TestSessionDO" },
+            { "name": "SYNC", "class_name": "TestSyncDO" },
+            { "name": "ECHO", "class_name": "TestEchoDO" },
+            { "name": "COUNTER", "class_name": "TestCounterDO" },
+            { "name": "MERGED", "class_name": "TestMergedDO" },
         ],
     },
-    "migrations": [{ "tag": "v1", "new_sqlite_classes": ["TestShardDO", "TestSessionDO"] }],
+    "migrations": [
+        { "tag": "v1", "new_sqlite_classes": ["TestShardDO", "TestSessionDO", "TestSyncDO", "TestEchoDO"] },
+        { "tag": "v2", "new_sqlite_classes": ["TestCounterDO"] },
+        { "tag": "v3", "new_sqlite_classes": ["TestMergedDO"] },
+    ],
 }

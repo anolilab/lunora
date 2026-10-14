@@ -1,5 +1,7 @@
 import { defineSchema, defineTable, v } from "lunorash/server";
 
+import { ratelimit } from "./ratelimit/schema.js";
+
 /**
  * todo-app — the simplest CRUD demo.
  *
@@ -12,4 +14,4 @@ export default defineSchema({
         done: v.boolean(),
         createdAt: v.number(),
     }).index("by_creation", ["createdAt"]),
-});
+}).extend(ratelimit.extension);

@@ -1,5 +1,7 @@
-import { LunoraClient } from "lunorash/client";
+import "@lunora/auth-ui/styles.css";
+
 import { LunoraProvider } from "@lunora/react";
+import { LunoraClient } from "lunorash/client";
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 

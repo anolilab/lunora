@@ -77,19 +77,15 @@ const writeLock = (projectRoot: string, lock: RegistryLock): void => {
 
 /** Record (or overwrite) the last-written hash for one item's destination file. */
 const recordFile = (lock: RegistryLock, itemKey: string, destinationRelative: string, content: string): void => {
-    const existing = lock.items[itemKey];
-    const item = existing ?? { files: {} };
+    const item = lock.items[itemKey] ?? { files: {} };
 
-    if (existing === undefined) {
-        // eslint-disable-next-line no-param-reassign -- `lock` is the accumulator this helper exists to populate
-        lock.items[itemKey] = item;
-    }
-
+    // eslint-disable-next-line no-param-reassign -- `lock` is the accumulator this helper exists to populate
+    lock.items[itemKey] = item;
     item.files[destinationRelative] = hashContent(content);
 };
 
 /** The hash `add` last recorded for a destination, or `undefined` if it was never tracked. */
 const recordedHash = (lock: RegistryLock, itemKey: string, destinationRelative: string): string | undefined => lock.items[itemKey]?.files[destinationRelative];
 
-export type { LockItem, RegistryLock };
-export { hashContent, LOCK_FILE, readLock, recordedHash, recordFile, writeLock };
+export type { RegistryLock };
+export { hashContent, readLock, recordedHash, recordFile, writeLock };

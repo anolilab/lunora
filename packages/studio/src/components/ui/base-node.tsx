@@ -10,7 +10,7 @@ import { cn } from "../../lib/utils";
  * (`database-schema-node`) builds on this so every node reads like the rest of
  * the studio chrome instead of React Flow's default box.
  */
-function BaseNode({ className, selected, ...props }: React.ComponentProps<"div"> & { selected?: boolean }) {
+function BaseNode({ className, selected, ...props }: React.ComponentProps<"div"> & { selected?: boolean }): React.ReactElement {
     return (
         <div
             data-slot="base-node"
@@ -26,12 +26,12 @@ function BaseNode({ className, selected, ...props }: React.ComponentProps<"div">
 }
 
 /** The node's title bar — table name plus any badges. */
-function BaseNodeHeader({ className, ...props }: React.ComponentProps<"div">) {
+function BaseNodeHeader({ className, ...props }: React.ComponentProps<"div">): React.ReactElement {
     return <div data-slot="base-node-header" className={cn("flex items-center gap-2 rounded-t-md bg-muted/50 px-3 py-1.5", className)} {...props} />;
 }
 
 /** The node's body — the list of columns. */
-function BaseNodeContent({ className, ...props }: React.ComponentProps<"div">) {
+function BaseNodeContent({ className, ...props }: React.ComponentProps<"div">): React.ReactElement {
     return <div data-slot="base-node-content" className={cn("flex flex-col", className)} {...props} />;
 }
 

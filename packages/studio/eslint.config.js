@@ -134,10 +134,18 @@ export default createConfig(
         },
     },
     // Markdown code blocks: don't enforce language tags.
+    // The `n` Node-builtins rules reach into the scope manager, which a markdown
+    // document has none of — under ESLint 10 they throw "Cannot read properties
+    // of undefined (globalScope)" while LOADING the rule, so a single committed
+    // .md file crashes the whole lint run instead of reporting findings. They're
+    // meaningless on prose either way, so turn them off for markdown.
     {
         files: ["**/*.md", "**/*.md/**"],
         rules: {
             "markdown/fenced-code-language": "off",
+            "n/no-unsupported-features/es-builtins": "off",
+            "n/no-unsupported-features/es-syntax": "off",
+            "n/no-unsupported-features/node-builtins": "off",
         },
     },
     // React Compiler is enabled for this package (babel-plugin-react-compiler in
@@ -161,13 +169,12 @@ export default createConfig(
             "react-hooks/exhaustive-deps": "warn",
         },
     },
-    // The repo convention (AGENTS.md) is named exports only — uniform `import { x }`
-    // sites, no default-vs-named ambiguity. `import/prefer-default-export` would push
-    // single-export files the other way (to a default), so it's off; `exports-last`
-    // (kept on) still enforces export placement.
+    // The repo convention (AGENTS.md): a sole-export file exports `default`; files
+    // with multiple exports use named-only. `import/prefer-default-export` (on via
+    // the base config) enforces the single-export half, keeping import sites uniform.
     {
         rules: {
-            "import/prefer-default-export": "off",
+            "import/prefer-default-export": "error",
         },
     },
     // Behavior-breaking autofixers — kept off (not style). sort-objects reorders the
@@ -179,6 +186,15 @@ export default createConfig(
         rules: {
             "perfectionist/sort-objects": "off",
             "vitest/prefer-expect-type-of": "off",
+        },
+    },
+    // `jsdoc/text-escaping` escapes `<` and `&` in doc comments into HTML entities and
+    // offers no way to exempt code spans, so its autofix turns `Doc<T>` into `Doc&lt;T>` —
+    // which is then what every reader sees on hover. Last in the list so it applies to
+    // every file, including the scoped blocks above.
+    {
+        rules: {
+            "jsdoc/text-escaping": "off",
         },
     },
 );

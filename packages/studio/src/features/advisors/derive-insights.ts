@@ -13,7 +13,8 @@ type InsightSeverity = "error" | "info" | "warning";
  * links to the Schema/Indexes tab to add the index, rather than leaving the
  * slowness an unattributed symptom.
  */
-type InsightKind = "high-error-rate" | "high-evictions" | "high-write-contention" | "low-cache-hit-rate" | "missing-index" | "slow-function";
+type InsightKind =
+    "high-error-rate" | "high-evictions" | "high-write-contention" | "low-cache-hit-rate" | "missing-index" | "slow-function" | "storage-headroom";
 
 /**
  * One detected issue. `value` is the headline number whose meaning depends on
@@ -22,7 +23,8 @@ type InsightKind = "high-error-rate" | "high-evictions" | "high-write-contention
  * for per-function insights; `message` carries the last error for
  * high-error-rate; `tables` carries the full-scanned tables (busiest first) for
  * the causal `missing-index` kind. For `high-write-contention` it is the OCC
- * conflict ratio (conflicts / calls).
+ * conflict ratio (conflicts / calls). For `storage-headroom` it is the shard's
+ * SQLite size in bytes.
  */
 interface Insight {
     fn?: string;
@@ -49,6 +51,10 @@ interface InsightThresholds {
     minErrorCalls: number;
     /** Flag functions whose slowest call is at or above this many milliseconds. */
     slowFunctionMs: number;
+    /** Escalate the storage insight to `error` at or above this many bytes. */
+    storageCriticalBytes: number;
+    /** Flag a shard whose SQLite is at or above this many bytes. */
+    storageWarnBytes: number;
 }
 
 const DEFAULT_INSIGHT_THRESHOLDS: InsightThresholds = {
@@ -59,6 +65,16 @@ const DEFAULT_INSIGHT_THRESHOLDS: InsightThresholds = {
     minConflictCalls: 5,
     minErrorCalls: 5,
     slowFunctionMs: 1000,
+    // Half the 10 GiB per-DO ceiling. Past this the escape hatch is itself
+    // expensive — re-homing the rows needs a write window whose length scales
+    // with the data — so it stops being a thing to plan and starts being a
+    // thing to schedule.
+    storageCriticalBytes: 5_368_709_120,
+    // 1 GiB, 10% of the per-DO ceiling — the same point `@lunora/do` emits its
+    // one-shot `console.warn` at, so the studio and the runtime agree on when
+    // headroom becomes a topic. Deliberately a studio-side knob rather than an
+    // import: the studio does not (and should not) depend on `@lunora/do`.
+    storageWarnBytes: 1_073_741_824,
 };
 
 /** error first, then warning, then info — so the worst issues sort to the top. */
@@ -132,11 +148,18 @@ const deriveFunctionInsights = (stat: FunctionCallStat, thresholds: InsightThres
  * function whose slowest call crosses the threshold with no scan attribution to
  * blame); high-error-rate (a function failing over a meaningful count);
  * high-write-contention (a function whose OCC write conflicts make up a
- * meaningful share of calls — a sharding candidate).
+ * meaningful share of calls — a sharding candidate); storage-headroom (a shard
+ * whose SQLite is closing on the 10 GiB per-DO ceiling).
  *
  * A slow function with full-scan attribution emits `missing-index` (causal, with
  * `tables`) instead of the bare `slow-function`, so the panel can link straight
  * to the fix rather than restating the symptom.
+ *
+ * `storage-headroom` exists because the runtime's own signal is a one-shot
+ * `console.warn` inside the Durable Object — it fires once per DO instance, into
+ * a log nobody is tailing at 3am months before the wall. The size is already on
+ * the `getMetrics` snapshot the studio pulls, so surfacing it as a finding costs
+ * one comparison and puts the warning where someone will actually meet it.
  */
 const deriveInsights = (
     metrics: ShardMetrics | null,
@@ -144,6 +167,46 @@ const deriveInsights = (
     thresholds: InsightThresholds = DEFAULT_INSIGHT_THRESHOLDS,
 ): Insight[] => {
     const insights: Insight[] = [];
+
+    // `databaseSize` is null on a runtime that does not expose one (workerd
+    // blocks the SQLite size pragmas, so the DO reports it directly); absent is
+    // "unknown", never "empty", so it must not read as headroom.
+    if (typeof metrics?.databaseSize === "number" && metrics.databaseSize >= thresholds.storageWarnBytes) {
+        insights.push({
+            kind: "storage-headroom",
+            severity: metrics.databaseSize >= thresholds.storageCriticalBytes ? "error" : "warning",
+            value: metrics.databaseSize,
+        });
+    }
+
+    // TODO(stranded-rows): a sibling `stranded-rows` insight — a table the schema
+    // declares `.shardBy()` that still holds rows in `__root__`. Those are the
+    // pre-migration copies the app can no longer read (admin ops are addressed to
+    // a SHARD, not routed by the schema, which is why the Studio's Data page can
+    // still clear them), and they keep counting against the 10 GiB ceiling.
+    //
+    // NOT built yet, deliberately: `lunora deploy`'s schema-drift gate already
+    // classifies a shard-mode change as `breaking` and blocks the deploy
+    // (`shared/schema-snapshot.ts`, `changedShardMode`), so rows cannot be
+    // stranded without someone passing `--allow-schema-drift` on purpose. That is
+    // prevention, and it strictly beats detection-after-the-fact.
+    //
+    // BUILD IT WHEN either becomes true:
+    //   - `--allow-schema-drift` turns habitual (CI pipelines pinning it, support
+    //     threads recommending it) — the gate is then bypassed as a matter of
+    //     routine and stops being the guard this comment leans on; or
+    //   - a second consumer needs per-table shard mode client-side, so the cost
+    //     below is shared rather than paid for one advisory.
+    //
+    // COST, measured 2026-08-28: the studio cannot see `shardMode` today.
+    // `listTables` (which this panel already calls per shard, and which returns
+    // the `{ name, rowCount }` half of the answer) reads SQLite physically —
+    // `listTables(sql)` in `@lunora/do`'s admin path, no schema in scope. Only the
+    // schema snapshot JSON carries shard mode, via schemaVersions → schemaVersion
+    // → parse, which is two extra round-trips on every Advisors load. The cheaper
+    // shape is an optional `shardMode` on `TableInfo`, filled by the codegen ShardDO
+    // subclass (which does hold the schema) and left absent by the base class, so
+    // an older worker degrades to "no finding" rather than a wrong one.
 
     if (metrics?.cache) {
         const { evictions, hits, misses } = metrics.cache;

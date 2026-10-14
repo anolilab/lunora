@@ -1,0 +1,314 @@
+# Nightly full-suite verification: PRs only run `vis affected`, so unchanged
+# packages go stale between merges. Everything here runs unfiltered — every
+# package's tests, all workerd suites, e2e. Never a required check; a nightly
+# failure is a canary, not a blocker.
+
+"name": "Nightly"
+
+"on": # yamllint disable-line rule:truthy
+    "schedule":
+        # 03:00 UTC daily — after the day's merges, before the EU morning.
+        - "cron": "0 3 * * *"
+    "workflow_dispatch": # yamllint disable-line rule:empty-values
+
+"concurrency":
+    "group": "${{ github.workflow }}-${{ github.ref }}"
+    "cancel-in-progress": true
+
+"permissions":
+    "contents": "read" # to fetch code (actions/checkout)
+
+"jobs":
+    "test-full":
+        "name": "Full test suite (node-${{ matrix.node_version }})"
+        "runs-on": "ubuntu-latest"
+        "timeout-minutes": 60
+        "strategy":
+            "fail-fast": false
+            "matrix":
+                "node_version": ["22.15", "24.11"]
+        "steps":
+            - "name": "Harden Runner"
+              "uses": "step-security/harden-runner@9af89fc71515a100421586dfdb3dc9c984fbf411" # v2.19.4
+              "with":
+                  "egress-policy": "audit"
+
+            - "name": "Git checkout"
+              "uses": "anolilab/workflows/step/checkout-with-retry@6c16895f4c3b5273b373656988505d1a8264e78b" # main
+
+            - "name": "Setup resources and environment"
+              "uses": "anolilab/workflows/step/node@acba5fb15ac98ad23dec1ad233e40e1bb79c1dae" # v19.0.4
+              "with":
+                  "node-version": "${{ matrix.node_version }}"
+                  "cache-prefix": "nightly"
+                  "install-node-gyp": "true"
+                  "skip-playwright": "true"
+                  "enable-nx-cache": "false"
+                  "run-npm-audit": "false"
+                  "run-signatures-audit": "false"
+
+            # Full build, not `affected`, so every package's dist exists.
+            - "name": "Build packages"
+              "run": "pnpm run build:packages"
+
+            # workerd stays off (the job below covers it) and no coverage is
+            # collected — this is a pass/fail canary, and Codecov is fed by test.yml.
+            - "name": "Run all tests"
+              "run": "pnpm run test"
+
+    # Same design as test.yml's `test-workerd` job — see the comments there.
+    "test-workerd":
+        "name": "Workerd integration (${{ matrix.package }})"
+        "runs-on": "ubuntu-latest"
+        "timeout-minutes": 20
+        "strategy":
+            "fail-fast": false
+            "matrix":
+                "package":
+                    [
+                        "packages/auth",
+                        "packages/browser",
+                        "packages/client",
+                        "packages/container",
+                        "packages/d1",
+                        "packages/do",
+                        "packages/payment",
+                        "packages/queue",
+                        "packages/ratelimit",
+                        "packages/runtime",
+                        "packages/scheduler",
+                        "packages/server",
+                        "packages/sql-store",
+                        "packages/storage",
+                        "packages/workflow",
+                        "packages/x402",
+                        "examples/privacy",
+                    ]
+        "steps":
+            - "name": "Harden Runner"
+              "uses": "step-security/harden-runner@9af89fc71515a100421586dfdb3dc9c984fbf411" # v2.19.4
+              "with":
+                  "egress-policy": "audit"
+
+            - "name": "Git checkout"
+              "uses": "anolilab/workflows/step/checkout-with-retry@6c16895f4c3b5273b373656988505d1a8264e78b" # main
+
+            - "name": "Setup resources and environment"
+              "uses": "anolilab/workflows/step/node@acba5fb15ac98ad23dec1ad233e40e1bb79c1dae" # v19.0.4
+              "with":
+                  "node-version": "22.15"
+                  "cache-prefix": "test-workerd"
+                  "install-node-gyp": "true"
+                  "skip-playwright": "true"
+                  "enable-nx-cache": "false"
+                  "run-npm-audit": "false"
+                  "run-signatures-audit": "false"
+
+            # The matrix is a hand-typed list of directories (16 packages, one example),
+            # duplicated verbatim in test.yml and nightly.yml, with nothing tying either
+            # copy to the packages/* and examples/* that actually declare a `workerd`
+            # vitest project. Drop one from either copy and its workerd suites stop
+            # running with every check green. Each leg asserts its own directory still
+            # declares the project, and that the leg count equals the number of
+            # directories that do — together that makes the matrix and the filesystem
+            # the same set, not merely the same size.
+            - "name": "Assert the matrix matches the packages declaring a workerd project"
+              "run": |
+                  declared="$(grep -l 'name: "workerd"' packages/*/vitest.config.ts examples/*/vitest.config.ts | sed 's|/vitest.config.ts||' | sort)"
+                  count="$(printf '%s\n' "$declared" | wc -l | tr -d ' ')"
+                  if ! printf '%s\n' "$declared" | grep -qx "${{ matrix.package }}"; then
+                    echo "${{ matrix.package }}/vitest.config.ts declares no \`workerd\` project — this leg would run nothing." >&2
+                    echo "Declared: $(printf '%s' "$declared" | tr '\n' ' ')" >&2
+                    exit 1
+                  fi
+                  if [ "$count" != "${{ strategy.job-total }}" ]; then
+                    echo "$count packages declare a workerd project but the matrix has ${{ strategy.job-total }} legs." >&2
+                    echo "Declared: $(printf '%s' "$declared" | tr '\n' ' ')" >&2
+                    echo "Fix the matrix in .github/workflows/test.yml AND .github/workflows/nightly.yml." >&2
+                    exit 1
+                  fi
+
+            - "name": "Build package and dependencies"
+              "run": |
+                  project="$(node -p "require('./${{ matrix.package }}/project.json').name")"
+                  case "${{ matrix.package }}" in
+                    examples/*) pnpm exec vis run build --filter "${project}^..." ;;
+                    *) pnpm exec vis run build --query "project=${project}" ;;
+                  esac
+
+            - "name": "Run workerd suites"
+              "env":
+                  "LUNORA_WORKERD_TESTS": "1"
+              "run": |
+                  pnpm --filter "$(node -p "require('./${{ matrix.package }}/package.json').name")" run test --project workerd
+
+    # test.yml's `e2e` without the paths-filter gate.
+    "e2e":
+        "name": "E2E (Playwright + Miniflare)"
+        "runs-on": "ubuntu-latest"
+        "timeout-minutes": 30
+        "steps":
+            - "name": "Harden Runner"
+              "uses": "step-security/harden-runner@9af89fc71515a100421586dfdb3dc9c984fbf411" # v2.19.4
+              "with":
+                  "egress-policy": "audit"
+
+            - "name": "Git checkout"
+              "uses": "anolilab/workflows/step/checkout-with-retry@6c16895f4c3b5273b373656988505d1a8264e78b" # main
+
+            - "name": "Setup resources and environment"
+              "uses": "anolilab/workflows/step/node@acba5fb15ac98ad23dec1ad233e40e1bb79c1dae" # v19.0.4
+              "with":
+                  "node-version": "22.15"
+                  "cache-prefix": "e2e"
+                  "install-node-gyp": "true"
+                  "skip-playwright": "true"
+                  "enable-nx-cache": "false"
+                  "run-npm-audit": "false"
+                  "run-signatures-audit": "false"
+
+            # See test.yml for why the packages build first and why the build and
+            # the browser download overlap.
+            - "parallel":
+                  - "name": "Build packages"
+                    "run": "pnpm run build:packages"
+
+                  - "name": "Install Playwright browsers"
+                    "run": "pnpm --filter @lunora/e2e exec playwright install chromium firefox"
+
+            - "name": "Run E2E suite"
+              "env":
+                  "CI": "true"
+                  "LUNORA_E2E": "true"
+              "run": "pnpm e2e"
+
+            # This job is a hand-copy of test.yml's and had already diverged: the
+            # examples suite was missing here. That is the worst place to lose it —
+            # the point of the nightly is to run what the paths filters skip, so a
+            # suite absent here is a suite nothing unfiltered ever runs.
+            - "name": "Run examples E2E suite"
+              "env":
+                  "CI": "true"
+              "run": "pnpm run e2e:examples"
+
+            - "name": "Upload Playwright report on failure"
+              "if": "failure()"
+              "uses": "actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02" # v4.6.2
+              "with":
+                  "name": "playwright-report"
+                  "path": |
+                      tests/e2e/playwright-report
+                      tests/e2e/playwright-report-examples
+                  "retention-days": 7
+
+    # On PRs this matrix is path-gated, but the `templates` filter DOES include
+    # `packages/**` (see .github/file-filters.yml) — a package change that breaks every
+    # scaffold, like the `vue-demi` build script that arrived transitively through
+    # @lunora/client, is gated there. What this run adds is the schedule: the PR job
+    # only fires when a PR touches a matching path, so a break introduced by a
+    # dependency bump — or one already sitting on `alpha` — surfaces here first.
+    # A failure is a canary rather than a blocker, which is why `report-failure`
+    # below files an issue: a red run nobody reads is the same as no run at all.
+    "templates-full":
+        "name": "Template scaffold matrix"
+        "runs-on": "ubuntu-latest"
+        "timeout-minutes": 90
+        "steps":
+            - "name": "Harden Runner"
+              "uses": "step-security/harden-runner@9af89fc71515a100421586dfdb3dc9c984fbf411" # v2.19.4
+              "with":
+                  "egress-policy": "audit"
+
+            - "name": "Git checkout"
+              "uses": "anolilab/workflows/step/checkout-with-retry@6c16895f4c3b5273b373656988505d1a8264e78b" # main
+
+            - "name": "Setup resources and environment"
+              "uses": "anolilab/workflows/step/node@acba5fb15ac98ad23dec1ad233e40e1bb79c1dae" # v19.0.4
+              "with":
+                  "node-version": "22.15"
+                  "cache-prefix": "nightly-templates"
+                  "install-node-gyp": "true"
+                  "skip-playwright": "true"
+                  "enable-nx-cache": "false"
+                  "run-npm-audit": "false"
+                  "run-signatures-audit": "false"
+
+            # `:prod` because the matrix packs `dist/` into tarballs, and a development
+            # build keeps `react/jsx-dev-runtime`, killing a Next production prerender
+            # with `jsxDEV is not a function`.
+            - "name": "Build packages (production artifacts)"
+              "run": "pnpm run build:packages:prod"
+
+            - "name": "Run the template scaffold matrix"
+              "run": "pnpm run test:templates"
+
+            - "name": "Upload scaffold logs on failure"
+              "if": "failure()"
+              "uses": "actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02" # v4.6.2
+              "with":
+                  "name": "template-smoke-logs"
+                  "path": ".template-smoke-logs"
+                  "retention-days": 7
+                  "if-no-files-found": "ignore"
+
+    # A nightly that goes red silently is indistinguishable from one that never ran.
+    # This opens ONE tracking issue and updates it on each subsequent failure rather
+    # than filing a new one nightly, and closes it when the suite next goes green.
+    "report-failure":
+        "name": "Report nightly failure"
+        "runs-on": "ubuntu-latest"
+        "if": "always() && github.event_name == 'schedule'"
+        "needs": ["test-full", "test-workerd", "e2e", "templates-full"]
+        "permissions":
+            "issues": "write"
+        "steps":
+            - "name": "Open or update the nightly tracking issue"
+              "env":
+                  "GH_TOKEN": "${{ github.token }}"
+                  "REPO": "${{ github.repository }}"
+                  "RUN_URL": "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+                  "FAILED": "${{ contains(needs.*.result, 'failure') }}"
+              "run": |
+                  set -euo pipefail
+                  title="Nightly suite failing"
+
+                  # Idempotent: the label may not exist yet, and `gh issue create`
+                  # fails outright on an unknown one.
+                  gh label create nightly --repo "$REPO" --color "B60205" \
+                      --description "Opened automatically when the nightly suite fails" \
+                      2>/dev/null || true
+                  existing="$(gh issue list --repo "$REPO" --state open --label nightly \
+                      --search "$title in:title" --json number --jq '.[0].number // empty')"
+
+                  if [[ "$FAILED" != "true" ]]; then
+                      if [[ -n "$existing" ]]; then
+                          gh issue close "$existing" --repo "$REPO" \
+                              --comment "Nightly is green again: $RUN_URL"
+                      fi
+                      exit 0
+                  fi
+
+                  # printf, not an indented heredoc: inside a YAML block scalar every
+                  # continuation line keeps its indentation, and >4 leading spaces makes
+                  # GitHub render the table as a code block.
+                  body="$(printf '%s\n' \
+                      "The nightly suite failed." \
+                      "" \
+                      "Run: $RUN_URL" \
+                      "" \
+                      "| job | result |" \
+                      "| --- | --- |" \
+                      "| Full test suite | ${{ needs.test-full.result }} |" \
+                      "| Workerd integration | ${{ needs.test-workerd.result }} |" \
+                      "| E2E | ${{ needs.e2e.result }} |" \
+                      "| Template scaffold matrix | ${{ needs.templates-full.result }} |" \
+                      "" \
+                      "The nightly is unfiltered, so a failure here is usually either a break" \
+                      "already on \`alpha\` that the path-gated PR jobs did not reach, or drift" \
+                      "from a dependency published since the last run.")"
+
+                  if [[ -n "$existing" ]]; then
+                      gh issue comment "$existing" --repo "$REPO" --body "$body"
+                  else
+                      gh issue create --repo "$REPO" --title "$title" --label nightly --body "$body"
+                  fi

@@ -42,8 +42,72 @@ export interface WhereOperators<T> {
     notIn?: T[];
 }
 
+/**
+ * A value stored as a plain JS object: not a scalar (an `Id<T>` is a branded string, which is an `object` to
+ * TypeScript but has no keys worth offering), an array, a date, bytes, a bigint or a function.
+ */
+type IsPlainObject<V> = V extends string | number | boolean | bigint | symbol
+    ? false
+    : V extends ReadonlyArray<unknown>
+      ? false
+      : V extends Date | Uint8Array | ArrayBuffer | bigint | ((...arguments_: never[]) => unknown)
+        ? false
+        : V extends object
+          ? true
+          : false;
+
+/** The dotted paths below an object, to three steps. */
+type SubPaths<V, Depth extends unknown[]> = Depth["length"] extends 3
+    ? never
+    : [IsPlainObject<V>] extends [true]
+      ? { [K in keyof V & string]-?: K | `${K}.${SubPaths<NonNullable<V[K]>, [...Depth, 0]>}` }[keyof V & string]
+      : never;
+
+/** The type at the end of dotted path `P` below `V`. */
+type PathValue<V, P extends string> = P extends `${infer Head}.${infer Rest}`
+    ? Head extends keyof V
+        ? PathValue<NonNullable<V[Head]>, Rest>
+        : never
+    : P extends keyof V
+      ? V[P]
+      : never;
+
+/**
+ * Every dotted path into an object-valued column of `Doc` (`"profile.address.city"`), at most four segments
+ * counting the column. A column that is not a plain object contributes none.
+ */
+type ColumnPaths<Doc> = {
+    [K in keyof Doc & string]-?: [IsPlainObject<NonNullable<Doc[K]>>] extends [true] ? `${K}.${SubPaths<NonNullable<Doc[K]>, []>}` : never;
+}[keyof Doc & string];
+
+/** The type at the end of a {@link ColumnPaths} path. */
+type DocPathValue<Doc, P extends string> = P extends `${infer Column}.${infer Rest}`
+    ? Column extends keyof Doc
+        ? PathValue<NonNullable<Doc[Column]>, Rest>
+        : never
+    : never;
+
+type ScalarLeaf = boolean | number | string | null | undefined;
+
+/** The dotted paths into an object column that end at a string, number or boolean. */
+type ScalarPaths<Doc> = { [P in ColumnPaths<Doc>]: [DocPathValue<Doc, P>] extends [ScalarLeaf] ? P : never }[ColumnPaths<Doc>];
+
+/**
+ * `where` keys that reach into an object column: `{ "profile.plan": "pro" }`. Only paths that end at a string,
+ * number or boolean are offered — an object, array, date, bigint or bytes leaf has no single SQL comparison.
+ *
+ * `unknown` (the identity for `&`) when there are none, never `{}`: intersecting with an empty object type
+ * switches off the weak-type check that rejects a `where` key naming nothing.
+ */
+type PathWhere<Doc, Paths extends string = ScalarPaths<Doc>> = [Paths] extends [never]
+    ? unknown
+    : { [P in Paths]?: DocPathValue<Doc, P> | WhereOperators<DocPathValue<Doc, P>> };
+
+/** `patch` keys that set one value inside an object column, keeping its siblings: `{ "profile.plan": "pro" }`. */
+type PathPatch<Doc, Paths extends string = ColumnPaths<Doc>> = [Paths] extends [never] ? unknown : { [P in Paths]?: DocPathValue<Doc, P> };
+
 /** A typed `where` tree over a document's columns. */
-export type Where<TDocument> = {
+export type Where<TDocument> = PathWhere<TDocument> & {
     [K in keyof TDocument]?: TDocument[K] | WhereOperators<TDocument[K]>;
 } & {
     AND?: Where<TDocument>[];
@@ -51,13 +115,28 @@ export type Where<TDocument> = {
     OR?: Where<TDocument>[];
 };
 
-/** One `{ field: "asc" | "desc" }` ordering entry; `orderBy` is an ordered list. */
-export type OrderBy<TDocument> = Partial<Record<keyof TDocument, "asc" | "desc">>;
+/**
+ * One ordering entry; `orderBy` is an ordered list. `{ field: "asc" | "desc" }` sorts NULLs first
+ * ascending and last descending. `{ field: { sort: "desc", nulls: "first" } }` places them yourself.
+ *
+ * A placement other than the default can change the query plan (see Pagination in the docs), so
+ * measure a hot read. It has no effect on a column that cannot hold NULL. Keep the same `orderBy` for every page of a
+ * paginated read, as a cursor is only valid against the ordering that minted it.
+ */
+export type OrderBy<TDocument> = Partial<Record<keyof TDocument | ScalarPaths<TDocument>, "asc" | "desc" | { nulls: "first" | "last"; sort: "asc" | "desc" }>>;
 
 export interface QueryArgs<TDocument> {
     cursor?: null | string;
     limit?: number;
     orderBy?: OrderBy<TDocument>[];
+
+    /**
+     * Project each returned row down to these columns (plus the system fields
+     * `_id`/`_creationTime`, always retained). Trims wire payload for wide rows;
+     * relations requested via `with` are still attached. Reactivity is unaffected —
+     * the engine still reads the whole row to track dependencies.
+     */
+    select?: ReadonlyArray<keyof TDocument & string>;
     where?: Where<TDocument>;
 }
 
@@ -99,20 +178,28 @@ type RelationWhere<DM, REL extends Record<keyof DM, object>, T extends keyof DM>
 /**
  * Relation-aware `where` tree — the column predicates of {@link Where} plus
  * Prisma-style relation predicates resolved by the `@lunora/do` pre-resolver.
- * `Where&lt;DM[T]>` stays the column-only structural mirror for back-compat; the
+ * `Where<DM[T]>` stays the column-only structural mirror for back-compat; the
  * table facade threads `REL` through this richer form.
  */
-export type WhereOf<DM, REL extends Record<keyof DM, object>, T extends keyof DM> = RelationWhere<DM, REL, T> & {
-    [K in keyof DM[T]]?: DM[T][K] | WhereOperators<DM[T][K]>;
-} & {
-    AND?: WhereOf<DM, REL, T>[];
-    NOT?: WhereOf<DM, REL, T>;
-    OR?: WhereOf<DM, REL, T>[];
-};
+export type WhereOf<DM, REL extends Record<keyof DM, object>, T extends keyof DM> = PathWhere<DM[T]> &
+    RelationWhere<DM, REL, T> & {
+        [K in keyof DM[T]]?: DM[T][K] | WhereOperators<DM[T][K]>;
+    } & {
+        AND?: WhereOf<DM, REL, T>[];
+        NOT?: WhereOf<DM, REL, T>;
+        OR?: WhereOf<DM, REL, T>[];
+    };
 
 /** {@link QueryArgs} with the relation-aware {@link WhereOf} `where` typing. */
 export interface QueryArgsOf<DM, REL extends Record<keyof DM, object>, T extends keyof DM> {
     cursor?: null | string;
+
+    /**
+     * Include soft-deleted rows (`.softDelete()` tables only). Default hides them;
+     * `true` returns deleted rows alongside live ones. No effect on a table
+     * without `.softDelete()`.
+     */
+    includeDeleted?: boolean;
     limit?: number;
     orderBy?: OrderBy<DM[T]>[];
     where?: WhereOf<DM, REL, T>;
@@ -127,27 +214,35 @@ export interface QueryPage<TDocument> {
 /** The nested `with` sub-argument inside a relation's with-value, or `{}`. */
 type NestedWithArgument<WK> = WK extends { with: infer NW } ? NW : {};
 
+/** The nested `select` tuple inside a relation's with-value, or `undefined` (no projection). */
+type NestedSelectArgument<WK> = WK extends { select: infer S } ? S : undefined;
+
 /**
  * The `with` argument for table `T`: each relation can be `true` (load with no
- * refinements) or an object. `many` relations accept `where`/`orderBy`/`limit`
- * plus a nested `with`; `one` relations accept only a nested `with`. The
- * reserved `_count` key requests per-relation aggregate counts.
+ * refinements) or an object. `many` relations accept `where`/`orderBy`/`limit`/
+ * `select` plus a nested `with`; `one` relations accept `select` + a nested
+ * `with`. The reserved `_count` key requests per-relation aggregate counts.
  */
 export type WithArg<DM, REL extends Record<keyof DM, object>, T extends keyof DM> = {
     [K in keyof REL[T]]?: REL[T][K] extends { __relationKind: "many"; __target: infer Target extends keyof DM }
         ? boolean | (QueryArgs<DM[Target]> & { with?: WithArg<DM, REL, Target> })
         : REL[T][K] extends { __relationKind: "one"; __target: infer Target extends keyof DM }
-          ? boolean | { with?: WithArg<DM, REL, Target> }
+          ? boolean | { select?: ReadonlyArray<keyof DM[Target] & string>; with?: WithArg<DM, REL, Target> }
           : never;
 } & {
     _count?: { [K in keyof REL[T]]?: true };
 };
 
-/** Resolve a single relation descriptor + its with-value to the loaded type. */
+/**
+ * Resolve a single relation descriptor + its with-value to the loaded type,
+ * threading the nested `select` tuple into the projected child shape (the 5th
+ * `LoadWith` arg) so `with: { author: { select: ["name"] } }` narrows the loaded
+ * `author` to the selected columns + system fields.
+ */
 type LoadRelation<DM, REL extends Record<keyof DM, object>, R, WK> = R extends { __relationKind: "one"; __target: infer Target extends keyof DM }
-    ? LoadWith<DM, REL, Target, NestedWithArgument<WK>> | null
+    ? LoadWith<DM, REL, Target, NestedWithArgument<WK>, NestedSelectArgument<WK>> | null
     : R extends { __relationKind: "many"; __target: infer Target extends keyof DM }
-      ? LoadWith<DM, REL, Target, NestedWithArgument<WK>>[]
+      ? LoadWith<DM, REL, Target, NestedWithArgument<WK>, NestedSelectArgument<WK>>[]
       : never;
 
 /** The relation keys of `W` that were actually requested (not `false`/`undefined`). */
@@ -160,8 +255,25 @@ type LoadedRelations<DM, REL extends Record<keyof DM, object>, T extends keyof D
 /** The `_count` projection of `W`, if any. */
 type LoadedCount<W> = W extends { _count: infer C } ? { _count: { [K in keyof C]: number } } : {};
 
-/** `Doc&lt;T>` narrowed to exactly the relations requested in the with-arg `W`. */
-export type LoadWith<DM, REL extends Record<keyof DM, object>, T extends keyof DM, W> = DM[T] & LoadedCount<W> & LoadedRelations<DM, REL, T, W>;
+/** System columns a `select` projection always retains, so cursors and by-id reuse keep working. */
+type SelectAlwaysKeep<DM, T extends keyof DM> = ("_creationTime" | "_id") & keyof DM[T];
+
+/**
+ * `DM[T]` narrowed to the columns named by a `select` tuple `S` (plus the system
+ * fields). `undefined` (the default — no `select`) keeps the full document.
+ */
+type ProjectDoc<DM, T extends keyof DM, S> =
+    S extends ReadonlyArray<infer K> ? (K extends keyof DM[T] ? Pick<DM[T], (K & keyof DM[T]) | SelectAlwaysKeep<DM, T>> : DM[T]) : DM[T];
+
+/**
+ * `Doc<T>` narrowed to exactly the relations requested in the with-arg `W` and,
+ * when a `select` tuple `S` is supplied, to its projected columns. `S` defaults
+ * to `undefined` so the 4-argument form (the codegen-emitted callers) keeps the
+ * full document.
+ */
+export type LoadWith<DM, REL extends Record<keyof DM, object>, T extends keyof DM, W, S = undefined> = LoadedCount<W> &
+    LoadedRelations<DM, REL, T, W> &
+    ProjectDoc<DM, T, S>;
 
 /** Reducer applied by an aggregate (`avg`/`count`/`max`/`min`/`sum`). */
 export type AggregateOp = "avg" | "count" | "max" | "min" | "sum";
@@ -191,7 +303,7 @@ export interface RestrictableQueryOptionsOf<DM, REL extends Record<keyof DM, obj
     where?: WhereOf<DM, REL, T>;
 }
 
-/** Args for `ctx.db.&lt;table>.aggregate({ op, field?, where? })`. */
+/** Args for `ctx.db.<table>.aggregate({ op, field?, where? })`. */
 export interface TableAggregateOptions<TDocument> extends RestrictableQueryOptions<TDocument> {
     field?: keyof TDocument & string;
     op: AggregateOp;
@@ -203,7 +315,7 @@ export interface TableAggregateOptionsOf<DM, REL extends Record<keyof DM, object
     op: AggregateOp;
 }
 
-/** Args for `ctx.db.&lt;table>.groupBy({ by, agg?, where? })`. */
+/** Args for `ctx.db.<table>.groupBy({ by, agg?, where? })`. */
 export interface TableGroupByOptions<TDocument> extends RestrictableQueryOptions<TDocument> {
     agg?: { field?: keyof TDocument & string; op: AggregateOp };
     by: ReadonlyArray<keyof TDocument & string>;
@@ -221,7 +333,7 @@ export interface GroupByEntry<TDocument> {
     value: null | number;
 }
 
-/** Args for `ctx.db.&lt;table>.rank(name, args)`. `row` is either an id or a row doc. */
+/** Args for `ctx.db.<table>.rank(name, args)`. `row` is either an id or a row doc. */
 export interface TableRankOptions<TDocument> extends RestrictableQueryOptions<TDocument> {
     row: string | TDocument;
 }
@@ -232,7 +344,7 @@ export interface RankResult {
     total: number;
 }
 
-/** Args for `ctx.db.&lt;table>.rankPage(name, args)`. */
+/** Args for `ctx.db.<table>.rankPage(name, args)`. */
 export interface TableRankPageOptions<TDocument> extends RestrictableQueryOptions<TDocument> {
     cursor?: null | string;
     take?: number;
@@ -263,18 +375,70 @@ export interface SearchFilterBuilder<TDocument> {
  */
 export interface SearchReader<TDocument> {
     collect: () => Promise<TDocument[]>;
+
+    /**
+     * Like `.collect()`, but pairs each matched document with the relevance
+     * score the FTS engine already computed to produce the descending order —
+     * `.collect()` throws it away after sorting by it, this surfaces it
+     * instead. Ordered by `score` descending, same order as `.collect()`.
+     */
+    collectWithScores: () => Promise<{ document: TDocument; score: number }[]>;
     first: () => Promise<TDocument | null>;
     take: (limit: number) => Promise<TDocument[]>;
     unique: () => Promise<TDocument | null>;
 }
 
-/** Read-only typed table accessor exposed on `QueryCtx.db.&lt;table>`. */
+/** A latitude/longitude point (WGS84 decimal degrees) accepted by geo queries. */
+export interface GeoPointInput {
+    lat: number;
+    lng: number;
+}
+
+/** An axis-aligned latitude/longitude bounding box (`sw`/`ne` corners). */
+export interface GeoBoundingBox {
+    ne: GeoPointInput;
+    sw: GeoPointInput;
+}
+
+/**
+ * Builder passed to `.withGeoIndex(name, q => …)`. Call exactly one of
+ * `.near(point, radiusMeters)` (proximity, nearest-first) or `.within(box)`
+ * (bounding-box).
+ */
+export interface GeoFilterBuilder {
+    near: (point: GeoPointInput, radiusMeters: number) => GeoFilterBuilder;
+    within: (box: GeoBoundingBox) => GeoFilterBuilder;
+}
+
+/**
+ * Chainable reader returned by `.withGeoIndex()`. `.near()` results come back
+ * ordered nearest-first; `.within()` results by row creation time. `.paginate()`
+ * is intentionally absent — cap the result set with `.take(n)`.
+ */
+export interface GeoReader<TDocument> {
+    collect: () => Promise<TDocument[]>;
+
+    /**
+     * Like `.collect()`, but pairs each matched document with the distance
+     * (in meters) from `.near()`'s point that the read already computed to
+     * produce the nearest-first order. `.within()` box matches have no
+     * point-distance metric, so `distanceMeters` is `null` for those rows
+     * rather than a misleading `0`.
+     */
+    collectWithScores: () => Promise<{ distanceMeters: null | number; document: TDocument }[]>;
+    first: () => Promise<TDocument | null>;
+    take: (limit: number) => Promise<TDocument[]>;
+    unique: () => Promise<TDocument | null>;
+}
+
+/** Read-only typed table accessor exposed on `QueryCtx.db.<table>`. */
 export interface TableReaderFacade<
     DM,
     REL extends Record<keyof DM, object>,
     RANK extends Record<keyof DM, string>,
     SEARCH extends Record<keyof DM, string>,
     T extends keyof DM,
+    GEO extends Record<keyof DM, string> = Record<keyof DM, never>,
 > {
     /**
      * Reduce rows in this table to a scalar (`avg`/`max`/`min`/`sum` — `count`
@@ -291,9 +455,46 @@ export interface TableReaderFacade<
      * uses to inject `baseWhere` and `restrictsCounts`.
      */
     count: (where?: RestrictableQueryOptionsOf<DM, REL, T> | WhereOf<DM, REL, T>) => Promise<number>;
-    findFirst: <W extends WithArg<DM, REL, T> = {}>(args?: QueryArgsOf<DM, REL, T> & { with?: W }) => Promise<LoadWith<DM, REL, T, W> | null>;
-    findFirstOrThrow: <W extends WithArg<DM, REL, T> = {}>(args?: QueryArgsOf<DM, REL, T> & { with?: W }) => Promise<LoadWith<DM, REL, T, W>>;
-    findMany: <W extends WithArg<DM, REL, T> = {}>(args?: QueryArgsOf<DM, REL, T> & { with?: W }) => Promise<QueryPage<LoadWith<DM, REL, T, W>>>;
+
+    /** `true` when at least one row matches `where` (any row when omitted). RLS-filtered exactly like `findFirst`. */
+    exists: (where?: WhereOf<DM, REL, T>) => Promise<boolean>;
+
+    /**
+     * Describe how this table would run `findMany(args)` without running it: the SQL, its bound
+     * parameters, and the database's own plan, one line per step. Use it to check that a filter is
+     * served by an index (`SEARCH … USING INDEX by_room`) rather than a scan (`SCAN …`).
+     *
+     * Honors RLS and soft delete exactly like the read, so the plan is the one your caller would get.
+     * Explaining does not subscribe a live query to this table. A relation filter in `where` is resolved
+     * first with an ordinary read of the related table, which does subscribe to that table, since the ids
+     * it matched are part of `params`. Takes no `with` or `select`: neither changes the statement.
+     *
+     * `params` carries values your RLS policies injected and, for a relation filter, the ids it matched.
+     * Keep the result on the server rather than returning it to a client.
+     */
+    explain: (args?: QueryArgsOf<DM, REL, T>) => Promise<QueryPlan>;
+    findFirst: <W extends WithArg<DM, REL, T> = {}, S extends ReadonlyArray<keyof DM[T] & string> | undefined = undefined>(
+        args?: QueryArgsOf<DM, REL, T> & { select?: S; with?: W },
+    ) => Promise<LoadWith<DM, REL, T, W, S> | null>;
+    findFirstOrThrow: <W extends WithArg<DM, REL, T> = {}, S extends ReadonlyArray<keyof DM[T] & string> | undefined = undefined>(
+        args?: QueryArgsOf<DM, REL, T> & { select?: S; with?: W },
+    ) => Promise<LoadWith<DM, REL, T, W, S>>;
+    findMany: <W extends WithArg<DM, REL, T> = {}, S extends ReadonlyArray<keyof DM[T] & string> | undefined = undefined>(
+        args?: QueryArgsOf<DM, REL, T> & { select?: S; with?: W },
+    ) => Promise<QueryPage<LoadWith<DM, REL, T, W, S>>>;
+
+    /**
+     * The one row matching `where`, or `null` when none does — and a `NOT_UNIQUE`
+     * error when a SECOND one matches, so a broken uniqueness invariant surfaces at
+     * the read rather than as a wrong answer downstream. `findFirst` drops that
+     * assertion; this is the ORM spelling of the fluent reader's `.unique()`.
+     *
+     * `limit`/`cursor` are not accepted rather than silently ignored: paging a read
+     * that must match at most one row is the assertion being dropped again.
+     */
+    findUnique: <W extends WithArg<DM, REL, T> = {}, S extends ReadonlyArray<keyof DM[T] & string> | undefined = undefined>(
+        args?: Omit<QueryArgsOf<DM, REL, T>, "cursor" | "limit"> & { select?: S; with?: W },
+    ) => Promise<LoadWith<DM, REL, T, W, S> | null>;
     get: (id: Id<string & T>) => Promise<DM[T] | null>;
 
     /**
@@ -319,6 +520,14 @@ export interface TableReaderFacade<
     rankPage: (indexName: RANK[T], options?: TableRankPageOptions<DM[T]>) => Promise<RankPage<DM[T]>>;
 
     /**
+     * Restrict the query to a declared `.geoIndex()` and run a proximity /
+     * bounding-box match. `indexName` is constrained to this table's geo indexes
+     * (`never` when it declares none). Returns a distance-ordered reader —
+     * finish with `.take(n)` / `.collect()`.
+     */
+    withGeoIndex: (indexName: GEO[T], build: (q: GeoFilterBuilder) => GeoFilterBuilder) => GeoReader<DM[T]>;
+
+    /**
      * Restrict the query to a declared `.searchIndex()` and run a full-text
      * match. `indexName` is constrained to this table's search indexes
      * (`never` when it declares none). Returns a relevance-ordered reader —
@@ -327,7 +536,7 @@ export interface TableReaderFacade<
     withSearchIndex: (indexName: SEARCH[T], search: (q: SearchFilterBuilder<DM[T]>) => SearchFilterBuilder<DM[T]>) => SearchReader<DM[T]>;
 }
 
-/** Read-write typed table accessor exposed on `MutationCtx.db.&lt;table>` / `ActionCtx.db.&lt;table>`. */
+/** Read-write typed table accessor exposed on `MutationCtx.db.<table>` / `ActionCtx.db.<table>`. */
 export interface TableWriterFacade<
     DM,
     IM extends Record<keyof DM, object>,
@@ -335,31 +544,196 @@ export interface TableWriterFacade<
     RANK extends Record<keyof DM, string>,
     SEARCH extends Record<keyof DM, string>,
     T extends keyof DM,
-> extends TableReaderFacade<DM, REL, RANK, SEARCH, T> {
+    GEO extends Record<keyof DM, string> = Record<keyof DM, never>,
+> extends TableReaderFacade<DM, REL, RANK, SEARCH, T, GEO> {
+    /**
+     * Delete a row by id. On a `.softDelete()` table this flips the marker column
+     * (and cascades as a soft delete) instead of removing the row; use
+     * {@link TableWriterFacade.hardDelete} to force physical removal.
+     */
     delete: (id: Id<string & T>) => Promise<void>;
-    /** Delete many rows in this table by id in one call; returns the *requested* id count (unknown ids are no-ops). Atomic within a mutation (a throw rolls the mutation back); an action has no transaction span. */
-    deleteMany: (ids: ReadonlyArray<Id<string & T>>, options?: { limit?: number }) => Promise<{ deleted: number }>;
-    insert: (values: IM[T]) => Promise<Id<string & T>>;
-    /** Insert many documents into this table in one call, returning the minted ids in input order. Atomic within a mutation (a throw rolls the mutation back); an action has no transaction span. */
-    insertMany: (values: ReadonlyArray<IM[T]>, options?: { limit?: number }) => Promise<Id<string & T>[]>;
-    patch: (id: Id<string & T>, values: Partial<IM[T]>) => Promise<void>;
-    /** Patch many rows in this table by id in one call. Atomic within a mutation (a throw rolls the mutation back); an action has no transaction span. */
-    patchMany: (patches: ReadonlyArray<{ id: Id<string & T>; values: Partial<IM[T]> }>, options?: { limit?: number }) => Promise<void>;
+
+    /**
+     * Delete many rows in this table. Pass an array of ids (requested count is
+     * returned; unknown ids are no-ops) or `{ where }` to delete matching rows
+     * (actual removed count is returned). Atomic within a mutation.
+     */
+    deleteMany: {
+        (ids: ReadonlyArray<Id<string & T>>, options?: { limit?: number }): Promise<{ deleted: number }>;
+        (args: { limit?: number; where: Partial<DM[T]> }): Promise<{ deleted: number }>;
+    };
+
+    /** Physically remove a row (and physically cascade `onDelete`), bypassing `.softDelete()`. Same as `delete()` on a non-soft table. */
+    hardDelete: (id: Id<string & T>) => Promise<void>;
+
+    /**
+     * Insert a document, returning its minted id. With `{ skipDuplicates: true }`
+     * a UNIQUE-constraint breach resolves to `null` (the row already exists)
+     * instead of throwing — the return type widens to `Id | null` on that overload.
+     */
+    insert: {
+        (values: InsertValues<DM, IM, REL, T>, options: { skipDuplicates: true }): Promise<Id<string & T> | null>;
+        (values: InsertValues<DM, IM, REL, T>, options?: { skipDuplicates?: boolean }): Promise<Id<string & T>>;
+    };
+
+    /**
+     * Insert many documents into this table in one call, returning the minted ids
+     * in input order. With `{ skipDuplicates: true }`, UNIQUE breaches resolve to
+     * `null` for that row instead of failing the batch. Atomic within a mutation.
+     */
+    insertMany: {
+        (values: ReadonlyArray<IM[T]>, options: { limit?: number; skipDuplicates: true }): Promise<(Id<string & T> | null)[]>;
+        (values: ReadonlyArray<IM[T]>, options?: { limit?: number; skipDuplicates?: boolean }): Promise<Id<string & T>[]>;
+    };
+    patch: (id: Id<string & T>, values: PatchValues<IM[T]> & RelationWrites<DM, REL, T>) => Promise<void>;
+
+    /**
+     * Patch many rows in this table. Pass an array of `{ id, values }` or
+     * `{ where, values }` to patch matching rows with the same values. Returns
+     * the actual patched count. Atomic within a mutation.
+     */
+    patchMany: {
+        (patches: ReadonlyArray<{ id: Id<string & T>; values: PatchValues<IM[T]> }>, options?: { limit?: number }): Promise<{ patched: number }>;
+        (args: { limit?: number; values: PatchValues<IM[T]>; where: Partial<DM[T]> }): Promise<{ patched: number }>;
+    };
     replace: (id: Id<string & T>, values: IM[T]) => Promise<void>;
+
+    /** Un-soft-delete a row by id: clears the `.softDelete()` marker so list reads see it again. Throws on a non-soft table. */
+    restore: (id: Id<string & T>) => Promise<void>;
+
+    /**
+     * Insert when no existing row matches `target`, otherwise patch the match with
+     * `update` (defaulting to `create`). `target` names a `.unique()` column (or a
+     * tuple) used to look it up. Returns the row id and whether it was `created`.
+     * Composes `findFirst` + `insert`/`patch`, so RLS gates each step.
+     */
+    upsert: (args: {
+        create: InsertValues<DM, IM, REL, T>;
+        target: UpsertTargetOf<DM, T>;
+        update?: PatchValues<IM[T]> & RelationWrites<DM, REL, T>;
+    }) => Promise<{ created: boolean; id: Id<string & T> }>;
+
+    /** Sequential {@link TableWriterFacade.upsert} over many rows sharing one `target`; one result per input row, in order. */
+    upsertMany: (args: {
+        rows: ReadonlyArray<{ create: InsertValues<DM, IM, REL, T>; update?: PatchValues<IM[T]> & RelationWrites<DM, REL, T> }>;
+        target: UpsertTargetOf<DM, T>;
+    }) => Promise<{ created: boolean; id: Id<string & T> }[]>;
 }
 
-/** Per-table read facade — `ctx.db.&lt;table>` on a `QueryCtx`. */
-export type DatabaseReaderFacade<DM, REL extends Record<keyof DM, object>, RANK extends Record<keyof DM, string>, SEARCH extends Record<keyof DM, string>> = {
-    readonly [T in keyof DM]: TableReaderFacade<DM, REL, RANK, SEARCH, T>;
+/** Conflict target for `upsert`/`upsertMany`: one column of table `T`, or a tuple of them. */
+export type UpsertTargetOf<DM, T extends keyof DM> = ReadonlyArray<keyof DM[T] & string> | (keyof DM[T] & string);
+
+/**
+ * An atomic update for a number column, applied to the value the row holds when the
+ * write runs: `{ increment: 1 }`, `{ decrement: 1 }`, `{ multiply: 2 }`, `{ divide: 2 }`.
+ * The column must already hold a finite number; a result that is not finite is rejected.
+ */
+type NumberFieldOperator =
+    | { decrement: number; divide?: never; increment?: never; multiply?: never }
+    | { decrement?: never; divide: number; increment?: never; multiply?: never }
+    | { decrement?: never; divide?: never; increment: number; multiply?: never }
+    | { decrement?: never; divide?: never; increment?: never; multiply: number };
+
+/** An atomic update for a boolean column: `{ toggle: true }` flips the stored value. */
+interface BooleanFieldOperator {
+    toggle: true;
+}
+
+/**
+ * The values a `patch` accepts: any column's own type, and for a number or boolean
+ * column also an atomic operator ({@link NumberFieldOperator}, {@link BooleanFieldOperator}).
+ */
+export type PatchValues<Row> = PathPatch<Row> & {
+    [K in keyof Row]?: Row[K] | OperatorFor<NonNullable<Row[K]>>;
 };
 
-/** Per-table read-write facade — `ctx.db.&lt;table>` on a `MutationCtx` / `ActionCtx`. */
+/**
+ * The operator a column of type `T` takes: arithmetic when `T` is exactly `number` (so a literal union
+ * such as `1 | 2` is out — the result could leave the set — and so is `number | string`, which the
+ * store does not treat as a number column), `{ toggle: true }` when it is exactly `boolean`.
+ */
+type OperatorFor<T> = [T] extends [number]
+    ? [number] extends [T]
+        ? NumberFieldOperator
+        : never
+    : [T] extends [boolean]
+      ? [boolean] extends [T]
+          ? BooleanFieldOperator
+          : never
+      : never;
+
+/** What `explain` returns: the SQL a read compiles to, its bound parameters, and the database's plan for it. */
+export interface QueryPlan {
+    /** The bound parameters, in order. */
+    params: unknown[];
+    /** One line per plan step, as the database reports it. */
+    plan: string[];
+    /** The statement the read compiles to. */
+    sql: string;
+}
+
+/**
+ * Nested write for a to-one relation: point the row at `Target` (`connect`), or clear the link (`disconnect`, which
+ * needs a foreign key that can be empty). One or the other, not both.
+ */
+export type ToOneRelationWrite<TargetId> = { connect: TargetId; disconnect?: never } | { connect?: never; disconnect: true };
+
+/**
+ * Nested write for a to-many relation: point `Target` rows at this one (`connect`), release them (`disconnect`, which
+ * needs a foreign key that can be empty), or replace the whole list (`set`: rows not named are released). `set`
+ * cannot be combined with the other two.
+ */
+export type ToManyRelationWrite<TargetId> =
+    | { connect?: never; disconnect?: never; set: ReadonlyArray<TargetId> }
+    | { connect?: ReadonlyArray<TargetId>; disconnect?: ReadonlyArray<TargetId>; set?: never };
+
+/**
+ * Nested relation writes accepted by `insert`, `patch` and `upsert`, keyed by relation name:
+ * `{ author: { connect: userId } }`, `{ posts: { set: [a, b] } }`. A table with no relations contributes none
+ * (`unknown`, the identity for `&`, never `{}`: an empty object type would switch off the weak-type check).
+ */
+export type RelationWrites<DM, REL extends Record<keyof DM, object>, T extends keyof DM> = [keyof REL[T]] extends [never]
+    ? unknown
+    : {
+          [K in keyof REL[T]]?: REL[T][K] extends { __relationKind: "one"; __target: infer Target extends keyof DM }
+              ? ToOneRelationWrite<Id<string & Target>>
+              : REL[T][K] extends { __relationKind: "many"; __target: infer Target extends keyof DM }
+                ? ToManyRelationWrite<Id<string & Target>>
+                : never;
+      };
+
+/** The foreign-key columns of a table's to-one relations — the keys a nested `connect` supplies. */
+type OneRelationFields<RelT> = {
+    [K in keyof RelT]: RelT[K] extends { __field: infer Field extends string; __relationKind: "one" } ? Field : never;
+}[keyof RelT];
+
+/**
+ * What `insert` accepts: the row as it is, or the row without its to-one foreign keys plus the nested writes that
+ * supply them. Leaving a key out with no `connect` to supply it is not caught by the type — the store's own
+ * validation rejects the missing field.
+ */
+export type InsertValues<DM, IM extends Record<keyof DM, object>, REL extends Record<keyof DM, object>, T extends keyof DM> =
+    IM[T] | (Omit<IM[T], OneRelationFields<REL[T]>> & RelationWrites<DM, REL, T>);
+
+/** Per-table read facade — `ctx.db.<table>` on a `QueryCtx`. */
+export type DatabaseReaderFacade<
+    DM,
+    REL extends Record<keyof DM, object>,
+    RANK extends Record<keyof DM, string>,
+    SEARCH extends Record<keyof DM, string>,
+    GEO extends Record<keyof DM, string> = Record<keyof DM, never>,
+> = {
+    readonly [T in keyof DM]: TableReaderFacade<DM, REL, RANK, SEARCH, T, GEO>;
+};
+
+/** Per-table read-write facade — `ctx.db.<table>` on a `MutationCtx` / `ActionCtx`. */
 export type DatabaseWriterFacade<
     DM,
     IM extends Record<keyof DM, object>,
     REL extends Record<keyof DM, object>,
     RANK extends Record<keyof DM, string>,
     SEARCH extends Record<keyof DM, string>,
+    GEO extends Record<keyof DM, string> = Record<keyof DM, never>,
 > = {
-    readonly [T in keyof DM]: TableWriterFacade<DM, IM, REL, RANK, SEARCH, T>;
+    readonly [T in keyof DM]: TableWriterFacade<DM, IM, REL, RANK, SEARCH, T, GEO>;
 };

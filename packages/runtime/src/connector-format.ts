@@ -15,7 +15,13 @@
  * the line-delimited stream an Airbyte incremental source emits.
  *
  * Both consume the SAME page, so a single endpoint feeds either ecosystem.
+ *
+ * Shard admin RPCs hand docs over in wire form (`encodeWire` tags for bigint /
+ * bytes), so both formatters decode each doc and map it to warehouse-portable
+ * JSON before it reaches third-party output — see {@link toPortableDocument}.
  */
+
+import { toPortableDocument } from "./portable-json";
 
 /**
  * One change record in a {@link ConnectorSyncPage}. Mirrors a row of the CDC log
@@ -91,10 +97,13 @@ const DEFAULT_PRIMARY_KEY = "_id";
  * map to override per table, used to fill the `schema` block.
  */
 const toFivetranResponse = (page: ConnectorSyncPage, primaryKey: Record<string, string> | string = DEFAULT_PRIMARY_KEY): FivetranResponse => {
-    const insert: Record<string, Record<string, unknown>[]> = {};
-    const update: Record<string, Record<string, unknown>[]> = {};
-    const remove: Record<string, Record<string, unknown>[]> = {};
-    const schema: Record<string, { primary_key: string[] }> = {};
+    // Null-prototype accumulators: `change.table` is connector input, so a
+    // proto-string table name (`__proto__`, `constructor`) must not reach
+    // Object.prototype's setters — write it as an own property instead.
+    const insert = Object.create(null) as Record<string, Record<string, unknown>[]>;
+    const update = Object.create(null) as Record<string, Record<string, unknown>[]>;
+    const remove = Object.create(null) as Record<string, Record<string, unknown>[]>;
+    const schema = Object.create(null) as Record<string, { primary_key: string[] }>;
 
     const pkFor = (table: string): string => (typeof primaryKey === "string" ? primaryKey : (primaryKey[table] ?? DEFAULT_PRIMARY_KEY));
 
@@ -116,13 +125,18 @@ const toFivetranResponse = (page: ConnectorSyncPage, primaryKey: Record<string, 
     for (const change of page.changes) {
         schema[change.table] ??= { primary_key: [pkFor(change.table)] };
 
+        const portable = toPortableDocument(change.doc);
+
         if (change.op === "delete") {
-            bucketFor(remove, change.table).push(change.doc);
+            bucketFor(remove, change.table).push(portable);
         } else if (change.op === "update") {
-            bucketFor(update, change.table).push(change.doc);
+            bucketFor(update, change.table).push(portable);
         } else {
-            // `insert` and `upsert` both map to Fivetran's upsert-on-PK `insert`.
-            bucketFor(insert, change.table).push(change.doc);
+            // `insert`, `upsert`, and any op outside the Fivetran verbs (a
+            // connector that has drifted from the schema) all land in `insert` —
+            // Fivetran upserts on primary key, so the row still lands and a sync
+            // never hard-fails on one unknown op.
+            bucketFor(insert, change.table).push(portable);
         }
     }
 
@@ -146,7 +160,8 @@ const toAirbyteMessages = (page: ConnectorSyncPage, emittedAt: number = Date.now
     const messages: AirbyteMessage[] = [];
 
     for (const change of page.changes) {
-        const data = change.op === "delete" ? { ...change.doc, _lunora_deleted: true } : change.doc;
+        const portable = toPortableDocument(change.doc);
+        const data = change.op === "delete" ? { ...portable, _lunora_deleted: true } : portable;
 
         messages.push({ record: { data, emitted_at: emittedAt, stream: change.table }, type: "RECORD" });
     }

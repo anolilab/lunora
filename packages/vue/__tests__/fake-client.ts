@@ -1,4 +1,5 @@
-import type { ArgsOf, FunctionReference, LunoraClient, ReturnOf, SubscriptionErrorCallback, Unsubscribe } from "@lunora/client";
+import type { ArgsOf, FunctionReference, LunoraClient, ReturnOf, StreamHandle, StreamIterable, SubscriptionErrorCallback, Unsubscribe } from "@lunora/client";
+import { createStream } from "@lunora/client";
 import { vi } from "vitest";
 import { createApp } from "vue";
 
@@ -11,21 +12,44 @@ interface SubscribeCall {
     options: { onError?: SubscriptionErrorCallback; shardKey?: string };
 }
 
+interface StreamCall {
+    args: Record<string, unknown>;
+    functionPath: string;
+    /** The producer side — drive the stream with `handle.push`/`complete`/`fail`. */
+    handle: StreamHandle;
+    /** The consumer iterable handed back to the composable. */
+    iterable: StreamIterable<unknown>;
+    /** Spy invoked when the composable cancels its iterator (teardown). */
+    onCancel: ReturnType<typeof vi.fn>;
+    options: { durable?: boolean; maxBuffer?: number; shardKey?: string };
+}
+
 /**
  * A hand-rolled stand-in for `LunoraClient` exposing just the surface the Vue
- * composables touch (`subscribe`, `mutation`). Records every subscribe call,
- * lets a test push values to a live subscription, and spies on unsubscribe so we
- * can assert teardown. No WebSocket, no network — pure in-memory.
+ * composables touch (`subscribe`, `mutation`, `stream`). Records every subscribe
+ * and stream call, lets a test push values to a live subscription or stream, and
+ * spies on unsubscribe / cancel so we can assert teardown. No WebSocket, no
+ * network — pure in-memory.
  */
 interface FakeClient {
+    /** A recorded mock of `action` so tests can assert calls/resolve a value. */
+    actionSpy: ReturnType<typeof vi.fn>;
     /** The fake typed as a `LunoraClient` for passing into the composables. */
     client: LunoraClient;
+    /** Await a macrotask so the stream consumer's `for await` loop drains queued chunks into `chunks`. */
+    flush: () => Promise<void>;
     /** A recorded mock of `mutation` so tests can assert calls/resolve a value. */
     mutationSpy: ReturnType<typeof vi.fn>;
     /** Run `fn` with this fake provided as the Lunora client (no component mount). */
     provide: <T>(fn: () => T) => T;
     /** Push `value` to every callback subscribed for `(functionPath, args)`. */
     push: (functionPath: string, args: Record<string, unknown>, value: unknown) => void;
+    /** Push a chunk to every open stream matching `(functionPath, args)`. */
+    pushStream: (functionPath: string, args: Record<string, unknown>, value: unknown) => void;
+    /** Set the auth token (and optionally the subject) — fires `onAuthTokenChange`. */
+    setAuthToken: (token: string | null, subject?: string | null) => void;
+    /** Every `stream` call made against the fake, in order. */
+    streamCalls: StreamCall[];
     /** Every `subscribe` call made against the fake, in order. */
     subscribeCalls: SubscribeCall[];
     /** Spy invoked each time a subscription's returned `Unsubscribe` runs. */
@@ -36,8 +60,10 @@ const keyOf = (functionPath: string, args: Record<string, unknown>): string => `
 
 const createFakeClient = (): FakeClient => {
     const subscribeCalls: SubscribeCall[] = [];
+    const streamCalls: StreamCall[] = [];
     const unsubscribeSpy = vi.fn<() => void>();
     const mutationSpy = vi.fn<(...args: unknown[]) => Promise<unknown>>(async () => undefined);
+    const actionSpy = vi.fn<(...args: unknown[]) => Promise<unknown>>(async () => undefined);
 
     // A throwaway Vue app gives us a real `runWithContext` so `inject`/`provide`
     // resolve without mounting a component into a DOM.
@@ -63,7 +89,71 @@ const createFakeClient = (): FakeClient => {
         };
     };
 
-    const fake = { mutation: mutationSpy, subscribe } as unknown as LunoraClient;
+    const stream = <F extends FunctionReference<"stream">>(
+        function_: F,
+        args: ArgsOf<F>,
+        options: { durable?: boolean; maxBuffer?: number; shardKey?: string } = {},
+    ): StreamIterable<ReturnOf<F>> => {
+        const onCancel = vi.fn<() => void>();
+        const { handle, iterable } = createStream<unknown>({ maxBuffer: options.maxBuffer, onCancel });
+
+        streamCalls.push({
+            args: args ?? {},
+            functionPath: function_["__lunoraRef"],
+            handle,
+            iterable,
+            onCancel,
+            options,
+        });
+
+        return iterable as StreamIterable<ReturnOf<F>>;
+    };
+
+    // Auth-identity surface the voice primitive's `watchVoiceIdentity` reads: it
+    // keys on the identity FINGERPRINT (subject when supplied, else the token), so
+    // a same-subject JWT refresh fires the listeners without moving the identity.
+    let authToken: string | null = null;
+    let authSubject: string | null | undefined;
+    const authTokenListeners = new Set<(token: string | null) => void>();
+    const setAuthTokenFake = (token: string | null, subject?: string | null): void => {
+        if (subject !== undefined) {
+            authSubject = subject;
+        } else if (token === null) {
+            authSubject = undefined;
+        }
+
+        if (authToken === token) {
+            return;
+        }
+
+        authToken = token;
+
+        for (const listener of authTokenListeners) {
+            listener(token);
+        }
+    };
+
+    const fake = {
+        action: actionSpy,
+        currentIdentity: (): string | null => authSubject ?? authToken,
+        // The identity store declares itself on attach; the fake has nothing
+        // to gate, so this only has to exist.
+        expectIdentityResolution: (): void => undefined,
+        identityEpoch: (): number => 0,
+        onIdentityChange: (): Unsubscribe => () => undefined,
+        getAuthToken: (): string | null => authToken,
+        onAuthTokenChange: (listener: (token: string | null) => void): Unsubscribe => {
+            authTokenListeners.add(listener);
+
+            return () => {
+                authTokenListeners.delete(listener);
+            };
+        },
+        setAuthToken: setAuthTokenFake,
+        mutation: mutationSpy,
+        stream,
+        subscribe,
+    } as unknown as LunoraClient;
 
     // Install the fake into the app's provide context up front so
     // `useLunora()` resolves it inside `runWithContext`.
@@ -81,7 +171,36 @@ const createFakeClient = (): FakeClient => {
         }
     };
 
-    return { client: fake, mutationSpy, provide, push, subscribeCalls, unsubscribeSpy };
+    const pushStream = (functionPath: string, args: Record<string, unknown>, value: unknown): void => {
+        const target = keyOf(functionPath, args);
+
+        for (const call of streamCalls) {
+            if (keyOf(call.functionPath, call.args) === target) {
+                call.handle.push(value);
+            }
+        }
+    };
+
+    // The stream consumer drains its queue across microtasks; a macrotask hop
+    // guarantees every buffered chunk has landed in the composable's `chunks` ref.
+    const flush = (): Promise<void> =>
+        new Promise((resolve) => {
+            setTimeout(resolve, 0);
+        });
+
+    return {
+        actionSpy,
+        client: fake,
+        flush,
+        mutationSpy,
+        provide,
+        push,
+        pushStream,
+        setAuthToken: setAuthTokenFake,
+        streamCalls,
+        subscribeCalls,
+        unsubscribeSpy,
+    };
 };
 
 export type { FakeClient };

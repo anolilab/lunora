@@ -1,0 +1,336 @@
+import { LunoraProvider } from "@lunora/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import type { ReactElement } from "react";
+import { describe, expect, it } from "vitest";
+
+import QueuesPanel from "../../../src/features/queues/queues-panel";
+import type { QueueMessageRow, QueueMetadata, QueuesResult, ReplayQueueMessageResult } from "../../../src/lib/admin";
+import { ADMIN_FUNCTIONS } from "../../../src/lib/admin";
+import type { MockClientHooks } from "../../mock-client";
+import { createMockClient } from "../../mock-client";
+
+const renderPanel = (mock: MockClientHooks): ReactElement => (
+    <LunoraProvider client={mock.asClient}>
+        <QueuesPanel />
+    </LunoraProvider>
+);
+
+const oneQueue: QueueMetadata = { binding: "EMAIL_QUEUE", exportName: "sendWelcome", mode: "push", name: "emails" };
+
+const message = (overrides: Partial<QueueMessageRow> = {}): QueueMessageRow => {
+    return {
+        attempts: 1,
+        body: { hello: "world" },
+        capturedAt: 1_700_000_000_000,
+        deadLettered: false,
+        exportName: "sendWelcome",
+        id: "msg-1",
+        messageId: "cf-1",
+        outcome: "ack",
+        queue: "emails",
+        timestamp: 1_700_000_000_000,
+        ...overrides,
+    };
+};
+
+describe("queuesPanel", () => {
+    it("loads the declared queues on the default tab", async () => {
+        expect.assertions(1);
+
+        const mock = createMockClient({
+            query: (reference): unknown => {
+                if (reference === ADMIN_FUNCTIONS.listQueues) {
+                    return { queues: [oneQueue] } satisfies QueuesResult;
+                }
+
+                if (reference === ADMIN_FUNCTIONS.getQueueMessages) {
+                    return { entries: [] };
+                }
+
+                throw new Error(`unexpected ${reference}`);
+            },
+        });
+
+        render(renderPanel(mock));
+
+        await screen.findByTestId("queues-row-sendWelcome");
+
+        expect(screen.getByTestId("queues-row-sendWelcome").textContent).toContain("emails");
+    });
+
+    it("replays a message: sends the id, and refetches the log", async () => {
+        expect.hasAssertions();
+
+        let replayedId: string | undefined;
+        let messagesReadCount = 0;
+
+        const mock = createMockClient({
+            query: (reference, args): unknown => {
+                if (reference === ADMIN_FUNCTIONS.listQueues) {
+                    return { queues: [oneQueue] } satisfies QueuesResult;
+                }
+
+                if (reference === ADMIN_FUNCTIONS.getQueueMessages) {
+                    messagesReadCount += 1;
+
+                    return { entries: [message()] };
+                }
+
+                if (reference === ADMIN_FUNCTIONS.replayQueueMessage) {
+                    replayedId = (args as { id: string }).id;
+
+                    return { sent: 1, target: "emails" } satisfies ReplayQueueMessageResult;
+                }
+
+                throw new Error(`unexpected ${reference}`);
+            },
+        });
+
+        render(renderPanel(mock));
+
+        fireEvent.click(screen.getByTestId("queues-tab-messages"));
+
+        await screen.findByTestId("queues-message-msg-1");
+
+        const readsBeforeReplay = messagesReadCount;
+
+        fireEvent.click(screen.getByTestId("queues-replay-msg-1"));
+
+        await waitFor(() => {
+            expect(messagesReadCount).toBeGreaterThan(readsBeforeReplay);
+        });
+
+        expect(replayedId).toBe("msg-1");
+        expect(screen.queryByTestId("queues-error")).toBeNull();
+    });
+
+    it("renders a bigint / bytes body instead of [unserializable]", async () => {
+        expect.assertions(2);
+
+        const mock = createMockClient({
+            query: (reference): unknown => {
+                if (reference === ADMIN_FUNCTIONS.listQueues) {
+                    return { queues: [oneQueue] } satisfies QueuesResult;
+                }
+
+                return { entries: [message({ body: { amountMinor: 1999n, receipt: new Uint8Array([1, 2]).buffer } })] };
+            },
+        });
+
+        render(renderPanel(mock));
+        fireEvent.click(screen.getByTestId("queues-tab-messages"));
+
+        const row = await screen.findByTestId("queues-message-msg-1");
+
+        expect(row.textContent).toContain('{"amountMinor":"1999","receipt":"<bytes: 2 B>"}');
+        expect(row.textContent).not.toContain("unserializable");
+    });
+
+    it("surfaces a rejected replay in the panel's error surface", async () => {
+        expect.assertions(1);
+
+        const mock = createMockClient({
+            query: (reference): unknown => {
+                if (reference === ADMIN_FUNCTIONS.listQueues) {
+                    return { queues: [oneQueue] } satisfies QueuesResult;
+                }
+
+                if (reference === ADMIN_FUNCTIONS.getQueueMessages) {
+                    return { entries: [message()] };
+                }
+
+                if (reference === ADMIN_FUNCTIONS.replayQueueMessage) {
+                    throw new Error("QUEUE_REPLAY_FAILED");
+                }
+
+                throw new Error(`unexpected ${reference}`);
+            },
+        });
+
+        render(renderPanel(mock));
+
+        fireEvent.click(screen.getByTestId("queues-tab-messages"));
+
+        await screen.findByTestId("queues-message-msg-1");
+
+        fireEvent.click(screen.getByTestId("queues-replay-msg-1"));
+
+        await screen.findByTestId("queues-error");
+
+        expect(screen.getByTestId("queues-error").textContent).toContain("QUEUE_REPLAY_FAILED");
+    });
+
+    // Every other destructive action in the studio (storage delete, migrations,
+    // export/import, PITR restore, …) is gated behind the shared `ConfirmButton`
+    // component before it fires. `clearQueueMessages` matches that: the "Clear
+    // log" button in queues-panel.tsx is a `ConfirmButton`, so the first click
+    // only reveals the confirm/cancel prompt and `onClear` (which invokes
+    // `clearQueueMessages`) fires only from the `queues-clear-confirm` click.
+    it("does not clear on the first click; only the confirm click invokes clearQueueMessages", async () => {
+        expect.hasAssertions();
+
+        let cleared = false;
+
+        const mock = createMockClient({
+            query: (reference): unknown => {
+                if (reference === ADMIN_FUNCTIONS.listQueues) {
+                    return { queues: [oneQueue] } satisfies QueuesResult;
+                }
+
+                if (reference === ADMIN_FUNCTIONS.getQueueMessages) {
+                    return { entries: cleared ? [] : [message()] };
+                }
+
+                if (reference === ADMIN_FUNCTIONS.clearQueueMessages) {
+                    cleared = true;
+
+                    return { cleared: true };
+                }
+
+                throw new Error(`unexpected ${reference}`);
+            },
+        });
+
+        render(renderPanel(mock));
+
+        fireEvent.click(screen.getByTestId("queues-tab-messages"));
+
+        await screen.findByTestId("queues-message-msg-1");
+
+        // First click only reveals the confirm/cancel prompt — the log must
+        // still be intact and clearQueueMessages must not have fired.
+        fireEvent.click(screen.getByTestId("queues-clear"));
+
+        expect(cleared).toBe(false);
+        expect(screen.getByTestId("queues-message-msg-1")).toBeDefined();
+
+        fireEvent.click(screen.getByTestId("queues-clear-confirm"));
+
+        await waitFor(() => {
+            expect(cleared).toBe(true);
+        });
+
+        await waitFor(() => {
+            expect(screen.queryByTestId("queues-message-msg-1")).toBeNull();
+        });
+    });
+
+    // The panel holds ONE page of the log (`DEFAULT_MESSAGE_LIMIT`), while the
+    // clear empties the whole reserved table — up to `QUEUE_RETENTION` rows. The
+    // confirm used to quote the page length, which is a number it never measured
+    // and is smaller than what the click destroys whenever the log is full.
+    it("confirms by scope, not by the loaded page's length", async () => {
+        expect.assertions(1);
+
+        const mock = createMockClient({
+            query: (reference): unknown => {
+                if (reference === ADMIN_FUNCTIONS.listQueues) {
+                    return { queues: [oneQueue] } satisfies QueuesResult;
+                }
+
+                if (reference === ADMIN_FUNCTIONS.getQueueMessages) {
+                    return { entries: [message()] };
+                }
+
+                throw new Error(`unexpected ${reference}`);
+            },
+        });
+
+        render(renderPanel(mock));
+
+        fireEvent.click(screen.getByTestId("queues-tab-messages"));
+        await screen.findByTestId("queues-message-msg-1");
+
+        fireEvent.click(screen.getByTestId("queues-clear"));
+
+        expect(screen.getByTestId("queues-clear-confirm").textContent).toBe("Clear the whole message log?");
+    });
+
+    const topicQueues: QueueMetadata[] = [
+        oneQueue,
+        { binding: "QUEUE_AUDIT", exportName: "audit", mode: "push", name: "audit", topic: "signups" },
+        { binding: "QUEUE_WELCOME", exportName: "welcome", mode: "push", name: "welcome", topic: "signups" },
+    ];
+
+    it("groups subscriptions under their topic", async () => {
+        expect.assertions(2);
+
+        const mock = createMockClient({
+            query: (reference): unknown => {
+                if (reference === ADMIN_FUNCTIONS.listQueues) {
+                    return { queues: topicQueues } satisfies QueuesResult;
+                }
+
+                return { entries: [] };
+            },
+        });
+
+        render(renderPanel(mock));
+
+        const header = await screen.findByTestId("queues-topic-signups");
+
+        expect(header.textContent).toContain("signups");
+        expect(header.textContent).toContain("2 subscriptions");
+    });
+
+    it("publishes a test message to every subscription of a topic", async () => {
+        expect.hasAssertions();
+
+        const sentTo: string[] = [];
+        const mock = createMockClient({
+            query: (reference, args): unknown => {
+                if (reference === ADMIN_FUNCTIONS.listQueues) {
+                    return { queues: topicQueues } satisfies QueuesResult;
+                }
+
+                if (reference === ADMIN_FUNCTIONS.sendQueueMessage) {
+                    sentTo.push((args as { exportName: string }).exportName);
+
+                    return { sent: 1 };
+                }
+
+                return { entries: [] };
+            },
+        });
+
+        render(renderPanel(mock));
+
+        fireEvent.click(await screen.findByTestId("queues-tab-send"));
+        fireEvent.change(await screen.findByTestId("queues-send-select"), { target: { value: "topic:signups" } });
+        fireEvent.click(screen.getByTestId("queues-send-button"));
+
+        await waitFor(() => {
+            expect(sentTo.toSorted((a, b) => a.localeCompare(b))).toStrictEqual(["audit", "welcome"]);
+        });
+    });
+
+    it("names the subscriptions a topic publish did not reach", async () => {
+        expect.hasAssertions();
+
+        const mock = createMockClient({
+            query: (reference, args): unknown => {
+                if (reference === ADMIN_FUNCTIONS.listQueues) {
+                    return { queues: topicQueues } satisfies QueuesResult;
+                }
+
+                if (reference === ADMIN_FUNCTIONS.sendQueueMessage) {
+                    if ((args as { exportName: string }).exportName === "audit") {
+                        throw new Error("binding missing");
+                    }
+
+                    return { sent: 1 };
+                }
+
+                return { entries: [] };
+            },
+        });
+
+        render(renderPanel(mock));
+
+        fireEvent.click(await screen.findByTestId("queues-tab-send"));
+        fireEvent.change(await screen.findByTestId("queues-send-select"), { target: { value: "topic:signups" } });
+        fireEvent.click(screen.getByTestId("queues-send-button"));
+
+        await expect(screen.findByText(/Not sent to audit: binding missing/u)).resolves.toBeDefined();
+    });
+});

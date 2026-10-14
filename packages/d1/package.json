@@ -1,6 +1,6 @@
 {
     "name": "@lunora/d1",
-    "version": "0.0.0",
+    "version": "1.0.0-alpha.176",
     "description": "D1 adapter for Lunora .global() tables, wrapping the Sessions API for read-your-writes",
     "keywords": [
         "cloudflare",
@@ -25,7 +25,7 @@
         "directory": "packages/d1"
     },
     "files": [
-        "dist",
+        "./dist",
         "README.md",
         "LICENSE.md",
         "__assets__"
@@ -46,31 +46,42 @@
         },
         "./package.json": "./package.json"
     },
+    "publishConfig": {
+        "access": "public"
+    },
     "scripts": {
         "build": "pnpm exec packem build --development",
         "build:prod": "pnpm exec packem build --production",
-        "lint:eslint": "eslint .",
+        "lint:eslint": "eslint . --max-warnings=0",
         "lint:eslint:fix": "eslint . --fix",
-        "lint:prettier": "prettier --check .",
-        "lint:prettier:fix": "prettier --write .",
+        "lint:prettier": "prettier --check . --ignore-path ../../.prettierignore",
+        "lint:prettier:fix": "prettier --write . --ignore-path ../../.prettierignore",
         "lint:types": "tsc --noEmit",
         "test": "vitest run",
         "test:coverage": "vitest run --coverage",
-        "test:bench": "vitest bench --run --config vitest.bench.config.ts"
+        "test:bench": "vitest bench --run --config vitest.bench.config.ts",
+        "fallow:audit": "fallow audit",
+        "fallow:dead-code": "fallow dead-code",
+        "fallow:health": "fallow health --score"
     },
     "dependencies": {
-        "@lunora/do": "workspace:*",
-        "@lunora/sql-store": "workspace:*",
+        "@lunora/errors": ">=1.0.0-alpha.51 <2.0.0-0",
+        "@lunora/platform": "1.0.0-alpha.62",
+        "@lunora/shard-engine": "1.0.0-alpha.125",
+        "@lunora/sql-store": "1.0.0-alpha.177",
         "drizzle-orm": "catalog:drizzle"
     },
     "devDependencies": {
-        "@cloudflare/vitest-pool-workers": "catalog:cloudflare",
+        "@cloudflare/vitest-plugin": "catalog:cloudflare",
         "@cloudflare/workers-types": "catalog:cloudflare",
         "@codspeed/vitest-plugin": "catalog:test",
+        "@lunora/do": "1.0.0-alpha.209",
+        "@lunora/search-core": "workspace:*",
         "@types/node": "catalog:types",
         "@visulima/packem": "catalog:build",
         "@vitest/coverage-v8": "catalog:test",
         "esbuild": "catalog:build",
+        "fallow": "catalog:lint",
         "typescript": "catalog:tsc",
         "vitest": "catalog:test",
         "wrangler": "catalog:cloudflare"

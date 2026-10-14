@@ -32,7 +32,7 @@ NavigationMenuList.displayName = NavigationMenuPrimitive.List.displayName;
 const NavigationMenuItem = NavigationMenuPrimitive.Item;
 
 const navigationMenuTriggerStyle = cva(
-    "group text-[var(--nav-text-color)] inline-flex h-9 w-max items-center justify-center px-4 py-2 text-sm font-medium transition-colors duration-300 hover:text-[var(--nav-text-color)]/80 focus:text-[var(--nav-text-color)]/80 disabled:pointer-events-none disabled:opacity-50 data-active:bg-white/20 data-[state=open]:bg-white/20",
+    "group text-[var(--nav-text-color)] inline-flex h-9 w-max items-center justify-center px-4 py-2 text-sm font-medium transition-colors duration-300 hover:text-[var(--nav-text-color)]/80 focus:text-[var(--nav-text-color)]/80 disabled:pointer-events-none disabled:opacity-50 data-active:bg-hairline-strong data-[state=open]:bg-hairline-strong",
 );
 
 const NavigationMenuTrigger = ({

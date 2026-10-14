@@ -1,0 +1,13 @@
+{
+    "extends": "../../tsconfig.base.json",
+    "compilerOptions": {
+        // Intentionally no `outDir`/`rootDir`: `lint:types` is `tsc --noEmit` and the
+        // real build is packem (driven by package.json exports), so neither is
+        // load-bearing here. A set `rootDir` would raise TS6059 for the inlined
+        // `../../../shared/*` imports (files outside this package, bundled in at
+        // build time). See AGENTS.md "Top-level shared/".
+        "moduleResolution": "bundler",
+        "types": ["node"]
+    },
+    "include": ["src/**/*", "__tests__/**/*", "__bench__/**/*"]
+}

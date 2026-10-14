@@ -1,0 +1,55 @@
+# Learn more https://docs.github.com/en/get-started/getting-started-with-git/ignoring-files
+
+# dependencies
+node_modules/
+
+# Expo
+.expo/
+dist/
+web-build/
+expo-env.d.ts
+
+# Native
+.kotlin/
+*.orig.*
+*.jks
+*.p8
+*.p12
+*.key
+*.mobileprovision
+
+# Metro
+.metro-health-check*
+
+# debug
+npm-debug.*
+yarn-debug.*
+yarn-error.*
+
+# macOS
+.DS_Store
+*.pem
+
+# local env files
+.env
+.env.*
+!.env.example
+.dev.vars
+
+# Lunora / Cloudflare
+lunora/_generated
+.wrangler
+.wrangler.lunora-*.jsonc
+# `celld dev` state (holds `.dev.vars` values) and the celld driver's projection of wrangler.jsonc
+.celld/
+.celld.wrangler.json
+.celld.service.*.wrangler.json
+.lunora/
+.lunora-cache
+
+# typescript
+*.tsbuildinfo
+
+# generated native folders
+/ios
+/android

@@ -1,31 +1,17 @@
-import { cpSync, existsSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { runVerifyCommand } from "../../src/commands/verify/handler";
+import type { VerifyCommandData } from "../../src/commands/verify/handler";
+import { execute, runVerifyCommand } from "../../src/commands/verify/handler";
+import type { VerifyOptions } from "../../src/commands/verify/index";
+import { EXIT_CODE } from "../../src/util/exit-code";
 import type { Logger } from "../../src/util/logger";
 import { createRecordingSpawner } from "../../src/util/spawn";
-
-/** Run async `body` while capturing everything written to `process.stdout`. */
-const captureStdout = async (body: () => Promise<void>): Promise<string> => {
-    let captured = "";
-    const spy = vi.spyOn(process.stdout, "write").mockImplementation((chunk: string | Uint8Array): boolean => {
-        captured += typeof chunk === "string" ? chunk : Buffer.from(chunk).toString("utf8");
-
-        return true;
-    });
-
-    try {
-        await body();
-    } finally {
-        spy.mockRestore();
-    }
-
-    return captured;
-};
+import { runExecute } from "../helpers/execute";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const fixtureRoot = join(here, "..", "..", "..", "codegen", "__tests__", "fixtures", "simple");
@@ -38,6 +24,7 @@ const VALID_WRANGLER = `{
     "durable_objects": {
         "bindings": [{ "name": "SHARD", "class_name": "ShardDO" }]
     },
+    "migrations": [{ "tag": "v1", "new_sqlite_classes": ["ShardDO"] }],
     "d1_databases": [{ "binding": "DB", "database_name": "x", "database_id": "y" }]
 }
 `;
@@ -93,6 +80,166 @@ describe("lunora verify", () => {
             expect(existsSync(join(workdir, "lunora", "_generated"))).toBe(false);
         });
 
+        describe("eRROR-level codegen advisories", () => {
+            /** An index over a column the table never declares — a canonical ERROR advisory. */
+            const addBogusIndexToSchema = (): void => {
+                const schemaPath = join(workdir, "lunora", "schema.ts");
+                const schema = readFileSync(schemaPath, "utf8");
+                const patched = schema.replace(
+                    `.searchIndex("by_text", { field: "text", filterFields: ["channelId"] }),`,
+                    `.searchIndex("by_text", { field: "text", filterFields: ["channelId"] })\n        .index("by_bogus", ["doesNotExist"]),`,
+                );
+
+                expect(patched).not.toBe(schema);
+
+                writeFileSync(schemaPath, patched, "utf8");
+            };
+
+            it("blocks under --strict-advisories, so verify does not pass what prepare and deploy reject", async () => {
+                expect.assertions(3);
+
+                // `verify` already runs the OTHER two gates codegen produces (the
+                // platform diagnostics and the schema drift gate) and nothing read
+                // `codegen.advisories` — so the documented pre-deploy gate went green
+                // on the exact projects `prepare`/`deploy` refuse. An ERROR advisory
+                // means the call throws at runtime, which is what verify exists to
+                // catch before a deploy does.
+                writeFileSync(join(workdir, "wrangler.jsonc"), VALID_WRANGLER, "utf8");
+                addBogusIndexToSchema();
+
+                const { logger } = recordingLogger();
+                const result = await runVerifyCommand({ cwd: workdir, logger, strictAdvisories: true, typecheck: false });
+
+                expect(result.code).toBe(1);
+                expect(result.errors.join("\n")).toContain("ERROR-level");
+            });
+
+            it("passes the same project under --no-strict-advisories, the opt-out it now accepts", async () => {
+                expect.assertions(2);
+
+                writeFileSync(join(workdir, "wrangler.jsonc"), VALID_WRANGLER, "utf8");
+                addBogusIndexToSchema();
+
+                const { logger } = recordingLogger();
+                const result = await runVerifyCommand({ cwd: workdir, logger, strictAdvisories: false, typecheck: false });
+
+                expect(result.code).toBe(0);
+            });
+        });
+
+        it("fails on a platform diagnostic — the target it just resolved cannot serve the app", async () => {
+            expect.assertions(3);
+
+            // `verify` is the documented CI/pre-deploy gate, and it resolves and
+            // validates the deploy target immediately before running codegen with
+            // it. Dropping the one output that depends on that target let an app
+            // whose nightly cron can never fire on this host verify clean.
+            writeFileSync(join(workdir, "wrangler.jsonc"), VALID_WRANGLER, "utf8");
+            writeFileSync(join(workdir, "lunora.config.ts"), `export default { target: "node" };\n`, "utf8");
+            writeFileSync(
+                join(workdir, "lunora", "crons.ts"),
+                `import { cronJobs } from "@lunora/server";\n\nconst crons = cronJobs();\n\ncrons.daily("nightly-billing-sweep", { hourUTC: 3, minuteUTC: 0 }, internal.messages.purge, {});\n\nexport default crons;\n`,
+                "utf8",
+            );
+            const { logger, recorded } = recordingLogger();
+
+            const result = await runVerifyCommand({ cwd: workdir, logger, typecheck: false });
+
+            expect(result.code).toBe(1);
+            expect(result.errors.some((error) => error.includes("cron"))).toBe(true);
+            expect(recorded.errors.join("\n")).toContain("platform_unsupported_feature");
+        });
+
+        it("reports every platform diagnostic, not just the first", async () => {
+            expect.assertions(3);
+
+            // `--format json` consumers read `errors` — the documented CI gate.
+            // Only the FIRST error-level diagnostic reached the result, so an app
+            // with two unsupported features had one of them silently dropped from
+            // the machine-readable output that gates the pipeline.
+            writeFileSync(join(workdir, "wrangler.jsonc"), VALID_WRANGLER, "utf8");
+            writeFileSync(join(workdir, "lunora.config.ts"), `export default { target: "node" };\n`, "utf8");
+            writeFileSync(
+                join(workdir, "lunora", "crons.ts"),
+                `import { cronJobs } from "@lunora/server";\n\nconst crons = cronJobs();\n\ncrons.daily("nightly-billing-sweep", { hourUTC: 3, minuteUTC: 0 }, internal.messages.purge, {});\n\nexport default crons;\n`,
+                "utf8",
+            );
+            writeFileSync(
+                join(workdir, "lunora", "capture.ts"),
+                `import { action } from "@lunora/server";\n\nexport const capture = action({ args: {}, handler: async (ctx) => ctx.browser.screenshot("https://example.com") });\n`,
+                "utf8",
+            );
+            const { logger } = recordingLogger();
+
+            const result = await runVerifyCommand({ cwd: workdir, logger, typecheck: false });
+
+            expect(result.code).toBe(1);
+            expect(result.errors.some((error) => error.includes("cron"))).toBe(true);
+            expect(result.errors.some((error) => error.toLowerCase().includes("browser"))).toBe(true);
+        });
+
+        describe("--env", () => {
+            /**
+             * `durable_objects` is non-inheritable, so an env-scoped binding is
+             * invisible from the top level. `verify` read the top level only —
+             * the cheap PR-CI gate validated a different surface from the
+             * `deploy --env` that would ship, and an env-only binding naming an
+             * unexported class was never cross-checked at all.
+             */
+            const ENV_SCOPED_WRANGLER = `{
+    "name": "lunora-app",
+    "main": "src/index.ts",
+    "compatibility_date": "2026-04-07",
+    "compatibility_flags": ["nodejs_compat"],
+    "durable_objects": {
+        "bindings": [{ "name": "SHARD", "class_name": "ShardDO" }]
+    },
+    "migrations": [{ "tag": "v1", "new_sqlite_classes": ["ShardDO", "SchedulerDO"] }],
+    "d1_databases": [{ "binding": "DB", "database_name": "x", "database_id": "y" }],
+    "env": {
+        "production": {
+            "durable_objects": {
+                "bindings": [
+                    { "name": "SHARD", "class_name": "ShardDO" },
+                    { "name": "SCHEDULER", "class_name": "SchedulerDO" }
+                ]
+            }
+        }
+    }
+}
+`;
+
+            const seedEnvScopedProject = (): void => {
+                writeFileSync(join(workdir, "wrangler.jsonc"), ENV_SCOPED_WRANGLER, "utf8");
+                mkdirSync(join(workdir, "src"), { recursive: true });
+                writeFileSync(join(workdir, "src", "index.ts"), 'export { ShardDO } from "../lunora/_generated/shard.js";\n', "utf8");
+            };
+
+            it("validates the env.<name> view, catching a binding the top level never declares", async () => {
+                expect.assertions(2);
+
+                seedEnvScopedProject();
+                const { logger } = recordingLogger();
+
+                const result = await runVerifyCommand({ cwd: workdir, env: "production", logger, typecheck: false });
+
+                expect(result.code).toBe(1);
+                expect(result.errors.join("\n")).toContain("SchedulerDO");
+            });
+
+            it("leaves the top-level view green — the env binding is not part of it", async () => {
+                expect.assertions(2);
+
+                seedEnvScopedProject();
+                const { logger } = recordingLogger();
+
+                const result = await runVerifyCommand({ cwd: workdir, logger, typecheck: false });
+
+                expect(result.code).toBe(0);
+                expect(result.errors).toEqual([]);
+            });
+        });
+
         it("returns 1 and surfaces wrangler errors", async () => {
             expect.assertions(3);
 
@@ -127,6 +274,23 @@ describe("lunora verify", () => {
             expect(result.errors.some((error) => error.includes("codegen failed"))).toBe(true);
         });
 
+        it("prints the matched Lunora fix under a recognized codegen error", async () => {
+            expect.assertions(3);
+
+            writeFileSync(join(workdir, "wrangler.jsonc"), VALID_WRANGLER, "utf8");
+            // Valid TypeScript with no `defineSchema()` call → codegen throws the
+            // recognized "defineSchema() not found" error, which carries a fix hint.
+            writeFileSync(join(workdir, "lunora", "schema.ts"), "export const notASchema = 1;", "utf8");
+            const { logger, recorded } = recordingLogger();
+
+            const result = await runVerifyCommand({ cwd: workdir, logger });
+
+            expect(result.code).toBe(1);
+            expect(result.errors.some((error) => error.includes("codegen failed"))).toBe(true);
+            // The fix hint (solution header) is rendered alongside the error bullet.
+            expect(recorded.errors.join("\n")).toContain("No Lunora schema found");
+        });
+
         it("returns 1 when wrangler.jsonc is missing", async () => {
             expect.assertions(3);
 
@@ -159,6 +323,26 @@ describe("lunora verify", () => {
             expect(calls[0]?.descriptor).toMatchObject({
                 args: ["exec", "tsc", "--noEmit", "-p", "tsconfig.json"],
                 command: "pnpm",
+                cwd: workdir,
+            });
+        });
+
+        it("routes tsc through npx when the project declares npm", async () => {
+            expect.assertions(2);
+
+            writeFileSync(join(workdir, "wrangler.jsonc"), VALID_WRANGLER, "utf8");
+            writeFileSync(join(workdir, "tsconfig.json"), TSCONFIG, "utf8");
+            // `detectPackageManager` reads the nearest package.json's `packageManager`.
+            writeFileSync(join(workdir, "package.json"), `{ "packageManager": "npm@10.9.0" }\n`, "utf8");
+            const { logger } = recordingLogger();
+            const { calls, spawner } = createRecordingSpawner(0);
+
+            await runVerifyCommand({ cwd: workdir, logger, spawner });
+
+            expect(calls).toHaveLength(1);
+            expect(calls[0]?.descriptor).toMatchObject({
+                args: ["--", "tsc", "--noEmit", "-p", "tsconfig.json"],
+                command: "npx",
                 cwd: workdir,
             });
         });
@@ -207,55 +391,153 @@ describe("lunora verify", () => {
             expect(calls).toHaveLength(0);
         });
 
-        describe("--format json", () => {
-            it("emits a single parseable JSON document with the structured result", async () => {
-                expect.assertions(5);
+        describe("--health-url probe", () => {
+            it("is skipped by default (no healthUrl) so verify stays offline-safe", async () => {
+                expect.assertions(3);
 
                 writeFileSync(join(workdir, "wrangler.jsonc"), VALID_WRANGLER, "utf8");
                 const { logger } = recordingLogger();
-
-                const stdout = await captureStdout(async () => {
-                    await runVerifyCommand({ cwd: workdir, format: "json", logger, typecheck: false });
+                const healthFetch = vi.fn<() => Promise<{ ok: boolean; status: number }>>(async () => {
+                    return { ok: true, status: 200 };
                 });
 
-                const parsed = JSON.parse(stdout) as { code: number; errors: unknown[]; warnings: unknown[]; wranglerPath: unknown };
+                const result = await runVerifyCommand({ cwd: workdir, healthFetch, logger, typecheck: false });
 
-                expect(parsed.code).toBe(0);
-                expect(Array.isArray(parsed.errors)).toBe(true);
-                expect(Array.isArray(parsed.warnings)).toBe(true);
-                expect(parsed).toHaveProperty("wranglerPath");
-                expect(parsed.errors).toEqual([]);
+                expect(result.code).toBe(0);
+                // No healthUrl → the probe never fires.
+                expect(healthFetch).not.toHaveBeenCalled();
+                expect(result.errors).toEqual([]);
             });
 
-            it("serializes errors into the JSON document on failure", async () => {
-                expect.assertions(2);
-
-                // No wrangler.jsonc → validation error.
-                const { logger } = recordingLogger();
-
-                const stdout = await captureStdout(async () => {
-                    await runVerifyCommand({ cwd: workdir, format: "json", logger, typecheck: false });
-                });
-
-                const parsed = JSON.parse(stdout) as { code: number; errors: string[] };
-
-                expect(parsed.code).toBe(1);
-                expect(parsed.errors.length).toBeGreaterThan(0);
-            });
-
-            it("rejects an unknown --format the same way logs does", async () => {
+            it("passes when the deployment's /_lunora/health returns 200", async () => {
                 expect.assertions(3);
 
+                writeFileSync(join(workdir, "wrangler.jsonc"), VALID_WRANGLER, "utf8");
                 const { logger, recorded } = recordingLogger();
-
-                const stdout = await captureStdout(async () => {
-                    const result = await runVerifyCommand({ cwd: workdir, format: "yaml", logger, typecheck: false });
-
-                    expect(result.error).toBeDefined();
+                const healthFetch = vi.fn<() => Promise<{ ok: boolean; status: number }>>(async () => {
+                    return { ok: true, status: 200 };
                 });
 
-                expect(stdout).toBe("");
-                expect(recorded.errors.some((line) => line.includes('unknown --format "yaml" — expected pretty | json'))).toBe(true);
+                const result = await runVerifyCommand({
+                    cwd: workdir,
+                    healthFetch,
+                    healthUrl: "https://my-app.workers.dev",
+                    logger,
+                    typecheck: false,
+                });
+
+                expect(result.code).toBe(0);
+                expect(healthFetch).toHaveBeenCalledWith("https://my-app.workers.dev/_lunora/health");
+                expect(recorded.successes.join("\n")).toContain("health probe ok");
+            });
+
+            it("fails red when the health endpoint returns 503", async () => {
+                expect.assertions(3);
+
+                writeFileSync(join(workdir, "wrangler.jsonc"), VALID_WRANGLER, "utf8");
+                const { logger } = recordingLogger();
+                const healthFetch = vi.fn<() => Promise<{ ok: boolean; status: number }>>(async () => {
+                    return { ok: false, status: 503 };
+                });
+
+                const result = await runVerifyCommand({
+                    cwd: workdir,
+                    healthFetch,
+                    healthUrl: "https://my-app.workers.dev/",
+                    logger,
+                    typecheck: false,
+                });
+
+                expect(result.code).toBe(1);
+                expect(result.errors.some((error) => error.includes("health probe failed"))).toBe(true);
+                // A trailing slash on the base URL doesn't double up in the probed URL.
+                expect(healthFetch).toHaveBeenCalledWith("https://my-app.workers.dev/_lunora/health");
+            });
+
+            it("fails red when the probe can't reach the deployment", async () => {
+                expect.assertions(2);
+
+                writeFileSync(join(workdir, "wrangler.jsonc"), VALID_WRANGLER, "utf8");
+                const { logger } = recordingLogger();
+                const healthFetch = vi.fn<() => Promise<{ ok: boolean; status: number }>>(async () => {
+                    throw new Error("ECONNREFUSED");
+                });
+
+                const result = await runVerifyCommand({
+                    cwd: workdir,
+                    healthFetch,
+                    healthUrl: "https://my-app.workers.dev",
+                    logger,
+                    typecheck: false,
+                });
+
+                expect(result.code).toBe(1);
+                expect(result.errors.some((error) => error.includes("could not reach"))).toBe(true);
+            });
+        });
+
+        describe("--format json", () => {
+            it("emits a single parseable JSON envelope with the structured result", async () => {
+                expect.assertions(5);
+
+                writeFileSync(join(workdir, "wrangler.jsonc"), VALID_WRANGLER, "utf8");
+
+                const { code, document } = await runExecute<VerifyOptions, VerifyCommandData>(execute, {
+                    commandName: "verify",
+                    cwd: workdir,
+                    options: { format: "json", typecheck: false },
+                });
+
+                expect(code).toBe(0);
+                expect(document?.code).toBe(0);
+                expect(Array.isArray(document?.data?.warnings)).toBe(true);
+                expect(document?.data).toHaveProperty("wranglerPath");
+                expect(document?.data?.errors).toEqual([]);
+            });
+
+            /**
+             * A failure has to answer in the same shape a success does. Before the
+             * envelope, a failed command put NOTHING on stdout under `--format
+             * json` — the exit code said "it broke" and the reason existed only as
+             * English prose on stderr, which is exactly what the flag exists to
+             * avoid.
+             */
+            it("emits the envelope on failure too, with the reason in it", async () => {
+                expect.assertions(4);
+
+                // No wrangler.jsonc → validation error.
+                const { code, document } = await runExecute<VerifyOptions, VerifyCommandData>(execute, {
+                    commandName: "verify",
+                    cwd: workdir,
+                    options: { format: "json", typecheck: false },
+                });
+
+                expect(code).toBe(1);
+                expect(document?.code).toBe(1);
+                expect(document?.data?.errors.length).toBeGreaterThan(0);
+                expect(document?.error).toBeDefined();
+            });
+
+            /**
+             * `runVerifyCommand` returns for an unresolved `--target` before it
+             * reaches its reporting tail, so this is the path a serialization
+             * written inside the command body would have skipped.
+             */
+            it("emits the envelope for an unresolved --target, with the reason in it", async () => {
+                expect.assertions(4);
+
+                writeFileSync(join(workdir, "wrangler.jsonc"), VALID_WRANGLER, "utf8");
+
+                const { code, document } = await runExecute<VerifyOptions, VerifyCommandData>(execute, {
+                    commandName: "verify",
+                    cwd: workdir,
+                    options: { format: "json", target: "nope", typecheck: false },
+                });
+
+                expect(code).toBe(EXIT_CODE.USAGE);
+                expect(document?.code).toBe(EXIT_CODE.USAGE);
+                expect(document?.error).toContain("unknown deploy target");
+                expect(document?.data?.errors.join(" ")).toContain("unknown deploy target");
             });
         });
     });

@@ -17,13 +17,20 @@
  * `Headers`/`URL`, so it unit-tests under plain Node without workerd.
  */
 
+import { isEnvDisabled, isEnvEnabled } from "../../../shared/env-flag";
+import { LunoraError } from "./errors";
+
 /** Per-header overrides for {@link SecurityHeadersOptions}. `false` omits the header. */
 interface SecurityHeadersOptions {
     /**
      * `Content-Security-Policy`. Omitted (`undefined`) applies a restrictive
-     * default to **non-HTML** responses only, so an SSR page is never broken by
-     * a policy it didn't opt into. Pass a string to apply that policy to every
-     * response (HTML included); `false` to never send one.
+     * `default-src 'none'` policy to **non-HTML** responses, and a conservative
+     * hardening policy to **HTML** responses (`base-uri 'none'; frame-ancestors
+     * 'self'; object-src 'none'`) — this does NOT set `default-src`/`script-src`,
+     * so it never blocks an SSR page's own scripts/styles/images/fetches, it only
+     * locks down the `base` element, framing (mirroring the `SAMEORIGIN`
+     * X-Frame-Options default), and legacy plugins. Pass a string to apply that
+     * exact policy to every response (HTML included); `false` to never send one.
      */
     csp?: string | false;
     /** `X-Frame-Options` (clickjacking). Defaults to `SAMEORIGIN`. `false` omits it. */
@@ -40,7 +47,12 @@ interface SecurityHeadersOptions {
 interface CorsOptions {
     /** Echo `Access-Control-Allow-Credentials: true`. Incompatible with a `*` allowlist. */
     allowCredentials?: boolean;
-    /** Request headers permitted on the actual request (preflight `Allow-Headers`). */
+
+    /**
+     * Extra request headers permitted on the actual request (preflight
+     * `Allow-Headers`). Always added to the headers `@lunora/client` sends on
+     * its own, which cannot be removed.
+     */
     allowedHeaders?: string[];
     /** Methods permitted cross-origin (preflight `Allow-Methods`). */
     allowedMethods?: string[];
@@ -52,6 +64,23 @@ interface CorsOptions {
 
 /** Origin/CSRF guard configuration. */
 interface CsrfOptions {
+    /**
+     * Whether a loopback `Origin` is trusted **when the worker itself is serving on
+     * loopback**. Defaults to `true`.
+     *
+     * This is the local-development shape: the browser loads the app from the dev
+     * server on `localhost:3000` which proxies `/_lunora` to wrangler on
+     * `localhost:8787`. With `changeOrigin`, the worker sees its own URL as
+     * `:8787` while the browser's `Origin` stays `:3000`, so the two don't match and
+     * the cookie-bearing WS upgrade is rejected — the app then hangs on its loading
+     * state with no clue why. Both ends are loopback, so nothing cross-site can
+     * reach them.
+     *
+     * It cannot loosen production: the exemption requires the worker's OWN origin to
+     * be loopback, which a deployed worker's never is. Set `false` for a hardened
+     * local setup that wants the strict same-origin rule.
+     */
+    allowLoopback?: boolean;
     /** Extra origins (beyond same-origin and the CORS allowlist) accepted on unsafe cookie requests. */
     trustedOrigins?: string[];
 }
@@ -71,7 +100,7 @@ interface SecurityOptions {
 
 interface ResolvedHeaders {
     coop: string | undefined;
-    csp: { htmlToo: boolean; value: string } | undefined;
+    csp: { htmlValue: string | undefined; value: string } | undefined;
     enabled: boolean;
     frameOptions: string | undefined;
     hsts: string | undefined;
@@ -99,6 +128,7 @@ interface ResolvedCors {
 }
 
 interface ResolvedCsrf {
+    allowLoopback: boolean;
     enabled: boolean;
     trustedOrigins: string[];
 }
@@ -112,10 +142,60 @@ interface ResolvedSecurity {
 
 const DEFAULT_CSP = "default-src 'none'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'";
 
+/**
+ * Conservative default CSP for HTML responses, derived from the resolved
+ * `frameOptions` so the two framing controls agree — a static `frame-ancestors
+ * 'self'` would otherwise *weaken* an `X-Frame-Options: DENY` policy, since
+ * modern browsers prefer CSP `frame-ancestors` over the legacy header.
+ * Deliberately omits `default-src`/`script-src`/`style-src`/`connect-src`/
+ * `form-action` so it never breaks an SSR page's own resources or cross-origin
+ * form posts (e.g. OAuth redirects); it only locks the `base` element's href,
+ * forbids legacy plugins, and mirrors the framing policy: `DENY` → `'none'`,
+ * `SAMEORIGIN` → `'self'`, disabled (`frameOptions: false`) → no
+ * `frame-ancestors` (framing left unrestricted, matching the absent header).
+ * Operators wanting a strict HTML policy pass an explicit `csp` string.
+ */
+const htmlCspFor = (frameOptions: string | undefined): string => {
+    const parts = ["base-uri 'none'", "object-src 'none'"];
+
+    if (frameOptions === "DENY") {
+        parts.push("frame-ancestors 'none'");
+    } else if (frameOptions === "SAMEORIGIN") {
+        parts.push("frame-ancestors 'self'");
+    }
+
+    return parts.join("; ");
+};
+
 const DEFAULT_PERMISSIONS_POLICY =
     "accelerometer=(), autoplay=(), camera=(), display-capture=(), geolocation=(), gyroscope=(), magnetometer=(), microphone=(), payment=(), usb=()";
 
-const DEFAULT_CORS_HEADERS = ["Authorization", "Content-Type", "X-D1-Bookmark", "X-Lunora-Mutation-Id"];
+/**
+ * Request headers a cross-origin caller may send by default.
+ *
+ * This is the allowlist the preflight intersects against, with no wildcard, so
+ * every header `@lunora/client` attaches on its own has to be here — a browser
+ * blocks the whole request over one unlisted name. That makes the list part of
+ * the client's wire contract, not a security knob to trim: each entry is a
+ * header the SDK sends unprompted, and omitting one breaks exactly the apps
+ * that configure `security.cors` (i.e. those on a separate frontend domain).
+ */
+const DEFAULT_CORS_HEADERS = [
+    "Authorization",
+    "Content-Type",
+    "X-D1-Bookmark",
+    "X-Lunora-Client-Id",
+    "X-Lunora-Client-Seq",
+    // Sent on replayed offline writes under a cookie session; see
+    // `assertExpectedSubject` in `create-worker.ts`.
+    "X-Lunora-Expect-Subject",
+    "X-Lunora-Min-Seq",
+    "X-Lunora-Mutation-Id",
+    // The REST surface's documented header form of `?shardKey=` (`rest-routes.ts`
+    // reads it). Omitted, a browser SPA on an allowlisted origin that picked the
+    // header over the query parameter was blocked at preflight.
+    "X-Lunora-Shard-Key",
+];
 
 const DEFAULT_CORS_METHODS = ["DELETE", "GET", "HEAD", "PATCH", "POST", "PUT"];
 
@@ -142,16 +222,16 @@ const resolveHstsHeader = (hsts: SecurityHeadersOptions["hsts"]): string | undef
 /**
  * @returns the resolved CSP config object, or `undefined` when CSP is disabled.
  */
-const resolveCspHeader = (csp: SecurityHeadersOptions["csp"]): ResolvedHeaders["csp"] => {
+const resolveCspHeader = (csp: SecurityHeadersOptions["csp"], htmlDefault: string): ResolvedHeaders["csp"] => {
     if (csp === false) {
         return undefined;
     }
 
     if (typeof csp === "string") {
-        return { htmlToo: true, value: csp };
+        return { htmlValue: csp, value: csp };
     }
 
-    return { htmlToo: false, value: DEFAULT_CSP };
+    return { htmlValue: htmlDefault, value: DEFAULT_CSP };
 };
 
 const resolveHeaders = (input: boolean | SecurityHeadersOptions | undefined): ResolvedHeaders => {
@@ -168,12 +248,14 @@ const resolveHeaders = (input: boolean | SecurityHeadersOptions | undefined): Re
     }
 
     const options: SecurityHeadersOptions = input === undefined || input === true ? {} : input;
+    // Resolve framing first so the default HTML CSP's `frame-ancestors` tracks it.
+    const frameOptions = options.frameOptions === false ? undefined : (options.frameOptions ?? "SAMEORIGIN");
 
     return {
         coop: "same-origin",
-        csp: resolveCspHeader(options.csp),
+        csp: resolveCspHeader(options.csp, htmlCspFor(frameOptions)),
         enabled: true,
-        frameOptions: options.frameOptions === false ? undefined : (options.frameOptions ?? "SAMEORIGIN"),
+        frameOptions,
         hsts: resolveHstsHeader(options.hsts),
         permissionsPolicy: options.permissionsPolicy === false ? undefined : (options.permissionsPolicy ?? DEFAULT_PERMISSIONS_POLICY),
         referrerPolicy: options.referrerPolicy === false ? undefined : (options.referrerPolicy ?? "strict-origin-when-cross-origin"),
@@ -204,13 +286,36 @@ const resolveCors = (input: CorsOptions | false | undefined): ResolvedCors => {
     if (typeof origins === "function") {
         // A custom predicate is an explicit developer decision, so it counts for CSRF
         // trust in both directions.
-        isAllowed = origins;
-        isExplicitlyAllowed = origins;
+        //
+        // Wrapped ONCE here rather than at the three consumers (preflight, header
+        // reflection, and the CSRF trusted-origin decision), all of which test it
+        // truthily. It is app code: a predicate written as `origins.indexOf(o)` or
+        // `TRUSTED.find(...)` returns a number or an object, and every non-`true`
+        // truthy value would allow the origin.
+        const allowsOrigin = (origin: string): boolean => (origins(origin) as unknown) === true;
+
+        isAllowed = allowsOrigin;
+        isExplicitlyAllowed = allowsOrigin;
+
+        // A predicate bypasses the array path's wildcard+credentials guard, and it
+        // is also assigned to `isExplicitlyAllowed` above — meaning the CSRF and
+        // WebSocket origin checks trust it even when CORS credentials are off. An
+        // over-broad predicate (e.g. `() => true`, or a loose `endsWith`) therefore
+        // admits cookie-bearing form posts and WS upgrades from any origin — and,
+        // with `allowCredentials: true`, additionally reflects any Origin with
+        // credentials (the exact combo the array path forbids at construction).
+        // We can't statically prove a predicate is safe, so warn loudly either way.
+        const credentialsNote = allowCredentials ? " AND reflects matching origins with credentials (`allowCredentials: true`)" : "";
+
+        // eslint-disable-next-line no-console -- surface a security-sensitive CORS configuration at construction
+        console.warn(
+            `@lunora/runtime: security.cors uses a custom \`allowedOrigins\` predicate. It is trusted by the CSRF and WebSocket origin checks${credentialsNote} — ensure it matches ONLY trusted origins by exact equality; an over-broad predicate (e.g. \`() => true\`, or \`endsWith\`/\`includes\` checks) defeats the allowlist.`,
+        );
     } else {
         const originsList = origins;
 
         if (originsList.includes("*") && allowCredentials) {
-            throw new Error(
+            throw new LunoraError(
                 '@lunora/runtime: security.cors cannot combine a wildcard origin ("*") with allowCredentials: true — browsers reject it and it defeats the allowlist.',
             );
         }
@@ -223,7 +328,11 @@ const resolveCors = (input: CorsOptions | false | undefined): ResolvedCors => {
 
     return {
         allowCredentials,
-        allowedHeaders: input.allowedHeaders ?? DEFAULT_CORS_HEADERS,
+        // An app's list ADDS to the SDK's own headers rather than replacing
+        // them: each default is one `@lunora/client` sends unprompted, and a
+        // custom list written before one of them existed fails that request's
+        // preflight — which the client can only read as a network error.
+        allowedHeaders: [...new Set([...DEFAULT_CORS_HEADERS, ...(input.allowedHeaders ?? [])])],
         allowedMethods: input.allowedMethods ?? DEFAULT_CORS_METHODS,
         enabled: true,
         isAllowed,
@@ -234,25 +343,13 @@ const resolveCors = (input: CorsOptions | false | undefined): ResolvedCors => {
 
 const resolveCsrf = (input: boolean | CsrfOptions | undefined): ResolvedCsrf => {
     if (input === false) {
-        return { enabled: false, trustedOrigins: [] };
+        return { allowLoopback: false, enabled: false, trustedOrigins: [] };
     }
 
     const options: CsrfOptions = input === undefined || input === true ? {} : input;
 
-    return { enabled: true, trustedOrigins: options.trustedOrigins ?? [] };
+    return { allowLoopback: options.allowLoopback ?? true, enabled: true, trustedOrigins: options.trustedOrigins ?? [] };
 };
-
-/** Env values that read as "disable this layer" for the `LUNORA_SECURITY_*` opt-out vars. */
-const DISABLED_ENV_VALUES = new Set(["0", "disabled", "false", "no", "off"]);
-
-/** Env values that read as "on" for a boolean-ish flag like `LUNORA_CORS_ALLOW_CREDENTIALS`. */
-const ENABLED_ENV_VALUES = new Set(["1", "enabled", "on", "true", "yes"]);
-
-/** True when an env var is explicitly set to a disable value (`off`, `false`, `0`, …). */
-const isEnvDisabled = (value: unknown): boolean => typeof value === "string" && DISABLED_ENV_VALUES.has(value.trim().toLowerCase());
-
-/** True when an env var is explicitly set to an enable value (`on`, `true`, `1`, …). */
-const isEnvEnabled = (value: unknown): boolean => typeof value === "string" && ENABLED_ENV_VALUES.has(value.trim().toLowerCase());
 
 /**
  * Build a {@link CorsOptions} from the deployment env when CORS isn't configured
@@ -302,8 +399,16 @@ const parseEnvCors = (env: Record<string, unknown> | undefined): CorsOptions | u
  * and `LUNORA_ALLOWED_ORIGINS` / `LUNORA_CORS_ALLOW_CREDENTIALS` configure CORS
  * when it isn't set in code. **Code config wins** — an explicit `security.*` in
  * {@link SecurityOptions} overrides the matching env knob — so the env var only
- * relaxes or fills the secure default, and the DO security audit (which reads the
- * same vars) and the running worker stay in agreement.
+ * relaxes or fills the secure default.
+ *
+ * That precedence is exactly why the two can disagree, so pick one place per
+ * layer. The Durable Object's security audit (`buildSecurityAudit`) sees only
+ * `env` — the DO has no view of what was passed to `createWorker` — so
+ * `security: { headers: true }` in code plus an `off` value for
+ * `LUNORA_SECURITY_HEADERS` in env leaves the worker applying the headers while the audit reports
+ * `security-headers-disabled`, and the same holds for `csrf`. The audit is
+ * reporting the deployment var honestly; it is not a claim about the resolved
+ * worker. Setting a layer in code means leaving its env var unset.
  */
 const resolveSecurity = (security: SecurityOptions | undefined, env?: Record<string, unknown>): ResolvedSecurity => {
     const headers = security?.headers ?? (isEnvDisabled(env?.["LUNORA_SECURITY_HEADERS"]) ? false : undefined);
@@ -321,6 +426,25 @@ const resolveSecurity = (security: SecurityOptions | undefined, env?: Record<str
  * Origin component of a URL string (e.g. a `Referer`), or `undefined` if unparseable.
  * @returns the origin string, or `undefined` when `value` is null/empty/unparseable.
  */
+/** Hostnames that can only ever be the local machine. */
+const LOOPBACK_HOSTNAMES = new Set(["127.0.0.1", "::1", "[::1]", "localhost"]);
+
+/**
+ * Whether `origin` addresses the local machine. Matches `localhost`, IPv4
+ * `127.0.0.1`, and IPv6 `[::1]` on any port/scheme.
+ *
+ * Deliberately narrow: a `*.localhost` subdomain or any other 127/8 address is NOT
+ * matched, because those can be pointed at by public DNS and are a known way to
+ * smuggle a "local" origin. Only the three canonical spellings count.
+ */
+const isLoopbackOrigin = (origin: string): boolean => {
+    try {
+        return LOOPBACK_HOSTNAMES.has(new URL(origin).hostname);
+    } catch {
+        return false;
+    }
+};
+
 const originOf = (value: string | null): string | undefined => {
     if (!value) {
         return undefined;
@@ -352,8 +476,40 @@ const isTrustedOrigin = (origin: string, selfOrigin: string, resolved: ResolvedS
         return true;
     }
 
+    // Dev-proxy exemption: both ends on loopback. Gated on the worker's OWN origin
+    // being loopback too, so a deployed worker (whose origin never is) cannot reach
+    // this branch. See `CsrfOptions.allowLoopback`.
+    if (resolved.csrf.allowLoopback && isLoopbackOrigin(selfOrigin) && isLoopbackOrigin(origin)) {
+        return true;
+    }
+
     return resolved.cors.enabled && resolved.cors.isExplicitlyAllowed(origin);
 };
+
+/**
+ * The 403 body for a rejected origin.
+ *
+ * Names the origin received, the origin expected, and the knob that fixes it. The
+ * old body said only "cross-origin state-changing request rejected", which behind a
+ * dev proxy is actively misleading: the request wasn't cross-*site*, the ports
+ * simply differed, and there was nothing in the response pointing at
+ * `security.csrf.trustedOrigins`.
+ */
+const forbiddenOriginResponse = (what: string, received: string | undefined, selfOrigin: string): Response =>
+    Response.json(
+        {
+            error: {
+                code: "FORBIDDEN_ORIGIN",
+                expectedOrigin: selfOrigin,
+                message:
+                    `${what} rejected: Origin ${received === undefined ? "was missing" : `"${received}"`} is not trusted (this worker serves "${selfOrigin}"). ` +
+                    "Add it to `security.csrf.trustedOrigins` (or LUNORA_ALLOWED_ORIGINS) if it is yours. " +
+                    "Behind a dev proxy this usually means the proxy rewrote the host: keep both ends on loopback, or list the dev-server origin.",
+                receivedOrigin: received,
+            },
+        },
+        { headers: { "content-type": "application/json" }, status: 403 },
+    );
 
 /**
  * CSRF defense: reject an unsafe (state-changing), **cookie-authenticated**
@@ -378,17 +534,64 @@ const enforceOrigin = (request: Request, resolved: ResolvedSecurity): Response |
         return undefined;
     }
 
-    return Response.json(
-        { error: { code: "FORBIDDEN_ORIGIN", message: "cross-origin state-changing request rejected" } },
-        { headers: { "content-type": "application/json" }, status: 403 },
-    );
+    return forbiddenOriginResponse("cross-origin state-changing request", source, selfOrigin);
 };
+
+/**
+ * CSRF defense for the WebSocket upgrade (Cross-Site WebSocket Hijacking).
+ *
+ * A WS handshake is an HTTP `GET`, so {@link enforceOrigin}'s safe-method
+ * exemption never fires for it — yet the browser auto-attaches the session
+ * cookie to the handshake and WebSocket connections are NOT governed by
+ * CORS/SOP. Without an explicit `Origin` check any page can open
+ * `wss://app/_lunora/ws`, authenticate as the logged-in victim, and read the
+ * victim's live queries + issue mutations as them. This guard closes that hole.
+ *
+ * Scoped to cookie-bearing upgrades — the only vector CSWSH can ride (a browser
+ * attaches cookies but never a bearer token). Bearer/token/server-to-server
+ * upgrades (no `Cookie`) are exempt. A browser ALWAYS sends `Origin` on a WS
+ * handshake, so a missing/untrusted `Origin` on a cookie-bearing upgrade fails
+ * closed (mirrors {@link enforceOrigin}).
+ * @returns a `403` Response when the upgrade origin is untrusted, or `undefined` when it is allowed.
+ */
+const enforceWebSocketOrigin = (request: Request, resolved: ResolvedSecurity): Response | undefined => {
+    if (!resolved.csrf.enabled || !request.headers.get("cookie")) {
+        return undefined;
+    }
+
+    const selfOrigin = new URL(request.url).origin;
+    const source = originOf(request.headers.get("origin"));
+
+    if (source !== undefined && isTrustedOrigin(source, selfOrigin, resolved)) {
+        return undefined;
+    }
+
+    return forbiddenOriginResponse("cross-origin websocket upgrade", source, selfOrigin);
+};
+
+/**
+ * Response headers a cross-origin caller may READ.
+ *
+ * A browser hides every response header except the CORS-safelisted ones unless
+ * it is named here, and `response.headers.get(...)` then returns `null` with no
+ * error anywhere. That failure is silent by construction, so this list is not a
+ * policy knob: it is exactly the set of headers `@lunora/client` reads back,
+ * and a header the SDK consumes but that is missing here does not break loudly
+ * — it degrades the guarantee the header exists to provide.
+ *
+ * `x-d1-bookmark` carries D1 read-your-writes; `x-lunora-shard-key` is the
+ * canonical shard a dispatch resolved to, which the client keys its replica
+ * bookmark by; `x-lunora-edge-cache` is the REST edge-cache hit indicator, which
+ * the docs tell callers to read and a browser could not otherwise see.
+ */
+const DEFAULT_CORS_EXPOSED_HEADERS = ["X-D1-Bookmark", "X-Lunora-Edge-Cache", "X-Lunora-Shard-Key"];
 
 /** Build the `Access-Control-Allow-*` headers for an allowed cross-origin request. */
 const corsResponseHeaders = (origin: string, cors: ResolvedCors): Headers => {
     const headers = new Headers();
 
     headers.set("access-control-allow-origin", origin);
+    headers.set("access-control-expose-headers", DEFAULT_CORS_EXPOSED_HEADERS.join(", "));
     headers.append("vary", "Origin");
 
     if (cors.allowCredentials) {
@@ -420,7 +623,27 @@ const handleCorsPreflight = (request: Request, resolved: ResolvedSecurity): Resp
     const requested = request.headers.get("access-control-request-headers");
 
     headers.set("access-control-allow-methods", resolved.cors.allowedMethods.join(", "));
-    headers.set("access-control-allow-headers", requested ?? resolved.cors.allowedHeaders.join(", "));
+
+    // Enforce the configured allowlist rather than echoing the browser's
+    // requested headers verbatim: intersect the requested list against
+    // `allowedHeaders` case-insensitively (preserving the requested casing),
+    // so a client can never widen the advertised set beyond what the developer
+    // permitted. `allowedHeaders` has no wildcard support, so none is honored.
+    let allowedHeaders: string;
+
+    if (requested === null) {
+        allowedHeaders = resolved.cors.allowedHeaders.join(", ");
+    } else {
+        const permitted = new Set(resolved.cors.allowedHeaders.map((name) => name.toLowerCase()));
+
+        allowedHeaders = requested
+            .split(",")
+            .map((name) => name.trim())
+            .filter((name) => name.length > 0 && permitted.has(name.toLowerCase()))
+            .join(", ");
+    }
+
+    headers.set("access-control-allow-headers", allowedHeaders);
     headers.set("access-control-max-age", String(resolved.cors.maxAge));
 
     // eslint-disable-next-line unicorn/no-null -- the Fetch API requires `null` (not `undefined`) for an empty 204 body
@@ -462,8 +685,15 @@ const applyBaselineHeaders = (headers: Headers, request: Request, response: Resp
         setIfAbsent(headers, "cross-origin-opener-policy", config.coop);
     }
 
-    if (config.csp !== undefined && (config.csp.htmlToo || !isHtmlResponse(response))) {
-        setIfAbsent(headers, "content-security-policy", config.csp.value);
+    if (config.csp !== undefined) {
+        // HTML responses get the (possibly conservative) HTML policy; everything
+        // else gets the strict policy. `htmlValue` may be undefined only in
+        // future configs that opt HTML out entirely.
+        const cspValue = isHtmlResponse(response) ? config.csp.htmlValue : config.csp.value;
+
+        if (cspValue !== undefined) {
+            setIfAbsent(headers, "content-security-policy", cspValue);
+        }
     }
 };
 
@@ -514,4 +744,4 @@ const decorateResponse = (response: Response, request: Request, resolved: Resolv
 };
 
 export type { CorsOptions, CsrfOptions, ResolvedSecurity, SecurityHeadersOptions, SecurityOptions };
-export { decorateResponse, enforceOrigin, handleCorsPreflight, resolveSecurity };
+export { decorateResponse, enforceOrigin, enforceWebSocketOrigin, handleCorsPreflight, resolveSecurity };

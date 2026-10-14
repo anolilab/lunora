@@ -64,6 +64,33 @@ describe("lunora add — whole-file reconcile", () => {
         expect(existsSync(join(workdir, "lunora", ".lunora-registry.json"))).toBe(true);
     });
 
+    it("keeps the provenance of files already written when a later item throws", async () => {
+        expect.assertions(4);
+
+        // A second item whose source file is missing: reconciling it throws
+        // part-way through the plan, AFTER `foo` has already been written.
+        mkdirSync(join(registryRoot, "bar"), { recursive: true });
+        writeFileSync(
+            join(registryRoot, "bar", "registry.json"),
+            JSON.stringify({ files: [{ from: "gone.ts", merge: "create-or-skip", to: "lunora/bar/index.ts" }], name: "bar" }, undefined, 2),
+            "utf8",
+        );
+
+        const failed = await runAddCommand({ cwd: workdir, from: registryRoot, logger: silentLogger(), names: ["foo", "bar"], yes: true });
+
+        expect(failed.code).toBe(1);
+        // `foo` landed on disk before the throw…
+        expect(readFileSync(destination(), "utf8")).toContain("v = 1");
+        // …so its provenance must have been persisted, or every later add sees an
+        // untracked file and refuses forever.
+        expect(existsSync(join(workdir, "lunora", ".lunora-registry.json"))).toBe(true);
+
+        setUpstream("export const v = 2;\n");
+        await addFoo();
+
+        expect(readFileSync(destination(), "utf8")).toContain("v = 2");
+    });
+
     it("upgrades a file the user has not edited", async () => {
         expect.assertions(2);
 

@@ -1,0 +1,481 @@
+---
+title: Migrating from Supabase
+description: Side-by-side mapping — Postgres tables, RLS, Edge Functions, Auth, Storage, and Realtime.
+related:
+    - to: /docs/concepts/schema
+    - to: /docs/concepts/sharding
+    - to: /docs/concepts/rls
+    - to: /docs/packages/auth
+      note: "sessions, OAuth, password flows"
+    - to: /docs/packages/cli
+      note: "`lunora migrate generate`, `lunora run`"
+    - to: /docs/architecture
+---
+
+Supabase and Lunora both give you a typed backend with auth, storage,
+functions, and realtime on top of a relational store, so much of your mental
+model carries over directly, and **both have RLS**. The differences are where
+they sit: Supabase is a managed Postgres with an auto-generated REST/GraphQL
+API that clients query directly; Lunora is a **code-first** backend on your own
+Cloudflare account where reads and writes go through typed server functions and
+the schema is declared in TypeScript.
+
+Two shifts shape the whole migration:
+
+1. **Schema moves from SQL migrations to `defineSchema`.** Your tables already
+   have a shape, so you're translating a `CREATE TABLE` into a `defineTable`,
+   not inventing structure. The payoff is end-to-end types and lint-enforced
+   indexes.
+2. **Clients call functions, not the database.** There's no `supabase.from(...)`
+   on the client. Every read is a `query` and every write is a `mutation`;
+   `supabase-js`'s table access becomes typed hooks over those functions.
+
+This guide is a side-by-side mapping plus the gotchas you'll hit porting a
+Supabase app.
+
+## At a glance
+
+| Concern         | Supabase                                | Lunora                                    |
+| --------------- | --------------------------------------- | ----------------------------------------- |
+| Hosting         | Supabase Cloud (managed Postgres)       | Your Cloudflare account                   |
+| Backend runtime | PostgREST + Edge Functions (Deno)       | Cloudflare Workers + Durable Objects      |
+| Database        | Postgres                                | Durable Object SQLite (`__root__`) + D1   |
+| Schema          | SQL migrations                          | `lunora/schema.ts` (`defineSchema`)       |
+| Client reads    | `supabase.from(...).select()`           | server `query` + `useQuery`               |
+| Client writes   | `supabase.from(...).insert()` (RLS)     | server `mutation` only                    |
+| Server logic    | Edge Functions (`supabase/functions/*`) | `query` / `mutation` / `action`           |
+| Row security    | RLS policies (SQL)                      | RLS in code + `ctx.auth`                  |
+| Realtime        | `postgres_changes` / broadcast          | `useQuery` (live by default)              |
+| Auth            | Supabase Auth (GoTrue)                  | [`@lunora/auth`](/docs/packages/auth)     |
+| File storage    | Supabase Storage (S3-backed)            | `ctx.storage` (backed by R2)              |
+| Scheduled work  | `pg_cron` / scheduled Edge Functions    | `ctx.scheduler.runAfter` / cron           |
+| Cross-tenant    | one Postgres, RLS by `tenant_id`        | `.global()` tables in D1                  |
+| Per-tenant      | one Postgres, RLS by `user_id`          | `.shardBy("field")` tables in DOs         |
+| Web SDK         | `@supabase/supabase-js`                 | `@lunora/client` + `@lunora/react`        |
+| Deploy          | `supabase db push` / dashboard          | `lunora deploy` (wraps `wrangler deploy`) |
+
+## Schema
+
+Your Postgres tables translate directly: the DSL is different but the shape
+is the same. `defineSchema`/`defineTable` come from `@lunora/server`, columns
+become validators, and each `CREATE INDEX` becomes a `.index(name, [fields])`.
+
+Supabase (SQL migration):
+
+```sql
+create table messages (
+    id uuid primary key default gen_random_uuid(),
+    channel_id uuid references channels (id),
+    text text not null,
+    author_id uuid references auth.users (id),
+    created_at timestamptz default now()
+);
+create index messages_by_channel on messages (channel_id);
+```
+
+Lunora:
+
+```ts
+import { defineSchema, defineTable, v } from "lunorash/server";
+
+export const schema = defineSchema({
+    messages: defineTable({
+        channelId: v.id("channels"),
+        text: v.string(),
+        authorId: v.string(),
+        createdAt: v.number(),
+    })
+        .shardBy("channelId")
+        .index("by_channel", ["channelId"]),
+});
+```
+
+The new decision is **`.shardBy(field)` vs `.global()` vs neither**. Where
+Supabase keeps everything in one Postgres and partitions logically via RLS,
+Lunora surfaces the physical decision because it determines which Durable
+Object owns the row. Start with neither (everything in `__root__`) and promote
+when you hit the 1 GiB warning. See
+[Concepts: sharding](/docs/concepts/sharding).
+
+Two more translation notes:
+
+- **IDs.** Lunora rows carry a typed `id` (`v.id("messages")`); drop the
+  `uuid`/`gen_random_uuid()` boilerplate.
+- **Timestamps.** There's no `timestamptz`/`now()` default, so populate a
+  numeric `createdAt` (`Date.now()`) yourself in the mutation.
+
+## Reads: `supabase.from(...).select()` → `useQuery`
+
+Supabase clients query Postgres directly through PostgREST; realtime is a
+separate `postgres_changes` subscription you wire up. In Lunora the read is a
+server `query` and `useQuery` **is** the live subscription: one call, with no
+separate realtime channel.
+
+Supabase:
+
+```ts
+// one-shot select
+const { data } = await supabase.from("messages").select("*").eq("channel_id", channelId);
+
+// …plus a separate realtime subscription to stay live
+supabase.channel("messages").on("postgres_changes", { event: "*", schema: "public", table: "messages" }, reload).subscribe();
+```
+
+Lunora:
+
+```ts
+import { useQuery } from "@lunora/react";
+import { api } from "../lunora/_generated/api";
+
+const messages = useQuery(api.messages.list, { channelId });
+// undefined while loading, then the typed array; live-updates automatically
+```
+
+…backed by a server query:
+
+```ts
+import { query, v } from "./_generated/server";
+
+export const list = query.input({ channelId: v.id("channels") }).query(async ({ ctx, args: { channelId } }) => {
+    return ctx.db
+        .query("messages")
+        .withIndex("by_channel", (q) => q.eq("channelId", channelId))
+        .collect();
+});
+```
+
+## Writes: `.insert()` → `mutation`
+
+Supabase clients write Postgres directly, with RLS deciding what's allowed.
+Lunora has no client-side database write: the client **calls a mutation**, and
+the mutation is where validation and authorization live.
+
+Supabase:
+
+```ts
+await supabase.from("messages").insert({ channel_id: channelId, text, author_id: user.id });
+```
+
+Lunora:
+
+```ts
+// client
+import { useMutation } from "@lunora/react";
+const { mutate: send } = useMutation(api.messages.send);
+await send({ channelId, text });
+```
+
+```ts
+// server — mutation is the only write path
+import { LunoraError } from "lunorash/server";
+
+import { mutation, v } from "./_generated/server";
+
+export const send = mutation.input({ channelId: v.id("channels"), text: v.string() }).mutation(async ({ ctx, args }) => {
+    // ctx.auth.userId is null | string — guard it, it does not throw on its own
+    if (!ctx.auth.userId) {
+        throw new LunoraError("UNAUTHORIZED", "not signed in");
+    }
+
+    return ctx.db.insert("messages", { ...args, authorId: ctx.auth.userId, createdAt: Date.now() });
+});
+```
+
+## Row-level security
+
+This is the closest concept between the two products; the difference is where
+policies live. Supabase RLS is SQL `create policy` statements evaluated by
+Postgres on every client query. Lunora RLS is declared **in code** and, because
+every read already goes through a server query, you also have `ctx.auth`
+available for imperative checks.
+
+Supabase:
+
+```sql
+create policy "own messages" on messages
+    for select using (author_id = auth.uid());
+```
+
+Lunora:
+
+```ts
+import { definePolicies, definePolicy, rls } from "lunorash/server";
+
+import { query } from "./_generated/server";
+
+// "you only see messages you authored"
+const ownMessages = definePolicy({
+    table: "messages",
+    on: "read",
+    when: ({ auth }) => ({ authorId: auth.userId }),
+});
+
+export const list = query.use(rls(definePolicies([ownMessages]))).query(async ({ ctx }) => ctx.db.query("messages").collect());
+```
+
+Policies are pure functions bound to a `table` + operation (`on: "read"`,
+`"insert"`, `"update"`, or `"delete"`) and applied per procedure via
+`.use(rls(...))`. A bare `query`/`mutation` sees an unguarded `ctx.db`, so RLS is
+opt-in exactly where you want it — and it covers writes as well as reads. There's
+no separate policy language to keep in sync with the app.
+
+## Edge Functions → actions
+
+Deno Edge Functions that call third-party APIs map to Lunora **actions** (the
+non-transactional tier that can do I/O). Secrets come from `ctx.secrets` instead
+of `Deno.env`.
+
+```ts
+// Supabase: serve(async (req) => { … Deno.env.get("STRIPE_SECRET_KEY") … })
+export const charge = action.input({ orderId: v.string() }).action(async ({ ctx, args }) => {
+    const key = await ctx.secrets.get("STRIPE_SECRET_KEY");
+    // …call Stripe, then persist via a mutation
+});
+```
+
+## Auth
+
+Supabase Auth (GoTrue) becomes [`@lunora/auth`](/docs/packages/auth), an opt-in
+add-on that handles sessions, email/password and OAuth flows, and rotating
+refresh tokens inside a `SessionDO`. Inside functions you read `ctx.auth`
+(userId, claims) the way you'd read `auth.uid()` in a policy or
+`supabase.auth.getUser()` server-side. The client uses `useAuth` in place of
+`supabase.auth.onAuthStateChange`.
+
+If you'd rather keep an existing IdP, any provider that yields a verifiable
+token works; see [`@lunora/cloudflare-access`](/docs/packages/cloudflare-access)
+for the Zero Trust path.
+
+## File storage
+
+Supabase Storage maps to `ctx.storage`, backed by **R2**. Uploads go through a
+Worker-signed `PUT` URL (so your storage rules still apply) and downloads use
+`getUrl` against your `publicBaseUrl`; `getPresignedUrl` is the direct-to-R2
+escape hatch:
+
+```ts
+// Supabase: supabase.storage.from(bucket).upload(path, file)
+const uploadUrl = await ctx.storage.generateUploadUrl(key, { contentType }); // client PUTs the file here
+const src = ctx.storage.getUrl(key); // read back (requires publicBaseUrl configured)
+```
+
+For typed buckets and signed downloads see [`@lunora/storage`](/docs/packages/storage).
+
+## Scheduled work
+
+`pg_cron` jobs and scheduled Edge Functions become
+`ctx.scheduler.runAfter(ms, fn, args)` for one-shot delays, or a declared cron
+job for recurring work. Under the hood Lunora persists schedules in a
+`SchedulerDO`. See [`@lunora/scheduler`](/docs/packages/scheduler).
+
+## Porting checklist
+
+1. **Translate the schema.** Turn each `CREATE TABLE` into a `defineTable` in
+   `lunora/schema.ts`; each `CREATE INDEX` into `.index(...)`. Decide
+   `.global()` / `.shardBy(field)` / neither per table
+   ([Sharding](/docs/concepts/sharding)).
+2. **Move reads server-side.** Every client `supabase.from(...).select()`
+   becomes a `query` the client calls with `useQuery`. Drop the separate
+   `postgres_changes` subscription; `useQuery` is already live.
+3. **Move writes server-side.** Every `.insert()`/`.update()`/`.delete()`
+   becomes a `mutation`; the client calls it via `useMutation`.
+4. **Port RLS.** SQL `create policy` read rules → [Lunora RLS](/docs/concepts/rls);
+   write rules → `ctx.auth` checks at the top of each mutation. Drop the policy
+   SQL.
+5. **Rehome Edge Functions.** Deno functions → `query`/`mutation`/`action`;
+   `Deno.env` → `ctx.secrets`.
+6. **Swap auth + storage.** Supabase Auth → [`@lunora/auth`](/docs/packages/auth)
+   (or an external IdP via `@lunora/cloudflare-access`); Supabase Storage →
+   `ctx.storage`.
+7. **Export & import data.** Dump each table to CSV, then point `lunora import`
+   at the directory. There is no reshape script, and ids are preserved so
+   foreign keys survive. See [Importing your data](#importing-your-data) below. Any
+   `.global()` table needs a `lunora migrate generate init` schema step first.
+8. **Wire the React provider.** Replace the `createClient(...)` init with
+   `<LunoraProvider client={new LunoraClient({ url })}>` (`url` is your Worker's
+   `*.workers.dev` hostname).
+9. **Deploy.** `lunora deploy` builds and calls `wrangler deploy` (data
+   migrations are opt-in: `--migrate`, plus `--migrate-yes` in production). Your data plane now lives in your own Cloudflare account.
+
+## Importing your data
+
+`lunora import --from supabase` reads a directory of CSV dumps and inserts them
+through the admin import endpoint. Ids are preserved verbatim, so every foreign
+key that pointed at a `uuid` still points at it afterwards: there is no
+remapping pass and no ordering problem to solve.
+
+### 1. Dump each table to CSV
+
+```bash
+mkdir supabase-dump && cd supabase-dump
+
+# One file per table. The header row names the columns the importer reads.
+psql "$SUPABASE_DB_URL" -c "\copy public.users  TO 'users.csv'  WITH CSV HEADER"
+psql "$SUPABASE_DB_URL" -c "\copy public.posts  TO 'posts.csv'  WITH CSV HEADER"
+```
+
+The dashboard's per-table CSV export works too. A file's stem becomes the table
+name (`posts.csv` → `posts`), which a mapping can override.
+
+<Callout type="info">
+    CSV is the contract on purpose: every hosted Postgres can produce it, it needs no live database connection during the import, and `COPY`'s quoting rules are
+    unambiguous. The importer distinguishes a NULL from an empty string exactly as Postgres encodes them: an unquoted empty field is NULL, a quoted `""` is a
+    genuine empty string.
+</Callout>
+
+### 2. Generate the column mapping
+
+Postgres types that need converting (timestamps, `jsonb`, `bytea`, `int8`) are
+declared per column. `--scan` samples the dump and proposes them:
+
+```bash
+lunora import ./supabase-dump --from supabase --scan
+```
+
+That writes `lunora/import-supabase.json` for you to review:
+
+```jsonc title="lunora/import-supabase.json"
+{
+    "keyPrefix": "", // optional R2 key prefix for migrated storage objects
+    "tables": {
+        "posts": {
+            "file": "posts.csv", // defaults to <table>.csv
+            "idColumn": "id", // preserved verbatim as _id
+            "types": {
+                "created_at": "timestamp-ms",
+                "metadata": "json",
+                "view_count": "int8-string",
+            },
+        },
+    },
+}
+```
+
+`--scan` is a proposal, not an authority: it only infers a type when _every_
+non-null value in the column agrees, and it never overwrites a mapping you have
+already edited. A column the mapping does not name is copied through untouched.
+
+The reshapes available are `timestamp-ms`, `timestamp-iso`, `json`,
+`bytea-base64`, `int8-string`, `number`, `boolean`, and `text-array`.
+
+<Callout type="warn">
+    A reshape that would lose information **fails the import and names the column** rather than silently rounding. An `int8` past `Number.MAX_SAFE_INTEGER` or a
+    `numeric` with more digits than a double holds will refuse `number` and point you at `int8-string`, which keeps the value whole as a string. This is
+    deliberate: a truncated money column is discovered in production months later, whereas a failed import is fixed in a minute.
+</Callout>
+
+### 3. Import
+
+```bash
+lunora import ./supabase-dump --from supabase --verify
+```
+
+`--verify` checks that every source row is accounted for and exits non-zero if
+any table came up short.
+
+### 4. Users and passwords
+
+Add an `auth` block naming your `auth.users` dump (and `auth.identities`, if you
+have OAuth providers linked):
+
+```jsonc title="lunora/import-supabase.json"
+{
+    "auth": {
+        "file": "auth.users.csv",
+        "identitiesFile": "auth.identities.csv",
+    },
+}
+```
+
+Those become better-auth `user` and `account` rows. Email addresses, verified
+status, display names, avatars, and creation timestamps all carry across.
+
+<Callout type="warn">
+    **Passwords do not migrate, and cannot.** Supabase stores bcrypt hashes; better-auth hashes with something else. There is no honest conversion, so every
+    imported user arrives without a credential and signs in once via "forgot password". Send a reset link to your whole user table on cutover with better-auth's
+    `sendResetPassword`. Plan the announcement before you cut over, not after.
+</Callout>
+
+The auth dump files are excluded from the table import, so no password hash ever
+lands in your database as an ordinary column.
+
+### 5. Storage
+
+`--with-storage` copies every object out of Supabase Storage into R2 and rewrites
+the columns that held object paths:
+
+```bash
+export SUPABASE_URL="https://<project>.supabase.co"
+export SUPABASE_SERVICE_ROLE_KEY="<service-role key, not the anon key>"
+
+lunora import ./supabase-dump --from supabase --with-storage --verify
+```
+
+Name the path columns in the mapping so they get rewritten:
+
+```jsonc title="lunora/import-supabase.json"
+{
+    "tables": {
+        "posts": { "storageColumns": ["cover_path"] },
+    },
+}
+```
+
+<Callout type="info">
+    The key comes from the environment rather than a flag on purpose: a service-role key grants full read/write on your project, and a command-line flag is
+    visible to every other process on the machine via the process table.
+</Callout>
+
+A named column is matched against whichever spelling your app stored, so all
+three of these resolve to the same migrated object:
+
+| Stored value                                                        | Where it comes from                                  |
+| ------------------------------------------------------------------- | ---------------------------------------------------- |
+| `avatars/u1.png`                                                    | bucket-qualified, what `storage.list()` returns      |
+| `u1.png`                                                            | bucket-relative, from a client that knows its bucket |
+| `https://<ref>.supabase.co/storage/v1/object/public/avatars/u1.png` | `getPublicUrl()` / `createSignedUrl()`               |
+
+The one case that stays unresolved is a bare filename two buckets both carry
+(`logo.png` in `avatars` and in `brand`). Guessing there would rewrite half your
+rows at the wrong object, so the importer reports it and you qualify the value
+instead.
+
+Objects land under content-hash keys, so identical files dedupe and a re-run is
+cheap. **The transfer is resumable**: every object is checkpointed as it
+completes, so if the run dies at object 40,000 of 50,000, re-running the same
+command picks up where it stopped instead of re-downloading what already moved.
+A partial transfer deliberately does not import rows, because every path column
+would point at an object that is not there yet.
+
+### What is not imported
+
+The importer moves data. These are still yours to port by hand, and the sections
+above cover each:
+
+- **RLS policies** → [Lunora RLS](/docs/concepts/rls) + `ctx.auth` checks (step 4)
+- **Edge Functions** → `query`/`mutation`/`action` (step 5)
+- **Realtime channels** → `useQuery`, which is live by default (step 3)
+- **Database functions and triggers** → mutations, or [`@lunora/hyperdrive`](/docs/packages/hyperdrive) if you keep the Postgres
+- **Sessions and refresh tokens**: deliberately not migrated; users sign in again
+
+## Caveats
+
+- **No client-side database access.** This is by design, and it's the source of
+  the type safety and the single authorization surface. Budget time to move
+  `supabase.from(...)` reads and writes into server functions.
+- **SQLite, not Postgres.** No Postgres-only features (extensions like PostGIS
+  or `pgvector`, stored procedures, `LISTEN/NOTIFY`, arbitrary SQL from the
+  client). Vector search and external Postgres are separate paths; see
+  [`@lunora/hyperdrive`](/docs/packages/hyperdrive) to reach an existing
+  Postgres from an action.
+- **No transactions across shards.** A mutation runs inside one Durable Object;
+  cross-shard writes need a saga or an action that fans out. Postgres gives you
+  database-wide transactions; Lunora's are per-shard.
+- **D1 eventual consistency on replicas.** Reads from `.global()` tables use
+  the D1 Sessions API. Pass the `x-d1-bookmark` header for read-your-writes;
+  otherwise you may read a slightly stale replica.
+- **Self-hosted studio, not a managed dashboard.** There's no hosted control
+  plane like the Supabase dashboard. Instead
+  [`@lunora/studio`](/docs/packages/studio) ships a studio that
+  `lunora dev` serves at `/__lunora` (data browser, function runner, metrics,
+  migrations, scheduled jobs, advisors), gated by your own `LUNORA_ADMIN_TOKEN`.

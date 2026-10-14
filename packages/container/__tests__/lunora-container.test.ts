@@ -4,13 +4,27 @@
  * stub (see `vitest.config.ts`), and the Durable Object context is faked with
  * the surface the upstream `Container` constructor actually touches.
  */
+import { Container } from "@cloudflare/containers";
+import { LunoraError } from "@lunora/errors";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import LunoraContainer from "../src/do/index";
+import { LunoraContainer } from "../src/do/index";
 import { defineContainer } from "../src/index";
 
+/** Overrides for the pieces the readiness/hard-timeout paths read off the ctx. */
+interface FakeContextOverrides {
+    /** The `ctx.container` stub (running flag + optional `getTcpPort`). */
+    container?: unknown;
+    /** Value `ctx.storage.get` resolves to (the stored hard-timeout generation). */
+    storedGeneration?: number;
+}
+
 /** Minimal fake of the pieces `@cloudflare/containers` reads off the DO ctx. */
-const fakeDurableObjectContext = (): Record<string, unknown> => {
+const fakeDurableObjectContext = (overrides: FakeContextOverrides = {}): Record<string, unknown> => {
+    // Keyed like the real storage, so the env override and the hard-timeout
+    // generation cannot read each other's values.
+    const stored = new Map<string, unknown>(overrides.storedGeneration === undefined ? [] : [["__lunoraHardTimeoutGeneration", overrides.storedGeneration]]);
+
     return {
         // The base ctor schedules alarms inside an un-awaited
         // `blockConcurrencyWhile(...)` critical section that touches the full
@@ -19,17 +33,24 @@ const fakeDurableObjectContext = (): Record<string, unknown> => {
         // but don't run it — otherwise the alarm machinery becomes an unhandled
         // rejection that fails the run.
         blockConcurrencyWhile: async () => {},
-        container: { running: false },
+        container: overrides.container ?? { running: false },
         storage: {
+            delete: async (keys: string | string[]) => {
+                for (const key of Array.isArray(keys) ? keys : [keys]) {
+                    stored.delete(key);
+                }
+            },
             deleteAlarm: async () => {},
-            get: async () => undefined,
+            get: async (key: string) => stored.get(key),
             getAlarm: async () => null,
             kv: {
                 delete: () => {},
                 get: () => undefined,
                 put: () => {},
             },
-            put: async () => {},
+            put: async (key: string, value: unknown) => {
+                stored.set(key, value);
+            },
             setAlarm: async () => {},
             sql: {
                 // The base class iterates exec() results, so return an (empty)
@@ -66,12 +87,740 @@ describe(LunoraContainer, () => {
         expect(instance.envVars).toStrictEqual({ API_KEY: "s3cret", LOG_LEVEL: "info" });
     });
 
+    it("applies the multi-port, egress-firewall, and labels fields onto the Container base", () => {
+        expect.assertions(7);
+
+        const definition = defineContainer({
+            allowedHosts: ["*.stripe.com"],
+            deniedHosts: ["*.evil.com"],
+            entrypoint: ["node", "server.js"],
+            image: "./app",
+            interceptHttps: true,
+            labels: { env: "prod", tenant: "acme" },
+            pingEndpoint: "/healthz",
+            requiredPorts: [8080, 9090],
+        });
+
+        const instance = new LunoraContainer(fakeDurableObjectContext() as never, {}, definition, "transcoder") as unknown as {
+            allowedHosts: string[];
+            deniedHosts: string[];
+            entrypoint: string[];
+            interceptHttps: boolean;
+            labels: Record<string, string>;
+            pingEndpoint: string;
+            requiredPorts: number[];
+        };
+
+        expect(instance.requiredPorts).toStrictEqual([8080, 9090]);
+        expect(instance.entrypoint).toStrictEqual(["node", "server.js"]);
+        expect(instance.interceptHttps).toBe(true);
+        expect(instance.allowedHosts).toStrictEqual(["*.stripe.com"]);
+        expect(instance.deniedHosts).toStrictEqual(["*.evil.com"]);
+        expect(instance.pingEndpoint).toBe("/healthz");
+        expect(instance.labels).toStrictEqual({ env: "prod", tenant: "acme" });
+    });
+
     it("fails fast when a declared secret is missing from the worker env", () => {
         expect.assertions(1);
 
         const definition = defineContainer({ image: "./app", secrets: ["API_KEY"] });
 
         expect(() => new LunoraContainer(fakeDurableObjectContext() as never, {}, definition, "transcoder")).toThrow('declared secret "API_KEY" is not set');
+    });
+});
+
+/** Cast onto the private Secrets Store resolver + `envVars` the start path reads. */
+type SecretsStoreProbe = { applyStartEnv: () => Promise<void>; envVars: Record<string, string>; resolveSecretsStoreEnv: () => Promise<Record<string, string>> };
+
+/** The status of a pending response, without reading a member off an `await`. */
+const statusOf = async (pending: Promise<Response>): Promise<number> => pending.then((response) => response.status);
+
+describe("lunoraContainer reserved routes", () => {
+    const reservedRouteInstance = (): { instance: LunoraContainer; proxied: { path: string; port: unknown }[] } => {
+        const definition = defineContainer({ defaultPort: 8080, image: "./app" });
+        const instance = new LunoraContainer(fakeDurableObjectContext() as never, {}, definition, "runner");
+        const proxied: { path: string; port: unknown }[] = [];
+
+        // Stub the upstream `Container.containerFetch` (two prototypes up), so
+        // LunoraContainer's own `fetch` / `containerFetch` / `lunoraExec` guards
+        // run for real and only the container proxy is faked.
+        vi.spyOn(Object.getPrototypeOf(Object.getPrototypeOf(instance)) as { containerFetch: () => Promise<Response> }, "containerFetch").mockImplementation(
+            async (...args: unknown[]) => {
+                const target = args[0] as Request;
+
+                proxied.push({ path: new URL(target.url).pathname, port: args[1] });
+
+                return new Response("ok");
+            },
+        );
+
+        return { instance, proxied };
+    };
+
+    afterEach(() => {
+        vi.restoreAllMocks();
+    });
+
+    it("refuses /__lunora/* over fetch however the path is spelled, and whatever the exec header says", async () => {
+        expect.assertions(2);
+
+        const { instance, proxied } = reservedRouteInstance();
+        const probes: Request[] = [
+            ...[
+                "/__lunora/exec",
+                "/__LUNORA/exec",
+                "/__lunora;x/exec",
+                "/%5F%5FLunora/exec",
+                "/api/__lunora/exec",
+                "/__lunora%2Fexec",
+                "/%255F%255Flunora/exec",
+                "/%5F%5Flunora/exec/%ZZ",
+            ].map((path) => new Request(`https://container${path}`, { method: "POST" })),
+            // The old in-band mark, in the value exec used and in wrong ones: none opens the route.
+            ...["1", "0", "true"].map(
+                (value) => new Request("https://container/__lunora/exec", { headers: { "x-lunora-container-exec": value }, method: "POST" }),
+            ),
+            // A websocket upgrade takes the same entry.
+            new Request("https://container/__lunora/exec", { headers: { Upgrade: "websocket" } }),
+        ];
+        const statuses: number[] = [];
+
+        for (const probe of probes) {
+            // eslint-disable-next-line no-await-in-loop -- sequential probes against one instance
+            statuses.push(await statusOf(instance.fetch(probe)));
+        }
+
+        expect(statuses).toStrictEqual(Array.from({ length: probes.length }).fill(403));
+        expect(proxied).toStrictEqual([]);
+    });
+
+    it("refuses /__lunora/* on the public containerFetch RPC too", async () => {
+        expect.assertions(3);
+
+        const { instance, proxied } = reservedRouteInstance();
+
+        // `containerFetch` is callable on the stub directly, skipping `fetch`.
+        await expect(statusOf(instance.containerFetch(new Request("https://container/__lunora/exec", { method: "POST" }), 8080))).resolves.toBe(403);
+        await expect(statusOf(instance.containerFetch("https://container/__LUNORA/exec", { method: "POST" }, 8080))).resolves.toBe(403);
+        expect(proxied).toStrictEqual([]);
+    });
+
+    it("serves exec only through lunoraExec, only for POST /__lunora/exec, on the targeted port", async () => {
+        expect.assertions(4);
+
+        const { instance, proxied } = reservedRouteInstance();
+
+        await expect(statusOf(instance.lunoraExec(new Request("https://container/__lunora/exec", { method: "POST" })))).resolves.toBe(200);
+        await expect(
+            statusOf(instance.lunoraExec(new Request("https://container/__lunora/exec", { headers: { "cf-container-target-port": "9090" }, method: "POST" }))),
+        ).resolves.toBe(200);
+        // Not a general bypass: another reserved path, or another method, is refused.
+        expect([
+            await statusOf(instance.lunoraExec(new Request("https://container/__lunora/other", { method: "POST" }))),
+            await statusOf(instance.lunoraExec(new Request("https://container/__lunora/exec"))),
+        ]).toStrictEqual([400, 400]);
+        expect(proxied).toStrictEqual([
+            { path: "/__lunora/exec", port: 8080 },
+            { path: "/__lunora/exec", port: 9090 },
+        ]);
+    });
+
+    it("still proxies ordinary paths", async () => {
+        expect.assertions(1);
+
+        const { instance, proxied } = reservedRouteInstance();
+
+        await instance.fetch(new Request("https://container/api/status"));
+        await instance.fetch(new Request("https://container/__lunora-status"));
+
+        expect(proxied.map((entry) => entry.path)).toStrictEqual(["/api/status", "/__lunora-status"]);
+    });
+});
+
+describe("lunoraContainer native exec", () => {
+    afterEach(() => {
+        vi.restoreAllMocks();
+    });
+
+    /** A stream that yields `text` once. */
+    const streamOf = (text: string): ReadableStream<Uint8Array> =>
+        new ReadableStream({
+            start(controller) {
+                controller.enqueue(new TextEncoder().encode(text));
+                controller.close();
+            },
+        });
+
+    const nativeInstance = (exec: (...args: unknown[]) => Promise<unknown>): { instance: LunoraContainer; proxied: unknown[]; started: unknown[] } => {
+        const context = fakeDurableObjectContext({ container: { exec, running: false } });
+        const instance = new LunoraContainer(context as never, {}, defineContainer({ defaultPort: 8080, image: "./app" }), "runner");
+        const base = Object.getPrototypeOf(Object.getPrototypeOf(instance)) as {
+            containerFetch: () => Promise<Response>;
+            startAndWaitForPorts: () => Promise<void>;
+        };
+        const proxied: unknown[] = [];
+        const started: unknown[] = [];
+
+        vi.spyOn(base, "containerFetch").mockImplementation(async (...args: unknown[]) => {
+            proxied.push(args);
+
+            return new Response("proxied");
+        });
+        vi.spyOn(base, "startAndWaitForPorts").mockImplementation(async (...args: unknown[]) => {
+            started.push(args[0]);
+        });
+
+        return { instance, proxied, started };
+    };
+
+    const execRequest = (body: Record<string, unknown>): Request =>
+        new Request("https://container/__lunora/exec", { body: JSON.stringify(body), headers: { "content-type": "application/json" }, method: "POST" });
+
+    it("runs the command through ctx.container.exec, unshelled, and answers the exec contract", async () => {
+        expect.assertions(4);
+
+        const exec = vi.fn<(...args: unknown[]) => Promise<unknown>>(async () => {
+            return { exitCode: Promise.resolve(3), kill: () => {}, stderr: streamOf("warn"), stdout: streamOf("hello") };
+        });
+        const { instance, proxied, started } = nativeInstance(exec);
+        const response = await instance.lunoraExec(execRequest({ args: ["-la", "/tmp"], command: "ls", cwd: "/work", env: { A: "1" } }));
+
+        await expect(response.json()).resolves.toStrictEqual({ code: 3, stderr: "warn", stdout: "hello" });
+        expect(exec).toHaveBeenCalledWith(["ls", "-la", "/tmp"], { cwd: "/work", env: { A: "1" }, stderr: "pipe", stdout: "pipe" });
+        expect(started).toStrictEqual([8080]);
+        expect(proxied).toStrictEqual([]);
+    });
+
+    it("kills a still-running process and answers 413 when output overruns maxOutputBytes", async () => {
+        expect.assertions(2);
+
+        const kill = vi.fn<() => void>();
+        const { instance } = nativeInstance(async () => {
+            return { exitCode: new Promise<number>(() => {}), kill, stderr: streamOf(""), stdout: streamOf("0123456789") };
+        });
+
+        await expect(statusOf(instance.lunoraExec(execRequest({ command: "yes", maxOutputBytes: 4 })))).resolves.toBe(413);
+        expect(kill).toHaveBeenCalledTimes(1);
+    });
+
+    it("counts stdout and stderr against one shared budget", async () => {
+        expect.assertions(2);
+
+        const kill = vi.fn<() => void>();
+        const { instance } = nativeInstance(async () => {
+            return { exitCode: new Promise<number>(() => {}), kill, stderr: streamOf("err"), stdout: streamOf("out") };
+        });
+
+        // Each stream alone fits the 5-byte cap; together (6 bytes) they do not.
+        await expect(statusOf(instance.lunoraExec(execRequest({ command: "noisy", maxOutputBytes: 5 })))).resolves.toBe(413);
+        expect(kill).toHaveBeenCalledTimes(1);
+    });
+
+    it("never kills a process that already exited, even when its output overran the cap", async () => {
+        expect.assertions(2);
+
+        const kill = vi.fn<() => void>();
+        const { instance } = nativeInstance(async () => {
+            return { exitCode: Promise.resolve(0), kill, stderr: streamOf(""), stdout: streamOf("0123456789") };
+        });
+
+        await expect(statusOf(instance.lunoraExec(execRequest({ command: "cat", maxOutputBytes: 4 })))).resolves.toBe(413);
+        expect(kill).not.toHaveBeenCalled();
+    });
+
+    it("kills the process and answers 504 when timeoutMs elapses", async () => {
+        expect.assertions(2);
+
+        const kill = vi.fn<() => void>();
+        const { instance } = nativeInstance(async () => {
+            return { exitCode: new Promise<number>(() => {}), kill, stderr: new ReadableStream(), stdout: new ReadableStream() };
+        });
+
+        await expect(statusOf(instance.lunoraExec(execRequest({ command: "sleep", timeoutMs: 5 })))).resolves.toBe(504);
+        expect(kill).toHaveBeenCalledTimes(1);
+    });
+
+    it("answers 504 when the timeout fires after the streams closed but before the process exited", async () => {
+        expect.assertions(2);
+
+        let exit: ((code: number) => void) | undefined;
+        const kill = vi.fn<() => void>(() => {
+            exit?.(137);
+        });
+        const { instance } = nativeInstance(async () => {
+            return {
+                exitCode: new Promise<number>((resolve) => {
+                    exit = resolve;
+                }),
+                kill,
+                stderr: streamOf(""),
+                stdout: streamOf("partial"),
+            };
+        });
+
+        await expect(statusOf(instance.lunoraExec(execRequest({ command: "hang", timeoutMs: 5 })))).resolves.toBe(504);
+        expect(kill).toHaveBeenCalledTimes(1);
+    });
+
+    it("passes the container's start env under the per-call env, since exec processes do not inherit it", async () => {
+        expect.assertions(1);
+
+        const exec = vi.fn<(...args: unknown[]) => Promise<unknown>>(async () => {
+            return { exitCode: Promise.resolve(0), kill: () => {}, stderr: streamOf(""), stdout: streamOf("") };
+        });
+        const context = fakeDurableObjectContext({ container: { exec, running: false } });
+        const instance = new LunoraContainer(
+            context as never,
+            { DATABASE_URL: "postgres://x" },
+            defineContainer({ defaultPort: 8080, env: { LOG_LEVEL: "info" }, image: "./app", secrets: ["DATABASE_URL"] }),
+            "runner",
+        );
+
+        vi.spyOn(
+            Object.getPrototypeOf(Object.getPrototypeOf(instance)) as { startAndWaitForPorts: () => Promise<void> },
+            "startAndWaitForPorts",
+        ).mockResolvedValue(undefined);
+        await instance.lunoraExec(execRequest({ command: "psql", env: { LOG_LEVEL: "debug" } }));
+
+        expect(exec.mock.calls[0]![1]).toMatchObject({ env: { DATABASE_URL: "postgres://x", LOG_LEVEL: "debug" } });
+    });
+
+    it("counts a native exec in flight, so sleepAfter cannot stop the container under it", async () => {
+        expect.assertions(2);
+
+        let inflightDuringExec = -1;
+        const { instance } = nativeInstance(async () => {
+            inflightDuringExec = (instance as unknown as { inflightRequests: number }).inflightRequests;
+
+            return { exitCode: Promise.resolve(0), kill: () => {}, stderr: streamOf(""), stdout: streamOf("") };
+        });
+
+        await instance.lunoraExec(execRequest({ command: "true" }));
+
+        expect(inflightDuringExec).toBe(1);
+        expect((instance as unknown as { inflightRequests: number }).inflightRequests).toBe(0);
+    });
+
+    it("falls back to the container's own route when the runtime has no native exec", async () => {
+        expect.assertions(2);
+
+        const context = fakeDurableObjectContext();
+        const instance = new LunoraContainer(context as never, {}, defineContainer({ defaultPort: 8080, image: "./app" }), "runner");
+
+        vi.spyOn(Object.getPrototypeOf(Object.getPrototypeOf(instance)) as { containerFetch: () => Promise<Response> }, "containerFetch").mockResolvedValue(
+            new Response("proxied"),
+        );
+
+        const response = await instance.lunoraExec(execRequest({ command: "ls" }));
+
+        expect(response.status).toBe(200);
+        await expect(response.text()).resolves.toBe("proxied");
+    });
+});
+
+describe("lunoraContainer secretsStore resolution", () => {
+    it("resolves Secrets Store bindings and merges them into envVars before start", async () => {
+        expect.assertions(1);
+
+        const definition = defineContainer({
+            env: { LOG_LEVEL: "info" },
+            image: "./app",
+            secretsStore: { STRIPE_KEY: "STRIPE_SECRET" },
+        });
+        const env = { STRIPE_SECRET: { get: async () => "sk_live_123" } };
+
+        const instance = new LunoraContainer(fakeDurableObjectContext() as never, env, definition, "transcoder") as unknown as SecretsStoreProbe;
+
+        await instance.applyStartEnv();
+
+        expect(instance.envVars).toStrictEqual({ LOG_LEVEL: "info", STRIPE_KEY: "sk_live_123" });
+    });
+
+    it("resolves each binding only once across repeated starts", async () => {
+        expect.assertions(2);
+
+        const get = vi.fn<() => Promise<string>>(async () => "sk_live_123");
+        const definition = defineContainer({ image: "./app", secretsStore: { STRIPE_KEY: "STRIPE_SECRET" } });
+
+        const instance = new LunoraContainer(
+            fakeDurableObjectContext() as never,
+            { STRIPE_SECRET: { get } },
+            definition,
+            "transcoder",
+        ) as unknown as SecretsStoreProbe;
+
+        await instance.applyStartEnv();
+        await instance.applyStartEnv();
+
+        expect(get).toHaveBeenCalledTimes(1);
+        expect(instance.envVars).toStrictEqual({ STRIPE_KEY: "sk_live_123" });
+    });
+
+    it("retries resolution after a transient failure instead of caching the rejection forever", async () => {
+        expect.assertions(3);
+
+        // First `.get()` rejects (a transient Secrets Store hiccup), the second
+        // succeeds. A cached rejected promise would poison every later start; the
+        // memo must be cleared on failure so the next resolution retries.
+        const get = vi.fn<() => Promise<string>>().mockRejectedValueOnce(new Error("secrets store unavailable")).mockResolvedValueOnce("sk_live_123");
+        const definition = defineContainer({ image: "./app", secretsStore: { STRIPE_KEY: "STRIPE_SECRET" } });
+
+        const instance = new LunoraContainer(
+            fakeDurableObjectContext() as never,
+            { STRIPE_SECRET: { get } },
+            definition,
+            "transcoder",
+        ) as unknown as SecretsStoreProbe;
+
+        await expect(instance.applyStartEnv()).rejects.toThrow("secrets store unavailable");
+
+        // The second attempt must re-run resolution (not replay the rejection).
+        await instance.applyStartEnv();
+
+        expect(get).toHaveBeenCalledTimes(2);
+        expect(instance.envVars).toStrictEqual({ STRIPE_KEY: "sk_live_123" });
+    });
+
+    it("fails the start when the Secrets Store binding is missing from the worker env", async () => {
+        expect.assertions(1);
+
+        const definition = defineContainer({ image: "./app", secretsStore: { STRIPE_KEY: "STRIPE_SECRET" } });
+        const instance = new LunoraContainer(fakeDurableObjectContext() as never, {}, definition, "transcoder") as unknown as SecretsStoreProbe;
+
+        await expect(instance.resolveSecretsStoreEnv()).rejects.toThrow('binding "STRIPE_SECRET", which is not a Secrets Store binding');
+    });
+
+    it("fails the start when a Secrets Store value does not resolve to a string", async () => {
+        expect.assertions(1);
+
+        const definition = defineContainer({ image: "./app", secretsStore: { STRIPE_KEY: "STRIPE_SECRET" } });
+        const env = { STRIPE_SECRET: { get: async () => undefined } };
+        const instance = new LunoraContainer(fakeDurableObjectContext() as never, env, definition, "transcoder") as unknown as SecretsStoreProbe;
+
+        await expect(instance.resolveSecretsStoreEnv()).rejects.toThrow("did not resolve to a string value");
+    });
+
+    it("is a no-op when no secretsStore is configured", async () => {
+        expect.assertions(1);
+
+        const definition = defineContainer({ env: { LOG_LEVEL: "info" }, image: "./app" });
+        const instance = new LunoraContainer(fakeDurableObjectContext() as never, {}, definition, "transcoder") as unknown as SecretsStoreProbe;
+
+        await instance.applyStartEnv();
+
+        expect(instance.envVars).toStrictEqual({ LOG_LEVEL: "info" });
+    });
+
+    it("skips Secrets Store resolution when start() supplies its own envVars", async () => {
+        expect.assertions(2);
+
+        // The binding is missing from the worker env, so resolution *would* throw
+        // — proving it's skipped when the caller overrides `envVars` (which
+        // replace the env set wholesale, discarding any resolved secret anyway).
+        const definition = defineContainer({ image: "./app", secretsStore: { STRIPE_KEY: "STRIPE_SECRET" } });
+        const instance = new LunoraContainer(fakeDurableObjectContext() as never, {}, definition, "transcoder");
+
+        const probe = instance as unknown as SecretsStoreProbe & { start: (options?: { envVars?: Record<string, string> }) => Promise<void> };
+        const resolveSpy = vi.spyOn(probe, "resolveSecretsStoreEnv");
+        // Stub the upstream `Container.start` (two prototypes up) — it would try
+        // to boot a real container otherwise.
+        const baseStart = vi
+            .spyOn(Object.getPrototypeOf(Object.getPrototypeOf(instance)) as { start: () => Promise<void> }, "start")
+            .mockResolvedValue(undefined);
+
+        await probe.start({ envVars: { STRIPE_KEY: "override" } });
+
+        expect(resolveSpy).not.toHaveBeenCalled();
+        expect(baseStart).toHaveBeenCalledTimes(1);
+
+        baseStart.mockRestore();
+    });
+});
+
+describe("lunoraContainer start({ envVars }) replaces the declared env", () => {
+    it("starts with exactly the per-instance envVars, leaving declared env and secrets out", async () => {
+        expect.assertions(2);
+
+        // Replace, not merge, is the contract: it is how an app starts an
+        // untrusted (model-driven) exec sandbox WITHOUT the credentials the
+        // definition declares. A merge would hand that sandbox DATABASE_URL.
+        const definition = defineContainer({
+            env: { LOG_LEVEL: "info" },
+            image: "./app",
+            secrets: ["DATABASE_URL"],
+            secretsStore: { STRIPE_KEY: "STRIPE_SECRET" },
+        });
+        const instance = new LunoraContainer(
+            fakeDurableObjectContext() as never,
+            { DATABASE_URL: "postgres://secret", STRIPE_SECRET: { get: async () => "sk_live_123" } },
+            definition,
+            "sandbox",
+        );
+        const baseStart = vi
+            .spyOn(Object.getPrototypeOf(Object.getPrototypeOf(instance)) as { start: (options?: unknown) => Promise<void> }, "start")
+            .mockResolvedValue(undefined);
+
+        await (instance as unknown as { start: (options?: { envVars?: Record<string, string> }) => Promise<void> }).start({ envVars: { TENANT: "t1" } });
+
+        expect(baseStart).toHaveBeenCalledTimes(1);
+        expect(baseStart.mock.calls[0]![0]).toStrictEqual({ envVars: { TENANT: "t1" } });
+
+        baseStart.mockRestore();
+    });
+});
+
+describe("lunoraContainer start({ envVars }) override persists", () => {
+    afterEach(() => {
+        vi.restoreAllMocks();
+    });
+
+    const sandboxDefinition = defineContainer({
+        env: { LOG_LEVEL: "info" },
+        image: "./app",
+        secrets: ["DATABASE_URL"],
+        secretsStore: { STRIPE_KEY: "STRIPE_SECRET" },
+    });
+    const workerEnv = { DATABASE_URL: "postgres://secret", STRIPE_SECRET: { get: async () => "sk_live_123" } };
+    const basePrototype = (instance: object): { destroy: () => Promise<void>; start: () => Promise<void>; startAndWaitForPorts: () => Promise<void> } =>
+        Object.getPrototypeOf(Object.getPrototypeOf(instance)) as {
+            destroy: () => Promise<void>;
+            start: () => Promise<void>;
+            startAndWaitForPorts: () => Promise<void>;
+        };
+
+    type StartProbe = {
+        envVars: Record<string, string>;
+        start: (options?: { envVars?: Record<string, string> }) => Promise<void>;
+        startAndWaitForPorts: () => Promise<void>;
+    };
+
+    it("restarts with the override after the container stopped, even on a fresh DO instance", async () => {
+        expect.assertions(2);
+
+        // The restart path: after `sleepAfter`, a crash or `hardTimeout`, the
+        // next exec/fetch starts the container through `startAndWaitForPorts`.
+        // It used to boot with the declared env and the Secrets Store values,
+        // handing a "credential-free" sandbox its credentials back.
+        const context = fakeDurableObjectContext();
+        const first = new LunoraContainer(context as never, workerEnv, sandboxDefinition, "sandbox") as unknown as StartProbe;
+
+        vi.spyOn(basePrototype(first), "start").mockResolvedValue(undefined);
+        vi.spyOn(basePrototype(first), "startAndWaitForPorts").mockResolvedValue(undefined);
+
+        await first.start({ envVars: { TENANT: "t1" } });
+
+        expect(first.envVars).toStrictEqual({ TENANT: "t1" });
+
+        // The DO was evicted while the container slept; a new instance over the
+        // same storage takes the implicit restart.
+        const second = new LunoraContainer(context as never, workerEnv, sandboxDefinition, "sandbox") as unknown as StartProbe;
+
+        await second.startAndWaitForPorts();
+
+        expect(second.envVars).toStrictEqual({ TENANT: "t1" });
+    });
+
+    it("rejects a start({ envVars }) on a running instance whose env differs, rather than reporting it applied", async () => {
+        expect.assertions(2);
+
+        // Upstream returns early on a running container, so the old env stays.
+        const context = fakeDurableObjectContext({ container: { monitor: async () => new Promise<never>(() => {}), running: true } });
+        const instance = new LunoraContainer(context as never, workerEnv, sandboxDefinition, "sandbox") as unknown as StartProbe;
+        const baseStart = vi.spyOn(basePrototype(instance), "start").mockResolvedValue(undefined);
+
+        await expect(instance.start({ envVars: {} })).rejects.toThrow(/already running with a different env/u);
+        expect(baseStart).not.toHaveBeenCalled();
+    });
+
+    it("accepts a repeat start({ envVars }) with the same env on a running instance", async () => {
+        expect.assertions(1);
+
+        const context = fakeDurableObjectContext();
+        const instance = new LunoraContainer(context as never, workerEnv, sandboxDefinition, "sandbox") as unknown as StartProbe;
+
+        vi.spyOn(basePrototype(instance), "start").mockResolvedValue(undefined);
+        await instance.start({ envVars: { TENANT: "t1" } });
+        (context as { container: { running: boolean } }).container.running = true;
+
+        await expect(instance.start({ envVars: { TENANT: "t1" } })).resolves.toBeUndefined();
+    });
+
+    it("destroy() drops the override, so the next start uses the declared env again", async () => {
+        expect.assertions(1);
+
+        const context = fakeDurableObjectContext();
+        const instance = new LunoraContainer(context as never, workerEnv, sandboxDefinition, "sandbox") as unknown as StartProbe & {
+            destroy: () => Promise<void>;
+        };
+
+        vi.spyOn(basePrototype(instance), "start").mockResolvedValue(undefined);
+        vi.spyOn(basePrototype(instance), "destroy").mockResolvedValue(undefined);
+        vi.spyOn(basePrototype(instance), "startAndWaitForPorts").mockResolvedValue(undefined);
+
+        await instance.start({ envVars: {} });
+        await instance.destroy();
+        await instance.startAndWaitForPorts();
+
+        expect(instance.envVars).toStrictEqual({ DATABASE_URL: "postgres://secret", LOG_LEVEL: "info", STRIPE_KEY: "sk_live_123" });
+    });
+});
+
+describe("lunoraContainer durable_object scheduling", () => {
+    afterEach(() => {
+        vi.restoreAllMocks();
+    });
+
+    const agentComputer = defineContainer({
+        image: "base",
+        images: { base: "./container", gpu: "./gpu" },
+        instanceType: "lite",
+        schedulingPolicy: "durable_object",
+    });
+    const images = { base: "registry.cloudflare.com/acct/base@sha256:aaa", gpu: "registry.cloudflare.com/acct/gpu@sha256:bbb" };
+    const basePrototype = (instance: object): { start: (options?: unknown) => Promise<void>; startAndWaitForPorts: () => Promise<void> } =>
+        Object.getPrototypeOf(Object.getPrototypeOf(instance)) as { start: (options?: unknown) => Promise<void>; startAndWaitForPorts: () => Promise<void> };
+
+    type SchedulingProbe = {
+        image?: string;
+        instance?: unknown;
+        lunoraSnapshot: (options?: { name?: string }) => Promise<unknown>;
+        start: (options?: Record<string, unknown>) => Promise<void>;
+        startAndWaitForPorts: () => Promise<void>;
+    };
+
+    const scheduled = (container: Record<string, unknown> = {}): { context: Record<string, unknown>; instance: SchedulingProbe } => {
+        const context = fakeDurableObjectContext({ container: { images, running: false, ...container } });
+
+        return { context, instance: new LunoraContainer(context as never, {}, agentComputer, "agentComputer") as unknown as SchedulingProbe };
+    };
+
+    it("starts the definition's default image and size when the start names none", async () => {
+        expect.assertions(2);
+
+        const { instance } = scheduled();
+
+        vi.spyOn(basePrototype(instance), "startAndWaitForPorts").mockResolvedValue(undefined);
+        await instance.startAndWaitForPorts();
+
+        expect(instance.image).toBe(images.base);
+        expect(instance.instance).toBe("lite");
+    });
+
+    it("persists an explicit image and size, so a fresh DO instance restarts with them", async () => {
+        expect.assertions(3);
+
+        const { context, instance } = scheduled();
+
+        vi.spyOn(basePrototype(instance), "start").mockResolvedValue(undefined);
+        vi.spyOn(basePrototype(instance), "startAndWaitForPorts").mockResolvedValue(undefined);
+        await instance.start({ image: "gpu", instanceType: "standard-2" });
+
+        expect(instance.image).toBe(images.gpu);
+
+        const second = new LunoraContainer(context as never, {}, agentComputer, "agentComputer") as unknown as SchedulingProbe;
+
+        await second.startAndWaitForPorts();
+
+        expect(second.image).toBe(images.gpu);
+        expect(second.instance).toBe("standard-2");
+    });
+
+    it("passes a managed image through and refuses an unknown name with the declared list", async () => {
+        expect.assertions(2);
+
+        const { instance } = scheduled();
+
+        vi.spyOn(basePrototype(instance), "start").mockResolvedValue(undefined);
+        await instance.start({ image: "cloudflare/debian-trixie" });
+
+        expect(instance.image).toBe("cloudflare/debian-trixie");
+        await expect(scheduled().instance.start({ image: "missing" })).rejects.toThrow(/no image named "missing" — declared images: base, gpu/u);
+    });
+
+    it("forwards a snapshot as containerSnapshot and refuses one alongside an image", async () => {
+        expect.assertions(3);
+
+        const { instance } = scheduled();
+        const baseStart = vi.spyOn(basePrototype(instance), "start").mockResolvedValue(undefined);
+        const snapshot = { id: "snap-1", size: 42 };
+
+        await instance.start({ snapshot });
+
+        expect(baseStart.mock.calls[0]![0]).toStrictEqual({ containerSnapshot: snapshot });
+        await expect(instance.start({ image: "base", snapshot })).rejects.toThrow(/an image or a snapshot, not both/u);
+        expect(baseStart).toHaveBeenCalledTimes(1);
+    });
+
+    it("refuses a different selection or a snapshot restore on a running instance", async () => {
+        expect.assertions(2);
+
+        const { instance } = scheduled({ monitor: async () => new Promise<never>(() => {}), running: true });
+
+        await expect(instance.start({ image: "gpu" })).rejects.toMatchObject({ code: "CONFLICT" });
+        await expect(instance.start({ snapshot: { id: "snap-1", size: 1 } })).rejects.toMatchObject({ code: "CONFLICT" });
+    });
+
+    it("stores nothing from a rejected start — neither an unknown image nor the env override", async () => {
+        expect.assertions(2);
+
+        const { context, instance } = scheduled();
+
+        vi.spyOn(basePrototype(instance), "startAndWaitForPorts").mockResolvedValue(undefined);
+        const { storage } = context as { storage: { get: (key: string) => Promise<unknown> } };
+
+        await expect(instance.start({ envVars: {}, image: "tpyo" })).rejects.toThrow(/no image named "tpyo"/u);
+
+        await expect(storage.get("__lunoraStartOverride")).resolves.toBeUndefined();
+    });
+
+    it("keeps a stored image when a later start only changes the size, and accepts a repeat of the running choice", async () => {
+        expect.assertions(2);
+
+        const { context, instance } = scheduled();
+
+        vi.spyOn(basePrototype(instance), "start").mockResolvedValue(undefined);
+        await instance.start({ image: "gpu" });
+        await instance.start({ instanceType: { diskMb: 8000, memoryMib: 4096, vcpu: 1 } });
+
+        expect(instance.image).toBe(images.gpu);
+
+        (context as { container: { running: boolean } }).container.running = true;
+
+        await expect(instance.start({ image: "gpu", instanceType: { diskMb: 8000, memoryMib: 4096, vcpu: 1 } })).resolves.toBeUndefined();
+    });
+
+    it("lets a running container with no image (restored from a snapshot) take the fetch/exec restart path", async () => {
+        expect.assertions(1);
+
+        const noDefault = defineContainer({ images: { base: "./container" }, schedulingPolicy: "durable_object" });
+        const context = fakeDurableObjectContext({ container: { images, monitor: async () => new Promise<never>(() => {}), running: true } });
+        const instance = new LunoraContainer(context as never, {}, noDefault, "sandbox") as unknown as SchedulingProbe;
+
+        vi.spyOn(basePrototype(instance), "startAndWaitForPorts").mockResolvedValue(undefined);
+
+        await expect(instance.startAndWaitForPorts()).resolves.toBeUndefined();
+    });
+
+    it("snapshots a running container and refuses when it is stopped", async () => {
+        expect.assertions(3);
+
+        const snapshotContainer = vi.fn<(options: { name?: string }) => Promise<{ id: string; name?: string; size: number }>>(async (options) => {
+            return { id: "snap-1", name: options.name, size: 7 };
+        });
+        const { instance } = scheduled({ monitor: async () => new Promise<never>(() => {}), running: true, snapshotContainer });
+
+        await expect(instance.lunoraSnapshot({ name: "before-upgrade" })).resolves.toStrictEqual({ id: "snap-1", name: "before-upgrade", size: 7 });
+        expect(snapshotContainer).toHaveBeenCalledWith({ name: "before-upgrade" });
+        await expect(scheduled().instance.lunoraSnapshot()).rejects.toThrow(/needs a running container/u);
+    });
+
+    it("refuses image, size and snapshot selection on a default-policy container", async () => {
+        expect.assertions(2);
+
+        const instance = new LunoraContainer(fakeDurableObjectContext() as never, {}, defineContainer({ image: "./app" }), "app") as unknown as SchedulingProbe;
+
+        await expect(instance.start({ image: "base" })).rejects.toThrow(/needs schedulingPolicy "durable_object"/u);
+        await expect(instance.lunoraSnapshot()).rejects.toThrow(/snapshots need schedulingPolicy "durable_object"/u);
     });
 });
 
@@ -84,6 +833,56 @@ describe("lunoraContainer lifecycle logging", () => {
         const definition = defineContainer({ image: "./app" });
 
         return new LunoraContainer(fakeDurableObjectContext() as never, {}, definition, "transcoder");
+    };
+
+    /**
+     * Stub the base's `startAndWaitForPorts` down to the one part that matters
+     * here: `@cloudflare/containers` ends it (and `start()`) with
+     * `blockConcurrencyWhile(async () => { … await this.onStart(); })`
+     * (from both `start()` and `startAndWaitForPorts()`), and workerd treats a *rejecting*
+     * closure there as unrecoverable — it aborts the Durable Object and flattens
+     * the error to a plain `Error`. Pulling the image and waiting for ports is
+     * stubbed; the gate is reproduced, and the double records the abort so a
+     * regression is visible rather than merely differently-worded.
+     * @returns A record whose `aborted` flag flips if the gate saw a rejection.
+     */
+    const baseStartGate = (onContainerStarted?: () => void, syncPendingStoppedEvents?: (self: LunoraContainer) => Promise<void>): { aborted: boolean } => {
+        const record = { aborted: false };
+
+        const gate = async function runGate(this: { onStart: () => Promise<void> }): Promise<void> {
+            // `doStartContainer` ends with `state.setRunning()`, so a start that
+            // reaches the gate has already flipped the container to running. A
+            // double that left the flag alone made every start look like a first
+            // start, which is exactly the case the run-identity logic must tell
+            // apart from a no-op start on a live container.
+            onContainerStarted?.();
+
+            try {
+                await this.onStart();
+            } catch (error) {
+                record.aborted = true;
+
+                // workerd flattens the closure's error to a plain `Error` whose
+                // message is the original's `name: message` and which carries none
+                // of its own properties.
+                throw new Error(String(error), { cause: error });
+            }
+        };
+
+        // The base ends BOTH start entry points this way, and only
+        // `startAndWaitForPorts` syncs the pending `onStop` first — so a test that
+        // stubs only one of them cannot see the difference between the two paths.
+        // That sync is where a previous run's `onStop` is finally delivered, and it
+        // runs INSIDE this call, which is what `syncPendingStoppedEvents` models.
+        vi.spyOn(Container.prototype, "startAndWaitForPorts").mockImplementation(async function runWaitGate(
+            this: LunoraContainer & { onStart: () => Promise<void> },
+        ): Promise<void> {
+            await syncPendingStoppedEvents?.(this);
+            await gate.call(this);
+        });
+        vi.spyOn(Container.prototype, "start").mockImplementation(gate);
+
+        return record;
     };
 
     it("emits a lunora container event on start", async () => {
@@ -111,6 +910,24 @@ describe("lunoraContainer lifecycle logging", () => {
         expect(JSON.parse((spy.mock.calls.at(-1)![0] as string) ?? "{}")).toMatchObject({ event: "stop", message: "runtime_signal (exit 137)" });
     });
 
+    it("emits a sleep event when activity expires", async () => {
+        expect.assertions(1);
+
+        const spy = vi.spyOn(console, "log").mockImplementation(() => {});
+
+        await build().onActivityExpired();
+
+        // Our envelope is logged before `super.onActivityExpired()`'s own plain
+        // line, so it's the first call.
+        expect(JSON.parse((spy.mock.calls[0]![0] as string) ?? "{}")).toMatchObject({
+            container: "transcoder",
+            event: "sleep",
+            level: "info",
+            source: "lunora",
+            type: "container",
+        });
+    });
+
     it("emits an error event and re-throws (the base onError contract)", () => {
         expect.assertions(2);
 
@@ -118,6 +935,436 @@ describe("lunoraContainer lifecycle logging", () => {
 
         expect(() => build().onError(new Error("crashed"))).toThrow("crashed");
         expect(JSON.parse((spy.mock.calls[0]![0] as string) ?? "{}")).toMatchObject({ event: "error", level: "error", message: "crashed" });
+    });
+
+    it("gates the start on readyOn probes until each returns its expected status", async () => {
+        expect.assertions(3);
+
+        vi.spyOn(console, "log").mockImplementation(() => {});
+
+        const fetched: string[] = [];
+        const context = fakeDurableObjectContext({
+            container: {
+                getTcpPort: (port: number) => {
+                    return {
+                        fetch: (url: string) => {
+                            fetched.push(`${String(port)}:${url}`);
+
+                            return Promise.resolve({ status: url.endsWith("/live") ? 204 : 200 });
+                        },
+                    };
+                },
+                // `running: false` keeps the base ctor off its monitor path; the
+                // readiness probes only need `getTcpPort`, not a running flag.
+                running: false,
+            },
+        });
+
+        const definition = defineContainer({
+            defaultPort: 8080,
+            image: "./app",
+            readyOn: [{ path: "/ready" }, { path: "live", port: 9090, status: 204 }],
+        });
+        const instance = new LunoraContainer(context as never, {}, definition, "transcoder");
+
+        baseStartGate();
+
+        await expect(instance.startAndWaitForPorts()).resolves.toBeUndefined();
+        // `/ready` resolves on the default port; `live` (no leading slash) is
+        // normalized and probed on its own port against status 204.
+        expect(fetched).toContain("8080:http://container/ready");
+        expect(fetched).toContain("9090:http://container/live");
+    });
+
+    it("fails the start when a readyOn check has no port and no defaultPort", async () => {
+        expect.assertions(2);
+
+        vi.spyOn(console, "log").mockImplementation(() => {});
+
+        const context = fakeDurableObjectContext({
+            container: {
+                getTcpPort: () => {
+                    return { fetch: () => Promise.resolve({ status: 200 }) };
+                },
+                running: false,
+            },
+        });
+        const definition = defineContainer({ image: "./app", readyOn: [{ path: "/ready" }] });
+        const instance = new LunoraContainer(context as never, {}, definition, "transcoder");
+        const state = baseStartGate();
+
+        await expect(instance.startAndWaitForPorts()).rejects.toThrow("has no port");
+        // A misconfigured probe is a config error, not grounds for tearing the
+        // object down — it must surface from outside the start gate.
+        expect(state.aborted).toBe(false);
+    });
+
+    it("aborts a readiness probe that never responds instead of hanging forever, and rejects at the deadline", async () => {
+        expect.assertions(3);
+
+        vi.spyOn(console, "log").mockImplementation(() => {});
+        // The per-attempt deadline is a JS-land `setTimeout`
+        // (shared/abort-deadline.ts), so fake timers drive it directly:
+        // advancing to the readiness deadline fires the attempt's abort and
+        // the loop's own deadline check in one pass, without a real 30s wait.
+        vi.useFakeTimers();
+
+        const context = fakeDurableObjectContext({
+            container: {
+                getTcpPort: () => {
+                    return {
+                        // A container that accepted the TCP connection but never
+                        // answers: the returned promise only ever settles via the
+                        // abort signal, exactly like a real `fetch` would.
+                        fetch: (_url: string, init?: { signal?: AbortSignal }) =>
+                            new Promise((_resolve, reject) => {
+                                if (init?.signal?.aborted) {
+                                    reject(new Error("aborted"));
+
+                                    return;
+                                }
+
+                                init?.signal?.addEventListener("abort", () => {
+                                    reject(new Error("aborted"));
+                                });
+                            }),
+                    };
+                },
+                running: false,
+            },
+        });
+
+        const definition = defineContainer({ defaultPort: 8080, image: "./app", readyOn: [{ path: "/ready" }] });
+        const instance = new LunoraContainer(context as never, {}, definition, "transcoder");
+        const state = baseStartGate();
+
+        let thrown: unknown;
+
+        try {
+            // The start only settles once the fake timers below advance, so it is
+            // kicked off here and awaited after they do.
+            const pending = instance.startAndWaitForPorts().catch((error: unknown) => {
+                thrown = error;
+            });
+
+            await vi.advanceTimersByTimeAsync(30_000);
+            await pending;
+        } finally {
+            vi.useRealTimers();
+        }
+
+        // A wedged app is an ordinary, diagnosable failure. Waiting for it inside
+        // the base's `blockConcurrencyWhile` would make workerd abort the Durable
+        // Object and flatten the error to a plain `Error`, so the caller would get
+        // an opaque message instead of the check, the port and the budget — and
+        // the object would lose its in-memory state and its hibernating sockets on
+        // every start attempt. The wait therefore runs outside the gate.
+        expect(state.aborted).toBe(false);
+        expect(thrown).toBeInstanceOf(LunoraError);
+        expect((thrown as Error).message).toContain('readiness check "/ready" (port 8080) did not return 200 within 30000ms');
+    });
+
+    it("does not proxy a request while the readiness probes are still pending", async () => {
+        expect.assertions(2);
+
+        vi.spyOn(console, "log").mockImplementation(() => {});
+
+        // The base commits the healthy state INSIDE its start gate, before our
+        // probes run — so `super.containerFetch` skips the start path entirely and
+        // would proxy to an app that never reported ready. Reproduce exactly that:
+        // healthy, with a probe that never succeeds.
+        const proxied = vi.spyOn(Container.prototype, "containerFetch").mockResolvedValue(new Response("from the app"));
+
+        vi.spyOn(Container.prototype, "getState").mockResolvedValue({ status: "healthy" } as never);
+
+        vi.useFakeTimers();
+
+        // A container that accepts the connection and never answers — the probe
+        // settles only via its abort signal, as with a real wedged app.
+        const context = fakeDurableObjectContext({
+            container: {
+                getTcpPort: () => {
+                    return {
+                        fetch: (_url: string, init?: { signal?: AbortSignal }) =>
+                            new Promise((_resolve, reject) => {
+                                if (init?.signal?.aborted) {
+                                    reject(new Error("aborted"));
+
+                                    return;
+                                }
+
+                                init?.signal?.addEventListener("abort", () => {
+                                    reject(new Error("aborted"));
+                                });
+                            }),
+                    };
+                },
+                running: false,
+            },
+        });
+
+        const definition = defineContainer({ defaultPort: 8080, image: "./app", readyOn: [{ path: "/ready" }] });
+        const instance = new LunoraContainer(context as never, {}, definition, "transcoder");
+
+        let thrown: unknown;
+
+        try {
+            const pending = instance.containerFetch("https://container/").catch((error: unknown) => {
+                thrown = error;
+            });
+
+            await vi.advanceTimersByTimeAsync(30_000);
+            await pending;
+        } finally {
+            vi.useRealTimers();
+        }
+
+        // The request fails on the readiness budget instead of being handed to an
+        // app that never reported ready.
+        expect(proxied).not.toHaveBeenCalled();
+        expect((thrown as Error).message).toContain('readiness check "/ready"');
+    });
+
+    /** The `ctx.container` surface the readiness/start paths touch, with a mutable `running` flag. */
+    interface RunningFlagContainer {
+        getTcpPort: (port?: number) => { fetch: (url: string, init?: RequestInit) => Promise<Response> };
+        monitor: () => Promise<void>;
+        running: boolean;
+    }
+
+    /** A `ctx.container` stub whose `running` flag is mutable, the way the real one is. */
+    const runningFlagContainer = (running: boolean): RunningFlagContainer => {
+        return {
+            getTcpPort: () => {
+                return { fetch: async () => new Response("ok", { status: 200 }) };
+            },
+            // The base attaches a monitor whenever it finds the container already
+            // running; the real one settles when the container exits.
+            monitor: () => new Promise<void>(() => {}),
+            running,
+        };
+    };
+
+    it("re-arms and re-probes when a start follows a run that exited without an onStop", async () => {
+        expect.assertions(3);
+
+        vi.spyOn(console, "log").mockImplementation(() => {});
+
+        const definition = defineContainer({ defaultPort: 8080, hardTimeout: "30s", image: "./app", readyOn: [{ path: "/ready" }] });
+        const container = runningFlagContainer(false);
+        const instance = new LunoraContainer(fakeDurableObjectContext({ container }) as never, {}, definition, "transcoder");
+        const scheduleSpy = vi.spyOn(instance, "schedule").mockResolvedValue(undefined as never);
+        const probes = vi.spyOn(container, "getTcpPort");
+
+        baseStartGate(() => {
+            container.running = true;
+        });
+
+        await instance.startAndWaitForPorts();
+
+        expect(scheduleSpy).toHaveBeenCalledTimes(1);
+
+        // The run ends — a crash, `sleepAfter`, or the hard timeout's own SIGTERM.
+        // The base's monitor callback records the exit and nothing else: `onStop`
+        // is only reached through `syncPendingStoppedEvents`, which `start()` never
+        // calls and the alarm loop can take up to three minutes to reach. So the
+        // next start MUST NOT be handed the finished run's settled gate — that
+        // skips both the hard-timeout re-arm and the `readyOn` probes.
+        container.running = false;
+
+        await instance.start();
+
+        expect(scheduleSpy).toHaveBeenCalledTimes(2);
+        expect(probes).toHaveBeenCalledTimes(2);
+    });
+
+    it("caps the new run when the container exits while the Secrets Store is being resolved", async () => {
+        expect.assertions(2);
+
+        vi.spyOn(console, "log").mockImplementation(() => {});
+
+        // `resolveSecretsStoreEnv` is a real Secrets Store RPC on its first call,
+        // and the run identity was snapshotted BEFORE it. A container that exits
+        // in that window (a crash, `sleepAfter`, the hard timeout's own SIGTERM)
+        // leaves the snapshot saying "already running" while the base goes on to
+        // start a SECOND run — which is then never armed, and runs uncapped.
+        const definition = defineContainer({
+            defaultPort: 8080,
+            hardTimeout: "30s",
+            image: "./app",
+            readyOn: [{ path: "/ready" }],
+            secretsStore: { STRIPE_KEY: "STRIPE_SECRET" },
+        });
+        const container = runningFlagContainer(true);
+        const get = vi.fn<() => Promise<string>>(async () => {
+            container.running = false;
+
+            return "sk_live_123";
+        });
+        const instance = new LunoraContainer(fakeDurableObjectContext({ container }) as never, { STRIPE_SECRET: { get } }, definition, "transcoder");
+        const scheduleSpy = vi.spyOn(instance, "schedule").mockResolvedValue(undefined as never);
+        const probes = vi.spyOn(container, "getTcpPort");
+
+        baseStartGate(() => {
+            container.running = true;
+        });
+
+        await instance.startAndWaitForPorts();
+
+        expect(scheduleSpy).toHaveBeenCalledTimes(1);
+        expect(probes).toHaveBeenCalledTimes(1);
+    });
+
+    it("caps the new run when the base reports the previous run's stop during its own start", async () => {
+        expect.assertions(1);
+
+        vi.spyOn(console, "log").mockImplementation(() => {});
+
+        // `startAndWaitForPorts` calls `syncPendingStoppedEvents` before it starts
+        // anything, which is what finally delivers the previous run's `onStop`. It
+        // lands INSIDE the base call, after the snapshot: the exit is reported,
+        // the base starts a fresh run, and the snapshot still says "already
+        // running", so the hard timeout is never armed for it.
+        const definition = defineContainer({ defaultPort: 8080, hardTimeout: "30s", image: "./app" });
+        const container = runningFlagContainer(true);
+        const instance = new LunoraContainer(fakeDurableObjectContext({ container }) as never, {}, definition, "transcoder");
+        const scheduleSpy = vi.spyOn(instance, "schedule").mockResolvedValue(undefined as never);
+
+        baseStartGate(
+            () => {
+                container.running = true;
+            },
+            async (self) => {
+                container.running = false;
+
+                await self.onStop({ exitCode: 0, reason: "exit" });
+            },
+        );
+
+        await instance.startAndWaitForPorts();
+
+        expect(scheduleSpy).toHaveBeenCalledTimes(1);
+    });
+
+    it("does not re-arm the hard timeout when a start finds the container already running", async () => {
+        expect.assertions(2);
+
+        vi.spyOn(console, "log").mockImplementation(() => {});
+
+        // The mirror case: an isolate recycled under a live container has no gate
+        // in memory, but the run's hard-timeout schedule row is durable (SQLite)
+        // and still armed. Re-arming stamps a fresh generation, so the row that
+        // would have killed the run is ignored and a periodic "ensure started"
+        // call pushes the "total lifetime" cap out indefinitely.
+        const definition = defineContainer({ defaultPort: 8080, hardTimeout: "30s", image: "./app", readyOn: [{ path: "/ready" }] });
+        const container = runningFlagContainer(true);
+        const instance = new LunoraContainer(fakeDurableObjectContext({ container }) as never, {}, definition, "transcoder");
+        const scheduleSpy = vi.spyOn(instance, "schedule").mockResolvedValue(undefined as never);
+        const probes = vi.spyOn(container, "getTcpPort");
+
+        baseStartGate(() => {
+            container.running = true;
+        });
+
+        await instance.start();
+
+        expect(scheduleSpy).not.toHaveBeenCalled();
+        // Readiness is still established for this isolate — it has no gate on
+        // record and must not proxy on the base's healthy state alone.
+        expect(probes).toHaveBeenCalledTimes(1);
+    });
+
+    it("resolves the Secrets Store env on the startAndWaitForPorts path", async () => {
+        expect.assertions(2);
+
+        vi.spyOn(console, "log").mockImplementation(() => {});
+
+        // The start path `containerFetch` routes through, and the one an app can
+        // call itself. `doStartContainer` reads `this.envVars`, so skipping
+        // resolution here starts the container without its `secretsStore` values.
+        const get = vi.fn<() => Promise<string>>(async () => "sk_live_123");
+        const definition = defineContainer({ image: "./app", secretsStore: { STRIPE_KEY: "STRIPE_SECRET" } });
+        const container = runningFlagContainer(false);
+        const instance = new LunoraContainer(fakeDurableObjectContext({ container }) as never, { STRIPE_SECRET: { get } }, definition, "transcoder");
+
+        baseStartGate(() => {
+            container.running = true;
+        });
+
+        await instance.startAndWaitForPorts();
+
+        expect(get).toHaveBeenCalledTimes(1);
+        expect((instance as unknown as { envVars: Record<string, string> }).envVars).toStrictEqual({ STRIPE_KEY: "sk_live_123" });
+    });
+
+    it("arms a hard-timeout schedule on start, stamped with the bumped run generation", async () => {
+        expect.assertions(2);
+
+        vi.spyOn(console, "log").mockImplementation(() => {});
+
+        const definition = defineContainer({ hardTimeout: "30s", image: "./app" });
+        const instance = new LunoraContainer(fakeDurableObjectContext({ storedGeneration: 4 }) as never, {}, definition, "transcoder");
+        const scheduleSpy = vi.spyOn(instance, "schedule").mockResolvedValue(undefined as never);
+
+        baseStartGate();
+
+        await instance.startAndWaitForPorts();
+
+        expect(scheduleSpy).toHaveBeenCalledTimes(1);
+        // 30s → 30 seconds; generation 4 → 5 (bumped so a stale schedule is detectable).
+        expect(scheduleSpy).toHaveBeenCalledWith(30, "onHardTimeoutExpired", { generation: 5 });
+    });
+
+    it("onHardTimeoutExpired stops a running instance whose generation matches", async () => {
+        expect.assertions(2);
+
+        const spy = vi.spyOn(console, "log").mockImplementation(() => {});
+
+        const definition = defineContainer({ hardTimeout: "30s", image: "./app" });
+        // `monitor` is reached by the base ctor when `running` is true.
+        const instance = new LunoraContainer(
+            fakeDurableObjectContext({ container: { monitor: () => Promise.resolve(), running: true }, storedGeneration: 3 }) as never,
+            {},
+            definition,
+            "transcoder",
+        );
+        const stopSpy = vi.spyOn(instance, "stop").mockResolvedValue(undefined);
+
+        await instance.onHardTimeoutExpired({ generation: 3 });
+
+        expect(stopSpy).toHaveBeenCalledTimes(1);
+        expect(JSON.parse((spy.mock.calls.at(-1)![0] as string) ?? "{}")).toMatchObject({ event: "stop", message: "hard timeout reached" });
+    });
+
+    it("onHardTimeoutExpired ignores a stale generation or an already-stopped instance", async () => {
+        expect.assertions(2);
+
+        vi.spyOn(console, "log").mockImplementation(() => {});
+
+        const definition = defineContainer({ hardTimeout: "30s", image: "./app" });
+
+        const stale = new LunoraContainer(
+            fakeDurableObjectContext({ container: { monitor: () => Promise.resolve(), running: true }, storedGeneration: 5 }) as never,
+            {},
+            definition,
+            "transcoder",
+        );
+        const staleStop = vi.spyOn(stale, "stop").mockResolvedValue(undefined);
+
+        await stale.onHardTimeoutExpired({ generation: 2 });
+
+        const stopped = new LunoraContainer(
+            fakeDurableObjectContext({ container: { running: false }, storedGeneration: 1 }) as never,
+            {},
+            definition,
+            "transcoder",
+        );
+        const stoppedStop = vi.spyOn(stopped, "stop").mockResolvedValue(undefined);
+
+        await stopped.onHardTimeoutExpired({ generation: 1 });
+
+        expect(staleStop).not.toHaveBeenCalled();
+        expect(stoppedStop).not.toHaveBeenCalled();
     });
 
     it("does not break onStart when the ShardDO push throws (best-effort)", async () => {

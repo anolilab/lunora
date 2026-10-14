@@ -1,0 +1,28 @@
+"name": "CLA"
+
+# The check is the shared `cla` workflow: it reads the event payload and checks
+# nothing out. Bots and collaborators with write access are exempt.
+"on": # yamllint disable-line rule:truthy
+    "pull_request_target":
+        "types":
+            - "opened"
+            - "reopened"
+            - "synchronize"
+            - "edited"
+    # So the check can be required in a merge queue; the workflow skips it there.
+    "merge_group": # yamllint disable-line rule:empty-values
+
+"concurrency":
+    "group": "${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}"
+    "cancel-in-progress": true
+
+"permissions": {}
+
+"jobs":
+    "cla":
+        "permissions":
+            "contents": "read"
+            "pull-requests": "write" # to post the sticky comment with instructions
+        "uses": "anolilab/workflows/.github/workflows/cla.yml@fb7a881926480723026a1deaa587ceaaaee7bf12" # v24.2.0
+        "with":
+            "target-repo": "anolilab/lunora"

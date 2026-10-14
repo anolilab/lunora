@@ -1,29 +1,35 @@
 export type { ValidationPath } from "./errors";
 export { describeValue, formatPath, ValidationError } from "./errors";
+export { cyrb53 } from "./hash";
 export type { JsonSchema, SchemaNodeReader } from "./json-schema-core";
-export { jsonSchemaFromNode, objectSchemaFromNodes } from "./json-schema-core";
+export { acceptsAbsent, jsonSchemaFromNode, objectSchemaFromNodes } from "./json-schema-core";
 export { argsToJsonSchema, toJsonSchema } from "./to-json-schema";
 export type {
+    ArrayColumnValidator,
     CheckOptions,
     Column,
     ColumnMeta,
     ColumnValidator,
+    GeoPoint,
     Id,
     Infer,
     InferInsert,
     InferSelect,
+    InferStandardInput,
     InferStandardOutput,
     InsertShape,
     JsonSchemaFragment,
     MetaOptions,
+    NumberColumnValidator,
+    ObjectColumnValidator,
+    ParseOptions,
     SelectShape,
     ServerDefaultContext,
+    StringColumnValidator,
     TimestampColumnValidator,
     Validator,
     ValidatorKind,
 } from "./v";
 export { isOrWrapsFromValidator, optionalInner, v } from "./v";
-export type { InferValidatorMap, ValidatorMap } from "./validator-map";
-export { parseValidatorMap } from "./validator-map";
-
-export const VERSION = "0.0.0";
+export type { CompiledValidatorMap, InferValidatorMap, ValidatorMap } from "./validator-map";
+export { DEFER_VALIDATION, installCompiledValidatorMap, parseValidatorMap } from "./validator-map";

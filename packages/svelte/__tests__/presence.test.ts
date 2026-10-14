@@ -7,13 +7,25 @@ import { presence } from "../src/presence";
 
 const HEARTBEAT = { __lunoraRef: "presence:heartbeat" } as unknown as HeartbeatReference;
 const LIST_PRESENT = { __lunoraRef: "presence:listPresent" } as unknown as ListPresentReference;
-const SESS_ID_PATTERN = /^sess-/;
+// `randomSessionId`'s non-`randomUUID` arm (shared/random-session-id.ts) hex-encodes
+// 16 bytes of `crypto.getRandomValues`, so the id is exactly 32 lowercase hex chars.
+// There is deliberately no arm below that: a runtime with no Web Crypto throws
+// rather than mint a `Date.now()` string two sessions can share.
+const SESS_ID_PATTERN = /^[\da-f]{32}$/;
+/** The message `randomSessionId` throws when no Web Crypto is present at all. */
+const NO_WEB_CRYPTO = /no Web Crypto available/;
 
 const createPresenceFakeClient = () => {
     type Callback = (value: unknown) => void;
 
     const mutationCalls: { args: unknown; functionPath: string }[] = [];
-    const subscribeCalls: { args: unknown; callback: Callback; functionPath: string; unsubscribed: boolean }[] = [];
+    const subscribeCalls: {
+        args: unknown;
+        callback: Callback;
+        functionPath: string;
+        onError?: (error: { code?: string; message: string }) => void;
+        unsubscribed: boolean;
+    }[] = [];
     const setConnectionContextCalls: unknown[] = [];
 
     // Refcounted connection-context model mirroring the real client: holders keyed
@@ -72,11 +84,17 @@ const createPresenceFakeClient = () => {
         setConnectionContext: (context: Record<string, unknown> | undefined) => {
             setConnectionContextCalls.push(context);
         },
-        subscribe: (function_: FunctionReference, args: Record<string, unknown>, callback: Callback) => {
+        subscribe: (
+            function_: FunctionReference,
+            args: Record<string, unknown>,
+            callback: Callback,
+            options?: { onError?: (error: { code?: string; message: string }) => void },
+        ) => {
             const call = {
                 args,
                 callback,
                 functionPath: function_["__lunoraRef"],
+                onError: options?.onError,
                 unsubscribed: false,
             };
 
@@ -106,10 +124,16 @@ const flushAsync = async (): Promise<void> => {
 describe("presence (Svelte)", () => {
     beforeEach(() => {
         vi.useFakeTimers({ shouldAdvanceTime: true });
+        // `presence` gates its heartbeat/interval/listener/connection-context wiring
+        // on a browser `window` (SVELTE-01); the vitest env is `node` (no `window`),
+        // so define one for these client-path tests. The SSR test below removes it
+        // to exercise the guard, mirroring `@lunora/vue`'s `use-presence.test.ts`.
+        Object.defineProperty(globalThis, "window", { configurable: true, value: {} });
     });
 
     afterEach(() => {
         vi.useRealTimers();
+        Reflect.deleteProperty(globalThis, "window");
     });
 
     it("heartbeats on mount and again on each interval tick", async () => {
@@ -169,12 +193,17 @@ describe("presence (Svelte)", () => {
         handle.teardown();
     });
 
-    it("generates fallback session id when crypto is unavailable", () => {
+    it("mints a session id from getRandomValues when crypto.randomUUID is unavailable", () => {
         const fake = createPresenceFakeClient();
         // eslint-disable-next-line n/no-unsupported-features/node-builtins -- accessing globalThis.crypto to save/restore it for the test
         const originalCrypto = globalThis.crypto;
 
-        Object.defineProperty(globalThis, "crypto", { configurable: true, value: undefined });
+        // A non-secure origin (a plain-HTTP LAN dev/preview server) leaves
+        // `crypto.randomUUID` undefined while still shipping `getRandomValues`.
+        Object.defineProperty(globalThis, "crypto", {
+            configurable: true,
+            value: { getRandomValues: (array: Uint8Array) => array.fill(171) },
+        });
 
         try {
             const handle = presence(fake.client, "room-1", {
@@ -186,6 +215,29 @@ describe("presence (Svelte)", () => {
             expect(handle.sessionId).toMatch(SESS_ID_PATTERN);
 
             handle.teardown();
+        } finally {
+            Object.defineProperty(globalThis, "crypto", { configurable: true, value: originalCrypto });
+        }
+    });
+
+    it("refuses to mint a session id when Web Crypto is absent entirely", () => {
+        const fake = createPresenceFakeClient();
+        // eslint-disable-next-line n/no-unsupported-features/node-builtins -- accessing globalThis.crypto to save/restore it for the test
+        const originalCrypto = globalThis.crypto;
+
+        Object.defineProperty(globalThis, "crypto", { configurable: true, value: undefined });
+
+        try {
+            // `randomSessionId` used to fall back to `Date.now().toString(36)` here.
+            // That is not an id: two sessions opened in the same millisecond collide
+            // onto one presence row, and the value is guessable. Throwing is correct.
+            expect(() =>
+                presence(fake.client, "room-1", {
+                    heartbeat: HEARTBEAT,
+                    intervalMs: 500,
+                    listPresent: LIST_PRESENT,
+                }),
+            ).toThrow(NO_WEB_CRYPTO);
         } finally {
             Object.defineProperty(globalThis, "crypto", { configurable: true, value: originalCrypto });
         }
@@ -213,6 +265,32 @@ describe("presence (Svelte)", () => {
         await flushAsync();
 
         expect(fake.mutationCalls).toHaveLength(callsAtTeardown);
+    });
+
+    it("teardown is idempotent — releases the connection context exactly once (FINDING 3 regression)", () => {
+        let releaseCalls = 0;
+
+        const client = {
+            acquireConnectionContext: () => () => {
+                releaseCalls += 1;
+            },
+            mutation: () => Promise.resolve(undefined),
+            subscribe: () => () => undefined,
+        } as unknown as LunoraClient;
+
+        const handle = presence(client, "room-1", {
+            heartbeat: HEARTBEAT,
+            intervalMs: 500,
+            listPresent: LIST_PRESENT,
+            sessionId: "sess-idem",
+        });
+
+        // The auto-wired `onDestroy` and a manual `handle.teardown()` may both
+        // fire in a real component; teardown must guard so the release runs once.
+        handle.teardown();
+        handle.teardown();
+
+        expect(releaseCalls).toBe(1);
     });
 
     it("two concurrent presence stores don't clear each other's context (refcount)", () => {
@@ -244,5 +322,143 @@ describe("presence (Svelte)", () => {
         first.teardown();
 
         expect(fake.currentConnectionContext()).toBeUndefined();
+    });
+
+    it("does not heartbeat, open an interval, subscribe, or acquire connection context during SSR (no window) (SVELTE-01)", async () => {
+        const fake = createPresenceFakeClient();
+
+        // Simulate the server render: no browser `window` (this package pairs
+        // with `@lunora/nuxt`'s server rendering, where a component's init runs
+        // inside `renderToString` with no `window`).
+        Reflect.deleteProperty(globalThis, "window");
+
+        const handle = presence(fake.client, "room-1", {
+            heartbeat: HEARTBEAT,
+            intervalMs: 500,
+            listPresent: LIST_PRESENT,
+            sessionId: "sess-fixed",
+        });
+
+        // Reading the store ("rendering" it) must not trigger a live WS
+        // subscription server-side either.
+        const stopPresent = handle.present.subscribe(() => undefined);
+
+        await flushAsync();
+
+        // No setup-time heartbeat write, no live subscription, no connection
+        // context acquired.
+        expect(fake.mutationCalls).toHaveLength(0);
+        expect(fake.subscribeCalls).toHaveLength(0);
+        expect(fake.currentConnectionContext()).toBeUndefined();
+
+        // No leaked interval: advancing time fires no further heartbeats.
+        await vi.advanceTimersByTimeAsync(2000);
+        await flushAsync();
+
+        expect(fake.mutationCalls).toHaveLength(0);
+
+        // The store stays at its inert initial value.
+        expect(get(handle.present)).toBeUndefined();
+
+        stopPresent();
+
+        // Teardown itself must not throw with nothing to release/clear.
+        expect(() => {
+            handle.teardown();
+        }).not.toThrow();
+    });
+
+    // An RLS denial or a session expiry on the `listPresent` subscription used to be
+    // dropped on the floor: `present` simply froze at its last value with nothing to
+    // read and no handler to call. Matches React's `usePresence` error channel.
+    it("setData during SSR (no window) sends no heartbeat", () => {
+        const fake = createPresenceFakeClient();
+
+        Reflect.deleteProperty(globalThis, "window");
+
+        const handle = presence(fake.client, "room-1", {
+            heartbeat: HEARTBEAT,
+            intervalMs: 500,
+            listPresent: LIST_PRESENT,
+            sessionId: "sess-fixed",
+        });
+
+        handle.setData({ status: "typing" });
+
+        expect(fake.mutationCalls).toHaveLength(0);
+    });
+
+    it("setData while mounted sends a heartbeat carrying the new data", async () => {
+        const fake = createPresenceFakeClient();
+
+        const handle = presence(fake.client, "room-1", {
+            heartbeat: HEARTBEAT,
+            intervalMs: 500,
+            listPresent: LIST_PRESENT,
+            sessionId: "sess-fixed",
+        });
+
+        await flushAsync();
+
+        expect(fake.mutationCalls).toHaveLength(1);
+
+        handle.setData({ status: "typing" });
+
+        expect(fake.mutationCalls).toHaveLength(2);
+        expect(fake.mutationCalls[1]?.args).toMatchObject({ roomId: "room-1", sessionId: "sess-fixed", data: { status: "typing" } });
+
+        handle.teardown();
+    });
+
+    it("setData after teardown sends no heartbeat", async () => {
+        const fake = createPresenceFakeClient();
+
+        const handle = presence(fake.client, "room-1", {
+            heartbeat: HEARTBEAT,
+            intervalMs: 500,
+            listPresent: LIST_PRESENT,
+            sessionId: "sess-fixed",
+        });
+
+        await flushAsync();
+        handle.teardown();
+
+        const callsAtTeardown = fake.mutationCalls.length;
+
+        handle.setData({ status: "typing" });
+        await flushAsync();
+
+        expect(fake.mutationCalls).toHaveLength(callsAtTeardown);
+    });
+
+    it("surfaces a listPresent subscription error on `error` and through `onError`", async () => {
+        const fake = createPresenceFakeClient();
+        const seen: { code?: string; message: string }[] = [];
+
+        const handle = presence(fake.client, "room-1", {
+            heartbeat: HEARTBEAT,
+            listPresent: LIST_PRESENT,
+            onError: (subscriptionError) => seen.push(subscriptionError),
+            sessionId: "sess-fixed",
+        });
+
+        const stopPresent = handle.present.subscribe(() => undefined);
+        const stopError = handle.error.subscribe(() => undefined);
+
+        await flushAsync();
+
+        const call = fake.subscribeCalls[0]!;
+
+        call.callback([{ sessionId: "sess-fixed" }]);
+        call.onError?.({ code: "FORBIDDEN", message: "denied" });
+
+        expect(get(handle.error)?.message).toBe("denied");
+        expect(seen).toStrictEqual([{ code: "FORBIDDEN", message: "denied" }]);
+        // The last good value is retained — the error is additive, not a reset.
+        expect(get(handle.present)).toStrictEqual([{ sessionId: "sess-fixed" }]);
+
+        stopError();
+        stopPresent();
+        handle.teardown();
     });
 });

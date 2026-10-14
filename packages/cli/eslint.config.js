@@ -147,6 +147,19 @@ export default createConfig(
             "import/prefer-default-export": "off",
         },
     },
+    // `semver` is a devDependency ON PURPOSE: packem externalizes `dependencies`
+    // and inlines everything else, so keeping it out of `dependencies` is what
+    // bundles it into `dist` and keeps it off the manifest consumers install
+    // (the same trick `@lunora/agent` / `@lunora/server` use for the internal
+    // `@lunora/dispatch` and `@lunora/search-core`). `import/no-extraneous-
+    // dependencies` reads that as a mistake, so it is scoped off for the files
+    // that import it rather than suppressed at the import site.
+    {
+        files: ["**/commands/add/features.ts", "**/commands/dev/tunnel.ts"],
+        rules: {
+            "import/no-extraneous-dependencies": "off",
+        },
+    },
     // Behavior-breaking autofixers — kept off (not style). sort-objects reorders the
     // keys of JSON.stringify'd wire payloads / canonical objects, changing the bytes on
     // the wire and breaking order-sensitive tests; prefer-expect-type-of rewrites a
@@ -156,6 +169,15 @@ export default createConfig(
         rules: {
             "perfectionist/sort-objects": "off",
             "vitest/prefer-expect-type-of": "off",
+        },
+    },
+    // `jsdoc/text-escaping` escapes `<` and `&` in doc comments into HTML entities and
+    // offers no way to exempt code spans, so its autofix turns `Doc<T>` into `Doc&lt;T>` —
+    // which is then what every reader sees on hover. Last in the list so it applies to
+    // every file, including the scoped blocks above.
+    {
+        rules: {
+            "jsdoc/text-escaping": "off",
         },
     },
 );

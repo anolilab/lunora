@@ -10,6 +10,8 @@
 
 <!-- END_PACKAGE_OG_IMAGE_PLACEHOLDER -->
 
+> **Experimental** — this package is outside the Lunora 1.0 stability promise: its API may change in any release, without a major version bump.
+
 <br />
 
 <div align="center">
@@ -34,7 +36,7 @@
 
 ---
 
-A small AI helper for Lunora, built on the [Vercel AI SDK](https://ai-sdk.dev) v6 core and Cloudflare's official [`workers-ai-provider`](https://github.com/cloudflare/ai). Call `generateText`/`streamText`/`generateObject`/`embed`/`tool` from any function handler. **Cloudflare Workers AI is the zero-config default**, but the helper is provider-agnostic: every call takes either a Workers AI model id (a string) or any AI SDK model object — `@ai-sdk/openai`, `@ai-sdk/anthropic`, OpenRouter, … — so apps are never locked to Workers AI. Pair `embed` with [`@lunora/vectors`](https://www.npmjs.com/package/@lunora/vectors) for RAG.
+A small AI helper for Lunora, built on the [Vercel AI SDK](https://ai-sdk.dev) v7 core and Cloudflare's official [`workers-ai-provider`](https://github.com/cloudflare/ai). Call `generateText`/`streamText`/`generateObject`/`embed`/`tool` from any function handler. **Cloudflare Workers AI is the zero-config default**, but the helper is provider-agnostic: every call takes either a Workers AI model id (a string) or any AI SDK model object — `@ai-sdk/openai`, `@ai-sdk/anthropic`, OpenRouter, … — so apps are never locked to Workers AI. Pair `embed` with [`@lunora/bindings/vectors`](https://www.npmjs.com/package/@lunora/bindings) for RAG.
 
 Part of the [Lunora](https://github.com/anolilab/lunora) framework — a type-safe, real-time backend on Cloudflare Workers + Durable Objects with a Vite-first DX.
 
@@ -52,19 +54,25 @@ yarn add @lunora/ai
 pnpm add @lunora/ai
 ```
 
-To use another provider, install it alongside (optional): `pnpm add @ai-sdk/openai`.
+Other providers need no extra install: `ctx.ai.model("anthropic/claude-sonnet-5")` routes through Cloudflare AI Gateway (see below).
 
 ## Usage
 
-When a function uses AI, codegen wires a typed **`ctx.ai`** onto the action context (inference is an external call, so — like `ctx.fetch` — it lives on actions). Workers AI is the zero-config default; pass any AI SDK model to use another provider.
+When a function uses AI, codegen wires a typed **`ctx.ai`** onto the action context (inference is an external call, so — like `ctx.fetch` — it lives on actions). Workers AI is the zero-config default; a `"<provider>/<model>"` id reaches any other provider through Cloudflare AI Gateway, and any AI SDK model object passes straight through.
 
 ```ts
 // lunora/summarize.ts — ctx.ai (codegen-wired), Workers AI by default
 import { action, v } from "@/lunora/_generated/server";
 import { generateText } from "@lunora/ai";
 
-export const summarize = action.input({ text: v.string() }).action(async ({ args: { text }, ctx }) => {
+export const summarize = action.input({ text: v.string().max(20_000) }).action(async ({ args: { text }, ctx }) => {
     const { text: summary } = await generateText({
+        // Both ends of the token bill are bounded: the input by `.max()` above,
+        // the completion here. An `action` is public RPC and inference is
+        // metered, so an unbounded completion is a denial-of-wallet vector — a
+        // short prompt can ask for an arbitrarily long answer, and output
+        // tokens are the expensive half.
+        maxOutputTokens: 300,
         model: ctx.ai.model("@cf/meta/llama-3.3-70b-instruct-fp8-fast"),
         prompt: `Summarize:\n\n${text}`,
     });
@@ -74,15 +82,16 @@ export const summarize = action.input({ text: v.string() }).action(async ({ args
 ```
 
 ```ts
-// Bring-your-own provider — same call surface, no lock-in
-import { streamText } from "@lunora/ai";
-import { openai } from "@ai-sdk/openai";
-
-const result = streamText({ model: openai("gpt-5"), messages });
+// Any provider: change the string, nothing else. Routed through Cloudflare AI
+// Gateway over the same `AI` binding — Unified Billing or keys stored on the
+// gateway, so the app holds no provider API key.
+const result = streamText({ model: ctx.ai.model("anthropic/claude-sonnet-5"), messages });
 ```
 
+Every `ctx.ai.model(...)` call is traced and its tokens and cost are counted per function (`gen_ai.usage.*`), which Studio's **AI usage** page charts. `lunora cloudflare ai-gateway` creates a gateway for the app and sets `LUNORA_AI_GATEWAY_ID`; without it, calls use the account's `default` gateway.
+
 ```ts
-// RAG: embed via ctx.ai, store/search with @lunora/vectors (ctx.vectors)
+// RAG: embed via ctx.ai, store/search with @lunora/bindings/vectors (ctx.vectors)
 import { embed } from "@lunora/ai";
 
 const { embedding } = await embed({ model: ctx.ai.embeddingModel("@cf/baai/bge-base-en-v1.5"), value: text });
@@ -93,10 +102,14 @@ Outside an action — in the worker entry, a Durable Object, or a queue/schedule
 
 > This README covers the basics. For the full API, options, and guides, see the **[documentation](https://lunora.sh/docs)**.
 
+### Local dev without a Cloudflare login
+
+Workers AI only runs remotely, so the `AI` binding needs a Cloudflare login even in dev. When `lunora dev` or `vite dev` finds none (no `wrangler login`, no `CLOUDFLARE_API_TOKEN`), it leaves the binding out and prints a warning instead of failing to boot. AI SDK model objects and `"<provider>/<model>"` slugs through `LUNORA_AI_PROXY_URL` keep working; `@cf/…` models throw until you log in.
+
 ## Related
 
 - [`@lunora/server`](https://www.npmjs.com/package/@lunora/server) — function primitives whose `ctx.ai` this package backs.
-- [`@lunora/vectors`](https://www.npmjs.com/package/@lunora/vectors) — pair `embed` with Vectorize for RAG.
+- [`@lunora/bindings/vectors`](https://www.npmjs.com/package/@lunora/bindings) — pair `embed` with Vectorize for RAG.
 - [`@lunora/vite`](https://www.npmjs.com/package/@lunora/vite) — infers and reconciles the `AI` binding into `wrangler.jsonc`.
 
 ## Supported Node.js Versions

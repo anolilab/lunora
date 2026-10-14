@@ -1,4 +1,5 @@
 import { expect, test } from "../fixtures/lunora.js";
+import { BASE_URL } from "../origin";
 
 /**
  * Auth flow E2E — exercises `@lunora/auth`'s better-auth integration end to
@@ -11,7 +12,6 @@ import { expect, test } from "../fixtures/lunora.js";
  *   - wrong password → 401 with INVALID_EMAIL_OR_PASSWORD code
  *   - weak password (< 8 chars) → 400 PASSWORD_TOO_SHORT
  */
-const WORKER_URL = process.env.LUNORA_E2E_WORKER_URL ?? "http://localhost:5173";
 
 test.beforeEach(async ({ resetServer }) => {
     await resetServer();
@@ -28,9 +28,9 @@ test("user can sign up and sees an authenticated session", async ({ page }) => {
 
     // Sign up via better-auth's REST endpoint directly so we still validate
     // the worker route on top of the UI.
-    const signupResponse = await page.request.post(`${WORKER_URL}/api/auth/sign-up/email`, {
+    const signupResponse = await page.request.post(`${BASE_URL}/api/auth/sign-up/email`, {
         data: { email, name: email, password },
-        headers: { Origin: WORKER_URL },
+        headers: { Origin: BASE_URL },
     });
 
     expect(signupResponse.status()).toBe(200);
@@ -54,9 +54,9 @@ test("sign in with wrong password returns a helpful error", async ({ page }) => 
     const password = "test-password-1234"; // gitleaks:allow
 
     // Pre-create the user via API so we can attempt a failed login.
-    const signupResponse = await page.request.post(`${WORKER_URL}/api/auth/sign-up/email`, {
+    const signupResponse = await page.request.post(`${BASE_URL}/api/auth/sign-up/email`, {
         data: { email, name: email, password },
-        headers: { Origin: WORKER_URL },
+        headers: { Origin: BASE_URL },
     });
 
     expect(signupResponse.status()).toBe(200);
@@ -89,9 +89,9 @@ test("sign out clears the session cookie", async ({ signedInPage }) => {
 });
 
 test("sign up with weak password (< 8 chars) returns 400 PASSWORD_TOO_SHORT", async ({ page }) => {
-    const response = await page.request.post(`${WORKER_URL}/api/auth/sign-up/email`, {
+    const response = await page.request.post(`${BASE_URL}/api/auth/sign-up/email`, {
         data: { email: `weak-${Date.now()}@lunora.test`, name: "weak", password: "abc" },
-        headers: { Origin: WORKER_URL },
+        headers: { Origin: BASE_URL },
     });
 
     expect(response.status()).toBe(400);

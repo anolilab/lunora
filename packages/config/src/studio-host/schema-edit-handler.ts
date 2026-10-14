@@ -16,15 +16,17 @@
  * answers `409` with `{ needsMigration: true, ... }` and writes nothing; the
  * editor routes these to the migration handoff (Item 5).
  */
-import { existsSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 
-import { CodegenDiagnosticError, runCodegen } from "@lunora/codegen";
+import type { CodegenOptions } from "@lunora/codegen";
 
 import join from "../path";
 import type { ApplyFailureReason, SchemaEdit } from "../schema-edit/mutate";
 import { applyAdditiveEdit, classifyEdit } from "../schema-edit/mutate";
 import type { ParseSchemaResult, SchemaTable } from "../schema-edit/parse";
 import { parseSchema } from "../schema-edit/parse";
+import { runStudioCodegen } from "./codegen-options";
+import writeFileAtomic from "./write-atomic";
 
 /**
  * Endpoint path both dev hosts mount the handler at. Distinct from the CLI's
@@ -35,6 +37,8 @@ const SCHEMA_EDIT_ENDPOINT = "/__lunora/schema-edit";
 
 /** A request adapted from the host transport. */
 interface SchemaEditRequest {
+    /** API-spec mode the host runs codegen with; forwarded to the regeneration. */
+    readonly apiSpec?: CodegenOptions["apiSpec"];
     /** Parsed JSON body for a `POST`; ignored for `GET`. */
     readonly body?: unknown;
     /** HTTP method (`GET` / `POST`). */
@@ -103,14 +107,6 @@ const readSchema = (schemaPath: string): { response: SchemaEditResponse } | { ta
     return { tables: parsed.tables };
 };
 
-/** Write the new schema source atomically (temp file + rename). */
-const writeSchemaAtomic = (schemaPath: string, text: string): void => {
-    const temporaryPath = `${schemaPath}.lunora-tmp`;
-
-    writeFileSync(temporaryPath, text, "utf8");
-    renameSync(temporaryPath, schemaPath);
-};
-
 /** A destructive edit never writes; it hands off to the migrations workflow. */
 const needsMigrationResponse = (edit: SchemaEdit): SchemaEditResponse => {
     return {
@@ -126,9 +122,9 @@ const needsMigrationResponse = (edit: SchemaEdit): SchemaEditResponse => {
 
 /** Handle a `POST` additive/destructive edit. */
 const handlePost = (request: SchemaEditRequest, schemaPath: string): SchemaEditResponse => {
-    const edit = request.body as SchemaEdit | undefined;
+    const edit = request.body as SchemaEdit | null | undefined;
 
-    if (edit === undefined || typeof edit !== "object" || typeof (edit as { kind?: unknown }).kind !== "string") {
+    if (edit === undefined || edit === null || typeof edit !== "object" || typeof (edit as { kind?: unknown }).kind !== "string") {
         return { body: { error: "invalid-edit", ok: false }, status: 400 };
     }
 
@@ -147,19 +143,16 @@ const handlePost = (request: SchemaEditRequest, schemaPath: string): SchemaEditR
         return { body: { error: applied.reason, ok: false }, status: statusForFailure(applied.reason) };
     }
 
-    writeSchemaAtomic(schemaPath, applied.text);
+    writeFileAtomic(schemaPath, applied.text);
 
-    // Re-run codegen so the generated types + DO shape follow the new source.
-    let diagnostics: ReadonlyArray<string> = [];
+    // Re-run codegen so the generated types + DO shape follow the new source —
+    // unless the codegen switch is off, which `runStudioCodegen` owns.
+    let diagnostics: ReadonlyArray<string>;
 
     try {
-        runCodegen({ lunoraDirectory: request.schemaDirectory ?? "lunora", projectRoot: request.projectRoot });
+        diagnostics = runStudioCodegen(request);
     } catch (error: unknown) {
-        if (error instanceof CodegenDiagnosticError) {
-            diagnostics = [error.message];
-        } else {
-            return { body: { error: error instanceof Error ? error.message : String(error), ok: false }, status: 500 };
-        }
+        return { body: { error: error instanceof Error ? error.message : String(error), ok: false }, status: 500 };
     }
 
     const parsed = parseSchema(applied.text);

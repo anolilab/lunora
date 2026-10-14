@@ -3,27 +3,49 @@
  * tables) against `lunora/migrations/.snapshot.json` and emit a timestamped
  * SQL migration file.
  *
- * The applied migrations themselves still go through `@lunora/d1`'s
- * `MigrationRunner` at deploy time — this command only **produces** the SQL.
+ * ## How the emitted file is applied
+ *
+ * With `wrangler d1 execute <database> --file lunora/migrations/<file>.sql`,
+ * the same way `@lunora/auth`'s compiled schema is applied. It is a
+ * multi-statement file — one `CREATE TABLE` plus a `CREATE INDEX` per index,
+ * per table — so it is NOT a `@lunora/d1` `Migration`: `MigrationRunner`
+ * rejects anything past the first statement (`assertSingleStatement`), which
+ * is why feeding it a generated file throws. Split the file by hand if you
+ * want the runner's hash-tracked, batched application.
+ *
+ * ## What the file is worth applying for
+ *
+ * Not the creates: the runtime already provisions every `.global()` table on
+ * first use (`runSqlGlobalTableMigrations`), idempotently and additively, so
+ * `CREATE TABLE IF NOT EXISTS` / `ADD COLUMN` / `CREATE INDEX IF NOT EXISTS`
+ * only restate what the worker does for itself. The statements the runtime
+ * will never issue are the destructive ones — `DROP TABLE`, `DROP INDEX`, and
+ * everything under the file's "NOT auto-generated" comment block — and those
+ * are the reason to run it. The snapshot it writes alongside is what makes the
+ * next diff see a dropped table at all.
  */
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 
-import { discoverMigrations, discoverSchema } from "@lunora/codegen";
+import { discoverMigrations, discoverSchema, readPackageDependencies } from "@lunora/codegen";
+import { isInteractive, promptSelect, promptText } from "@lunora/config";
+import { LunoraError } from "@lunora/errors";
 import { join } from "@visulima/path";
 import { Project } from "ts-morph";
 
-import resolveAdminBaseUrl from "../../util/admin-url";
-import type { CommandHandler } from "../../util/command";
-import { defineHandler } from "../../util/command";
+import { REPROJECTION_MIGRATION_PREFIX, reprojectionMigrationTable } from "../../../../../shared/reprojection-id";
+import { resolveAdminBearer, targetsRemoteWorker } from "../../util/admin-token";
+import { adminFetch, normalizeAdminBaseUrl, resolveAdminBaseUrl } from "../../util/admin-url";
+import type { Refusal } from "../../util/exit-code";
+import { EXIT_CODE, exitCodeForStatus, isRefusal } from "../../util/exit-code";
 import type { Logger } from "../../util/logger";
 import type { SchemaSnapshot } from "../../util/migration-diff";
 import { diffSnapshots, renderMigrationFile } from "../../util/migration-diff";
-import { resolveProductionWorkerUrl } from "../../util/resolve-target";
 import schemaIrToSnapshot from "../../util/schema-snapshot";
-import { runExportCommand, runImportCommand } from "../data-transfer";
+import { runExportCommand } from "../data-transfer/export";
+import { runImportCommand } from "../data-transfer/import";
 import type { FetchLike } from "../run/handler";
-import type { MigrateOptions } from "./index";
+import { readAndLogBody } from "../run/handler";
 
 interface MigrateGenerateCommandOptions {
     cwd?: string;
@@ -38,6 +60,8 @@ interface MigrateGenerateCommandResult {
     code: number;
     /** Whether the diff was empty (no changes detected). */
     empty: boolean;
+    /** Why it failed, when the reason is known — the shared `CommandResult` contract. */
+    error?: string;
     /** Absolute path to the migration file (empty string when nothing was written). */
     migrationFile: string;
 }
@@ -87,14 +111,14 @@ const loadSnapshot = (path: string): SchemaSnapshot | undefined => {
 
         // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- parsed is untrusted file content cast to SchemaSnapshot; the version may be anything on disk
         if (parsed.version !== 1) {
-            throw new Error(`unsupported snapshot version: ${parsed.version as unknown as string}`);
+            throw new LunoraError("INTERNAL", `unsupported snapshot version: ${parsed.version as unknown as string}`);
         }
 
         return parsed;
     } catch (error: unknown) {
         const message = error instanceof Error ? error.message : String(error);
 
-        throw new Error(`failed to read ${path}: ${message}`, { cause: error });
+        throw new LunoraError("INTERNAL", `failed to read ${path}: ${message}`, { cause: error });
     }
 };
 
@@ -103,9 +127,11 @@ const runMigrateGenerateCommand = (options: MigrateGenerateCommandOptions): Migr
     const schemaPath = join(cwd, "lunora", "schema.ts");
 
     if (!existsSync(schemaPath)) {
-        options.logger.error(`schema not found: ${schemaPath} — run \`vis generate lunora-table --name=<name>\` to create one`);
+        const error = `schema not found: ${schemaPath} — run \`vis generate lunora-table --name=<name>\` to create one`;
 
-        return { code: 1, empty: true, migrationFile: "" };
+        options.logger.error(error);
+
+        return { code: EXIT_CODE.NOT_FOUND, empty: true, error, migrationFile: "" };
     }
 
     // Parse the current schema with ts-morph (reusing the codegen discoverer).
@@ -121,9 +147,11 @@ const runMigrateGenerateCommand = (options: MigrateGenerateCommandOptions): Migr
     try {
         previousSnapshot = loadSnapshot(snapshotPath);
     } catch (error: unknown) {
-        options.logger.error(error instanceof Error ? error.message : String(error));
+        const message = error instanceof Error ? error.message : String(error);
 
-        return { code: 1, empty: true, migrationFile: "" };
+        options.logger.error(message);
+
+        return { code: EXIT_CODE.USAGE, empty: true, error: message, migrationFile: "" };
     }
 
     const diff = diffSnapshots(previousSnapshot, nextSnapshot);
@@ -214,7 +242,27 @@ const RESERVED_WORDS = new Set([
     "with",
     "yield",
 ]);
-const DEFINE_MIGRATION_IMPORT = `import { defineMigration } from "@lunora/server";`;
+
+/**
+ * The `defineMigration` import the scaffold writes.
+ *
+ * `@lunora/server` is real, but it is NOT a declared dependency of a project
+ * that depends on the `lunorash` umbrella — there the specifier that resolves is
+ * `lunorash/server`, which re-exports it. Emitting the scoped form
+ * unconditionally produced a file that did not resolve in exactly the setup the
+ * docs recommend, so the choice follows the same rule codegen uses for every
+ * other generated import: umbrella when the project declares it, scoped
+ * otherwise.
+ */
+/** An already-scaffolded `defineMigration` import, under EITHER supported specifier. */
+const EXISTING_DEFINE_MIGRATION_IMPORT_RE = /^import\s*\{\s*defineMigration\s*\}\s*from\s*["'](?:@lunora\/server|lunorash\/server)["'][^\n]*$/mu;
+
+const defineMigrationImportFor = (projectRoot: string): string => {
+    const dependencies = readPackageDependencies(projectRoot);
+    const useUmbrella = dependencies?.has("lunorash") ?? false;
+
+    return `import { defineMigration } from "${useUmbrella ? "lunorash/server" : "@lunora/server"}";`;
+};
 const RUN_MIGRATION_OP = "__lunora_admin__:runMigration";
 const MIGRATION_STATUS_OP = "__lunora_admin__:migrationStatus";
 const MIGRATE_ENDPOINT_PATH = "/_lunora/migrate";
@@ -241,7 +289,14 @@ interface MigrateCreateCommandOptions {
     logger: Logger;
     /** Free-text migration name; slugified into the `id` and export identifier. */
     name: string;
-    /** Target table the migration iterates. Left as a TODO placeholder when omitted. */
+
+    /**
+     * Inject a custom table prompt (tests, non-TTY callers). Receives the
+     * table names discovered in `lunora/schema.ts` (possibly empty) and
+     * resolves to the chosen table, or `undefined` to abort.
+     */
+    promptTable?: (tables: ReadonlyArray<string>) => Promise<string | undefined>;
+    /** Target table the migration iterates. Prompted for interactively when omitted. */
     table?: string;
 }
 
@@ -251,20 +306,88 @@ interface MigrateCreateCommandResult {
     file: string;
 }
 
+/** Table names declared in `lunora/schema.ts`, or `[]` when the schema is missing or unparsable. */
+const discoverKnownTables = (cwd: string): string[] => {
+    const schemaPath = join(cwd, "lunora", "schema.ts");
+
+    if (!existsSync(schemaPath)) {
+        return [];
+    }
+
+    try {
+        const project = new Project({ skipAddingFilesFromTsConfig: true });
+
+        return discoverSchema(project, schemaPath).tables.map((table) => table.name);
+    } catch {
+        // Best-effort convenience only — an unparsable schema just means no suggestions.
+        return [];
+    }
+};
+
 /**
- * `lunora migrate create &lt;name>` — scaffold a `defineMigration({...})` block in
+ * Default interactive table prompt: a numbered pick over the schema's known
+ * tables when any were discovered, else a free-text question.
+ */
+const promptForTable = async (tables: ReadonlyArray<string>): Promise<string | undefined> => {
+    if (tables.length > 0) {
+        return promptSelect(
+            "Which table does this migration iterate?",
+            tables.map((name) => {
+                return { label: name, value: name };
+            }),
+        );
+    }
+
+    return promptText("Target table for the migration: ");
+};
+
+/**
+ * Resolve the target table for `migrate create`: the explicit `--table` when
+ * given, else an interactive prompt (injected or the default). Returns
+ * `undefined` after logging when the table cannot be resolved — omitted in a
+ * non-interactive context, or the prompt was aborted.
+ */
+const resolveCreateTable = async (cwd: string, options: MigrateCreateCommandOptions): Promise<string | undefined> => {
+    if (options.table !== undefined) {
+        return options.table;
+    }
+
+    const prompt = options.promptTable ?? (isInteractive() ? promptForTable : undefined);
+
+    if (prompt === undefined) {
+        options.logger.error("migrate create requires a target table when not running interactively — re-run with --table <table>");
+
+        return undefined;
+    }
+
+    const answer = await prompt(discoverKnownTables(cwd));
+    const table = answer?.trim();
+
+    if (table === undefined || table === "") {
+        options.logger.error("no table selected — re-run with --table <table>");
+
+        return undefined;
+    }
+
+    return table;
+};
+
+/**
+ * `lunora migrate create <name>` — scaffold a `defineMigration({...})` block in
  * `lunora/migrations.ts`, appending to the file (and creating it with the
  * import) when it already exists. Refuses to clobber an existing migration of
- * the same id or export name.
+ * the same id or export name. The target table comes from `--table`, or from
+ * an interactive prompt when omitted (a non-interactive run without `--table`
+ * fails instead of scaffolding a placeholder).
  */
-const runMigrateCreateCommand = (options: MigrateCreateCommandOptions): MigrateCreateCommandResult => {
+const runMigrateCreateCommand = async (options: MigrateCreateCommandOptions): Promise<MigrateCreateCommandResult> => {
     const cwd = options.cwd ?? process.cwd();
     const slug = kebabCase(options.name);
 
     if (slug === "") {
         options.logger.error(`invalid migration name: "${options.name}" — must contain at least one alphanumeric character`);
 
-        return { code: 1, file: "" };
+        return { code: EXIT_CODE.USAGE, file: "" };
     }
 
     const exportName = camelCase(slug);
@@ -278,18 +401,22 @@ const runMigrateCreateCommand = (options: MigrateCreateCommandOptions): MigrateC
             `invalid migration name: "${options.name}" derives the export \`${exportName}\`, which is not a valid identifier — pick a name that starts with a letter and isn't a reserved word`,
         );
 
-        return { code: 1, file: "" };
+        return { code: EXIT_CODE.USAGE, file: "" };
     }
 
-    const table = options.table ?? "TODO_table";
+    const table = await resolveCreateTable(cwd, options);
+
+    if (table === undefined) {
+        return { code: EXIT_CODE.USAGE, file: "" };
+    }
 
     // `table` is written verbatim into generated TypeScript (`table: "..."`),
-    // so it must be a bare identifier — otherwise a crafted `--table` value can
-    // inject arbitrary source into lunora/migrations.ts.
+    // so it must be a bare identifier — otherwise a crafted `--table` (or
+    // prompted) value can inject arbitrary source into lunora/migrations.ts.
     if (!IDENTIFIER_PATTERN.test(table)) {
-        options.logger.error(`invalid --table: "${table}" — must be a valid identifier ([A-Za-z_][A-Za-z0-9_]*)`);
+        options.logger.error(`invalid table: "${table}" — must be a valid identifier ([A-Za-z_][A-Za-z0-9_]*)`);
 
-        return { code: 1, file: "" };
+        return { code: EXIT_CODE.USAGE, file: "" };
     }
 
     const lunoraDirectory = join(cwd, "lunora");
@@ -300,13 +427,22 @@ const runMigrateCreateCommand = (options: MigrateCreateCommandOptions): MigrateC
     if (content.includes(`id: "${slug}"`) || new RegExp(String.raw`\bexport const ${exportName}\b`, "u").test(content)) {
         options.logger.error(`a migration with id "${slug}" (export \`${exportName}\`) already exists in ${file}`);
 
-        return { code: 1, file: "" };
+        return { code: EXIT_CODE.CONFLICT, file: "" };
     }
 
+    const defineMigrationImport = defineMigrationImportFor(cwd);
+
     if (content.trim() === "") {
-        content = `${DEFINE_MIGRATION_IMPORT}\n`;
-    } else if (!content.includes(DEFINE_MIGRATION_IMPORT)) {
-        content = `${DEFINE_MIGRATION_IMPORT}\n${content}`;
+        content = `${defineMigrationImport}\n`;
+    } else if (EXISTING_DEFINE_MIGRATION_IMPORT_RE.test(content)) {
+        // An existing scaffold may carry the OTHER specifier — a file written
+        // before the project adopted the `lunorash` umbrella (or after it
+        // dropped it). Matching only the specifier we would emit meant
+        // prepending a second `defineMigration` import beside the first, and a
+        // duplicate local binding does not compile.
+        content = content.replace(EXISTING_DEFINE_MIGRATION_IMPORT_RE, defineMigrationImport);
+    } else {
+        content = `${defineMigrationImport}\n${content}`;
     }
 
     const block = `export const ${exportName} = defineMigration({
@@ -319,10 +455,6 @@ const runMigrateCreateCommand = (options: MigrateCreateCommandOptions): MigrateC
     writeFileSync(file, `${content.trimEnd()}\n\n${block}\n`, "utf8");
 
     options.logger.success(`scaffolded migration "${slug}" in ${file}`);
-
-    if (options.table === undefined) {
-        options.logger.warn(`set the \`table\` field on "${slug}" — it defaults to "${table}"`);
-    }
 
     return { code: 0, file };
 };
@@ -373,6 +505,23 @@ interface MigrateDataRequest {
 
 /** Resolve the table for `options.id`, logging and returning `undefined` on any failure. */
 const resolveValidatedTable = (cwd: string, options: MigrateDataCommandOptions): string | undefined => {
+    // The framework's re-projection backfill is not a `defineMigration` in the
+    // user's `lunora/`, so the AST scan below can never find it and the
+    // documented command would exit 1 without a network call. Its table is in
+    // the id, and the shard validates the id anyway (an unaffected or unknown
+    // table has no migration and answers MIGRATION_NOT_FOUND).
+    const reserved = reprojectionMigrationTable(options.id);
+
+    if (reserved !== undefined) {
+        return reserved;
+    }
+
+    if (options.id.startsWith(REPROJECTION_MIGRATION_PREFIX)) {
+        options.logger.error(`"${options.id}" names no table — use ${REPROJECTION_MIGRATION_PREFIX}<table>`);
+
+        return undefined;
+    }
+
     let table: string | undefined;
 
     try {
@@ -402,48 +551,94 @@ const resolveValidatedTable = (cwd: string, options: MigrateDataCommandOptions):
  * Validate the guards (`--prod`/`--yes`), token, target table, and fetch impl
  * for a data migration. Returns `undefined` after logging when any check fails.
  */
-const resolveMigrateDataRequest = (options: MigrateDataCommandOptions): MigrateDataRequest | undefined => {
+const resolveMigrateDataRequest = (options: MigrateDataCommandOptions): MigrateDataRequest | Refusal => {
     const cwd = options.cwd ?? process.cwd();
 
     if (options.prod && options.url === undefined) {
         options.logger.error("--prod requires an explicit --url (refusing to migrate the implicit localhost worker)");
 
-        return undefined;
-    }
-
-    if (options.prod && (options.subcommand === "up" || options.subcommand === "down") && !options.yes) {
-        options.logger.error(`migrate ${options.subcommand} --prod runs the migration against production. Re-run with --yes to confirm.`);
-
-        return undefined;
-    }
-
-    const token = options.token ?? process.env.LUNORA_ADMIN_TOKEN;
-
-    if (!token) {
-        options.logger.error("admin token required — pass --token or set LUNORA_ADMIN_TOKEN");
-
-        return undefined;
+        return { refused: EXIT_CODE.USAGE };
     }
 
     const table = resolveValidatedTable(cwd, options);
 
     if (table === undefined) {
-        return undefined;
+        // The migration id names no table in the project's schema.
+        return { refused: EXIT_CODE.USAGE };
     }
 
-    const baseUrl = resolveAdminBaseUrl(options.url, options.logger);
+    const baseUrl = resolveAdminBaseUrl(options.url, options.logger, options.cwd);
 
     if (baseUrl === undefined) {
+        // `resolveAdminBaseUrl` logged an invalid `--url`, or its refusal to put a
+        // bearer on the wire in cleartext — both are the target you named.
+        return { refused: EXIT_CODE.USAGE };
+    }
+
+    // Resolved after `baseUrl`, and through the shared resolver, because the
+    // `.dev.vars` fallback is gated on the target being loopback — it needs to
+    // know where the request is going. Reading only `--token`/the environment
+    // made `migrate up/down/status` the one admin command that still demanded a
+    // flag against the local worker, where `lunora dev` has already written the
+    // token into `.dev.vars`.
+    const { token } = resolveAdminBearer({ cwd, token: options.token, url: baseUrl });
+
+    if (!token) {
+        options.logger.error("admin token required — pass --token, set LUNORA_ADMIN_TOKEN, or add it to .dev.vars (local targets only)");
+
+        return { refused: EXIT_CODE.AUTH };
+    }
+
+    // Gated on the RESOLVED destination, not on `--prod`: the flag is the
+    // operator's self-declaration, and omitting it against `--url https://…`
+    // used to rewrite every row in production with no confirmation at all.
+    if ((options.subcommand === "up" || options.subcommand === "down") && targetsRemoteWorker({ prod: options.prod, url: baseUrl }) && !options.yes) {
+        options.logger.error(`migrate ${options.subcommand} runs the migration against ${baseUrl}, which is not local. Re-run with --yes to confirm.`);
+
+        return { refused: EXIT_CODE.USAGE };
+    }
+
+    const fetchImpl: FetchLike = options.fetchImpl ?? adminFetch;
+
+    return { fetchImpl, requestUrl: `${baseUrl}${MIGRATE_ENDPOINT_PATH}`, table, token };
+};
+
+/**
+ * Why a migration fan-out failed according to its own response BODY, or
+ * `undefined` when it did not.
+ *
+ * `/_lunora/migrate` answers `200` unconditionally: the coordinator folds every
+ * per-shard outcome into the body (`{ status, ok, failed, shards }`) and the
+ * route returns it verbatim. So `Response.ok` is `true` for a migration that
+ * threw on every shard, and reading only the status line reported a clean
+ * success over data nothing touched — with the post-deploy migration step then
+ * advancing the committed `.lunora-schema.json` baseline past a breaking change
+ * whose backfill ran nowhere.
+ *
+ * The identical trap on the identical roll-up shape is documented at the import
+ * command's 207 Multi-Status branch (`../data-transfer/import.ts`).
+ *
+ * Two independent signals, because they mean different things: `failed` counts
+ * shards the fan-out could not reach at all, while `status: "failed"` is the
+ * roll-up over the shards it DID reach. Either one is a failed run.
+ */
+const migrationRollUpFailure = (body: unknown): string | undefined => {
+    if (body === null || typeof body !== "object") {
         return undefined;
     }
 
-    const fetchImpl: FetchLike = options.fetchImpl ?? (globalThis as unknown as { fetch: FetchLike }).fetch;
+    const rollUp = body as { failed?: unknown; status?: unknown };
+    const unreachable = typeof rollUp.failed === "number" && rollUp.failed > 0 ? rollUp.failed : 0;
 
-    if (typeof fetchImpl !== "function") {
-        throw new TypeError("no fetch implementation available — pass fetchImpl or run on Node >= 18");
+    if (unreachable > 0) {
+        return `${String(unreachable)} shard(s) could not be reached — their rows were NOT migrated (see the per-shard errors above)`;
     }
 
-    return { fetchImpl, requestUrl: `${baseUrl}${MIGRATE_ENDPOINT_PATH}`, table, token };
+    if (rollUp.status === "failed") {
+        return "the migration reported `failed` on at least one shard — see the per-shard results above";
+    }
+
+    return undefined;
 };
 
 /** Build the RPC args payload for a data migration. */
@@ -472,7 +667,7 @@ const buildMigrateArgs = (options: MigrateDataCommandOptions): Record<string, un
 };
 
 /**
- * `lunora migrate up|down|status &lt;id>` — drive the cross-shard data-migration
+ * `lunora migrate up|down|status <id>` — drive the cross-shard data-migration
  * orchestrator. Resolves the migration's table locally, then POSTs a migration
  * admin RPC to the Worker's `/_lunora/migrate` endpoint, which fans it out to
  * every live shard of that table and rolls up the per-shard outcomes.
@@ -480,8 +675,9 @@ const buildMigrateArgs = (options: MigrateDataCommandOptions): Record<string, un
 const runMigrateDataCommand = async (options: MigrateDataCommandOptions): Promise<MigrateDataCommandResult> => {
     const request = resolveMigrateDataRequest(options);
 
-    if (request === undefined) {
-        return { body: undefined, code: 1, requestUrl: "" };
+    if (isRefusal(request)) {
+        // `resolveMigrateDataRequest` logged the reason; its code says which kind.
+        return { body: undefined, code: request.refused, requestUrl: "" };
     }
 
     const { fetchImpl, requestUrl, table, token } = request;
@@ -496,19 +692,18 @@ const runMigrateDataCommand = async (options: MigrateDataCommandOptions): Promis
         method: "POST",
     });
 
-    const text = await response.text();
+    const body = await readAndLogBody(response, options.logger);
+    const rollUpFailure = migrationRollUpFailure(body);
 
-    let body: unknown;
-
-    try {
-        body = JSON.parse(text);
-    } catch {
-        body = text;
+    if (rollUpFailure !== undefined) {
+        options.logger.error(`migrate ${options.subcommand} "${options.id}": ${rollUpFailure}`);
     }
 
-    options.logger.info(JSON.stringify(body, undefined, 2));
+    // A transport failure carries the worker's status; a per-shard roll-up
+    // failure came back 200 and is a genuine generic failure.
+    const rollUpCode = rollUpFailure === undefined ? 0 : 1;
 
-    return { body, code: response.ok ? 0 : 1, requestUrl };
+    return { body, code: response.ok ? rollUpCode : exitCodeForStatus(response.status), requestUrl };
 };
 
 interface MigrateToHyperdriveOptions {
@@ -527,7 +722,24 @@ interface MigrateToHyperdriveOptions {
     toToken?: string;
     /** Target deployment (Hyperdrive-backed). Defaults to `--url`/localhost. */
     toUrl?: string;
+    /** Confirm the bulk write into the target — forwarded to the import leg, which refuses a remote target without it. */
+    yes?: boolean;
 }
+
+interface MigrateToHyperdriveResult {
+    /** Bytes in the intermediate NDJSON dump (0 when the run failed before exporting). */
+    bytes: number;
+    code: number;
+    /** Why it failed, when the reason is known — the shared `CommandResult` contract. */
+    error?: string;
+    /** Rows read out of the D1 source. */
+    exported: number;
+    /** Rows the Hyperdrive target accepted. Short of `exported` means the remainder already existed there. */
+    imported: number;
+}
+
+/** Apply {@link normalizeAdminBaseUrl}, passing an absent URL straight through. */
+const normalizeOptionalUrl = (url: string | undefined): string | undefined => (url === undefined ? undefined : normalizeAdminBaseUrl(url));
 
 /**
  * `lunora migrate d1-to-hyperdrive` — copy `.global()` table data from a
@@ -543,20 +755,29 @@ interface MigrateToHyperdriveOptions {
  * For an in-place switch, export first (this command, same `--from`/`--to`
  * URL before the schema swap is risky) — the skill documents both.
  */
-const runMigrateToHyperdriveCommand = async (options: MigrateToHyperdriveOptions): Promise<{ code: number }> => {
+const runMigrateToHyperdriveCommand = async (options: MigrateToHyperdriveOptions): Promise<MigrateToHyperdriveResult> => {
     const { logger } = options;
-    const fromUrl = options.fromUrl ?? options.toUrl;
-    const toUrl = options.toUrl ?? options.fromUrl;
+    // Normalized with the SAME rule `resolveAdminBaseUrl` applies to the request
+    // it sends, so the guard below compares what the two legs will actually
+    // address rather than what the user typed — `https://w/` and `https://w` are
+    // one deployment, and the raw comparison waved them through. The normalized
+    // values are what the export/import legs are handed, so guard and work agree.
+    const fromUrl = normalizeOptionalUrl(options.fromUrl ?? options.toUrl);
+    const toUrl = normalizeOptionalUrl(options.toUrl ?? options.fromUrl);
 
     // Refuse a self-migration: with only one URL given, the source and target
     // resolve to the same deployment, so the export and import would run against
     // one database (a no-op that misreports "counts match"). Require distinct URLs.
-    if (fromUrl !== undefined && fromUrl === toUrl) {
-        logger.error(
-            "source and target are the same deployment — pass distinct --from-url and --to-url so the D1 export and Hyperdrive import don't run against one database",
-        );
+    // No `!== undefined` precondition: with neither URL flag given both are
+    // `undefined` and both default to the SAME worker, which is exactly the
+    // self-migration this refuses — the guard used to skip that case.
+    if (fromUrl === toUrl) {
+        const error =
+            "source and target are the same deployment — pass distinct --from-url and --to-url so the D1 export and Hyperdrive import don't run against one database";
 
-        return { code: 1 };
+        logger.error(error);
+
+        return { bytes: 0, code: EXIT_CODE.USAGE, error, exported: 0, imported: 0 };
     }
 
     // When no --out is given, stage the (plaintext, cross-tenant) dump inside a
@@ -564,126 +785,74 @@ const runMigrateToHyperdriveCommand = async (options: MigrateToHyperdriveOptions
     const temporaryDirectory = options.out === undefined ? mkdtempSync(join(tmpdir(), "lunora-d1ps-")) : undefined;
     const dumpPath = options.out ?? join(temporaryDirectory as string, "dump.ndjson");
 
-    logger.info(`Exporting .global() data from the D1 source (${fromUrl ?? "http://localhost:8787"}) …`);
+    try {
+        logger.info(`Exporting .global() data from the D1 source (${fromUrl ?? "http://localhost:8787"}) …`);
 
-    const exportResult = await runExportCommand({
-        fetchImpl: options.fetchImpl,
-        logger,
-        out: dumpPath,
-        prod: options.prod,
-        tables: options.tables,
-        token: options.fromToken,
-        url: fromUrl,
-    });
-
-    if (exportResult.code !== 0) {
-        return { code: exportResult.code };
-    }
-
-    logger.info(`Exported ${String(exportResult.rows)} row(s) (${String(exportResult.bytes)} bytes).`);
-    logger.info(`Importing into the Hyperdrive target (${toUrl ?? "http://localhost:8787"}) …`);
-
-    const importResult = await runImportCommand({
-        batchSize: options.batchSize,
-        fetchImpl: options.fetchImpl,
-        file: dumpPath,
-        logger,
-        prod: options.prod,
-        token: options.toToken,
-        url: toUrl,
-    });
-
-    // Clean up the private temp dir (and the dump inside it) unless the caller
-    // asked to keep the dump via --out.
-    if (temporaryDirectory !== undefined) {
-        rmSync(temporaryDirectory, { force: true, recursive: true });
-    }
-
-    if (importResult.code !== 0) {
-        return { code: importResult.code };
-    }
-
-    if (importResult.inserted === exportResult.rows) {
-        logger.info(`✓ Migrated ${String(exportResult.rows)} row(s) — counts match. Verify your app reads from Hyperdrive, then decommission the D1 binding.`);
-    } else {
-        logger.warn(
-            `Imported ${String(importResult.inserted)} of ${String(exportResult.rows)} exported row(s) — the remainder likely already existed in the target (see conflicts above). Re-run after resolving, or inspect the dump with --out.`,
-        );
-    }
-
-    return { code: 0 };
-};
-
-/** `lunora migrate &lt;subcommand>` handler (lazy-loaded via the command's `loader`). */
-const execute: CommandHandler<MigrateOptions> = defineHandler<MigrateOptions>(({ argument, cwd, logger, options }) => {
-    const sub = argument[0];
-
-    if (sub === "generate") {
-        return runMigrateGenerateCommand({ cwd, logger, name: argument[1] ?? options.name });
-    }
-
-    if (sub === "d1-to-hyperdrive") {
-        return runMigrateToHyperdriveCommand({
-            batchSize: options.batchSize,
-            fromToken: options.fromToken ?? options.token,
-            fromUrl: options.fromUrl ?? options.url,
+        const exportResult = await runExportCommand({
+            fetchImpl: options.fetchImpl,
             logger,
-            out: options.out,
-            prod: options.prod === true,
+            out: dumpPath,
+            prod: options.prod,
             tables: options.tables,
-            toToken: options.toToken ?? options.token,
-            toUrl: options.toUrl ?? options.url,
+            token: options.fromToken,
+            url: fromUrl,
         });
-    }
 
-    if (sub === "create") {
-        const name = argument[1] ?? options.name;
-
-        if (!name) {
-            logger.error("migrate create requires a name. Usage: lunora migrate create <name> [--table <table>]");
-
-            return { code: 1 };
+        if (exportResult.code !== 0) {
+            return {
+                bytes: exportResult.bytes,
+                code: exportResult.code,
+                exported: exportResult.rows,
+                imported: 0,
+                ...(exportResult.error === undefined ? {} : { error: exportResult.error }),
+            };
         }
 
-        return runMigrateCreateCommand({ cwd, logger, name, table: options.table });
-    }
+        logger.info(`Exported ${String(exportResult.rows)} row(s) (${String(exportResult.bytes)} bytes).`);
+        logger.info(`Importing into the Hyperdrive target (${toUrl ?? "http://localhost:8787"}) …`);
 
-    if (sub === "up" || sub === "down" || sub === "status") {
-        const id = argument[1] ?? options.name;
-
-        if (!id) {
-            logger.error(`migrate ${sub} requires a migration id. Usage: lunora migrate ${sub} <id>`);
-
-            return { code: 1 };
-        }
-
-        return runMigrateDataCommand({
+        const importResult = await runImportCommand({
             batchSize: options.batchSize,
-            cwd,
-            dryRun: options.dryRun === true,
-            id,
+            fetchImpl: options.fetchImpl,
+            file: dumpPath,
             logger,
-            maxBatches: options.steps,
-            prod: options.prod === true,
-            subcommand: sub,
-            token: options.token,
-            url: resolveProductionWorkerUrl({ cwd, prod: options.prod === true, url: options.url }),
-            yes: options.yes === true,
+            prod: options.prod,
+            token: options.toToken,
+            url: toUrl,
+            yes: options.yes,
         });
+
+        if (importResult.code !== 0) {
+            return {
+                bytes: exportResult.bytes,
+                code: importResult.code,
+                exported: exportResult.rows,
+                imported: importResult.inserted,
+                ...(importResult.error === undefined ? {} : { error: importResult.error }),
+            };
+        }
+
+        if (importResult.inserted === exportResult.rows) {
+            logger.info(
+                `✓ Migrated ${String(exportResult.rows)} row(s) — counts match. Verify your app reads from Hyperdrive, then decommission the D1 binding.`,
+            );
+        } else {
+            logger.warn(
+                `Imported ${String(importResult.inserted)} of ${String(exportResult.rows)} exported row(s) — the remainder likely already existed in the target (see conflicts above). Re-run after resolving, or inspect the dump with --out.`,
+            );
+        }
+
+        return { bytes: exportResult.bytes, code: 0, exported: exportResult.rows, imported: importResult.inserted };
+    } finally {
+        // Always shred the private temp dir (and the plaintext, cross-tenant dump
+        // inside it) — even when export/import throws or returns early — unless the
+        // caller asked to keep the dump via --out. Leaving it behind would strand a
+        // full plaintext export in /tmp until OS cleanup.
+        if (temporaryDirectory !== undefined) {
+            rmSync(temporaryDirectory, { force: true, recursive: true });
+        }
     }
-
-    logger.error(`unknown migrate subcommand: "${sub ?? ""}" — expected generate | create | up | down | status`);
-
-    return { code: 1 };
-});
-
-export { execute };
-export type {
-    MigrateCreateCommandOptions,
-    MigrateCreateCommandResult,
-    MigrateDataCommandOptions,
-    MigrateDataCommandResult,
-    MigrateGenerateCommandOptions,
-    MigrateGenerateCommandResult,
 };
+
+export type { MigrateDataCommandOptions, MigrateGenerateCommandOptions, MigrateGenerateCommandResult };
 export { runMigrateCreateCommand, runMigrateDataCommand, runMigrateGenerateCommand, runMigrateToHyperdriveCommand };

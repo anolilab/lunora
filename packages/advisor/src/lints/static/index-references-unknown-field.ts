@@ -21,31 +21,22 @@ const indexReferencesUnknownField: Lint = {
     level: "ERROR",
     name: "index_references_unknown_field",
     remediation: "Fix the column name in the index declaration, or add the column to the table.",
-    run: (context) => {
-        const findings = [];
-
-        for (const table of context.schema.tables) {
+    run: (context) =>
+        context.schema.tables.flatMap((table) => {
             const columns = tableColumnSet(table);
 
-            for (const index of table.indexes) {
-                for (const field of index.fields) {
-                    if (columns.has(field)) {
-                        continue;
-                    }
-
-                    findings.push(
+            return table.indexes.flatMap((index) =>
+                index.fields
+                    .filter((field) => !columns.has(field))
+                    .map((field) =>
                         emit(indexReferencesUnknownField, {
                             cacheKey: `index_references_unknown_field:${table.name}:${index.name}:${field}`,
                             detail: `Index "${index.name}" on table "${table.name}" references column "${field}", which is not declared on the table.`,
                             metadata: { field, index: index.name, indexKind: index.kind, table: table.name },
                         }),
-                    );
-                }
-            }
-        }
-
-        return findings;
-    },
+                    ),
+            );
+        }),
     source: "static",
     title: "Index references unknown field",
 };

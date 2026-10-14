@@ -6,7 +6,7 @@
 
 </a>
 
-<h3 align="center">Rate limiting: token-bucket / fixed-window / sliding-window algorithms, deny list, sharding, pluggable stores, and procedure middleware</h3>
+<h3 align="center">Rate limiting: token-bucket / fixed-window / sliding-window algorithms, deny list, pluggable stores, and procedure middleware</h3>
 
 <!-- END_PACKAGE_OG_IMAGE_PLACEHOLDER -->
 
@@ -34,7 +34,7 @@
 
 ---
 
-Rate limiting for Lunora: token-bucket, fixed-window, and sliding-window algorithms, a deny list, optional sharding for hot limits, pluggable stores (in-memory, SQL, or the Lunora ORM), and procedure middleware that rides the `.use()` chain.
+Rate limiting for Lunora: token-bucket, fixed-window, and sliding-window algorithms, a deny list, pluggable stores (in-memory, SQL, or the Lunora ORM), and procedure middleware that rides the `.use()` chain.
 
 Part of the [Lunora](https://github.com/anolilab/lunora) framework — a type-safe, real-time backend on Cloudflare Workers + Durable Objects with a Vite-first DX.
 
@@ -59,37 +59,68 @@ to a procedure's `.use(...)` chain. The procedure builders (`mutation`, …) com
 from your app's generated `_generated/server` module, not from a package.
 
 ```ts
-import { RateLimiter, rateLimit } from "@lunora/ratelimit";
+import { dbRateLimit } from "@lunora/ratelimit";
 
 import { mutation } from "./_generated/server";
 
-const limiter = new RateLimiter({
-    config: {
-        login: { kind: "fixed window", period: 60_000, rate: 5 },
-        send: { kind: "token bucket", period: 1_000, rate: 10 },
-    },
-});
+const config = {
+    login: { kind: "fixed window", period: 60_000, rate: 5 },
+    send: { kind: "token bucket", period: 1_000, rate: 10 },
+};
 
+// `dbRateLimit` builds the limiter per call, backed by a Lunora table via
+// `ctx.db`, so the count is durable. A `RateLimiter` built with no explicit
+// `store` falls back to `createMemoryStore` (a per-instance in-memory Map) —
+// fine for a limit that only ever needs to hold within one Durable Object
+// instance, but a limiter like `login` needs a durable store or it stops
+// enforcing the configured rate the moment the DO instance is sharded,
+// replicated, or recreated.
 // As procedure middleware — throws a structural LunoraError (429/403) on rejection.
-export const send = mutation.use(rateLimit(limiter, "send", { key: (ctx) => ctx.auth.userId })).mutation(async ({ ctx }) => {
+// `key` must resolve to a string — a resolver returning `undefined` throws
+// rather than silently sharing one bucket across every keyless caller.
+export const send = mutation.use(dbRateLimit(config, "send", { key: (ctx) => ctx.auth.userId ?? "anonymous" })).mutation(async ({ ctx }) => {
     // …
 });
 ```
 
-Or call the limiter directly:
+Or call the limiter directly, inside a mutation/action so `ctx.db` is available.
+A login limiter belongs in an **action**: a mutation's `ctx.db` writes ride its
+storage transaction, so a handler that throws (a wrong password) rolls the
+consumed unit back and every failed attempt is free. An action's writes commit
+on their own, so the charge stays whether or not the handler throws.
 
 ```ts
-const status = await limiter.limit("send", { key: userId });
+import { RateLimiter, RateLimitError, createDbStore } from "@lunora/ratelimit";
 
-if (!status.ok) {
-    // status.retryAfter is milliseconds until the request would succeed.
-    // status.reason is "rate" or "deny".
-}
+import { action } from "./_generated/server";
+
+export const login = action.action(async ({ ctx, args }) => {
+    const limiter = new RateLimiter({ config, store: createDbStore({ db: ctx.db }) });
+    const status = await limiter.limit("login", { key: args.email });
+
+    if (!status.ok) {
+        // Stop here — `limit` returns a failing status by default rather than
+        // throwing, so falling through authenticates the rejected attempt.
+        // status.retryAfter is milliseconds until the request would succeed.
+        // status.reason is "rate" or "deny".
+        throw new RateLimitError(status);
+    }
+
+    await authenticate(args);
+});
 ```
 
 For durable per-DO state inside a procedure, back the limiter with a Lunora
 table via `dbRateLimit(config, name, options)`, or supply a `store`
-(`createMemoryStore` / `createSqlStore` / `createDbStore`).
+(`createSqlStore` / `createDbStore`). `createMemoryStore` stays the default —
+correct inside a single Durable Object — but constructing a `RateLimiter` with
+no explicit `store` now warns once so that choice is visible instead of
+silent.
+
+A key that is an IPv6 address (for example `ctx.ip`) is bucketed by its /64
+prefix, and an IPv4-mapped address by the IPv4 address it wraps. An IPv6 client
+usually controls a whole /64, so a per-address bucket would let it pick a fresh
+address for every request. A deny-list IPv6 entry bans its /64.
 
 > This README covers the basics. For the full API, options, and guides, see the **[documentation](https://lunora.sh/docs)**.
 

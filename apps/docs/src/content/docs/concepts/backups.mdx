@@ -1,0 +1,427 @@
+---
+title: Backups, export & import
+description: Snapshot a deployment, recover a shard to any moment in the last 30 days, and move data in and out as NDJSON.
+related:
+    - to: /docs/packages/cli
+    - to: /docs/concepts/migrations
+    - to: /docs/concepts/sharding
+    - to: /docs/production-checklist
+    - to: /docs/packages/runtime
+---
+
+Lunora has three ways to get data back after something goes wrong, and they
+solve different problems. Pick by how far back you need to go and whether the
+copy has to live outside Cloudflare.
+
+| Tier                   | Command / wiring                         | Window    | Where the data lives             |
+| ---------------------- | ---------------------------------------- | --------- | -------------------------------- |
+| Point-in-time recovery | `lunora backup pitr`                     | 30 days   | in place, on the platform        |
+| Snapshot backups       | `lunora backup create [--bucket <name>]` | unbounded | a file you keep, or an R2 bucket |
+| Scheduled R2 backups   | `backupCron` + `backupStore`             | unbounded | an R2 bucket in your account     |
+
+Pick by the question you are actually asking:
+
+- **"Undo the last hour."** Point-in-time recovery. It is in place, on the
+  platform, and covers the last 30 days without reading an object store or
+  replaying anything.
+- **"Get me the data from three months ago"**, or **"put production into
+  staging"**, or **"keep a copy somewhere Cloudflare is not."** Snapshot
+  backups. Portable NDJSON, no window, restorable into a different deployment.
+
+The two share nothing: PITR never reads a snapshot, and a snapshot restore never
+touches the change log.
+
+Everything below talks to admin-gated endpoints on a running worker, so each
+command needs an admin bearer token. Prefer the `LUNORA_ADMIN_TOKEN` environment
+variable over `--token`, which is visible to other local processes through the
+process table.
+
+Two separate guardrails apply to the target, and neither is `--prod` on its own:
+
+- `--prod` requires an explicit `--url`. It never _grants_ a remote target and
+  never _gates_ one — a `--url https://…` is accepted with or without it.
+- A non-loopback `--url` must be `https:`, so the admin bearer is never sent in
+  the clear.
+
+What gates a destructive verb is the resolved URL, not the flag: a PITR
+`--restore` against any non-loopback worker refuses without `--yes`, whether or
+not `--prod` was passed. `prune` always confirms — `--yes` or an interactive
+prompt — because an object-store delete has no undo.
+
+<Callout type="warn">
+    Omitting `--prod` does **not** keep a script off production. `lunora backup create --url https://prod.example.com` exports production with no extra flag. If
+    you need a script that can only ever hit local state, withhold the production URL and the admin token, not `--prod`.
+</Callout>
+
+## Point-in-time recovery
+
+PITR drives the platform's own Durable Object change log, so it restores a shard
+to any moment in the last 30 days without replaying a snapshot or reading an
+object store. It is the fastest way back from a bad mutation or a botched
+migration.
+
+```bash
+lunora backup pitr --at 2026-06-01T12:00:00Z          # read the bookmark for that moment
+lunora backup pitr --at 2026-06-01T12:00:00Z --restore --yes
+lunora backup pitr --bookmark <bookmark> --restore --restart --yes
+```
+
+Without `--restore` the command only _reads_ the bookmark for a time, a safe way
+to confirm you have the right moment before acting. `--at` accepts an ISO
+timestamp or epoch milliseconds and must fall inside the 30-day window.
+`--bookmark` passes an explicit bookmark and wins over `--at`; that is how you
+undo a restore, since each restore hands back an undo bookmark.
+
+Recovery applies when the Durable Object next starts. Pass `--restart` to restart
+the shard immediately instead of waiting. `--shard` targets a specific shard;
+omit it for the root shard. Because PITR is per shard, a
+[sharded](/docs/concepts/sharding) app recovers one shard at a time.
+
+<Callout type="warn">
+    A production `pitr --restore` overwrites live data and requires `--yes`. Read the bookmark first, and take a snapshot before restoring so you can get back
+    to the current state if the target moment turns out to be wrong.
+</Callout>
+
+### Anything reading the change feed must be re-seeded, not resumed
+
+A restore rewinds the changelog along with the data, and the changelog then
+re-issues the sequence numbers it lost to different rows. A warehouse connector
+holding a cursor from before the restore is therefore holding a position in a
+sequence that no longer means what it meant — and its mirror still contains rows
+the restore removed, for which no delete will ever be emitted.
+
+The read paths refuse such a cursor **while they can still recognise it**: a
+cursor above the changelog's high-watermark is proof of the rewind, and the feed
+answers `CDC_TIMELINE_FORKED` (409) rather than an empty page. That proof
+expires. Once post-restore writes have pushed the sequence back past the cursor,
+it is in range again and the feed serves it — skipping everything the new
+timeline wrote below it, permanently and without an error.
+
+So treat re-seeding every change-feed consumer as part of the restore, in the
+same way you would clear the [R2 archive](#archiving-trimmed-entries-to-r2). Do
+not wait to be told: on a busy deployment the window in which you would be told
+is minutes wide.
+
+#### Storing the epoch beside the cursor widens that window
+
+Every per-shard page from `/_lunora/admin/sync` carries an `epoch` next to its
+`cursor` — the identity of the timeline that cursor indexes. Store the pair, and
+post the epochs back in the next request's `epochs` map alongside `cursors`:
+
+```json
+{ "cursors": { "c1": 812 }, "epochs": { "c1": "6c95…" }, "tables": ["messages"] }
+```
+
+A shard whose timeline has since been sealed then refuses that shard's page with
+`CDC_TIMELINE_FORKED` **whatever the cursor says**, so you are told after the
+watermark proof has expired rather than only before it. The refusal carries the
+current epoch to resume against, and the remedy is unchanged: re-seed, because
+an incremental cursor cannot cross a fork.
+
+The refusal arrives as that shard's `error` in the response, with the shard's own
+code on it — branch on `code`, never on the message:
+
+```json
+{
+    "shards": [
+        {
+            "shardKey": "c1",
+            "cursor": 812,
+            "epoch": "6c95…",
+            "error": { "code": "CDC_TIMELINE_FORKED", "message": "…", "timedOut": false }
+        }
+    ]
+}
+```
+
+`CDC_TIMELINE_FORKED` means re-seed against the epoch the message names.
+`CDC_LOG_TRIMMED` and `CDC_PAYLOAD_COMPACTED` also mean re-seed — the range you
+asked for is gone rather than moved. Anything else (`SHARD_TIMEOUT`,
+`SHARD_HTTP_ERROR`, `INTERNAL`) is transport: retry the same cursor and epoch,
+which the response echoes back to you for exactly that purpose.
+
+Both halves are optional. A connector that ignores `epoch` and never sends
+`epochs` behaves exactly as it did, with exactly the guarantee described above —
+so this widens the window for consumers that opt in, and does not replace the
+standing instruction to re-seed proactively. It also only fires once something on
+the shard has sealed the fork: a reconnecting subscriber, a refused consumer, or
+the retention sweep finding the [R2 archive](#archiving-trimmed-entries-to-r2)
+rewound. The `globalCursor` for `.global()` tables has no epoch, and for the same
+reason — that plane has no archive, so nothing there detects a fork unattended.
+
+## Snapshot backups
+
+`lunora backup create` exports every table to a timestamped NDJSON file under a
+backup directory and records it in a `manifest.json`. This is the portable tier:
+the file is yours, it outlives the 30-day PITR window, and it can be restored
+into a different deployment.
+
+```bash
+lunora backup create                    # snapshot every table
+lunora backup create --tables users,messages
+lunora backup create --dir ./snapshots  # default: .lunora-backups
+lunora backup list                      # print the manifest
+lunora backup restore 2026-06-01T12:00:00.000Z
+lunora backup restore ./snapshots/some-file.ndjson
+```
+
+<Callout>
+    A backup **id** is the ISO timestamp the snapshot was taken at (`2026-06-01T12:00:00.000Z`), which is what `list` prints first and what `restore` matches.
+    The **file name** (and object key) is that same timestamp with `:` and `.` swapped for `-`, because those characters are awkward in file names:
+    `lunora-backup-2026-06-01T12-00-00-000Z.ndjson`. `restore` accepts either one, an id from the manifest or a path/key you name directly, so passing the file
+    name where you meant the id fails with "backup not found" rather than restoring the wrong thing.
+</Callout>
+
+A snapshot's id is the ISO timestamp it was taken at, and the manifest records
+the file, row count, byte size, the SHA-256 of the snapshot, and the table
+allowlist if one was used. `restore` accepts either an id from the manifest or a
+direct path to an NDJSON file.
+
+There is no managed backup schedule in the CLI. `create` is a plain command, so
+schedule it wherever you already run periodic jobs (a CI cron, or a
+[cron-triggered action](/docs/concepts/scheduling)).
+
+### Into a bucket instead of a directory
+
+Written to `--dir`, a snapshot is exactly as durable as the disk the CLI ran on,
+which is a strange property for the tier that exists for everything the 30-day
+window cannot cover. Pass `--bucket` and the same snapshot goes to an R2 bucket
+in your account instead:
+
+```bash
+lunora backup create --bucket default              # the app's default bucket
+lunora backup create --bucket archive --prefix db/ # a named bucket + key prefix
+lunora backup list --bucket default
+lunora backup restore 2026-06-01T12:00:00.000Z --bucket default --verify
+```
+
+The destination is the only thing that changes: the NDJSON is byte-identical to
+what `--dir` writes, and the manifest records the same fields. Bytes travel
+through the worker's admin storage routes under the admin bearer you already
+pass, so the CLI never holds R2 credentials and nothing about the bucket is
+written into the manifest. The upload is checksum-verified (the worker digests
+the body and refuses to write on a mismatch), and the manifest entry is written
+only after the object has landed, so an index entry never points at a snapshot
+that is not there.
+
+Backups default to the `backups/` prefix, the same one the scheduled backup
+below writes to, so `list` shows both as one history. One invocation reads one
+destination: a listing that merged a bucket and a directory would leave you
+unable to say which copy you are about to restore.
+
+`--verify` re-reads the snapshot and checks it against the SHA-256 recorded when
+it was taken, before a single row is imported. Both tiers record one, so it works
+on a scheduled snapshot as well as a hand-taken one. A snapshot with no recorded
+checksum, one written by a release before this feature existed, fails `--verify`
+rather than passing quietly.
+
+`list --bucket` reads one object per snapshot (the sidecar), so a bucket holding
+thousands of snapshots is that many small reads; a damaged or unrelated
+`.manifest.json` under the prefix is skipped with a warning rather than failing
+the command.
+
+Both bucket-backed tiers cap the snapshot they will build, for different
+reasons; `--dir` is uncapped. `create --bucket` refuses above **32 MiB**, the
+limit of the checksum-verified upload route; bigger would mean an unverified
+signed PUT, which is not what the copy you restore from should depend on. The
+scheduled backup refuses above **24 MiB**: it assembles the snapshot inside a
+Worker isolate, and the cap is set well under that isolate's memory limit
+because it bounds the snapshot rather than the export that produced it. Either
+way the answer is `--tables` / `backupTables`, or `--dir` plus
+`wrangler r2 object put` to move a large file yourself.
+
+<Callout>
+    On `@lunora/platform-node`, object storage is an fs-backed shim: a "bucket" there is a directory on the same machine. The commands work unchanged, but it is
+    not a separate failure domain the way R2 is.
+</Callout>
+
+### Scheduled backups into R2
+
+<Callout type="warn">
+    **The built-in `backupCron` never deletes.** `backupRetain` sets the window, but the scheduled run only reports how many snapshots sit past it —
+    `lunora backup prune` is the one command that removes a backup, and it confirms before it does. `lunora backup retention` shows what a prune would remove,
+    from the same selection, so the preview cannot drift from the deletion. A bucket therefore grows until you prune it.
+
+    The `backup` **registry item** is the exception, and deliberately so: it copies a `prune` internal action into your project alongside its `snapshot`, and
+    you schedule the pair on your own cron so the loop is self-managing. That one deletes — `{ keepDays, keepLast }` is its retention window, and it refuses to
+    run with neither set. If you added that item, the "grows until you prune it" sentence above does not describe your bucket.
+
+</Callout>
+
+```bash
+lunora backup retention   # what is past the window
+lunora backup prune       # remove it (asks first; --yes for scripts)
+```
+
+Run the preview after changing `backupRetain`, and on any bucket that predates this feature: snapshots written before retention learned to mark its own are
+never eligible, so it may own fewer of them than the bucket holds.
+
+For a schedule that runs on the platform itself rather than in CI, the worker
+can take its own snapshots on a Cron Trigger and write them to an R2 bucket in
+your account. Wire `backupStore`, `backupCron`, and `backupRetain` on
+`createWorker`; see
+[scheduled backups in @lunora/runtime](/docs/packages/runtime#scheduled-backups)
+for the full configuration. Each run writes the snapshot plus a manifest object,
+reports how many older snapshots sit past the retention count without removing
+them, and produces exactly the format `lunora backup restore <file>` consumes,
+including the key layout `lunora backup list --bucket` reads, so cron-written and
+hand-taken snapshots share one history.
+
+### Restoring when the CLI machine is gone
+
+This is the case the bucket exists for: the laptop or CI runner that took the
+backups is unavailable, and the snapshots are the only copy. Nothing about a
+restore depends on that machine: the bucket is self-describing, and the CLI is a
+client:
+
+```bash
+npx lunora backup list --bucket default --prod --url https://api.example.com
+npx lunora backup restore 2026-06-01T12:00:00.000Z \
+    --bucket default --verify --prod --url https://api.example.com --yes
+```
+
+Any machine with `npx`, the worker's URL, and `LUNORA_ADMIN_TOKEN` can do this;
+no R2 credentials are involved, because the bytes travel through the worker's
+admin routes and the bucket binding is the authority. Each snapshot's manifest
+lives beside it in the same bucket, so there is no separate index to have lost;
+`list` reads them back one object at a time.
+
+If the worker itself is gone too, the objects are still ordinary R2 objects.
+Note the key uses the file-name form of the id, dashes rather than colons:
+
+```bash
+wrangler r2 object list <bucket> --prefix backups/
+wrangler r2 object get <bucket>/backups/lunora-backup-2026-06-01T12-00-00-000Z.ndjson \
+    --file ./snapshot.ndjson
+lunora import ./snapshot.ndjson --url https://api.example.com
+```
+
+## Export and import
+
+`lunora export` and `lunora import` are the plumbing under the backup commands,
+exposed directly for one-off data movement: seeding a staging deployment from
+production, migrating between accounts, or piping rows into another system.
+
+```bash
+lunora export --out ./data.ndjson
+lunora export --tables messages,channels --out ./subset.ndjson
+lunora export                            # stream NDJSON to stdout
+
+lunora import ./data.ndjson
+lunora import ./users.ndjson --table users
+lunora import ./data.ndjson --batch-size 200
+```
+
+### The NDJSON format
+
+One JSON object per line, each an envelope naming its table:
+
+```json
+{ "table": "users", "doc": { "_id": "...", "_creationTime": 1735689600000, "email": "a@example.com" } }
+{ "table": "messages", "doc": { "_id": "...", "_creationTime": 1735689601000, "text": "hi" } }
+```
+
+The envelope is what makes a single file able to carry a whole deployment.
+Export streams rows as they are produced (shard-local tables first, then
+`.global()` tables), so a large export does not have to fit in memory. Import
+reads the file back and POSTs it in batches (500 rows per request by default),
+reporting inserted and errored counts per batch.
+
+If your source file is bare documents rather than envelopes (rows exported from
+somewhere else), pass `--table` and the CLI wraps each line for you.
+
+Because documents carry their `_id`, a restore preserves identity, so
+[relations](/docs/concepts/relations) between tables survive the round trip.
+Import the referenced table before the table that references it.
+
+## Streaming data out continuously
+
+Snapshots are point-in-time. To keep an external warehouse or ETL sink in step
+with the deployment as it changes, use the continuous CDC export tap instead: it
+streams the shard op-log to named sinks with at-least-once, per-shard-ordered,
+resumable delivery.
+
+### Keeping the changelog from growing forever
+
+The tap reads a per-shard changelog (`__cdc_log`) that the shard appends to on
+every committed mutation. Nothing trims it by default, so on a write-heavy shard
+it grows for the lifetime of the app. Two environment variables bound it, and
+both are off unless you set them:
+
+| Variable                       | What it does                                                                                                                      |
+| ------------------------------ | --------------------------------------------------------------------------------------------------------------------------------- |
+| `LUNORA_CDC_PAYLOAD_RETENTION` | Keeps the newest N entries' documents and strips the rest, retaining every key. The documents are where nearly all the bytes are. |
+| `LUNORA_CDC_LOG_RETENTION`     | Keeps the newest N entries and **deletes** the rest outright.                                                                     |
+
+They are deliberately opt-in. A shard can read the cursors of its own
+subscribers and never sweeps past the slowest of them, but it cannot see where
+an external consumer sits — a warehouse connector holds a cursor token issued by
+the Worker, and nothing in the shard knows what it is. So you state the window
+you can afford, and the sweep additionally never crosses the in-shard floor.
+
+Both are parsed strictly. `LUNORA_CDC_LOG_RETENTION=10k` is not "10,000" — it is
+ignored entirely, which is the safe reading for a value that controls a delete.
+
+### Archiving trimmed entries to R2
+
+Trimming is a cliff. A consumer that resumes below the retained window is told
+to re-seed from a full snapshot, which for a connector that was offline over a
+weekend means re-downloading the shard because a few megabytes of changelog were
+deleted.
+
+Bind an R2 bucket as `LUNORA_CDC_ARCHIVE` and the sweep uploads entries before
+destroying them, so the export tap above can be served out of the archive
+instead of being refused:
+
+```jsonc
+// wrangler.jsonc
+{
+    "r2_buckets": [{ "binding": "LUNORA_CDC_ARCHIVE", "bucket_name": "my-app-cdc-archive" }],
+    "vars": { "LUNORA_CDC_LOG_RETENTION": "100000" },
+}
+```
+
+There is no flag to turn this on — the presence of the binding is the switch,
+and a shard without it behaves exactly as before. Four things worth knowing:
+
+- **It needs `LUNORA_CDC_LOG_RETENTION`.** Payload retention alone keeps every
+  key, so there is no cliff to soften and nothing is uploaded.
+- **Nothing is deleted before the upload is acknowledged.** A failed upload
+  skips that cycle's trim; the log stays larger until the next sweep.
+- **Nothing prunes the archive.** It grows without bound by design. Set an R2
+  lifecycle rule on the bucket if you want it bounded — an expired segment
+  leaves a hole the read-back reports as a refusal, never as a silent gap.
+- **A point-in-time restore orphans everything already archived.** Segments are
+  filed under the changelog's epoch, and a restore forks the timeline onto a new
+  one. That is deliberate — entries describing changes that no longer happened
+  must not be servable — but no read path will ever reach the old segments
+  again, and nothing deletes them. Clear the bucket after a
+  [PITR restore](#point-in-time-recovery), or keep paying for them.
+
+A consumer far enough behind is still told to re-seed: a read reaches back a
+bounded number of segments, which at the default sweep cadence covers roughly
+half an hour of continuous trimming.
+
+<Callout type="warn">
+    **This serves the export tap, and nothing else.** A reconnecting realtime subscriber below the retained window still re-seeds, and so does a read replica —
+    both check the floor before they read and never reach the archive. Binding the bucket will not stop your clients re-downloading a shape after a long
+    disconnect; it stops your warehouse connector re-downloading the shard.
+</Callout>
+
+## Practising a restore
+
+Until you have restored a backup, you do not know that it works. The cheapest
+drill:
+
+1. `lunora backup create` against production.
+2. Spin up a scratch deployment, or `lunora reset` a local one.
+3. `lunora import ./the-snapshot.ndjson` against it.
+4. Run your app against the restored data and confirm it behaves.
+
+If you keep backups in a bucket, do the drill from the bucket
+(`lunora backup restore <id> --bucket <name> --verify`) rather than from a copy
+on your laptop: the machine that took the backup is the one you are assuming you
+will not have. Drill a **scheduled** snapshot, not only one you took by
+hand: the unattended tier is the one whose failures nobody watches.
+
+Do this before you need it, and again whenever the schema changes shape.

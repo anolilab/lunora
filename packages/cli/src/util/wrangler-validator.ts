@@ -8,10 +8,8 @@
  * directly from `@lunora/config`.
  */
 export type {
-    SchemaInfo,
-    WranglerConfig,
     WranglerProjectValidationOptions as WranglerValidationOptions,
     WranglerValidationReport,
     WranglerProjectValidationResult as WranglerValidationResult,
-} from "@lunora/config";
-export { REQUIRED_COMPATIBILITY_DATE, REQUIRED_FLAG, validateWranglerProject as validateWrangler, validateWranglerConfig } from "@lunora/config";
+} from "@lunora/config/cloudflare";
+export { REQUIRED_COMPATIBILITY_DATE, REQUIRED_FLAG, validateWranglerProject as validateWrangler, validateWranglerConfig } from "@lunora/config/cloudflare";

@@ -3,10 +3,14 @@ import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+import { runAddFeature } from "../../src/commands/add/handler";
+import { applyDeps, confirmDepMutation, resolveDepRange, rewriteUmbrellaImports } from "../../src/commands/registry/apply";
 import { parseManifest, runAddCommand } from "../../src/commands/registry/index";
+import { EXIT_CODE } from "../../src/util/exit-code";
 import type { Logger } from "../../src/util/logger";
+import { resolveDistTag } from "../../src/util/source-ref";
 
 const makeLogger = (): { lines: string[]; logger: Logger } => {
     const lines: string[] = [];
@@ -55,6 +59,81 @@ describe("lunora add", () => {
 
     afterEach(() => {
         rmSync(workdir, { force: true, recursive: true });
+    });
+
+    describe("resolveDepRange", () => {
+        it("passes plain semver ranges through untouched", () => {
+            expect.assertions(2);
+
+            expect(resolveDepRange("^1.2.3")).toBe("^1.2.3");
+            expect(resolveDepRange("latest")).toBe("latest");
+        });
+
+        it("maps bare workspace aliases to the CLI's release-channel dist-tag", () => {
+            expect.assertions(4);
+
+            // The channel is derived from the running CLI version (`alpha` in this
+            // monorepo) — never the literal `workspace:` protocol or a placeholder.
+            const tag = resolveDistTag();
+
+            expect(resolveDepRange("workspace:*")).toBe(tag);
+            expect(resolveDepRange("workspace:^")).toBe(tag);
+            expect(resolveDepRange("workspace:~")).toBe(tag);
+            expect(resolveDepRange("workspace:")).toBe(tag);
+        });
+
+        it("strips the workspace: prefix from version-bearing ranges", () => {
+            expect.assertions(2);
+
+            expect(resolveDepRange("workspace:^1.2.3")).toBe("^1.2.3");
+            expect(resolveDepRange("workspace:1.2.3")).toBe("1.2.3");
+        });
+    });
+
+    describe("umbrella-aware add", () => {
+        const writeUmbrellaPackageJson = (): void => {
+            writeFileSync(join(workdir, "package.json"), JSON.stringify({ dependencies: { lunorash: "alpha" }, name: "demo" }, null, 4), "utf8");
+        };
+
+        it("rewriteUmbrellaImports rewrites base scopes and leaves add-ons", () => {
+            expect.assertions(5);
+
+            expect(rewriteUmbrellaImports('import { x } from "@lunora/server";')).toBe('import { x } from "lunorash/server";');
+            expect(rewriteUmbrellaImports("import { x } from '@lunora/client/query';")).toBe("import { x } from 'lunorash/client/query';");
+            expect(rewriteUmbrellaImports('export * from "@lunora/values";')).toBe('export * from "lunorash/values";');
+            // Add-on scopes the umbrella does not re-export are untouched.
+            expect(rewriteUmbrellaImports('import { auth } from "@lunora/auth";')).toBe('import { auth } from "@lunora/auth";');
+            expect(rewriteUmbrellaImports('import { useQuery } from "@lunora/react";')).toBe('import { useQuery } from "@lunora/react";');
+        });
+
+        it("applyDeps skips umbrella-provided base deps but keeps add-ons", () => {
+            expect.assertions(3);
+
+            writeUmbrellaPackageJson();
+
+            const added = applyDeps({ "@lunora/auth": "workspace:*", "@lunora/server": "workspace:*" }, workdir, makeLogger().logger, "dependencies", true);
+
+            expect(added).toContain("@lunora/auth");
+            expect(added).not.toContain("@lunora/server");
+
+            const pkg = JSON.parse(readFileSync(join(workdir, "package.json"), "utf8")) as { dependencies: Record<string, string> };
+
+            expect(pkg.dependencies["@lunora/server"]).toBeUndefined();
+        });
+
+        it("rewrites copied base imports to lunorash subpaths in an umbrella project", async () => {
+            expect.assertions(2);
+
+            writeUmbrellaPackageJson();
+
+            await runAddCommand({ cwd: workdir, from: registryRoot, logger: makeLogger().logger, names: ["ratelimit"], yes: true });
+
+            // The ratelimit fixture's index.ts imports `@lunora/server`.
+            const copied = readFileSync(join(workdir, "lunora", "ratelimit", "index.ts"), "utf8");
+
+            expect(copied).toContain('from "lunorash/server"');
+            expect(copied).not.toContain('from "@lunora/server"');
+        });
     });
 
     describe("parseManifest", () => {
@@ -232,6 +311,24 @@ describe("lunora add", () => {
             expect(afterSecond).toStrictEqual(afterFirst);
         });
 
+        it("scaffolds a schema whose DEFAULT export codegen can read", async () => {
+            expect.assertions(3);
+
+            // No schema.ts at all — the path that used to write a named-only
+            // export, which codegen's emitted app.ts/shard.ts cannot import, so
+            // every such project failed tsc with TS2613 until someone fixed the
+            // export by hand.
+            rmSync(join(workdir, "lunora", "schema.ts"));
+
+            const result = await runAddCommand({ cwd: workdir, from: registryRoot, logger: makeLogger().logger, names: ["ratelimit"], yes: true });
+            const scaffolded = readFileSync(join(workdir, "lunora", "schema.ts"), "utf8");
+
+            expect(result.code).toBe(0);
+            expect(scaffolded).toContain("export default defineSchema({})");
+            // And the extension still splices into that shape.
+            expect(scaffolded).toContain(".extend(ratelimit.extension)");
+        });
+
         it("applies deps to package.json and bindings to wrangler.jsonc", async () => {
             expect.assertions(3);
 
@@ -246,6 +343,116 @@ describe("lunora add", () => {
             // comment preserved + binding applied.
             expect(wrangler).toContain("RATELIMIT_ENABLED");
         });
+
+        it("merges an object-rooted binding key-wise instead of replacing the whole root", async () => {
+            expect.assertions(4);
+
+            // A custom-source item can declare a whole `vars` object. Writing it
+            // verbatim replaces the root, so every variable the project already
+            // set disappears from wrangler.jsonc without a word.
+            const customRegistry = mkdtempSync(join(tmpdir(), "lunora-custom-registry-"));
+
+            mkdirSync(join(customRegistry, "planter"), { recursive: true });
+            writeFileSync(
+                join(customRegistry, "planter", "registry.json"),
+                JSON.stringify({
+                    bindings: [{ path: ["vars"], value: { NEW_VAR: "added", SHARED: "theirs" } }],
+                    deps: {},
+                    description: "plants a vars block",
+                    files: [],
+                    name: "planter",
+                    requires: [],
+                }),
+                "utf8",
+            );
+
+            writeFileSync(join(workdir, "wrangler.jsonc"), '{\n    "name": "demo",\n    "vars": { "EXISTING": "keep", "SHARED": "mine" }\n}\n', "utf8");
+
+            const { lines, logger } = makeLogger();
+
+            await runAddCommand({ cwd: workdir, from: customRegistry, logger, names: ["planter"], yes: true });
+
+            const { vars } = JSON.parse(readFileSync(join(workdir, "wrangler.jsonc"), "utf8")) as { vars: Record<string, string> };
+
+            expect(vars.EXISTING).toBe("keep");
+            // The project's value wins on a collision, and the skip is reported.
+            expect(vars.SHARED).toBe("mine");
+            expect(lines.join("\n")).toContain("SHARED already exists in vars");
+            // A genuinely new key still lands.
+            expect(vars.NEW_VAR).toBe("added");
+
+            rmSync(customRegistry, { force: true, recursive: true });
+        });
+
+        it("rewrites a manifest's workspace: dep range to the concrete published version", async () => {
+            expect.assertions(3);
+
+            // The ratelimit fixture pins `@lunora/ratelimit: workspace:*`. The
+            // workspace protocol is only resolvable inside the monorepo — leaking
+            // it into a consumer's package.json makes `pnpm install` abort with
+            // ERR_PNPM_WORKSPACE_PKG_NOT_FOUND.
+            //
+            // What replaces it is the CONCRETE version the CLI's channel tag
+            // currently points at, not the tag: a dist-tag in package.json lets a
+            // stale lockfile or pnpm metadata cache keep an older release, since
+            // the specifier still matches and is never re-resolved. `init` pins
+            // for exactly this reason and `add` used to write a floating "alpha"
+            // right beside init's pinned `lunorash`.
+            const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValue(Response.json({ "dist-tags": { [resolveDistTag()]: "9.9.9-test.1" } }));
+
+            try {
+                const { lines, logger } = makeLogger();
+
+                await runAddCommand({ cwd: workdir, from: registryRoot, logger, names: ["ratelimit"], yes: true });
+
+                const pkg = JSON.parse(readFileSync(join(workdir, "package.json"), "utf8")) as { dependencies: Record<string, string> };
+
+                expect(pkg.dependencies["@lunora/ratelimit"]).toBe("9.9.9-test.1");
+                expect(JSON.stringify(pkg)).not.toContain("workspace:");
+                // The plan preview resolves through the same map, so what it
+                // advertises is what lands.
+                expect(lines.join("\n")).toContain("@lunora/ratelimit@9.9.9-test.1");
+            } finally {
+                fetchSpy.mockRestore();
+            }
+        });
+
+        it("falls back to the channel dist-tag when the registry is unreachable", async () => {
+            expect.assertions(2);
+
+            // Offline, there is no version to pin. The channel tag still resolves
+            // to installable code (unlike `latest` on a pre-release channel), so
+            // it is the right fallback — never the `workspace:` protocol.
+            const fetchSpy = vi.spyOn(globalThis, "fetch").mockRejectedValue(new Error("getaddrinfo ENOTFOUND registry.npmjs.org"));
+
+            try {
+                await runAddCommand({ cwd: workdir, from: registryRoot, logger: makeLogger().logger, names: ["ratelimit"], yes: true });
+
+                const pkg = JSON.parse(readFileSync(join(workdir, "package.json"), "utf8")) as { dependencies: Record<string, string> };
+
+                expect(pkg.dependencies["@lunora/ratelimit"]).toBe(resolveDistTag());
+                expect(JSON.stringify(pkg)).not.toContain("workspace:");
+            } finally {
+                fetchSpy.mockRestore();
+            }
+        });
+    });
+
+    describe("install hint", () => {
+        it("names the detected manager's own install command, not a hardcoded pnpm", async () => {
+            expect.assertions(1);
+
+            // `packageManager` is the strongest of `detectPackageManager`'s
+            // signals — deterministic regardless of what happens to be
+            // installed on the machine running the suite.
+            writeFileSync(join(workdir, "package.json"), JSON.stringify({ dependencies: {}, name: "demo", packageManager: "yarn@4.0.0" }, null, 4), "utf8");
+
+            const { lines, logger } = makeLogger();
+
+            await runAddCommand({ cwd: workdir, from: registryRoot, logger, names: ["ratelimit"], yes: true });
+
+            expect(lines.join("\n")).toContain("yarn install  # install newly-added dependencies");
+        });
     });
 
     describe("requires resolution", () => {
@@ -257,6 +464,112 @@ describe("lunora add", () => {
             expect(result.code).toBe(0);
             expect(existsSync(join(workdir, "lunora", "ratelimit", "index.ts"))).toBe(true);
             expect(existsSync(join(workdir, "lunora", "needs-ratelimit", "index.ts"))).toBe(true);
+        });
+    });
+
+    describe("untrusted --source confirmation", () => {
+        it("`lunora add <item> --source …` refuses to write without confirmation", async () => {
+            expect.assertions(4);
+
+            const { lines, logger } = makeLogger();
+            const result = await runAddFeature({
+                cwd: workdir,
+                feature: "ratelimit",
+                from: registryRoot,
+                logger,
+                source: "gh:attacker/evil",
+            });
+
+            // Non-TTY with no `--yes`: nobody could be asked, so the INVOCATION
+            // is wrong — distinct from a human declining the prompt (CANCELLED).
+            expect(result.code).toBe(EXIT_CODE.USAGE);
+            expect(lines.join("\n")).toContain("custom registry source");
+            // Nothing from the attacker-controlled origin reached the project.
+            expect(existsSync(join(workdir, "lunora", "ratelimit", "index.ts"))).toBe(false);
+            expect(readFileSync(join(workdir, "wrangler.jsonc"), "utf8")).not.toContain("RATELIMIT_ENABLED");
+        });
+
+        it("`--yes` is the conscious confirmation that lets it through", async () => {
+            expect.assertions(2);
+
+            const result = await runAddFeature({
+                cwd: workdir,
+                feature: "ratelimit",
+                from: registryRoot,
+                logger: makeLogger().logger,
+                source: "gh:attacker/evil",
+                yes: true,
+            });
+
+            expect(result.code).toBe(0);
+            expect(existsSync(join(workdir, "lunora", "ratelimit", "index.ts"))).toBe(true);
+        });
+
+        it("`--from` is the same kind of origin and is confirmed too", async () => {
+            expect.assertions(3);
+
+            // A local registry root the user named is no more trusted than a
+            // remote `--source`; `lunora add` used to auto-confirm this half.
+            const prompts: string[] = [];
+            const result = await runAddFeature({
+                confirm: async (message: string) => {
+                    prompts.push(message);
+
+                    return true;
+                },
+                cwd: workdir,
+                feature: "ratelimit",
+                from: registryRoot,
+                logger: makeLogger().logger,
+            });
+
+            expect(prompts).toHaveLength(1);
+            expect(result.code).toBe(0);
+            expect(existsSync(join(workdir, "lunora", "ratelimit", "index.ts"))).toBe(true);
+        });
+
+        it("names the origin the resolver actually reads when both are given", async () => {
+            expect.assertions(2);
+
+            // `resolveRegistryRoot` takes `--from` and ignores `--source` when
+            // both are set, so a prompt naming `source` asked the operator to
+            // confirm a place nothing read from.
+            const prompts: string[] = [];
+            const result = await runAddFeature({
+                confirm: async (message: string) => {
+                    prompts.push(message);
+
+                    return true;
+                },
+                cwd: workdir,
+                feature: "ratelimit",
+                from: registryRoot,
+                logger: makeLogger().logger,
+                source: "gh:attacker/evil",
+            });
+
+            expect(result.code).toBe(0);
+            expect(prompts[0]).toContain(registryRoot);
+        });
+
+        it("the default first-party registry still needs no confirmation", async () => {
+            expect.assertions(2);
+
+            // Neither `--source` nor `--from`: `lunora add` itself is the opt-in,
+            // so a files-only item from the pinned registry must not ask again.
+            const asked: string[] = [];
+            const proceeded = await confirmDepMutation([{ manifest: { files: [], name: "foo" } }], {
+                confirm: async (message: string) => {
+                    asked.push(message);
+
+                    return false;
+                },
+                logger: makeLogger().logger,
+                names: [],
+            });
+
+            expect(proceeded).toStrictEqual({ ok: true });
+            expect(asked).toHaveLength(0);
         });
     });
 

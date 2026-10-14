@@ -2,9 +2,11 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
+import { platformMatrixIds } from "@lunora/codegen";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import { interpretRemote, LUNORA_CONFIG_FILE, readProjectRemotePreference } from "../src/project-config";
+import { DEFAULT_DEPLOY_TARGET, deployTargetIds, resolveDeployDriver } from "../src/driver-registry";
+import { interpretRemote, readProjectRemotePreference, readProjectTarget, resolveProjectTarget } from "../src/project-config";
 
 describe("interpretRemote", () => {
     it("passes a boolean through unchanged", () => {
@@ -42,7 +44,12 @@ describe("readProjectRemotePreference", () => {
         rmSync(root, { force: true, recursive: true });
     });
 
-    it("returns undefined when lunora.json is absent", () => {
+    /** Write the project's `lunora.config.ts`. `source` is embedded as the default-exported object literal. */
+    const writeProjectConfig = (source: string): void => {
+        writeFileSync(join(root, "lunora.config.ts"), `export default ${source};\n`, "utf8");
+    };
+
+    it("returns undefined when lunora.config.ts is absent", () => {
         expect.assertions(1);
 
         expect(readProjectRemotePreference(root)).toBeUndefined();
@@ -51,7 +58,7 @@ describe("readProjectRemotePreference", () => {
     it("reads `remote: true`", () => {
         expect.assertions(1);
 
-        writeFileSync(join(root, LUNORA_CONFIG_FILE), `{ "remote": true }`, "utf8");
+        writeProjectConfig(`{ remote: true }`);
 
         expect(readProjectRemotePreference(root)).toBe(true);
     });
@@ -59,23 +66,33 @@ describe("readProjectRemotePreference", () => {
     it("reads `remote: false`", () => {
         expect.assertions(1);
 
-        writeFileSync(join(root, LUNORA_CONFIG_FILE), `{ "remote": false }`, "utf8");
+        writeProjectConfig(`{ remote: false }`);
 
         expect(readProjectRemotePreference(root)).toBe(false);
     });
 
-    it("tolerates JSONC comments + trailing commas", () => {
+    it("tolerates comments + trailing commas, being real TypeScript", () => {
         expect.assertions(1);
 
-        writeFileSync(join(root, LUNORA_CONFIG_FILE), `{\n  // project default\n  "remote": true,\n}`, "utf8");
+        writeProjectConfig(`{\n  // project default\n  remote: true,\n}`);
 
         expect(readProjectRemotePreference(root)).toBe(true);
     });
 
-    it("returns undefined for malformed JSONC rather than throwing", () => {
+    it("returns undefined for a config that does not parse rather than throwing", () => {
         expect.assertions(1);
 
-        writeFileSync(join(root, LUNORA_CONFIG_FILE), `{ not valid `, "utf8");
+        writeFileSync(join(root, "lunora.config.ts"), `export default { remote: `, "utf8");
+
+        expect(readProjectRemotePreference(root)).toBeUndefined();
+    });
+
+    it("returns undefined for a config that THROWS rather than breaking the command", () => {
+        expect.assertions(1);
+
+        // A `.ts` config runs, unlike the JSON it replaces — so a throw is a new
+        // failure mode, and `lunora dev` must survive it.
+        writeFileSync(join(root, "lunora.config.ts"), `throw new Error("boom");\n`, "utf8");
 
         expect(readProjectRemotePreference(root)).toBeUndefined();
     });
@@ -83,8 +100,112 @@ describe("readProjectRemotePreference", () => {
     it("returns undefined when the file has no remote key", () => {
         expect.assertions(1);
 
-        writeFileSync(join(root, LUNORA_CONFIG_FILE), `{ "name": "app" }`, "utf8");
+        writeProjectConfig(`{ name: "app" }`);
 
         expect(readProjectRemotePreference(root)).toBeUndefined();
+    });
+});
+
+describe("deploy-target resolution", () => {
+    let root: string;
+
+    beforeEach(() => {
+        root = mkdtempSync(join(tmpdir(), "lunora-project-config-"));
+    });
+
+    afterEach(() => {
+        rmSync(root, { force: true, recursive: true });
+    });
+
+    const writeConfig = (config: unknown): void => {
+        writeFileSync(join(root, "lunora.config.ts"), `export default ${JSON.stringify(config)};\n`, "utf8");
+    };
+
+    it("falls back to the registry default with no flag and no config", () => {
+        expect.assertions(2);
+
+        expect(readProjectTarget(root)).toBeUndefined();
+        expect(resolveProjectTarget(root)).toBe(DEFAULT_DEPLOY_TARGET);
+    });
+
+    it("reads the target from lunora.config.ts", () => {
+        expect.assertions(2);
+
+        writeConfig({ remote: true, target: "aws" });
+
+        expect(readProjectTarget(root)).toBe("aws");
+        expect(resolveProjectTarget(root)).toBe("aws");
+    });
+
+    it("lets an explicit target win over the config", () => {
+        expect.assertions(1);
+
+        writeConfig({ target: "aws" });
+
+        // `--target` is the per-invocation override; a project that normally
+        // ships to one provider must be able to build for another without
+        // editing the committed config.
+        expect(resolveProjectTarget(root, "cloudflare")).toBe("cloudflare");
+    });
+
+    it("ignores a non-string target", () => {
+        expect.assertions(2);
+
+        // A shape error is not a name the user meant, so it collapses to "no
+        // preference" — unlike a misspelled string, which must reach the
+        // registry and throw.
+        writeConfig({ target: 42 });
+
+        expect(readProjectTarget(root)).toBeUndefined();
+        expect(resolveProjectTarget(root)).toBe(DEFAULT_DEPLOY_TARGET);
+    });
+
+    it("degrades to the default on a malformed config rather than throwing", () => {
+        expect.assertions(1);
+
+        writeFileSync(join(root, "lunora.config.ts"), "export default { target: ", "utf8");
+
+        expect(resolveProjectTarget(root)).toBe(DEFAULT_DEPLOY_TARGET);
+    });
+
+    it("carries a misspelled target through to a throwing driver lookup", () => {
+        expect.assertions(2);
+
+        writeConfig({ target: "clouflare" });
+
+        // The whole point of the resolution order: a typo must NOT be swallowed
+        // into the default. Quietly deploying to Cloudflare because the name
+        // was unrecognized ships an app to the wrong provider.
+        expect(resolveProjectTarget(root)).toBe("clouflare");
+        expect(() => resolveDeployDriver(resolveProjectTarget(root))).toThrow(/unknown deploy target "clouflare"/);
+    });
+});
+
+describe("target registries", () => {
+    // A ONE-DIRECTION invariant, not equality — plan 234 is why. A target with
+    // a driver but NO matrix is the dangerous case: it passes
+    // `resolveTargetOrThrow` and then codegen emits an un-gated surface,
+    // reintroducing the silent fallback with the guard fully in place. That
+    // direction must never happen, so it stays asserted below.
+    //
+    // A target with a matrix but no driver is different: it says codegen can
+    // gate capabilities for a host the CLI cannot deploy to yet. `node` was
+    // exactly that while its capability matrix landed ahead of its driver; both
+    // registries list it now, so they happen to agree again — but agreement is a
+    // coincidence of timing, not the invariant. "Codegen-gateable" and
+    // "deployable" are different questions, and the next host answers the first
+    // the moment its matrix lands.
+    //
+    // This used to assert strict equality on the theory that the two id
+    // spaces were one concept and would always agree — true only because both
+    // held exactly `cloudflare` and nothing had tested the claim. Restoring the
+    // strict form would just turn that normal intermediate state back into a
+    // test failure.
+    it("never has a deploy driver for a target codegen cannot gate", () => {
+        expect.assertions(1);
+
+        const matrixIds = new Set(platformMatrixIds());
+
+        expect(deployTargetIds().every((id) => matrixIds.has(id))).toBe(true);
     });
 });

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { defineAggregateIndex, defineRankIndex, defineSchema, defineTable, defineVectorIndex, v } from "../src/index";
+import { defineAggregateIndex, defineRankIndex, defineSchema, defineTable, defineVectorIndex, indexFieldsFromSchema, v } from "../src/index";
 
 describe("defineTable", () => {
     it("returns a table definition with shape and default __root__ shard mode", () => {
@@ -17,9 +17,16 @@ describe("defineTable", () => {
         expect(messages.searchIndexes).toEqual([]);
     });
 
-    it("rejects a v.from() column (args-only), including when nested under v.optional/array", () => {
-        expect.assertions(3);
+    it("accepts a v.from() column, bare and nested under v.optional/array", () => {
+        expect.assertions(4);
 
+        // `v.from()` used to be args-only, because codegen could not recover the
+        // wrapped schema's type and a column needs one. It can now (via
+        // `~standard.types.output`), and a column needs no SQL type of its own —
+        // a shard row is a JSON document, and a `.global()` table maps this to a
+        // JSON text column like `v.object`/`v.record`/`v.union`. Keeping the
+        // rejection meant maintaining the same shape twice, in two languages, for
+        // every project that also uses zod.
         const fake = {
             "~standard": {
                 validate: (value: unknown) => {
@@ -30,9 +37,13 @@ describe("defineTable", () => {
             },
         };
 
-        expect(() => defineTable({ x: v.from(fake) })).toThrow(/args-only/u);
-        expect(() => defineTable({ x: v.optional(v.from(fake)) })).toThrow(/args-only/u);
-        expect(() => defineTable({ x: v.array(v.from(fake)) })).toThrow(/args-only/u);
+        const table = defineTable({ bare: v.from(fake), items: v.array(v.from(fake)), maybe: v.optional(v.from(fake)) });
+
+        expect(table.shape.bare.kind).toBe("from");
+        expect(table.shape.maybe.kind).toBe("optional");
+        expect(table.shape.items.kind).toBe("array");
+        // The column still validates through the wrapped schema on write.
+        expect(table.shape.bare.parse({ any: "shape" })).toEqual({ any: "shape" });
     });
 
     it(".index appends an index definition", () => {
@@ -59,12 +70,46 @@ describe("defineTable", () => {
         expect(documents.searchIndexes[0]).toMatchObject({ field: "body", filterFields: ["workspaceId"], name: "by_body" });
     });
 
+    /**
+     * Both guards exist for the same reason: neither option *degrades* on a
+     * typo, so nothing downstream can report one. An unknown language silently
+     * analyzes as folding-only; an unknown strategy silently picks a different
+     * physical storage layout. Schema-build time is the only place either is
+     * still a typo rather than a stored fact.
+     */
+    it(".searchIndex refuses an unknown language or strategy", () => {
+        expect.assertions(3);
+
+        expect(() => defineTable({ body: v.string() }).searchIndex("by_body", { field: "body", language: "klingon" as never })).toThrow(
+            /unknown language "klingon" \(supported: de, en, es, fr, it, nl, none, pt\)/u,
+        );
+        expect(() => defineTable({ body: v.string() }).searchIndex("by_body", { field: "body", strategy: "Native" as never })).toThrow(
+            /unknown strategy "Native" \(supported: native, portable\)/u,
+        );
+        // The accepted spellings still pass, so the guards are not just refusing.
+        expect(defineTable({ body: v.string() }).searchIndex("by_body", { field: "body", language: "en", strategy: "native" }).searchIndexes[0]).toMatchObject({
+            language: "en",
+            strategy: "native",
+        });
+    });
+
     it(".shardBy marks the table as shard-local", () => {
         expect.assertions(1);
 
         const documents = defineTable({ body: v.string(), workspaceId: v.id("workspaces") }).shardBy("workspaceId");
 
         expect(documents.shardMode).toEqual({ field: "workspaceId", kind: "shardBy" });
+    });
+
+    it(".ownedBy records the owning column for owner-scoped shapes", () => {
+        expect.assertions(2);
+
+        // Independent of `.shardBy` even when both name the same column: the shard
+        // key routes storage, `ownedBy` states who the rows belong to.
+        const nodes = defineTable({ text: v.string(), userId: v.string() }).shardBy("userId").ownedBy("userId");
+
+        expect(nodes.ownerField).toBe("userId");
+        expect(defineTable({ text: v.string() }).ownerField).toBeUndefined();
     });
 
     it(".global marks the table as global", () => {
@@ -81,6 +126,17 @@ describe("defineTable", () => {
         const settings = defineTable({ key: v.string() }).global({ backend: "hyperdrive" });
 
         expect(settings.shardMode).toEqual({ backend: "hyperdrive", kind: "global" });
+    });
+
+    it("rejects chaining .shardBy() and .global() in either order", () => {
+        expect.assertions(2);
+
+        // Both write the one `shardMode`, so the later call used to discard the
+        // earlier silently: the table landed on a tier the author never chose.
+        // The chain is the only place the collision is observable — by the time
+        // `defineSchema` runs, one of the two modes is simply gone.
+        expect(() => defineTable({ roomId: v.string() }).shardBy("roomId").global()).toThrow(/cannot be both \.shardBy\(key\) and \.global\(\)/u);
+        expect(() => defineTable({ roomId: v.string() }).global().shardBy("roomId")).toThrow(/cannot be both \.shardBy\(key\) and \.global\(\)/u);
     });
 
     it("table without .vectorize exposes an empty vectorIndexes array", () => {
@@ -289,5 +345,103 @@ describe("defineSchema", () => {
 
         expect(index).toMatchObject({ dimensions: 1024, kind: "vectorIndex", metric: "cosine", table: "docs" });
         expect(index?.select({ body: "B", title: "T" })).toBe("T\n\nB");
+    });
+});
+
+describe("indexFieldsFromSchema (plan 250 — mask() bare-index-scan / rank oracle)", () => {
+    it("maps a regular index's declared `fields` and a rank index's `sortBy` ∪ `partitionBy`", () => {
+        expect.assertions(1);
+
+        const schema = defineSchema({
+            users: defineTable({ createdAt: v.number(), score: v.number(), ssn: v.string() })
+                .index("by_ssn", ["ssn"])
+                .rankIndex("by_score", { partitionBy: ["ssn"], sortBy: [{ field: "score" }] }),
+        });
+
+        expect(indexFieldsFromSchema(schema)).toStrictEqual({
+            users: {
+                index: { by_ssn: ["ssn"] },
+                rank: { by_score: ["score", "ssn"] },
+            },
+        });
+    });
+
+    it("omits a table with no declared indexes rather than mapping it to `{}`", () => {
+        expect.assertions(1);
+
+        const schema = defineSchema({ users: defineTable({ email: v.string() }) });
+
+        expect(indexFieldsFromSchema(schema)).toStrictEqual({});
+    });
+
+    it("folds a rank index with no `partitionBy` down to just its `sortBy` fields", () => {
+        expect.assertions(1);
+
+        const schema = defineSchema({
+            messages: defineTable({ createdAt: v.number() }).rankIndex("byTime", { sortBy: [{ field: "createdAt" }] }),
+        });
+
+        expect(indexFieldsFromSchema(schema)).toStrictEqual({ messages: { rank: { byTime: ["createdAt"] } } });
+    });
+
+    it("maps a geo index's declared `field` (closes the withGeoIndex position oracle)", () => {
+        expect.assertions(1);
+
+        const schema = defineSchema({
+            users: defineTable({ homeLocation: v.geoPoint(), name: v.string() }).geoIndex("by_location", { field: "homeLocation" }),
+        });
+
+        expect(indexFieldsFromSchema(schema)).toStrictEqual({
+            users: {
+                geo: { by_location: ["homeLocation"] },
+            },
+        });
+    });
+
+    it("does NOT include vectorIndexes or aggregateIndexes fields — neither is a reachable ordinal oracle through the masked reader", () => {
+        expect.assertions(1);
+
+        const embed = async (text: string): Promise<ReadonlyArray<number>> => [text.length];
+        const schema = defineSchema(
+            { docs: defineTable({ body: v.string(), ssn: v.string() }).aggregateIndex("byCount") },
+            {
+                byEmbedding: defineVectorIndex({
+                    dimensions: 3,
+                    embed,
+                    metric: "cosine",
+                    source: { select: (row) => String(row.body), table: "docs" },
+                }),
+            },
+        );
+
+        expect(indexFieldsFromSchema(schema)).toStrictEqual({});
+    });
+});
+
+describe("defineSchema().jurisdiction()", () => {
+    it("is chainable and preserves the schema's tables", () => {
+        expect.assertions(2);
+
+        const schema = defineSchema({
+            messages: defineTable({ text: v.string() }),
+        }).jurisdiction("us");
+
+        expect(Object.keys(schema.tables)).toStrictEqual(["messages"]);
+        // Still extendable/composable after pinning the jurisdiction.
+        expect(typeof schema.extend).toBe("function");
+    });
+
+    it("composes with .rls() in either order", () => {
+        expect.assertions(2);
+
+        const a = defineSchema({ messages: defineTable({ text: v.string() }) })
+            .rls("required")
+            .jurisdiction("eu");
+        const b = defineSchema({ messages: defineTable({ text: v.string() }) })
+            .jurisdiction("eu")
+            .rls("required");
+
+        expect(a.rlsMode).toBe("required");
+        expect(b.rlsMode).toBe("required");
     });
 });

@@ -1,10 +1,14 @@
 ---
 title: "@lunora/runtime"
 description: The Worker entrypoint — createWorker, RPC envelope, shard routing.
+related:
+    - to: /docs/packages/do
+    - to: /docs/packages/d1
+    - to: /docs/architecture
 ---
 
 `@lunora/runtime` is the low-level Worker runtime. In a normal Lunora app you
-don't call it directly — codegen emits `src/server/index.ts` as a fluent
+don't call it directly; codegen emits `src/server/index.ts` as a fluent
 builder that wires `createWorker` for you. Drop down to this package when you
 hand-write a Worker entry, add a custom HTTP route, or build your own transport.
 
@@ -35,7 +39,7 @@ export { ShardDO };
 
 ## `createWorker(options)`
 
-Returns a `{ fetch, scheduled, serverQuery }` object — a valid Cloudflare module
+Returns a `{ fetch, scheduled, serverQuery }` object, a valid Cloudflare module
 Worker. `fetch` handles HTTP/WebSocket traffic, `scheduled` handles Cron
 Triggers (see [Scheduled backups](#scheduled-backups)), and `serverQuery` is an
 in-process query/mutation dispatch for SSR loaders co-located in the same Worker
@@ -53,23 +57,44 @@ path). Internally `fetch`:
 
 `shardDO` is the only required option. The rest are opt-in:
 
-| Option                                                     | Purpose                                                                                        |
-| ---------------------------------------------------------- | ---------------------------------------------------------------------------------------------- |
-| `shardDO` (required)                                       | The shard `DurableObjectNamespace` (typically `env.SHARD`)                                     |
-| `queryCoordinator`                                         | Enables cross-shard fan-out (`createQueryCoordinator({ registry })`); without it `fanOut` 400s |
-| `resolveIdentity`                                          | `(request, env) => identity \| null` — sets `ctx.auth` on the shard                            |
-| `authorizeShard` / `authorizeFanOut`                       | Per-shard / fan-out authorization gates (return `false` to reject)                             |
-| `routes`                                                   | `Record<string, Route>` of custom HTTP handlers (`"GET /healthz"` or `"/healthz"`)             |
-| `httpRouter`                                               | A meta-framework SSR handler / `httpRouter()` app, dispatched after the reserved endpoints     |
-| `security`                                                 | The secure-by-default HTTP edge — headers, CORS, CSRF (see `SecurityOptions`)                  |
-| `crons` / `cronJobs`                                       | Cron-trigger handlers keyed by their exact expression                                          |
-| `backupCron` / `backupStore` / `adminToken`                | The built-in scheduled NDJSON backup (see below)                                               |
-| `functions`, `*Introspector`, `storage*`, `openApiSpec`, … | Back the admin-gated `/_lunora/admin/*` endpoints the Studio reads                             |
+| Option                                                     | Purpose                                                                                                                       |
+| ---------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------- |
+| `shardDO` (required)                                       | The shard `DurableObjectNamespace` (typically `env.SHARD`)                                                                    |
+| `queryCoordinator`                                         | Enables cross-shard fan-out (`createQueryCoordinator({ registry })`); without it `fanOut` 400s                                |
+| `resolveIdentity`                                          | `(request, env) => identity \| null`; sets `ctx.auth` on the shard                                                            |
+| `authorizeShard` / `authorizeFanOut`                       | Per-shard / fan-out authorization gates (return `false` to reject)                                                            |
+| `allowUnauthenticatedShardAccess`                          | Opt into open shard/fan-out access (only safe when every table is per-row RLS-protected)                                      |
+| `routes`                                                   | `Record<string, Route>` of custom HTTP handlers (`"GET /healthz"` or `"/healthz"`)                                            |
+| `httpRouter`                                               | A meta-framework SSR handler / `httpRouter()` app, dispatched after the reserved endpoints                                    |
+| `security`                                                 | The secure-by-default HTTP edge: headers, CORS, CSRF (see `SecurityOptions`)                                                  |
+| `crons` / `cronJobs`                                       | Cron-trigger handlers keyed by their exact expression                                                                         |
+| `backupCron` / `backupStore` / `adminToken`                | The built-in scheduled NDJSON backup (see below)                                                                              |
+| `queueHandler`                                             | The queue fan-out seam; `POST /_lunora/scheduled` needs no option — see _Running crons and queues where the host has neither_ |
+| `functions`, `*Introspector`, `storage*`, `openApiSpec`, … | Back the admin-gated `/_lunora/admin/*` endpoints the Studio reads                                                            |
+
+Cross-shard access is **default-denied**. A request that names a non-default
+shard (`shardKey !== defaultShardKey`, default `__root__`) or a fan-out is
+rejected with `403` (`FORBIDDEN_SHARD` / `FORBIDDEN_FANOUT`) unless the
+worker sets `authorizeShard` / `authorizeFanOut`, or
+`allowUnauthenticatedShardAccess: true`. A single-DO app never addresses a
+non-default shard, so it is unaffected; the gate only bites once you
+[`.shardBy()`](/docs/concepts/sharding). `allowUnauthenticatedShardAccess` is
+only safe when every table is protected by per-row RLS (the runtime logs a
+one-time warning while it is on with no `authorizeShard`/`authorizeFanOut`).
+
+`authorizeShard` is a gate on **callers**: it receives a single
+`{ identity, shardKey }` argument and runs only for client-originated access
+(RPC, REST, `serverQuery`, WebSocket upgrade). Server-initiated dispatch — a
+firing cron, a scheduler job — originates inside the trust boundary (the
+scheduler endpoint authenticates an HMAC signature or admin bearer first) and
+never reaches the gate, so `identity === null` always means an anonymous end
+user and `({ identity }) => identity?.userId !== undefined` is a complete gate
+that cannot starve the scheduler.
 
 ## `composeWorker` / `withFrameworkWorker`
 
 `composeWorker(options)` is `createWorker` under a name that reads better in
-framework templates — same options, same return. Use it when a meta-framework's
+framework templates; same options, same return. Use it when a meta-framework's
 SSR handler (TanStack Start, React Router, SolidStart, …) is passed as
 `httpRouter`: the reserved realtime endpoints (`/_lunora/rpc`, `/_lunora/ws`,
 `/_lunora/admin/*`), auth, and explicit `routes` go to Lunora first, then
@@ -84,6 +109,31 @@ object, and `options` may be a plain object or an `(env) => options` factory
 supplies that). When Lunora configures no cron surface, the host's own
 `scheduled` is preserved rather than dropped.
 
+## `createLunoraHandler(options?)`
+
+The framework-neutral mount seam for **web-standard frameworks that own the
+worker entry** (Hono, Nitro/h3, Elysia, any WinterCG host on Workers). Returns a
+`(request, env, ctx?) => Response` that serves Lunora's realtime plane
+(`/_lunora/rpc`, `/_lunora/ws`, `/_lunora/admin/*`); mount it under `/_lunora/*`
+in your router and everything else stays your framework's. `shardDO` defaults to
+`env.SHARD`, so the common case needs no options; pass a partial options object
+or an `(env) => options` factory for `auth`, `crons`, or a custom namespace.
+
+```ts
+import { Hono } from "hono";
+import { createLunoraHandler } from "lunorash/runtime";
+
+const lunora = createLunoraHandler();
+const app = new Hono<{ Bindings: Env }>();
+
+app.use("/_lunora/*", (c) => lunora(c.req.raw, c.env, c.executionCtx));
+```
+
+This is the **one shared helper** that replaces per-framework adapter packages.
+See [Bring your framework](/docs/frameworks/bring-your-framework#mount-lunora-inside-your-framework)
+for Nitro/Elysia examples and the host contract. `resolveLunoraOptions` and
+`NOOP_EXECUTION_CONTEXT` are exported too, for adapters that need finer control.
+
 ## `defineRpcEnvelope`
 
 Helper for building a custom transport (e.g. a CLI driver). Wraps a
@@ -97,12 +147,12 @@ const envelope = defineRpcEnvelope({ functionPath: "messages:send", args: { body
 ## `RpcEnvelope` / `Route` / `WorkerOptions`
 
 Type-only exports. `WorkerOptions` is the options bag of `createWorker`. `Route`
-is a custom HTTP handler — `(request, env, context) => Response | Promise<Response>`
-— stored in the `routes` map.
+is a custom HTTP handler stored in the `routes` map:
+`(request, env, context) => Response | Promise<Response>`.
 
 ## `resolveShard(namespace, shardKey)`
 
-Returns a `ResolvedShard` (`{ fetch }`) — the shard stub for the given shard key,
+Returns a `ResolvedShard` (`{ fetch }`): the shard stub for the given shard key,
 preferring `namespace.getByName` and falling back to `idFromName` + `get`. The
 runtime calls this for you, but it's exported so add-ons can route through the
 same logic.
@@ -115,7 +165,7 @@ const response = await shard.fetch(request);
 ## `ShardNamespaceLike` / `ResolvedShard` / `ExecutionContextLike`
 
 Structural type aliases over the corresponding `@cloudflare/workers-types`
-shapes — they exist so unit tests can pass plain mock objects without
+shapes; they exist so unit tests can pass plain mock objects without
 pulling in the full Workers types.
 
 ## Scheduled backups
@@ -134,8 +184,8 @@ const build = (env: Env): LunoraWorker =>
         // Built-in backup: on this cron, export every table to NDJSON and write
         // it (plus a manifest sidecar) to the bound R2 bucket.
         backupStore: env.BACKUPS, // any R2 bucket binding
-        backupCron: "0 3 * * *", // must match a wrangler triggers.crons entry
-        backupRetain: 14, // keep the newest 14 snapshots; prune older ones
+        backupCron: "0 3 * * *", // a literal here is written into triggers.crons for you
+        backupRetain: 14, // the window: `lunora backup prune` keeps the newest 14
         // backupPrefix: "backups/", // key prefix (default)
         // backupTables: ["users"],  // omit to back up every table
     });
@@ -148,11 +198,11 @@ export default {
 
 Each run writes two objects under `backupPrefix`:
 
-- `lunora-backup-<id>.ndjson` — the snapshot, one `{ table, doc }` per line
+- `lunora-backup-<id>.ndjson`: the snapshot, one `{ table, doc }` per line
   (the same NDJSON shape the `/_lunora/admin/export` endpoint and
   `lunora backup create` produce).
-- `lunora-backup-<id>.ndjson.manifest.json` — a `BackupManifest`
-  (`{ id, createdAt, cron, file, rows, bytes, scheduledTime, tables? }`).
+- `lunora-backup-<id>.ndjson.manifest.json`: a `BackupManifest`
+  (`{ id, createdAt, cron, file, rows, bytes, sha256, scheduledTime, tables? }`).
 
 The `id` is the trigger's `scheduledTime` as an ISO timestamp, so a snapshot
 is named after the moment it represents. The backup requires `adminToken`
@@ -161,8 +211,98 @@ is named after the moment it represents. The backup requires `adminToken`
 recorded rather than silently skipped.
 
 Register your own cron handlers via `crons` (keyed by the exact expression);
-they run independently of — and, on a shared expression, alongside — the
-built-in backup.
+they run independently of the built-in backup, and alongside it on a shared
+expression.
+
+### Retention does not delete on its own
+
+`backupRetain` is the window (how many snapshots this cron keeps) and nothing
+more. **The scheduled backup never deletes.** It writes the snapshot, reports
+how many sit past the window, and leaves them there; removing them is
+`lunora backup prune`, which is the only thing in Lunora that deletes a backup.
+
+```bash
+lunora backup retention --url https://api.example.com   # what would go; deletes nothing
+lunora backup prune --url https://api.example.com       # deletes it, after confirming
+```
+
+The trade is deliberate. An R2 delete has no undo, the thing deleted is the
+backup, and a config mistake surfaces when someone reaches for a snapshot that
+is not there, so the destructive step is one an operator takes, not a side
+effect of a backup succeeding. The cost is that a bucket grows until somebody
+prunes it, which is why every run that has snapshots past the window says so and
+names the command.
+
+Both commands answer from the worker, because the worker is the only party that
+knows its own `backupCron` and `backupRetain`, and because eligibility depends
+on a marker that is not visible in a plain object listing. They share one
+selection, so what `retention` predicts is what `prune` removes.
+
+`prune` prints the list and asks before deleting; `--yes` skips the prompt for
+scripts, and without a TTY it refuses rather than assuming. It needs a window:
+with no `backupRetain` there is nothing past it, and a default is deliberately
+not invented.
+
+Run the preview on any bucket that predates the marker: those sidecars are never
+eligible, so retention may own far fewer snapshots than the bucket contains. It
+says exactly how many.
+
+A prune only ever removes snapshots **this** cron wrote: each sidecar is
+stamped with its cron expression, and the prune matches on it. Snapshots taken
+by hand, and snapshots from a second deployment sharing the bucket, are left
+alone, so two workers on one bucket each keep the retention they configured.
+(Sidecars written before this marker existed are never eligible; delete those by
+hand once.) A failed retention _report_ is warned about and does not
+fail the backup that already landed; the run itself deletes nothing to fail
+at.
+
+`lunora backup list --bucket <name>` reads the same layout, so scheduled
+snapshots and ones taken by hand with `lunora backup create --bucket <name>`
+appear as one history, and `lunora backup restore <id> --bucket <name> --verify`
+works on either, because both tiers record the snapshot's SHA-256 in the
+manifest. The scheduled run also hands the digest to R2, which verifies it on
+write and reports it from `head`/`list` afterwards. (Snapshots written by a
+release before this one carry no checksum; `--verify` refuses those rather than
+reporting an unverified restore as a verified one.)
+
+### Size
+
+The backup is built in the isolate: `orchestrateExport` resolves every shard's
+rows into memory before the first row is encoded, so the snapshot has to fit
+alongside them in a Worker's ~128 MB. The run **refuses past 24 MiB of NDJSON**
+(`BACKUP_TOO_LARGE`): the cron invocation fails loudly and nothing is written.
+
+Read that cap for what it is: a bound on the snapshot, not on peak memory. For
+shard-local tables the row set is already resident when the first check runs, so
+it only bounds anything incrementally for `.global()` tables, which stream from
+a generator. The number is set well under the isolate's limit precisely because
+it cannot bound the larger allocation, and a backup comfortably under it can
+still exhaust a Worker if the row set behind it is large.
+
+Narrow it with `backupTables`, or move the job off-platform with
+`lunora backup create --bucket` (32 MiB, and it runs on a machine). Backing up
+more often does not help: every run is a full snapshot, not an increment.
+
+Raising the ceiling means making the export fan-out stream per shard. A bigger
+object or a multipart upload would not help: the rows are already in memory
+before the upload starts.
+
+### Reading objects back
+
+`lunora backup restore --bucket` pulls a snapshot down through the admin-gated
+`GET /_lunora/admin/storage/object?key=…`, which streams one object's body
+under the same bearer as every other admin route. It needs a `storageDownload`
+function on the worker; wrap the storage call, as the generated app worker
+does:
+
+```ts
+storageDownload: (key: string, opts?: { bucket?: string }) => pick(opts?.bucket).download(key),
+```
+
+`createStorage(...).download` cannot be passed directly: its second parameter is
+a byte range, not a bucket. Without it the endpoint
+answers `STORAGE_DOWNLOAD_NOT_CONFIGURED` and a bucket restore is not
+available; the snapshot is still readable with `wrangler r2 object get`.
 
 ### Wrangler bindings
 
@@ -174,19 +314,258 @@ built-in backup.
 ```
 
 The `crons` array must contain the exact `backupCron` string; Wrangler only
-delivers triggers it declares. To restore a scheduled snapshot, download the
-NDJSON object and feed it to `lunora backup restore <file>` (optionally with
-`--to <time>` for point-in-time replay).
+delivers triggers it declares. `lunora deploy` and the dev server write
+`triggers.crons` for you: codegen reads your `lunora/crons.ts` registrations
+**and** the `backupCron` / `crons` keys your worker entry passes to
+`createWorker`, so a string literal like the one above needs no hand-editing.
+
+A value codegen cannot read statically — `backupCron: env.NIGHTLY_CRON`, or one
+supplied through `.extend((env) => ({ … }))` — still needs its own
+`triggers.crons` entry, and that entry is safe to add: these commands only ever
+remove entries they generated, the set they own being recorded in your
+`package.json` under `lunora.crons`. Anything else is left alone and reported as
+kept. To restore a scheduled snapshot, download the NDJSON object and
+feed it to `lunora backup restore <file>`; for point-in-time recovery use
+`lunora backup pitr --at <time> --restore`.
 
 ## `LunoraError` / `toErrorResponse` / `LunoraErrorBody`
 
-The runtime's typed error class. Throwing a `LunoraError(code, message)`
-inside a handler causes a `{ error: { code, message, ... } }` body to come
-back over RPC instead of an HTTP 500. `toErrorResponse(err)` is the same
-mapping exposed for add-ons.
+The runtime's transport-level error class, for the **worker entry and runtime
+add-ons** — HTTP routes, middleware you mount on `createWorker`, host adapters.
+Throwing a `LunoraError(message, { code, status })` produces a
+`{ error: { code, message, ... } }` body instead of an HTTP 500.
+`toErrorResponse(err)` is the same mapping exposed for add-ons.
 
-## See also
+<Callout type="warn">
+    **This is not the class you throw inside a query, mutation, or action.** Those use `LunoraError` from `lunorash/server` (`@lunora/errors`), whose signature
+    is `(code, message?, options?)` — the **code first**, resolved against the shared error catalog. The two classes share a name and a wire shape but take
+    their arguments in opposite orders, so always import deliberately.
+</Callout>
 
-- [@lunora/do](/docs/packages/do)
-- [@lunora/d1](/docs/packages/d1)
-- [Architecture](/docs/architecture)
+Here the message comes **first**; `code` and `status` are options:
+
+```ts
+import { LunoraError } from "@lunora/runtime";
+
+throw new LunoraError("no such post", { code: "NOT_FOUND", status: 404 });
+```
+
+Reversing them (`new LunoraError("NOT_FOUND", "no such post")`) does not
+compile, and from untyped code it mints an error whose _message_ is
+`"NOT_FOUND"` and whose code defaults to `INTERNAL` — a redacted 500, exactly
+what this class exists to avoid.
+
+## Running crons and queues where the host has neither
+
+Some hosts hand a Worker no cron trigger and no queue consumer of its own —
+Cloudflare's Workers for Platforms is the case this exists for: a script in a
+dispatch namespace gets neither, whatever its own `wrangler.jsonc` declares. The
+work still has to run, so the platform drives it over HTTP instead, through two
+reserved endpoints `createWorker` serves. Both are **admin-gated** (the same
+bearer as `/_lunora/admin/*`) and both refuse anything but `POST`.
+
+`POST /_lunora/scheduled` replays one cron firing:
+
+```bash
+curl -X POST https://<tenant>/_lunora/scheduled \
+  -H "authorization: Bearer $LUNORA_ADMIN_TOKEN" \
+  -d '{ "cron": "0 9 * * *" }'
+```
+
+Dispatch is keyed on the expression and goes through the same path a native
+trigger takes — user crons, code crons and the scheduled backup all behave
+exactly as they would on a real firing. A body with no `cron` is a `400`; the
+platform is expected to know which expression is due.
+
+`POST /_lunora/queue` hands over a batch the platform's own consumer drained,
+and answers with the ids to redeliver:
+
+```bash
+curl -X POST https://<tenant>/_lunora/queue \
+  -H "authorization: Bearer $LUNORA_ADMIN_TOKEN" \
+  -d '{ "queue": "jobs", "messages": [{ "id": "m1", "body": { "userId": "u1" } }] }'
+# => { "retry": ["m1"] }
+```
+
+It needs a `queueHandler` on `createWorker` (`(batch, env, ctx) => { retry? }`);
+without one the endpoint is a `400` rather than a silent success, so a
+misconfigured tenant fails loudly instead of dropping every batch. Messages with
+no string `id` are dropped before the handler sees them — there would be nothing
+to ack or retry them by.
+
+A forwarded batch is capped at **16 MiB** and a larger one is refused with a
+`413` — chunked or not, since the cap is enforced as the bytes arrive rather than
+from `Content-Length`. That is sized for a full Cloudflare Queues batch (100
+messages × 128 KiB) plus the forwarding envelope, so a consumer that respects the
+queue's own limits never meets it. A body that names no `messages` array — an
+empty body included — is a `400` rather than an empty batch, because answering
+`{ "retry": [] }` would tell the consumer to ack messages this worker never read.
+
+Neither endpoint replaces the native triggers where a host has them. On an
+ordinary account-level Worker, `triggers.crons` and a real queue consumer are
+still the path; these are the seam a platform reaches for when the host removed
+it.
+
+## Health / readiness probe
+
+`createWorker` serves two probe endpoints an uptime monitor, a load balancer,
+or a Cloudflare Health Check can hit, with no configuration required:
+
+- `GET /_lunora/health`: the aggregate probe. `200` when every critical
+  dependency resolves, `503` when a critical one is down. A non-critical failure
+  reports `status: "degraded"` but keeps the `200`.
+- `GET /_lunora/health/ready`: the readiness gate (only readiness checks).
+
+The runtime auto-registers probes structurally from `env`: the shard Durable
+Object (reachability, critical), any D1 binding (`SELECT 1`, critical), and R2 /
+queue / Hyperdrive bindings (presence, non-critical). The body carries only
+per-check `up`/`down` and static `appName` / `appVersion`, **never** a secret,
+connection string, or env value. Configure via `health`:
+
+```ts
+createWorker({
+    shardDO: env.SHARD,
+    health: {
+        appName: "my-app",
+        appVersion: env.CF_VERSION_METADATA?.id,
+        auth: "public", // or "admin" — bearer-gated + per-check messages included
+        probes: [
+            // add a bespoke downstream check
+            { name: "billing-api", critical: false, check: async () => ({ healthy: await pingBilling() }) },
+        ],
+    },
+});
+```
+
+Point a Cloudflare Health Check (or any uptime monitor) at
+`https://<your-worker>/_lunora/health` and alert on a non-`200`.
+
+## Opt-in public REST surface
+
+Publish a procedure over REST by tagging it with `.expose({ rest: true })` in
+`server/`:
+
+```ts
+export const list = query
+    .input({ channelId: v.id("channels") })
+    .expose({ rest: true })
+    .query(async ({ ctx, args }) => ctx.db.query("messages")./* … */);
+```
+
+The runtime then mints `GET /_lunora/rest/messages/list` (queries; also `POST`)
+or `POST /_lunora/rest/messages/send` (mutations / actions). A REST call is
+routed **through** the procedure via the same dispatch as typed RPC, so
+`ctx.auth`, RLS, and the `v.*` validators are all enforced at the shard; REST
+is a transport adapter, never a weaker entry point. **Default-closed**: a
+procedure without the tag has no REST route (it 404s), and there is no
+table-level auto-CRUD (that would bypass RLS). Query args ride the query string
+(`?limit=10`, JSON-encoded for non-scalars); mutation/action args come from the
+JSON body. The generated OpenAPI (`_generated/openapi.json`) describes exactly
+this surface. Rate-limit it over `@lunora/ratelimit`:
+
+```ts
+import { createRestRateLimit } from "lunorash/runtime";
+import { RateLimiter } from "@lunora/ratelimit";
+
+createWorker({
+    shardDO: env.SHARD,
+    functions: LUNORA_FUNCTIONS,
+    restRateLimit: createRestRateLimit(new RateLimiter(/* … */), { name: "rest" }),
+});
+```
+
+With no `key` callback the limit is keyed on Cloudflare's `CF-Connecting-IP`, and
+only while running on Cloudflare — the edge stamps that header over anything the
+client sent, so it is the one client-address header a caller cannot choose. On any
+other target (`target: "node"`, a container, a bare host) nothing overwrites it, so
+the runtime resolves no IP at all — and the gate then **refuses** the request with
+a `500` naming the fix, rather than pooling every caller behind one bucket. That is
+deliberate on both counts: trusting the header off Cloudflare would let an attacker
+rotate `Cf-Connecting-IP` for a fresh bucket per request and the limit would stop
+applying to exactly the traffic it exists to stop, while a shared bucket inverts a
+per-caller limit into a one-request-per-period lever anyone can pull for the whole
+deployment. Off Cloudflare, pass `key` and identify callers by something they
+cannot forge:
+
+```ts
+createRestRateLimit(limiter, { key: (request) => request.headers.get("x-api-key") ?? undefined, name: "rest" });
+```
+
+### Origins behind a proxy: `trustedClientIpHeader`
+
+A non-Cloudflare origin sitting **behind** Cloudflare is the case where the refusal
+is pure loss rather than protection. The edge stamps `CF-Connecting-IP`, the origin
+accepts only Cloudflare traffic, so the header genuinely is trustworthy — yet the
+runtime still resolves no IP, because the code runs on the origin and nothing in
+the request tells it apart from a directly-exposed host. A limit that could have
+been per-IP refuses every request instead.
+
+Only the deployment knows it is fronted, so the deployment says so. Declare the
+header and per-IP limiting comes back:
+
+```ts
+createWorker({
+    shardDO: env.SHARD,
+    functions: LUNORA_FUNCTIONS,
+    // Governs `ctx.ip`.
+    trustedClientIpHeader: "cf-connecting-ip",
+    // Governs the REST limiter's default key. Set both, or the two disagree
+    // about who a request came from.
+    restRateLimit: createRestRateLimit(limiter, { name: "rest", trustedClientIpHeader: "cf-connecting-ip" }),
+});
+```
+
+Declaring it asserts that the named header is set by infrastructure **you
+control**, on every request, replacing whatever the caller sent — so no caller
+can choose its value. A proxy that only forwards or appends a client-supplied
+header is not such a thing, and neither is an origin that can be reached around
+it: if any route bypasses the proxy, a caller arrives with the header they typed,
+rotates it for a fresh bucket per request, and forges the `ctx.ip` your procedures
+key on. Lock the origin to the proxy before setting this. Left unset, the
+fail-closed default above applies; on Cloudflare the option is ignored and
+`CF-Connecting-IP` is used regardless.
+
+A value containing a comma is refused rather than read, because that is an
+appended chain (`x-forwarded-for: <client>, <hop>`) whose leftmost entry is
+client-written. Declare a header your proxy replaces, or key on something else
+with `key`.
+
+This mirrors `@lunora/auth`'s `advanced.ipAddress.trustedProxies` opt-in, which
+solves the same problem for the sign-in limiter. Both are per-deployment
+assertions and neither implies the other, so a fronted origin sets both.
+
+Security guidance: keep the surface small, prefer `.output()` on exposed
+procedures so the response shape is contractual, and rely on the procedure's own
+RLS/auth for authorization; never expose an unauthenticated mutation that
+writes state you wouldn't accept from an anonymous caller.
+
+## Continuous CDC export tap
+
+Stream the shard op-log to an external warehouse/ETL sink continuously (the
+outbound counterpart to CDC-in). Wire named sinks + a durable cursor store, and
+drive one drain pass per `POST /_lunora/admin/export-tap/run` (cron or external
+scheduler):
+
+```ts
+import { createKvCursorStore, r2Sink, webhookExportSink } from "lunorash/runtime";
+
+createWorker({
+    shardDO: env.SHARD,
+    queryCoordinator,
+    exportCursorStore: createKvCursorStore(env.CDC_CURSORS),
+    exportSinks: {
+        warehouse: webhookExportSink({ name: "warehouse", url: env.WAREHOUSE_URL }),
+        archive: r2Sink({ name: "archive", bucket: env.CDC_BUCKET, prefix: "cdc" }),
+    },
+});
+```
+
+Delivery is **at-least-once**, **ordered per shard**, and **resumable**: a
+shard's cursor advances only after the sink acknowledges its batch, so a crash
+replays rather than drops. A failing sink applies backpressure (the shard's
+cursor stays put and the next pass retries with exponential backoff) **without
+stalling the shard**: the tap is a reader, so writes proceed. `POST` body:
+`{ "sink": "warehouse", "limit"?: number }`; the response reports `delivered`,
+`cursors`, `failures`, and `hasMore` (poll again while `true`). Managed
+Snowflake / BigQuery / Airbyte / Fivetran connectors are a Lunora Cloud concern;
+the framework ships the tap.

@@ -1,17 +1,62 @@
 /**
- * `@lunora/mcp` — a Model Context Protocol server that exposes a Lunora
- * deployment to AI agents.
+ * `@lunora/mcp` — Model Context Protocol servers for Lunora. This entry exposes
+ * a *deployment* to AI agents; the `@lunora/mcp/docs` subpath exposes the
+ * framework's *documentation* (credential-free, and safe to host publicly).
  *
- * It registers tools for introspecting a deployment (`lunora_list_functions`,
- * `lunora_list_tables`) and invoking its functions (`lunora_run_query`,
- * `lunora_run_mutation`, `lunora_run_action`), each backed by `LunoraClient`
- * over HTTP RPC.
- *
- * Run the `lunora-mcp` binary (configured via `LUNORA_URL` /
- * `LUNORA_ADMIN_TOKEN`) for the stdio transport, or build a server
+ * The deployment server: It registers tools for introspecting a deployment
+ * (`lunora_list_functions`, `lunora_list_tables`) and invoking its functions
+ * (`lunora_run_query`, plus `lunora_run_mutation` and `lunora_run_action` when
+ * writes are enabled), each backed by `LunoraClient` over HTTP RPC, plus
+ * `lunora_explain_error` — a credential-free read of the static error catalog
+ * (status, title, hint, matched solution) that needs no deployment at all. It also
+ * exposes the deployment's observability reads (`lunora_get_logs`,
+ * `lunora_get_issues`, `lunora_get_advisories`, `lunora_get_query_insights`,
+ * `lunora_get_migration_status`) when `allowObservability` (or the
+ * LUNORA_MCP_ALLOW_OBSERVABILITY env) is set — read-only, but they return
+ * production user data, so they are omitted entirely without it. The server is
+ * read-only by default — the write tools are exposed only when `allowWrites`
+ * (or the `LUNORA_MCP_ALLOW_WRITES` env) is set, and every run tool is
+ * allowlisted against the deployment's discovered public functions. Past that
+ * gate the two write tools run a two-step confirmation handshake: the first
+ * call writes nothing and returns the proposed action plus a self-verifying
+ * `actionDigest`, and only a second call carrying `confirmed: true` and that
+ * digest executes (see `./write-confirmation`). It can also
+ * front durable `@lunora/agent` runs as `agent_<name>` tools when `allowAgents`
+ * (or `LUNORA_MCP_ALLOW_AGENTS` + `LUNORA_MCP_AGENTS`) is set. Run the
+ * `lunora-mcp` binary (configured via the `LUNORA_URL`, `LUNORA_ADMIN_TOKEN`,
+ * and `LUNORA_MCP_ALLOW_WRITES` env vars) for the stdio transport, serve the
+ * server remotely over Streamable HTTP with `createMcpFetchHandler` (a
+ * Workers-ready `Request` → `Response` handler), or build a server
  * programmatically with `createLunoraMcpServer` and connect any transport.
+ *
+ * A remote endpoint is reachable by anyone who knows its URL, and the tools
+ * carry the deployment's admin bearer — so for a public deployment use
+ * `createAuthedMcpFetchHandler` instead, which mounts the same server behind
+ * better-auth's MCP OAuth gate (`requireMcpAuth` from `@lunora/auth/plugins`)
+ * and can scope tool exposure to the access token's own scopes.
  */
+export type { CallAgentToolOptions, McpAgentExposure } from "./agent-tools";
+export { AGENT_RUN_INPUT_SCHEMA, AGENT_STATUS_TOOL_NAME, agentToolDefinitions, callAgentTool, parseAgentsEnv } from "./agent-tools";
+export type { AuthedMcpFetchHandlerOptions, AuthedMcpServerOptions, McpAccessTokenClaims, McpAuthProtect } from "./authed-http";
+export { createAuthedMcpFetchHandler, mcpTokenScopes } from "./authed-http";
+export type { McpServerInfo, McpTool } from "./compose";
+export { createToolServer } from "./compose";
+export type { McpFetchHandler, McpFetchHandlerOptions, ServeStatelessOptions } from "./http";
+export { createMcpFetchHandler, DEFAULT_MAX_REQUEST_BYTES, serveStateless } from "./http";
+export type { LocalDeployment, LocalDeploymentSource, LocalMcpServerOptions } from "./local";
+export { connectLocalStdio, createLocalMcpServer, LOCAL_SERVER_NAME, localTools, NO_DEPLOYMENT_MESSAGE } from "./local";
+export type {
+    PaidMcpChargeConfig,
+    PaidMcpExecutionContext,
+    PaidMcpFetchHandler,
+    PaidMcpServer,
+    PaidMcpServerConfig,
+    RegisterPaidToolOptions,
+    RegisterToolOptions,
+    ToolHandler,
+} from "./paid";
+export { createPaidMcpServer } from "./paid";
 export type { LunoraMcpServerOptions } from "./server";
 export { connectStdio, createLunoraMcpServer } from "./server";
 export type { ToolDefinition, ToolInputSchema, ToolResult } from "./tools";
-export { callTool, TOOL_DEFINITIONS } from "./tools";
+export { callTool, OBSERVABILITY_TOOL_DEFINITIONS, READ_ONLY_TOOL_DEFINITIONS, toolDefinitions, WRITE_TOOL_DEFINITIONS } from "./tools";

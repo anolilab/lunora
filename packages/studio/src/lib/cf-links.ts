@@ -16,16 +16,16 @@
 const CLOUDFLARE_DASH = "https://dash.cloudflare.com/?to=/:account";
 
 /** Workers Observability — the raw, un-attributed request firehose (Logs panel). */
-export const CLOUDFLARE_OBSERVABILITY_URL = `${CLOUDFLARE_DASH}/workers-and-pages/observability`;
+export const CLOUDFLARE_OBSERVABILITY_URL: string = `${CLOUDFLARE_DASH}/workers-and-pages/observability`;
 
 /** Workers & Pages overview — where vars, secrets, and bindings are edited (Settings panel). */
-export const CLOUDFLARE_WORKERS_URL = `${CLOUDFLARE_DASH}/workers-and-pages`;
+export const CLOUDFLARE_WORKERS_URL: string = `${CLOUDFLARE_DASH}/workers-and-pages`;
 
 /** R2 overview — the bucket list / object browser (Files panel). */
-export const CLOUDFLARE_R2_URL = `${CLOUDFLARE_DASH}/r2`;
+export const CLOUDFLARE_R2_URL: string = `${CLOUDFLARE_DASH}/r2`;
 
 /** D1 overview — the database console for raw SQL / Time-Travel (Globals panel). */
-export const CLOUDFLARE_D1_URL = `${CLOUDFLARE_DASH}/workers/d1`;
+export const CLOUDFLARE_D1_URL: string = `${CLOUDFLARE_DASH}/workers/d1`;
 
 /** Durable Objects overview — the namespace list / analytics (Metrics panel). */
-export const CLOUDFLARE_DURABLE_OBJECTS_URL = `${CLOUDFLARE_DASH}/workers/durable-objects`;
+export const CLOUDFLARE_DURABLE_OBJECTS_URL: string = `${CLOUDFLARE_DASH}/workers/durable-objects`;

@@ -10,11 +10,14 @@
  * raw values.
  *
  * Masking transforms values on the **read/return path only**; it never changes
- * what is stored. It rewrites the *top-level* rows of the table being read —
- * rows hydrated as a `with` relation are NOT masked (the same boundary RLS has);
- * mask such a relation at its own read site if it can surface PII.
+ * what is stored. It rewrites the rows of the table being read AND the rows
+ * hydrated for each `with` relation hop, by that hop's own policy, at every
+ * nesting depth — the same boundary `rls()` enforces with `relationBaseWhere`.
+ * The one exception is a nested `with` across the cross-shard relation hop,
+ * which is refused (`MASK_UNSUPPORTED`) because the mask cannot travel there.
  */
 import type { Permission, Role } from "../rls/types";
+import type { IndexFieldsByTable } from "../schema";
 
 /**
  * Context handed to a {@link MaskFn} (and to {@link MaskOptions.bypass}). The
@@ -30,6 +33,7 @@ export interface MaskContext<Context = unknown> {
         /** `true` when any of the request's `roles` grants `permission` (see {@link MaskOptions.roles}). Fails closed for unregistered roles. */
         readonly can: (permission: Permission | string) => boolean;
         readonly identity?: Record<string, unknown> | null;
+        /** Role labels from the identity's `roles` claim (see `PolicyContext.auth.roles`). */
         readonly roles: ReadonlyArray<string>;
         readonly userId: null | string;
     };
@@ -85,14 +89,36 @@ export type MaskPolicies<Context = unknown> = Record<string, MaskColumns<Context
  * - `roles` registers the role→permission grants that back `ctx.auth.can(...)`
  * inside a {@link MaskFn} — identical to `rls(policies, { roles })`. A role
  * not listed grants no permissions (fails closed for unknown roles).
- * - `bypass` is a procedure-wide escape hatch: when it returns `true` the whole
- * mask is skipped (the caller sees raw values). Use it for a privileged
+ * - `bypass` is a procedure-wide escape hatch: when it returns exactly `true` the
+ * whole mask is skipped (the caller sees raw values). Use it for a privileged
  * viewer — `bypass: ({ auth }) => auth.can("pii:view")`. Prefer this over
  * branching every column when an entire class of caller should see clear data.
+ * The verdict is compared to `true`, never evaluated for truthiness: returning
+ * a claim (`auth.identity?.role`) rather than a decision is a DENIAL here, not
+ * an unmasked read.
+ * - `indexFields` closes the bare-index-scan / rank / geo position oracle (see
+ * the `mask/middleware` module docblock's "Residual read-position oracles" section).
  */
 export interface MaskOptions<Context = unknown> {
     readonly bypass?: (context: MaskContext<Context>) => boolean;
+
+    /**
+     * Per-table, per-KIND index→declared-fields map (regular index `fields`
+     * under `index`; rank index `sortBy` ∪ `partitionBy` under `rank`; geo
+     * index `field` under `geo`). Supplied to close the bare-index-scan /
+     * rank / geo position oracle: a `withIndex(name)` with no range callback,
+     * a `rank`/`rankPage`/`rankBefore` read, or a `withGeoIndex` read, over an
+     * index whose DECLARED fields (for that read's own kind) intersect a
+     * masked column, is rejected. Kept per kind — rather than one flat
+     * name→fields map — because the engine resolves `withIndex` /
+     * `withGeoIndex` / rank reads in three separate namespaces, so the same
+     * index name can legally denote a different index per kind; a flat map
+     * would let one kind's fields shadow another's for a colliding name.
+     * OPTIONAL and additive — omit it and behaviour is unchanged (the oracle
+     * stays open, exactly as before this option existed). Build it with
+     * `indexFieldsFromSchema` (exported from `@lunora/server`):
+     * `mask(policies, { indexFields: indexFieldsFromSchema(schema) })`.
+     */
+    readonly indexFields?: IndexFieldsByTable;
     readonly roles?: ReadonlyArray<Role>;
 }
-
-export type { Permission, Role } from "../rls/types";

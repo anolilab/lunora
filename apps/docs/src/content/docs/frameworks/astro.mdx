@@ -1,6 +1,15 @@
 ---
 title: Astro
 description: Compose Astro's @astrojs/cloudflare worker with Lunora realtime, plus reactive-loader server helpers for .astro frontmatter.
+related:
+    - to: /docs/frameworks/bring-your-framework
+      note: "the class-A/B/C composition matrix (Astro is class-B)"
+    - to: /docs/frameworks/reactive-loaders
+      note: "the SSR-seed → live handoff this page plugs into"
+    - to: /docs/frameworks/deploy
+      note: "one worker, one deploy"
+    - to: /docs/packages/runtime
+      note: "`withFrameworkWorker`, the composition primitive `withLunora` aliases"
 ---
 
 `@lunora/astro` is the Astro integration for Lunora. Astro is multi-framework at
@@ -44,7 +53,7 @@ bun add @lunora/astro
 
 </Tabs>
 
-`astro` is an **optional** peer (`^6.0.0`); only the host Astro app pulls it in.
+`astro` is an **optional** peer (`>=6.0.0`); only the host Astro app pulls it in.
 `@lunora/astro`'s own public types are declared structurally, so the package
 type-checks even when `astro` is not installed.
 
@@ -85,9 +94,9 @@ the wiring is declared in `astro.config` the idiomatic Astro way, and so future
 build-time hooks (binding reconcile, dev middleware) have a home without changing
 the public surface. It accepts one option:
 
-| Option        | Type     | Default           | Description                                                                                              |
-| ------------- | -------- | ----------------- | -------------------------------------------------------------------------------------------------------- |
-| `serverEntry` | `string` | `"src/worker.ts"` | Path (or specifier) of the module that calls `withLunora` and is the composed worker's `export default`. |
+| Option        | Type     | Default           | Description                                                                                                                            |
+| ------------- | -------- | ----------------- | -------------------------------------------------------------------------------------------------------------------------------------- |
+| `serverEntry` | `string` | `"src/server.ts"` | Path (or specifier) of the module that composes the Lunora plane with the Astro handler and is the composed worker's `export default`. |
 
 ## Single-worker composition with `withLunora`
 
@@ -98,8 +107,8 @@ returns a single composed worker. The reserved realtime endpoints
 (`/_lunora/rpc`, `/_lunora/ws`, `/_lunora/admin/*`, plus any auth routes / explicit
 `routes`) are handled by Lunora; everything else falls through to the Astro SSR
 handler. The two dispatch flows share one worker but never collide, and an Astro
-render that throws is contained at the seam and surfaced as a plain 500. It can
-never take down the realtime plane.
+render that throws is contained at the seam and surfaced as a plain 500, so it
+cannot take down the realtime plane.
 
 `withLunora` is the Astro-named alias of the framework-neutral
 `withFrameworkWorker` from `@lunora/runtime` (the same composer behind
@@ -116,7 +125,7 @@ withLunora(host, options): ComposedWorker
   bindings that only exist per request, like `env.SHARD` → `shardDO`.
 
 ```ts
-// src/worker.ts
+// src/server.ts
 import { handle } from "@astrojs/cloudflare/handler";
 import { withLunora } from "@lunora/astro";
 
@@ -213,15 +222,17 @@ const client = createServerClient({ token: session?.session.token, url });
 
 ## Deploy
 
-Because `@astrojs/cloudflare` writes its build to `dist/_worker.js/` (it does
-**not** clobber the wrangler `main` field), Astro's wiring needs no `main`
-redirection, unlike SvelteKit, whose adapter overwrites `main`. Point wrangler's
-`main` at your `withLunora` wrapper and declare the `ShardDO` binding:
+Because `@astrojs/cloudflare` exports its SSR handler as an importable
+function (`handle` from `@astrojs/cloudflare/handler`, see above) rather than
+writing an adapter-owned worker entry to disk, there is no build output that
+would clobber the wrangler `main` field. SvelteKit is the contrast: its adapter
+overwrites `main` with its own emitted `_worker.js`. Point wrangler's `main`
+at your `withLunora` wrapper and declare the `ShardDO` binding:
 
 ```jsonc
 // wrangler.jsonc
 {
-    "main": "src/worker.ts",
+    "main": "src/server.ts",
     "durable_objects": {
         "bindings": [{ "name": "SHARD", "class_name": "ShardDO" }],
     },
@@ -229,19 +240,18 @@ redirection, unlike SvelteKit, whose adapter overwrites `main`. Point wrangler's
 }
 ```
 
-wrangler bundles `src/worker.ts` (via `@cloudflare/vite-plugin` through the Astro
-adapter), so `@astrojs/cloudflare/handler`'s `handle` resolves at build time. Run
-the Astro build first so the adapter output exists, then deploy. See
+The adapter's embedded `@cloudflare/vite-plugin` builds `src/server.ts` into
+`dist/server/entry.mjs` and writes a `.wrangler/deploy/config.json` redirect, so
+`@astrojs/cloudflare/handler`'s `handle` resolves at build time and `wrangler deploy`
+ships the adapter-built bundle. Run the Astro build first, then deploy.
+
+Do **not** name that file `src/worker.ts`: `lunora deploy` treats that exact path
+as a SvelteKit-shaped composed entry and passes it to wrangler positionally, and
+the adapter redirect's `no_bundle: true` then uploads the raw TypeScript source
+as the worker. See
 [Deploy your framework](/docs/frameworks/deploy) for the one-worker deploy story.
 
 <Callout type="info">
     Re-export `ShardDO` from your worker entry (or the schema's generated server module) so the single deployed worker exports the Durable Object class wrangler
     binds.
 </Callout>
-
-## See also
-
-- [Bring your framework](/docs/frameworks/bring-your-framework) — the class-A/B/C composition matrix (Astro is class-B)
-- [Reactive loaders](/docs/frameworks/reactive-loaders) — the SSR-seed → live handoff this page plugs into
-- [Deploy your framework](/docs/frameworks/deploy) — one worker, one deploy
-- [@lunora/runtime](/docs/packages/runtime) — `withFrameworkWorker`, the composition primitive `withLunora` aliases

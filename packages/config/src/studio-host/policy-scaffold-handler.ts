@@ -18,14 +18,17 @@
  * chain. A destructive request (rewriting an existing `when`) answers `409` and
  * writes nothing — it routes to the manual-edit/migration path.
  */
-import { existsSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { isAbsolute, relative } from "node:path";
 
-import { CodegenDiagnosticError, runCodegen } from "@lunora/codegen";
+import type { CodegenOptions } from "@lunora/codegen";
+import { LunoraError } from "@lunora/errors";
 
 import join from "../path";
 import type { DestructivePolicyEdit, PolicyEdit, PolicyScaffoldFailureReason, ScaffoldPolicyEdit, WireRlsEdit } from "../schema-edit/policy-scaffold";
-import { classifyPolicyEdit, scaffoldPolicyFile, wireRlsIntoProcedure } from "../schema-edit/policy-scaffold";
+import { classifyPolicyEdit, resolveServerModule, scaffoldPolicyFile, wireRlsIntoProcedure } from "../schema-edit/policy-scaffold";
+import { runStudioCodegen } from "./codegen-options";
+import writeFileAtomic from "./write-atomic";
 
 /**
  * Endpoint path both dev hosts mount the handler at. A sibling of the schema
@@ -45,6 +48,8 @@ type PolicyScaffoldBody = DestructivePolicyEdit | ScaffoldPolicyEdit | WirePolic
 
 /** A request adapted from the host transport. */
 interface PolicyScaffoldRequest {
+    /** API-spec mode the host runs codegen with; forwarded to the regeneration. */
+    readonly apiSpec?: CodegenOptions["apiSpec"];
     /** Parsed JSON body of the `POST`. */
     readonly body?: unknown;
     /** HTTP method — only `POST` is handled. */
@@ -76,14 +81,6 @@ const statusForFailure = (reason: PolicyScaffoldFailureReason): number => {
     return reason === "destructive" ? 409 : 422;
 };
 
-/** Write source atomically (temp file + rename) so a crash can't leave a half-written file. */
-const writeAtomic = (path: string, text: string): void => {
-    const temporaryPath = `${path}.lunora-tmp`;
-
-    writeFileSync(temporaryPath, text, "utf8");
-    renameSync(temporaryPath, path);
-};
-
 /**
  * Re-run codegen after an applied edit so the generated types + RLS matrix
  * follow the new source. Codegen diagnostics surface in the response body
@@ -91,16 +88,12 @@ const writeAtomic = (path: string, text: string): void => {
  * is a hard `500`.
  */
 const runCodegenForResponse = (request: PolicyScaffoldRequest, okBody: Record<string, unknown>): PolicyScaffoldResponse => {
-    let diagnostics: ReadonlyArray<string> = [];
+    let diagnostics: ReadonlyArray<string>;
 
     try {
-        runCodegen({ lunoraDirectory: request.schemaDirectory ?? "lunora", projectRoot: request.projectRoot });
+        diagnostics = runStudioCodegen(request);
     } catch (error: unknown) {
-        if (error instanceof CodegenDiagnosticError) {
-            diagnostics = [error.message];
-        } else {
-            return { body: { error: error instanceof Error ? error.message : String(error), ok: false }, status: 500 };
-        }
+        return { body: { error: error instanceof Error ? error.message : String(error), ok: false }, status: 500 };
     }
 
     return { body: { ...okBody, diagnostics, ok: true }, status: 200 };
@@ -122,7 +115,7 @@ const refuseDestructive = (edit: PolicyEdit): PolicyScaffoldResponse => {
 
 /** Handle a `scaffoldPolicy` request: write a new stub file, refusing to overwrite. */
 const handleScaffoldPolicy = (request: PolicyScaffoldRequest, edit: ScaffoldPolicyEdit): PolicyScaffoldResponse => {
-    const result = scaffoldPolicyFile(edit);
+    const result = scaffoldPolicyFile(edit, resolveServerModule(request.projectRoot));
 
     if (!result.ok) {
         return { body: { error: result.reason, ok: false }, status: statusForFailure(result.reason) };
@@ -137,7 +130,7 @@ const handleScaffoldPolicy = (request: PolicyScaffoldRequest, edit: ScaffoldPoli
         return { body: { error: "file-exists", fileName: result.fileName, ok: false }, status: 409 };
     }
 
-    writeAtomic(targetPath, result.source);
+    writeFileAtomic(targetPath, result.source);
 
     return runCodegenForResponse(request, { fileName: result.fileName });
 };
@@ -170,13 +163,13 @@ const handleWireRls = (request: PolicyScaffoldRequest, edit: WirePolicyEdit): Po
         return { body: { error: "unknown-procedure", ok: false }, status: 404 };
     }
 
-    const wired = wireRlsIntoProcedure(readFileSync(procedurePath, "utf8"), edit);
+    const wired = wireRlsIntoProcedure(readFileSync(procedurePath, "utf8"), edit, resolveServerModule(request.projectRoot));
 
     if (!wired.ok) {
         return { body: { error: wired.reason, ok: false }, status: statusForFailure(wired.reason) };
     }
 
-    writeAtomic(procedurePath, wired.text);
+    writeFileAtomic(procedurePath, wired.text);
 
     return runCodegenForResponse(request, { exportName: edit.exportName });
 };
@@ -193,7 +186,7 @@ const handlePolicyScaffoldRequest = (request: PolicyScaffoldRequest): PolicyScaf
 
     const { body } = request;
 
-    if (body === undefined || typeof body !== "object" || typeof (body as { kind?: unknown }).kind !== "string") {
+    if (body === undefined || body === null || typeof body !== "object" || typeof (body as { kind?: unknown }).kind !== "string") {
         return { body: { error: "invalid-edit", ok: false }, status: 400 };
     }
 
@@ -216,7 +209,7 @@ const handlePolicyScaffoldRequest = (request: PolicyScaffoldRequest): PolicyScaf
     // destructive branch above, leaving only the two additive kinds handled
     // here. Throw rather than guess so a future additive kind that forgets its
     // branch fails loudly instead of silently masquerading as destructive.
-    throw new Error(`unhandled additive policy edit kind: ${String((edit as { kind?: unknown }).kind)}`);
+    throw new LunoraError("INTERNAL", `unhandled additive policy edit kind: ${String((edit as { kind?: unknown }).kind)}`);
 };
 
 export type { PolicyScaffoldBody, PolicyScaffoldRequest, PolicyScaffoldResponse, WirePolicyEdit };

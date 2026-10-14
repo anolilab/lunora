@@ -73,7 +73,24 @@ export interface HyperdriveConnection {
  */
 export interface SqlClient {
     /**
+     * The database system behind this client, as OTel names it in
+     * `db.system.name`. Stamped by the driver adapters ({@link import("./create-hyperdrive").fromPostgresJs | fromPostgresJs}
+     * / {@link import("./create-hyperdrive").fromNodePg | fromNodePg} → `"postgresql"`,
+     * {@link import("./create-hyperdrive").fromMysql2 | fromMysql2} → `"mysql"`) so `ctx.sql`'s automatic
+     * instrumentation reports the real system. Optional: a hand-built client may
+     * omit it and is then reported as `"other_sql"`.
+     */
+    readonly dbSystem?: "mysql" | "postgresql";
+
+    /**
      * Run a parameterised SQL statement and return the result rows.
+     *
+     * SECURITY: `text` is executed verbatim — the package never rewrites or
+     * escapes it. NEVER interpolate untrusted/user input into `text`; put every
+     * value in `params` and reference it with a positional placeholder (`$1`/`?`).
+     * Building `text` by string-concatenating request data is a SQL-injection
+     * sink against your own Postgres/MySQL. Identifiers (table/column names) can't
+     * be parameterised — allowlist them against a fixed set, don't interpolate.
      * @param text SQL text with driver-native positional placeholders.
      * @param params Bound parameter values, positionally matched to `text`.
      * @returns The rows the statement produced (empty for non-`SELECT`s that
@@ -85,25 +102,64 @@ export interface SqlClient {
 /**
  * Structural projection of a `pg` (node-postgres) `Client`/`Pool`. Only the
  * `query` method `fromNodePg` calls is required, kept structural for testing.
+ *
+ * Method syntax, not an arrow property — see {@link PostgresJsLike}.
  */
+/* eslint-disable @typescript-eslint/method-signature-style, @typescript-eslint/no-invalid-void-type -- bivariant params (the drivers declare mutable arrays), and `this: void` is the `allowAsThisParameter` case the repo config does not enable */
 export interface NodePgLike {
-    query: (text: string, params?: ReadonlyArray<unknown>) => Promise<{ rows: unknown[] }>;
+    query(this: void, text: string, params?: ReadonlyArray<unknown>): Promise<{ rows: unknown[] }>;
 }
 
 /**
  * Structural projection of a `postgres` (postgres.js) tagged-template client.
  * The adapter uses the `.unsafe(text, params)` escape hatch so callers keep
  * full control of the parameter list.
+ *
+ * **`unsafe` is declared with METHOD syntax, and that is load-bearing.** Under
+ * `strictFunctionTypes` an arrow PROPERTY is checked contravariantly in its
+ * parameters, so a driver whose `unsafe` takes a MUTABLE array — which real
+ * postgres.js does (`parameters?: ParameterOrJSON<never>[]`) — is not assignable
+ * to one declared `params?: ReadonlyArray<unknown>`. As an arrow property this
+ * projection could therefore never accept the package it projects: every
+ * consumer got
+ * `TS2345: Argument of type 'Sql<{}>' is not assignable to parameter of type
+ * 'PostgresJsLike'`, and this repo's own test reached for
+ * `as unknown as PostgresJsLike` to get past it. Method syntax is checked
+ * bivariantly, which is what a structural projection of someone else's type
+ * needs — `readonly unknown[]` and postgres.js's mutable array relate in one
+ * direction, which is all bivariance asks for.
  */
 export interface PostgresJsLike {
-    unsafe: (text: string, params?: ReadonlyArray<unknown>) => Promise<unknown>;
+    unsafe(this: void, text: string, params?: ReadonlyArray<unknown>): Promise<unknown>;
 }
 
 /**
  * Structural projection of a `mysql2/promise` connection/pool. `mysql2`'s
  * `execute` resolves to a `[rows, fields]` tuple; the adapter takes the first
  * element as the rows.
+ *
+ * Method syntax, not an arrow property — see {@link PostgresJsLike} — but here
+ * that is necessary and NOT sufficient, which is why `params` is `unknown`.
+ *
+ * mysql2 types its second argument as a single `ExecuteValues`: a union of
+ * scalars, `ExecuteValues[]` and `{ [key: string]: ExecuteValues }`. Declared
+ * `params?: ReadonlyArray<unknown>` this projection could never accept the
+ * driver it projects — bivariance needs the two parameter types to relate in
+ * ONE direction and they relate in neither (`readonly unknown[] | undefined` is
+ * not an `ExecuteValues`, and a `string` is not an array).
+ *
+ * `unknown` is the narrowest supertype of `ExecuteValues` that does not restate
+ * mysql2's union here. Restating it would be the vacuous shim all over again —
+ * a local copy that drifts from the package it mirrors and makes the gate pass
+ * while a consumer fails.
+ *
+ * The looseness is confined to the INPUT position: this types the driver a
+ * caller hands to `fromMysql2`, not what anyone passes to
+ * {@link SqlClient.query}, which still declares `ReadonlyArray<unknown>`. Every
+ * call site in this package forwards an array, and the driver validates the
+ * values at runtime regardless.
  */
 export interface Mysql2Like {
-    execute: (text: string, params?: ReadonlyArray<unknown>) => Promise<[unknown, unknown]>;
+    execute(this: void, text: string, params?: unknown): Promise<[unknown, unknown]>;
 }
+/* eslint-enable @typescript-eslint/method-signature-style, @typescript-eslint/no-invalid-void-type */

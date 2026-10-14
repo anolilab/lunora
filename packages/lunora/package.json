@@ -1,6 +1,6 @@
 {
     "name": "lunorash",
-    "version": "0.0.0",
+    "version": "1.0.0-alpha.391",
     "description": "The Lunora umbrella package: one install for the server authoring API, worker runtime, Durable Objects, and the lunora CLI",
     "keywords": [
         "backend",
@@ -27,7 +27,7 @@
         "lunora": "./dist/bin.mjs"
     },
     "files": [
-        "dist",
+        "./dist",
         "README.md",
         "LICENSE.md",
         "__assets__"
@@ -62,9 +62,17 @@
             "types": "./dist/server/rls/testing.d.ts",
             "import": "./dist/server/rls/testing.mjs"
         },
+        "./server/otel": {
+            "types": "./dist/server/otel.d.ts",
+            "import": "./dist/server/otel.mjs"
+        },
         "./values": {
             "types": "./dist/values.d.ts",
             "import": "./dist/values.mjs"
+        },
+        "./errors": {
+            "types": "./dist/errors.d.ts",
+            "import": "./dist/errors.mjs"
         },
         "./runtime": {
             "types": "./dist/runtime.d.ts",
@@ -73,6 +81,14 @@
         "./do": {
             "types": "./dist/do.d.ts",
             "import": "./dist/do.mjs"
+        },
+        "./platform": {
+            "types": "./dist/platform.d.ts",
+            "import": "./dist/platform.mjs"
+        },
+        "./observability": {
+            "types": "./dist/observability.d.ts",
+            "import": "./dist/observability.mjs"
         },
         "./client": {
             "types": "./dist/client.d.ts",
@@ -94,26 +110,69 @@
             "types": "./dist/client/ssr.d.ts",
             "import": "./dist/client/ssr.mjs"
         },
+        "./client/upload": {
+            "types": "./dist/client/upload.d.ts",
+            "import": "./dist/client/upload.mjs"
+        },
+        "./client/service": {
+            "types": "./dist/client/service.d.ts",
+            "import": "./dist/client/service.mjs"
+        },
+        "./flags": {
+            "types": "./dist/flags.d.ts",
+            "import": "./dist/flags.mjs"
+        },
+        "./flags/env": {
+            "types": "./dist/flags/env.d.ts",
+            "import": "./dist/flags/env.mjs"
+        },
+        "./flags/flagship": {
+            "types": "./dist/flags/flagship.d.ts",
+            "import": "./dist/flags/flagship.mjs"
+        },
+        "./flags/memory": {
+            "types": "./dist/flags/memory.d.ts",
+            "import": "./dist/flags/memory.mjs"
+        },
+        "./flags/web": {
+            "types": "./dist/flags/web.d.ts",
+            "import": "./dist/flags/web.mjs"
+        },
+        "./ratelimit": {
+            "types": "./dist/ratelimit.d.ts",
+            "import": "./dist/ratelimit.mjs"
+        },
         "./package.json": "./package.json"
+    },
+    "publishConfig": {
+        "access": "public"
     },
     "scripts": {
         "build": "pnpm exec packem build --development",
         "build:prod": "pnpm exec packem build --production",
-        "lint:eslint": "eslint .",
+        "lint:eslint": "eslint . --max-warnings=0",
         "lint:eslint:fix": "eslint . --fix",
-        "lint:prettier": "prettier --check .",
-        "lint:prettier:fix": "prettier --write .",
+        "lint:prettier": "prettier --check . --ignore-path ../../.prettierignore",
+        "lint:prettier:fix": "prettier --write . --ignore-path ../../.prettierignore",
         "lint:types": "tsc --noEmit",
         "test": "vitest run",
-        "test:coverage": "vitest run --coverage"
+        "test:coverage": "vitest run --coverage",
+        "fallow:audit": "fallow audit",
+        "fallow:dead-code": "fallow dead-code",
+        "fallow:health": "fallow health --score"
     },
     "dependencies": {
-        "@lunora/cli": "workspace:*",
-        "@lunora/client": "workspace:*",
-        "@lunora/do": "workspace:*",
-        "@lunora/runtime": "workspace:*",
-        "@lunora/server": "workspace:*",
-        "@lunora/values": "workspace:*"
+        "@lunora/cli": "1.0.0-alpha.392",
+        "@lunora/client": "1.0.0-alpha.203",
+        "@lunora/do": "1.0.0-alpha.209",
+        "@lunora/errors": ">=1.0.0-alpha.51 <2.0.0-0",
+        "@lunora/flags": "1.0.0-alpha.68",
+        "@lunora/observability": "1.0.0-alpha.135",
+        "@lunora/platform": "1.0.0-alpha.62",
+        "@lunora/ratelimit": "1.0.0-alpha.129",
+        "@lunora/runtime": "1.0.0-alpha.196",
+        "@lunora/server": "1.0.0-alpha.196",
+        "@lunora/values": "1.0.0-alpha.64"
     },
     "devDependencies": {
         "@codspeed/vitest-plugin": "catalog:test",
@@ -121,6 +180,7 @@
         "@visulima/packem": "catalog:build",
         "@vitest/coverage-v8": "catalog:test",
         "esbuild": "catalog:build",
+        "fallow": "catalog:lint",
         "typescript": "catalog:tsc",
         "vitest": "catalog:test"
     },

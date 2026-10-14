@@ -1,0 +1,251 @@
+import { describe, expect, it } from "vitest";
+
+import type { PlatformCapabilities, SchedulerHost, ShardDirectory, ShardHost, SocketHost } from "../src";
+import { CLOUDFLARE_CAPABILITIES, LUNORA_ROLE_PREFIX, NODE_CAPABILITIES, NOOP_EXECUTION_CONTEXT, resolveShard } from "../src";
+
+describe("@lunora/platform contracts", () => {
+    it("exports the Cloudflare capability matrix", () => {
+        expect.assertions(4);
+
+        expect(CLOUDFLARE_CAPABILITIES.id).toBe("cloudflare");
+        expect(CLOUDFLARE_CAPABILITIES.name).toBe("Cloudflare");
+        expect(CLOUDFLARE_CAPABILITIES.features.shardedState?.level).toBe("native");
+        expect(CLOUDFLARE_CAPABILITIES.features.websocketHibernation?.level).toBe("native");
+    });
+
+    // Every telemetry surface that needs a HOST primitive carries a rating, so a
+    // second host is told rather than left to discover it at runtime. The
+    // engine-level pipeline (`ctx.log` / `ctx.trace` / `ctx.span` /
+    // `ctx.metrics` / traced `ctx.fetch`) deliberately has no key: it is sink
+    // callbacks plus the `fetch` global, portable by construction.
+    it("rates the telemetry surfaces that stand on a host primitive", () => {
+        expect.assertions(6);
+
+        // `request.cf` — the mTLS trust signal and the OTLP placement detector.
+        expect(CLOUDFLARE_CAPABILITIES.features.edgeRequestMetadata?.level).toBe("native");
+        expect(NODE_CAPABILITIES.features.edgeRequestMetadata?.level).toBe("unsupported");
+
+        // The one telemetry surface that reaches past `ShardHost` into a
+        // provider API (`cloudflare:workers`' `tracing.enterSpan`).
+        expect(CLOUDFLARE_CAPABILITIES.features.hostTraceFusion?.level).toBe("native");
+        expect(NODE_CAPABILITIES.features.hostTraceFusion?.level).toBe("unsupported");
+
+        // Reading the durable `ctx.log` archive back needs an Iceberg catalog
+        // and an SQL engine over it, not just a bucket.
+        expect(CLOUDFLARE_CAPABILITIES.features.logArchive?.level).toBe("native");
+        expect(NODE_CAPABILITIES.features.logArchive?.level).toBe("unsupported");
+    });
+
+    // Features Lunora builds itself must not claim platform parity: codegen and
+    // Studio read `level` to report what the target actually provides.
+    it("reports Lunora-implemented features as emulated, not native", () => {
+        expect.assertions(2);
+
+        expect(CLOUDFLARE_CAPABILITIES.features.crossShardFanout?.level).toBe("emulated");
+        expect(CLOUDFLARE_CAPABILITIES.features.mail?.level).toBe("emulated");
+    });
+
+    // Plan 234: `@lunora/platform-node` is honestly a mostly-unsupported target
+    // — no Cloudflare-specific product bindings exist for it — but it must
+    // rate EVERY feature Cloudflare does, not leave gaps `gateAgainstMatrix`
+    // would otherwise fail closed on under `platform_undeclared_feature`
+    // rather than the more specific `platform_unsupported_feature`.
+    it("exports the Node capability matrix, rating every feature Cloudflare rates", () => {
+        expect.assertions(5);
+
+        expect(NODE_CAPABILITIES.id).toBe("node");
+        expect(NODE_CAPABILITIES.name).toBe("Node");
+        expect(Object.keys(NODE_CAPABILITIES.features).toSorted((a, b) => a.localeCompare(b))).toStrictEqual(
+            Object.keys(CLOUDFLARE_CAPABILITIES.features).toSorted((a, b) => a.localeCompare(b)),
+        );
+        // The two contracts this package actually implements well: real
+        // synchronous SQL, matching Cloudflare's native rating.
+        expect(NODE_CAPABILITIES.features.localSql?.level).toBe("native");
+        // Most Cloudflare-specific products have no Node equivalent at all —
+        // spot-check one rather than enumerate all 15. Not `objectStorage`: that
+        // one grew an emulation (`createNodeR2Bucket`), and a spot-check has to
+        // name a feature nothing is building towards.
+        expect(NODE_CAPABILITIES.features.vectorStore?.level).toBe("unsupported");
+    });
+
+    // `identityProxy` rates whether the HOST hands the runtime a
+    // pre-authenticated identity out-of-band (Cloudflare Access attached to a
+    // Worker populates `ExecutionContextLike.access`), NOT whether an
+    // identity-aware proxy can be used at all. The header-stamping form of the
+    // same product needs no host support, so the rating deliberately does not
+    // gate the `ctx.access` facade — see `CAPABILITY_TO_FEATURE` in
+    // `@lunora/codegen`, which leaves `access` unmapped on purpose.
+    it("rates the out-of-band identity proxy per host, without gating the portable header path", () => {
+        expect.assertions(2);
+
+        expect(CLOUDFLARE_CAPABILITIES.features.identityProxy?.level).toBe("native");
+        expect(NODE_CAPABILITIES.features.identityProxy?.level).toBe("unsupported");
+    });
+
+    // `ctx.origin` and the storage base fallback: every host fills it from
+    // `request.url`, but only an edge that routes by hostname vouches for it.
+    it("rates the request origin as vouched for on the edge and caller-shaped on node", () => {
+        expect.assertions(2);
+
+        expect(CLOUDFLARE_CAPABILITIES.features.requestOrigin?.level).toBe("native");
+        expect(NODE_CAPABILITIES.features.requestOrigin?.level).toBe("emulated");
+    });
+
+    it("exports the noop execution context", () => {
+        expect.assertions(2);
+
+        expect(NOOP_EXECUTION_CONTEXT.waitUntil).toBeDefined();
+        expect(NOOP_EXECUTION_CONTEXT.passThroughOnException).toBeDefined();
+    });
+
+    it("structurally types a minimal shard host", () => {
+        expect.assertions(2);
+
+        const host: ShardHost = {
+            alarms: {
+                delete: () => {},
+                get: () => null,
+                set: () => {},
+            },
+            runSerialized: async (function_) => function_(),
+            sql: {
+                // A minimal cursor: iterable, buffered, and single-row — the
+                // three shapes the engine's read paths use.
+                exec: <Row>() => {
+                    // Delegate iteration to a real empty array rather than a
+                    // generator method: prettier and `generator-star-spacing`
+                    // disagree on how to space `*[Symbol.iterator]()`, and the
+                    // array form needs no arbitration to say the same thing.
+                    const rows: Row[] = [];
+
+                    return {
+                        [Symbol.iterator]: () => rows[Symbol.iterator](),
+                        one: () => {
+                            throw new Error("no rows");
+                        },
+                        toArray: () => rows,
+                    };
+                },
+            },
+            transaction: async (function_) => function_(),
+        };
+
+        expect(host.runSerialized).toBeDefined();
+        expect(host.transaction).toBeDefined();
+    });
+
+    it("structurally types a minimal scheduler host", () => {
+        expect.assertions(1);
+
+        const scheduler: SchedulerHost = {
+            cancel: async () => true,
+            cron: async () => {},
+            schedule: async () => {
+                return { id: "1", scheduledFor: Date.now() };
+            },
+        };
+
+        expect(scheduler.schedule).toBeDefined();
+    });
+
+    it("refuses a shard key carrying the reserved role prefix on every host", () => {
+        expect.assertions(1);
+
+        const directory: ShardDirectory = {
+            get: () => {
+                return { fetch: async () => new Response("reached") };
+            },
+            idForName: (name) => name,
+        };
+
+        expect(() => resolveShard(directory, `${LUNORA_ROLE_PREFIX}scheduler:default`)).toThrow(/reserved/u);
+    });
+
+    it("structurally types a two-step shard directory", async () => {
+        expect.assertions(1);
+
+        const directory: ShardDirectory = {
+            get: (id) => {
+                return { fetch: async () => new Response(String(id)) };
+            },
+            idForName: (name) => `shard:${name}`,
+        };
+
+        const response = await resolveShard(directory, "a").fetch(new Request("http://localhost/"));
+
+        await expect(response.text()).resolves.toBe("shard:a");
+    });
+
+    it("structurally types a name-only shard directory without id stubs", async () => {
+        expect.assertions(1);
+
+        // The whole point of the union: a registry that only understands names
+        // type-checks without stubbing out `idForName`/`get`.
+        const directory: ShardDirectory = {
+            getByName: (name) => {
+                return { fetch: async () => new Response(name) };
+            },
+        };
+
+        const response = await resolveShard(directory, "a").fetch(new Request("http://localhost/"));
+
+        await expect(response.text()).resolves.toBe("a");
+    });
+
+    it("prefers direct name lookup when a directory offers both", async () => {
+        expect.assertions(1);
+
+        const directory: ShardDirectory = {
+            get: () => {
+                return { fetch: async () => new Response("two-step") };
+            },
+            getByName: () => {
+                return { fetch: async () => new Response("direct") };
+            },
+            idForName: (name) => name,
+        };
+
+        const response = await resolveShard(directory, "a").fetch(new Request("http://localhost/"));
+
+        await expect(response.text()).resolves.toBe("direct");
+    });
+
+    it("structurally types a minimal socket host", () => {
+        expect.assertions(1);
+
+        const socketHost: SocketHost = {
+            accept: () => {
+                return {
+                    close: () => {},
+                    deserializeAttachment: () => undefined,
+                    id: "1",
+                    send: () => {},
+                    serializeAttachment: () => {},
+                };
+            },
+            getSockets: () => [],
+            // Required, not optional: a host that cannot map a runtime-delivered
+            // socket back to its handle pushes every caller onto the provider
+            // socket type. `undefined` for an unknown socket is a valid answer;
+            // omitting the method is not.
+            handleFor: () => undefined,
+            idFor: () => "socket-1",
+        };
+
+        expect(socketHost.accept).toBeDefined();
+    });
+
+    it("capability matrix is structurally valid", () => {
+        expect.assertions(1);
+
+        const capabilities: PlatformCapabilities = {
+            features: {
+                shardedState: { level: "emulated", note: "via in-memory map" },
+            },
+            id: "test",
+            name: "Test",
+        };
+
+        expect(capabilities.features.shardedState?.level).toBe("emulated");
+    });
+});

@@ -9,6 +9,12 @@ import { isDirty } from "./sql-tabs";
 /** The auto-derived tab label when the operator hasn't set a custom name: the draft's first line, or "Untitled". */
 const derivedTabLabel = (sql: string, untitled: string): string => (sql.trim() === "" ? untitled : (sql.split("\n")[0] ?? sql).slice(0, 24));
 
+/** Focus and select the rename input the moment it mounts, so typing replaces the old name. */
+const focusOnMount = (node: HTMLInputElement | null): void => {
+    node?.focus();
+    node?.select();
+};
+
 /** The inline rename editor shown in place of the tab label; commits on Enter/blur, cancels on Esc. */
 const TabRenameInput = ({
     initial,
@@ -25,10 +31,6 @@ const TabRenameInput = ({
 }): ReactElement => {
     const t = useT();
     // Callback ref: focus + select the moment it mounts (fires once on open, not per render).
-    const focusOnMount = (node: HTMLInputElement | null): void => {
-        node?.focus();
-        node?.select();
-    };
     const onBlur = (event: FocusEvent<HTMLInputElement>): void => {
         onCommit(event.currentTarget.value.trim());
     };

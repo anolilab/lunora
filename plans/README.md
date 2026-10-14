@@ -1,73 +1,89 @@
 # Implementation Plans
 
-Two waves of advisor plans have run against this repo. **Completed plans are
-removed from this directory once shipped** (the record lives in git history and
-the tables below); only deferred, blocked, or reference plans remain as files.
+What is planned, in flight, or kept as a reference design. **A plan file is deleted
+once it ships**; the record lives in git history and in the PR that landed it. The
+full wave-by-wave log (waves 1–22 and the parity passes, every shipped and rejected
+plan) was retired on 2026-10-06 — read it at
+[`f01e4ff5:plans/README.md`](https://github.com/anolilab/lunora/blob/f01e4ff55da15f8bcef232f4c9b237487f7798aa/plans/README.md).
 
 Status values: TODO | IN PROGRESS | DONE | BLOCKED (one-line reason) | REJECTED.
 
-## Wave 1 — Cloudflare platform coverage (baseline `058071c8`, 2026-06-15)
+New plans start from [`TEMPLATE.md`](./TEMPLATE.md). Its **Platform parity**
+section is mandatory for anything that adds or changes a `ctx.*` surface, a
+provider binding, or a deploy/runtime capability: state the mapping per target
+(`native` | `emulated` | `unsupported`) or the explicit non-support. Codegen reads
+that matrix, so a row left unstated ships a surface that silently does nothing on
+the target it was never mapped for.
 
-Does lunora support a given Cloudflare product/binding? The 14 completed plans
-(027–032, 034, 035, 038–043) shipped and were removed. Remaining (all P3, deferred):
+When a plan ships: delete its file and remove its row here in the same change.
 
-| Plan | Cloudflare product        | Shape                                  | Status              |
-| ---- | ------------------------- | -------------------------------------- | ------------------- |
-| 033  | Stream (video)            | `@lunora/stream` (REST + signed URLs)  | TODO (P3, deferred) |
-| 036  | Pipelines                 | hint-binding + `ctx` send helper       | TODO (P3, deferred) |
-| 037  | Realtime / Calls (WebRTC) | optional TURN/SFU helper (out-of-core) | TODO (P3, deferred) |
+## In progress
 
-## Wave 2 — all-package gaps + end-to-end DX (baseline `b51b440a`, 2026-06-17)
+| Plan                                       | Title                                                           | Remaining                                                                                            |
+| ------------------------------------------ | --------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------- |
+| [460](./460-cloudflare-artifacts.md)       | Cloudflare Artifacts as an action-only `ctx.artifacts`          | A–D shipped (#926 + D deploy check); live probes remain (need Workers Paid)                          |
+| [463](./463-experimental-graduation.md)    | Graduate the experimental tier to stable                        | A shipped (#1002), B1 `payment` graduated (#1001); remaining packages                                |
+| [166](./166-enterprise-auth-saml-scim.md)  | Enterprise auth: SAML SSO + SCIM                                | Phase 1a (OIDC SSO + SCIM Users) shipped; Phase 1b SAML gated                                        |
+| [464](./464-replay-conflict-resolution.md) | Replayed offline writes that conflict                           | Phase A shipped (docs + test); Phase B waits on a real app needing a merge the handler can't express |
+| [468](./468-gdpr-package.md)               | `@lunora/privacy`: data-subject rights (export, erasure, holds) | Phase 0: codegen spike; legal and tax review open (§10)                                              |
 
-Audit of what's missing across the 37 packages and how to improve the DX of the
-full product. Executed via isolated-worktree subagents; each was reviewed
-(build/test/typecheck re-run) before landing on `alpha`.
+## Open (TODO)
 
-| Plan | Title                                             | Status                                                                                                                                                                                                                                                                                                                                                 |
-| ---- | ------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| 044  | Docs/AGENTS.md package coverage                   | DONE (shipped)                                                                                                                                                                                                                                                                                                                                         |
-| 045  | Testing-harness coverage (scheduler/fetch/subs)   | DONE (shipped)                                                                                                                                                                                                                                                                                                                                         |
-| 046  | Shared pagination core in `@lunora/client`        | DONE (shipped, folded into 047)                                                                                                                                                                                                                                                                                                                        |
-| 047  | Vue/Solid/Svelte adapter parity with React        | DONE (shipped)                                                                                                                                                                                                                                                                                                                                         |
-| 048  | Inner-loop error-UX papercuts                     | DONE (shipped)                                                                                                                                                                                                                                                                                                                                         |
-| 049  | MCP function-schema introspection tool            | DONE (shipped)                                                                                                                                                                                                                                                                                                                                         |
-| 050  | Expand advisor runtime lints                      | REJECTED & REMOVED — `unused_index`/`slow_table_scan` are already the two halves of the existing `index_utilization` runtime lint (verified: only `hot-shard`/`index-utilization`/`constraint-validator` runtime lints exist). No work to do; plan file deleted, record in git history.                                                                |
-| 051  | Thread project version into OpenAPI/OpenRPC specs | DONE (shipped)                                                                                                                                                                                                                                                                                                                                         |
-| 052  | [Spike] Typed HTTP-SSE stream consumer            | REWRITTEN — original WS premise was wrong (`use-stream.ts` already consumes WS `kind:"stream"`); real gap is a typed consumer for `httpRoute.<verb>().stream()` SSE routes. See [052-streaming-hook-spike.md](052-streaming-hook-spike.md) (TODO, P2).                                                                                                 |
-| 053  | Batch mutations (insertMany/deleteMany/patchMany) | BUILD IMPLEMENTED (pending commit/review) — all three shipped on `DatabaseWriter` per the §8 decisions (Q1 all-or-nothing, Q5 cap 500); per-row loop reusing every write invariant; tests green (do writer + server RLS + testing harness); types/lint clean for the new code. See [053-batch-mutations-design.md](053-batch-mutations-design.md) §10. |
-| 054  | Package-aware `.dev.vars` secrets scaffolding     | DONE (shipped)                                                                                                                                                                                                                                                                                                                                         |
-| 055  | Workflows & Queue observability in Studio         | DONE & REMOVED — (a) workflows REST proxy + studio instance history shipped (verified `packages/workflow/src/rest-api.ts` + client methods); (b) scheduler dead-letter + pools shipped; (c) Queues migration analyzed, verdict NO (the two workpool backends coexist by design). Analysis preserved in git history; plan file deleted.                 |
+| Plan                                                   | Title                                                                | Notes                                                                             |
+| ------------------------------------------------------ | -------------------------------------------------------------------- | --------------------------------------------------------------------------------- |
+| [466](./466-local-replica-client-wiring.md)            | Wire `@lunora/replica` into every client                             | decisions D1–D6 open; Phase 0 first                                               |
+| [467](./467-client-split-remaining-clusters.md)        | Finish splitting `lunora-client.ts`                                  | replay engine, frame handlers, admin surface; decisions D1–D3                     |
+| [480](./480-scheduler-remove-id-less-complete-shim.md) | Require the job id on `/complete` so a completion frees its own slot | blocked: needs a read-only check of production pool rows for `inFlightIds`        |
+| [482](./482-ratelimit-db-store-atomic-consume.md)      | Make the ratelimit consume atomic on the D1-backed `.global()` table | SQL and KV fixed in #1129; D1 needs a conditional write on `ctx.db` (in progress) |
+| [135](./135-stable-1.0-roadmap.md)                     | Road to stable 1.0.0                                                 | umbrella; phase/exit-criteria tracker for `alpha → main`                          |
+| [306](./306-pluggable-queue-drivers.md)                | Pluggable queue-driver package                                       | P2                                                                                |
+| [332](./332-payment-conformance-spike.md)              | Spike: what a payment-provider conformance suite asserts             | spike; deliverable is a decision                                                  |
+| [168](./168-cross-shard-transactions-spike.md)         | Cross-shard transaction story                                        | spike; decision first                                                             |
+| [078](./078-custom-scalar-types.md)                    | Custom scalar types (`v.custom`)                                     | not shipped                                                                       |
+| [089](./089-promise-pipelining-batch.md)               | Promise pipelining over the batch transport                          | draft, design-only                                                                |
+| [160](./160-adapter-voice-agent-consolidation.md)      | Consolidate the voice/agent surface across the 5 adapters            | deferred                                                                          |
+| [364](./364-studio-conversational-assistant.md)        | Conversational assistant for the Studio                              | P3                                                                                |
+| [033](./033-stream.md)                                 | Cloudflare Stream (video)                                            | P3, deferred                                                                      |
+| [037](./037-realtime-calls-webrtc.md)                  | Cloudflare Realtime / Calls (WebRTC)                                 | P3, deferred                                                                      |
+| [133](./133-live-cdc-and-do-consumes-do.md)            | Live CDC ingest + DO-consumes-DO shape                               | P3, demand-gated                                                                  |
+| [169](./169-collab-crdt.md)                            | `@lunora/collab` (CRDT / collaborative editing)                      | demand-gated                                                                      |
+| [453](./453-embedded-runtime.md)                       | In-process runtime as an embedded (browser / device) target          | phase 1 shipped; rest demand-gated                                                |
 
-### Notes
+## Shipped
 
-- **046** was cherry-picked into **047**'s branch, so the shared pagination core
-  and the adapter parity work shipped together in one commit on `alpha`.
-- **048 ↔ 054** both touched `cli/src/commands/dev/handler.ts`
-  (`offerDevVariablesScaffold`); the two changes (non-interactive `.dev.vars`
-  hint + package-aware example scaffolding) were merged by hand on integration.
-- **050** rejected & file removed: the two proposed runtime lints already exist as
-  the two halves of the existing `index_utilization` runtime lint.
-- **052** rewritten: the original "server→client streaming hook" premise was wrong —
-  the React `use-stream.ts` (and `client/src/stream.ts`) already consume the WS
-  `kind:"stream"` procedure. The genuine gap is a typed consumer for HTTP-SSE
-  `httpRoute.<verb>().stream()` routes; codegen captures `HttpRouteIR.stream` but
-  emits no typed reference, and the client has no SSE reader. The plan now targets
-  that (codegen-emitted `HttpStreamRef` + a fetch/`ReadableStream` consumer + hook).
-- **053** shipped its design doc only; the prototype `insertMany` on the public
-  `DatabaseWriter` was held out of `alpha` — it surfaced 5 open questions
-  (RLS partial-failure policy, the `lunoraTest` BEGIN/COMMIT gap, return shape, …).
-  §8 now carries recommended answers; the build is unblocked on maintainer sign-off.
-- **055** done & file removed: (a) workflows REST proxy + studio instance history and
-  (b) scheduler dead-letter + workpool observability both shipped; (c) the Queues
-  migration was analyzed and rejected — `createWorkpool` (DO) and `createQueueWorkpool`
-  (Queues) coexist by design at different points on the trade-off curve.
+Plans whose files were deleted on this branch. The commit column is the change that
+landed the plan; a follow-up commit that completed it is listed after the first.
 
-## Notes for executors (carried from wave 1)
+| Plan | Title                                                                       | Commit               |
+| ---- | --------------------------------------------------------------------------- | -------------------- |
+| 489  | Many-to-many relations through a join table                                 | #1146                |
+| 479  | Make `createPayment`'s `authorize` required (default-deny)                  | 360c4f27c            |
+| 483  | Make the `.dev.vars` create exclusive on the final path                     | 58e11f997, 88b7c1997 |
+| 484  | Flag `v.any()` public args reached through an alias, destructure, or helper | e942bdb5f, 88b7c1997 |
+| 485  | Stop presence `setData` heartbeats before mount or on the server            | c52580876, 7ac090ea7 |
+| 486  | Gate raw data-read and observability MCP tools behind scopes                | ed2a1abe3, 88b7c1997 |
+| 487  | Never send the master admin token in a WebSocket URL                        | 5e89bec39            |
+| 481  | Cap presence by distinct user and bound the sweep read                      | #1129 (9acca8722)    |
+| 488  | Serve the Node scheduler dispatch route for queue and topic handlers        | #1129 (9acca8722)    |
 
-- `dist/` is gitignored and built on demand. Build deps first:
-  `pnpm --filter "@lunora/<pkg>..." run build` (trailing `...` includes deps), or
-  `pnpm run test:affected` / `pnpm run lint:affected:types`.
-- ESM with `moduleResolution: "bundler"` — **no `.js` extensions** in relative
-  imports (sole exception: `@lunora/codegen`'s emitted `_generated/*` output).
-- Never mix a default export with named exports; named-only when a file has >1 export.
-- Shared dep versions come from pnpm catalogs (`catalog:*`) — never hardcode a version.
+## Reference designs
+
+Design docs and spike findings that gate unbuilt follow-on work. Delete one when the
+follow-on ships or is rejected.
+
+| Doc                                                 | Subject                                                                 |
+| --------------------------------------------------- | ----------------------------------------------------------------------- |
+| [052](./052-streaming-hook-design.md)               | Typed HTTP-SSE stream consumer (adapter parity, reconnect, POST bodies) |
+| [137](./137-release-train-rehearsal.md)             | Release-train rehearsal, feeds 135 Phase 3                              |
+| [162](./162-phase0-crosstabsync-design.md)          | crossTabSync subscribe relay (CLIENT-01)                                |
+| [234](./234-node-host-findings.md)                  | Node host findings                                                      |
+| [237](./237-admin-auth-hooks-design.md)             | Reactive admin/organization auth hooks; remaining adapters open         |
+| [238](./238-vector-reader-design.md)                | `.withVectorIndex()` reader; codegen wiring + `define-rag` open         |
+| [241](./241-inapp-inbox-design.md)                  | In-app inbox read half; D1 backend open                                 |
+| [247](./247-event-store-design.md)                  | `defineEventStore`; not ratified                                        |
+| [333](./333-query-snapshot-coherence.md)            | Snapshot coherence for query subscriptions                              |
+| [334](./334-mutation-determinism.md)                | Runtime determinism for query/mutation bodies                           |
+| [386](./386-queue-workpool-observability-design.md) | Observability for the Queues-backed workpool                            |
+| [395](./395-sdk-stream-forms-design.md)             | Stream subscription forms for the non-Dart SDKs                         |
+| [435](./435-platform-budget-tck-design.md)          | Portability-budget leg of the platform TCK                              |
+| [445](./445-agent-approvals-inbox-design.md)        | Pending-approvals inbox for the HITL surface                            |

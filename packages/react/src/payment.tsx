@@ -4,18 +4,41 @@ import type { ReactNode } from "react";
 import { useCallback, useState } from "react";
 
 /**
+ * Stable provider identifier. Mirror of `@lunora/payment`'s `ProviderId` — the
+ * value is persisted verbatim, so an app branching on it must see every provider
+ * that has an adapter, not just the two that shipped first.
+ */
+type ProviderId = "autumn" | "creem" | "dodopayments" | "polar" | "stripe";
+
+/**
  * Client-safe mirror of `@lunora/payment`'s `Subscription`. Re-declared here
  * (rather than imported) so this React entry never pulls in the server-only
- * `@lunora/payment` module graph — the kit stays React + DOM only. Keep this in
- * sync with `packages/payment/src/types.ts`.
+ * `@lunora/payment` module graph — the kit stays React + DOM only.
+ * `__tests__/payment-mirror.test.ts` fails when this drifts from
+ * `packages/payment/src/types.ts`.
  */
 interface Subscription {
     readonly cancelAtPeriodEnd: boolean;
     readonly createdAt: number;
     readonly currentPeriodEnd?: number;
+    /** Start of the current billing period — the window metered usage is summed over. */
+    readonly currentPeriodStart?: number;
     readonly id: string;
+    /** When the provider says the last applied event happened (epoch ms); older redeliveries are ignored. */
+    readonly lastEventAt?: number;
     readonly priceId: string;
-    readonly provider: "polar" | "stripe";
+
+    /**
+     * EVERY price/product id the subscription bills, not just the primary one. A Stripe
+     * subscription can carry an add-on or a metered price alongside the base plan, and a
+     * customer paying for one is entitled to it — so entitlements test membership here.
+     *
+     * Optional because the webhook path and any pre-existing stored row carry only
+     * `priceId`; absent reads as `[priceId]`, which is exactly right for the single-item
+     * case every other provider has.
+     */
+    readonly priceIds?: ReadonlyArray<string>;
+    readonly provider: ProviderId;
     readonly quantity: number;
     readonly referenceId: string;
     readonly state: "active" | "canceled" | "past_due" | "paused" | "trialing";
@@ -40,6 +63,24 @@ interface UseCheckoutResult {
 }
 
 /**
+ * Resolve a redirect target to a safe href, throwing on a non-http(s) scheme.
+ * The `url` is expected to be a provider-hosted checkout/portal URL from the
+ * app's own action, but a compromised/misconfigured server could return a
+ * `javascript:`/`data:` URL — this keeps such a value out of `location.assign`.
+ * Kept at module scope (not an inline `throw`) so `useCheckout` stays
+ * React-Compiler-optimizable.
+ */
+const safeRedirectHref = (url: string): string => {
+    const parsed = new URL(url, globalThis.location.href);
+
+    if (parsed.protocol !== "https:" && parsed.protocol !== "http:") {
+        throw new Error(`refusing to redirect to a non-http(s) URL: ${parsed.protocol}`);
+    }
+
+    return parsed.href;
+};
+
+/**
  * Decoupled redirect-on-resolve primitive shared by `CheckoutButton` and
  * `CustomerPortalButton`. The app passes a `trigger` thunk that calls its own
  * Lunora action (the one wrapping `LunoraPayment.createCheckout` /
@@ -55,15 +96,21 @@ const useCheckout = (trigger: RedirectTrigger): UseCheckoutResult => {
     const [pending, setPending] = useState(false);
     const [error, setError] = useState<Error | undefined>(undefined);
 
+    // react-doctor-disable-next-line react-doctor/react-compiler-no-manual-memoization -- load-bearing: the `try { … } finally { … }` below bails React Compiler for the whole `useCheckout` hook (it can't lower a TryStatement with a finalizer yet), so this `useCallback` is the only thing keeping `checkout`'s identity stable. Keep it.
     const checkout = useCallback(async (): Promise<void> => {
         setPending(true);
         setError(undefined);
 
+        // react-doctor-disable-next-line react-hooks-js/todo -- the `finally { setPending(false) }` guarantees the pending flag always clears (success, redirect, or throw); the compiler can't lower a try/finally yet, but the finalizer is required semantics, not optimizable-away.
         try {
             const target = await trigger();
-            const { url } = target;
 
-            globalThis.location.assign(url);
+            // Validate the scheme via a module-level helper (not an inline
+            // `throw`) — a literal ThrowStatement inside try/catch defeats the
+            // React Compiler's memoization of this hook, whereas a throwing call
+            // is fine. `safeRedirectHref` rejects non-http(s) URLs so a
+            // compromised action can't drive `location.assign` to `javascript:`.
+            globalThis.location.assign(safeRedirectHref(target.url));
         } catch (error_: unknown) {
             const normalized = error_ instanceof Error ? error_ : new Error(String(error_));
 
@@ -119,6 +166,7 @@ interface CustomerPortalButtonProps extends RedirectButtonOwnProps {
 const RedirectButton = ({ "aria-label": ariaLabel, children, className, disabled, onError, title, trigger }: RedirectButtonProps): ReactNode => {
     const { checkout, pending } = useCheckout(trigger);
 
+    // react-doctor-disable-next-line react-doctor/react-compiler-no-manual-memoization -- kept deliberately: although React Compiler memoizes this component, ESLint's `react-perf/jsx-no-new-function-as-prop` (a static rule that can't see the compiler) requires memoized function props like the `onClick` below. Keep `useCallback` to satisfy that hard lint gate.
     const handleClick = useCallback((): void => {
         checkout().catch((error: unknown) => {
             const normalized = error instanceof Error ? error : new Error(String(error));
@@ -172,6 +220,6 @@ const CustomerPortalButton = ({ onPortal, ...rest }: CustomerPortalButtonProps):
     );
 };
 
-export type { CheckoutButtonProps, CustomerPortalButtonProps, RedirectTarget, RedirectTrigger, Subscription, UseCheckoutResult };
+export type { CheckoutButtonProps, CustomerPortalButtonProps, ProviderId, RedirectTarget, RedirectTrigger, Subscription, UseCheckoutResult };
 // eslint-disable-next-line react-refresh/only-export-components -- useCheckout is the shared hook these buttons build on and is part of the kit's public API; colocating it with the buttons keeps the payment surface in one module (same pattern as useLunora alongside LunoraProvider).
 export { CheckoutButton, CustomerPortalButton, useCheckout };

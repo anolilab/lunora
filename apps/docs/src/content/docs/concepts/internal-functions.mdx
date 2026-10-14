@@ -1,6 +1,12 @@
 ---
 title: Internal functions
 description: internalQuery / internalMutation / internalAction — server-only functions never exposed to the client.
+related:
+    - to: /docs/concepts/queries-mutations
+    - to: /docs/concepts/actions
+    - to: /docs/concepts/http-endpoints
+    - to: /docs/packages/server
+    - to: /docs/packages/scheduler
 ---
 
 Every `query`, `mutation`, and `action` you export is **public** by default,
@@ -32,6 +38,9 @@ export const applyStripeSync = internalMutation.input({ id: v.id("customers"), r
 The three builders mirror their public counterparts and produce the same
 `ctx`. `internalQuery` gets a read-only `QueryCtx`, `internalMutation` a
 transactional `MutationCtx`, and `internalAction` the side-effectful `ActionCtx`.
+An `internalMutation` reached through `ctx.runMutation` is transactional however
+it was reached: from an action it opens its own all-or-nothing span, and from
+another mutation it rides the caller's.
 
 | Public     | Internal           | `ctx`         |
 | ---------- | ------------------ | ------------- |
@@ -46,7 +55,7 @@ Internal functions are addressed through the generated `internal` namespace
 
 ```ts
 import { action, v } from "@/lunora/_generated/server";
-import { internal } from "@/lunora/_generated/api";
+import { internal } from "@/lunora/_generated/internal";
 
 export const syncCustomer = action.input({ stripeId: v.string() }).action(async ({ ctx, args }) => {
     const customer = await ctx.runQuery(internal.customers.byStripeId, args);
@@ -68,7 +77,7 @@ always internal. Schedule an `internal*` reference from a mutation or action:
 
 ```ts
 import { mutation, v } from "@/lunora/_generated/server";
-import { internal } from "@/lunora/_generated/api";
+import { internal } from "@/lunora/_generated/internal";
 
 export const enqueueReport = mutation.input({ accountId: v.id("accounts") }).mutation(async ({ ctx, args }) => {
     // Build the report off the request path — and don't expose the builder to clients.
@@ -79,11 +88,3 @@ export const enqueueReport = mutation.input({ accountId: v.id("accounts") }).mut
 The same applies to cron jobs (`cronJobs`) and connection-lifecycle hooks
 (`onConnect` / `onDisconnect`), which are registered as internal mutations the
 runtime dispatches on a schedule or socket event rather than via a client call.
-
-## See also
-
-- [Queries & mutations](/docs/concepts/queries-mutations)
-- [Actions](/docs/concepts/actions)
-- [HTTP endpoints](/docs/concepts/http-endpoints)
-- [API: @lunora/server](/docs/packages/server)
-- [API: @lunora/scheduler](/docs/packages/scheduler)

@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-import type { ExecutionContextLike, ResolvedIdentity } from "../src/create-worker";
+import { encodeIdentityHeader } from "../../../shared/identity-header";
+import type { ExecutionContextLike, ResolvedIdentity, ShardCaller } from "../src/create-worker";
 import { createWorker } from "../src/create-worker";
 import type { ShardNamespaceLike } from "../src/resolve-shard";
 
@@ -133,7 +134,7 @@ describe("serverQuery — in-process fast-path (PLAN4 §2.2 / §5.3)", () => {
             result: {
                 args: {},
                 functionPath: "messages:list",
-                identity: JSON.stringify({ email: "u@example.com" }),
+                identity: encodeIdentityHeader({ email: "u@example.com" }),
                 shardKey: "__root__",
                 userId: "user_42",
             },
@@ -145,7 +146,7 @@ describe("serverQuery — in-process fast-path (PLAN4 §2.2 / §5.3)", () => {
     it("threads shardKey identically on both paths", async () => {
         expect.assertions(3);
 
-        const worker = createWorker({ shardDO: shard.namespace });
+        const worker = createWorker({ allowUnauthenticatedShardAccess: true, shardDO: shard.namespace });
 
         const httpRes = await worker.fetch(rpcRequest({ args: {}, functionPath: "messages:list", shardKey: "channel-7" }), {}, fakeContext);
         const httpBody = await httpRes.text();
@@ -163,7 +164,7 @@ describe("serverQuery — in-process fast-path (PLAN4 §2.2 / §5.3)", () => {
 
         // `authorizeShard` denies the anonymous caller — the same gate `handleRpc`
         // runs. If `serverQuery` bypassed it, this is where the divergence would show.
-        const authorizeShard = vi.fn<(identity: ResolvedIdentity | null, shardKey: string) => boolean>((identity) => identity !== null);
+        const authorizeShard = vi.fn<(caller: ShardCaller) => boolean>(({ identity }) => identity !== null);
 
         const worker = createWorker({ authorizeShard, shardDO: shard.namespace });
 
@@ -183,7 +184,7 @@ describe("serverQuery — in-process fast-path (PLAN4 §2.2 / §5.3)", () => {
     it("allows an authenticated call through the auth gate identically on both paths", async () => {
         expect.assertions(3);
 
-        const authorizeShard = (identity: ResolvedIdentity | null): boolean => identity !== null;
+        const authorizeShard = ({ identity }: ShardCaller): boolean => identity !== null;
         const resolveIdentity = (): ResolvedIdentity => {
             return { userId: "user_42" };
         };
@@ -204,7 +205,7 @@ describe("serverQuery — in-process fast-path (PLAN4 §2.2 / §5.3)", () => {
     it("passes the resolved identity to authorizeShard the same way handleRpc does", async () => {
         expect.assertions(2);
 
-        const authorizeShard = vi.fn<(identity: ResolvedIdentity | null, shardKey: string) => boolean>(() => true);
+        const authorizeShard = vi.fn<(caller: ShardCaller) => boolean>(() => true);
         const resolveIdentity = (): ResolvedIdentity => {
             return { email: "u@example.com", userId: "user_42" };
         };
@@ -216,7 +217,7 @@ describe("serverQuery — in-process fast-path (PLAN4 §2.2 / §5.3)", () => {
         expect(authorizeShard).toHaveBeenCalledTimes(1);
         // Full identity object (not just userId) + the resolved shardKey — exactly
         // the arguments the HTTP path passes.
-        expect(authorizeShard).toHaveBeenCalledWith({ email: "u@example.com", userId: "user_42" }, "channel-7");
+        expect(authorizeShard).toHaveBeenCalledWith({ identity: { email: "u@example.com", userId: "user_42" }, shardKey: "channel-7" });
     });
 
     it("returns a BAD_REQUEST error Response (not a throw) for a non-reference, mirroring the HTTP catch", async () => {
@@ -240,5 +241,203 @@ describe("serverQuery — in-process fast-path (PLAN4 §2.2 / §5.3)", () => {
 
         expect(JSON.parse(await res.text())).toMatchObject({ result: { shardKey: "tenant-1" } });
         expect(shard.calls[0]!.shardKey).toBe("tenant-1");
+    });
+
+    // An OTLP body past the gzip threshold is exported asynchronously, so without
+    // the caller's `waitUntil` an SSR host can tear the isolate down mid-export and
+    // silently lose exactly the error spans operators care about.
+    it("registers dispatch telemetry with the caller's waitUntil", async () => {
+        expect.assertions(2);
+
+        const kept: Promise<unknown>[] = [];
+        const observability = {
+            onRpc: (_event: unknown, context?: { waitUntil?: (promise: Promise<unknown>) => void }) => {
+                context?.waitUntil?.(Promise.resolve("sent"));
+            },
+        };
+        const worker = createWorker({ observability, shardDO: shard.namespace });
+
+        await worker.serverQuery(new Request("https://app.example/page"), {}, messagesList, {}, { waitUntil: (promise) => kept.push(promise) });
+
+        expect(kept).toHaveLength(1);
+        await expect(kept[0]).resolves.toBe("sent");
+    });
+
+    // Sinks are user-extensible and this context is fanned out to all of them, so
+    // raw `env` (every secret binding) and the raw `Request` (its Authorization /
+    // Cookie headers) must not be reachable from it.
+    it("never exposes raw env or request to a sink", async () => {
+        expect.assertions(3);
+
+        const seen: object[] = [];
+        const observability = {
+            onRpc: (_event: unknown, context?: object) => {
+                if (context) {
+                    seen.push(context);
+                }
+            },
+        };
+        const worker = createWorker({ observability, shardDO: shard.namespace });
+
+        await worker.serverQuery(new Request("https://app.example/page", { headers: { authorization: "Bearer hunter2" } }), { SECRET: "s3cret" }, messagesList);
+
+        expect(seen).toHaveLength(1);
+        expect(Object.keys(seen[0]!).toSorted((a, b) => a.localeCompare(b))).toStrictEqual(["resourceAttributes"]);
+        expect(JSON.stringify(seen[0])).not.toContain("s3cret");
+    });
+});
+
+describe("serverQuery — x402 paywall parity", () => {
+    /** Structural shape of the injected `x402Charge` gate (the type is internal to create-worker). */
+    type ChargeGateStub = (
+        request: Request,
+        spec: { functionPath: string; price: number | string },
+        dispatch: () => Promise<Response>,
+        deps?: { waitUntil?: (promise: Promise<unknown>) => void },
+    ) => Promise<Response>;
+
+    const paidReport = { __lunoraRef: "reports:premium" } as const;
+    const paidFunctions = { "reports:premium": { kind: "query", x402: { price: "$0.05" } } } as const;
+
+    it("runs the charge gate and withholds the shard when unpaid", async () => {
+        expect.assertions(4);
+
+        // Before the fix `serverQuery` called `dispatchSingleShard` directly, so an
+        // SSR loader served every paid result free: no 402, no settlement, while
+        // the same procedure was paywalled over RPC and REST.
+        const shard = createEchoShardSpy();
+        const x402Charge = vi.fn<ChargeGateStub>(() => Promise.resolve(new Response(undefined, { status: 402 })));
+        const worker = createWorker({ functions: paidFunctions, shardDO: shard.namespace, x402Charge });
+
+        const response = await worker.serverQuery(new Request("https://app.example/page"), {}, paidReport, {});
+
+        expect(response.status).toBe(402);
+        expect(x402Charge).toHaveBeenCalledTimes(1);
+        expect(x402Charge.mock.calls[0]![1]).toStrictEqual({ functionPath: "reports:premium", price: "$0.05" });
+        expect(shard.calls).toHaveLength(0);
+    });
+
+    it("dispatches once the gate settles the payment", async () => {
+        expect.assertions(2);
+
+        const shard = createEchoShardSpy();
+        const x402Charge = vi.fn<ChargeGateStub>((_request, _spec, dispatch) => dispatch());
+        const worker = createWorker({ functions: paidFunctions, shardDO: shard.namespace, x402Charge });
+
+        const response = await worker.serverQuery(new Request("https://app.example/page"), {}, paidReport, {});
+
+        expect(response.status).toBe(200);
+        expect(shard.calls).toHaveLength(1);
+    });
+
+    it("fail-closes a paid procedure with no gate configured (500), never serving it free", async () => {
+        expect.assertions(2);
+
+        const shard = createEchoShardSpy();
+        const worker = createWorker({ functions: paidFunctions, shardDO: shard.namespace });
+
+        const response = await worker.serverQuery(new Request("https://app.example/page"), {}, paidReport, {});
+
+        expect(response.status).toBe(500);
+        expect(shard.calls).toHaveLength(0);
+    });
+
+    it("leaves a free procedure untouched by the gate", async () => {
+        expect.assertions(3);
+
+        const shard = createEchoShardSpy();
+        const x402Charge = vi.fn<ChargeGateStub>((_request, _spec, dispatch) => dispatch());
+        const worker = createWorker({ functions: paidFunctions, shardDO: shard.namespace, x402Charge });
+
+        const response = await worker.serverQuery(new Request("https://app.example/page"), {}, messagesList, {});
+
+        expect(response.status).toBe(200);
+        expect(x402Charge).not.toHaveBeenCalled();
+        expect(shard.calls).toHaveLength(1);
+    });
+
+    it("forwards the SSR host's `waitUntil` to the gate so the settlement receipt survives the response", async () => {
+        expect.assertions(2);
+
+        const shard = createEchoShardSpy();
+        const x402Charge = vi.fn<ChargeGateStub>((_request, _spec, dispatch) => dispatch());
+        const worker = createWorker({ functions: paidFunctions, shardDO: shard.namespace, x402Charge });
+        const waitUntil = vi.fn<(promise: Promise<unknown>) => void>();
+
+        await worker.serverQuery(new Request("https://app.example/page"), {}, paidReport, {}, { waitUntil });
+
+        const receipt = Promise.resolve();
+
+        x402Charge.mock.calls[0]![3]!.waitUntil!(receipt);
+
+        expect(waitUntil).toHaveBeenCalledWith(receipt);
+        expect(shard.calls).toHaveLength(1);
+    });
+});
+
+describe("reserved-prefix parity — the fan-out-only relation read is refused on every dispatch surface", () => {
+    /**
+     * `__lunora_relation__:*` reads RAW, RLS-blind rows for whatever `args.table`
+     * names. The binding that pins `args.table` to the AUTHORIZED `fanOut.table`
+     * lives in `parseEnvelope` and runs only when a `fanOut` is present, and the
+     * DO applies no gate of its own — its comment cites the worker's refusal as
+     * the reason ("worker refuses this prefix on a single-shard envelope, so it's
+     * only reachable through the authorizeFanOut-gated fan-out path"). So the
+     * guard being skipped on a surface means nothing checks it at all.
+     */
+    const relationRead = { __lunoraRef: "__lunora_relation__:read" } as const;
+
+    it("serverQuery refuses it, byte-identically to /_lunora/rpc", async () => {
+        expect.assertions(4);
+
+        const shard = createEchoShardSpy();
+        const worker = createWorker({ shardDO: shard.namespace });
+
+        const httpRes = await worker.fetch(rpcRequest({ args: { table: "payments" }, functionPath: "__lunora_relation__:read" }), {}, fakeContext);
+        const serverRes = await worker.serverQuery(
+            new Request("https://app.example/loader"),
+            {},
+            relationRead,
+            { table: "payments" },
+            { context: fakeContext },
+        );
+
+        expect(httpRes.status).toBe(403);
+        expect(serverRes.status).toBe(403);
+        // `serverQuery`'s stated contract is a byte-identical result to the HTTP path.
+        await expect(serverRes.text()).resolves.toBe(await httpRes.text());
+        // Nothing reached a shard on either path.
+        expect(shard.calls).toHaveLength(0);
+    });
+
+    it("an httpRoute's ctx.run* refuses it", async () => {
+        expect.assertions(2);
+
+        const shard = createEchoShardSpy();
+        let thrown: unknown;
+
+        const worker = createWorker({
+            httpRouter: {
+                fetch: async (_request: Request, env: unknown) => {
+                    const ctx = (env as { __lunoraCtx: { runQuery: (reference: unknown, args: Record<string, unknown>) => Promise<unknown> } }).__lunoraCtx;
+
+                    try {
+                        await ctx.runQuery(relationRead, { table: "payments" });
+                    } catch (error: unknown) {
+                        thrown = error;
+                    }
+
+                    return new Response("ok");
+                },
+            },
+            shardDO: shard.namespace,
+        });
+
+        await worker.fetch(new Request("https://app.example/webhook", { method: "POST" }), {}, fakeContext);
+
+        // `ctx.run*` additionally stamps `x-lunora-system: "1"`, so an unguarded
+        // dispatch here reaches the shard as a TRUSTED caller.
+        expect((thrown as { code?: string } | undefined)?.code).toBe("FORBIDDEN");
+        expect(shard.calls).toHaveLength(0);
     });
 });

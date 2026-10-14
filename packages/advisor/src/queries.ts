@@ -1,18 +1,66 @@
+import type { AdvisorCallSiteScope } from "./call-site-scope";
+
 /**
  * One query read discovered in a function body — the input the
- * `filter_without_index` lint consumes. Produced by the codegen feeder (which
- * parses `ctx.db.query("table")…` chains from the AST); runtime callers don't
- * supply it, so the lint simply finds nothing there.
+ * `filter_without_index` / `filter_on_primary_key` / `unbounded_collect` lints
+ * consume. Produced by the codegen feeder (which parses `ctx.db.query("table")…`
+ * chains from the AST); runtime callers don't supply it, so those lints simply
+ * find nothing there.
  */
 export interface AdvisorQueryRead {
     /** Source file the read appears in (relative to the lunora dir, no extension). */
     file: string;
+
+    /**
+     * The fields the `.filter(...)` predicate reads off its row parameter. `undefined`
+     * when there is no filter or the predicate is not a function literal.
+     */
+    filterFields?: string[];
+
+    /**
+     * True when the chain's `.filter()` predicate compares `_id`
+     * (`(d) => d._id === args.id`) — a full scan for a row that `ctx.db.get`
+     * addresses directly. Optional so a feeder predating this field still
+     * typechecks; absent is treated as "not a primary-key filter".
+     */
+    filtersPrimaryKey?: boolean;
+
     /** True when the chain calls `.filter(...)`. */
     hasFilter: boolean;
     /** True when the chain narrows with `.withIndex(...)` or `.withSearchIndex(...)`. */
     hasIndex: boolean;
+
+    /**
+     * The chain's `.withIndex(...)`, present exactly when the chain has one. `name` is
+     * the literal index name, or `undefined` when it is not a string literal. `bounds`
+     * are the comparators its range callback calls: `[]` for a bare `.withIndex(name)`
+     * (an open range), `undefined` when the callback cannot be read.
+     */
+    index?: { bounds?: string[]; name?: string };
     /** 1-based line of the `query(...)` call, or `0` when unknown. */
     line: number;
+    /** Who the site runs on behalf of — see {@link AdvisorCallSiteScope}. */
+    scope: AdvisorCallSiteScope;
     /** The queried table; empty when the `query(...)` argument is not a string literal. */
     table: string;
+
+    /**
+     * The materializing call the chain ends in — `"collect"`, `"take"`,
+     * `"paginate"`, `"first"`, `"unique"`, … — i.e. how much of the narrowed set
+     * the read actually loads.
+     *
+     * `undefined` when the chain reaches no recognised terminal (a reader passed
+     * on, a bare `query(...)`) AND when a feeder predating this field produced
+     * the read. The two are deliberately not distinguished: no consumer could act
+     * on the difference, so the terminal-shaped lints skip the read either way
+     * rather than guessing a terminal.
+     */
+    terminal?: string;
+
+    /**
+     * Visibility of the procedure the read runs on behalf of: `internal` when every
+     * caller is internal, `public` when any caller is public. `undefined` when the
+     * feeder could not read the registered functions.
+     */
+    visibility?: "internal" | "public";
 }

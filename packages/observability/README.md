@@ -1,0 +1,32 @@
+# `@lunora/observability`
+
+Host-neutral telemetry storage and read models for Lunora — the data behind the Studio's Logs, Traces, Metrics and Issues views.
+
+## What's in it
+
+| Area            | Modules                                                                                                                        |
+| --------------- | ------------------------------------------------------------------------------------------------------------------------------ |
+| **Logs**        | `request-log` (durable, redacted request records), `log-buffer` (in-memory ring for the live tail)                             |
+| **Traces**      | `context-telemetry` (`ctx.trace` / span creation), `span-buffer` (ring + waterfall folding), `trace-context` (W3C traceparent) |
+| **Metrics**     | `function-metrics`, `query-metrics`, `auth-metrics`, `database-telemetry`, `metric-buffer`, `metric-history`                   |
+| **Issues**      | `issue-state` (grouping + status), `issue-explainer` (AI explanation of a grouped issue)                                       |
+| **Audit**       | `security-audit` (configuration findings)                                                                                      |
+| **Correlation** | `storage-correlation`                                                                                                          |
+
+## Why it is its own package
+
+None of it is Cloudflare-specific. It reads and writes through the SQL handle the engine hands it, and it lived inside `@lunora/do` only because that is where the Durable Object it instruments happens to live.
+
+That mattered in practice: anything wanting request logs or metrics had to depend on the Cloudflare Durable Object package to get them. The dependency now runs `@lunora/do` → `@lunora/observability` → `@lunora/shard-engine`, so a second host consumes this directly rather than inheriting a provider-bound edge.
+
+## Host-specific values are injected, not baked in
+
+Three details are Cloudflare's rather than this package's, so the host passes them:
+
+- **AI model** — `explainIssue(binding, args, { defaultModel })`. `DEFAULT_EXPLAIN_ISSUE_MODEL` is a Workers AI id, exported so the Cloudflare host has a name to pass rather than a string literal.
+- **Query batch size** — hashes are read in batches of `DEFAULT_HASH_QUERY_BATCH` (100), the Durable Object SQLite bound-parameter cap. `readIssueStates` takes it as a `{ hashQueryBatch }` option, but neither the function nor the constant is on the package barrel and the in-package reader passes no options, so the batch is fixed at 100 until a host with a different cap needs it threaded through.
+- **Span projections** — the exported types `HostSpanLike`, `HostTracingLike` and `HostTracingResolver`. Named for the role, not the provider; Cloudflare's `enterSpan` callback argument is one shape that satisfies them. The host injects its tracer through the `TracerDeps` option fields `fuseHostSpans?: boolean` and `resolveHostTracing?: HostTracingResolver` — those are option names, not exported values, and the resolver itself lives in the host (`@lunora/do`'s `shard-do.ts` guards a dynamic `import("cloudflare:workers")`).
+
+## Importing it
+
+Import from this package directly. `@lunora/do` deliberately does **not** re-export it — doing so would put the Cloudflare package back in the middle of a dependency it does not own, and would mean a second host reaching telemetry _through_ Cloudflare.

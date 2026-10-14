@@ -12,7 +12,6 @@ import transformer from "@visulima/packem/transformer/esbuild";
 // eslint-disable-next-line import/no-unused-modules -- consumed by packem CLI
 export default defineConfig({
     runtime: "browser",
-    failOnWarn: false,
     externals: [/^svelte($|\/)/],
     preset: createSveltePreset(),
     rollup: {

@@ -1,30 +1,52 @@
-import { useLunora } from "@lunora/react";
 import { useNavigate } from "@tanstack/react-router";
 import type { ReactElement, ReactNode } from "react";
-import { useEffect, useState } from "react";
+import { lazy, Suspense } from "react";
 
-import { Bar, EvilBarChart } from "../../components/evilcharts/charts/bar-chart";
-import type { ChartConfig } from "../../components/evilcharts/ui/chart";
 import { Badge } from "../../components/ui/badge";
 import { Card, CardContent } from "../../components/ui/card";
 import { EmptyState } from "../../components/ui/empty-state";
+import { useAdminQuery } from "../../hooks/use-admin-query";
+import type { TFunction } from "../../i18n/i18n-context";
 import { useT } from "../../i18n/i18n-context";
-import type { AuditEntry, FunctionCallStat, MetricsSnapshot, SecurityAuditResult, SubscriptionsResult } from "../../lib/admin";
+import type { AuditEntry, CacheStats, FunctionCallStat, MetricsSnapshot, SecurityAuditResult, SubscriptionsResult } from "../../lib/admin";
 import { ADMIN_FUNCTIONS } from "../../lib/admin";
-import { adminRef, callOptions, fireAndForget, formatBytes } from "../../lib/internal";
+import { fireAndForget, formatBytes } from "../../lib/internal";
 import { cn } from "../../lib/utils";
 import { deriveInsights } from "../advisors/derive-insights";
+import BindingsOverview from "./bindings-overview";
+import { ConnectAgentCard } from "./connect-agent";
+
+// The stat-card sparkline is Home's only `recharts` consumer. Lazy-loading it
+// keeps the (heavy) chart engine out of the studio's entry bundle — Home's
+// structure paints immediately and each sparkline streams in on its own chunk.
+const Sparkline = lazy(() => import("./sparkline"));
 
 interface HomePanelProps {
     /** Shard key the health digest targets on first load. Defaults to the root shard. */
     readonly initialShardKey?: string;
 }
 
-const GET_METRICS = adminRef(ADMIN_FUNCTIONS.getMetrics);
-const GET_FUNCTION_STATS = adminRef(ADMIN_FUNCTIONS.getFunctionStats);
-const GET_SECURITY_AUDIT = adminRef(ADMIN_FUNCTIONS.getSecurityAudit);
-const GET_AUDIT_LOG = adminRef(ADMIN_FUNCTIONS.getAuditLog);
-const LIST_SUBSCRIPTIONS = adminRef(ADMIN_FUNCTIONS.listSubscriptions);
+/**
+ * The cache line under the Database-size card. Three distinct states, none of
+ * them blank: the reactive query cache is not enabled for this app, it is
+ * enabled but has served nothing yet, or it has a real hit rate. A blank footer
+ * conflated the first two — an app with no cache looked exactly like one whose
+ * cache was doing nothing.
+ */
+const cacheFooterText = (t: TFunction, cache: CacheStats | null | undefined): string => {
+    // `null` is the shard saying "no reactive cache configured"; `undefined` is a
+    // metrics payload that carries no `cache` key at all — an older shard, or any
+    // response shaped before the field existed. Both mean "nothing to report", and
+    // this value is untrusted JSON off the admin wire, so the absent case has to be
+    // handled here rather than assumed away by the declared type.
+    if (cache === null || cache === undefined) {
+        return t("cache not enabled");
+    }
+
+    const samples = cache.hits + cache.misses;
+
+    return samples === 0 ? t("no cache traffic yet") : `${Math.round((cache.hits / samples) * 100).toString()}% ${t("cache hit")}`;
+};
 
 /** Format a millisecond duration compactly (`24ms`, `1.2s`). */
 const formatMs = (ms: number): string => {
@@ -61,32 +83,6 @@ interface StatDelta {
     readonly positive: boolean;
     readonly text: string;
 }
-
-/** Series colour for the stat-card sparkline (the foreground var already flips per theme). */
-const SPARKLINE_CONFIG = { value: { colors: { dark: ["var(--foreground)"], light: ["var(--foreground)"] }, label: "" } } satisfies ChartConfig;
-
-/** A compact monochrome bar sparkline (evilcharts) drawn from a numeric series (oldest → newest). */
-const Sparkline = ({ data }: { readonly data: ReadonlyArray<number> }): ReactElement | null => {
-    const bars = data.slice(-16);
-
-    // A single point can't read as a trend (and renders as one fat block), so a
-    // sparkline only shows once there are at least a few buckets.
-    if (bars.length < 3) {
-        return null;
-    }
-
-    const rows = bars.map((value, index) => {
-        return { index, value };
-    });
-
-    return (
-        <div aria-hidden="true" className="h-8 w-28">
-            <EvilBarChart animationType="none" barCategoryGap={1} className="h-8 w-full" config={SPARKLINE_CONFIG} data={rows}>
-                <Bar dataKey="value" />
-            </EvilBarChart>
-        </div>
-    );
-};
 
 /** Sum a metrics-history field per minute bucket, oldest first — the series a sparkline draws. */
 const bucketSeries = (history: MetricsSnapshot["history"], field: "calls" | "errors"): number[] => {
@@ -154,7 +150,11 @@ const StatCard = ({
                         <span className="text-2xl font-semibold tabular-nums text-foreground">{value}</span>
                         {unit !== undefined && <span className="text-xs text-muted-foreground">{unit}</span>}
                     </span>
-                    {trend !== undefined && <Sparkline data={trend} />}
+                    {trend !== undefined && (
+                        <Suspense fallback={<div aria-hidden="true" className="h-8 w-28" />}>
+                            <Sparkline data={trend} />
+                        </Suspense>
+                    )}
                 </div>
             </div>
             {delta == null ? (
@@ -295,6 +295,7 @@ const LiveConnectionsCard = ({ subs }: { readonly subs: SubscriptionsResult | nu
 /** The latest durable admin operations (newest first). */
 const RecentActivityCard = ({ entries }: { readonly entries: ReadonlyArray<AuditEntry> }): ReactElement => {
     const t = useT();
+    // react-doctor-disable-next-line react-hooks-js/purity -- relative timestamps have to read the wall clock; the value is display-only and is meant to advance on every render
     const now = Date.now();
 
     return (
@@ -352,42 +353,32 @@ const averageLatencyMs = (functions: ReadonlyArray<FunctionCallStat>): null | nu
  * placeholder rather than blanking the page.
  */
 export const HomePanel = ({ initialShardKey }: HomePanelProps): ReactElement => {
-    const client = useLunora();
     const t = useT();
     const navigate = useNavigate();
 
-    const [metrics, setMetrics] = useState<MetricsSnapshot | null>(null);
-    const [functions, setFunctions] = useState<FunctionCallStat[]>([]);
-    const [performanceCount, setPerformanceCount] = useState<null | number>(null);
-    const [securityCount, setSecurityCount] = useState<null | number>(null);
-    const [subscriptions, setSubscriptions] = useState<SubscriptionsResult | null>(null);
-    const [activity, setActivity] = useState<AuditEntry[]>([]);
+    const shard = initialShardKey ?? "";
 
-    useEffect(() => {
-        const shard = initialShardKey ?? "";
+    // Each digest source is its own one-shot admin read, so a slow or failing card
+    // (a missing admin token, a cold instance) degrades on its own rather than
+    // blanking the page. The security audit is deployment-wide → root shard ("").
+    const metricsQuery = useAdminQuery<MetricsSnapshot>(ADMIN_FUNCTIONS.getMetrics, {}, { shardKey: shard });
+    const statsQuery = useAdminQuery<{ functions: FunctionCallStat[] }>(ADMIN_FUNCTIONS.getFunctionStats, {}, { shardKey: shard });
+    const auditQuery = useAdminQuery<SecurityAuditResult>(ADMIN_FUNCTIONS.getSecurityAudit, {}, { shardKey: "" });
+    const subscriptionsQuery = useAdminQuery<SubscriptionsResult>(ADMIN_FUNCTIONS.listSubscriptions, {}, { shardKey: shard });
+    const auditLogQuery = useAdminQuery<{ entries: AuditEntry[] }>(ADMIN_FUNCTIONS.getAuditLog, {}, { shardKey: shard });
 
-        const load = async (): Promise<void> => {
-            const [snapshot, stats, audit, subs, recent] = await Promise.allSettled([
-                client.query(GET_METRICS, {}, callOptions(shard)) as Promise<MetricsSnapshot>,
-                client.query(GET_FUNCTION_STATS, {}, callOptions(shard)) as Promise<{ functions: FunctionCallStat[] }>,
-                client.query(GET_SECURITY_AUDIT, {}, callOptions("")) as Promise<SecurityAuditResult>,
-                client.query(LIST_SUBSCRIPTIONS, {}, callOptions(shard)) as Promise<SubscriptionsResult>,
-                client.query(GET_AUDIT_LOG, {}, callOptions(shard)) as Promise<{ entries: AuditEntry[] }>,
-            ]);
+    const metrics = metricsQuery.data ?? null;
+    const functions = Array.isArray(statsQuery.data?.functions) ? statsQuery.data.functions : [];
+    const subscriptions = subscriptionsQuery.data ?? null;
+    const activity = Array.isArray(auditLogQuery.data?.entries) ? auditLogQuery.data.entries : [];
 
-            const snapshotValue = snapshot.status === "fulfilled" ? snapshot.value : null;
-            const statFns = stats.status === "fulfilled" && Array.isArray(stats.value.functions) ? stats.value.functions : [];
-
-            setMetrics(snapshotValue);
-            setFunctions(statFns);
-            setPerformanceCount(stats.status === "fulfilled" ? deriveInsights(snapshotValue, statFns).length : null);
-            setSecurityCount(audit.status === "fulfilled" && Array.isArray(audit.value.findings) ? audit.value.findings.length : null);
-            setSubscriptions(subs.status === "fulfilled" ? subs.value : null);
-            setActivity(recent.status === "fulfilled" && Array.isArray(recent.value.entries) ? recent.value.entries : []);
-        };
-
-        fireAndForget(load());
-    }, [client, initialShardKey]);
+    // `null` for an unresolved or failed read (renders a muted placeholder rather
+    // than a misleading zero); a number once the read resolves. `deriveInsights`
+    // draws on BOTH the metrics snapshot and the function stats, so wait for both —
+    // resolving on `statsQuery` alone could show `0` / "No issues found" while the
+    // metrics-derived insights are still loading.
+    const performanceCount = metricsQuery.data === undefined || statsQuery.data === undefined ? null : deriveInsights(metrics, functions).length;
+    const securityCount = Array.isArray(auditQuery.data?.findings) ? auditQuery.data.findings.length : null;
 
     const viewSecurity = (): void => {
         fireAndForget(navigate({ to: "/security" }));
@@ -404,8 +395,9 @@ export const HomePanel = ({ initialShardKey }: HomePanelProps): ReactElement => 
     const errorSeries = bucketSeries(metrics?.history, "errors");
     const avgLatency = averageLatencyMs(functions);
     const maxLatency = Math.max(0, ...functions.map((function_) => function_.maxDurationMs));
-    const cache = metrics?.cache;
-    const cacheHitRate = cache != null && cache.hits + cache.misses > 0 ? Math.round((cache.hits / (cache.hits + cache.misses)) * 100) : null;
+    // Undefined only while the snapshot is still loading; once it resolves the
+    // footer always says something.
+    const cacheFooter = metrics === null ? undefined : cacheFooterText(t, metrics.cache);
 
     return (
         <div className="flex flex-col gap-6" data-testid="lunora-home">
@@ -418,12 +410,11 @@ export const HomePanel = ({ initialShardKey }: HomePanelProps): ReactElement => 
                     label={t("Avg latency")}
                     value={avgLatency === null ? "—" : formatMs(avgLatency)}
                 />
-                <StatCard
-                    footer={cacheHitRate === null ? undefined : `${String(cacheHitRate)}% ${t("cache hit")}`}
-                    label={t("Database size")}
-                    value={formatBytes(metrics?.databaseSize ?? null)}
-                />
+                <StatCard footer={cacheFooter} label={t("Database size")} value={formatBytes(metrics?.databaseSize ?? null)} />
             </div>
+
+            {/* Cloudflare bindings the app wires (KV / R2 / Vectorize) — count + names. */}
+            <BindingsOverview />
 
             {/* Activity: busiest functions, live connections, recent changes. */}
             <div className="grid gap-3 lg:grid-cols-3">
@@ -476,9 +467,11 @@ export const HomePanel = ({ initialShardKey }: HomePanelProps): ReactElement => 
                     <ConnectCard command="npm i @lunora/react" label={t("React")} />
                     <ConnectCard command="lunora dev" label={t("CLI")} />
                 </div>
+                <ConnectAgentCard />
             </section>
         </div>
     );
 };
 
+export { cacheFooterText };
 export type { HomePanelProps };

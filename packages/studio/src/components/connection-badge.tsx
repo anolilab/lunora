@@ -14,6 +14,9 @@ const STATUS_DOT = {
     connecting: "bg-warning",
     idle: "bg-muted-foreground",
     offline: "bg-destructive",
+    // Caution, not good: data is still arriving, but over the HTTP polling
+    // fallback — slower than live, and shapes/streams/whispers are dark.
+    polling: "bg-warning",
 } as const;
 
 /**
@@ -26,7 +29,7 @@ const ConnectionBadge = (): ReactElement => {
     const t = useT();
     const status = useConnectionStatus();
 
-    // Only the active status is translated — no throwaway map of the other three.
+    // Only the active status is translated — no throwaway map of the other four.
     let text: string;
 
     switch (status) {
@@ -47,6 +50,11 @@ const ConnectionBadge = (): ReactElement => {
         }
         case "offline": {
             text = t("Offline");
+
+            break;
+        }
+        case "polling": {
+            text = t("Polling");
 
             break;
         }

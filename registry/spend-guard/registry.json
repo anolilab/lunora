@@ -1,0 +1,28 @@
+{
+    "$schema": "../schema/registry-item.schema.json",
+    "name": "spend-guard",
+    "title": "Spend guard",
+    "description": "Pauses the Worker when a Cloudflare usage alert fires. A verified billing usage alert posted to /_lunora/spend-alert sets a flag in an R2 bucket; while it is set, user traffic gets 503 and cron jobs are skipped. Nothing resumes the app automatically.",
+    "docs": "Wrap the Worker's default export: `export default withSpendGuard(createWorker({ ... }))` (or `withSpendGuard({ fetch, scheduled })` for a hand-written entry), importing it from lunora/spend-guard. Set SPEND_GUARD_SECRET with `wrangler secret put SPEND_GUARD_SECRET`, and create a webhook destination in Cloudflare whose secret is the same value. Point `lunora cloudflare alerts setup --webhook <destination-id>` at it. Resume by deleting the spend-paused object from the SPEND_GUARD bucket. See README.md for the steps and what the pause does not stop.",
+    "requires": [],
+    "deps": {},
+    "bindings": [
+        {
+            "path": ["r2_buckets"],
+            "value": [
+                {
+                    "binding": "SPEND_GUARD",
+                    "bucket_name": "lunora-spend-guard"
+                }
+            ]
+        }
+    ],
+    "envVars": [
+        {
+            "name": "SPEND_GUARD_SECRET",
+            "description": "Shared secret Cloudflare sends in the cf-webhook-auth header of every alert delivery. Generate one with `openssl rand -hex 32`. With no secret set, the receiver refuses every request.",
+            "secret": true
+        }
+    ],
+    "files": [{ "from": "spend-guard.ts", "to": "lunora/spend-guard/index.ts", "merge": "create-or-skip" }]
+}

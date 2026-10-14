@@ -1,3 +1,4 @@
+import { LunoraError } from "@lunora/errors";
 import type { Root } from "react-dom/client";
 import { createRoot } from "react-dom/client";
 
@@ -17,7 +18,7 @@ export interface MountStudioOptions extends StudioAppProps {
  * Mount the batteries-included {@link StudioApp} into the DOM and return the
  * React root (call `.unmount()` to tear it down). This is the entry the
  * standalone app's `main.tsx` and the `@lunora/vite` dev route both call — it
- * keeps the host HTML to a single `&lt;div id="root">` plus one script.
+ * keeps the host HTML to a single `<div id="root">` plus one script.
  */
 export const mountStudio = (options: MountStudioOptions = {}): Root => {
     const { container = "#root", ...appProps } = options;
@@ -25,21 +26,13 @@ export const mountStudio = (options: MountStudioOptions = {}): Root => {
     const element = typeof container === "string" ? document.querySelector(container) : container;
 
     if (element === null) {
-        throw new Error(`mountStudio: container ${typeof container === "string" ? container : "element"} not found`);
+        throw new LunoraError("INTERNAL", `mountStudio: container ${typeof container === "string" ? container : "element"} not found`);
     }
 
     const root = createRoot(element);
 
-    root.render(
-        <StudioApp
-            adminToken={appProps.adminToken}
-            basePath={appProps.basePath}
-            baseUrl={appProps.baseUrl}
-            locale={appProps.locale}
-            rulesInstalled={appProps.rulesInstalled}
-            studio={appProps.studio}
-        />,
-    );
+    // eslint-disable-next-line react/jsx-props-no-spreading -- forwarding a closed, typed prop set: the hand-written list this replaces dropped `client`, so `mountStudio({ client })` type-checked and mounted an unauthenticated studio. Spreading is what makes every present and future `StudioAppProps` key arrive by construction.
+    root.render(<StudioApp {...appProps} />);
 
     return root;
 };

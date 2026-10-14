@@ -1,0 +1,12 @@
+# https://docs.github.com/communities/using-templates-to-encourage-useful-issues-and-pull-requests/configuring-issue-templates-for-your-repository
+blank_issues_enabled: false
+contact_links:
+    - name: "💬 Questions & usage help"
+      url: "https://github.com/anolilab/lunora/discussions"
+      about: "Have a question or need help using Lunora? Ask in Discussions — please don't open an issue for questions."
+    - name: "📚 Documentation"
+      url: "https://lunora.sh"
+      about: "Guides, API reference, and examples. Most “how do I…” answers live here."
+    - name: "🔒 Report a security vulnerability"
+      url: "https://github.com/anolilab/lunora/security/advisories/new"
+      about: "Please report vulnerabilities privately via a security advisory, not a public issue."

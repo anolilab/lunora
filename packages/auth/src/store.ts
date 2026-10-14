@@ -162,6 +162,25 @@ export interface AuthStore {
     count: (model: string, where: ReadonlyArray<AuthWhereClause>) => Promise<number>;
     /** Insert `data` into `model`; return the stored row (the adapter pre-fills `id`). */
     create: (model: string, data: AuthRow) => Promise<AuthRow>;
+
+    /**
+     * Atomically apply signed numeric deltas to **at most one** row in `model`
+     * matching `where`, then return the updated row (or `undefined` if the guard
+     * matched none). For each `increment` entry it applies `field = field + delta`
+     * (a negative delta decrements); the optional `set` map assigns absolute
+     * values in the same step. The `where` clause is both selector **and** guard
+     * — comparison operators are honoured, so a guard like
+     * `{ field: "count", operator: "lt", value: max }` only mutates the row while
+     * it still satisfies the predicate.
+     *
+     * Backs better-auth's durable (`storage: "database"`) rate limiter, whose
+     * counter rides these tables. Implementing it natively — one statement that
+     * guards, increments, and returns — gives the **one-winner-across-isolates**
+     * guarantee the read-then-update fallback cannot: on Workers two concurrent
+     * requests would otherwise both read `count=4` and both write `5`, letting a
+     * `max` of 5 pass 6+. Same race-closing rationale as {@link AuthStore.consumeOne}.
+     */
+    incrementOne: (model: string, where: ReadonlyArray<AuthWhereClause>, increment: Record<string, number>, set?: AuthRow) => Promise<AuthRow | undefined>;
     /** Read rows from `model` honouring the filter/sort/window in `query`. */
     read: (model: string, query: AuthQuery) => Promise<AuthRow[]>;
     /** Delete rows in `model` matching `where`; return how many were removed. */
@@ -171,27 +190,34 @@ export interface AuthStore {
 }
 
 /**
- * Evaluate a better-auth where clause list against a row. Clauses fold
- * left-to-right by their `connector` (`AND` by default, `OR` when set) — the
- * same precedence better-auth's own adapters use. An empty list matches every
- * row. Exported so any in-memory-style {@link AuthStore} can reuse it.
+ * Evaluate a better-auth where clause list against a row.
+ *
+ * better-auth hands an adapter a FLAT list in which each clause carries its own
+ * `connector` (`AND` by default). Every persistent adapter it ships resolves that
+ * by PARTITIONING: `AND(and-clauses) AND OR(or-clauses)`. The OR clauses are
+ * alternatives among themselves, never an escape hatch from the AND clauses —
+ * `@better-auth/kysely-adapter` pushes each group into its own `.where()` (two
+ * `.where()` calls are ANDed), `@better-auth/drizzle-adapter` ends in
+ * `and(andClause, orClause)`, and `@better-auth/prisma-adapter` emits
+ * `{ AND: […], OR: […] }`, which Prisma also ANDs.
+ *
+ * This used to fold the list left-associatively instead, so `[A, B(OR), C(OR)]`
+ * meant `A OR B OR C` — strictly BROADER than any of them. On a credential lookup
+ * that is an authentication bypass in shape: a row failing the primary condition
+ * is still returned because a secondary one matched. `@better-auth/memory-adapter`
+ * does fold left, but it is the only one and it re-evaluates `where[0]` inside the
+ * same loop; the persistent adapters are the contract worth mirroring, and they
+ * are also what a plugin author will have tested against.
+ *
+ * An empty list matches every row, and a list with no OR clause is unaffected —
+ * which is every clause list better-auth 1.7.1 itself builds. Exported so any
+ * in-memory-style {@link AuthStore} can reuse it.
  */
 export const matchesWhere = (row: AuthRow, where: ReadonlyArray<AuthWhereClause>): boolean => {
-    let result = true;
+    const alternatives = where.filter((clause) => clause.connector === "OR");
+    const required = where.filter((clause) => clause.connector !== "OR");
 
-    for (const [index, clause] of where.entries()) {
-        const clauseResult = evaluateClause(row, clause);
-
-        if (index === 0) {
-            result = clauseResult;
-        } else if (clause.connector === "OR") {
-            result = result || clauseResult;
-        } else {
-            result = result && clauseResult;
-        }
-    }
-
-    return result;
+    return required.every((clause) => evaluateClause(row, clause)) && (alternatives.length === 0 || alternatives.some((clause) => evaluateClause(row, clause)));
 };
 
 /**
@@ -235,6 +261,28 @@ export const createMemoryAuthStore = (): AuthStore => {
             const row = { ...data };
 
             tableOf(model).push(row);
+
+            return Promise.resolve({ ...row });
+        },
+        incrementOne: (model, where, increment, set) => {
+            const row = tableOf(model).find((candidate) => matchesWhere(candidate, where));
+
+            if (!row) {
+                return Promise.resolve(undefined);
+            }
+
+            // Synchronous guarded read-modify-write: no `await` interleaves
+            // between the guard match and the mutation, so this is atomic even
+            // under concurrent callers — the in-memory analogue of the SQL
+            // `UPDATE … RETURNING`. `increment` and `set` target disjoint columns
+            // in better-auth's usage; deltas add onto the current value.
+            for (const [field, delta] of Object.entries(increment)) {
+                row[field] = (typeof row[field] === "number" ? row[field] : 0) + delta;
+            }
+
+            if (set) {
+                Object.assign(row, set);
+            }
 
             return Promise.resolve({ ...row });
         },

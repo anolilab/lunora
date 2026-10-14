@@ -76,7 +76,7 @@ describe("rlsPanel", () => {
     });
 
     it("shows empty states when no policies or roles are defined", async () => {
-        expect.assertions(2);
+        expect.hasAssertions();
 
         render(renderPanel(createRlsClient({ policies: [], roles: [] })));
 

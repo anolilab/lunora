@@ -1,0 +1,754 @@
+/**
+ * `ctx.parallel` / `ctx.spawn` — workflow fan-out with child-DO resource
+ * isolation. Each branch runs as its own child workflow instance (its own
+ * Durable Object: ~128 MB memory, 5 min CPU, independent retry budget) instead
+ * of sharing the parent instance's single budget the way `Promise.all` of
+ * `ctx.runStep(...)` would.
+ *
+ * Node-safe (no `cloudflare:workers` import): the native durable `step`, the
+ * workflow bindings, and the parent's identity are all injected, so the whole
+ * spawn/join orchestration is unit-testable with plain doubles. The workerd-only
+ * `src/do` base class supplies the real values and runs the child-side signal.
+ *
+ * ### How the join works
+ *
+ * The parent spawns every branch (idempotent `step.do` create, keyed by a
+ * deterministic child id so a parent replay re-attaches instead of double-
+ * spawning), then **hibernates** on a `step.waitForEvent` per branch. Each child
+ * is an ordinary declared workflow; the base class wraps it so that, when spawned
+ * as a branch, it `sendEvent`s its result (or error) back to the parent instance
+ * once its handler finishes. The parent awaits all those joins CONCURRENTLY — so a
+ * failure anywhere fails the group at once rather than after every earlier-declared
+ * branch has finished — and slots each result into its declaration-order position,
+ * returning a tuple of branch outputs. Children are arbitrary user workflows —
+ * nothing about their bodies
+ * changes; only the base class learns to call home.
+ */
+import { LunoraError } from "@lunora/errors";
+
+import { BRANCH_MARKER_KEY, BRANCH_MARKER_REJECTION, hasBranchMarker } from "../../../shared/branch-marker";
+import { fnv1a64Hex } from "../../../shared/fnv1a";
+import { resolveWorkflowHandle } from "../../../shared/workflow-binding";
+import { RESERVED_EVENT_TYPE_PREFIX } from "./define-event";
+import { isDuplicateInstanceError, NonRetryableError } from "./errors";
+import type {
+    BranchCompensationParams,
+    WorkflowBranch,
+    WorkflowInstanceLike,
+    WorkflowLogger,
+    WorkflowParallelFunction,
+    WorkflowSpawnFunction,
+    WorkflowStepLike,
+} from "./types";
+
+/** Hard cap on branches per `ctx.parallel` call — auto-scale, never silently spawn unbounded DOs. */
+const MAX_BRANCHES = 100;
+
+/** The engine's own instance-id ceiling: `create` rejects anything longer, before it looks at the characters. */
+const MAX_INSTANCE_ID_LENGTH = 100;
+
+/** Durable-step name prefix for a branch/spawn create. */
+const SPAWN_STEP_PREFIX = "lunora:spawn:";
+/** Durable-step name prefix for the parent's per-branch join wait. */
+const AWAIT_STEP_PREFIX = "lunora:await:";
+/** Durable-step name prefix for the child's completion signal back to the parent. */
+const SIGNAL_STEP_PREFIX = "lunora:signal:";
+/** Durable-step name prefix for a completed branch's group-saga compensation spawn. */
+const COMPENSATE_STEP_PREFIX = "lunora:compensate:";
+
+/** `-<16 hex>` — the width the fold below spends on its disambiguating digest. */
+const DIGEST_WIDTH = 17;
+
+/**
+ * The instance id this package hands to `create`: `id` with `suffix` appended,
+ * folded back under the engine's ceiling when the two together overflow it.
+ *
+ * **Every id minted here routes through this**, because the engine's create-time
+ * check is `id.length > 100` FIRST and only then the character pattern. Both halves
+ * of the id are caller-controlled right up to that ceiling — an explicit
+ * `branch(…, { id })` / `ctx.spawn(…, { id })` is taken verbatim by the run
+ * context's allocator, and its derived `<parentId>-<parentWorkflow>-c<n>` form appends
+ * to a parent id the host issued at whatever length it likes. So even the shortest
+ * derived suffix, `-x-c0`, puts a 96-character parent over, and `+ "-compensate"`
+ * pushes a rollback over sooner still. Every one of those is a hard `create` rejection, and neither surfaces
+ * as one. For a CHILD, the spawn `Promise.all` sits outside {@link createParallel}'s
+ * try, so the rejection is not a `BranchJoinFailure` and the group-saga rollback is
+ * skipped entirely. For a ROLLBACK, {@link compensateCompleted} logs it and moves
+ * on, and the completed branch is never rolled back — on a saga that took payment,
+ * that unrun rollback is the refund.
+ *
+ * The fold keeps a digest of the WHOLE input (siblings of one over-long parent stay
+ * distinct rather than truncating to the same head) and keeps `suffix` intact so it
+ * stays readable in a dashboard. Deterministic, so a parent replay re-attaches to
+ * the same instance instead of spawning a second one.
+ *
+ * The CHARACTER class is deliberately NOT enforced. Only a suffix of ours is ours to
+ * constrain — hence `-compensate` and not the `<childId>:compensate` that shipped
+ * once and made the whole group-saga feature inert, since `:` is outside
+ * `^[a-zA-Z0-9_][a-zA-Z0-9-_]*$`. The ids themselves belong to the host:
+ * `@lunora/platform-node` runs this same orchestrator on `@visulima/workflow`, whose
+ * `generateRunId` mints `<definitionId>:<uuid>` and accepts no override, so
+ * validating against Cloudflare's grammar here would refuse ids the running host had
+ * just issued. `__tests__/fan-out.test.ts` applies the engine's own check to every id
+ * this package mints.
+ *
+ * Step names are a different, far laxer validator (`isValidStepName`: only control
+ * characters and >256 characters are rejected), so the `lunora:*` step prefixes
+ * above are fine as they are.
+ */
+const boundInstanceId = (id: string, suffix = ""): string => {
+    if (id.length + suffix.length <= MAX_INSTANCE_ID_LENGTH) {
+        return `${id}${suffix}`;
+    }
+
+    return `${id.slice(0, MAX_INSTANCE_ID_LENGTH - suffix.length - DIGEST_WIDTH)}-${fnv1a64Hex(id)}${suffix}`;
+};
+
+/**
+ * Event-type prefix the parent waits on and the child sends. Derived from the
+ * reserved namespace rather than re-spelled, so the guard that rejects user events
+ * in that namespace can never stop covering it.
+ */
+const BRANCH_EVENT_PREFIX = `${RESERVED_EVENT_TYPE_PREFIX}branch:`;
+
+/** The completion event a branch child sends to its parent. Discriminated so an `undefined` value is distinguishable from a failure. */
+type BranchOutcome = { error: { message: string; name: string }; status: "error" } | { status: "ok"; value?: unknown };
+
+/**
+ * The shape `workflowClassName` gives every workflow export key — an identifier
+ * codegen accepts (`[A-Za-z_$][\w$]*`, first letter upper-cased) followed by
+ * `Workflow`: `OrderPipelineWorkflow`, `_ordersWorkflow`, `$ordersWorkflow`.
+ */
+const WORKFLOW_EXPORT_KEY = /^[A-Z_$][\w$]*Workflow$/u;
+
+/** The marker the parent injects into a child's params and the child reads back to address its parent. */
+interface BranchMarker {
+    /** The event type the parent waits on for this branch. */
+    eventType: string;
+    /** Declaration-order index of the branch (for log correlation). */
+    index: number;
+    /** The parent workflow's own export key (its generated class name) — how the child reaches back. */
+    parentClassName: string;
+    /** The parent workflow instance id. */
+    parentId: string;
+}
+
+/** Resolve a declared child workflow's binding by export name; throws a helpful error when absent. */
+type WorkflowBindingResolver = (workflow: string) => {
+    create: (options?: { id?: string; params?: Record<string, unknown> }) => Promise<WorkflowInstanceLike>;
+    get: (id: string) => Promise<WorkflowInstanceLike>;
+};
+
+/** Dependencies the fan-out factories close over — all injected so the orchestration is Node-testable. */
+interface FanOutDeps {
+    /** The Worker environment bindings (a non-Cloudflare host's workflows live here). */
+    env: Record<string, unknown>;
+    /** The invoking context's `ctx.exports` — where Cloudflare exposes the declared workflows. */
+    exports?: unknown;
+    /** The running workflow's instance id — the parent id stamped into each child. */
+    instanceId: string;
+    /** Optional structured logger — used to surface best-effort failures (e.g. a stranded group-saga compensation) without aborting the flow. */
+    log?: WorkflowLogger;
+    /** Allocate the next deterministic child instance id (replay-stable; honors an explicit id). Free to return any length — every result is folded through {@link boundInstanceId} before it reaches `create`. */
+    nextChildId: (explicit?: string) => string;
+    /** The running workflow's own export key — passed to children so they can signal back. */
+    parentClassName: string;
+    /** Resolve a child workflow's binding by export name. */
+    resolveBinding: WorkflowBindingResolver;
+    /** The native Cloudflare durable-step API. */
+    step: WorkflowStepLike;
+}
+
+/**
+ * Build a single fan-out branch: a declared child workflow referenced by its
+ * `lunora/workflows.ts` export name, plus the params it is created with. Pass the
+ * output type as the generic argument so `ctx.parallel(...)` infers the result
+ * tuple — e.g. `branch("imageTag", { key })` typed as `branch` of `{ tags }`.
+ */
+const branch = <Output = unknown>(
+    workflow: string,
+    params?: Record<string, unknown>,
+    options?: { compensateWith?: string; id?: string; timeout?: number | string },
+): WorkflowBranch<Output> => {
+    return { compensateWith: options?.compensateWith, id: options?.id, params, timeout: options?.timeout, workflow };
+};
+
+/** Reduce an unknown thrown value to the serialisable `{ message, name }` a branch event carries. */
+const serializeError = (error: unknown): { message: string; name: string } => {
+    if (error instanceof Error) {
+        return { message: error.message, name: error.name };
+    }
+
+    return { message: String(error), name: "Error" };
+};
+
+/** Build the success outcome a completed branch reports to its parent. */
+const okOutcome = (value: unknown): BranchOutcome => {
+    return { status: "ok", value };
+};
+
+/** Build the failure outcome a thrown branch reports to its parent. */
+const errorOutcome = (error: unknown): BranchOutcome => {
+    return { error: serializeError(error), status: "error" };
+};
+
+/**
+ * Cloudflare's hard ceiling on a workflow event payload. An outcome over it can
+ * never reach the parent — `sendEvent` rejects on every retry.
+ * https://developers.cloudflare.com/workflows/reference/limits/
+ */
+const MAX_EVENT_PAYLOAD_BYTES = 1_048_576;
+
+/**
+ * A bounded, never-throwing description of whatever `JSON.stringify` threw.
+ *
+ * The obvious `error instanceof Error ? error.message : String(error)` is not
+ * total on this path: `message` is a plain writable property, so an `Error` can
+ * carry a non-string one (`.slice` is then not a function), and a thrown
+ * non-`Error` can have a `toString` that throws or no prototype at all
+ * (`String()` then throws "Cannot convert object to primitive value"). Both come
+ * from a `toJSON` the branch handler wrote, so both are reachable — and a throw
+ * here escapes the very guard that exists to keep the parent off its 24-hour
+ * join timeout, leaving it hibernating on a branch that finished.
+ *
+ * Sliced because V8's cyclic-structure message names a path through the
+ * offending object and is itself unbounded, which would reintroduce the
+ * oversized-payload failure the guard below prevents.
+ */
+const describeSerializationFailure = (error: unknown): string => {
+    try {
+        return String(error instanceof Error ? error.message : error).slice(0, 200);
+    } catch {
+        return "the failure itself could not be described";
+    }
+};
+
+/**
+ * Swap an outcome the event channel cannot carry for a bounded failure that it
+ * can.
+ *
+ * Cloudflare caps an event payload at {@link MAX_EVENT_PAYLOAD_BYTES}. A branch
+ * whose output is over it had `sendEvent` reject on every retry of the signal
+ * step; the failure was swallowed as best-effort, the child completed, and the
+ * parent then hibernated on its join until the branch `timeout` (Cloudflare's
+ * default is 24 hours) before compensating a branch that had actually
+ * succeeded. Reporting the size failure instead fails the group in seconds with
+ * a message that names the branch and the byte count.
+ *
+ * Measured on the serialised form, because that is what the host puts on the
+ * wire, and applied to the error path too — an oversized error message is just
+ * as undeliverable as an oversized value.
+ *
+ * The same bound covers the ATTACH path, where the outcome is not sent as an
+ * event but returned as the spawn step's value: the host's per-step state cap is
+ * the same 1 MiB, and a step return it cannot serialise aborts the instance
+ * outright rather than failing one branch.
+ *
+ * An outcome that cannot be serialised AT ALL (a cyclic object, a `BigInt`, a
+ * throwing `toJSON`) is the same failure one step earlier: the measurement
+ * itself throws, `signalBranchParentSafe` swallows it as best-effort, and the
+ * parent again hibernates to its join timeout on a branch that finished. So it
+ * gets the same treatment — a bounded error outcome the event channel can carry.
+ */
+
+const boundOutcome = (outcome: BranchOutcome): BranchOutcome => {
+    let bytes: number;
+
+    try {
+        bytes = new TextEncoder().encode(JSON.stringify(outcome)).length;
+    } catch (encodeError: unknown) {
+        return {
+            error: {
+                message:
+                    `branch outcome cannot be serialised to JSON (${describeSerializationFailure(encodeError)}) — ` +
+                    "the parent can never receive it. Return a plain JSON value (no cycles, no BigInt, no class instance that fails to serialise) " +
+                    "or a reference the parent can dereference (an R2 key, a row id)",
+                name: "BranchOutputUnserializable",
+            },
+            status: "error",
+        };
+    }
+
+    if (bytes <= MAX_EVENT_PAYLOAD_BYTES) {
+        return outcome;
+    }
+
+    return {
+        error: {
+            message:
+                `branch outcome serialises to ${String(bytes)} bytes, over Cloudflare's ${String(MAX_EVENT_PAYLOAD_BYTES)}-byte event payload limit — ` +
+                "the parent can never receive it. Return a reference the parent can dereference (an R2 key, a row id) instead of the payload itself",
+            name: "BranchOutputTooLarge",
+        },
+        status: "error",
+    };
+};
+
+/**
+ * Start a child instance, or attach to the one a previous attempt already
+ * started.
+ *
+ * `step.do` memoizes a step's RESULT, not its side effects: a spawn body that
+ * fails *after* `create` landed (an RPC/transport error, a DO eviction
+ * mid-step) is re-run, and Cloudflare rejects the second create with "instance
+ * already exists". Without this the step burned its retries and `ctx.spawn` /
+ * `ctx.parallel` failed while the child it had just started kept running —
+ * contradicting the replay-re-attachment the docs promise. A duplicate-id
+ * rejection is exactly the signal that the create applied, so take the existing
+ * instance over; every other rejection surfaces so the step retries or fails
+ * visibly.
+ */
+const createOrAttach = async (
+    binding: ReturnType<WorkflowBindingResolver>,
+    options: { id: string; params?: Record<string, unknown> },
+): Promise<{ attached: boolean; instance: WorkflowInstanceLike }> => {
+    try {
+        return { attached: false, instance: await binding.create(options) };
+    } catch (error: unknown) {
+        if (!isDuplicateInstanceError(error)) {
+            throw error;
+        }
+
+        return { attached: true, instance: await binding.get(options.id) };
+    }
+};
+
+/**
+ * The branch outcome an already-attached child has ALREADY produced, or
+ * `undefined` while it is still running.
+ *
+ * Read only on the attach path, so it costs one `status()` call exactly when a
+ * spawn found the child already there and never on a first spawn. It is what
+ * makes `instance.restart()` on a fanned-out parent recoverable: a restart wipes
+ * the parent's step cache *and* its event map, so the re-run spawn steps
+ * re-attach to children that have already sent — and had consumed — their
+ * completion events. Waiting on those events hibernates the parent until the
+ * per-branch timeout (24 hours by default) and then fails the group, with the
+ * finished children's results sitting unread on their handles the whole time.
+ * The same read also recovers a join whose signal was lost for any other reason.
+ */
+const attachedOutcome = async (instance: WorkflowInstanceLike): Promise<BranchOutcome | undefined> => {
+    const { error, output, status } = await instance.status();
+
+    if (status === "complete") {
+        return okOutcome(output);
+    }
+
+    if (status === "errored" || status === "terminated") {
+        return { error: error ?? { message: `branch instance ${status}`, name: "Error" }, status: "error" };
+    }
+
+    return undefined;
+};
+
+/**
+ * Read a spawn step's memoized value back as a branch outcome.
+ *
+ * The value is whatever the spawn step returned on its first (durable) run.
+ * A parent that was already in flight when this shape changed replays a plain
+ * child-id string, which is not an outcome — it joins on the event as before.
+ */
+const spawnedOutcome = (value: unknown): BranchOutcome | undefined => {
+    if (typeof value !== "object" || value === null) {
+        return undefined;
+    }
+
+    const { status } = value as { status?: unknown };
+
+    return status === "error" || status === "ok" ? (value as BranchOutcome) : undefined;
+};
+
+/** A branch after id/event-type allocation — the parent's per-branch join bookkeeping. */
+interface PlannedBranch {
+    childId: string;
+    eventType: string;
+    index: number;
+    item: WorkflowBranch;
+}
+
+/**
+ * Internal carrier for the first branch (in wall-clock order) to fail its join.
+ *
+ * Concurrent joins reject rather than return, so the branch that lost has to travel
+ * out through `Promise.all` with enough context to build the group's terminal message
+ * and pick the error the compensations receive. Never escapes `createParallel`.
+ */
+class BranchJoinFailure extends Error {
+    public readonly branchError: { message: string; name: string };
+
+    public readonly kind: "failed" | "join failed";
+
+    public readonly plan: PlannedBranch;
+
+    public constructor(plan: PlannedBranch, branchError: { message: string; name: string }, kind: "failed" | "join failed") {
+        super(branchError.message);
+        this.branchError = branchError;
+        this.kind = kind;
+        this.plan = plan;
+    }
+}
+
+/**
+ * Group-saga rollback (plan 075 Phase 3): on a branch failure, spawn each
+ * already-completed sibling's declared `compensateWith` workflow in reverse
+ * declaration order. Each spawn is a durable, replay-safe idempotent create
+ * (keyed by the completed child's id via `step.do` memoization), so a parent
+ * replay re-attaches instead of double-compensating. Completed branches with no
+ * `compensateWith` are skipped; the failing branch itself is never compensated
+ * (its own per-step rollbacks already ran inside its instance).
+ */
+const compensateCompleted = async (
+    deps: FanOutDeps,
+    completed: ReadonlyArray<{ output: unknown; plan: PlannedBranch }>,
+    error: { message: string; name: string },
+): Promise<void> => {
+    for (let cursor = completed.length - 1; cursor >= 0; cursor -= 1) {
+        const done = completed[cursor];
+        const compensateWith = done?.plan.item.compensateWith;
+
+        if (done === undefined || compensateWith === undefined) {
+            continue;
+        }
+
+        try {
+            // Resolve the compensation binding OUTSIDE the durable step: a missing or
+            // typo'd `compensateWith` export throws deterministically here (no wasted
+            // step retries on an error that can never succeed) and is caught below.
+            const compensation = deps.resolveBinding(compensateWith);
+
+            // eslint-disable-next-line no-await-in-loop -- reverse-order group-saga compensation, one durable spawn per completed branch
+            await deps.step.do(`${COMPENSATE_STEP_PREFIX}${done.plan.childId}`, async (): Promise<string> => {
+                const compensateId = boundInstanceId(done.plan.childId, "-compensate");
+                const compensationParams: BranchCompensationParams = {
+                    branch: done.plan.item.workflow,
+                    error,
+                    index: done.plan.index,
+                    output: done.output,
+                };
+
+                await createOrAttach(compensation, { id: compensateId, params: compensationParams });
+
+                return compensateId;
+            });
+        } catch (compensationError: unknown) {
+            // A single failed compensation (unresolvable binding, create rejection)
+            // must not strand the earlier-declared siblings' rollbacks nor mask the
+            // original group failure — log it and continue the reverse loop.
+            deps.log?.error(
+                `ctx.parallel: group-saga compensation "${compensateWith}" for branch "${done.plan.item.workflow}" (#${String(done.plan.index)}) failed`,
+                compensationError,
+            );
+        }
+    }
+};
+
+/**
+ * Build `ctx.parallel` for one workflow invocation. Spawns each branch as an
+ * isolated child instance, hibernates on all the per-branch `waitForEvent` joins at
+ * once, and returns the branch outputs in declaration order. Throws (non-retryable —
+ * retrying the join cannot re-run an already-failed child) on the first branch to
+ * report an error in WALL-CLOCK order, not the first in declaration order:
+ * `ctx.parallel` is documented fail-fast, and a declaration-order loop made a group
+ * whose first branch runs for an hour wait that hour to notice its second branch had
+ * failed in a second. Still-running siblings are left to finish (Cloudflare cannot
+ * cleanly cancel a running instance).
+ *
+ * **Group saga (plan 075 Phase 3):** when a branch fails, every *already-completed*
+ * sibling that declared a `compensateWith` workflow is rolled back — its
+ * compensation workflow is spawned (durable, replay-safe, in reverse declaration
+ * order) with {@link BranchCompensationParams} — before the group failure is
+ * thrown. "Already-completed" means completed at the instant of failure, in any
+ * order: a sibling that finished ahead of an earlier-declared one used to be
+ * invisible to the loop and its rollback was silently skipped. A group where no
+ * branch sets `compensateWith` behaves exactly as a plain fail-fast fan-out, so the
+ * feature is zero-overhead until opted into.
+ */
+const createParallel = (deps: FanOutDeps): WorkflowParallelFunction => {
+    const run = async (branches: ReadonlyArray<WorkflowBranch>): Promise<unknown[]> => {
+        if (branches.length === 0) {
+            return [];
+        }
+
+        if (branches.length > MAX_BRANCHES) {
+            throw new NonRetryableError(
+                `ctx.parallel: ${String(branches.length)} branches exceeds the cap of ${String(MAX_BRANCHES)} — split the fan-out or raise the work into fewer child workflows`,
+            );
+        }
+
+        // Assign deterministic ids + event types synchronously, in declaration
+        // order, BEFORE any await — so a parent replay reproduces the exact same
+        // ids and re-attaches to the existing children rather than spawning new ones.
+        const planned: PlannedBranch[] = branches.map((item, index) => {
+            const childId = boundInstanceId(deps.nextChildId(item.id));
+
+            return { childId, eventType: `${BRANCH_EVENT_PREFIX}${childId}`, index, item };
+        });
+
+        // Reject duplicate child ids up front. Two branches resolving to the same id
+        // (a repeated explicit `id`, or an explicit id colliding with a derived one)
+        // share a spawn/await/event step name, so `step.do` memoization would silently
+        // drop the second spawn and both joins would wait on the same event — wrong
+        // output or a hang. Fail loud and non-retryable instead.
+        const seenIds = new Set<string>();
+
+        for (const plan of planned) {
+            if (seenIds.has(plan.childId)) {
+                throw new NonRetryableError(
+                    `ctx.parallel: duplicate branch id "${plan.childId}" — each branch in a group must resolve to a unique child instance id (check explicit \`id\` options)`,
+                );
+            }
+
+            seenIds.add(plan.childId);
+        }
+
+        // 1. Spawn all branches concurrently. `step.do` memoizes by name, so the
+        //    create runs exactly once across replays/restarts. A step that had to
+        //    ATTACH reports the child's outcome when it has already finished, so
+        //    the join below can skip an event that will never be delivered twice.
+        const spawned = await Promise.all(
+            planned.map((plan) =>
+                deps.step.do(`${SPAWN_STEP_PREFIX}${plan.childId}`, async (): Promise<BranchOutcome | undefined> => {
+                    const binding = deps.resolveBinding(plan.item.workflow);
+                    const marker: BranchMarker = {
+                        eventType: plan.eventType,
+                        index: plan.index,
+                        parentClassName: deps.parentClassName,
+                        parentId: deps.instanceId,
+                    };
+
+                    const { attached, instance } = await createOrAttach(binding, {
+                        id: plan.childId,
+                        params: { ...plan.item.params, [BRANCH_MARKER_KEY]: marker },
+                    });
+
+                    if (!attached) {
+                        return undefined;
+                    }
+
+                    // Bounded for the same reason the event path is: this value is
+                    // the SPAWN STEP's return, which the host persists (miniflare's
+                    // engine answers a step output over 1 MiB with `Step … output
+                    // is too large`, and it aborts the whole instance for one it
+                    // cannot serialise). Left raw, a large-output child taken over
+                    // by the attach path burned the step's retries instead of
+                    // failing its branch with the byte count.
+                    const outcome = await attachedOutcome(instance);
+
+                    return outcome === undefined ? undefined : boundOutcome(outcome);
+                }),
+            ),
+        );
+
+        // 2. Join: hibernate until each branch signals back. CONCURRENT, not a
+        //    declaration-order loop — a loop observes branch #1's failure only after
+        //    branch #0's join returns, so a group whose first branch runs for an hour
+        //    is not fail-fast, and a sibling that finished out of declaration order
+        //    was absent from `completed` and never compensated. Both are documented
+        //    guarantees. `Promise.all` rejects on the first branch to fail in
+        //    WALL-CLOCK order and handles the later rejections itself, and each join
+        //    records its own completion as it lands, so `completed` is the true
+        //    already-finished set at the instant of failure.
+        const results: unknown[] = Array.from({ length: planned.length });
+        const completed: ({ output: unknown; plan: PlannedBranch } | undefined)[] = Array.from({ length: planned.length });
+
+        const join = async (plan: PlannedBranch, finished: BranchOutcome | undefined): Promise<void> => {
+            let outcome: BranchOutcome;
+
+            if (finished === undefined) {
+                try {
+                    const event = await deps.step.waitForEvent<BranchOutcome>(`${AWAIT_STEP_PREFIX}${plan.childId}`, {
+                        timeout: plan.item.timeout,
+                        type: plan.eventType,
+                    });
+
+                    outcome = event.payload;
+                } catch (joinError: unknown) {
+                    // The join itself failed — the per-branch `timeout` elapsed because
+                    // the child was terminated (or its parent binding was absent, so its
+                    // signal no-op'd) before it could report back. Treated exactly as a
+                    // reported branch error, so a timed-out join compensates its siblings
+                    // rather than stranding them.
+                    throw new BranchJoinFailure(plan, serializeError(joinError), "join failed");
+                }
+            } else {
+                // The spawn step attached to a child that had already finished — its
+                // terminal status IS the outcome, and no event is coming.
+                outcome = finished;
+            }
+
+            if (outcome.status === "error") {
+                throw new BranchJoinFailure(plan, outcome.error, "failed");
+            }
+
+            completed[plan.index] = { output: outcome.value, plan };
+            results[plan.index] = outcome.value;
+        };
+
+        try {
+            await Promise.all(planned.map((plan, index) => join(plan, spawnedOutcome(spawned[index]))));
+        } catch (error: unknown) {
+            if (!(error instanceof BranchJoinFailure)) {
+                throw error;
+            }
+
+            // Group saga: roll back every sibling that HAD completed when the group
+            // failed, in reverse declaration order. `completed` is sparse — a branch
+            // still running has no entry — so compact it before handing it over.
+            await compensateCompleted(
+                deps,
+                completed.filter((done) => done !== undefined),
+                error.branchError,
+            );
+
+            throw new NonRetryableError(
+                `ctx.parallel: branch "${error.plan.item.workflow}" (#${String(error.plan.index)}) ${error.kind}: ${error.branchError.message}`,
+            );
+        }
+
+        return results;
+    };
+
+    return run as unknown as WorkflowParallelFunction;
+};
+
+/**
+ * Build `ctx.spawn` for one workflow invocation — fire-and-forget start of a
+ * declared child workflow, with replay-safe idempotent create. Returns a live
+ * handle to the child instance (no join; use `ctx.parallel` to await results).
+ */
+const createSpawn =
+    (deps: FanOutDeps): WorkflowSpawnFunction =>
+    async (workflow: string, params?: Record<string, unknown>, options?: { id?: string }): Promise<WorkflowInstanceLike> => {
+        // Reject a caller-supplied reserved branch marker at the trust boundary —
+        // only `createParallel`'s internal injection may set `__lunoraBranch`.
+        if (hasBranchMarker(params)) {
+            throw new LunoraError("BAD_REQUEST", `@lunora/workflow: params ${BRANCH_MARKER_REJECTION}`);
+        }
+
+        const childId = boundInstanceId(deps.nextChildId(options?.id));
+
+        await deps.step.do(`${SPAWN_STEP_PREFIX}${childId}`, async (): Promise<string> => {
+            const binding = deps.resolveBinding(workflow);
+
+            await createOrAttach(binding, { id: childId, params });
+
+            return childId;
+        });
+
+        return deps.resolveBinding(workflow).get(childId);
+    };
+
+/**
+ * Read the parent-callback marker the spawning parent injected into a child's
+ * params, or `undefined` when this instance was not spawned as a branch (a
+ * top-level instance, or a `ctx.spawn` fire-and-forget child). The base class
+ * uses it to decide whether to signal completion back.
+ */
+const extractBranchMarker = (payload: unknown): BranchMarker | undefined => {
+    if (typeof payload !== "object" || payload === null) {
+        return undefined;
+    }
+
+    const marker = (payload as Record<string, unknown>)[BRANCH_MARKER_KEY];
+
+    if (typeof marker !== "object" || marker === null) {
+        return undefined;
+    }
+
+    const candidate = marker as Record<string, unknown>;
+
+    if (
+        typeof candidate.eventType !== "string" ||
+        typeof candidate.parentClassName !== "string" ||
+        typeof candidate.parentId !== "string" ||
+        typeof candidate.index !== "number"
+    ) {
+        return undefined;
+    }
+
+    // Defense-in-depth: even if a marker slips past the create-surface guard,
+    // constrain the parent dereference to a workflow export key and the send to
+    // the branch event namespace. Legitimate markers always satisfy both
+    // (createParallel stamps `workflowClassName` keys and `lunora:branch:*` types).
+    if (!WORKFLOW_EXPORT_KEY.test(candidate.parentClassName) || !candidate.eventType.startsWith(BRANCH_EVENT_PREFIX)) {
+        return undefined;
+    }
+
+    return { eventType: candidate.eventType, index: candidate.index, parentClassName: candidate.parentClassName, parentId: candidate.parentId };
+};
+
+/** Return the child's params with the internal branch marker removed — the shape the user handler's `ctx.params` should see. */
+const stripBranchMarker = (payload: unknown): unknown => {
+    if (typeof payload !== "object" || payload === null) {
+        return payload;
+    }
+
+    const rest = { ...(payload as Record<string, unknown>) };
+
+    Reflect.deleteProperty(rest, BRANCH_MARKER_KEY);
+
+    return rest;
+};
+
+/**
+ * Signal a branch's terminal outcome back to its parent (a durable `step.do`, so
+ * the send is retried until it lands). Best-effort: if the parent binding is
+ * unavailable the call is a no-op and the parent's `waitForEvent` falls back to
+ * its timeout. Pass the result on success or the serialised error on failure.
+ */
+const signalBranchParent = async (
+    deps: { env: Record<string, unknown>; exports?: unknown; step: WorkflowStepLike },
+    marker: BranchMarker,
+    outcome: BranchOutcome,
+): Promise<void> => {
+    const binding = resolveWorkflowHandle<{ get: (id: string) => Promise<WorkflowInstanceLike> }>(deps.env, deps.exports, marker.parentClassName, ["get"]);
+
+    if (binding === undefined) {
+        return;
+    }
+
+    const getParent = binding.get.bind(binding);
+    const deliverable = boundOutcome(outcome);
+
+    await deps.step.do(`${SIGNAL_STEP_PREFIX}${String(marker.index)}`, async (): Promise<string> => {
+        const parent = await getParent(marker.parentId);
+
+        await parent.sendEvent({ payload: deliverable, type: marker.eventType });
+
+        return marker.eventType;
+    });
+};
+
+/**
+ * A never-throwing wrapper over {@link signalBranchParent}. A failed parent signal —
+ * the parent instance was terminated, or `sendEvent` rejects after its durable
+ * step retries — must not become the child's own recorded failure (success path)
+ * nor mask the handler's real error (error path). The parent simply falls back to
+ * its `waitForEvent` timeout when the signal is lost. The failure is logged when a
+ * logger is provided.
+ */
+const signalBranchParentSafe = async (
+    deps: { env: Record<string, unknown>; exports?: unknown; log?: WorkflowLogger; step: WorkflowStepLike },
+    marker: BranchMarker,
+    outcome: BranchOutcome,
+): Promise<void> => {
+    try {
+        await signalBranchParent(deps, marker, outcome);
+    } catch (signalError: unknown) {
+        deps.log?.error(`@lunora/workflow: failed to signal branch parent "${marker.parentId}" (event "${marker.eventType}")`, signalError);
+    }
+};
+
+export type { BranchOutcome, FanOutDeps, WorkflowBindingResolver };
+export {
+    branch,
+    createParallel,
+    createSpawn,
+    errorOutcome,
+    extractBranchMarker,
+    MAX_BRANCHES,
+    okOutcome,
+    signalBranchParent,
+    signalBranchParentSafe,
+    stripBranchMarker,
+};

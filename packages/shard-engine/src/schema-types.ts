@@ -1,0 +1,939 @@
+import type { IndexKeyEntry } from "./read-write-set";
+import type { RelationWriteMap } from "./relation-writes";
+import type { SystemDatabaseReader } from "./system-reader";
+import type { SubscriptionIdentity } from "./types";
+import type { WhereInput } from "./where-types";
+
+/**
+ * Structural schema/writer types shared by the DO, D1, and SQL-store dialects.
+ *
+ * These are the host-neutral contracts that engine files (query compilation,
+ * relation resolution, rank/aggregate planning, etc.) need without taking a
+ * dependency on a concrete backend or on `@lunora/server`.
+ */
+
+/** Reducer applied by an aggregate index. */
+export type AggregateOp = "avg" | "count" | "max" | "min" | "sum";
+
+/** Structural mirror of `@lunora/server`'s `AggregateIndexDefinition`. */
+export interface AggregateIndexDefinitionLike {
+    readonly by?: ReadonlyArray<string>;
+    readonly field?: string;
+    readonly name: string;
+    readonly on: string;
+    readonly op: AggregateOp;
+    readonly where?: Record<string, unknown>;
+}
+
+/** Structural mirror of `@lunora/server`'s `GeoIndexDefinition`. */
+export interface GeoIndexDefinitionLike {
+    readonly field: string;
+    readonly name: string;
+    readonly precision?: number;
+}
+
+/** Structural mirror of `@lunora/server`'s `IndexDefinition`. */
+export interface IndexDefinitionLike {
+    readonly fields: ReadonlyArray<string>;
+    readonly name: string;
+    readonly unique?: boolean;
+}
+
+/** Structural mirror of `@lunora/server`'s `RankIndexDefinition`. */
+export interface RankIndexDefinitionLike {
+    readonly name: string;
+    readonly on: string;
+    readonly partitionBy?: ReadonlyArray<string>;
+    readonly sortBy: ReadonlyArray<RankSortKeyLike>;
+    readonly where?: Record<string, unknown>;
+}
+
+export interface SearchIndexDefinitionLike {
+    /** Indexed text column; a dot-separated path reads a nested field. */
+    readonly field: string;
+    readonly filterFields?: ReadonlyArray<string>;
+    /** Analysis profile (folding + stopwords) — see `@lunora/server`'s `SearchIndexDefinition`. */
+    readonly language?: string;
+    readonly name: string;
+    /** Skip the migration-time backfill of the search companion — see `@lunora/server`'s `SearchIndexDefinition`. */
+    readonly staged?: boolean;
+    /** `"native"` opts into the engine's own full-text index where it has one; see `@lunora/server`'s `SearchIndexDefinition`. */
+    readonly strategy?: string;
+}
+
+/** Auth slice handed to a `.serverDefault(fn)` factory at write time. */
+export interface ServerDefaultContextLike {
+    readonly auth: {
+        readonly identity: Record<string, unknown> | null;
+        readonly userId: null | string;
+    };
+}
+
+/** Column constraints/defaults the write layer honors. */
+export interface ColumnMetaLike {
+    readonly defaultFn?: () => unknown;
+    readonly defaultValue?: unknown;
+    readonly notNull?: boolean;
+    readonly onUpdateFn?: () => unknown;
+    readonly serverDefault?: (context: ServerDefaultContextLike) => unknown;
+    readonly unique?: boolean;
+}
+
+/** Structural mirror of a validator from `@lunora/values`. */
+export interface ValidatorLike {
+    /**
+     * The validator's internal metadata bag. `column` carries the modifier
+     * chain; `inner` is the child of a `v.optional(...)` / `v.array(...)`
+     * wrapper; `tableName` is a `v.id("target")`'s target table — the fact the
+     * relation-graph edge set is derived from.
+     *
+     * `members` (a `v.union(...)`'s alternatives) and `value` (a
+     * `v.literal(...)`'s one permitted value) are here because storage reads
+     * them: a literal's column type and codec pair are the ones its VALUE's type
+     * needs, and whether a NULL in a column means `null` or means "field unset"
+     * turns on whether any union member accepts `null`. Both were read off an
+     * untyped bag before, which is how each stayed wrong without a compiler
+     * anywhere in a position to say so.
+     */
+    readonly _meta?: {
+        readonly column?: ColumnMetaLike;
+        readonly inner?: ValidatorLike;
+        readonly members?: ReadonlyArray<ValidatorLike>;
+
+        /** A `v.object({...})`'s fields: what a dotted path into the column is checked against. */
+        readonly shape?: Readonly<Record<string, ValidatorLike>>;
+        readonly tableName?: string;
+        readonly value?: unknown;
+    };
+    readonly kind?: string;
+    readonly parse?: (value: unknown) => unknown;
+}
+
+/** Lifecycle phase relative to the SQL write. */
+export type TriggerTimingLike = "after" | "before";
+
+/** The CRUD operation a trigger reacts to. `patch` and `replace` both map to `update`. */
+export type TriggerOpLike = "delete" | "insert" | "update";
+
+/**
+ * A schedulable durable-workflow reference — the generated `workflows.<name>` /
+ * `agents.<name>` object (carries its generated class name + stable
+ * name). Structural mirror so a scheduled target can be a workflow/agent, not
+ * just a function path, without this package depending on `@lunora/scheduler`.
+ */
+export interface SchedulableWorkflowReferenceLike {
+    readonly className?: string;
+    readonly isLunoraWorkflow: true;
+    readonly name?: string;
+}
+
+/**
+ * Structural mirror of `@lunora/server`'s `Scheduler` (kept local so this
+ * package takes no runtime dependency on the server package).
+ */
+export interface SchedulerLike {
+    runAfter: (delayMs: number, target: SchedulableWorkflowReferenceLike | string, args?: Record<string, unknown>) => Promise<string>;
+    runAt: (timestampMs: number, target: SchedulableWorkflowReferenceLike | string, args?: Record<string, unknown>) => Promise<string>;
+}
+
+/** What a trigger handler observes about the write that fired it. */
+export interface TriggerEventLike {
+    /** The new/merged row — present on `insert` and `update`, absent on `delete`. */
+    doc?: Record<string, unknown>;
+    id: string;
+    op: TriggerOpLike;
+    /** The pre-write row — present on `update` and `delete`, absent on `insert`. */
+    previous?: Record<string, unknown>;
+    table: string;
+}
+
+/** Handle injected into trigger handlers; built by the backend write layer. */
+export interface TriggerContextLike {
+    db: DatabaseWriterLike;
+    scheduler: SchedulerLike;
+}
+
+/** Structural mirror of `@lunora/server`'s `TriggerDefinition`. */
+export interface TriggerDefinitionLike {
+    readonly handler: (context: TriggerContextLike, event: TriggerEventLike) => Promise<void> | void;
+    readonly op: TriggerOpLike;
+    readonly timing: TriggerTimingLike;
+}
+
+/** Minimal schema projection the RLS guard reads. */
+export interface GuardableSchema {
+    readonly rlsMode?: "required";
+    readonly tables: Record<string, { readonly isPublic?: boolean }>;
+}
+
+/** Minimal subset of `@lunora/server`'s `Schema<T>` the adapter reads. */
+export interface SchemaLike {
+    readonly rlsMode?: "required";
+    readonly tables: Record<string, TableDefinitionLike>;
+}
+
+/**
+ * Decides whether an update may be written, given the row as the store read it and the row it is
+ * about to write. A layer that authorizes writes (the RLS gate) passes one so the verdict is taken
+ * against the store's own read, not an earlier one: an atomic operator (`{ increment: 1 }`)
+ * resolves to a value that depends on the row, so a check made before the store reads can approve
+ * a different post-image than the one that lands.
+ */
+export type PatchVerifier = (previous: Record<string, unknown>, next: Record<string, unknown>) => boolean;
+
+/** Optional extras for a single `patch` call. */
+export interface PatchWriteOptions {
+    /** Checked on every attempt, after operators resolve and before the write; `false` raises FORBIDDEN. */
+    verify?: PatchVerifier;
+}
+
+/** Structural mirror of `@lunora/server`'s `TableDefinition`. */
+export interface TableDefinitionLike {
+    readonly aggregateIndexes?: ReadonlyArray<AggregateIndexDefinitionLike>;
+    readonly commitOrderedMode?: boolean;
+
+    /**
+     * `.dropStalePatches()` — drop a `patch` whose fields moved since the
+     * caller's CDC baseline instead of clobbering the newer value. Opt-in per
+     * table; see `dropStalePatches` in `ctx-db.ts` for the rule and its limits.
+     */
+    readonly dropStalePatchesMode?: boolean;
+    readonly geoIndexes?: ReadonlyArray<GeoIndexDefinitionLike>;
+    readonly indexes: ReadonlyArray<IndexDefinitionLike>;
+    readonly isPublic?: boolean;
+    readonly memoryMode?: boolean;
+    readonly rankIndexes?: ReadonlyArray<RankIndexDefinitionLike>;
+    readonly relationMap?: Record<string, RelationDefinitionLike>;
+    readonly searchIndexes?: ReadonlyArray<SearchIndexDefinitionLike>;
+    readonly shape: Record<string, ValidatorLike>;
+    readonly shardMode?: { field?: string; kind: "global" | "root" | "shardBy" };
+    readonly softDeleteMode?: { field: string };
+    readonly triggerMap?: Record<string, TriggerDefinitionLike>;
+    readonly ttlPolicy?: { after?: number; field: string };
+}
+
+/** Structural mirror of `@lunora/server`'s `KeyedRelationDefinition`: a `one` or `many` relation backed by one foreign-key column. */
+export interface KeyedRelationDefinitionLike {
+    readonly field: string;
+    readonly kind: "many" | "one";
+    readonly onDelete?: OnDeleteActionLike;
+    readonly references: string;
+    readonly table: string;
+    readonly through?: never;
+}
+
+/** Structural mirror of `@lunora/server`'s `RelationThrough`: the join table of a many-to-many relation. */
+export interface RelationThroughLike {
+    readonly from: string;
+    readonly table: string;
+    readonly to: string;
+}
+
+/** Structural mirror of `@lunora/server`'s `ThroughRelationDefinition`: a many-to-many relation through a join table. */
+export interface ThroughRelationDefinitionLike {
+    readonly kind: "many";
+    readonly table: string;
+    readonly through: RelationThroughLike;
+}
+
+/** Structural mirror of `@lunora/server`'s `RelationDefinition`. */
+export type RelationDefinitionLike = KeyedRelationDefinitionLike | ThroughRelationDefinitionLike;
+
+export type OnDeleteActionLike = "cascade" | "restrict" | "set null";
+
+/** Per-relation refinements: filter / order / cap / project / recurse. */
+export interface NestedWith {
+    limit?: number;
+    orderBy?: OrderByInput[];
+    select?: ReadonlyArray<string>;
+    where?: WhereInput;
+    with?: WithInput;
+}
+
+/** The `with` argument for relation loading. */
+export interface WithInput {
+    [relationName: string]: NestedWith | Record<string, true> | boolean | undefined;
+    _count?: Record<string, true>;
+}
+
+/**
+ * The remaining per-REQUEST budget for capped-relation fan-out reads, shared by
+ * every `with` level of one read.
+ *
+ * Mutable and passed by reference on purpose: the bound that matters is the
+ * TOTAL number of reads a single request issues, and each nested `with` level
+ * resolves inside its own `fetcher` call, so a per-level cap bounds nothing.
+ *
+ * Deliberately NOT a field on {@link QueryArgs}. It has to cross the injected
+ * `fetcher` boundary to reach the next level, but it is internal accounting, not
+ * a query anybody writes — as a public argument it would be a documented knob
+ * whose obvious value (`{ remaining: Infinity }`) disables the subrequest bound
+ * and turns a slow read into a failed one. It rides the args object under
+ * {@link FAN_OUT_BUDGET} instead, which no public type can name.
+ */
+export interface FanOutBudget {
+    remaining: number;
+}
+
+/**
+ * The key a {@link FanOutBudget} travels under on a `fetcher`'s args.
+ *
+ * `Symbol.for`, not `Symbol()`: a package can appear more than once in a
+ * dependency graph and `shared/` files are inlined per bundle, so a
+ * module-local symbol risks being written by one copy and read by another. The
+ * global registry makes them the same key whatever the bundling does.
+ */
+export const FAN_OUT_BUDGET = Symbol.for("lunora.relations.fanOutBudget");
+
+export interface ResolveWithOptions {
+    fanOutBudget?: FanOutBudget;
+    fetcher: (tableName: string, args: QueryArgs) => Promise<QueryPage>;
+    groupedCounter: (tableName: string, whereField: string, values: unknown[], policyWhere?: WhereInput) => Promise<Map<unknown, number>>;
+    parents: Record<string, unknown>[];
+    relationBaseWhere?: (table: string) => undefined | WhereInput;
+    relationMask?: RelationMask;
+    schema: { readonly tables: Record<string, TableDefinitionLike> };
+    tableName: string;
+    with: WithInput;
+}
+
+export interface ResolveWithResult {
+    parent: Record<string, unknown>;
+    relationName: string;
+    rows: Record<string, unknown>[];
+}
+
+export type SortDirection = "asc" | "desc";
+
+/** Where rows holding SQL NULL sort among the others. */
+export type NullPlacement = "first" | "last";
+
+/**
+ * A single `{ field: "asc" | "desc" }` entry; `orderBy` is an ordered list of these. The object form
+ * `{ field: { sort: "desc", nulls: "last" } }` also says where NULLs go. Without it NULLs sort
+ * first ascending and last descending, as SQLite orders them.
+ */
+export type OrderByInput = Record<string, SortDirection | { nulls: NullPlacement; sort: SortDirection }>;
+
+export interface QueryArgs {
+    baseWhere?: WhereInput;
+    cursor?: null | string;
+
+    includeDeleted?: boolean;
+
+    limit?: number;
+
+    /**
+     * Return `continueCursor: null` without building one. **Engine-internal**, in
+     * the same sense as `baseWhere` / `relationBaseWhere` / `relationMask`: no
+     * user-facing query builder sets it.
+     *
+     * Set only by `findFirst`, which reads `page[0]` and discards the envelope —
+     * so the cursor it was handed cost an `encodeWire`, a `JSON.stringify` and a
+     * base64 for a value nobody reads, on a read that is one of the most common
+     * in the framework.
+     *
+     * A caller that sets this and then READS `continueCursor` gets `null` where a
+     * next page exists, and pages nowhere. `isDone` stays honest either way, so
+     * prefer it for "is there more". Nothing but `findFirst` should set this.
+     */
+    omitContinueCursor?: boolean;
+    orderBy?: OrderByInput[];
+    relationBaseWhere?: (table: string) => undefined | WhereInput;
+    relationMask?: RelationMask;
+    restrictsCounts?: boolean;
+    select?: ReadonlyArray<string>;
+    where?: WhereInput;
+    with?: WithInput;
+}
+
+/**
+ * Args for a **cross-shard relation read** — the reverse cross-backend hop where a
+ * `.global()` (D1) parent loads a shard-local child whose rows span every shard.
+ *
+ * This is {@link QueryArgs} minus what cannot survive the hop and plus what
+ * replaces it. The hop crosses a JSON boundary (the fan-out envelope), so the two
+ * RLS carriers must travel as DATA:
+ *
+ * - `baseWhere` is folded into `where` by the caller before it is sent.
+ * - `relationBaseWhere` is a FUNCTION, so it is projected into
+ * {@link CrossShardReadArgs.relationPolicies} — a table → filter map the serving
+ * shard rebuilds a `relationBaseWhere` from for the nested `with` hops.
+ *
+ * Dropping either is not a lossy convenience but an RLS bypass: the serving shard
+ * reads through its RAW ctx-db, so an unfiltered `where` returns every child row
+ * for the FK regardless of the child's read policy.
+ */
+export interface CrossShardReadArgs {
+    orderBy?: OrderByInput[];
+    /** Serialized projection of `relationBaseWhere`, keyed by table; applied to nested `with` hops on the serving shard. */
+    relationPolicies?: Record<string, WhereInput>;
+    /** The child filter with the caller's `baseWhere` (the read policy) ALREADY folded in. */
+    where?: WhereInput;
+    with?: WithInput;
+}
+
+/**
+ * Per-target-table column mask applied to `with`-hydrated CHILD rows, the
+ * column-level twin of `relationBaseWhere`.
+ *
+ * Masking is a middleware ABOVE `ctx.db`, so it only ever sees the rows of the
+ * table named in the call — a `with` hop is hydrated below it by the relation
+ * loader and would come back in the clear. Threading this hook down the same
+ * path `relationBaseWhere` takes lets the loader rewrite each hop's rows with
+ * the policy for THAT table. Returns the rows unchanged for a table with no
+ * mask policy.
+ *
+ * Unlike `relationBaseWhere`, this hook cannot be projected into data for the
+ * cross-shard fan-out (a mask strategy may be a closure over the request), so a
+ * nested `with` crossing that hop is refused rather than served unmasked — see
+ * `toCrossShardArgs` in `@lunora/sql-store`.
+ */
+export type RelationMask = (table: string, rows: Record<string, unknown>[]) => Record<string, unknown>[];
+
+/** What `explain` returns: the SQL a read compiles to and the database's plan for it. */
+export interface QueryPlan {
+    /** The bound parameters, in order. */
+    params: unknown[];
+    /** One line per plan step, as the database reports it (`SEARCH messages USING INDEX by_room (room=?)`). */
+    plan: string[];
+    /** The statement the read compiles to. */
+    sql: string;
+}
+
+export interface QueryPage {
+    continueCursor: null | string;
+    isDone: boolean;
+    page: Record<string, unknown>[];
+    splitCursor?: null | string;
+}
+
+/**
+ * One directed foreign-key edge derived from a `v.id("target")` column:
+ * `sourceTable.column` → `targetTable`.
+ *
+ * The direction is the one the DATA points in — the row carrying the column is
+ * the source — which is the direction a `"out"` traversal follows. The `name`
+ * is what a caller passes to `related({ edges: [...] })`; a column name is
+ * unique within its table, so `` `${sourceTable}.${column}` `` is unique within
+ * the schema.
+ */
+export interface RelationEdge {
+    /** `true` for a `v.array(v.id(...))` column — one row holds MANY target ids. */
+    readonly array: boolean;
+    /** The `v.id(...)` column on {@link RelationEdge.sourceTable}. */
+    readonly column: string;
+    /** The addressable edge-type name: `` `${sourceTable}.${column}` ``. */
+    readonly name: string;
+    /** The table whose rows carry the foreign key. */
+    readonly sourceTable: string;
+    /** The table the foreign key points at. */
+    readonly targetTable: string;
+}
+
+/** An explicit `{ table, id }` start node for {@link DatabaseWriterLike.related}. */
+export interface RelatedStartReference {
+    id: string;
+    table: string;
+}
+
+/**
+ * Where a traversal starts: an explicit {@link RelatedStartReference}, or a
+ * loaded document (its `_id` is read and its owning table resolved through the
+ * writer's `lookupById` seam). A document is recognised by carrying `_id`, so a
+ * table that happens to declare `table`/`id` columns is never mistaken for a
+ * reference.
+ *
+ * The document arm requires `_id` for the same reason `resolveStart` reads it:
+ * without it the union COLLAPSED — a bare `Record<string, unknown>` swallows
+ * `RelatedStartReference`, so `related({ tabel: "x", id: "y" })` type-checked
+ * and failed at runtime with a message about the shape it was already meant to
+ * enforce. Requiring the discriminant makes the documented distinction real.
+ */
+export type RelatedStart = (Record<string, unknown> & { _id: string }) | RelatedStartReference;
+
+/** Which way foreign-key edges are followed out of each visited node. */
+export type RelatedDirection = "both" | "in" | "out";
+
+/** Options for {@link DatabaseWriterLike.related}. */
+export interface RelatedOptions {
+    /** Opaque cursor from a prior page's `continueCursor`; `null`/omitted starts at the first page. */
+    cursor?: null | string;
+
+    /**
+     * How many hops to expand. `1` (the default) is the direct neighbourhood;
+     * higher values re-expand each frontier. Must be an integer in
+     * `1 … RELATED_MAX_DEPTH`.
+     */
+    depth?: number;
+
+    /** Which way edges are followed. Default `"both"`. */
+    direction?: RelatedDirection;
+
+    /**
+     * Restrict the walk to these edge-type names ({@link RelationEdge.name}).
+     * Omitted ⇒ every edge the schema declares. An unknown name is refused
+     * rather than ignored — a typo that silently widens a traversal is the
+     * failure this exists to prevent.
+     */
+    edges?: ReadonlyArray<string>;
+
+    /** Maximum nodes per page. Default `RELATED_DEFAULT_LIMIT`, capped at `RELATED_MAX_LIMIT`. */
+    limit?: number;
+
+    /**
+     * Per-table read filter applied to EVERY read the traversal makes, the
+     * start row's included — the same seam `with`-relation loading threads (see
+     * {@link QueryArgs.relationBaseWhere}). Engine-internal: the RLS middleware
+     * supplies it so a traversal cannot walk into rows the caller's policy
+     * excludes, and so a start row the policy hides reads as absent.
+     *
+     * One seam rather than a separate `baseWhere` for the start table, because
+     * the start table is only known after the reader resolves it — a caller
+     * passing a loaded document does not name it.
+     */
+    relationBaseWhere?: (table: string) => undefined | WhereInput;
+
+    /** Per-target-table column mask applied to every hop's rows — see {@link RelationMask}. */
+    relationMask?: RelationMask;
+}
+
+/** One row reached by a traversal, with how it was reached. */
+export interface RelatedNode {
+    /** Hops from the start node; always `>= 1`. */
+    depth: number;
+    /** The reached row. */
+    document: Record<string, unknown>;
+    /** Edge-type names walked from the start node to this one, in order. Length equals {@link RelatedNode.depth}. */
+    path: ReadonlyArray<string>;
+    /** Document ids from the start node to this one inclusive. Length equals `depth + 1`. */
+    pathIds: ReadonlyArray<string>;
+    /** Depth-decaying relevance, `RELATED_DEPTH_DECAY ** (depth - 1)` — `1` at depth 1, halving per hop. */
+    score: number;
+    /** The table {@link RelatedNode.document} lives in. */
+    table: string;
+}
+
+/** One page of a traversal — the same envelope shape as {@link QueryPage}. */
+export interface RelatedPage {
+    continueCursor: null | string;
+    isDone: boolean;
+    nodes: RelatedNode[];
+}
+
+export interface OrderKey {
+    direction: SortDirection;
+    field: string;
+
+    /**
+     * Can this column hold SQL NULL? Required, not optional, so every place that
+     * builds an `OrderKey` has to answer — the keyset seek emits an extra
+     * `OR col IS NULL` arm for a nullable ordered column (see `pivotCondition`),
+     * and that arm costs a full index scan on a column that never holds NULL.
+     * `undefined` would make "forgot to thread it" silently mean "not nullable",
+     * which is the row-losing direction.
+     */
+    nullable: boolean;
+
+    /**
+     * Where this key's NULLs sort, when the caller asked for something other than the default. Set
+     * only on a nullable key: on a column that never holds NULL the placement is moot, and the
+     * clause it would add can cost the index.
+     */
+    nulls?: NullPlacement;
+}
+
+/** Query-options shape shared by every aggregate reader. */
+export interface RestrictableQueryOptions {
+    baseWhere?: WhereInput;
+    relationBaseWhere?: (table: string) => undefined | WhereInput;
+    restrictsCounts?: boolean;
+    where?: WhereInput;
+}
+
+/** Args for `DatabaseWriterLike.aggregate`. */
+export interface AggregateOptions extends RestrictableQueryOptions {
+    field?: string;
+    op: AggregateOp;
+}
+
+/** Result of `aggregate` — the scalar reduction, or `null` when no rows matched. */
+export type AggregateResult = null | number;
+
+/** Args for `DatabaseWriterLike.groupBy`. */
+export interface GroupByOptions extends RestrictableQueryOptions {
+    agg?: { field?: string; op: AggregateOp };
+    by: ReadonlyArray<string>;
+}
+
+/** Result of `groupBy` — one entry per distinct group tuple. */
+export interface GroupByEntry {
+    key: Record<string, unknown>;
+    value: AggregateResult;
+}
+
+export type RankDirection = "asc" | "desc";
+
+export interface RankSortKeyLike {
+    readonly direction: RankDirection;
+    readonly field: string;
+}
+
+/** 1-based position within a partition under the declared sort, plus the partition's row total. */
+export interface RankResult {
+    position: number;
+    total: number;
+}
+
+export interface RankOptions extends RestrictableQueryOptions {
+    row: Record<string, unknown> | string;
+}
+
+export interface RankBeforeOptions {
+    partitionKey: string;
+    restrictsCounts?: boolean;
+    rowId: string;
+    sortValues: ReadonlyArray<unknown>;
+}
+
+export interface RankBeforeResult {
+    before: number;
+    total: number;
+}
+
+export interface RankPageOptions extends RestrictableQueryOptions {
+    after?: RankPageRowKey;
+    cursor?: null | string;
+    partitionKey?: string;
+    take?: number;
+}
+
+export interface RankPage {
+    continueCursor: null | string;
+    isDone: boolean;
+    page: Record<string, unknown>[];
+}
+
+export interface RankPageRowKey {
+    partitionKey: string;
+    rowId: string;
+    sortValues: ReadonlyArray<unknown>;
+}
+
+export interface RankPageRow {
+    doc: Record<string, unknown>;
+    key: RankPageRowKey;
+}
+
+export interface ShardRankPageResult {
+    directions: ReadonlyArray<RankDirection>;
+    hasMore: boolean;
+    rows: ReadonlyArray<RankPageRow>;
+}
+
+/** Options accepted by `TableReaderLike.paginate` — Convex-compatible. */
+export interface PaginationOptions {
+    cursor?: null | string;
+    endCursor?: null | string;
+    numItems: number;
+}
+
+/** Builder for search-index filters. */
+export interface SearchFilterBuilderLike {
+    eq: (field: string, value: unknown) => SearchFilterBuilderLike;
+    search: (field: string, query: string) => SearchFilterBuilderLike;
+}
+
+/** Builder for geo-index filters. */
+export interface GeoFilterBuilderLike {
+    near: (point: { lat: number; lng: number }, radiusMeters: number) => GeoFilterBuilderLike;
+    within: (box: { ne: { lat: number; lng: number }; sw: { lat: number; lng: number } }) => GeoFilterBuilderLike;
+}
+
+/**
+ * One row of a `.collectWithScores()` result — the document paired with the
+ * ranking value the read already computed to order it. `score` (FTS
+ * relevance, higher is better) is populated for a `.withSearchIndex()` chain;
+ * `distanceMeters` (haversine distance from `.near()`'s point) for a
+ * `.withGeoIndex()` chain. `.within()` box matches have no point-distance
+ * metric, so `distanceMeters` is `null` for those rows rather than a
+ * misleading `0`. The two fields are mutually exclusive per call — which one
+ * is populated depends on which index the chain staged.
+ */
+export type ScoredDocument = GeoScoredDocument | SearchScoredDocument;
+
+/** A `.collectWithScores()` row from a `.withGeoIndex()` chain — see {@link ScoredDocument}. */
+export interface GeoScoredDocument {
+    distanceMeters: null | number;
+    document: Record<string, unknown>;
+    score?: never;
+}
+
+/** A `.collectWithScores()` row from a `.withSearchIndex()` chain — see {@link ScoredDocument}. */
+export interface SearchScoredDocument {
+    distanceMeters?: never;
+    document: Record<string, unknown>;
+    score: number;
+}
+
+/** A `ctx.db.<table>` reader facade. */
+export interface TableReaderLike {
+    /** Lazy row iteration — see the implementation note in `ctx-db.ts`. */
+    [Symbol.asyncIterator]: () => AsyncIterator<Record<string, unknown>>;
+    collect: () => Promise<Record<string, unknown>[]>;
+
+    /**
+     * Like `.collect()`, but pairs each row with the relevance score /
+     * distance the read already computed to order it — see
+     * {@link ScoredDocument}. Requires a staged `.withSearchIndex()` or
+     * `.withGeoIndex()`; throws otherwise (mirrors `.paginate()`'s
+     * geo-unsupported guard).
+     */
+    collectWithScores: () => Promise<ScoredDocument[]>;
+    filter: (predicate: (document: Record<string, unknown>) => boolean) => TableReaderLike;
+    first: () => Promise<Record<string, unknown> | null>;
+    order: (direction: "asc" | "desc") => TableReaderLike;
+    paginate: (options: PaginationOptions) => Promise<QueryPage>;
+    take: (limit: number) => Promise<Record<string, unknown>[]>;
+    unique: () => Promise<Record<string, unknown> | null>;
+    withGeoIndex: (indexName: string, build: (q: GeoFilterBuilderLike) => GeoFilterBuilderLike) => TableReaderLike;
+    withIndex: (indexName: string, range?: (q: IndexRangeBuilderLike) => IndexRangeBuilderLike) => TableReaderLike;
+    withSearchIndex: (indexName: string, search: (q: SearchFilterBuilderLike) => SearchFilterBuilderLike) => TableReaderLike;
+}
+
+/** Builder for index range scans. */
+export interface IndexRangeBuilderLike {
+    eq: (field: string, value: unknown) => IndexRangeBuilderLike;
+    gt: (field: string, value: unknown) => IndexRangeBuilderLike;
+    gte: (field: string, value: unknown) => IndexRangeBuilderLike;
+    lt: (field: string, value: unknown) => IndexRangeBuilderLike;
+    lte: (field: string, value: unknown) => IndexRangeBuilderLike;
+}
+
+/** Notifies hibernated subscribers that a row in `table` changed. */
+export type BroadcastDelta = (delta: MutationDelta) => void;
+
+/** Records that a query touched `table`. */
+export type ReadHook = (table: string, idOrScan?: string) => void;
+
+/** The argument a connection-lifecycle hook receives. */
+export interface LifecycleEvent {
+    connectionId: string;
+    context?: Record<string, unknown>;
+    shardKey: string;
+    userId: string | null;
+}
+
+/**
+ * Per-socket lifecycle dispatch payload: the hook's argument, plus the caller
+ * context to replay it under.
+ *
+ * That context is {@link SubscriptionIdentity} itself rather than a restatement
+ * of its members. It used to restate them, which is why it was the one place a
+ * socket's context was assembled by hand instead of through the shared helper —
+ * and why `ip` had to be added here separately. Extending means the helper's
+ * output spreads straight in, and the next member added is not a second edit.
+ */
+export interface LifecycleDispatchInfo extends SubscriptionIdentity {
+    event: LifecycleEvent;
+}
+
+/** Per-row change notification emitted by the CDC layer. */
+export interface MutationDelta {
+    /**
+     * Index positions the written row occupies, unioned across its BEFORE and
+     * AFTER images. Computed once on the write path (which is the only place
+     * that still holds the before-image) so consumers never re-derive it —
+     * a consumer working from `row` alone sees only the destination, and would
+     * miss a subscriber watching the slice the row just LEFT.
+     */
+    indexKeys?: ReadonlyArray<IndexKeyEntry>;
+    key: string;
+    op: "insert" | "update" | "delete";
+    row?: Record<string, unknown>;
+    table: string;
+}
+
+/** Structural surface the RLS guard wraps. */
+export interface DatabaseWriterLike {
+    aggregate: (tableName: string, options: AggregateOptions) => Promise<AggregateResult>;
+    asId?: (tableName: string, id: string) => string;
+
+    /**
+     * Check that the caller's update policy would let row `id` be written, without writing it: no row changes,
+     * no trigger fires, no timestamp, version or change-data-capture entry moves. A relation-only patch uses it to
+     * gate its parent row, which it never writes. Optional: the RLS middleware evaluates the update policy here, and
+     * a writer with no policy layer has no update rule to check. The guard gates only the table.
+     */
+    assertPatchAllowed?: (id: string, expectedTable?: string) => Promise<void>;
+
+    /**
+     * Which tables this store's change-data-capture log recorded a write to
+     * after `sinceSeq`, plus the log's current head — a metadata-only probe that
+     * reads no documents.
+     *
+     * It exists so a poller can find out that nothing it watches has changed
+     * without re-reading what it watches. The `.global()` shape path polls on a
+     * timer because a global table is written from other shards and other
+     * regions, with no coordinator to poke it; before this, every tick answered
+     * "did anything change?" by draining the entire membership of every live
+     * shape from the global backend and diffing it, which costs the same whether
+     * the answer is yes or no — and on a healthy deployment it is overwhelmingly
+     * no.
+     *
+     * Optional because it is only meaningful on a store with CDC enabled: a
+     * caller that gets `undefined` has no visibility and must fall back to
+     * re-reading, which is what every caller did before this method existed.
+     *
+     * `cursorOnly` asks for the head WITHOUT the table list, for a caller that
+     * has already decided to read everything this pass — a cold instance with no
+     * cursor to compare against, or a scheduled resync. Such a caller still needs
+     * a cursor to adopt so the NEXT pass can narrow, but the table list it would
+     * be handed is discarded, and computing it means scanning the changelog from
+     * `sinceSeq` — which on a cold instance is the whole log.
+     */
+    cdcChangedTables?: (
+        sinceSeq: number,
+        options?: { cursorOnly?: boolean },
+    ) => Promise<
+        | {
+              cursor: number;
+
+              /**
+               * Oldest `seq` the changelog still retains, when the store is
+               * configured to trim it. Absent means "nothing is ever trimmed",
+               * which is the default and makes the gap below impossible.
+               *
+               * A caller whose `sinceSeq` is under this floor has had the very
+               * rows it was about to reason about deleted, so `tables` UNDER-
+               * REPORTS: it must treat the answer as no-visibility and re-read
+               * everything, exactly as it does when this method is unavailable.
+               */
+              floor?: number;
+              tables: string[];
+          }
+        | undefined
+    >;
+    count: (tableName: string, where?: RestrictableQueryOptions | WhereInput) => Promise<number>;
+    delete: (id: string, expectedTable?: string, options?: { hard?: boolean }) => Promise<void>;
+    deleteAll?: (tableName: string, options?: { chunkSize?: number; hard?: boolean }) => Promise<{ deleted: number }>;
+    deleteMany?: (ids: ReadonlyArray<string>, options?: { limit?: number }, expectedTable?: string) => Promise<{ deleted: number }>;
+
+    deleteWhere?: (tableName: string, where: WhereInput, options?: { limit?: number }) => Promise<{ deleted: number }>;
+
+    /**
+     * Describe how the store would run `findMany(tableName, args)`: the statement, its bound
+     * parameters, and the database's own plan for it, one line per step.
+     */
+    explain: (tableName: string, args?: QueryArgs) => Promise<QueryPlan>;
+    findFirst: (tableName: string, args?: QueryArgs) => Promise<Record<string, unknown> | null>;
+    findFirstOrThrow: (tableName: string, args?: QueryArgs) => Promise<Record<string, unknown>>;
+    findMany: (tableName: string, args?: QueryArgs) => Promise<QueryPage>;
+    get: (id: string, expectedTable?: string) => Promise<Record<string, unknown> | null>;
+    groupBy: (tableName: string, options: GroupByOptions) => Promise<ReadonlyArray<GroupByEntry>>;
+    insert: (tableName: string, document: Record<string, unknown>, options?: { allowExplicitId?: boolean; clientId?: string }) => Promise<string>;
+    insertMany?: (
+        tableName: string,
+        documents: ReadonlyArray<Record<string, unknown>>,
+        options?: { limit?: number; skipDuplicates?: boolean },
+    ) => Promise<(string | null)[]>;
+    insertManyUnsafe?: (
+        tableName: string,
+        documents: ReadonlyArray<Record<string, unknown>>,
+        options?: { allowExplicitId?: boolean; limit?: number },
+    ) => Promise<string[]>;
+    lookupById?: (id: string, expectedTable?: string) => Promise<null | { row: Record<string, unknown>; tableName: string }>;
+    normalizeId: (tableName: string, id: string) => null | string;
+
+    patch: (id: string, patch: Record<string, unknown>, expectedTable?: string, options?: PatchWriteOptions) => Promise<void>;
+
+    /**
+     * Conditional patch: apply `patch` to row `id` of `tableName` only while the
+     * CURRENT row matches `where`, decided atomically with the write. Returns
+     * whether it applied and the row as it stands afterwards (`null` when there
+     * is no such row). A row that does not match is left untouched and reported
+     * with `applied: false`.
+     *
+     * Every implementation decides in one step against the stored row, never by
+     * reading first and writing later. A shard-local table (DO `storage.sql`,
+     * `better-sqlite3`, celld's SQLite) checks the predicate and writes the row
+     * in one synchronous run, CAS-guarded on the row image. A `.global()` table
+     * (`@lunora/sql-store` over D1, Postgres, MySQL) runs one
+     * `UPDATE … WHERE id = ? AND <version> AND (<where>)`, re-reading and
+     * re-deciding when the version moved underneath.
+     *
+     * Optional because a writer that cannot decide atomically must not offer a
+     * read-then-write substitute; callers raise an explicit unsupported error
+     * when it is absent.
+     */
+    patchIf?: (
+        tableName: string,
+        id: string,
+        args: { patch: Record<string, unknown>; verify?: PatchVerifier; where: WhereInput },
+    ) => Promise<{ applied: boolean; doc: Record<string, unknown> | null }>;
+    patchMany?: (
+        patches: ReadonlyArray<{ id: string; patch: Record<string, unknown> }>,
+        options?: { limit?: number },
+        expectedTable?: string,
+    ) => Promise<{ patched: number }>;
+    patchWhere?: (tableName: string, args: { patch: Record<string, unknown>; where: WhereInput }, options?: { limit?: number }) => Promise<{ patched: number }>;
+    query: (tableName: string) => TableReaderLike;
+    rank: (tableName: string, indexName: string, options: RankOptions) => Promise<null | RankResult>;
+    rankBefore?: (tableName: string, indexName: string, options: RankBeforeOptions) => Promise<RankBeforeResult>;
+    rankPage: (tableName: string, indexName: string, options?: RankPageOptions) => Promise<RankPage>;
+    rankPageRows?: (tableName: string, indexName: string, options?: RankPageOptions) => Promise<ShardRankPageResult>;
+
+    /**
+     * Walk the schema-derived foreign-key graph out of one row — breadth-first,
+     * bounded by `depth` and `limit`, cycle-safe — and return each reached row
+     * with its depth, the edge names walked to reach it, and a depth-decaying
+     * score.
+     *
+     * OPTIONAL because it is derived from the schema's `v.id(...)` columns and
+     * implemented by the shard writer; the `.global()` twin and the generated
+     * `globalDbStub` do not carry it. Reads route through this writer's own
+     * `get`/`findMany`, so read-dependency tracking, soft-delete scoping and
+     * global-table routing all apply per hop exactly as they do for a direct
+     * read.
+     */
+    related?: (start: RelatedStart, options?: RelatedOptions) => Promise<RelatedPage>;
+
+    /**
+     * The edge set {@link DatabaseWriterLike.related} walks, derived from this
+     * schema's `v.id(...)` columns once per writer. Present exactly when
+     * `related` is — the two are a pair, and the `.global()` twin carries
+     * neither.
+     *
+     * PUBLISHED rather than kept as a closure variable because a wrapper that
+     * has to route the traversal PER TABLE — the RLS middleware under a
+     * `.rls("required")` schema — cannot delegate to `related`: that closure is
+     * already bound to one writer, and every hop out of it would go to that
+     * writer. Such a wrapper runs the walk itself over a reader it routes, and
+     * the walk needs this set to know what the hops are.
+     *
+     * It is metadata, not capability. Edge NAMES are already a caller-facing
+     * surface (`RelatedOptions.edges` selects by them, and refuses an undeclared
+     * one), and holding the set grants no read that the writer would not
+     * otherwise gate.
+     */
+    relationEdges?: ReadonlyArray<RelationEdge>;
+
+    /** Per-relation facts the table facade needs for nested relation writes (`connect`/`disconnect`/`set`). */
+    relationWrites?: RelationWriteMap;
+    replace: (id: string, document: Record<string, unknown>, expectedTable?: string, options?: { allowExplicitId?: boolean }) => Promise<void>;
+    restore?: (id: string, expectedTable?: string) => Promise<void>;
+
+    /**
+     * The system-table reader.
+     *
+     * Typed as `unknown` until the engine extraction completed: `system-reader`
+     * lived in `@lunora/do` while this file was already here, so naming it would
+     * have inverted the dependency. Both are in this package now, so the real
+     * type applies and callers stop asserting their way past it.
+     */
+    system?: SystemDatabaseReader;
+    wipeShard?: (options?: { chunkSize?: number; exclude?: ReadonlyArray<string>; tables?: ReadonlyArray<string> }) => Promise<{
+        deleted: number;
+        tables: Record<string, number>;
+    }>;
+}

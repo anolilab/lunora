@@ -1,15 +1,32 @@
+export type { AgentHarness, AgentHarnessOptions, AgentRunOverrides, HarnessDispatch, HarnessMessage, HarnessThread } from "./agent-harness";
+export { agentHarness, finalTurn, toolCallTurn } from "./agent-harness";
+export type { EvaluationAttributeValue, EvaluationMetrics, EvaluationSpanHandle, RecordEvaluationInput } from "./evaluation-telemetry";
+export { evaluationAttributes, recordEvaluation } from "./evaluation-telemetry";
+export type { ArtifactsFake } from "./fake-artifacts";
+export { createArtifactsFake } from "./fake-artifacts";
 export type {
+    FakeNotifyControls,
+    FakeQueueControls,
     FakeScheduledJob,
     FakeSchedulerControls,
+    FakeTopicControls,
     FunctionRegistry,
     LunoraTestOptions,
+    NotifyChannel,
+    PublishedTopicMessage,
     ScheduledJobFailure,
+    SentNotification,
+    SentQueueMessage,
     SweepOptions,
     TestHarness,
     TestIdentity,
     TestSubscription,
 } from "./harness";
 export { lunoraTest } from "./harness";
+export type { RetrievalScorerOptions } from "./retrieval-scorer";
+export { groundednessScorer, mrrScorer, ndcgAtK, precisionAtK, recallAtK } from "./retrieval-scorer";
+export type { EvalCase, EvalItemResult, EvalResult, ProducedOutput, Scorer, ScoreResult, ScorerSample } from "./scorer";
+export { containsScorer, evaluate, exactMatchScorer, keywordScorer, llmScorer, regexScorer, scoreSample } from "./scorer";
 
 /**
  * `@lunora/testing` — the user-facing toolkit for end-to-end testing a Lunora app.

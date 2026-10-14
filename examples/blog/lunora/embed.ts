@@ -17,10 +17,12 @@ export const embedText = (input: string): number[] => {
         let hash = 0x81_1c_9d_c5;
 
         for (const character of token) {
+            // eslint-disable-next-line no-bitwise -- FNV-1a IS defined as xor-then-multiply; there is no non-bitwise form of it.
             hash ^= character.codePointAt(0) ?? 0;
             hash = Math.imul(hash, 0x01_00_01_93);
         }
 
+        // eslint-disable-next-line no-bitwise -- `>>> 0` is the standard coercion of the signed 32-bit result back to unsigned.
         vector[(hash >>> 0) % EMBED_DIMENSIONS] += 1;
     }
 

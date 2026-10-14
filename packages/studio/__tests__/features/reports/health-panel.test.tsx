@@ -1,5 +1,5 @@
 import { LunoraProvider } from "@lunora/react";
-import { render, screen, waitFor } from "@testing-library/react";
+import { act, render, screen, waitFor } from "@testing-library/react";
 import type { ReactElement } from "react";
 import { describe, expect, it } from "vitest";
 
@@ -168,6 +168,46 @@ describe("healthPanel SLO view", () => {
         expect(screen.getByTestId("hl-spark-requests")).toBeDefined();
     });
 
+    it("shows a notice when the durable history was truncated by the read limit", async () => {
+        expect.assertions(1);
+
+        const mock = withConnection(
+            createMockClient({
+                query: (reference): unknown => {
+                    if (reference === ADMIN_FUNCTIONS.getLogs) {
+                        return { entries: ENTRIES };
+                    }
+
+                    if (reference === ADMIN_FUNCTIONS.getMetrics) {
+                        return { ...SNAPSHOT, historyTruncated: true };
+                    }
+
+                    if (reference === ADMIN_FUNCTIONS.getFunctionStats) {
+                        return { functions: [] };
+                    }
+
+                    throw new Error(`unexpected ${reference}`);
+                },
+            }),
+        );
+
+        render(renderPanel(mock));
+
+        await screen.findByTestId("hl-history-truncated");
+
+        expect(screen.getByTestId("hl-history-truncated")).toBeDefined();
+    });
+
+    it("does not show the truncation notice when the durable history fits within the read limit", async () => {
+        expect.assertions(1);
+
+        render(renderPanel(sloClient()));
+
+        await screen.findByTestId("hl-spark-requests");
+
+        expect(screen.queryByTestId("hl-history-truncated")).toBeNull();
+    });
+
     it("degrades each SLO tile to — when its read fails, without blanking the panel", async () => {
         expect.assertions(2);
 
@@ -213,6 +253,34 @@ describe("healthPanel", () => {
 
         expect(screen.getByTestId("hl-error-count").textContent).toBe("2");
         expect(screen.getAllByTestId("hl-error-row")).toHaveLength(2);
+    });
+
+    it("reports the TOTAL error count even though the list is capped", async () => {
+        expect.assertions(2);
+
+        // Eight errors against a display cap of five. The badge is the only thing
+        // telling the operator the volume, which is the signal that matters during an
+        // incident — a badge that saturates at the cap says nothing. The case above
+        // stays under the cap, so it passes either way and cannot catch this.
+        const many: LogEntry[] = Array.from({ length: 8 }, (_, index) => {
+            return {
+                functionPath: "messages:send",
+                level: "error" as const,
+                message: `boom ${index.toString()}`,
+                timestamp: 1_700_000_000_000 + index * 1000,
+            };
+        });
+
+        render(renderPanel(clientWith(many)));
+
+        await waitFor(() => {
+            if (screen.getByTestId("hl-error-count").textContent !== "8") {
+                throw new Error("not loaded");
+            }
+        });
+
+        expect(screen.getByTestId("hl-error-count").textContent).toBe("8");
+        expect(screen.getAllByTestId("hl-error-row")).toHaveLength(5);
     });
 
     it("renders request count and error rate from metrics", async () => {
@@ -270,5 +338,69 @@ describe("healthPanel", () => {
         });
 
         expect(screen.getByTestId("hl-requests").textContent).toBe("200");
+    });
+
+    it("reloads for a new shard prop while the previous shard's fan-out is still in flight", async () => {
+        expect.assertions(2);
+
+        const held: (() => void)[] = [];
+        const REQUESTS_BY_SHARD: Record<string, number> = { "": 100, "room-a": 900, "room-b": 200 };
+
+        const mock = withConnection(
+            createMockClient({
+                query: (reference, _args, options): unknown => {
+                    const shard = (options as undefined | { shardKey?: string })?.shardKey ?? "";
+                    const answer = (): unknown => {
+                        if (reference === ADMIN_FUNCTIONS.getLogs) {
+                            return { entries: [] };
+                        }
+
+                        if (reference === ADMIN_FUNCTIONS.getMetrics) {
+                            // root 100 + room-a 900, or root 100 + room-b 200.
+                            return { ...METRICS, requests: REQUESTS_BY_SHARD[shard] ?? 0, shard };
+                        }
+
+                        throw new Error(`unexpected ${reference}`);
+                    };
+
+                    if (shard !== "room-a") {
+                        return answer();
+                    }
+
+                    return new Promise((resolve) => {
+                        held.push(() => {
+                            resolve(Promise.resolve().then(answer));
+                        });
+                    });
+                },
+            }),
+        );
+
+        const panel = (shard: string): ReactElement => (
+            <LunoraProvider client={mock.asClient}>
+                <HealthPanel initialShardKey={shard} />
+            </LunoraProvider>
+        );
+
+        const { rerender } = render(panel("room-a"));
+
+        rerender(panel("room-b"));
+
+        await waitFor(() => {
+            if (screen.getByTestId("hl-requests").textContent !== "300") {
+                throw new Error("room-b not loaded");
+            }
+        });
+
+        expect(screen.getByTestId("hl-requests").textContent).toBe("300");
+
+        // room-a's fan-out landing late must not paint over room-b.
+        await act(async () => {
+            for (const release of held) {
+                release();
+            }
+        });
+
+        expect(screen.getByTestId("hl-requests").textContent).toBe("300");
     });
 });

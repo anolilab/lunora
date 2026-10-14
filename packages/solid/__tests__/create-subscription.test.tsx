@@ -1,4 +1,5 @@
 import type { FunctionReference } from "@lunora/client";
+import { LunoraError } from "@lunora/errors";
 import { render } from "@solidjs/testing-library";
 import { createSignal } from "solid-js";
 import { describe, expect, it } from "vitest";
@@ -62,7 +63,7 @@ describe(createSubscription, () => {
         const fake = createFakeClient();
         const [channelId, setChannelId] = createSignal("c1");
 
-        render(
+        const { container } = render(
             () => {
                 const { data } = createSubscription(msgRef, () => {
                     return { channelId: channelId() };
@@ -76,7 +77,14 @@ describe(createSubscription, () => {
         expect(fake.subscriptions).toHaveLength(1);
         expect(fake.subscriptions[0]?.args).toStrictEqual({ channelId: "c1" });
 
+        fake.subscriptions[0]?.push("from-c1");
+
+        expect(container.textContent).toBe("from-c1");
+
         setChannelId("c2");
+
+        // The previous args' value does not survive the switch.
+        expect(container.textContent).toBe("undefined");
 
         expect(fake.subscriptions).toHaveLength(2);
         expect(fake.subscriptions[0]?.unsubscribed).toBe(true);
@@ -105,6 +113,52 @@ describe(createSubscription, () => {
 
         expect(fake.subscriptions[0]?.unsubscribed).toBe(true);
         expect(container.textContent).toBe("empty");
+    });
+
+    it("preserves the SubscriptionError code on the surfaced error", () => {
+        const fake = createFakeClient();
+        let capturedError: (() => Error | undefined) | undefined;
+
+        render(
+            () => {
+                const { error } = createSubscription(msgRef, { channelId: "c1" });
+                capturedError = error;
+
+                return <pre>{String(error()?.message)}</pre>;
+            },
+            { wrapper: (props) => <LunoraProvider client={fake.asClient}>{props.children}</LunoraProvider> },
+        );
+
+        fake.subscriptions[0]?.error({ code: "auth-expired", message: "token expired" });
+
+        const surfaced = capturedError!();
+
+        expect(surfaced).toBeInstanceOf(LunoraError);
+        expect((surfaced as LunoraError).code).toBe("auth-expired");
+        expect(surfaced?.message).toBe("token expired");
+    });
+
+    it("surfaces a bare Error when the SubscriptionError carries no code", () => {
+        const fake = createFakeClient();
+        let capturedError: (() => Error | undefined) | undefined;
+
+        render(
+            () => {
+                const { error } = createSubscription(msgRef, { channelId: "c1" });
+                capturedError = error;
+
+                return <pre>{String(error()?.message)}</pre>;
+            },
+            { wrapper: (props) => <LunoraProvider client={fake.asClient}>{props.children}</LunoraProvider> },
+        );
+
+        fake.subscriptions[0]?.error({ message: "boom" });
+
+        const surfaced = capturedError!();
+
+        expect(surfaced).toBeInstanceOf(Error);
+        expect(surfaced).not.toBeInstanceOf(LunoraError);
+        expect(surfaced?.message).toBe("boom");
     });
 
     it("tears down subscription on unmount", () => {

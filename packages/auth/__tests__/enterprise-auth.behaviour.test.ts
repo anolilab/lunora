@@ -1,0 +1,328 @@
+import { memoryAdapter } from "better-auth/adapters/memory";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+import { createAuth } from "../src/create-auth";
+import { handleAuthRequest } from "../src/handler";
+import { scim } from "../src/plugins";
+import { sso } from "../src/plugins-enterprise";
+import authTables from "../src/schema";
+import signInAndCookie from "./_helpers/auth-session";
+
+/**
+ * Round-trip behaviour for the enterprise-auth plugins Lunora re-exports —
+ * `sso` (OIDC/OAuth2/SAML providers per email domain) and `scim` (SCIM 2.0 Users
+ * provisioning). As with `plugins.behaviour.test.ts`, these drive the real
+ * better-auth runtime against an in-memory adapter — the only stub is the external
+ * IdP at the fetch boundary (see `stubIdentityProvider`), because provider
+ * registration really does call out to the issuer's discovery endpoint.
+ *
+ * Deliberately covered here, because each is a property the feature rests on:
+ *
+ * - `authTables` auto-derives the plugins' D1 tables, so an app gets the schema
+ * from the plugin list alone, and stores no SCIM credential at rest.
+ * - An OIDC provider registers and is then resolvable **by email domain**, which
+ * is the whole point of enterprise SSO over plain OAuth.
+ * - SCIM's non-GET/POST verbs survive Lunora's request routing. An IdP pushes
+ * `PUT`/`PATCH`/`DELETE` at `/scim/v2/Users/:id`; if the dispatch chain dropped
+ * them, provisioning would fail in a way no OIDC test would notice.
+ *
+ * NOT covered: a real IdP handshake (Okta/Entra token exchange) and SAML assertion
+ * verification. Both need an external tenant, and the SAML CPU cost on workerd is
+ * still an open question — see the package docs.
+ */
+
+const SECRET = "x".repeat(32);
+
+const STRONG_PASSWORD = "correct horse battery staple";
+
+/**
+ * An empty in-memory database with exactly the tables `plugins` need, derived from
+ * `authTables` rather than hand-listed.
+ *
+ * Hand-listing rots: the memory adapter throws "Model X not found" for anything it
+ * wasn't seeded with, and 1.7's SCIM plugin alone contributes seven tables whose names
+ * changed from 1.6. Deriving them means the seed follows the plugin set automatically.
+ */
+const seedMemoryDatabase = (plugins: unknown[] = []): Record<string, unknown[]> => {
+    const tables = Object.keys(authTables({ plugins, secret: SECRET } as Parameters<typeof authTables>[0]));
+
+    return {
+        ...Object.fromEntries(tables.map((table) => [table, []])),
+        // better-auth's rate limiter stores counters through the same adapter but is not
+        // part of `authTables`, so it has to be added by hand.
+        rateLimit: [],
+    };
+};
+
+/**
+ * The IdP origin must be trusted for provider registration to accept an OIDC
+ * discovery URL — better-auth refuses an untrusted discovery endpoint outright
+ * ("Untrusted OIDC discovery URL"), which is an SSRF guard, not a nuisance.
+ */
+const TRUSTED_IDP_ORIGIN = "https://idp.example.com";
+
+/** The bearer token the IdP presents. In a real app this comes from `ctx.secrets`, never a literal. */
+const SCIM_TOKEN = "scim-test-token";
+
+/**
+ * A SCIM connection, declared in config the way better-auth 1.7 requires.
+ *
+ * The credential is stated here rather than minted at runtime, which is precisely how
+ * GHSA-j8v8-g9cx-5qf4 was fixed: 1.6 exposed a session-authenticated
+ * `/scim/generate-token` endpoint and stored the result in plaintext in the database,
+ * so any signed-in user could mint a token for someone else's connection.
+ */
+const scimOptions = {
+    connections: [{ credentials: [{ id: "primary", token: SCIM_TOKEN, type: "bearer" as const }], id: "okta-acme" }],
+};
+
+const DISCOVERY_URL = `${TRUSTED_IDP_ORIGIN}/.well-known/openid-configuration`;
+
+const oidcConfig = {
+    authorizationEndpoint: `${TRUSTED_IDP_ORIGIN}/authorize`,
+    clientId: "lunora-test-client",
+    clientSecret: "lunora-test-secret",
+    discoveryEndpoint: DISCOVERY_URL,
+    jwksEndpoint: `${TRUSTED_IDP_ORIGIN}/jwks`,
+    scopes: ["openid", "email", "profile"],
+    tokenEndpoint: `${TRUSTED_IDP_ORIGIN}/token`,
+};
+
+/** What the IdP serves at its discovery URL — the minimum better-auth reads. */
+const discoveryDocument = {
+    authorization_endpoint: oidcConfig.authorizationEndpoint,
+    id_token_signing_alg_values_supported: ["RS256"],
+    issuer: TRUSTED_IDP_ORIGIN,
+    jwks_uri: oidcConfig.jwksEndpoint,
+    response_types_supported: ["code"],
+    subject_types_supported: ["public"],
+    token_endpoint: oidcConfig.tokenEndpoint,
+    userinfo_endpoint: `${TRUSTED_IDP_ORIGIN}/userinfo`,
+};
+
+/**
+ * Stub the IdP at the fetch boundary and return the spy.
+ *
+ * Registering a provider is NOT a pure local write: better-auth fetches the
+ * issuer's discovery document (unconditionally — omitting `discoveryEndpoint`
+ * just derives it from `issuer`), so in a Worker this is an outbound subrequest
+ * at registration time. Only the external IdP is stubbed; the better-auth
+ * runtime, the adapter, and the endpoints are all real. Anything *other* than the
+ * discovery URL rejects, so an unexpected outbound call fails loudly instead of
+ * silently hitting the network.
+ */
+const stubIdentityProvider = () =>
+    vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
+        let url: string;
+
+        if (typeof input === "string") {
+            url = input;
+        } else if (input instanceof URL) {
+            url = input.toString();
+        } else {
+            url = input.url;
+        }
+
+        if (url === DISCOVERY_URL) {
+            return Response.json(discoveryDocument);
+        }
+
+        throw new Error(`unexpected outbound fetch in test: ${url}`);
+    });
+
+describe("authTables with the enterprise plugins", () => {
+    const tablesWithPlugins = (): Record<string, { shape: Record<string, { kind?: string }> }> =>
+        authTables({ plugins: [sso(), scim(scimOptions)], secret: SECRET });
+
+    it("derives the sso + scim tables from the plugin list alone", () => {
+        expect.assertions(3);
+
+        const tables = Object.keys(tablesWithPlugins());
+
+        // An app declaring these plugins gets the storage for free — no hand-written
+        // table definitions, which is what makes the plugins drop-in.
+        expect(tables).toContain("ssoProvider");
+        expect(tables).toContain("scimUser");
+        expect(tables).toContain("scimConnectionBinding");
+    });
+
+    it("carries the columns the SSO domain lookup depends on", () => {
+        expect.assertions(2);
+
+        const tables = tablesWithPlugins();
+
+        // `domain` is what maps a work email to a provider; without it the enterprise
+        // flow degrades to picking a provider by hand.
+        expect(Object.keys(tables["ssoProvider"]?.shape ?? {})).toEqual(expect.arrayContaining(["domain", "issuer", "providerId"]));
+        // The provider row points at a user, so it must be typed as an id, not a string.
+        expect(tables["ssoProvider"]?.shape["userId"]?.kind).toBe("id");
+    });
+
+    it("stores no SCIM credential in the database", () => {
+        expect.assertions(1);
+
+        // Scoped to the SCIM tables: `session.token` and `account.accessToken` are
+        // core better-auth columns and none of this test's business.
+        const scimColumns = Object.entries(tablesWithPlugins())
+            .filter(([table]) => table.startsWith("scim"))
+            .flatMap(([, table]) => Object.keys(table.shape));
+
+        // The heart of GHSA-j8v8-g9cx-5qf4 was a bearer token minted at runtime and kept
+        // in plaintext in the `scimProvider` table. 1.7 declares credentials in config
+        // instead, so no SCIM table should hold one — if a token column reappears here,
+        // the at-rest exposure is back and this fails.
+        expect(scimColumns.filter((column) => /token|secret|credential/iu.test(column))).toEqual([]);
+    });
+
+    it("supports Groups as well as Users", () => {
+        expect.assertions(2);
+
+        const tables = Object.keys(tablesWithPlugins());
+
+        // 1.6 was Users-only, which is why plan 166 scoped group→role sync as custom
+        // work. 1.7 ships it, so that phase is upstream's now.
+        expect(tables).toContain("scimGroup");
+        expect(tables).toContain("scimGroupMember");
+    });
+
+    it("adds nothing when the plugins are absent (no schema cost for apps that don't opt in)", () => {
+        expect.assertions(2);
+
+        const tables = Object.keys(authTables({ secret: SECRET }));
+
+        expect(tables).not.toContain("ssoProvider");
+        expect(tables).not.toContain("scimUser");
+    });
+});
+
+describe("sso plugin behaviour (OIDC mode)", () => {
+    let memoryDatabase: Record<string, unknown[]>;
+    // `any` rather than `ReturnType<typeof createAuth>` so plugin-contributed
+    // endpoints are reachable through `auth.api` without re-deriving the generics.
+    let auth: any;
+    let headers: Headers;
+
+    beforeEach(async () => {
+        stubIdentityProvider();
+
+        memoryDatabase = seedMemoryDatabase([sso()]);
+        auth = createAuth({
+            baseURL: "http://localhost",
+            database: memoryAdapter(memoryDatabase),
+            emailAndPassword: { enabled: true },
+            plugins: [sso()],
+            secret: SECRET,
+            trustedOrigins: [TRUSTED_IDP_ORIGIN],
+        });
+
+        await auth.api.signUpEmail({ body: { email: "admin@acme.test", name: "Admin", password: STRONG_PASSWORD } });
+
+        headers = await signInAndCookie(auth, "admin@acme.test", STRONG_PASSWORD);
+    });
+
+    afterEach(() => {
+        vi.restoreAllMocks();
+    });
+
+    it("registers an OIDC provider against a domain", async () => {
+        expect.assertions(2);
+
+        const provider = await auth.api.registerSSOProvider({
+            body: { domain: "acme.test", issuer: "https://idp.example.com", oidcConfig, providerId: "acme-oidc" },
+            headers,
+        });
+
+        expect(provider).toMatchObject({ issuer: "https://idp.example.com" });
+        expect(memoryDatabase["ssoProvider"]).toHaveLength(1);
+    });
+
+    it("resolves a provider from an email domain and hands back the IdP redirect", async () => {
+        expect.assertions(2);
+
+        await auth.api.registerSSOProvider({
+            body: { domain: "acme.test", issuer: "https://idp.example.com", oidcConfig, providerId: "acme-oidc" },
+            headers,
+        });
+
+        // The domain→provider lookup is the enterprise affordance: a user types a
+        // work email and lands at their own IdP without choosing a provider.
+        const result = await auth.api.signInSSO({ body: { callbackURL: "http://localhost/dashboard", email: "someone@acme.test" } });
+
+        expect(result.url).toContain("https://idp.example.com/authorize");
+        expect(result.redirect).toBe(true);
+    });
+
+    it("refuses an unknown domain rather than falling back to some other provider", async () => {
+        expect.assertions(1);
+
+        await auth.api.registerSSOProvider({
+            body: { domain: "acme.test", issuer: "https://idp.example.com", oidcConfig, providerId: "acme-oidc" },
+            headers,
+        });
+
+        await expect(auth.api.signInSSO({ body: { callbackURL: "http://localhost/dashboard", email: "someone@not-acme.test" } })).rejects.toThrow(/provider/iu);
+    });
+});
+
+describe("scim plugin request routing", () => {
+    let auth: any;
+
+    beforeEach(() => {
+        auth = createAuth({
+            baseURL: "http://localhost",
+            database: memoryAdapter(seedMemoryDatabase([scim(scimOptions)])),
+            emailAndPassword: { enabled: true },
+            plugins: [scim(scimOptions)],
+            secret: SECRET,
+        });
+    });
+
+    it("rejects an unauthenticated request with SCIM's own error schema", async () => {
+        expect.assertions(2);
+
+        const response = await handleAuthRequest(auth, new Request("http://localhost/api/auth/scim/v2/Users", { method: "GET" }));
+
+        // 401 in SCIM's error format proves the request reached the plugin's auth check.
+        // `not.toBe(404)` would have been satisfied by any failure, including better-auth
+        // rejecting the body before SCIM ever saw it.
+        expect(response?.status).toBe(401);
+        await expect(response?.json()).resolves.toMatchObject({ schemas: ["urn:ietf:params:scim:api:messages:2.0:Error"] });
+    });
+
+    // Valid SCIM bodies per verb. An invalid one dies in better-auth's generic body
+    // validation with a 400 and never reaches SCIM — which is how the first version of
+    // this test passed while proving nothing about the SCIM handlers.
+    it.each([
+        ["PUT", { schemas: ["urn:ietf:params:scim:schemas:core:2.0:User"], userName: "victim@acme.test" }],
+        ["PATCH", { Operations: [{ op: "replace", path: "active", value: false }], schemas: ["urn:ietf:params:scim:api:messages:2.0:PatchOp"] }],
+        ["DELETE", undefined],
+    ])("routes %s through to SCIM's auth check (an IdP needs it for provisioning)", async (method, body) => {
+        expect.assertions(1);
+
+        const response = await handleAuthRequest(
+            auth,
+            new Request("http://localhost/api/auth/scim/v2/Users/some-user-id", {
+                ...(body === undefined ? {} : { body: JSON.stringify(body), headers: { "content-type": "application/json" } }),
+                method,
+            }),
+        );
+
+        // 401 (not 400, not 404, not 405): the verb was routed, the body was accepted,
+        // and SCIM's own credential check is what turned it away. A method filter added
+        // anywhere in the dispatch chain would break deactivation, and this catches it.
+        expect(response?.status).toBe(401);
+    });
+
+    it("accepts the configured bearer credential", async () => {
+        expect.assertions(1);
+
+        const response = await handleAuthRequest(
+            auth,
+            new Request("http://localhost/api/auth/scim/v2/Users", { headers: { authorization: `Bearer ${SCIM_TOKEN}` }, method: "GET" }),
+        );
+
+        // The counterpart to the 401s above: with the config-declared token the same
+        // route answers, so those rejections are about credentials and not about routing.
+        expect(response?.status).toBe(200);
+    });
+});

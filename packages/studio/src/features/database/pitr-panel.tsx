@@ -8,10 +8,11 @@ import { Button } from "../../components/ui/button";
 import { Input } from "../../components/ui/input";
 import { Label } from "../../components/ui/label";
 import { useAutoRefresh } from "../../hooks/use-auto-refresh";
+import useMirroredRef from "../../hooks/use-mirrored-ref";
 import { useT } from "../../i18n/i18n-context";
 import type { PitrBookmarkResult, PitrRestoreResult } from "../../lib/admin";
 import { ADMIN_FUNCTIONS } from "../../lib/admin";
-import { adminRef, callOptions, errorMessage, fireAndForget } from "../../lib/internal";
+import { adminRef, callOptions, errorCode, errorMessage, fireAndForget } from "../../lib/internal";
 
 interface PitrPanelProps {
     /** Shard key the PITR ops target. Defaults to the root shard. */
@@ -20,6 +21,47 @@ interface PitrPanelProps {
 
 const GET_BOOKMARK = adminRef(ADMIN_FUNCTIONS.getPitrBookmark);
 const PITR_RESTORE = adminRef(ADMIN_FUNCTIONS.pitrRestore);
+
+/** A run of digits: an epoch-ms timestamp rather than a date string. */
+const EPOCH_MS_RE = /^\d+$/u;
+
+/**
+ * The typed restore target as epoch-ms, parsed HERE rather than on the worker:
+ * the worker `Date.parse`s a string, so digits (`"1717200000000"`) came back NaN,
+ * and an ISO time with no offset was read in the WORKER's time zone. A run of
+ * digits is epoch-ms; anything else goes through the browser's `Date.parse`, so
+ * an offset-less time means this browser's local time — and the panel shows the
+ * resolved UTC instant before anything is sent.
+ * @returns epoch-ms and its UTC ISO form, or `undefined` when the text is not a time
+ */
+const parsePitrTime = (text: string): undefined | { epochMs: number; iso: string } => {
+    const trimmed = text.trim();
+    const epochMs = EPOCH_MS_RE.test(trimmed) ? Number(trimmed) : Date.parse(trimmed);
+
+    const date = new Date(epochMs);
+
+    // `Date`'s own range, not `isFinite`: past ±8.64e15 ms `toISOString` throws.
+    return Number.isNaN(date.getTime()) ? undefined : { epochMs, iso: date.toISOString() };
+};
+
+/** What the typed time resolves to, in UTC — shown before a preview or restore so an offset-less time can't silently mean a different instant. */
+const ResolvedTimeHint = ({ text }: { readonly text: string }): ReactElement | null => {
+    const t = useT();
+
+    if (text.trim() === "") {
+        return null;
+    }
+
+    const resolved = parsePitrTime(text);
+
+    return (
+        <p className="font-mono text-xs text-muted-foreground" data-testid="pitr-time-resolved">
+            {resolved === undefined
+                ? t("Not a time — use epoch-ms or ISO 8601.")
+                : t("Resolves to {instant} (a date-time without an offset is read in this browser's time zone; a bare date is UTC)", { instant: resolved.iso })}
+        </p>
+    );
+};
 
 /**
  * Native Durable-Object point-in-time recovery for one shard — the **Time
@@ -38,33 +80,66 @@ export const PitrPanel = ({ initialShardKey }: PitrPanelProps): ReactElement => 
     const client = useLunora();
     const t = useT();
     const shardKey = initialShardKey ?? "";
+    const shardKeyRef = useMirroredRef(shardKey);
 
     const [current, setCurrent] = useState<null | string>(null);
     const [time, setTime] = useState<string>("");
-    const [preview, setPreview] = useState<null | string>(null);
+    // Tagged with the shard it was asked for: a bookmark names a point in ONE
+    // shard's history, so it is only shown while that shard is the one in view.
+    const [preview, setPreview] = useState<null | { bookmark: string; shard: string }>(null);
     const [bookmark, setBookmark] = useState<string>("");
     const [restart, setRestart] = useState<boolean>(false);
     const [restored, setRestored] = useState<null | PitrRestoreResult>(null);
     const [error, setError] = useState<null | string>(null);
     const [busy, setBusy] = useState<boolean>(false);
+    // The host answered that it keeps no bookmarks (e.g. local Wrangler), so no
+    // preview or restore can succeed: say so and disable them rather than let each
+    // click fail the same way.
+    const [unavailable, setUnavailable] = useState<boolean>(false);
 
-    const refresh = useCallback(async (): Promise<void> => {
-        setBusy(true);
-        setError(null);
+    // `superseded` aborts once the client or shard changes, so an answer from the
+    // previous host can't re-enable controls the current one refuses.
+    const refresh = useCallback(
+        async (superseded?: AbortSignal): Promise<void> => {
+            setBusy(true);
+            setError(null);
 
-        try {
-            const result = (await client.query(GET_BOOKMARK, {}, callOptions(shardKey))) as PitrBookmarkResult;
+            let next: { current: null | string; error: null | string; unavailable: boolean };
 
-            setCurrent(result.current);
-        } catch (error_) {
-            setError(errorMessage(error_));
-        } finally {
+            try {
+                const result = (await client.query(GET_BOOKMARK, {}, callOptions(shardKey))) as PitrBookmarkResult;
+
+                next = { current: result.current, error: null, unavailable: false };
+            } catch (error_) {
+                next = { current: null, error: errorMessage(error_), unavailable: errorCode(error_) === "PITR_UNAVAILABLE" };
+            }
+
+            if (superseded?.aborted === true) {
+                return;
+            }
+
+            if (next.error === null) {
+                setCurrent(next.current);
+            } else {
+                setError(next.error);
+            }
+
+            setUnavailable(next.unavailable);
             setBusy(false);
-        }
-    }, [client, shardKey]);
+            // react-doctor-disable-next-line react-doctor/exhaustive-deps -- `shardKey` is derived from the `initialShardKey` prop (this view has no shard input of its own) and is listed, so a prop change re-targets the read
+        },
+        [client, shardKey],
+    );
 
     useEffect(() => {
-        fireAndForget(refresh());
+        // react-doctor-disable-next-line react-hooks-js/set-state-in-effect -- async refresh of the current bookmark, not derived state
+        const superseded = new AbortController();
+
+        fireAndForget(refresh(superseded.signal));
+
+        return () => {
+            superseded.abort();
+        };
     }, [refresh]);
 
     // The current bookmark advances on every shard write; poll it so it doesn't go
@@ -82,7 +157,7 @@ export const PitrPanel = ({ initialShardKey }: PitrPanelProps): ReactElement => 
                 }
             })(),
         );
-    }, true);
+    }, !unavailable);
 
     const onTimeChange = (event: ChangeEvent<HTMLInputElement>): void => {
         setTime(event.target.value);
@@ -96,32 +171,50 @@ export const PitrPanel = ({ initialShardKey }: PitrPanelProps): ReactElement => 
         setRestart(event.target.checked);
     };
 
+    const resolvedTime = parsePitrTime(time);
+
     const onPreview = (): void => {
-        if (time.trim() === "") {
+        if (resolvedTime === undefined) {
             return;
         }
+
+        const asked = shardKey;
 
         fireAndForget(
             (async (): Promise<void> => {
                 setBusy(true);
                 setError(null);
 
-                try {
-                    const result = (await client.query(GET_BOOKMARK, { time: time.trim() }, callOptions(shardKey))) as PitrBookmarkResult;
+                let next: { error: string } | { result: PitrBookmarkResult };
 
-                    setPreview(result.forTime ?? null);
-                    setCurrent(result.current);
+                try {
+                    next = { result: (await client.query(GET_BOOKMARK, { time: resolvedTime.epochMs }, callOptions(asked))) as PitrBookmarkResult };
                 } catch (error_) {
-                    setPreview(null);
-                    setError(errorMessage(error_));
-                } finally {
-                    setBusy(false);
+                    next = { error: errorMessage(error_) };
                 }
+
+                // The shard changed while this was in flight: its re-read owns
+                // `current`, `error` and `busy` now.
+                if (shardKeyRef.current !== asked) {
+                    return;
+                }
+
+                if ("result" in next) {
+                    setPreview(next.result.forTime === undefined ? null : { bookmark: next.result.forTime, shard: asked });
+                    setCurrent(next.result.current);
+                } else {
+                    setPreview(null);
+                    setError(next.error);
+                }
+
+                setBusy(false);
             })(),
         );
     };
 
-    const runRestore = (args: { bookmark?: string; restart?: boolean; time?: string }): void => {
+    const shownPreview = preview?.shard === shardKey ? preview.bookmark : null;
+
+    const runRestore = (args: { bookmark?: string; restart?: boolean; time?: number }): void => {
         fireAndForget(
             (async (): Promise<void> => {
                 setBusy(true);
@@ -134,21 +227,36 @@ export const PitrPanel = ({ initialShardKey }: PitrPanelProps): ReactElement => 
                     await refresh();
                 } catch (error_) {
                     setError(errorMessage(error_));
-                } finally {
-                    setBusy(false);
+                    // Restore support is checked on its own, so a host can serve bookmarks
+                    // and still refuse to arm one.
+                    if (errorCode(error_) === "PITR_UNAVAILABLE") {
+                        setUnavailable(true);
+                    }
                 }
+
+                setBusy(false);
             })(),
         );
     };
 
     // A restore needs an explicit bookmark or a time to aim at.
-    const canRestore = bookmark.trim() !== "" || time.trim() !== "";
+    const canRestore = bookmark.trim() !== "" || resolvedTime !== undefined;
+
+    // Name what is about to happen. The most destructive action here used to
+    // confirm with a bare "Confirm restore", which said neither WHICH shard would
+    // be rewound — this view is shard-scoped and an operator may have several
+    // open — nor to WHEN. Mirrors `onConfirmRestore`'s own bookmark-wins-over-time
+    // precedence, so the label can't promise a different target than the one sent.
+    const confirmRestoreLabel = t("Restore {shard} to {target}?", {
+        shard: shardKey === "" ? t("root") : shardKey,
+        target: bookmark.trim() === "" ? (resolvedTime?.iso ?? "") : t("the given bookmark"),
+    });
 
     const onConfirmRestore = (): void => {
-        const args: { bookmark?: string; restart?: boolean; time?: string } = restart ? { restart: true } : {};
+        const args: { bookmark?: string; restart?: boolean; time?: number } = restart ? { restart: true } : {};
 
         if (bookmark.trim() === "") {
-            args.time = time.trim();
+            args.time = resolvedTime?.epochMs;
         } else {
             args.bookmark = bookmark.trim();
         }
@@ -196,13 +304,21 @@ export const PitrPanel = ({ initialShardKey }: PitrPanelProps): ReactElement => 
                     <Label htmlFor="pitr-time">{t("Time (ISO or epoch-ms, last 30 days)")}</Label>
                     <div className="flex items-center gap-2">
                         <Input data-testid="pitr-time" id="pitr-time" onChange={onTimeChange} placeholder="2026-06-01T00:00:00.000Z" value={time} />
-                        <Button data-testid="pitr-preview" disabled={busy || time.trim() === ""} onClick={onPreview} size="sm" type="button" variant="outline">
+                        <Button
+                            data-testid="pitr-preview"
+                            disabled={busy || unavailable || resolvedTime === undefined}
+                            onClick={onPreview}
+                            size="sm"
+                            type="button"
+                            variant="outline"
+                        >
                             {t("Preview")}
                         </Button>
                     </div>
-                    {preview !== null && (
+                    <ResolvedTimeHint text={time} />
+                    {shownPreview !== null && (
                         <p className="font-mono text-xs break-all text-muted-foreground" data-testid="pitr-preview-bookmark">
-                            {t("Bookmark for that time")}: {preview}
+                            {t("Bookmark for that time")}: {shownPreview}
                         </p>
                     )}
                 </div>
@@ -225,7 +341,12 @@ export const PitrPanel = ({ initialShardKey }: PitrPanelProps): ReactElement => 
                 </Label>
 
                 <div>
-                    <ConfirmButton confirmLabel={t("Confirm restore")} disabled={busy || !canRestore} onConfirm={onConfirmRestore} testId="pitr-restore">
+                    <ConfirmButton
+                        confirmLabel={confirmRestoreLabel}
+                        disabled={busy || unavailable || !canRestore}
+                        onConfirm={onConfirmRestore}
+                        testId="pitr-restore"
+                    >
                         {t("Restore")}
                     </ConfirmButton>
                 </div>
@@ -246,7 +367,7 @@ export const PitrPanel = ({ initialShardKey }: PitrPanelProps): ReactElement => 
                         {t("Undo bookmark")}: {restored.undoBookmark}
                     </p>
                     <div>
-                        <ConfirmButton confirmLabel={t("Confirm undo")} disabled={busy} onConfirm={onUndo} testId="pitr-undo">
+                        <ConfirmButton confirmLabel={t("Confirm undo")} disabled={busy || unavailable} onConfirm={onUndo} testId="pitr-undo">
                             {t("Undo restore")}
                         </ConfirmButton>
                     </div>

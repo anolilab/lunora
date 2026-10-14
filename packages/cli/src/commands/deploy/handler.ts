@@ -1,259 +1,64 @@
-import { existsSync, readFileSync } from "node:fs";
+import { dirname } from "node:path";
 
 import type { CodegenResult } from "@lunora/codegen";
-import { discoverMigrations, runCodegen } from "@lunora/codegen";
+import { readServiceBindings, runCodegen } from "@lunora/codegen";
+import type { DeployDriver, DeployRequest, ToolchainCommand } from "@lunora/config";
 import {
-    DEV_VARS_FILE,
     discoverContainerInfo,
-    findWranglerFile,
+    discoverSchemaInfo,
     inferLunoraBindings,
-    parseDevVariableEntries,
-    readLinkedProject,
+    planToolchainInvocation,
+    resolveDeployDriver,
+    resolveSchemaDirectory,
+} from "@lunora/config";
+import type { WranglerConfig } from "@lunora/config/cloudflare";
+import {
+    describePreservedCrons,
+    mergeWranglerEnvironment,
     readWranglerJsonc,
     reconcileWranglerBindings,
-} from "@lunora/config";
-import { join } from "@visulima/path";
+    reconcileWranglerCompatibilityDate,
+    reconcileWranglerCrons,
+    warnCloudflareCliConfigOnce,
+    wranglerCodegenInputs,
+} from "@lunora/config/cloudflare";
 import { Spinner } from "@visulima/spinner";
-import { Project } from "ts-morph";
 
+import { evaluateAdvisoryGate, resolveStrictAdvisories } from "../../util/advisory-gate";
 import type { ApiSpec } from "../../util/api-spec";
 import { parseApiSpec } from "../../util/api-spec";
-import { autoLinkFromDeployOutput } from "../../util/auto-link";
+import reportArchitectureDiff from "../../util/architecture-diff";
+import { checkArtifactsJurisdiction } from "../../util/artifacts-jurisdiction";
+import { writeBindingManifestFile } from "../../util/binding-manifest-file";
 import type { CommandHandler } from "../../util/command";
 import { defineHandler } from "../../util/command";
 import { renderDeploySummary } from "../../util/deploy-summary";
-import type { DockerProbe } from "../../util/docker";
-import { isDockerAvailable } from "../../util/docker";
+import { resolveRunnableTargetOrError } from "../../util/deploy-target";
+import { detectPackageManager, toolchainExecArgs } from "../../util/detect-package-manager";
+import { checkDurableObjectBudget } from "../../util/durable-object-budget";
+import type { ExitCode } from "../../util/exit-code";
+import { EXIT_CODE } from "../../util/exit-code";
 import type { Logger } from "../../util/logger";
-import { isJsonFormat, loggerForFormat, printJson, validateOutputFormat } from "../../util/output-format";
+import reportPlatformDiagnostics from "../../util/platform-diagnostics";
+import { runPostCodegenHook } from "../../util/post-codegen-hook";
 import { buildRailpackImages } from "../../util/railpack";
 import { resolveWorkerUrl } from "../../util/resolve-target";
 import { runSchemaDriftGate } from "../../util/schema-drift-gate";
 import type { SpawnDescriptor, Spawner } from "../../util/spawn";
 import { defaultSpawner } from "../../util/spawn";
+import snapshotWranglerConfig from "../../util/wrangler-snapshot";
 import { validateWrangler } from "../../util/wrangler-validator";
-import type { MigrateDataCommandOptions } from "../migrate/handler";
-import { runMigrateDataCommand } from "../migrate/handler";
-import type { FetchLike } from "../run/handler";
+import type { PreDeployCommand } from "./checks";
+import { resolveComposedWorkerEntry, runPreDeployChecks, validateMigrateDeployPreflight } from "./checks";
 import type { DeployOptions } from "./index";
-
-/** Placeholder written by `reconcileWranglerBindings` for auto-provisioned D1 bindings. */
-const D1_PLACEHOLDER_ID = "<replace-with-d1-create-id>";
-
-interface DeployCommandOptions {
-    /** Override the schema-drift gate — deploy even with breaking drift and no new migration. */
-    allowSchemaDrift?: boolean;
-    /** Which API spec(s) codegen emits. Defaults to codegen's `"openapi"` when omitted. */
-    apiSpec?: ApiSpec;
-    cwd?: string;
-    /** Docker-availability probe injected in tests. Defaults to a real `docker info` check. */
-    dockerAvailable?: DockerProbe;
-
-    /**
-     * Validate, bundle, and run all pre-deploy gates without publishing
-     * (`wrangler deploy --dry-run`). Post-deploy steps (data migrations, schema
-     * baseline re-bless) are skipped since nothing shipped.
-     */
-    dryRun?: boolean;
-    env?: string;
-    /** Fetch implementation injected in tests for `--migrate` RPC calls. */
-    fetchImpl?: FetchLike;
-    /** Output format: `pretty` (default) or `json`. */
-    format?: string;
-    /** Set to `false` to disable interactive spinners (test injection). */
-    interactive?: boolean;
-    logger: Logger;
-
-    /**
-     * When true, after a successful `wrangler deploy`, discover and run all
-     * pending data migrations via the worker's `/_lunora/migrate` admin RPC.
-     * The worker must be live (exit 0) before migrations are attempted.
-     *
-     * Implementation note: the status RPC returns the full shard-level
-     * migration state, but there is no single authoritative "list of pending
-     * migration ids" that can be read client-side before running the worker.
-     * Instead, `--migrate` runs `migrate status` followed by `migrate up` for
-     * each migration id discovered locally via `discoverMigrations`.  The
-     * worker's `MigrationRunner` is idempotent — running `up` on an already-
-     * applied migration is a no-op — so this approach is safe.
-     */
-    migrate?: boolean;
-
-    /** Admin bearer token for `--migrate` (falls back to `LUNORA_ADMIN_TOKEN`). */
-    migrateToken?: string;
-
-    /**
-     * Worker URL for `--migrate`. REQUIRED when `--migrate` is set — the deploy
-     * handler never captures the URL `wrangler deploy` published to, so there is
-     * no safe default; omitting it would silently target `http://localhost:8787`
-     * (the dev worker), applying the migration to local state instead of prod.
-     */
-    migrateUrl?: string;
-
-    /**
-     * Confirm a production data migration triggered via `--migrate` (the
-     * `migrate up --prod` confirmation the standalone command requires). Without
-     * it a `--migrate --migrate-url &lt;prod>` deploy refuses to run the migration.
-     */
-    migrateYes?: boolean;
-
-    /**
-     * Emit the bundled worker to this directory via `wrangler deploy --outdir`
-     * (paired with `dryRun` by `lunora build`). Also writes esbuild metadata to
-     * `&lt;outDir>/bundle-meta.json`. When unset, no artifact is written.
-     */
-    outDir?: string;
-
-    /**
-     * Upload a preview version (`wrangler versions upload`) instead of a live
-     * `wrangler deploy`. Codegen + the drift gate + validation still run, but
-     * the post-deploy finalize (migrations, baseline re-bless, auto-link, the
-     * production summary) is skipped — a preview never shifts live traffic.
-     */
-    preview?: boolean;
-    /** Railpack-availability probe injected in tests. Defaults to a real `railpack --version` + `BUILDKIT_HOST` check. */
-    railpackAvailable?: DockerProbe;
-    skipCodegen?: boolean;
-    spawner?: Spawner;
-
-    /**
-     * Deploy to a temporary Cloudflare account (`wrangler deploy --temporary`).
-     * For unauthenticated use only: wrangler provisions a short-lived account +
-     * token, deploys, and prints a claim URL; the deployment stays live ~60
-     * minutes before the unclaimed account is deleted. Wrangler itself errors
-     * if credentials are already present (OAuth / `CLOUDFLARE_API_TOKEN` /
-     * global API key), so we pass the flag straight through without guarding.
-     */
-    temporary?: boolean;
-    /** Re-bless the committed schema baseline with the current shape (accepts breaking drift). */
-    updateSchemaBaseline?: boolean;
-}
-
-interface DeployCommandResult {
-    code: number;
-    descriptor: SpawnDescriptor | undefined;
-    /** Set when the run aborted before reaching the wrangler invocation. */
-    error?: string;
-    /** The schema-drift gate verdict, when it ran (skipped on `--skip-codegen`). */
-    schemaDrift?: { blocked: boolean; reason: string };
-    validation: {
-        problems: ReadonlyArray<string>;
-        wranglerPath: string | undefined;
-    };
-}
-
-interface WranglerD1Entry {
-    binding?: string;
-    database_id?: string;
-}
-
-interface WranglerD1Shape {
-    containers?: ReadonlyArray<{ image?: string } | null | undefined>;
-    d1_databases?: ReadonlyArray<WranglerD1Entry>;
-    vars?: Record<string, unknown>;
-}
-
-/**
- * Worker-origin `vars` that must resolve to the deployed worker's public URL.
- * A Cloudflare Worker can't reach `localhost`, so a localhost value here means
- * scheduled-job dispatch (SchedulerDO → `LUNORA_ORIGIN_URL`) and auth callbacks
- * (`AUTH_URL`) silently break in production.
- */
-const ORIGIN_VAR_NAMES = ["LUNORA_ORIGIN_URL", "LUNORA_WORKER_ORIGIN", "AUTH_URL"] as const;
-
-/** True when a URL string resolves to a loopback host (localhost / 127.0.0.1 / ::1). */
-const isLocalhostUrl = (value: string): boolean => {
-    try {
-        const { hostname } = new URL(value);
-
-        return hostname === "localhost" || hostname === "127.0.0.1" || hostname === "::1" || hostname === "[::1]";
-    } catch {
-        return false;
-    }
-};
-
-/** Mirrors the validator's heuristic: a container image that is a local path (vs a registry reference). */
-const isLocalImagePath = (image: string): boolean => image.startsWith("./") || image.startsWith("../") || image.startsWith("/") || image.includes("Dockerfile");
-
-/**
- * `wrangler deploy` builds and pushes a container image with the local Docker
- * engine whenever `containers[].image` points at a Dockerfile. Check that
- * prerequisite up front and return an actionable error instead of letting
- * wrangler fail mid-deploy with an opaque engine error. Returns `undefined`
- * when no local image build is needed or Docker is available.
- */
-const checkContainerDockerPreflight = (cwd: string, logger: Logger, dockerAvailable: DockerProbe): string | undefined => {
-    const wranglerPath = findWranglerFile(cwd);
-
-    if (!wranglerPath) {
-        return undefined;
-    }
-
-    const { parsed } = readWranglerJsonc<WranglerD1Shape>(wranglerPath);
-    const localImages = (parsed?.containers ?? []).filter((entry) => typeof entry?.image === "string" && isLocalImagePath(entry.image));
-
-    if (localImages.length === 0 || dockerAvailable()) {
-        return undefined;
-    }
-
-    const message =
-        `deploy blocked: wrangler.jsonc declares ${String(localImages.length)} container(s) built from a local Dockerfile, but no Docker-compatible ` +
-        `engine is available. Start Docker (or Colima), or point the container's \`image\` at a pre-built registry reference. ` +
-        `Note: container images must target linux/amd64.`;
-
-    logger.error(message);
-
-    return message;
-};
-
-/**
- * Resolve the worker entry `wrangler deploy` should bundle. Class-B frameworks
- * (SvelteKit, Astro) ship a CF adapter that owns the wrangler `main` field and
- * overwrites it with its own generated worker at build time — so `main` cannot
- * itself point at Lunora's composition. The template instead ships a
- * `src/worker.ts` that imports that generated handler, wraps it with
- * `withLunora` (mounting `/_lunora/*`), and re-exports `ShardDO`. When that file
- * exists we pass it as the positional deploy entry so the ONE deployed worker is
- * the composed one — the positional argument overrides `main`. Class-A/C
- * templates have no `src/worker.ts` (their `main` already points at the real
- * entry), so this returns `undefined` and `wrangler` uses `main` as usual.
- */
-const resolveComposedWorkerEntry = (cwd: string): string | undefined => (existsSync(join(cwd, "src", "worker.ts")) ? "src/worker.ts" : undefined);
-
-/**
- * Verify every container's local build source exists before wrangler/railpack
- * runs. A Dockerfile/build-dir typo otherwise fails opaquely mid-deploy.
- * Registry images have no local source, so they're skipped. Returns the first
- * error message, or `undefined` when all sources exist (or none are local).
- */
-const checkContainerSourcesExist = (cwd: string, logger: Logger): string | undefined => {
-    for (const container of discoverContainerInfo(cwd, "lunora").containers) {
-        const { image } = container;
-
-        if (image.kind === "dockerfile" && !existsSync(join(cwd, image.dockerfilePath))) {
-            const message = `deploy blocked: container "${container.exportName}" references a Dockerfile at "${image.dockerfilePath}" that does not exist. Create it or fix the \`image\` path in lunora/containers.ts.`;
-
-            logger.error(message);
-
-            return message;
-        }
-
-        if (image.kind === "build" && !existsSync(join(cwd, image.buildDir))) {
-            const message = `deploy blocked: container "${container.exportName}" references a Railpack build directory "${image.buildDir}" that does not exist. Create it or fix the \`image.build\` path in lunora/containers.ts.`;
-
-            logger.error(message);
-
-            return message;
-        }
-    }
-
-    return undefined;
-};
+import completeDeploy from "./post-deploy";
+import { offerMissingSecrets, warnDevVariablesNotPushed } from "./secrets";
+import type { DeployCommandData, DeployCommandOptions, DeployCommandResult } from "./types";
 
 const isInteractive = (options: DeployCommandOptions): boolean => {
     // `--format json` owns stdout for the JSON document — interactive spinners
     // would corrupt it, so json mode is always non-interactive.
-    if (isJsonFormat(options.format)) {
+    if (options.format === "json") {
         return false;
     }
 
@@ -265,30 +70,6 @@ const isInteractive = (options: DeployCommandOptions): boolean => {
 };
 
 /**
- * Return the name of any D1 binding that still carries the placeholder
- * database_id written by `reconcileWranglerBindings`. Returns `undefined`
- * when no placeholder is found (or when wrangler.jsonc is absent/unparseable —
- * the validator will report the real problem in that case).
- */
-const findD1PlaceholderBinding = (cwd: string): string | undefined => {
-    const wranglerPath = findWranglerFile(cwd);
-
-    if (!wranglerPath) {
-        return undefined;
-    }
-
-    const { parsed } = readWranglerJsonc<WranglerD1Shape>(wranglerPath);
-
-    if (!parsed) {
-        return undefined;
-    }
-
-    const placeholder = (parsed.d1_databases ?? []).find((entry) => entry.database_id === D1_PLACEHOLDER_ID);
-
-    return placeholder?.binding;
-};
-
-/**
  * Build + push any Railpack `{ build }` containers before wrangler runs. Reads
  * the build sources from `lunora/containers.ts` (not wrangler.jsonc — by the
  * time it's reconciled the build kind is indistinguishable from a registry ref)
@@ -296,11 +77,21 @@ const findD1PlaceholderBinding = (cwd: string): string | undefined => {
  * Returns an error message when a build is blocked or fails, else `undefined`.
  */
 const buildContainerImages = async (cwd: string, options: DeployCommandOptions): Promise<string | undefined> => {
-    const targets = discoverContainerInfo(cwd, "lunora")
-        .containers.filter((container) => container.image.kind === "build")
-        .map((container) => {
-            return { buildDir: (container.image as { buildDir: string }).buildDir, exportName: container.exportName };
-        });
+    // A dry run publishes nothing, and this pushes to the Cloudflare Registry —
+    // the same reason `offerMissingSecrets` skips. The comment at the call site
+    // called this "deploy-only" while nothing enforced it, so `lunora build` and
+    // `deploy --dry-run` both shipped an image. The read-only container checks
+    // (missing build dir / Dockerfile) still run in `runPreDeployChecks`, so a
+    // dry run keeps reporting what a real deploy would reject.
+    if (options.dryRun === true) {
+        return undefined;
+    }
+
+    const targets = discoverContainerInfo(cwd, "lunora").containers.flatMap((container) =>
+        container.schedulingPolicy === undefined && container.image.kind === "build"
+            ? [{ buildDir: container.image.buildDir, exportName: container.exportName }]
+            : [],
+    );
 
     if (targets.length === 0) {
         return undefined;
@@ -318,19 +109,86 @@ const buildContainerImages = async (cwd: string, options: DeployCommandOptions):
 };
 
 /**
+ * Reconcile the committed `triggers.crons` with the schedules codegen discovered.
+ *
+ * `undefined` means codegen was skipped (e.g. `--prebuilt`): we have no evidence
+ * of the project's crons, so leave the committed `triggers.crons` untouched —
+ * clearing it would silently stop every production cron. A defined array
+ * (including `[]`) means codegen ran and reconciling — clearing a
+ * genuinely-removed last cron — is intended. Mirrors the
+ * `if (codegen !== undefined)` guard on the schema-drift gate.
+ */
+const syncCronTriggers = (cwd: string, logger: Logger, cronTriggers: ReadonlyArray<string> | undefined): void => {
+    if (cronTriggers === undefined) {
+        return;
+    }
+
+    try {
+        const reconciled = reconcileWranglerCrons(cwd, cronTriggers);
+
+        if (reconciled.changed) {
+            logger.success(`synced ${String(cronTriggers.length)} cron trigger(s) → ${reconciled.wranglerPath ?? "wrangler.jsonc"}`);
+        }
+
+        // A damaged `lunora.crons` ownership record degrades reconciliation to
+        // add-only, which is safe but invisible — see `ReconcileCronsResult`.
+        for (const warning of reconciled.warnings) {
+            logger.warn(warning);
+        }
+
+        // The array is not the codegen-derived set. Say so — a `backupCron`
+        // entry that quietly stopped being delivered is exactly the failure the
+        // preservation exists to prevent, and silence is how it went unnoticed.
+        const kept = describePreservedCrons(reconciled.preserved);
+
+        if (kept !== undefined) {
+            logger.info(kept);
+        }
+    } catch (error: unknown) {
+        const message = error instanceof Error ? error.message : String(error);
+
+        logger.warn(`cron trigger sync skipped: ${message}`);
+    }
+};
+
+/**
  * Auto-provision the bindings the project's code implies before validating, so
  * a first deploy doesn't fail on a SESSION/SCHEDULER/DB binding the user never
  * had to hand-write. Idempotent — a no-op once the config is in sync — and
  * best-effort: a failure here must not abort the deploy, since the validator
  * still reports any genuinely missing requirement.
  */
-const provisionBindings = async (cwd: string, logger: Logger): Promise<void> => {
+const provisionBindings = async (
+    cwd: string,
+    logger: Logger,
+    cronTriggers: ReadonlyArray<string> | undefined,
+    target: string,
+    environment: string | undefined,
+): Promise<void> => {
     try {
-        const inferred = await inferLunoraBindings({ projectRoot: cwd });
-        const reconciled = reconcileWranglerBindings(cwd, inferred);
+        // Resolved for its side effect: reject an unregistered target before
+        // reconciling a config shaped for the wrong provider. Every caller
+        // (deploy, prepare, and `lunora dev`'s wrangler flavor) reconciles
+        // through this function, so this is the one guard.
+        resolveDeployDriver(target);
 
-        if (reconciled.changed) {
-            logger.success(`provisioned bindings: ${reconciled.added.join(", ")} → ${reconciled.wranglerPath ?? "wrangler.jsonc"}`);
+        const inferred = await inferLunoraBindings({ projectRoot: cwd, schemaDir: resolveSchemaDirectory(cwd) });
+        const reconciled = reconcileWranglerBindings(cwd, inferred, { environment, target });
+
+        const writtenTo = reconciled.wranglerPath ?? "wrangler.jsonc";
+
+        if (reconciled.added.length > 0) {
+            logger.success(`provisioned bindings: ${reconciled.added.join(", ")} → ${writtenTo}`);
+        }
+
+        if (reconciled.updated.length > 0) {
+            logger.success(`updated bindings: ${reconciled.updated.join(", ")} → ${writtenTo}`);
+        }
+
+        if (reconciled.devConfig !== undefined) {
+            const { added, path, updated } = reconciled.devConfig;
+
+            logger.success(`dev sidecar bindings: ${[...added, ...updated].join(", ")} → ${path}`);
         }
 
         for (const warning of reconciled.warnings) {
@@ -341,157 +199,22 @@ const provisionBindings = async (cwd: string, logger: Logger): Promise<void> => 
 
         logger.warn(`binding inference skipped: ${message}`);
     }
-};
-
-/**
- * Print a NON-BLOCKING reminder that `wrangler deploy` does not push secrets.
- * `lunora deploy` ships code + bindings but never uploads `.dev.vars` values —
- * those are pushed separately via `lunora env push`. So a user who edited
- * `.dev.vars` and then deployed would otherwise be left with stale/missing
- * deployed secrets and no signal that anything drifted (Supabase #45242).
- *
- * This only fires when a local `.dev.vars` actually exists and carries at least
- * one key — there's nothing to remind about otherwise. It is a warning only and
- * never aborts the deploy; it does not prompt, so it's safe under
- * `--yes`/non-interactive flows.
- */
-const warnDevVariablesNotPushed = (cwd: string, logger: Logger): void => {
-    const devVariablesPath = join(cwd, DEV_VARS_FILE);
-
-    if (!existsSync(devVariablesPath)) {
-        return;
-    }
-
-    let keyCount: number;
 
     try {
-        keyCount = parseDevVariableEntries(readFileSync(devVariablesPath, "utf8")).length;
-    } catch {
-        // A read/parse failure here must never block a deploy — skip the reminder.
-        return;
-    }
+        const reconciled = reconcileWranglerCompatibilityDate(cwd);
 
-    if (keyCount === 0) {
-        return;
-    }
-
-    logger.warn(
-        `Note: \`lunora deploy\` does not push secrets. ${DEV_VARS_FILE} has ${String(keyCount)} key(s); ` +
-            `if you changed them, run \`lunora env push --yes\` to update the deployed secrets.`,
-    );
-};
-
-/**
- * Discover migration ids from `lunora/migrations.ts` and run them in declared
- * order against the now-live worker. The worker's `MigrationRunner` is
- * idempotent — running `up` on an already-applied migration is a no-op —
- * so iterating every declared id is safe even when some were previously applied.
- *
- * We do not attempt to parse the `status` RPC response to filter "pending"
- * ids, because the status response is shard-aggregated (each shard reports its
- * own applied set) and there is no guaranteed single boolean per migration id.
- * Running `up` unconditionally and relying on worker idempotency is simpler,
- * auditable, and safe.
- */
-const runPostDeployMigrations = async (options: DeployCommandOptions, cwd: string): Promise<number> => {
-    const project = new Project({ skipAddingFilesFromTsConfig: true });
-    const lunoraDirectory = join(cwd, "lunora");
-    let migrations: ReadonlyArray<{ id: string; table: string }>;
-
-    try {
-        migrations = discoverMigrations(project, lunoraDirectory);
+        if (reconciled.changed) {
+            logger.success(
+                `bumped compatibility_date to ${reconciled.date ?? "unknown"} (Workers Cache enabled) → ${reconciled.wranglerPath ?? "wrangler.jsonc"}`,
+            );
+        }
     } catch (error: unknown) {
         const message = error instanceof Error ? error.message : String(error);
 
-        options.logger.warn(`--migrate: could not discover migrations (${message}); skipping`);
-
-        return 0;
+        logger.warn(`compatibility date sync skipped: ${message}`);
     }
 
-    if (migrations.length === 0) {
-        options.logger.info("--migrate: no data migrations declared in lunora/");
-
-        return 0;
-    }
-
-    options.logger.info(`--migrate: running ${String(migrations.length)} migration(s) against deployed worker`);
-
-    for (const migration of migrations) {
-        options.logger.info(`--migrate: up "${migration.id}" (table "${migration.table}")`);
-
-        const migrateOptions: MigrateDataCommandOptions = {
-            cwd,
-            fetchImpl: options.fetchImpl,
-            id: migration.id,
-            logger: options.logger,
-            // A `--migrate-url` is always set by this point (guarded above), so this
-            // is a production migration — gate it behind the operator's explicit
-            // `--migrate-yes`/`--yes` rather than auto-confirming.
-            prod: true,
-            subcommand: "up",
-            token: options.migrateToken,
-            url: options.migrateUrl,
-            yes: options.migrateYes === true,
-        };
-
-        // eslint-disable-next-line no-await-in-loop -- sequential: each migration must finish before the next
-        const migrateResult = await runMigrateDataCommand(migrateOptions);
-
-        if (migrateResult.code !== 0) {
-            options.logger.error(`--migrate: migration "${migration.id}" failed — see output above`);
-
-            return migrateResult.code;
-        }
-
-        options.logger.success(`--migrate: "${migration.id}" applied`);
-    }
-
-    return 0;
-};
-
-/**
- * Validate the migration options that would otherwise fail only after the live
- * worker has already been replaced by `wrangler deploy`.
- */
-const validateMigrateDeployPreflight = (options: DeployCommandOptions): string | undefined => {
-    // A dry run / preview never publishes a live version, so post-deploy
-    // migrations don't run — don't demand `--migrate-url`/`--migrate-yes` for a
-    // `--dry-run --migrate` or `--preview --migrate` combo.
-    if (!options.migrate || options.dryRun || options.preview) {
-        return undefined;
-    }
-
-    // `wrangler deploy`'s published URL is never captured here, so without an
-    // explicit `--migrate-url` the downstream migration would default to
-    // `http://localhost:8787` (the dev worker) and apply against LOCAL state —
-    // and ship the production admin bearer to whatever listens on that port.
-    // Refuse before deploying rather than silently targeting localhost later.
-    if (options.migrateUrl === undefined) {
-        const message =
-            "--migrate requires --migrate-url <https://your-worker> — the deploy target URL is not captured automatically, refusing to default to localhost";
-
-        options.logger.error(message);
-
-        return message;
-    }
-
-    if (options.migrateYes !== true) {
-        const message = "--migrate runs production data migrations after deploy. Re-run with --migrate-yes to confirm.";
-
-        options.logger.error(message);
-
-        return message;
-    }
-
-    if ((options.migrateToken ?? process.env.LUNORA_ADMIN_TOKEN) === undefined || (options.migrateToken ?? process.env.LUNORA_ADMIN_TOKEN) === "") {
-        const message = "admin token required for --migrate — pass --migrate-token or set LUNORA_ADMIN_TOKEN";
-
-        options.logger.error(message);
-
-        return message;
-    }
-
-    return undefined;
+    syncCronTriggers(cwd, logger, cronTriggers);
 };
 
 /**
@@ -499,7 +222,16 @@ const validateMigrateDeployPreflight = (options: DeployCommandOptions): string |
  * success (the deploy needs its schema snapshot for the drift gate), or an
  * `{ error }` message on failure.
  */
-const runCodegenStep = (cwd: string, interactive: boolean, logger: Logger, apiSpec: ApiSpec | undefined): { error?: string; result?: CodegenResult } => {
+const runCodegenStep = async (
+    cwd: string,
+    interactive: boolean,
+    logger: Logger,
+    apiSpec: ApiSpec | undefined,
+    target: string,
+    spawner: Spawner | undefined,
+    jsonOutput: boolean,
+    strictAdvisories: boolean,
+): Promise<{ error?: string; result?: CodegenResult }> => {
     let codegenSpinner: Spinner | undefined;
 
     if (interactive) {
@@ -510,11 +242,53 @@ const runCodegenStep = (cwd: string, interactive: boolean, logger: Logger, apiSp
     }
 
     try {
-        const result = runCodegen({ apiSpec, projectRoot: cwd });
+        const result = runCodegen({ apiSpec, projectRoot: cwd, target, ...wranglerCodegenInputs(cwd) });
         codegenSpinner?.succeed("codegen complete");
 
         if (!codegenSpinner) {
             logger.success("codegen complete");
+        }
+
+        // Portability diagnostics (`platform_unsupported_feature` /
+        // `platform_unknown_target`) mean the emitted `ctx.*` surface does not
+        // match what the deploy target can actually serve — always blocking,
+        // no opt-out, same as every other codegen caller
+        // (`reportPlatformDiagnostics` is shared for exactly this reason).
+        const platform = reportPlatformDiagnostics(result.platformDiagnostics, logger);
+
+        if (platform.errors.length > 0) {
+            // Every message was already logged above; the returned `error` is the
+            // single-string abort reason the deploy result carries.
+            return { error: platform.errors.join("; ") };
+        }
+
+        // ERROR-level schema advisories ("the call throws at runtime") gate on
+        // the same `--no-strict-advisories` opt-out `lunora codegen` uses, so a
+        // legitimately-partial target can still ship interactively while CI
+        // stays strict by default.
+        const { errorAdvisories, names, shouldBlock } = evaluateAdvisoryGate(result.advisories, strictAdvisories);
+
+        if (shouldBlock) {
+            const message =
+                `${errorAdvisories.length.toString()} ERROR-level ${errorAdvisories.length === 1 ? "advisory" : "advisories"} (${names.join(", ")}). ` +
+                // Command-neutral: this pipeline is reached from `deploy`, `prepare`
+                // AND `build`, and all three now register the flag it names.
+                `Pass --no-strict-advisories to downgrade this to a warning and continue.`;
+
+            logger.error(message);
+
+            return { error: message };
+        }
+
+        // Codegen ran in-process, not through the project's own `codegen`
+        // script. Without this a deploy would ship output the project considers
+        // unfinished, and the deploy pipeline has no reason to run that script
+        // first, so nothing else would catch it.
+        const postCodegen = await runPostCodegenHook({ cwd, logger, spawner, stdoutToStderr: jsonOutput });
+
+        // Already logged by the hook — this only decides that it BLOCKS.
+        if (postCodegen.error !== undefined) {
+            return { error: postCodegen.error };
         }
 
         return { result };
@@ -530,338 +304,626 @@ const runCodegenStep = (cwd: string, interactive: boolean, logger: Logger, apiSp
 };
 
 /**
- * Check for a D1 placeholder database_id and return an error message when one
- * is found. Returns `undefined` when the config is clean (or absent/unparseable
- * — those cases fall through to the validator). Extracted from `runDeployCommand`
- * to keep its cognitive complexity within the 15-node budget.
+ * The neutral deploy request these options describe. The projection's
+ * `configPath` is added when the command is planned
+ * ({@link planToolchainInvocation}).
  */
-const checkD1Placeholder = (cwd: string, logger: Logger): string | undefined => {
-    const placeholderBinding = findD1PlaceholderBinding(cwd);
-
-    if (placeholderBinding === undefined) {
-        return undefined;
-    }
-
-    const message =
-        `deploy blocked: the "${placeholderBinding}" D1 binding has a placeholder database_id ` +
-        `("${D1_PLACEHOLDER_ID}"). Run \`wrangler d1 create <name>\` to create the database, ` +
-        `then replace the placeholder in wrangler.jsonc with the real id before deploying.`;
-
-    logger.error(message);
-
-    return message;
+const deployRequestFor = (cwd: string, options: DeployCommandOptions): DeployRequest => {
+    return {
+        dryRun: options.dryRun,
+        // Class-B composition: bundle the `src/worker.ts` wrapper (which the
+        // framework's CF adapter can't clobber) instead of the adapter-owned `main`.
+        entry: resolveComposedWorkerEntry(cwd),
+        environment: options.env,
+        outDir: options.outDir,
+        preview: options.preview,
+        temporary: options.temporary,
+    };
 };
 
 /**
- * Hard-block a deploy when a worker-origin `var` still points at localhost.
- * `lunora deploy` always targets Cloudflare (the dev loop is `lunora dev`), and
- * a Worker can't reach a loopback address — so a localhost origin silently
- * breaks scheduled jobs / auth callbacks in production. Mirrors the
- * D1-placeholder hard-block. Returns the error message, or `undefined` when
- * clean (or when wrangler.jsonc is absent/unparseable — the validator handles
- * that).
+ * Plan the target's deploy command without writing anything. The argv builder
+ * is where a host refuses an option it has no equivalent for (celld has no
+ * `--env`, `--preview`, …), so the pre-deploy pipeline plans once up front — a
+ * refusal then stops the deploy before codegen or provisioning has touched a
+ * file — and {@link buildDeployCommand} plans again, against the provisioned
+ * config, to run it.
  */
-const checkLocalhostOriginVariables = (cwd: string, logger: Logger): string | undefined => {
-    const wranglerPath = findWranglerFile(cwd);
+const planDeploy = (cwd: string, options: DeployCommandOptions, driver: DeployDriver): ReturnType<typeof planToolchainInvocation> => {
+    const { toolchain } = driver;
 
-    if (!wranglerPath) {
-        return undefined;
+    // `resolveRunnableTargetOrError` rejects a toolchain-less target (Node) at
+    // selection; this is the backstop for a direct caller that skipped it.
+    if (toolchain === undefined) {
+        throw new Error(`deploy target "${driver.id}" has no command-line toolchain`);
     }
 
-    const { parsed } = readWranglerJsonc<WranglerD1Shape>(wranglerPath);
-    const variables = parsed?.vars;
+    const request = deployRequestFor(cwd, options);
 
-    if (!variables) {
-        return undefined;
-    }
-
-    const offenders = ORIGIN_VAR_NAMES.filter((name) => typeof variables[name] === "string" && isLocalhostUrl(variables[name]));
-
-    if (offenders.length === 0) {
-        return undefined;
-    }
-
-    const message =
-        `deploy blocked: ${offenders.join(", ")} in wrangler.jsonc point at localhost. A deployed Worker can't reach a loopback ` +
-        `address, so this silently breaks scheduled-job dispatch / auth callbacks. Set each to the deployed worker's public URL ` +
-        `(or move it to a secret with \`wrangler secret put\`) before deploying.`;
-
-    logger.error(message);
-
-    return message;
+    return planToolchainInvocation(driver, cwd, "deploy", (configPath) => toolchain.deploy({ ...request, configPath }));
 };
 
 /**
- * After a successful `wrangler deploy`, run any requested data migrations and —
- * only when the whole operation succeeded — advance the committed schema
- * baseline via the gate's deferred `rebless`. Extracted from `executeDeploy` to
- * keep its cognitive complexity within the 15-node budget.
+ * Assemble the target's deploy argv (the package-manager launcher is prepended
+ * by the caller via {@link toolchainExecArgs}), write the config projection it
+ * reads, and say what that projection left out.
  */
-const finalizeSuccessfulDeploy = async (
-    options: DeployCommandOptions,
-    cwd: string,
-    descriptor: SpawnDescriptor,
-    validation: DeployCommandResult["validation"],
-    reblessSchemaBaseline: (() => void) | undefined,
-): Promise<DeployCommandResult> => {
-    if (options.migrate) {
-        const migrateCode = await runPostDeployMigrations(options, cwd);
-
-        // Only advance the committed baseline when deploy AND its migrations
-        // succeeded; a failed migration leaves the gate measuring against the
-        // pre-deploy baseline on the retry.
-        if (migrateCode === 0) {
-            reblessSchemaBaseline?.();
-        }
-
-        return { code: migrateCode, descriptor, validation };
-    }
-
-    // Deploy succeeded — safe to advance the committed schema baseline.
-    reblessSchemaBaseline?.();
-
-    return { code: 0, descriptor, validation };
-};
-
-/**
- * Run the gates that must pass before `wrangler deploy`: the D1-placeholder
- * hard-block, the Dockerfile-container Docker preflight, and the Railpack
- * `{ build }` build+push step. Returns the first error message, or `undefined`
- * when all pass. Extracted from {@link executeDeploy} to keep its complexity
- * bounded.
- */
-const runPreDeployGates = async (cwd: string, options: DeployCommandOptions): Promise<string | undefined> => {
-    const d1Error = checkD1Placeholder(cwd, options.logger);
-
-    if (d1Error !== undefined) {
-        return d1Error;
-    }
-
-    const localhostOriginError = checkLocalhostOriginVariables(cwd, options.logger);
-
-    if (localhostOriginError !== undefined) {
-        return localhostOriginError;
-    }
-
-    const sourceError = checkContainerSourcesExist(cwd, options.logger);
-
-    if (sourceError !== undefined) {
-        return sourceError;
-    }
-
-    const dockerError = checkContainerDockerPreflight(cwd, options.logger, options.dockerAvailable ?? isDockerAvailable);
-
-    if (dockerError !== undefined) {
-        return dockerError;
-    }
-
-    return buildContainerImages(cwd, options);
-};
-
-/**
- * Assemble the `pnpm exec wrangler deploy …` argv: the class-B composed-entry
- * positional (when present), `--env`, and `--dry-run`. Extracted from
- * {@link executeDeploy} to keep its cognitive complexity within budget.
- */
-const buildWranglerDeployArgs = (cwd: string, options: DeployCommandOptions): string[] => {
-    // `--preview` uploads a new Version (with a preview URL) instead of going
-    // live, so production traffic is untouched.
-    const args = options.preview ? ["exec", "wrangler", "versions", "upload"] : ["exec", "wrangler", "deploy"];
-
-    // Class-B composition: bundle the `src/worker.ts` wrapper (which the
-    // framework's CF adapter can't clobber) instead of the adapter-owned `main`.
+const buildDeployCommand = (cwd: string, options: DeployCommandOptions, driver: DeployDriver): ToolchainCommand => {
+    const invocation = planDeploy(cwd, options, driver);
     const composedEntry = resolveComposedWorkerEntry(cwd);
 
     if (composedEntry !== undefined) {
-        args.push(composedEntry);
         options.logger.info(`class-B composition: deploying ${composedEntry} (overrides wrangler main)`);
     }
 
-    if (options.env !== undefined) {
-        args.push("--env", options.env);
-    }
-
-    // `--temporary` deploys to a wrangler-provisioned short-lived account when
-    // unauthenticated. Passed straight through — wrangler errors itself if
-    // credentials are already present.
+    // A short-lived account is wrangler-provisioned when unauthenticated; it
+    // errors itself if credentials are already present.
     if (options.temporary) {
-        args.push("--temporary");
         options.logger.info("temporary account: deploying to a short-lived Cloudflare account (~60min); wrangler will print a claim URL");
     }
 
-    // `--dry-run` validates + bundles without publishing. Nothing ships, so the
+    // A dry run validates + bundles without publishing. Nothing ships, so the
     // post-deploy finalize (migrations, baseline re-bless) is skipped by the caller.
     if (options.dryRun) {
-        args.push("--dry-run");
         options.logger.info("dry run: validating + bundling without publishing");
     }
 
     // `lunora build` writes the bundled worker (+ esbuild metafile) to disk for
     // CI artifacting / bundle inspection.
     if (options.outDir !== undefined) {
-        args.push("--outdir", options.outDir, "--metafile");
         options.logger.info(`build artifact: emitting bundle to ${options.outDir}`);
     }
 
-    return args;
+    invocation.commit();
+
+    // Those keys configure nothing on that host, and an operator reading the
+    // Cloudflare config should not assume otherwise.
+    if (invocation.projection !== undefined && invocation.projection.dropped.length > 0) {
+        options.logger.warn(
+            `${driver.name} ignores these wrangler keys, so they were left out of ${invocation.projection.configPath}: ${invocation.projection.dropped.join(", ")}`,
+        );
+    }
+
+    return invocation.command;
 };
 
-const executeDeploy = async (options: DeployCommandOptions): Promise<DeployCommandResult> => {
+/**
+ * Failed-deploy result with the empty validation shape shared by every
+ * pre-wrangler abort. Exit 2 by default: everything that aborts before wrangler
+ * runs — the pipeline, the `--migrate` preflight, the entry build — refuses
+ * because the project or the invocation is wrong, never because the deploy
+ * itself failed. A check that resolved a different bucket passes `code`.
+ */
+const abortResult = (error: string, extra?: Partial<DeployCommandResult>): DeployCommandResult => {
+    return {
+        code: EXIT_CODE.USAGE,
+        descriptor: undefined,
+        error,
+        validation: { problems: [], wranglerPath: undefined },
+        ...extra,
+    };
+};
+
+/**
+ * Log wrangler.jsonc validation problems (if any) and report whether the deploy
+ * must abort.
+ *
+ * Warnings are printed too, not just `report.errors`. This command is the one
+ * that actually ships a Worker, so a warning it swallows is one the user meets
+ * as a wrangler failure instead — which is what happened while the
+ * unexported-class check was warning-level (it blocks now), and still applies to
+ * the `unverifiedKeys` env-override notice and the missing-assets-directory
+ * warning.
+ */
+const reportWranglerProblems = (validation: { problems: ReadonlyArray<string>; report?: { warnings: ReadonlyArray<string> } }, logger: Logger): boolean => {
+    for (const warning of validation.report?.warnings ?? []) {
+        logger.warn(`wrangler.jsonc: ${warning}`);
+    }
+
+    if (validation.problems.length === 0) {
+        return false;
+    }
+
+    logger.error("wrangler.jsonc validation failed:");
+
+    for (const problem of validation.problems) {
+        logger.error(`  - ${problem}`);
+    }
+
+    return true;
+};
+
+/**
+ * Assemble the wrangler {@link SpawnDescriptor}, including how its stdout is
+ * handled — the one decision that has to be right for `--format json` to stay
+ * pipeable:
+ *
+ * Pretty + publishing uses `captureStdout` (buffered AND teed, so the URL can be
+ * read while the user still watches live progress). Json + publishing uses
+ * `captureStdoutSilently` (buffered, never teed — the caller replays it to
+ * stderr), because `captureStdout` there would interleave with the single JSON
+ * document on stdout and corrupt it. A dry run has nothing to read, so its
+ * stdout is left alone (mapped to stderr in json mode).
+ */
+const buildDeploySpawn = (cwd: string, options: DeployCommandOptions, driver: DeployDriver): SpawnDescriptor => {
+    const jsonFormat = options.format === "json";
+    // Read the deployed URL off wrangler's stdout on EVERY publishing run — a
+    // preview and a `--format json` deploy need to report where the thing went
+    // just as much as a first pretty deploy does, and a re-deploy is how a
+    // CHANGED url gets noticed.
+    const publishes = options.dryRun !== true;
+
+    const deployCommand = buildDeployCommand(cwd, options, driver);
+    const exec = toolchainExecArgs(detectPackageManager(cwd), deployCommand);
+
+    return {
+        args: exec.args,
+        captureStdout: publishes && !jsonFormat,
+        captureStdoutSilently: publishes && jsonFormat,
+        command: exec.command,
+        cwd,
+        stdoutToStderr: jsonFormat && !publishes,
+    };
+};
+
+/**
+ * {@link runPreDeployPipeline}'s outcome. Split on `error` so a passing run
+ * always carries its resolved `target` — the caller must never fall back to
+ * `resolveDeployDriver`'s default (Cloudflare) for a target it did not resolve.
+ */
+type PreDeployPipelineResult =
+    | {
+          /** Set when a check resolved its own exit code — otherwise the caller's default applies. */
+          code?: ExitCode;
+          error: string;
+          schemaDrift?: { blocked: boolean; reason: string };
+          target?: string;
+          validation: DeployCommandResult["validation"];
+      }
+    | {
+          codegen?: CodegenResult;
+          error?: never;
+          reblessSchemaBaseline?: () => void;
+          recordArchitecture?: () => void;
+          target: string;
+          validation: DeployCommandResult["validation"];
+      };
+
+/**
+ * Everything both `lunora prepare` and `lunora deploy` must do before anything
+ * ships: resolve the target, run codegen (with its post-hook, platform
+ * diagnostics and ERROR-advisory gate), gate on schema drift, provision the
+ * bindings the code implies, run the read-only pre-deploy checks, and validate
+ * the resulting wrangler config.
+ *
+ * Shared because it was written twice. `prepare` had its own copy of the same
+ * five steps and the two had already drifted in the direction that matters: only
+ * deploy gated on ERROR-level advisories, so a CI job could run `lunora prepare`,
+ * go green, and still be rejected by the deploy it was meant to pre-check. They
+ * also provisioned differently — deploy reconciled inline, prepare went through
+ * `DeployDriver.provision` — so "prepare then deploy" could reconcile twice by
+ * two routes.
+ *
+ * Not identical in every respect: `prepare` takes no `--env`, so it always sees
+ * the top-level config view while `deploy --env <name>` sees the environment's
+ * own (non-inheritable) `vars` / `d1_databases` / `containers`. A green
+ * `prepare` therefore does not prove a `deploy --env <name>` will pass.
+ *
+ * Stops before the container BUILD and the wrangler invocation, which is exactly
+ * the line between the two commands: `prepare` answers "would this deploy?"
+ * without pushing an image or a bundle.
+ */
+const runPreDeployPipeline = async (options: DeployCommandOptions, command: PreDeployCommand): Promise<PreDeployPipelineResult> => {
     const cwd = options.cwd ?? process.cwd();
     const interactive = isInteractive(options);
+    const strictAdvisories = resolveStrictAdvisories(options);
+    const empty = { problems: [], wranglerPath: undefined };
+
+    // Resolved ONCE, and before anything writes. This rewrites `_generated/*`
+    // and may mutate `wrangler.jsonc` well before the wrangler step, so
+    // validating at the point of driver use would leave those side effects behind
+    // on an unknown target. Resolving here also means `lunora.config.*`'s `target`
+    // reaches the driver, not just the `--target` flag.
+    //
+    // The `Runnable` form additionally rejects a registered-but-undeployable
+    // target (a driver with no toolchain). That has to happen here rather than at
+    // the wrangler step: codegen below tailors the whole `ctx.*` surface to the
+    // target's capability matrix, and failing after that leaves the app rewritten
+    // for a target it then refuses to ship.
+    const resolvedTarget = resolveRunnableTargetOrError(cwd, options.target);
+
+    if (resolvedTarget.target === undefined) {
+        const message = resolvedTarget.error ?? "unknown deploy target";
+
+        // Logged here, not just returned: the caller only prints `error` in
+        // `--format json` mode, so a bare return exits 1 in silence.
+        options.logger.error(message);
+
+        return { error: message, validation: empty };
+    }
+
+    const { target } = resolvedTarget;
+
+    // An option the target refuses (celld has no `--env`, `--preview`, …) has to
+    // stop the deploy HERE, before codegen rewrites `_generated/*` and
+    // provisioning writes `wrangler.jsonc` — not at the deploy step, after both.
+    try {
+        planDeploy(cwd, options, resolveDeployDriver(target));
+    } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+
+        options.logger.error(message);
+
+        return { error: message, target, validation: empty };
+    }
 
     let codegen: CodegenResult | undefined;
 
     if (!options.skipCodegen) {
-        const codegenStep = runCodegenStep(cwd, interactive, options.logger, options.apiSpec);
+        const codegenStep = await runCodegenStep(
+            cwd,
+            interactive,
+            options.logger,
+            options.apiSpec,
+            target,
+            options.spawner,
+            options.format === "json",
+            strictAdvisories,
+        );
 
         if (codegenStep.error !== undefined) {
-            return {
-                code: 1,
-                descriptor: undefined,
-                error: codegenStep.error,
-                validation: { problems: [], wranglerPath: undefined },
-            };
+            return { error: codegenStep.error, target, validation: empty };
         }
 
         codegen = codegenStep.result;
     }
 
-    // Schema-drift gate: block when the schema has breaking changes (dropped/
-    // retyped/now-required field, dropped table/index/relation, re-shard, …) and
-    // no NEW `defineMigration` was added since the committed baseline. Mirrors the
-    // D1-placeholder guard's early-abort + actionable message. Skipped on
-    // `--skip-codegen` (no fresh snapshot to gate on).
-    //
-    // The baseline re-bless is DEFERRED: `gate.rebless` is invoked only after a
-    // successful `wrangler deploy` (below), so a deploy that fails after this
-    // point never advances the committed baseline past a breaking change that
-    // never shipped — which would silently defeat the gate on the retry.
     let reblessSchemaBaseline: (() => void) | undefined;
 
     if (codegen !== undefined) {
         const gate = runSchemaDriftGate({
             allowDrift: options.allowSchemaDrift === true,
             codegen,
+            command,
             logger: options.logger,
             updateBaseline: options.updateSchemaBaseline === true,
         });
 
         if (gate.blocked) {
             return {
-                code: 1,
-                descriptor: undefined,
-                error: "schema drift gate blocked deploy",
+                error: `schema drift gate blocked ${command}`,
                 schemaDrift: { blocked: true, reason: gate.reason },
-                validation: { problems: [], wranglerPath: undefined },
+                target,
+                validation: empty,
             };
         }
 
         reblessSchemaBaseline = gate.rebless;
     }
 
-    await provisionBindings(cwd, options.logger);
+    const recordArchitecture = codegen && reportArchitectureDiff({ current: codegen.architecture, cwd, environment: options.env, logger: options.logger });
 
-    const migratePreflightError = validateMigrateDeployPreflight(options);
+    // Provisioning WRITES `wrangler.jsonc`. On a dry run those writes are rolled
+    // back — but not here: the caller owns that window, because the artifacts
+    // that have to read the provisioned config (the wrangler bundle, and
+    // `build --emit-bindings`'s requirements document) are produced after this
+    // function returns. Restoring here derived both from the reverted config, so
+    // `build --emit-bindings` handed a deployer `"crons": []` for an app with a
+    // nightly cron. See `snapshotWranglerConfig`.
+    await provisionBindings(cwd, options.logger, codegen?.cronTriggers, target, options.env);
 
-    if (migratePreflightError !== undefined) {
-        return { code: 1, descriptor: undefined, error: migratePreflightError, validation: { problems: [], wranglerPath: undefined } };
+    const checkError = runPreDeployChecks(cwd, options, command);
+
+    if (checkError !== undefined) {
+        return { code: checkError.code, error: checkError.error, target, validation: empty };
     }
 
-    // Pre-wrangler gates: the D1 placeholder hard-block, the Dockerfile-container
-    // Docker preflight, and the Railpack `{ build }` build+push step. Each aborts
-    // with a directed message rather than letting wrangler fail opaquely later.
-    const preflightError = await runPreDeployGates(cwd, options);
+    // `--env <name>` validates the env-scoped view — a binding present only at
+    // the top level is a real gap for that environment (non-inheritable; see
+    // wrangler-validator.ts's NON_INHERITABLE_KEYS).
+    const validation = validateWrangler({ environment: options.env, projectRoot: cwd });
 
-    if (preflightError !== undefined) {
-        return { code: 1, descriptor: undefined, error: preflightError, validation: { problems: [], wranglerPath: undefined } };
+    if (reportWranglerProblems(validation, options.logger)) {
+        return { error: "wrangler validation failed", target, validation };
     }
 
-    const validation = validateWrangler({ projectRoot: cwd });
+    return { codegen, reblessSchemaBaseline, recordArchitecture, target, validation };
+};
 
-    if (validation.problems.length > 0) {
-        options.logger.error("wrangler.jsonc validation failed:");
+/** Why this run deploys no services, or `undefined` when it deploys them. */
+const serviceDeploySkipReason = (options: DeployCommandOptions): string | undefined => {
+    if (options.skipServices === true) {
+        return "--skip-services";
+    }
 
-        for (const problem of validation.problems) {
-            options.logger.error(`  - ${problem}`);
+    if (options.preview === true) {
+        return "--preview uploads the app version only";
+    }
+
+    // A temporary account is the app's alone: services deployed with the real
+    // login would land elsewhere, and the bindings could never resolve.
+    if (options.temporary === true) {
+        return "--temporary deploys the app to a throwaway account";
+    }
+
+    return undefined;
+};
+
+/**
+ * Deploy each `lunora.config` service (plan 457) before the app, so the app's
+ * `services[]` bindings never point at a Worker that does not exist yet, or at
+ * an older one missing a method the app now calls. Each one goes through the
+ * target's own deploy command, run from the service's folder (so a custom
+ * `build` runs where the service lives) against the target's projection of the
+ * service's config — celld's driver projects it like the app's. `--env` and
+ * `--dry-run` pass through; a target refusing one says so here. Returns the
+ * error that stops the deploy, if any.
+ */
+const deployServices = async (cwd: string, options: DeployCommandOptions, driver: DeployDriver, spawner: Spawner): Promise<string | undefined> => {
+    const { error, services } = readServiceBindings(cwd);
+
+    if (error !== undefined) {
+        return error;
+    }
+
+    if (services.length === 0) {
+        return undefined;
+    }
+
+    const { toolchain } = driver;
+    const skipped = toolchain === undefined ? `target "${driver.id}" has no deploy command` : serviceDeploySkipReason(options);
+
+    if (skipped !== undefined || toolchain === undefined) {
+        const names = services.map((service) => service.worker).join(", ");
+
+        options.logger.warn(`services not deployed (${skipped ?? ""}): ${names} — deploy them yourself if the app calls anything new`);
+
+        return undefined;
+    }
+
+    const manager = detectPackageManager(cwd);
+    // Two keys may bind two entrypoints of one Worker: it deploys once.
+    const workers = [...new Map(services.map((service) => [service.wranglerPath, service])).values()];
+
+    for (const service of workers) {
+        const directory = dirname(service.wranglerPath);
+        let invocation: ReturnType<typeof planToolchainInvocation>;
+
+        try {
+            invocation = planToolchainInvocation(driver, directory, "deploy", (configPath) =>
+                // Always an explicit config: wrangler left to discover one walks up
+                // from the service folder and can find the app's `wrangler.json`
+                // or a Vite build's `.wrangler/deploy/config.json` first.
+                toolchain.deploy({ configPath: configPath ?? service.wranglerPath, dryRun: options.dryRun === true, environment: options.env }),
+            );
+        } catch (error_: unknown) {
+            return `service ${service.name} (${service.worker}): ${error_ instanceof Error ? error_.message : String(error_)}`;
         }
 
-        return {
-            code: 1,
-            descriptor: undefined,
-            error: "wrangler validation failed",
-            validation,
-        };
+        invocation.commit();
+
+        const exec = toolchainExecArgs(manager, invocation.command);
+
+        options.logger.info(`deploying service ${service.name} (${service.worker}) via ${exec.command} ${exec.args.join(" ")}`);
+
+        // eslint-disable-next-line no-await-in-loop -- in order: a failed service stops the rest, and the app
+        const result = await spawner({ args: exec.args, command: exec.command, cwd: directory, stdoutToStderr: options.format === "json" });
+
+        if (result.code !== 0) {
+            return `service ${service.name} (${service.worker}): ${exec.command} ${exec.args.join(" ")} exited ${String(result.code)} — stopping before the app`;
+        }
+    }
+
+    return undefined;
+};
+
+/** Warn when a Cloudflare deploy's account is near or at its Durable Object class cap; say nothing otherwise. */
+const warnDurableObjectBudget = async (wranglerPath: string | undefined, target: string, environment: string | undefined, logger: Logger): Promise<void> => {
+    if (target !== "cloudflare") {
+        return;
+    }
+
+    // `--env` deploys to the environment's own `account_id` when it sets one.
+    const parsed =
+        wranglerPath === undefined
+            ? undefined
+            : readWranglerJsonc<{ account_id?: unknown; env?: Record<string, { account_id?: unknown } | undefined> }>(wranglerPath).parsed;
+    const accountId = (environment === undefined ? undefined : parsed?.env?.[environment]?.account_id) ?? parsed?.account_id;
+    const budget = await checkDurableObjectBudget({ accountId });
+
+    if (budget.verdict === "near" || budget.verdict === "full") {
+        logger.warn(budget.fix === undefined ? budget.message : `${budget.message} ${budget.fix}`);
+    }
+};
+
+/**
+ * Refuse a Cloudflare deploy that binds an Artifacts namespace outside the
+ * schema's `.jurisdiction("…")`, or one that does not exist yet (plan 460 D).
+ * Warns, and lets the deploy go on, when the lookup cannot be made. Returns the
+ * error that stops the deploy, if any.
+ */
+const checkArtifactsNamespaces = async (
+    cwd: string,
+    wranglerPath: string | undefined,
+    target: string,
+    environment: string | undefined,
+    logger: Logger,
+): Promise<string | undefined> => {
+    const parsed = target === "cloudflare" && wranglerPath !== undefined ? readWranglerJsonc<WranglerConfig>(wranglerPath).parsed : undefined;
+
+    if (parsed === undefined) {
+        return undefined;
+    }
+
+    // `artifacts` is non-inheritable, so `--env` reads only that environment's entries.
+    const entries = (mergeWranglerEnvironment(parsed, environment).merged.artifacts ?? []).flatMap((entry) =>
+        typeof entry?.binding === "string" && typeof entry.namespace === "string" ? [{ binding: entry.binding, namespace: entry.namespace }] : [],
+    );
+    // Parsed only once something is bound: the schema scan is the slow half.
+    const jurisdiction = entries.length === 0 ? undefined : discoverSchemaInfo(cwd, resolveSchemaDirectory(cwd)).info?.jurisdiction;
+
+    if (jurisdiction === undefined) {
+        return undefined;
+    }
+
+    const accountId = (environment === undefined ? undefined : parsed.env?.[environment]?.account_id) ?? parsed.account_id;
+    const checks = await Promise.all(entries.map(async (entry) => checkArtifactsJurisdiction({ ...entry, accountId, jurisdiction })));
+    const failures: string[] = [];
+
+    for (const check of checks) {
+        const line = check.fix === undefined ? check.message : `${check.message} ${check.fix}`;
+
+        if (check.verdict === "unchecked") {
+            logger.warn(line);
+        } else if (check.verdict !== "ok") {
+            // Logged here like the migrate preflight: a pretty-mode run prints no returned error.
+            logger.error(line);
+            failures.push(line);
+        }
+    }
+
+    return failures.length === 0 ? undefined : failures.join("\n");
+};
+
+const executeDeploy = async (options: DeployCommandOptions): Promise<DeployCommandResult> => {
+    const cwd = options.cwd ?? process.cwd();
+    const interactive = isInteractive(options);
+
+    const pipeline = await runPreDeployPipeline(options, options.commandName ?? "deploy");
+
+    if (pipeline.error !== undefined) {
+        // A validation failure carries its problem list; every earlier abort
+        // shares the empty-validation shape, optionally with the drift verdict.
+        if (pipeline.validation.problems.length > 0) {
+            return { code: EXIT_CODE.USAGE, descriptor: undefined, error: pipeline.error, validation: pipeline.validation };
+        }
+
+        const extra = pipeline.schemaDrift === undefined ? undefined : { schemaDrift: pipeline.schemaDrift };
+
+        return abortResult(pipeline.error, { ...extra, ...(pipeline.code === undefined ? {} : { code: pipeline.code }) });
+    }
+
+    const { validation } = pipeline;
+    const driver = resolveDeployDriver(pipeline.target);
+
+    // The Artifacts lookup is read-only, so it runs on `--dry-run` too: a dry run
+    // reports what a real deploy would refuse.
+    const preflightError =
+        validateMigrateDeployPreflight(options) ?? (await checkArtifactsNamespaces(cwd, validation.wranglerPath, pipeline.target, options.env, options.logger));
+
+    if (preflightError !== undefined) {
+        return abortResult(preflightError);
+    }
+
+    // The build half of the pre-deploy gates. The read-only checks already ran in
+    // the shared pipeline; this pushes container images, so it no-ops on a dry
+    // run (enforced inside `buildContainerImages`).
+    // railpack builds and pushes to the Cloudflare registry; celld builds each
+    // container from its Dockerfile itself during `celld deploy`.
+    const buildError = driver.toolchain?.prebuildsContainerImages === true ? await buildContainerImages(cwd, options) : undefined;
+
+    if (buildError !== undefined) {
+        return abortResult(buildError);
     }
 
     // Non-blocking secret-drift reminder: `wrangler deploy` never pushes
     // `.dev.vars` values, so an edited `.dev.vars` would otherwise leave the
     // deployed worker with stale/missing secrets silently (Supabase #45242).
-    warnDevVariablesNotPushed(cwd, options.logger);
+    warnDevVariablesNotPushed(cwd, options.logger, driver);
 
-    // Capture wrangler's stdout (to read the deployed URL for auto-link) only on
-    // a first, unlinked, real (non-dry-run, non-preview) pretty-mode deploy — so
-    // existing links are never clobbered and subsequent deploys keep full TTY output.
-    const shouldAutoLink = !isJsonFormat(options.format) && options.dryRun !== true && options.preview !== true && readLinkedProject(cwd) === undefined;
+    // Non-blocking too: nothing this deploy runs reads a `cloudflare.config.ts`
+    // (the target's own toolchain — wrangler, or celld — deploys from the
+    // reconciled wrangler config), so it is correct as it stands. The risk is a
+    // separate `cf deploy` shipping from a config Lunora never updates (#964).
+    warnCloudflareCliConfigOnce(cwd, (message) => {
+        options.logger.warn(message);
+    });
 
-    const descriptor: SpawnDescriptor = {
-        args: buildWranglerDeployArgs(cwd, options),
-        captureStdout: shouldAutoLink,
-        command: "pnpm",
-        cwd,
-        // In `--format json` mode stdout is reserved for the single JSON document,
-        // so route wrangler's progress + deployed-URL output to stderr instead.
-        stdoutToStderr: isJsonFormat(options.format),
-    };
+    // Non-blocking as well: an account at its Durable Object class cap makes
+    // wrangler reject a deploy that adds a class, and its error does not say
+    // which limit (plan 462). Online only with credentials; silent otherwise.
+    await warnDurableObjectBudget(validation.wranglerPath, pipeline.target, options.env, options.logger);
+
+    // Detect required secrets not yet set on the target. Interactive: offer to
+    // generate + push the mintable ones (provider keys flagged to set by hand).
+    // Non-interactive (CI): a missing required secret aborts rather than shipping
+    // a worker that will crash. Best-effort detection — skips dry-run/preview and
+    // stays quiet when the worker can't be queried yet (first deploy / not authed).
+    const { error: secretAbort, mintedSecretsFile } = await offerMissingSecrets(cwd, options, interactive, driver);
+
+    if (secretAbort !== undefined) {
+        options.logger.error(secretAbort);
+
+        // `mintedSecretsFile` may be set here too — a secret can be recorded
+        // and STILL abort (e.g. the second of two mintable keys failed to
+        // push) — carry it through so the caller's `error` path doesn't drop
+        // the one place that value is now recoverable.
+        return { code: EXIT_CODE.USAGE, descriptor: undefined, error: secretAbort, mintedSecretsFile, validation };
+    }
+
+    const spawner = options.spawner ?? defaultSpawner;
+    const servicesError = await deployServices(cwd, options, driver, spawner);
+
+    if (servicesError !== undefined) {
+        return { code: EXIT_CODE.FAILURE, descriptor: undefined, error: servicesError, mintedSecretsFile, validation };
+    }
+
+    const descriptor = buildDeploySpawn(cwd, options, driver);
 
     options.logger.info(`deploying via ${descriptor.command} ${descriptor.args.join(" ")}`);
 
-    const spawner = options.spawner ?? defaultSpawner;
     const result = await spawner(descriptor);
 
+    // Replay what was captured silently, so `--format json` still shows the
+    // deploy output the operator reads in a CI log — on stderr, where it can't
+    // touch the document on stdout.
+    if (descriptor.captureStdoutSilently === true && result.stdout !== undefined && result.stdout !== "") {
+        process.stderr.write(result.stdout);
+    }
+
     if (result.code !== 0) {
-        return { code: result.code, descriptor, validation };
+        return { code: result.code, descriptor, mintedSecretsFile, validation };
     }
 
-    // A dry run published nothing — never run migrations or advance the schema
-    // baseline against a deploy that didn't happen.
-    if (options.dryRun) {
-        return { code: 0, descriptor, validation };
-    }
+    const completed = await completeDeploy({ ...pipeline, cwd, descriptor, mintedSecretsFile, options, stdout: result.stdout });
 
-    // A preview uploaded a Version but didn't go live — skip the post-deploy
-    // finalize (migrations / baseline re-bless) and auto-link, which only apply
-    // to a production deploy. wrangler prints the preview URL itself.
-    if (options.preview) {
-        return { code: 0, descriptor, validation };
-    }
-
-    // Zero-effort linking: record the deployed URL the first time (self-guards
-    // when already linked or when stdout wasn't captured).
-    autoLinkFromDeployOutput({ cwd, env: options.env, logger: options.logger, output: result.stdout });
-
-    return finalizeSuccessfulDeploy(options, cwd, descriptor, validation, reblessSchemaBaseline);
+    return { ...completed, logsAvailable: driver.toolchain?.tail !== undefined };
 };
 
 /**
- * Run a deploy, then (in `--format json` mode) serialize the structured
- * {@link DeployCommandResult} to stdout. Human/progress logging is routed to
- * stderr for json output so stdout carries only the single JSON document.
+ * Run a deploy. In `--format json` mode the human/progress channel is already on
+ * stderr (`defineHandler` routed it) and the Vercel-style summary is skipped, so
+ * stdout is left to the single result document `execute` returns.
  */
 const runDeployCommand = async (options: DeployCommandOptions): Promise<DeployCommandResult> => {
-    const formatError = validateOutputFormat("deploy", options.format);
+    // The dry-run rollback for `deploy --dry-run`: provisioning's writes stay on
+    // disk until every artifact that has to describe them has been derived, then
+    // the committed config goes back exactly as it was. Both artifacts are
+    // produced inside this one window — the wrangler bundle by `executeDeploy`,
+    // and `--emit-bindings`'s requirements document right after it — so nothing
+    // else needs to own a snapshot.
+    const { logger } = options;
+    const restoreWrangler = options.dryRun === true ? snapshotWranglerConfig(options.cwd ?? process.cwd()) : undefined;
 
-    if (formatError !== undefined) {
-        options.logger.error(formatError);
+    let result: DeployCommandResult;
 
-        return { code: 1, descriptor: undefined, error: formatError, validation: { problems: [], wranglerPath: undefined } };
+    try {
+        result = await executeDeploy({ ...options, logger });
+
+        if (result.code === 0 && options.emitBindings !== undefined) {
+            const { error } = writeBindingManifestFile({ destination: options.emitBindings, logger, projectRoot: options.cwd ?? process.cwd() });
+
+            if (error !== undefined) {
+                logger.error(error);
+
+                result = { ...result, code: EXIT_CODE.USAGE };
+            }
+        }
+    } finally {
+        restoreWrangler?.();
     }
 
-    const result = await executeDeploy({ ...options, logger: loggerForFormat(options.format, options.logger) });
-
-    if (isJsonFormat(options.format)) {
-        printJson(result);
-
+    if (options.format === "json") {
         return result;
     }
 
@@ -870,41 +932,70 @@ const runDeployCommand = async (options: DeployCommandOptions): Promise<DeployCo
     // printed the preview URL), and never in json mode (the early return above)
     // where it would corrupt the document on stdout.
     if (result.code === 0 && options.dryRun !== true && options.preview !== true) {
-        renderDeploySummary({ cwd: options.cwd ?? process.cwd(), env: options.env, logger: options.logger, migrated: options.migrate === true });
+        renderDeploySummary({
+            cwd: options.cwd ?? process.cwd(),
+            env: options.env,
+            logger: options.logger,
+            logsAvailable: result.logsAvailable === true,
+            mintedSecretsFile: result.mintedSecretsFile,
+            // From the deploy that just ran, not the link file — the link can be
+            // stale (or absent on a first deploy), and this run knows the truth.
+            url: result.deployment?.url,
+        });
     } else if (result.code === 0 && options.preview === true) {
-        options.logger.success("preview version uploaded — see the preview URL in the wrangler output above");
+        const previewUrl = result.deployment?.url;
+
+        options.logger.success(previewUrl === undefined ? "preview version uploaded" : `preview version uploaded — ${previewUrl}`);
     }
 
     return result;
 };
 
 /** `lunora deploy` handler (lazy-loaded via the command's `loader`). */
-const execute: CommandHandler<DeployOptions> = defineHandler<DeployOptions>(async ({ cwd, logger, options }) => {
+const execute: CommandHandler<DeployOptions> = defineHandler<DeployOptions, DeployCommandData>(async ({ cwd, format, logger, options }) => {
     const result = await runDeployCommand({
         allowSchemaDrift: options.allowSchemaDrift === true,
         apiSpec: parseApiSpec(options.apiSpec),
         cwd,
         dryRun: options.dryRun === true,
         env: options.env,
-        format: options.format,
+        format,
+        healthCheck: options.healthCheck === true,
         logger,
         migrate: options.migrate === true,
         migrateToken: options.migrateToken,
         // Fall back to the `.lunora/project.json` link so a linked checkout no
-        // longer needs --migrate-url repeated on every `deploy --migrate`.
-        migrateUrl: resolveWorkerUrl({ cwd, url: options.migrateUrl }),
+        // longer needs --migrate-url repeated on every `deploy --migrate`. The
+        // link is only trusted when it was recorded for THIS `--env` — a
+        // production-linked checkout must not silently supply its URL to a
+        // `--env staging --migrate` run (see resolveWorkerUrl's env guard).
+        migrateUrl: resolveWorkerUrl({ cwd, env: options.env, url: options.migrateUrl }),
         migrateYes: options.migrateYes === true,
         preview: options.preview === true,
         // `--prebuilt` trusts a prior `lunora build`/`prepare`: skip codegen (and
         // thus the drift gate, which has no fresh snapshot to measure).
         skipCodegen: options.prebuilt === true,
+        skipServices: options.skipServices === true,
+        strictAdvisories: options.strictAdvisories,
+        target: options.target,
         temporary: options.temporary === true,
         updateSchemaBaseline: options.updateSchemaBaseline === true,
     });
 
-    return { code: result.code };
+    return {
+        code: result.code,
+        data: {
+            deployment: result.deployment,
+            healthCheck: result.healthCheck,
+            mintedSecretsFile: result.mintedSecretsFile,
+            schemaDrift: result.schemaDrift,
+            validation: result.validation,
+        },
+        error: result.error,
+    };
 });
 
 export { execute };
-export type { DeployCommandOptions, DeployCommandResult };
-export { runDeployCommand };
+// `provisionBindings` is shared with `lunora dev`'s wrangler flavor, which has
+// no `@lunora/vite` to reconcile bindings for it on startup.
+export { provisionBindings, runDeployCommand, runPreDeployPipeline };

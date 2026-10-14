@@ -33,7 +33,9 @@ const Harness = ({ onRenderCount }: HarnessProps): ReactElement => {
     const { results, status } = usePaginatedQuery(makeRef("items:list"), {}, { initialNumItems: 2 });
     const renderCount = useRef(0);
 
+    // react-doctor-disable-next-line react-hooks-js/refs -- test instrumentation: this harness deliberately mutates and reads a render-count ref during render to assert the hook doesn't over-render. Not production code.
     renderCount.current += 1;
+    // react-doctor-disable-next-line react-hooks-js/refs -- test instrumentation: reading the render-count ref during render to report it to the test. Not production code.
     onRenderCount?.(renderCount.current);
 
     return (

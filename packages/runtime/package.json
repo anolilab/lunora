@@ -1,6 +1,6 @@
 {
     "name": "@lunora/runtime",
-    "version": "0.0.0",
+    "version": "1.0.0-alpha.196",
     "description": "Lunora Worker runtime: the RPC router, shard resolver, and query coordinator",
     "keywords": [
         "cloudflare",
@@ -25,7 +25,7 @@
         "directory": "packages/runtime"
     },
     "files": [
-        "dist",
+        "./dist",
         "README.md",
         "LICENSE.md",
         "__assets__"
@@ -42,32 +42,50 @@
         },
         "./package.json": "./package.json"
     },
+    "publishConfig": {
+        "access": "public"
+    },
     "scripts": {
         "build": "pnpm exec packem build --development",
         "build:prod": "pnpm exec packem build --production",
-        "lint:eslint": "eslint .",
+        "lint:eslint": "eslint . --max-warnings=0",
         "lint:eslint:fix": "eslint . --fix",
-        "lint:prettier": "prettier --check .",
-        "lint:prettier:fix": "prettier --write .",
+        "lint:prettier": "prettier --check . --ignore-path ../../.prettierignore",
+        "lint:prettier:fix": "prettier --write . --ignore-path ../../.prettierignore",
         "lint:types": "tsc --noEmit",
         "test": "vitest run",
         "test:coverage": "vitest run --coverage",
-        "test:bench": "vitest bench --run --config vitest.bench.config.ts"
+        "test:bench": "vitest bench --run --config vitest.bench.config.ts",
+        "fallow:audit": "fallow audit",
+        "fallow:dead-code": "fallow dead-code",
+        "fallow:health": "fallow health --score"
+    },
+    "dependencies": {
+        "@lunora/bindings": "1.0.0-alpha.109",
+        "@lunora/errors": ">=1.0.0-alpha.51 <2.0.0-0",
+        "@lunora/observability": "1.0.0-alpha.135",
+        "@lunora/platform": "1.0.0-alpha.62"
     },
     "devDependencies": {
-        "@cloudflare/vitest-pool-workers": "catalog:cloudflare",
+        "@cloudflare/vitest-plugin": "catalog:cloudflare",
         "@cloudflare/workers-types": "catalog:cloudflare",
         "@codspeed/vitest-plugin": "catalog:test",
-        "@lunora/do": "workspace:*",
-        "@lunora/workflow": "workspace:*",
+        "@lunora/do": "1.0.0-alpha.209",
+        "@lunora/shard-engine": "1.0.0-alpha.125",
+        "@lunora/workflow": "1.0.0-alpha.76",
         "@types/node": "catalog:types",
         "@visulima/packem": "catalog:build",
         "@vitest/coverage-v8": "catalog:test",
         "esbuild": "catalog:build",
+        "fallow": "catalog:lint",
         "hono": "catalog:http",
         "typescript": "catalog:tsc",
         "vitest": "catalog:test",
         "wrangler": "catalog:cloudflare"
+    },
+    "peerDependencies": {
+        "@lunora/shard-engine": ">=1.0.0-alpha.24 <2.0.0-0",
+        "@lunora/workflow": ">=1.0.0-alpha.24 <2.0.0-0"
     },
     "engines": {
         "node": "^22.15.0 || >=24.11.0"

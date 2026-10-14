@@ -4,6 +4,9 @@ import { describe, expect, it } from "vitest";
 
 import { generateValue } from "../src/generate-value";
 
+/** A fixed epoch so no assertion depends on the wall clock. */
+const NOW = 1_785_000_000_000;
+
 /** Build a validator annotated with JSON-Schema constraint metadata (mirrors how `.check()` attaches `constraints`). */
 const withConstraints = (validator: Validator, constraints: Record<string, unknown>): Validator => {
     const inner = validator as { _meta?: Record<string, unknown> };
@@ -19,7 +22,7 @@ describe("generateValue — string minLength", () => {
         expect.hasAssertions();
 
         const validator = withConstraints(v.string(), { minLength: 20 });
-        const value = generateValue(validator, "slug", "test-input");
+        const value = generateValue(validator, "slug", "test-input", NOW);
 
         expect(typeof value).toBe("string");
         expect((value as string).length).toBeGreaterThanOrEqual(20);
@@ -29,7 +32,7 @@ describe("generateValue — string minLength", () => {
         expect.hasAssertions();
 
         const validator = withConstraints(v.string(), { maxLength: 5, minLength: 3 });
-        const value = generateValue(validator, "code", "test-input");
+        const value = generateValue(validator, "code", "test-input", NOW);
 
         expect(typeof value).toBe("string");
         expect((value as string).length).toBeGreaterThanOrEqual(3);
@@ -41,7 +44,88 @@ describe("generateValue — string minLength", () => {
 
         const validator = withConstraints(v.string(), { maxLength: 3, minLength: 10 });
 
-        expect(() => generateValue(validator, "code", "test-input")).toThrow(/minLength.*maxLength/u);
+        expect(() => generateValue(validator, "code", "test-input", NOW)).toThrow(/minLength.*maxLength/u);
+    });
+});
+
+describe("generateValue — number constraints", () => {
+    it("throws when minimum > maximum (impossible constraint, regression: was a raw faker error)", () => {
+        expect.hasAssertions();
+
+        const validator = withConstraints(v.number(), { maximum: 10, minimum: 100 });
+
+        expect(() => generateValue(validator, "score", "test-input", NOW)).toThrow(/minimum.*maximum/u);
+    });
+
+    it("uses a float when the bounds are non-integers", () => {
+        expect.hasAssertions();
+
+        const validator = withConstraints(v.number(), { maximum: 1, minimum: 0.5 });
+        const value = generateValue(validator, "ratio", "test-input", NOW) as number;
+
+        expect(typeof value).toBe("number");
+        expect(value).toBeGreaterThanOrEqual(0.5);
+        expect(value).toBeLessThanOrEqual(1);
+    });
+});
+
+describe("generateValue — a one-sided bound outside the default window", () => {
+    /** Enough rows that a range wide enough to vary is visibly not a single pinned value. */
+    const ROWS = 40;
+
+    const seedColumn = (validator: Validator, field: string): ReadonlyArray<number> =>
+        Array.from({ length: ROWS }, (_unused, index) => generateValue(validator, field, [field, index], NOW) as number);
+
+    it.each([
+        ["a bigint capped below the default floor", v.bigint(), { maximum: -1 }, Number.NEGATIVE_INFINITY, -1],
+        ["a bigint floored above the default ceiling", v.bigint(), { minimum: 1_000_001 }, 1_000_001, Number.POSITIVE_INFINITY],
+        ["a number capped below the default floor", v.number(), { maximum: -1 }, Number.NEGATIVE_INFINITY, -1],
+        ["a number floored above the default ceiling", v.number(), { minimum: 5000 }, 5000, Number.POSITIVE_INFINITY],
+    ])("draws %s from an interval that is not empty", (_label, base, constraints, min, max) => {
+        expect.assertions(2);
+
+        // Completing the missing side with the raw default crossed the declared
+        // one — `v.bigint().max(-1)` resolved to `min: 0, max: -1` — so the
+        // generator drew from an empty interval and answered with the bound it
+        // was told to stay under, for every row.
+        const values = seedColumn(withConstraints(base, constraints), "amount");
+
+        expect(values.filter((value) => !Number.isInteger(value) || value < min || value > max)).toStrictEqual([]);
+        expect(new Set(values).size).toBeGreaterThan(1);
+    });
+
+    it.each([
+        ["a rating", { maximum: 5 }, 0, 5],
+        ["a floor inside the default window", { minimum: 10 }, 10, 1000],
+    ])("leaves %s drawing from the default window it still overlaps", (_label, constraints, min, max) => {
+        expect.assertions(1);
+
+        // Only a bound the default window CANNOT reach slides it: a `max(5)`
+        // rating must not start seeding negative scores.
+        const values = seedColumn(withConstraints(v.number(), constraints), "score");
+
+        expect(values.filter((value) => value < min || value > max)).toStrictEqual([]);
+    });
+
+    it("throws when a bigint declares minimum > maximum (the schema's own contradiction)", () => {
+        expect.assertions(1);
+
+        expect(() => generateValue(withConstraints(v.bigint(), { maximum: 10, minimum: 100 }), "amount", "input", NOW)).toThrow(/minimum.*maximum/u);
+    });
+});
+
+describe("generateValue — record key validator", () => {
+    it("generates keys via the key validator, honouring its constraints (regression: key validator was ignored)", () => {
+        expect.hasAssertions();
+
+        const keyValidator = withConstraints(v.string(), { minLength: 8 }) as unknown as Validator<string>;
+        const validator = v.record(keyValidator, v.boolean());
+        const value = generateValue(validator, "flags", "test-input", NOW) as Record<string, unknown>;
+        const keys = Object.keys(value);
+
+        expect(keys.length).toBeGreaterThan(0);
+        expect(keys.every((key) => key.length >= 8)).toBe(true);
+        expect(Object.values(value).every((entry) => typeof entry === "boolean")).toBe(true);
     });
 });
 
@@ -49,7 +133,7 @@ describe("generateValue — bigint wire representation", () => {
     it("emits a plain number (not BigInt) so the value is JSON-serialisable", () => {
         expect.hasAssertions();
 
-        const value = generateValue(v.bigint(), "count", "test-input");
+        const value = generateValue(v.bigint(), "count", "test-input", NOW);
 
         expect(typeof value).toBe("number");
         // Must be an integer and within the safe integer range.
@@ -65,7 +149,7 @@ describe("generateValue — bytes wire representation", () => {
     it("emits a number[] that survives JSON round-trip without a custom replacer", () => {
         expect.hasAssertions();
 
-        const value = generateValue(v.bytes(), "data", "test-input");
+        const value = generateValue(v.bytes(), "data", "test-input", NOW);
 
         expect(Array.isArray(value)).toBe(true);
         expect((value as number[]).every((byte) => Number.isInteger(byte) && byte >= 0 && byte <= 255)).toBe(true);
@@ -82,10 +166,209 @@ describe("generateValue — bytes wire representation", () => {
     it("produces a revivable ArrayBuffer via Uint8Array.from for the testing adapter", () => {
         expect.hasAssertions();
 
-        const value = generateValue(v.bytes(), "payload", "test-input") as number[];
+        const value = generateValue(v.bytes(), "payload", "test-input", NOW) as number[];
         const { buffer } = Uint8Array.from(value);
 
         expect(buffer).toBeInstanceOf(ArrayBuffer);
         expect(new Uint8Array(buffer)).toHaveLength(value.length);
+    });
+});
+
+describe("generateValue — v.date() / v.timestamp()", () => {
+    const SIX_MONTHS_MS = 180 * 24 * 60 * 60 * 1000;
+
+    it.each([
+        ["date", v.date()],
+        ["timestamp", v.timestamp()],
+    ])("anchors a v.%s() column on the caller's `now` rather than a generator-local window", (kind, validator) => {
+        expect.assertions(2);
+
+        // Regression: this arm drew from faker's hard-coded 1980–2020 window and
+        // ignored `now` entirely, so `expiresAt: v.timestamp()` seeded 2012 while
+        // `expiresAt: v.timestamp().unique()` (which uses `now`) seeded 2026.
+        const value = generateValue(validator, "expiresAt", `${kind}-input`, NOW) as number;
+
+        expect(value).toBeLessThanOrEqual(NOW);
+        expect(value).toBeGreaterThanOrEqual(NOW - SIX_MONTHS_MS);
+    });
+
+    it("shifts with `now` instead of staying pinned to a fixed calendar window", () => {
+        expect.assertions(1);
+
+        const later = NOW + 10 * 365 * 24 * 60 * 60 * 1000;
+
+        expect(generateValue(v.timestamp(), "expiresAt", "same-input", later)).toBe(
+            (generateValue(v.timestamp(), "expiresAt", "same-input", NOW) as number) + (later - NOW),
+        );
+    });
+});
+
+describe("generateValue — refined string columns", () => {
+    it("refuses a pattern-constrained column by name instead of seeding a value its own validator rejects", () => {
+        expect.assertions(2);
+
+        // The `.unique()` twin (`stringDeal`) and the `v.from()` arm both refuse
+        // loudly for this reason; the ordinary path used to emit a bare lorem
+        // word — `sku` → "audeo", `safeParse().ok === false`.
+        const sku = v.string().pattern(/^SKU-\d{4}$/u);
+
+        expect(() => generateValue(sku, "sku", "input", NOW)).toThrow(/sku/u);
+        expect(() => generateValue(sku, "sku", "input", NOW)).toThrow(/pattern/u);
+    });
+
+    it("refuses a column declaring a format it has no generator for", () => {
+        expect.assertions(1);
+
+        expect(() => generateValue(withConstraints(v.string(), { format: "ipv6" }), "peer", "input", NOW)).toThrow(/format "ipv6"/u);
+    });
+
+    it.each([
+        ["homepage", v.string().url(), (value: string) => new URL(value).protocol],
+        ["contact", v.string().email(), (value: string) => (/^[^@\s]+@[^@\s]+$/u.test(value) ? "https:" : "")],
+    ])("generates a conforming value for a declared format on %s, whose name no heuristic matches", (field, validator, probe) => {
+        expect.assertions(1);
+
+        // A declared format outranks the field-name heuristics: neither
+        // `homepage` nor `contact` matches a keyword, so both used to fall
+        // through to `copycat.word` — "tremo", "audeo".
+        expect(probe(generateValue(validator, field, `${field}-input`, NOW) as string)).toBe("https:");
+    });
+});
+
+describe("generateValue — a declared format under declared length bounds", () => {
+    /** Enough rows that the generator's own length variance is guaranteed to cross every bound under test. */
+    const ROWS = 60;
+
+    /** Every value the column would be seeded, so an assertion sees the whole spread rather than one lucky draw. */
+    const seedColumn = (validator: Validator, field: string): ReadonlyArray<string> =>
+        Array.from({ length: ROWS }, (_unused, index) => generateValue(validator, field, [field, index], NOW) as string);
+
+    it.each([
+        ["an address cut to fit", "contact", v.string().email().max(20), 0, 20],
+        ["an address padded to fit", "contact", v.string().email().min(40), 40, Number.POSITIVE_INFINITY],
+        ["an address pinned to one width", "contact", v.string().email().length(24), 24, 24],
+        ["an address in the narrowest column that admits one", "contact", v.string().email().max(13), 0, 13],
+        ["a URL cut to fit", "homepage", v.string().url().max(20), 0, 20],
+        ["a URL padded to fit", "homepage", v.string().url().min(60), 60, Number.POSITIVE_INFINITY],
+        ["a URL in the narrowest column that admits one", "homepage", v.string().url().max(9), 0, 9],
+    ])("seeds %s that the column's own validator accepts", (_label, field, validator, min, max) => {
+        expect.assertions(2);
+
+        // The length axis used to be a blind `slice`/`padEnd` applied AFTER the
+        // format generator ran, so an address in a `max(20)` column arrived with
+        // its domain cut off mid-word and a URL in a `max(8)` one arrived as the
+        // bare scheme — values the column rejects on the very next insert.
+        const values = seedColumn(validator, field);
+
+        expect(values.filter((value) => !validator.safeParse(value).ok)).toStrictEqual([]);
+        expect(values.filter((value) => value.length < min || value.length > max)).toStrictEqual([]);
+    });
+
+    it.each([
+        ["email", "contact", v.string().email().max(12), 13],
+        ["uri", "homepage", v.string().url().max(8), 9],
+    ])("refuses a %s column too narrow for any conforming value, naming it", (format, field, validator, minimum) => {
+        expect.assertions(1);
+
+        // Refusing on the BOUND rather than on the generated value keeps the
+        // outcome deterministic: a per-value check would refuse some rows of the
+        // same column and seed others.
+        expect(() => generateValue(validator, field, [field, 0], NOW)).toThrow(
+            new RegExp(`column "${field}" declares format "${format}".*shortest ${format} value the seeder can build is ${String(minimum)}`, "u"),
+        );
+    });
+
+    it("stretches a shapeless value to its bounds without a format to preserve", () => {
+        expect.assertions(2);
+
+        const values = seedColumn(withConstraints(v.string(), { maxLength: 12, minLength: 9 }), "note");
+
+        expect(values.filter((value) => value.length < 9 || value.length > 12)).toStrictEqual([]);
+        expect(new Set(values).size).toBeGreaterThan(1);
+    });
+});
+
+describe("generateValue — time-named number columns", () => {
+    const SIX_MONTHS_MS = 180 * 24 * 60 * 60 * 1000;
+
+    it.each(["createdAt", "updatedAt", "publishedAt", "expiresAt", "eventTimestamp", "startDate", "deletedSince", "validUntil"])(
+        "seeds %s as an epoch-ms timestamp inside the recent window",
+        (field) => {
+            expect.assertions(2);
+
+            const value = generateValue(v.number(), field, `${field}-input`, NOW) as number;
+
+            expect(value).toBeLessThanOrEqual(NOW);
+            expect(value).toBeGreaterThanOrEqual(NOW - SIX_MONTHS_MS);
+        },
+    );
+
+    it.each([
+        "rating",
+        "latitude",
+        "longitude",
+        "category",
+        "quantity",
+        "format",
+        "timeout",
+        "candidateId",
+        "updateCount",
+        "seat",
+        "responseTime",
+        "loadTime",
+        "elapsedTime",
+    ])("leaves %s as a plain number", (field) => {
+        expect.assertions(1);
+
+        // Matching is on the last WORD: `format` ends in "at", `candidateId`
+        // contains "date", `timeout` contains "time" — a latitude of 1.78e12
+        // is not a latitude.
+        expect(generateValue(v.number(), field, `${field}-input`, NOW)).toBeLessThanOrEqual(1000);
+    });
+
+    it("lets declared bounds win over the name", () => {
+        expect.assertions(1);
+
+        // A schema that says 0..5 means a rating, whatever the column is called.
+        const validator = withConstraints(v.number(), { maximum: 5, minimum: 0 });
+
+        expect(generateValue(validator, "createdAt", "bounded-input", NOW)).toBeLessThanOrEqual(5);
+    });
+
+    it("is deterministic for the same seed input and clock", () => {
+        expect.assertions(1);
+
+        expect(generateValue(v.number(), "createdAt", "same-input", NOW)).toBe(generateValue(v.number(), "createdAt", "same-input", NOW));
+    });
+});
+
+describe("generateValue — v.from()", () => {
+    const fake = {
+        "~standard": {
+            validate: (value: unknown) => {
+                return { value };
+            },
+            vendor: "fake",
+            version: 1 as const,
+        },
+    };
+
+    it("refuses by name instead of generating a value that fails on insert", () => {
+        expect.assertions(2);
+
+        // There is nothing to introspect: the seeder cannot know whether the
+        // external schema wants a UUID, an ISO date, or a 20-field object. The
+        // generic word fallback would produce a value the very next
+        // `ctx.db.insert` rejects, reported as a validation failure on a row
+        // nobody wrote by hand.
+        expect(() => generateValue(v.from(fake), "mcpServers", "input", NOW)).toThrow(/mcpServers/u);
+        // The message must name escapes the seeder actually offers.
+        expect(() => generateValue(v.from(fake), "mcpServers", "input", NOW)).toThrow(/overrides|only/u);
+    });
+
+    it("refuses through v.optional() too, rather than silently emitting undefined", () => {
+        expect.assertions(1);
+
+        expect(() => generateValue(v.optional(v.from(fake)), "mcpServers", "input", NOW)).toThrow(/mcpServers/u);
     });
 });

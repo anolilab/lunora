@@ -21,7 +21,7 @@ Then regenerate types and the schedule:
 lunora codegen
 ```
 
-Codegen discovers the `crons.interval(...)` registration by AST, compiles its schedule to a standard cron expression, resolves the `internal.crons_jobs.run` reference to its `crons_jobs:run` dispatch ref, and emits both `lunora/_generated/crons.ts` (the dispatcher map the Worker's `scheduled()` handler consumes) and the matching `triggers.crons` entry in `wrangler.jsonc`.
+Codegen discovers the `crons.interval(...)` registration by AST, compiles its schedule to a standard cron expression, resolves the `internal.crons.jobs.run` reference to its `crons_jobs:run` dispatch ref, and emits both `lunora/_generated/crons.ts` (the dispatcher map the Worker's `scheduled()` handler consumes) and the matching `triggers.crons` entry in `wrangler.jsonc`.
 
 ## How it works
 
@@ -30,18 +30,18 @@ Codegen discovers the `crons.interval(...)` registration by AST, compiles its sc
 ```ts
 import { cronJobs } from "@lunora/server";
 
-import { internal } from "./_generated/api.js";
+import { internal } from "./_generated/internal.js";
 
 const crons = cronJobs();
 
-crons.interval("heartbeat", { hours: 1 }, internal.crons_jobs.run, {});
+crons.interval("heartbeat", { hours: 1 }, internal.crons.jobs.run, {});
 
 export default crons;
 ```
 
 - **`cronJobs()`** returns a chainable builder. Each registration takes `(name, schedule, fnRef, args?)`.
 - **`name`** must be a non-empty string literal and unique across the whole project — the runtime keys the dispatcher by name.
-- **`fnRef`** must be a static two-segment property access on the generated proxy: `internal.<file>.<fn>` (or `api.<file>.<fn>`). The leading `internal`/`api` root is dropped and the file segment is sanitized, so `internal.crons_jobs.run` dispatches as `crons_jobs:run`. A dynamic reference can't be discovered by codegen.
+- **`fnRef`** must be a static property access on the generated proxy: `internal.<…path>.<fn>` (or `api.<…path>.<fn>`), one segment per folder and file. The leading `internal`/`api` root is dropped and the path is joined with `_`, so `internal.crons.jobs.run` dispatches as `crons_jobs:run`. A dynamic reference can't be discovered by codegen.
 - **`args`** is an optional static object literal, forwarded verbatim to the function on every fire.
 
 ### Why `internal`
@@ -50,7 +50,7 @@ Cron targets are **internal** functions (`internalMutation` / `internalAction` /
 
 ## Schedules
 
-All schedule helpers are UTC. Exactly one of `seconds` / `minutes` / `hours` is allowed for `interval`.
+All schedule helpers are UTC. `interval` takes exactly one of `minutes` / `hours`. `{ seconds }` is rejected at definition time — Cloudflare Cron Triggers have a one-minute floor, so the 6-field expression it would compile to is refused by `wrangler deploy`; use `ctx.scheduler.runAfter`/`runAt` for sub-minute work, or `{ minutes: 1 }` for the fastest cron-native cadence.
 
 ```ts
 crons.interval("sweep", { minutes: 30 }, internal.presence.sweep, { roomId: "lobby" });

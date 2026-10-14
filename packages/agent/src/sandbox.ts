@@ -1,0 +1,546 @@
+import { LunoraError } from "@lunora/errors";
+import { jsonSchema } from "ai";
+
+import { SANDBOX_INVOKE_PATH, toFunctionReference } from "./paths";
+import { SANDBOX_BROWSER_DISPATCH_TIMEOUT_MS, SANDBOX_CONTAINER_DISPATCH_TIMEOUT_MS } from "./sandbox-budgets";
+import type { AgentToolContext, AgentToolDefinition } from "./types";
+
+/**
+ * The reference every sandbox tool dispatches through — the internal action
+ * `sandboxComponent().invoke`, auto-registered by codegen at `"sandbox:invoke"`.
+ * A tool's `execute` runs inside the loop's durable step, which has no direct
+ * `ctx.browser`/`ctx.containers`; it reaches them by dispatching this action
+ * (an action ctx carries both), exactly like a `functionTool`.
+ */
+const SANDBOX_REF = toFunctionReference(SANDBOX_INVOKE_PATH);
+
+/**
+ * The R2 object extension for a byte-returning browser op, or `undefined` for
+ * an op that returns text and needs no destination.
+ *
+ * Keyed off the render's OWN format, not just the op: the component stores a
+ * `type: "jpeg"` screenshot with `mediaType: "image/jpeg"`, so a fixed `.png`
+ * would hand back a key whose extension contradicts the bytes — and anything
+ * that infers the format from the key (a CDN, a thumbnailer, a browser opening
+ * the object) would read it wrong.
+ */
+const browserRenderExtension = (input: BrowserToolInput): string | undefined => {
+    if (input.op === "pdf") {
+        return "pdf";
+    }
+
+    if (input.op === "screenshot") {
+        return input.type === "jpeg" ? "jpeg" : "png";
+    }
+
+    return undefined;
+};
+
+/**
+ * What a byte-returning browser op resolves to. The render is written to R2 and
+ * its key comes back — never the bytes, which would be truncated to the model's
+ * output cap and billed for nothing.
+ * @experimental
+ */
+interface BrowserRenderResult {
+    /** Size of the stored object. */
+    bytes: number;
+    /** The absolute R2 key the render was written to. */
+    key: string;
+    /** The render's content type, e.g. `image/jpeg`. */
+    mediaType: string;
+}
+
+/**
+ * The render-destination fields `browserTool` pins itself. Stripped from model
+ * input before the author's are applied, so the destination is the author's for
+ * EVERY op — not just the two that read it. Without the strip, a `content` call
+ * carrying an out-of-schema `bucket` makes the dispatcher resolve whatever env
+ * binding the model named; the result is inert today, and pinning it is what
+ * keeps it inert if a later op starts reading the destination.
+ */
+const PINNED_RENDER_KEYS = new Set(["bucket", "path", "root"]);
+
+/**
+ * The model-provided input to a {@link browserTool} call — a discriminated
+ * union on `op` so one tool exposes every headless-browser capability.
+ * @experimental
+ */
+type BrowserToolInput =
+    | { fullPage?: boolean; op: "screenshot"; type?: "jpeg" | "png"; url: string }
+    | { op: "content"; url: string }
+    | { op: "pdf"; url: string }
+    | { op: "scrape"; selector?: string; url: string };
+
+/**
+ * The model-provided input to a {@link containerTool} call — a discriminated
+ * union on `op`. `fetch` sends an HTTP request to the container; `exec` asks it
+ * to run a command (delegated to `ctx.containers.<name>.exec`, the first-class
+ * exec contract in `@lunora/container`; the container app serves its route).
+ * @experimental
+ */
+type ContainerToolInput = { args?: string[]; command?: string; op: "exec" } | { body?: string; method?: string; op: "fetch"; path: string };
+
+/**
+ * Author-supplied config for `browserTool`.
+ * @experimental
+ */
+interface BrowserToolOptions {
+    /**
+     * R2 binding name the byte-returning ops (`screenshot`, `pdf`) write their
+     * render to. REQUIRED for those two: a render is billed, and a tool result
+     * is capped at `MAX_TOOL_OUTPUT_CHARS`, so base64 bytes inline would be
+     * truncated mid-string and unusable by the model — paid for and thrown
+     * away. With a bucket the op returns `{ bytes, key, mediaType }` and the
+     * app serves or post-processes the object by key. `content`/`scrape`
+     * return text and need no bucket; without one, a `screenshot`/`pdf` call is
+     * refused as a tool result (never dispatched) so nothing is billed.
+     */
+    bucket?: string;
+
+    /** Override the model-facing description (what the tool does). */
+    description?: string;
+
+    /**
+     * Gate a call behind a human approval. Defaults to **unattended** (no gate),
+     * matching the AI SDK. `browserTool` fetches a model-chosen `url` with no
+     * allowlist, so it is an SSRF surface: a prompt-injected model can point it at
+     * an internal/link-local address and read the response back into context. Pass
+     * a boolean or a predicate to gate it (evaluated from replay-stable input, so
+     * keep it deterministic).
+     */
+    needsApproval?: ((input: BrowserToolInput) => boolean) | boolean;
+
+    /**
+     * Key prefix inside {@link BrowserToolOptions.bucket} that renders are
+     * written under, isolating them from the rest of the bucket. Default: the
+     * bucket root. Each render lands at `<root>/<threadKey>/<toolCallId>.<ext>`
+     * — derived only from replay-stable identifiers, so a retried step
+     * overwrites its own object rather than accumulating one per attempt.
+     */
+    root?: string;
+}
+
+/**
+ * The model-provided input to a {@link fsTool} call — a discriminated union on
+ * `op` over an R2-backed virtual filesystem. Paths are relative to the tool's
+ * pinned `root`; a `..` that escapes the root is rejected server-side.
+ * @experimental
+ */
+type FsToolInput =
+    | { op: "ls"; path?: string }
+    | { op: "read"; path: string }
+    | { op: "rm"; path: string }
+    | { op: "stat"; path: string }
+    | { content: string; op: "write"; path: string };
+
+/**
+ * Author-supplied config for `fsTool`.
+ * @experimental
+ */
+interface FsToolOptions {
+    /** Override the model-facing description (what the tool does). */
+    description?: string;
+
+    /**
+     * Gate a call behind a human approval. Defaults to gating the WRITING ops
+     * (`write`, `rm`) — a prompt-injected model shouldn't silently overwrite or
+     * delete the sandbox — while `ls`/`read`/`stat` run unattended. Pass a boolean
+     * or a predicate (evaluated from replay-stable input, so keep it deterministic).
+     */
+    needsApproval?: ((input: FsToolInput) => boolean) | boolean;
+
+    /**
+     * The key prefix every path is scoped under, isolating this tool's files from
+     * the rest of the bucket. Either a fixed string (e.g. `"agents/support"`) or a
+     * function of the tool context — return `` `agents/${ctx.threadKey}` `` (or an
+     * owner-derived prefix) to give each run/user its OWN namespace in a
+     * multi-tenant agent. Default: the bucket root (shared — set a root for
+     * multi-tenant use). The server rejects any `..` that would escape it.
+     */
+    root?: ((context: AgentToolContext) => string) | string;
+}
+
+/**
+ * Author-supplied config for `containerFsTool`.
+ * @experimental
+ */
+interface ContainerFsToolOptions {
+    /** Override the model-facing description (what the tool does). */
+    description?: string;
+
+    /**
+     * Gate a call behind a human approval. Defaults to gating the writing ops
+     * (`write`, `rm`), as `fsTool` does. Pass a boolean or a predicate
+     * (evaluated from replay-stable input, so keep it deterministic).
+     */
+    needsApproval?: ((input: FsToolInput) => boolean) | boolean;
+
+    /**
+     * The absolute directory inside the container every path is scoped under.
+     * Default `"/workspace"`. The dispatcher rejects any `..` that would escape it.
+     */
+    root?: string;
+}
+
+/**
+ * Author-supplied config for `containerTool`.
+ * @experimental
+ */
+interface ContainerToolOptions {
+    /** Override the model-facing description (what the tool does). */
+    description?: string;
+
+    /**
+     * Gate a call behind a human approval. Defaults to gating any command
+     * execution — an `exec` — plus any `fetch` using a non-idempotent method
+     * (POST/PUT/PATCH/DELETE), so a prompt-injected model cannot reach some
+     * other mutating route unattended. A read-only `fetch` runs unattended. The
+     * exec route itself needs no special case: `@lunora/container` reserves
+     * `/__lunora/*` and refuses a `fetch` into it. Pass a boolean or your own
+     * predicate to change that. Evaluated from replay-stable input, so keep it
+     * deterministic.
+     */
+    needsApproval?: ((input: ContainerToolInput) => boolean) | boolean;
+}
+
+const DEFAULT_BROWSER_DESCRIPTION =
+    "Drive a headless browser: screenshot a page, render it to PDF, read its HTML content, or scrape it. " +
+    'Set `op` to "screenshot" | "pdf" | "content" | "scrape" and pass the target `url`.';
+
+const DEFAULT_CONTAINER_DESCRIPTION =
+    "Talk to a sandboxed container: `fetch` an HTTP path on it, or `exec` a command inside it. " +
+    'Set `op` to "fetch" (with `path`) or "exec" (with `command`).';
+
+const DEFAULT_FS_DESCRIPTION =
+    "Read and write files in a persistent sandbox filesystem. " +
+    'Set `op` to "ls" (list a directory), "read", "write" (with `content`), "rm", or "stat", and pass `path`.';
+
+const DEFAULT_CONTAINER_FS_DESCRIPTION =
+    "Read and write files on the sandboxed container's own disk — the same disk its commands run against. " +
+    'Set `op` to "ls" (list a directory), "read", "write" (with `content`), "rm", or "stat", and pass `path`.';
+
+/** The directory `containerFsTool` scopes paths under when the author names none. */
+const DEFAULT_CONTAINER_FS_ROOT = "/workspace";
+
+/** The default gate for `fsTool` — writing ops (`write`/`rm`) pause for approval; reads run unattended. */
+const defaultFsGate = (input: FsToolInput): boolean => input.op === "write" || input.op === "rm";
+
+const FS_TOOL_SCHEMA = jsonSchema<FsToolInput>({
+    properties: {
+        content: { description: "write: the file contents.", type: "string" },
+        op: { description: "The filesystem operation to run.", enum: ["ls", "read", "write", "rm", "stat"], type: "string" },
+        path: { description: "The file or directory path, relative to the sandbox root.", type: "string" },
+    },
+    required: ["op"],
+    type: "object",
+});
+
+const BROWSER_TOOL_SCHEMA = jsonSchema<BrowserToolInput>({
+    properties: {
+        fullPage: { description: "screenshot: capture the full scrollable page rather than just the viewport.", type: "boolean" },
+        op: { description: "The browser operation to run.", enum: ["screenshot", "scrape", "pdf", "content"], type: "string" },
+        selector: { description: "scrape: optional CSS selector hint to narrow the extraction.", type: "string" },
+        type: { description: "screenshot: image encoding (default png).", enum: ["png", "jpeg"], type: "string" },
+        url: { description: "The URL to operate on.", type: "string" },
+    },
+    required: ["op", "url"],
+    type: "object",
+});
+
+/**
+ * HTTP methods considered non-idempotent — a `fetch` using one of these is
+ * gated by default, since it can mutate container state. An omitted `method`
+ * defaults to GET (idempotent, unattended), per `CONTAINER_TOOL_SCHEMA`'s own
+ * documented default.
+ */
+const NON_IDEMPOTENT_METHODS = new Set(["DELETE", "PATCH", "POST", "PUT"]);
+
+/**
+ * The default human-in-the-loop gate for `containerTool`. Gates command
+ * execution — an `exec` — AND, more broadly, any `fetch` using a
+ * non-idempotent HTTP method (POST/PUT/PATCH/DELETE), since a prompt-injected
+ * model could otherwise reach an arbitrary privileged/mutating container route
+ * unattended. A GET/HEAD/OPTIONS (or method-omitted, defaulting to GET)
+ * `fetch` to any route still runs unattended — scope the container's read
+ * routes accordingly.
+ *
+ * Deliberately *not* pattern-matching the exec route: a `fetch` cannot reach
+ * it at all. `@lunora/container` refuses `/__lunora/*` from `ContainerHandle.fetch`,
+ * which is the only place that sees the same resolved path the container's
+ * router will — so there is no spelling of that route to recognise here, and no
+ * second copy of the route literal to drift out of lockstep.
+ */
+const defaultContainerGate = (input: ContainerToolInput): boolean => input.op === "exec" || NON_IDEMPOTENT_METHODS.has((input.method ?? "GET").toUpperCase());
+
+const CONTAINER_TOOL_SCHEMA = jsonSchema<ContainerToolInput>({
+    properties: {
+        args: { description: "exec: command arguments.", items: { type: "string" }, type: "array" },
+        body: { description: "fetch: request body.", type: "string" },
+        command: { description: "exec: the command to run.", type: "string" },
+        method: { description: "fetch: HTTP method (default GET).", type: "string" },
+        op: { description: "The container operation to run.", enum: ["fetch", "exec"], type: "string" },
+        path: { description: "fetch: request path on the container (e.g. /health).", type: "string" },
+    },
+    required: ["op"],
+    type: "object",
+});
+
+/**
+ * A batteries-included agent tool that drives Cloudflare Browser Rendering. One
+ * tool exposes every browser op (screenshot / pdf / content / scrape); the model
+ * picks via `op`. The call dispatches to the auto-registered `sandbox:invoke`
+ * action — which runs on an action ctx carrying `ctx.browser`. Importing the tool
+ * makes codegen register the dispatcher and provision the `BROWSER` binding; like
+ * any `ctx.browser` user, the app still supplies a `config.browser` thunk
+ * (`createBrowser({ binding: env.BROWSER, launch })` with the optional
+ * `@cloudflare/playwright` `launch` peer) to `createShardDO()` — codegen never
+ * injects that peer, so the browser op throws a directed error until it is wired.
+ *
+ * `content`/`scrape` return text. `screenshot`/`pdf` write the render to
+ * `opts.bucket` and return `{ bytes, key, mediaType }` — never the bytes
+ * themselves, which a 4000-char tool-output cap would truncate into something
+ * unusable after paying for the render. Without a bucket those two ops are
+ * refused as a tool result and never dispatched.
+ *
+ * Security: the model chooses the `url` with no allowlist, so this is an SSRF
+ * surface — pass `opts.needsApproval` to gate calls a prompt-injected model
+ * could aim at internal/link-local endpoints.
+ *
+ * ```ts
+ * import { browserTool, defineAgent } from "@lunora/agent/sandbox";
+ *
+ * export const researcher = defineAgent({
+ *     model: "@cf/meta/llama-3.3-70b-instruct-fp8-fast",
+ *     tools: { browser: browserTool({ bucket: "SANDBOX_BUCKET", root: "renders" }) },
+ * });
+ * ```
+ * @experimental
+ */
+const browserTool = (options: BrowserToolOptions = {}): AgentToolDefinition<BrowserToolInput, BrowserRenderResult | string> => {
+    // An empty string is "not configured", not a binding name: `resolveBucket`
+    // would look up `env[""]`, find nothing, and throw `INTERNAL` — which is
+    // RETRYABLE, so the run would burn its whole retry budget and fail instead
+    // of returning the directed refusal below.
+    const bucket = options.bucket !== undefined && options.bucket.length > 0 ? options.bucket : undefined;
+
+    return {
+        description: options.description ?? DEFAULT_BROWSER_DESCRIPTION,
+        // Pin `kind` LAST so out-of-schema model input can never override it.
+        execute: async (input, context: AgentToolContext) => {
+            const extension = browserRenderExtension(input);
+            // Refused HERE, as the tool's RESULT, rather than thrown: a throw
+            // out of `execute` is not a deterministic dispatch failure, so the
+            // durable step retries it to exhaustion and the run fails on a
+            // misconfiguration the model could route around. A string lets the
+            // next turn pick `content` instead — and nothing was dispatched, so
+            // no render was billed for output that could not be returned.
+            if (extension !== undefined && bucket === undefined) {
+                return `Cannot run a "${input.op}": this browser tool has no \`bucket\` configured, so the render has nowhere to go. Use "content" or "scrape" for page text, or ask the operator to pass \`browserTool({ bucket })\`.`;
+            }
+
+            const destination =
+                extension === undefined
+                    ? {}
+                    : {
+                          bucket,
+                          // Replay-stable: both identifiers are fixed for the
+                          // life of this tool call, so a retried step rewrites
+                          // the same object instead of leaking one per attempt.
+                          path: `${context.threadKey}/${context.toolCallId}.${extension}`,
+                          ...(options.root === undefined ? {} : { root: options.root }),
+                      };
+
+            const modelInput = Object.fromEntries(Object.entries(input).filter(([key]) => !PINNED_RENDER_KEYS.has(key)));
+
+            return (await context.run(SANDBOX_REF, { ...modelInput, ...destination, kind: "browser" }, { timeoutMs: SANDBOX_BROWSER_DISPATCH_TIMEOUT_MS })) as
+                BrowserRenderResult | string;
+        },
+        inputSchema: BROWSER_TOOL_SCHEMA,
+        isLunoraAgentTool: true,
+        ...(options.needsApproval === undefined ? {} : { needsApproval: options.needsApproval }),
+    };
+};
+
+/**
+ * A batteries-included agent tool that talks to a declared Cloudflare
+ * Container. `name` is the `ctx.containers.<name>` key (the `lunora/containers.ts`
+ * export). One tool exposes `fetch` (HTTP request) and `exec` (run a command);
+ * the model picks via `op`. The call dispatches to the auto-registered
+ * `sandbox:invoke` action, which carries `ctx.containers`.
+ *
+ * Every call is addressed to ONE instance per thread (`ctx.containers.<name>
+ * .get(threadKey)`), not a random pool member, so a multi-step session shares a
+ * filesystem — size the container's `maxInstances` for the number of live
+ * threads. See `sandbox-budgets.ts` for the time budgets and the re-execution
+ * ceiling that remains.
+ *
+ * By default a read-only (GET/HEAD/OPTIONS, or method-omitted) `fetch` runs
+ * unattended while everything else is gated behind a human approval — an
+ * `exec`; a `fetch` whose path resolves to the privileged exec route (both
+ * reach the same command-execution path in the container, so gating on the
+ * `op` name alone would let a `fetch` to it run a command unattended);
+ * and a `fetch` using a non-idempotent method (POST/PUT/PATCH/DELETE) to ANY
+ * route, since a prompt-injected model could otherwise mutate container state
+ * through some other privileged route just by avoiding the literal exec
+ * path. A `fetch` can still reach any *other read* route unattended, so scope
+ * the container's GET routes accordingly. Pass `opts.needsApproval` to widen
+ * or disable the gate.
+ *
+ * ```ts
+ * import { containerTool, defineAgent } from "@lunora/agent/sandbox";
+ *
+ * export const ops = defineAgent({
+ *     model: "@cf/meta/llama-3.3-70b-instruct-fp8-fast",
+ *     tools: { sandbox: containerTool("sandbox") },
+ * });
+ * ```
+ * @experimental
+ */
+const containerTool = (name: string, options: ContainerToolOptions = {}): AgentToolDefinition<ContainerToolInput, string> => {
+    if (typeof name !== "string" || name.length === 0) {
+        throw new LunoraError("INTERNAL", "@lunora/agent: containerTool requires a container `name` (the ctx.containers.<name> key from lunora/containers.ts)");
+    }
+
+    // Default gate: any command execution, plus any state-mutating fetch. A
+    // read-only fetch (GET/HEAD/OPTIONS) runs unattended; an exec — or a fetch
+    // that resolves to the exec route, or uses a non-idempotent method —
+    // pauses for approval unless overridden. See `defaultContainerGate`.
+    const needsApproval: ((input: ContainerToolInput) => boolean) | boolean = options.needsApproval ?? defaultContainerGate;
+
+    return {
+        description: options.description ?? DEFAULT_CONTAINER_DESCRIPTION,
+        // Pin `kind`/`name`/`instance` LAST so out-of-schema model input can never
+        // override the authoritative container — or the instance — the author pinned.
+        //
+        // `instance` is the THREAD's own container. The accessor's `.any()` picks
+        // a random pool member per call, so `exec("pnpm install")` followed by
+        // `exec("pnpm test")` lands on two different containers with two fresh
+        // disks — the second command runs against nothing the first produced.
+        // Addressing by thread makes a multi-step sandbox session share one
+        // filesystem, which is the only way the tool's own `exec` sequence means
+        // anything. It also costs one container instance per live thread, so a
+        // container fronting an agent wants its `maxInstances` sized for that.
+        execute: (input, context: AgentToolContext) =>
+            context.run(
+                SANDBOX_REF,
+                { ...input, instance: context.threadKey, kind: "container", name },
+                { timeoutMs: SANDBOX_CONTAINER_DISPATCH_TIMEOUT_MS },
+            ) as Promise<string>,
+        inputSchema: CONTAINER_TOOL_SCHEMA,
+        isLunoraAgentTool: true,
+        needsApproval,
+    };
+};
+
+/**
+ * A batteries-included agent tool exposing a persistent, R2-backed virtual
+ * filesystem. `bucket` is the R2 binding name; every path is scoped under the
+ * pinned `opts.root` (a `..` that would escape it is rejected). One tool exposes
+ * `ls`/`read`/`write`/`rm`/`stat`; the model picks via `op`. The call dispatches
+ * to the auto-registered `sandbox:invoke` action, which reads the bucket from
+ * `ctx.env`. workerd has no real shell — this is object-store-backed file I/O.
+ *
+ * By default the writing ops (`write`/`rm`) pause for a human approval while
+ * reads run unattended; pass `opts.needsApproval` to change that. Importing the
+ * tool registers the dispatcher; the app must declare the `r2_bucket` binding in
+ * `wrangler.jsonc` (the fs op throws a directed error until it is wired).
+ *
+ * ```ts
+ * import { defineAgent, fsTool } from "@lunora/agent/sandbox";
+ *
+ * export const coder = defineAgent({
+ *     model: "@cf/meta/llama-3.3-70b-instruct-fp8-fast",
+ *     tools: { fs: fsTool("SANDBOX_BUCKET", { root: "agents/coder" }) },
+ * });
+ * ```
+ * @experimental
+ */
+const fsTool = (bucket: string, options: FsToolOptions = {}): AgentToolDefinition<FsToolInput> => {
+    if (typeof bucket !== "string" || bucket.length === 0) {
+        throw new LunoraError("INTERNAL", "@lunora/agent: fsTool requires an R2 `bucket` binding name (the r2_bucket declared in wrangler.jsonc)");
+    }
+
+    return {
+        description: options.description ?? DEFAULT_FS_DESCRIPTION,
+        // Pin kind/bucket/root LAST so out-of-schema model input can never override
+        // the authoritative bucket + sandbox root the author pinned. `root` may be
+        // a function of the ctx (per-run/owner isolation), resolved here.
+        execute: (input, context: AgentToolContext) => {
+            const root = typeof options.root === "function" ? options.root(context) : (options.root ?? "");
+
+            return context.run(SANDBOX_REF, { ...input, bucket, kind: "fs", root });
+        },
+        inputSchema: FS_TOOL_SCHEMA,
+        isLunoraAgentTool: true,
+        needsApproval: options.needsApproval ?? defaultFsGate,
+    };
+};
+
+/**
+ * A batteries-included agent tool for files on a container's OWN disk —
+ * `name` is the `ctx.containers.<name>` key of a `defineContainer({ sandbox:
+ * true })` container. Same `ls`/`read`/`write`/`rm`/`stat` ops and the same
+ * default approval gate as {@link fsTool}, but backed by the container's
+ * filesystem (through `@cloudflare/sandbox`'s `Files`) instead of R2, and
+ * addressed to the same per-thread instance {@link containerTool} uses. So a
+ * file the model writes here is the file its next `exec` sees, which is not
+ * true of `fsTool`.
+ *
+ * Every path is scoped under `opts.root` (default `/workspace`); a `..` that
+ * would escape it is rejected. A `write` creates missing parent directories.
+ *
+ * ```ts
+ * import { containerFsTool, containerTool, defineAgent } from "@lunora/agent/sandbox";
+ *
+ * export const coder = defineAgent({
+ *     model: "@cf/meta/llama-3.3-70b-instruct-fp8-fast",
+ *     tools: { files: containerFsTool("sandbox"), shell: containerTool("sandbox") },
+ * });
+ * ```
+ * @experimental
+ */
+const containerFsTool = (name: string, options: ContainerFsToolOptions = {}): AgentToolDefinition<FsToolInput> => {
+    if (typeof name !== "string" || name.length === 0) {
+        throw new LunoraError(
+            "INTERNAL",
+            "@lunora/agent: containerFsTool requires a container `name` (the ctx.containers.<name> key from lunora/containers.ts)",
+        );
+    }
+
+    const root = options.root ?? DEFAULT_CONTAINER_FS_ROOT;
+
+    if (!root.startsWith("/")) {
+        throw new LunoraError("INTERNAL", `@lunora/agent: containerFsTool \`root\` must be an absolute path inside the container (got "${root}")`);
+    }
+
+    return {
+        description: options.description ?? DEFAULT_CONTAINER_FS_DESCRIPTION,
+        // Pin kind/name/instance/root LAST so out-of-schema model input can never
+        // override them. `instance` is the thread's own container, the same one
+        // `containerTool` addresses — that shared disk is the point of the tool.
+        execute: (input, context: AgentToolContext) =>
+            context.run(
+                SANDBOX_REF,
+                { ...input, instance: context.threadKey, kind: "containerFs", name, root },
+                { timeoutMs: SANDBOX_CONTAINER_DISPATCH_TIMEOUT_MS },
+            ),
+        inputSchema: FS_TOOL_SCHEMA,
+        isLunoraAgentTool: true,
+        needsApproval: options.needsApproval ?? defaultFsGate,
+    };
+};
+
+export type {
+    BrowserRenderResult,
+    BrowserToolInput,
+    BrowserToolOptions,
+    ContainerFsToolOptions,
+    ContainerToolInput,
+    ContainerToolOptions,
+    FsToolInput,
+    FsToolOptions,
+};
+export { browserTool, containerFsTool, containerTool, fsTool };
+export type { JsCodeToolInput, JsCodeToolOptions, JsCodeToolResult } from "./js-code-tool";
+export { jsCodeTool } from "./js-code-tool";

@@ -8,7 +8,7 @@
  * `deploy --migrate`, `logs`, `run`, `insights`, the deploy summary — no longer
  * need `--url`/`--name` re-typed on every invocation.
  *
- * It is deliberately distinct from `lunora.json` (committed project settings)
+ * It is deliberately distinct from `lunora.config.*` (committed project settings)
  * and from `wrangler.jsonc` (Cloudflare worker config). It carries no secrets —
  * only public identifiers — so even though it is gitignored by convention, an
  * accidental commit leaks nothing sensitive.
@@ -38,7 +38,7 @@ const LINKED_PROJECT_FILE: string = join(LINKED_PROJECT_DIR, "project.json");
 interface LinkedProject {
     /** Cloudflare account id the worker lives under, when known. */
     account?: string;
-    /** Cloudflare environment name (`wrangler … --env &lt;env>`), when scoped. */
+    /** Cloudflare environment name (`wrangler … --env <env>`), when scoped. */
     env?: string;
     /** ISO-8601 timestamp recorded when the link was written. */
     linkedAt?: string;

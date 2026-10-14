@@ -1,7 +1,33 @@
-import type { CallExpression, Expression, ObjectLiteralExpression } from "ts-morph";
-import { Node } from "ts-morph";
+import { LunoraError } from "@lunora/errors";
+import type { CallExpression, Expression, Identifier, ObjectLiteralExpression, SpreadAssignment } from "ts-morph";
+import { Node, VariableDeclarationKind } from "ts-morph";
 
+import { diagnosticAt } from "./diagnostics";
+import { staticPropertyName } from "./discover/property-name";
 import type { ColumnMetaIR, ValidatorIR } from "./ir";
+
+/**
+ * Resolves a `v.from(...)` argument expression to the wrapped Standard Schema's
+ * inferred type, rendered as TS source valid inside `_generated/`.
+ */
+type StandardTypeResolver = (node: Node) => string | undefined;
+
+/**
+ * Registered by the codegen run, because recovering the type needs the type
+ * checker AND the same "is this renderable in a generated file?" guards the
+ * handler-return path uses — both of which live in `discover/functions`. A
+ * module-level hook rather than a threaded parameter keeps the recursive
+ * parse functions' signatures unchanged, and importing it the other way would
+ * make a cycle (`discover/functions` already imports this module).
+ *
+ * Unset (a bare parser, a test) simply means `v.from()` stays `unknown`, which
+ * is the behaviour that predates the recovery.
+ */
+let standardTypeResolver: StandardTypeResolver | undefined;
+
+const setStandardTypeResolver = (resolver: StandardTypeResolver | undefined): void => {
+    standardTypeResolver = resolver;
+};
 
 const FIELD_NAME_RE = /^[A-Za-z_$][\w$]*$/u;
 
@@ -10,15 +36,21 @@ const FIELD_NAME_RE = /^[A-Za-z_$][\w$]*$/u;
  * `defineTable`. They unwrap to the base validator's IR with the constraint
  * recorded under `column`, rather than counting as their own validator kind.
  */
-const COLUMN_MODIFIERS = new Set(["$defaultFn", "$onUpdateFn", "$type", "default", "defaultNow", "nullable", "unique"]);
+const COLUMN_MODIFIERS = new Set(["$defaultFn", "$onUpdateFn", "$type", "default", "defaultNow", "nullable", "serverDefault", "unique"]);
 
 const applyColumnModifier = (base: ValidatorIR, modifier: string): ValidatorIR => {
     const column: ColumnMetaIR = { notNull: true, ...base.column };
 
     switch (modifier) {
+        // `.serverDefault(fn)` joins the defaults: it stamps the column from the
+        // request auth on every write and returns `TInsert | undefined`, so the
+        // field is optional on insert for the same reason as the others. It is
+        // also the documented way to make a field non-client-controllable, so
+        // refusing to parse it took a security control down with the build.
         case "$defaultFn":
         case "default":
-        case "defaultNow": {
+        case "defaultNow":
+        case "serverDefault": {
             column.hasDefault = true;
 
             break;
@@ -29,8 +61,10 @@ const applyColumnModifier = (base: ValidatorIR, modifier: string): ValidatorIR =
             break;
         }
         case "$type": {
-            // Type-only override: the generated code can't import the caller's
-            // override type, so it stays a no-op and we emit the base kind.
+            // Type-only override, deliberately a no-op here: the runtime parser is
+            // unchanged, so the base kind is what a stored value is guaranteed to
+            // be, and emitting the caller's `T` would mean rendering an arbitrary
+            // (possibly module-local) user type into `_generated/`.
             break;
         }
         case "nullable": {
@@ -52,18 +86,228 @@ const applyColumnModifier = (base: ValidatorIR, modifier: string): ValidatorIR =
     return { ...base, column };
 };
 
-/** Scalar `v.*` kinds that map to a bare `{ kind }` IR with no further parsing. */
-const SCALAR_KINDS = new Set(["any", "bigint", "boolean", "bytes", "date", "null", "number", "string", "timestamp"]);
+/**
+ * Scalar `v.*` kinds that map to a bare `{ kind }` IR with no further parsing.
+ * `geoPoint` is arg-less like the scalars (it renders to a fixed `{ lat, lng }`
+ * object type in `emit/shared.ts`), so it rides this fast path too.
+ */
+const SCALAR_KINDS = new Set(["any", "bigint", "boolean", "bytes", "date", "geoPoint", "null", "number", "string", "timestamp"]);
 
 /**
- * Refinement/annotation modifiers that hang off any base `v.*` validator
- * (`.check(pred, …)` adds a runtime predicate; `.meta({ schema })` merges a
- * JSON Schema fragment). Neither changes the validator's *kind* or the TS type
- * it emits, so codegen unwraps them to the base validator's IR. Without this the
- * parser would treat `check`/`meta` as unknown kinds and throw — even though the
- * `unbounded_string_arg` advisor explicitly recommends them for length bounds.
+ * Modifiers that carry a RUNTIME PREDICATE: `.check(...)` spelled out, and every
+ * named refinement `@lunora/values` puts on the column surfaces —
+ * `v.string().max(200)`, `v.number().int()`, `v.string().email()`, and the rest of
+ * `StringColumnValidator` / `NumberColumnValidator` / `ArrayColumnValidator`.
+ *
+ * Each is a `self.check(...)` at runtime (see `v.ts`), so it refines the value
+ * without changing the validator's kind, and each records `hasRefinement` for the
+ * same reason: the predicate is a closure the IR cannot represent, so the AOT
+ * compiler must decline the node rather than emit a fast path that accepts a
+ * 10,000-character string the interpreted parser rejects.
+ *
+ * Absent from this set the named ones reached {@link parseBuilderMember} as if
+ * `.max` were a validator factory, and codegen ABORTED with `Unsupported
+ * validator kind: max` — on a schema column as readily as on an `.input()` arg,
+ * so a published, publicly-typed API made the whole app ungeneratable.
+ *
+ * Kept in sync with `packages/values/src/v.ts` by a test that reads the three
+ * interfaces and asserts set equality in both directions — the failure mode of
+ * drift here is that hard abort, not a degraded type.
  */
-const TRANSPARENT_MODIFIERS = new Set(["check", "meta"]);
+const REFINEMENT_MODIFIERS = new Set(["check", "email", "int", "length", "max", "min", "pattern", "positive", "url"]);
+
+/**
+ * Modifiers that are pure ANNOTATION: they attach metadata (a JSON Schema
+ * fragment) and leave both the kind and the accepted values alone, so the IR
+ * passes through untouched and the AOT compiler may still compile the node.
+ */
+const METADATA_MODIFIERS = new Set(["meta"]);
+
+/**
+ * Modifiers that change only how a value is PARSED at runtime, never the
+ * inferred type or the set of accepted values — so the IR passes through
+ * untouched, exactly like a metadata modifier, and the AOT compiler may still
+ * compile the node.
+ *
+ * `.strip()` marks an object as narrowing on purpose, which only has an effect
+ * under `.output()` (where undeclared keys are otherwise an error). Args
+ * validation — the only thing the AOT compiler emits — is unaffected either way,
+ * so there is nothing here for it to model.
+ *
+ * Kept separate from {@link METADATA_MODIFIERS} rather than folded in: that set
+ * is defined as attaching a JSON Schema fragment, and `.strip()` attaches
+ * nothing. Same handling, different reason — and the reason is what the next
+ * person needs.
+ */
+const PARSE_BEHAVIOR_MODIFIERS = new Set(["strip"]);
+
+/**
+ * Identifiers currently being followed to their declaration, so a self- or
+ * mutually-referential `const` (`const a = b; const b = a;`) terminates instead
+ * of recursing forever. Parsing is synchronous and single-threaded, so one
+ * module-level set is enough; every entry is removed in a `finally`.
+ */
+const resolvingAliases = new Set<Identifier>();
+
+/**
+ * Object literals currently being merged into a shape through a spread, so a
+ * cycle terminates with a diagnostic instead of a stack overflow. Same
+ * single-threaded, `finally`-cleared discipline as {@link resolvingAliases}.
+ */
+const spreadingShapes = new Set<ObjectLiteralExpression>();
+
+/**
+ * Follow a bare identifier to the validator expression its `const` holds.
+ *
+ * A validator written once and reused — `const vDocumentDoc = v.object({…})`,
+ * then `.output(v.union(vDocumentDoc, v.null()))` — used to reach the parser as
+ * an `Identifier`, which is not a `CallExpression`, so it fell through to the
+ * `{ kind: "any" }` catch-all and rendered `unknown` in the generated api. That
+ * left consumers narrowing `unknown` to `{}` and erroring on every property
+ * access, and pushed authors toward inlining a 20-field object literal at every
+ * call site rather than keeping one source of truth for a table's public shape.
+ *
+ * Resolved through the SYMBOL (with `getAliasedSymbol` for an import) rather
+ * than `getDefinitionNodes`, so a validator imported from a sibling module
+ * resolves the same as a local one — go-to-definition would stop at the
+ * `ImportSpecifier`.
+ *
+ * Applies to every validator position, not just `.output()`: `.input()` shapes,
+ * table columns, and nested `v.array(vRow)` / `v.optional(vRow)` arguments all
+ * route through {@link parseValidator}, and all degraded the same way.
+ */
+const resolveValidatorAlias = (identifier: Identifier): Expression | undefined => {
+    const symbol = identifier.getSymbol();
+    let declaration = (symbol?.getAliasedSymbol() ?? symbol)?.getValueDeclaration();
+
+    // A shorthand property (`{ bounded }`) is its own initializer, so the
+    // identifier reaching here IS the property name — and its symbol is the
+    // PROPERTY, whose declaration is the shorthand assignment rather than the
+    // const it stands for. Resolution stopped there and the field degraded to
+    // `unknown` in the public api surface, while the longhand `{ bounded: bounded }`
+    // spelling of the same thing resolved fine. Silent, and the wrong way round:
+    // `object-shorthand` autofixes the working spelling into the broken one.
+    // `getValueSymbol` is the checker's answer to "what does this shorthand
+    // stand for"; the aliased hop after it covers an imported validator.
+    if (declaration !== undefined && Node.isShorthandPropertyAssignment(declaration)) {
+        const valueSymbol = declaration.getValueSymbol();
+
+        declaration = (valueSymbol?.getAliasedSymbol() ?? valueSymbol)?.getValueDeclaration();
+    }
+
+    if (declaration === undefined || !Node.isVariableDeclaration(declaration)) {
+        return undefined;
+    }
+
+    return declaration.getInitializer();
+};
+
+/**
+ * Whether an expression reached through {@link resolveValidatorAlias} is held by
+ * a `const`. The resolver hands back a declaration's initializer, so its parent
+ * is that declaration; anything that is not a variable declaration at all (a
+ * property assignment, say) is not a rebindable binding and passes.
+ */
+const isConstBinding = (initializer: Expression): boolean => {
+    const declaration = initializer.getParent();
+
+    return !Node.isVariableDeclaration(declaration) || declaration.getVariableStatement()?.getDeclarationKind() === VariableDeclarationKind.Const;
+};
+
+/**
+ * The object literal an expression stands for: the literal itself, the one a
+ * `const` holds (local or imported, via {@link resolveValidatorAlias}), or
+ * `undefined` when it cannot be read statically.
+ *
+ * Sharing an argument record between two procedures — `const sharedArgs = {…}`,
+ * then `.input({ ...sharedArgs, extra })` — is the most ordinary thing there is,
+ * and the fields behind the spread used to vanish from the generated types with
+ * no diagnostic. Callers that cannot resolve one must say so rather than emit a
+ * shape that disagrees with the validator the runtime enforces.
+ *
+ * A property access (`sharedSchema.args`) resolves through the checker to the
+ * property's own initializer, so a record reached off an object resolves like
+ * one held in a `const`. Values assembled at RUNTIME — `defineListArgs(...).args`,
+ * which `lunora introspect` generates — have no literal to find and correctly
+ * come back `undefined`.
+ */
+const resolveObjectLiteral = (expression: Expression): ObjectLiteralExpression | undefined => {
+    if (Node.isParenthesizedExpression(expression) || Node.isAsExpression(expression) || Node.isSatisfiesExpression(expression)) {
+        return resolveObjectLiteral(expression.getExpression());
+    }
+
+    if (Node.isObjectLiteralExpression(expression)) {
+        return expression;
+    }
+
+    if (Node.isPropertyAccessExpression(expression)) {
+        const declaration = expression.getSymbol()?.getValueDeclaration();
+        const initializer = declaration !== undefined && Node.isPropertyAssignment(declaration) ? declaration.getInitializer() : undefined;
+
+        return initializer === undefined ? undefined : resolveObjectLiteral(initializer);
+    }
+
+    if (!Node.isIdentifier(expression) || resolvingAliases.has(expression)) {
+        return undefined;
+    }
+
+    const target = resolveValidatorAlias(expression);
+
+    // `const` only. A `let`/`var` holding an args record can be reassigned
+    // between its initializer and the `.input(…)` that names it, and the shape
+    // emitted from the initializer would then be a type the runtime validator
+    // disagrees with — the exact mismatch this resolution exists to remove.
+    if (target === undefined || !isConstBinding(target)) {
+        return undefined;
+    }
+
+    resolvingAliases.add(expression);
+
+    try {
+        return resolveObjectLiteral(target);
+    } finally {
+        resolvingAliases.delete(expression);
+    }
+};
+
+/**
+ * The conventional local name of the validator factory namespace.
+ *
+ * Matched by name rather than by resolving the import, deliberately: a project
+ * that aliases it (`import { v as val }`) simply does not get alias resolution
+ * and keeps the previous `unknown` rendering — a smaller, safer failure than
+ * mis-classifying an arbitrary call as a validator and throwing on it.
+ */
+const VALIDATOR_NAMESPACE = "v";
+
+/**
+ * Whether `expression` is shaped like a validator: a `v.*(…)` chain, or another
+ * identifier that {@link parseValidator} will resolve in turn (`const b = a;`).
+ *
+ * This is the gate that lets a const reference be followed WITHOUT a catch. A
+ * const holding something unrelated — `const merged = lodash.merge(a, b)` used
+ * where a validator was expected — is left to the `{ kind: "any" }` fallback,
+ * exactly as before alias resolution existed.
+ */
+const rootsAtValidatorFactory = (expression: Expression): boolean => {
+    if (Node.isIdentifier(expression)) {
+        return true;
+    }
+
+    let node: Node = expression;
+
+    while (Node.isCallExpression(node)) {
+        const callee = node.getExpression();
+
+        if (!Node.isPropertyAccessExpression(callee)) {
+            return false;
+        }
+
+        node = callee.getExpression();
+    }
+
+    return Node.isIdentifier(node) && node.getText() === VALIDATOR_NAMESPACE;
+};
 
 /**
  * Convert a v.* call expression (or any other expression) into a {@link ValidatorIR}.
@@ -71,6 +315,28 @@ const TRANSPARENT_MODIFIERS = new Set(["check", "meta"]);
  * TS types are identical regardless of where a validator appears.
  */
 const parseValidator = (expression: Expression): ValidatorIR => {
+    if (Node.isIdentifier(expression) && !resolvingAliases.has(expression)) {
+        const target = resolveValidatorAlias(expression);
+
+        // Gated on the target LOOKING like a validator rather than wrapped in a
+        // try/catch. A catch around the recursive parse would also swallow
+        // `Unsupported validator kind` raised by a typo INSIDE a hoisted
+        // validator — so `const vRow = v.object({ x: v.strng() })` would quietly
+        // render `unknown` while the identical expression written inline aborted
+        // the run. Two forms that are supposed to be interchangeable must not
+        // diverge on the error path, so the check happens before the parse and
+        // anything that gets past it throws exactly as the inline form does.
+        if (target !== undefined && rootsAtValidatorFactory(target)) {
+            resolvingAliases.add(expression);
+
+            try {
+                return parseValidator(target);
+            } finally {
+                resolvingAliases.delete(expression);
+            }
+        }
+    }
+
     if (Node.isCallExpression(expression)) {
         // parseValidatorCall <-> parseValidator/parseObjectShape are mutually
         // recursive, so one forward reference is unavoidable here. Arrow consts
@@ -82,32 +348,83 @@ const parseValidator = (expression: Expression): ValidatorIR => {
     return { kind: "any", sourceText: expression.getText() };
 };
 
+/**
+ * The fields `{ ...sharedArgs }` contributes, or `{}` when it cannot be read.
+ *
+ * Unreadable is deliberately NOT fatal. `defineSchema({ ...authTables(options) })`
+ * is the documented way to consume `@lunora/auth`, and the record it spreads is
+ * built at runtime from the better-auth plugin list — there is no inline form to
+ * fall back to, so aborting would leave that path unable to generate at all.
+ * What the shape loses is reported instead, by the pass that knows which
+ * procedure the shape belongs to (`discover/unreadable-arguments.ts`).
+ *
+ * `spreadingShapes` catches a cycle (`const a = { ...b }; const b = { ...a }`):
+ * the alias guard is released before the shape is parsed, so without it the two
+ * literals recurse into each other until the stack gives out.
+ */
+const parseSpreadShape = (property: SpreadAssignment): Record<string, ValidatorIR> => {
+    const spread = resolveObjectLiteral(property.getExpression());
+
+    if (spread === undefined || spreadingShapes.has(spread)) {
+        return {};
+    }
+
+    spreadingShapes.add(spread);
+
+    try {
+        // eslint-disable-next-line @typescript-eslint/no-use-before-define -- mutual recursion: a spread's shape is parsed by the same parser that found it
+        return parseObjectShape(spread);
+    } finally {
+        spreadingShapes.delete(spread);
+    }
+};
+
+const unresolvableKey = (nameNode: Node): never => {
+    throw diagnosticAt(nameNode, `computed property name ${nameNode.getText()} must be a string literal — codegen resolves object keys statically.`);
+};
+
 const parseObjectShape = (object: ObjectLiteralExpression): Record<string, ValidatorIR> => {
     const out: Record<string, ValidatorIR> = {};
 
     for (const property of object.getProperties()) {
-        if (!Node.isPropertyAssignment(property)) {
+        // Merged in source order, so spread semantics hold: a key written after
+        // the spread wins, one written before it loses.
+        if (Node.isSpreadAssignment(property)) {
+            Object.assign(out, parseSpreadShape(property));
+
             continue;
         }
 
-        // Skip computed property names (`[expr]: ...`) — we can't derive a stable
-        // identifier from them and they can't be emitted safely.
-        const nameNode = property.getNameNode();
+        // A shorthand property (`{ status }`, where `status` is a validator held
+        // in a const) is its own initializer. Treating it as "not a property
+        // assignment" dropped the field from the shape with no error anywhere —
+        // the column vanished from `Doc_*`, and an index over it only surfaced
+        // as a confusing `index_references_unknown_field` advisory. Every caller
+        // of this parser (table shapes, `.input()` args, http routes, mutators)
+        // was affected, and `object-shorthand` autofixes plain assignments into
+        // this form, so the loss could arrive from a lint run.
+        const shorthand = Node.isShorthandPropertyAssignment(property);
 
-        if (Node.isComputedPropertyName(nameNode)) {
+        if (!shorthand && !Node.isPropertyAssignment(property)) {
             continue;
         }
 
-        const initializer = property.getInitializer();
+        const initializer = shorthand ? property.getNameNode() : property.getInitializer();
 
         if (!initializer) {
             continue;
         }
 
-        const fieldName = property.getName();
+        // A literal computed name (`["id"]`) resolves to its key. Any other one
+        // aborts the run: the key still exists at runtime, so dropping it from the
+        // IR would let the compiled args validator commit records the interpreted
+        // parser rejects (the soundness contract in `@lunora/values`
+        // `validator-map.ts`), or silently drop a table column from `Doc_*`.
+        const nameNode = property.getNameNode();
+        const fieldName = staticPropertyName(nameNode) ?? unresolvableKey(nameNode);
 
         if (!FIELD_NAME_RE.test(fieldName)) {
-            throw new Error(`@lunora/codegen: field name is not a valid JS identifier: ${JSON.stringify(fieldName)}`);
+            throw new LunoraError("INTERNAL", `@lunora/codegen: field name is not a valid JS identifier: ${JSON.stringify(fieldName)}`);
         }
 
         out[fieldName] = parseValidator(initializer);
@@ -120,8 +437,55 @@ const parseObjectShape = (object: ObjectLiteralExpression): Record<string, Valid
 const parseArgument = (argument: Node | undefined, fallback: ValidatorIR): ValidatorIR =>
     argument && Node.isExpression(argument) ? parseValidator(argument) : fallback;
 
-/** Parse a single `v.NAME(...)` builder call, dispatching on the member name. */
-const parseBuilderMember = (member: string, args: ReadonlyArray<Node>): ValidatorIR => {
+/**
+ * Render a `v.literal(...)` argument as the IR's `literalValue` source text.
+ *
+ * String and no-substitution template literals are normalized to canonical JSON
+ * (`JSON.stringify` of the runtime value) so escapes, backticks, and single
+ * quotes survive as a valid, safely-emittable double-quoted literal — splicing
+ * the raw source text instead would carry an unescaped backtick/quote or a stray
+ * backslash that fails `LITERAL_VALUE_RE` and aborts the whole codegen run with a
+ * spurious INTERNAL error. Numbers, `true`/`false`/`null`, and any non-literal
+ * expression keep their verbatim source text; the latter is intentionally
+ * rejected downstream by `LITERAL_VALUE_RE`.
+ */
+const renderLiteralSource = (node: Node | undefined): string => {
+    if (node === undefined) {
+        return "undefined";
+    }
+
+    if (Node.isStringLiteral(node) || Node.isNoSubstitutionTemplateLiteral(node)) {
+        return JSON.stringify(node.getLiteralValue());
+    }
+
+    return node.getText();
+};
+
+/**
+ * `v.from(externalSchema)` — recover the wrapped schema's inferred type through
+ * the registered resolver (`~standard.types.output`, the same property the
+ * runtime's `InferStandardOutput` reads).
+ *
+ * Without this, every argument behind a `v.from()` typed as `unknown` in the
+ * generated api, which broke `ctx.run*` calls, made handler args implicitly
+ * `any` under `noImplicitAny`, and gave generated clients untyped arguments.
+ * Falls back to a bare `from` node when unrecoverable, so
+ * the emitted type is `unknown` exactly as before.
+ */
+const parseFrom = (schemaArgument: Node | undefined): ValidatorIR => {
+    const tsType = schemaArgument && standardTypeResolver ? standardTypeResolver(schemaArgument) : undefined;
+
+    return tsType === undefined ? { kind: "from" } : { kind: "from", tsType };
+};
+
+/**
+ * Parse a single `v.NAME(...)` builder call, dispatching on the member name.
+ * `call` anchors a `diagnosticAt` when a member requires a static argument it
+ * did not get (e.g. `v.id(...)`'s table-name literal) — it is the whole call
+ * expression, used as a fallback pinpoint when the offending argument itself
+ * is absent.
+ */
+const parseBuilderMember = (member: string, args: ReadonlyArray<Node>, call: CallExpression): ValidatorIR => {
     if (SCALAR_KINDS.has(member)) {
         return { kind: member };
     }
@@ -134,22 +498,31 @@ const parseBuilderMember = (member: string, args: ReadonlyArray<Node>): Validato
         }
 
         case "from": {
-            // v.from(externalSchema) — the external Standard Schema validator's
-            // output type is not statically recoverable at codegen time.
-            // Emit an `unknown`-typed IR node so generated api types compile.
-            return { kind: "from" };
+            return parseFrom(first);
         }
 
         case "id": {
-            return { kind: "id", tableName: first && Node.isStringLiteral(first) ? first.getLiteralText() : "_unknown_" };
+            // The table name feeds straight into the generated `Id<"...">` type
+            // (see `emit/shared.ts`), so codegen must resolve it statically — a
+            // non-literal (or missing) argument must fail loudly rather than
+            // degrade to a placeholder that still compiles.
+            if (!first || !Node.isStringLiteral(first)) {
+                throw diagnosticAt(
+                    first ?? call,
+                    `v.id(...) target table must be a string literal — codegen resolves foreign-key targets statically. Got ${first ? first.getText() : "no argument"}.`,
+                );
+            }
+
+            return { kind: "id", tableName: first.getLiteralText() };
         }
 
         case "literal": {
             return {
                 kind: "literal",
-                // Captures the source text — for string/number/boolean/null literals
-                // this matches the TS type representation directly.
-                literalValue: first ? first.getText() : "undefined",
+                // Canonical source text — strings/templates are re-encoded via
+                // JSON.stringify (see renderLiteralSource) so escapes/backticks
+                // survive; numbers/booleans/null keep their verbatim text.
+                literalValue: renderLiteralSource(first),
             };
         }
 
@@ -182,11 +555,29 @@ const parseBuilderMember = (member: string, args: ReadonlyArray<Node>): Validato
 
         default: {
             // Loud failure — silently emitting `unknown` masks codegen bugs.
-            // `emit.ts` keeps a fallback case for safety, but this parser
+            // `emit/shared.ts` keeps a fallback case for safety, but this parser
             // must call out validator kinds it does not recognise.
-            throw new Error(`Unsupported validator kind: ${member}`);
+            throw new LunoraError("INTERNAL", `Unsupported validator kind: ${member}`);
         }
     }
+};
+
+/**
+ * The single numeric literal a modifier was called with, or `undefined` for
+ * anything else — no argument, several, or an expression whose value this pass
+ * cannot know (`v.string().max(LIMIT)`). Underscore separators are stripped, so
+ * `max(100_000)` reads as 100000.
+ */
+const numericLiteralArgument = (args: ReadonlyArray<Node>): number | undefined => {
+    const [only] = args;
+
+    if (args.length !== 1 || only === undefined || !Node.isNumericLiteral(only)) {
+        return undefined;
+    }
+
+    const value = Number(only.getText().replaceAll("_", ""));
+
+    return Number.isSafeInteger(value) && value >= 0 ? value : undefined;
 };
 
 const parseValidatorCall = (call: CallExpression): ValidatorIR => {
@@ -199,22 +590,54 @@ const parseValidatorCall = (call: CallExpression): ValidatorIR => {
     const member = callee.getName();
     const args = call.getArguments();
 
-    if (COLUMN_MODIFIERS.has(member)) {
+    // Every modifier unwraps to its receiver's IR; the three sets differ only in
+    // what they then record. Partitioned by EFFECT so adding a modifier means
+    // choosing which list it belongs in — a single `member === …` comparison
+    // standing in for one of the sets is how the next addition silently gets the
+    // wrong treatment.
+    if (COLUMN_MODIFIERS.has(member) || REFINEMENT_MODIFIERS.has(member) || METADATA_MODIFIERS.has(member) || PARSE_BEHAVIOR_MODIFIERS.has(member)) {
         const receiver = callee.getExpression();
         const base = Node.isExpression(receiver) ? parseValidator(receiver) : { kind: "any" };
 
-        return applyColumnModifier(base, member);
+        if (COLUMN_MODIFIERS.has(member)) {
+            return applyColumnModifier(base, member);
+        }
+
+        if (!REFINEMENT_MODIFIERS.has(member)) {
+            return base;
+        }
+
+        // A `.max(<literal>)` on a string is the one refinement whose predicate
+        // the IR CAN represent — `value.length <= n` and nothing else — so it is
+        // recorded rather than left opaque, and the AOT compiler keeps its fast
+        // path over it (see `stringMaxLength`). Every other refinement stays a
+        // runtime closure and sets `unmodelledRefinement`, which is what the
+        // compiler declines on. `hasRefinement` is set either way: it is what
+        // `schema-drift` hashes, and a bound is still a refinement there.
+        const bound = member === "max" && base.kind === "string" ? numericLiteralArgument(args) : undefined;
+
+        if (bound !== undefined) {
+            // The TIGHTER of the two on a repeated bound: the runtime applies every
+            // `.check()` in the chain, so `v.string().max(5).max(10)` accepts 5.
+            // Keeping the later one would emit a guard that lets a 7-character
+            // value through the fast path that the interpreted parser rejects.
+            return { ...base, hasRefinement: true, stringMaxLength: Math.min(base.stringMaxLength ?? bound, bound) };
+        }
+
+        return { ...base, hasRefinement: true, unmodelledRefinement: true };
     }
 
-    // `.check(...)` / `.meta(...)` refine or annotate the base validator without
-    // altering its kind — unwrap to the receiver's IR unchanged.
-    if (TRANSPARENT_MODIFIERS.has(member)) {
-        const receiver = callee.getExpression();
-
-        return Node.isExpression(receiver) ? parseValidator(receiver) : { kind: "any" };
-    }
-
-    return parseBuilderMember(member, args);
+    return parseBuilderMember(member, args, call);
 };
 
-export { parseObjectShape, parseValidator };
+export {
+    COLUMN_MODIFIERS,
+    METADATA_MODIFIERS,
+    PARSE_BEHAVIOR_MODIFIERS,
+    parseObjectShape,
+    parseValidator,
+    REFINEMENT_MODIFIERS,
+    resolveObjectLiteral,
+    setStandardTypeResolver,
+};
+export type { StandardTypeResolver };

@@ -1,0 +1,457 @@
+package dev.lunora
+
+import java.math.BigInteger
+import java.util.Base64
+
+/**
+ * The tagged value codec for Lunora's client↔server wire, ported from
+ * `shared/wire-codec.ts`.
+ *
+ * The wire is JSON with no reviver; values JSON cannot carry (big integers,
+ * bytes, dates, maps/sets, ±Infinity/NaN, `undefined` in an array position)
+ * become self-delimiting tagged arrays whose first element is [TAG]. Pure-JSON
+ * values encode to a structurally identical tree.
+ *
+ * Kotlin's sealed class lets [WireValue] represent every wire shape exactly, so
+ * `encode(decode(x)) == x` is total rather than a convention — the same
+ * property Rust's enum gives, and the reason both ports read the most directly.
+ *
+ * See `protocol/README.md` §2 for the normative grammar.
+ */
+object Wire {
+    /** Marks a JSON array as a tagged wire value. */
+    const val TAG: String = "\$lunora.wire\$"
+
+    /** Bounds recursion so a hostile deeply-nested payload cannot exhaust the stack. */
+    const val MAX_DEPTH: Int = 64
+
+    /**
+     * Bounds a decoded big integer. Decimal parsing is superlinear, so an
+     * unbounded digit string from an untrusted peer is a denial of service.
+     * Applied only on decode — the untrusted direction.
+     */
+    const val MAX_BIGINT_DIGITS: Int = 1024
+
+    /**
+     * Largest epoch a Date holds (ECMAScript TimeClip). Past this, and for any
+     * non-finite epoch, `new Date(v)` is an Invalid Date.
+     */
+    const val MAX_TIME_VALUE: Double = 8.64e15
+
+    /** An RFC 3986 scheme, then the rest — what makes an href ABSOLUTE. */
+    private val ABSOLUTE_HREF = Regex("^[A-Za-z][A-Za-z0-9+\\-.]*:[\\s\\S]*$")
+
+    /**
+     * Bytes per element for the typed-array views the codec round-trips. A view
+     * whose payload is not a whole number of elements is not a view the
+     * reference can rebuild — `new Float32Array(buffer)` raises a RangeError
+     * there — so accepting it would hand the consumer bytes it cannot
+     * reconstruct. `ArrayBuffer` is absent deliberately: it is untyped, so there
+     * is nothing to align.
+     */
+    private val TYPED_ARRAY_ELEMENT_SIZES: Map<String, Int> = mapOf(
+        "BigInt64Array" to 8,
+        "BigUint64Array" to 8,
+        "Float32Array" to 4,
+        "Float64Array" to 8,
+        "Int16Array" to 2,
+        "Int32Array" to 4,
+        "Int8Array" to 1,
+        "Uint16Array" to 2,
+        "Uint32Array" to 4,
+        "Uint8Array" to 1,
+        "Uint8ClampedArray" to 1,
+    )
+
+    /** Encode [value] into a JSON-safe tree, tagging the leaves JSON cannot carry. */
+    fun encode(value: WireValue, depth: Int = 0): Any? {
+        if (depth > MAX_DEPTH) throw WireFormatException("wire-codec: value nesting exceeds the $MAX_DEPTH-level limit")
+
+        return when (value) {
+            is WireValue.Null -> null
+            // Distinct from Null: as an object field this is dropped on encode
+            // (matching JSON.stringify), but in an array position it must be
+            // preserved, or every later element silently shifts.
+            is WireValue.Undefined -> listOf(TAG, "undefined")
+            is WireValue.Bool -> value.value
+            is WireValue.Num -> value.value
+            is WireValue.NaN -> listOf(TAG, "nan")
+            is WireValue.Infinity -> listOf(TAG, "inf")
+            is WireValue.NegInfinity -> listOf(TAG, "-inf")
+            is WireValue.Text -> value.value
+            is WireValue.BigInt -> listOf(TAG, "bigint", value.value.toString())
+            is WireValue.Date -> listOf(TAG, "date", encode(value.epochMs, depth + 1))
+            is WireValue.Url -> listOf(TAG, "url", value.href)
+            is WireValue.Bytes -> listOf(TAG, "bytes", Base64.getEncoder().encodeToString(value.data))
+            is WireValue.TypedBytes ->
+                listOf(TAG, "bytes", Base64.getEncoder().encodeToString(value.data), value.ctor)
+            is WireValue.Arr -> encodeArray(value, depth)
+            is WireValue.Obj -> value.fields.filterNot { it.second is WireValue.Undefined }
+                .associate { it.first to encode(it.second, depth + 1) }
+            is WireValue.WireMap ->
+                listOf(TAG, "map", value.entries.map { listOf(encode(it.first, depth + 1), encode(it.second, depth + 1)) })
+            is WireValue.WireSet -> listOf(TAG, "set", value.items.map { encode(it, depth + 1) })
+            is WireValue.Err -> encodeError(value, depth)
+        }
+    }
+
+    private fun encodeArray(value: WireValue.Arr, depth: Int): Any {
+        val encoded = value.items.map { encode(it, depth + 1) }
+
+        // Escape a user array whose first element is literally the sentinel, or
+        // the decoder would mistake it for a tagged value.
+        return if (encoded.firstOrNull() == TAG) listOf(TAG, "arr", encoded) else encoded
+    }
+
+    private fun encodeError(value: WireValue.Err, depth: Int): Any {
+        val props = value.props.filterNot { it.second is WireValue.Undefined }
+            .associate { it.first to encode(it.second, depth + 1) }
+        val encoded = mutableListOf<Any?>(TAG, "error", value.name, value.message, props)
+
+        // `cause` rides a positional slot; absent when unset, keeping the
+        // 5-element form.
+        value.cause?.takeIf { it !is WireValue.Undefined }?.let { encoded.add(encode(it, depth + 1)) }
+
+        return encoded
+    }
+
+    /** Inverse of [encode]: revive tagged leaves into [WireValue]. */
+    fun decode(value: Any?, depth: Int = 0): WireValue {
+        if (depth > MAX_DEPTH) throw WireFormatException("wire-codec: value nesting exceeds the $MAX_DEPTH-level limit")
+
+        return when (value) {
+            null -> WireValue.Null
+            is Boolean -> WireValue.Bool(value)
+            is Double -> WireValue.Num(value)
+            is String -> WireValue.Text(value)
+            is List<*> -> if (value.firstOrNull() == TAG) decodeTagged(value, depth) else WireValue.Arr(value.map { decode(it, depth + 1) })
+            is Map<*, *> -> WireValue.Obj(value.map { (key, item) -> key.toString() to decode(item, depth + 1) })
+            else -> throw WireFormatException("wire-codec: cannot decode a ${value.javaClass.name}")
+        }
+    }
+
+    private fun decodeTagged(items: List<*>, depth: Int): WireValue = when (items.getOrNull(1)) {
+        "undefined" -> WireValue.Undefined
+        "nan" -> WireValue.NaN
+        "inf" -> WireValue.Infinity
+        "-inf" -> WireValue.NegInfinity
+        "bigint" -> decodeBigInt(items)
+        "date" -> decodeDate(items, depth)
+        "url" -> decodeUrl(items)
+        "map" -> decodeMap(items, depth)
+        "set" -> decodeSet(items, depth)
+        "error" -> decodeError(items, depth)
+        "bytes" -> decodeBytes(items)
+        "arr" -> WireValue.Arr(payloadList(items, "arr").map { decode(it, depth + 1) })
+        // Unknown tag (forward compatibility): an ordinary array.
+        else -> WireValue.Arr(items.map { decode(it, depth + 1) })
+    }
+
+    /**
+     * The tag's payload slot as a list, or a typed rejection.
+     *
+     * `items[2] as List<*>` threw a bare ClassCastException — or an
+     * IndexOutOfBoundsException on a short array — straight out of `decode`, so
+     * a caller catching WireFormatException around a decode caught neither.
+     */
+    private fun payloadList(items: List<*>, tag: String): List<*> =
+        items.getOrNull(2) as? List<*> ?: throw WireFormatException("wire-codec: malformed $tag tag")
+
+    /**
+     * Decode a `map` tag, refusing an entry that is not exactly a `[key, value]`
+     * pair. A longer entry is as malformed as a shorter one — the reference
+     * refuses both rather than picking two slots out of an entry it cannot read.
+     */
+    private fun decodeMap(items: List<*>, depth: Int): WireValue {
+        val entries = mutableListOf<Pair<WireValue, WireValue>>()
+        val seen = mutableMapOf<String, Int>()
+
+        for (entry in payloadList(items, "map")) {
+            if (entry !is List<*> || entry.size != 2) {
+                throw WireFormatException("wire-codec: malformed map entry")
+            }
+
+            val key = positiveZero(decode(entry[0], depth + 1))
+            val pair = key to decode(entry[1], depth + 1)
+            val identity = mapKeyIdentity(key)
+
+            // Last write wins, at the FIRST occurrence's position — the reference
+            // builds a real Map, and `Map.prototype.set` on a key already present
+            // overwrites the value in place rather than appending. Keeping both
+            // entries left two peers of one deployment reading a different value
+            // from identical bytes.
+            if (identity != null) {
+                val index = seen[identity]
+
+                if (index != null) {
+                    // Only the VALUE. `Map.prototype.set` on a key already
+                    // present keeps the key it holds, so a later `-0` never
+                    // replaces the `0` stored under it.
+                    entries[index] = entries[index].first to pair.second
+
+                    continue
+                }
+
+                seen[identity] = entries.size
+            }
+
+            entries.add(pair)
+        }
+
+        return WireValue.WireMap(entries)
+    }
+
+    /**
+     * Decode a `set` tag, collapsing duplicates the way a real `Set` does.
+     *
+     * The reference builds a `new Set`, which de-duplicates by SameValueZero and
+     * keeps the FIRST occurrence's position — the same rule as a `Map`'s keys, so
+     * the same identity helper decides it. Carrying both copies re-encoded a set
+     * the reference would never emit.
+     */
+    private fun decodeSet(items: List<*>, depth: Int): WireValue {
+        val decoded = mutableListOf<WireValue>()
+        val seen = mutableSetOf<String>()
+
+        for (entry in payloadList(items, "set")) {
+            val value = positiveZero(decode(entry, depth + 1))
+            val identity = mapKeyIdentity(value)
+
+            if (identity != null && !seen.add(identity)) {
+                continue
+            }
+
+            decoded.add(value)
+        }
+
+        return WireValue.WireSet(decoded)
+    }
+
+    /**
+     * A signed zero stored as `+0`, as `Set.prototype.add` and `Map.prototype.set`
+     * do on INSERT — so a lone `-0` member or key re-encodes (and keys, per §3's
+     * bare `-0` token) as `0` in the reference, not only when it collides.
+     */
+    private fun positiveZero(value: WireValue): WireValue = if (value is WireValue.Num && value.value == 0.0) WireValue.Num(0.0) else value
+
+    /**
+     * A map key's collapse identity, or `null` when it never collapses.
+     *
+     * The reference's `Map` compares keys by SameValueZero: primitives by value
+     * (NaN equal to itself), everything else by reference — so two structurally
+     * identical Date/bytes keys stay two entries there and must stay two here.
+     */
+    private fun mapKeyIdentity(key: WireValue): String? = when (key) {
+        is WireValue.Null -> "null"
+        is WireValue.Undefined -> "undefined"
+        is WireValue.NaN -> "num:nan"
+        is WireValue.Infinity -> "num:inf"
+        is WireValue.NegInfinity -> "num:-inf"
+        is WireValue.Bool -> "bool:${key.value}"
+        // `+ 0.0` clears the sign of a zero and changes nothing else: SameValueZero
+        // holds -0 equal to 0, while Double.toString keeps the sign ("-0.0").
+        is WireValue.Num -> "num:${key.value + 0.0}"
+        is WireValue.Text -> "str:${key.value}"
+        is WireValue.BigInt -> "big:${key.value}"
+        else -> null
+    }
+
+    private fun decodeDate(items: List<*>, depth: Int): WireValue {
+        // Epoch milliseconds, and nothing else. The payload is DECODED first (a
+        // nested `[TAG, "nan"]` is how an invalid date travels), then checked:
+        // `null` or a string would otherwise become a Date carrying a value no
+        // epoch arithmetic can use, re-encoded as a legitimate-looking date tag.
+        val epoch = decode(items.getOrNull(2), depth + 1)
+
+        if (epoch !is WireValue.Num && epoch !is WireValue.NaN && epoch !is WireValue.Infinity && epoch !is WireValue.NegInfinity) {
+            throw WireFormatException("wire-codec: malformed date tag")
+        }
+
+        // TimeClip, exactly as `new Date(epoch)` applies it: truncate toward
+        // zero, and turn anything non-finite or past +-8.64e15 into an Invalid
+        // Date. Kept verbatim, an out-of-range epoch re-encoded as a date tag
+        // the reference — whose own Date can never hold that value — refuses to
+        // produce.
+        // TimeClip is ToIntegerOrInfinity, not truncation, and the two differ on
+        // exactly one window: an epoch in (-1, 0] gives +0 there and -0 under
+        // `ceil`, which keeps the sign of zero. The window is one value wide,
+        // and the stable subscription key spells -0 as the bare token `-0`,
+        // distinct from `0` — so the `+ 0.0` is what keeps a Date built from
+        // -0.5 on the same subscription as the TS client.
+        val clipped = when {
+            epoch is WireValue.Num && Math.abs(epoch.value) <= MAX_TIME_VALUE ->
+                WireValue.Num((if (epoch.value < 0) Math.ceil(epoch.value) else Math.floor(epoch.value)) + 0.0)
+            else -> WireValue.NaN
+        }
+
+        return WireValue.Date(clipped)
+    }
+
+    /**
+     * An href must be ABSOLUTE — a scheme, per RFC 3986, then the rest.
+     *
+     * The reference builds a real `URL`, which throws on anything unparseable,
+     * while every port stored the string verbatim and accepted `"not a url"` — a
+     * frame that kills a JS peer's subscription and is waved through here.
+     * Reproducing WHATWG URL parsing in eight languages is not on offer (their
+     * own parsers disagree with it in the deep end), so the contract, and
+     * `protocol/README.md` §2.1, is the floor of it.
+     */
+    private fun decodeUrl(items: List<*>): WireValue {
+        val href = items.getOrNull(2) as? String ?: throw WireFormatException("wire-codec: malformed url tag")
+
+        if (!ABSOLUTE_HREF.matches(href)) throw WireFormatException("wire-codec: url href is not absolute")
+
+        return WireValue.Url(href)
+    }
+
+    private fun decodeBigInt(items: List<*>): WireValue {
+        val raw = items.getOrNull(2)
+
+        if (raw !is String || raw.length > MAX_BIGINT_DIGITS || !isBigIntLiteral(raw)) {
+            throw WireFormatException("wire-codec: invalid or over-long bigint (max $MAX_BIGINT_DIGITS digits)")
+        }
+
+        return WireValue.BigInt(BigInteger(raw))
+    }
+
+    private fun decodeError(items: List<*>, depth: Int): WireValue {
+        // The props slot is NOT optional, NOT nullable and NOT a primitive: the
+        // reference reads it with `Object.keys`, which throws on a null or
+        // missing slot and ENUMERATES a string/number/boolean/array — so
+        // `[TAG,"error","E","m","ab"]` would decode there with the invented props
+        // {0:"a",1:"b"} while substituting an empty map accepted the same frame
+        // here.
+        if (items.size < 5) throw WireFormatException("wire-codec: malformed error tag")
+
+        // The slot is decoded as one VALUE at depth+1, which puts its own fields
+        // at depth+2 — what the reference does with a single
+        // `decodeWire(value[4], depth + 1)` before it touches a field. Walking
+        // the raw map's entries here charged a level too few, so a props value
+        // nested one past the cap re-encoded happily out of this port and out of
+        // no other (`error-props-past-cap`).
+        val slot = decode(items[4], depth + 1)
+        val props = (slot as? WireValue.Obj ?: throw WireFormatException("wire-codec: malformed error tag — props must be an object")).fields
+
+        // Both label slots are type-CHECKED, like every other slot. Defaulting to
+        // "" accepted the frame while erasing the error's identity, and the ports
+        // did not even agree on that: two carried the non-string through
+        // verbatim. A slot that must hold a string and does not is a malformed
+        // frame.
+        val name = items.getOrNull(2) as? String ?: throw WireFormatException("wire-codec: malformed error tag")
+        val message = items.getOrNull(3) as? String ?: throw WireFormatException("wire-codec: malformed error tag")
+
+        return WireValue.Err(
+            name = name,
+            message = message,
+            props = props,
+            cause = if (items.size > 5) decode(items[5], depth + 1) else null,
+        )
+    }
+
+    private fun decodeBytes(items: List<*>): WireValue {
+        val encoded = items.getOrNull(2) as? String ?: throw WireFormatException("wire-codec: malformed bytes tag")
+
+        val data = try {
+            Base64.getDecoder().decode(encoded)
+        } catch (error: IllegalArgumentException) {
+            throw WireFormatException("wire-codec: invalid base64 in bytes tag")
+        }
+
+        // The payload must be CANONICAL, not merely decodable. The JDK's basic
+        // decoder infers missing padding and ignores the unused low bits of a
+        // short final quantum, so "AQI" and "AQJ=" both decoded here — the second
+        // one silently, into two bytes that re-encode as "AQI=", different bytes
+        // than the peer wrote. Re-encoding and comparing is the whole rule: the
+        // payload must be exactly what a conforming encoder would have written.
+        if (Base64.getEncoder().encodeToString(data) != encoded) {
+            throw WireFormatException("wire-codec: bytes payload is not canonical padded base64")
+        }
+
+        val ctor = items.getOrNull(3) as? String ?: "Uint8Array"
+
+        // A plain Uint8Array re-encodes to the 2-element form; every other view
+        // keeps its constructor name.
+        if (ctor == "Uint8Array") return WireValue.Bytes(data)
+
+        if (ctor != "ArrayBuffer") {
+            // An UNKNOWN ctor name decodes to raw bytes, dropping the name — the
+            // forward-compat rule in protocol/README.md §2.1. Keeping it re-encoded
+            // a 4-element form the reference emits as 3, so the same value relayed
+            // through JS and through here produced different bytes, and therefore
+            // different stable subscription keys.
+            val size = TYPED_ARRAY_ELEMENT_SIZES[ctor] ?: return WireValue.Bytes(data)
+
+            if (data.size % size != 0) {
+                throw WireFormatException("wire-codec: $ctor payload of ${data.size} bytes is not a multiple of its $size-byte element")
+            }
+        }
+
+        return WireValue.TypedBytes(data, ctor)
+    }
+
+    /** Whether [raw] is an optionally-negative run of ASCII digits. */
+    private fun isBigIntLiteral(raw: String): Boolean {
+        val body = raw.removePrefix("-")
+
+        return body.isNotEmpty() && body.all { it in '0'..'9' }
+    }
+
+    /**
+     * Convert a plain JSON tree — such as a generated model serialised through
+     * its own accessors — into a [WireValue].
+     *
+     * Safe as a structural mapping because a generated model can never contain a
+     * wire wrapper: the generator refuses to emit a typed model for any schema
+     * carrying a `v.bigint()` or `v.bytes()`.
+     */
+    fun fromJson(value: Any?): WireValue = decode(value)
+}
+
+/** Every value the Lunora wire can carry. */
+sealed class WireValue {
+    object Null : WireValue()
+
+    /** JavaScript's `undefined`, distinct from JSON null. */
+    object Undefined : WireValue()
+
+    object NaN : WireValue()
+
+    object Infinity : WireValue()
+
+    object NegInfinity : WireValue()
+
+    data class Bool(val value: Boolean) : WireValue()
+
+    data class Num(val value: Double) : WireValue()
+
+    data class Text(val value: String) : WireValue()
+
+    /** A `v.bigint()`. [BigInteger] is arbitrary-precision, so no range is lost. */
+    data class BigInt(val value: BigInteger) : WireValue()
+
+    /** A Date, as epoch milliseconds. An invalid Date carries NaN and round-trips exactly. */
+    data class Date(val epochMs: WireValue) : WireValue()
+
+    data class Url(val href: String) : WireValue()
+
+    data class Arr(val items: List<WireValue>) : WireValue()
+
+    /** Field order is preserved, so a pure-JSON object survives a round trip. */
+    data class Obj(val fields: List<Pair<String, WireValue>>) : WireValue()
+
+    /** Ordered pairs whose keys may be non-string, which a Map cannot represent. */
+    data class WireMap(val entries: List<Pair<WireValue, WireValue>>) : WireValue()
+
+    data class WireSet(val items: List<WireValue>) : WireValue()
+
+    /** A plain `Uint8Array`: raw bytes, 2-element wire form. */
+    class Bytes(val data: ByteArray) : WireValue()
+
+    /** Any other typed-array view, carrying its constructor name. */
+    class TypedBytes(val data: ByteArray, val ctor: String) : WireValue()
+
+    data class Err(val name: String, val message: String, val props: List<Pair<String, WireValue>> = emptyList(), val cause: WireValue? = null) : WireValue()
+}
+
+class WireFormatException(message: String) : RuntimeException(message)

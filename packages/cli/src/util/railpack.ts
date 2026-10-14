@@ -1,5 +1,6 @@
 import { containerBuildTag } from "@lunora/container";
 
+import { detectPackageManager, execArgsFor } from "./detect-package-manager";
 import type { DockerProbe } from "./docker";
 import { isRailpackAvailable } from "./docker";
 import type { Logger } from "./logger";
@@ -68,7 +69,8 @@ const buildRailpackImages = async (options: RailpackBuildOptions): Promise<Railp
         const tag = containerBuildTag(target.exportName);
 
         const build: SpawnDescriptor = { args: ["build", target.buildDir, "--name", tag], command: "railpack", cwd: options.cwd };
-        const push: SpawnDescriptor = { args: ["exec", "wrangler", "containers", "push", tag], command: "pnpm", cwd: options.cwd };
+        const pushExec = execArgsFor(detectPackageManager(options.cwd), "wrangler", ["containers", "push", tag]);
+        const push: SpawnDescriptor = { args: pushExec.args, command: pushExec.command, cwd: options.cwd };
 
         options.logger.info(`railpack: building "${target.exportName}" → ${tag} from ${target.buildDir}`);
         // eslint-disable-next-line no-await-in-loop -- sequential: build must finish before push, and one target before the next

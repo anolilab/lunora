@@ -3,7 +3,7 @@ import { beforeEach, describe, expect, it } from "vitest";
 
 import { createAuthAdmin } from "../src/admin";
 import { createAuth } from "../src/create-auth";
-import { admin } from "../src/plugins";
+import { admin, deviceAuthorization, jwt, oauthProvider, organization, twoFactor } from "../src/plugins";
 
 /**
  * Round-trip behaviour for `createAuthAdmin`, exercised against the real
@@ -91,6 +91,30 @@ describe("createAuthAdmin", () => {
         expect(userRow(user.id)?.["banned"]).toBe(false);
     });
 
+    it("clears a stale banExpires when a temp ban is escalated to a permanent ban", async () => {
+        expect.assertions(2);
+
+        const user = await adminApi.createUser({ email: "escalate@example.com", name: "Esc" });
+
+        // Temp ban sets banExpires; escalating to a permanent ban (no expiresInSeconds)
+        // must null it out, else the "permanent" ban silently lapses after the first expiry.
+        await adminApi.banUser({ expiresInSeconds: 3600, reason: "temp", userId: user.id });
+
+        expect(userRow(user.id)?.["banExpires"] ?? null).not.toBeNull();
+
+        await adminApi.banUser({ reason: "permanent", userId: user.id });
+
+        expect(userRow(user.id)?.["banExpires"] ?? null).toBeNull();
+    });
+
+    it("rejects a non-positive expiresInSeconds instead of silently making the ban permanent", async () => {
+        expect.assertions(1);
+
+        const user = await adminApi.createUser({ email: "negban@example.com", name: "Neg" });
+
+        await expect(adminApi.banUser({ expiresInSeconds: -100, userId: user.id })).rejects.toThrow(/INVALID_BAN_SECONDS|positive/iu);
+    });
+
     it("sets a role", async () => {
         expect.assertions(1);
 
@@ -109,14 +133,93 @@ describe("createAuthAdmin", () => {
         await expect(adminApi.setUserPassword({ newPassword: "x", userId: user.id })).rejects.toThrow(/PASSWORD_TOO_SHORT|at least/iu);
     });
 
-    it("mints an impersonation token for a user", async () => {
+    const credentialAccounts = (userId: string): Record<string, unknown>[] =>
+        (database["account"] ?? []).filter((row) => {
+            const account = row as { providerId?: string; userId?: string };
+
+            return account.userId === userId && account.providerId === "credential";
+        }) as Record<string, unknown>[];
+
+    it("creates the credential account when setting a password for a user without one", async () => {
+        expect.assertions(3);
+
+        const user = await adminApi.createUser({ email: "nopw@example.com", name: "NoPw" });
+
+        expect(credentialAccounts(user.id)).toHaveLength(0);
+
+        await adminApi.setUserPassword({ newPassword: STRONG_PASSWORD, userId: user.id });
+
+        const accounts = credentialAccounts(user.id);
+
+        expect(accounts).toHaveLength(1);
+        expect(typeof accounts[0]?.["password"]).toBe("string");
+    });
+
+    it("rejects setting a password for an unknown user", async () => {
+        expect.assertions(1);
+
+        await expect(adminApi.setUserPassword({ newPassword: STRONG_PASSWORD, userId: "no-such-user" })).rejects.toThrow(/USER_NOT_FOUND|not found/iu);
+    });
+
+    it("updates the existing credential account without adding a second one", async () => {
+        expect.assertions(3);
+
+        const user = await adminApi.createUser({ email: "haspw@example.com", name: "HasPw", password: STRONG_PASSWORD });
+        const before = credentialAccounts(user.id)[0]?.["password"];
+
+        await adminApi.setUserPassword({ newPassword: "another sound password", userId: user.id }); // gitleaks:allow -- test fixture password, not a real secret
+
+        const accounts = credentialAccounts(user.id);
+
+        expect(accounts).toHaveLength(1);
+        expect(typeof accounts[0]?.["password"]).toBe("string");
+        expect(accounts[0]?.["password"]).not.toBe(before);
+    });
+
+    it("refuses to plant a credential account on a deployment with email+password disabled", async () => {
         expect.assertions(2);
 
-        const user = await adminApi.createUser({ email: "imp@example.com", name: "Imp" });
-        const result = await adminApi.impersonateUser({ userId: user.id });
+        const oauthOnlyDatabase = seedMemoryDatabase();
+        const oauthOnlyAuth = createAuth({
+            baseURL: "http://localhost",
+            database: memoryAdapter(oauthOnlyDatabase),
+            plugins: [admin()],
+            secret: SECRET,
+        });
+        const oauthOnlyAdmin = createAuthAdmin(oauthOnlyAuth);
 
-        expect(typeof result.token).toBe("string");
-        expect(result.token.length).toBeGreaterThan(0);
+        const user = await oauthOnlyAdmin.createUser({ email: "oauthonly@example.com", name: "OAuthOnly" });
+
+        // Creating one here would go live the day email+password is switched on.
+        await expect(oauthOnlyAdmin.setUserPassword({ newPassword: STRONG_PASSWORD, userId: user.id })).rejects.toThrow(/EMAIL_PASSWORD_DISABLED|disabled/iu);
+        expect(oauthOnlyDatabase["account"]).toHaveLength(0);
+    });
+
+    /** Persisted session rows for a user, newest last, as better-auth wrote them. */
+    const sessionRows = (userId: string): Record<string, unknown>[] =>
+        (database["session"] ?? []).filter((row) => (row as { userId: string }).userId === userId) as Record<string, unknown>[];
+
+    const asMillis = (value: unknown): number => (value instanceof Date ? value.getTime() : new Date(String(value)).getTime());
+
+    it("mints an impersonation token that IS a freshly persisted session's token", async () => {
+        expect.assertions(6);
+
+        const user = await adminApi.createUser({ email: "imp@example.com", name: "Imp" });
+        const first = await adminApi.impersonateUser({ userId: user.id });
+        const second = await adminApi.impersonateUser({ userId: user.id });
+
+        const rows = sessionRows(user.id);
+
+        // Exactly the two sessions just minted, and the returned credentials are exactly their
+        // stored tokens — not a value the caller could have derived (the user id) and not a
+        // constant that would impersonate everyone.
+        expect(rows).toHaveLength(2);
+        expect(new Set(rows.map((row) => row["token"]))).toStrictEqual(new Set([first.token, second.token]));
+        expect(first.token).not.toBe(second.token);
+        expect(first.token).not.toBe(user.id);
+        expect(first.user.id).toBe(user.id);
+        // The session is marked as an impersonation, not an ordinary login.
+        expect(rows.every((row) => row["impersonatedBy"] !== undefined && row["impersonatedBy"] !== null)).toBe(true);
     });
 
     it("never leaks the session token through listSessions", async () => {
@@ -164,6 +267,152 @@ describe("createAuthAdmin", () => {
         expect(userRow(user.id)).toBeUndefined();
     });
 
+    it("removes a user cleanly when no plugin tables exist", async () => {
+        expect.assertions(1);
+
+        // The default harness has no organization/two-factor/passkey plugins,
+        // so every cascade gate must skip rather than throw.
+        const user = await adminApi.createUser({ email: "noplugins@example.com", name: "NoPlugins" });
+
+        await expect(adminApi.removeUser({ userId: user.id })).resolves.toBeUndefined();
+    });
+
+    it("cascades removeUser over user-keyed plugin tables", async () => {
+        expect.assertions(5);
+
+        const pluginDatabase: Record<string, unknown[]> = {
+            ...seedMemoryDatabase(),
+            invitation: [],
+            member: [],
+            organization: [],
+            team: [],
+            teamMember: [],
+            twoFactor: [],
+        };
+        const pluginAuth = createAuth({
+            baseURL: "http://localhost",
+            database: memoryAdapter(pluginDatabase),
+            emailAndPassword: { enabled: true },
+            plugins: [admin(), organization({ teams: { enabled: true } }), twoFactor()],
+            secret: SECRET,
+        });
+        const pluginAdmin = createAuthAdmin(pluginAuth);
+
+        const user = await pluginAdmin.createUser({ email: "cascade@example.com", name: "Cascade" });
+        const survivor = await pluginAdmin.createUser({ email: "stays@example.com", name: "Stays" });
+
+        const org = await pluginAdmin.createOrganization({ name: "Cascade Org", ownerId: user.id });
+
+        // A second owner, so removing `user` doesn't trip the last-owner guard.
+        await pluginAdmin.addMember({ organizationId: org.id, role: "owner", userId: survivor.id });
+        await pluginAdmin.inviteMember({ email: "guest@example.com", inviterId: user.id, organizationId: org.id });
+
+        // The harness has no endpoint-level 2FA/team enrolment; seed the
+        // user-keyed rows directly — the cascade only cares about the rows.
+        pluginDatabase["twoFactor"]?.push({ backupCodes: "codes", id: "tf1", secret: "totp-secret", userId: user.id });
+        pluginDatabase["teamMember"]?.push({ createdAt: new Date(), id: "tm1", teamId: "team1", userId: user.id });
+
+        await pluginAdmin.removeUser({ userId: user.id });
+
+        const rowsFor = (model: string, field: string): unknown[] =>
+            (pluginDatabase[model] ?? []).filter((row) => (row as Record<string, unknown>)[field] === user.id);
+
+        expect(rowsFor("member", "userId")).toHaveLength(0);
+        expect(rowsFor("teamMember", "userId")).toHaveLength(0);
+        expect(rowsFor("twoFactor", "userId")).toHaveLength(0);
+        expect(rowsFor("invitation", "inviterId")).toHaveLength(0);
+
+        // Scoped strictly to the removed user: the survivor's membership stays.
+        expect((pluginDatabase["member"] ?? []).filter((row) => (row as Record<string, unknown>)["userId"] === survivor.id)).toHaveLength(1);
+    });
+
+    it("cascades removeUser over the OAuth-provider credential tables", async () => {
+        expect.assertions(5);
+
+        const oauthDatabase: Record<string, unknown[]> = {
+            ...seedMemoryDatabase(),
+            deviceCode: [],
+            oauthAccessToken: [],
+            oauthClient: [],
+            oauthConsent: [],
+            oauthRefreshToken: [],
+        };
+        const oauthAuth = createAuth({
+            baseURL: "http://localhost",
+            database: memoryAdapter(oauthDatabase),
+            emailAndPassword: { enabled: true },
+            plugins: [admin(), jwt(), oauthProvider({ consentPage: "/consent", loginPage: "/sign-in" }), deviceAuthorization()],
+            secret: SECRET,
+        });
+        const oauthAdmin = createAuthAdmin(oauthAuth);
+
+        const user = await oauthAdmin.createUser({ email: "tokens@example.com", name: "Tokens" });
+
+        // Issuing these needs a full third-party authorization dance; the rows are
+        // what the cascade acts on. None of these declare onDelete in better-auth's
+        // schema, so nothing else would ever remove them.
+        oauthDatabase["oauthAccessToken"]?.push({ accessToken: "at-live", clientId: "c1", id: "at1", userId: user.id });
+        oauthDatabase["oauthRefreshToken"]?.push({ clientId: "c1", id: "rt1", refreshToken: "rt-live", userId: user.id });
+        oauthDatabase["oauthConsent"]?.push({ clientId: "c1", consentGiven: true, id: "oc1", userId: user.id });
+        oauthDatabase["deviceCode"]?.push({ deviceCode: "dc", id: "dc1", userCode: "ABCD", userId: user.id });
+        // A client this user registered belongs to everyone using that app — it stays.
+        oauthDatabase["oauthClient"]?.push({ clientId: "c1", id: "cl1", userId: user.id });
+
+        await oauthAdmin.removeUser({ userId: user.id });
+
+        expect(oauthDatabase["oauthAccessToken"]).toHaveLength(0);
+        expect(oauthDatabase["oauthRefreshToken"]).toHaveLength(0);
+        expect(oauthDatabase["oauthConsent"]).toHaveLength(0);
+        expect(oauthDatabase["deviceCode"]).toHaveLength(0);
+        expect(oauthDatabase["oauthClient"]).toHaveLength(1);
+    });
+
+    it("refuses to remove the last owner of an organization instead of orphaning it", async () => {
+        expect.assertions(3);
+
+        const orgDatabase: Record<string, unknown[]> = { ...seedMemoryDatabase(), invitation: [], member: [], organization: [] };
+        const orgAuth = createAuth({
+            baseURL: "http://localhost",
+            database: memoryAdapter(orgDatabase),
+            emailAndPassword: { enabled: true },
+            plugins: [admin(), organization()],
+            secret: SECRET,
+        });
+        const orgAdmin = createAuthAdmin(orgAuth);
+
+        const owner = await orgAdmin.createUser({ email: "sole@example.com", name: "Sole" });
+        await orgAdmin.createOrganization({ name: "Sole Owner Co", ownerId: owner.id });
+
+        await expect(orgAdmin.removeUser({ userId: owner.id })).rejects.toThrow(/LAST_ORGANIZATION_OWNER|last owner/iu);
+
+        // Refused, not half-applied: the user and their membership both survive.
+        expect(orgDatabase["user"]).toHaveLength(1);
+        expect(orgDatabase["member"]).toHaveLength(1);
+    });
+
+    it("removes an org member who is not the last owner", async () => {
+        expect.assertions(2);
+
+        const orgDatabase: Record<string, unknown[]> = { ...seedMemoryDatabase(), invitation: [], member: [], organization: [] };
+        const orgAuth = createAuth({
+            baseURL: "http://localhost",
+            database: memoryAdapter(orgDatabase),
+            emailAndPassword: { enabled: true },
+            plugins: [admin(), organization()],
+            secret: SECRET,
+        });
+        const orgAdmin = createAuthAdmin(orgAuth);
+
+        const owner = await orgAdmin.createUser({ email: "keeps@example.com", name: "Keeps" });
+        const plain = await orgAdmin.createUser({ email: "plain@example.com", name: "Plain" });
+        const org = await orgAdmin.createOrganization({ name: "Two Person Co", ownerId: owner.id });
+
+        await orgAdmin.addMember({ organizationId: org.id, userId: plain.id });
+
+        await expect(orgAdmin.removeUser({ userId: plain.id })).resolves.toBeUndefined();
+        expect(orgDatabase["member"]).toHaveLength(1);
+    });
+
     it("reports capabilities from the enabled plugins", async () => {
         expect.assertions(3);
 
@@ -195,7 +444,7 @@ describe("createAuthAdmin", () => {
     });
 
     it("impersonateUser respects a custom impersonationSeconds TTL", async () => {
-        expect.assertions(2);
+        expect.assertions(4);
 
         const customTtl = 7200; // 2 hours
         const adminWithTtl = createAuthAdmin(auth, { impersonationSeconds: customTtl });
@@ -211,6 +460,13 @@ describe("createAuthAdmin", () => {
 
         expect(result.expiresAt).toBeGreaterThanOrEqual(expectedMin);
         expect(result.expiresAt).toBeLessThanOrEqual(expectedMax);
+
+        // The returned number is worthless if the row the token points at expires at a different
+        // time (or carries no expiry at all) — that is what actually ends the impersonation.
+        const rows = sessionRows(user.id);
+
+        expect(rows).toHaveLength(1);
+        expect(asMillis(rows[0]?.["expiresAt"])).toBe(result.expiresAt);
     });
 
     it("impersonateUser rejects invalid impersonationSeconds values", async () => {

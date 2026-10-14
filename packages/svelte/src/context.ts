@@ -1,4 +1,5 @@
 import type { LunoraClient } from "@lunora/client";
+import { LunoraError } from "@lunora/errors";
 import { getContext, setContext } from "svelte";
 
 /**
@@ -37,7 +38,7 @@ export const getLunoraClient = (): LunoraClient => {
     const client = getContext<LunoraClient | undefined>(LUNORA_CONTEXT_KEY);
 
     if (!client) {
-        throw new Error("getLunoraClient(): no LunoraClient in context — call setLunoraClient(client) in an ancestor component first.");
+        throw new LunoraError("INTERNAL", "getLunoraClient(): no LunoraClient in context — call setLunoraClient(client) in an ancestor component first.");
     }
 
     return client;

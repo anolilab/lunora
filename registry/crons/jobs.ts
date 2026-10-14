@@ -2,8 +2,8 @@
  * Example internal cron target — added by `lunora registry add crons`.
  *
  * This file is YOURS: a normal Lunora module copied into your project. It lives
- * at `lunora/crons/jobs.ts`, so codegen surfaces its functions under the
- * `crons_jobs` namespace — i.e. `internal.crons_jobs.run` (the ref the sample
+ * at `lunora/crons/jobs.ts`, so codegen surfaces its functions as
+ * `internal.crons.jobs.*` — i.e. `internal.crons.jobs.run` (the ref the sample
  * job in `lunora/crons.ts` fires).
  *
  * `run` is an **internalMutation**: server-only, so a client can never invoke
@@ -15,21 +15,21 @@
  * Cron handlers should be idempotent: a missed tick may be retried, and a
  * long-running tick can overlap the next one.
  */
-import { internalMutation, v } from "./_generated/server.js";
+import { internalMutation, v } from "#lunora/_generated/server.js";
 
 /**
  * The example periodic job. Returns the wall-clock time it ran so you can see
  * it firing in the studio's function logs; replace the body with real work.
  */
-export const run = internalMutation({
-    args: { since: v.optional(v.number()) },
-    handler: async (_ctx, { since }): Promise<{ ranAt: number }> => {
-        const ranAt = Date.now();
+export const run = internalMutation.input({ since: v.optional(v.number()) }).mutation(async ({ args: { since }, ctx }): Promise<{ ranAt: number }> => {
+    // `ctx.now` (not `Date.now()`): mutation handlers must be deterministic, so
+    // read the run instant from the context — a single stable value the runtime
+    // captures once per execution.
+    const ranAt = ctx.now;
 
-        // TODO: do your periodic work here. `since` is an example arg — pass
-        // whatever you need from the cron registration's args object.
-        void since;
+    // TODO: do your periodic work here. `since` is an example arg — pass
+    // whatever you need from the cron registration's args object.
+    void since;
 
-        return { ranAt };
-    },
+    return { ranAt };
 });

@@ -1,33 +1,34 @@
-import type { ArgsOf, FunctionReference, LunoraSchedulerOptions, RunOptions, Scheduler, ScheduleRecord } from "./types";
+import { LunoraError } from "@lunora/errors";
 
-const callDO = async <T>(options: LunoraSchedulerOptions, path: string, body: unknown): Promise<T> => {
-    const stub = options.namespace.get(options.namespace.idFromName(options.instanceName ?? "default"));
-    const response = await stub.fetch(`https://scheduler.internal${path}`, {
-        body: JSON.stringify(body),
-        headers: { "content-type": "application/json" },
-        method: "POST",
-    });
+import { collectPages } from "../../../shared/collect-pages";
+import { decodeWire, encodeArgsOrThrow } from "../../../shared/wire-codec";
+import { assertSchedulerOptions, callDO, getDO } from "./do-client";
+import type { CronTarget, LunoraSchedulerOptions, RunOptions, Scheduler, ScheduleRecord, ScheduleTargetArgs } from "./types";
+import { isWorkflowReference } from "./types";
+import assertScheduleDelay from "./validate-delay";
+import assertScheduleInstant from "./validate-instant";
 
-    if (!response.ok) {
-        const text = await response.text();
-
-        throw new Error(`@lunora/scheduler: SchedulerDO ${path} failed (${String(response.status)}): ${text}`);
+/**
+ * Name a schedule target for an error message: a workflow/agent class, a
+ * function reference's path, or the bare `"ns:fn"` string the loosely-typed
+ * `ctx.scheduler` surface still accepts.
+ */
+const targetLabel = (target: CronTarget): string => {
+    if (typeof (target as unknown) === "string") {
+        return target as unknown as string;
     }
 
-    return await response.json();
+    return (isWorkflowReference(target) ? target.className : target.__lunoraRef) ?? "<unknown>";
 };
 
-const getDO = async <T>(options: LunoraSchedulerOptions, path: string): Promise<T> => {
-    const stub = options.namespace.get(options.namespace.idFromName(options.instanceName ?? "default"));
-    const response = await stub.fetch(`https://scheduler.internal${path}`, { method: "GET" });
-
-    if (!response.ok) {
-        const text = await response.text();
-
-        throw new Error(`@lunora/scheduler: SchedulerDO ${path} failed (${String(response.status)}): ${text}`);
-    }
-
-    return await response.json();
+/**
+ * Undo `runAt`'s encode on a record read back out of the DO, so `list()` /
+ * `get()` — and the `_scheduled_functions` system table they back — answer the
+ * same value the caller scheduled rather than the tagged wire form. Identity for
+ * pure-JSON args, so a record written before the encode landed reads unchanged.
+ */
+const decodeRecordArgs = (record: ScheduleRecord): ScheduleRecord => {
+    return { ...record, args: decodeWire(record.args) as Record<string, unknown> };
 };
 
 /**
@@ -36,63 +37,116 @@ const getDO = async <T>(options: LunoraSchedulerOptions, path: string): Promise<
  * thin RPC wrapper.
  */
 const createScheduler = (options: LunoraSchedulerOptions): Scheduler => {
-    // Defensive runtime guard: required by the type, but JS callers can omit it
-    // (exercised by createScheduler({} as never) in the tests).
-    // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- guards untrusted JS callers despite the required type
-    if (!options.namespace) {
-        throw new Error("@lunora/scheduler: `namespace` (SchedulerDO binding) is required");
-    }
+    assertSchedulerOptions(options);
 
-    if (!options.originUrl) {
-        throw new Error("@lunora/scheduler: `originUrl` is required so the DO can dispatch back to the Worker");
-    }
+    // Resolves the job id, not the `{ id, scheduledFor }` record the DO answers
+    // with: this object is installed as `ctx.scheduler`, whose contract
+    // (`SchedulerLike` in @lunora/shard-engine, `Scheduler` in @lunora/server,
+    // `ctx.scheduler` in @lunora/runtime, and the docs) is `Promise<string>`.
+    // The DO's `scheduledFor` echoes what the caller passed, so nothing is lost;
+    // `get(id)` returns the full record for a caller that wants it back.
+    const runAt = async <T extends CronTarget>(date: Date | number, target: T, args: ScheduleTargetArgs<T>, options_: RunOptions = {}): Promise<string> => {
+        // Rounded UP to a whole millisecond: the SchedulerDO's time index takes
+        // integers only, so a fractional instant (`runAfter(1500.5)`, or
+        // `Date.now() + 1000 / 3`) used to pass the guard below and be refused
+        // by the DO. Up, never down, so a job never fires before it was asked to.
+        const scheduledFor = Math.ceil(date instanceof Date ? date.getTime() : date);
 
-    const runAt = async <F extends FunctionReference>(
-        date: Date | number,
-        function_: F,
-        args: ArgsOf<F>,
-        options_: RunOptions = {},
-    ): Promise<{ id: string; scheduledFor: number }> => {
-        const scheduledFor = date instanceof Date ? date.getTime() : date;
+        // The bound `runAfter` has always applied, restated for the absolute form.
+        // Without it `runAt` was the door a `NaN`/`Infinity` instant walked through
+        // — `JSON.stringify` renders it `null`, and the DO stores a `scheduledFor`
+        // no alarm can fire, so the job is accepted and then never runs.
+        assertScheduleInstant(scheduledFor, Date.now(), "ctx.scheduler.runAt");
 
-        return callDO<{ id: string; scheduledFor: number }>(options, "/schedule", {
-            args,
-            functionPath: function_.__lunoraRef,
-            originUrl: options.originUrl,
-            // Optional workpool / retry-policy passthrough. Absent for ordinary
-            // `runAfter`/`runAt` calls, which keeps the wire payload (and the
-            // DO's behaviour) identical to before this feature.
+        // Shared envelope; the target-specific field (`functionPath` xor
+        // `workflow`) is merged in below.
+        //
+        // `instanceName` travels on EVERY call, pooled or not: the DO resolves
+        // the pool's reserved slot against it, so omitting it made a job
+        // scheduled on `tenant-a` release its slot on `default` — a slot leaked
+        // per job (fatal at a cap of 1) plus a phantom pool row on the wrong
+        // instance. `maxConcurrency` only means anything for a pooled job, so it
+        // rides along only when `pool` is set (mirroring `createWorkpool`).
+        const base = {
+            // Wire-encoded, and decoded again by `decodeRecordArgs` on the way
+            // back out — see `create-dispatch-runner.ts` for why the hop needs
+            // bracketing. The record is stored verbatim and POSTed verbatim to
+            // `/_lunora/scheduler/dispatch` on fire, where the decode is the
+            // shard's for a function target and `handleSchedulerDispatch`'s
+            // workflow branch (before `create({ params })`) for a workflow one.
+            args: encodeArgsOrThrow("ctx.scheduler.runAt", targetLabel(target), args),
+            // Pre-minted id, when the caller decided it before the call could be
+            // made (see `RunOptions.id`). Absent for an ordinary schedule, and the
+            // DO mints one.
+            id: options_.id,
+            instanceName: options.instanceName ?? "default",
+            maxConcurrency: options_.pool === undefined ? undefined : options_.maxConcurrency,
             pool: options_.pool,
             retry: options_.retry,
             scheduledFor,
             shardKey: options_.shardKey,
-        });
-    };
+        };
 
-    const runAfter = async <F extends FunctionReference>(
-        delayMs: number,
-        function_: F,
-        args: ArgsOf<F>,
-        options_: RunOptions = {},
-    ): Promise<{ id: string; scheduledFor: number }> => {
-        if (!Number.isFinite(delayMs) || delayMs < 0) {
-            throw new Error("@lunora/scheduler: `delayMs` must be a non-negative finite number");
+        if (isWorkflowReference(target)) {
+            // A workflow/agent target starts a fresh durable instance on fire; carry
+            // its export key (the generated class name) so the runtime can `create()` it.
+            if (typeof target.className !== "string" || target.className.length === 0) {
+                throw new LunoraError(
+                    "INTERNAL",
+                    "@lunora/scheduler: workflow/agent schedule target is missing its `className` — pass the generated `workflows.<name>` / `agents.<name>` reference",
+                );
+            }
+
+            const scheduled = await callDO<{ id: string }>(options, "/schedule", { ...base, workflow: target.className });
+
+            return scheduled.id;
         }
 
-        return runAt(Date.now() + delayMs, function_, args, options_);
+        // A bare string reaches here via the public string-typed `ctx.scheduler`
+        // surface (`createScheduler(...) as SchedulerLike`); a FunctionReference
+        // carries the path under `__lunoraRef`.
+        const functionPath = typeof (target as unknown) === "string" ? (target as unknown as string) : target.__lunoraRef;
+
+        const scheduled = await callDO<{ id: string }>(options, "/schedule", { ...base, functionPath });
+
+        return scheduled.id;
+    };
+
+    const runAfter = async <T extends CronTarget>(delayMs: number, target: T, args: ScheduleTargetArgs<T>, options_: RunOptions = {}): Promise<string> => {
+        assertScheduleDelay(delayMs, "ctx.scheduler.runAfter");
+
+        return runAt(Date.now() + delayMs, target, args, options_);
     };
 
     const cancel = async (id: string): Promise<{ cancelled: boolean }> => callDO<{ cancelled: boolean }>(options, "/cancel", { id });
 
-    // The DO's `/list` returns `{ records: ScheduleRecord[] }` (the pending
-    // `id:` headers). Surface the array directly to callers.
-    const list = async (): Promise<ScheduleRecord[]> => {
-        const body = await getDO<{ records?: ScheduleRecord[] }>(options, "/list");
+    /**
+     * Walk every page of a cursored DO list route (`/list`, `/dead`) and return
+     * the whole set.
+     *
+     * The DO answers a BOUNDED page (`{ records, truncated, cursor }`) so a large
+     * backlog is never serialized into one response. Returning just the first
+     * page here — and dropping `truncated` on the floor — is a silent wrong
+     * answer: `list()` backs `ctx.db.system.query("_scheduled_functions")
+     * .collect()`, whose contract is "the full list of rows", so an app deduping
+     * against its pending jobs reads clean past the page size and schedules
+     * unbounded duplicates. Paging keeps that promise while each individual
+     * response stays bounded.
+     */
+    const listAll = async (path: string): Promise<ScheduleRecord[]> => {
+        const records = await collectPages<ScheduleRecord>(async (cursor) =>
+            getDO<{ cursor?: string; records?: ScheduleRecord[]; truncated?: boolean }>(
+                options,
+                cursor === undefined ? path : `${path}?cursor=${encodeURIComponent(cursor)}`,
+            ),
+        );
 
-        // Keep the return type honest (never `undefined`) if the DO ever responds
-        // 200 without a `records` array.
-        return Array.isArray(body.records) ? body.records : [];
+        return records.map((record) => decodeRecordArgs(record));
     };
+
+    // The DO's `/list` returns one bounded page of the pending `id:` headers;
+    // `listAll` walks them all so callers see every pending job.
+    const list = async (): Promise<ScheduleRecord[]> => listAll("/list");
 
     // Direct single-record lookup against the DO's `GET /get?id=` route, which
     // reads the `id:<id>` storage key in O(1) — instead of scanning the whole
@@ -101,10 +155,25 @@ const createScheduler = (options: LunoraSchedulerOptions): Scheduler => {
         const body = await getDO<{ record?: ScheduleRecord }>(options, `/get?id=${encodeURIComponent(id)}`);
 
         // eslint-disable-next-line unicorn/no-null -- public contract returns `ScheduleRecord | null` (Convex `get` convention), not undefined
-        return body.record ?? null;
+        return body.record === undefined ? null : decodeRecordArgs(body.record);
     };
 
-    return { cancel, get, list, runAfter, runAt };
+    // The DO's `/dead` returns the records parked by `recordRetry()` after their
+    // retry budget was exhausted. They are deliberately absent from `/list` (the
+    // park deletes the `id:` header), so this is the only view of a job that
+    // failed permanently rather than being silently dropped.
+    const dead = async (): Promise<ScheduleRecord[]> => listAll("/dead");
+
+    // `POST /dead/retry` resurrects a parked record with a fresh attempt budget.
+    // A miss answers `{ retried: false }` rather than erroring, so a racing
+    // double-recover is a no-op rather than a failure.
+    const deadRetry = async (id: string): Promise<boolean> => {
+        const { retried } = await callDO<{ retried?: boolean }>(options, "/dead/retry", { id });
+
+        return retried === true;
+    };
+
+    return { cancel, dead, deadRetry, get, list, runAfter, runAt };
 };
 
 export default createScheduler;

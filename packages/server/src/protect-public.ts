@@ -1,4 +1,4 @@
-import runMiddlewareChain from "./builder/run-middleware";
+import composeMiddleware from "./builder/compose-middleware";
 import type { Middleware } from "./builder/types";
 
 /**
@@ -53,17 +53,17 @@ const protectPublic = <Context>(options: ProtectPublicOptions<Context>): Middlew
         (middleware): middleware is Middleware<Context, Context> => middleware !== undefined,
     );
 
-    // `runMiddlewareChain` is the shared onion executor, typed over `unknown` so
-    // it can host any builder's context. The casts below are that boundary's tax,
-    // not a loose contract: every `chain` element is a `Middleware<Context, Context>`
-    // (a structural subtype of the `unknown` form), and the terminal/result are the
-    // same `Context` the executor threads through untouched.
-    const composed: Middleware<Context, Context> = async ({ ctx, next }) =>
-        runMiddlewareChain(chain as ReadonlyArray<Middleware<unknown, unknown>>, ctx, (context) =>
-            next({ ctx: context as Record<string, unknown> }),
-        ) as Promise<Context>;
-
-    return composed;
+    // `composeMiddleware` is the package's one composer: it folds the chain over
+    // the shared onion executor AND returns the arrow with the chain's `rls()` /
+    // `mask()` policy tags already re-stamped on it — the composed arrow is a NEW
+    // function object, so without that the builder's hoisting would silently drop
+    // every policy passed through `use`.
+    //
+    // The cast is the executor's boundary tax, not a loose contract: the executor
+    // is typed over `unknown` so it can host any builder's context, every `chain`
+    // element is a `Middleware<Context, Context>` (a structural subtype of the
+    // `unknown` form), and the context is threaded through untouched.
+    return composeMiddleware<Context, Context>(chain as ReadonlyArray<Middleware<unknown, unknown>>);
 };
 
 export type { ProtectPublicOptions };

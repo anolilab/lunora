@@ -1,36 +1,57 @@
 import { useLunora } from "@lunora/react";
 import type { ReactElement, ReactNode } from "react";
-import { useState } from "react";
+import { useCallback, useState } from "react";
 
-import { ConfirmButton } from "../../components/confirm-button";
 import { ShardInput } from "../../components/shard-input";
-import { EmptyState } from "../../components/ui/empty-state";
-import { useT } from "../../i18n/i18n-context";
-import type { FilterClause, TableInfo } from "../../lib/admin";
+import { useAdminQuery } from "../../hooks/use-admin-query";
+import useMirroredRef from "../../hooks/use-mirrored-ref";
+import type { ColumnMeta, FilterClause, TableIndexInfo, TableInfo, TablePage, TablesColumnsResult, TablesIndexesResult } from "../../lib/admin";
 import { ADMIN_FUNCTIONS } from "../../lib/admin";
-import { adminRef, callOptions } from "../../lib/internal";
-import { maskColumnsForTable, maskRows, mergeSensitiveColumns } from "../../lib/mask-preview";
+import { usePersistedValue } from "../../lib/browser-storage";
+import { advisorSchemaFromColumns } from "../../lib/cascade-schema";
+import { adminRef, callOptions, fireAndForget } from "../../lib/internal";
+import { maskRow } from "../../lib/mask-preview";
 import type { DataView, SavedQuery } from "../../lib/saved-queries";
-import type { TableRow } from "./data-browser-grid";
-import { DataBrowserTableView } from "./data-browser-grid";
+import { useSqlAssistant } from "../sql/hooks/use-sql-assistant";
+import { backRelationKey, backRelationsFor } from "./back-relations";
+import { BulkPatchDialog } from "./bulk-patch-dialog";
+import { CascadePreviewDialog, MAX_ROWS_PER_TABLE } from "./cascade-preview";
+import DataBrowserPage from "./data-browser-page";
 import DataFacets from "./data-facets";
-import type { EditableFilter } from "./data-filters";
-import { DataFilters } from "./data-filters";
-import { TransposedTable } from "./data-grid";
-import DataQueryBar from "./data-query-bar";
 import { GenerateRowsDialog } from "./generate-rows-dialog";
-import { CellDetailDialog, GridActionsBar } from "./grid-features";
-import GridPagination from "./grid-pagination";
+import { CellDetailDialog } from "./grid-features";
+import { useBackRelations } from "./hooks/use-back-relations";
 import { useDataBrowser } from "./hooks/use-data-browser";
+import { useDataViewPreferences } from "./hooks/use-data-view-preferences";
+import type { InsertBatchOutcome } from "./hooks/use-generate-rows";
 import { useGenerateRows } from "./hooks/use-generate-rows";
-import useMaskPolicies from "./hooks/use-mask-policies";
+import { useRowInspection } from "./hooks/use-row-inspection";
 import { RowDetailDrawer } from "./row-detail";
-import RowFormEditor from "./row-form";
 import { ShardExplorer } from "./shard-explorer";
-import { StagedDiffPanel } from "./staged-edits";
 import { TableListSidebar } from "./table-list-sidebar";
 
+/** Browser-local store for per-table enabled reverse-relation columns. */
+const BACK_RELATIONS_KEY = "lunora-studio-back-relations";
+
+/**
+ * Columns covered by a single-column UNIQUE index. Only single-column ones: a
+ * composite unique index does not make its members individually unique, so
+ * flagging them would cry wolf on every ordinary bulk set.
+ */
+const uniqueColumnsFor = (indexes: ReadonlyArray<TableIndexInfo> | undefined): ReadonlySet<string> =>
+    new Set((indexes ?? []).filter((index) => index.unique === true && index.fields.length === 1).map((index) => index.fields[0] ?? ""));
+
+/** Hoisted empty schema map so an unresolved `describeTables` doesn't churn the resolver's identity. */
+const EMPTY_COLUMNS_BY_TABLE: Readonly<Record<string, ColumnMeta[]>> = {};
+
 interface DataBrowserProps {
+    /**
+     * Offer "Generate rows" alongside the edit controls. It needs the dev host's
+     * seed endpoint, which a deployed studio does not have, so it is its own
+     * switch rather than part of `editable`. Off by default.
+     */
+    readonly canGenerateRows?: boolean;
+
     /**
      * Allow editing: surfaces insert/edit/delete actions that issue
      * `__lunora_admin__:writeRow` ops through the schema-aware writer. Off by
@@ -49,6 +70,8 @@ interface DataBrowserProps {
     readonly initialFilters?: FilterClause[];
     /** Sort to hydrate from a shared link / saved query. */
     readonly initialOrderBy?: DataView["orderBy"];
+    /** Comma-separated pinned columns from the URL; wins over the per-browser default. */
+    readonly initialPins?: string;
     /** Substring search to hydrate from a shared link / saved query. */
     readonly initialSearch?: string;
     /** Shard key the browser targets on first load. Defaults to the root shard. */
@@ -62,10 +85,11 @@ interface DataBrowserProps {
     readonly onNavigateToGlobal?: (table: string, id: string) => void;
 
     /**
-     * Called whenever the open table changes, so the host can mirror it to the URL
-     * (the Table editor pushes `?table=…`). Omitted in standalone use.
+     * Navigate the URL to a table (the Table editor pushes `?table=…`), opening it
+     * clean; `options.search` pre-fills the search for an FK-cell traversal.
+     * Omitted in standalone use.
      */
-    readonly onSelectTable?: (table: string) => void;
+    readonly onSelectTable?: (table: string, options?: { search?: string }) => void;
 
     /**
      * Called whenever the loaded view (shard / search / filters / sort) changes, so
@@ -110,11 +134,10 @@ const DEFAULT_PAGE_SIZE = 50;
 /** Hoisted empty table list — a stable reference for the "no tables yet" sidebar (avoids a fresh `[]` literal in JSX). */
 const NO_TABLES: ReadonlyArray<TableInfo> = [];
 
-/** Shared Supabase-style control-button class for the toolbar actions. */
-const CONTROL_BTN =
-    "inline-flex items-center gap-1 rounded-md border border-border px-2.5 py-1 text-xs font-medium text-foreground outline-none transition-colors hover:bg-accent focus-visible:bg-accent disabled:pointer-events-none disabled:opacity-50 aria-pressed:bg-accent aria-pressed:text-accent-foreground";
-
 const LIST_TABLES = adminRef(ADMIN_FUNCTIONS.listTables);
+
+/** Bounded page read the cascade preview counts related rows with. */
+const READ_TABLE_PAGE = adminRef(ADMIN_FUNCTIONS.readTablePage);
 
 /**
  * The table-list sidebar header: the schema/source switch (when the browser is
@@ -142,105 +165,6 @@ const DataBrowserSidebarHeader = ({
 );
 
 /**
- * The page's view toggle / live status / search / add-row controls. All state
- * lives in the parent; this component is purely the control bar markup. The grid
- * is always live (Convex-style) — there is no Refresh or Live toggle; a passive
- * indicator shows the stream is healthy, and flips to "Live unavailable" only when
- * the admin subscription is rejected (the grid still shows its last-fetched rows).
- */
-const DataBrowserViewControls = ({
-    columns,
-    editable,
-    filter,
-    filters,
-    hasMaskedColumns,
-    liveError,
-    maskOn,
-    onAddRow,
-    onBulkDelete,
-    onClearTable,
-    onFilterChange,
-    onFiltersChange,
-    onGenerateRows,
-    onShowJson,
-    onShowTable,
-    onToggleMask,
-    total,
-    viewMode,
-}: {
-    columns: string[];
-    editable: boolean;
-    filter: string;
-    filters: EditableFilter[];
-    /** Whether the selected table has any mask-covered columns — gates the toggle's visibility. */
-    hasMaskedColumns: boolean;
-    liveError: string | undefined;
-    /** Whether the "Mask sensitive columns" preview is on. */
-    maskOn: boolean;
-    onAddRow: () => void;
-    onBulkDelete: () => void;
-    onClearTable: () => void;
-    onFilterChange: (event: React.ChangeEvent<HTMLInputElement>) => void;
-    onFiltersChange: (filters: EditableFilter[]) => void;
-    onGenerateRows: () => void;
-    onShowJson: () => void;
-    onShowTable: () => void;
-    onToggleMask: () => void;
-    total: number;
-    viewMode: "json" | "table";
-}): ReactElement => {
-    const t = useT();
-
-    return (
-        <div className="flex flex-col gap-2" data-testid="db-view-toggle">
-            <div className="flex flex-wrap items-center gap-1.5">
-                <button aria-pressed={viewMode === "table"} className={CONTROL_BTN} data-testid="db-view-table" onClick={onShowTable} type="button">
-                    Table
-                </button>
-                <button aria-pressed={viewMode === "json"} className={CONTROL_BTN} data-testid="db-view-json" onClick={onShowJson} type="button">
-                    JSON
-                </button>
-                <span
-                    className="inline-flex items-center gap-1.5 px-1 text-xs font-medium text-muted-foreground"
-                    data-testid="db-live-indicator"
-                    role="status"
-                    title={liveError === undefined ? t("Live — changes stream in automatically") : t("Live unavailable: {liveError}", { liveError })}
-                >
-                    <span aria-hidden="true" className={`size-1.5 rounded-full ${liveError === undefined ? "bg-success" : "bg-muted-foreground/50"}`} />
-                    {liveError === undefined ? t("Live") : t("Live unavailable")}
-                </span>
-                {hasMaskedColumns && (
-                    <button aria-pressed={maskOn} className={CONTROL_BTN} data-testid="db-mask-toggle" onClick={onToggleMask} type="button">
-                        {t("Mask sensitive columns")}
-                    </button>
-                )}
-                {editable && (
-                    <button className={CONTROL_BTN} data-testid="db-add-row" onClick={onAddRow} type="button">
-                        Add row
-                    </button>
-                )}
-                {editable && (
-                    <button className={CONTROL_BTN} data-testid="db-generate-rows" onClick={onGenerateRows} type="button">
-                        {t("Generate rows")}
-                    </button>
-                )}
-                {editable && total > 0 && (filter !== "" || filters.length > 0) && (
-                    <ConfirmButton confirmLabel={`Delete ${total.toString()} matching?`} onConfirm={onBulkDelete} testId="db-bulk-delete">
-                        {`Delete ${total.toString()} matching`}
-                    </ConfirmButton>
-                )}
-                {editable && total > 0 && filter === "" && filters.length === 0 && (
-                    <ConfirmButton confirmLabel={`Clear all ${total.toString()} rows?`} onConfirm={onClearTable} testId="db-clear-table">
-                        {`Clear table (${total.toString()})`}
-                    </ConfirmButton>
-                )}
-            </div>
-            <DataFilters columns={columns} filters={filters} onFiltersChange={onFiltersChange} onSearchChange={onFilterChange} search={filter} />
-        </div>
-    );
-};
-
-/**
  * Read-only data browser for a single shard's SQLite database. Lists the user
  * tables (via the `__lunora_admin__:listTables` RPC), then pages through the
  * rows of whichever table is selected (`__lunora_admin__:readTablePage`).
@@ -258,10 +182,12 @@ const DataBrowserViewControls = ({
  * that state lives in {@link useDataBrowser}; this component is just the markup.
  */
 export const DataBrowser = ({
+    canGenerateRows = false,
     editable = false,
     globalTableNames,
     initialFilters,
     initialOrderBy,
+    initialPins,
     initialSearch,
     initialShardKey,
     onNavigateToGlobal,
@@ -272,66 +198,182 @@ export const DataBrowser = ({
     schemaSwitch,
     tableParam,
 }: DataBrowserProps): ReactElement => {
+    // Reverse relations ("← messages") are opt-in per table: resolving them is
+    // proportional to relations × page size, and most sessions never look at
+    // them. The EDGES are derived from schema metadata the studio can fetch once;
+    // only the COUNTS need a per-page round trip.
+    const schemaQuery = useAdminQuery<TablesColumnsResult>(ADMIN_FUNCTIONS.describeTables, {}, { shardKey: initialShardKey ?? "" });
+
+    // Declared indexes, for the one thing the column metadata cannot answer:
+    // which columns carry a UNIQUE index. Setting such a column to a constant
+    // across two or more matching rows is a guaranteed mid-batch constraint
+    // failure — a partial write — so the bulk-patch dialog warns before the
+    // operator commits rather than after the writer refuses.
+    const indexesQuery = useAdminQuery<TablesIndexesResult>(ADMIN_FUNCTIONS.listTablesIndexes, {}, { shardKey: initialShardKey ?? "" });
+    const columnsByTable = schemaQuery.data?.columnsByTable ?? EMPTY_COLUMNS_BY_TABLE;
+    const [backRelationsOn, setBackRelationsOn] = usePersistedValue<Record<string, string[]>>(BACK_RELATIONS_KEY, {});
+
+    // MEMOIZED DELIBERATELY, unlike the derivations below. This feeds
+    // `activeBackRelations` → the grid's `columnDefs` → `useReactTable`, and
+    // react-table resets its internal state (column sizing, row selection) the
+    // moment `columns` changes identity. React Compiler would hold it stable, but
+    // a compiler bail-out here is a visible bug, not a slow render.
+    // react-doctor-disable-next-line react-doctor/react-compiler-no-manual-memoization -- identity is behaviour here: react-table resets on a new `columns` identity
+    const resolveBackRelations = useCallback(
+        (table: string) => {
+            const enabled = new Set(backRelationsOn[table]);
+
+            return backRelationsFor(table, columnsByTable).filter((relation) => enabled.has(backRelationKey(relation)));
+        },
+        // react-doctor-disable-next-line react-doctor/exhaustive-deps -- `columnsByTable` IS `schemaQuery.data?.columnsByTable`, destructured above; the deps are complete
+        [backRelationsOn, columnsByTable],
+    );
+
+    const browser = useDataBrowser({
+        initialFilters,
+        initialOrderBy,
+        initialSearch,
+        initialShardKey,
+        onSelectTable,
+        onViewChange,
+        pageSize: initialPageSize,
+        resolveBackRelations,
+        tableParam,
+    });
+
     const {
-        addRow,
-        bulkDelete,
         cancelCellEdit,
-        cancelEdit,
-        changePageSize,
-        clearTable,
         columns,
-        committing,
         currentView,
-        discardStaged,
         editableColumn,
-        editing,
         editingCell,
         facetFilter,
         facets,
-        filter,
-        filters,
-        goNext,
-        goPrevious,
-        hasNext,
-        hasPrevious,
-        jumpToPage,
-        liveError,
         loadTables,
         navigateToRef,
-        onBulkDeleteSelected,
-        onCommitStaged,
-        onFilterChange,
         onFiltersChange,
-        onRowDelete,
-        onRowEdit,
         page,
         pageError,
         previewRef,
-        pageSize,
-        rangeEnd,
-        rangeStart,
-        saveEdit,
+        queryShardKey,
         selectedTable,
         selectTable,
-        setEditorDocumentText,
         setShardKey,
         shardKey,
-        showJson,
-        showTable,
         stage,
-        stagedChanges,
         stagedValue,
         startCellEdit,
-        table,
         tables,
         tablesError,
         toggleFacet,
-        total,
-        viewMode,
-        writeError,
-    } = useDataBrowser({ initialFilters, initialOrderBy, initialSearch, initialShardKey, onSelectTable, onViewChange, pageSize: initialPageSize, tableParam });
+    } = browser;
+
+    // Natural-language filtering. The model returns STRUCTURED clauses which
+    // land in the visible filter rows for the operator to see and edit — the
+    // query never runs off un-reviewed model output.
+    const assistant = useSqlAssistant(shardKey);
+    // The table on screen when a suggestion lands. The clauses name the columns of
+    // the table they were asked for, so a reply that arrives after a table switch
+    // is dropped rather than filtering the new table by the old one's columns.
+    const selectedTableRef = useMirroredRef(selectedTable);
+
+    const askAiFilter = (prompt: string): void => {
+        const askedFor = selectedTable;
+        const apply = async (): Promise<void> => {
+            const clauses = await assistant.suggestFilter(prompt, askedFor ?? "");
+
+            if (clauses !== undefined && selectedTableRef.current === askedFor) {
+                onFiltersChange(
+                    clauses.map((clause) => {
+                        // The wire value is `unknown`; a filter row is a string
+                        // input, so only scalars round-trip meaningfully.
+                        const raw: unknown = clause.value;
+                        const value = typeof raw === "string" || typeof raw === "number" || typeof raw === "boolean" ? String(raw) : "";
+
+                        return { column: clause.column, operator: clause.operator, value };
+                    }),
+                );
+            }
+        };
+
+        fireAndForget(apply());
+    };
+
+    // Available reverse edges for the open table, and the counts for the loaded
+    // page. Only the switched-on edges are resolved; the rest cost nothing.
+    // Plain derivations — React Compiler memoizes them, and `useBackRelations`
+    // keys its fetch on a serialised signature rather than these identities, so
+    // nothing downstream cares whether they are stable.
+    const availableBackRelations = selectedTable === null ? [] : backRelationsFor(selectedTable, columnsByTable);
+    const enabledBackRelations = new Set(backRelationsOn[selectedTable ?? ""]);
+    // One pass, not map-then-filter: a page is up to a few hundred rows.
+    const pageIds: string[] = [];
+
+    for (const row of page?.rows ?? []) {
+        const id = row._id ?? row.id;
+
+        if (typeof id === "string" && id !== "") {
+            pageIds.push(id);
+        }
+    }
+    // The DEBOUNCED shard, matching the page these ids came from — the live one
+    // would refetch per keystroke and could count children on a shard other than
+    // the one whose rows are on screen.
+    const backRelationCounts = useBackRelations(enabledBackRelations, availableBackRelations, pageIds, queryShardKey);
+
+    const onToggleBackRelation = (key: string): void => {
+        setBackRelationsOn((current) => {
+            const forTable = selectedTable ?? "";
+            const existing: string[] = current[forTable] ?? [];
+
+            return { ...current, [forTable]: existing.includes(key) ? existing.filter((entry) => entry !== key) : [...existing, key] };
+        });
+    };
+
+    // Pinned columns, per table, persisted on this browser. Per table because a
+    // pin is a statement about THAT table's shape ("keep the email visible"),
+    // not a global preference; persisted because re-pinning on every navigation
+    // would make the feature not worth using.
+    const preferences = useDataViewPreferences({ columns, initialPins, selectedTable });
+
+    // Which overlay is open. Separate from the render preferences above: these five
+    // fields are read here and nowhere else, and `onInspect` is read only by the page.
+    const inspection = useRowInspection();
+
+    // The row awaiting a cascade-impact confirmation, or null when none is open.
+    const [cascadePreviewRowId, setCascadePreviewRowId] = useState<null | string>(null);
+    const { closeExpandedCell, closeInspect, expandedCell, inspecting, onExpandCell } = inspection;
 
     const client = useLunora();
+
+    // The open table's declared columns, keyed by name — what the row editor reads
+    // to pick a field widget. Sourced from the same `describeTables` read the
+    // diagram and the back-relations use, not from `useGenerateRows`'s
+    // `describeTable`: that one is only fetched when the generate dialog opens.
+    const editorColumnMeta = Object.fromEntries((columnsByTable[selectedTable ?? ""] ?? []).map((meta) => [meta.name, meta]));
+
+    // The `v.storage(...)` columns of the table on screen. Their values are R2
+    // object keys, which is what lets an expanded cell show the object instead of
+    // the key — every other column's value IS the value.
+    // One pass, and it carries the bucket: a `Map` rather than a `Set` because the
+    // cell needs to know WHICH bucket to resolve against, not merely that it is a
+    // storage column. An entry with no bucket means `v.storage()` with no argument.
+    const storageColumns = new Map<string, string | undefined>();
+
+    for (const meta of columnsByTable[selectedTable ?? ""] ?? []) {
+        if (meta.isStorage === true) {
+            storageColumns.set(meta.name, meta.bucket);
+        }
+    }
+
+    // Resolves against the bucket `v.storage(bucket)` named, which codegen now
+    // reports on the column. A column declared without one resolves against the
+    // deployment's default bucket, which is what `v.storage()` itself means.
+    // react-doctor-disable-next-line react-doctor/react-compiler-no-manual-memoization -- identity is behaviour: this is an effect dependency in `StoragePreview`, and a fresh closure per render would re-fetch the signed URL on every keystroke elsewhere in the browser
+    const resolveStorageUrl = useCallback(
+        async (key: string, bucket?: string): Promise<string> => client.signedStorageUrl(key, bucket === undefined ? {} : { bucket }),
+        [client],
+    );
 
     // Fetch the table list for a given shard key — used by the ShardExplorer to
     // show a live table/row-count summary when the operator picks a recent shard.
@@ -363,58 +405,19 @@ export const DataBrowser = ({
         }
     };
 
-    const onInsertGeneratedRows = (rows: ReadonlyArray<Record<string, unknown>>): Promise<string | undefined> => insertBatch(rows, closeGenerateDialog);
+    const onInsertGeneratedRows = (rows: ReadonlyArray<Record<string, unknown>>): Promise<InsertBatchOutcome> => insertBatch(rows, closeGenerateDialog);
 
-    // The row whose full document the detail drawer is showing, if any. Pure
-    // view state — kept out of the data hook since it touches no fetch logic.
-    const [inspecting, setInspecting] = useState<TableRow | null>(null);
-    const closeInspect = (): void => {
-        setInspecting(null);
+    // Bulk-patch dialog. Purely open/closed state — the browser model owns the
+    // predicate and the drain loop, so the dialog only has to hand back the
+    // one-field document to merge.
+    const [bulkPatchOpen, setBulkPatchOpen] = useState<boolean>(false);
+
+    const onOpenBulkPatch = (): void => {
+        setBulkPatchOpen(true);
     };
 
-    // Whether the table view is transposed (fields as rows, records as columns) —
-    // pure view state for reading wide tables; persists across table switches until
-    // the operator toggles it back.
-    const [transposed, setTransposed] = useState<boolean>(false);
-    const onToggleTranspose = (): void => {
-        setTransposed((current) => !current);
-    };
-
-    // The deployment's codegen-discovered mask policies (table + column + strategy),
-    // loaded once. Drives the "Mask sensitive columns" preview: a render-only
-    // redaction of what a `.use(mask(...))` caller would see, plus the per-column
-    // "masked" header chips. The operator keeps full DB access — this is a preview,
-    // not enforcement.
-    const maskPolicies = useMaskPolicies();
-    // Default the preview ON so plaintext secrets are hidden out of the box (the
-    // operator reveals them by toggling). The toggle is only rendered when the
-    // active table actually has sensitive columns, so an ordinary table is
-    // unaffected; when it does, the safe-by-default state is masked.
-    const [maskOn, setMaskOn] = useState<boolean>(true);
-    const onToggleMask = (): void => {
-        setMaskOn((current) => !current);
-    };
-
-    // The active table's masked columns (column → strategy). Explicit codegen
-    // policies (`.use(mask(...))`) are layered with a name-heuristic fallback so a
-    // plaintext `password` / `api_key` / `token` column with no declared policy is
-    // still masked by default (as `"redact"`). Explicit policies always win.
-    const explicitMaskColumns = maskColumnsForTable(maskPolicies, selectedTable ?? "");
-    const maskColumns = mergeSensitiveColumns(explicitMaskColumns, columns);
-
-    // The threaded view the grid/JSON/transposed renderers read. The chips show
-    // whenever a column is covered; cell values are only rewritten when the toggle
-    // is on.
-    const maskView = { columns: maskColumns, enabled: maskOn };
-
-    // The cell whose full value the expand dialog is showing, if any. Opened from
-    // the per-cell expand affordance; pure view state like `inspecting`.
-    const [expandedCell, setExpandedCell] = useState<null | { column: string; value: unknown }>(null);
-    const onExpandCell = (column: string, value: unknown): void => {
-        setExpandedCell({ column, value });
-    };
-    const closeExpandedCell = (): void => {
-        setExpandedCell(null);
+    const closeBulkPatch = (): void => {
+        setBulkPatchOpen(false);
     };
 
     // Follow a `v.id` ref cell. Targets in another storage tier (a `.global()` D1
@@ -449,9 +452,37 @@ export const DataBrowser = ({
         startEdit: startCellEdit,
     };
 
+    // Row deletion goes through the cascade-impact preview: the delete itself only
+    // runs once the operator has seen which related rows the FK graph says are
+    // impacted. The dialog IS the confirmation step, which is why the grid's row
+    // button opens it directly rather than confirming first.
+    const openCascadePreview = (id: null | string): void => {
+        if (id !== null) {
+            setCascadePreviewRowId(id);
+        }
+    };
+
+    const confirmCascadeDelete = (): void => {
+        browser.onRowDelete(cascadePreviewRowId);
+    };
+
+    // Bounded per-table read the preview counts impacted rows with: an EXACT match
+    // on the child's foreign-key column (`column = parent row id`), not the
+    // free-text `search` — that one matches any column containing the id, so a note
+    // quoting the id counted as a cascade victim. Reads the DEBOUNCED shard, the one
+    // the rows on screen came from.
+    const readCascadePage = async (table: string, column: string, value: string): Promise<TablePage> =>
+        (await client.query(
+            READ_TABLE_PAGE,
+            { filters: [{ column, operator: "eq", value }], limit: MAX_ROWS_PER_TABLE, offset: 0, orderBy: [], table },
+            callOptions(queryShardKey),
+        )) as TablePage;
+
     // The foreign-key context passed alongside it: the column → table map plus the
     // navigate/preview handlers a ref cell needs.
-    const references = { columns: page?.refs, onNavigate: handleNavigateRef, onPreview: previewRef };
+    // `maskViewFor` (not `preferences.maskView`) because the hover preview renders a
+    // row from the TARGET table, whose covered columns are its own.
+    const references = { columns: page?.refs, maskViewFor: preferences.maskViewFor, onNavigate: handleNavigateRef, onPreview: previewRef };
 
     return (
         <div className="flex h-full min-w-0" data-testid="lunora-data-browser">
@@ -491,150 +522,81 @@ export const DataBrowser = ({
                 )}
 
                 {page !== null && (
-                    <div className="flex min-h-0 flex-1 flex-col" data-testid="db-page">
-                        <div className="flex shrink-0 flex-col gap-2 border-b border-border px-4 py-3">
-                            <DataBrowserViewControls
-                                columns={columns}
-                                editable={editable}
-                                filter={filter}
-                                filters={filters}
-                                hasMaskedColumns={maskColumns.size > 0}
-                                liveError={liveError}
-                                maskOn={maskOn}
-                                onAddRow={addRow}
-                                onBulkDelete={bulkDelete}
-                                onClearTable={clearTable}
-                                onFilterChange={onFilterChange}
-                                onFiltersChange={onFiltersChange}
-                                onGenerateRows={onOpenGenerateRows}
-                                onShowJson={showJson}
-                                onShowTable={showTable}
-                                onToggleMask={onToggleMask}
-                                total={total}
-                                viewMode={viewMode}
-                            />
-
-                            {queryBar !== undefined && (
-                                <DataQueryBar
-                                    onApply={queryBar.onApplyQuery}
-                                    onCopyLink={queryBar.onCopyLink}
-                                    onDelete={queryBar.onDeleteQuery}
-                                    onSave={saveCurrentQuery}
-                                    saved={queryBar.saved}
-                                />
-                            )}
-
-                            {viewMode === "table" && page.rows.length > 0 && (
-                                <GridActionsBar
-                                    columns={page.columns}
-                                    editable={editable}
-                                    name={selectedTable ?? "export"}
-                                    onBulkDelete={onBulkDeleteSelected}
-                                    onToggleTranspose={onToggleTranspose}
-                                    rows={page.rows}
-                                    table={table.table}
-                                    transposed={transposed}
-                                />
-                            )}
-
-                            {editable && editing !== null && (
-                                <RowFormEditor
-                                    documentText={editing.docText}
-                                    onCancel={cancelEdit}
-                                    onDocumentTextChange={setEditorDocumentText}
-                                    onSave={saveEdit}
-                                    refs={page.refs}
-                                />
-                            )}
-
-                            {editable && stagedChanges.length > 0 && (
-                                <StagedDiffPanel changes={stagedChanges} committing={committing} onCommit={onCommitStaged} onDiscard={discardStaged} />
-                            )}
-
-                            {writeError !== null && (
-                                <p className="text-sm text-destructive" data-testid="db-write-error" role="alert">
-                                    {writeError}
-                                </p>
-                            )}
-                        </div>
-
-                        {viewMode === "table" && page.rows.length === 0 && (
-                            <div className="flex flex-1 items-center justify-center p-6">
-                                <EmptyState
-                                    description="Rows you insert into this table will show up here."
-                                    icon={
-                                        <svg
-                                            aria-hidden="true"
-                                            fill="none"
-                                            stroke="currentColor"
-                                            strokeLinecap="round"
-                                            strokeLinejoin="round"
-                                            strokeWidth={1.6}
-                                            viewBox="0 0 24 24"
-                                        >
-                                            <path d="M4 5h16v14H4V5Zm0 5h16M10 10v9M4 14.5h16" />
-                                        </svg>
-                                    }
-                                    testId="db-empty-rows"
-                                    title="This table is empty."
-                                />
-                            </div>
-                        )}
-
-                        {viewMode === "table" && page.rows.length > 0 && transposed && (
-                            <TransposedTable columns={page.columns} rows={maskRows(page.rows, maskView)} />
-                        )}
-
-                        {viewMode === "table" && page.rows.length > 0 && !transposed && (
-                            <DataBrowserTableView
-                                edit={edit}
-                                editable={editable}
-                                mask={maskView}
-                                onDelete={onRowDelete}
-                                onEdit={onRowEdit}
-                                onInspect={setInspecting}
-                                refs={references}
-                                scrollRef={table.scrollRef}
-                                scrollToIndex={table.scrollToIndex}
-                                table={table.table}
-                                tableRows={table.tableRows}
-                                tbodyStyle={table.tbodyStyle}
-                                virtualRows={table.virtualRows}
-                            />
-                        )}
-
-                        {viewMode === "json" && (
-                            <pre className="min-h-0 flex-1 overflow-auto border-t border-border bg-muted/30 p-3 text-xs" data-testid="db-json">
-                                {JSON.stringify(maskRows(page.rows, maskView), null, 2)}
-                            </pre>
-                        )}
-
-                        <div className="flex shrink-0 items-center border-t border-border px-4 py-2">
-                            <GridPagination
-                                hasNext={hasNext}
-                                hasPrevious={hasPrevious}
-                                onJumpToPage={jumpToPage}
-                                onNext={goNext}
-                                onPageSizeChange={changePageSize}
-                                onPrevious={goPrevious}
-                                pageSize={pageSize}
-                                prefix="db"
-                                rangeEnd={rangeEnd}
-                                rangeStart={rangeStart}
-                                total={total}
-                            />
-                        </div>
-                    </div>
+                    <DataBrowserPage
+                        assistant={assistant}
+                        backRelations={{
+                            available: availableBackRelations,
+                            counts: backRelationCounts,
+                            enabled: enabledBackRelations,
+                            onToggle: onToggleBackRelation,
+                        }}
+                        browser={browser}
+                        columnMeta={editorColumnMeta}
+                        edit={edit}
+                        editable={editable}
+                        onAskAiFilter={askAiFilter}
+                        onInspect={inspection.onInspect}
+                        onOpenBulkPatch={onOpenBulkPatch}
+                        onOpenGenerateRows={canGenerateRows ? onOpenGenerateRows : undefined}
+                        onRowDelete={openCascadePreview}
+                        onSaveQuery={saveCurrentQuery}
+                        page={page}
+                        preferences={preferences}
+                        queryBar={queryBar}
+                        references={references}
+                    />
                 )}
             </div>
 
-            {page !== null && <DataFacets columns={columns} facets={facets} onFacetFilter={facetFilter} onToggleFacet={toggleFacet} />}
-
-            {inspecting !== null && page !== null && (
-                <RowDetailDrawer columns={page.columns} onClose={closeInspect} onNavigate={handleNavigateRef} refs={page.refs} row={inspecting} />
+            {page !== null && (
+                <DataFacets columns={columns} facets={facets} mask={preferences.maskView} onFacetFilter={facetFilter} onToggleFacet={toggleFacet} />
             )}
 
-            {expandedCell !== null && <CellDetailDialog column={expandedCell.column} onClose={closeExpandedCell} value={expandedCell.value} />}
+            {inspecting !== null && page !== null && (
+                <RowDetailDrawer
+                    columns={page.columns}
+                    mask={preferences.maskView}
+                    onClose={closeInspect}
+                    onNavigate={handleNavigateRef}
+                    refs={page.refs}
+                    row={maskRow(inspecting, preferences.maskView)}
+                />
+            )}
+
+            {cascadePreviewRowId !== null && selectedTable !== null && (
+                <CascadePreviewDialog
+                    onClose={() => {
+                        setCascadePreviewRowId(null);
+                    }}
+                    onConfirm={confirmCascadeDelete}
+                    readPage={readCascadePage}
+                    rowId={cascadePreviewRowId}
+                    schema={advisorSchemaFromColumns(columnsByTable)}
+                    table={selectedTable}
+                />
+            )}
+
+            {expandedCell !== null && (
+                <CellDetailDialog
+                    bucket={storageColumns.get(expandedCell.column)}
+                    column={expandedCell.column}
+                    onClose={closeExpandedCell}
+                    resolveUrl={storageColumns.has(expandedCell.column) ? resolveStorageUrl : undefined}
+                    value={expandedCell.value}
+                />
+            )}
+
+            {bulkPatchOpen && selectedTable !== null && (
+                <BulkPatchDialog
+                    columns={browser.columns.filter((name) => browser.editableColumn(name))}
+                    onApply={browser.bulkPatch}
+                    onClose={closeBulkPatch}
+                    shardKey={browser.queryShardKey}
+                    table={selectedTable}
+                    total={browser.total}
+                    uniqueColumns={uniqueColumnsFor(indexesQuery.data?.indexesByTable[selectedTable])}
+                />
+            )}
 
             {generateOpen && selectedTable !== null && columnMeta !== undefined && (
                 <GenerateRowsDialog

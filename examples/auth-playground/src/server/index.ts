@@ -14,8 +14,9 @@ interface Env {
     SHARD: ShardNamespaceLike;
 }
 
-let worker: ReturnType<typeof createWorker> | null = null;
-let authInstance: ReturnType<typeof buildAuth> | null = null;
+let worker: ReturnType<typeof createWorker> | undefined;
+let authInstance: ReturnType<typeof buildAuth> | undefined;
+let authReady: Promise<ReturnType<typeof buildAuth>> | undefined;
 
 /**
  * Worker entry for the auth-playground demo.
@@ -30,38 +31,62 @@ let authInstance: ReturnType<typeof buildAuth> | null = null;
  * (the Kysely migrator that creates the tables the runtime SQL adapter then uses)
  * once, on the first request. For production prefer `compileMigrationsSql`
  * + `wrangler d1 execute` at deploy time.
+ *
+ * Init and migration are memoized as a SINGLE promise, and every request awaits
+ * it. Assigning `authInstance` before awaiting `ensureMigrated` would let a
+ * second concurrent cold-start request see a non-null instance and serve
+ * `/api/auth/*` against tables that do not exist yet.
  */
 export default {
     async fetch(request: Request, env: Env, ctx: ExecutionContextLike): Promise<Response> {
-        if (!authInstance) {
-            authInstance = buildAuth({ AUTH_SECRET: env.AUTH_SECRET, DB: env.DB });
+        authReady ??= (async () => {
+            try {
+                const instance = buildAuth({ AUTH_SECRET: env.AUTH_SECRET, DB: env.DB });
 
-            // Create tables via the raw-D1 Kysely migrator (the runtime adapter issues no DDL).
-            await ensureMigrated(buildMigrationAuth({ AUTH_SECRET: env.AUTH_SECRET, DB: env.DB }));
-        }
+                // Create tables via the raw-D1 Kysely migrator (the runtime adapter issues no DDL).
+                await ensureMigrated(buildMigrationAuth({ AUTH_SECRET: env.AUTH_SECRET, DB: env.DB }));
 
-        const authResponse = await handleAuthRequest(authInstance, request);
+                // Published only once the tables exist, so `resolveIdentity` below can
+                // never observe a half-initialized instance.
+                authInstance = instance;
+
+                return instance;
+            } catch (error) {
+                // Memoising the PROMISE means a rejection is memoised too: without
+                // this, one failed cold-start migration (a D1 blip) would be
+                // replayed to every later request for the isolate's whole life,
+                // with no path back to a working state. Drop it so the next
+                // request retries.
+                authReady = undefined;
+
+                throw error;
+            }
+        })();
+
+        const readyAuth = await authReady;
+        const authResponse = await handleAuthRequest(readyAuth, request);
 
         if (authResponse) {
             return authResponse;
         }
 
-        if (!worker) {
-            worker = createWorker({
-                // `openApiSpec` (regenerated on every `lunora/` change) backs the
-                // studio's always-current API-reference tab.
-                openApiSpec,
-                resolveIdentity: async (identityRequest) => {
-                    // `authInstance` is always set by the time we reach here — it is built
-                    // at the top of `fetch` before any request work happens.
-                    const session = await authInstance!.api.getSession({ headers: identityRequest.headers });
+        worker ??= createWorker({
+            // `openApiSpec` (regenerated on every `lunora/` change) backs the
+            // studio's always-current API-reference tab.
+            openApiSpec,
+            resolveIdentity: async (identityRequest) => {
+                // Set by the memoized init above, which every request awaits
+                // before reaching here.
+                if (!authInstance) {
+                    return null;
+                }
 
-                    return session?.user?.id ? { userId: session.user.id } : null;
-                },
-                shardDO: env.SHARD,
-            });
-        }
+                const session = await authInstance.api.getSession({ headers: identityRequest.headers });
 
+                return session?.user.id ? { userId: session.user.id } : null;
+            },
+            shardDO: env.SHARD,
+        });
         return worker.fetch(request, env, ctx);
     },
 };

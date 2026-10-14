@@ -46,14 +46,15 @@ Part of the [Lunora](https://github.com/anolilab/lunora) framework — a type-sa
 pnpm add @lunora/payment stripe
 ```
 
-`stripe` is an optional peer dependency — install only the provider SDK you use; the adapter takes the client by injection.
+`stripe` is an optional peer dependency — install only the provider SDK you use; the adapter takes the client by injection. The same holds for the other providers: `createPolarAdapter` (Polar), `createAutumnAdapter` ([Autumn](https://useautumn.com)), `createDodoPaymentsAdapter` ([Dodo Payments](https://dodopayments.com)), and `createCreemAdapter` ([Creem](https://creem.io)) take a structural client too, so no provider SDK is a hard dependency of this package. Additional providers plug in via `PaymentAdapter`.
 
 ## Usage
 
 Build a facade from an adapter and a store, then start a hosted checkout:
 
 ```ts
-import { createPayment, createStripeAdapter, MemoryPaymentStore } from "@lunora/payment";
+import { createPayment, MemoryPaymentStore } from "@lunora/payment";
+import { createStripeAdapter } from "@lunora/payment/stripe";
 import Stripe from "stripe";
 
 const payment = createPayment({
@@ -61,6 +62,9 @@ const payment = createPayment({
         client: new Stripe(env.STRIPE_SECRET_KEY),
         webhookSecret: env.STRIPE_WEBHOOK_SECRET,
     }),
+    // Required. Return `true` only when the current caller owns `referenceId`; anything else
+    // (including a throw) denies. Replace `callerOwns` with your ownership check.
+    authorize: async (referenceId) => callerOwns(referenceId),
     store: new MemoryPaymentStore(),
 });
 
@@ -95,6 +99,7 @@ Webhook signature verification needs the raw request body, so the endpoint runs 
 
 ```ts
 // lunora/http.ts
+import { webhookResponse } from "@lunora/payment";
 import { httpAction, httpRouter } from "lunorash/server";
 import { processWebhook } from "./billing";
 
@@ -106,12 +111,12 @@ app.post(
         const body = await request.text();
         const signature = request.headers.get("stripe-signature") ?? "";
 
-        return Response.json(await ctx.runAction(processWebhook, { body, signature }));
+        return webhookResponse(await ctx.runAction(processWebhook, { body, signature }));
     }),
 );
 ```
 
-`handleWebhook` always returns `200` once the signature verifies, so the provider stops retrying — a duplicate or no-op event is acknowledged, not re-applied.
+Once the signature verifies, `handleWebhook` acknowledges with `200` — a duplicate or no-op event is not re-applied — with one deliberate exception: an **orphaned** event, one patching a row whose create event has not arrived yet, answers `500` so the provider retries it (bounded to a single retry). That is why the route must use `webhookResponse`: `Response.json(result)` would answer `200` for every outcome, and an out-of-order delivery would be lost for good.
 
 > This README covers the basics. For the full API — entitlements, usage metering, reconciliation, and the stored tables — see the [documentation](https://lunora.sh/docs/packages/payment).
 

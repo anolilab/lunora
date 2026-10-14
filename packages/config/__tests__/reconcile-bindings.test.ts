@@ -1,12 +1,13 @@
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { parse as parseJsonc } from "jsonc-parser";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import type { DurableObjectSpec, InferredBindings } from "../src/infer-bindings";
-import { reconcileWranglerBindings } from "../src/reconcile-bindings";
+import { reconcileWranglerBindings } from "../src/cloudflare/reconcile-bindings";
+import type { InferredBindings } from "../src/infer-bindings";
+import type { DurableObjectSpec } from "../src/worker-entry";
 
 const SHARD: DurableObjectSpec = { binding: "SHARD", className: "ShardDO" };
 const SCHEDULER: DurableObjectSpec = { binding: "SCHEDULER", className: "SchedulerDO" };
@@ -14,22 +15,42 @@ const SESSION: DurableObjectSpec = { binding: "SESSION", className: "SessionDO" 
 
 const baseInferred = (overrides: Partial<InferredBindings> = {}): InferredBindings => {
     return {
+        agents: [],
         containers: [],
         durableObjects: [SHARD],
         needsD1: false,
+        queues: [],
+        services: [],
         signals: [],
         usesAi: false,
+        usesAiSearch: false,
         usesAnalytics: false,
+        usesAnalyticsSql: false,
+        usesArtifacts: false,
         usesAuth: false,
         usesBrowser: false,
+        usesCimdWorkers: false,
         usesHyperdrive: false,
+        usesFlags: false,
         usesImages: false,
         usesKv: false,
         usesMail: false,
-        usesPayment: false,
+        usesNotify: false,
+        usesNotifyFcm: false,
+        usesNotifyWebPush: false,
+        usesPaymentAutumn: false,
+        usesPaymentCreem: false,
+        usesPaymentDodopayments: false,
+        usesPaymentPolar: false,
+        usesPayments: false,
+        usesPaymentStripe: false,
         usesPipelines: false,
+        usesR2sql: false,
         usesScheduler: false,
         usesStorage: false,
+        usesWorkerLoader: false,
+        usesX402Charge: false,
+        usesX402: false,
         workflows: [],
         ...overrides,
     };
@@ -47,6 +68,7 @@ const MINIMAL_WRANGLER = `{
     // A fully-synced config carries observability (reconcile turns it on when
     // absent), so the no-op tests below start from a config that already has it.
     "observability": { "enabled": true },
+    "upload_source_maps": true,
 }
 `;
 
@@ -73,6 +95,67 @@ describe("reconcileWranglerBindings", () => {
         expect(result.reason).toContain("in sync");
     });
 
+    describe("environment argument (advisory only — does not change WHERE bindings are written)", () => {
+        it("still writes only to the top level when environment is passed", () => {
+            expect.assertions(2);
+
+            writeFileSync(
+                join(root, "wrangler.jsonc"),
+                `{
+    "name": "lunora-app",
+    "compatibility_date": "2026-04-07",
+    "durable_objects": { "bindings": [] },
+    "env": { "production": {} },
+}
+`,
+                "utf8",
+            );
+
+            const result = reconcileWranglerBindings(root, baseInferred(), { environment: "production" });
+
+            expect(result.changed).toBe(true);
+            // The write landed at the top level, not inside env.production —
+            // the pipeline has no env-scoped write path (see the doc comment).
+            expect(readConfig().durable_objects.bindings).toContainEqual({ class_name: "ShardDO", name: "SHARD" });
+        });
+
+        it("warns that env.production has its own non-inheritable bindings needing manual reconciliation", () => {
+            expect.assertions(1);
+
+            writeFileSync(
+                join(root, "wrangler.jsonc"),
+                `{
+    "name": "lunora-app",
+    "compatibility_date": "2026-04-07",
+    "durable_objects": { "bindings": [] },
+    "env": { "production": {} },
+}
+`,
+                "utf8",
+            );
+
+            const result = reconcileWranglerBindings(root, baseInferred(), { environment: "production" });
+
+            expect(result.warnings.some((line) => line.includes("env.production") && line.includes("top level"))).toBe(true);
+        });
+
+        it("warns distinctly when the requested environment isn't declared at all", () => {
+            expect.assertions(1);
+
+            const result = reconcileWranglerBindings(root, baseInferred(), { environment: "production" });
+
+            expect(result.warnings.some((line) => line.includes('no "env.production" block'))).toBe(true);
+        });
+
+        it("does not warn about environments when none was requested (unchanged default)", () => {
+            expect.assertions(1);
+
+            const result = reconcileWranglerBindings(root, baseInferred());
+
+            expect(result.warnings.some((line) => line.includes("env."))).toBe(false);
+        });
+    });
+
     it("turns on observability when the key is absent (not just for container apps)", () => {
         expect.assertions(3);
 
@@ -97,6 +180,50 @@ describe("reconcileWranglerBindings", () => {
         expect(readConfig().observability).toEqual({ enabled: true, head_sampling_rate: 1 });
     });
 
+    describe("upload_source_maps", () => {
+        const plain = `{
+    "name": "lunora-app",
+    "compatibility_date": "2026-04-07",
+    "durable_objects": { "bindings": [{ "name": "SHARD", "class_name": "ShardDO" }] },
+    "migrations": [{ "tag": "v1", "new_sqlite_classes": ["ShardDO"] }],
+    "observability": { "enabled": true },
+}
+`;
+
+        it.each([[undefined], ["cloudflare"]])("turns source maps on when the key is absent (target %s)", (target) => {
+            expect.assertions(2);
+
+            writeFileSync(join(root, "wrangler.jsonc"), plain, "utf8");
+
+            const result = reconcileWranglerBindings(root, baseInferred(), { target });
+
+            expect(result.added).toContain("upload_source_maps");
+            expect(readConfig().upload_source_maps).toBe(true);
+        });
+
+        it.each([["celld"], ["node"]])("leaves wrangler.jsonc alone on the %s target", (target) => {
+            expect.assertions(2);
+
+            writeFileSync(join(root, "wrangler.jsonc"), plain, "utf8");
+
+            const result = reconcileWranglerBindings(root, baseInferred(), { target });
+
+            expect(result.added).not.toContain("upload_source_maps");
+            expect(readConfig().upload_source_maps).toBeUndefined();
+        });
+
+        it("keeps an explicit false", () => {
+            expect.assertions(2);
+
+            writeFileSync(join(root, "wrangler.jsonc"), plain.replace('"observability"', '"upload_source_maps": false,\n    "observability"'), "utf8");
+
+            const result = reconcileWranglerBindings(root, baseInferred());
+
+            expect(result.added).not.toContain("upload_source_maps");
+            expect(readConfig().upload_source_maps).toBe(false);
+        });
+    });
+
     it("binds a newly-exported SCHEDULER DO and registers its migration class", () => {
         expect.assertions(4);
 
@@ -109,6 +236,97 @@ describe("reconcileWranglerBindings", () => {
 
         expect(config.durable_objects.bindings.map((binding: { name: string }) => binding.name)).toEqual(["SHARD", "SCHEDULER"]);
         expect(config.migrations.flatMap((migration: { new_sqlite_classes?: string[] }) => migration.new_sqlite_classes ?? [])).toContain("SchedulerDO");
+    });
+
+    it("treats a class introduced by renamed_classes as already registered", () => {
+        expect.assertions(2);
+
+        // wrangler's own `getDeclaredDOClassNames` applies deleted_classes and
+        // renamed_classes alongside the new_* lists. Appending a second
+        // `new_sqlite_classes: ["ShardDO"]` here makes miniflare throw
+        // "Cannot apply new_sqlite_classes migration to existing class ShardDO",
+        // and the write persists in the committed config.
+        writeFileSync(
+            join(root, "wrangler.jsonc"),
+            `{
+    "name": "lunora-app",
+    "compatibility_date": "2026-04-07",
+    "observability": { "enabled": true, "head_sampling_rate": 1 },
+    "upload_source_maps": true,
+    "durable_objects": { "bindings": [{ "name": "SHARD", "class_name": "ShardDO" }] },
+    "migrations": [
+        { "tag": "v1", "new_sqlite_classes": ["OldShardDO"] },
+        { "tag": "v2", "renamed_classes": [{ "from": "OldShardDO", "to": "ShardDO" }] }
+    ],
+}
+`,
+            "utf8",
+        );
+
+        const result = reconcileWranglerBindings(root, baseInferred());
+
+        expect(result.changed).toBe(false);
+        expect(readConfig().migrations).toHaveLength(2);
+    });
+
+    it("re-registers a class a later deleted_classes migration removed", () => {
+        expect.assertions(2);
+
+        writeFileSync(
+            join(root, "wrangler.jsonc"),
+            `{
+    "name": "lunora-app",
+    "compatibility_date": "2026-04-07",
+    "observability": { "enabled": true, "head_sampling_rate": 1 },
+    "upload_source_maps": true,
+    "durable_objects": { "bindings": [{ "name": "SHARD", "class_name": "ShardDO" }] },
+    "migrations": [
+        { "tag": "v1", "new_sqlite_classes": ["ShardDO"] },
+        { "tag": "v2", "deleted_classes": ["ShardDO"] }
+    ],
+}
+`,
+            "utf8",
+        );
+
+        const result = reconcileWranglerBindings(root, baseInferred());
+
+        expect(result.changed).toBe(true);
+        expect(readConfig().migrations.at(-1)).toEqual({ new_sqlite_classes: ["ShardDO"], tag: "v3" });
+    });
+
+    // `wrangler.jsonc` is hand-edited, so a stray `null` (a trailing comma in a
+    // JSONC array parses to one) reaches the replay. Reconcile must still return
+    // a report — the malformed shape is the validator's error to describe, not a
+    // raw TypeError out of a provisioning step that runs on every dev start.
+    it("reconciles past null entries in migrations, renamed_classes and the class lists", () => {
+        expect.assertions(2);
+
+        writeFileSync(
+            join(root, "wrangler.jsonc"),
+            `{
+    "name": "lunora-app",
+    "compatibility_date": "2026-04-07",
+    "observability": { "enabled": true, "head_sampling_rate": 1 },
+    "upload_source_maps": true,
+    "durable_objects": { "bindings": [{ "name": "SHARD", "class_name": "ShardDO" }] },
+    "migrations": [
+        null,
+        { "tag": "v1", "new_sqlite_classes": ["OldShardDO", null] },
+        { "tag": "v2", "renamed_classes": [null, { "from": "OldShardDO", "to": "ShardDO" }] },
+        { "tag": "v3", "deleted_classes": [null] }
+    ],
+}
+`,
+            "utf8",
+        );
+
+        const result = reconcileWranglerBindings(root, baseInferred());
+
+        // `ShardDO` IS declared (by the rename), so nothing is appended — the
+        // null entries must not hide that and trigger a duplicate migration.
+        expect(result.changed).toBe(false);
+        expect(readConfig().migrations).toHaveLength(4);
     });
 
     it("adds the DB binding when a global schema is inferred, and warns about the placeholder id", () => {
@@ -141,6 +359,7 @@ describe("reconcileWranglerBindings", () => {
     "durable_objects": { "bindings": [{ "name": "SHARD", "class_name": "ShardDO" }] },
     "migrations": [{ "tag": "v1", "new_sqlite_classes": ["ShardDO"] }],
     "observability": { "enabled": true },
+    "upload_source_maps": true,
     "ai": { "binding": "AI" },
 }
 `,
@@ -163,6 +382,7 @@ describe("reconcileWranglerBindings", () => {
     "durable_objects": { "bindings": [{ "name": "SHARD", "class_name": "ShardDO" }] },
     "migrations": [{ "tag": "v1", "new_sqlite_classes": ["ShardDO"] }],
     "observability": { "enabled": true },
+    "upload_source_maps": true,
     "d1_databases": [{ "binding": "DB", "database_name": "x", "database_id": "real-id" }],
 }
 `,
@@ -205,15 +425,224 @@ describe("reconcileWranglerBindings", () => {
         expect(readConfig().r2_buckets).toBeUndefined();
     });
 
+    it("warns about a missing artifacts binding, naming the schema's jurisdiction, and never writes one", () => {
+        expect.assertions(3);
+
+        const unpinned = reconcileWranglerBindings(root, baseInferred({ usesArtifacts: true }));
+        const pinned = reconcileWranglerBindings(root, baseInferred({ jurisdiction: "us", usesArtifacts: true }));
+
+        expect(unpinned.warnings.join(" ")).toMatch(/add an "artifacts" binding/u);
+        expect(pinned.warnings.join(" ")).toMatch(/"jurisdiction": "us"/u);
+        // The namespace's residency is fixed at creation, so nothing is auto-written.
+        expect(readConfig().artifacts).toBeUndefined();
+    });
+
+    describe("an existing artifacts binding", () => {
+        const wranglerWith = (bindings: ReadonlyArray<string>): void => {
+            writeFileSync(
+                join(root, "wrangler.jsonc"),
+                `{
+    "name": "lunora-app",
+    "compatibility_date": "2026-04-07",
+    "durable_objects": { "bindings": [{ "name": "SHARD", "class_name": "ShardDO" }] },
+    "migrations": [{ "tag": "v1", "new_sqlite_classes": ["ShardDO"] }],
+    "artifacts": [${bindings.map((binding) => `{ "binding": "${binding}", "namespace": "default" }`).join(", ")}],
+}
+`,
+                "utf8",
+            );
+        };
+
+        it("reminds about the .artifacts() override, not the full setup hint, when only another name is bound", () => {
+            expect.assertions(3);
+
+            // Usually a valid `.artifacts()` override, which reconcile can't see.
+            wranglerWith(["REPOS"]);
+
+            const warnings = reconcileWranglerBindings(root, baseInferred({ usesArtifacts: true })).warnings.join(" ");
+
+            expect(warnings).toContain('"REPOS" is bound, but none is named "ARTIFACTS"');
+            expect(warnings).toContain("`.artifacts()`");
+            expect(warnings).not.toMatch(/add an "artifacts" binding/u);
+        });
+
+        it("stays quiet once a binding named ARTIFACTS exists", () => {
+            expect.assertions(1);
+
+            wranglerWith(["REPOS", "ARTIFACTS"]);
+
+            expect(reconcileWranglerBindings(root, baseInferred({ usesArtifacts: true })).warnings.join(" ")).not.toMatch(/ctx\.artifacts/u);
+        });
+    });
+
+    it("keeps warning about pipelines until the binding codegen resolves actually exists", () => {
+        expect.assertions(3);
+
+        // Codegen resolves ONE fixed name — `config.pipelines?.(env) ?? env.PIPELINES`
+        // — and `pipelines` has no `defineApp` override, so a differently-named
+        // entry satisfies the wrangler validator while `ctx.pipelines.send()`
+        // still throws at runtime. Keying the hint on array length silenced it
+        // for exactly that config, and nothing before runtime ever named
+        // PIPELINES.
+        writeFileSync(
+            join(root, "wrangler.jsonc"),
+            `{
+    "name": "lunora-app",
+    "compatibility_date": "2026-04-07",
+    "durable_objects": { "bindings": [{ "name": "SHARD", "class_name": "ShardDO" }] },
+    "migrations": [{ "tag": "v1", "new_sqlite_classes": ["ShardDO"] }],
+    "pipelines": [{ "binding": "EVENTS", "stream": "events" }],
+}
+`,
+            "utf8",
+        );
+
+        const wrongName = reconcileWranglerBindings(root, baseInferred({ usesPipelines: true }));
+
+        expect(wrongName.warnings.join(" ")).toMatch(/PIPELINES/u);
+
+        writeFileSync(
+            join(root, "wrangler.jsonc"),
+            `{
+    "name": "lunora-app",
+    "compatibility_date": "2026-04-07",
+    "durable_objects": { "bindings": [{ "name": "SHARD", "class_name": "ShardDO" }] },
+    "migrations": [{ "tag": "v1", "new_sqlite_classes": ["ShardDO"] }],
+    "pipelines": [{ "binding": "PIPELINES", "stream": "events" }],
+}
+`,
+            "utf8",
+        );
+
+        expect(reconcileWranglerBindings(root, baseInferred({ usesPipelines: true })).warnings.join(" ")).not.toMatch(/pipelines binding/u);
+        // The pipeline resource is un-mintable, so nothing is auto-written either way.
+        expect(readConfig().pipelines).toStrictEqual([{ binding: "PIPELINES", stream: "events" }]);
+    });
+
+    it("warns when a declared secrets.required list omits a secret the app needs", () => {
+        expect.assertions(2);
+
+        // wrangler dev loads ONLY the listed keys from .dev.vars once the list
+        // exists, so an omitted secret is stripped and the worker throws on it.
+        const write = (required: string[]): void => {
+            writeFileSync(
+                join(root, "wrangler.jsonc"),
+                JSON.stringify({
+                    compatibility_date: "2026-04-07",
+                    durable_objects: { bindings: [{ class_name: "ShardDO", name: "SHARD" }] },
+                    migrations: [{ new_sqlite_classes: ["ShardDO"], tag: "v1" }],
+                    name: "lunora-app",
+                    secrets: { required },
+                }),
+                "utf8",
+            );
+        };
+
+        write(["API_KEY"]);
+
+        expect(reconcileWranglerBindings(root, baseInferred()).warnings.join(" ")).toMatch(/secrets\.required without LUNORA_ADMIN_TOKEN/u);
+
+        write(["API_KEY", "LUNORA_ADMIN_TOKEN"]);
+
+        expect(reconcileWranglerBindings(root, baseInferred()).warnings.join(" ")).not.toMatch(/secrets\.required/u);
+    });
+
+    it("warns when Flagship binding mode is used but no flagship binding exists, without writing one", () => {
+        expect.assertions(2);
+
+        const result = reconcileWranglerBindings(root, baseInferred({ flagshipBinding: "FLAGS", usesFlags: true }));
+
+        expect(result.warnings.join(" ")).toMatch(/flagship binding "FLAGS".*app_id/u);
+        // The app_id is un-mintable, so nothing is auto-written.
+        expect(readConfig().flagship).toBeUndefined();
+    });
+
+    it("does not warn about flagship when a matching flagship binding already exists", () => {
+        expect.assertions(1);
+
+        writeFileSync(
+            join(root, "wrangler.jsonc"),
+            `{
+    "name": "lunora-app",
+    "compatibility_date": "2026-04-07",
+    "durable_objects": { "bindings": [{ "name": "SHARD", "class_name": "ShardDO" }] },
+    "migrations": [{ "tag": "v1", "new_sqlite_classes": ["ShardDO"] }],
+    "flagship": [{ "binding": "FLAGS", "app_id": "app-abc" }],
+}
+`,
+            "utf8",
+        );
+
+        const result = reconcileWranglerBindings(root, baseInferred({ flagshipBinding: "FLAGS", usesFlags: true }));
+
+        expect(result.warnings.join(" ")).not.toMatch(/flagship binding/u);
+    });
+
+    it("does not warn about flagship for an HTTP-mode provider (no binding implied)", () => {
+        expect.assertions(1);
+
+        const result = reconcileWranglerBindings(root, baseInferred({ usesFlags: true }));
+
+        expect(result.warnings.join(" ")).not.toMatch(/flagship binding/u);
+    });
+
     it("warns to set the provider secrets when @lunora/payment is used, without adding any binding", () => {
         expect.assertions(3);
 
-        const result = reconcileWranglerBindings(root, baseInferred({ usesPayment: true }));
+        const result = reconcileWranglerBindings(root, baseInferred({ usesPayments: true }));
 
         expect(result.warnings.join(" ")).toMatch(/STRIPE_SECRET_KEY.*POLAR_ACCESS_TOKEN/u);
         // Payment rides the existing ShardDO via ctx.db — no new binding written.
         expect(result.changed).toBe(false);
         expect(readConfig().durable_objects.bindings.map((binding: { name: string }) => binding.name)).toEqual(["SHARD"]);
+    });
+
+    it("suppresses the payment reminder once any provider's secret pair is set in .dev.vars", () => {
+        expect.assertions(2);
+
+        // Creem, not Stripe — the reminder must clear for every supported adapter,
+        // not just the two it used to name.
+        const devVars = ["CREEM_API_KEY=set", "CREEM_WEBHOOK_SECRET=set", ""].join("\n");
+
+        writeFileSync(join(root, ".dev.vars"), devVars);
+
+        const result = reconcileWranglerBindings(root, baseInferred({ usesPayments: true }));
+
+        expect(result.warnings.join(" ")).not.toMatch(/@lunora\/payment is used/u);
+        expect(result.changed).toBe(false);
+    });
+
+    it("still reminds when .dev.vars declares a provider key with an empty value", () => {
+        expect.assertions(1);
+
+        // A scaffolded-but-unfilled pair is not configured.
+        writeFileSync(join(root, ".dev.vars"), "CREEM_API_KEY=\nCREEM_WEBHOOK_SECRET=\n");
+
+        const result = reconcileWranglerBindings(root, baseInferred({ usesPayments: true }));
+
+        expect(result.warnings.join(" ")).toMatch(/@lunora\/payment is used/u);
+    });
+
+    it("reminds to add a recipient [vars] entry when @lunora/x402/charge is used, without writing a binding", () => {
+        expect.assertions(2);
+
+        const result = reconcileWranglerBindings(root, baseInferred({ usesX402Charge: true }));
+
+        expect(result.warnings.join(" ")).toMatch(/x402\/charge.*recipient wallet address.*\[vars\]/u);
+        // The recipient var name is user-chosen — nothing is auto-written.
+        expect(result.changed).toBe(false);
+    });
+
+    it("reminds to add a Secrets Store binding + spend policy when @lunora/x402/pay is used, without writing a binding", () => {
+        expect.assertions(3);
+
+        const result = reconcileWranglerBindings(root, baseInferred({ usesX402: true }));
+
+        expect(result.warnings.join(" ")).toMatch(/x402\/pay.*secrets_store_secrets\[\].*spend policy/u);
+        // ctx.secrets is a Secrets Store binding (created out-of-band), not a
+        // .dev.vars value, so the pay wallet key is a hint — never auto-written.
+        expect(result.warnings.join(" ")).toMatch(/Secrets Store binding, not \.dev\.vars/u);
+        expect(result.changed).toBe(false);
     });
 
     it("warns when auth is used but no SessionDO is exported, without binding SESSION", () => {
@@ -257,6 +686,7 @@ describe("reconcileWranglerBindings", () => {
     "durable_objects": { "bindings": [{ "name": "SHARD", "class_name": "ShardDO" }] },
     "migrations": [{ "tag": "v1", "new_sqlite_classes": ["ShardDO"] }],
     "observability": { "enabled": true },
+    "upload_source_maps": true,
     "d1_databases": [{ "binding": "DB", "database_name": "x", "database_id": "real-id" }],
 }
 `,
@@ -292,7 +722,7 @@ describe("reconcileWranglerBindings", () => {
         expect(second.changed).toBe(false);
     });
 
-    it("auto-writes the self-describing analytics dataset when @lunora/analytics is inferred, idempotently", () => {
+    it("auto-writes the self-describing analytics dataset when @lunora/bindings/analytics is inferred, idempotently", () => {
         expect.assertions(3);
 
         const first = reconcileWranglerBindings(root, baseInferred({ usesAnalytics: true }));
@@ -305,7 +735,152 @@ describe("reconcileWranglerBindings", () => {
         expect(second.changed).toBe(false);
     });
 
-    it("warns rather than writes a kv_namespaces binding when @lunora/kv is used (the namespace id can't be minted)", () => {
+    it("auto-writes the AI_SEARCH namespace binding when ctx.aiSearch is inferred, idempotently", () => {
+        expect.assertions(3);
+
+        const first = reconcileWranglerBindings(root, baseInferred({ usesAiSearch: true }));
+
+        expect(first.added).toContain("AI_SEARCH (AI Search namespace)");
+        // No `remote: true`: wrangler proxies an AI Search binding remotely in plain dev already.
+        expect(readConfig().ai_search_namespaces).toStrictEqual([{ binding: "AI_SEARCH", namespace: "default" }]);
+
+        const second = reconcileWranglerBindings(root, baseInferred({ usesAiSearch: true }));
+
+        expect(second.changed).toBe(false);
+    });
+
+    it("auto-writes the ANALYTICS_SQL binding when ctx.analyticsSql is inferred, idempotently", () => {
+        expect.assertions(4);
+
+        const first = reconcileWranglerBindings(root, baseInferred({ usesAnalyticsSql: true }));
+
+        expect(first.added).toContain("ANALYTICS_SQL (Analytics SQL)");
+        // No `remote: true`: wrangler proxies the Analytics SQL binding remotely in plain dev already.
+        expect(readConfig().analytics).toStrictEqual({ binding: "ANALYTICS_SQL" });
+        // The write-only Analytics Engine dataset is a different binding and is untouched.
+        expect(readConfig().analytics_engine_datasets).toBeUndefined();
+
+        const second = reconcileWranglerBindings(root, baseInferred({ usesAnalyticsSql: true }));
+
+        expect(second.changed).toBe(false);
+    });
+
+    it("does not write the analytics binding when the app chains .analyticsSql() onto defineApp", () => {
+        expect.assertions(2);
+
+        // The override points ctx.analyticsSql at the REST transport, so an
+        // `analytics` binding would be dead config (and rejected by wrangler < 4.145.0).
+        mkdirSync(join(root, "src"), { recursive: true });
+        writeFileSync(
+            join(root, "src", "server.ts"),
+            `import { defineApp } from "../lunora/_generated/app";\n\nconst app = defineApp().analyticsSql((env) => createAnalyticsSqlRest({ accountId: env.CF_ACCOUNT_ID, apiToken: env.CF_TOKEN }));\nexport default app;\n`,
+            "utf8",
+        );
+
+        const result = reconcileWranglerBindings(root, baseInferred({ usesAnalyticsSql: true }));
+
+        expect(result.added).not.toContain("ANALYTICS_SQL (Analytics SQL)");
+        expect(readConfig().analytics).toBeUndefined();
+    });
+
+    it("still writes the analytics binding when .analyticsSql( appears only in a comment", () => {
+        expect.assertions(1);
+
+        mkdirSync(join(root, "src"), { recursive: true });
+        writeFileSync(
+            join(root, "src", "server.ts"),
+            `import { defineApp } from "../lunora/_generated/app";\n\n// Chain .analyticsSql(...) here to use the REST transport instead.\nconst app = defineApp();\nexport default app;\n`,
+            "utf8",
+        );
+
+        reconcileWranglerBindings(root, baseInferred({ usesAnalyticsSql: true }));
+
+        expect(readConfig().analytics).toStrictEqual({ binding: "ANALYTICS_SQL" });
+    });
+
+    it("leaves a hand-written analytics binding under another name alone", () => {
+        expect.assertions(2);
+
+        writeFileSync(join(root, "wrangler.jsonc"), `${MINIMAL_WRANGLER.trimEnd().slice(0, -1)}    "analytics": { "binding": "METRICS" },\n}\n`, "utf8");
+
+        const result = reconcileWranglerBindings(root, baseInferred({ usesAnalyticsSql: true }));
+
+        expect(result.added).not.toContain("ANALYTICS_SQL (Analytics SQL)");
+        expect(readConfig().analytics).toStrictEqual({ binding: "METRICS" });
+    });
+
+    it("leaves a hand-written ai_search_namespaces entry alone instead of adding AI_SEARCH beside it", () => {
+        expect.assertions(3);
+
+        const block = `    "ai_search_namespaces": [{ "binding": "DOCS_SEARCH", "namespace": "docs", "remote": true }],\n`;
+
+        writeFileSync(join(root, "wrangler.jsonc"), `${MINIMAL_WRANGLER.trimEnd().slice(0, -1)}${block}}\n`, "utf8");
+
+        const result = reconcileWranglerBindings(root, baseInferred({ usesAiSearch: true }));
+
+        expect(result.changed).toBe(false);
+        expect(result.added).not.toContain("AI_SEARCH (AI Search namespace)");
+        expect(readConfig().ai_search_namespaces).toStrictEqual([{ binding: "DOCS_SEARCH", namespace: "docs", remote: true }]);
+    });
+
+    it.each([
+        ["an ai_search instance", `    "ai_search": [{ "binding": "AI_SEARCH", "instance_name": "docs" }],\n`, "ai_search"],
+        ["a KV namespace", `    "kv_namespaces": [{ "binding": "AI_SEARCH", "id": "abc" }],\n`, "kv_namespaces"],
+        ["a queue producer", `    "queues": { "producers": [{ "binding": "AI_SEARCH", "queue": "search-jobs" }] },\n`, "queues.producers"],
+        ["a var", `    "vars": { "AI_SEARCH": "on" },\n`, "vars"],
+        ["a rate limiter", `    "ratelimits": [{ "name": "AI_SEARCH", "namespace_id": "1001", "simple": { "limit": 10, "period": 60 } }],\n`, "ratelimits"],
+        ["an unsafe binding", `    "unsafe": { "bindings": [{ "name": "AI_SEARCH", "type": "metadata" }] },\n`, "unsafe.bindings"],
+        ["a logfwdr binding", `    "logfwdr": { "bindings": [{ "name": "AI_SEARCH", "destination": "logs" }] },\n`, "logfwdr.bindings"],
+        ["a wasm module", `    "wasm_modules": { "AI_SEARCH": "./search.wasm" },\n`, "wasm_modules"],
+        ["a text blob", `    "text_blobs": { "AI_SEARCH": "./search.txt" },\n`, "text_blobs"],
+        ["a data blob", `    "data_blobs": { "AI_SEARCH": "./search.bin" },\n`, "data_blobs"],
+        ["a required secret", `    "secrets": { "required": ["AI_SEARCH"] },\n`, "secrets.required"],
+    ])("does not write AI_SEARCH when %s already holds the name, and says why", (_label, block, owner) => {
+        expect.assertions(4);
+
+        writeFileSync(join(root, "wrangler.jsonc"), `${MINIMAL_WRANGLER.trimEnd().slice(0, -1)}${block}}\n`, "utf8");
+
+        const result = reconcileWranglerBindings(root, baseInferred({ usesAiSearch: true }));
+
+        // Writing it would make wrangler reject the config: "AI_SEARCH assigned to multiple bindings".
+        expect(result.added).not.toContain("AI_SEARCH (AI Search namespace)");
+        expect(readConfig().ai_search_namespaces).toBeUndefined();
+        expect(result.warnings.some((warning) => warning.startsWith("ai_search_namespaces: not adding"))).toBe(true);
+        expect(result.warnings.some((warning) => warning.includes(`already bound by \`${owner}\``))).toBe(true);
+    });
+
+    it("does not write AI_SEARCH when a Durable Object binding already holds the name", () => {
+        expect.assertions(3);
+
+        // `durable_objects` is already in the base config, so the name goes into its existing list.
+        const config = MINIMAL_WRANGLER.replace(
+            `"bindings": [{ "name": "SHARD"`,
+            `"bindings": [{ "name": "AI_SEARCH", "class_name": "Search" }, { "name": "SHARD"`,
+        );
+
+        writeFileSync(join(root, "wrangler.jsonc"), config, "utf8");
+
+        const result = reconcileWranglerBindings(root, baseInferred({ usesAiSearch: true }));
+
+        expect(result.added).not.toContain("AI_SEARCH (AI Search namespace)");
+        expect(readConfig().ai_search_namespaces).toBeUndefined();
+        expect(result.warnings.some((warning) => warning.includes("already bound by `durable_objects.bindings`"))).toBe(true);
+    });
+
+    it("auto-writes the LOADER worker_loaders binding when jsCodeTool is inferred, idempotently", () => {
+        expect.assertions(3);
+
+        const first = reconcileWranglerBindings(root, baseInferred({ usesWorkerLoader: true }));
+
+        expect(first.added).toContain("LOADER (Worker Loader)");
+        expect(readConfig().worker_loaders).toEqual([{ binding: "LOADER" }]);
+
+        const second = reconcileWranglerBindings(root, baseInferred({ usesWorkerLoader: true }));
+
+        expect(second.changed).toBe(false);
+    });
+
+    it("warns rather than writes a kv_namespaces binding when @lunora/bindings/kv is used (the namespace id can't be minted)", () => {
         expect.assertions(2);
 
         const result = reconcileWranglerBindings(root, baseInferred({ usesKv: true }));
@@ -363,6 +938,55 @@ describe("reconcileWranglerBindings", () => {
         const result = reconcileWranglerBindings(root, baseInferred({ usesHyperdrive: true }));
 
         expect(result.warnings.join(" ")).not.toMatch(/hyperdrive is used/u);
+    });
+
+    describe("voice agents", () => {
+        // A voice-enabled agent: its durable loop still rides `workflows[]`, but
+        // the real-time session is a Durable Object, so it ALSO needs a
+        // `durable_objects` binding + `new_sqlite_classes` migration.
+        const VOICE_SUPPORT = {
+            className: "SupportAgentWorkflow",
+            exported: true,
+            exportName: "support",
+            name: "agent-support",
+            voice: true,
+            voiceBindingName: "VOICE_SUPPORT",
+            voiceClassName: "SupportVoiceDO",
+        };
+
+        it("provisions the voice DO binding + migration class for an exported voice agent", () => {
+            expect.assertions(4);
+
+            const result = reconcileWranglerBindings(root, baseInferred({ agents: [VOICE_SUPPORT] }));
+
+            expect(result.changed).toBe(true);
+            expect(result.added).toContain(`${VOICE_SUPPORT.voiceBindingName}/${VOICE_SUPPORT.voiceClassName}`);
+
+            const config = readConfig();
+
+            expect(config.durable_objects.bindings).toContainEqual({ class_name: "SupportVoiceDO", name: "VOICE_SUPPORT" });
+            expect(config.migrations.flatMap((migration: { new_sqlite_classes?: string[] }) => migration.new_sqlite_classes ?? [])).toContain("SupportVoiceDO");
+        });
+
+        it("is idempotent — a second run is a no-op", () => {
+            expect.assertions(1);
+
+            reconcileWranglerBindings(root, baseInferred({ agents: [VOICE_SUPPORT] }));
+
+            expect(reconcileWranglerBindings(root, baseInferred({ agents: [VOICE_SUPPORT] })).changed).toBe(false);
+        });
+
+        it("adds no voice DO for a non-voice agent (workflow-only path never touches durable_objects)", () => {
+            expect.assertions(1);
+
+            const result = reconcileWranglerBindings(
+                root,
+                baseInferred({ agents: [{ ...VOICE_SUPPORT, voice: false, voiceBindingName: undefined, voiceClassName: undefined }] }),
+            );
+
+            // The agent still reconciles into workflows[], but never a voice DO.
+            expect(result.added.join(" ")).not.toContain("VoiceDO");
+        });
     });
 
     describe("containers", () => {
@@ -434,6 +1058,7 @@ describe("reconcileWranglerBindings", () => {
     "name": "lunora-app",
     "compatibility_date": "2026-04-07",
     "observability": { "enabled": false },
+    "upload_source_maps": true,
     "durable_objects": { "bindings": [{ "name": "SHARD", "class_name": "ShardDO" }] },
     "migrations": [{ "tag": "v1", "new_sqlite_classes": ["ShardDO"] }],
 }
@@ -491,6 +1116,63 @@ describe("reconcileWranglerBindings", () => {
             expect(entry.rollout_active_grace_period).toBe(300);
         });
 
+        it("retunes a durable_object entry's images and warns on a scheduling policy switch instead of rewriting it", () => {
+            expect.assertions(3);
+
+            const agentComputer = {
+                ...TRANSCODER,
+                image: undefined,
+                images: { base: { buildContext: "./container", dockerfilePath: "./container/Dockerfile", kind: "dockerfile" as const } },
+                maxInstances: undefined,
+                schedulingPolicy: "durable_object" as const,
+            };
+
+            reconcileWranglerBindings(root, baseInferred({ containers: [agentComputer] }));
+
+            const withGpu = {
+                ...agentComputer,
+                images: { ...agentComputer.images, gpu: { kind: "registry" as const, reference: "registry.cloudflare.com/a/gpu@sha256:b" } },
+            };
+
+            reconcileWranglerBindings(root, baseInferred({ containers: [withGpu] }));
+
+            expect(readConfig().containers[0].images.gpu).toEqual({ image: "registry.cloudflare.com/a/gpu@sha256:b" });
+
+            const switched = reconcileWranglerBindings(root, baseInferred({ containers: [TRANSCODER] }));
+
+            expect(switched.warnings.some((line) => line.includes("scheduling_policy") && line.includes("immutable"))).toBe(true);
+            expect(readConfig().containers[0].scheduling_policy).toBe("durable_object");
+        });
+
+        it("writes a durable_object container as its policy and named images, without the default-policy fields", () => {
+            expect.assertions(1);
+
+            const agentComputer = {
+                ...TRANSCODER,
+                buildArgs: { NODE_ENV: "production" },
+                image: undefined,
+                images: {
+                    base: { buildContext: "./container", dockerfilePath: "./container/Dockerfile", kind: "dockerfile" as const },
+                    pinned: { kind: "registry" as const, reference: "registry.cloudflare.com/acct/repo@sha256:abc" },
+                },
+                maxInstances: undefined,
+                schedulingPolicy: "durable_object" as const,
+            };
+
+            reconcileWranglerBindings(root, baseInferred({ containers: [agentComputer] }));
+
+            expect(readConfig().containers).toEqual([
+                {
+                    class_name: "TranscoderContainer",
+                    images: {
+                        base: { build_context: "./container", build_vars: { NODE_ENV: "production" }, dockerfile: "./container/Dockerfile" },
+                        pinned: { image: "registry.cloudflare.com/acct/repo@sha256:abc" },
+                    },
+                    scheduling_policy: "durable_object",
+                },
+            ]);
+        });
+
         it("writes a custom instance type with wrangler field names", () => {
             expect.assertions(1);
 
@@ -504,26 +1186,26 @@ describe("reconcileWranglerBindings", () => {
 
     describe("workflows", () => {
         const ORDER_PIPELINE = {
-            bindingName: "WORKFLOW_ORDER_PIPELINE",
             className: "OrderPipelineWorkflow",
             exported: true,
             exportName: "orderPipeline",
             name: "order-pipeline",
+            steps: [],
         };
 
-        it("provisions only the workflows[] entry — no DO binding, no migration class", () => {
+        it("declares the workflow in exports — no workflows[] binding, no DO binding, no migration class", () => {
             expect.assertions(5);
 
             const result = reconcileWranglerBindings(root, baseInferred({ workflows: [ORDER_PIPELINE] }));
 
-            expect(result.changed).toBe(true);
-            expect(result.added).toContain("workflows/OrderPipelineWorkflow");
+            expect(result.added).toContain("exports/OrderPipelineWorkflow");
 
             const config = readConfig();
 
-            expect(config.workflows).toEqual([{ binding: "WORKFLOW_ORDER_PIPELINE", class_name: "OrderPipelineWorkflow", name: "order-pipeline" }]);
+            expect(config.exports).toEqual({ OrderPipelineWorkflow: { name: "order-pipeline", type: "workflow" } });
+            expect(config.workflows).toBeUndefined();
             // Workflows are not Durable Objects: never bound, never migrated.
-            expect(config.durable_objects.bindings.map((binding: { name: string }) => binding.name)).not.toContain("WORKFLOW_ORDER_PIPELINE");
+            expect(config.durable_objects.bindings.map((binding: { class_name: string }) => binding.class_name)).not.toContain("OrderPipelineWorkflow");
             expect(config.migrations.flatMap((migration: { new_sqlite_classes?: string[] }) => migration.new_sqlite_classes ?? [])).not.toContain(
                 "OrderPipelineWorkflow",
             );
@@ -546,30 +1228,659 @@ describe("reconcileWranglerBindings", () => {
 
             expect(result.changed).toBe(false);
             expect(result.warnings.join(" ")).toContain("not exported by the worker entry");
-            expect(readConfig().workflows).toBeUndefined();
+            expect(readConfig().exports).toBeUndefined();
             // The structured gap (for the dev error overlay) mirrors the warning.
             expect(result.exportGaps).toStrictEqual([
                 { className: "OrderPipelineWorkflow", exportName: "orderPipeline", kind: "workflow", module: "workflows" },
             ]);
         });
 
-        it("appends a new workflow alongside an existing one, matched by class_name", () => {
+        it("adds a new workflow export alongside an existing one", () => {
             expect.assertions(2);
 
             reconcileWranglerBindings(root, baseInferred({ workflows: [ORDER_PIPELINE] }));
 
-            const SECOND = {
-                bindingName: "WORKFLOW_SEND_RECEIPT",
-                className: "SendReceiptWorkflow",
-                exported: true,
-                exportName: "sendReceipt",
-                name: "send-receipt",
-            };
-
+            const SECOND = { className: "SendReceiptWorkflow", exported: true, exportName: "sendReceipt", name: "send-receipt", steps: [] };
             const result = reconcileWranglerBindings(root, baseInferred({ workflows: [ORDER_PIPELINE, SECOND] }));
 
-            expect(result.added).toEqual(["workflows/SendReceiptWorkflow"]);
-            expect(readConfig().workflows.map((entry: { class_name: string }) => entry.class_name)).toEqual(["OrderPipelineWorkflow", "SendReceiptWorkflow"]);
+            expect(result.added).toEqual(["exports/SendReceiptWorkflow"]);
+            expect(Object.keys(readConfig().exports)).toEqual(["OrderPipelineWorkflow", "SendReceiptWorkflow"]);
+        });
+
+        it("moves a workflows[] binding Lunora generated into its export, keeping the name and hand-set settings", () => {
+            expect.assertions(3);
+
+            writeFileSync(
+                join(root, "wrangler.jsonc"),
+                JSON.stringify({
+                    compatibility_date: "2026-09-01",
+                    name: "app",
+                    workflows: [
+                        { binding: "WORKFLOW_ORDER_PIPELINE", class_name: "OrderPipelineWorkflow", limits: { steps: 5000 }, name: "order-pipeline" },
+                        { binding: "OTHER", class_name: "Remote", name: "remote", script_name: "other-worker" },
+                    ],
+                }),
+            );
+
+            const result = reconcileWranglerBindings(root, baseInferred({ workflows: [ORDER_PIPELINE] }));
+
+            expect(readConfig().exports.OrderPipelineWorkflow).toEqual({ limits: { steps: 5000 }, name: "order-pipeline", type: "workflow" });
+            // Another Worker's workflow is not this worker's to move.
+            expect(readConfig().workflows).toEqual([{ binding: "OTHER", class_name: "Remote", name: "remote", script_name: "other-worker" }]);
+            expect(result.updated).toContain("workflows/OrderPipelineWorkflow → exports");
+        });
+
+        it("keeps a moved binding's deployed name when the declaration differs, and warns", () => {
+            expect.assertions(2);
+
+            writeFileSync(
+                join(root, "wrangler.jsonc"),
+                JSON.stringify({
+                    compatibility_date: "2026-09-01",
+                    name: "app",
+                    workflows: [{ binding: "WORKFLOW_ORDER_PIPELINE", class_name: "OrderPipelineWorkflow", name: "orders-v1" }],
+                }),
+            );
+
+            const result = reconcileWranglerBindings(root, baseInferred({ workflows: [ORDER_PIPELINE] }));
+
+            expect(readConfig().exports.OrderPipelineWorkflow.name).toBe("orders-v1");
+            expect(result.warnings.join(" ")).toContain('is deployed as "orders-v1" but declared as "order-pipeline"');
+        });
+
+        it("leaves workflows[] alone and warns when the installed wrangler cannot run workflow exports", () => {
+            expect.assertions(3);
+
+            mkdirSync(join(root, "node_modules", "wrangler"), { recursive: true });
+            writeFileSync(join(root, "node_modules", "wrangler", "package.json"), JSON.stringify({ name: "wrangler", version: "4.129.0" }));
+            writeFileSync(
+                join(root, "wrangler.jsonc"),
+                JSON.stringify({
+                    compatibility_date: "2026-09-01",
+                    name: "app",
+                    workflows: [{ binding: "WORKFLOW_ORDER_PIPELINE", class_name: "OrderPipelineWorkflow", name: "order-pipeline" }],
+                }),
+            );
+
+            const result = reconcileWranglerBindings(root, baseInferred({ workflows: [ORDER_PIPELINE] }));
+
+            expect(readConfig().exports).toBeUndefined();
+            expect(readConfig().workflows).toHaveLength(1);
+            expect(result.warnings.join(" ")).toContain("wrangler 4.129 (needs >= 4.142)");
+        });
+
+        const SETTINGS = {
+            defaultRetention: { errorRetention: "30 days", successRetention: "3 days" },
+            limits: { steps: 25_000 },
+            schedules: ["0 * * * *"],
+        };
+
+        it("writes the declared schedules, limits and default_retention onto a new export", () => {
+            expect.assertions(1);
+
+            reconcileWranglerBindings(root, baseInferred({ workflows: [{ ...ORDER_PIPELINE, ...SETTINGS }] }));
+
+            expect(readConfig().exports.OrderPipelineWorkflow).toStrictEqual({
+                default_retention: { error_retention: "30 days", success_retention: "3 days" },
+                limits: { steps: 25_000 },
+                name: "order-pipeline",
+                schedules: ["0 * * * *"],
+                type: "workflow",
+            });
+        });
+
+        it("retunes an existing export's declared settings and reports, but keeps, an undeclared one", () => {
+            expect.assertions(4);
+
+            reconcileWranglerBindings(root, baseInferred({ workflows: [{ ...ORDER_PIPELINE, ...SETTINGS }] }));
+
+            const result = reconcileWranglerBindings(
+                root,
+                baseInferred({ workflows: [{ ...ORDER_PIPELINE, limits: { steps: 20_000 }, schedules: ["*/15 * * * *"] }] }),
+            );
+
+            expect(result.updated).toStrictEqual(["exports/OrderPipelineWorkflow.schedules", "exports/OrderPipelineWorkflow.limits.steps"]);
+            expect(readConfig().exports.OrderPipelineWorkflow).toMatchObject({ limits: { steps: 20_000 }, schedules: ["*/15 * * * *"] });
+            // Dropped from the definition, or set by hand — indistinguishable, so kept and named.
+            expect(readConfig().exports.OrderPipelineWorkflow.default_retention).toStrictEqual({ error_retention: "30 days", success_retention: "3 days" });
+            expect(result.warnings.join(" ")).toContain("exports/OrderPipelineWorkflow.default_retention.success_retention is set in wrangler.jsonc");
+        });
+    });
+
+    describe("agents", () => {
+        const SUPPORT = {
+            className: "SupportAgentWorkflow",
+            exported: true,
+            exportName: "support",
+            name: "agent-support",
+        };
+
+        it("declares the agent as a workflow export — an agent compiles onto a Workflow", () => {
+            expect.assertions(4);
+
+            const result = reconcileWranglerBindings(root, baseInferred({ agents: [SUPPORT] }));
+
+            expect(result.added).toContain("exports/SupportAgentWorkflow");
+
+            const config = readConfig();
+
+            expect(config.exports).toEqual({ SupportAgentWorkflow: { name: "agent-support", type: "workflow" } });
+            // Agents are not Durable Objects: never bound, never migrated.
+            expect(config.durable_objects.bindings.map((binding: { class_name: string }) => binding.class_name)).not.toContain("SupportAgentWorkflow");
+            expect(config.migrations.flatMap((migration: { new_sqlite_classes?: string[] }) => migration.new_sqlite_classes ?? [])).not.toContain(
+                "SupportAgentWorkflow",
+            );
+        });
+
+        it("is idempotent — a second run is a no-op", () => {
+            expect.assertions(1);
+
+            reconcileWranglerBindings(root, baseInferred({ agents: [SUPPORT] }));
+
+            const second = reconcileWranglerBindings(root, baseInferred({ agents: [SUPPORT] }));
+
+            expect(second.changed).toBe(false);
+        });
+
+        it("skips an unexported agent and warns instead, with an agent-kind export gap", () => {
+            expect.assertions(4);
+
+            const result = reconcileWranglerBindings(root, baseInferred({ agents: [{ ...SUPPORT, exported: false }] }));
+
+            expect(result.changed).toBe(false);
+            expect(result.warnings.join(" ")).toContain("not exported by the worker entry");
+            expect(readConfig().exports).toBeUndefined();
+            expect(result.exportGaps).toStrictEqual([{ className: "SupportAgentWorkflow", exportName: "support", kind: "agent", module: "agents" }]);
+        });
+
+        it("writes an agent alongside a workflow into the same exports map without clobbering", () => {
+            expect.assertions(2);
+
+            const ORDER_PIPELINE = { className: "OrderPipelineWorkflow", exported: true, exportName: "orderPipeline", name: "order-pipeline", steps: [] };
+            const result = reconcileWranglerBindings(root, baseInferred({ agents: [SUPPORT], workflows: [ORDER_PIPELINE] }));
+
+            expect(result.added).toEqual(["exports/OrderPipelineWorkflow", "exports/SupportAgentWorkflow"]);
+            expect(Object.keys(readConfig().exports)).toEqual(["OrderPipelineWorkflow", "SupportAgentWorkflow"]);
+        });
+    });
+
+    // Every other queue test starts from a config with no consumer, which is
+    // the one state where "write the tuning" and "write only missing entries"
+    // agree. These start from a consumer an earlier reconcile already wrote.
+    describe("queue tuning on an existing queues.consumers[] entry", () => {
+        const receiptQueue = (tuning: Record<string, unknown>) => {
+            return { bindingName: "QUEUE_RECEIPT", exportName: "receiptQueue", filePath: "queues", mode: "push" as const, name: "receipt-queue", tuning };
+        };
+
+        const seedConsumer = (consumer: string): void => {
+            writeFileSync(
+                join(root, "wrangler.jsonc"),
+                `${MINIMAL_WRANGLER.trimEnd().slice(0, -1)}    "queues": {
+        "producers": [{ "binding": "QUEUE_RECEIPT", "queue": "receipt-queue" }],
+        "consumers": [${consumer}],
+    },
+}
+`,
+                "utf8",
+            );
+        };
+
+        const receiptConsumer = (): Record<string, unknown> =>
+            readConfig().queues.consumers.find((entry: { queue: string }) => entry.queue === "receipt-queue") as Record<string, unknown>;
+
+        it("deploys a dead-letter queue and retry budget added to defineQueue after the consumer was first written", () => {
+            expect.assertions(4);
+
+            seedConsumer(`{ "queue": "receipt-queue", "max_retries": 3 }`);
+
+            const result = reconcileWranglerBindings(
+                root,
+                baseInferred({ queues: [receiptQueue({ deadLetterQueue: "receipt-dlq", maxRetries: 5, retryDelay: 60 })] }),
+            );
+
+            expect(result.changed).toBe(true);
+            // A retune is an update, not a newly provisioned binding.
+            expect({ added: result.added, updated: result.updated }).toStrictEqual({
+                added: [],
+                updated: ["queues.consumers/receipt-queue (max_retries, dead_letter_queue, retry_delay)"],
+            });
+            expect(receiptConsumer()).toStrictEqual({ dead_letter_queue: "receipt-dlq", max_retries: 5, queue: "receipt-queue", retry_delay: 60 });
+            // Still exactly one consumer for the queue — updated in place, not appended.
+            expect(readConfig().queues.consumers).toHaveLength(1);
+        });
+
+        it("leaves a field defineQueue does not declare exactly as the user wrote it", () => {
+            expect.assertions(1);
+
+            seedConsumer(`{ "queue": "receipt-queue", "max_batch_size": 50, "max_concurrency": 4, "max_retries": 3 }`);
+
+            reconcileWranglerBindings(root, baseInferred({ queues: [receiptQueue({ maxRetries: 8 })] }));
+
+            expect(receiptConsumer()).toStrictEqual({ max_batch_size: 50, max_concurrency: 4, max_retries: 8, queue: "receipt-queue" });
+        });
+
+        it("writes a declared maxConcurrency as max_concurrency", () => {
+            expect.assertions(1);
+
+            seedConsumer(`{ "queue": "receipt-queue", "max_retries": 3 }`);
+
+            reconcileWranglerBindings(root, baseInferred({ queues: [receiptQueue({ maxConcurrency: 5 })] }));
+
+            expect(receiptConsumer()).toStrictEqual({ max_concurrency: 5, max_retries: 3, queue: "receipt-queue" });
+        });
+
+        it("is a no-op once the existing consumer already matches defineQueue", () => {
+            expect.assertions(1);
+
+            seedConsumer(`{ "queue": "receipt-queue", "max_retries": 5, "dead_letter_queue": "receipt-dlq" }`);
+
+            const result = reconcileWranglerBindings(root, baseInferred({ queues: [receiptQueue({ deadLetterQueue: "receipt-dlq", maxRetries: 5 })] }));
+
+            expect(result.changed).toBe(false);
+        });
+
+        it("keeps a retune when the same run also appends a new queue", () => {
+            expect.assertions(1);
+
+            seedConsumer(`{ "queue": "receipt-queue", "max_retries": 3 }`);
+
+            const invoiceQueue = {
+                bindingName: "QUEUE_INVOICE",
+                exportName: "invoiceQueue",
+                filePath: "queues",
+                mode: "push" as const,
+                name: "invoice-queue",
+                tuning: {},
+            };
+
+            reconcileWranglerBindings(root, baseInferred({ queues: [receiptQueue({ maxRetries: 5 }), invoiceQueue] }));
+
+            expect(readConfig().queues.consumers).toStrictEqual([{ max_retries: 5, queue: "receipt-queue" }, { queue: "invoice-queue" }]);
+        });
+
+        it("retunes a field in place, keeping the comments and layout of a hand-edited queues block", () => {
+            expect.assertions(3);
+
+            writeFileSync(
+                join(root, "wrangler.jsonc"),
+                `${MINIMAL_WRANGLER.trimEnd().slice(0, -1)}    "queues": {
+        // consumers first on purpose
+        "consumers": [
+            // bumped after the March incident
+            { "queue": "receipt-queue", "max_retries": 3 },
+        ],
+        "producers": [{ "binding": "QUEUE_RECEIPT", "queue": "receipt-queue" }],
+    },
+}
+`,
+                "utf8",
+            );
+
+            reconcileWranglerBindings(root, baseInferred({ queues: [receiptQueue({ maxRetries: 5 })] }));
+
+            const text = readFileSync(join(root, "wrangler.jsonc"), "utf8");
+
+            expect(text).toContain("// bumped after the March incident");
+            expect(text).toContain("// consumers first on purpose");
+            // Only the one value changed: the entry stays on its line, and consumers stay ahead of producers.
+            expect(text).toContain(`{ "queue": "receipt-queue", "max_retries": 5 },`);
+        });
+
+        // These start from a consumer that already carries a field `defineQueue`
+        // no longer declares. Whether it goes depends on the ownership record in
+        // package.json: only a field reconcile wrote, still at the value it wrote, is removed.
+        describe("an option removed from defineQueue", () => {
+            const seedManifest = (lunora?: Record<string, unknown>): void => {
+                writeFileSync(join(root, "package.json"), `${JSON.stringify({ name: "app", ...(lunora === undefined ? {} : { lunora }) }, null, 4)}\n`, "utf8");
+            };
+
+            const readManifest = (): Record<string, unknown> => JSON.parse(readFileSync(join(root, "package.json"), "utf8")) as Record<string, unknown>;
+
+            it("removes a dead-letter queue reconcile wrote once defineQueue drops it", () => {
+                expect.assertions(3);
+
+                seedConsumer(`{ "queue": "receipt-queue", "max_retries": 5, "dead_letter_queue": "receipt-dlq" }`);
+                seedManifest({ queueTuning: { queues: { "receipt-queue": { dead_letter_queue: "receipt-dlq", max_retries: 5 } } } });
+
+                const result = reconcileWranglerBindings(root, baseInferred({ queues: [receiptQueue({ maxRetries: 5 })] }));
+
+                expect(result.updated).toStrictEqual(["queues.consumers/receipt-queue (removed dead_letter_queue)"]);
+                expect(receiptConsumer()).toStrictEqual({ max_retries: 5, queue: "receipt-queue" });
+                // The record now owns only what is still declared.
+                expect(readManifest()["lunora"]).toStrictEqual({ queueTuning: { queues: { "receipt-queue": { max_retries: 5 } } } });
+            });
+
+            it("keeps a field changed by hand after reconcile wrote it, and says so", () => {
+                expect.assertions(3);
+
+                seedConsumer(`{ "queue": "receipt-queue", "max_retries": 7 }`);
+                seedManifest({ crons: ["0 3 * * *"], queueTuning: { queues: { "receipt-queue": { max_retries: 5 } } } });
+
+                const result = reconcileWranglerBindings(root, baseInferred({ queues: [receiptQueue({})] }));
+
+                expect(receiptConsumer()).toStrictEqual({ max_retries: 7, queue: "receipt-queue" });
+                expect(result.warnings.filter((warning) => warning.includes("changed by hand"))).toHaveLength(1);
+                // Nothing is owned any more, so the record goes; the unrelated key stays.
+                expect(readManifest()["lunora"]).toStrictEqual({ crons: ["0 3 * * *"] });
+            });
+
+            it("keeps the field when nothing records that reconcile wrote it", () => {
+                expect.assertions(2);
+
+                seedConsumer(`{ "queue": "receipt-queue", "max_retries": 5, "dead_letter_queue": "receipt-dlq" }`);
+                seedManifest();
+
+                const result = reconcileWranglerBindings(root, baseInferred({ queues: [receiptQueue({ maxRetries: 5 })] }));
+
+                expect(result.changed).toBe(false);
+                expect(receiptConsumer()).toStrictEqual({ dead_letter_queue: "receipt-dlq", max_retries: 5, queue: "receipt-queue" });
+            });
+
+            it("takes back out, on a later pass, a field an earlier pass wrote", () => {
+                expect.assertions(3);
+
+                seedConsumer(`{ "queue": "receipt-queue" }`);
+                seedManifest();
+
+                reconcileWranglerBindings(root, baseInferred({ queues: [receiptQueue({ deadLetterQueue: "receipt-dlq", maxRetries: 5 })] }));
+
+                expect(receiptConsumer()).toStrictEqual({ dead_letter_queue: "receipt-dlq", max_retries: 5, queue: "receipt-queue" });
+
+                const second = reconcileWranglerBindings(root, baseInferred({ queues: [receiptQueue({})] }));
+
+                expect(second.updated).toStrictEqual(["queues.consumers/receipt-queue (removed max_retries, removed dead_letter_queue)"]);
+                expect(receiptConsumer()).toStrictEqual({ queue: "receipt-queue" });
+            });
+
+            // A formatter may keep the record inline, or in another key order.
+            // A pass that owns the same fields must leave package.json alone.
+            it.each([
+                ["inline", `{ "name": "app", "lunora": { "queueTuning": { "queues": { "receipt-queue": { "max_retries": 5 } } } } }\n`],
+                [
+                    "reordered",
+                    `{\n  "lunora": {\n    "queueTuning": { "queues": { "receipt-queue": { "dead_letter_queue": "receipt-dlq", "max_retries": 5 } } }\n  },\n  "name": "app"\n}\n`,
+                ],
+            ])("leaves an %s record byte-identical when nothing changed", (label, manifest) => {
+                expect.assertions(1);
+
+                seedConsumer(
+                    label === "inline"
+                        ? `{ "queue": "receipt-queue", "max_retries": 5 }`
+                        : `{ "queue": "receipt-queue", "max_retries": 5, "dead_letter_queue": "receipt-dlq" }`,
+                );
+                writeFileSync(join(root, "package.json"), manifest, "utf8");
+
+                reconcileWranglerBindings(
+                    root,
+                    baseInferred({ queues: [receiptQueue(label === "inline" ? { maxRetries: 5 } : { deadLetterQueue: "receipt-dlq", maxRetries: 5 })] }),
+                );
+
+                expect(readFileSync(join(root, "package.json"), "utf8")).toBe(manifest);
+            });
+
+            it("writes the record without reformatting the rest of package.json", () => {
+                expect.assertions(1);
+
+                seedConsumer(`{ "queue": "receipt-queue" }`);
+                writeFileSync(join(root, "package.json"), `{\n  "name": "app",\n  "scripts": { "dev": "lunora dev" }\n}\n`, "utf8");
+
+                reconcileWranglerBindings(root, baseInferred({ queues: [receiptQueue({ maxRetries: 5 })] }));
+
+                expect(readFileSync(join(root, "package.json"), "utf8")).toBe(
+                    `{\n  "name": "app",\n  "scripts": { "dev": "lunora dev" },\n  "lunora": {\n    "queueTuning": {\n      "queues": {\n        "receipt-queue": {\n          "max_retries": 5\n        }\n      }\n    }\n  }\n}\n`,
+                );
+            });
+
+            it("removes a dropped field's trailing comment with it, and keeps every other comment", () => {
+                expect.assertions(1);
+
+                writeFileSync(
+                    join(root, "wrangler.jsonc"),
+                    `${MINIMAL_WRANGLER.trimEnd().slice(0, -1)}    "queues": {
+        "producers": [{ "binding": "QUEUE_RECEIPT", "queue": "receipt-queue" }],
+        "consumers": [
+            {
+                "queue": "receipt-queue", // the receipts
+                "max_retries": 5, // raised in March
+                "dead_letter_queue": "receipt-dlq" // the dlq
+            },
+        ],
+    },
+}
+`,
+                    "utf8",
+                );
+                seedManifest({ queueTuning: { queues: { "receipt-queue": { dead_letter_queue: "receipt-dlq", max_retries: 5 } } } });
+
+                reconcileWranglerBindings(root, baseInferred({ queues: [receiptQueue({ maxRetries: 5 })] }));
+
+                // The field before the removed last one loses its now-trailing comma, not its comment.
+                expect(readFileSync(join(root, "wrangler.jsonc"), "utf8")).toContain(`            {
+                "queue": "receipt-queue", // the receipts
+                "max_retries": 5 // raised in March
+            },`);
+            });
+
+            it("reports a package.json it cannot write as its own failure, after wrangler.jsonc was updated", () => {
+                expect.assertions(3);
+
+                seedConsumer(`{ "queue": "receipt-queue" }`);
+                seedManifest();
+                chmodSync(join(root, "package.json"), 0o444);
+
+                try {
+                    const result = reconcileWranglerBindings(root, baseInferred({ queues: [receiptQueue({ maxRetries: 5 })] }));
+
+                    expect(result.changed).toBe(true);
+                    expect(receiptConsumer()).toStrictEqual({ max_retries: 5, queue: "receipt-queue" });
+                    expect(
+                        result.warnings.filter((warning) => warning.includes("wrangler.jsonc was updated") && warning.includes("package.json")),
+                    ).toHaveLength(1);
+                } finally {
+                    chmodSync(join(root, "package.json"), 0o644);
+                }
+            });
+        });
+
+        // An `env.<name>` block declares its own consumers, usually under
+        // environment-suffixed queue names that only its own producers map back to
+        // a `defineQueue` export.
+        describe("a consumer inside the env block a --env deploy targets", () => {
+            const seedEnvironment = (consumer: string): void => {
+                writeFileSync(
+                    join(root, "wrangler.jsonc"),
+                    `${MINIMAL_WRANGLER.trimEnd().slice(0, -1)}    "queues": {
+        "producers": [{ "binding": "QUEUE_RECEIPT", "queue": "receipt-queue" }],
+        "consumers": [{ "queue": "receipt-queue", "max_retries": 3 }],
+    },
+    "env": {
+        "production": {
+            "queues": {
+                "producers": [{ "binding": "QUEUE_RECEIPT", "queue": "receipt-queue-prod" }],
+                "consumers": [${consumer}],
+            },
+        },
+    },
+}
+`,
+                    "utf8",
+                );
+                writeFileSync(join(root, "package.json"), `{ "name": "app" }\n`, "utf8");
+            };
+
+            const productionConsumer = (): Record<string, unknown> => readConfig().env.production.queues.consumers[0] as Record<string, unknown>;
+
+            it("retunes it through the block's own producer, but leaves dead_letter_queue to the user", () => {
+                expect.assertions(4);
+
+                seedEnvironment(`{ "queue": "receipt-queue-prod", "max_retries": 3, "max_concurrency": 2 }`);
+
+                const result = reconcileWranglerBindings(root, baseInferred({ queues: [receiptQueue({ deadLetterQueue: "receipt-dlq", maxRetries: 5 })] }), {
+                    environment: "production",
+                });
+
+                // COUNTS: both scopes retuned, one DLQ warning for the env consumer.
+                expect(result.updated).toStrictEqual([
+                    "queues.consumers/receipt-queue (max_retries, dead_letter_queue)",
+                    "env.production.queues.consumers/receipt-queue-prod (max_retries)",
+                ]);
+                expect(productionConsumer()).toStrictEqual({ max_concurrency: 2, max_retries: 5, queue: "receipt-queue-prod" });
+                expect(result.warnings.filter((warning) => warning.includes("dead_letter_queue"))).toHaveLength(1);
+                expect(readConfig().env.production.queues.consumers).toHaveLength(1);
+            });
+
+            it("leaves the env block alone without --env", () => {
+                expect.assertions(1);
+
+                seedEnvironment(`{ "queue": "receipt-queue-prod", "max_retries": 3 }`);
+
+                reconcileWranglerBindings(root, baseInferred({ queues: [receiptQueue({ maxRetries: 5 })] }));
+
+                expect(productionConsumer()).toStrictEqual({ max_retries: 3, queue: "receipt-queue-prod" });
+            });
+
+            it("takes back out a field an earlier --env pass wrote into the block", () => {
+                expect.assertions(2);
+
+                seedEnvironment(`{ "queue": "receipt-queue-prod" }`);
+
+                reconcileWranglerBindings(root, baseInferred({ queues: [receiptQueue({ maxRetries: 5 })] }), { environment: "production" });
+
+                expect(productionConsumer()).toStrictEqual({ max_retries: 5, queue: "receipt-queue-prod" });
+
+                reconcileWranglerBindings(root, baseInferred({ queues: [receiptQueue({})] }), { environment: "production" });
+
+                expect(productionConsumer()).toStrictEqual({ queue: "receipt-queue-prod" });
+            });
+
+            const seedBlock = (queues: string): void => {
+                writeFileSync(
+                    join(root, "wrangler.jsonc"),
+                    `${MINIMAL_WRANGLER.trimEnd().slice(0, -1)}    "queues": {
+        "producers": [{ "binding": "QUEUE_RECEIPT", "queue": "receipt-queue" }],
+        "consumers": [{ "queue": "receipt-queue", "max_retries": 5 }],
+    },
+    "env": { "production": { "queues": ${queues} } },
+}
+`,
+                    "utf8",
+                );
+                writeFileSync(join(root, "package.json"), `{ "name": "app" }\n`, "utf8");
+            };
+
+            it("does not also retune a same-named consumer when the block's producer maps the binding elsewhere", () => {
+                expect.assertions(3);
+
+                seedBlock(`{
+            "producers": [{ "binding": "QUEUE_RECEIPT", "queue": "billing-prod" }],
+            "consumers": [{ "queue": "billing-prod" }, { "queue": "receipt-queue" }],
+        }`);
+
+                const result = reconcileWranglerBindings(root, baseInferred({ queues: [receiptQueue({ deadLetterQueue: "receipt-dlq", maxRetries: 5 })] }), {
+                    environment: "production",
+                });
+
+                // COUNTS: exactly the one consumer the block's producer names.
+                expect(readConfig().env.production.queues.consumers).toStrictEqual([{ max_retries: 5, queue: "billing-prod" }, { queue: "receipt-queue" }]);
+                expect(result.warnings.filter((warning) => warning.includes("defineQueue declares deadLetterQueue"))).toHaveLength(1);
+                expect(result.warnings.filter((warning) => warning.includes("env.production.queues.consumers/receipt-queue:"))).toHaveLength(1);
+            });
+
+            it("matches by name when the block declares no producers, and names a consumer it matches to nothing", () => {
+                expect.assertions(2);
+
+                seedBlock(`{ "consumers": [{ "queue": "receipt-queue" }, { "queue": "other-worker-queue-prod" }] }`);
+
+                const result = reconcileWranglerBindings(root, baseInferred({ queues: [receiptQueue({ maxRetries: 5 })] }), { environment: "production" });
+
+                expect(readConfig().env.production.queues.consumers).toStrictEqual([
+                    { max_retries: 5, queue: "receipt-queue" },
+                    { queue: "other-worker-queue-prod" },
+                ]);
+                expect(result.warnings.filter((warning) => warning.includes("other-worker-queue-prod"))).toHaveLength(1);
+            });
+        });
+    });
+
+    // Every step here is add-only, so a renamed `defineQueue`/`defineWorkflow`
+    // export leaves the previous entry behind. Removing it would mean deleting
+    // config this tool cannot prove it wrote, so the orphan is named in
+    // `warnings` instead.
+    describe("orphaned workflow / queue entries", () => {
+        const RECEIPT_QUEUE = {
+            bindingName: "QUEUE_RECEIPT",
+            exportName: "receiptQueue",
+            filePath: "queues",
+            mode: "push" as const,
+            name: "receipt-queue",
+            tuning: {},
+        };
+        const SEND_RECEIPT = {
+            className: "SendReceiptWorkflow",
+            exported: true,
+            exportName: "sendReceipt",
+            name: "send-receipt",
+            steps: [],
+        };
+
+        /** Seed the config with the pre-rename entries, then reconcile the renamed declarations onto it. */
+        const seed = (block: string): void => {
+            writeFileSync(join(root, "wrangler.jsonc"), `${MINIMAL_WRANGLER.trimEnd().slice(0, -1)}${block}}\n`, "utf8");
+        };
+
+        it("warns about a queues.consumers[] subscription no defineQueue export declares", () => {
+            expect.assertions(3);
+
+            seed(`    "queues": {
+        "producers": [{ "binding": "QUEUE_EMAIL", "queue": "email-queue" }],
+        "consumers": [{ "queue": "email-queue" }],
+    },
+`);
+
+            const result = reconcileWranglerBindings(root, baseInferred({ queues: [RECEIPT_QUEUE] }));
+
+            expect(result.warnings.join("\n")).toContain(`queues.consumers[] to "email-queue"`);
+            expect(result.warnings.join("\n")).toContain(`queues.producers[] binding "QUEUE_EMAIL"`);
+            // The orphan is reported, not deleted: removal would also drop a hand-wired subscription.
+            expect(readConfig().queues.consumers.map((entry: { queue: string }) => entry.queue)).toStrictEqual(["email-queue", "receipt-queue"]);
+        });
+
+        it("warns about a workflows[] entry no defineWorkflow/defineAgent export generates", () => {
+            expect.assertions(3);
+
+            seed(`    "workflows": [{ "binding": "WORKFLOW_ORDER_PIPELINE", "class_name": "OrderPipelineWorkflow", "name": "order-pipeline" }],
+`);
+
+            const result = reconcileWranglerBindings(root, baseInferred({ workflows: [SEND_RECEIPT] }));
+
+            expect(result.warnings.join("\n")).toContain(`declares workflow "OrderPipelineWorkflow"`);
+            // The orphan stays in workflows[]; the declared workflow goes to exports.
+            expect(readConfig().workflows.map((entry: { class_name: string }) => entry.class_name)).toStrictEqual(["OrderPipelineWorkflow"]);
+            expect(Object.keys(readConfig().exports)).toStrictEqual(["SendReceiptWorkflow"]);
+        });
+
+        it("stays quiet when the project declares no queue/workflow at all", () => {
+            expect.assertions(1);
+
+            seed(`    "queues": { "producers": [{ "binding": "QUEUE_EMAIL", "queue": "email-queue" }], "consumers": [{ "queue": "email-queue" }] },
+    "workflows": [{ "binding": "WORKFLOW_ORDER_PIPELINE", "class_name": "OrderPipelineWorkflow", "name": "order-pipeline" }],
+`);
+
+            // Nothing declared means nothing to compare against: a hand-wired
+            // config this tool has never touched must not be flagged.
+            const result = reconcileWranglerBindings(root, baseInferred());
+
+            expect(result.warnings).toStrictEqual([]);
+        });
+
+        it("stays quiet once the entries match the declarations", () => {
+            expect.assertions(1);
+
+            reconcileWranglerBindings(root, baseInferred({ queues: [RECEIPT_QUEUE], workflows: [SEND_RECEIPT] }));
+
+            const second = reconcileWranglerBindings(root, baseInferred({ queues: [RECEIPT_QUEUE], workflows: [SEND_RECEIPT] }));
+
+            expect(second.warnings).toStrictEqual([]);
         });
     });
 });

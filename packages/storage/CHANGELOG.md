@@ -1,0 +1,1892 @@
+## @lunora/storage [1.0.0-alpha.130](https://github.com/anolilab/lunora/compare/@lunora/storage@1.0.0-alpha.129...@lunora/storage@1.0.0-alpha.130) (2026-10-14)
+
+### Features
+
+* **server:** answer If-None-Match with 304 and document storage cache headers ([#1153](https://github.com/anolilab/lunora/issues/1153)) ([0116518](https://github.com/anolilab/lunora/commit/011651878083c89305b94e6f8799d1c4265651aa)), closes [#1154](https://github.com/anolilab/lunora/issues/1154)
+
+
+### Dependencies
+
+* **@lunora/platform:** upgraded to 1.0.0-alpha.62
+
+## @lunora/storage [1.0.0-alpha.129](https://github.com/anolilab/lunora/compare/@lunora/storage@1.0.0-alpha.128...@lunora/storage@1.0.0-alpha.129) (2026-10-14)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.54
+
+## @lunora/storage [1.0.0-alpha.128](https://github.com/anolilab/lunora/compare/@lunora/storage@1.0.0-alpha.127...@lunora/storage@1.0.0-alpha.128) (2026-10-13)
+
+
+### Dependencies
+
+* **@lunora/platform:** upgraded to 1.0.0-alpha.61
+
+## @lunora/storage [1.0.0-alpha.127](https://github.com/anolilab/lunora/compare/@lunora/storage@1.0.0-alpha.126...@lunora/storage@1.0.0-alpha.127) (2026-10-12)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.53
+
+## @lunora/storage [1.0.0-alpha.126](https://github.com/anolilab/lunora/compare/@lunora/storage@1.0.0-alpha.125...@lunora/storage@1.0.0-alpha.126) (2026-10-12)
+
+
+### Dependencies
+
+* **@lunora/platform:** upgraded to 1.0.0-alpha.60
+
+## @lunora/storage [1.0.0-alpha.125](https://github.com/anolilab/lunora/compare/@lunora/storage@1.0.0-alpha.124...@lunora/storage@1.0.0-alpha.125) (2026-10-12)
+
+
+### Dependencies
+
+* **@lunora/platform:** upgraded to 1.0.0-alpha.59
+
+## @lunora/storage [1.0.0-alpha.124](https://github.com/anolilab/lunora/compare/@lunora/storage@1.0.0-alpha.123...@lunora/storage@1.0.0-alpha.124) (2026-10-09)
+
+
+### Dependencies
+
+* **@visulima/storage:** 2.0.33 → 2.0.37
+
+## @lunora/storage [1.0.0-alpha.123](https://github.com/anolilab/lunora/compare/@lunora/storage@1.0.0-alpha.122...@lunora/storage@1.0.0-alpha.123) (2026-10-09)
+
+### Features
+
+* **storage:** scope the r2 upload state per caller with stateScope ([#1061](https://github.com/anolilab/lunora/issues/1061)) ([470e8b0](https://github.com/anolilab/lunora/commit/470e8b044bf39fba10cc2d18d5a5827b679bf997))
+
+## @lunora/storage [1.0.0-alpha.122](https://github.com/anolilab/lunora/compare/@lunora/storage@1.0.0-alpha.121...@lunora/storage@1.0.0-alpha.122) (2026-10-08)
+
+
+### Dependencies
+
+* **@lunora/platform:** upgraded to 1.0.0-alpha.58
+
+## @lunora/storage [1.0.0-alpha.121](https://github.com/anolilab/lunora/compare/@lunora/storage@1.0.0-alpha.120...@lunora/storage@1.0.0-alpha.121) (2026-10-08)
+
+### Bug Fixes
+
+* **notify:** errors range, per-message urgency, channel secrets, SW hang ([#1043](https://github.com/anolilab/lunora/issues/1043)) ([f0e6b1c](https://github.com/anolilab/lunora/commit/f0e6b1cea73d9f5f05b793a1ebf79306e159c148))
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.52
+
+## @lunora/storage [1.0.0-alpha.120](https://github.com/anolilab/lunora/compare/@lunora/storage@1.0.0-alpha.119...@lunora/storage@1.0.0-alpha.120) (2026-10-08)
+
+### Bug Fixes
+
+* **storage:** type upload options, let authorize grant context ([#1044](https://github.com/anolilab/lunora/issues/1044)) ([9bcb5a8](https://github.com/anolilab/lunora/commit/9bcb5a829d3ed09fa90d013b187e2ae89cad8997))
+
+## @lunora/storage [1.0.0-alpha.119](https://github.com/anolilab/lunora/compare/@lunora/storage@1.0.0-alpha.118...@lunora/storage@1.0.0-alpha.119) (2026-10-07)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.51
+
+## @lunora/storage [1.0.0-alpha.118](https://github.com/anolilab/lunora/compare/@lunora/storage@1.0.0-alpha.117...@lunora/storage@1.0.0-alpha.118) (2026-10-06)
+
+
+### Dependencies
+
+* **@lunora/platform:** upgraded to 1.0.0-alpha.57
+
+## @lunora/storage [1.0.0-alpha.117](https://github.com/anolilab/lunora/compare/@lunora/storage@1.0.0-alpha.116...@lunora/storage@1.0.0-alpha.117) (2026-10-06)
+
+
+### Dependencies
+
+* **@lunora/platform:** upgraded to 1.0.0-alpha.56
+
+## @lunora/storage [1.0.0-alpha.116](https://github.com/anolilab/lunora/compare/@lunora/storage@1.0.0-alpha.115...@lunora/storage@1.0.0-alpha.116) (2026-10-05)
+
+
+### Dependencies
+
+* **@visulima/storage:** 2.0.25 → 2.0.33
+
+## @lunora/storage [1.0.0-alpha.115](https://github.com/anolilab/lunora/compare/@lunora/storage@1.0.0-alpha.114...@lunora/storage@1.0.0-alpha.115) (2026-10-05)
+
+## @lunora/storage [1.0.0-alpha.114](https://github.com/anolilab/lunora/compare/@lunora/storage@1.0.0-alpha.113...@lunora/storage@1.0.0-alpha.114) (2026-10-04)
+
+## @lunora/storage [1.0.0-alpha.113](https://github.com/anolilab/lunora/compare/@lunora/storage@1.0.0-alpha.112...@lunora/storage@1.0.0-alpha.113) (2026-10-04)
+
+## @lunora/storage [1.0.0-alpha.112](https://github.com/anolilab/lunora/compare/@lunora/storage@1.0.0-alpha.111...@lunora/storage@1.0.0-alpha.112) (2026-10-04)
+
+## @lunora/storage [1.0.0-alpha.111](https://github.com/anolilab/lunora/compare/@lunora/storage@1.0.0-alpha.110...@lunora/storage@1.0.0-alpha.111) (2026-10-03)
+
+## @lunora/storage [1.0.0-alpha.110](https://github.com/anolilab/lunora/compare/@lunora/storage@1.0.0-alpha.109...@lunora/storage@1.0.0-alpha.110) (2026-10-03)
+
+## @lunora/storage [1.0.0-alpha.109](https://github.com/anolilab/lunora/compare/@lunora/storage@1.0.0-alpha.108...@lunora/storage@1.0.0-alpha.109) (2026-10-03)
+
+## @lunora/storage [1.0.0-alpha.108](https://github.com/anolilab/lunora/compare/@lunora/storage@1.0.0-alpha.107...@lunora/storage@1.0.0-alpha.108) (2026-10-03)
+
+## @lunora/storage [1.0.0-alpha.107](https://github.com/anolilab/lunora/compare/@lunora/storage@1.0.0-alpha.106...@lunora/storage@1.0.0-alpha.107) (2026-10-03)
+
+## @lunora/storage [1.0.0-alpha.106](https://github.com/anolilab/lunora/compare/@lunora/storage@1.0.0-alpha.105...@lunora/storage@1.0.0-alpha.106) (2026-10-03)
+
+
+### Dependencies
+
+* **@lunora/platform:** upgraded to 1.0.0-alpha.55
+
+## @lunora/storage [1.0.0-alpha.105](https://github.com/anolilab/lunora/compare/@lunora/storage@1.0.0-alpha.104...@lunora/storage@1.0.0-alpha.105) (2026-10-03)
+
+## @lunora/storage [1.0.0-alpha.104](https://github.com/anolilab/lunora/compare/@lunora/storage@1.0.0-alpha.103...@lunora/storage@1.0.0-alpha.104) (2026-10-03)
+
+### Features
+
+* **storage:** resumable uploads over the r2 binding ([#948](https://github.com/anolilab/lunora/issues/948)) ([8189220](https://github.com/anolilab/lunora/commit/8189220610b21af0827acf9575c6ccd60c611e00)), closes [#937](https://github.com/anolilab/lunora/issues/937)
+
+
+### Dependencies
+
+* **@lunora/platform:** upgraded to 1.0.0-alpha.54
+
+## @lunora/storage [1.0.0-alpha.103](https://github.com/anolilab/lunora/compare/@lunora/storage@1.0.0-alpha.102...@lunora/storage@1.0.0-alpha.103) (2026-10-03)
+
+### Bug Fixes
+
+* **server:** type multipart, list and upload on action ctx.storage ([#947](https://github.com/anolilab/lunora/issues/947)) ([36341e5](https://github.com/anolilab/lunora/commit/36341e5bd858b81f0d7299b661842d107bd831be)), closes [#940](https://github.com/anolilab/lunora/issues/940)
+
+## @lunora/storage [1.0.0-alpha.102](https://github.com/anolilab/lunora/compare/@lunora/storage@1.0.0-alpha.101...@lunora/storage@1.0.0-alpha.102) (2026-10-03)
+
+
+### Dependencies
+
+* **@lunora/platform:** upgraded to 1.0.0-alpha.53
+
+## @lunora/storage [1.0.0-alpha.101](https://github.com/anolilab/lunora/compare/@lunora/storage@1.0.0-alpha.100...@lunora/storage@1.0.0-alpha.101) (2026-10-03)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.50
+* **@lunora/platform:** upgraded to 1.0.0-alpha.52
+
+## @lunora/storage [1.0.0-alpha.100](https://github.com/anolilab/lunora/compare/@lunora/storage@1.0.0-alpha.99...@lunora/storage@1.0.0-alpha.100) (2026-10-03)
+
+
+### Dependencies
+
+* **@lunora/platform:** upgraded to 1.0.0-alpha.51
+
+## @lunora/storage [1.0.0-alpha.99](https://github.com/anolilab/lunora/compare/@lunora/storage@1.0.0-alpha.98...@lunora/storage@1.0.0-alpha.99) (2026-10-02)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.49
+* **@lunora/platform:** upgraded to 1.0.0-alpha.50
+
+## @lunora/storage [1.0.0-alpha.98](https://github.com/anolilab/lunora/compare/@lunora/storage@1.0.0-alpha.97...@lunora/storage@1.0.0-alpha.98) (2026-10-02)
+
+### Features
+
+* fetch-only service entrypoints, ctx.services test fakes, resumable upload docs ([#938](https://github.com/anolilab/lunora/issues/938)) ([6b3ff8a](https://github.com/anolilab/lunora/commit/6b3ff8a2728663e053587ee03f9b8a059bcc1177))
+
+## @lunora/storage [1.0.0-alpha.97](https://github.com/anolilab/lunora/compare/@lunora/storage@1.0.0-alpha.96...@lunora/storage@1.0.0-alpha.97) (2026-10-02)
+
+
+### Dependencies
+
+* **@lunora/platform:** upgraded to 1.0.0-alpha.49
+
+## @lunora/storage [1.0.0-alpha.96](https://github.com/anolilab/lunora/compare/@lunora/storage@1.0.0-alpha.95...@lunora/storage@1.0.0-alpha.96) (2026-10-02)
+
+
+### Dependencies
+
+* **@lunora/platform:** upgraded to 1.0.0-alpha.48
+
+## @lunora/storage [1.0.0-alpha.95](https://github.com/anolilab/lunora/compare/@lunora/storage@1.0.0-alpha.94...@lunora/storage@1.0.0-alpha.95) (2026-10-01)
+
+
+### Dependencies
+
+* **@lunora/platform:** upgraded to 1.0.0-alpha.47
+
+## @lunora/storage [1.0.0-alpha.94](https://github.com/anolilab/lunora/compare/@lunora/storage@1.0.0-alpha.93...@lunora/storage@1.0.0-alpha.94) (2026-09-30)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.48
+* **@lunora/platform:** upgraded to 1.0.0-alpha.46
+
+## @lunora/storage [1.0.0-alpha.93](https://github.com/anolilab/lunora/compare/@lunora/storage@1.0.0-alpha.92...@lunora/storage@1.0.0-alpha.93) (2026-09-30)
+
+
+### Dependencies
+
+* **@lunora/platform:** upgraded to 1.0.0-alpha.45
+
+## @lunora/storage [1.0.0-alpha.92](https://github.com/anolilab/lunora/compare/@lunora/storage@1.0.0-alpha.91...@lunora/storage@1.0.0-alpha.92) (2026-09-30)
+
+
+### Dependencies
+
+* **@lunora/platform:** upgraded to 1.0.0-alpha.44
+
+## @lunora/storage [1.0.0-alpha.91](https://github.com/anolilab/lunora/compare/@lunora/storage@1.0.0-alpha.90...@lunora/storage@1.0.0-alpha.91) (2026-09-29)
+
+
+### Dependencies
+
+* **@lunora/platform:** upgraded to 1.0.0-alpha.43
+
+## @lunora/storage [1.0.0-alpha.90](https://github.com/anolilab/lunora/compare/@lunora/storage@1.0.0-alpha.89...@lunora/storage@1.0.0-alpha.90) (2026-09-28)
+
+### Features
+
+* **storage:** sign registry item urls against the request origin ([#904](https://github.com/anolilab/lunora/issues/904)) ([9a93310](https://github.com/anolilab/lunora/commit/9a9331038d9ca92c71dee82e17feb89ff58f0d0c))
+
+
+### Dependencies
+
+* **@lunora/platform:** upgraded to 1.0.0-alpha.42
+
+## @lunora/storage [1.0.0-alpha.89](https://github.com/anolilab/lunora/compare/@lunora/storage@1.0.0-alpha.88...@lunora/storage@1.0.0-alpha.89) (2026-09-28)
+
+### Bug Fixes
+
+* close five template, registry and generator defects ([#897](https://github.com/anolilab/lunora/issues/897)) ([3df5a3e](https://github.com/anolilab/lunora/commit/3df5a3e8e23fb61a06bf996d8850a46aa041f6ce))
+
+## @lunora/storage [1.0.0-alpha.88](https://github.com/anolilab/lunora/compare/@lunora/storage@1.0.0-alpha.87...@lunora/storage@1.0.0-alpha.88) (2026-09-27)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.46
+
+## @lunora/storage [1.0.0-alpha.87](https://github.com/anolilab/lunora/compare/@lunora/storage@1.0.0-alpha.86...@lunora/storage@1.0.0-alpha.87) (2026-09-27)
+
+### Bug Fixes
+
+* **examples:** drop the placeholder storage base url ([#867](https://github.com/anolilab/lunora/issues/867)) ([252abce](https://github.com/anolilab/lunora/commit/252abce0c92d6d355fe52bffeb1157e200fb97ff))
+
+## @lunora/storage [1.0.0-alpha.86](https://github.com/anolilab/lunora/compare/@lunora/storage@1.0.0-alpha.85...@lunora/storage@1.0.0-alpha.86) (2026-09-27)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.45
+
+## @lunora/storage [1.0.0-alpha.85](https://github.com/anolilab/lunora/compare/@lunora/storage@1.0.0-alpha.84...@lunora/storage@1.0.0-alpha.85) (2026-09-26)
+
+
+### Dependencies
+
+* **@lunora/platform:** upgraded to 1.0.0-alpha.41
+
+## @lunora/storage [1.0.0-alpha.84](https://github.com/anolilab/lunora/compare/@lunora/storage@1.0.0-alpha.83...@lunora/storage@1.0.0-alpha.84) (2026-09-26)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.44
+* **@lunora/platform:** upgraded to 1.0.0-alpha.40
+
+## @lunora/storage [1.0.0-alpha.83](https://github.com/anolilab/lunora/compare/@lunora/storage@1.0.0-alpha.82...@lunora/storage@1.0.0-alpha.83) (2026-09-26)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.43
+
+## @lunora/storage [1.0.0-alpha.82](https://github.com/anolilab/lunora/compare/@lunora/storage@1.0.0-alpha.81...@lunora/storage@1.0.0-alpha.82) (2026-09-26)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.42
+
+## @lunora/storage [1.0.0-alpha.81](https://github.com/anolilab/lunora/compare/@lunora/storage@1.0.0-alpha.80...@lunora/storage@1.0.0-alpha.81) (2026-09-25)
+
+
+### Dependencies
+
+* **@lunora/platform:** upgraded to 1.0.0-alpha.39
+
+## @lunora/storage [1.0.0-alpha.80](https://github.com/anolilab/lunora/compare/@lunora/storage@1.0.0-alpha.79...@lunora/storage@1.0.0-alpha.80) (2026-09-25)
+
+
+### Dependencies
+
+* **@lunora/platform:** upgraded to 1.0.0-alpha.38
+
+## @lunora/storage [1.0.0-alpha.79](https://github.com/anolilab/lunora/compare/@lunora/storage@1.0.0-alpha.78...@lunora/storage@1.0.0-alpha.79) (2026-09-25)
+
+
+### Dependencies
+
+* **@lunora/platform:** upgraded to 1.0.0-alpha.37
+
+## @lunora/storage [1.0.0-alpha.78](https://github.com/anolilab/lunora/compare/@lunora/storage@1.0.0-alpha.77...@lunora/storage@1.0.0-alpha.78) (2026-09-25)
+
+
+### Dependencies
+
+* **@lunora/platform:** upgraded to 1.0.0-alpha.36
+
+## @lunora/storage [1.0.0-alpha.77](https://github.com/anolilab/lunora/compare/@lunora/storage@1.0.0-alpha.76...@lunora/storage@1.0.0-alpha.77) (2026-09-25)
+
+
+### Dependencies
+
+* **@lunora/platform:** upgraded to 1.0.0-alpha.34
+
+## @lunora/storage [1.0.0-alpha.76](https://github.com/anolilab/lunora/compare/@lunora/storage@1.0.0-alpha.75...@lunora/storage@1.0.0-alpha.76) (2026-09-24)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.41
+
+## @lunora/storage [1.0.0-alpha.75](https://github.com/anolilab/lunora/compare/@lunora/storage@1.0.0-alpha.74...@lunora/storage@1.0.0-alpha.75) (2026-09-24)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.40
+
+## @lunora/storage [1.0.0-alpha.74](https://github.com/anolilab/lunora/compare/@lunora/storage@1.0.0-alpha.73...@lunora/storage@1.0.0-alpha.74) (2026-09-23)
+
+
+### Dependencies
+
+* **@lunora/platform:** upgraded to 1.0.0-alpha.33
+
+## @lunora/storage [1.0.0-alpha.73](https://github.com/anolilab/lunora/compare/@lunora/storage@1.0.0-alpha.72...@lunora/storage@1.0.0-alpha.73) (2026-09-13)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.39
+
+## @lunora/storage [1.0.0-alpha.72](https://github.com/anolilab/lunora/compare/@lunora/storage@1.0.0-alpha.71...@lunora/storage@1.0.0-alpha.72) (2026-09-13)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.38
+
+## @lunora/storage [1.0.0-alpha.71](https://github.com/anolilab/lunora/compare/@lunora/storage@1.0.0-alpha.70...@lunora/storage@1.0.0-alpha.71) (2026-09-12)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.37
+
+## @lunora/storage [1.0.0-alpha.70](https://github.com/anolilab/lunora/compare/@lunora/storage@1.0.0-alpha.69...@lunora/storage@1.0.0-alpha.70) (2026-09-12)
+
+### ⚠ BREAKING CHANGES
+
+* **storage:** `list()` throws on a `limit` that is not a positive integer (`0` was previously
+clamped up to a one-row page, a fractional limit floored), and `upload()`/`store()` accept
+`ArrayBufferView` and `string` bodies.
+
+
+Claude-Session: https://claude.ai/code/session_012fk2r14izBDQteWpxDZ2jz
+
+Co-authored-by: Claude Opus 5 <noreply@anthropic.com>
+
+### Bug Fixes
+
+* **storage:** close four silently-bypassed guards ([#740](https://github.com/anolilab/lunora/issues/740)) ([3b9f5b1](https://github.com/anolilab/lunora/commit/3b9f5b1ed61db7b6552786b5ac60c240f0f61e67))
+
+
+### Dependencies
+
+* **@lunora/platform:** upgraded to 1.0.0-alpha.32
+
+## @lunora/storage [1.0.0-alpha.69](https://github.com/anolilab/lunora/compare/@lunora/storage@1.0.0-alpha.68...@lunora/storage@1.0.0-alpha.69) (2026-09-12)
+
+
+### Dependencies
+
+* **@lunora/platform:** upgraded to 1.0.0-alpha.31
+
+## @lunora/storage [1.0.0-alpha.68](https://github.com/anolilab/lunora/compare/@lunora/storage@1.0.0-alpha.67...@lunora/storage@1.0.0-alpha.68) (2026-09-12)
+
+### Bug Fixes
+
+* **server,codegen:** keep deferred deletes off a rolled-back span ([#718](https://github.com/anolilab/lunora/issues/718)) ([9cea51e](https://github.com/anolilab/lunora/commit/9cea51e088d4bf7a08d3b027d04ef2d6c569ee77))
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.36
+* **@lunora/platform:** upgraded to 1.0.0-alpha.30
+
+## @lunora/storage [1.0.0-alpha.67](https://github.com/anolilab/lunora/compare/@lunora/storage@1.0.0-alpha.66...@lunora/storage@1.0.0-alpha.67) (2026-09-12)
+
+## @lunora/storage [1.0.0-alpha.66](https://github.com/anolilab/lunora/compare/@lunora/storage@1.0.0-alpha.65...@lunora/storage@1.0.0-alpha.66) (2026-09-11)
+
+## @lunora/storage [1.0.0-alpha.65](https://github.com/anolilab/lunora/compare/@lunora/storage@1.0.0-alpha.64...@lunora/storage@1.0.0-alpha.65) (2026-09-11)
+
+## @lunora/storage [1.0.0-alpha.64](https://github.com/anolilab/lunora/compare/@lunora/storage@1.0.0-alpha.63...@lunora/storage@1.0.0-alpha.64) (2026-09-10)
+
+
+### Dependencies
+
+* **@lunora/platform:** upgraded to 1.0.0-alpha.29
+
+## @lunora/storage [1.0.0-alpha.63](https://github.com/anolilab/lunora/compare/@lunora/storage@1.0.0-alpha.62...@lunora/storage@1.0.0-alpha.63) (2026-09-10)
+
+## @lunora/storage [1.0.0-alpha.62](https://github.com/anolilab/lunora/compare/@lunora/storage@1.0.0-alpha.61...@lunora/storage@1.0.0-alpha.62) (2026-09-08)
+
+## @lunora/storage [1.0.0-alpha.61](https://github.com/anolilab/lunora/compare/@lunora/storage@1.0.0-alpha.60...@lunora/storage@1.0.0-alpha.61) (2026-09-08)
+
+## @lunora/storage [1.0.0-alpha.60](https://github.com/anolilab/lunora/compare/@lunora/storage@1.0.0-alpha.59...@lunora/storage@1.0.0-alpha.60) (2026-09-08)
+
+## @lunora/storage [1.0.0-alpha.59](https://github.com/anolilab/lunora/compare/@lunora/storage@1.0.0-alpha.58...@lunora/storage@1.0.0-alpha.59) (2026-09-08)
+
+
+### Dependencies
+
+* **@lunora/platform:** upgraded to 1.0.0-alpha.28
+
+## @lunora/storage [1.0.0-alpha.58](https://github.com/anolilab/lunora/compare/@lunora/storage@1.0.0-alpha.57...@lunora/storage@1.0.0-alpha.58) (2026-09-08)
+
+## @lunora/storage [1.0.0-alpha.57](https://github.com/anolilab/lunora/compare/@lunora/storage@1.0.0-alpha.56...@lunora/storage@1.0.0-alpha.57) (2026-09-08)
+
+## @lunora/storage [1.0.0-alpha.56](https://github.com/anolilab/lunora/compare/@lunora/storage@1.0.0-alpha.55...@lunora/storage@1.0.0-alpha.56) (2026-09-07)
+
+## @lunora/storage [1.0.0-alpha.55](https://github.com/anolilab/lunora/compare/@lunora/storage@1.0.0-alpha.54...@lunora/storage@1.0.0-alpha.55) (2026-09-07)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.35
+
+## @lunora/storage [1.0.0-alpha.54](https://github.com/anolilab/lunora/compare/@lunora/storage@1.0.0-alpha.53...@lunora/storage@1.0.0-alpha.54) (2026-09-06)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.34
+
+## @lunora/storage [1.0.0-alpha.53](https://github.com/anolilab/lunora/compare/@lunora/storage@1.0.0-alpha.52...@lunora/storage@1.0.0-alpha.53) (2026-09-06)
+
+### ⚠ BREAKING CHANGES
+
+* **storage,bindings:** the key and metadata guards raise `BAD_REQUEST` instead of
+`INTERNAL`. `INTERNAL` is a redacting code — `toErrorBody` swaps the
+message for "Internal error" and answers 500 — so keeping it would have
+reproduced the very opaque failure these guards exist to replace. They
+describe caller input, same as the `assertOneExpirationForm` sibling that
+already used `BAD_REQUEST`.
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01VUuYamsU1YLmAQhtut9PLZ
+
+* fix(storage): resolve buckets by own property, not prototype lookup
+
+Both bucket maps are plain object literals looked up with a bare index and
+a truthiness/`??` guard, so a prototype key resolved to an inherited
+`Object.prototype` member and the guard never engaged.
+
+`ctx.storage.bucket("constructor")` returned `{ ...Function, bucket,
+bucketName: "constructor" }` — an empty spread with no methods, carrying a
+`bucketName` tag `storageRules` would go on to match rules against, instead
+of the intended `no bucket registered for "constructor"` error. In the
+codegen-emitted `pick`, `?bucket=constructor` on the admin storage routes
+threw `s.delete is not a function` (a 500) rather than falling back to the
+default bucket the way any other unregistered name does.
+
+Guard both with `Object.hasOwn`, matching the three places that already do
+(`create-vectors`, `kv-introspector`, `create-admin-introspector`).
+Regenerates the two example `_generated` trees and the golden fixture.
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01VUuYamsU1YLmAQhtut9PLZ
+
+### Bug Fixes
+
+* **storage,bindings:** enforce the upload cap the docblock promises ([#628](https://github.com/anolilab/lunora/issues/628)) ([d724f69](https://github.com/anolilab/lunora/commit/d724f69d44eb30f3d6158b8422ead3cc74eacdb4))
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.33
+
+## @lunora/storage [1.0.0-alpha.52](https://github.com/anolilab/lunora/compare/@lunora/storage@1.0.0-alpha.51...@lunora/storage@1.0.0-alpha.52) (2026-09-05)
+
+### ⚠ BREAKING CHANGES
+
+* **storage,server,cli:** an oversized streamed body now rejects the `upload()` call with
+`PAYLOAD_TOO_LARGE` rather than resolving and erroring later when the bucket drains the stream.
+
+`list()` never sent `include`, and under `r2_list_honor_include` (every compat date since
+2022-08-04) R2 omits `httpMetadata`/`customMetadata` from list entries unless asked. The projection
+copied both as if present, so a real bucket returned empty bags for every entry while `head()` on
+the same key returned them in full. `R2BucketLike.list` had no `include` either, so nothing COULD
+ask.
+
+The JS `WhereInput` evaluator behind `rls()` diverged from the SQL compiler it mirrors, twice, both
+fail-open on the write path. A non-array `notIn` passed every row where the compiler throws
+`BAD_REQUEST` — a policy written to keep `admin` rows out admitted one on write. And a NULL cell
+passed `ne`/`notIn`, where SQL's three-valued logic excludes it. Both are fixed at the shared
+operator evaluator, so the read filter, the write USING/WITH-CHECK gates and the `expectPolicy`
+harness all move together; `in` gets the same refusal, and `eq`/`ne` against a `null` operand keep
+folding to `IS NULL`/`IS NOT NULL`. The SQL side is unchanged.
+
+`migrate generate` emitted `NOT NULL` for a `.nullable()` column: the CLI derived nullability from
+`v.optional` alone, though the runtime rule is `notNull` AND not optional, and `.nullable()` is what
+clears `notNull`. A table created from the migration file rejected the null the column exists to
+accept while the auto-provisioned one took it. It now reads `nullable` off the `FieldSnapshot` the
+snapshot already carries.
+
+The gate was the real defect for the first two: the unit suite's fake bucket accepts any stream and
+returns whatever it stored, so only the workerd suite can see either. It now uploads a stream and
+asserts list metadata.
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01VUuYamsU1YLmAQhtut9PLZ
+
+* fix(storage): bound the buffered upload path and validate the cap that bounds it
+
+Capping a streamed upload buffers it, so `maxSize` is now the per-request memory
+ceiling — and nothing checked that it was a usable number. `typeof NaN === "number"`
+let a NaN cap into the branch, where `seen > NaN` is never true: the cap silently
+off while the whole body was still collected into the isolate, an unbounded buffer
+from something as ordinary as an unset byte-limit variable coerced with `Number(...)`.
+A negative cap is the mirror image — `seen > -1` is true on the first chunk, so every
+upload was refused. Both now fail up front as VALIDATION_ERROR.
+
+The ceiling is shared, not per request: N in-flight uploads hold up to N x maxSize
+against one ~128 MB isolate, so a 50 MB cap OOMs three uploads deep with every one
+inside its documented limit. A streamed `maxSize` above 16 MiB is therefore refused
+with a pointer to `createMultipartUpload`/`createUploadHandler`, which never hold the
+whole object. "Omit maxSize" is dropped as the escape hatch for large objects — the
+advisor lint fires on exactly that, so the two guidances contradicted each other; the
+lint's remediation now names the multipart path instead, which it does not flag.
+
+The counter accepts every BufferSource shape but re-enqueued the original chunk, and
+undici's `Response` body takes only Uint8Array, so an ArrayBuffer/DataView/Float32Array
+chunk failed with a bare `TypeError: Received non-Uint8Array chunk` — no code, nothing
+naming storage. Chunks are normalised to a Uint8Array view (no copy). workerd accepts
+the raw shapes, so this only ever broke under Node; the workerd suite now carries the
+case either way.
+
+Also documents that a `list()` page may hold fewer objects than `limit`, since R2
+shrinks a page to fit the metadata `include` asks for — paginate on truncated/cursor.
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01VUuYamsU1YLmAQhtut9PLZ
+
+* fix(server): evaluate rls predicates under sql's three-valued logic
+
+The JS `WhereInput` evaluator folded SQL's UNKNOWN into `false` at each operator. That is the
+right answer at the top of a `WHERE` and the wrong one under a `NOT`: `NOT UNKNOWN` is UNKNOWN and
+still excludes the row, while `!false` is `true` and admits it. `{ NOT: { role: { ne: "admin" } } }`
+against a NULL cell therefore admitted a row SQL excludes — fail-open on the write gate.
+
+The evaluator now carries the three values (FALSE < UNKNOWN < TRUE, so AND is the minimum, OR the
+maximum, NOT the reflection) and collapses them exactly once, in `matchesWhere`, where only TRUE
+keeps the row. No operator has to reason about whether UNKNOWN happens to be safe at its position.
+
+Closed by the same change:
+
+- `in` kept the mirror of the `notIn` bug. `[null, "admin"].includes(null)` is true in JS, so a
+  NULL cell passed a membership check SQL excludes unconditionally. A write policy
+  `{ tenantId: { in: allowedTenants } }` whose list carried a null admitted a `tenantId: null` row
+  that every read of the same policy then hid.
+- `contains` and the ordered comparators admitted a NULL cell under a `NOT`, for the reason `ne`
+  did. A NULL *operand* on an ordered comparator stays FALSE, which is what the compiler emits.
+- an `undefined` operand — `{ ownerId: undefined }`, `{ ownerId: { eq: undefined } }`, or an
+  undefined member of an `in` list — now raises BAD_REQUEST. It is a dropped variable: the SQL
+  compiler binds the placeholder so the driver rejects the statement, while this evaluator
+  compared with `!==` and quietly matched every row that lacked the column.
+- the equality shorthand reads an absent column as SQL NULL, so `{ role: null }` means
+  `role IS NULL` the way it does in SQL.
+
+The `matchesOperators` docblock claimed full NULL parity. It now names the three divergences that
+remain — case-sensitive `contains`, and two degenerate shapes that stay deliberately fail-closed.
+
+BREAKING: the evaluator also backs the legacy `query()` row filter and `expectPolicy`, so reads
+converge on the same answers. A NULL cell that a `ne`/`in`/`notIn`/`contains` read policy used to
+return from `query()` is now filtered out, matching what the SQL readers always did. A malformed
+operand that used to be ignored there now throws BAD_REQUEST from inside the filter, so an app
+with a scalar `notIn` or a dropped variable in a read policy goes from a silent wrong answer to a
+visible 400 on every legacy `query()`.
+
+Every row of the truth table pinned in `rls-null-semantics.test.ts` was produced by compiling the
+predicate with `compileWhereSql`, rendering it and running it on `node:sqlite` — none of it from
+memory. Eight of the sixteen cases fail against the pre-change evaluator, all in the fail-open
+direction.
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01VUuYamsU1YLmAQhtut9PLZ
+
+* refactor(server): move the rls where evaluator into its own module
+
+`rls/middleware.ts` was 2,035 lines and 400 of them were a self-contained pure evaluator that has
+to be read against `@lunora/shard-engine`'s `where-sql.ts` to be reviewed at all — the two are
+parallel implementations of one predicate language, and their agreement is a security property, not
+a nicety.
+
+Moved verbatim to `rls/where-match.ts`, which states that contract in its header: what the twin is
+for, why it exists twice, and where the pinned truth table lives. `containsRelationPredicate` and
+`matchesWhere` are the only two names the middleware used; `matchesWhere` stays re-exported from
+`./middleware` so the in-process harness and the sibling middlewares keep one import site.
+
+No behaviour change — the only edit to a moved line is a JSDoc `{@link}` that no longer resolves
+across the file boundary.
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01VUuYamsU1YLmAQhtut9PLZ
+
+* test(server): pin that a malformed NOT operand cannot admit a write
+
+Review raised `{ NOT: "a" }` as a fail-open: the operand is cast to a
+`WhereInput` and recursed, and `Object.keys("a")` is ["0"], so it tests a column
+no document has.
+
+It was fail-open under the boolean evaluator — an absent column read FALSE and
+`NOT` flipped it to a write-admitting TRUE. The three-valued rewrite closed it:
+an absent column is UNKNOWN, `kleeneNot(UNKNOWN)` is UNKNOWN, and only TRUE
+admits. Verified by probe across string, array and number operands.
+
+No behaviour change — these are guard rails, and the comment says so rather than
+implying they repair something.
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01VUuYamsU1YLmAQhtut9PLZ
+
+* test(server): type the malformed-NOT operands the evaluator is asked to refuse
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01VUuYamsU1YLmAQhtut9PLZ
+
+### Bug Fixes
+
+* **storage,server,cli:** make streaming uploads work, and stop RLS writes failing open ([#616](https://github.com/anolilab/lunora/issues/616)) ([c76d854](https://github.com/anolilab/lunora/commit/c76d854db12705c12b4d4c11b2e8f805287cdb16))
+
+
+### Dependencies
+
+* **@lunora/platform:** upgraded to 1.0.0-alpha.27
+
+## @lunora/storage [1.0.0-alpha.51](https://github.com/anolilab/lunora/compare/@lunora/storage@1.0.0-alpha.50...@lunora/storage@1.0.0-alpha.51) (2026-09-05)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.32
+
+## @lunora/storage [1.0.0-alpha.50](https://github.com/anolilab/lunora/compare/@lunora/storage@1.0.0-alpha.49...@lunora/storage@1.0.0-alpha.50) (2026-09-04)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.31
+* **@lunora/platform:** upgraded to 1.0.0-alpha.26
+
+## @lunora/storage [1.0.0-alpha.49](https://github.com/anolilab/lunora/compare/@lunora/storage@1.0.0-alpha.48...@lunora/storage@1.0.0-alpha.49) (2026-09-03)
+
+### Bug Fixes
+
+* audit rounds 14-16 ([#586](https://github.com/anolilab/lunora/issues/586)) ([6a09b74](https://github.com/anolilab/lunora/commit/6a09b746cfc9fb36f451c208b7a1c3eac16e56f4))
+
+## @lunora/storage [1.0.0-alpha.48](https://github.com/anolilab/lunora/compare/@lunora/storage@1.0.0-alpha.47...@lunora/storage@1.0.0-alpha.48) (2026-09-03)
+
+### ⚠ BREAKING CHANGES
+
+* 34 public API changes across mail, storage, payment, replica,
+studio, workflow, agent, codegen, cli and the shard runtime. The full list is in
+
+### Bug Fixes
+
+* audit rounds 7-11 ([#579](https://github.com/anolilab/lunora/issues/579)) ([224a42a](https://github.com/anolilab/lunora/commit/224a42a741f524e0110da55917c79fd08c90a885))
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.30
+* **@lunora/platform:** upgraded to 1.0.0-alpha.25
+
+## @lunora/storage [1.0.0-alpha.47](https://github.com/anolilab/lunora/compare/@lunora/storage@1.0.0-alpha.46...@lunora/storage@1.0.0-alpha.47) (2026-09-02)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.29
+* **@lunora/platform:** upgraded to 1.0.0-alpha.24
+
+## @lunora/storage [1.0.0-alpha.46](https://github.com/anolilab/lunora/compare/@lunora/storage@1.0.0-alpha.45...@lunora/storage@1.0.0-alpha.46) (2026-09-01)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.28
+
+## @lunora/storage [1.0.0-alpha.45](https://github.com/anolilab/lunora/compare/@lunora/storage@1.0.0-alpha.44...@lunora/storage@1.0.0-alpha.45) (2026-09-01)
+
+### ⚠ BREAKING CHANGES
+
+* `ctx.scheduler.runAfter` and `runAt` resolve the bare job id
+instead of `{ id, scheduledFor }`. Four gates — the type, the docs, the
+platform contract and the generated surface — already said `Promise<string>`;
+only `@lunora/scheduler` resolved an object, and the install is a cast, so
+nothing caught the disagreement. `scheduler-host.ts` assembles the platform
+contract's `ScheduledJob` from the instant it already computed, so no
+information is lost. The one in-repo call site is updated.
+
+`@lunora/ai`'s default model and embedding model were settable only through
+options codegen does not thread, so an app could not change either. Both now
+read `LUNORA_AI_DEFAULT_MODEL` / `LUNORA_AI_DEFAULT_EMBEDDING_MODEL` from
+`env`, the seam codegen does thread, mirroring the existing
+`LUNORA_AI_GATEWAY_*` convention; explicit options still win.
+
+`SocketHost.idFor` is kept but its doc no longer claims the engine uses it to
+reassociate a rehydrated socket — per-socket state is keyed on the handle
+object and durable identity is the engine's own `connectionId`. It is the
+conformance suite's identity oracle in 8 legs, which is a real consumer.
+
+* fix(codegen): scan the worker entry so the security lints can fire
+
+Five ERROR-level advisor lints could never fire. `listLunoraSourceFiles`
+recurses only `lunora/`, but `createBrowser`, `createPayment` and
+`createInboundEmailHandler` are called from the worker entry under `src/`,
+so `discoverConfigCalls` found nothing and every lint keyed on it returned
+clean regardless of the code. `mail_inbound_dispatch_without_verify`,
+`payment_create_without_authorize`, `browser_allow_private_targets`,
+`export_sink_misconfigured` and `browser_user_url_without_allowlist`'s
+suppression arm are now live.
+
+The fix is a second, explicitly-scoped walk rather than widening the
+existing one: `listLunoraSourceFiles` also feeds `refreshCodegenProject`'s
+add/remove reconciliation, which drops Project files under `lunoraDirectory`
+that vanished from disk, so widening it globally would have changed that set
+too. Only `config-calls.ts` and `export-sinks.ts` are switched over.
+
+`apps/playground`'s inbound email handler declares no `verify`, so it now
+produces a real ERROR advisory — which is the point, but it will surprise a
+gate until it is fixed.
+
+Also inert: the umbrella's `lunorash/flags/flagship` specifier was not in the
+flagship provider set, so an app importing through the umbrella got no
+binding inference; and `fsTool` never registered the sandbox dispatcher, so
+declaring it produced an app whose tool had nothing to dispatch to.
+
+`constraint_validator` is kept — `runAdvisor`, the lint and
+`AdvisorTableSample` are all public API and the README's example is a caller
+passing its own samples. What was false was the claim that the studio feeds
+it: `LintContext.tableSamples` said the studio "reads up to the configured
+row cap from each table via readTablePage", which nothing does. Building a
+feeder needs a bounded-sample admin read that does not exist, so the docs now
+state there is no shipped feeder rather than implying one.
+
+The generated Drizzle schemas were documented nowhere despite
+`@lunora/server/drizzle` existing as a published subpath whose own docs point
+at them; they now have a section explaining the global/shard split.
+
+* fix(templates): stop scaffolding insecure cookies and a shared rate-limit bucket
+
+`templates/expo` set `AUTH_URL: "http://localhost:8787"` in wrangler's
+`vars`, which is baked into the deployed Worker. better-auth derives
+`useSecureCookies` from that URL, so every project scaffolded from this
+template shipped session cookies without `Secure` in production. The value
+moved to `.dev.vars.example`; unset, better-auth resolves per request and the
+weak-secret guard throws. The README was actively instructing users to put it
+in `vars`.
+
+All 12 non-expo templates keyed their rate limiter
+`(ctx) => ctx.auth.userId ?? "anon"`, so every unauthenticated caller shared
+one bucket — one client could exhaust it for all of them. Now
+`ctx.auth.userId ?? ctx.ip ?? "anon"`, verbatim from the advisor lint that
+prescribes it. The hand-rolled inline limiter is replaced by the copy-in
+`lunora/ratelimit/schema.ts`, whose `limits` map was previously dead config:
+its only key was never read, so tuning it did nothing.
+
+`templates/expo` had no `imports` map, so `lunora registry add` produced
+files importing `#lunora/_generated/server.js` that could not resolve.
+
+In examples: `auth-playground`'s document list claimed membership isolation
+in a comment while reading every row for an organization the caller merely
+named; the index now pins the equality prefix to the session's own ownerId.
+A procedure context deliberately carries no raw Headers, so `getActiveMember`
+is unreachable from a query — the doc says so and points at the httpAction
+recipe rather than implying a check that cannot happen.
+
+`blog`'s cron was documented but never wired: no `crons.ts`, no trigger, and
+`scheduled()` was never exported, so it would have fired into nothing even
+once declared. Its `drafts.save` patched any id the client sent, which is an
+IDOR; it now re-reads and checks the author, returning an indistinguishable
+NOT_FOUND. Its bare `Error` throws were becoming redacted 500s rather than
+the 401s they read as. The unused `users` table carrying a `passwordHash`
+column is gone — shipping a second, empty credential store teaches worse
+than losing the `.global()` demo, and the README now points at `team-chat`
+for that.
+
+* fix(playground): take the message author from the verified identity
+
+`lunora/mutators.ts` accepted `userId` as an argument and wrote it verbatim
+as the author, so any caller could post as any user. It is publicly
+dispatchable — codegen registers `mutators:sendMessage` and exposes it on the
+`api` proxy — so this was not a local-only path. Fixed with the framework's
+existing control, `owner: "userId"` on `defineMutator`, which requires a
+verified identity, rejects a mismatched argument, and overwrites the column
+before the authoritative impl runs.
+
+The same path also bypassed `messages.send`'s rate limit and its 4096-char
+cap by pushing an identical row through a second entry point; both now match.
+
+`apps/studio` read `VITE_LUNORA_ADMIN_TOKEN` unconditionally, so a production
+build inlined an admin bearer token into a shipped bundle. The neighbouring
+`baseUrl` was already gated on `import.meta.env.PROD`; the token now sits
+behind `import.meta.env.DEV`, which is statically false in a production
+build, so the variable is never read and cannot be inlined.
+
+The signed-upload content-type check ran only when the URL had pinned one,
+so an unpinned URL accepted any content type — the guard is unconditional
+now, and the e2e helper forwards `contentType` so it can still mint a usable
+pinned PUT.
+
+`seedKv` stays a public action deliberately. Making it internal was
+considered and would have stranded it with no caller at all: the internal
+gate reads `x-lunora-system`, set only by scheduler/cron/queue dispatch,
+while the Studio runner and `lunora run --as` both re-enter through the
+ordinary RPC path. It takes no caller input — fixed values at six fixed keys
+— so the exposure is resetting demo data. The docstring records why, and
+warns that a seeder writing caller-supplied keys must not copy the shape.
+
+Deletes a 443-line throwaway spike the file itself labelled as such.
+
+* docs: make the non-callable examples callable and correct the wrong claims
+
+Nineteen snippets across the concept docs used the object form
+`query({ args, handler })`, which is not callable — the same page set's
+migration guide says so explicitly. Every one is now the chainable builder
+form the code actually exposes.
+
+The Hyperdrive recipes assigned `ctx.sql = …`, which does not work: the
+facade is wired by codegen from the app's config, not assigned in a handler.
+The caching page hand-rolled 110 lines of cache bookkeeping that
+`defineActionCache` does in three.
+
+Corrections where the prose was simply false: the payment integration
+claimed 12 tables where it creates 5; the read-replica page described
+fallback behaviour the implementation does not have; and the offline-first
+page contradicted the `.meta()` documentation this round introduced.
+
+`packages/hyperdrive`'s README documented "Tagged-template queries" and
+"Unsafe / raw queries" sections for APIs that do not exist —
+`fromPostgresJs()` returns a `SqlClient` whose only member is `query(text,
+params)`; `.unsafe()` belongs to the raw postgres.js client it wraps.
+
+`sdks/python`'s `stable_stringify` docstring was the last copy of the
+"code-point order" claim; the sort is UTF-16 code-unit order, which its own
+`_utf16_sort_key` already implemented correctly.
+
+* fix(examples): sort the expo manifest after adding the imports map
+
+The `imports` map that lets `lunora registry add` resolve
+`#lunora/_generated/server.js` was inserted in the wrong position.
+Key order is enforced by one CI job that nothing else covers.
+
+* style(client): satisfy the lint rules the new code tripped
+
+Mostly mechanical, but two are real changes rather than suppressions.
+
+The deferred-close WebSocket double added for the teardown regression test
+duplicated the shared one except for a single method, which sonarjs
+correctly flagged twice. The shared double now takes a `deferClose` flag and
+the copy is gone. Verified the test still fails with the teardown fix
+reverted, so the consolidation kept its diagnostic power.
+
+The offline-flush barrier chained off `.then()` without returning a value.
+It is a sequencing barrier with nothing to pass along, so it is an async
+IIFE now — no rule to satisfy, and it reads as what it is.
+
+The stream drain discarded its chunks into an unused binding; it collects
+them and asserts the torn-down stream yielded none, which is the property
+the test is actually about.
+
+The remaining jsdoc/no-secrets disables follow the convention already used
+in `@lunora/advisor` and `@lunora/codegen`: intentional bullet lists, and
+back-ticked identifiers in prose that the entropy heuristic reads as
+credentials.
+
+* docs(scheduler): correct the three places still destructuring the old return
+
+`runAfter`/`runAt` resolve the bare job id now, so `const { id } = await
+ctx.scheduler.runAfter(...)` binds `undefined`. The package README and the
+`lunora-setup-scheduler` CLI skill both taught exactly that, and the skill
+also stated the old `{ id, scheduledFor }` shape in prose.
+
+These are the siblings of the call site that was already fixed —
+`docs/index.mdx` was updated with the signature change and its neighbours
+were not.
+
+* style(server): drop the now-redundant casts on the middleware context
+
+`validateArgs` already returns `Record<string, unknown>`, so the two
+`parsed as Record<string, unknown>` assertions at the `withCallContext`
+call sites became unnecessary once it took `parsed` directly.
+
+* fix(client): model the browser's asynchronous close in the shared socket double
+
+The double dispatched `close` synchronously inside `close()`, which no browser
+does. That hid a whole class of teardown-ordering bug from all 148 tests using
+it: `teardownConnection` clears `conn.socket` AFTER calling `close()`, so a
+same-tick event still found the identity guard satisfied and reached
+`handleDisconnect`. The teardown regression test added earlier in this branch
+had to opt into deferred close to see its own bug — which left the unfaithful
+behaviour as the default for everything else.
+
+Deferred close is now the only behaviour. Flipping it turned four tests red,
+and all four were the double's fault rather than the code's: `readyState` must
+flip synchronously (a browser sets it before returning from `close()`) while
+only the EVENT is deferred. Fixed there; 783 pass.
+
+Verified the teardown regression test still fails with its fix reverted, so
+consolidating on one double did not cost it its teeth.
+
+Also from review:
+
+- `resolveRunnableTargetOrThrow` was written twice — once in the CLI, once in
+  the Vite plugin — with two hand-written messages that would drift. The
+  predicate is a property of the driver registry, not of either tool, so
+  `isRunnableTarget`/`runnableTargetIds` now live in `@lunora/config` beside
+  `resolveTargetOrThrow`, whose own docblock already argued the Vite plugin
+  needs the same guard. Both callers keep their own wording; neither keeps its
+  own logic.
+
+- `check-project-json-targets.js` floored only its TOTAL count, so a declared
+  workspace group that exists but holds no members passed vacuously while its
+  two sibling checks failed. Floored per group, on member directories rather
+  than on `project.json` files — not every member has one, by design.
+
+- `WORKER_ENTRY_ROOTS` claimed to mirror `@lunora/config`'s
+  `WORKER_ENTRY_FALLBACKS` and does not. Kept separate deliberately — one picks
+  THE entry file, the other decides what a security lint may see, and equal
+  lists would be wrong for one of the two jobs — but the comment now says that
+  instead of inviting the reader to assume equality.
+
+- Two `{@link}` targets are qualified, which removes the need for the
+  `jsdoc/no-undefined-types` half of a suppression.
+
+* fix(client): restore follower subscribe, and reset backoff on a frame-less socket
+
+Two regressions this branch introduced, both found by review.
+
+**`crossTabSync` was broken for every follower tab.** `subscribe()` was added
+to the leader-only guard on the reasoning that a follower's subscribe "reached
+the server only when the leader happened to hold the same
+`(fn, args, shardKey)`". That is not an accident — it is the mechanism. The
+follower's registration is what puts a `SubscriptionState` in
+`this.subscriptions`, and `onSubscriptionData` drops any broadcast whose key it
+cannot find there. Guarding it did not make a silent failure loud; it made the
+leader's entire broadcast path dead code and threw `NOT_IMPLEMENTED`
+synchronously out of every `useQuery`, `useInfiniteQuery`, `@lunora/db`
+collection and svelte `query` in every non-leader tab.
+
+`subscribeShape`, `whisper*`, `setConnectionContext` and
+`acquireConnectionContext` genuinely have no relay path and keep their throws.
+
+The existing follower tests could not catch this: each calls `subscribe()`
+without any other tab announcing leadership, so the client is still inside its
+startup claim window and the guard never fires. The new test establishes the
+leader FIRST, then subscribes, then asserts the broadcast is delivered —
+re-adding the guard turns it red.
+
+**A socket that receives no JSON frame never reset its reconnect backoff.**
+Moving the reset off `onOpen` was right (an upgrade is accepted before the
+credential is read, so resetting there turns a lapsed token into a storm), but
+"first non-error frame" is unreachable for some clients: the server sends no ack
+for the `connect` envelope, and the keepalive pong is a plain string answered by
+the runtime without waking the DO, so `JSON.parse` rejects it before the reset.
+A whisper sender, a presence-only client, or any `ensureSocket` warm-up with no
+active subscription therefore doubled its delay on every blip with nothing ever
+resetting it, parking a healthy connection at the 30s cap.
+
+Surviving a 5s window is now the second proof of acceptance — a rejected
+credential closes 4001 well inside it, and that path clears the timer. The test
+covers both directions: a socket held open past the window reconnects at the
+initial delay again, and one closed at 100ms does not.
+
+**`apps/playground` could not build.** The worker-entry scan added earlier in
+this branch makes `mail_inbound_dispatch_without_verify` fire on an inbound
+handler that really does dispatch spoofable mail into a function running with
+the admin bearer and RLS off. `vite build` fails unconditionally on an
+ERROR-level advisory, and `lint:types` fails under CI only — which is why the
+pre-flight gate run reported green. Added the `verify` gate the lint asks for:
+DMARC pass, or SPF and DKIM both passing. Fails closed, since a `null` verdict
+means the receiving MX stamped no `Authentication-Results` header at all.
+
+* fix(codegen): type the emitted scheduler config so the compiler guards the install
+
+The scheduler return type had drifted from `Promise<string>` across four gates
+with nothing failing, and the fix earlier in this branch corrected the type
+while leaving the mechanism intact: the emitted config field was
+`(env) => unknown`, which forced `as SchedulerLike` at all four use sites and
+made the compiler blind to exactly this class of drift. The field now carries
+`SchedulerLike`, the casts are gone, and the next disagreement is a build
+error. Golden fixtures and all 13 example `_generated` trees regenerated.
+
+Also from review:
+
+- The registry's new auth and target guards threw bare `Error`, which the
+  templates commit in this same branch identified as becoming a redacted 500.
+  An unauthenticated caller was told the server had faulted. They are coded
+  now: `UNAUTHORIZED` for the auth gate, `BAD_REQUEST` for a malformed or
+  non-`https:` URL, `FORBIDDEN` for a host outside the allowlist. The
+  missing-binding throws stay bare — a misconfigured deployment IS a 500.
+
+- `@lunora/container` telemetry is batched now, so nothing leaves the process
+  until a timer elapses or `flush()` drains it. Every emit used to be its own
+  POST, so an existing job that exits promptly without flushing went from
+  reporting everything to reporting nothing. `flush()` is documented as
+  required rather than as an optimisation, including the oldest-first drop at
+  the item cap.
+
+- `examples/auth-playground` memoised the init PROMISE, so one failed
+  cold-start migration was replayed to every later request for the isolate's
+  life with no path back. Cleared on failure so the next request retries.
+
+- The SDK port-discovery gates treated every directory under `sdks/` except
+  `smoke` as a port, so a stray `node_modules` or `.venv` would have failed
+  both permanently on a difference that is not a missing port. Anchored on the
+  README every real port ships. Demonstrated both ways: a stray directory no
+  longer trips it, a genuine new port still does.
+
+- `discoverSandboxUsage` drove its scan from `TOOL_FLAGS` but kept a
+  hand-written conjunction for the early break; that is the third flag waiting
+  to be forgotten, so it reads the table too.
+
+- `registry/tsconfig.json`'s exclusion rationale had grown to a ~1,100-character
+  JSON string — unwrappable, unreadable in review, unlintable. Moved to
+  `registry/TYPECHECK.md` with a pointer left behind.
+
+- Noted in `withCallContext`'s JSDoc that every builder procedure now receives a
+  cloned context, not only those declaring `.meta()`.
+
+* revert(codegen): keep the scheduler config field untyped, and record why
+
+Typing the emitted `scheduler?: (env) => …` field as `SchedulerLike` — so the
+compiler would guard the seam the `Promise<string>` drift slipped through —
+does not compile. `@lunora/scheduler`'s public `Scheduler.runAfter`/`runAt` are
+generic with a REQUIRED `args`, while `SchedulerLike` takes it optional, so a
+function needing three parameters is not assignable to one callable with two.
+Every app that calls `createScheduler` directly fails, `apps/playground` and
+`examples/blog` among them.
+
+So the `as SchedulerLike` cast was not a loose annotation over two agreeing
+shapes; it was hiding a real incompatibility between the scheduler package's
+public type and what the DO accepts. Reconciling those two signatures is the
+fix, and it is an API change to `@lunora/scheduler` rather than a cast removal.
+
+Reverted to `unknown`, with the exact cause written at the field so the next
+reader learns why the cast is there instead of rediscovering it. The
+`Promise<string>` correction itself stands — that was the actual defect.
+
+Adds `isRunnableTarget` / `runnableTargetIds` to the `@lunora/config` snapshot.
+
+* fix(client): keep the framework-called follower surfaces inert instead of throwing
+
+A second review pass over the fixes the first one prompted. Its highest finding
+is the same shape the branch keeps producing: the earlier commit un-guarded
+`subscribe` because a follower's registration is what the leader's broadcast is
+matched against, and stopped there. `acquireConnectionContext` and
+`subscribeShape` are not app-level calls — all five `usePresence` adapters
+(react, vue, svelte, solid, angular) call the first from a component effect, and
+`@lunora/db`'s shape-backed `createCollection` calls the second from its sync
+path. Neither is something an app can opt out of, so the guard threw
+`NOT_IMPLEMENTED` out of an effect and unwound the entire tab to an error
+boundary. Before this branch presence merely failed to update.
+
+Both are inert on a follower now. The loud throw is kept for `whisper`,
+`whisperSubscribe` and `setConnectionContext`, which no first-party package
+calls — those are app code, which can handle a failure.
+
+`@lunora/agent`'s inbound handler had the same call-site-vs-layer problem with
+a security edge: it built `createInboundEmailHandler` with no `verify` and
+`AgentEmailTarget` gave apps no way to add one, while its own header instructs
+mappers not to trust `email.from`. A claimed message starts a durable run whose
+tools execute RLS-bypassed, so the gate now runs before any mapper — the same
+fail-closed DKIM/SPF/DMARC check the playground got. The advisor lint could
+never have caught this: it scans user projects, not this repo's sources.
+
+Also from the pass:
+
+- `runnableTargetIds` repeated the predicate `isRunnableTarget` defines, five
+  lines below it, in the commit whose purpose was removing that duplication.
+  Both moved to `driver-registry.ts`, beside the registry they query rather than
+  in the module that reads `lunora.json`, and `isRunnableTarget` answers `false`
+  for an unregistered id instead of throwing.
+- Three registry JSON files had every em dash rewritten to `—` and their
+  arrays exploded by a serializer that was not the repo's Prettier, mangling
+  user-facing `description` copy. Restored.
+- The emitted `scheduler?:` docblock carried a ~600-character maintainer
+  post-mortem into every user's `_generated/shard.ts`. One sentence there now;
+  the explanation lives in `emit.ts` where maintainers read it.
+- The SDK README marker added last round NARROWED the gate it was meant to
+  protect: a new port shipping without a README was invisible to discovery AND
+  absent from the list, so no drift fired. Replaced with an explicit ignore
+  list — a non-port directory costs one deliberate line, anything else fails.
+- `examples/auth-playground` still memoised a rejected promise if `buildAuth`
+  threw, one line above the fix for exactly that.
+- The browser item echoed the rejected hostname back to the caller, letting an
+  authenticated caller enumerate `ALLOWED_RENDER_HOSTS` by probing. Logged
+  server-side, generic to the client.
+- `clearConnectionTimers` replaces three copies of the same clear block across
+  two teardown paths, so a fourth timer cannot be half-remembered.
+- Comment trimming where the prior review's "rationale as changelog" note
+  applied again, and a `jsdoc/check-indentation` suppression deleted by removing
+  the list that needed it.
+
+* perf(server): skip the per-call context clone when no middleware can read it
+
+CodSpeed flagged 15 regressed benchmarks on this branch, all in
+`packages/server`, with `N=0: no .use (dispatch floor)` down 21.5% — a
+procedure with no middleware at all. That is the tell: `withCallContext`
+was cloning the dispatch context on every call, where the previous
+`withMeta` cloned only when `.meta()` was declared.
+
+`ctx.args` and `ctx.meta` exist for `.use()` steps to read; a handler already
+receives `args` as its own parameter. So a procedure with no middleware and no
+meta is handed the dispatch context unchanged.
+
+Measured locally rather than inferred from the instruction-count delta:
+
+  N=0 dispatch floor   3.06M -> 4.37M ops/s   (1.43x)
+  empty args           3.06M -> 4.43M ops/s   (1.44x)
+  single id arg        2.71M -> 4.04M ops/s   (1.49x)
+
+Procedures that DO declare middleware still pay the clone, and that cost is
+real — it is what makes `ctx.args` reach a `.use()` step, which is what fixed
+`emailGateMiddleware` and `verifyTurnstileMiddleware` throwing FORBIDDEN on
+every call. Prototype delegation would avoid the property copy, but
+`@lunora/auth`'s own docs teach `next({ ctx: { ...ctx, … } })`, and a spread
+drops inherited properties — so the full clone is required for correctness.
+
+* test(vite): cover the runnable-target guard
+
+Codecov put `packages/vite/src/index.ts` at 66% patch coverage: the guard
+that stops `vite build --target node` running the Cloudflare pipeline had no
+test at all. Verified the two positive cases fail with the guard reverted.
+
+* ci: keep CodeRabbit under its file cap so it reviews the code at all
+
+CodeRabbit skipped this PR entirely — "116 files, 16 over the limit of 100" —
+so a change touching every package got no automated review. The cap counts
+files that survive `path_filters`, and 44 of those were markdown.
+
+Excluded two kinds that cost review budget without earning it:
+
+- `**/CHANGELOG.md` — semantic-release writes them; reviewing generated
+  release notes is noise.
+- `**/docs/**` — the long-form prose docs under `packages/*/docs/` and
+  `apps/docs/src/content/`.
+
+That brings the reviewable set to 92. READMEs stay in deliberately: they are
+what a user reads first, and a wrong snippet there costs the most — this
+branch fixed several.
+
+The trade is explicit. Prose review is worth less than code review, and the
+previous setting bought neither: over the cap, CodeRabbit reviews nothing.
+* `useFlag`, `useFlags`, `createFlag`, `createFlags` and `flag`/
+`flags` no longer take a targeting `context`, and `FlagContext` is no longer
+exported. Any call passing one was passing a value the server discarded.
+
+`react-native.api.md` drifts too: it re-exports `@lunora/react` wholesale, so it
+carried a `FlagContext` row nothing would think to look for.
+
+* refactor(runtime): stop exporting four symbols nothing outside them uses
+
+Audited as "dead exports". Only one was dead code; the other three have live
+in-file callers, so it was the EXPORT that was unused, not the function — and
+deleting them would have broken working paths. `readShardKey` is the only thing
+that reads `?shardKey=` / `x-lunora-shard-key` for REST dispatch;
+`exportShardTable` is what `exportShardRows` delegates to per table;
+`hydrateDocsById` is the `IN (...)` hydration that keeps `computeRankPage` off
+an N+1. All three are now module-private.
+
+`DEFAULT_LOG_LIMIT` was genuinely dead: a public alias of the module-private
+`DEFAULT_LIMIT = 500` that nothing read except one `{@link}`. Deleted, and the
+`PipelineLogQuery.limit` doc states the default literally instead of linking a
+symbol that no longer exists.
+
+Also removes an unreachable diagnostic in the advisor command. It printed
+"advisor evidence unavailable — codegen ran with linting disabled" when
+`advisorContext` was undefined, which requires `CodegenOptions.lint` to be set —
+and that option is set at 47 call sites, every one of them inside codegen's own
+tests. No production caller passes it, so the branch could not run. Deleted
+rather than given a `--no-lint` flag to justify it: a user running `lunora
+advisor` wants the advisor evidence by definition. The option stays for library
+callers.
+
+* fix(codegen): gate `.commitOrdered()` against the target's capability matrix
+
+`commitOrderedTables` was rated in every platform capability matrix and read by
+nothing. A host rating it `unsupported` emitted the full `.commitOrdered()`
+surface with no diagnostic and silently dropped the ordering guarantee — which
+is the only thing that feature is.
+
+Promoted to a real `PlatformSignals` entry, read off the same IR that already
+feeds `globalTables`, so an unsupported rating now emits
+`platform_unsupported_feature` at codegen time. The test fails without the
+signal key wired in.
+
+`@lunora/platform`'s docblock called this "the outstanding case"; it now records
+that it was promoted, and that `memoryTables`, `objectStorageBackups` and
+`objectStorageCdcArchive` remain unpromoted instances of the same shape — rated
+in every matrix, consulted by nothing.
+
+* fix(examples): re-bless the five schema baselines that reported deploy drift
+
+`feedback-board`, `team-chat`, `kanban-board`, `chess` and `tanstack-start` all
+call `.extend(ratelimit.extension)` but their committed
+`lunora/.lunora-schema.json` had no `ratelimit_buckets`, so `lunora deploy`
+reported drift on each. Refreshed through the documented path.
+
+Two of them carried more than the ratelimit drift, and re-blessing accepts it:
+`kanban-board` had a required `tasks.status`, `chess` had `games.drawOfferedBy`
+and `lobbies.guestId` widening `string -> union`. Both were pre-existing and
+breaking; naming them here beats letting them ride in silently.
+
+`--update-schema-baseline` was reported as crashing with "Cannot read properties
+of undefined (reading 'filter')". It does not, under any condition that could be
+constructed — a refactor wrapped every reconcile step in try/catch, so a
+TypeError there now surfaces as a warning rather than killing the command, and
+the likely original home (`DeployDriver.provision`) is dead code no CLI path
+calls. No speculative fix. What the path did lack was any coverage at all, so it
+now has an end-to-end test: capture a baseline, age it into breaking drift,
+assert `prepare` blocks, assert the flag re-blesses it. Neutering the flag turns
+it red.
+
+The rate-limit copy-in paths taught two names for one thing: `registry/ratelimit`
+called its only bucket `default` while all 13 templates and all 9 example
+schemas use operation-shaped names. Reconciled on `send`. `lunora init`'s overlay
+was a third copy — and was internally inconsistent, emitting `default` while the
+`LUNORA_MESSAGES` it writes alongside declared `send`.
+
+`.lunora-schema.json` is now Prettier-ignored. `serializeSchemaSnapshot` writes
+2-space and Prettier rewrites it to 4, so every re-bless produced a file that
+failed `lint:prettier` until someone ran `--write`. The serializer owns that
+format and cannot change: its exact output is the input to `hashSchemaSnapshot`,
+which is a schema version's identity in the DO's `__lunora_schema_history`
+ledger. Ignoring is safe because that hash is taken from the re-serialized
+object, never from the file's bytes.
+
+Docs: `plans/README.md` described a deleted playground prototype as a live spike
+deliverable, and `protocol/README.md` documented the wire grammar without the
+two fixture-schema additions that now drive all eight SDK suites — `reencoded`
+(for shapes that are legitimately not fixed points of `encode(decode(x)) == x`)
+and `rejected[]`. Two claims those additions falsified are corrected with them.
+
+### Bug Fixes
+
+* close the round-2 package audit findings across registry, protocol, client and CI ([#539](https://github.com/anolilab/lunora/issues/539)) ([e3dd702](https://github.com/anolilab/lunora/commit/e3dd70282af1aff606fe03a4ebd29c33d0029ce5)), closes [#540](https://github.com/anolilab/lunora/issues/540)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.27
+* **@lunora/platform:** upgraded to 1.0.0-alpha.23
+
+## @lunora/storage [1.0.0-alpha.44](https://github.com/anolilab/lunora/compare/@lunora/storage@1.0.0-alpha.43...@lunora/storage@1.0.0-alpha.44) (2026-08-31)
+
+### Bug Fixes
+
+* close the silent-success class across all 55 packages ([#536](https://github.com/anolilab/lunora/issues/536)) ([dad6b74](https://github.com/anolilab/lunora/commit/dad6b74b79dd336b13f0b922a6ab32d3345c9657))
+
+
+### Dependencies
+
+* **@lunora/platform:** upgraded to 1.0.0-alpha.22
+
+## @lunora/storage [1.0.0-alpha.43](https://github.com/anolilab/lunora/compare/@lunora/storage@1.0.0-alpha.42...@lunora/storage@1.0.0-alpha.43) (2026-08-29)
+
+### ⚠ BREAKING CHANGES
+
+* eleven packages now declare peerDependencies. Consumers that
+relied on those packages resolving through hoisting must install them; the
+alternative was shipping types that fail to resolve off this repo's node_modules.
+
+`@lunora/workflow` is an optional peer of `@lunora/runtime`, so packem inlines
+its types rather than importing them — the published `@lunora/runtime` carries no
+`@lunora/workflow` dependency, as its source comments already promised.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01AWDgSnuBJaeQHfEitB2zeL
+
+* fix: satisfy eslint and the template matrix after the packem gate
+
+Two CI failures from making packem warnings fatal, each a gate that the local
+packem sweep does not cover.
+
+`@lunora/advisor` back to a real dependency on `@lunora/errors`. `ae-metrics.ts`
+imports `LunoraError` as a VALUE, and import/no-extraneous-dependencies requires
+that for anything under `src/` regardless of whether the module reaches the
+bundle. packem cannot see it because that module's value exports are
+quarantined — `src/index.ts` re-exports only its types — so the throwing code is
+tree-shaken out. The two rules disagree by construction; the packem side is now a
+commented `unused` exclusion that says which condition would end it.
+
+`@lunora/workflow` becomes a REQUIRED peer of `@lunora/runtime`. As an optional
+peer it was auto-installed anyway, and every one of the twelve templates then
+resolved `@lunora/workflow` from the npm REGISTRY instead of this checkout — the
+scaffold matrix builds its local-tarball map from required peers only, on the
+assumption that optional ones are never pulled in. Forcing the type to inline
+instead (`resolveExternals.exclude`) does not work: that option governs the JS
+bundle, and the declaration build has its own resolver, so the import survived.
+A required peer matches the other seven packages here and keeps the type
+resolvable for consumers.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01AWDgSnuBJaeQHfEitB2zeL
+
+### Build System
+
+* ship .mjs everywhere and make packem warnings fatal ([#526](https://github.com/anolilab/lunora/issues/526)) ([b3eaacc](https://github.com/anolilab/lunora/commit/b3eaacc5a31fe4634a5f4a6c59fda6fbbc8315e1))
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.26
+* **@lunora/platform:** upgraded to 1.0.0-alpha.21
+
+## @lunora/storage [1.0.0-alpha.42](https://github.com/anolilab/lunora/compare/@lunora/storage@1.0.0-alpha.41...@lunora/storage@1.0.0-alpha.42) (2026-08-28)
+
+### Bug Fixes
+
+* close nine copied-helper divergences across eight packages ([#522](https://github.com/anolilab/lunora/issues/522)) ([a2455bb](https://github.com/anolilab/lunora/commit/a2455bb0f58b9873633504c3f1e9bfeb44a5870e))
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.25
+* **@lunora/platform:** upgraded to 1.0.0-alpha.20
+
+## @lunora/storage [1.0.0-alpha.41](https://github.com/anolilab/lunora/compare/@lunora/storage@1.0.0-alpha.40...@lunora/storage@1.0.0-alpha.41) (2026-08-27)
+
+### Documentation
+
+* repair 404 package links, and document .source() in the hyperdrive readme ([#501](https://github.com/anolilab/lunora/issues/501)) ([d519ac2](https://github.com/anolilab/lunora/commit/d519ac23f2bd8ddf5a10af5db11f141e8728babf))
+
+
+### Dependencies
+
+* **@lunora/platform:** upgraded to 1.0.0-alpha.19
+
+## @lunora/storage [1.0.0-alpha.40](https://github.com/anolilab/lunora/compare/@lunora/storage@1.0.0-alpha.39...@lunora/storage@1.0.0-alpha.40) (2026-08-27)
+
+### Bug Fixes
+
+* **shard-engine:** reject cursors minted before the tiebreak changed direction ([#503](https://github.com/anolilab/lunora/issues/503)) ([fdc58bc](https://github.com/anolilab/lunora/commit/fdc58bc6acc6c4f794da42e038c6953d2554c0fe))
+
+## @lunora/storage [1.0.0-alpha.39](https://github.com/anolilab/lunora/compare/@lunora/storage@1.0.0-alpha.38...@lunora/storage@1.0.0-alpha.39) (2026-08-27)
+
+### Performance Improvements
+
+* **storage:** emit base64url in one pass instead of remapping base64 ([#498](https://github.com/anolilab/lunora/issues/498)) ([42fb981](https://github.com/anolilab/lunora/commit/42fb9812746805816d95ef25c19809c180c54b0c))
+
+## @lunora/storage [1.0.0-alpha.38](https://github.com/anolilab/lunora/compare/@lunora/storage@1.0.0-alpha.37...@lunora/storage@1.0.0-alpha.38) (2026-08-26)
+
+### Features
+
+* **server:** add ctx.storage.deleteAfterCommit for mutations ([#484](https://github.com/anolilab/lunora/issues/484)) ([c759ddb](https://github.com/anolilab/lunora/commit/c759ddbc594e05749ecdb08e1f4d4c8472a11b28))
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.24
+* **@lunora/platform:** upgraded to 1.0.0-alpha.18
+
+## @lunora/storage [1.0.0-alpha.37](https://github.com/anolilab/lunora/compare/@lunora/storage@1.0.0-alpha.36...@lunora/storage@1.0.0-alpha.37) (2026-08-26)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.23
+
+## @lunora/storage [1.0.0-alpha.36](https://github.com/anolilab/lunora/compare/@lunora/storage@1.0.0-alpha.35...@lunora/storage@1.0.0-alpha.36) (2026-08-25)
+
+### ⚠ BREAKING CHANGES
+
+* **runtime:** `serveStorageObject`'s structural storage parameter now
+requires `head` alongside `download`. `@lunora/storage` provides it (with
+its own fallback to a 0-length ranged `get()` on a binding with no HEAD);
+a hand-rolled double must add it.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01EjmVJXmP8D1Amh6t49vS4T
+
+* refactor(shared): extract memoizePromise, stop poisoning the HMAC key cache
+
+Three lazily-built async singletons had each hand-rolled the same keyed
+memo: look the key up, store the PROMISE so concurrent callers coalesce
+onto one run, drop the entry if it rejects. `shared/promise-memo.ts` is
+the one definition; `@lunora/mcp`'s per-tool charge middleware,
+`@lunora/x402`'s per-procedure one, and the per-secret HMAC key cache now
+use it.
+
+It also fixes two bugs the copies had between them.
+
+`shared/hmac-url.ts` never evicted on rejection at all, so a single failed
+`crypto.subtle.importKey` stayed in the map and every later verify against
+that secret was served the original failure for the isolate's whole life.
+
+The two that did evict deleted whatever sat under the key at rejection
+time, not necessarily their own entry. A slow first attempt failing after
+a healthy retry had taken the slot would delete that retry. The shared
+helper compares identity before deleting, so an entry can only ever evict
+itself.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01EjmVJXmP8D1Amh6t49vS4T
+
+* feat(runtime): store the declared REST cache policy at the edge
+
+`.expose({ rest: true, cache })` emitted `Cache-Control` and `Vary` and
+stopped there. A response a Worker GENERATES is not stored by the colo
+cache on its own, so the declared policy bought browser revalidation and
+nothing else — every request still paid a shard dispatch. `caches.default`
+was used exactly zero times in the repo.
+
+`rest-edge-cache` adds the missing half: a `match` before dispatch and a
+`waitUntil`-deferred `put` after, wrapped in the guards that make storing
+a procedure-backed response safe rather than a cross-user leak.
+
+- Only a genuinely anonymous, effective-`public` exchange is stored,
+  reusing the credential check the header path already applies. A
+  declared-`private` policy is never stored: it is caller-specific by
+  definition and this cache is shared by everyone hitting the colo.
+- `Vary` is enforced in the KEY. Cloudflare's cache honours `Vary` for
+  `Accept-Encoding` only, so a body that varies on `x-lunora-shard-key`
+  would otherwise be handed to a caller with a different key. Every
+  varying header's value is folded into the stored URL, which turns the
+  hazard into a miss.
+- The lookup runs after the rate-limit gate, the order a CDN uses: a hit
+  still costs a Worker invocation and is still the caller's request, so it
+  is metered — it just skips the shard.
+- A cache read or write that rejects is treated as a miss, never as a
+  failed request.
+
+`@lunora/platform` gains the `HttpCacheLike` contract and rates `httpCache`
+in both matrices: `native` on Cloudflare, `unsupported` on Node, where the
+surface degrades to emitting `Cache-Control` alone.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01EjmVJXmP8D1Amh6t49vS4T
+
+* fix(runtime): let createWorker reach the REST edge cache, and test the wiring
+
+`buildRestRoutes` took an `edgeCache` dep that `createWorker` never
+forwarded, so the documented opt-out was unreachable for anyone going
+through the normal entry point — and nothing could inject a double either,
+which is why the gap survived review. `restEdgeCache` now plumbs through,
+mirroring `restRateLimit`. It is forwarded when PRESENT rather than when
+truthy, since `null` is the meaningful opt-out value.
+
+The unit tests covered `rest-edge-cache`'s store/lookup decisions in
+isolation but nothing exercised what the route does with them. Added, at
+the `createWorker` level where a shard spy can count dispatches:
+
+- a second identical request is served from the cache with NO second shard
+  dispatch (this is the whole feature, and it was unasserted)
+- a credentialed caller stores nothing and dispatches every time
+- the rate-limit gate is consulted BEFORE the cache, so a warm entry does
+  not hand a limited caller a free body
+- `restEdgeCache: null` keeps the declared `Cache-Control` on the wire
+  while storing nothing
+- an endpoint with no declared policy is never stored
+
+Plus `defaultHttpCache` (absent `caches`, present, and a throwing accessor),
+and one for `serveStorageObject`'s 206 headers coming from the head rather
+than the ranged read — a deliberate choice that no test pinned, so nothing
+would have caught it flipping.
+
+Each new assertion was mutation-checked: reverting the plumbing, moving the
+lookup ahead of the limiter, and swapping the 206 header source each fail
+exactly the test that claims to cover them.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01EjmVJXmP8D1Amh6t49vS4T
+
+* fix(runtime): keep paid and per-caller responses out of the edge cache
+
+The edge cache sat upstream of the x402 charge gate, which runs inside
+`invokeExposed`. A hit returned before dispatch, so it ran neither the
+challenge nor the settlement — and `x-payment` was in no credential list,
+so a payer read as anonymous and their 200 was stored. Every later caller
+in that colo got the paid body free, together with the payer's
+`X-PAYMENT-RESPONSE` receipt, for the whole `maxAge`.
+
+`x-payment` is now a credential header, so a paid exchange is `private` on
+the header path and unstorable on the cache path by the same derivation. A
+response carrying a settlement receipt is refused separately — a second
+lock on a money path.
+
+That derivation is now singular. `effectiveRestScope` is the one answer to
+"may a shared cache have this", called by both halves; the store no longer
+re-derives scope and credentials for itself, where gaining a credential
+source on one side alone would have silently stored a per-caller body.
+
+Also closed, all of them reachable without an attacker:
+
+- `__lunora_vary` was documented as reserved but nothing reserved it. It
+  reached the procedure as an argument while `set` overwrote it in the key,
+  making it the one query key a caller could vary without varying the key.
+  It is now excluded from args and deleted before the key is built.
+- A shard response's `x-d1-bookmark` / `x-lunora-shard-key` were stored and
+  replayed, so a caller holding a newer bookmark could adopt a stale one and
+  lose read-your-writes. Both are dropped from the stored copy.
+- `applyRestCache` merges the procedure's own `Vary` into the emitted
+  header, but the key folds only the policy's names, so a response could
+  advertise more than the key fenced. Storing now requires the advertised
+  set to be fenced; `Vary: *` never stores.
+- The store path evaluated the key and `clone()` as arguments, outside its
+  `.catch`. A policy with a malformed `vary` (`"Accept Language"`) made
+  `Headers.get` throw and turned every request to that endpoint into a 500 —
+  for a policy that emitted a valid `Vary` header before. Both paths now
+  degrade to a miss, as the read path already did.
+- `X-Lunora-Edge-Cache` is CORS-exposed, so the browser clients the docs
+  point at it can actually read it.
+
+Structurally, the two `undefined`-threading functions become one per-route
+builder: what a policy decides on its own is decided once at construction,
+and a route that can never edge-cache has no cache code path at all. Only
+the cache handle stays late-bound, since `caches.default` cannot be read at
+construction time in workerd. The seven exports with no consumers are gone
+from the package surface rather than frozen in two snapshots.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_017M3tmDNVKV9Dq3GSVTcvYL
+
+* fix(storage): make head serializable, declared, and stubbed
+
+Three ways the new body-free read did not survive contact with a caller.
+
+`head()` returned `download()`'s `withSha256` Proxy. That Proxy exists to
+keep R2's native body accessors alive, and its own docblock says why it must
+not be used for a body-free read: a Proxy over a non-extensible host object
+cannot advertise the synthetic checksum fields as own keys, so
+`JSON.stringify` drops them. A head result is exactly what a query returns,
+so `sha256`/`sha256Base64` vanished on the wire. It now uses the same
+`toListObject` projection `list()` does. The test could not catch it — it
+asserted by property access, which the get trap serves, against an
+extensible object literal — so it now round-trips through JSON against a
+`preventExtensions`'d double.
+
+`ctx.storage.head` was documented in the capability table and the file-storage
+guide but declared on neither `ReadOnlyStorage` nor `Storage`, so calling it
+was a type error. It is declared now, returning `StorageObjectHead` — the
+richer public mirror an HTTP layer needs, keeping the validator, the base64
+digest and `uploaded` as a `Date`.
+
+Codegen's `storageStub` did not list `head`, so an app with no storage
+configured met `TypeError: context.storage.head is not a function` on any
+ranged request instead of the "no storage configured" message every other
+operation gives.
+
+Separately: a `Range` that cannot produce a 206 anyway — absent, multi-range,
+malformed — no longer pays for a metadata read it then discards, which also
+closes the window where the object could vanish between the two reads and
+turn a 200 into a 404. The full-object answer is decidable from the header
+alone.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_017M3tmDNVKV9Dq3GSVTcvYL
+
+* refactor(shared): bound memoizePromise by size, not by callback
+
+`onInsert` was an extension point with one consumer, on a helper whose whole
+justification is that three call sites were the same shape. The thing that
+one consumer did with it — `evictOldestEntry(map, capacity)` — is what
+`evict-oldest`'s contract already assumes: "every caller inserts exactly one
+entry immediately after calling". A `maxEntries` bound makes that structural
+instead of a promise each caller keeps, with no closure per call.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_017M3tmDNVKV9Dq3GSVTcvYL
+
+### Features
+
+* **runtime:** store the declared REST cache policy at the edge ([#476](https://github.com/anolilab/lunora/issues/476)) ([9ababee](https://github.com/anolilab/lunora/commit/9ababeebc68cd74adfef5d923cfa9e1d70f0f690))
+
+
+### Dependencies
+
+* **@lunora/platform:** upgraded to 1.0.0-alpha.17
+
+## @lunora/storage [1.0.0-alpha.35](https://github.com/anolilab/lunora/compare/@lunora/storage@1.0.0-alpha.34...@lunora/storage@1.0.0-alpha.35) (2026-08-24)
+
+### ⚠ BREAKING CHANGES
+
+* **storage:** Storage.getPresignedUrl / buildPresignedUrl now
+throw a VALIDATION_ERROR (400) at mint time for an explicit
+out-of-range expiresInSeconds instead of silently clamping it to a
+different lifetime. Per input class, old behaviour -> new behaviour:
+
+  - NaN / Infinity: minted a 900s URL   -> throws
+  - 0 or negative:  minted a 1s URL     -> throws
+  - 0 < value < 1:  minted a 1s URL     -> throws (floors to 0)
+  - value > 604800: minted a 604800s URL -> throws
+  - absent:         900s (unchanged)
+  - 1 .. 604800:    honoured (unchanged, ceiling still inclusive)
+
+A handler forwarding a user- or config-supplied TTL that previously
+served a clamped URL now fails the mutation/action instead. Callers
+that relied on the clamp must clamp before calling, or catch
+VALIDATION_ERROR. Already-minted URLs are unaffected — verification
+is unchanged.
+
+
+Claude-Session: https://claude.ai/code/session_01P2mHUwAGcpzDrv4ZNd8MLG
+
+Co-authored-by: Claude Fable 5 <noreply@anthropic.com>
+
+### Bug Fixes
+
+* **storage:** validate signed-url ttl and base path uniformly ([#449](https://github.com/anolilab/lunora/issues/449)) ([cd830bb](https://github.com/anolilab/lunora/commit/cd830bb17b9a0e0932dff71fcef967a2e2aa97cc))
+
+## @lunora/storage [1.0.0-alpha.34](https://github.com/anolilab/lunora/compare/@lunora/storage@1.0.0-alpha.33...@lunora/storage@1.0.0-alpha.34) (2026-08-23)
+
+### Build System
+
+* migrate to @cloudflare/vitest-plugin v1 ([#470](https://github.com/anolilab/lunora/issues/470)) ([05c4937](https://github.com/anolilab/lunora/commit/05c49371c30d65907eec8719f27a117f9bcaaefc))
+
+
+### Dependencies
+
+* **@lunora/platform:** upgraded to 1.0.0-alpha.15
+
+## @lunora/storage [1.0.0-alpha.33](https://github.com/anolilab/lunora/compare/%40lunora%2Fstorage%401.0.0-alpha.32...%40lunora%2Fstorage%401.0.0-alpha.33) (2026-08-18)
+
+
+### Dependencies
+
+* **@lunora/platform:** upgraded to 1.0.0-alpha.14
+
+## @lunora/storage [1.0.0-alpha.32](https://github.com/anolilab/lunora/compare/%40lunora%2Fstorage%401.0.0-alpha.31...%40lunora%2Fstorage%401.0.0-alpha.32) (2026-08-18)
+
+
+### Dependencies
+
+* **@lunora/platform:** upgraded to 1.0.0-alpha.13
+
+## @lunora/storage [1.0.0-alpha.31](https://github.com/anolilab/lunora/compare/%40lunora%2Fstorage%401.0.0-alpha.30...%40lunora%2Fstorage%401.0.0-alpha.31) (2026-08-15)
+
+
+### Dependencies
+
+* **@lunora/platform:** upgraded to 1.0.0-alpha.12
+
+## @lunora/storage [1.0.0-alpha.30](https://github.com/anolilab/lunora/compare/%40lunora%2Fstorage%401.0.0-alpha.29...%40lunora%2Fstorage%401.0.0-alpha.30) (2026-08-14)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.22
+* **@lunora/platform:** upgraded to 1.0.0-alpha.11
+
+## @lunora/storage [1.0.0-alpha.29](https://github.com/anolilab/lunora/compare/%40lunora%2Fstorage%401.0.0-alpha.28...%40lunora%2Fstorage%401.0.0-alpha.29) (2026-08-12)
+
+## @lunora/storage [1.0.0-alpha.28](https://github.com/anolilab/lunora/compare/%40lunora%2Fstorage%401.0.0-alpha.27...%40lunora%2Fstorage%401.0.0-alpha.28) (2026-08-11)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.21
+* **@lunora/platform:** upgraded to 1.0.0-alpha.10
+
+## @lunora/storage [1.0.0-alpha.27](https://github.com/anolilab/lunora/compare/%40lunora%2Fstorage%401.0.0-alpha.26...%40lunora%2Fstorage%401.0.0-alpha.27) (2026-08-10)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.20
+
+## @lunora/storage [1.0.0-alpha.26](https://github.com/anolilab/lunora/compare/%40lunora%2Fstorage%401.0.0-alpha.25...%40lunora%2Fstorage%401.0.0-alpha.26) (2026-08-10)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.19
+* **@lunora/platform:** upgraded to 1.0.0-alpha.9
+
+## @lunora/storage [1.0.0-alpha.25](https://github.com/anolilab/lunora/compare/%40lunora%2Fstorage%401.0.0-alpha.24...%40lunora%2Fstorage%401.0.0-alpha.25) (2026-08-09)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.18
+
+## @lunora/storage [1.0.0-alpha.24](https://github.com/anolilab/lunora/compare/%40lunora%2Fstorage%401.0.0-alpha.23...%40lunora%2Fstorage%401.0.0-alpha.24) (2026-08-09)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.17
+* **@lunora/platform:** upgraded to 1.0.0-alpha.8
+
+## @lunora/storage [1.0.0-alpha.23](https://github.com/anolilab/lunora/compare/%40lunora%2Fstorage%401.0.0-alpha.22...%40lunora%2Fstorage%401.0.0-alpha.23) (2026-08-07)
+
+
+### Dependencies
+
+* **@lunora/platform:** upgraded to 1.0.0-alpha.7
+
+## @lunora/storage [1.0.0-alpha.22](https://github.com/anolilab/lunora/compare/%40lunora%2Fstorage%401.0.0-alpha.21...%40lunora%2Fstorage%401.0.0-alpha.22) (2026-08-07)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.16
+
+## @lunora/storage [1.0.0-alpha.21](https://github.com/anolilab/lunora/compare/%40lunora%2Fstorage%401.0.0-alpha.20...%40lunora%2Fstorage%401.0.0-alpha.21) (2026-08-07)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.15
+
+## @lunora/storage [1.0.0-alpha.20](https://github.com/anolilab/lunora/compare/%40lunora%2Fstorage%401.0.0-alpha.19...%40lunora%2Fstorage%401.0.0-alpha.20) (2026-08-04)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.14
+* **@lunora/platform:** upgraded to 1.0.0-alpha.6
+
+## @lunora/storage [1.0.0-alpha.19](https://github.com/anolilab/lunora/compare/%40lunora%2Fstorage%401.0.0-alpha.18...%40lunora%2Fstorage%401.0.0-alpha.19) (2026-08-04)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.13
+* **@lunora/platform:** upgraded to 1.0.0-alpha.5
+
+## @lunora/storage [1.0.0-alpha.18](https://github.com/anolilab/lunora/compare/%40lunora%2Fstorage%401.0.0-alpha.17...%40lunora%2Fstorage%401.0.0-alpha.18) (2026-08-02)
+
+
+### Dependencies
+
+* **@lunora/platform:** upgraded to 1.0.0-alpha.4
+
+## @lunora/storage [1.0.0-alpha.17](https://github.com/anolilab/lunora/compare/%40lunora%2Fstorage%401.0.0-alpha.16...%40lunora%2Fstorage%401.0.0-alpha.17) (2026-08-02)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.12
+* **@lunora/platform:** upgraded to 1.0.0-alpha.3
+
+## @lunora/storage [1.0.0-alpha.16](https://github.com/anolilab/lunora/compare/%40lunora%2Fstorage%401.0.0-alpha.15...%40lunora%2Fstorage%401.0.0-alpha.16) (2026-08-01)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.11
+* **@lunora/platform:** upgraded to 1.0.0-alpha.2
+
+## @lunora/storage [1.0.0-alpha.15](https://github.com/anolilab/lunora/compare/%40lunora%2Fstorage%401.0.0-alpha.14...%40lunora%2Fstorage%401.0.0-alpha.15) (2026-07-31)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.10
+
+## @lunora/storage [1.0.0-alpha.14](https://github.com/anolilab/lunora/compare/%40lunora%2Fstorage%401.0.0-alpha.13...%40lunora%2Fstorage%401.0.0-alpha.14) (2026-07-30)
+
+
+### Dependencies
+
+* **@lunora/platform:** upgraded to 1.0.0-alpha.1
+
+## @lunora/storage [1.0.0-alpha.13](https://github.com/anolilab/lunora/compare/%40lunora%2Fstorage%401.0.0-alpha.12...%40lunora%2Fstorage%401.0.0-alpha.13) (2026-07-28)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.9
+
+## @lunora/storage [1.0.0-alpha.12](https://github.com/anolilab/lunora/compare/%40lunora%2Fstorage%401.0.0-alpha.11...%40lunora%2Fstorage%401.0.0-alpha.12) (2026-07-25)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.8
+
+## @lunora/storage [1.0.0-alpha.11](https://github.com/anolilab/lunora/compare/%40lunora%2Fstorage%401.0.0-alpha.10...%40lunora%2Fstorage%401.0.0-alpha.11) (2026-07-23)
+
+## @lunora/storage [1.0.0-alpha.10](https://github.com/anolilab/lunora/compare/%40lunora%2Fstorage%401.0.0-alpha.9...%40lunora%2Fstorage%401.0.0-alpha.10) (2026-07-20)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.6
+
+## @lunora/storage [1.0.0-alpha.9](https://github.com/anolilab/lunora/compare/%40lunora%2Fstorage%401.0.0-alpha.8...%40lunora%2Fstorage%401.0.0-alpha.9) (2026-07-17)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.5
+
+## @lunora/storage [1.0.0-alpha.8](https://github.com/anolilab/lunora/compare/%40lunora%2Fstorage%401.0.0-alpha.7...%40lunora%2Fstorage%401.0.0-alpha.8) (2026-07-11)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.4
+
+## @lunora/storage [1.0.0-alpha.7](https://github.com/anolilab/lunora/compare/%40lunora%2Fstorage%401.0.0-alpha.6...%40lunora%2Fstorage%401.0.0-alpha.7) (2026-07-08)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.3
+
+## @lunora/storage [1.0.0-alpha.6](https://github.com/anolilab/lunora/compare/%40lunora%2Fstorage%401.0.0-alpha.5...%40lunora%2Fstorage%401.0.0-alpha.6) (2026-07-04)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.2
+
+## @lunora/storage [1.0.0-alpha.5](https://github.com/anolilab/lunora/compare/%40lunora%2Fstorage%401.0.0-alpha.4...%40lunora%2Fstorage%401.0.0-alpha.5) (2026-07-03)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.1
+
+## @lunora/storage [1.0.0-alpha.4](https://github.com/anolilab/lunora/compare/%40lunora%2Fstorage%401.0.0-alpha.3...%40lunora%2Fstorage%401.0.0-alpha.4) (2026-07-02)
+
+## @lunora/storage [1.0.0-alpha.3](https://github.com/anolilab/lunora/compare/@lunora/storage@1.0.0-alpha.2...@lunora/storage@1.0.0-alpha.3) (2026-06-27)
+
+### Features
+
+* **queue:** add queues, pipelines, secrets bindings + studio queues page ([#30](https://github.com/anolilab/lunora/issues/30)) ([131460c](https://github.com/anolilab/lunora/commit/131460c5826f2ef600fa0ef81248ede91835dd0c)), closes [#29](https://github.com/anolilab/lunora/issues/29) [#31](https://github.com/anolilab/lunora/issues/31) [visulima#714](https://github.com/visulima/visulima/issues/714)
+
+### Miscellaneous Chores
+
+* **deps:** wire fallow into every package ([896a81d](https://github.com/anolilab/lunora/commit/896a81d39a064293234bba3b734cde1036e81a67))
+* update our og pacakge image ([63e6811](https://github.com/anolilab/lunora/commit/63e6811e2dfb94bc2cc38c05292b527e884660b5))
+
+## @lunora/storage [1.0.0-alpha.2](https://github.com/anolilab/lunora/compare/@lunora/storage@1.0.0-alpha.1...@lunora/storage@1.0.0-alpha.2) (2026-06-22)
+
+### Bug Fixes
+
+* **bench:** seed remaining CodSpeed benches in beforeAll ([0fde66b](https://github.com/anolilab/lunora/commit/0fde66b509a99d09d90c6141e01c12c55ac8f5de))
+
+## @lunora/storage 1.0.0-alpha.1 (2026-06-21)
+
+### Features
+
+* publish all packages publicly for the initial alpha release ([91781b4](https://github.com/anolilab/lunora/commit/91781b485bf7a9891805c6851fe393de5f87ef40))
+
+### Miscellaneous Chores
+
+* lunora start ([786b573](https://github.com/anolilab/lunora/commit/786b5735d986bca4df64ccf642273a085bf7d574))
+* normalize package.json key order ([d7a25f0](https://github.com/anolilab/lunora/commit/d7a25f00e0f665dd113ad17e98081b9bd69a1989))

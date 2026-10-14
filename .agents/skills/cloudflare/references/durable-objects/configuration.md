@@ -39,26 +39,35 @@
 
 ## Jurisdiction (Data Locality)
 
-Specify jurisdiction at ID creation for data residency compliance:
+Restrict a DO to run and store data within a region for data-residency compliance. Prefer deriving a jurisdiction-restricted subnamespace via `.jurisdiction(j)`:
 
 ```typescript
-// EU data residency
-const id = env.MY_DO.idFromName("user:123", { jurisdiction: "eu" })
+// Available jurisdictions (more may be added)
+const jurisdictions = ["eu", "us", "fedramp"]
 
-// Available jurisdictions
-const jurisdictions = ["eu", "fedramp"]  // More may be added
+// Preferred: derive a jurisdiction-restricted subnamespace, then create IDs from it
+const euNs = env.MY_DO.jurisdiction("eu")
+const euId = euNs.idFromName("user:123")   // runs + stores data in the EU
+const euStub = euNs.get(euId)
+await euStub.someMethod()                  // data stays in the EU
 
-// All operations on this DO stay within jurisdiction
-const stub = env.MY_DO.get(id)
-await stub.someMethod()  // Data stays in EU
+// US data residency — runs + stores data in the United States
+const usNs = env.MY_DO.jurisdiction("us")
+const usStub = usNs.get(usNs.idFromName("user:123"))
+await usStub.someMethod()                  // data stays in the US
+
+// Per-ID form (not recommended; prefer the subnamespace above)
+const id = env.MY_DO.newUniqueId({ jurisdiction: "us" })
 ```
 
 **Key points:**
 - Set at ID creation time, immutable afterward
 - DO instance physically located within jurisdiction
 - Storage and compute guaranteed within boundary
-- Use for GDPR, FedRAMP, other compliance requirements
-- No cross-jurisdiction access (requests fail if DO in different jurisdiction)
+- Use for GDPR, FedRAMP, US data-residency, other compliance requirements
+- The same name maps to different IDs in different jurisdictions
+- Workers may still reach the DO from anywhere — only where it runs/stores is constrained (use Regional Services to also constrain request handling)
+- Mixing a namespace jurisdiction with a differently-scoped ID errors
 
 ## Migrations
 
@@ -127,11 +136,14 @@ interface Env {
 
 export class MyDO extends DurableObject<Env> {}
 
+type DurableObjectJurisdiction = "eu" | "us" | "fedramp";
+
 type DurableObjectNamespace<T> = {
-  newUniqueId(options?: { jurisdiction?: string }): DurableObjectId;
+  newUniqueId(options?: { jurisdiction?: DurableObjectJurisdiction }): DurableObjectId;
   idFromName(name: string): DurableObjectId;
   idFromString(id: string): DurableObjectId;
   get(id: DurableObjectId): DurableObjectStub<T>;
+  jurisdiction(j: DurableObjectJurisdiction): DurableObjectNamespace<T>;
 };
 ```
 

@@ -9,58 +9,44 @@
 // Additionally, you should also exclude this file from your linter and/or formatter to prevent it from being checked or modified.
 
 import { Route as rootRouteImport } from './routes/__root'
-import { Route as StudioRouteImport } from './routes/studio'
-import { Route as SitemapDotxmlRouteImport } from './routes/sitemap[.]xml'
-import { Route as PrivacyRouteImport } from './routes/privacy'
-import { Route as LlmsDottxtRouteImport } from './routes/llms[.]txt'
-import { Route as LlmsFullDottxtRouteImport } from './routes/llms-full[.]txt'
-import { Route as ImprintRouteImport } from './routes/imprint'
-import { Route as CodeOfConductRouteImport } from './routes/code-of-conduct'
-import { Route as ChangelogRouteImport } from './routes/changelog'
 import { Route as IndexRouteImport } from './routes/index'
-import { Route as PackagesIndexRouteImport } from './routes/packages/index'
-import { Route as BlogIndexRouteImport } from './routes/blog/index'
-import { Route as PackagesSlugRouteImport } from './routes/packages/$slug'
-import { Route as DocsSplatRouteImport } from './routes/docs/$'
-import { Route as BlogRssDotxmlRouteImport } from './routes/blog/rss[.]xml'
-import { Route as BlogSlugRouteImport } from './routes/blog/$slug'
-import { Route as ApiSearchRouteImport } from './routes/api/search'
+import { Route as AgentSetupDotmdRouteImport } from './routes/agent-setup[.]md'
+import { Route as ChangelogRouteImport } from './routes/changelog'
+import { Route as CloudRouteImport } from './routes/cloud'
+import { Route as CodeOfConductRouteImport } from './routes/code-of-conduct'
+import { Route as CompareRouteImport } from './routes/compare'
+import { Route as ExamplesRouteImport } from './routes/examples'
+import { Route as ImprintRouteImport } from './routes/imprint'
+import { Route as LlmsFullDottxtRouteImport } from './routes/llms-full[.]txt'
+import { Route as LlmsDottxtRouteImport } from './routes/llms[.]txt'
+import { Route as McpRouteImport } from './routes/mcp'
+import { Route as PressRouteImport } from './routes/press'
+import { Route as PrivacyRouteImport } from './routes/privacy'
+import { Route as StartRouteImport } from './routes/start'
+import { Route as StudioRouteImport } from './routes/studio'
 import { Route as ApiOgRouteImport } from './routes/api/og'
+import { Route as ApiSearchRouteImport } from './routes/api/search'
+import { Route as BlogIndexRouteImport } from './routes/blog/index'
+import { Route as BlogSlugRouteImport } from './routes/blog/$slug'
+import { Route as BlogRssDotxmlRouteImport } from './routes/blog/rss[.]xml'
+import { Route as DocsIndexRouteImport } from './routes/docs/index'
+import { Route as DocsSplatRouteImport } from './routes/docs/$'
+import { Route as PackagesIndexRouteImport } from './routes/packages/index'
+import { Route as PackagesSlugRouteImport } from './routes/packages/$slug'
+import { Route as VsAppwriteRouteImport } from './routes/vs/appwrite'
+import { Route as VsConvexRouteImport } from './routes/vs/convex'
+import { Route as VsFirebaseRouteImport } from './routes/vs/firebase'
+import { Route as VsSupabaseRouteImport } from './routes/vs/supabase'
 import { Route as LlmsDotmdxDocsSplatRouteImport } from './routes/llms[.]mdx.docs.$'
 
-const StudioRoute = StudioRouteImport.update({
-  id: '/studio',
-  path: '/studio',
+const IndexRoute = IndexRouteImport.update({
+  id: '/',
+  path: '/',
   getParentRoute: () => rootRouteImport,
 } as any)
-const SitemapDotxmlRoute = SitemapDotxmlRouteImport.update({
-  id: '/sitemap.xml',
-  path: '/sitemap.xml',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const PrivacyRoute = PrivacyRouteImport.update({
-  id: '/privacy',
-  path: '/privacy',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const LlmsDottxtRoute = LlmsDottxtRouteImport.update({
-  id: '/llms.txt',
-  path: '/llms.txt',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const LlmsFullDottxtRoute = LlmsFullDottxtRouteImport.update({
-  id: '/llms-full.txt',
-  path: '/llms-full.txt',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const ImprintRoute = ImprintRouteImport.update({
-  id: '/imprint',
-  path: '/imprint',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const CodeOfConductRoute = CodeOfConductRouteImport.update({
-  id: '/code-of-conduct',
-  path: '/code-of-conduct',
+const AgentSetupDotmdRoute = AgentSetupDotmdRouteImport.update({
+  id: '/agent-setup.md',
+  path: '/agent-setup.md',
   getParentRoute: () => rootRouteImport,
 } as any)
 const ChangelogRoute = ChangelogRouteImport.update({
@@ -68,39 +54,69 @@ const ChangelogRoute = ChangelogRouteImport.update({
   path: '/changelog',
   getParentRoute: () => rootRouteImport,
 } as any)
-const IndexRoute = IndexRouteImport.update({
-  id: '/',
-  path: '/',
+const CloudRoute = CloudRouteImport.update({
+  id: '/cloud',
+  path: '/cloud',
   getParentRoute: () => rootRouteImport,
 } as any)
-const PackagesIndexRoute = PackagesIndexRouteImport.update({
-  id: '/packages/',
-  path: '/packages/',
+const CodeOfConductRoute = CodeOfConductRouteImport.update({
+  id: '/code-of-conduct',
+  path: '/code-of-conduct',
   getParentRoute: () => rootRouteImport,
 } as any)
-const BlogIndexRoute = BlogIndexRouteImport.update({
-  id: '/blog/',
-  path: '/blog/',
+const CompareRoute = CompareRouteImport.update({
+  id: '/compare',
+  path: '/compare',
   getParentRoute: () => rootRouteImport,
 } as any)
-const PackagesSlugRoute = PackagesSlugRouteImport.update({
-  id: '/packages/$slug',
-  path: '/packages/$slug',
+const ExamplesRoute = ExamplesRouteImport.update({
+  id: '/examples',
+  path: '/examples',
   getParentRoute: () => rootRouteImport,
 } as any)
-const DocsSplatRoute = DocsSplatRouteImport.update({
-  id: '/docs/$',
-  path: '/docs/$',
+const ImprintRoute = ImprintRouteImport.update({
+  id: '/imprint',
+  path: '/imprint',
   getParentRoute: () => rootRouteImport,
 } as any)
-const BlogRssDotxmlRoute = BlogRssDotxmlRouteImport.update({
-  id: '/blog/rss.xml',
-  path: '/blog/rss.xml',
+const LlmsFullDottxtRoute = LlmsFullDottxtRouteImport.update({
+  id: '/llms-full.txt',
+  path: '/llms-full.txt',
   getParentRoute: () => rootRouteImport,
 } as any)
-const BlogSlugRoute = BlogSlugRouteImport.update({
-  id: '/blog/$slug',
-  path: '/blog/$slug',
+const LlmsDottxtRoute = LlmsDottxtRouteImport.update({
+  id: '/llms.txt',
+  path: '/llms.txt',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const McpRoute = McpRouteImport.update({
+  id: '/mcp',
+  path: '/mcp',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const PressRoute = PressRouteImport.update({
+  id: '/press',
+  path: '/press',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const PrivacyRoute = PrivacyRouteImport.update({
+  id: '/privacy',
+  path: '/privacy',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const StartRoute = StartRouteImport.update({
+  id: '/start',
+  path: '/start',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const StudioRoute = StudioRouteImport.update({
+  id: '/studio',
+  path: '/studio',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ApiOgRoute = ApiOgRouteImport.update({
+  id: '/api/og',
+  path: '/api/og',
   getParentRoute: () => rootRouteImport,
 } as any)
 const ApiSearchRoute = ApiSearchRouteImport.update({
@@ -108,9 +124,59 @@ const ApiSearchRoute = ApiSearchRouteImport.update({
   path: '/api/search',
   getParentRoute: () => rootRouteImport,
 } as any)
-const ApiOgRoute = ApiOgRouteImport.update({
-  id: '/api/og',
-  path: '/api/og',
+const BlogIndexRoute = BlogIndexRouteImport.update({
+  id: '/blog/',
+  path: '/blog/',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const BlogSlugRoute = BlogSlugRouteImport.update({
+  id: '/blog/$slug',
+  path: '/blog/$slug',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const BlogRssDotxmlRoute = BlogRssDotxmlRouteImport.update({
+  id: '/blog/rss.xml',
+  path: '/blog/rss.xml',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const DocsIndexRoute = DocsIndexRouteImport.update({
+  id: '/docs/',
+  path: '/docs/',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const DocsSplatRoute = DocsSplatRouteImport.update({
+  id: '/docs/$',
+  path: '/docs/$',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const PackagesIndexRoute = PackagesIndexRouteImport.update({
+  id: '/packages/',
+  path: '/packages/',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const PackagesSlugRoute = PackagesSlugRouteImport.update({
+  id: '/packages/$slug',
+  path: '/packages/$slug',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const VsAppwriteRoute = VsAppwriteRouteImport.update({
+  id: '/vs/appwrite',
+  path: '/vs/appwrite',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const VsConvexRoute = VsConvexRouteImport.update({
+  id: '/vs/convex',
+  path: '/vs/convex',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const VsFirebaseRoute = VsFirebaseRouteImport.update({
+  id: '/vs/firebase',
+  path: '/vs/firebase',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const VsSupabaseRoute = VsSupabaseRouteImport.update({
+  id: '/vs/supabase',
+  path: '/vs/supabase',
   getParentRoute: () => rootRouteImport,
 } as any)
 const LlmsDotmdxDocsSplatRoute = LlmsDotmdxDocsSplatRouteImport.update({
@@ -121,13 +187,19 @@ const LlmsDotmdxDocsSplatRoute = LlmsDotmdxDocsSplatRouteImport.update({
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
+  '/agent-setup.md': typeof AgentSetupDotmdRoute
   '/changelog': typeof ChangelogRoute
+  '/cloud': typeof CloudRoute
   '/code-of-conduct': typeof CodeOfConductRoute
+  '/compare': typeof CompareRoute
+  '/examples': typeof ExamplesRoute
   '/imprint': typeof ImprintRoute
   '/llms-full.txt': typeof LlmsFullDottxtRoute
   '/llms.txt': typeof LlmsDottxtRoute
+  '/mcp': typeof McpRoute
+  '/press': typeof PressRoute
   '/privacy': typeof PrivacyRoute
-  '/sitemap.xml': typeof SitemapDotxmlRoute
+  '/start': typeof StartRoute
   '/studio': typeof StudioRoute
   '/api/og': typeof ApiOgRoute
   '/api/search': typeof ApiSearchRoute
@@ -135,19 +207,30 @@ export interface FileRoutesByFullPath {
   '/blog/rss.xml': typeof BlogRssDotxmlRoute
   '/docs/$': typeof DocsSplatRoute
   '/packages/$slug': typeof PackagesSlugRoute
+  '/vs/appwrite': typeof VsAppwriteRoute
+  '/vs/convex': typeof VsConvexRoute
+  '/vs/firebase': typeof VsFirebaseRoute
+  '/vs/supabase': typeof VsSupabaseRoute
   '/blog/': typeof BlogIndexRoute
+  '/docs/': typeof DocsIndexRoute
   '/packages/': typeof PackagesIndexRoute
   '/llms.mdx/docs/$': typeof LlmsDotmdxDocsSplatRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
+  '/agent-setup.md': typeof AgentSetupDotmdRoute
   '/changelog': typeof ChangelogRoute
+  '/cloud': typeof CloudRoute
   '/code-of-conduct': typeof CodeOfConductRoute
+  '/compare': typeof CompareRoute
+  '/examples': typeof ExamplesRoute
   '/imprint': typeof ImprintRoute
   '/llms-full.txt': typeof LlmsFullDottxtRoute
   '/llms.txt': typeof LlmsDottxtRoute
+  '/mcp': typeof McpRoute
+  '/press': typeof PressRoute
   '/privacy': typeof PrivacyRoute
-  '/sitemap.xml': typeof SitemapDotxmlRoute
+  '/start': typeof StartRoute
   '/studio': typeof StudioRoute
   '/api/og': typeof ApiOgRoute
   '/api/search': typeof ApiSearchRoute
@@ -155,20 +238,31 @@ export interface FileRoutesByTo {
   '/blog/rss.xml': typeof BlogRssDotxmlRoute
   '/docs/$': typeof DocsSplatRoute
   '/packages/$slug': typeof PackagesSlugRoute
+  '/vs/appwrite': typeof VsAppwriteRoute
+  '/vs/convex': typeof VsConvexRoute
+  '/vs/firebase': typeof VsFirebaseRoute
+  '/vs/supabase': typeof VsSupabaseRoute
   '/blog': typeof BlogIndexRoute
+  '/docs': typeof DocsIndexRoute
   '/packages': typeof PackagesIndexRoute
   '/llms.mdx/docs/$': typeof LlmsDotmdxDocsSplatRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/': typeof IndexRoute
+  '/agent-setup.md': typeof AgentSetupDotmdRoute
   '/changelog': typeof ChangelogRoute
+  '/cloud': typeof CloudRoute
   '/code-of-conduct': typeof CodeOfConductRoute
+  '/compare': typeof CompareRoute
+  '/examples': typeof ExamplesRoute
   '/imprint': typeof ImprintRoute
   '/llms-full.txt': typeof LlmsFullDottxtRoute
   '/llms.txt': typeof LlmsDottxtRoute
+  '/mcp': typeof McpRoute
+  '/press': typeof PressRoute
   '/privacy': typeof PrivacyRoute
-  '/sitemap.xml': typeof SitemapDotxmlRoute
+  '/start': typeof StartRoute
   '/studio': typeof StudioRoute
   '/api/og': typeof ApiOgRoute
   '/api/search': typeof ApiSearchRoute
@@ -176,7 +270,12 @@ export interface FileRoutesById {
   '/blog/rss.xml': typeof BlogRssDotxmlRoute
   '/docs/$': typeof DocsSplatRoute
   '/packages/$slug': typeof PackagesSlugRoute
+  '/vs/appwrite': typeof VsAppwriteRoute
+  '/vs/convex': typeof VsConvexRoute
+  '/vs/firebase': typeof VsFirebaseRoute
+  '/vs/supabase': typeof VsSupabaseRoute
   '/blog/': typeof BlogIndexRoute
+  '/docs/': typeof DocsIndexRoute
   '/packages/': typeof PackagesIndexRoute
   '/llms.mdx/docs/$': typeof LlmsDotmdxDocsSplatRoute
 }
@@ -184,13 +283,19 @@ export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
   fullPaths:
     | '/'
+    | '/agent-setup.md'
     | '/changelog'
+    | '/cloud'
     | '/code-of-conduct'
+    | '/compare'
+    | '/examples'
     | '/imprint'
     | '/llms-full.txt'
     | '/llms.txt'
+    | '/mcp'
+    | '/press'
     | '/privacy'
-    | '/sitemap.xml'
+    | '/start'
     | '/studio'
     | '/api/og'
     | '/api/search'
@@ -198,19 +303,30 @@ export interface FileRouteTypes {
     | '/blog/rss.xml'
     | '/docs/$'
     | '/packages/$slug'
+    | '/vs/appwrite'
+    | '/vs/convex'
+    | '/vs/firebase'
+    | '/vs/supabase'
     | '/blog/'
+    | '/docs/'
     | '/packages/'
     | '/llms.mdx/docs/$'
   fileRoutesByTo: FileRoutesByTo
   to:
     | '/'
+    | '/agent-setup.md'
     | '/changelog'
+    | '/cloud'
     | '/code-of-conduct'
+    | '/compare'
+    | '/examples'
     | '/imprint'
     | '/llms-full.txt'
     | '/llms.txt'
+    | '/mcp'
+    | '/press'
     | '/privacy'
-    | '/sitemap.xml'
+    | '/start'
     | '/studio'
     | '/api/og'
     | '/api/search'
@@ -218,19 +334,30 @@ export interface FileRouteTypes {
     | '/blog/rss.xml'
     | '/docs/$'
     | '/packages/$slug'
+    | '/vs/appwrite'
+    | '/vs/convex'
+    | '/vs/firebase'
+    | '/vs/supabase'
     | '/blog'
+    | '/docs'
     | '/packages'
     | '/llms.mdx/docs/$'
   id:
     | '__root__'
     | '/'
+    | '/agent-setup.md'
     | '/changelog'
+    | '/cloud'
     | '/code-of-conduct'
+    | '/compare'
+    | '/examples'
     | '/imprint'
     | '/llms-full.txt'
     | '/llms.txt'
+    | '/mcp'
+    | '/press'
     | '/privacy'
-    | '/sitemap.xml'
+    | '/start'
     | '/studio'
     | '/api/og'
     | '/api/search'
@@ -238,20 +365,31 @@ export interface FileRouteTypes {
     | '/blog/rss.xml'
     | '/docs/$'
     | '/packages/$slug'
+    | '/vs/appwrite'
+    | '/vs/convex'
+    | '/vs/firebase'
+    | '/vs/supabase'
     | '/blog/'
+    | '/docs/'
     | '/packages/'
     | '/llms.mdx/docs/$'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
+  AgentSetupDotmdRoute: typeof AgentSetupDotmdRoute
   ChangelogRoute: typeof ChangelogRoute
+  CloudRoute: typeof CloudRoute
   CodeOfConductRoute: typeof CodeOfConductRoute
+  CompareRoute: typeof CompareRoute
+  ExamplesRoute: typeof ExamplesRoute
   ImprintRoute: typeof ImprintRoute
   LlmsFullDottxtRoute: typeof LlmsFullDottxtRoute
   LlmsDottxtRoute: typeof LlmsDottxtRoute
+  McpRoute: typeof McpRoute
+  PressRoute: typeof PressRoute
   PrivacyRoute: typeof PrivacyRoute
-  SitemapDotxmlRoute: typeof SitemapDotxmlRoute
+  StartRoute: typeof StartRoute
   StudioRoute: typeof StudioRoute
   ApiOgRoute: typeof ApiOgRoute
   ApiSearchRoute: typeof ApiSearchRoute
@@ -259,60 +397,30 @@ export interface RootRouteChildren {
   BlogRssDotxmlRoute: typeof BlogRssDotxmlRoute
   DocsSplatRoute: typeof DocsSplatRoute
   PackagesSlugRoute: typeof PackagesSlugRoute
+  VsAppwriteRoute: typeof VsAppwriteRoute
+  VsConvexRoute: typeof VsConvexRoute
+  VsFirebaseRoute: typeof VsFirebaseRoute
+  VsSupabaseRoute: typeof VsSupabaseRoute
   BlogIndexRoute: typeof BlogIndexRoute
+  DocsIndexRoute: typeof DocsIndexRoute
   PackagesIndexRoute: typeof PackagesIndexRoute
   LlmsDotmdxDocsSplatRoute: typeof LlmsDotmdxDocsSplatRoute
 }
 
 declare module '@tanstack/react-router' {
   interface FileRoutesByPath {
-    '/studio': {
-      id: '/studio'
-      path: '/studio'
-      fullPath: '/studio'
-      preLoaderRoute: typeof StudioRouteImport
+    '/': {
+      id: '/'
+      path: '/'
+      fullPath: '/'
+      preLoaderRoute: typeof IndexRouteImport
       parentRoute: typeof rootRouteImport
     }
-    '/sitemap.xml': {
-      id: '/sitemap.xml'
-      path: '/sitemap.xml'
-      fullPath: '/sitemap.xml'
-      preLoaderRoute: typeof SitemapDotxmlRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/privacy': {
-      id: '/privacy'
-      path: '/privacy'
-      fullPath: '/privacy'
-      preLoaderRoute: typeof PrivacyRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/llms.txt': {
-      id: '/llms.txt'
-      path: '/llms.txt'
-      fullPath: '/llms.txt'
-      preLoaderRoute: typeof LlmsDottxtRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/llms-full.txt': {
-      id: '/llms-full.txt'
-      path: '/llms-full.txt'
-      fullPath: '/llms-full.txt'
-      preLoaderRoute: typeof LlmsFullDottxtRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/imprint': {
-      id: '/imprint'
-      path: '/imprint'
-      fullPath: '/imprint'
-      preLoaderRoute: typeof ImprintRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/code-of-conduct': {
-      id: '/code-of-conduct'
-      path: '/code-of-conduct'
-      fullPath: '/code-of-conduct'
-      preLoaderRoute: typeof CodeOfConductRouteImport
+    '/agent-setup.md': {
+      id: '/agent-setup.md'
+      path: '/agent-setup.md'
+      fullPath: '/agent-setup.md'
+      preLoaderRoute: typeof AgentSetupDotmdRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/changelog': {
@@ -322,53 +430,95 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ChangelogRouteImport
       parentRoute: typeof rootRouteImport
     }
-    '/': {
-      id: '/'
-      path: '/'
-      fullPath: '/'
-      preLoaderRoute: typeof IndexRouteImport
+    '/cloud': {
+      id: '/cloud'
+      path: '/cloud'
+      fullPath: '/cloud'
+      preLoaderRoute: typeof CloudRouteImport
       parentRoute: typeof rootRouteImport
     }
-    '/packages/': {
-      id: '/packages/'
-      path: '/packages'
-      fullPath: '/packages/'
-      preLoaderRoute: typeof PackagesIndexRouteImport
+    '/code-of-conduct': {
+      id: '/code-of-conduct'
+      path: '/code-of-conduct'
+      fullPath: '/code-of-conduct'
+      preLoaderRoute: typeof CodeOfConductRouteImport
       parentRoute: typeof rootRouteImport
     }
-    '/blog/': {
-      id: '/blog/'
-      path: '/blog'
-      fullPath: '/blog/'
-      preLoaderRoute: typeof BlogIndexRouteImport
+    '/compare': {
+      id: '/compare'
+      path: '/compare'
+      fullPath: '/compare'
+      preLoaderRoute: typeof CompareRouteImport
       parentRoute: typeof rootRouteImport
     }
-    '/packages/$slug': {
-      id: '/packages/$slug'
-      path: '/packages/$slug'
-      fullPath: '/packages/$slug'
-      preLoaderRoute: typeof PackagesSlugRouteImport
+    '/examples': {
+      id: '/examples'
+      path: '/examples'
+      fullPath: '/examples'
+      preLoaderRoute: typeof ExamplesRouteImport
       parentRoute: typeof rootRouteImport
     }
-    '/docs/$': {
-      id: '/docs/$'
-      path: '/docs/$'
-      fullPath: '/docs/$'
-      preLoaderRoute: typeof DocsSplatRouteImport
+    '/imprint': {
+      id: '/imprint'
+      path: '/imprint'
+      fullPath: '/imprint'
+      preLoaderRoute: typeof ImprintRouteImport
       parentRoute: typeof rootRouteImport
     }
-    '/blog/rss.xml': {
-      id: '/blog/rss.xml'
-      path: '/blog/rss.xml'
-      fullPath: '/blog/rss.xml'
-      preLoaderRoute: typeof BlogRssDotxmlRouteImport
+    '/llms-full.txt': {
+      id: '/llms-full.txt'
+      path: '/llms-full.txt'
+      fullPath: '/llms-full.txt'
+      preLoaderRoute: typeof LlmsFullDottxtRouteImport
       parentRoute: typeof rootRouteImport
     }
-    '/blog/$slug': {
-      id: '/blog/$slug'
-      path: '/blog/$slug'
-      fullPath: '/blog/$slug'
-      preLoaderRoute: typeof BlogSlugRouteImport
+    '/llms.txt': {
+      id: '/llms.txt'
+      path: '/llms.txt'
+      fullPath: '/llms.txt'
+      preLoaderRoute: typeof LlmsDottxtRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/mcp': {
+      id: '/mcp'
+      path: '/mcp'
+      fullPath: '/mcp'
+      preLoaderRoute: typeof McpRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/press': {
+      id: '/press'
+      path: '/press'
+      fullPath: '/press'
+      preLoaderRoute: typeof PressRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/privacy': {
+      id: '/privacy'
+      path: '/privacy'
+      fullPath: '/privacy'
+      preLoaderRoute: typeof PrivacyRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/start': {
+      id: '/start'
+      path: '/start'
+      fullPath: '/start'
+      preLoaderRoute: typeof StartRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/studio': {
+      id: '/studio'
+      path: '/studio'
+      fullPath: '/studio'
+      preLoaderRoute: typeof StudioRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/og': {
+      id: '/api/og'
+      path: '/api/og'
+      fullPath: '/api/og'
+      preLoaderRoute: typeof ApiOgRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/api/search': {
@@ -378,11 +528,81 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ApiSearchRouteImport
       parentRoute: typeof rootRouteImport
     }
-    '/api/og': {
-      id: '/api/og'
-      path: '/api/og'
-      fullPath: '/api/og'
-      preLoaderRoute: typeof ApiOgRouteImport
+    '/blog/': {
+      id: '/blog/'
+      path: '/blog'
+      fullPath: '/blog/'
+      preLoaderRoute: typeof BlogIndexRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/blog/$slug': {
+      id: '/blog/$slug'
+      path: '/blog/$slug'
+      fullPath: '/blog/$slug'
+      preLoaderRoute: typeof BlogSlugRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/blog/rss.xml': {
+      id: '/blog/rss.xml'
+      path: '/blog/rss.xml'
+      fullPath: '/blog/rss.xml'
+      preLoaderRoute: typeof BlogRssDotxmlRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/docs/': {
+      id: '/docs/'
+      path: '/docs'
+      fullPath: '/docs/'
+      preLoaderRoute: typeof DocsIndexRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/docs/$': {
+      id: '/docs/$'
+      path: '/docs/$'
+      fullPath: '/docs/$'
+      preLoaderRoute: typeof DocsSplatRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/packages/': {
+      id: '/packages/'
+      path: '/packages'
+      fullPath: '/packages/'
+      preLoaderRoute: typeof PackagesIndexRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/packages/$slug': {
+      id: '/packages/$slug'
+      path: '/packages/$slug'
+      fullPath: '/packages/$slug'
+      preLoaderRoute: typeof PackagesSlugRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/vs/appwrite': {
+      id: '/vs/appwrite'
+      path: '/vs/appwrite'
+      fullPath: '/vs/appwrite'
+      preLoaderRoute: typeof VsAppwriteRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/vs/convex': {
+      id: '/vs/convex'
+      path: '/vs/convex'
+      fullPath: '/vs/convex'
+      preLoaderRoute: typeof VsConvexRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/vs/firebase': {
+      id: '/vs/firebase'
+      path: '/vs/firebase'
+      fullPath: '/vs/firebase'
+      preLoaderRoute: typeof VsFirebaseRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/vs/supabase': {
+      id: '/vs/supabase'
+      path: '/vs/supabase'
+      fullPath: '/vs/supabase'
+      preLoaderRoute: typeof VsSupabaseRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/llms.mdx/docs/$': {
@@ -397,13 +617,19 @@ declare module '@tanstack/react-router' {
 
 const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
+  AgentSetupDotmdRoute: AgentSetupDotmdRoute,
   ChangelogRoute: ChangelogRoute,
+  CloudRoute: CloudRoute,
   CodeOfConductRoute: CodeOfConductRoute,
+  CompareRoute: CompareRoute,
+  ExamplesRoute: ExamplesRoute,
   ImprintRoute: ImprintRoute,
   LlmsFullDottxtRoute: LlmsFullDottxtRoute,
   LlmsDottxtRoute: LlmsDottxtRoute,
+  McpRoute: McpRoute,
+  PressRoute: PressRoute,
   PrivacyRoute: PrivacyRoute,
-  SitemapDotxmlRoute: SitemapDotxmlRoute,
+  StartRoute: StartRoute,
   StudioRoute: StudioRoute,
   ApiOgRoute: ApiOgRoute,
   ApiSearchRoute: ApiSearchRoute,
@@ -411,7 +637,12 @@ const rootRouteChildren: RootRouteChildren = {
   BlogRssDotxmlRoute: BlogRssDotxmlRoute,
   DocsSplatRoute: DocsSplatRoute,
   PackagesSlugRoute: PackagesSlugRoute,
+  VsAppwriteRoute: VsAppwriteRoute,
+  VsConvexRoute: VsConvexRoute,
+  VsFirebaseRoute: VsFirebaseRoute,
+  VsSupabaseRoute: VsSupabaseRoute,
   BlogIndexRoute: BlogIndexRoute,
+  DocsIndexRoute: DocsIndexRoute,
   PackagesIndexRoute: PackagesIndexRoute,
   LlmsDotmdxDocsSplatRoute: LlmsDotmdxDocsSplatRoute,
 }

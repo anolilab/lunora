@@ -1,0 +1,171 @@
+import { createFileRoute } from "@tanstack/react-router";
+
+import { getPackageBySlug } from "@/data/packages";
+
+// resvg-wasm (no native binary) so this works in serverless functions, where the
+// native @resvg/resvg-js addon fails to bundle. The wasm version must match the
+// installed @resvg/resvg-wasm version. Initialized once per cold start.
+const RESVG_WASM_URL = "https://cdn.jsdelivr.net/npm/@resvg/resvg-wasm@2.6.2/index_bg.wasm";
+
+let wasmReady: Promise<void> | null = null;
+
+/** `initWasm` rejects with this once the module has been initialised. */
+const ALREADY_INITIALIZED = /already initialized/i;
+
+/**
+ * Initialises the wasm once per *process*, not once per module instance.
+ *
+ * Two failure modes, both of which made this endpoint answer 500 forever.
+ *
+ * First, `initWasm` throws "Already initialized. The `initWasm()` function can
+ * be used only once." A dev-server module reload drops `wasmReady` while the
+ * wasm itself stays initialised in the process, so the next request calls it
+ * again and fails — permanently, until the server restarts. That is what broke
+ * every generated cover on a dev server that had been up all day. The wasm is
+ * already there, so this is success, not an error.
+ *
+ * Second, caching the promise unconditionally caches a rejection: one failed
+ * fetch — a CDN blip, a cold start racing the network — and every later request
+ * rejects instantly from the cache. Clearing it lets the next request retry.
+ */
+const ensureWasm = (initWasm: typeof import("@resvg/resvg-wasm").initWasm): Promise<void> => {
+    wasmReady ??= initWasm(fetch(RESVG_WASM_URL)).catch((error: unknown) => {
+        if (error instanceof Error && ALREADY_INITIALIZED.test(error.message)) {
+            return;
+        }
+
+        wasmReady = null;
+
+        throw error;
+    });
+
+    return wasmReady;
+};
+
+const ACCENT_COLORS: Record<string, string> = {
+    "crimson-energy": "#ED5AA3",
+    "royal-amethyst": "#9273E8",
+    "sky-sapphire": "#31DAED",
+};
+
+const FONT_BASE = "https://cdn.jsdelivr.net/fontsource/fonts";
+
+const fetchFont = async (url: string): Promise<ArrayBuffer> => {
+    const response = await fetch(url);
+
+    return response.arrayBuffer();
+};
+
+// Fonts are fetched once per cold start and reused (OG responses are cached a
+// day). Cleared on failure for the same reason as the wasm above: a cached
+// rejection would make every later render fail instantly and permanently.
+let fontsPromise: Promise<{ data: ArrayBuffer; name: string; style: "normal"; weight: 400 | 700 }[]> | null = null;
+
+const loadFonts = () => {
+    fontsPromise ??= Promise.all([
+        fetchFont(`${FONT_BASE}/geist@latest/latin-400-normal.ttf`),
+        fetchFont(`${FONT_BASE}/geist@latest/latin-700-normal.ttf`),
+        fetchFont(`${FONT_BASE}/geist-mono@latest/latin-400-normal.ttf`),
+    ])
+        .then(([regular, bold, mono]) => [
+            { data: regular, name: "Geist", style: "normal" as const, weight: 400 as const },
+            { data: bold, name: "Geist", style: "normal" as const, weight: 700 as const },
+            { data: mono, name: "Geist Mono", style: "normal" as const, weight: 400 as const },
+        ])
+        .catch((error: unknown) => {
+            fontsPromise = null;
+
+            throw error;
+        });
+
+    return fontsPromise;
+};
+
+const truncate = (text: string, max: number): string => (text.length > max ? `${text.slice(0, max - 1).trimEnd()}…` : text);
+
+const renderPng = async (title: string, description: string, eyebrow: string, accent: string): Promise<Uint8Array<ArrayBuffer>> => {
+    // Imported here, not at the top of the module. This file is part of the route
+    // tree, so a top-level import loads satori on every request the function
+    // serves. satori statically imports harfbuzzjs, whose entry starts loading
+    // `hb.wasm` from disk on import and leaves the result as a promise nothing
+    // awaits. When that file is missing (Netlify's tracer does not follow it; see
+    // `included_files` in netlify.toml) the rejection goes unhandled, and on Lambda
+    // that ends the process. Every instance died after its first request, so every
+    // navigation paid a ~8s cold start. Loading the renderer here keeps any such
+    // failure confined to this endpoint.
+    const [{ default: satori }, { initWasm, Resvg }] = await Promise.all([import("satori"), import("@resvg/resvg-wasm")]);
+
+    const svg = await satori(
+        <div style={{ backgroundColor: "#0e0e11", display: "flex", fontFamily: "Geist", height: "630px", width: "1200px" }}>
+            <div style={{ background: "linear-gradient(180deg, #31DAED 0%, #9273E8 50%, #ED5AA3 100%)", height: "630px", width: "10px" }} />
+            <div style={{ display: "flex", flex: 1, flexDirection: "column", justifyContent: "space-between", padding: "84px 80px" }}>
+                <div style={{ display: "flex", flexDirection: "column" }}>
+                    <div style={{ color: accent, fontFamily: "Geist Mono", fontSize: "22px", letterSpacing: "3px" }}>{eyebrow.toUpperCase()}</div>
+                    <div style={{ color: "#F2F3F8", fontSize: "62px", fontWeight: 700, lineHeight: 1.12, marginTop: "30px" }}>{title}</div>
+                    <div style={{ color: "#A0A0A8", fontSize: "27px", lineHeight: 1.4, marginTop: "26px" }}>{truncate(description, 130)}</div>
+                </div>
+                <div style={{ color: "#6B7280", display: "flex", fontFamily: "Geist Mono", fontSize: "22px" }}>lunora.sh</div>
+            </div>
+        </div>,
+        { fonts: await loadFonts(), height: 630, width: 1200 },
+    );
+
+    await ensureWasm(initWasm);
+
+    const resvg = new Resvg(svg);
+    const rendered = resvg.render();
+    const png = rendered.asPng();
+
+    // Copy out of wasm memory into a fresh ArrayBuffer-backed Uint8Array before
+    // freeing (also a valid Response BodyInit, which the raw view is not).
+    const bytes = new Uint8Array(png.byteLength);
+
+    bytes.set(png);
+    rendered.free();
+    resvg.free();
+
+    return bytes;
+};
+
+export const Route = createFileRoute("/api/og")({
+    server: {
+        handlers: {
+            async GET(request) {
+                const url = new URL(request.request.url);
+                const slug = url.searchParams.get("slug");
+                const titleParameter = url.searchParams.get("title");
+
+                let title = "Lunora";
+                let description = "The type-safe, real-time backend for Cloudflare.";
+                let eyebrow = "Lunora";
+                let accentColor = "sky-sapphire";
+
+                if (titleParameter) {
+                    // Direct mode: blog posts (and any page) pass their own title/description.
+                    title = titleParameter;
+                    description = url.searchParams.get("description") ?? "";
+                    eyebrow = url.searchParams.get("eyebrow") ?? "Lunora";
+                    accentColor = url.searchParams.get("accent") ?? "royal-amethyst";
+                } else if (slug) {
+                    const pkg = getPackageBySlug(slug);
+
+                    if (pkg) {
+                        title = pkg.name;
+                        description = pkg.description;
+                        eyebrow = "Package";
+                        accentColor = pkg.accentColor;
+                    }
+                }
+
+                const png = await renderPng(title, description, eyebrow, ACCENT_COLORS[accentColor] ?? "#9273E8");
+
+                return new Response(png, {
+                    headers: {
+                        "Cache-Control": "public, max-age=86400",
+                        "Content-Type": "image/png",
+                    },
+                });
+            },
+        },
+    },
+});

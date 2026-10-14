@@ -1,0 +1,245 @@
+"use client";
+
+import { Link } from "@tanstack/react-router";
+import { ArrowRight, Minus } from "lucide-react";
+import type { FC } from "react";
+
+import HatchSpacer from "@/components/sections/hatch-spacer";
+import { Pill } from "@/components/sections/langbase";
+import { ArticleHeader } from "@/kit/page-header";
+import { createJsonLd, SITE_URL } from "@/lib/seo";
+
+/**
+ * Shared, data-driven "Lunora vs X" comparison page: breadcrumb, an honest table,
+ * a prose summary, two verdicts (where they win / where Lunora differs), an FAQ,
+ * and a CTA, in the shared dark frame. Emits BreadcrumbList + FAQPage JSON-LD.
+ * Facts live in ./data; keep them accurate and sourced.
+ */
+
+type Tone = "neutral" | "no" | "warn" | "yes";
+
+/** Comparison page slugs (routes under /vs). Literal so `/vs/${slug}` typechecks. */
+type CompareSlug = "appwrite" | "convex" | "firebase" | "supabase";
+
+interface Cell {
+    label: string;
+    tone?: Tone;
+}
+
+interface CompareRow {
+    criterion: string;
+    lunora: Cell;
+    them: Cell;
+}
+
+interface Verdict {
+    body: string;
+    title: string;
+}
+
+interface Faq {
+    a: string;
+    q: string;
+}
+
+interface Comparison {
+    description: string;
+    /** FAQ — rendered as content and emitted as FAQPage structured data. */
+    faqs: Faq[];
+    intro: string;
+    lunoraDiffers: Verdict;
+    /** Display name, e.g. "Convex". */
+    name: string;
+    rows: CompareRow[];
+    /** Route slug under /vs, e.g. "convex". */
+    slug: CompareSlug;
+    /** Longer prose for content depth — paragraphs. */
+    summary: string[];
+    theyWin: Verdict;
+}
+
+const TONE_CLASS: Record<Tone, string> = {
+    neutral: "text-ink-muted",
+    no: "text-ink-faint",
+    warn: "text-amber-300",
+    yes: "text-emerald-300",
+};
+
+// Escape `<` so a stray "</script>" in data can't break out of the JSON-LD block.
+const safeJsonLd = (value: string): string => value.replaceAll("<", String.raw`\u003c`);
+
+const CellView: FC<{ cell: Cell }> = ({ cell }) => {
+    const tone = cell.tone ?? "neutral";
+
+    return (
+        <span className={`inline-flex items-center gap-1.5 ${TONE_CLASS[tone]}`}>
+            {tone === "no" ? <Minus className="size-3.5 shrink-0" /> : null}
+            {cell.label}
+        </span>
+    );
+};
+
+export const ComparePage: FC<{ data: Comparison; others: { name: string; slug: CompareSlug }[] }> = ({ data, others }) => {
+    const breadcrumbLd = safeJsonLd(
+        createJsonLd({
+            "@type": "BreadcrumbList",
+            itemListElement: [
+                { "@type": "ListItem", item: SITE_URL, name: "Home", position: 1 },
+                { "@type": "ListItem", item: `${SITE_URL}/compare`, name: "Compare", position: 2 },
+                { "@type": "ListItem", item: `${SITE_URL}/vs/${data.slug}`, name: `Lunora vs ${data.name}`, position: 3 },
+            ],
+        }),
+    );
+    const faqLd = safeJsonLd(
+        createJsonLd({
+            "@type": "FAQPage",
+            mainEntity: data.faqs.map((faq) => {
+                return {
+                    "@type": "Question",
+                    acceptedAnswer: { "@type": "Answer", text: faq.a },
+                    name: faq.q,
+                };
+            }),
+        }),
+    );
+
+    return (
+        <div className="relative overflow-x-clip bg-canvas" data-theme="dark">
+            {/* eslint-disable-next-line react/no-danger -- JSON-LD structured data; the payload is built locally and `<` is escaped via safeJsonLd */}
+            <script dangerouslySetInnerHTML={{ __html: breadcrumbLd }} type="application/ld+json" />
+            {/* eslint-disable-next-line react/no-danger -- JSON-LD structured data; the payload is built locally and `<` is escaped via safeJsonLd */}
+            <script dangerouslySetInnerHTML={{ __html: faqLd }} type="application/ld+json" />
+
+            <ArticleHeader
+                breadcrumb={[{ label: "Lunora", to: "/" }, { label: "Compare", to: "/compare" }, { label: data.name }]}
+                lead={data.intro}
+                meta="Comparison"
+                title={`Lunora vs ${data.name}`}
+            />
+
+            {/* Comparison table */}
+            <section className="relative bg-canvas py-14" data-nav-theme="dark">
+                <div className="mx-auto max-w-4xl px-5">
+                    <h2 className="mb-6 text-2xl font-semibold tracking-tight text-ink">Lunora vs {data.name} at a glance</h2>
+                    <table className="w-full border-collapse text-sm">
+                        <thead>
+                            <tr className="border-b border-hairline text-left">
+                                <th className="py-3 pr-4 font-medium text-ink-faint">
+                                    <span className="sr-only">Criterion</span>
+                                </th>
+                                <th className="py-3 pr-4 font-semibold text-ink">Lunora</th>
+                                <th className="py-3 font-semibold text-ink-muted">{data.name}</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {data.rows.map((row) => (
+                                <tr className="border-b border-hairline align-top" key={row.criterion}>
+                                    <td className="py-3 pr-4 text-ink-muted">{row.criterion}</td>
+                                    <td className="py-3 pr-4">
+                                        <CellView cell={row.lunora} />
+                                    </td>
+                                    <td className="py-3">
+                                        <CellView cell={row.them} />
+                                    </td>
+                                </tr>
+                            ))}
+                        </tbody>
+                    </table>
+                </div>
+            </section>
+
+            <HatchSpacer />
+
+            {/* Summary prose */}
+            <section className="relative bg-canvas py-16" data-nav-theme="dark">
+                <div className="mx-auto flex max-w-4xl flex-col gap-4 px-5">
+                    <h2 className="text-2xl font-semibold tracking-tight text-ink">How Lunora and {data.name} differ</h2>
+                    {data.summary.map((paragraph) => (
+                        <p className="max-w-[68ch] leading-relaxed text-ink-muted" key={paragraph.slice(0, 24)}>
+                            {paragraph}
+                        </p>
+                    ))}
+                </div>
+            </section>
+
+            <HatchSpacer />
+
+            {/* Verdicts */}
+            <section className="relative bg-canvas py-16" data-nav-theme="dark">
+                <div className="mx-auto max-w-4xl px-5">
+                    <h2 className="mb-6 text-2xl font-semibold tracking-tight text-ink">Where each one wins</h2>
+                    <div className="grid grid-cols-1 gap-px border border-hairline md:grid-cols-2">
+                        <div className="flex flex-col gap-3 border-b border-hairline bg-canvas p-8 md:border-r md:border-b-0">
+                            <span className="font-mono text-xs tracking-wider text-ink-faint uppercase">Where {data.name} wins</span>
+                            <h3 className="text-xl font-semibold text-ink">{data.theyWin.title}</h3>
+                            <p className="text-sm leading-relaxed text-ink-muted">{data.theyWin.body}</p>
+                        </div>
+                        <div className="flex flex-col gap-3 bg-canvas p-8">
+                            <span className="font-mono text-xs tracking-wider text-ink-faint uppercase">Where Lunora differs</span>
+                            <h3 className="text-xl font-semibold text-ink">{data.lunoraDiffers.title}</h3>
+                            <p className="text-sm leading-relaxed text-ink-muted">{data.lunoraDiffers.body}</p>
+                        </div>
+                    </div>
+                </div>
+            </section>
+
+            <HatchSpacer />
+
+            {/* FAQ */}
+            <section className="relative bg-canvas py-16" data-nav-theme="dark">
+                <div className="mx-auto flex max-w-4xl flex-col gap-6 px-5">
+                    <h2 className="text-2xl font-semibold tracking-tight text-ink">Frequently asked questions</h2>
+                    <dl className="flex flex-col divide-y divide-hairline">
+                        {data.faqs.map((faq) => (
+                            <div className="flex flex-col gap-2 py-5 first:pt-0" key={faq.q}>
+                                <dt className="text-base font-semibold text-ink">
+                                    <h3>{faq.q}</h3>
+                                </dt>
+                                <dd className="max-w-[72ch] text-sm leading-relaxed text-ink-muted">{faq.a}</dd>
+                            </div>
+                        ))}
+                    </dl>
+                </div>
+            </section>
+
+            <HatchSpacer />
+
+            {/* CTA + other comparisons */}
+            <section className="relative overflow-hidden bg-canvas" data-nav-theme="dark">
+                <div
+                    aria-hidden="true"
+                    className="pointer-events-none absolute inset-x-0 bottom-0 -z-0 h-64 opacity-50"
+                    style={{ background: "radial-gradient(60% 100% at 50% 120%, hsl(256 72% 68% / 0.22), transparent 70%)" }}
+                />
+                <div className="relative z-10 mx-auto flex max-w-4xl flex-col items-center gap-6 px-5 py-20 text-center">
+                    <h2 className="text-3xl font-semibold tracking-tight text-ink sm:text-4xl">Try Lunora on your own Cloudflare.</h2>
+                    <p className="max-w-lg text-ink-muted">
+                        Lunora is alpha and open source. Try it on a side project and tell us where it breaks. Prefer managed? Join the Lunora Cloud waitlist.
+                    </p>
+                    <div className="flex flex-wrap items-center justify-center gap-2.5">
+                        <Pill primary to="/docs">
+                            Start building
+                            <ArrowRight className="size-4" />
+                        </Pill>
+                        <Pill to="/cloud">Lunora Cloud waitlist</Pill>
+                    </div>
+                    {others.length > 0 ? (
+                        <p className="mt-2 text-sm text-ink-faint">
+                            Compare with{" "}
+                            {others.map((other, index) => (
+                                <span key={other.slug}>
+                                    {index > 0 ? " · " : ""}
+                                    <Link className="text-ink-muted underline decoration-white/20 underline-offset-2 hover:text-ink" to={`/vs/${other.slug}`}>
+                                        {other.name}
+                                    </Link>
+                                </span>
+                            ))}
+                        </p>
+                    ) : null}
+                </div>
+            </section>
+        </div>
+    );
+};
+
+export type { Cell, CompareRow, CompareSlug, Comparison, Faq, Tone, Verdict };

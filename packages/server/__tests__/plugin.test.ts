@@ -275,7 +275,9 @@ describe("defineSchema(...).extend(...)", () => {
             }),
         });
 
-        const schema = defineSchema({ todos: defineTable({ title: v.string() }) }).extend(ratelimit.extension!);
+        const schema = defineSchema({ todos: defineTable({ title: v.string() }) }).extend(ratelimit.extension);
+
+        expectTypeOf<keyof typeof schema.tables>().toEqualTypeOf<"ratelimit_buckets" | "todos">();
 
         expect(Object.keys(schema.tables).toSorted((a, b) => a.localeCompare(b))).toEqual(["ratelimit_buckets", "todos"]);
     });
@@ -293,6 +295,18 @@ describe("defineSchema(...).extend(...)", () => {
         expect(Object.keys(schema.tables).toSorted((left, right) => left.localeCompare(right))).toEqual(["a_one", "b_two", "base"]);
     });
 
+    it("keeps the extension key literal, so .extend() adds exactly <key>_<table> to the table names (#1021)", () => {
+        expect.assertions(1);
+
+        const extension = defineSchemaExtension("billing", { tables: { invoices: defineTable({ total: v.number() }) } });
+        const schema = defineSchema({ todos: defineTable({ title: v.string() }) }).extend(extension);
+
+        expectTypeOf(extension.key).toEqualTypeOf<"billing">();
+        expectTypeOf<keyof typeof schema.tables>().toEqualTypeOf<"billing_invoices" | "todos">();
+
+        expect(Object.keys(schema.tables)).toContain("billing_invoices");
+    });
+
     it("two extensions with the same key + table collide under the shared prefix", () => {
         expect.assertions(1);
 
@@ -306,6 +320,33 @@ describe("defineSchema(...).extend(...)", () => {
         const intermediate = defineSchema({ ok: defineTable({ x: v.string() }) }).extend(conflicting);
 
         expect(() => intermediate.extend(second)).toThrow(/extend\("dupes"\): table "dupes_same" already exists/);
+    });
+
+    // Plan 258 §5 S3: `defineSchema` only validates the tables it was called
+    // with — an extension's tables never passed through it, so without
+    // re-running `validateIndexFields` on the merged set, a bad
+    // extension-contributed index was never checked at all (it only failed
+    // later, at migration time, as an opaque SQLite error).
+    it("re-validates the merged schema, throwing for an extension-contributed index naming a column absent from its table's shape", () => {
+        expect.assertions(1);
+
+        const broken = defineSchemaExtension("broken", {
+            tables: { widgets: defineTable({ title: v.string() }).index("by_owner", ["ownerId" as never]) },
+        });
+
+        expect(() => defineSchema({ todos: defineTable({ title: v.string() }) }).extend(broken)).toThrow(
+            /table "broken_widgets" index "by_owner" names column "ownerId" which is not in the table's shape/,
+        );
+    });
+
+    it("still accepts a well-formed extension index (no false positive from the re-validation)", () => {
+        expect.assertions(1);
+
+        const ok = defineSchemaExtension("ok", {
+            tables: { widgets: defineTable({ ownerId: v.string(), title: v.string() }).index("by_owner", ["ownerId"]) },
+        });
+
+        expect(() => defineSchema({ todos: defineTable({ title: v.string() }) }).extend(ok)).not.toThrow();
     });
 });
 
@@ -413,6 +454,23 @@ describe("installPlugins", () => {
         // Same collision policy as `.extend(...)`: a duplicate prefixed table throws.
         expect(() => installPlugins(schema, [ratelimit])).toThrow(/table "ratelimit_buckets" already exists/);
     });
+
+    // Plan 258 §5 S3: `installPlugins` shares `mergeSchemaExtension` with
+    // `.extend(...)`, so it gets the same re-validation for free — a plugin's
+    // bad index is caught here too, not just on the `.extend(...)` chain.
+    it("re-validates a plugin's contributed index too, throwing for a column absent from the plugin table's shape", () => {
+        expect.assertions(1);
+
+        const broken = definePlugin("broken", {
+            extension: defineSchemaExtension("broken", {
+                tables: { widgets: defineTable({ title: v.string() }).index("by_owner", ["ownerId" as never]) },
+            }),
+        });
+
+        expect(() => installPlugins(defineSchema({ todos: defineTable({ title: v.string() }) }), [broken])).toThrow(
+            /table "broken_widgets" index "by_owner" names column "ownerId" which is not in the table's shape/,
+        );
+    });
 });
 
 describe("composePluginMiddleware", () => {
@@ -490,12 +548,15 @@ describe("composePluginMiddleware", () => {
         await expect(procedure.handler({}, {})).rejects.toThrow(/next\(\) called multiple times/u);
     });
 
-    it("short-circuits later plugins when one returns without calling next()", async () => {
-        expect.assertions(1);
+    it("rejects a plugin that returns without calling next() instead of silently skipping the rest", async () => {
+        expect.assertions(2);
 
-        // `stop` returns its context without calling next() — the composed chain
-        // must not advance to `after`, matching how a `.use()` link that never
-        // calls next() halts the chain.
+        // `stop` returns its context without calling next(). That is NOT a
+        // short-circuit: the chain's terminal is what builds the handler's
+        // context, so letting it through ran the handler with `after` — and, in a
+        // real chain, `rls()`/`mask()` — never applied, while the hoisted `fn.rls`
+        // still advertised the procedure as guarded. It must be a loud error, the
+        // same class as the double-next() tripwire above.
         const ran: string[] = [];
         const stop = definePlugin("stop", {
             middleware: ({ ctx }) => {
@@ -515,7 +576,7 @@ describe("composePluginMiddleware", () => {
         const c = initLunora.dataModel<Record<string, never>>().create();
         const procedure = c.query.use(composePluginMiddleware([stop, after])).query(() => "ok");
 
-        await procedure.handler({}, {});
+        await expect(procedure.handler({}, {})).rejects.toThrow(/resolved without calling next\(\)/u);
 
         expect(ran).toEqual(["stop"]);
     });

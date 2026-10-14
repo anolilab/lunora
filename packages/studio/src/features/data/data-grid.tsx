@@ -2,6 +2,7 @@ import type { ReactElement, ReactNode } from "react";
 
 import { useT } from "../../i18n/i18n-context";
 import { formatCell } from "../../lib/internal";
+import { highlightSegments } from "./highlight-segments";
 
 /**
  * One grid cell's value, rendered Outerbase/Supabase-style: a `null`/`undefined`
@@ -9,12 +10,26 @@ import { formatCell } from "../../lib/internal";
  * string), everything else goes through {@link formatCell}. The raw text is set as
  * the cell `title` so a truncated value is recoverable on hover.
  */
-const CellValue = ({ value }: { readonly value: unknown }): ReactElement => {
+const CellValue = ({ highlight, value }: { readonly highlight?: string; readonly value: unknown }): ReactElement => {
     if (value === null || value === undefined) {
         return <span className="text-muted-foreground/50 italic">NULL</span>;
     }
 
-    return <span title={formatCell(value)}>{formatCell(value)}</span>;
+    const text = formatCell(value);
+
+    if (highlight === undefined || highlight === "") {
+        return <span title={text}>{text}</span>;
+    }
+
+    return (
+        <span title={text}>
+            {highlightSegments(text, highlight).map((segment) => (
+                <mark className={segment.match ? "rounded-sm bg-warning/40 text-foreground" : "bg-transparent text-inherit"} key={segment.offset}>
+                    {segment.text}
+                </mark>
+            ))}
+        </span>
+    );
 };
 
 /**
@@ -43,8 +58,10 @@ const TransposedTable = ({
                         {rows.map((_, index) => (
                             <th
                                 className="border-b border-border px-3 py-1.5 text-start font-mono text-[11px] tracking-wide uppercase tabular-nums text-muted-foreground"
-                                // eslint-disable-next-line react-x/no-array-index-key -- raw row has no stable id; position is the only key
+                                /* eslint-disable react-x/no-array-index-key -- raw row has no stable id; position is the only key */
+                                // react-doctor-disable-next-line react-doctor/no-array-index-as-key -- these rows are positional — the index IS the identity, because the underlying record carries no domain id (see the matching eslint-disable)
                                 key={index}
+                                /* eslint-enable react-x/no-array-index-key */
                             >
                                 {t("Row {n}", { n: index + 1 })}
                             </th>
@@ -58,8 +75,13 @@ const TransposedTable = ({
                                 {column}
                             </th>
                             {rows.map((row, index) => (
-                                // eslint-disable-next-line react-x/no-array-index-key -- raw row has no stable id; position is the only key
-                                <td className="max-w-md truncate border-b border-border px-3 py-1.5 font-mono" key={index}>
+                                <td
+                                    className="max-w-md truncate border-b border-border px-3 py-1.5 font-mono"
+                                    /* eslint-disable react-x/no-array-index-key -- raw row has no stable id; position is the only key */
+                                    // react-doctor-disable-next-line react-doctor/no-array-index-as-key -- raw row has no stable id; position is the only key
+                                    key={index}
+                                    /* eslint-enable react-x/no-array-index-key */
+                                >
                                     <CellValue value={row[column]} />
                                 </td>
                             ))}

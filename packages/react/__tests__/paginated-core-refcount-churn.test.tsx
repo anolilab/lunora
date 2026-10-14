@@ -84,6 +84,7 @@ const createCountingBackend = (initial: string[]) => {
         getAuthToken: vi.fn<() => string | null>(() => null),
         mutation: vi.fn<() => Promise<unknown>>(),
         onAuthTokenChange: vi.fn<() => Unsubscribe>(() => () => undefined),
+        onIdentityChange: vi.fn<() => Unsubscribe>(() => () => undefined),
         query,
         setAuthToken: vi.fn<(token: string | null) => void>(),
         subscribe,

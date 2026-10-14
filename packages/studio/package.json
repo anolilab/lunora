@@ -1,6 +1,6 @@
 {
     "name": "@lunora/studio",
-    "version": "0.0.0",
+    "version": "1.0.0-alpha.293",
     "description": "The Lunora Studio: a local admin UI for your schema, data, logs, and advisors",
     "keywords": [
         "admin-ui",
@@ -25,7 +25,7 @@
         "directory": "packages/studio"
     },
     "files": [
-        "dist",
+        "./dist",
         "src/theme.css",
         "README.md",
         "LICENSE.md",
@@ -33,21 +33,24 @@
     ],
     "type": "module",
     "sideEffects": false,
-    "module": "./dist/index.js",
+    "module": "./dist/index.mjs",
     "types": "./dist/index.d.ts",
     "exports": {
         ".": {
             "types": "./dist/index.d.ts",
-            "import": "./dist/index.js"
+            "import": "./dist/index.mjs"
         },
         "./mount": {
             "types": "./dist/mount.d.ts",
-            "import": "./dist/mount.js"
+            "import": "./dist/mount.mjs"
         },
         "./styles.css": "./dist/styles.css",
         "./standalone/studio.js": "./dist/standalone/studio.js",
         "./theme.css": "./src/theme.css",
         "./package.json": "./package.json"
+    },
+    "publishConfig": {
+        "access": "public"
     },
     "scripts": {
         "dev": "pnpm --filter @lunora/studio-app dev",
@@ -56,13 +59,17 @@
         "build:css": "pnpm exec tailwindcss --input ./src/styles.css --output ./dist/styles.css --minify",
         "build:standalone": "node ./scripts/build-standalone.mjs",
         "build:prod": "pnpm exec packem build --production && pnpm run build:css && pnpm run build:standalone",
-        "lint:eslint": "eslint .",
+        "lint:eslint": "eslint . --max-warnings=0",
         "lint:eslint:fix": "eslint . --fix",
-        "lint:prettier": "prettier --check .",
-        "lint:prettier:fix": "prettier --write .",
+        "lint:prettier": "prettier --check . --ignore-path ../../.prettierignore",
+        "lint:prettier:fix": "prettier --write . --ignore-path ../../.prettierignore",
         "lint:types": "tsc --noEmit",
         "test": "vitest run",
-        "test:coverage": "vitest run --coverage"
+        "test:coverage": "vitest run --project unit --coverage",
+        "test:unit": "vitest run --project unit",
+        "fallow:audit": "fallow audit",
+        "fallow:dead-code": "fallow dead-code",
+        "fallow:health": "fallow health --score"
     },
     "dependencies": {
         "@base-ui/react": "catalog:ui",
@@ -70,16 +77,19 @@
         "@hugeicons/react": "catalog:ui",
         "@lingui/core": "catalog:i18n",
         "@lingui/message-utils": "catalog:i18n",
-        "@lunora/advisor": "workspace:*",
-        "@lunora/analytics": "workspace:*",
-        "@lunora/client": "workspace:*",
-        "@lunora/react": "workspace:*",
+        "@lunora/advisor": "1.0.0-alpha.212",
+        "@lunora/bindings": "1.0.0-alpha.109",
+        "@lunora/client": "1.0.0-alpha.203",
+        "@lunora/errors": ">=1.0.0-alpha.51 <2.0.0-0",
+        "@lunora/react": "1.0.0-alpha.216",
+        "@tanstack/react-query": "catalog:frontend",
         "@tanstack/react-router": "catalog:frontend",
         "@tanstack/react-table": "catalog:frontend",
         "@tanstack/react-virtual": "catalog:frontend",
         "@xyflow/react": "catalog:frontend",
         "class-variance-authority": "catalog:ui",
         "clsx": "catalog:ui",
+        "diff": "catalog:frontend",
         "html-to-image": "catalog:frontend",
         "motion": "catalog:frontend",
         "recharts": "catalog:frontend",
@@ -88,7 +98,11 @@
     "devDependencies": {
         "@babel/core": "catalog:build",
         "@babel/preset-react": "catalog:build",
-        "@lunora/mail": "workspace:*",
+        "@lunora/mail": "1.0.0-alpha.106",
+        "@lunora/notify": "1.0.0-alpha.79",
+        "@lunora/platform": "1.0.0-alpha.62",
+        "@lunora/runtime": "1.0.0-alpha.196",
+        "@lunora/shard-engine": "1.0.0-alpha.125",
         "@tailwindcss/cli": "catalog:vite",
         "@testing-library/dom": "catalog:frontend",
         "@testing-library/react": "catalog:frontend",
@@ -99,6 +113,7 @@
         "@vitest/coverage-v8": "catalog:test",
         "babel-plugin-react-compiler": "catalog:build",
         "esbuild": "catalog:build",
+        "fallow": "catalog:lint",
         "jsdom": "catalog:frontend",
         "react": "catalog:frontend",
         "react-dom": "catalog:frontend",
@@ -109,6 +124,8 @@
         "vitest": "catalog:test"
     },
     "peerDependencies": {
+        "@lunora/mail": ">=1.0.0-alpha.53 <2.0.0-0",
+        "@lunora/runtime": ">=1.0.0-alpha.78 <2.0.0-0",
         "react": "^19.2.7",
         "react-dom": "^19.2.7"
     },

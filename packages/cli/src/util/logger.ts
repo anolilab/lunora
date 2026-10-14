@@ -3,14 +3,18 @@
  * us level-aware output, structured `success`/`warn`/`error` channels and
  * (importantly) the same Spinner / Reporter primitives we use elsewhere.
  *
- * Two reporters are wired: `PrettyReporter` for interactive terminals and
- * `JsonReporter` when `LUNORA_LOG_JSON=1` (CI / machine-readable mode).
+ * Two reporters are wired: `LunoraReporter` for normal runs (it paints the
+ * create-astro-style step badges of the `init` flow and renders the standard
+ * levels itself — log types without a badge print plain) and `JsonReporter` when
+ * `LUNORA_LOG_JSON=1` (CI / machine-readable mode).
  *
  * The public surface stays the same `Logger` shape the existing commands
- * already program against so we don't have to touch every command.
+ * already program against so we don't have to touch every command; the badged
+ * step output is reached through the separate `logStep` helper.
  */
+import type { StepBadgeName } from "@lunora/config";
+import { LunoraReporter, STEP_BADGE_NAMES } from "@lunora/config";
 import { JsonReporter } from "@visulima/pail/reporter/json";
-import { PrettyReporter } from "@visulima/pail/reporter/pretty";
 import { createPail } from "@visulima/pail/server";
 
 interface Logger {
@@ -50,18 +54,6 @@ interface PailReporter {
 
 type PailReporterConstructor = new () => PailReporter;
 
-const wantJson = (): boolean => {
-    const flag = process.env.LUNORA_LOG_JSON;
-
-    return flag === "1" || flag === "true";
-};
-
-const buildReporter = (): PailReporter => {
-    const Reporter: PailReporterConstructor = (wantJson() ? JsonReporter : PrettyReporter) as PailReporterConstructor;
-
-    return new Reporter();
-};
-
 /**
  * Lazily-constructed pail instance. Building it (plus its Pretty/Json reporter)
  * is deferred until the first `createLogger()` / `getPail()` call so that merely
@@ -70,19 +62,111 @@ const buildReporter = (): PailReporter => {
  */
 let sharedPail: PailLogger | undefined;
 
+/**
+ * Programmatically forced JSON mode (`lunora dev --json` / agent auto-detect),
+ * OR-ed with the `LUNORA_LOG_JSON` env flag. Module-level because the pail
+ * instance is a lazily-built singleton.
+ */
+let jsonForced = false;
+
+/**
+ * Logger every command logs through while set. Undefined in production, where
+ * {@link createLogger} builds the shared pail. `--format json` keeps it too:
+ * the override is off stdout already, so `loggerForFormat` has nothing to
+ * divert (see `isProcessStreamLogger`).
+ *
+ * Set by `runCli({ logger })` and by in-process command tests. Without it a
+ * command's output went to the real stdout/stderr no matter what the caller
+ * injected: it interleaved with the test reporter's own progress display, and
+ * no assertion could see it — which is why the `mcp` wiring tests could only
+ * check an exit code and documented the gap as if it were by design.
+ *
+ * Module-level for the same reason {@link sharedPail} is: the logger is
+ * resolved per call, deep inside command bodies and their helpers, with no
+ * argument path from the CLI entry down to each one.
+ */
+let commandLogger: Logger | undefined;
+
+/** Set (or, with `undefined`, clear) the {@link commandLogger} override. */
+const setCommandLogger = (logger: Logger | undefined): void => {
+    commandLogger = logger;
+};
+
+const wantJson = (): boolean => {
+    if (jsonForced) {
+        return true;
+    }
+
+    const flag = process.env.LUNORA_LOG_JSON;
+
+    return flag === "1" || flag === "true";
+};
+
+/** Instantiate a reporter class through the local {@link PailReporterConstructor} typing (see its packaging-bug note). */
+const constructReporter = (Reporter: unknown): PailReporter => new (Reporter as PailReporterConstructor)();
+
+const buildReporters = (): PailReporter[] => [constructReporter(wantJson() ? JsonReporter : LunoraReporter)];
+
+/**
+ * Switch every subsequent log line to machine-readable JSON (pail's
+ * `JsonReporter`), equivalent to `LUNORA_LOG_JSON=1`. Safe to call at any
+ * point: the shared pail is dropped so the next log call rebuilds it with the
+ * JSON reporter. Used by `lunora dev --json` and the AI-agent auto-detection.
+ */
+const forceJsonLogging = (): void => {
+    if (jsonForced) {
+        return;
+    }
+
+    jsonForced = true;
+    sharedPail = undefined;
+};
+
+/**
+ * Custom pail log types backing the `init` flow's step badges. Each becomes a
+ * `pail.<name>(message)` method; `LunoraReporter` paints them as badge boxes
+ * (off-TTY fallback) while the colors live in `@lunora/config`'s theme. The
+ * `informational` RFC5424 level keeps them on stdout and visible at the default
+ * verbosity (pail rejects the `"info"` shorthand).
+ */
+const STEP_LOG_TYPES = Object.fromEntries(STEP_BADGE_NAMES.map((name) => [name, { label: name, logLevel: "informational" }])) as Record<
+    StepBadgeName,
+    { label: string; logLevel: "informational" }
+>;
+
+/**
+ * Every logger this module built over the process's own streams.
+ *
+ * `loggerForFormat` swaps one of these for the stderr logger in `--format json`
+ * mode, because stdout must carry only the JSON document. A logger from
+ * anywhere else is the caller's own sink — already off stdout — so replacing it
+ * achieves nothing and discards their capture, which is what silently dropped
+ * an embedder's logger (`runDeployCommand({ format: "json", logger })`) and
+ * sent every json-mode command's transcript to the real stderr instead.
+ */
+const processStreamLoggers = new WeakSet<Logger>();
+
+/** True for the loggers {@link createLogger} / {@link createStderrLogger} built over the process streams. */
+const isProcessStreamLogger = (logger: Logger): boolean => processStreamLoggers.has(logger);
+
 const getPail = (): PailLogger => {
     sharedPail ??= createPail({
-        reporters: [buildReporter()],
+        reporters: buildReporters(),
         scope: ["lunora"],
         stderr: process.stderr,
         stdout: process.stdout,
+        types: STEP_LOG_TYPES,
     }) as PailLogger;
 
     return sharedPail;
 };
 
 const createLogger = (): Logger => {
-    return {
+    if (commandLogger !== undefined) {
+        return commandLogger;
+    }
+
+    const logger: Logger = {
         debug: (message) => {
             getPail().debug(message);
         },
@@ -99,6 +183,10 @@ const createLogger = (): Logger => {
             getPail().warn(message);
         },
     };
+
+    processStreamLoggers.add(logger);
+
+    return logger;
 };
 
 /**
@@ -113,7 +201,7 @@ const createStderrLogger = (): Logger => {
         process.stderr.write(`${tag} ${message}\n`);
     };
 
-    return {
+    const logger: Logger = {
         debug: (message) => {
             write("debug", message);
         },
@@ -130,6 +218,10 @@ const createStderrLogger = (): Logger => {
             write("warn ", message);
         },
     };
+
+    processStreamLoggers.add(logger);
+
+    return logger;
 };
 
 /**
@@ -147,5 +239,15 @@ const pail: PailLogger = new Proxy({} as PailLogger, {
     },
 });
 
+/**
+ * Emit a badged step line through the shared pail (the `init` flow's off-TTY
+ * fallback for the create-astro-style transcript). The `message` may contain
+ * newlines — `LunoraReporter` indents continuation lines under the badge so a
+ * dimmed answer sits below its question.
+ */
+const logStep = (type: StepBadgeName, message: string): void => {
+    (getPail() as unknown as Record<StepBadgeName, (message: string) => void>)[type](message);
+};
+
 export type { Logger };
-export { createLogger, createStderrLogger, getPail, pail };
+export { createLogger, createStderrLogger, forceJsonLogging, isProcessStreamLogger, logStep, pail, setCommandLogger };

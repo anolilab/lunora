@@ -13,19 +13,33 @@
  */
 import type { IncomingMessage, ServerResponse } from "node:http";
 
+import type { CodegenOptions } from "@lunora/codegen";
+
+import { headerValue } from "./transport-guard";
+
 /** Max request body the local-dev endpoints accept (1 MB) — guards dev against a runaway upload. */
 const MAX_BODY_BYTES = 1_000_000;
 
+/**
+ * The host's project configuration, forwarded verbatim to the handler. Separate
+ * from `projectRoot` (which every host has) because these two come from the
+ * host's own Lunora options.
+ */
+interface LocalEndpointContext {
+    /** API-spec mode the host runs codegen with, so a studio edit regenerates the same spec files. */
+    readonly apiSpec?: CodegenOptions["apiSpec"];
+    /** Override the lunora subdirectory name. Defaults to `"lunora"`. */
+    readonly schemaDirectory?: string;
+}
+
 /** A request adapted from a host transport, passed to a local-dev handler. */
-interface LocalEndpointRequest {
+interface LocalEndpointRequest extends LocalEndpointContext {
     /** Parsed JSON body of the request (`undefined` for `GET` / an empty body). */
     readonly body?: unknown;
     /** HTTP method. */
     readonly method: string;
     /** Project root containing the `lunora/` directory. */
     readonly projectRoot: string;
-    /** Override the lunora subdirectory name. Defaults to `"lunora"`. */
-    readonly schemaDirectory?: string;
 }
 
 /** A response a local-dev handler returns, serialised back as JSON with its status. */
@@ -65,13 +79,6 @@ const respondJson = (response: ServerResponse, status: number, body: unknown): v
     response.statusCode = status;
     response.setHeader("Content-Type", "application/json; charset=utf-8");
     response.end(JSON.stringify(body));
-};
-
-/** A single header value, lower-cased and trimmed; `undefined` when absent or array-valued. */
-const headerValue = (raw: string | string[] | undefined): string | undefined => {
-    const value = Array.isArray(raw) ? raw[0] : raw;
-
-    return typeof value === "string" ? value.trim().toLowerCase() : undefined;
 };
 
 /** Allowed `Sec-Fetch-Site` values — anything else is a cross-origin navigation. */
@@ -129,6 +136,14 @@ const originRejectionReason = (request: IncomingMessage): string | undefined => 
  * `text/plain`/`application/x-www-form-urlencoded` WITHOUT a preflight, but
  * cannot set `application/json` without one (which same-origin policy then
  * blocks). Combined with layer 1 this denies the browser-driven CSRF vector.
+ *
+ * Module-private on purpose: this runs inside {@link serveJsonHandler}, before
+ * a body is read or a handler runs, so every host that routes an endpoint
+ * through that adapter is gated without doing anything. The Vite host used to
+ * carry its own line-for-line copy and call it first — the exact drift pattern
+ * `./transport-guard` records (the two hosts diverged on a guard and the
+ * token-bearing document went to a relay). One implementation, no call sites
+ * to keep in step.
  */
 const csrfRejectionReason = (request: IncomingMessage): string | undefined => {
     const method = (request.method ?? "GET").toUpperCase();
@@ -159,8 +174,19 @@ const csrfRejectionReason = (request: IncomingMessage): string | undefined => {
  * schema); every other method has its body read + JSON-parsed first. The
  * handler's `{ status, body }` is serialised back as JSON. A malformed body is a
  * `400`; an unexpected throw (e.g. the body-size guard) is a `500`.
+ *
+ * `context` carries the host's own Lunora options through to the handler: its
+ * `schemaDirectory` (so a custom `schemaDir` targets the right directory instead
+ * of defaulting to `"lunora"`) and its `apiSpec`, so a studio edit regenerates
+ * with the same options the host's own codegen run uses.
  */
-const serveJsonHandler = (request: IncomingMessage, response: ServerResponse, handle: LocalEndpointHandler, projectRoot: string): void => {
+const serveJsonHandler = (
+    request: IncomingMessage,
+    response: ServerResponse,
+    handle: LocalEndpointHandler,
+    projectRoot: string,
+    context: LocalEndpointContext = {},
+): void => {
     const run = async (): Promise<void> => {
         try {
             // CSRF / cross-origin defense BEFORE the body is read or the handler
@@ -184,7 +210,7 @@ const serveJsonHandler = (request: IncomingMessage, response: ServerResponse, ha
                 return;
             }
 
-            const result = handle({ body: parsed, method: request.method ?? "POST", projectRoot });
+            const result = handle({ ...context, body: parsed, method: request.method ?? "POST", projectRoot });
 
             respondJson(response, result.status, result.body);
         } catch (error: unknown) {
@@ -198,5 +224,5 @@ const serveJsonHandler = (request: IncomingMessage, response: ServerResponse, ha
     });
 };
 
-export type { LocalEndpointHandler, LocalEndpointRequest, LocalEndpointResponse };
+export type { LocalEndpointContext, LocalEndpointHandler, LocalEndpointRequest, LocalEndpointResponse };
 export { serveJsonHandler };

@@ -1,3 +1,5 @@
+import { LunoraError } from "@lunora/errors";
+
 import type { Mailer, SendOptions } from "./types";
 
 /** Serializable representation of a `SendOptions` payload — drops the `react` field. */
@@ -7,6 +9,13 @@ export interface QueuedSend {
     from?: string;
     headers?: Record<string, string>;
     html?: string;
+
+    /**
+     * Stable dedup key, minted at enqueue time by `createMailer(...).queue()` — see
+     * `SendOptions.idempotencyKey`. Carried through untouched by `consumeQueuedSend`;
+     * a consumer wanting exactly-once delivery dedupes against its own store using it.
+     */
+    idempotencyKey?: string;
     replyTo?: string;
     subject: string;
     text?: string;
@@ -19,17 +28,11 @@ export interface QueuedSend {
  * the queue body must carry only the pre-rendered html/text and scalar fields.
  */
 export const toQueuedPayload = (options: SendOptions): QueuedSend => {
-    return {
-        bcc: options.bcc,
-        cc: options.cc,
-        from: options.from,
-        headers: options.headers,
-        html: options.html,
-        replyTo: options.replyTo,
-        subject: options.subject,
-        text: options.text,
-        to: options.to,
-    };
+    const queued = { ...options };
+
+    delete queued.react;
+
+    return queued;
 };
 
 /**
@@ -37,12 +40,35 @@ export const toQueuedPayload = (options: SendOptions): QueuedSend => {
  * to a configured `Mailer.send()`. Use this inside your Worker's `queue()`
  * handler.
  *
+ * DEDUPE IS THE CONSUMER'S JOB, and this helper does not do it. The payload's
+ * `idempotencyKey` was minted once at enqueue time so it survives redelivery, but
+ * nothing downstream reads it: no transport forwards it to the provider (Resend
+ * dedupes on an `Idempotency-Key` REQUEST header, which the provider client offers
+ * no hook for — its `headers` field becomes message headers in the body). A
+ * consumer that only acks is correct for the failure the ack covers and sends a
+ * duplicate for the one it does not: the provider accepted the message and the
+ * worker died before acking.
+ *
+ * The recipe below NARROWS that window; it does not close it, and nothing on
+ * this path can. The mark is written after the provider accepted the message, so
+ * a crash in between still redelivers and resends, and a KV read is eventually
+ * consistent — a redelivery seconds later can miss a mark that was written.
+ * Delivery is at-least-once end to end. An app that must not double-send needs a
+ * strongly-consistent mark taken BEFORE the send (a Durable Object or D1 row
+ * claimed by this key, released on failure), and even then the send-then-crash
+ * window is only ever traded for a send-that-may-not-have-happened one.
+ *
  * ```ts
  * export default {
  *   queue: async (batch, env) => {
- *     const mailer = createMailer({ apiKey: env.RESEND_API_KEY, from: "..." });
+ *     // createMailerFromEnv, so dev captures the message here instead of sending it.
+ *     const mailer = createMailerFromEnv(env);
  *     for (const message of batch.messages) {
+ *       const { idempotencyKey } = message.body;
+ *       if (await env.SENT.get(idempotencyKey)) { message.ack(); continue; }
  *       await consumeQueuedSend(mailer, message.body);
+ *       await env.SENT.put(idempotencyKey, "1", { expirationTtl: 86_400 });
+ *       message.ack();
  *     }
  *   },
  * };
@@ -50,7 +76,7 @@ export const toQueuedPayload = (options: SendOptions): QueuedSend => {
  */
 export const consumeQueuedSend = async (mailer: Mailer, payload: unknown): Promise<{ id: string }> => {
     if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
-        throw new Error("@lunora/mail: queue message body must be an object");
+        throw new LunoraError("INTERNAL", "@lunora/mail: queue message body must be an object");
     }
 
     const candidate = payload as Record<string, unknown>;
@@ -67,7 +93,7 @@ export const consumeQueuedSend = async (mailer: Mailer, payload: unknown): Promi
     const recipientIsStringArray = Array.isArray(candidate.to) && candidate.to.every((value) => typeof value === "string");
 
     if (!recipientIsString && !recipientIsStringArray) {
-        throw new Error("@lunora/mail: queue message `to` must be a string or string[]");
+        throw new LunoraError("INTERNAL", "@lunora/mail: queue message `to` must be a string or string[]");
     }
 
     const assertOptionalString = (field: string, value: unknown): string | undefined => {
@@ -129,6 +155,7 @@ export const consumeQueuedSend = async (mailer: Mailer, payload: unknown): Promi
         from: assertOptionalString("from", candidate.from),
         headers,
         html: assertOptionalString("html", candidate.html),
+        idempotencyKey: assertOptionalString("idempotencyKey", candidate.idempotencyKey),
         replyTo: assertOptionalString("replyTo", candidate.replyTo),
         subject: candidate.subject,
         text: assertOptionalString("text", candidate.text),
@@ -137,5 +164,3 @@ export const consumeQueuedSend = async (mailer: Mailer, payload: unknown): Promi
 
     return mailer.send(options);
 };
-
-export { type QueueLike } from "./types";

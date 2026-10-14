@@ -1,11 +1,16 @@
 import type { FunctionReference } from "@lunora/client";
+import { LunoraClient } from "@lunora/client";
+import { onlineManager } from "@tanstack/react-query";
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import type { ReactElement } from "react";
 import { describe, expect, it, vi } from "vitest";
 
 import { LunoraProvider } from "../src/lunora-provider";
 import { useMutation } from "../src/use-mutation";
+import useQuery from "../src/use-query";
 import { createMockClient } from "./mock-client";
+import type { MockSocket } from "./mock-socket";
+import { createMockWebSocket } from "./mock-socket";
 
 const makeRef = (ref: string): FunctionReference => {
     return { __lunoraRef: ref };
@@ -198,5 +203,158 @@ describe("useMutation", () => {
         await waitFor(() => {
             expect(mock.mutation).toHaveBeenCalledWith(expect.objectContaining({ __lunoraRef: "counter:inc" }), {}, { optimisticUpdate: perCall });
         });
+    });
+
+    it("reaches client.mutation while offline, so the write queues and its optimistic update paints", async () => {
+        expect.assertions(3);
+
+        const sockets: MockSocket[] = [];
+        const counter = makeRef("counter:get");
+        const client = new LunoraClient({
+            fetch: vi.fn<typeof fetch>(async () => {
+                throw new TypeError("Failed to fetch");
+            }),
+            url: "https://app.example",
+            WebSocket: createMockWebSocket(sockets),
+        });
+        const spy = vi.spyOn(client, "mutation");
+
+        const Counter = (): ReactElement => {
+            const value = useQuery(counter, {}) as { count: number } | undefined;
+            const { mutate } = useMutation(makeRef("counter:inc"));
+
+            return (
+                <button
+                    data-testid="count"
+                    // eslint-disable-next-line react-perf/jsx-no-new-function-as-prop -- test-only click handler; stable identity is irrelevant for a single fireEvent.
+                    onClick={() => {
+                        mutate(
+                            {},
+                            {
+                                optimisticUpdate: (store) => {
+                                    store.setQuery(counter, {}, { count: 1 });
+                                },
+                            },
+                        ).catch(() => undefined);
+                    }}
+                    type="button"
+                >
+                    {value === undefined ? "-" : String(value.count)}
+                </button>
+            );
+        };
+
+        render(
+            <LunoraProvider client={client}>
+                <Counter />
+            </LunoraProvider>,
+        );
+
+        // Connected once, so an offline write is eligible for the queue.
+        await act(async () => {
+            sockets.at(-1)?.open();
+            await Promise.resolve();
+        });
+
+        const subscribe = sockets.at(-1)?.sent.find((frame) => frame.type === "subscribe");
+
+        await act(async () => {
+            sockets.at(-1)?.receive({ cursor: 1, data: { count: 0 }, id: subscribe?.id, type: "data" });
+            await Promise.resolve();
+        });
+
+        try {
+            await act(async () => {
+                sockets.at(-1)?.drop();
+                onlineManager.setOnline(false);
+                await Promise.resolve();
+            });
+
+            fireEvent.click(screen.getByTestId("count"));
+
+            await act(async () => {
+                await new Promise((resolve) => {
+                    setTimeout(resolve, 20);
+                });
+            });
+
+            expect(spy).toHaveBeenCalledTimes(1);
+            expect(client.pendingCount()).toBe(1);
+            expect(screen.getByTestId("count").textContent).toBe("1");
+        } finally {
+            onlineManager.setOnline(true);
+            client.close();
+        }
+    });
+
+    it("holds a write made offline before the client ever connected, then sends it once online", async () => {
+        expect.assertions(3);
+
+        const sockets: MockSocket[] = [];
+        const fetchMock = vi.fn<typeof fetch>(async () => Response.json({ result: "sent" }));
+        const client = new LunoraClient({ fetch: fetchMock, url: "https://app.example", WebSocket: createMockWebSocket(sockets) });
+        let outcome = "pending";
+
+        const Writer = (): ReactElement => {
+            const { mutate } = useMutation(makeRef("posts:create"));
+
+            return (
+                <button
+                    data-testid="write"
+                    // eslint-disable-next-line react-perf/jsx-no-new-function-as-prop -- test-only click handler; stable identity is irrelevant for a single fireEvent.
+                    onClick={() => {
+                        mutate({ title: "cold" })
+                            .then((value) => {
+                                outcome = `resolved:${String(value)}`;
+
+                                return undefined;
+                            })
+                            .catch((error: unknown) => {
+                                outcome = `rejected:${String(error)}`;
+                            });
+                    }}
+                    type="button"
+                >
+                    write
+                </button>
+            );
+        };
+
+        render(
+            <LunoraProvider client={client}>
+                <Writer />
+            </LunoraProvider>,
+        );
+
+        try {
+            await act(async () => {
+                onlineManager.setOnline(false);
+                await Promise.resolve();
+            });
+
+            // No socket has ever opened, so the client cannot queue this write.
+            fireEvent.click(screen.getByTestId("write"));
+
+            await act(async () => {
+                await new Promise((resolve) => {
+                    setTimeout(resolve, 20);
+                });
+            });
+
+            expect(fetchMock).toHaveBeenCalledTimes(0);
+
+            await act(async () => {
+                onlineManager.setOnline(true);
+                await new Promise((resolve) => {
+                    setTimeout(resolve, 20);
+                });
+            });
+
+            expect(fetchMock).toHaveBeenCalledTimes(1);
+            expect(outcome).toBe("resolved:sent");
+        } finally {
+            onlineManager.setOnline(true);
+            client.close();
+        }
     });
 });

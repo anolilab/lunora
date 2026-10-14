@@ -1,132 +1,95 @@
 import type { ReactElement } from "react";
-import { useState } from "react";
+import { useRef, useState } from "react";
 
-import SqlResultChart from "../../components/result-chart";
 import { Alert } from "../../components/ui/alert";
 import { Button } from "../../components/ui/button";
-import { Card, CardContent, CardHeader, CardTitle } from "../../components/ui/card";
+import { Card, CardContent } from "../../components/ui/card";
 import { EmptyState } from "../../components/ui/empty-state";
 import { useT } from "../../i18n/i18n-context";
+import type { AssistantChartConfig, SqlConsoleResult } from "../../lib/admin";
 import { newId, usePersistedList } from "../../lib/browser-storage";
-import { useRunSql } from "../sql/hooks/use-run-sql";
+import { fireAndForget } from "../../lib/internal";
+import { useSqlAssistant } from "../sql/hooks/use-sql-assistant";
+import type { ChartKind, Widget, WidgetKind } from "./dashboard-widgets";
+import { DashboardWidgetCard, widgetKind } from "./dashboard-widgets";
 
 interface DashboardsPanelProps {
     /** Shard key new widgets default to. Defaults to the root shard. */
     readonly initialShardKey?: string;
 }
 
-/** One browser-persisted chart widget on the dashboard. */
-interface Widget {
-    readonly id: string;
-    /** Optional shard key the widget's query runs against; empty/absent → root shard. */
-    readonly shardKey?: string;
-    readonly sql: string;
-    readonly title: string;
-}
+/** The picker's options, in the order they are offered. */
+const CHART_KINDS: ReadonlyArray<ChartKind> = ["bar", "line", "area"];
+
+/** The tile kinds, in the order they are offered. */
+const WIDGET_KINDS: ReadonlyArray<WidgetKind> = ["chart", "kpi", "table", "text"];
 
 /** Draft state for the add/edit form. */
 interface WidgetDraft {
+    readonly chartKind: ChartKind;
+    readonly kind: WidgetKind;
     readonly shardKey: string;
     readonly sql: string;
+    readonly text: string;
     readonly title: string;
 }
 
 const STORAGE_KEY = "lunora-studio-dashboards";
-const EMPTY_DRAFT: WidgetDraft = { shardKey: "", sql: "", title: "" };
-
-interface WidgetCardProps {
-    readonly onEdit: (id: string) => void;
-    readonly onRemove: (id: string) => void;
-    readonly widget: Widget;
-}
+const EMPTY_DRAFT: WidgetDraft = { chartKind: "bar", kind: "chart", shardKey: "", sql: "", text: "", title: "" };
 
 /**
- * One dashboard tile: a titled card that runs its saved SQL on mount (and when
- * the SQL/shard changes) via the read-only `runSql` admin RPC and charts the
- * result with {@link SqlResultChart}. A failed query renders its message inline
- * rather than throwing, so one broken widget never blanks the grid.
+ * Write an accepted suggestion onto one widget: both the columns the assistant
+ * found and, as the operator's own choice, the shape it picked.
+ *
+ * A module-level updater rather than an inline closure so the handler that uses
+ * it stays inside the nesting limit.
  */
-const WidgetCard = ({ onEdit, onRemove, widget }: WidgetCardProps): ReactElement => {
-    const t = useT();
+const applyInference =
+    (id: string, inferred: AssistantChartConfig) =>
+    (current: Widget[]): Widget[] =>
+        current.map((widget) => (widget.id === id ? { ...widget, chartAxes: inferred, chartKind: inferred.kind } : widget));
 
-    // The shared run/cancel hook owns the query lifecycle; the card is otherwise
-    // purely presentational. It re-runs whenever the widget's SQL or shard changes.
-    const { error, loading, result } = useRunSql(widget.sql, widget.shardKey ?? "");
+/**
+ * Move `from` to sit where `to` currently is.
+ *
+ * A module-level updater for the same reason as {@link applyInference}. An id
+ * that is no longer in the list (a widget removed mid-drag) leaves the order
+ * untouched rather than appending it back.
+ */
+const moveWidget =
+    (from: string, to: string) =>
+    (current: Widget[]): Widget[] => {
+        const moved = current.find((widget) => widget.id === from);
+        const rest = current.filter((widget) => widget.id !== from);
+        const at = rest.findIndex((widget) => widget.id === to);
 
-    const onEditClick = (): void => {
-        onEdit(widget.id);
+        if (moved === undefined || at === -1) {
+            return current;
+        }
+
+        return [...rest.slice(0, at), moved, ...rest.slice(at)];
     };
 
-    const onRemoveClick = (): void => {
-        onRemove(widget.id);
-    };
+/** The chart picker's label for one kind. Explicit, so the `t(...)` ids stay statically known. */
+const kindLabel = (kind: ChartKind, t: ReturnType<typeof useT>): string => {
+    if (kind === "line") {
+        return t("Line");
+    }
 
-    return (
-        <Card data-testid={`dashboards-widget-${widget.id}`}>
-            <CardHeader className="flex flex-row items-start justify-between gap-2 border-b pb-3">
-                <CardTitle className="min-w-0 truncate" title={widget.title}>
-                    {widget.title}
-                </CardTitle>
-                <div className="flex shrink-0 items-center gap-1">
-                    <Button
-                        aria-label={t("Edit widget")}
-                        data-testid={`dashboards-widget-edit-${widget.id}`}
-                        onClick={onEditClick}
-                        size="icon-xs"
-                        title={t("Edit widget")}
-                        type="button"
-                        variant="ghost"
-                    >
-                        <svg
-                            aria-hidden="true"
-                            fill="none"
-                            stroke="currentColor"
-                            strokeLinecap="round"
-                            strokeLinejoin="round"
-                            strokeWidth={1.6}
-                            viewBox="0 0 24 24"
-                        >
-                            <path d="M4 20h4L18 10l-4-4L4 16v4ZM14 6l4 4" />
-                        </svg>
-                    </Button>
-                    <Button
-                        aria-label={t("Remove widget")}
-                        data-testid={`dashboards-widget-remove-${widget.id}`}
-                        onClick={onRemoveClick}
-                        size="icon-xs"
-                        title={t("Remove widget")}
-                        type="button"
-                        variant="ghost"
-                    >
-                        <svg
-                            aria-hidden="true"
-                            fill="none"
-                            stroke="currentColor"
-                            strokeLinecap="round"
-                            strokeLinejoin="round"
-                            strokeWidth={1.6}
-                            viewBox="0 0 24 24"
-                        >
-                            <path d="M5 7h14M9 7V5h6v2m-1 0v12H10V7M7 7v13h10V7" />
-                        </svg>
-                    </Button>
-                </div>
-            </CardHeader>
-            <CardContent className="min-h-32 py-2">
-                {error !== undefined && (
-                    <Alert className="font-mono text-xs" testId={`dashboards-widget-error-${widget.id}`} variant="destructive">
-                        {error}
-                    </Alert>
-                )}
-                {error === undefined && loading && result === undefined && (
-                    <p className="p-4 text-sm text-muted-foreground" data-testid={`dashboards-widget-loading-${widget.id}`}>
-                        {t("Running…")}
-                    </p>
-                )}
-                {error === undefined && result !== undefined && <SqlResultChart result={result} />}
-            </CardContent>
-        </Card>
-    );
+    return kind === "area" ? t("Area") : t("Bar");
+};
+
+/** The tile picker's label for one kind. Explicit for the same reason as {@link kindLabel}. */
+const widgetKindLabel = (kind: WidgetKind, t: ReturnType<typeof useT>): string => {
+    if (kind === "kpi") {
+        return t("Single value");
+    }
+
+    if (kind === "table") {
+        return t("Table");
+    }
+
+    return kind === "text" ? t("Text") : t("Chart");
 };
 
 interface WidgetFormProps {
@@ -137,7 +100,11 @@ interface WidgetFormProps {
     readonly onSubmit: () => void;
 }
 
-/** The add/edit form: a title, a SQL textarea, and an optional shard key. */
+/**
+ * The add/edit form. The tile kind comes first because it decides what the rest
+ * of the form even is: a `text` tile has a body and no query, and only a `chart`
+ * tile has a shape to pick.
+ */
 const WidgetForm = ({ draft, editing, onCancel, onChange, onSubmit }: WidgetFormProps): ReactElement => {
     const t = useT();
 
@@ -147,14 +114,26 @@ const WidgetForm = ({ draft, editing, onCancel, onChange, onSubmit }: WidgetForm
     const onSqlChange = (event: React.ChangeEvent<HTMLTextAreaElement>): void => {
         onChange({ ...draft, sql: event.target.value });
     };
+    const onTextChange = (event: React.ChangeEvent<HTMLTextAreaElement>): void => {
+        onChange({ ...draft, text: event.target.value });
+    };
     const onShardChange = (event: React.ChangeEvent<HTMLInputElement>): void => {
         onChange({ ...draft, shardKey: event.target.value });
+    };
+    const onKindChange = (event: React.ChangeEvent<HTMLSelectElement>): void => {
+        onChange({ ...draft, chartKind: event.target.value as ChartKind });
+    };
+    const onWidgetKindChange = (event: React.ChangeEvent<HTMLSelectElement>): void => {
+        onChange({ ...draft, kind: event.target.value as WidgetKind });
     };
     const onSubmitClick = (): void => {
         onSubmit();
     };
 
-    const canSave = draft.title.trim() !== "" && draft.sql.trim() !== "";
+    const isText = draft.kind === "text";
+    // A text tile is saveable on its body; every other kind needs a query. Both
+    // need a title, which is the only thing the grid renders before the tile runs.
+    const canSave = draft.title.trim() !== "" && (isText ? draft.text.trim() !== "" : draft.sql.trim() !== "");
 
     return (
         <Card data-testid="dashboards-form">
@@ -168,24 +147,65 @@ const WidgetForm = ({ draft, editing, onCancel, onChange, onSubmit }: WidgetForm
                     type="text"
                     value={draft.title}
                 />
-                <textarea
-                    aria-label={t("SQL query")}
-                    className="min-h-24 resize-y rounded-md border border-border bg-background p-2 font-mono text-xs leading-5 outline-none focus-visible:border-ring"
-                    data-testid="dashboards-form-sql"
-                    onChange={onSqlChange}
-                    placeholder="SELECT author, COUNT(*) AS messages FROM …"
-                    spellCheck={false}
-                    value={draft.sql}
-                />
-                <input
-                    aria-label={t("Shard key (optional)")}
-                    className="h-8 rounded-md border border-border bg-background px-2 font-mono text-xs outline-none focus-visible:border-ring"
-                    data-testid="dashboards-form-shard"
-                    onChange={onShardChange}
-                    placeholder={t("Shard key (optional)")}
-                    type="text"
-                    value={draft.shardKey}
-                />
+                <select
+                    aria-label={t("Widget type")}
+                    className="h-8 rounded-md border border-border bg-background px-2 text-xs outline-none focus-visible:border-ring"
+                    data-testid="dashboards-form-widget-kind"
+                    onChange={onWidgetKindChange}
+                    value={draft.kind}
+                >
+                    {WIDGET_KINDS.map((kind) => (
+                        <option key={kind} value={kind}>
+                            {widgetKindLabel(kind, t)}
+                        </option>
+                    ))}
+                </select>
+                {isText ? (
+                    <textarea
+                        aria-label={t("Text")}
+                        className="min-h-24 resize-y rounded-md border border-border bg-background p-2 text-xs leading-5 outline-none focus-visible:border-ring"
+                        data-testid="dashboards-form-text"
+                        onChange={onTextChange}
+                        placeholder={t("Notes for whoever reads this dashboard.")}
+                        value={draft.text}
+                    />
+                ) : (
+                    <textarea
+                        aria-label={t("SQL query")}
+                        className="min-h-24 resize-y rounded-md border border-border bg-background p-2 font-mono text-xs leading-5 outline-none focus-visible:border-ring"
+                        data-testid="dashboards-form-sql"
+                        onChange={onSqlChange}
+                        placeholder="SELECT author, COUNT(*) AS messages FROM …"
+                        spellCheck={false}
+                        value={draft.sql}
+                    />
+                )}
+                {draft.kind === "chart" && (
+                    <select
+                        aria-label={t("Chart type")}
+                        className="h-8 rounded-md border border-border bg-background px-2 text-xs outline-none focus-visible:border-ring"
+                        data-testid="dashboards-form-kind"
+                        onChange={onKindChange}
+                        value={draft.chartKind}
+                    >
+                        {CHART_KINDS.map((kind) => (
+                            <option key={kind} value={kind}>
+                                {kindLabel(kind, t)}
+                            </option>
+                        ))}
+                    </select>
+                )}
+                {!isText && (
+                    <input
+                        aria-label={t("Shard key (optional)")}
+                        className="h-8 rounded-md border border-border bg-background px-2 font-mono text-xs outline-none focus-visible:border-ring"
+                        data-testid="dashboards-form-shard"
+                        onChange={onShardChange}
+                        placeholder={t("Shard key (optional)")}
+                        type="text"
+                        value={draft.shardKey}
+                    />
+                )}
                 <div className="flex items-center justify-end gap-2">
                     <Button data-testid="dashboards-form-cancel" onClick={onCancel} size="sm" type="button" variant="outline">
                         {t("Cancel")}
@@ -200,12 +220,12 @@ const WidgetForm = ({ draft, editing, onCancel, onChange, onSubmit }: WidgetForm
 };
 
 /**
- * The Dashboards panel: a single browser-persisted dashboard of chart widgets.
- * Each widget is a saved read-only SQL query, run through the `runSql` admin RPC
- * and charted with the studio's {@link SqlResultChart}. "Add widget" opens an
- * inline form (title + SQL + optional shard); each tile can be edited or removed.
- * The widget list persists to `localStorage`, mirroring the SQL editor's saved
- * queries, so a dashboard survives a reload without any server-side state.
+ * The Dashboards panel: a single browser-persisted dashboard of tiles — a chart,
+ * a single value, a result table, or a note. The first three are a saved
+ * read-only SQL query run through the `runSql` admin RPC; the note runs nothing.
+ * "Add widget" opens an inline form; each tile can be edited, removed, or dragged
+ * to reorder. The list persists to `localStorage`, mirroring the SQL editor's
+ * saved queries, so a dashboard survives a reload without any server-side state.
  */
 const DashboardsPanel = ({ initialShardKey }: DashboardsPanelProps): ReactElement => {
     const t = useT();
@@ -214,6 +234,15 @@ const DashboardsPanel = ({ initialShardKey }: DashboardsPanelProps): ReactElemen
     const [draft, setDraft] = useState<WidgetDraft>(EMPTY_DRAFT);
     const [editingId, setEditingId] = useState<null | string>(null);
     const [formOpen, setFormOpen] = useState<boolean>(false);
+    // One assistant for the whole dashboard, not one per card: the AI binding is
+    // a property of the deployment, so N cards would mean N identical
+    // availability subscriptions. The shard only decides where the call lands.
+    const assistant = useSqlAssistant(initialShardKey ?? "");
+    // Which card is waiting, tracked here rather than reading `assistant.pending`
+    // — that status is per TASK, so it would spin every card's button at once.
+    const [inferringId, setInferringId] = useState<null | string>(null);
+    // Carries the dragged tile's id from a card's dragstart to another card's drop.
+    const draggedWidget = useRef<null | string>(null);
 
     const openAdd = (): void => {
         setEditingId(null);
@@ -232,29 +261,115 @@ const DashboardsPanel = ({ initialShardKey }: DashboardsPanelProps): ReactElemen
 
         if (found !== undefined) {
             setEditingId(id);
-            setDraft({ shardKey: found.shardKey ?? "", sql: found.sql, title: found.title });
+            setDraft({
+                chartKind: found.chartKind ?? "bar",
+                kind: widgetKind(found),
+                shardKey: found.shardKey ?? "",
+                sql: found.sql,
+                text: found.text ?? "",
+                title: found.title,
+            });
             setFormOpen(true);
         }
+    };
+
+    /**
+     * Ask the assistant to read this widget's result SHAPE and write back both
+     * the columns it found and the shape it chose.
+     *
+     * It writes `chartKind` as well as `chartAxes` because accepting a
+     * suggestion IS a choice — the operator clicked the button. Storing only the
+     * axes would leave the shape at the mercy of the suggested series surviving
+     * `SqlResultChart`'s column gate, which is exactly the silent-fallback this
+     * workstream exists to remove.
+     */
+    const onSuggestChart = (id: string, result: SqlConsoleResult): void => {
+        setInferringId(id);
+
+        const apply = async (): Promise<void> => {
+            const inferred = await assistant.inferChart({ columns: result.columns, rowCount: result.rowCount });
+
+            if (inferred !== undefined) {
+                setWidgets(applyInference(id, inferred));
+            }
+        };
+
+        /*
+         * `.finally()` on the promise, not a `try`/`finally` STATEMENT: React
+         * Compiler cannot lower a `TryStatement` here and bails on the whole
+         * component, so one spinner reset would cost every other value in this
+         * panel its memoization.
+         *
+         * Nothing is caught because `inferChart` swallows its own failures and
+         * answers `undefined` for both an AI error and a degraded reply; the
+         * operator sees the cause through the `assistant.reason("chart")` alert
+         * below. `.finally()` still runs on a rejection, so the spinner clears
+         * either way.
+         */
+        fireAndForget(
+            apply().finally(() => {
+                setInferringId((current) => (current === id ? null : current));
+            }),
+        );
     };
 
     const onRemove = (id: string): void => {
         setWidgets((current) => current.filter((widget) => widget.id !== id));
     };
 
+    const onReorder = (from: string, to: string): void => {
+        setWidgets(moveWidget(from, to));
+    };
+
+    /**
+     * Move one widget one place, for the keyboard.
+     *
+     * An adjacent SWAP rather than `moveWidget`'s insert-before, because the two
+     * read differently under repetition: pressing "move down" twice should land a
+     * widget two places later, which insert-before does not do at the tail.
+     */
+    const onMove = (id: string, delta: -1 | 1): void => {
+        setWidgets((current) => {
+            const at = current.findIndex((widget) => widget.id === id);
+            const to = at + delta;
+
+            if (at === -1 || to < 0 || to >= current.length) {
+                return current;
+            }
+
+            const next = [...current];
+            const moved = next[at];
+            const displaced = next[to];
+
+            if (moved === undefined || displaced === undefined) {
+                return current;
+            }
+
+            next[at] = displaced;
+            next[to] = moved;
+
+            return next;
+        });
+    };
+
     const onSubmit = (): void => {
         const title = draft.title.trim();
         const sql = draft.sql.trim();
+        const text = draft.text.trim();
+        const { chartKind, kind } = draft;
 
-        if (title === "" || sql === "") {
+        // The same rule the form's Save button is disabled by, re-checked here:
+        // the button is a hint, this is the guard.
+        if (title === "" || (kind === "text" ? text === "" : sql === "")) {
             return;
         }
 
-        const shardKey = draft.shardKey.trim();
+        const saved = { chartKind, kind, shardKey: draft.shardKey.trim(), sql, text, title };
 
         if (editingId === null) {
-            setWidgets((current) => [...current, { id: newId("w"), shardKey, sql, title }]);
+            setWidgets((current) => [...current, { ...saved, id: newId("w") }]);
         } else {
-            setWidgets((current) => current.map((widget) => (widget.id === editingId ? { ...widget, shardKey, sql, title } : widget)));
+            setWidgets((current) => current.map((widget) => (widget.id === editingId ? { ...widget, ...saved } : widget)));
         }
 
         closeForm();
@@ -263,7 +378,7 @@ const DashboardsPanel = ({ initialShardKey }: DashboardsPanelProps): ReactElemen
     return (
         <div className="flex flex-col gap-4" data-testid="lunora-dashboards">
             <div className="flex items-center justify-between">
-                <p className="text-sm text-muted-foreground">{t("Chart widgets backed by saved read-only SQL queries.")}</p>
+                <p className="text-sm text-muted-foreground">{t("Charts, values, tables, and notes. Drag a tile to reorder.")}</p>
                 {!formOpen && (
                     <Button data-testid="dashboards-add" onClick={openAdd} size="sm" type="button">
                         {t("Add widget")}
@@ -271,14 +386,36 @@ const DashboardsPanel = ({ initialShardKey }: DashboardsPanelProps): ReactElemen
                 )}
             </div>
 
+            {assistant.reason("chart") !== undefined && (
+                <Alert className="text-xs" testId="dashboards-suggest-error" variant="destructive">
+                    {t("Could not suggest a chart for that result.")}
+                </Alert>
+            )}
+
             {formOpen && <WidgetForm draft={draft} editing={editingId !== null} onCancel={closeForm} onChange={setDraft} onSubmit={onSubmit} />}
 
             {widgets.length === 0 && !formOpen ? (
-                <EmptyState description={t("Add a widget to chart a saved SQL query on this browser.")} testId="dashboards-empty" title={t("No widgets yet")} />
+                <EmptyState
+                    description={t("Add a chart, a single value, a table, or a note. Everything is saved on this browser.")}
+                    testId="dashboards-empty"
+                    title={t("No widgets yet")}
+                />
             ) : (
                 <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3" data-testid="dashboards-grid">
-                    {widgets.map((widget) => (
-                        <WidgetCard key={widget.id} onEdit={onEdit} onRemove={onRemove} widget={widget} />
+                    {widgets.map((widget, index) => (
+                        <DashboardWidgetCard
+                            draggedRef={draggedWidget}
+                            first={index === 0}
+                            inferring={inferringId === widget.id}
+                            key={widget.id}
+                            last={index === widgets.length - 1}
+                            onEdit={onEdit}
+                            onMove={onMove}
+                            onRemove={onRemove}
+                            onReorder={onReorder}
+                            onSuggest={assistant.unavailable ? undefined : onSuggestChart}
+                            widget={widget}
+                        />
                     ))}
                 </div>
             )}

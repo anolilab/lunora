@@ -1,0 +1,330 @@
+---
+title: Monorepos and external IaC
+description: Running the Lunora worker as one node in a larger dev graph, deploying it from Terraform/Pulumi/Alchemy, and consuming its generated API from a sibling package.
+---
+
+`lunora dev` and `lunora deploy` default to owning the whole show, which is
+right for a standalone app and wrong for a repo that already has seven Workers
+and a task runner. Every piece is separable, and this page covers how.
+
+## Running as one node in a dev graph
+
+`lunora dev` normally starts three things: `wrangler dev`, the Studio server,
+and the codegen watcher. Each can be turned off independently, so an external
+supervisor (Turbo, Nx, `vis run dev`, a Procfile) can own the parts it already
+manages while Lunora keeps the parts only it can do.
+
+| Flag           | Turns off                                              |
+| -------------- | ------------------------------------------------------ |
+| `--no-worker`  | the `wrangler dev` spawn (your runner owns the worker) |
+| `--no-studio`  | the embedded Studio server                             |
+| `--no-codegen` | the codegen watcher                                    |
+
+On the Vite flavors the codegen watcher lives in `@lunora/vite`, inside the
+framework dev server — a separate process. `--no-codegen` reaches it as
+`LUNORA_CODEGEN=0`, which you can set yourself when you run that dev script
+directly instead of through `lunora dev`.
+
+The common monorepo shape is **attached mode**, where your runner starts the
+worker and Lunora keeps regenerating types and serving Studio:
+
+```jsonc
+// package.json — one node in the graph, alongside your other workers
+{
+    "scripts": {
+        "dev": "run-p dev:worker dev:lunora",
+        "dev:worker": "wrangler dev --port 8788",
+        "dev:lunora": "lunora dev --no-worker --worker-port 8788",
+    },
+}
+```
+
+`--worker-port` still matters with `--no-worker`: Studio and the printed hints
+need to know where the externally-owned worker is listening.
+
+### Pin the inspector port too
+
+A repo running several Workers side by side has to pin both ports `wrangler dev`
+takes, not just the worker one. The devtools inspector starts at 9229 and climbs
+while ports are busy, so the Lunora worker's inspector walks straight into the
+port a sibling worker pinned — and the one that dies is whichever bound second,
+so the failure moves between runs and names a port that appears in no config
+you can grep.
+
+```jsonc
+// package.json — every worker owns both of its ports
+{
+    "scripts": {
+        "dev": "run-p dev:worker dev:lunora",
+        "dev:worker": "wrangler dev --port 8788 --inspector-port 9230",
+        "dev:lunora": "lunora dev --worker-port 8789 --inspector-port 9231",
+    },
+}
+```
+
+`--inspector-port` mirrors `--worker-port`: the flag wins, then
+`dev.inspector_port` in the project's `wrangler.jsonc`, and with neither set
+wrangler keeps its own default and walks. It applies to the `wrangler dev`
+spawn, so on the Vite flavors pass the port through the plugin instead
+(`lunora({ cloudflare: { inspectorPort: 9231 } })`).
+
+### Telling the supervisor what to provide
+
+A task runner starting seven Workers needs two things from Lunora before it can
+treat it as one node: what this Worker requires, and where it will serve.
+
+`lunora info --bindings` answers the first without running anything, which is
+what a supervisor wants while it is still planning the graph:
+
+```bash
+lunora info --bindings                  # human-readable
+lunora info --bindings --format json    # the manifest a deployer or runner consumes
+lunora info --bindings --out reqs.json
+```
+
+`lunora dev` writes the same document plus a `dev` section, to
+`.lunora/dev-bindings.json`, on every start — no flag required:
+
+```jsonc
+{
+    "version": 1,
+    "name": "app",
+    "bindings": [{ "type": "d1", "binding": "DB", "databaseName": "app" }],
+    "crons": ["0 9 * * *"],
+    "vars": ["PUBLIC_URL"],
+    "dev": {
+        "origin": "http://localhost:8787",
+        "statusFile": ".lunora/dev.json",
+    },
+}
+```
+
+`lunora dev` names both files in its startup banner, so you do not have to know
+they exist. `--emit-bindings <file>` moves the manifest elsewhere. Naming a path also changes the
+failure policy: a project with no readable `wrangler.jsonc` then fails the run,
+because a named path means something is waiting on that file. The default write
+stays a courtesy and simply skips.
+
+It is written once, before the worker starts, so your runner can reserve the
+port and wire its proxy while Lunora is still booting. Readiness is deliberately
+**not** in it — that arrives later, so the manifest names the file carrying it
+rather than shipping a `ready: false` that never changes.
+
+`dev.origin` is present only on the wrangler flavor, where the CLI owns the port.
+On the Vite flavors Vite resolves its own — possibly after this file is written —
+so the manifest omits `origin` rather than publish a guess that would aim your
+proxy at a port nothing is listening on. Read `statusFile` for the real URL
+there; `@lunora/vite` writes it once the server is up.
+
+One derivation feeds all three entry points, so the requirements a deployer
+provisions cannot drift from the ones your dev graph proxies. The manifest never
+carries values — `vars` is key names only — which is what makes it safe to write
+into a working tree unasked.
+
+### Waiting for readiness
+
+A supervisor that starts a dependent step — an integration suite, a second
+worker that calls this one — needs to know when the worker is actually serving,
+not merely that the process exists. Sleeping a guessed interval is the usual
+workaround and it races on a cold cache.
+
+`lunora dev` records its state in `.lunora/dev.json` as soon as it starts, and
+adds a `readyAt` stamp the moment the worker first answers on its origin. The
+two are deliberately separate: `url` and `pid` are written _before_ anything is
+listening, which is enough to find and stop a server and not enough to gate on.
+
+```bash
+# Wait for the worker to serve, then run whatever depends on it.
+# Bounded, and bails if the server died: `running: false` reports no `ready` key
+# at all, so an unbounded `until .ready == true` would spin forever on a dead
+# server rather than failing.
+ready=false
+
+for _ in $(seq 120); do
+    status=$(lunora dev status --json)
+    if [ "$(jq -r .ready <<<"$status")" = "true" ]; then ready=true; break; fi
+    if [ "$(jq -r .running <<<"$status")" = "false" ]; then echo "dev server is not running"; exit 1; fi
+    sleep 1
+done
+
+# Falling out of the loop is a TIMEOUT, not a pass — without this the tests run
+# against a server that never became ready, which is the failure the readiness
+# stamp exists to prevent.
+[ "$ready" = "true" ] || { echo "dev server never became ready"; exit 1; }
+
+pnpm run test:integration
+```
+
+`lunora dev status` shows the same thing for a human, as `ready` or `starting`
+in its detail line. It works under `--no-worker` too: this process still owns the
+record, so it reports on the worker your runner started.
+
+`readyAt` is a claim about the record's own `url` and nothing else. On the Vite
+flavors `@lunora/vite` writes the record once Vite has resolved that URL, so
+`ready` there means the framework dev server is up — on SvelteKit/Nuxt the
+`wrangler dev` sidecar that owns `ShardDO` runs on its own port, which this
+record does not advertise and `readyAt` says nothing about.
+
+Raise `LUNORA_DEV_READY_TIMEOUT_MS` if a cold build is slower than the default
+two minutes; it moves the background wait and this stamp together.
+
+<Callout type="warn">
+    A missing `readyAt` means *not ready yet*, never *never*. A worker that takes longer than the probe waits keeps running with the field absent, so poll for
+    it with your own timeout rather than treating one absent read as failure.
+</Callout>
+
+<Callout type="info">
+    Studio is single-app. With several Lunora-touching Workers, run it against one of them rather than expecting a combined view, and mind that `/__lunora` is
+    mounted on the worker's own routes.
+</Callout>
+
+## Deploying from external IaC
+
+`lunora deploy` is codegen + validate + `wrangler deploy`. Under Terraform,
+Pulumi, Alchemy or any other IaC that wants to be the source of truth for
+bindings, do **not** use it. Run the pieces as steps in your graph instead.
+
+Every step is exported from `@lunora/cli` as a function, so `alchemy.run.ts`
+(or equivalent) can call them directly rather than shelling out:
+
+```ts
+import { runCodegenCommand, runImportCommand, runMigrateGenerateCommand } from "@lunora/cli";
+
+// Build step: generate + validate. Throws on a hard failure; the returned
+// `failedAdvisories` is non-zero when an ERROR-level advisory blocked it.
+const codegen = runCodegenCommand({ cwd: "./backend", logger });
+```
+
+`runDeployCommand`, `runResetCommand`, `runRpcCommand`, `runExportCommand` and
+`runAddCommand` are exported the same way; see the package's `index.ts` for the
+full set.
+
+Migrations belong **inside** the IaC graph as a post-deploy step, not as a
+separate CLI invocation that races it:
+
+```bash
+lunora migrate up --url https://my-worker.example.workers.dev
+```
+
+### Handing the requirements to your IaC program
+
+The duplication that bites here is the binding list: `wrangler.jsonc` declares
+what the Worker reads, your IaC program declares what to create, and nothing
+keeps them in step. `lunora build --emit-bindings` closes that by emitting the
+requirements as data your program can consume:
+
+```bash
+lunora build --emit-bindings .lunora/bindings.json
+```
+
+```jsonc
+{
+    "version": 1,
+    "name": "acme-backend",
+    "compatibilityDate": "2026-04-07",
+    "bindings": [
+        { "type": "d1", "binding": "DB", "resource": "acme", "resourceId": "…" },
+        { "type": "durable_object", "binding": "SHARD", "className": "ShardDO", "sqlite": true },
+        { "type": "r2", "binding": "FILES", "resource": "acme-files" },
+        { "type": "vectorize", "binding": "VECTORS", "resource": "acme-index" },
+    ],
+    "crons": ["*/5 * * * *"],
+    "vars": ["API_BASE"],
+    "unknown": [],
+}
+```
+
+It is derived from `wrangler.jsonc` **after** the pre-deploy pipeline has
+reconciled it, so it describes what the bundle actually needs rather than what
+happened to be written down. Three things worth knowing:
+
+- **Every binding is listed, including the ones Lunora cannot provision.** A KV
+  namespace id, a Hyperdrive id, a Vectorize index: Lunora warns about these and
+  never writes them, which makes them exactly the ones your program has to create.
+- **`vars` contributes names only.** The file is committed and read by CI, and a
+  var can hold something you would rather not publish.
+- **`unknown` is the honest escape hatch.** A wrangler section this version does
+  not model lands there by name rather than being dropped, so an
+  under-provisioned deploy is visible here instead of at runtime. A non-empty
+  `unknown` is worth reading before you trust the rest.
+
+<Callout type="warn">
+    **`wrangler.jsonc` is declaration-only under external IaC.** Lunora's validator reads it to check that every binding a schema needs is declared, but it
+    never provisions anything. When your IaC owns the real ids, keep the binding *names* accurate and treat the id fields as placeholders. A real id there is a
+    footgun, because nothing keeps it in step with the IaC state and a stale one is indistinguishable from a correct one.
+</Callout>
+
+## Consuming the generated API from a sibling package
+
+`lunora/_generated/api.ts` is emitted inside the backend package. A sibling
+package (your web app, another Worker) reaches it through `exports` entries on
+the backend's `package.json`:
+
+```jsonc
+// backend/package.json
+{
+    "name": "@acme/backend",
+    "exports": {
+        "./api": "./lunora/_generated/api.ts",
+        "./dataModel": "./lunora/_generated/dataModel.ts",
+        "./server": "./lunora/_generated/server.ts",
+    },
+}
+```
+
+Consumers then import `@acme/backend/api` rather than reaching across the repo
+by path, which keeps the generated file an implementation detail.
+
+`api.ts` and `dataModel.ts` carry **no server dependency**: `dataModel.ts` has
+no imports at all, and the query-DSL bindings that need `@lunora/server` live in
+`server.ts`. So a consumer that only wants `Doc`/`Id` and the typed `api` needs
+`@lunora/client` and nothing else; only a package importing `./server` pulls the
+server surface in.
+
+<Callout type="warn">
+    These entries point at **raw TypeScript**, not built output, so every consumer compiles it. That is fine inside one workspace and awkward across published
+    package boundaries. If you publish the backend, build the generated files into your `dist` and point the `exports` there instead.
+</Callout>
+
+## Calling the backend from a sibling Worker
+
+`ctx.run*` covers calls **within** one Lunora app. For another Worker in the
+same account, bind it and use `@lunora/client/service`:
+
+```jsonc
+// services/llm-gateway/wrangler.jsonc
+{
+    "services": [{ "binding": "BACKEND", "service": "acme-backend" }],
+}
+```
+
+```ts
+import { createServiceClient } from "@lunora/client/service";
+import { api } from "@acme/backend/api";
+
+export default {
+    async fetch(request: Request, env: Env) {
+        // `env` is a handler argument on Workers, never a module-scope global —
+        // build the client inside the handler (or pass `env` into a factory).
+        const backend = createServiceClient(env.BACKEND);
+        const threads = await backend.query(api.threads.list, { userId });
+
+        return Response.json(threads);
+    },
+};
+```
+
+The call is typed against the same `api` the browser uses, so a renamed function
+or a changed argument is a compile error rather than a runtime 404. Arguments and
+results go through the same wire codec as the HTTP path, so a `bigint` or byte
+array survives the hop, and a thrown `LunoraError` arrives with its `code` and
+`data` intact.
+
+<Callout type="info">
+    Prefer this to calling the backend's public URL. A service binding incurs no request fee, never leaves the edge, and is authenticated by construction: the
+    binding *is* the capability, so the callee needs no public route and you need no shared secret. Only **public** functions are reachable: an `internal*`
+    procedure is absent from `api` and refused by the callee, because a binding is a boundary between deployments rather than the intra-app `ctx.run*` seam.
+</Callout>
+
+Pass `{ shardKey }` as the third argument for a sharded app. Without it the
+callee routes to its default shard, exactly as the HTTP path does.

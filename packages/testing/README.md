@@ -109,12 +109,42 @@ Each `lunoraTest(...)` opens an in-memory SQLite database; call `t.close()`
 Pass a `fetch` option to replace the throwing stub in action contexts:
 
 ```ts
-const fakeFetch = vi.fn<typeof globalThis.fetch>().mockResolvedValue(Response.json({ ok: true }));
+const fakeFetch = vi.fn<typeof globalThis.fetch>(async () => Response.json({ ok: true }));
 const t = lunoraTest(schema, { fetch: fakeFetch });
 // ctx.fetch inside any action now calls fakeFetch
 ```
 
 Without the option, `ctx.fetch` still throws the v1 error on first access.
+
+#### Injectable `ctx.services`
+
+Pass a `services` option with a fake per `lunora.config` service an action calls
+(`{ documentParser: { fetch } }`). See the [package docs](https://lunora.sh/docs/packages/testing#injectable-ctxservices)
+for an example.
+
+#### Recording `ctx.queues`, `ctx.topics` and `ctx.notify` / `ctx.push`
+
+Pass `queues` / `topics` (the queue and topic export names from
+`lunora/queues.ts`) and/or `notify` (the `lunora/notify.ts` default export).
+Sends are recorded instead of delivered, and read back with
+`t.queues.sent(name)` / `t.topics.published(name)` / `t.notify.sent(channel)`. See the
+[package docs](https://lunora.sh/docs/packages/testing#queues) for details.
+
+```ts
+const t = lunoraTest(schema, { notify, queues: ["jobs"], topics: ["signups"] });
+```
+
+#### Fixed `ctx.now`
+
+Pass a `now` option (epoch ms) to pin `ctx.now` across every context, so
+time-dependent handlers are deterministic:
+
+```ts
+const t = lunoraTest(schema, { now: 1_700_000_000_000 });
+// ctx.now === 1_700_000_000_000 in every query/mutation/action
+```
+
+Defaults to the wall clock captured at harness creation.
 
 #### Controllable in-memory scheduler
 
@@ -155,8 +185,14 @@ The virtual clock is **per-harness** — advancing one harness's clock does not
 affect other harnesses, so tests running in parallel are isolated.
 
 Provide a `functions` map (`{ "path:name": registeredFn }`) so the scheduler
-can dispatch jobs. Paths not in the map produce a `console.warn` and are
-silently dropped (matching production behaviour for unknown paths).
+can dispatch jobs. A path not in the map fails the job with `FUNCTION_NOT_FOUND`,
+which then walks the retry budget into `t.scheduler.failures()` — matching
+production, where the DO fires the job at the Worker and dead-letters it.
+
+A retryable failure is re-enqueued silently, so `failures()` only fills once the
+whole backoff schedule (~930s of virtual clock) has elapsed — and at that point
+`advance()`/`runPending()` re-throw the failure by default. Pass
+`{ throwOnError: false }` to inspect `failures()` instead.
 
 #### Subscription testing
 

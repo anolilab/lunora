@@ -2,6 +2,7 @@ import { defineSchema, defineTable } from "@lunora/server";
 import { v } from "@lunora/values";
 import { describe, expect, it } from "vitest";
 
+import type { AdvisorSchema } from "../src";
 import { circularFk, fromServerSchema } from "../src";
 
 const run = (schema: ReturnType<typeof defineSchema>) => circularFk.run({ schema: fromServerSchema(schema) });
@@ -186,5 +187,94 @@ describe("circular_fk", () => {
 
         // One cycle covers {a, b, d} and the other covers {a, c, d}.
         expect(cycles).toEqual(expect.arrayContaining([expect.arrayContaining(["a", "b", "d"]), expect.arrayContaining(["a", "c", "d"])]));
+    });
+
+    it("stays fast on a large acyclic reconverging FK graph (no exponential path blow-up)", () => {
+        expect.assertions(1);
+
+        // A forward-only diamond chain: t_i → t_{i+1} and t_i → t_{i+2}. Every
+        // edge points at a higher index, so the graph is strictly acyclic, but
+        // the number of distinct simple *paths* from t0 grows like Fibonacci(n).
+        // A naive enumerate-all-paths DFS walks every one of them and would take
+        // minutes here (and hang codegen); Johnson's algorithm blocks exhausted
+        // subtrees and returns immediately. This test would time out under the
+        // old implementation. Built as an AdvisorSchema directly to keep the graph
+        // construction (and the forward-only edges) explicit.
+        const n = 40;
+        const tables: AdvisorSchema["tables"][number][] = [];
+
+        for (let i = 0; i < n; i += 1) {
+            const relations: AdvisorSchema["tables"][number]["relations"][number][] = [];
+
+            if (i + 1 < n) {
+                relations.push({ field: "next1", kind: "one", name: "a", references: "_id", table: `t${(i + 1).toString()}` });
+            }
+
+            if (i + 2 < n) {
+                relations.push({ field: "next2", kind: "one", name: "b", references: "_id", table: `t${(i + 2).toString()}` });
+            }
+
+            tables.push({ fields: [], indexes: [], name: `t${i.toString()}`, relations });
+        }
+
+        // Acyclic ⇒ zero findings, and it must return well within the test timeout.
+        expect(circularFk.run({ schema: { tables } })).toHaveLength(0);
+    });
+
+    /** One table whose `one` relations point at `targets`, in declaration order. */
+    const node = (name: string, targets: string[]): AdvisorSchema["tables"][number] => {
+        return {
+            fields: [],
+            indexes: [],
+            name,
+            relations: targets.map((target, index) => {
+                return { field: `${target}Id`, kind: "one" as const, name: `r${index.toString()}`, references: "_id", table: target };
+            }),
+        };
+    };
+
+    it("recovers a cycle through a vertex an earlier fruitless branch blocked (Johnson's unblock cascade)", () => {
+        expect.assertions(2);
+
+        // a→b, a→c; b→c, b→a; c→b. Exploring a's first neighbour `b` descends to
+        // `c`, whose only edge is a back-edge to the on-stack `b` — fruitless, so
+        // `c` is blocked with `b` recorded as the vertex that must release it.
+        // `b` then closes a→b→a, and ONLY the recursive cascade inside `unblock`
+        // frees `c` in time for a's second neighbour to find a→c→b→a. Without the
+        // cascade that cycle is silently dropped and every other case here still
+        // passes — the 4-table fixtures above never block a vertex at all.
+        const tables = [node("a", ["b", "c"]), node("b", ["c", "a"]), node("c", ["b"])];
+        const findings = circularFk.run({ schema: { tables } });
+
+        expect(findings.map((finding) => finding.metadata["path"])).toStrictEqual(["a → b → a", "a → c → b → a", "b → c → b"]);
+        expect(findings).toHaveLength(3);
+    });
+
+    it("canonicalizes the emitted ring by codepoint, independent of the locale-collated search order", () => {
+        expect.assertions(1);
+
+        // The search order is `localeCompare`d (locale-dependent: "alpha" sorts
+        // before "Beta"), while the rotation compares by codepoint ("Beta" < "alpha").
+        // The two disagree on mixed case, so the rotation is what keeps the cacheKey
+        // stable rather than following whatever collation the host's ICU build applies.
+        const tables = [node("Beta", ["alpha"]), node("alpha", ["Beta"])];
+
+        expect(circularFk.run({ schema: { tables } })[0]?.cacheKey).toBe("circular_fk:Beta→alpha");
+    });
+
+    it("stops at MAX_CYCLES on a densely interconnected graph", () => {
+        expect.assertions(1);
+
+        // A complete 6-vertex digraph holds far more elementary circuits than the
+        // 100 cap that keeps both the output and the runtime bounded.
+        const names = ["n0", "n1", "n2", "n3", "n4", "n5"];
+        const tables = names.map((name) =>
+            node(
+                name,
+                names.filter((other) => other !== name),
+            ),
+        );
+
+        expect(circularFk.run({ schema: { tables } })).toHaveLength(100);
     });
 });

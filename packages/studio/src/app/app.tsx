@@ -9,11 +9,15 @@ import { TooltipProvider } from "../components/ui/tooltip";
 import useDebounced from "../hooks/use-debounced";
 import { createStudioI18n, useT } from "../i18n/i18n-context";
 import { StudioI18nProvider } from "../i18n/i18n-provider";
+import { resolveOrigin } from "../lib/internal";
+import { withOperationRecording } from "../lib/recording-client";
 import STUDIO_ROOT_CLASS from "../lib/theme-constants";
 import { loadToken, saveToken } from "../lib/token-storage";
 import { cn } from "../lib/utils";
+import { createAdminWsTokenProvider } from "../lib/ws-token-provider";
 import type { StudioChrome, StudioProps } from "./studio";
 import { Studio } from "./studio";
+import StudioLogin from "./studio-login";
 
 interface StudioAppProps {
     /**
@@ -60,20 +64,6 @@ interface StudioAppProps {
     readonly studio?: Omit<StudioProps, "children" | "chrome" | "i18n" | "locale">;
 }
 
-const resolveBaseUrl = (explicit: string | undefined): string => {
-    if (explicit !== undefined && explicit !== "") {
-        return explicit;
-    }
-
-    const loc = (globalThis as { location?: { origin?: string } }).location;
-
-    if (loc?.origin !== undefined && loc.origin !== "") {
-        return loc.origin;
-    }
-
-    return "http://localhost:5173";
-};
-
 interface StudioAppBodyProps {
     readonly basePath?: string;
     readonly chrome: StudioChrome;
@@ -83,7 +73,7 @@ interface StudioAppBodyProps {
 /**
  * The composed studio plus its error boundary. Kept separate from {@link
  * StudioApp} because its `useT` (for the error-boundary label) must read the
- * `StudioI18nProvider` the app renders above it. The composed `&lt;Studio>`
+ * `StudioI18nProvider` the app renders above it. The composed `<Studio>`
  * inherits that same provider, so it isn't handed an instance here.
  */
 const StudioAppBody = ({ basePath, chrome, studio }: StudioAppBodyProps): ReactElement => {
@@ -91,19 +81,8 @@ const StudioAppBody = ({ basePath, chrome, studio }: StudioAppBodyProps): ReactE
 
     return (
         <ErrorBoundary fallbackTitle={t("Studio failed")} label={t("Studio")} retryLabel={t("Try again")}>
-            <Studio
-                basePath={basePath}
-                chrome={chrome}
-                dataEditable={studio?.dataEditable}
-                functions={studio?.functions}
-                initialShardKey={studio?.initialShardKey}
-                openApiSpec={studio?.openApiSpec}
-                openRpcSpec={studio?.openRpcSpec}
-                runAsIdentity={studio?.runAsIdentity}
-                scheduledCancel={studio?.scheduledCancel}
-                scheduledLoad={studio?.scheduledLoad}
-                schemaEditable={studio?.schemaEditable}
-            />
+            {/* eslint-disable-next-line react/jsx-props-no-spreading -- forwarding a closed, typed prop set: the hand-written list this replaces dropped `scheduledCron`, so a host that supplied a cron loader silently got the default fetch. `basePath` follows the spread because the app-level prop is the one that wins. */}
+            <Studio {...studio} basePath={basePath} chrome={chrome} />
         </ErrorBoundary>
     );
 };
@@ -124,7 +103,7 @@ interface StudioShellProps {
  * and applies the `.dark` class to its OWN container (not `document.documentElement`),
  * so the studio can be embedded inside a host app without recoloring the host.
  * Builds the app-owned {@link StudioChrome} (header theme toggle, footer
- * admin-token popover, rules banner) handed to the composed `&lt;Studio>`.
+ * admin-token popover, rules banner) handed to the composed `<Studio>`.
  */
 const StudioShell = ({ basePath, clearToken, client, i18n, onTokenChange, rulesInstalled, studio, token }: StudioShellProps): ReactElement => {
     // The resolved light/dark is applied to this scoped root (not `<html>`).
@@ -152,7 +131,7 @@ const StudioShell = ({ basePath, clearToken, client, i18n, onTokenChange, rulesI
 
 /**
  * A fully self-contained studio page: it constructs a {@link LunoraClient}
- * pointed at the worker, wires it through a `&lt;LunoraProvider>`, manages the
+ * pointed at the worker, wires it through a `<LunoraProvider>`, manages the
  * admin token + theme, and renders the composed {@link Studio} — handing it the
  * top-bar/sidebar {@link StudioChrome} (theme toggle, admin-token popover, rules
  * banner) so those affordances render inside the sidebar shell.
@@ -160,7 +139,7 @@ const StudioShell = ({ basePath, clearToken, client, i18n, onTokenChange, rulesI
  * Mount this directly (the standalone app and the `@lunora/vite` dev route both
  * do) when you want the batteries-included page rather than composing panels
  * yourself. For embedding into an existing admin UI, use the individual panels
- * or `&lt;Studio>` under your own provider instead.
+ * or `<Studio>` under your own provider instead.
  */
 const StudioApp = ({ adminToken, basePath, baseUrl, client: injectedClient, rulesInstalled, studio, locale }: StudioAppProps = {}): ReactElement => {
     // Seed from the prop, else a token persisted in a prior session (so a reload
@@ -176,25 +155,46 @@ const StudioApp = ({ adminToken, basePath, baseUrl, client: injectedClient, rule
     // token doesn't rebuild the LunoraClient (and tear down its WebSocket +
     // reconnect timers) once per keystroke. The raw `token` still drives the
     // controlled input; the client rebuilds at most once per typing pause.
-    const debouncedToken = useDebounced(token, 300);
+    //
+    // The reset key snaps the mirror on the empty↔non-empty transition, which is
+    // exactly where the gate below flips. The gate reads the RAW token, so without
+    // the snap the shell mounts every panel against a credential-less client for the
+    // full delay after a login — a row of 401s and failed WS subscribes — and drops
+    // the credential a delay late on logout. Editing a token that is already set
+    // stays debounced, which is what the delay is for.
+    const debouncedToken = useDebounced(token, 300, token === "");
 
+    // react-doctor-disable-next-line react-doctor/react-compiler-no-manual-memoization -- identity is behaviour: this is the LunoraClient — a fresh one per render opens a new WebSocket
     const client = useMemo(() => {
         // A supplied client (dev mock / embedding) wins — render the chrome
-        // against it and don't build or own a real one.
+        // against it and don't build or own a real one. It is still wrapped for
+        // recording: an embedded studio's admin calls belong on the tape too.
         if (injectedClient !== undefined) {
-            return injectedClient;
+            return withOperationRecording(injectedClient);
         }
 
-        // The token doubles as the WS credential (`wsToken`) so live admin
-        // subscriptions clear the upgrade's admin gate, mirroring the bearer the
-        // HTTP admin RPCs already send.
-        const created = new LunoraClient({ url: resolveBaseUrl(baseUrl), ...(debouncedToken === "" ? {} : { wsToken: debouncedToken }) });
+        // The admin token authorizes the WS upgrade too, but never rides the URL
+        // itself: the client's `wsToken` is a provider that mints a short-lived
+        // HMAC-signed sub-token from the worker (master token in the
+        // Authorization HEADER) fresh on every (re)connect, so only the ephemeral
+        // token appears in `?token=`. Against a worker without the mint endpoint
+        // (404s) the provider fails the connection instead; the master token is
+        // never sent as a WS credential. A 4001 token-expired drop invalidates the
+        // provider's cache so the reconnect re-mints even when the cached token
+        // still looks fresh.
+        const origin = resolveOrigin(baseUrl);
+        const provider = debouncedToken === "" ? undefined : createAdminWsTokenProvider({ adminToken: debouncedToken, baseUrl: origin });
+        const created = new LunoraClient({ url: origin, ...(provider === undefined ? {} : { wsToken: provider.getToken }) });
 
-        if (debouncedToken !== "") {
+        if (provider !== undefined) {
             created.setAuthToken(debouncedToken);
+            created.onTokenExpired(provider.invalidate);
         }
 
-        return created;
+        // The single seam every admin RPC crosses. Wrapping here is what makes the
+        // operation console's coverage true by construction rather than by every
+        // call site remembering to opt in — see `lib/recording-client.ts`.
+        return withOperationRecording(created);
     }, [baseUrl, debouncedToken, injectedClient]);
 
     // Close the previous client when `token`/`baseUrl` changes (and on unmount)
@@ -226,18 +226,32 @@ const StudioApp = ({ adminToken, basePath, baseUrl, client: injectedClient, rule
 
     // Theme lives in a provider so the resolved class can be applied to the
     // studio's own scoped root (see StudioShell) rather than `<html>`.
+    //
+    // Token gate: with no admin token (none injected by the dev host, none
+    // persisted), render the login page and nothing else — every studio page
+    // sits behind it. A token (dev `.dev.vars` auto-inject, a prior paste, or
+    // submitting the login) drops straight into the app; clearing it returns here.
+    //
+    // An injected `client` skips the gate entirely: the caller owns that client's
+    // credentials (that is the documented contract — `baseUrl`/`adminToken` are
+    // ignored when it is set), so there is no token here to gate on and the login
+    // form could not affect it anyway.
     return (
         <ThemeProvider>
-            <StudioShell
-                basePath={basePath}
-                clearToken={clearToken}
-                client={client}
-                i18n={i18n}
-                onTokenChange={onTokenChange}
-                rulesInstalled={rulesInstalled}
-                studio={studio}
-                token={token}
-            />
+            {token === "" && injectedClient === undefined ? (
+                <StudioLogin i18n={i18n} onSubmit={setToken} />
+            ) : (
+                <StudioShell
+                    basePath={basePath}
+                    clearToken={clearToken}
+                    client={client}
+                    i18n={i18n}
+                    onTokenChange={onTokenChange}
+                    rulesInstalled={rulesInstalled}
+                    studio={studio}
+                    token={token}
+                />
+            )}
         </ThemeProvider>
     );
 };

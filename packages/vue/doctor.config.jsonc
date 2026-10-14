@@ -1,0 +1,40 @@
+{
+    "rules": {
+        // This package is entirely Vue. React Doctor scans it because it globs
+        // `.ts` too, and three of its rule families then describe a runtime that
+        // is not here. Each is scoped off for its own reason; the
+        // framework-agnostic findings are deliberately left on (see the bottom).
+        //
+        // `rules-of-hooks` — fires on `useAuth` inside `setup` and `useLunora`
+        // inside `hydratePreloaded`: "not a component or Hook, so React cannot
+        // attach Hook state to a render". React preserves hook ORDER across
+        // re-renders, so a conditional or nested call desynchronises its state.
+        // A Vue `setup` runs once per component instance and composables are
+        // plain calls that register against the active effect scope — there is
+        // no order to preserve and no React render to attach state to.
+        "react-doctor/rules-of-hooks": "off",
+        // `effect-needs-cleanup` — fires on `setInterval` in `use-rate-limit.ts`
+        // and `client.subscribe` in `use-paginated-core.ts`, reporting "no
+        // cleanup path". Both DO clean up; the rule only recognises a `useEffect`
+        // return value. `use-rate-limit` stores the timer and clears it from
+        // `onScopeDispose(() => stopInterval())`, and `use-paginated-core` keeps
+        // each `Unsubscribe` on its entry and releases them all from
+        // `onScopeDispose(teardownAll)`. `onScopeDispose` is Vue's teardown hook
+        // and is exactly the cleanup path the rule is asking for.
+        "react-doctor/effect-needs-cleanup": "off",
+        // `immutability` / `todo` — both report that "this component misses React
+        // Compiler's automatic memoization & re-renders more than it should".
+        // React Compiler does not compile this package: there is no React
+        // component and no re-render here, so there is no memoization to miss.
+        // Vue's reactivity tracks dependencies at runtime and the reassignments
+        // flagged (in async bodies, after "render") are ordinary composable state.
+        "react-hooks-js/immutability": "off",
+        "react-hooks-js/todo": "off",
+        // NOT turned off: `react-doctor/js-index-maps`, which flags an
+        // `array.find()` inside a loop in `use-paginated-core.ts`. That one is
+        // framework-agnostic and a real suggestion, so it should keep reporting.
+        //
+        // The gates that do cover this package: `vue-tsc`, ESLint with
+        // `eslint-plugin-vue`, and the render tests in `__tests__/`.
+    },
+}

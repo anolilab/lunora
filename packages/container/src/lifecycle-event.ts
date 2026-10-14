@@ -12,7 +12,7 @@
  */
 
 /** A container lifecycle transition worth a log line. */
-type ContainerLifecycle = "error" | "start" | "stop";
+type ContainerLifecycle = "error" | "sleep" | "start" | "stop";
 
 /** The `source` tag every Lunora console event carries (mirrors `LUNORA_EVENT_SOURCE`). */
 const LUNORA_EVENT_SOURCE = "lunora";
@@ -85,5 +85,5 @@ const emitContainerLifecycle = (container: string, instance: string, event: Cont
     return envelope;
 };
 
-export type { ContainerLifecycle, ContainerLifecycleEvent };
-export { buildContainerLifecycleEvent, emitContainerLifecycle, LUNORA_EVENT_SOURCE };
+export type { ContainerLifecycleEvent };
+export { buildContainerLifecycleEvent, emitContainerLifecycle };

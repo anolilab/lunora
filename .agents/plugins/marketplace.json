@@ -1,0 +1,16 @@
+{
+    "name": "lunora",
+    "interface": {
+        "displayName": "Lunora"
+    },
+    "plugins": [
+        {
+            "name": "lunora",
+            "source": {
+                "source": "local",
+                "path": "./plugins/lunora"
+            },
+            "category": "Engineering"
+        }
+    ]
+}

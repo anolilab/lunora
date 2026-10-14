@@ -1,10 +1,14 @@
 ---
 title: "@lunora/cli"
 description: The standalone `lunora` binary — scaffold, codegen, deploy.
+related:
+    - to: /docs/packages/vite
+    - to: /docs/packages/d1
+    - to: /docs/deployment
 ---
 
 `@lunora/cli` is the standalone alternative to the Vite plugin. It powers
-the `lunora` binary you got when you ran `npx lunora init`. The
+the `lunora` binary you got when you ran `npx lunorash@alpha init`. The
 plugin and the CLI share the same `@lunora/codegen` core, so the generated
 files are identical regardless of how they were produced.
 
@@ -12,75 +16,199 @@ files are identical regardless of how they were produced.
 
 ```bash
 # Project
-lunora init [name] [-t <template>]      # scaffold a new project (default template: vite)
+lunora init [name] [-t <template>]      # scaffold a new project (default: react)
             [-i | --yes]                 #   offer (or skip) adding auth + email
 lunora add <auth|email>                 # add a feature to the current project
-lunora view [--remote]                  # open the Lunora studio in your browser
+lunora view                             # open the Lunora studio in your browser
 lunora docs [section]                   # open the docs site in your browser
-lunora info [--json]                    # print versions, wrangler summary, schema overview
-lunora registry <add|list|view|build>   # component registry
+lunora info [--format json] [--bindings] # versions + wrangler summary; --bindings for the manifest
+lunora doctor [--format <pretty|json>]  # preflight the project (bindings, placeholders, secrets)
+lunora registry <add|list|view|build>   # component registry (add/list: --format json)
 lunora rules <install|check>            # install the AI agent skills into .agents/skills/
 
 # Develop
+lunora mcp install [client…]            # wire Lunora's MCP servers into your editor
+            [--list] [--print] [--force]
+            [--docs-only] [--local-only]
+            [--global | --project]
+lunora mcp uninstall [client…]          # remove them again
+lunora mcp serve [--allow-writes]       # the stdio MCP server your editor spawns
+            [--no-docs] [--url u] [--token t]
 lunora dev [--port n] [--worker-port n] # wrangler worker + studio + codegen watch
+            [--inspector-port n]
+            [--remote | --local]
             [--no-studio] [--no-codegen]
+            [--tunnel [--allow-mail <email>…]]
 lunora codegen [--api-spec <spec>]      # one-shot codegen
+            [--format <pretty|json>]
 lunora run <fn> [--args <json>]         # send a single RPC to a running worker
-            [--shard <key>] [--url <u>]
+            [--shard <key>] [--url <u>] [--format json]
+            [--as <userId>] [--claims <json>] #   run as an identity (identity-gated apps)
+lunora insights [--shard <key>]         # write-conflict / error / latency hot-spots
+            [--limit n] [--format json] [--prod --url <u>]
+lunora profile --target node --url <u>  # on-demand CPU / heap profile (pprof) of a Node app
+            [--type cpu|heap] [--duration-ms n] [--out <file>] [--token <t>]
 lunora reset [--all] [--yes]            # clear local Miniflare state
 
 # Deploy
-lunora prepare [--api-spec <spec>]      # codegen + wrangler validation — for CI
+lunora prepare [--api-spec <spec>]      # every pre-deploy gate, without deploying — for CI
 lunora build [--out-dir <dir>]          # bundle the worker to disk without deploying
 lunora deploy [--env <name>]            # codegen, validate wrangler, then wrangler deploy
-              [--migrate] [--prebuilt]  #   --preview uploads a version (no live traffic)
-              [--preview]
+              [--migrate --migrate-yes] #   --migrate also needs --migrate-url unless linked
+              [--prebuilt]              #   --preview uploads a version (no live traffic)
+              [--preview] [--dry-run]   #   --dry-run validates + bundles, never publishes
+              [--temporary]             #   --temporary deploys with no account (~60min, then claim)
+              [--health-check]          #   --health-check probes /_lunora/health/ready after deploying
 lunora link --url <url> [--env <name>]  # link this checkout to its deployed worker
-lunora deployments <list|inspect|rollback|promote>   # history + traffic control
-             [--env <name>] [--yes]
 lunora verify [--api-spec <spec>]       # dry-run codegen + tsc --noEmit (no files written)
               [--no-typecheck]
-lunora analyze [--json]                 # wrangler dry-run: bundle size + top modules
+lunora analyze [--format json]          # wrangler dry-run: bundle size + top modules
+
+# Cloudflare only (refused on a celld or Node project)
+lunora cloudflare                       # list the tools
+lunora cloudflare alerts [status|setup|test]   # usage alerts that catch a runaway bill
+lunora cloudflare deployments <list|inspect|rollback|promote>   # history + traffic control
+             [--env <name>] [--yes] [--format json]  # json: `list` only
+lunora cloudflare profile [worker]               # on-demand CPU / heap profile (pprof) of the live Worker
+lunora cloudflare containers <build|push|images|list|info|delete> [args…]
+            [--tag <name:tag>] [--push] [--env <n>]
+            [--format json]             #   json: list | info | images list
+lunora cloudflare ai-gateway [--id <id>]       # create/reuse an AI Gateway, write its id to vars
+            [--no-logs] [--dry-run] [--format json]
 
 # Data
 lunora logs [worker]                    # stream live Worker logs via wrangler tail
             [--format <pretty|json>]    #   [--status <s>] [--search <q>] [--env <n>]
-lunora migrate <generate|create|up|down|status> [name|id]
-lunora env <list|get|set|unset|push|diff|doctor>
+lunora migrate <generate|create|up|down|status> [name|id] [--format json]
+lunora env <list|get|set|unset|push|diff|doctor> [--format json]
 lunora export [--out <file>] [--tables <t1,t2>] [--url <u>] [--token <tok>]
-lunora import <file> [--table <name>] [--batch-size n]
-lunora backup <create|list|restore|pitr> [--dir <d>] [--at <iso>]
+              [--format json]           #   json needs --out <file>
+lunora import <file> [--table <name>] [--batch-size n] [--format json]
+lunora backup <create|list|restore|pitr> [--dir <d>] [--bucket <b>] [--at <iso>]
+            [--format json]
+lunora seed [--table <t>] [--count n]   # deterministic fake data from schema.ts
+            [--seed n] [--dry-run] [--reset] [--format json]
+lunora shards prune [--tables <a,b>]    # drop empty shards from the shard registry
+            [--dry-run] [--format json]
+lunora introspect [--url <u>] [--tables <t1,t2>]  # scaffold schema.ts from an
+                  [--schema <s>] [--no-procedures] # existing Postgres/MySQL DB
+                  [--format json]
 ```
+
+### Machine-readable output
+
+Every command that produces a **result document** takes `--format pretty|json`
+(`pretty` is the default). In `json` mode stdout carries exactly one JSON
+document and every human/progress line moves to stderr, so `lunora <cmd>
+--format json | jq` always parses.
+
+The document is the same **envelope** for every command:
+
+```jsonc
+{
+    "code": 0, // the exit code the process terminates with
+    "data": {}, // the command's own payload — per-command, absent when it produced none
+    "error": "…", // why it failed; present whenever `code` is non-zero and a reason is known
+}
+```
+
+One shape to parse, whichever command produced it — and a **failure answers in
+the same shape a success does**, so the reason never has to be scraped out of
+English prose on stderr:
+
+```bash
+lunora doctor --format json | jq '.data.findings[] | select(.level == "fail")'
+lunora migrate status backfill-names --format json | jq '.data.result'
+lunora env diff --format json | jq -r '.data.localOnly[]'
+
+# The failure path is parseable too.
+lunora verify --format json | jq -r 'if .code == 0 then "ok" else .error end'
+```
+
+`code` is the only key present on every document — `data` is absent when the run
+failed before producing one, and `error` is absent on success. Read `code` (or
+the process exit status, which is the same number — see
+[CLI exit codes](/docs/exit-codes)) before reaching for either.
+
+Commands with the flag: `add`, `advisor`, `analyze`, `backup`, `build`,
+`cloudflare` (every tool), `codegen`, `deploy`, `doctor`, `env`, `eval`,
+`export`, `import`, `info`, `insights`, `introspect`, `logs`, `migrate`,
+`registry`, `run`, `seed`, `verify`.
+
+Three carry a documented restriction, because the payload already owns stdout or
+the underlying tool has no JSON rendering: `export --format json` requires
+`--out <file>` (with `--out -` the NDJSON stream is stdout); `cloudflare
+deployments --format json` applies to `list` only; `cloudflare containers
+--format json` applies to `list`, `info` and `images list`. Each refuses with a usage error rather than
+emitting a fabricated document.
+
+Where the flag is forwarded to a tool that writes the document itself —
+`cloudflare deployments list`, the `cloudflare containers` read subcommands, and
+`logs` (a stream, not a result) — stdout carries **that** tool's output and no envelope is added, since
+a second document on the same stream would make neither parseable.
+
+`lunora dev --json` is deliberately **not** part of this: it selects a streaming
+JSON **log-line** format for a long-running process, not a single result
+document. See [CLI exit codes](/docs/exit-codes) for the other half of the
+automation contract.
 
 ### `lunora init`
 
 Scaffolds a new Lunora project by fetching a template from
-`gh:anolilab/lunora/templates/<type>#<version>`. Pass `-t` / `--template`
-to choose the starting point:
+`gh:anolilab/lunora/templates/<type>#<ref>`. The ref is a **branch**, derived
+from the running CLI's own version: a pre-release resolves to its channel
+(`alpha`, `beta`, `next`), a stable release to `main`. `--ref` overrides it with
+any branch, tag or commit. `init` (and `add`) then resolve that ref to the
+immutable commit SHA it currently points at (logged as `pinned … → <sha>`), so
+the fetch is reproducible and tamper-evident; if the SHA can't be resolved
+(offline / rate-limited) it falls back to the ref itself with a one-line
+UNPINNED warning. Pass `-t` / `--template` to choose the starting point:
 
-| Template         | Description                                                                                    |
-| ---------------- | ---------------------------------------------------------------------------------------------- |
-| `vite`           | React + Vite + the Lunora plugin (the default)                                                 |
-| `standalone`     | Worker-only, no frontend                                                                       |
-| `astro`          | Astro + the standalone CLI                                                                     |
-| `nuxt`           | Nuxt + the standalone CLI                                                                      |
-| `sveltekit`      | SvelteKit + the standalone CLI                                                                 |
-| `tanstack-start` | TanStack Start + the standalone CLI                                                            |
-| `next`           | Next.js + the standalone CLI — **not yet available**; re-run with `-t vite` or `-t standalone` |
+| Value                         | Description                                                                          |
+| ----------------------------- | ------------------------------------------------------------------------------------ |
+| `react`                       | React SPA — official create-vite base + the Lunora layer (the default)               |
+| `vue`                         | Vue SPA — create-vite base + Lunora                                                  |
+| `solid`                       | Solid SPA — create-vite base + Lunora                                                |
+| `solid-v2`                    | Solid 2.0 SPA — the Solid 2 line (`@solidjs/web`, vite-plugin-solid 3)               |
+| `svelte`                      | Svelte SPA — create-vite base + Lunora                                               |
+| `rspack-react`                | React SPA on Rsbuild — the Worker runs under wrangler dev behind the dev server      |
+| `next`                        | Next.js (App Router) — OpenNext on Cloudflare + a standalone Lunora worker           |
+| `tanstack-start-react`        | TanStack Start (React) — SSR with live-loader routes                                 |
+| `tanstack-start-react-rspack` | TanStack Start (React) on Rsbuild — SSR composed into the Lunora worker              |
+| `tanstack-start-solid`        | TanStack Start (Solid)                                                               |
+| `vinext`                      | Next.js App Router on Vite (vinext) — composed into the Lunora worker (experimental) |
+| `vinext-pages`                | Next.js Pages Router on Vite (vinext) — composed into one worker (experimental)      |
+| `react-router`                | React Router (v7, framework mode) — SSR composed into the Lunora worker              |
+| `astro`                       | Astro (islands) — single-worker, Lunora composed into the adapter worker             |
+| `analog`                      | AnalogJS (Angular) — single-worker, Lunora mounted in Nitro                          |
+| `nuxt`                        | Nuxt (Vue) — single-worker, Lunora mounted in Nitro                                  |
+| `sveltekit`                   | SvelteKit — single-worker, Lunora composed into the adapter worker                   |
+| `expo`                        | React Native (Expo) — an iOS/Android/web app + a Lunora worker backend               |
+| `standalone`                  | Worker only — no frontend                                                            |
+
+The create-vite frameworks (`react`, `vue`, `solid`, `svelte`, plus
+`vanilla` via `--vite`) scaffold through the **overlay** engine (the official
+create-vite base plus the Lunora layer), while the rest are bespoke Lunora
+templates — `solid-v2` included, because create-vite's Solid base is still
+1.x. Run `lunora init` with no `-t` to pick from the same list interactively.
 
 Additional flags:
 
-- `--from <dir>` — copy from a local templates root instead of fetching remotely (offline-friendly; expects `<type>/` subdirs)
-- `--source <ref>` — override the remote template source (e.g. `gh:owner/repo/sub#ref`)
-- `--allow-unsafe-source` — permit `--source` values outside `gh:/github:/https://`
-- `--here` — add Lunora to an existing project: detect the framework, patch the config, scaffold `lunora/`, print per-framework wiring steps
-- `-i` / `--interactive` — after scaffolding, offer to add authentication and transactional email. Defaults on when stdin is a TTY; never prompts in CI.
-- `-y` / `--yes` — skip the auth/email offer and scaffold only.
-- `--ci <github\|gitlab>` — also scaffold a CI deploy pipeline (`.github/workflows/deploy.yml` for GitHub Actions, `.gitlab-ci.yml` for GitLab CI): a production `lunora deploy` on the default branch **and** a `lunora deploy --preview` on every pull / merge request. Set `CLOUDFLARE_API_TOKEN` and `CLOUDFLARE_ACCOUNT_ID` as the provider's secrets / CI-CD variables.
+- `--vite <framework>`: scaffold via the create-vite overlay for `react` | `vue` | `solid` | `svelte` | `vanilla`. Equivalent to passing the same value to `-t`.
+- `--from <dir>`: copy from a local templates root instead of fetching remotely (offline-friendly; expects `<type>/` subdirs)
+- `--source <ref>`: override the remote template source (e.g. `gh:owner/repo/sub#ref`)
+- `--ref <ref>`: fetch templates from a git branch, tag or commit (e.g. `--ref alpha`), overriding the version-derived default above
+- `--allow-unsafe-source`: permit `--source` values outside `gh:/github:/https://`
+- `--here`: add Lunora to an existing project (detect the framework, patch the config, scaffold `lunora/`, print per-framework wiring steps)
+- `-i` / `--interactive`: after scaffolding, offer to add authentication and transactional email. Defaults on when stdin is a TTY; never prompts in CI.
+- `-y` / `--yes`: scaffold only — skip every post-scaffold prompt (the auth/email offer, the dependency-install offer, and `git init`). The project is complete; run the printed install command yourself.
+- `--add <list>`: add features non-interactively after scaffolding — a comma-separated list of the values in the [`lunora add` table](#lunora-add), each applied with its shipped defaults. Bypasses the interactive picker and its sub-prompts.
+- `--dry-run`: walk every step (prompts and output included) without writing files, installing, or running git.
+- `--ci <github\|gitlab>`: also scaffold a CI deploy pipeline (`.github/workflows/deploy.yml` for GitHub Actions, `.gitlab-ci.yml` for GitLab CI), with a production `lunora deploy` on the default branch **and** a `lunora deploy --preview` on every pull / merge request. Set `CLOUDFLARE_API_TOKEN` and `CLOUDFLARE_ACCOUNT_ID` as the provider's secrets / CI-CD variables.
 
 ### `lunora add`
 
-Adds a feature to the **current** Lunora project (you must be inside one — a `lunora/` directory and a `wrangler.jsonc`). A thin front door over `lunora registry add`: it maps a feature to its registry item(s), applies them, and prints the next steps.
+Adds a feature to the **current** Lunora project (you must be inside one: a `lunora/` directory and a `wrangler.jsonc`). A thin front door over `lunora registry add`: it maps a feature to its registry item(s), applies them, and prints the next steps.
 
 ```bash
 lunora add auth                 # authentication (asks which provider)
@@ -89,50 +217,504 @@ lunora add auth --yes           # default provider (email & password), no prompt
 lunora add email                # transactional email (Cloudflare Email Workers + dev mail catcher)
 ```
 
-| Feature | Installs                                                  | Notes                                                                                                              |
-| ------- | --------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------ |
-| `auth`  | the `auth` registry item (or `auth-clerk` / `auth-auth0`) | Adds `@lunora/auth` + a D1 `DB` binding; verification / reset mail is captured into the studio **Mail** tab in dev |
-| `email` | the `mail` registry item                                  | Cloudflare Email Workers transport (`SEND_EMAIL` binding) + the dev mail catcher                                   |
+These are the features the interactive picker offers and `lunora init --add`
+accepts. Each is the registry item of the same name, applied with its shipped
+defaults — except `email`, which maps to the `mail` item, and `auth`, which
+picks between `auth`, `auth-clerk` and `auth-auth0`:
 
-Flags: `--provider <auth\|clerk\|auth0>`, `--yes`, `--from <dir>` (local registry root), `--source <ref>`, `--allow-unsafe-source`.
+| Feature             | Installs                                                         |
+| ------------------- | ---------------------------------------------------------------- |
+| `ai`                | LLMs via Workers AI (summarize, generate, stream)                |
+| `auth`              | Sign-up / sign-in (asks which provider)                          |
+| `auth-ui`           | Copy-in auth screens for your framework (sign in/up, reset, 2FA) |
+| `backup`            | Snapshot + restore your Durable Object data                      |
+| `browser`           | Headless browser screenshots + PDFs                              |
+| `cloudflare-access` | Zero Trust identity via Cloudflare Access                        |
+| `crons`             | Scheduled jobs via Cron Triggers (`@lunora/scheduler`)           |
+| `email`             | Cloudflare Email Workers + a dev mail catcher                    |
+| `flags`             | OpenFeature feature flags (`ctx.flags`)                          |
+| `hyperdrive`        | External Postgres/MySQL via Hyperdrive                           |
+| `payment`           | Stripe-first payments (checkout, subscription, webhooks)         |
+| `presence`          | Live presence / who's-online over hibernated WebSockets          |
+| `queue`             | Async message queues (push/pull consumers)                       |
+| `storage`           | Typed R2 buckets + signed URLs (`@lunora/storage`)               |
+| `workflow`          | Durable long-running workflows (`step.do`, sleep, branch)        |
+
+`auth` adds `@lunora/auth` plus a D1 `DB` binding, and its verification / reset
+mail is captured into the studio **Mail** tab in dev. Any other registry item
+name works here too (`auth-clerk`, …) — this table is the curated shortlist, not
+the whole registry; `lunora registry list` enumerates that.
+
+Flags: `--provider <auth\|clerk\|auth0>`, `--db <name>`, `--bucket <name>`, `--mail-to <address>`, `--yes`, `--from <dir>` (local registry root), `--source <ref>`, `--ref <ref>`, `--allow-unsafe-source`.
+
+### `lunora view`
+
+Opens the Lunora studio in your browser. The studio is always local: the
+running dev server records where it is serving it in `.lunora/dev.json`, so
+`view` opens that — the embedded studio server for the wrangler flavor, or
+Vite's `/__lunora` route when `@lunora/vite` owns the dev server. With no dev
+server running it falls back to the studio server's default,
+`http://127.0.0.1:6173`.
+
+```bash
+lunora view   # the running dev server's studio
+```
+
+<Callout type="info">
+    A deployed worker serves no studio — its `/_lunora/*` routes are RPC, WebSocket, status, migrate and admin only — so there is no remote URL to open. The
+    `--remote` flag this command used to take opened a 404 and has been removed.
+</Callout>
+
+### `lunora docs`
+
+Opens the documentation site in your browser. Pass an optional section path to
+jump straight to a page.
+
+```bash
+lunora docs                  # the docs home
+lunora docs addons/studio    # a specific section
+```
+
+### `lunora info`
+
+Prints the resolved project configuration: the installed `@lunora/*` versions, a
+`wrangler.jsonc` summary, and an overview of the tables declared in
+`lunora/schema.ts`. `--format json` emits the same snapshot machine-readably,
+useful in bug reports and CI diagnostics.
+
+```bash
+lunora info
+lunora info --format json
+```
+
+#### `--bindings`: what this Worker needs provisioned
+
+`--bindings` narrows the command to one question a machine asks — the binding
+manifest. It is the same document `lunora build --emit-bindings` hands a deployer
+and `lunora dev` writes for a task runner, from the same derivation, so those
+consumers cannot be told different things.
+
+```bash
+lunora info --bindings                  # bindings, crons and var NAMES
+lunora info --bindings --format json    # the manifest itself
+lunora info --bindings --out reqs.json  # write it
+```
+
+The manifest is a pure function of the project, so this answers without starting
+a dev server or producing a bundle — which is what a supervisor planning a
+multi-worker graph needs _before_ it starts anything. It never carries variable
+values, only their names.
+
+A project with no readable `wrangler.jsonc` exits non-zero rather than reporting
+an empty manifest: "this Worker needs nothing" is a claim a deployer acts on by
+provisioning nothing. `--out` without `--bindings` is an error.
+
+### `lunora doctor`
+
+A read-only preflight over the current project. It reports pass / warn / fail for:
+
+- **`wrangler.jsonc`**: that it exists, parses as JSONC, and declares the `SHARD`
+  Durable Object binding.
+- **D1 placeholders**: a `database_id` still left at the scaffold placeholder.
+- **Email destination**: a `send_email` binding whose `destination_address` is
+  still a placeholder.
+- **`.dev.vars`**: secrets present but left with unfilled values.
+- **`LUNORA_ADMIN_TOKEN`**: whether it is set.
+- **Containers**: every container declared in your config is actually exported
+  by the worker entry.
+- **Version skew**: `@lunora/*` packages spanning different versions, or mixing
+  release channels (e.g. stable + alpha).
+- **CLI shadowing**: a globally-installed `lunora` running instead of the
+  project's own, so the report describes a project this CLI is not pinned to.
+- **AI**: a project using `ctx.ai` with no `ai` binding, a
+  `LUNORA_AI_GATEWAY_TOKEN` with no gateway id to send it to, and (info) no
+  `LUNORA_AI_GATEWAY_ID`, which leaves `<provider>/<model>` slugs on the
+  account's `default` gateway.
+
+```bash
+lunora doctor
+lunora doctor --format json    # machine-readable; one JSON document on stdout
+```
+
+It writes nothing and exits non-zero when any hard check fails, so it works as a
+CI gate. See [Debugging](/docs/concepts/debugging) for how to act on each finding.
+
+#### Machine-readable output
+
+`--format json` prints exactly one JSON document on stdout; the human report is
+still rendered, but on stderr, so the document stays pipeable. The exit code is
+identical in both formats.
+
+```jsonc
+{
+    "code": 1,
+    "findings": [
+        {
+            "code": "d1-placeholder-id",
+            "fix": "Run `wrangler d1 create <name>` …",
+            "level": "fail",
+            "message": "D1 binding \"DB\" has a placeholder database_id …",
+        },
+        // …the info- and pass-level findings the summary counts
+    ],
+    "ok": false,
+    "summary": { "fail": 1, "info": 1, "pass": 1, "warn": 0 },
+}
+```
+
+`ok` is redundant with `code` on purpose: it is the field a consumer without a
+shell reaches for first. `pass`-level findings are included, so the document
+describes everything that was checked, not only what went wrong.
+
+#### Finding codes
+
+Branch on `finding.code`, never on `message`: the codes are the contract, the
+prose is not. New codes are added over time; treat an unknown one as advisory.
+
+| Code                               | Level | Meaning                                                                                                 |
+| ---------------------------------- | ----- | ------------------------------------------------------------------------------------------------------- |
+| `admin-token-missing`              | info  | `LUNORA_ADMIN_TOKEN` is not set (studio / admin RPCs stay disabled).                                    |
+| `admin-token-set`                  | pass  | `LUNORA_ADMIN_TOKEN` is set.                                                                            |
+| `ai-binding-missing`               | warn  | `ctx.ai` is used with no `ai` binding and no `LUNORA_AI_PROXY_URL`.                                     |
+| `ai-gateway-default`               | info  | No `LUNORA_AI_GATEWAY_ID` or proxy; slugs route through the `default` AI Gateway.                       |
+| `ai-gateway-token-unused`          | warn  | `LUNORA_AI_GATEWAY_TOKEN` is set, but `ctx.ai`'s binding path cannot send it.                           |
+| `artifacts-jurisdiction-mismatch`  | fail  | A bound Artifacts namespace sits in another jurisdiction than the schema's `.jurisdiction()`.           |
+| `artifacts-jurisdiction-ok`        | pass  | A bound Artifacts namespace is in the schema's jurisdiction.                                            |
+| `artifacts-jurisdiction-unchecked` | warn  | No `CLOUDFLARE_API_TOKEN` / account id, or the API refused, so a namespace's jurisdiction was not read. |
+| `artifacts-namespace-missing`      | fail  | A bound Artifacts namespace does not exist, so its first repo would create it unrestricted.             |
+| `cf-config-present`                | warn  | A Cloudflare CLI `cloudflare.config.*` is in the project root (Lunora never updates it).                |
+| `cimd-fetch-not-strictly-public`   | warn  | `@lunora/auth/cimd/workers` is imported without the `global_fetch_strictly_public` flag.                |
+| `cli-shadowed`                     | warn  | The running `lunora` is not the project's own install.                                                  |
+| `cpu-limit-missing`                | info  | No `limits.cpu_ms` caps a runaway handler's CPU burn.                                                   |
+| `d1-placeholder-id`                | fail  | A D1 binding still carries a scaffold `database_id`.                                                    |
+| `declared-export-missing`          | fail  | A declared container / workflow / agent is not exported by the worker entry.                            |
+| `declared-export-ok`               | pass  | A declared container / workflow / agent is exported by the worker entry.                                |
+| `declared-export-unchecked`        | warn  | Binding inference failed, so the worker-entry export check could not run.                               |
+| `dev-vars-missing-secret`          | warn  | `.dev.vars` has secret-looking keys left at placeholder values.                                         |
+| `do-class-budget-full`             | warn  | The account is at the Workers Paid cap of 500 classes (warns: an account fact).                         |
+| `do-class-budget-near`             | warn  | The account is within 10 classes of a Durable Object class cap (100 Free, 500 Paid).                    |
+| `do-class-budget-ok`               | pass  | The account has room under the Durable Object class caps.                                               |
+| `do-class-budget-unchecked`        | info  | No `CLOUDFLARE_API_TOKEN` / account id, or the API refused, so the class count was not read.            |
+| `email-destination-placeholder`    | warn  | A `send_email` binding has a placeholder `destination_address`.                                         |
+| `observability-full-sampling`      | info  | Logs or traces sample every request; Workers Observability is billed from 2026-12-01.                   |
+| `paid-product-unguarded`           | warn  | A metered product (Workers AI, Browser Rendering, Images) is bound, with no documented usage alert.     |
+| `paid-product-unknown`             | info  | Argo Smart Routing and Log Explorer enablement is a dashboard setting, which lunora cannot read.        |
+| `r2-lifecycle-unset`               | info  | An R2 bucket may lack an abort-incomplete-multipart lifecycle rule.                                     |
+| `scheduler-origin-missing`         | warn  | A `SchedulerDO` is declared but `LUNORA_ORIGIN_URL` is missing from wrangler.                           |
+| `schema-unreadable`                | fail  | `lunora/schema.ts` could not be parsed, so schema-derived checks were skipped.                          |
+| `service-workers-dev`              | warn  | A `lunora.config` service is still public on `workers.dev` with no route.                               |
+| `stale-lunora-json`                | warn  | `lunora.json` is present but no longer read (`lunora.config.*` replaced it).                            |
+| `vector-metadata-index-required`   | info  | A declared Vectorize metadata filter needs its metadata index created.                                  |
+| `vector-metadata-unfilterable`     | warn  | A metadata property has a type Vectorize cannot filter on.                                              |
+| `version-counter-spread`           | info  | Same-channel `@lunora/*` pre-release counters differ (normal, worth noting).                            |
+| `version-skew-channels`            | warn  | `@lunora/*` packages mix release channels (stable + alpha).                                             |
+| `version-skew-cores`               | warn  | `@lunora/*` packages span different `major.minor.patch` versions.                                       |
+| `wrangler-advisory`                | warn  | A wrangler.jsonc warning no more specific check claimed.                                                |
+| `wrangler-class-unexported`        | fail  | A `durable_objects` / `workflows` `class_name` is not exported by the worker entry.                     |
+| `wrangler-invalid`                 | fail  | A wrangler.jsonc validation error no more specific check claimed.                                       |
+| `wrangler-missing`                 | fail  | No `wrangler.jsonc` was found.                                                                          |
+| `wrangler-shard-binding-missing`   | fail  | `wrangler.jsonc` is missing the `SHARD` durable-object binding.                                         |
+| `wrangler-shard-binding-ok`        | pass  | `wrangler.jsonc` declares the `SHARD` durable-object binding.                                           |
+| `wrangler-unparseable`             | fail  | `wrangler.jsonc` was found but is not valid JSONC.                                                      |
 
 ### `lunora dev`
 
 Starts three concurrent processes: `wrangler dev` (Worker), the embedded
 Lunora studio, and codegen in watch mode. All three reload on file changes.
+In a project on `@lunora/vite` it spawns `vite dev` instead: the Vite plugin
+already runs the worker, studio, and codegen inside the Vite dev server.
 
 ```bash
-lunora dev                # default ports: studio 6173, worker 8787
-lunora dev --port 7000    # custom studio port
-lunora dev --no-studio    # Worker + codegen only
+lunora dev                       # default ports: studio 6173, worker 8787
+lunora dev --port 7000           # custom studio port
+lunora dev --worker-port 8790    # custom wrangler dev port
+lunora dev --inspector-port 9235 # pin wrangler's devtools inspector port
+lunora dev --no-studio           # Worker + codegen only
+lunora dev --local               # no remote proxy session (CI without Cloudflare credentials)
 ```
+
+A binding with no local mode (`ai`), in the app or in a `lunora.config`
+service, makes `wrangler dev` open a remote proxy session, and in a shell with
+no Cloudflare credentials that session fails and takes the whole dev session
+with it. `--local` starts it without the proxy; a call to such a binding then
+fails instead. It cannot be combined with `--remote`, and it overrides a remote
+default from `LUNORA_REMOTE` or `lunora.config`.
+
+When 8787 is taken, the worker lands on the next free port so two projects can
+run side by side. That silent move is refused when `.dev.vars` pins the worker
+origin to 8787 — an `AUTH_URL`/`BETTER_AUTH_URL` (or any other loopback origin
+on that port) would be left pointing at nothing. Free 8787, or pass
+`--worker-port` and update the pinned values to match.
+
+#### The two ports wrangler takes
+
+`wrangler dev` binds the worker **and** a devtools inspector, and both are
+configurable from `lunora dev`. Each resolves the same way — the flag first,
+then the project's `wrangler.jsonc`:
+
+| Port      | Flag               | `wrangler.jsonc` key | Neither                                      |
+| --------- | ------------------ | -------------------- | -------------------------------------------- |
+| Worker    | `--worker-port`    | `dev.port`           | the first free port at or above 8787         |
+| Inspector | `--inspector-port` | `dev.inspector_port` | wrangler's own default: 9229, probing upward |
+
+```jsonc
+// wrangler.jsonc — the project-level equivalent of the two flags
+{
+    "dev": {
+        "inspector_port": 9235,
+        "port": 8788,
+    },
+}
+```
+
+Pin the inspector in a repo that runs several Workers side by side. Left unset
+it starts at 9229 and climbs while ports are busy, so it eventually lands on a
+port a _sibling_ worker pinned — and the worker that dies is whichever bound
+second, which makes the failure non-deterministic and the port in the error
+message impossible to grep for.
+
+`--inspector-port` is `wrangler dev` only. On the Vite flavors the inspector
+belongs to `@cloudflare/vite-plugin`: pass it through the plugin instead —
+`lunora({ cloudflare: { inspectorPort: 9235 } })` — and for the SvelteKit /
+Nuxt worker sidecar pin `dev.inspector_port` in `wrangler.dev.jsonc`, the
+config that sidecar runs. `lunora dev` says so rather than dropping the flag.
+
+#### Sharing the dev server: `--tunnel`
+
+`--tunnel` puts the Worker on a public `https://<random>.trycloudflare.com` URL
+through a [Cloudflare Quick Tunnel](https://developers.cloudflare.com/cloudflare-one/networks/connectors/cloudflare-tunnel/do-more-with-tunnels/trycloudflare/)
+— for a webhook provider, a phone on another network, or a colleague. It needs
+[`cloudflared`](https://developers.cloudflare.com/cloudflare-one/networks/connectors/cloudflare-tunnel/downloads/)
+**2026.9.3 or newer** on your `PATH`; no Cloudflare account is needed on either
+side. The URL is new on every run.
+
+```bash
+lunora dev --tunnel                                     # PUBLIC: anyone with the URL gets in
+lunora dev --tunnel --allow-mail you@example.com        # only you, after a one-time PIN
+lunora dev --tunnel --allow-mail a@example.com --allow-mail b@example.com
+lunora dev --tunnel --allow-mail 'a@example.com,b@example.com'
+lunora dev --tunnel --allow-mail '*@example.com'        # anyone at that domain
+```
+
+Protection is your call, and it is off unless you ask for it. Without
+`--allow-mail` the tunnel is public and `lunora dev` prints a warning saying so.
+With it, each `--allow-mail` value is passed to cloudflared as
+`--allowed-mail` (a single address, a comma-separated list, or `*@domain`, and
+the flag repeats). Values are trimmed and empty ones dropped, so
+`--allow-mail ""` does not count as protection; an entry without an `@` is
+refused. A visitor then proves one of those addresses with a one-time
+PIN sent to the inbox before any request reaches the dev server. Their session
+lasts up to four hours, and access ends for everyone when `lunora dev` stops.
+PIN sign-in needs a browser, so a webhook sender or other non-interactive
+client cannot get through a protected tunnel. Use a public one for that, and
+stop it when you are done.
+
+What gets tunneled:
+
+- **The Worker, never Studio.** On the wrangler flavor Studio has its own port,
+  and that port is not tunneled. On the Vite flavors Studio sits on the same
+  origin at `/__lunora`, and its transport guard refuses forwarded requests,
+  which is every request through a tunnel. Leave `LUNORA_STUDIO_ALLOW_FORWARDED`
+  unset.
+- **On the Vite flavors, the URL Vite actually listens on.** Vite blocks hosts
+  it does not know. If the tunnel URL answers 403 ("Blocked request"), add
+  `server: { allowedHosts: [".trycloudflare.com"] }` to `vite.config`.
+
+The tunnel is best-effort. If `cloudflared` is missing or older than 2026.9.3,
+`lunora dev` prints the install link and runs without a tunnel. It does the
+same if cloudflared exits before assigning a URL. cloudflared runs with
+`--output json`, and the URL is read from its log lines. cloudflared is
+started directly, without a shell wrapper, so stopping dev stops cloudflared
+itself on every platform, Windows included. Quick tunnels are for development: Cloudflare caps each one at
+200 in-flight requests, and they do not support Server-Sent Events.
+
+The URL is also recorded in `.lunora/dev.json` as `tunnelUrl`.
+`lunora dev status` shows it (and `--json` carries it), and
+`lunora dev --background --tunnel` prints it once cloudflared reports it. That
+includes a Vite project, which then runs through the `lunora dev` daemon, so
+there is a process that owns cloudflared.
+
+`lunora doctor` does not check the `cloudflared` version. `lunora dev --tunnel`
+checks it when it starts.
+
+#### Background mode (AI agents)
+
+`--background` starts the dev server as a managed detached process: the
+command blocks until the server accepts requests, prints the URL + PID, then
+returns. A state record at `.lunora/dev.json` acts as a lockfile: starting
+again while a server runs reports the existing instance instead of spawning a
+conflict, and `stop` / `status` / `logs` resolve the running instance from it.
+Every subcommand is idempotent: stopping when nothing runs succeeds silently.
+
+```bash
+lunora dev --background   # detach; blocks until ready, prints URL + PID
+lunora dev status         # URL, PID, uptime (add --json for a machine-readable doc)
+lunora dev logs           # captured output of a background run (--lines n, 0 = all)
+lunora dev stop           # SIGTERM, SIGKILL escalation after 10s; clears the record
+```
+
+#### Files a supervisor reads
+
+`lunora dev` writes into the gitignored `.lunora/`, and names in its startup
+banner, whichever of these it produced:
+
+| File                                    | Carries                                                            |
+| --------------------------------------- | ------------------------------------------------------------------ |
+| `.lunora/dev.json`                      | live state — URL, PID, and `readyAt` once the server first answers |
+| `.lunora/dev-bindings.json` _(default)_ | the binding manifest, plus the origin it serves on                 |
+
+The manifest path is a default, not a fixed location — `--emit-bindings <file>`
+writes it elsewhere. And it is skipped entirely for a project with no readable
+`wrangler.jsonc`, since there is nothing to derive it from. So poll for it with
+your own timeout rather than blocking forever on a file this project may never
+produce; the banner names the path that was actually written.
+
+`readyAt` is what separates "the process exists" from "it is accepting
+requests" — the rest of the record is written before anything is listening.
+`lunora dev status` reports it as `ready` or `starting`, and `--json` carries
+`ready` / `readyAt`, so a task runner can gate a dependent step on a fact rather
+than a guessed sleep. A missing `readyAt` means _not ready yet_, never _never_.
+
+Naming a path with `--emit-bindings` also makes a derivation failure fatal, where
+the default write skips quietly: a named path means something is waiting on it.
+See [Monorepos and external IaC](/docs/concepts/monorepos-and-iac) for the full
+supervisor workflow.
+
+When an AI coding agent is detected (Claude Code, Cursor, Codex, Gemini CLI,
+Cline, …) background mode and JSON logging turn on automatically, so agent
+workflows need no flags. Set `LUNORA_AGENT_MODE=0` to opt out (or `=1` to
+force it). Agents can also poll `GET /_lunora/status` on the running worker, a
+public, secret-free health probe answering `{"ok":true}`.
+
+JSON log lines are available to everyone via `lunora dev --json` or
+`LUNORA_LOG_JSON=1`.
 
 ### `lunora deploy`
 
 Runs codegen, validates `wrangler.jsonc`, then invokes `wrangler deploy`.
 Pass `--migrate` to apply pending data migrations against the live worker
-immediately after a successful deploy.
+immediately after a successful deploy. It also requires `--migrate-yes` (an
+explicit confirmation; there is no environment variable for it), an admin token
+(`--migrate-token` or `LUNORA_ADMIN_TOKEN`), and `--migrate-url` unless this
+checkout is linked for the same `--env`. All three are checked **before**
+`wrangler deploy`, so a missing one aborts the deploy rather than skipping the
+migration.
 
 ```bash
 lunora deploy
 lunora deploy --env staging
-lunora deploy --migrate --migrate-token $LUNORA_ADMIN_TOKEN
+lunora deploy --migrate --migrate-yes --migrate-url https://app.example.com --migrate-token $LUNORA_ADMIN_TOKEN
+lunora deploy --temporary     # no Cloudflare account needed
+lunora deploy --dry-run       # run every pre-deploy gate, publish nothing
+lunora deploy --health-check  # …then prove the new version answers
 ```
 
-A successful first deploy auto-writes `.lunora/project.json` (see `lunora link`)
-from the deployed URL, so follow-up commands don't need `--url`.
+You don't need a Cloudflare account to try a deploy. `--temporary` ships to a
+temporary account (`wrangler deploy --temporary`): the Worker is live for about
+60 minutes, then you either claim it into an account or it's deleted. An account
+is only required to keep a deployment. (Wrangler errors if you're already
+authenticated, so drop `--temporary` once you've signed in.)
+
+`--dry-run` runs the full pre-deploy pipeline (codegen, the schema-drift gate,
+`wrangler.jsonc` validation, and the wrangler bundle) without publishing.
+
+A successful deploy auto-writes `.lunora/project.json` (see `lunora link`) from
+the deployed URL, so follow-up commands don't need `--url`. Every real deploy
+re-checks it: if the URL you just published to disagrees with the recorded one
+(a custom domain added, the worker renamed), the deploy **warns and keeps the
+recorded value** rather than rewriting an explicit `lunora link`. Run
+`lunora link --url <new>` to accept the change. `--temporary` never writes a
+link, since that account is gone in an hour.
 
 `--preview` uploads a new Worker **version** (`wrangler versions upload`) and
-prints a preview URL instead of going live — production traffic is untouched, and
-the post-deploy steps (migrations, baseline re-bless, auto-link) are skipped. The
-`--ci` pipelines use it to deploy a preview on every pull / merge request.
+reports its preview URL instead of going live: production traffic is untouched,
+and the post-deploy steps (migrations, baseline re-bless, link write) are
+skipped. The `--ci` pipelines use it to deploy a preview on every pull / merge
+request.
+
+#### Cloudflare CLI (`cf`)
+
+Lunora manages `wrangler.jsonc` and deploys with Wrangler. It does not support
+Cloudflare's beta `cf` CLI yet ([#964](https://github.com/anolilab/lunora/issues/964)).
+`cf` resource commands (zones, DNS, KV, …) are fine next to a Lunora project, but
+don't run `cf dev`, `cf build` or `cf deploy` on one: they read
+`cloudflare.config.ts`, which Lunora never updates, so the bindings, Durable
+Object classes and migrations Lunora adds would be silently missing. When a
+`cloudflare.config.{ts,mts,js,mjs}` sits in the project root, `lunora deploy`,
+`lunora codegen`, `lunora dev` (including `--background`) and the Vite and
+Rspack plugins (on dev and build alike) warn once per process tree, and
+`lunora doctor` reports `cf-config-present` on every run. The warning never
+blocks: nothing `lunora deploy` runs reads the file.
+
+#### `--health-check`
+
+After a live deploy, probe the new version's health route
+(`/_lunora/health/ready`, falling back to `/_lunora/health` on deployments
+without a readiness gate) and fail the command when it never answers. Five
+attempts, two seconds apart. A fresh version takes a moment to propagate, and a
+fixed ceiling is what a CI timeout can be set against.
+
+It is opt-in on purpose: a worker whose health route is admin-gated or
+unreachable from the runner must still be deployable, and a default-on network
+step would turn a good deploy into a red build for an unrelated reason.
+
+A red probe exits non-zero and says which half failed: the deploy succeeded,
+the probe did not. The probe runs **before** `--migrate`, so a worker that can't
+serve is never migrated.
+
+#### Machine-readable output
+
+`--format json` writes exactly one JSON document to stdout (every human line,
+including wrangler's own output, goes to stderr). It carries a `deployment`
+object describing what this run put where:
+
+```jsonc
+{
+    "code": 0,
+    "deployment": {
+        "deployedAt": "2026-08-08T09:12:33.417Z",
+        "dryRun": false,
+        "env": "production",
+        "preview": false,
+        "url": "https://my-app.acme.workers.dev",
+        "workerName": "my-app",
+    },
+    "healthCheck": { "ok": true, "url": "https://my-app.acme.workers.dev/_lunora/health/ready" },
+    // …validation, schemaDrift, mintedSecretsFile
+}
+```
+
+`dryRun` and `preview` are always present, so a consumer can tell "nothing went
+live" from "went live" without inferring it from a missing `url`. There is no
+version id: the pinned wrangler has no structured deploy output, and
+`lunora cloudflare deployments list` is the supported way to read one.
+
+A release pipeline reads the URL out of the same document it already checks the
+exit code of:
+
+```bash
+set -euo pipefail
+
+result=$(lunora deploy --env production --format json --health-check)
+url=$(echo "$result" | jq -r '.deployment.url')
+
+# The document is printed on failure too, and a failed deploy carries no URL —
+# without this guard `jq` yields "null" and the smoke test requests null/api/smoke,
+# so the pipeline fails at the wrong step.
+if [ -z "$url" ] || [ "$url" = "null" ]; then
+    echo "deploy reported no URL" >&2
+    exit 1
+fi
+
+curl -fsS "$url/api/smoke"
+```
 
 ### `lunora build`
 
 Runs the full pre-deploy pipeline (codegen, the schema-drift gate, `wrangler.jsonc`
 validation) and writes the bundled Worker to disk **without publishing**
 (`wrangler deploy --dry-run --outdir`). This is the build half of a build/deploy
-split — produce a verified artifact in one CI step, then ship it with
+split: produce a verified artifact in one CI step, then ship it with
 `lunora deploy --prebuilt` in another.
 
 ```bash
@@ -159,27 +741,228 @@ Once linked, `lunora run`, `lunora logs`, and `lunora deploy --migrate` resolve
 the worker from the link automatically. The bulk / destructive commands
 (`export`, `import`, `migrate`, `backup`, `seed`, `insights`) use the link only
 under `--prod`, so a production link never silently becomes the target of an
-unguarded write. The link carries only public identifiers — never secrets.
+unguarded write. The link carries only public identifiers, never secrets.
 
-### `lunora deployments`
+### Calling a function that requires a signed-in user
+
+`lunora run` sends an anonymous RPC. Any app that configures `authorizeShard`
+(the recommended posture) default-denies that, so the call comes back
+`FORBIDDEN_SHARD` no matter what you pass.
+
+`--as` is the way through: it dispatches via the admin-gated `runAs` op, which
+forges the named identity for that one call, so the function and any RLS
+middleware observe that user instead of an anonymous caller.
+
+```bash
+lunora run messages:list --as user_123
+lunora run messages:list --as user_123 --claims '{"org":"acme"}'   # extra identity claims
+```
+
+It needs the admin bearer, resolved in this order: `--token`, then
+`LUNORA_ADMIN_TOKEN`, then `.dev.vars`. The last applies only to a loopback
+target, so a dev secret is never sent to a deployed worker. Against your own dev
+server that means no flags at all.
+
+Identity forging is admin-gated, refuses to target reserved admin functions, and
+is recorded in the shard's audit trail. Treat the admin bearer accordingly.
+
+### `lunora cloudflare`
+
+Tools that only apply to an app deployed to your own Cloudflare account. Lunora
+also deploys to Node and celld hosts, where they have no meaning: on such a
+project every tool refuses and names the host in use (or the `--target` flag
+that chose it). The host comes from `--target`, then `target` in
+`lunora.config.*`, then Cloudflare. `lunora cloudflare` on its own lists the
+tools; `lunora cloudflare --help` shows every tool's arguments and options.
+`lunora cloudflare ai` and `lunora cloudflare ai gateway` are accepted for
+`ai-gateway`.
+
+These commands used to be top-level (`lunora containers`, `lunora deployments`,
+`lunora ai gateway`). The old names now exit `2` and print the new command to
+run.
+
+#### `lunora cloudflare alerts`
+
+Usage alerts for a self-hosted Cloudflare account, so a runaway Worker or a
+Durable Object loop shows up in your inbox instead of on next month's invoice.
+`lunora cloudflare alert` works too. Walkthrough:
+[Protect yourself from a runaway bill](/docs/runaway-bill).
+
+```bash
+lunora cloudflare alerts                                          # last month's usage + which products have an alert
+lunora cloudflare alerts setup --email ops@example.com --dry-run  # the plan, nothing written
+lunora cloudflare alerts setup --email ops@example.com --yes      # create / update the alerts
+lunora cloudflare alerts test                                     # what Cloudflare has delivered so far
+```
+
+It calls the Cloudflare API with `CLOUDFLARE_API_TOKEN` (a `wrangler login`
+session is not reused) on the account from `CLOUDFLARE_ACCOUNT_ID` or
+wrangler's `account_id`. The token needs **Notifications Write** for `setup`
+(**Notifications Read** is enough for `status` and `test`) and **Account
+Analytics Read** for the usage history; a refusal names the missing one.
+
+| Subcommand | What it does                                                                                                                                                                  |
+| ---------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `status`   | Default. Last calendar month's usage for Workers requests and CPU, Durable Objects requests, duration and rows, and D1 rows, and which enabled usage alert covers each.       |
+| `setup`    | A Usage Based Billing notification for Workers requests and Durable Objects requests at `--multiplier` (default 3) × last month, never below the included allowance.          |
+| `test`     | Each webhook destination's last delivery and failure, and the notifications Cloudflare sent for these policies. It sends nothing: Cloudflare's API has no test-send endpoint. |
+
+`setup` options: `--email <address>` and `--webhook <destination-id>` (each
+repeatable, at least one required), `--multiplier <n>`,
+`--threshold <metric>=<n>` (repeatable), `--allow-floor`,
+`--replace-recipients`, `--dry-run`, and `--yes` (required when stdin is not a
+TTY or with `--format json`).
+
+- **Product identifiers.** The `product` values come from the account when it
+  offers them, and otherwise from the list Cloudflare documents in its
+  [Terraform provider (v4.52.0)](https://github.com/cloudflare/terraform-provider-cloudflare/blob/v4.52.0/docs/resources/notification_policy.md):
+  `worker_requests` and seven Durable Objects products. There is **no usage
+  alert for D1 or for Workers CPU time**; for those the budget alert is the
+  only guard.
+- **Only request alerts are automatic.** Durable Objects duration and storage
+  reads/writes are metered in units that cannot be matched to an analytics
+  reading, so `setup` skips them unless you set a limit with
+  `--threshold do-duration=<n>` (metrics: `workers-requests`, `do-requests`,
+  `do-duration`, `do-rows-read`, `do-rows-written`).
+- **Unreadable usage is not zero.** When last month's usage cannot be read,
+  `setup` writes no alert for that metric and exits `1`, rather than setting
+  one at the floor that an already-busy account would trip every month. Pass
+  `--threshold`, or `--allow-floor` to accept the floor anyway.
+- **Re-runs are safe.** Its policies are named `Lunora usage: <metric>` and
+  found by that name, so a re-run updates them in place. An update adds the new
+  recipients to the existing ones (`--replace-recipients` replaces them; the
+  plan and the prompt list what is added or removed). An enabled alert of your
+  own on the same product is left alone; a disabled one does not count.
+- **Limits are read back.** Cloudflare does not document the unit of a usage
+  alert's limit. After writing, `setup` reads each policy back and shows the
+  limit Cloudflare stored, and it warns when your own alert's limit differs
+  from its plan by 100× or more.
+- **Budget alerts cannot be created or checked.** The account-wide USD budget
+  alert has no API; every subcommand prints where to make it: Manage Account >
+  Billing > Billable Usage > Create budget alert.
+- Usage notifications are offered to Pay-as-you-go accounts only; on an
+  ineligible account `setup` exits `4` without writing.
+
+#### `lunora cloudflare ai-gateway`
+
+`ctx.ai.model("<provider>/<model>")` (for example `"anthropic/claude-sonnet-5"`)
+routes through [Cloudflare AI Gateway](https://developers.cloudflare.com/ai-gateway/)
+over the Workers `AI` binding. The gateway is the one named by
+`LUNORA_AI_GATEWAY_ID` in the Worker's `vars`; without it, calls go through the
+account's auto-created `default` gateway. `lunora cloudflare ai-gateway` gives
+the app its own:
+
+```bash
+lunora cloudflare ai-gateway                 # gateway id = the worker `name` in wrangler.jsonc
+lunora cloudflare ai-gateway --id my-gateway # explicit id
+lunora cloudflare ai-gateway --no-logs       # don't store prompts/responses in the gateway
+lunora cloudflare ai-gateway --dry-run       # print the plan; no API call, no file edit
+```
+
+It creates the gateway over the Cloudflare API (or reuses it when the id already
+exists on the account), then writes `LUNORA_AI_GATEWAY_ID` and
+`LUNORA_AI_GATEWAY_ACCOUNT_ID` into the top-level `vars` of `wrangler.jsonc`,
+keeping comments and formatting. Redeploy afterwards so the Worker sees them.
+
+Credentials follow wrangler's non-interactive convention: `CLOUDFLARE_API_TOKEN`
+(a token with the **AI Gateway Write** permission) and `CLOUDFLARE_ACCOUNT_ID`,
+which falls back to the config's `account_id`. The binding is pre-authenticated,
+so no gateway token is needed.
+
+Log collection is **on** by default, matching the dashboard, so requests, costs
+and errors show up in the gateway's logs. Those logs include prompts and
+responses; pass `--no-logs` if they may carry data you must not store.
+Caching and rate limiting are left off.
+
+The gateway does not pay for third-party models on its own. Before the first
+`<provider>/<model>` call, set one of these up in the dashboard:
+
+- **Unified Billing** for OpenAI, Anthropic, Google, xAI, Groq and DeepSeek: load
+  credits on the account
+  ([docs](https://developers.cloudflare.com/ai-gateway/features/unified-billing/)).
+- **A key stored on the gateway** for other OpenAI-compatible providers (Mistral,
+  Perplexity, OpenRouter, …)
+  ([docs](https://developers.cloudflare.com/ai-gateway/configuration/bring-your-own-keys/)).
+
+#### `lunora cloudflare containers`
+
+Thin wrappers over `wrangler containers …`, so container image and instance
+management lives under the same CLI as the rest of the deploy workflow. The
+split matters in CI: build and push the image in one step, then ship the worker
+with `lunora deploy` in another.
+
+```bash
+lunora cloudflare containers build ./containers/transcoder --tag transcoder:v1
+lunora cloudflare containers build ./containers/transcoder --tag transcoder:v1 --push
+lunora cloudflare containers push transcoder:v1
+lunora cloudflare containers images list
+lunora cloudflare containers images delete transcoder:v1
+```
+
+`build` uses your local Docker engine; `--push` uploads to the Cloudflare
+Registry in the same step. `--env` selects the Cloudflare environment. See
+[@lunora/container](/docs/packages/container) for declaring containers in the
+first place.
+
+#### `lunora cloudflare deployments`
 
 Inspect deployment history and move traffic between Worker versions (wraps
 `wrangler versions` / `wrangler rollback`):
 
 ```bash
-lunora deployments list                       # 10 most recent deployments
-lunora deployments inspect <version-id>       # view a specific Worker version
-lunora deployments rollback --yes             # roll back to the previous version
-lunora deployments promote <version-id> --yes # send 100% of traffic to a version
+lunora cloudflare deployments list                       # 10 most recent deployments
+lunora cloudflare deployments inspect <version-id>       # view a specific Worker version
+lunora cloudflare deployments rollback --yes             # roll back to the previous version
+lunora cloudflare deployments promote <version-id> --yes # send 100% of traffic to a version
 ```
 
 `rollback` and `promote` change live traffic, so they require `--yes`.
 
+#### `lunora cloudflare profile`
+
+Capture an on-demand CPU or heap profile from the **live** Worker, with no
+redeploy, and save it as a gzip-compressed pprof file:
+
+```bash
+lunora cloudflare profile                                   # 10s CPU profile of the latest version
+lunora cloudflare profile --type heap --duration-ms 30000   # 30s allocation profile
+lunora cloudflare profile --version-id <version-id> --out cpu.pprof.gz
+lunora cloudflare profile --namespace-id <id> --actor-id <64-hex>   # one Durable Object instance
+go tool pprof -http=: cpu.pprof.gz                          # view the flamegraph
+```
+
+It calls the Workers profile API, so it needs `CLOUDFLARE_API_TOKEN` with the
+"Workers Scripts Read" permission and an account id (`CLOUDFLARE_ACCOUNT_ID` or
+`account_id` in wrangler config). `--duration-ms` is 1000–50000. The capture
+does not invoke your code: the target version must be loaded and receiving
+traffic while it runs, and a Durable Object must be active. `--env staging`
+profiles `<name>-staging`. A heap profile records allocations made during the
+window, not retained memory. Set `upload_source_maps: true` in the wrangler
+config so TypeScript function names are not mangled; the command warns if it
+is missing. The same capture is available from the dashboard's Observability
+tab (Flamegraph).
+
 ### `lunora prepare`
 
-Same pipeline as `lunora deploy` but stops before `wrangler deploy` — no
-Vite step, no network traffic. Use it in CI to catch codegen drift and
-`wrangler.jsonc` validation errors before the deploy job runs.
+Literally the same pipeline as `lunora deploy`, stopped before anything ships —
+one implementation, so what `prepare` accepts is what `deploy` accepts. No Vite
+step, no container image build, no `wrangler` invocation, no network traffic.
+
+It runs, and fails on, every pre-deploy gate:
+
+- codegen, its `postcodegen` hook, and platform-portability diagnostics
+- **ERROR-level advisories** (CI-default; `--no-strict-advisories` opts out)
+- the schema-drift gate — breaking schema changes with no new migration
+- binding provisioning into `wrangler.jsonc`
+- a placeholder D1 `database_id`, localhost origins in `vars`, missing container
+  sources, and an unavailable Docker daemon when Dockerfile containers are
+  declared
+- `wrangler.jsonc` validation
+
+<Callout type="info">
+    Earlier versions checked less than `deploy` did, so `prepare` could report "project is ready to deploy" for a project the deploy then refused. If you pinned
+    a CI job to the old behaviour, expect it to start failing on exactly the things the deploy would have.
+</Callout>
 
 ### `lunora verify`
 
@@ -187,23 +970,79 @@ Validates `wrangler.jsonc`, runs a codegen dry-run, and type-checks the
 project with `tsc --noEmit`. Nothing is written to disk. Exits non-zero on
 any error so you can gate merges on it.
 
+The codegen dry-run applies all three of codegen's gates — portability
+diagnostics, the schema-drift gate, and ERROR-level advisories — so a project
+`verify` passes is one `prepare` and `deploy` accept. The advisory gate takes the
+same `--no-strict-advisories` opt-out and the same CI-on/local-off default as
+everywhere else.
+
+Pass `--env <name>` to validate the `env.<name>` view of `wrangler.jsonc`, the
+way `lunora deploy --env <name>` will. It matters for bindings: `durable_objects`
+is not inheritable, so one declared only under `env.production` is invisible from
+the top level, and a PR check without the flag validates a surface the deploy
+does not use.
+
+Part of the wrangler validation is a cross-check of every declared
+`durable_objects` / `workflows` `class_name` against the worker entry's exports —
+wrangler refuses to bundle a Worker whose classes are not exported, and that used
+to surface only at `lunora build`. `lunora doctor` reports the same finding as
+`wrangler-class-unexported`.
+
 ### `lunora migrate`
 
 Manages both schema migrations (D1 SQL) and online data migrations (row
 transforms that run against a live worker):
 
 ```bash
-lunora migrate generate add_email_index   # diff schema.ts → emit D1 SQL
-lunora migrate create --name backfill_at  # scaffold a data-migration stub
-lunora migrate up                         # run pending data migrations (dev)
-lunora migrate up --prod --url <url>      # run against production (requires --yes)
-lunora migrate status                     # show pending / applied / failed
+lunora migrate generate add_email_index        # diff schema.ts → emit D1 SQL
+lunora migrate create --name backfill_at       # scaffold a data-migration stub
+lunora migrate up backfill_at                  # run one data migration (dev)
+lunora migrate up backfill_at --prod --url <url>  # against production (requires --yes)
+lunora migrate down backfill_at                # run its `down` direction
+lunora migrate status backfill_at              # applied / pending / failed
 ```
 
+`up`, `down` and `status` each take the migration id declared in
+`lunora/migrations.ts` — there is no "run everything pending" mode here;
+`lunora deploy --migrate` is what iterates the declared ids in order.
+
 `generate` parses `lunora/schema.ts`, filters to `.global()` tables (sharded
-tables live in per-DO SQLite — no migration needed), diffs against
+tables live in per-DO SQLite, so they need no migration), diffs against
 `lunora/migrations/.snapshot.json`, and emits a timestamped SQL file. Commit
-both the SQL and the snapshot — they are deterministic.
+both the SQL and the snapshot: they are deterministic.
+
+Apply the SQL with `wrangler d1 execute <database> --file
+lunora/migrations/<file>.sql`. It is a multi-statement file, so it is not a
+`@lunora/d1` `Migration` — that API takes one statement per entry. In practice
+most of the file is redundant: the worker provisions every `.global()` table on
+first use, idempotently and additively. What it will never do is drop or
+retype, so the `DROP TABLE` / `DROP INDEX` statements and the hand-written
+block under "NOT auto-generated" are the parts worth applying.
+
+#### `lunora migrate d1-to-hyperdrive`
+
+The third kind: a **backend** migration that copies `.global()` table data out
+of a D1-backed deployment into a Hyperdrive-backed one, for when a project
+outgrows D1. It is a guided orchestration over the admin export/import — it
+streams the source's global rows to an NDJSON dump, imports them into the
+target (whose `.global({ backend: "hyperdrive" })` tables route the writes to
+Hyperdrive), and verifies the row counts match. The blue-green flow: deploy the
+new Hyperdrive worker alongside the old D1 one, then point the two legs at them.
+
+```bash
+lunora migrate d1-to-hyperdrive \
+  --from-url https://old-worker.example.workers.dev \
+  --to-url   https://new-worker.example.workers.dev
+```
+
+The two URLs must be **distinct deployments**: given one, both legs would
+address the same database and the run would report "counts match" having done
+nothing, so the command refuses. `--from-token` / `--to-token` each fall back to
+`--token` (prefer `LUNORA_ADMIN_TOKEN`). `--tables a,b` limits the move to named
+`.global()` tables (default: all of them), and `--out <path>` keeps the
+intermediate NDJSON dump — without it the dump is staged in a private `0700`
+temp directory and discarded. Sharded tables are untouched: they live in
+per-Durable-Object SQLite, not in D1.
 
 ### `lunora run`
 
@@ -216,6 +1055,168 @@ lunora run messages:send --args '{"channelId":"general","text":"hi"}'
 `--shard` overrides shard routing; `--url` lets you point at a deployed
 Worker instead of `http://localhost:8787`.
 
+### `lunora codegen`
+
+Runs codegen once and exits, the one-shot form of what `lunora dev` and the
+Vite plugin do in watch mode. It reads `lunora/schema.ts` plus your function
+files and writes `lunora/_generated/`.
+
+```bash
+lunora codegen
+lunora codegen --api-spec both     # also emit openapi.json and openrpc.json
+lunora codegen --format json       # machine-readable output
+```
+
+It also keeps your linter and formatter skipping what it just wrote. `lunora
+init` offers this and `lunora add` re-applies it, which covers a project Lunora
+scaffolded — but a codebase that adopted Lunora later runs neither, so nothing
+ever told its ESLint / Prettier / Biome / oxlint about `_generated/`, and the
+first lint after adoption buries the real findings under thousands of
+generated-file errors. Detection is driven by the tools already in the project,
+every writer is idempotent, and a config it cannot safely edit (an ESLint flat
+config is arbitrary JavaScript; a monorepo-root config belongs to the workspace)
+is printed for you to paste rather than rewritten.
+
+`--api-spec` selects which API description to emit alongside the generated
+modules: `openapi` (the default) writes `openapi.json`, `openrpc` writes
+`openrpc.json`, `both` writes both, and `none` writes neither.
+
+The success line names the files this run actually emitted, which is not a fixed
+set: alongside the always-written modules, the per-feature ones (containers,
+workflows, agents, queues, scheduler, seed, collections) are written only while
+their feature is in use and **deleted** when it stops being, and the spec
+artifacts follow `--api-spec`. [Codegen output](#codegen-output) below describes
+what each file is for.
+
+### `lunora advisor`
+
+Scores your app's static advisor findings — the splinter-style schema, query and
+security lints from `@lunora/advisor` — into a health map, so the trend is a
+number CI can gate on rather than a wall of warnings:
+
+```bash
+lunora advisor                              # score the app, write lunora.advisor.map.json
+lunora advisor --all                        # every procedure as a check matrix
+lunora advisor --entry messages#sendMessage # inspect one procedure
+lunora advisor --min-score 80               # exit non-zero below 80
+lunora advisor --baseline                   # fail on any regression vs the committed map
+lunora advisor --no-write                   # report only, write no artifact
+```
+
+Commit the map: `--baseline` diffs against it, so a PR that makes the schema
+worse fails even while the absolute score is still above `--min-score`. The same
+findings drive the studio's **Advisors** tab.
+
+### `lunora eval`
+
+Discovers every `*.eval.ts` under `evals/` and runs it through its default-
+exported `run()`, which calls `evaluate` / `agentHarness` from
+`@lunora/testing`. Entirely in-process — unlike `seed` and `insights` it needs
+no running worker:
+
+```bash
+lunora eval                                     # run every eval, print the aggregate table
+lunora eval --threshold 0.8                     # non-zero exit below an average of 0.8
+lunora eval --dir evals/support --format json   # a subset, machine-readable
+```
+
+`--threshold` is a global score gate in `[0, 1]`; an eval that exports its own
+`threshold` wins over it for that eval.
+
+### `lunora sdk`
+
+Generates a self-contained, typed client SDK for another language from the
+project's OpenRPC surface — transport included, so the emitted package has no
+Lunora runtime dependency:
+
+```bash
+lunora sdk generate --lang python                  # → ./sdk/python
+lunora sdk generate --lang go --out ./clients/go   # choose the output directory
+lunora sdk generate --lang dart                    # Flutter-ready; live queries arrive as a Stream
+lunora sdk generate --lang rust --from ./sdks      # copy the transport from a local checkout
+```
+
+`--lang` defaults to `python`; `lunora sdk generate --help` lists the registered
+targets, and an unrecognised one is refused with the same list. The spec
+defaults to `./lunora/_generated/openrpc.json`, so run `lunora codegen
+--api-spec openrpc` (or `both`) first — `--spec <path>` points at another
+document. The transport is
+fetched at this CLI's own release tag so it matches the generated surface;
+`--ref` overrides that and `--from <dir>` copies from a local directory of
+per-language transports instead.
+
+### `lunora insights`
+
+Reports per-function metrics from a **running** worker, ranked into three
+sections:
+
+- **Write-conflict hot-spots**: functions that lose the OCC race most often.
+  These are your sharding candidates: a high conflict rate means many writers are
+  contending on one Durable Object.
+- **Error hot-spots**: functions by error rate, with the most recent error
+  message.
+- **Latency outliers**: slowest single call, plus the mean, per function.
+
+```bash
+lunora insights                      # against the local dev worker
+lunora insights --shard channel:demo # scope to one shard
+lunora insights --limit 25           # more rows per section (default 10)
+lunora insights --format json        # raw report
+lunora insights --prod --url https://app.example.com --token $LUNORA_ADMIN_TOKEN
+```
+
+Targeting production requires an explicit `--url`. See
+[Sharding](/docs/concepts/sharding) for what to do about a write-conflict
+hot-spot, and [Performance](/docs/concepts/observability) for the latency side.
+
+### `lunora profile`
+
+Captures an on-demand CPU or heap profile from a **running Node-target** app and
+writes it as a gzip-compressed pprof file. Read it with `go tool pprof`, or load
+it into Pyroscope or Speedscope.
+
+The app serves the capture itself. It mounts `createNodeProfileHandler` from
+`@lunora/platform-node` on a route it chooses, and that route is what `--url`
+points at. There is no default URL for a Node app, so `--url` is required.
+
+```bash
+lunora profile --target node --url https://app.example.com/__profile
+lunora profile --target node --url http://localhost:3000/__profile --type heap --duration-ms 30000
+lunora profile --target node --url https://app.example.com/__profile --out cpu.pprof.gz
+```
+
+- `--type cpu` (default) samples the call stack for the window. The app has to
+  be doing work during it, or the profile is empty. Functions V8 had already
+  inlined before the capture began can appear under their caller rather than
+  under their own name, so a long-running, warm app may show a caller where the
+  work is done.
+- `--type heap` reports the sampled allocations still alive when the window
+  ends. Allocations freed during the window do not appear.
+- `--duration-ms` is an integer from 1000 to 50000 (default 10000).
+- The bearer is `--token`, else `LUNORA_ADMIN_TOKEN`. It must match the token the
+  app passes to `createNodeProfileHandler`. The `.dev.vars` fallback applies to
+  localhost only, as it does for the other admin commands.
+- Only one capture runs per app process. A second request gets `409` until the
+  first finishes.
+
+On a project that deploys to Cloudflare the command refuses and points at
+`lunora cloudflare profile`. A project with no configured target resolves to
+Cloudflare, so the Node target must be passed with `--target node`, or set as the
+`target` in `lunora.config`.
+
+### `lunora reset`
+
+Clears local Miniflare state: the simulated Durable Objects, D1, R2, and KV
+that `lunora dev` persists under `.wrangler/state`. This is the "start from an
+empty database" button for local development; it never touches a deployed
+worker.
+
+```bash
+lunora reset          # clear Miniflare state (prompts to confirm)
+lunora reset --all    # also remove .lunora-cache
+lunora reset --yes    # skip the prompt (required when stdin is not a TTY)
+```
+
 ### `lunora env`
 
 Manage `.dev.vars` (local secrets) and push them to Cloudflare via `wrangler secret`:
@@ -225,20 +1226,30 @@ lunora env list              # list all keys in .dev.vars
 lunora env get DATABASE_URL  # read a single key
 lunora env set FOO bar       # write a key
 lunora env unset FOO         # remove a key
+lunora env generate          # generate strong values for the project's secrets
+lunora env generate AUTH_SECRET --set  # generate one and write it into .dev.vars
 lunora env push              # upload to Cloudflare (prompts unless --yes)
 lunora env push --prod --yes # push to the production environment
 lunora env diff              # compare local .dev.vars keys against Cloudflare
-lunora env doctor            # validate .dev.vars against wrangler.jsonc bindings
+lunora env doctor            # validate .dev.vars against .dev.vars.example
 ```
+
+`generate` mints cryptographically-strong values (32-byte hex). With no key it
+mints every secret this project can generate locally (`AUTH_SECRET`, …); name
+one to mint just that. By default it **prints** `KEY=value` lines on stdout — so
+you can pipe them into `wrangler secret put` — and `--set` writes them into
+`.dev.vars` instead. Minting replaces a value irreversibly, so `--set` refuses
+to overwrite a key that already holds a live (non-placeholder) secret unless you
+add `--yes`.
 
 `diff` reads the deployed Worker's secret **names** via `wrangler secret list`
 and reports which keys are local-only (need a `push`), remote-only, or in both.
 Cloudflare never returns secret **values** (they are write-only), so `diff`
-compares names — not values. Pass `--prod` to target the production environment.
+compares names, not values. Pass `--prod` to target the production environment.
 
 ### `lunora export` / `lunora import`
 
-Bulk data transfer between workers — mirrors Convex's `convex export` /
+Bulk data transfer between workers, mirroring Convex's `convex export` /
 `convex import`:
 
 ```bash
@@ -257,9 +1268,136 @@ Managed snapshot backups and native point-in-time recovery (PITR):
 lunora backup create                   # snapshot the running shard
 lunora backup list                     # list available snapshots
 lunora backup restore <id>             # restore a snapshot
+lunora backup retention                # what a prune would delete
+lunora backup prune                    # delete it — the only command that removes a backup
 lunora backup pitr --at 2024-06-01T12:00:00Z   # read PITR bookmark
 lunora backup pitr --at 2024-06-01T12:00:00Z --restore --yes   # restore to that point
 ```
+
+`create`, `list` and `restore` write to a directory (`--dir`, default
+`.lunora-backups`) or to an R2 bucket in your account (`--bucket <name>`,
+`--prefix`, default prefix `backups/`). The snapshot is identical either way;
+only the destination changes, and bucket traffic goes through the worker's
+admin storage routes under the admin bearer, so the CLI holds no R2
+credentials. `restore --verify` checks the snapshot's SHA-256 against the
+manifest before importing anything, and fails when no checksum was recorded.
+One invocation reads one destination: a bucket and a directory are never
+merged into one listing.
+
+```bash
+lunora backup create --bucket default --tables users,messages
+lunora backup list --bucket default
+lunora backup restore 2026-06-01T12:00:00.000Z --bucket default --verify
+```
+
+A backup **id** is the ISO timestamp the snapshot was taken at
+(`2026-06-01T12:00:00.000Z`). That is what `list` prints first and what
+`restore` matches. The **filename / object key** is the same timestamp with `:`
+and `.` swapped for `-`, because those characters are awkward in filenames
+(`lunora-backup-2026-06-01T12-00-00-000Z.ndjson`). `restore` takes either: an id
+it finds in the manifest, or a path/key you name directly.
+
+A bucket-backed snapshot goes through the checksum-verified admin upload route,
+which takes one body and caps it at 32 MiB. Above that `create --bucket` refuses
+and names the workaround (`--tables` to narrow the snapshot, or `--dir` plus
+`wrangler r2 object put` to move the file yourself). The alternative (the
+signed-PUT fallback the blob importer uses for large files) is not
+checksum-verified and needs URL signing configured, which is not what the copy
+you restore from should depend on.
+
+See [Backups, export & import](/docs/concepts/backups) for the full picture:
+snapshot format, restore drills, and moving data between deployments.
+
+### `lunora seed`
+
+Generates deterministic fake data from `lunora/schema.ts` and bulk-inserts it
+through the worker's admin endpoint. Rows are derived from a seed number, so the
+same `--seed` always produces identical ids and non-time columns. Columns named
+like a timestamp (`createdAt`, `expiresAt`, …) are generated relative to the
+wall clock, so a fixture that must be byte-identical across machines and CI runs
+needs `--now <epoch-ms>` pinned alongside `--seed`.
+
+```bash
+lunora seed                          # every table, default 10 rows each
+lunora seed --table posts --count 50 # 50 posts; FK parents seeded automatically
+lunora seed --seed 7 --dry-run       # print the NDJSON for seed 7, insert nothing
+lunora seed --reset                  # wipe local .wrangler/state, then seed
+```
+
+Seeding respects foreign keys: naming one table with `--table` also seeds the
+tables it references. `--batch-size` (default 500) sets rows per HTTP request.
+Targeting a non-local worker needs `--prod` plus an explicit `--url`, and prompts
+unless you pass `--yes`; prefer `LUNORA_ADMIN_TOKEN` over `--token`, which is
+visible to other local processes through the process table. See
+[@lunora/seed](/docs/packages/seed) for using the same generator inside tests.
+
+### `lunora shards`
+
+Maintains the shard registry, the record of which shards hold `.shardBy()` rows
+that cross-shard export, backups, CDC sync and migrations fan out to. A shard
+registers when it first writes a table and is never removed on its own, so
+fan-outs keep visiting shards that have since emptied. `prune` asks every
+registered shard to drop its entry for each table it holds no rows of.
+
+```bash
+lunora shards prune --dry-run         # list the empty registered shards, change nothing
+lunora shards prune                   # remove them from the registry
+lunora shards prune --tables messages # only the shards listed for `messages`
+```
+
+Each shard checks its own rows, so a shard written during the prune keeps (or
+regains) its entry. A shard the prune cannot reach keeps its entry too, and the
+command exits `1` so you can re-run it. Needs a registry: an app without
+`.shardRegistry(...)` gets a `400`. See [Sharding](/docs/concepts/sharding#the-shard-registry).
+
+### `lunora introspect`
+
+Reads an existing Postgres or MySQL database and scaffolds `lunora/schema.ts`
+from it, plus a `list`/`get` procedure module per table. Use it when you're
+adopting Lunora on top of a database that already exists, instead of
+transcribing the schema by hand.
+
+```bash
+lunora introspect --url postgres://localhost/shop  # every base table
+lunora introspect --tables users,orders            # just these (reads $DATABASE_URL)
+lunora introspect --dry-run                        # print, write nothing
+lunora introspect --no-procedures --force          # schema only, overwrite
+```
+
+The command is **read-only against the source database**: it queries
+`information_schema` (and `pg_index` on Postgres) and never writes.
+
+**Re-runs merge, they don't clobber.** The first run writes a whole
+`lunora/schema.ts`; after that the file is yours, and a second run folds only
+what's new (tables, columns, indexes) into it as additive edits, preserving
+your formatting, comments, and any validator you tightened. That goes through the
+same ts-morph editor the Studio schema editor uses, so two of its rules apply: a
+column added to a table that already exists lands `v.optional(...)` (a required
+one needs a backfill migration), and names that aren't bare identifiers are
+reported and skipped. Nothing is ever removed: a column dropped upstream stays,
+because deleting it would drop rows. Pass `--force` to overwrite instead of merge,
+and `--dry-run` to see the plan first.
+
+What it emits is a **starting point you own**, not a build artifact: review it
+before shipping. Specifically:
+
+- Every table is `.global({ backend: "hyperdrive" })`, because the rows live in
+  the external database. Point the `HYPERDRIVE` binding at it; see
+  [@lunora/hyperdrive](/docs/packages/hyperdrive).
+- Lunora mints its own `_id`, so the source primary key is carried over as a
+  unique index rather than replacing it.
+- Foreign keys become `v.id("<target>")`; a type with no direct validator becomes
+  `v.any()` with a `TODO` beside it, and is reported as a warning.
+- The emitted procedures are **RPC-only**. Publishing one over REST stays an
+  explicit `.expose({ rest: true })` decision you make after adding whatever auth
+  or RLS the table needs: `introspect` cannot know who may read your data.
+- `list` is built on [`defineListArgs`](/docs/packages/server#list-endpoints), so
+  only index-backed columns are filterable and paging is keyset-based. That bounds
+  which columns a caller can reach, not the cost of every operator over them.
+  Review the generated `filter` list before exposing the procedure.
+
+The driver is loaded on demand and is not a CLI dependency: install `pg` or
+`mysql2` in your project first.
 
 ### `lunora registry`
 
@@ -269,28 +1407,80 @@ Fetch and manage reusable Lunora components (queries, mutations, UI widgets):
 lunora registry list
 lunora registry view auth/session-token
 lunora registry add auth/session-token
-lunora registry build   # regenerate the local catalog index.json
+lunora registry build --from ./registry   # regenerate the local catalog index.json
 ```
 
 ### `lunora rules`
 
-Installs the Lunora **agent skills** — portable instructions that teach AI
-coding agents (Claude Code, Cursor, Copilot) how to use Lunora — into the
-project's `.agents/skills/`. `lunora dev`, the Vite plugin, and the studio nudge
+Installs the Lunora **agent skills** into the project's `.agents/skills/`: they
+are portable instructions that teach AI coding agents (Claude Code, Cursor,
+Copilot) how to use Lunora. `lunora dev`, the Vite plugin, and the studio nudge
 you to run this when the rules are missing.
 
 ```bash
-lunora rules install              # copy the skills into .agents/skills/ (skips edited files)
-lunora rules install --overwrite  # reinstall, replacing local edits
+lunora rules install              # copy the skills into .agents/skills/ (skips files that exist)
+lunora rules install --overwrite  # reinstall, replacing every existing file
 lunora rules check                # report which skills are present
 lunora rules check --strict       # exit non-zero when missing (CI gate)
 ```
 
+### `lunora mcp`
+
+Connects AI editors to Lunora over the
+[Model Context Protocol](https://modelcontextprotocol.io). Where `lunora rules`
+teaches an agent how Lunora works, this gives it live tools: documentation
+search, dev-server status and logs, and typed access to your app's functions.
+
+```bash
+lunora mcp install                      # every MCP client already configured here
+lunora mcp install claude-code cursor   # or name them
+lunora mcp install --list               # supported clients and their config files
+lunora mcp install --print              # show the config without writing it
+lunora mcp install --force              # replace entries that already exist
+lunora mcp install --docs-only          # skip this project's local server
+```
+
+`install` writes two servers, and they go to different places by default:
+**`lunora-docs`**, the hosted documentation server at `https://lunora.sh/mcp`,
+is the same URL in every project, so it lands in the client's **machine-wide**
+config; **`lunora`**, which runs `lunora mcp serve` for this app, only means
+anything inside the project, so it lands in the **project** config. Pass
+`--global` or `--project` to force both one way. Where a client only has one of
+the two (Zed has no project config, VS Code no global one), it falls back rather
+than skipping the client.
+
+`lunora mcp uninstall` removes both again, from both scopes and every client by
+default. It touches only the two entries we wrote, leaving the rest of the file
+and its comments alone. It knows each client's own
+config file, top-level key, and entry shape, so you don't have to remember that
+VS Code says `servers` where Cursor says `mcpServers`:
+
+| Client           | Config file                                       |
+| ---------------- | ------------------------------------------------- |
+| `claude-code`    | `.mcp.json`                                       |
+| `cursor`         | `.cursor/mcp.json`                                |
+| `vscode`         | `.vscode/mcp.json`                                |
+| `gemini`         | `.gemini/settings.json`                           |
+| `claude-desktop` | the OS application-data directory                 |
+| `windsurf`       | `~/.codeium/windsurf/mcp_config.json`             |
+| `codex`          | `~/.codex/config.toml` (snippet printed to paste) |
+
+Existing entries are left alone unless you pass `--force`, comments in a JSONC
+config survive the edit, and a file that doesn't parse is reported rather than
+overwritten.
+
+`lunora mcp serve` is the stdio server those entries spawn; you rarely run it
+by hand. It takes no required configuration: the dev server's URL comes from
+`.lunora/dev.json` and the admin token from `.dev.vars`, both re-read per tool
+call, so starting `lunora dev` after your editor is already open just works. It
+exposes the documentation tools, `lunora_dev_status` / `lunora_dev_logs`, and the
+read-only deployment tools; `--allow-writes` adds the mutation and action tools.
+
 ### `lunora analyze`
 
 Runs a `wrangler` dry-deploy and reports bundle size, the heaviest modules,
-and the state of `_generated/` files. Pass `--json` to pipe the output to a
-CI artifact.
+and the state of `_generated/` files. Pass `--format json` to pipe the output to
+a CI artifact.
 
 ### `lunora logs`
 
@@ -302,10 +1492,14 @@ lunora logs my-worker --format json --status error
 lunora logs --search "auth" --env staging
 ```
 
+The host comes from `--target`, then `target` in `lunora.config.*`, then
+Cloudflare. celld and Node have no log tail, so on such a project `logs` refuses
+instead of running `wrangler tail`.
+
 ## Writing Lunora functions by hand
 
 Queries, mutations, and actions are plain TypeScript files under `lunora/`.
-There is no scaffolding command — create the file yourself:
+There is no scaffolding command, so create the file yourself:
 
 ```ts title="lunora/messages.ts"
 import { mutation, query, v } from "@/lunora/_generated/server";
@@ -336,15 +1530,10 @@ loop.
 
 `lunora/_generated/`:
 
-- `api.ts` — the typed `api.<file>.<function>` namespace
-- `server.ts` — `internalQuery`, `internalMutation` exports re-typed against your schema
-- `dataModel.ts` — `Doc<"messages">`, `Id<"users">`, etc.
+- `api.ts`: the typed `api.<file>.<function>` namespace
+- `server.ts`: `internalQuery`, `internalMutation` exports re-typed against your schema
+- `dataModel.ts`: `Doc<"messages">`, `Id<"users">`, etc.
 
-These files are deterministic — commit them. CI re-runs codegen and diffs
-the result to catch drift.
-
-## See also
-
-- [@lunora/vite](/docs/packages/vite)
-- [@lunora/d1](/docs/packages/d1)
-- [Deployment](/docs/deployment)
+These files are deterministic, so commit them. Nothing checks the committed
+copy for you — `verify` runs codegen as a dry run and `prepare` overwrites it —
+so gate it explicitly: `lunora codegen && git diff --exit-code lunora/_generated`.

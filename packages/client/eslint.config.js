@@ -48,7 +48,7 @@ export default createConfig(
             // modern Node); eslint-plugin-n's Node-version data flags them conservatively.
             "n/no-unsupported-features/node-builtins": [
                 "error",
-                { ignores: ["crypto", "CryptoKey", "SubtleCrypto", "Storage", "sessionStorage", "localStorage"] },
+                { ignores: ["crypto", "CryptoKey", "SubtleCrypto", "Storage", "sessionStorage", "localStorage", "navigator"] },
             ],
             // Leading-underscore identifiers that are framework API by design: _id /
             // _creationTime are the public document fields; __lunora* are internal markers;
@@ -109,6 +109,11 @@ export default createConfig(
             "@typescript-eslint/require-await": "off",
             "e18e/prefer-static-regex": "off",
             "import/no-extraneous-dependencies": "off",
+            // The repo's named-only-export convention (AGENTS.md: "Never mix a
+            // default export with named exports") applies to test helpers too —
+            // a single-export file like __tests__/lib/named-exports.ts stays a
+            // named export, not the default this rule otherwise wants.
+            "import/prefer-default-export": "off",
             "max-classes-per-file": "off",
             "n/no-unsupported-features/node-builtins": "off",
             "sonarjs/deprecation": "off",
@@ -121,10 +126,18 @@ export default createConfig(
         },
     },
     // Markdown code blocks: don't enforce language tags.
+    // The `n` Node-builtins rules reach into the scope manager, which a markdown
+    // document has none of — under ESLint 10 they throw "Cannot read properties
+    // of undefined (globalScope)" while LOADING the rule, so a single committed
+    // .md file crashes the whole lint run instead of reporting findings. They're
+    // meaningless on prose either way, so turn them off for markdown.
     {
         files: ["**/*.md", "**/*.md/**"],
         rules: {
             "markdown/fenced-code-language": "off",
+            "n/no-unsupported-features/es-builtins": "off",
+            "n/no-unsupported-features/es-syntax": "off",
+            "n/no-unsupported-features/node-builtins": "off",
         },
     },
     // Behavior-breaking autofixers — kept off (not style). sort-objects reorders the
@@ -136,6 +149,15 @@ export default createConfig(
         rules: {
             "perfectionist/sort-objects": "off",
             "vitest/prefer-expect-type-of": "off",
+        },
+    },
+    // `jsdoc/text-escaping` escapes `<` and `&` in doc comments into HTML entities and
+    // offers no way to exempt code spans, so its autofix turns `Doc<T>` into `Doc&lt;T>` —
+    // which is then what every reader sees on hover. Last in the list so it applies to
+    // every file, including the scoped blocks above.
+    {
+        rules: {
+            "jsdoc/text-escaping": "off",
         },
     },
 );

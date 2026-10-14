@@ -1,7 +1,9 @@
 import type { Command, CommandExecute, CreateOptions, Toolbox } from "@visulima/cerebro";
 
+import { OUTPUT_FORMAT_OPTION } from "../../util/output-format";
+
 /**
- * `lunora run &lt;functionPath>` — send a single RPC to a running Lunora worker.
+ * `lunora run <functionPath>` — send a single RPC to a running Lunora worker.
  * Metadata only; the handler (lazy-loaded via `loader`) holds the logic.
  */
 const runCommand: Command = {
@@ -10,6 +12,8 @@ const runCommand: Command = {
     examples: [
         ['lunora run messages:send --args \'{"text":"hi"}\'', "Call a function with JSON args"],
         ["lunora run messages:list --shard channel:demo", "Target a specific shard"],
+        ["lunora run messages:list --as user_123", "Run as an authenticated user (needed when the app gates on identity)"],
+        ["lunora run messages:list --format json", "Emit the RPC result as a single JSON document on stdout"],
     ],
     group: "Develop",
     loader: () =>
@@ -19,8 +23,20 @@ const runCommand: Command = {
     name: "run",
     options: [
         { description: "JSON-encoded args object", name: "args", type: String },
+        {
+            description: "Run as this user id — dispatches through the admin-gated `runAs` op so identity-gated apps accept the call",
+            name: "as",
+            type: String,
+        },
+        { description: 'JSON-encoded extra identity claims to forge alongside --as (e.g. \'{"org":"acme"}\')', name: "claims", type: String },
         { description: "Explicit shard key", name: "shard", type: String },
-        { description: "Worker URL (default http://localhost:8787)", name: "url", type: String },
+        OUTPUT_FORMAT_OPTION,
+        { description: "Worker URL (defaults to the running dev server, else http://localhost:8787)", name: "url", type: String },
+        {
+            description: "Admin bearer for --as (prefer LUNORA_ADMIN_TOKEN or .dev.vars; --token is visible to other local processes via the process table)",
+            name: "token",
+            type: String,
+        },
     ],
 };
 
@@ -28,6 +44,10 @@ export { runCommand };
 
 export type RunRpcOptions = CreateOptions<{
     args: string | undefined;
+    as: string | undefined;
+    claims: string | undefined;
+    format: string | undefined;
     shard: string | undefined;
+    token: string | undefined;
     url: string | undefined;
 }>;

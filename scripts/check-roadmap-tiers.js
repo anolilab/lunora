@@ -1,0 +1,171 @@
+#!/usr/bin/env node
+/**
+ * Guards against `ROADMAP.md` and the API-snapshot guard disagreeing about
+ * which stability tier a package is in.
+ *
+ * Two hand-maintained copies of one taxonomy: `scripts/api-snapshot.js` stamps
+ * the tier into every snapshot header (and picks the stability sentence from
+ * it), while `ROADMAP.md` publishes the same tiers as the public commitment and
+ * hangs the graduation bar off them. They had already drifted by eight packages
+ * before anyone noticed — `platform`, `platform-cloudflare`, `shard-engine` and
+ * `observability` were Core in the script and absent from the roadmap;
+ * `auth-ui`, `notify`, `sql-store` and `dispatch` likewise for Stable adapters.
+ *
+ * That matters more than untidiness: a published bar that tells an adopter how
+ * a package earns its SemVer promise is worthless if the two documents disagree
+ * about which promise it has today.
+ *
+ * Deliberately loose in the same spirit as `check-agents-md-packages.js`: it
+ * asserts each covered directory is mentioned somewhere inside the matching
+ * tier bullet, not that the lists are formatted identically — Prettier reflows
+ * those bullets on every edit.
+ *
+ * It also reconciles the tier lists against `packages/` itself, which neither
+ * document did. Both taxonomies are hand-typed, so a package in NEITHER list is
+ * invisible to both checks and to `api:check` — `@lunora/container` shipped a
+ * changed public surface that way ("api:check had never heard of the package"),
+ * and `@lunora/search-core` was still uncovered. The reconciliation lives here
+ * rather than in `api-snapshot.js` because this runs on every `pnpm install`,
+ * while `api:check` needs a full build first.
+ *
+ * Run on every `pnpm install` via the root `postinstall` script.
+ */
+import { existsSync, readdirSync, readFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
+
+const rootDir = join(dirname(fileURLToPath(import.meta.url)), "..");
+
+/** The roadmap bullet that publishes each tier, keyed by the script's tier label. */
+const BULLETS = {
+    core: "**Core (full SemVer at 1.0):**",
+    experimental: "**Experimental (excluded from the 1.0 promise",
+    "stable-adapter": "**Stable adapters (1.0 if they pass the same gates):**",
+};
+
+/**
+ * The directory lists from `api-snapshot.js`, read as text.
+ *
+ * Importing it would run its extraction (it reads every built `dist`), so the
+ * arrays are parsed out instead — the same trade `check-agents-md-packages.js`
+ * makes by reading manifests rather than resolving the workspace.
+ */
+const readTiers = () => {
+    const source = readFileSync(join(rootDir, "scripts", "api-snapshot.js"), "utf8");
+
+    const dirsOf = (constant) => {
+        const block = new RegExp(String.raw`const ${constant} = \[([\s\S]*?)\];`).exec(source);
+
+        if (!block) {
+            throw new Error(`check-roadmap-tiers: could not find \`${constant}\` in scripts/api-snapshot.js`);
+        }
+
+        return [...block[1].matchAll(/"([a-z0-9-]+)"/gu)].map((match) => match[1]);
+    };
+
+    return { core: dirsOf("TIER_1"), experimental: dirsOf("TIER_3"), "stable-adapter": dirsOf("TIER_2") };
+};
+
+/** The text of one roadmap tier bullet, from its lead-in to the next bullet. */
+const bulletText = (roadmap, lead) => {
+    const start = roadmap.indexOf(lead);
+
+    if (start === -1) {
+        throw new Error(`check-roadmap-tiers: ROADMAP.md has no bullet starting "${lead}"`);
+    }
+
+    const next = roadmap.indexOf("\n    - **", start + lead.length);
+
+    if (next !== -1) {
+        return roadmap.slice(start, next);
+    }
+
+    // The last tier bullet has no sibling after it, and `indexOf` returning -1
+    // would make `slice` drop the final character — i.e. silently lose the last
+    // package in the list it is checking.
+    const afterBullets = roadmap.indexOf("\n- **", start);
+
+    return roadmap.slice(start, afterBullets === -1 ? roadmap.length : afterBullets);
+};
+
+/**
+ * Package directories deliberately outside the tier taxonomy, each with why.
+ *
+ * The check fails if an entry no longer exists, or has since been tiered, so
+ * this cannot quietly grow into a way to drop a package off the guard. Being
+ * `private` is NOT on its own a reason — `@lunora/auth-ui` and
+ * `@lunora/dispatch` are private and tiered, because the registry copies
+ * auth-ui's source verbatim into consumer projects.
+ */
+const UNTIERED = new Map([["search-core", "internal search primitives with no consumer outside @lunora/db — no public surface to promise"]]);
+
+/** Every `packages/<dir>` that carries a manifest, i.e. every real package. */
+const packageDirectories = () =>
+    readdirSync(join(rootDir, "packages"), { withFileTypes: true })
+        .filter((entry) => entry.isDirectory() && existsSync(join(rootDir, "packages", entry.name, "package.json")))
+        .map((entry) => entry.name)
+        .sort();
+
+const roadmap = readFileSync(join(rootDir, "ROADMAP.md"), "utf8");
+const tiers = readTiers();
+const problems = [];
+
+const tiered = new Map();
+
+for (const [tier, dirs] of Object.entries(tiers)) {
+    for (const dir of dirs) {
+        if (tiered.has(dir)) {
+            problems.push(`  ${dir} — listed in api-snapshot.js twice, as ${tiered.get(dir)} and as ${tier}`);
+        }
+
+        tiered.set(dir, tier);
+    }
+}
+
+const onDisk = new Set(packageDirectories());
+
+for (const dir of onDisk) {
+    if (!tiered.has(dir) && !UNTIERED.has(dir)) {
+        problems.push(
+            `  ${dir} — packages/${dir} exists but is in no TIER_* list in api-snapshot.js, so api:check has never heard of it. ` +
+                `Add it to a tier (and the matching ROADMAP.md bullet), or to UNTIERED here with a reason.`,
+        );
+    }
+}
+
+for (const [dir, reason] of UNTIERED) {
+    if (!onDisk.has(dir)) {
+        problems.push(`  ${dir} — listed in UNTIERED ("${reason}") but packages/${dir} is gone; remove the entry`);
+    } else if (tiered.has(dir)) {
+        problems.push(`  ${dir} — listed in UNTIERED but also in api-snapshot.js as ${tiered.get(dir)}; remove the UNTIERED entry`);
+    }
+}
+
+for (const [dir, tier] of tiered) {
+    if (!onDisk.has(dir)) {
+        problems.push(`  ${dir} — in api-snapshot.js as ${tier} but packages/${dir} does not exist`);
+    }
+}
+
+for (const [tier, dirs] of Object.entries(tiers)) {
+    const text = bulletText(roadmap, BULLETS[tier]);
+
+    for (const dir of dirs) {
+        // `lunora` is the `lunorash` umbrella; the roadmap names it by its npm
+        // name, which is what a reader would look for.
+        const needle = dir === "lunora" ? "lunorash" : dir;
+
+        if (!text.includes(`\`${needle}\``)) {
+            problems.push(`  ${needle} — in api-snapshot.js as ${tier}, missing from that tier in ROADMAP.md`);
+        }
+    }
+}
+
+if (problems.length > 0) {
+    process.stderr.write(
+        `${String(problems.length)} package tier problem(s) across ROADMAP.md, scripts/api-snapshot.js and packages/.\n` +
+            `The roadmap publishes the promise; the script enforces it. Fix the roadmap bullet (or the script's tier list):\n` +
+            `${problems.join("\n")}\n`,
+    );
+    process.exit(1);
+}

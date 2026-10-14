@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 
 import { createCaptureSink, createMailerFromEnv, shouldCaptureMail } from "../src/from-env";
+import { consumeQueuedSend } from "../src/queue";
 
 describe("shouldCaptureMail", () => {
     it("captures in a dev environment (WORKER_ENV=development)", () => {
@@ -24,6 +25,27 @@ describe("shouldCaptureMail", () => {
         expect(shouldCaptureMail({ WORKER_ENV: "production" })).toBe(false);
         // No env hints at all ⇒ treat as production (deliver), never silently capture.
         expect(shouldCaptureMail({})).toBe(false);
+    });
+
+    it("does NOT capture when any environment var names a non-dev environment", () => {
+        expect.assertions(2);
+
+        expect(shouldCaptureMail({ ENVIRONMENT: "production", NODE_ENV: "development" })).toBe(false);
+        expect(shouldCaptureMail({ NODE_ENV: "test", WORKER_ENV: "development" })).toBe(true);
+    });
+
+    it("treats an unrecognized LUNORA_MAIL_CAPTURE value as unset (falls through to env detection)", () => {
+        expect.assertions(3);
+
+        const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+
+        // "yes" is not a recognized override, so a dev env still captures…
+        expect(shouldCaptureMail({ LUNORA_MAIL_CAPTURE: "yes", WORKER_ENV: "development" })).toBe(true);
+        // …and a prod env still delivers, rather than the value forcing capture off.
+        expect(shouldCaptureMail({ LUNORA_MAIL_CAPTURE: "on", WORKER_ENV: "production" })).toBe(false);
+        expect(warn).toHaveBeenCalledWith(expect.stringContaining("unrecognized LUNORA_MAIL_CAPTURE"));
+
+        warn.mockRestore();
     });
 });
 
@@ -58,9 +80,15 @@ describe("createCaptureSink", () => {
         expect(init.headers.authorization).toBe("Bearer secret");
     });
 
-    it("returns a sentinel id without recording when SHARD or the admin token is absent", async () => {
-        expect.assertions(1);
+    it("says so, once, when there is nowhere to record — never a silent sentinel", async () => {
+        expect.assertions(4);
 
+        // The sibling RPC-failure branch below logs; this one returned the same
+        // `uncaptured` sentinel with nothing in the tail. Capture turns on for any
+        // env var matching dev/local/test, so a deploy that ships `NODE_ENV=test`,
+        // or a dev box with no `LUNORA_ADMIN_TOKEN`, swallowed every verification
+        // link, password reset and OTP without a word.
+        const consoleWarn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
         const sink = createCaptureSink({
             SHARD: {
                 get: () => {
@@ -71,6 +99,50 @@ describe("createCaptureSink", () => {
         });
 
         await expect(sink.record({ subject: "x", to: "a@b.test" })).resolves.toStrictEqual({ id: "uncaptured" });
+        expect(consoleWarn).toHaveBeenCalledTimes(1);
+        expect(consoleWarn.mock.calls[0]?.[0]).toMatch(/LUNORA_ADMIN_TOKEN/u);
+
+        // Once per isolate: a dev loop sends constantly, and one line per send is
+        // noise nobody reads.
+        await sink.record({ subject: "y", to: "a@b.test" });
+
+        expect(consoleWarn).toHaveBeenCalledTimes(1);
+
+        consoleWarn.mockRestore();
+    });
+
+    it("does NOT report success when the shard RPC fails — logs and returns the sentinel instead", async () => {
+        expect.assertions(2);
+
+        const consoleError = vi.spyOn(console, "error").mockImplementation(() => undefined);
+        // 401 (wrong admin token) with a non-JSON body: previously `.json()` threw
+        // or a success id was returned even though nothing was recorded.
+        const fetch = vi.fn<() => Promise<{ json: () => Promise<unknown>; ok: boolean; status: number }>>(async () => {
+            return {
+                json: async () => {
+                    throw new Error("not JSON");
+                },
+                ok: false,
+                status: 401,
+            };
+        });
+        const env = {
+            LUNORA_ADMIN_TOKEN: "wrong",
+            SHARD: {
+                get: () => {
+                    return { fetch };
+                },
+                idFromName: () => 0,
+            },
+        };
+
+        const result = await createCaptureSink(env).record({ subject: "Hi", to: "a@b.test" });
+
+        // Best-effort: the send still succeeds, but never with a bogus recorded id.
+        expect(result).toStrictEqual({ id: "uncaptured" });
+        expect(consoleError).toHaveBeenCalledWith(expect.stringContaining("failed to record captured mail"), expect.anything());
+
+        consoleError.mockRestore();
     });
 });
 
@@ -109,19 +181,98 @@ describe("createMailerFromEnv", () => {
         expect(() => createMailerFromEnv({ WORKER_ENV: "development" })).toThrow(/MAIL_FROM/);
     });
 
-    it("throws in production when no transport is configured", () => {
+    it("throws in production when neither a transport nor a queue is configured", () => {
         expect.assertions(1);
 
-        // Prod, no cloudflareSend, no RESEND_API_KEY ⇒ loud failure, not silent capture.
-        expect(() => createMailerFromEnv({ MAIL_FROM: "noreply@x.test", WORKER_ENV: "production" })).toThrow(/no transport/);
+        // Prod, no cloudflareSend, no RESEND_API_KEY, no queue ⇒ loud failure, not silent capture.
+        expect(() => createMailerFromEnv({ MAIL_FROM: "noreply@x.test", WORKER_ENV: "production" })).toThrow(/transport is required/);
     });
 
-    it("uses the cloudflareSend transport in production when supplied", () => {
+    it("honours an explicitly passed cloudflareSend whatever the Email binding is named", async () => {
+        expect.assertions(2);
+
+        const cloudflareSend = vi.fn<(from: string, to: string, raw: string) => Promise<void>>(async () => undefined);
+        const mailer = createMailerFromEnv({ EMAIL: {}, MAIL_FROM: "noreply@x.test", WORKER_ENV: "production" }, { cloudflareSend });
+
+        await mailer.send({ subject: "Hi", text: "x", to: "a@x.test" });
+
+        expect(cloudflareSend).toHaveBeenCalledTimes(1);
+        expect(cloudflareSend.mock.calls[0]?.slice(0, 2)).toStrictEqual(["noreply@x.test", "a@x.test"]);
+    });
+
+    it("lets a producer-only worker queue() without a delivery transport", async () => {
+        expect.assertions(2);
+
+        const send = vi.fn<(payload: unknown) => Promise<void>>(async () => undefined);
+        const mailer = createMailerFromEnv({ MAIL_FROM: "noreply@x.test", WORKER_ENV: "production" }, { queue: { send } });
+
+        await expect(mailer.queue({ subject: "Hi", text: "x", to: "a@x.test" })).resolves.toStrictEqual({ queued: true });
+        expect(send).toHaveBeenCalledTimes(1);
+    });
+
+    it("uses the cloudflareSend transport in production when SEND_EMAIL is bound", async () => {
         expect.assertions(1);
 
-        const mailer = createMailerFromEnv({ MAIL_FROM: "noreply@x.test", WORKER_ENV: "production" }, { cloudflareSend: async () => undefined });
+        const cloudflareSend = vi.fn<(from: string, to: string, raw: string) => Promise<void>>(async () => undefined);
+        const mailer = createMailerFromEnv({ MAIL_FROM: "noreply@x.test", SEND_EMAIL: {}, WORKER_ENV: "production" }, { cloudflareSend });
 
-        // Constructing succeeds (the transport is built lazily); a no-op send binding is wired.
-        expect(mailer).toHaveProperty("send");
+        await mailer.send({ subject: "Hi", text: "x", to: "a@x.test" });
+
+        expect(cloudflareSend).toHaveBeenCalledTimes(1);
+    });
+
+    it("captures queued mail in dev at consume time, never reaching the real transport", async () => {
+        expect.assertions(4);
+
+        const fetch = vi.fn<() => Promise<{ json: () => Promise<unknown> }>>(async () => {
+            return {
+                json: async () => {
+                    return { result: { id: "captured-1" } };
+                },
+            };
+        });
+        const env = {
+            LUNORA_ADMIN_TOKEN: "secret",
+            MAIL_FROM: "noreply@x.test",
+            SEND_EMAIL: {},
+            SHARD: {
+                get: () => {
+                    return { fetch };
+                },
+                idFromName: () => 0,
+            },
+            WORKER_ENV: "development",
+        };
+        const cloudflareSend = vi.fn<(from: string, to: string, raw: string) => Promise<void>>(async () => undefined);
+        const bodies: unknown[] = [];
+
+        // Producer: the message goes through the queue, not straight to capture.
+        await createMailerFromEnv(env, {
+            cloudflareSend,
+            queue: {
+                send: async (body) => {
+                    bodies.push(body);
+                },
+            },
+        }).queue({ subject: "Queued", text: "x", to: "a@x.test" });
+
+        expect(fetch).not.toHaveBeenCalled();
+
+        // Consumer: the dev mailer captures what it drains.
+        const result = await consumeQueuedSend(createMailerFromEnv(env, { cloudflareSend }), bodies[0]);
+
+        expect(result).toStrictEqual({ id: "captured-1" });
+        expect(fetch).toHaveBeenCalledTimes(1);
+        expect(cloudflareSend).not.toHaveBeenCalled();
+    });
+
+    it("forwards the queue binding so mailer.queue() works in production", async () => {
+        expect.assertions(2);
+
+        const send = vi.fn<(payload: unknown) => Promise<void>>(async () => undefined);
+        const mailer = createMailerFromEnv({ MAIL_FROM: "noreply@x.test", RESEND_API_KEY: "k", WORKER_ENV: "production" }, { queue: { send } });
+
+        await expect(mailer.queue({ subject: "Hi", to: "a@x.test" })).resolves.toStrictEqual({ queued: true });
+        expect(send).toHaveBeenCalledWith(expect.objectContaining({ subject: "Hi", to: "a@x.test" }));
     });
 });

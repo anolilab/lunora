@@ -1,0 +1,163 @@
+/**
+ * Solid port: the binding layer over the shared controllers. Flow logic is
+ * covered framework-agnostically in `__tests__/core`; these assert what only the
+ * Solid layer can get wrong — context wiring, the store seam, the flow gate,
+ * and the theme.
+ */
+import { fireEvent, render, screen } from "@solidjs/testing-library";
+import { flush } from "solid-js";
+import type { JSX } from "@solidjs/web";
+import { afterEach, describe, expect, it, vi } from "vitest";
+
+import type { AuthClient, AuthUIConfig } from "../../../packages/auth-ui/src/core";
+import { resetFlowWarnings } from "../../../packages/auth-ui/src/core";
+import { MagicLinkCard, ResetPasswordCard, SignInCard, SignUpCard } from "../../../packages/auth-ui/src/solid-v2";
+import { AuthUIProvider } from "../../../packages/auth-ui/src/solid-v2/provider";
+import { bareClient, fakeNav, pluginClient } from "../../../packages/auth-ui/__tests__/fake-client";
+
+const renderCard = (card: () => JSX.Element, authClient: AuthUIConfig["authClient"], theme?: AuthUIConfig["theme"]): ReturnType<typeof render> =>
+    render(() => (
+        <AuthUIProvider authClient={authClient} nav={fakeNav()} theme={theme}>
+            {card()}
+        </AuthUIProvider>
+    ));
+
+afterEach(() => {
+    resetFlowWarnings();
+    vi.restoreAllMocks();
+    // jsdom keeps the URL across tests otherwise, and the reset-password suite
+    // below relies on a clean starting point.
+    globalThis.history.pushState({}, "", "/");
+});
+
+describe("solid-v2 SignInCard", () => {
+    it("renders the fields and submits the typed credentials", () => {
+        expect.assertions(2);
+
+        const fake = bareClient();
+
+        renderCard(() => <SignInCard />, fake.client);
+
+        expect(screen.getByLabelText("Email")).toBeDefined();
+
+        fireEvent.input(screen.getByLabelText("Email"), { target: { value: "a@b.co" } });
+        fireEvent.input(screen.getByLabelText("Password"), { target: { value: "hunter2hunter2" } });
+        fireEvent.submit(screen.getByRole("button", { name: "Sign in" }));
+
+        expect(fake.signInEmail).toHaveBeenCalledWith(expect.objectContaining({ email: "a@b.co", password: "hunter2hunter2" }));
+    });
+
+    it("shows a field error instead of calling the client when a field is empty", () => {
+        expect.assertions(2);
+
+        const fake = bareClient();
+
+        renderCard(() => <SignInCard />, fake.client);
+        fireEvent.submit(screen.getByRole("button", { name: "Sign in" }));
+        // Solid 2 commits writes on the microtask queue, so a synchronous
+        // assertion would read the pre-update DOM.
+        flush();
+
+        expect(screen.getByText("Email is required.")).toBeDefined();
+        expect(fake.signInEmail).not.toHaveBeenCalled();
+    });
+});
+
+describe("solid-v2 flow gate", () => {
+    it("hides MagicLinkCard when the client has no magic-link plugin", () => {
+        expect.assertions(1);
+
+        vi.spyOn(console, "warn").mockImplementation(() => undefined);
+        renderCard(() => <MagicLinkCard />, bareClient().client);
+
+        expect(screen.queryByRole("button", { name: "Email me a link" })).toBeNull();
+    });
+
+    it("renders MagicLinkCard when the plugin is present on the client", () => {
+        expect.assertions(1);
+
+        renderCard(() => <MagicLinkCard />, pluginClient().client);
+
+        expect(screen.getByRole("button", { name: "Email me a link" })).toBeDefined();
+    });
+});
+
+describe("solid-v2 PasswordStrength", () => {
+    it("re-derives the checklist as the password is typed", () => {
+        expect.assertions(4);
+
+        const { container } = renderCard(() => <SignUpCard />, bareClient().client);
+
+        // Nothing to show for an empty field.
+        expect(container.querySelector(".lunora-auth-strength")).toBeNull();
+
+        fireEvent.input(screen.getByLabelText("Password"), { target: { value: "short" } });
+        flush();
+
+        const unmet = container.querySelector(".lunora-auth-strength__item") as HTMLElement;
+
+        expect(unmet.className).not.toContain("lunora-auth-strength__item--met");
+        expect(unmet.textContent).toContain("At least 8 characters");
+
+        // The requirements are read through a function, not captured once, so
+        // the same node flips to met.
+        fireEvent.input(screen.getByLabelText("Password"), { target: { value: "hunter2hunter2" } });
+        flush();
+
+        expect((container.querySelector(".lunora-auth-strength__item") as HTMLElement).className).toContain("lunora-auth-strength__item--met");
+    });
+});
+
+describe("solid-v2 theme", () => {
+    it("applies only the changed tokens to the card", () => {
+        expect.assertions(2);
+
+        const { container } = renderCard(
+            () => <SignInCard />,
+            bareClient().client,
+            (defaults) => {
+                return { ...defaults, primary: "rebeccapurple" };
+            },
+        );
+        const card = container.querySelector(".lunora-auth-card") as HTMLElement;
+
+        expect(card.style.getPropertyValue("--primary")).toBe("rebeccapurple");
+        expect(card.style.getPropertyValue("--border")).toBe("");
+    });
+});
+
+describe("solid-v2 ResetPasswordCard reads the token from the URL", () => {
+    it("submits the ?token= from the URL when no prop is passed", () => {
+        expect.assertions(1);
+
+        globalThis.history.pushState({}, "", "/reset-password?token=abc");
+
+        const resetPassword = vi.fn(() => Promise.resolve({ data: {}, error: null }));
+        const client = { getSession: vi.fn(), resetPassword } as unknown as AuthClient;
+
+        renderCard(() => <ResetPasswordCard />, client);
+
+        fireEvent.input(screen.getByLabelText("Password"), { target: { value: "hunter2hunter2" } });
+        fireEvent.input(screen.getByLabelText("Confirm password"), { target: { value: "hunter2hunter2" } });
+        fireEvent.submit(screen.getByRole("button", { name: "Set new password" }));
+
+        expect(resetPassword).toHaveBeenCalledWith(expect.objectContaining({ token: "abc" }));
+    });
+
+    it("lets an explicit prop win over the URL", () => {
+        expect.assertions(1);
+
+        globalThis.history.pushState({}, "", "/reset-password?token=from-url");
+
+        const resetPassword = vi.fn(() => Promise.resolve({ data: {}, error: null }));
+        const client = { getSession: vi.fn(), resetPassword } as unknown as AuthClient;
+
+        renderCard(() => <ResetPasswordCard token="from-prop" />, client);
+
+        fireEvent.input(screen.getByLabelText("Password"), { target: { value: "hunter2hunter2" } });
+        fireEvent.input(screen.getByLabelText("Confirm password"), { target: { value: "hunter2hunter2" } });
+        fireEvent.submit(screen.getByRole("button", { name: "Set new password" }));
+
+        expect(resetPassword).toHaveBeenCalledWith(expect.objectContaining({ token: "from-prop" }));
+    });
+});

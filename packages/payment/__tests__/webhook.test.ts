@@ -1,55 +1,14 @@
+import { createHmac } from "node:crypto";
+
 import { describe, expect, it } from "vitest";
 
-import { LunoraPaymentError } from "../src/errors";
-import { constantTimeEqual, hmacSha256Hex, parseStripeSignatureHeader, verifyStandardWebhook, verifyStripeSignature } from "../src/webhook";
-
-const sign = async (secret: string, payload: string, timestamp: number): Promise<string> => {
-    const signature = await hmacSha256Hex(secret, `${String(timestamp)}.${payload}`);
-
-    return `t=${String(timestamp)},v1=${signature}`;
-};
+import { constantTimeEqual as sharedConstantTimeEqual } from "../../../shared/constant-time-equal";
+import { constantTimeEqual, verifyStandardWebhook } from "../src/webhook";
 
 describe("webhook verification", () => {
-    const secret = "whsec_test";
     const payload = JSON.stringify({ id: "evt_1", type: "payment_intent.succeeded" });
     const timestamp = 1_700_000_000;
     const now = timestamp * 1000;
-
-    it("verifies a valid signature over the raw body", async () => {
-        expect.assertions(1);
-
-        const signatureHeader = await sign(secret, payload, timestamp);
-
-        await expect(verifyStripeSignature({ now, payload, secret, signatureHeader })).resolves.toBeUndefined();
-    });
-
-    it("rejects a tampered body", async () => {
-        expect.assertions(1);
-
-        const signatureHeader = await sign(secret, payload, timestamp);
-
-        await expect(verifyStripeSignature({ now, payload: `${payload} `, secret, signatureHeader })).rejects.toBeInstanceOf(LunoraPaymentError);
-    });
-
-    it("rejects an out-of-tolerance timestamp (replay)", async () => {
-        expect.assertions(1);
-
-        const signatureHeader = await sign(secret, payload, timestamp);
-
-        await expect(verifyStripeSignature({ now: now + 1_000_000, payload, secret, signatureHeader })).rejects.toMatchObject({
-            code: "WEBHOOK_TIMESTAMP_INVALID",
-        });
-    });
-
-    it("rejects a signature made with the wrong secret", async () => {
-        expect.assertions(1);
-
-        const signatureHeader = await sign("other_secret", payload, timestamp);
-
-        await expect(verifyStripeSignature({ now, payload, secret, signatureHeader })).rejects.toMatchObject({
-            code: "WEBHOOK_SIGNATURE_INVALID",
-        });
-    });
 
     it("compares in constant time", () => {
         expect.assertions(3);
@@ -59,22 +18,23 @@ describe("webhook verification", () => {
         expect(constantTimeEqual("a", "ab")).toBe(false);
     });
 
-    it("parses a multi-signature header", () => {
+    /**
+     * Pins the ONE-definition rule rather than the behaviour: a re-inlined local
+     * copy would still satisfy the assertions above while reintroducing the
+     * early return on a length mismatch that leaks the expected signature's
+     * length through response timing.
+     */
+    it("is the shared primitive, not a local copy", () => {
         expect.assertions(1);
 
-        expect(parseStripeSignatureHeader("t=5,v1=aa,v1=bb")).toEqual({ signatures: ["aa", "bb"], timestamp: 5 });
+        expect(constantTimeEqual).toBe(sharedConstantTimeEqual);
     });
 
     it("fails closed on an empty signing secret (no forgeable zero-length-key MAC)", async () => {
-        expect.assertions(2);
+        expect.assertions(1);
 
-        // An attacker can't sign with the empty key anyway (WebCrypto rejects a
-        // zero-length HMAC key), but the verifier must reject the empty secret
-        // up front regardless of the supplied header — so any header shape does.
-        const signatureHeader = `t=${String(timestamp)},v1=deadbeef`;
-
-        await expect(verifyStripeSignature({ now, payload, secret: "", signatureHeader })).rejects.toMatchObject({ code: "CONFIG_INVALID" });
-
+        // WebCrypto rejects a zero-length HMAC key anyway, but the verifier must reject the empty
+        // secret up front regardless of the supplied header.
         await expect(
             verifyStandardWebhook({
                 now,
@@ -85,5 +45,46 @@ describe("webhook verification", () => {
                 webhookTimestamp: String(timestamp),
             }),
         ).rejects.toMatchObject({ code: "CONFIG_INVALID" });
+    });
+
+    const signed = (key: Buffer): string =>
+        `v1,${createHmac("sha256", key)
+            .update(`msg_1.${String(timestamp)}.${payload}`)
+            .digest("base64")}`;
+    const verify = async (secret: string, webhookSignature: string, keyEncoding?: "base64" | "utf8"): Promise<void> =>
+        verifyStandardWebhook({
+            ...(keyEncoding === undefined ? {} : { keyEncoding }),
+            now,
+            payload,
+            secret,
+            webhookId: "msg_1",
+            webhookSignature,
+            webhookTimestamp: String(timestamp),
+        });
+
+    it("keys a utf8 secret by its bytes verbatim, prefix included", async () => {
+        expect.assertions(2);
+
+        const polarFormat = "polar_whs_3kL9xQ2mV7pR4tY8wZ1nB6cD5fG0hJ"; // gitleaks:allow -- test fixture signing key, not a real secret
+
+        await expect(verify(polarFormat, signed(Buffer.from(polarFormat, "utf8")), "utf8")).resolves.toBeUndefined();
+        // The prefix is part of the key: signing without it must not verify.
+        await expect(verify(polarFormat, signed(Buffer.from(polarFormat.slice("polar_whs_".length), "utf8")), "utf8")).rejects.toMatchObject({
+            code: "WEBHOOK_SIGNATURE_INVALID",
+        });
+    });
+
+    it("keeps the base64 default for whsec_ secrets", async () => {
+        expect.assertions(1);
+
+        const key = Buffer.from("a-standard-webhooks-key");
+
+        await expect(verify(`whsec_${key.toString("base64")}`, signed(key))).resolves.toBeUndefined();
+    });
+
+    it("reports a non-base64 secret as a configuration error, not a bad delivery", async () => {
+        expect.assertions(1);
+
+        await expect(verify("polar_whs_not-base64!", "v1,sig")).rejects.toMatchObject({ code: "CONFIG_INVALID" });
     });
 });

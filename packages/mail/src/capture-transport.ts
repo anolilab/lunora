@@ -69,5 +69,5 @@ const createCaptureTransport = (sink: MailboxSink): MailTransport => {
     return transport;
 };
 
-export { CAPTURE_TRANSPORT_BRAND, createCaptureTransport, isCaptureTransport };
+export { createCaptureTransport, isCaptureTransport };
 export type { CapturedMail, MailboxSink };

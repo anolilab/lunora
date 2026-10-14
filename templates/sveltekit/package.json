@@ -3,8 +3,11 @@
     "version": "0.0.0",
     "private": true,
     "type": "module",
+    "imports": {
+        "#lunora/*": "./lunora/*"
+    },
     "scripts": {
-        "dev": "lunora dev",
+        "dev": "vite",
         "build": "vite build",
         "preview": "vite preview",
         "codegen": "lunora codegen",
@@ -12,18 +15,21 @@
         "prepare": "svelte-kit sync"
     },
     "dependencies": {
+        "@lunora/ratelimit": "^0.0.0",
         "@lunora/svelte": "^0.0.0",
         "lunorash": "^0.0.0"
     },
     "devDependencies": {
+        "@cloudflare/workers-types": "^5.20261004.1",
+        "@lunora/studio": "^0.0.0",
         "@lunora/vite": "^0.0.0",
         "@sveltejs/adapter-cloudflare": "^7.2.8",
         "@sveltejs/kit": "^2.65.0",
         "@sveltejs/vite-plugin-svelte": "^7.1.2",
-        "@types/node": "^25.9.3",
+        "@types/node": "^25.9.8",
         "svelte": "^5.56.3",
         "typescript": "^6.0.3",
         "vite": "^8.0.16",
-        "wrangler": "^4.100.0"
+        "wrangler": "^4.147.0"
     }
 }

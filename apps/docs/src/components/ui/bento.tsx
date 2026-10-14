@@ -39,7 +39,7 @@ export const BentoCard = ({
         <div>{background}</div>
         <div className="pointer-events-none z-10 flex transform-gpu flex-col gap-1 p-6 transition-all duration-300 group-hover:-translate-y-10">
             <Icon className="h-12 w-12 origin-left transform-gpu text-neutral-700 transition-all duration-300 ease-in-out group-hover:scale-75" />
-            <h3 className="text-xl font-semibold text-white">{name}</h3>
+            <h3 className="text-xl font-semibold text-ink">{name}</h3>
             <p className="max-w-lg text-neutral-400">{description}</p>
         </div>
 
@@ -117,10 +117,10 @@ export const BentoSpotlightCard = ({
                     <CanvasRevealEffect animationSpeed={5} colors={revealColors} containerClassName="bg-transparent absolute inset-0 pointer-events-none" />
                 )}
             </motion.div>
-            <div className="pointer-events-none z-10 flex transform-gpu flex-col gap-2 p-6 transition-all duration-300">
-                <Icon className="my-5 h-6 w-6 origin-left transform-gpu text-white/60 transition-all duration-300 ease-in-out group-hover/spotlight:text-white group-hover/spotlight:scale-110" />
-                <h3 className="text-lg font-bold tracking-tight text-white">{name}</h3>
-                <p className="text-sm leading-relaxed text-white/40 transition-colors duration-300 group-hover/spotlight:text-white/55">{description}</p>
+            <div className="pointer-events-none z-10 flex transform-gpu flex-col gap-2 p-6 transition-transform duration-300">
+                <Icon className="my-5 h-6 w-6 origin-left transform-gpu text-ink-muted transition-[color,transform] duration-300 ease-in-out group-hover/spotlight:text-ink group-hover/spotlight:scale-110" />
+                <h3 className="text-lg font-bold tracking-tight text-ink">{name}</h3>
+                <p className="text-sm leading-relaxed text-ink-faint transition-colors duration-300 group-hover/spotlight:text-ink-muted">{description}</p>
             </div>
         </div>
     );

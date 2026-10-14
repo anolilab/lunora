@@ -108,7 +108,10 @@ describe("withLunora — Astro class-B single-worker composition (PLAN4 §3)", (
     it("forwards the realtime path to the shard with the envelope's shardKey", async () => {
         expect.assertions(2);
 
-        const worker = withLunora({ fetch: () => new Response("astro") }, { shardDO: shard.namespace });
+        // A client-named non-default shard is default-denied unless shard auth is
+        // configured; opt in explicitly so the realtime path forwards (mirrors the
+        // runtime create-worker suite).
+        const worker = withLunora({ fetch: () => new Response("astro") }, { allowUnauthenticatedShardAccess: true, shardDO: shard.namespace });
 
         await worker.fetch(
             new Request("https://app.example/_lunora/rpc", {

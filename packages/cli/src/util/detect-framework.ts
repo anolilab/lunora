@@ -20,6 +20,7 @@ const ADAPTER_BY_FRAMEWORK: Readonly<Record<DetectedFramework, string>> = {
     sveltekit: "@lunora/svelte",
     "tanstack-start": "@lunora/react",
     "tanstack-start-solid": "@lunora/solid",
+    vinext: "@lunora/react",
 };
 
 /** A {@link BaseFrameworkDetection} plus the client-adapter package the `--here` patcher installs/wires. */
@@ -43,4 +44,4 @@ const detectFramework = (root: string): FrameworkDetection => {
 export type { FrameworkDetection };
 export { detectFramework };
 
-export { type DetectedFramework, type FrameworkClass } from "@lunora/config";
+export { type DetectedFramework } from "@lunora/config";

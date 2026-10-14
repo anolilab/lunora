@@ -87,10 +87,56 @@ describe(defineContainer, () => {
         expect(() => defineContainer({ env: { API_KEY: "fallback" }, image: "./app", secrets: ["API_KEY"] })).toThrow("both `env` and `secrets`");
     });
 
+    it("accepts a secretsStore env → binding map", () => {
+        expect.assertions(1);
+
+        const definition = defineContainer({ image: "./app", secretsStore: { STRIPE_KEY: "STRIPE_SECRET" } });
+
+        expect(definition.secretsStore).toStrictEqual({ STRIPE_KEY: "STRIPE_SECRET" });
+    });
+
+    it("rejects an invalid secretsStore env name", () => {
+        expect.assertions(1);
+
+        expect(() => defineContainer({ image: "./app", secretsStore: { "NOT-VALID": "STRIPE_SECRET" } })).toThrow("not a valid environment variable name");
+    });
+
+    it("rejects an empty secretsStore binding name", () => {
+        expect.assertions(1);
+
+        expect(() => defineContainer({ image: "./app", secretsStore: { STRIPE_KEY: "  " } })).toThrow("non-empty Secrets Store binding name");
+    });
+
+    it("rejects a name declared in both secretsStore and env/secrets", () => {
+        expect.assertions(2);
+
+        expect(() => defineContainer({ env: { API_KEY: "x" }, image: "./app", secretsStore: { API_KEY: "API_SECRET" } })).toThrow(
+            "both `secretsStore` and `env`/`secrets`",
+        );
+        expect(() => defineContainer({ image: "./app", secrets: ["API_KEY"], secretsStore: { API_KEY: "API_SECRET" } })).toThrow(
+            "both `secretsStore` and `env`/`secrets`",
+        );
+    });
+
     it("rejects an invalid sleepAfter string", () => {
         expect.assertions(1);
 
         expect(() => defineContainer({ image: "./app", sleepAfter: "5 minutes" })).toThrow("`sleepAfter`");
+    });
+
+    it("rejects a non-positive, fractional, or NaN numeric sleepAfter", () => {
+        expect.assertions(4);
+
+        expect(() => defineContainer({ image: "./app", sleepAfter: 0 })).toThrow("`sleepAfter` must be a positive integer");
+        expect(() => defineContainer({ image: "./app", sleepAfter: -30 })).toThrow("`sleepAfter` must be a positive integer");
+        expect(() => defineContainer({ image: "./app", sleepAfter: 1.5 })).toThrow("`sleepAfter` must be a positive integer");
+        expect(() => defineContainer({ image: "./app", sleepAfter: Number.NaN })).toThrow("`sleepAfter` must be a positive integer");
+    });
+
+    it("accepts a positive integer sleepAfter", () => {
+        expect.assertions(1);
+
+        expect(defineContainer({ image: "./app", sleepAfter: 30 }).sleepAfter).toBe(30);
     });
 
     it("accepts a Railpack { build } image source", () => {
@@ -115,10 +161,131 @@ describe(defineContainer, () => {
         expect(() => defineContainer({ image: "./app", rollout: { stepPercentage: 101 } })).toThrow("rollout.stepPercentage");
     });
 
+    it("rejects a fractional or negative rollout gracePeriodSeconds, but accepts 0", () => {
+        expect.assertions(3);
+
+        expect(() => defineContainer({ image: "./app", rollout: { gracePeriodSeconds: -1 } })).toThrow("rollout.gracePeriodSeconds");
+        expect(() => defineContainer({ image: "./app", rollout: { gracePeriodSeconds: 1.5 } })).toThrow("rollout.gracePeriodSeconds");
+        // 0 is a meaningful value — no grace period — not a missing one.
+        expect(defineContainer({ image: "./app", rollout: { gracePeriodSeconds: 0 } }).rollout).toStrictEqual({ gracePeriodSeconds: 0 });
+    });
+
     it("rejects an empty { build } source", () => {
         expect.assertions(1);
 
         expect(() => defineContainer({ image: { build: "" } })).toThrow("`image.build` must be a non-empty");
+    });
+
+    it("accepts multi-port, egress-firewall, and labels config", () => {
+        expect.assertions(7);
+
+        const definition = defineContainer({
+            allowedHosts: ["*.stripe.com"],
+            deniedHosts: ["*.evil.com"],
+            entrypoint: ["node", "server.js"],
+            image: "./app",
+            interceptHttps: true,
+            labels: { env: "prod", tenant: "acme" },
+            pingEndpoint: "/healthz",
+            requiredPorts: [8080, 9090],
+        });
+
+        expect(definition.requiredPorts).toStrictEqual([8080, 9090]);
+        expect(definition.entrypoint).toStrictEqual(["node", "server.js"]);
+        expect(definition.interceptHttps).toBe(true);
+        expect(definition.allowedHosts).toStrictEqual(["*.stripe.com"]);
+        expect(definition.deniedHosts).toStrictEqual(["*.evil.com"]);
+        expect(definition.pingEndpoint).toBe("/healthz");
+        expect(definition.labels).toStrictEqual({ env: "prod", tenant: "acme" });
+    });
+
+    it("rejects a blank entrypoint part, hostname, or label key", () => {
+        expect.assertions(3);
+
+        expect(() => defineContainer({ entrypoint: ["node", "   "], image: "./app" })).toThrow("`entrypoint` must be a non-empty");
+        expect(() => defineContainer({ allowedHosts: ["  "], image: "./app" })).toThrow("`allowedHosts` must be an array of non-empty");
+        expect(() => defineContainer({ image: "./app", labels: { "  ": "x" } })).toThrow("`labels` must be a record of non-empty");
+    });
+
+    it("rejects a non-boolean interceptHttps", () => {
+        expect.assertions(1);
+
+        expect(() => defineContainer({ image: "./app", interceptHttps: "yes" as unknown as boolean })).toThrow("`interceptHttps` must be a boolean");
+    });
+
+    it("accepts a boolean sandbox flag and rejects anything else", () => {
+        expect.assertions(2);
+
+        expect(defineContainer({ image: "./app", sandbox: true }).sandbox).toBe(true);
+        expect(() => defineContainer({ image: "./app", sandbox: "yes" as unknown as boolean })).toThrow("`sandbox` must be a boolean");
+    });
+
+    it("validates backups: it needs sandbox, a bucket binding and a slash-terminated prefix", () => {
+        expect.assertions(4);
+
+        expect(defineContainer({ backups: { bucket: "WORKSPACES", prefix: "ws/" }, image: "./app", sandbox: true }).backups).toStrictEqual({
+            bucket: "WORKSPACES",
+            prefix: "ws/",
+        });
+        expect(() => defineContainer({ backups: { bucket: "WORKSPACES" }, image: "./app" })).toThrow("`backups` needs `sandbox: true`");
+        expect(() => defineContainer({ backups: { bucket: " " }, image: "./app", sandbox: true })).toThrow("`backups.bucket` must name an R2 bucket binding");
+        expect(() => defineContainer({ backups: { bucket: "WORKSPACES", prefix: "ws" }, image: "./app", sandbox: true })).toThrow(
+            "`backups.prefix` must be a string ending in `/`",
+        );
+    });
+
+    it("accepts hardTimeout and readyOn config", () => {
+        expect.assertions(3);
+
+        const definition = defineContainer({
+            defaultPort: 8080,
+            hardTimeout: "1h",
+            image: "./app",
+            readyOn: [{ path: "/ready" }, { path: "migrations", port: 9090, status: 204 }],
+        });
+
+        expect(definition.hardTimeout).toBe("1h");
+        expect(definition.readyOn).toStrictEqual([{ path: "/ready" }, { path: "migrations", port: 9090, status: 204 }]);
+        expect(defineContainer({ hardTimeout: 600, image: "./app" }).hardTimeout).toBe(600);
+    });
+
+    it("rejects an invalid hardTimeout", () => {
+        expect.assertions(3);
+
+        expect(() => defineContainer({ hardTimeout: "5 minutes", image: "./app" })).toThrow("`hardTimeout`");
+        expect(() => defineContainer({ hardTimeout: 0, image: "./app" })).toThrow("`hardTimeout`");
+        expect(() => defineContainer({ hardTimeout: -5, image: "./app" })).toThrow("`hardTimeout`");
+    });
+
+    it("rejects an invalid readyOn check", () => {
+        expect.assertions(4);
+
+        expect(() => defineContainer({ image: "./app", readyOn: [{ path: "   " }] })).toThrow("`readyOn[].path`");
+        expect(() => defineContainer({ image: "./app", readyOn: [{ path: " /ready " }] })).toThrow("leading or trailing whitespace");
+        expect(() => defineContainer({ image: "./app", readyOn: [{ path: "/ready", port: 70_000 }] })).toThrow("readyOn[].port");
+        expect(() => defineContainer({ image: "./app", readyOn: [{ path: "/ready", status: 700 }] })).toThrow("`readyOn[].status`");
+    });
+
+    it("rejects an empty or out-of-range requiredPorts", () => {
+        expect.assertions(2);
+
+        expect(() => defineContainer({ image: "./app", requiredPorts: [] })).toThrow("`requiredPorts` must be a non-empty");
+        expect(() => defineContainer({ image: "./app", requiredPorts: [70_000] })).toThrow("requiredPorts[]");
+    });
+
+    it("rejects an empty entrypoint and an empty-string entrypoint part", () => {
+        expect.assertions(2);
+
+        expect(() => defineContainer({ entrypoint: [], image: "./app" })).toThrow("`entrypoint` must be a non-empty");
+        expect(() => defineContainer({ entrypoint: ["node", ""], image: "./app" })).toThrow("`entrypoint` must be a non-empty");
+    });
+
+    it("rejects an empty hostname in an egress list and an empty pingEndpoint", () => {
+        expect.assertions(3);
+
+        expect(() => defineContainer({ allowedHosts: [""], image: "./app" })).toThrow("`allowedHosts` must be an array of non-empty");
+        expect(() => defineContainer({ deniedHosts: [""], image: "./app" })).toThrow("`deniedHosts` must be an array of non-empty");
+        expect(() => defineContainer({ image: "./app", pingEndpoint: "" })).toThrow("`pingEndpoint` must be a non-empty");
     });
 
     it("does not brand arbitrary objects", () => {
@@ -220,5 +387,73 @@ describe(resolveContainerEnvVars, () => {
         const definition = defineContainer({ image: "./app", secrets: ["API_KEY"] });
 
         expect(() => resolveContainerEnvVars(definition, {}, "transcoder")).toThrow('container "transcoder": declared secret "API_KEY" is not set');
+    });
+
+    describe("schedulingPolicy durable_object", () => {
+        it("accepts named images, a default image and a runtime size", () => {
+            expect.assertions(2);
+
+            const definition = defineContainer({
+                image: "base",
+                images: { base: "./container", pinned: { registry: "registry.cloudflare.com/acct/repo@sha256:abc" } },
+                instanceType: { diskMb: 8000, memoryMib: 4096, vcpu: 1 },
+                schedulingPolicy: "durable_object",
+            });
+
+            expect(definition.schedulingPolicy).toBe("durable_object");
+            expect(defineContainer({ image: "cloudflare/debian-trixie", schedulingPolicy: "durable_object" }).image).toBe("cloudflare/debian-trixie");
+        });
+
+        it("rejects a default image that names no declared or managed image", () => {
+            expect.assertions(1);
+
+            expect(() => defineContainer({ image: "gpu", images: { base: "./container" }, schedulingPolicy: "durable_object" })).toThrow(
+                /must name an entry of `images`/u,
+            );
+        });
+
+        it("rejects registry references outside the Cloudflare registry or without a digest", () => {
+            expect.assertions(2);
+
+            expect(() => defineContainer({ images: { base: { registry: "docker.io/acme/app:1" } }, schedulingPolicy: "durable_object" })).toThrow(
+                /digest-pinned \(@sha256\) reference under registry.cloudflare.com/u,
+            );
+            expect(() =>
+                defineContainer({ images: { base: { registry: "registry.cloudflare.com/acct/repo:latest" } }, schedulingPolicy: "durable_object" }),
+            ).toThrow(/digest-pinned/u);
+        });
+
+        it("rejects wrangler-only sizes and partial custom sizes", () => {
+            expect.assertions(2);
+
+            expect(() => defineContainer({ instanceType: "basic" as never, schedulingPolicy: "durable_object" })).toThrow(/not a runtime size/u);
+            expect(() => defineContainer({ instanceType: { vcpu: 1 } as never, schedulingPolicy: "durable_object" })).toThrow(
+                /needs diskMb in 1–20000 \(got undefined\)/u,
+            );
+        });
+
+        it("holds a custom runtime size to Cloudflare's custom instance bounds", () => {
+            expect.assertions(4);
+
+            const size = (instanceType: { diskMb: number; memoryMib: number; vcpu: number }) => () =>
+                defineContainer({ instanceType, schedulingPolicy: "durable_object" });
+
+            // Below the 1-vCPU floor of a custom size: a named runtime size covers that range.
+            expect(size({ diskMb: 2000, memoryMib: 4096, vcpu: 0.5 })).toThrow(/needs vcpu in 1–4 \(got 0\.5\) — below 1 vCPU use a named runtime size/u);
+            expect(size({ diskMb: 2000, memoryMib: 16_384, vcpu: 4 })).toThrow(/needs memoryMib in 1–12288 \(got 16384\)/u);
+            // 3 GiB per vCPU: 2 vCPU needs at least 6144 MiB.
+            expect(size({ diskMb: 2000, memoryMib: 4096, vcpu: 2 })).toThrow(/≥ 3072 MiB memory per vCPU \(got 4096 MiB for 2 vCPU\)/u);
+            expect(size({ diskMb: 20_000, memoryMib: 12_288, vcpu: 4 })).not.toThrow();
+        });
+
+        it("rejects default-policy fields, and images without the policy", () => {
+            expect.assertions(3);
+
+            expect(() => defineContainer({ maxInstances: 3, schedulingPolicy: "durable_object" } as never)).toThrow(/`maxInstances` is not supported/u);
+            expect(() => defineContainer({ rollout: { stepPercentage: 10 }, schedulingPolicy: "durable_object" } as never)).toThrow(
+                /`rollout` is not supported/u,
+            );
+            expect(() => defineContainer({ image: "./app", images: { base: "./x" } } as never)).toThrow(/`images` needs schedulingPolicy "durable_object"/u);
+        });
     });
 });

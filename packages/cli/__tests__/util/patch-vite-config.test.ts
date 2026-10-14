@@ -75,6 +75,27 @@ describe("patchViteConfig", () => {
             expect(result.reason).toBe("lunora plugin already present");
         });
 
+        it("patches a config that only MENTIONS lunora() in a comment or a string", () => {
+            expect.assertions(3);
+
+            // A commented-out plugin line, or a note about it, is not a call.
+            // Matching one made this report the config already wired and leave
+            // the project's dev server with no Lunora plugin in it at all.
+            const source = `import react from "@vitejs/plugin-react";
+
+// TODO: put lunora() back once the upgrade lands.
+export default defineConfig({
+    plugins: [react()],
+});
+`;
+
+            const result = patchViteConfig(source);
+
+            expect(result.changed).toBe(true);
+            expect(result.code).toContain('import { lunora } from "@lunora/vite";');
+            expect(result.code).toContain("plugins: [lunora(), react()]");
+        });
+
         it("is idempotent when called twice on the same source", () => {
             expect.assertions(2);
 
@@ -199,6 +220,29 @@ describe("patchViteConfig", () => {
             expect(result.code.indexOf("lunora()")).toBeLessThan(result.code.indexOf("react()"));
             // Existing entries survive
             expect(result.code).toContain("tsconfigPaths()");
+        });
+    });
+
+    describe("no-op paths", () => {
+        it("reports changed: false with a reason when `plugins` is not an array literal", () => {
+            expect.assertions(3);
+
+            // A shared plugin list — the shape the splice cannot handle. It bailed
+            // with a bare `return` and the caller still got `changed: true` over
+            // untouched `code`, so `init` wrote the file back and reported the Vite
+            // config patched while the project got no `lunora()` at all. The
+            // docblock has always promised `changed: false` for ANY no-op path.
+            const source = `import { defineConfig } from "vite";
+import plugins from "./vite-plugins";
+
+export default defineConfig({ plugins });
+`;
+
+            const result = patchViteConfig(source);
+
+            expect(result.changed).toBe(false);
+            expect(result.code).toBe(source);
+            expect(result.reason).toContain("not an array literal");
         });
     });
 

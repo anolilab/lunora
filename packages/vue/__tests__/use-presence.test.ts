@@ -7,7 +7,11 @@ import { createFakeClient } from "./fake-client";
 
 const HEARTBEAT = { __lunoraRef: "presence:heartbeat" } as unknown as HeartbeatReference;
 const LIST_PRESENT = { __lunoraRef: "presence:listPresent" } as unknown as ListPresentReference;
-const SESS_ID_PATTERN = /^sess-/;
+// `randomSessionId`'s non-`randomUUID` arm (shared/random-session-id.ts) hex-encodes
+// 16 bytes of `crypto.getRandomValues`, so the id is exactly 32 lowercase hex chars.
+// There is deliberately no arm below that: a runtime with no Web Crypto throws
+// rather than mint a `Date.now()` string two sessions can share.
+const SESS_ID_PATTERN = /^[\da-f]{32}$/;
 
 /**
  * Extend the fake client with a refcounted `acquireConnectionContext` stub that
@@ -80,10 +84,15 @@ const flushAsync = async (): Promise<void> => {
 describe("usePresence (Vue)", () => {
     beforeEach(() => {
         vi.useFakeTimers({ shouldAdvanceTime: true });
+        // The composable gates its heartbeat/interval/subscription on a browser
+        // `window`; the vitest env is `node` (no `window`), so define one for the
+        // client-path tests. The SSR test below removes it to exercise the guard.
+        Object.defineProperty(globalThis, "window", { configurable: true, value: {} });
     });
 
     afterEach(() => {
         vi.useRealTimers();
+        Reflect.deleteProperty(globalThis, "window");
     });
 
     it("heartbeats on mount and again on each interval tick", async () => {
@@ -150,12 +159,17 @@ describe("usePresence (Vue)", () => {
         scope.stop();
     });
 
-    it("generates fallback session id when crypto is unavailable", () => {
+    it("mints a session id from getRandomValues when crypto.randomUUID is unavailable", () => {
         const fake = createPresenceFakeClient();
         // eslint-disable-next-line n/no-unsupported-features/node-builtins -- accessing globalThis.crypto to save/restore it for the test
         const originalCrypto = globalThis.crypto;
 
-        Object.defineProperty(globalThis, "crypto", { configurable: true, value: undefined });
+        // A non-secure origin (a plain-HTTP LAN dev/preview server) leaves
+        // `crypto.randomUUID` undefined while still shipping `getRandomValues`.
+        Object.defineProperty(globalThis, "crypto", {
+            configurable: true,
+            value: { getRandomValues: (array: Uint8Array) => array.fill(171) },
+        });
 
         try {
             const scope = effectScope();
@@ -254,5 +268,155 @@ describe("usePresence (Vue)", () => {
         await flushAsync();
 
         expect(fake.contextFor()).toBeUndefined();
+    });
+
+    it("does not heartbeat, open an interval, or subscribe during SSR (no window)", async () => {
+        const fake = createPresenceFakeClient();
+
+        // Simulate the server render: no browser `window`.
+        Reflect.deleteProperty(globalThis, "window");
+
+        const scope = effectScope();
+        const result = scope.run(() =>
+            fake.provide(() =>
+                usePresence("room-1", {
+                    heartbeat: HEARTBEAT,
+                    intervalMs: 500,
+                    listPresent: LIST_PRESENT,
+                    sessionId: "sess-fixed",
+                }),
+            ),
+        )!;
+
+        await flushAsync();
+
+        // No setup-time heartbeat write, no live subscription, no connection context.
+        expect(fake.mutationSpy).not.toHaveBeenCalled();
+        expect(fake.subscribeCalls).toHaveLength(0);
+        expect(fake.acquireConnectionContext).not.toHaveBeenCalled();
+
+        // No leaked interval: advancing time fires no further heartbeats.
+        await vi.advanceTimersByTimeAsync(2000);
+        await flushAsync();
+
+        expect(fake.mutationSpy).not.toHaveBeenCalled();
+
+        // The session id is still returned so the caller has a stable handle.
+        expect(result.sessionId).toBe("sess-fixed");
+
+        scope.stop();
+    });
+
+    // An RLS denial or a session expiry on the `listPresent` subscription used to be
+    // dropped on the floor: `present` simply froze at its last value with nothing to
+    // read and no handler to call. Matches React's `usePresence` error channel.
+    it("setData during SSR (no window) sends no heartbeat", async () => {
+        const fake = createPresenceFakeClient();
+
+        Reflect.deleteProperty(globalThis, "window");
+
+        const scope = effectScope();
+        const result = scope.run(() =>
+            fake.provide(() =>
+                usePresence("room-1", {
+                    heartbeat: HEARTBEAT,
+                    intervalMs: 500,
+                    listPresent: LIST_PRESENT,
+                    sessionId: "sess-fixed",
+                }),
+            ),
+        )!;
+
+        result.setData({ status: "typing" });
+        await flushAsync();
+
+        expect(fake.mutationSpy).not.toHaveBeenCalled();
+
+        scope.stop();
+    });
+
+    it("setData while mounted sends a heartbeat carrying the new data", async () => {
+        const fake = createPresenceFakeClient();
+
+        const scope = effectScope();
+        const result = scope.run(() =>
+            fake.provide(() =>
+                usePresence("room-1", {
+                    heartbeat: HEARTBEAT,
+                    intervalMs: 500,
+                    listPresent: LIST_PRESENT,
+                    sessionId: "sess-fixed",
+                }),
+            ),
+        )!;
+
+        await flushAsync();
+
+        expect(fake.mutationSpy).toHaveBeenCalledTimes(1);
+
+        result.setData({ status: "typing" });
+        await flushAsync();
+
+        expect(fake.mutationSpy).toHaveBeenCalledTimes(2);
+        expect(fake.mutationSpy.mock.calls[1]?.[1]).toMatchObject({ roomId: "room-1", sessionId: "sess-fixed", data: { status: "typing" } });
+
+        scope.stop();
+    });
+
+    it("setData after the scope stops sends no heartbeat", async () => {
+        const fake = createPresenceFakeClient();
+
+        const scope = effectScope();
+        const result = scope.run(() =>
+            fake.provide(() =>
+                usePresence("room-1", {
+                    heartbeat: HEARTBEAT,
+                    intervalMs: 500,
+                    listPresent: LIST_PRESENT,
+                    sessionId: "sess-fixed",
+                }),
+            ),
+        )!;
+
+        await flushAsync();
+        scope.stop();
+
+        const callsAtStop = fake.mutationSpy.mock.calls.length;
+
+        result.setData({ status: "typing" });
+        await flushAsync();
+
+        expect(fake.mutationSpy).toHaveBeenCalledTimes(callsAtStop);
+    });
+
+    it("surfaces a listPresent subscription error on `error` and through `onError`", async () => {
+        const fake = createPresenceFakeClient();
+        const seen: { code?: string; message: string }[] = [];
+
+        const scope = effectScope();
+        const result = scope.run(() =>
+            fake.provide(() =>
+                usePresence("room-1", {
+                    heartbeat: HEARTBEAT,
+                    listPresent: LIST_PRESENT,
+                    onError: (subscriptionError) => seen.push(subscriptionError),
+                    sessionId: "sess-fixed",
+                }),
+            ),
+        )!;
+
+        await flushAsync();
+
+        const call = fake.subscribeCalls[0]!;
+
+        call.callback([{ sessionId: "sess-fixed" }]);
+        call.options.onError?.({ code: "FORBIDDEN", message: "denied" });
+
+        expect(result.error.value?.message).toBe("denied");
+        expect(seen).toStrictEqual([{ code: "FORBIDDEN", message: "denied" }]);
+        // The last good value is retained — the error is additive, not a reset.
+        expect(result.present.value).toStrictEqual([{ sessionId: "sess-fixed" }]);
+
+        scope.stop();
     });
 });

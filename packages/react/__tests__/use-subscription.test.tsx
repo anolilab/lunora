@@ -26,6 +26,37 @@ const Display = ({ args = EMPTY_ARGS }: { args?: Record<string, unknown> | "skip
 };
 
 describe("useSubscription", () => {
+    it("keeps the server error code on the surfaced Error", async () => {
+        expect.hasAssertions();
+
+        const mock = createMockClient();
+
+        const Probe = (): ReactElement => {
+            const { error } = useSubscription(makeRef("messages:list"), EMPTY_ARGS);
+
+            return <div data-testid="probe">{error === undefined ? "ok" : `${(error as { code?: string }).code ?? "no-code"}: ${error.message}`}</div>;
+        };
+
+        render(
+            <LunoraProvider client={mock.asClient}>
+                <Probe />
+            </LunoraProvider>,
+        );
+
+        await waitFor(() => {
+            expect(mock.subscribe).toHaveBeenCalledTimes(1);
+        });
+
+        await act(async () => {
+            mock.emitError("messages:list", { code: "UNAUTHORIZED", message: "denied" });
+        });
+
+        // A flat `new Error(message)` would leave consumers unable to branch on kind.
+        await waitFor(() => {
+            expect(screen.getByTestId("probe").textContent).toBe("UNAUTHORIZED: denied");
+        });
+    });
+
     it("opens a subscription on mount and renders pushed values", async () => {
         expect.hasAssertions();
 

@@ -15,9 +15,14 @@ import type { HyperdriveConnection, HyperdriveLike, Mysql2Like, NodePgLike, Post
  * import { createHyperdrive, fromPostgresJs } from "@lunora/hyperdrive";
  * import postgres from "postgres";
  *
- * // inside an action (never a query/mutation):
- * const { connectionString } = createHyperdrive(env.HYPERDRIVE);
- * ctx.sql = fromPostgresJs(postgres(connectionString));
+ * // Wire the client once, on the app builder — called per shard construction,
+ * // not per request. `ctx.sql` is emitted `readonly`; it is never assigned.
+ * const app = defineApp<Env>()
+ *     .shard((env) => env.SHARD)
+ *     .hyperdrive((env) => fromPostgresJs(postgres(createHyperdrive(env.HYPERDRIVE).connectionString)))
+ *     .build();
+ *
+ * // Then, inside an action (never a query/mutation):
  * const rows = await ctx.sql.query("select id from users where org = $1", [orgId]);
  * ```
  * @remarks
@@ -52,6 +57,7 @@ export const createHyperdrive = (binding: HyperdriveLike): { config: HyperdriveC
  */
 export const fromPostgresJs = (client: PostgresJsLike): SqlClient => {
     return {
+        dbSystem: "postgresql",
         query: async <Row = Record<string, unknown>>(text: string, params: ReadonlyArray<unknown> = []): Promise<Row[]> => {
             const rows = await client.unsafe(text, params);
 
@@ -67,6 +73,7 @@ export const fromPostgresJs = (client: PostgresJsLike): SqlClient => {
  */
 export const fromNodePg = (client: NodePgLike): SqlClient => {
     return {
+        dbSystem: "postgresql",
         query: async <Row = Record<string, unknown>>(text: string, params: ReadonlyArray<unknown> = []): Promise<Row[]> => {
             const result = await client.query(text, params);
 
@@ -86,6 +93,7 @@ export const fromNodePg = (client: NodePgLike): SqlClient => {
  */
 export const fromMysql2 = (connection: Mysql2Like): SqlClient => {
     return {
+        dbSystem: "mysql",
         query: async <Row = Record<string, unknown>>(text: string, params: ReadonlyArray<unknown> = []): Promise<Row[]> => {
             const [rows] = await connection.execute(text, params);
 

@@ -9,19 +9,19 @@ const args = { text: "hi" } as unknown;
 
 describe("mutation handle", () => {
     it("forwards args and options to client.mutation and resolves the result", async () => {
-        const mutationFn = vi.fn().mockResolvedValue({ id: 1 });
+        const mutationFn = vi.fn<(function_: unknown, args: unknown, options?: { shardKey?: string }) => Promise<unknown>>().mockResolvedValue({ id: 1 });
         const client = { mutation: mutationFn } as unknown as LunoraClient;
 
         const { mutate } = mutation(client, fnRef);
         const result = await mutate(args, { shardKey: "general" });
 
-        expect(result).toEqual({ id: 1 });
+        expect(result).toStrictEqual({ id: 1 });
         expect(mutationFn).toHaveBeenCalledWith(fnRef, args, { shardKey: "general" });
     });
 
     it("flips pending true during the call and back to false after it settles", async () => {
         let resolveCall: (value: unknown) => void = () => {};
-        const mutationFn = vi.fn(
+        const mutationFn = vi.fn<() => Promise<unknown>>(
             () =>
                 new Promise((resolve) => {
                     resolveCall = resolve;
@@ -45,7 +45,7 @@ describe("mutation handle", () => {
 
     it("keeps pending true until the last overlapping call settles (ref-counted)", async () => {
         const resolvers: ((value: unknown) => void)[] = [];
-        const mutationFn = vi.fn(
+        const mutationFn = vi.fn<() => Promise<unknown>>(
             () =>
                 new Promise((resolve) => {
                     resolvers.push(resolve);

@@ -1,4 +1,4 @@
-// Test-only wrangler config consumed by `@cloudflare/vitest-pool-workers`.
+// Test-only wrangler config consumed by `@cloudflare/vitest-plugin`.
 {
     "$schema": "../../../../node_modules/wrangler/config-schema.json",
     "name": "lunora-d1-test-worker",

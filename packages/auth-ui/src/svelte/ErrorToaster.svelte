@@ -1,0 +1,63 @@
+<!--
+    Renders the errors that have no card to land in — a failed social redirect, a
+    failed unlink, a sign-out that didn't. Mount it once in your app shell.
+
+    Errors that *do* belong to a card still render on that card's banner and never
+    reach here, so nothing is announced twice.
+-->
+<script lang="ts">
+    import { DEFAULT_LOCALIZATION } from "../core/localization";
+    import type { Toast } from "../core/toast";
+    import { dismissToast, getToasts, subscribeToasts } from "../core/toast";
+
+    /*
+     * The dismiss button's accessible name is a prop rather than a read of the
+     * provider's `localization`, because the toaster is mounted in the app shell
+     * and must keep working outside `<AuthUIProvider>`.
+     */
+    let { dismissLabel = DEFAULT_LOCALIZATION.dismiss }: { dismissLabel?: string } = $props();
+
+    /*
+     * The store is module-level (see `core/toast.ts`), not a controller bound to
+     * the provider, so this mirrors it into local state rather than going through
+     * `controllerStore`.
+     */
+    let toasts = $state<ReadonlyArray<Toast>>(getToasts());
+
+    $effect(() => {
+        // Re-read synchronously: a toast can be pushed between initialisation and
+        // this effect running.
+        toasts = getToasts();
+
+        return subscribeToasts(() => {
+            toasts = getToasts();
+        });
+    });
+</script>
+
+<!--
+    `polite`, not `assertive`: these are failures the user can retry, not
+    something that should interrupt a screen reader mid-sentence.
+
+    Mounted unconditionally — including with no toasts yet. A live region only
+    announces changes made AFTER it exists in the accessibility tree; gating
+    the whole wrapper on `toasts.length > 0` meant the very first toast landed
+    before assistive tech was watching the region, so it went unannounced.
+-->
+<div aria-live="polite" class="lunora-auth-toaster">
+    {#each toasts as toast (toast.id)}
+        <div class="lunora-auth-toast" role="status">
+            <span class="lunora-auth-toast__message">{toast.message}</span>
+            <button
+                aria-label={dismissLabel}
+                class="lunora-auth-toast__dismiss"
+                onclick={() => {
+                    dismissToast(toast.id);
+                }}
+                type="button"
+            >
+                ×
+            </button>
+        </div>
+    {/each}
+</div>

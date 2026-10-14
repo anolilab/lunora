@@ -34,9 +34,9 @@ interface LunoraErrorShape {
 }
 
 /** Drive a middleware and report whether `next` ran (the handler proceeded). */
-const run = async (middleware: Middleware<Ctx, Ctx>, ctx: Ctx): Promise<{ passed: boolean }> => {
+const run = async <C>(middleware: Middleware<C, C>, ctx: C): Promise<{ passed: boolean }> => {
     let passed = false;
-    const next = (async (): Promise<Ctx> => {
+    const next = (async (): Promise<C> => {
         passed = true;
 
         return ctx;
@@ -110,6 +110,27 @@ describe("verifyTurnstileMiddleware", () => {
         expect(error.status).toBe(403);
     });
 
+    it("throws FORBIDDEN/403 when `validate` returns a truthy non-boolean", async () => {
+        expect.assertions(2);
+
+        // `validate` is app code asserting the hostname/action the token was minted
+        // for. A version returning the matched value rather than a boolean (e.g.
+        // `(r) => ALLOWED.find((h) => h === r.hostname)`) must not pass a token
+        // replayed from another site — only an exact `true` does.
+        const fetch = vi.fn<FetchLike>(async () => jsonResponse({ hostname: "evil.example", success: true }));
+        const mw = verifyTurnstileMiddleware<Ctx>({
+            fetch,
+            secret: "sek",
+            token: (c) => c.turnstileToken,
+            validate: (result) => result.hostname as unknown as boolean,
+        });
+
+        const error = (await run(mw, { turnstileToken: "good" }).catch((error_: unknown) => error_)) as LunoraErrorShape;
+
+        expect(error.code).toBe("FORBIDDEN");
+        expect(error.status).toBe(403);
+    });
+
     it("fails closed (FORBIDDEN/403) on a siteverify transport error", async () => {
         expect.assertions(2);
 
@@ -141,5 +162,46 @@ describe("verifyTurnstileMiddleware", () => {
         expect(passed).toBe(true);
 
         consoleError.mockRestore();
+    });
+});
+
+/**
+ * The shape `@lunora/server`'s procedure builder actually hands a `.use()` step:
+ * the call's VALIDATED arguments, frozen, on `ctx.args` (see `withCallContext`
+ * in `packages/server/src/builder/index.ts`). This is the recipe the option's
+ * JSDoc documents — a token cannot reach the middleware any other way, since the
+ * procedure context carries the resolved identity and no raw `Headers`.
+ */
+describe("verifyTurnstileMiddleware over the builder's ctx.args", () => {
+    interface ArgsCtx {
+        args: { turnstileToken?: string };
+    }
+
+    const builderCtx = (args: { turnstileToken?: string }): ArgsCtx => {
+        return { args: Object.freeze(args) };
+    };
+
+    it("verifies a token routed through the function args", async () => {
+        expect.assertions(2);
+
+        const fetch = vi.fn<FetchLike>(async () => jsonResponse({ success: true }));
+        const mw = verifyTurnstileMiddleware<ArgsCtx>({ fetch, secret: "sek", token: (c) => c.args.turnstileToken });
+
+        const { passed } = await run(mw, builderCtx({ turnstileToken: "good" }));
+
+        expect(passed).toBe(true);
+        expect(new URLSearchParams(fetch.mock.calls[0]![1]?.body as string).get("response")).toBe("good");
+    });
+
+    it("rejects when the procedure declared no token arg", async () => {
+        expect.assertions(2);
+
+        const fetch = vi.fn<FetchLike>(async () => jsonResponse({ success: true }));
+        const mw = verifyTurnstileMiddleware<ArgsCtx>({ fetch, secret: "sek", token: (c) => c.args.turnstileToken });
+
+        const error = (await run(mw, builderCtx({})).catch((error_: unknown) => error_)) as LunoraErrorShape;
+
+        expect(error.code).toBe("FORBIDDEN");
+        expect(fetch).not.toHaveBeenCalled();
     });
 });

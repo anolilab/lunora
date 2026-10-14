@@ -22,7 +22,7 @@ plumbing.
 
 ## `workerd` project (real D1)
 
-Boots a real Miniflare D1 database via `@cloudflare/vitest-pool-workers`.
+Boots a real Miniflare D1 database via `@cloudflare/vitest-plugin`.
 The bound database is in-process SQLite; tests can read/write through
 either `env.DB` directly or through the worker exposed by
 `__tests__/workerd/test-worker.ts`.

@@ -1,13 +1,14 @@
 import type { CronJobInfo } from "@lunora/client";
 import { useLunora } from "@lunora/react";
 import type { ReactElement } from "react";
-import { useEffect, useMemo, useState } from "react";
+import { useState } from "react";
 
 import { ConfirmButton } from "../../components/confirm-button";
 import { Badge } from "../../components/ui/badge";
 import { Card, CardContent } from "../../components/ui/card";
 import { EmptyState } from "../../components/ui/empty-state";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "../../components/ui/table";
+import { useClientQuery } from "../../hooks/use-admin-query";
 import { useT } from "../../i18n/i18n-context";
 import { errorMessage, fireAndForget } from "../../lib/internal";
 
@@ -15,7 +16,7 @@ interface CronTriggersPanelProps {
     /**
      * Load the code-defined cron triggers. Defaults to `client.getCronJobs`,
      * which hits the worker's admin-gated `/_lunora/admin/cron-jobs` endpoint —
-     * so the panel works out of the box under `&lt;LunoraProvider>`, provided the
+     * so the panel works out of the box under `<LunoraProvider>`, provided the
      * worker is built with a `cronJobs` map and `adminToken`. Override it to
      * source triggers from elsewhere (e.g. tests).
      */
@@ -47,50 +48,36 @@ const IDLE: RunState = { kind: "idle" };
  * demand.
  */
 
+const cronRunner = (
+    client: ReturnType<typeof useLunora>,
+    loadCronJobs: CronTriggersPanelProps["loadCronJobs"],
+    runCronJob: CronTriggersPanelProps["runCronJob"],
+): ((name: string) => Promise<{ name: string; ran: boolean }>) | undefined => {
+    if (runCronJob !== undefined) {
+        return runCronJob;
+    }
+
+    return loadCronJobs === undefined ? (name: string) => client.runCronJob(name) : undefined;
+};
+
+/** How to run a trigger, or `undefined` when the panel is read-only: the host's runner wins; otherwise the client can run what it also lists. A custom loader without a runner stays read-only. */
 export const CronTriggersPanel = ({ loadCronJobs, runCronJob }: CronTriggersPanelProps = {}): ReactElement => {
     const client = useLunora();
     const t = useT();
 
-    const [jobs, setJobs] = useState<CronJobInfo[] | null>(null);
-    const [error, setError] = useState<null | string>(null);
     const [runStates, setRunStates] = useState<Record<string, RunState>>({});
+
+    // The cron-jobs map is HTTP-only (no admin-RPC path), so it's a
+    // `useClientQuery` over the supplied loader (or `client.getCronJobs`). The key
+    // carries the loader source so a custom `loadCronJobs` override never shares the
+    // default `client.getCronJobs()` cache entry under one `QueryClient`.
+    const jobsQuery = useClientQuery(["lunora-cron-jobs", loadCronJobs ? "custom" : "default"], () => (loadCronJobs ?? (() => client.getCronJobs()))());
+    const { data: jobs, error } = jobsQuery;
 
     // Running is available when the host supplies a runner, or when the panel is
     // sourcing triggers from the client (then the client can run them too). A
     // custom `loadCronJobs` without a `runCronJob` stays read-only.
-    const runImpl = useMemo<((name: string) => Promise<{ name: string; ran: boolean }>) | undefined>(() => {
-        if (runCronJob !== undefined) {
-            return runCronJob;
-        }
-
-        return loadCronJobs === undefined ? (name: string) => client.runCronJob(name) : undefined;
-    }, [client, loadCronJobs, runCronJob]);
-
-    useEffect(() => {
-        const token = { cancelled: false };
-
-        fireAndForget(
-            (async (): Promise<void> => {
-                try {
-                    const records = await (loadCronJobs ?? (() => client.getCronJobs()))();
-
-                    if (!token.cancelled) {
-                        setJobs(records);
-                        setError(null);
-                    }
-                } catch (error_) {
-                    if (!token.cancelled) {
-                        setJobs(null);
-                        setError(errorMessage(error_));
-                    }
-                }
-            })(),
-        );
-
-        return () => {
-            token.cancelled = true;
-        };
-    }, [client, loadCronJobs]);
+    const runImpl = cronRunner(client, loadCronJobs, runCronJob);
 
     const run = async (name: string): Promise<void> => {
         if (runImpl === undefined) {
@@ -107,6 +94,11 @@ export const CronTriggersPanel = ({ loadCronJobs, runCronJob }: CronTriggersPane
             setRunStates((previous) => {
                 return { ...previous, [name]: { kind: "ok" } };
             });
+
+            // Re-read the triggers after a manual run so any state the run touched
+            // is reflected (the list itself is static, but this matches the
+            // post-action refetch model used across the scheduler panels).
+            jobsQuery.refetch();
         } catch (error_) {
             setRunStates((previous) => {
                 return { ...previous, [name]: { kind: "error", message: errorMessage(error_) } };
@@ -122,7 +114,7 @@ export const CronTriggersPanel = ({ loadCronJobs, runCronJob }: CronTriggersPane
                 </p>
             )}
 
-            {jobs !== null && jobs.length === 0 && (
+            {jobs?.length === 0 && (
                 <EmptyState
                     description={t("Triggers declared with the cronJobs() builder appear here.")}
                     icon={
@@ -144,7 +136,7 @@ export const CronTriggersPanel = ({ loadCronJobs, runCronJob }: CronTriggersPane
                 />
             )}
 
-            {jobs !== null && jobs.length > 0 && (
+            {jobs !== undefined && jobs.length > 0 && (
                 <Card className="overflow-hidden py-0">
                     <CardContent className="px-0">
                         <Table data-testid="cron-table">

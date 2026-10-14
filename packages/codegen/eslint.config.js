@@ -20,6 +20,14 @@ export default createConfig(
             "**/_generated/**",
             "**/__fixtures__/**",
             "**/fixtures/**",
+            // Throwaway design-spike scripts (see plans/131-phase0-design.md) — not
+            // part of the package's build or public API, and deliberately outside
+            // tsconfig.json's `include` (they self-import the package's own BUILT
+            // public entry, which needs no `paths` hack precisely because they're
+            // never part of the tsc program). Type-aware linting can't parse a file
+            // outside the project program, so skip linting them entirely rather than
+            // widen the tsconfig to bring them back in.
+            "**/scripts/**",
             "**/test-results/**",
             "**/coverage/**",
             "**/.wrangler/**",
@@ -121,10 +129,18 @@ export default createConfig(
         },
     },
     // Markdown code blocks: don't enforce language tags.
+    // The `n` Node-builtins rules reach into the scope manager, which a markdown
+    // document has none of — under ESLint 10 they throw "Cannot read properties
+    // of undefined (globalScope)" while LOADING the rule, so a single committed
+    // .md file crashes the whole lint run instead of reporting findings. They're
+    // meaningless on prose either way, so turn them off for markdown.
     {
         files: ["**/*.md", "**/*.md/**"],
         rules: {
             "markdown/fenced-code-language": "off",
+            "n/no-unsupported-features/es-builtins": "off",
+            "n/no-unsupported-features/es-syntax": "off",
+            "n/no-unsupported-features/node-builtins": "off",
         },
     },
     // Behavior-breaking autofixers — kept off (not style). sort-objects reorders the
@@ -136,6 +152,15 @@ export default createConfig(
         rules: {
             "perfectionist/sort-objects": "off",
             "vitest/prefer-expect-type-of": "off",
+        },
+    },
+    // `jsdoc/text-escaping` escapes `<` and `&` in doc comments into HTML entities and
+    // offers no way to exempt code spans, so its autofix turns `Doc<T>` into `Doc&lt;T>` —
+    // which is then what every reader sees on hover. Last in the list so it applies to
+    // every file, including the scoped blocks above.
+    {
+        rules: {
+            "jsdoc/text-escaping": "off",
         },
     },
 );

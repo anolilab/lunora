@@ -9,13 +9,18 @@
  *
  * The caller decides *which* ids to sweep (typically a `@lunora/scheduler` job querying the store
  * for non-terminal rows), keeping this function pure and testable.
+ *
+ * The same sweep also retries metered-usage forwards the provider never accepted (see
+ * `sweepUnreportedUsage`) — the out-of-band retry `track`'s swallowed forward failure relies on.
  */
 import type { PaymentAdapter } from "./adapter";
+import { usageForwardIsIdempotent } from "./idempotency";
 import { compareMoney } from "./money";
 import type { PaymentObserver } from "./observability";
 import { notifyObserver } from "./observability";
 import type { PaymentStore } from "./store";
-import type { PaymentSession, Subscription } from "./types";
+import { overlayProviderSubscription, ownerOf } from "./store";
+import type { PaymentSession, PaymentState, Subscription } from "./types";
 
 interface ReconcileInput {
     readonly adapter: PaymentAdapter;
@@ -24,30 +29,110 @@ interface ReconcileInput {
     readonly paymentSessionIds?: ReadonlyArray<string>;
     readonly store: PaymentStore;
     readonly subscriptionIds?: ReadonlyArray<string>;
+
+    /**
+     * How many unreported usage events to retry forwarding upstream this sweep
+     * (oldest first). Default {@link DEFAULT_USAGE_REPORT_LIMIT}; `0` skips the
+     * usage sweep entirely. Ignored by an adapter that does not meter usage.
+     */
+    readonly usageReportLimit?: number;
 }
 
 interface ReconcileResult {
     readonly checkedPayments: number;
     readonly checkedSubscriptions: number;
+    readonly checkedUsage: number;
     readonly failedPayments: number;
     readonly failedSubscriptions: number;
+    /** Usage events whose retried forward failed again — still pending for the next sweep. */
+    readonly failedUsage: number;
     readonly updatedPayments: number;
     readonly updatedSubscriptions: number;
+    /** Usage events successfully forwarded upstream on this sweep. */
+    readonly updatedUsage: number;
 }
 
+/** Usage events retried per sweep when the caller does not say otherwise. */
+const DEFAULT_USAGE_REPORT_LIMIT = 100;
+
 const sameCurrencyAmount = (a: PaymentSession["amount"], b: PaymentSession["amount"]): boolean => a.currency === b.currency && compareMoney(a, b) === 0;
+
+/**
+ * The price SET is compared, not just the primary `priceId`: a removed add-on leaves the primary
+ * standing, and without this a missed removal kept the add-on's entitlement forever. Only when the
+ * provider reported a complete set — `undefined` is "unknown", the same rule `sync.ts` applies.
+ */
+const priceIdsDrifted = (existing: Subscription, current: Subscription): boolean => {
+    if (current.priceIds === undefined) {
+        return false;
+    }
+
+    const stored = new Set(existing.priceIds ?? [existing.priceId]);
+
+    return stored.size !== new Set(current.priceIds).size || current.priceIds.some((id) => !stored.has(id));
+};
 
 const subscriptionDrifted = (existing: Subscription | undefined, current: Subscription): boolean =>
     existing?.state !== current.state ||
     existing.cancelAtPeriodEnd !== current.cancelAtPeriodEnd ||
     existing.currentPeriodEnd !== current.currentPeriodEnd ||
+    existing.currentPeriodStart !== current.currentPeriodStart ||
     existing.priceId !== current.priceId ||
+    priceIdsDrifted(existing, current) ||
     existing.quantity !== current.quantity;
 
 const paymentDrifted = (existing: PaymentSession | undefined, current: PaymentSession): boolean =>
     existing?.state !== current.state ||
     !sameCurrencyAmount(existing.capturedAmount, current.capturedAmount) ||
     !sameCurrencyAmount(existing.refundedAmount, current.refundedAmount);
+
+/**
+ * How far a payment has progressed through being refunded. The refunded total only ever moves
+ * forward on a merge, so the state that labels it must not move backward either — states outside
+ * this ladder (`initiated`, `authorized`, `failed`, `canceled`) are not refund progress and are
+ * left entirely to provider truth.
+ */
+const REFUND_RANK: Partial<Record<PaymentState, number>> = { captured: 0, partially_refunded: 1, refunded: 2 };
+
+/**
+ * Merge the provider's payment snapshot over the stored row without regressing owner attribution or a
+ * refund the provider truth can't see. Reconcile trusts `getPaymentStatus` as authoritative, but some
+ * providers surface neither refunds nor the reference on that call: a Stripe PaymentIntent stays
+ * `succeeded` after a refund (refunds live on the charge the status call never fetches), and a Polar
+ * order snapshot carries no `referenceId`. A naive overwrite would then erase a `charge.refunded`
+ * webhook (re-entitling a refunded/charged-back customer) or blank a webhook-set reference (orphaning
+ * the row from the `by_reference` index and the default authorizer). So never move the refunded total
+ * backward, never regress a refund state, and never move a stored owner (see {@link ownerOf}).
+ *
+ * The state guard is a LADDER, not a single `captured` special case. A status read can report a
+ * refund state that lags the row rather than only a pre-refund one: `orderToSession` (Polar) and
+ * `checkoutToSession` (Creem) both map a `partially_refunded` status while filling `refundedAmount`
+ * only for a fully `refunded` one — so a locally `refunded` row reconciles against
+ * `{ state: "partially_refunded", refundedAmount: 0 }`. The total is `max`-ed and stays full while
+ * the state slid back a rung, leaving a row whose refunded total equals its captured total under a
+ * "partially refunded" label. `check` and every remainder calculation read that row, and
+ * `partially_refunded` is not terminal where `refunded` is.
+ */
+const mergePaymentTruth = (existing: PaymentSession | undefined, current: PaymentSession): PaymentSession => {
+    if (!existing) {
+        return current;
+    }
+
+    const sameRefundCurrency = existing.refundedAmount.currency === current.refundedAmount.currency;
+    const refundedAmount =
+        sameRefundCurrency && compareMoney(existing.refundedAmount, current.refundedAmount) > 0 ? existing.refundedAmount : current.refundedAmount;
+    const existingRank = REFUND_RANK[existing.state];
+    const currentRank = REFUND_RANK[current.state];
+    const state = existingRank !== undefined && currentRank !== undefined && currentRank < existingRank ? existing.state : current.state;
+
+    return {
+        ...current,
+        referenceId: ownerOf(existing.referenceId, current.referenceId),
+        refundedAmount,
+        state,
+        subscriptionId: current.subscriptionId ?? existing.subscriptionId,
+    };
+};
 
 // Re-sync one subscription against the provider's truth. Returns whether the store changed.
 const reconcileSubscription = async (adapter: PaymentAdapter, store: PaymentStore, id: string, observer?: PaymentObserver): Promise<boolean> => {
@@ -58,16 +143,18 @@ const reconcileSubscription = async (adapter: PaymentAdapter, store: PaymentStor
         return false;
     }
 
-    // Preserve the original createdAt when we already had the row.
-    await store.upsertSubscription({ ...current, createdAt: existing?.createdAt ?? current.createdAt });
+    // Provider truth for the lifecycle; the store keeps the owner (a read may not echo checkout
+    // metadata, or report Dodo's customer id), `createdAt` and `lastEventAt`.
+    await store.upsertSubscription(overlayProviderSubscription(existing, current));
     notifyObserver(observer, { id, kind: "subscription", provider: adapter.identifier, type: "reconcile.drift" });
 
     return true;
 };
 
 const reconcilePayment = async (adapter: PaymentAdapter, store: PaymentStore, id: string, observer?: PaymentObserver): Promise<boolean> => {
-    const current = await adapter.getPaymentStatus(id);
+    const providerTruth = await adapter.getPaymentStatus(id);
     const existing = await store.getPaymentSession(adapter.identifier, id);
+    const current = mergePaymentTruth(existing, providerTruth);
 
     if (!paymentDrifted(existing, current)) {
         return false;
@@ -77,6 +164,72 @@ const reconcilePayment = async (adapter: PaymentAdapter, store: PaymentStore, id
     notifyObserver(observer, { id, kind: "payment", provider: adapter.identifier, type: "reconcile.drift" });
 
     return true;
+};
+
+/**
+ * Retry the upstream forward for usage events that never reached the provider's
+ * meter — `track` records the ledger row first and forwards after, so a transient
+ * 5xx (or an adapter throw) leaves the row durable but the meter short. For a
+ * provider that OWNS entitlements that unit is otherwise lost for good: the
+ * customer is under-billed and over-entitled, and nothing else in the system ever
+ * reads `reportedToProvider`.
+ *
+ * Only rows the store reports as still owing a forward are seen here — see
+ * {@link PaymentStore.listUnreportedUsage}.
+ *
+ * Retrying is safe ONLY where the event's `idempotencyKey` reaches the provider's
+ * ingestion body, because a row is unreported whether the request failed or merely
+ * its response was lost, and nothing here can tell those apart. Stripe, Polar and
+ * Dodo all carry the key, so the second case collapses to one debit. Autumn carries
+ * nothing (`idempotency.ts`), so it would be a second debit — and the customer's
+ * allowance is spent twice over. {@link usageForwardIsIdempotent} gates that out.
+ */
+const sweepUnreportedUsage = async (
+    adapter: PaymentAdapter,
+    store: PaymentStore,
+    limit: number,
+    observer?: PaymentObserver,
+): Promise<SweepCounts & { checked: number }> => {
+    const { reportUsage } = adapter;
+
+    // `reportUsage` first: an adapter without it can't meter at all, and the check
+    // is total even for a partial test double that omits `capabilities`.
+    if (limit <= 0 || reportUsage === undefined || !adapter.capabilities.usageMetering || !usageForwardIsIdempotent(adapter.identifier)) {
+        return { checked: 0, failed: 0, updated: 0 };
+    }
+
+    const pending = await store.listUnreportedUsage(adapter.identifier, limit);
+    let updated = 0;
+    let failed = 0;
+
+    for (const event of pending) {
+        try {
+            // eslint-disable-next-line no-await-in-loop -- a retry sweep against a provider that just failed: serial, not a stampede
+            const customer = await store.getCustomerByReference(adapter.identifier, event.referenceId);
+
+            // eslint-disable-next-line no-await-in-loop -- see above
+            await reportUsage({
+                customerId: customer?.id,
+                featureId: event.featureId,
+                idempotencyKey: event.idempotencyKey,
+                quantity: event.quantity,
+                referenceId: event.referenceId,
+            });
+            // eslint-disable-next-line no-await-in-loop -- see above
+            await store.markUsageReported(adapter.identifier, event.idempotencyKey);
+            updated += 1;
+        } catch {
+            failed += 1;
+            notifyObserver(observer, {
+                featureId: event.featureId,
+                provider: adapter.identifier,
+                referenceId: event.referenceId,
+                type: "usage.report_failed",
+            });
+        }
+    }
+
+    return { checked: pending.length, failed, updated };
 };
 
 interface SweepCounts {
@@ -126,6 +279,7 @@ const reconcile = async (input: ReconcileInput): Promise<ReconcileResult> => {
         observability,
     );
     const paymentCounts = await sweep(paymentSessionIds, "payment", (id) => reconcilePayment(adapter, store, id, observability), adapter, observability);
+    const usageCounts = await sweepUnreportedUsage(adapter, store, input.usageReportLimit ?? DEFAULT_USAGE_REPORT_LIMIT, observability);
 
     // Always fire `reconcile.completed` (even when some ids failed) so the sweep is never a monitoring
     // blind spot, and report the failed counts alongside the updated ones.
@@ -141,10 +295,13 @@ const reconcile = async (input: ReconcileInput): Promise<ReconcileResult> => {
     return {
         checkedPayments: paymentSessionIds.length,
         checkedSubscriptions: subscriptionIds.length,
+        checkedUsage: usageCounts.checked,
         failedPayments: paymentCounts.failed,
         failedSubscriptions: subscriptionCounts.failed,
+        failedUsage: usageCounts.failed,
         updatedPayments: paymentCounts.updated,
         updatedSubscriptions: subscriptionCounts.updated,
+        updatedUsage: usageCounts.updated,
     };
 };
 

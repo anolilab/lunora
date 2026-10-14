@@ -1,0 +1,4 @@
+{
+    "title": "@lunora/payment",
+    "pages": ["index", "stripe", "polar", "autumn", "dodopayments", "creem"]
+}

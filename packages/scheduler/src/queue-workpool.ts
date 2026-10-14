@@ -14,9 +14,15 @@
  * {@link QueueJob} on the queue); `createQueueConsumer` wraps your `queue()`
  * handler (it dispatches each message and uses the message's native `ack()` /
  * `retry()` so failures ride Queues' retry + dead-letter machinery); and
- * `httpDispatcher` is the default dispatcher (POSTs each job to the Worker's
- * `/_lunora/scheduler/dispatch` endpoint, authenticated with the admin bearer).
+ * `httpDispatcher` is the default dispatcher (dispatches each job to the
+ * Worker's `/_lunora/scheduler/dispatch` endpoint via `@lunora/dispatch`'s
+ * `createDispatchRunner`, authenticated with the admin bearer).
  */
+// eslint-disable-next-line import/no-extraneous-dependencies -- @lunora/dispatch is a devDependency on purpose: packem inlines it into this bundle, so it is not a published runtime dep
+import { createDispatchRunner, isDispatchDecline, retryDeclinedMessage, signRequeue, verifyRequeue } from "@lunora/dispatch";
+import { LunoraError } from "@lunora/errors";
+
+import { encodeWire } from "../../../shared/wire-codec";
 import type {
     ArgsOf,
     FunctionReference,
@@ -31,16 +37,57 @@ import type {
     QueueWorkpoolOptions,
 } from "./types";
 
-/** Strip trailing slashes from an origin so the dispatch path joins cleanly. */
-const trimTrailingSlashes = (value: string): string => {
-    let end = value.length;
+/**
+ * Cloudflare Queues ceiling on one `sendBatch`: 100 messages. The byte caps
+ * alongside it (256 KB per batch, 128 KB per message) are left to the platform,
+ * which rejects them clearly — measuring them here means serializing every body
+ * a second time on the send path. Mirrored in `@lunora/queue` and
+ * `@lunora/scheduler`; no dependency edge between them.
+ */
+const MAX_QUEUE_BATCH = 100;
 
-    while (end > 0 && value[end - 1] === "/") {
-        end -= 1;
-    }
+/**
+ * Default deadline for one job's dispatch, overridable per dispatcher via
+ * {@link HttpDispatcherOptions.timeoutMs}. Deliberately far above
+ * `@lunora/dispatch`'s 30s default: that budget is for an inline `ctx.run`
+ * inside a handler that is itself serving something, whereas a workpool is
+ * precisely where jobs that outlive a request live (an LLM call, an export, a
+ * payment round-trip). Truncating those at 30s would turn a working job into a
+ * retry loop — and an action's dedup read is not gated, so the retry can run
+ * concurrently with the still-in-flight first attempt. 5 minutes still bounds a
+ * hung origin well short of the platform killing the whole `queue()`
+ * invocation, which is what this dispatcher previously did with no deadline at
+ * all.
+ */
+const DEFAULT_JOB_TIMEOUT_MS = 300_000;
 
-    return value.slice(0, end);
-};
+/**
+ * The single owner of what this package's producers put in a {@link QueueJob}'s
+ * `args` — `enqueue` and `enqueueBatch` both go through here, so the two cannot
+ * drift on what a job looks like on the queue.
+ *
+ * A job's args can hold a `bigint`, a `Date` or bytes, and the queue is a
+ * serialising hop: `@lunora/platform-node`'s queue host defaults to
+ * `contentType: "json"`, where a `bigint` throws inside `JSON.stringify` before
+ * the message is ever recorded and a `Date` silently arrives as an ISO string.
+ * A structured-clone (`"v8"`) queue carries both one hop further, only for the
+ * dispatcher's own `JSON.stringify` to refuse them identically. Encoding here
+ * makes the message body pure JSON on every host, which is also what keeps a
+ * dead-lettered job readable.
+ *
+ * The counterpart decode is the shard's, and it is the ONLY one on this path:
+ * `@lunora/do`'s dispatch loop runs `decodeWire(payload.args ?? {})` before the
+ * handler. `httpDispatcher` and `/_lunora/scheduler/dispatch` pass `args`
+ * through untouched, so nothing between here and there may encode or decode
+ * again — `decodeWire` is not idempotent, and a second pass flattens a `Date`
+ * to `{}`.
+ *
+ * `encodeWire` is the identity on pure JSON, so an existing caller's message
+ * body is unchanged. Absent args stay absent rather than becoming `{}`: a
+ * top-level `undefined` would otherwise encode to the tagged form.
+ */
+const encodeJobArgs = (args: Record<string, unknown> | undefined): Record<string, unknown> | undefined =>
+    args === undefined ? undefined : (encodeWire(args) as Record<string, unknown>);
 
 /**
  * Build a Queues producer that enqueues Lunora function dispatches. Concurrency
@@ -50,11 +97,19 @@ const createQueueWorkpool = (options: QueueWorkpoolOptions): QueueWorkpool => {
     // Defensive runtime guard: required by the type, but JS callers can omit it.
     // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- guards untrusted JS callers despite the required type
     if (!options.queue) {
-        throw new Error("@lunora/scheduler: `queue` (a Cloudflare Queue binding) is required");
+        throw new LunoraError("INTERNAL", "@lunora/scheduler: `queue` (a Cloudflare Queue binding) is required");
     }
 
     const enqueue = async <F extends FunctionReference>(function_: F, args: ArgsOf<F>, enqueueOptions: QueueEnqueueOptions = {}): Promise<void> => {
-        const job: QueueJob = { args, functionPath: function_.__lunoraRef, shardKey: enqueueOptions.shardKey };
+        // `ArgsOf<F>` is the reference's own args object, which TS cannot prove is
+        // a `Record<string, unknown>` even though every generated args type is
+        // one. Cast at the serialisation boundary rather than loosening the
+        // parameter, which is what makes the call site arg-checked at all.
+        const job: QueueJob = {
+            args: encodeJobArgs(args as Record<string, unknown>),
+            functionPath: function_.__lunoraRef,
+            shardKey: enqueueOptions.shardKey,
+        };
         const sendOptions = enqueueOptions.delaySeconds === undefined ? undefined : { delaySeconds: enqueueOptions.delaySeconds };
 
         await options.queue.send(job, sendOptions);
@@ -64,8 +119,15 @@ const createQueueWorkpool = (options: QueueWorkpoolOptions): QueueWorkpool => {
         jobs: ReadonlyArray<{ args?: Record<string, unknown>; ref: FunctionReference; shardKey?: string }>,
         sendOptions?: QueueSendOptionsLike,
     ): Promise<void> => {
+        if (jobs.length > MAX_QUEUE_BATCH) {
+            throw new LunoraError(
+                "VALIDATION_ERROR",
+                `@lunora/scheduler: enqueueBatch exceeds ${String(MAX_QUEUE_BATCH)} (got ${String(jobs.length)}) — split across calls`,
+            );
+        }
+
         const messages = jobs.map((job) => {
-            return { body: { args: job.args, functionPath: job.ref.__lunoraRef, shardKey: job.shardKey } satisfies QueueJob };
+            return { body: { args: encodeJobArgs(job.args), functionPath: job.ref.__lunoraRef, shardKey: job.shardKey } satisfies QueueJob };
         });
 
         await options.queue.sendBatch(messages, sendOptions);
@@ -77,6 +139,46 @@ const createQueueWorkpool = (options: QueueWorkpoolOptions): QueueWorkpool => {
 /** Validate a decoded queue message body is a dispatchable {@link QueueJob}. */
 const isQueueJob = (value: unknown): value is QueueJob =>
     typeof value === "object" && value !== null && typeof (value as { functionPath?: unknown }).functionPath === "string";
+
+/** Separates this package's requeue MACs from `@lunora/queue`'s. */
+const REQUEUE_SCOPE = "scheduler";
+
+/** The marker fields a re-enqueued copy adds to its {@link QueueJob}. */
+interface RequeueMarker {
+    requeuedFrom?: unknown;
+    requeueMac?: unknown;
+}
+
+/** A delivered job, the id it dispatches under, and whether it is an authenticated copy. */
+interface RequeuedJob {
+    id: string;
+    job: QueueJob;
+    requeued: boolean;
+}
+
+/** The exact text a copy's MAC covers: the job as the dispatcher will see it. */
+const requeuePayload = (job: QueueJob): string => JSON.stringify({ args: job.args, functionPath: job.functionPath, shardKey: job.shardKey });
+
+/**
+ * Split a delivered body into the job and the id it dispatches under.
+ *
+ * A body is app data, and anything with the producer binding can put one on
+ * the workpool's queue, so the `requeuedFrom` marker is honoured only with a
+ * MAC over it and the job, keyed by `requeue.secret` (`@lunora/dispatch`'s
+ * `signRequeue`). Anything else dispatches under the broker's id, like any job:
+ * a marker that could choose the id would choose which cached result the call
+ * is answered with. The marker fields are stripped either way, so a custom
+ * `QueueDispatch` never sees them.
+ */
+const readRequeuedJob = async (body: QueueJob & RequeueMarker, messageId: string, secret: string | undefined): Promise<RequeuedJob> => {
+    const { requeuedFrom, requeueMac, ...job } = body;
+    const genuine =
+        typeof requeuedFrom === "string" &&
+        secret !== undefined &&
+        (await verifyRequeue(secret, REQUEUE_SCOPE, requeuedFrom, requeuePayload(job), requeueMac).catch(() => false));
+
+    return genuine ? { id: requeuedFrom, job, requeued: true } : { id: messageId, job, requeued: false };
+};
 
 /**
  * Wrap a {@link QueueDispatch} into a Cloudflare `queue()` consumer handler.
@@ -93,14 +195,51 @@ const createQueueConsumer =
     async (batch: MessageBatchLike): Promise<void> => {
         await Promise.all(
             batch.messages.map(async (message) => {
+                // Resolved before the dispatch so the decline path below
+                // re-enqueues under the same id the dispatch used.
+                let copy: RequeuedJob | undefined;
+
                 try {
                     if (!isQueueJob(message.body)) {
-                        throw new Error("@lunora/scheduler: queue message body is not a QueueJob (missing functionPath)");
+                        throw new LunoraError("INTERNAL", "@lunora/scheduler: queue message body is not a QueueJob (missing functionPath)");
                     }
 
-                    await options.dispatch(message.body);
+                    copy = await readRequeuedJob(message.body, message.id, options.requeue?.secret);
+
+                    // A genuine re-enqueued copy dispatches under the id of the
+                    // message it replaces, so the shard dedups it against that
+                    // message's call. The marker fields never reach `dispatch`.
+                    await options.dispatch(copy.job, copy.id);
                     message.ack();
-                } catch {
+                } catch (error: unknown) {
+                    // A `DISPATCH_IN_PROGRESS` decline is this job's own earlier
+                    // delivery still running on the shard (a job past the
+                    // dispatch deadline). Retried at once it meets the same
+                    // claim and spends the queue's budget in seconds, so wait
+                    // the claim's ceiling out: the next delivery is then served
+                    // the finished result, or runs the job if that run died. On
+                    // the last delivery, where no retry is left, a delayed copy
+                    // goes back on `options.requeue.queue` instead — once per job.
+                    if (isDispatchDecline(error) && copy !== undefined) {
+                        const { requeue } = options;
+                        const { id, job, requeued } = copy;
+
+                        await retryDeclinedMessage(message, {
+                            maxRetries: options.maxRetries,
+                            requeue:
+                                requeue === undefined || requeued
+                                    ? undefined
+                                    : async (delaySeconds: number): Promise<void> => {
+                                          const requeueMac = await signRequeue(requeue.secret, REQUEUE_SCOPE, id, requeuePayload(job));
+
+                                          await requeue.queue.send({ ...job, requeuedFrom: id, requeueMac } as QueueJob, { delaySeconds });
+                                      },
+                            where: `@lunora/scheduler: queue "${batch.queue}"`,
+                        });
+
+                        return;
+                    }
+
                     // Hand off to Queues' retry/dead-letter machinery.
                     message.retry();
                 }
@@ -109,30 +248,46 @@ const createQueueConsumer =
     };
 
 /**
- * Default {@link QueueDispatch}: POST each job to the Worker's
+ * Default {@link QueueDispatch}: dispatch each job to the Worker's
  * `/_lunora/scheduler/dispatch` endpoint (the same path SchedulerDO dispatches
- * through), authenticated with the admin bearer. A non-2xx response throws so
- * the consumer retries the message.
+ * through) via `@lunora/dispatch`'s `createDispatchRunner` — which bounds each
+ * job with {@link HttpDispatcherOptions.timeoutMs} (default
+ * {@link DEFAULT_JOB_TIMEOUT_MS}), so a hung origin no longer holds the whole
+ * `queue()` invocation open, and threads the queue message id through for
+ * failure attribution. Any dispatch failure throws so the consumer retries the
+ * message — including a 2xx carrying a non-empty non-JSON body, which is an
+ * intermediary's page rather than a function's return value and therefore no
+ * evidence the job ran. An empty 2xx is a normal success (a `void` function).
+ *
+ * `job.args` is forwarded VERBATIM: {@link encodeJobArgs} already put it in wire
+ * form at the producer, and the shard's dispatch loop is the single decoder.
+ * Encoding again here would leave the handler a tagged array.
  */
 const httpDispatcher = (options: HttpDispatcherOptions): QueueDispatch => {
-    const fetchImpl = options.fetchImpl ?? (globalThis as unknown as { fetch: typeof fetch }).fetch;
+    const run = createDispatchRunner({
+        // `enqueue`/`enqueueBatch` already encoded these before the job entered the
+        // queue — that hop is its own JSON serialisation and a `bigint` throws at
+        // `queue.send`. Without this the runner encodes a SECOND time and the shard
+        // decodes once, so the handler gets `["$lunora.wire$","bigint","7"]` rather
+        // than `7n`, and a `Date` that is no longer a `Date`.
+        argsAlreadyEncoded: true,
+        env: { LUNORA_ADMIN_TOKEN: options.adminToken, LUNORA_ORIGIN_URL: options.originUrl },
+        fetchImpl: options.fetchImpl,
+        label: "@lunora/scheduler",
+    });
 
-    if (typeof fetchImpl !== "function") {
-        throw new TypeError("@lunora/scheduler: no fetch implementation available — pass fetchImpl or run on a platform with global fetch");
-    }
+    const timeoutMs = options.timeoutMs ?? DEFAULT_JOB_TIMEOUT_MS;
 
-    const url = `${trimTrailingSlashes(options.originUrl)}/_lunora/scheduler/dispatch`;
-
-    return async (job: QueueJob): Promise<void> => {
-        const response = await fetchImpl(url, {
-            body: JSON.stringify({ args: job.args ?? {}, functionPath: job.functionPath, shardKey: job.shardKey }),
-            headers: { authorization: `Bearer ${options.adminToken}`, "content-type": "application/json" },
-            method: "POST",
-        });
-
-        if (!response.ok) {
-            throw new Error(`@lunora/scheduler: queue dispatch failed (${response.status.toString()}): ${await response.text()}`);
-        }
+    return async (job: QueueJob, messageId?: string): Promise<void> => {
+        // `dedupId: messageId` is what makes a Queues REDELIVERY idempotent: it
+        // reaches the shard as the replay-dedup `mutationId`, so a message
+        // redelivered after its mutation already committed is applied once
+        // instead of charging the customer twice. (The DO-backed path gets this
+        // from `SchedulerDO.dispatch` sending `id: record.id`.) Safe to reuse the
+        // message id verbatim here — unlike a queue HANDLER, one message
+        // dispatches exactly one call, so there is no second call to collide
+        // with the first's cached result.
+        await run({ __lunoraRef: job.functionPath }, job.args, { dedupId: messageId, messageId, shardKey: job.shardKey, timeoutMs });
     };
 };
 

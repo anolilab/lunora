@@ -1,0 +1,89 @@
+"name": "Coverage baseline"
+
+# Codecov compares a PR against the most recent report on its BASE branch. Nothing
+# was producing one.
+#
+# `test.yml` runs on `pull_request` and `merge_group` only — never `push`, by
+# design — and its upload step is additionally gated on those two events. The
+# merge queue is not in use (every recent `Tests` run is a `pull_request`), so no
+# run has ever uploaded a report for an `alpha` commit. The baseline froze at
+# `95d33d67` on 2026-08-08, and by 2026-08-27 every PR comment was diffing today's
+# tree against a snapshot 1177 commits behind: a reported ~11% coverage "drop"
+# that was really 140 files added in the interim.
+#
+# This exists solely to give Codecov a truthful base. It is NOT a gate — no PR
+# blocks on it, and a PR's own coverage still comes from `test.yml`.
+"on": # yamllint disable-line rule:truthy
+    "push":
+        "branches": ["main", "alpha", "next", "beta"]
+    "workflow_dispatch": # yamllint disable-line rule:empty-values
+
+"concurrency":
+    # A release branch takes several pushes in a row — the squashed PR, then
+    # semantic-release's own commits. Only the newest tree is worth a report, and
+    # the older runs would upload a base that is immediately superseded.
+    "group": "${{ github.workflow }}-${{ github.ref }}"
+    "cancel-in-progress": true
+
+"permissions":
+    "contents": "read"
+
+"jobs":
+    "coverage":
+        "name": "Upload coverage baseline"
+        "runs-on": "ubuntu-latest"
+        # The PR leg runs `affected` and still takes ~25 minutes; this runs the whole
+        # tree, so the ceiling is well above that rather than just above it.
+        "timeout-minutes": 60
+        "steps":
+            - "name": "Harden Runner"
+              "uses": "step-security/harden-runner@9af89fc71515a100421586dfdb3dc9c984fbf411" # v2.19.4
+              "with":
+                  "egress-policy": "audit"
+
+            - "name": "Git checkout"
+              "uses": "anolilab/workflows/step/checkout-with-retry@6c16895f4c3b5273b373656988505d1a8264e78b" # main
+              "with":
+                  "fetch-depth": "0"
+
+            # 22.15 to match the leg that uploads from `test.yml`, so the base and the
+            # PR reports are produced by the same runtime. That leg's `node:sqlite` has
+            # no FTS5 (added in 22.16.0), so the FTS5 suites skip in both — the base is
+            # comparable to what a PR uploads rather than richer than it.
+            - "name": "Setup resources and environment"
+              "uses": "anolilab/workflows/step/node@acba5fb15ac98ad23dec1ad233e40e1bb79c1dae" # v19.0.4
+              "with":
+                  "node-version": "22.15"
+                  "cache-prefix": "coverage"
+                  "install-node-gyp": "true"
+                  "skip-playwright": "true"
+                  "enable-nx-cache": "false"
+                  "run-npm-audit": "false"
+                  "run-signatures-audit": "false"
+
+            # Full build, not `build:affected`: this measures the whole tree, so every
+            # package's `dist` has to exist for the suites that import it.
+            - "name": "Build packages"
+              "run": "pnpm run build:packages"
+
+            # `test:coverage`, not the `:affected` variant the PR legs use. An affected
+            # run reports only what changed, which is the one thing a baseline must not
+            # be.
+            #
+            # Same exclusions the PR legs carry, and for the same reasons:
+            # `LUNORA_WORKERD_TESTS` stays unset because the workerd suites hang under
+            # v8 coverage, and studio's `test:coverage` covers its DOM-free `unit`
+            # project only because the component suite stalls the same way. e2e and
+            # playground are excluded by the script's own query.
+            - "name": "Run the coverage suite"
+              "run": "pnpm run test:coverage"
+
+            # `continue-on-error` + `fail_ci_if_error`, matching `test.yml`: a Codecov
+            # outage should not paint a release branch red. A missed upload only leaves
+            # the base where it already was.
+            - "name": "Upload coverage to Codecov"
+              "continue-on-error": true
+              "uses": "codecov/codecov-action@0fb7174895f61a3b6b78fc075e0cd60383518dac" # v5.5.5
+              "with":
+                  "token": "${{ secrets.CODECOV_TOKEN }}"
+                  "fail_ci_if_error": false

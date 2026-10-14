@@ -1,4 +1,5 @@
 import { PGlite } from "@electric-sql/pglite";
+import { vector } from "@electric-sql/pglite-pgvector";
 import type { SqlExec } from "@lunora/sql-store";
 
 import type { RowClient } from "../../src/global-exec";
@@ -18,6 +19,8 @@ import { buildPgExec } from "../../src/global-exec";
  * `node:sqlite`.
  */
 interface PgliteHarness {
+    /** The raw row-client the {@link SqlExec} wraps — what `createPostgresGlobalCtxDb` takes. */
+    client: RowClient;
     /** Close the embedded database. */
     close: () => Promise<void>;
     /** The {@link SqlExec} the store core / migrations run against. */
@@ -26,8 +29,14 @@ interface PgliteHarness {
     query: (sql: string, parameters?: ReadonlyArray<unknown>) => Promise<Record<string, unknown>[]>;
 }
 
+/**
+ * `pgvector` is registered unconditionally: PGlite only exposes the `vector` type
+ * and its distance operators when the extension module is passed at construction,
+ * and gating that behind a flag put a per-suite mode into the one helper every
+ * hyperdrive suite goes through — to save a wasm registration nothing measured.
+ */
 const createPgliteHarness = async (): Promise<PgliteHarness> => {
-    const database = new PGlite();
+    const database = new PGlite({ extensions: { vector } });
 
     await database.waitReady;
 
@@ -40,6 +49,7 @@ const createPgliteHarness = async (): Promise<PgliteHarness> => {
     };
 
     return {
+        client: rowClient,
         close: () => database.close(),
         exec: buildPgExec(rowClient),
         query: async (sql, parameters = []) => {

@@ -1,0 +1,5671 @@
+## @lunora/runtime [1.0.0-alpha.196](https://github.com/anolilab/lunora/compare/@lunora/runtime@1.0.0-alpha.195...@lunora/runtime@1.0.0-alpha.196) (2026-10-14)
+
+
+### Dependencies
+
+* **@lunora/bindings:** upgraded to 1.0.0-alpha.109
+* **@lunora/observability:** upgraded to 1.0.0-alpha.135
+* **@lunora/platform:** upgraded to 1.0.0-alpha.62
+* **@lunora/do:** upgraded to 1.0.0-alpha.209
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.125
+
+## @lunora/runtime [1.0.0-alpha.195](https://github.com/anolilab/lunora/compare/@lunora/runtime@1.0.0-alpha.194...@lunora/runtime@1.0.0-alpha.195) (2026-10-14)
+
+
+### Dependencies
+
+* **@lunora/observability:** upgraded to 1.0.0-alpha.134
+* **@lunora/do:** upgraded to 1.0.0-alpha.208
+
+## @lunora/runtime [1.0.0-alpha.194](https://github.com/anolilab/lunora/compare/@lunora/runtime@1.0.0-alpha.193...@lunora/runtime@1.0.0-alpha.194) (2026-10-14)
+
+
+### Dependencies
+
+* **@lunora/bindings:** upgraded to 1.0.0-alpha.108
+* **@lunora/errors:** upgraded to 1.0.0-alpha.54
+* **@lunora/observability:** upgraded to 1.0.0-alpha.133
+* **@lunora/do:** upgraded to 1.0.0-alpha.207
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.124
+* **@lunora/workflow:** upgraded to 1.0.0-alpha.76
+
+## @lunora/runtime [1.0.0-alpha.193](https://github.com/anolilab/lunora/compare/@lunora/runtime@1.0.0-alpha.192...@lunora/runtime@1.0.0-alpha.193) (2026-10-13)
+
+
+### Dependencies
+
+* **@lunora/bindings:** upgraded to 1.0.0-alpha.107
+* **@lunora/observability:** upgraded to 1.0.0-alpha.132
+* **@lunora/platform:** upgraded to 1.0.0-alpha.61
+* **@lunora/do:** upgraded to 1.0.0-alpha.206
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.123
+
+## @lunora/runtime [1.0.0-alpha.192](https://github.com/anolilab/lunora/compare/@lunora/runtime@1.0.0-alpha.191...@lunora/runtime@1.0.0-alpha.192) (2026-10-12)
+
+
+### Dependencies
+
+* **@lunora/bindings:** upgraded to 1.0.0-alpha.106
+* **@lunora/errors:** upgraded to 1.0.0-alpha.53
+* **@lunora/observability:** upgraded to 1.0.0-alpha.131
+* **@lunora/do:** upgraded to 1.0.0-alpha.205
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.122
+* **@lunora/workflow:** upgraded to 1.0.0-alpha.75
+
+## @lunora/runtime [1.0.0-alpha.191](https://github.com/anolilab/lunora/compare/@lunora/runtime@1.0.0-alpha.190...@lunora/runtime@1.0.0-alpha.191) (2026-10-12)
+
+
+### Dependencies
+
+* **@lunora/bindings:** upgraded to 1.0.0-alpha.105
+* **@lunora/observability:** upgraded to 1.0.0-alpha.130
+* **@lunora/platform:** upgraded to 1.0.0-alpha.60
+* **@lunora/do:** upgraded to 1.0.0-alpha.204
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.121
+
+## @lunora/runtime [1.0.0-alpha.190](https://github.com/anolilab/lunora/compare/@lunora/runtime@1.0.0-alpha.189...@lunora/runtime@1.0.0-alpha.190) (2026-10-12)
+
+### Bug Fixes
+
+* close audit findings from the 2026-10-10 review ([#1129](https://github.com/anolilab/lunora/issues/1129)) ([9acca87](https://github.com/anolilab/lunora/commit/9acca8722e592f61060f872e1906af1e5f44fb62))
+
+
+### Dependencies
+
+* **@lunora/bindings:** upgraded to 1.0.0-alpha.104
+* **@lunora/observability:** upgraded to 1.0.0-alpha.129
+* **@lunora/platform:** upgraded to 1.0.0-alpha.59
+* **@lunora/do:** upgraded to 1.0.0-alpha.203
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.120
+
+## @lunora/runtime [1.0.0-alpha.189](https://github.com/anolilab/lunora/compare/@lunora/runtime@1.0.0-alpha.188...@lunora/runtime@1.0.0-alpha.189) (2026-10-10)
+
+
+### Dependencies
+
+* **@lunora/do:** upgraded to 1.0.0-alpha.202
+* **@lunora/workflow:** upgraded to 1.0.0-alpha.74
+
+## @lunora/runtime [1.0.0-alpha.188](https://github.com/anolilab/lunora/compare/@lunora/runtime@1.0.0-alpha.187...@lunora/runtime@1.0.0-alpha.188) (2026-10-09)
+
+
+### Dependencies
+
+* **@lunora/workflow:** upgraded to 1.0.0-alpha.73
+
+## @lunora/runtime [1.0.0-alpha.187](https://github.com/anolilab/lunora/compare/@lunora/runtime@1.0.0-alpha.186...@lunora/runtime@1.0.0-alpha.187) (2026-10-08)
+
+
+### Dependencies
+
+* **@lunora/bindings:** upgraded to 1.0.0-alpha.103
+* **@lunora/observability:** upgraded to 1.0.0-alpha.128
+* **@lunora/platform:** upgraded to 1.0.0-alpha.58
+* **@lunora/do:** upgraded to 1.0.0-alpha.201
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.119
+
+## @lunora/runtime [1.0.0-alpha.186](https://github.com/anolilab/lunora/compare/@lunora/runtime@1.0.0-alpha.185...@lunora/runtime@1.0.0-alpha.186) (2026-10-08)
+
+### Bug Fixes
+
+* **notify:** errors range, per-message urgency, channel secrets, SW hang ([#1043](https://github.com/anolilab/lunora/issues/1043)) ([f0e6b1c](https://github.com/anolilab/lunora/commit/f0e6b1cea73d9f5f05b793a1ebf79306e159c148))
+
+
+### Dependencies
+
+* **@lunora/bindings:** upgraded to 1.0.0-alpha.102
+* **@lunora/errors:** upgraded to 1.0.0-alpha.52
+* **@lunora/observability:** upgraded to 1.0.0-alpha.127
+* **@lunora/do:** upgraded to 1.0.0-alpha.200
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.118
+* **@lunora/workflow:** upgraded to 1.0.0-alpha.72
+
+## @lunora/runtime [1.0.0-alpha.185](https://github.com/anolilab/lunora/compare/@lunora/runtime@1.0.0-alpha.184...@lunora/runtime@1.0.0-alpha.185) (2026-10-07)
+
+### ⚠ BREAKING CHANGES
+
+* **codegen,cli:** references to a function in a folder use the nested path
+(`api.<folder>.<file>.<fn>`). An export named like a file in the same-named folder
+(`billing.ts` exporting `invoices` beside `billing/invoices.ts`) is now a codegen error.
+* **codegen,cli:** import `internal` from `./_generated/internal` instead of
+`./_generated/api`. `anyApi` and `AnyApi` are removed from `@lunora/server` and
+`@lunora/client`; build a reference by hand as `{ __lunoraRef: "<namespace>:<fn>" }`.
+
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_019eqAUAYWECEXnGUUr8A1Fr
+
+* fix(advisor): match privileged dispatches by dispatch namespace
+
+`privileged_dispatch_unvalidated_payload` compared the target file read off an `api.*` path with
+the procedure's real file path, so a target in `lunora/<dir>/index.ts` or a hyphenated folder
+never matched and an RLS bypass through it went unflagged. Both sides now compare as dispatch
+namespaces.
+
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_019eqAUAYWECEXnGUUr8A1Fr
+
+* docs(roadmap): list nested api and the deploy architecture diff
+
+Also sorts namespace members inside the codegen tree, so every emitter gets the same
+alphabetical order without pre-sorting (no generated output changes).
+
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_019eqAUAYWECEXnGUUr8A1Fr
+
+* fix(playground): sort split imports and read internal from internal.ts
+
+The codemod that moved `internal` to `_generated/internal` left two import blocks unsorted, and
+the playground smoke test still looked for `InternalApiTypes` inside `api.ts`.
+
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_019eqAUAYWECEXnGUUr8A1Fr
+
+* fix(cli): keep a skipped codegen run from clearing the architecture baseline
+
+With `--skip-codegen` there is no manifest, which the last-module handling read as "every
+module removed" and recorded an empty baseline. The diff now runs only when codegen did. Also
+update the scheduler skill's `fnRef` rule for nested paths and correct an advisor comment.
+
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_019eqAUAYWECEXnGUUr8A1Fr
+
+### Features
+
+* **codegen,cli:** nested plain-object api, separate internal.ts, deploy architecture diff ([#1030](https://github.com/anolilab/lunora/issues/1030)) ([9c5cefd](https://github.com/anolilab/lunora/commit/9c5cefdf9d71370f55404d22700c6d445132092e)), closes [#1029](https://github.com/anolilab/lunora/issues/1029) [#1029](https://github.com/anolilab/lunora/issues/1029)
+
+## @lunora/runtime [1.0.0-alpha.184](https://github.com/anolilab/lunora/compare/@lunora/runtime@1.0.0-alpha.183...@lunora/runtime@1.0.0-alpha.184) (2026-10-07)
+
+
+### Dependencies
+
+* **@lunora/bindings:** upgraded to 1.0.0-alpha.100
+
+## @lunora/runtime [1.0.0-alpha.183](https://github.com/anolilab/lunora/compare/@lunora/runtime@1.0.0-alpha.182...@lunora/runtime@1.0.0-alpha.183) (2026-10-06)
+
+
+### Dependencies
+
+* **@lunora/bindings:** upgraded to 1.0.0-alpha.99
+* **@lunora/observability:** upgraded to 1.0.0-alpha.126
+* **@lunora/platform:** upgraded to 1.0.0-alpha.57
+* **@lunora/do:** upgraded to 1.0.0-alpha.199
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.116
+
+## @lunora/runtime [1.0.0-alpha.182](https://github.com/anolilab/lunora/compare/@lunora/runtime@1.0.0-alpha.181...@lunora/runtime@1.0.0-alpha.182) (2026-10-06)
+
+
+### Dependencies
+
+* **@lunora/observability:** upgraded to 1.0.0-alpha.125
+* **@lunora/do:** upgraded to 1.0.0-alpha.198
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.115
+
+## @lunora/runtime [1.0.0-alpha.181](https://github.com/anolilab/lunora/compare/@lunora/runtime@1.0.0-alpha.180...@lunora/runtime@1.0.0-alpha.181) (2026-10-06)
+
+
+### Dependencies
+
+* **@lunora/observability:** upgraded to 1.0.0-alpha.124
+* **@lunora/do:** upgraded to 1.0.0-alpha.197
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.114
+
+## @lunora/runtime [1.0.0-alpha.180](https://github.com/anolilab/lunora/compare/@lunora/runtime@1.0.0-alpha.179...@lunora/runtime@1.0.0-alpha.180) (2026-10-06)
+
+
+### Dependencies
+
+* **@lunora/bindings:** upgraded to 1.0.0-alpha.98
+
+## @lunora/runtime [1.0.0-alpha.179](https://github.com/anolilab/lunora/compare/@lunora/runtime@1.0.0-alpha.178...@lunora/runtime@1.0.0-alpha.179) (2026-10-06)
+
+### Features
+
+* **runtime:** report shard errors with their stack to any tracker ([#1000](https://github.com/anolilab/lunora/issues/1000)) ([a178d5a](https://github.com/anolilab/lunora/commit/a178d5a6bb1f3134b897e9237377734f0348ea5d))
+
+
+### Dependencies
+
+* **@lunora/observability:** upgraded to 1.0.0-alpha.123
+* **@lunora/do:** upgraded to 1.0.0-alpha.196
+
+## @lunora/runtime [1.0.0-alpha.178](https://github.com/anolilab/lunora/compare/@lunora/runtime@1.0.0-alpha.177...@lunora/runtime@1.0.0-alpha.178) (2026-10-06)
+
+### Features
+
+* durable object class budget check and opt-in merged class ([#995](https://github.com/anolilab/lunora/issues/995)) ([fa5a78e](https://github.com/anolilab/lunora/commit/fa5a78ed39f03c5d39c9d209fc83c49f27bdb6f7))
+
+
+### Dependencies
+
+* **@lunora/bindings:** upgraded to 1.0.0-alpha.97
+* **@lunora/observability:** upgraded to 1.0.0-alpha.122
+* **@lunora/platform:** upgraded to 1.0.0-alpha.56
+* **@lunora/do:** upgraded to 1.0.0-alpha.195
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.113
+
+## @lunora/runtime [1.0.0-alpha.177](https://github.com/anolilab/lunora/compare/@lunora/runtime@1.0.0-alpha.176...@lunora/runtime@1.0.0-alpha.177) (2026-10-05)
+
+
+### Dependencies
+
+* **@lunora/observability:** upgraded to 1.0.0-alpha.121
+* **@lunora/do:** upgraded to 1.0.0-alpha.194
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.112
+
+## @lunora/runtime [1.0.0-alpha.176](https://github.com/anolilab/lunora/compare/@lunora/runtime@1.0.0-alpha.175...@lunora/runtime@1.0.0-alpha.176) (2026-10-03)
+
+
+### Dependencies
+
+* **@lunora/bindings:** upgraded to 1.0.0-alpha.96
+* **@lunora/observability:** upgraded to 1.0.0-alpha.120
+* **@lunora/platform:** upgraded to 1.0.0-alpha.55
+* **@lunora/do:** upgraded to 1.0.0-alpha.193
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.111
+
+## @lunora/runtime [1.0.0-alpha.175](https://github.com/anolilab/lunora/compare/@lunora/runtime@1.0.0-alpha.174...@lunora/runtime@1.0.0-alpha.175) (2026-10-03)
+
+### Bug Fixes
+
+* follow-ups to the cloudflare limits and ray id reviews ([#942](https://github.com/anolilab/lunora/issues/942), [#943](https://github.com/anolilab/lunora/issues/943)) ([#949](https://github.com/anolilab/lunora/issues/949)) ([34a4597](https://github.com/anolilab/lunora/commit/34a4597a14128ea2e48d52d101d0fbbf9b61e932)), closes [#944](https://github.com/anolilab/lunora/issues/944) [#944](https://github.com/anolilab/lunora/issues/944)
+
+
+### Dependencies
+
+* **@lunora/bindings:** upgraded to 1.0.0-alpha.95
+* **@lunora/observability:** upgraded to 1.0.0-alpha.119
+* **@lunora/platform:** upgraded to 1.0.0-alpha.54
+* **@lunora/do:** upgraded to 1.0.0-alpha.192
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.110
+
+## @lunora/runtime [1.0.0-alpha.174](https://github.com/anolilab/lunora/compare/@lunora/runtime@1.0.0-alpha.173...@lunora/runtime@1.0.0-alpha.174) (2026-10-03)
+
+### Features
+
+* **observability:** instrument ctx.sql with database telemetry ([#944](https://github.com/anolilab/lunora/issues/944)) ([2fd04d0](https://github.com/anolilab/lunora/commit/2fd04d07bbbb458d64e501f02cd353f79888aa3a)), closes [#private](https://github.com/anolilab/lunora/issues/private) [#private](https://github.com/anolilab/lunora/issues/private)
+
+
+### Dependencies
+
+* **@lunora/do:** upgraded to 1.0.0-alpha.191
+
+## @lunora/runtime [1.0.0-alpha.173](https://github.com/anolilab/lunora/compare/@lunora/runtime@1.0.0-alpha.172...@lunora/runtime@1.0.0-alpha.173) (2026-10-03)
+
+
+### Dependencies
+
+* **@lunora/bindings:** upgraded to 1.0.0-alpha.93
+* **@lunora/errors:** upgraded to 1.0.0-alpha.50
+* **@lunora/observability:** upgraded to 1.0.0-alpha.117
+* **@lunora/platform:** upgraded to 1.0.0-alpha.52
+* **@lunora/do:** upgraded to 1.0.0-alpha.190
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.108
+* **@lunora/workflow:** upgraded to 1.0.0-alpha.71
+
+## @lunora/runtime [1.0.0-alpha.172](https://github.com/anolilab/lunora/compare/@lunora/runtime@1.0.0-alpha.171...@lunora/runtime@1.0.0-alpha.172) (2026-10-03)
+
+### Features
+
+* **observability:** attach the cloudflare ray id to logs and spans ([#943](https://github.com/anolilab/lunora/issues/943)) ([b871bc8](https://github.com/anolilab/lunora/commit/b871bc89f4bf64c76f5716577dfff3d352ec3519))
+
+
+### Dependencies
+
+* **@lunora/bindings:** upgraded to 1.0.0-alpha.92
+* **@lunora/observability:** upgraded to 1.0.0-alpha.116
+* **@lunora/platform:** upgraded to 1.0.0-alpha.51
+* **@lunora/do:** upgraded to 1.0.0-alpha.189
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.107
+
+## @lunora/runtime [1.0.0-alpha.171](https://github.com/anolilab/lunora/compare/@lunora/runtime@1.0.0-alpha.170...@lunora/runtime@1.0.0-alpha.171) (2026-10-02)
+
+### Features
+
+* cloudflare changelog 2026-10-01/02 parity ([#923](https://github.com/anolilab/lunora/issues/923)) ([23287d9](https://github.com/anolilab/lunora/commit/23287d97c0e041e35d7a000b5b0fbce79fbbb732))
+
+
+### Dependencies
+
+* **@lunora/bindings:** upgraded to 1.0.0-alpha.91
+* **@lunora/errors:** upgraded to 1.0.0-alpha.49
+* **@lunora/observability:** upgraded to 1.0.0-alpha.115
+* **@lunora/platform:** upgraded to 1.0.0-alpha.50
+* **@lunora/do:** upgraded to 1.0.0-alpha.188
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.106
+* **@lunora/workflow:** upgraded to 1.0.0-alpha.70
+
+## @lunora/runtime [1.0.0-alpha.170](https://github.com/anolilab/lunora/compare/@lunora/runtime@1.0.0-alpha.169...@lunora/runtime@1.0.0-alpha.170) (2026-10-02)
+
+
+### Dependencies
+
+* **@lunora/bindings:** upgraded to 1.0.0-alpha.90
+* **@lunora/observability:** upgraded to 1.0.0-alpha.114
+* **@lunora/platform:** upgraded to 1.0.0-alpha.49
+* **@lunora/do:** upgraded to 1.0.0-alpha.187
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.105
+
+## @lunora/runtime [1.0.0-alpha.169](https://github.com/anolilab/lunora/compare/@lunora/runtime@1.0.0-alpha.168...@lunora/runtime@1.0.0-alpha.169) (2026-10-02)
+
+
+### Dependencies
+
+* **@lunora/bindings:** upgraded to 1.0.0-alpha.89
+* **@lunora/observability:** upgraded to 1.0.0-alpha.113
+* **@lunora/platform:** upgraded to 1.0.0-alpha.48
+* **@lunora/do:** upgraded to 1.0.0-alpha.186
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.104
+
+## @lunora/runtime [1.0.0-alpha.168](https://github.com/anolilab/lunora/compare/@lunora/runtime@1.0.0-alpha.167...@lunora/runtime@1.0.0-alpha.168) (2026-10-01)
+
+### Features
+
+* **codegen:** modules, a call-graph manifest and an architecture view ([#917](https://github.com/anolilab/lunora/issues/917)) ([522a779](https://github.com/anolilab/lunora/commit/522a7799d183c20d1edeb8cbd8b72939eb847fb2))
+
+## @lunora/runtime [1.0.0-alpha.167](https://github.com/anolilab/lunora/compare/@lunora/runtime@1.0.0-alpha.166...@lunora/runtime@1.0.0-alpha.167) (2026-10-01)
+
+
+### Dependencies
+
+* **@lunora/bindings:** upgraded to 1.0.0-alpha.88
+* **@lunora/observability:** upgraded to 1.0.0-alpha.112
+* **@lunora/platform:** upgraded to 1.0.0-alpha.47
+* **@lunora/do:** upgraded to 1.0.0-alpha.185
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.103
+
+## @lunora/runtime [1.0.0-alpha.166](https://github.com/anolilab/lunora/compare/@lunora/runtime@1.0.0-alpha.165...@lunora/runtime@1.0.0-alpha.166) (2026-09-30)
+
+### Features
+
+* cloudflare parity 1/3 — workflows, containers, browser run, tracing, ai, bindings ([#914](https://github.com/anolilab/lunora/issues/914)) ([e5297a9](https://github.com/anolilab/lunora/commit/e5297a97527f0863457e234e739a554b466750d1))
+
+
+### Dependencies
+
+* **@lunora/bindings:** upgraded to 1.0.0-alpha.87
+* **@lunora/errors:** upgraded to 1.0.0-alpha.48
+* **@lunora/observability:** upgraded to 1.0.0-alpha.111
+* **@lunora/platform:** upgraded to 1.0.0-alpha.46
+* **@lunora/do:** upgraded to 1.0.0-alpha.184
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.102
+* **@lunora/workflow:** upgraded to 1.0.0-alpha.69
+
+## @lunora/runtime [1.0.0-alpha.165](https://github.com/anolilab/lunora/compare/@lunora/runtime@1.0.0-alpha.164...@lunora/runtime@1.0.0-alpha.165) (2026-09-30)
+
+### ⚠ BREAKING CHANGES
+
+* `EmitAppOptions.tableNames` is replaced by `tables`
+(`{ name, shardMode }[]`).
+
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
+
+* fix(runtime): resolve the shard registry stub per call
+
+createDynamicShardRegistry cached its registry stub for its lifetime, and
+the generated worker builds its options once per isolate. workerd refuses
+I/O on a stub created during a different request, so every request after
+the first failed with "Cannot perform I/O on behalf of a different request".
+
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
+
+* feat(do): register written .shardBy() tables with the shard registry
+
+A Durable Object namespace cannot be enumerated, so cross-shard export,
+CDC sync and migrations only reach the shards ShardRegistryDO lists, and
+nothing ever registered one. After a write flushes, ShardDO now registers
+its key for each `.shardBy()` table it touched, once per table per
+instance, through a `shardRegistry()` hook the generated subclass
+overrides. The stub is pinned to the DO's own jurisdiction (via the new
+shard-engine `stubByName`, split out of `siblingStub`). A failed
+registration is logged and retried on the next write, never thrown at a
+caller whose write already committed.
+
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
+
+* feat(codegen): wire the shard registry into generated apps
+
+For a schema with `.shardBy()` tables, codegen now emits:
+
+- `.shardRegistry((env) => env.SHARD_REGISTRY)` on the app builder, which
+  feeds the namespace to the shard (so it registers what it writes) and
+  gives the worker a coordinator over `createDynamicShardRegistry`, so
+  export, CDC sync and migrations reach every registered shard;
+- `_generated/shardRegistry.ts`, re-exporting `ShardRegistryDO`.
+
+As with the scheduler module, the file's existence drives the rest:
+`@lunora/vite` composes `.shardRegistry(...)` and star-re-exports the class
+into `virtual:lunora/worker`, and `@lunora/config` maps `ShardRegistryDO`
+to `SHARD_REGISTRY` so `lunora dev` reconciles the binding and migration.
+The default registry's refusal now names `.shardRegistry(...)`.
+
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
+
+* feat(templates): bind the shard registry in every .shardBy() starter
+
+All 14 templates shard `messages` by `channelId`, so a fresh app's
+`lunora export` and backups refused it. Each now binds SHARD_REGISTRY to
+ShardRegistryDO in its v1 migration; hand-written entries declare
+`.shardRegistry(...)` and export the class, while `virtual:lunora/worker`
+templates get both from the composed entry. The playground is wired the
+same way, with the class added in a v2 migration.
+
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
+
+* docs(docs): document the shard registry
+
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
+
+* fix(do): keep replicas and relays out of the shard registry
+
+A read replica (`<owner>::replica::<region>`) or relay is a ShardDO in the
+same namespace, and a replica's CDC apply flushes like any write, so it
+registered itself as a shard. It refuses admin RPCs with 421, so every
+later export, backup and migration of that table failed with a 502.
+
+Registration now also runs past the response (deferPastResponse) instead
+of on the write's tail, claims each table before the round trip so
+concurrent first writes send one request, bounds the request with a 5s
+timeout, and backs off 30s after a failure. The /register call moves into
+shard-registry-do next to the route it targets.
+
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
+
+* fix(runtime): settle the export fan-out before committing a status
+
+Export now runs its shard-local fan-out (prepareExportRows) before it
+builds the Response, so a failed shard answers 502 and a `.shardBy()`
+table the default registry cannot list answers 400, instead of a 200
+whose body ends early. That replaces the separate discovery pre-check.
+
+The default registry answers a root (or undeclared) table with the
+default shard itself rather than an empty list, because fan-out, rank and
+shard traffic have no empty-list fallback and reached no shard at all.
+Its refusal now names the unbound SHARD_REGISTRY case. `requireCoordinator`
+in the orchestration routes became `assertAdminPost`, which is all it did.
+
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
+
+* fix(cli): only blame the dev server for an unreachable local worker
+
+adminFetch now adds the "is the dev server running?" hint only for a
+loopback target, and rethrows anything that is not a network TypeError
+(an abort, a timeout) as it is. It takes the admin commands' own init
+shape, so the call sites lose their casts, and backup's PITR/prune legs
+use it too. The six `typeof fetchImpl` guards it made unreachable are
+gone. `lunora import` now says no batch was acknowledged, not that no
+row was written, and keeps the resume advice.
+
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
+
+* refactor(codegen): one isShardByTable check and a fragment module
+
+`isShardByTable` in ir.ts replaces four spellings of the `.shardBy()`
+check. The shard registry's config field, constant and override move into
+`emitShardRegistryFragments` (shard-bindings), which brings shard.ts back
+under 1k lines. `EmitAppOptions.tables` is `Pick<TableIR, ...>` and
+`emitShardRegistry` takes the table list instead of two booleans.
+Orphaned and inaccurate comments in emit-app are fixed. Config derives the
+composed entry's framework DOs from one module-to-class map.
+
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
+
+* docs: state the shard-registry mapping on every host
+
+Node and celld capability notes now say where fan-out shard keys come
+from (the Node host's own registry; ShardRegistryDO on celld). Templates
+and the playground export ShardRegistryDO from the generated
+shardRegistry module the docs show, and analog/nuxt forward it from their
+server module. The sharding docs note that a key is never removed and
+that the 30s delay applies to every worker.
+
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
+
+* feat: prune empty shards from the shard registry
+
+A shard key stayed registered after its shard emptied, so every export,
+backup, CDC sync and migration kept visiting it. `lunora shards prune`
+(POST /_lunora/admin/shard-registry/prune) asks every registered shard to
+release the `.shardBy()` tables it holds no rows of.
+
+The shard decides, through a new `__lunora_admin__:releaseShardRegistration`
+RPC: its emptiness check and unregister run on the same chain as its own
+registrations, and clearing the table's claim means a write that lands
+mid-prune registers again after the unregister. A caller-side probe then
+delete could hide a shard written in between. An unreachable shard keeps
+its entries and the route answers 207 (the CLI exits 1); `--dry-run`
+reports without touching the registry. A caching registry is invalidated
+for the released tables, via a new optional `ShardRegistry.invalidate`.
+
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
+
+* fix: green the lint and template-entry CI jobs
+
+- playground: order the `ShardRegistryDO` re-export the way
+  perfectionist/sort-exports wants.
+- vis-templates: the Nitro entry test swapped only the first
+  `"./lunora/server"` specifier, and the analog/nuxt entries now re-export
+  `ShardRegistryDO` from it too. Swap every occurrence, stub the class,
+  and assert the entry exports it.
+- do: skip the registry step entirely on a shard with no registry, so a
+  write flush there does no extra promise work.
+
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
+
+### Bug Fixes
+
+* make admin data commands work on builder and sharded apps ([#912](https://github.com/anolilab/lunora/issues/912)) ([39c9f8c](https://github.com/anolilab/lunora/commit/39c9f8ce03f5c6ab1b0ccaca8a7e3254b227b02b))
+
+
+### Dependencies
+
+* **@lunora/bindings:** upgraded to 1.0.0-alpha.86
+* **@lunora/observability:** upgraded to 1.0.0-alpha.110
+* **@lunora/platform:** upgraded to 1.0.0-alpha.45
+* **@lunora/do:** upgraded to 1.0.0-alpha.183
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.101
+
+## @lunora/runtime [1.0.0-alpha.164](https://github.com/anolilab/lunora/compare/@lunora/runtime@1.0.0-alpha.163...@lunora/runtime@1.0.0-alpha.164) (2026-09-30)
+
+
+### Dependencies
+
+* **@lunora/bindings:** upgraded to 1.0.0-alpha.85
+* **@lunora/observability:** upgraded to 1.0.0-alpha.109
+* **@lunora/platform:** upgraded to 1.0.0-alpha.44
+* **@lunora/do:** upgraded to 1.0.0-alpha.182
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.100
+
+## @lunora/runtime [1.0.0-alpha.163](https://github.com/anolilab/lunora/compare/@lunora/runtime@1.0.0-alpha.162...@lunora/runtime@1.0.0-alpha.163) (2026-09-29)
+
+
+### Dependencies
+
+* **@lunora/bindings:** upgraded to 1.0.0-alpha.84
+* **@lunora/observability:** upgraded to 1.0.0-alpha.108
+* **@lunora/platform:** upgraded to 1.0.0-alpha.43
+* **@lunora/do:** upgraded to 1.0.0-alpha.181
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.99
+
+## @lunora/runtime [1.0.0-alpha.162](https://github.com/anolilab/lunora/compare/@lunora/runtime@1.0.0-alpha.161...@lunora/runtime@1.0.0-alpha.162) (2026-09-29)
+
+
+### Dependencies
+
+* **@lunora/bindings:** upgraded to 1.0.0-alpha.83
+* **@lunora/observability:** upgraded to 1.0.0-alpha.107
+* **@lunora/do:** upgraded to 1.0.0-alpha.180
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.98
+
+## @lunora/runtime [1.0.0-alpha.161](https://github.com/anolilab/lunora/compare/@lunora/runtime@1.0.0-alpha.160...@lunora/runtime@1.0.0-alpha.161) (2026-09-28)
+
+
+### Dependencies
+
+* **@lunora/bindings:** upgraded to 1.0.0-alpha.82
+* **@lunora/observability:** upgraded to 1.0.0-alpha.106
+* **@lunora/platform:** upgraded to 1.0.0-alpha.42
+* **@lunora/do:** upgraded to 1.0.0-alpha.178
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.97
+
+## @lunora/runtime [1.0.0-alpha.160](https://github.com/anolilab/lunora/compare/@lunora/runtime@1.0.0-alpha.159...@lunora/runtime@1.0.0-alpha.160) (2026-09-27)
+
+
+### Dependencies
+
+* **@lunora/observability:** upgraded to 1.0.0-alpha.105
+* **@lunora/do:** upgraded to 1.0.0-alpha.177
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.96
+
+## @lunora/runtime [1.0.0-alpha.159](https://github.com/anolilab/lunora/compare/@lunora/runtime@1.0.0-alpha.158...@lunora/runtime@1.0.0-alpha.159) (2026-09-27)
+
+### Code Refactoring
+
+* **runtime:** drop unused auth type re-exports from create-worker ([#878](https://github.com/anolilab/lunora/issues/878)) ([c1c3fa9](https://github.com/anolilab/lunora/commit/c1c3fa9f11073b243ca64a1ffed4bf1e8ca1cb7e))
+
+
+### Dependencies
+
+* **@lunora/bindings:** upgraded to 1.0.0-alpha.80
+* **@lunora/errors:** upgraded to 1.0.0-alpha.46
+* **@lunora/observability:** upgraded to 1.0.0-alpha.104
+* **@lunora/do:** upgraded to 1.0.0-alpha.176
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.95
+* **@lunora/workflow:** upgraded to 1.0.0-alpha.68
+
+## @lunora/runtime [1.0.0-alpha.158](https://github.com/anolilab/lunora/compare/@lunora/runtime@1.0.0-alpha.157...@lunora/runtime@1.0.0-alpha.158) (2026-09-27)
+
+### Bug Fixes
+
+* **scheduler:** keep cancelled jobs cancelled and accept fractional delays ([#871](https://github.com/anolilab/lunora/issues/871)) ([3a723fb](https://github.com/anolilab/lunora/commit/3a723fbee0f6a917bb9a0ad8ee9bc6fe66f71bcf))
+
+## @lunora/runtime [1.0.0-alpha.157](https://github.com/anolilab/lunora/compare/@lunora/runtime@1.0.0-alpha.156...@lunora/runtime@1.0.0-alpha.157) (2026-09-27)
+
+### Bug Fixes
+
+* **examples:** drop the placeholder storage base url ([#867](https://github.com/anolilab/lunora/issues/867)) ([252abce](https://github.com/anolilab/lunora/commit/252abce0c92d6d355fe52bffeb1157e200fb97ff))
+
+## @lunora/runtime [1.0.0-alpha.156](https://github.com/anolilab/lunora/compare/@lunora/runtime@1.0.0-alpha.155...@lunora/runtime@1.0.0-alpha.156) (2026-09-27)
+
+### Bug Fixes
+
+* **examples:** storage origin, presence authz, message window, e2e specs ([#866](https://github.com/anolilab/lunora/issues/866)) ([86f9032](https://github.com/anolilab/lunora/commit/86f903253ed3017876443d30bf33100c766010df))
+
+
+### Dependencies
+
+* **@lunora/do:** upgraded to 1.0.0-alpha.175
+
+## @lunora/runtime [1.0.0-alpha.155](https://github.com/anolilab/lunora/compare/@lunora/runtime@1.0.0-alpha.154...@lunora/runtime@1.0.0-alpha.155) (2026-09-27)
+
+### ⚠ BREAKING CHANGES
+
+* **runtime:** an HTTP call whose resolved identity carries a past exp or
+expiresAtMs now fails with 401 TOKEN_EXPIRED instead of running as that user.
+createAccessResolver returns an expired-but-genuine Access JWT's identity
+(with its past exp) instead of null; mapClaims now also sees those claims.
+
+
+Claude-Session: https://claude.ai/code/session_01SSVXdbku6XCtuRVMMEDqrE
+
+Co-authored-by: Claude Opus 5.5 <noreply@anthropic.com>
+
+### Bug Fixes
+
+* **runtime:** answer a lapsed credential with TOKEN_EXPIRED over HTTP ([#859](https://github.com/anolilab/lunora/issues/859)) ([5b50ddd](https://github.com/anolilab/lunora/commit/5b50dddc74f70f4a7ffe23bb29efe1090a41dd37))
+
+
+### Dependencies
+
+* **@lunora/bindings:** upgraded to 1.0.0-alpha.79
+* **@lunora/errors:** upgraded to 1.0.0-alpha.45
+* **@lunora/observability:** upgraded to 1.0.0-alpha.103
+* **@lunora/do:** upgraded to 1.0.0-alpha.174
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.94
+* **@lunora/workflow:** upgraded to 1.0.0-alpha.67
+
+## @lunora/runtime [1.0.0-alpha.154](https://github.com/anolilab/lunora/compare/@lunora/runtime@1.0.0-alpha.153...@lunora/runtime@1.0.0-alpha.154) (2026-09-27)
+
+
+### Dependencies
+
+* **@lunora/observability:** upgraded to 1.0.0-alpha.102
+* **@lunora/do:** upgraded to 1.0.0-alpha.173
+
+## @lunora/runtime [1.0.0-alpha.153](https://github.com/anolilab/lunora/compare/@lunora/runtime@1.0.0-alpha.152...@lunora/runtime@1.0.0-alpha.153) (2026-09-26)
+
+
+### Dependencies
+
+* **@lunora/bindings:** upgraded to 1.0.0-alpha.78
+* **@lunora/observability:** upgraded to 1.0.0-alpha.101
+* **@lunora/platform:** upgraded to 1.0.0-alpha.41
+* **@lunora/do:** upgraded to 1.0.0-alpha.172
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.92
+
+## @lunora/runtime [1.0.0-alpha.152](https://github.com/anolilab/lunora/compare/@lunora/runtime@1.0.0-alpha.151...@lunora/runtime@1.0.0-alpha.152) (2026-09-26)
+
+### ⚠ BREAKING CHANGES
+
+* **mail:** in an app declaring `.jurisdiction(...)`, `@lunora/mail` now resolves the
+pinned shard with no option passed, and an explicit mail `jurisdiction` that differs from
+the schema's throws.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01SSVXdbku6XCtuRVMMEDqrE
+
+* fix(mail): fail a captured send on a jurisdiction misconfiguration
+
+The capture sink resolved the jurisdiction inside its best-effort catch, so an
+explicit `jurisdiction` contradicting the schema's, or a binding that cannot be
+pinned, was logged and answered `{ id: "uncaptured" }`: a success-shaped result
+for mail nobody recorded. Both callers now scope the namespace with
+`applyJurisdiction` themselves and hand `postShardRpc` the scoped view; the
+capture sink does it before the catch, so that error reaches the sender while a
+failed RPC stays best-effort.
+
+Test (fails without the change): a contradicting jurisdiction rejects the
+captured send and makes no RPC.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01SSVXdbku6XCtuRVMMEDqrE
+
+### security
+
+* **mail:** pin mail's shard RPC to the schema's jurisdiction ([#848](https://github.com/anolilab/lunora/issues/848)) ([0191eee](https://github.com/anolilab/lunora/commit/0191eeeb7b504cb234bf01880929e9572966b71b))
+
+## @lunora/runtime [1.0.0-alpha.151](https://github.com/anolilab/lunora/compare/@lunora/runtime@1.0.0-alpha.150...@lunora/runtime@1.0.0-alpha.151) (2026-09-26)
+
+### ⚠ BREAKING CHANGES
+
+* **auth:** the per-table copy report replaces `skipped` with `unchanged`,
+`updated`, `deleted` and `conflicts`.
+
+Tests (workerd, each failing on the previous implementation and against a
+sabotaged variant): copy order; a resume refused after a mid-copy sign-up; a
+colliding row failing its page; purge refused after a reused rowid, an update
+and a delete, each then carried by the next copy; the rollback, password reset,
+session revoke and re-pin sequence ending in a verified purge; the per-call
+fetch budget; missing indexes; the step, table and cause on failure; the source
+serving requests again after a purge.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01SSVXdbku6XCtuRVMMEDqrE
+
+* docs(auth): say the auth copy is a snapshot reconciled by fingerprint
+
+The "Pinning auth and voice" steps claimed the copy could not miss a write
+and that `skipped` was 0 unless forced; neither held. The page now says:
+
+- the copy captures a snapshot, and updates or deletes made on the un-pinned
+  object afterwards are reconciled only through the fingerprint check
+- the un-pinned object can still take writes during a gradual rollout or after
+  a rollback
+- both refusals run on every call, including collisions with plugin state the
+  pinned object created on its own
+- one call copies at most 16 pages and `done: true` means every table matches
+- the report fields, and the purge refusals: incomplete copy vs source changed
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01SSVXdbku6XCtuRVMMEDqrE
+
+* fix(codegen): gate only DO-backed auth on a jurisdiction move
+
+Codegen refused a voice-only app that declared `.jurisdiction()` until it
+added `{ pinAuthAndVoice: true }`, although nothing is at risk there. A
+VoiceSessionDO keeps no storage: it holds the live socket and the utterance in
+progress, and every transcript turn is an agent-thread row in the shards, which
+the jurisdiction already pins. Pinning voice only drops the sessions live at the
+deploy.
+
+The JURISDICTION_MOVE gate now fires only for DO-backed auth, whose pinned
+object does start empty until its rows are copied. A voice-only app passes
+codegen and its voice namespaces are pinned through the worker's jurisdiction,
+as they already were at runtime.
+
+The acknowledgement is renamed `pinAuthAndVoice` -> `pinAuth` (and the IR field
+`jurisdictionPinsAuthAndVoice` -> `jurisdictionPinsAuth`). It no longer
+governs voice, and a name that says it does would tell a voice-only app it
+needs it. On the pre-release branch that is a straight rename: the schema
+option, the codegen discovery, the IR and emit option, the error hints, the
+runtime message, the capability note and the docs all change here, with no
+alias.
+
+The JURISDICTION_MOVE hint and the "Pinning auth and voice" docs now describe
+voice as pinned automatically and the acknowledgement as auth-only; the errors
+reference is regenerated.
+* **auth:** `.jurisdiction(j, { pinAuthAndVoice: true })` is now
+`.jurisdiction(j, { pinAuth: true })`. The codegen IR field and `emitApp`
+option `jurisdictionPinsAuthAndVoice` are now `jurisdictionPinsAuth`.
+
+Tests (failing on the previous code first): a voice-only app with a
+jurisdiction passes codegen and its generated worker carries the jurisdiction
+and the voice agents; DO-backed auth is still refused without the
+acknowledgement, and accepted with it.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01SSVXdbku6XCtuRVMMEDqrE
+
+* perf(auth): fingerprint the auth copy once per pass and stream it
+
+The change check scanned the copied prefix of every table on every copy
+call: the source digested each table up to its cursor, the target read its
+whole record back, and the user check loaded every copied and every pinned
+user key into memory. One call moves at most 1,600 rows, so a large table
+needed many calls, each scanning a prefix that grew toward the whole table:
+quadratic, and holding full tables in isolate memory.
+
+- Fingerprints now run once per pass: only on the call that reaches the end of
+  every table (and in purge). A table found changed there is marked for a
+  re-scan (`rescan` op), and the next call reconciles it. Resuming a partial
+  pass no longer re-reads what was already copied; a re-run after a finished
+  copy still checks, since it reaches the end at once.
+- Fingerprints stream from the SQL cursor, one row in memory at a time.
+- The user check looks only at user rows above a stored `rowid` watermark
+  and matches keys in SQL (`json_array`), so each call checks the sign-ups
+  since the last one instead of the whole table.
+- `status` computes the target's fingerprints only when asked.
+
+A node:sqlite suite covers the move on the default run as well, which the
+auth package's coverage floor needs now that the module is larger.
+
+Test (workerd): a copy over several calls fingerprints on one call only; it
+fails with a fingerprint added to every call.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01SSVXdbku6XCtuRVMMEDqrE
+
+* chore(api): regenerate the auth and errors snapshots after merging alpha
+
+The merge kept this branch's side of `api-snapshots/auth.api.md` and
+`errors.api.md` whole and dropped the entries alpha added (the session-sync
+client plugin and IDENTITY_MISMATCH). Regenerated from a fresh build so both
+sides are present; `api:check` passes.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01SSVXdbku6XCtuRVMMEDqrE
+
+* fix(auth): refuse to copy from an un-pinned auth object after its purge
+
+After a purge the un-pinned object materialises its schema again on its next
+request, so a rollback to a build without the pin re-creates its tables empty.
+A copy from it then read every table as fully deleted: the fingerprint check
+marked them changed, the re-scan swept every row the pinned object still held
+unchanged from the copy, and those users were deleted with no source left to
+restore them from.
+
+The purge now writes a tombstone (`__lunora_auth_purged__`) in the same
+transaction as the drop. Every source-side step (manifest, page, fingerprints,
+purge) refuses with the new AUTH_MOVE_SOURCE_PURGED (409) while it exists, and
+the tombstone is excluded from the tables a copy or purge sees.
+
+The purge also left the audit table's single-flight "already created" cache
+pointing at the dropped table, so the first audit read after a purge failed
+with "no such table". The object takes a fresh audit executor on purge.
+
+Test (workerd, failing without the tombstone): copy, purge, the un-pinned object
+serves again and takes a sign-up; copy and purge both refuse, and the pinned
+object keeps every copied user and account.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01SSVXdbku6XCtuRVMMEDqrE
+
+### Features
+
+* **auth:** copy DO-backed auth into its jurisdiction-pinned object ([#841](https://github.com/anolilab/lunora/issues/841)) ([ea1a3d4](https://github.com/anolilab/lunora/commit/ea1a3d40ff7fc084d3340d2d75c2bfb2f2bb1300))
+
+
+### Dependencies
+
+* **@lunora/bindings:** upgraded to 1.0.0-alpha.77
+* **@lunora/errors:** upgraded to 1.0.0-alpha.44
+* **@lunora/observability:** upgraded to 1.0.0-alpha.100
+* **@lunora/platform:** upgraded to 1.0.0-alpha.40
+* **@lunora/do:** upgraded to 1.0.0-alpha.171
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.91
+* **@lunora/workflow:** upgraded to 1.0.0-alpha.66
+
+## @lunora/runtime [1.0.0-alpha.150](https://github.com/anolilab/lunora/compare/@lunora/runtime@1.0.0-alpha.149...@lunora/runtime@1.0.0-alpha.150) (2026-09-26)
+
+
+### Dependencies
+
+* **@lunora/observability:** upgraded to 1.0.0-alpha.99
+* **@lunora/do:** upgraded to 1.0.0-alpha.170
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.90
+
+## @lunora/runtime [1.0.0-alpha.149](https://github.com/anolilab/lunora/compare/@lunora/runtime@1.0.0-alpha.148...@lunora/runtime@1.0.0-alpha.149) (2026-09-26)
+
+### ⚠ BREAKING CHANGES
+
+* **client:** `LunoraClient.getCurrentUser()` answering "no session" under a
+cookie session now signs the client out (`onIdentityChange` fires if a user was
+known), and `ServerMessage` gains `ServerIdentityMessage`.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01SSVXdbku6XCtuRVMMEDqrE
+
+* fix(client): adopt a 401 sign-out and keep the auth gate recoverable
+
+- `getCurrentUser()` treated a `401`/`403` from `/get-session` as "no session"
+  but did not adopt it, so a cookie sign-out answered that way left the
+  identity on the previous user. It is now adopted like a `200 null`; a bearer
+  session still ignores a null user, and a 5xx or 404 is still no verdict.
+- The identity store's recovery from `unreachable` on reconnect now always
+  asks. After an earlier answer, a cookie session's refresh otherwise short-
+  circuited to `unauthenticated` off its absent token.
+- A probe that gets no answer no longer blocks the next probe for the same
+  subject. Only an answer that contradicts the socket does, which is what
+  keeps a disagreeing resolver from looping.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01SSVXdbku6XCtuRVMMEDqrE
+
+* fix(runtime): add custom CORS headers to the client's own, not replace them
+
+`security.cors.allowedHeaders` replaced the default allowlist. A cross-origin
+app whose list predated a header `@lunora/client` sends on its own failed that
+request's preflight. The client can only read that as a network error, so a
+replayed offline write carrying `x-lunora-expect-subject` was retried as
+transient forever and never landed.
+
+An app's list is now added to the defaults, which are exactly the headers the
+client sends unprompted.
+* **client:** `security.cors.allowedHeaders` can no longer remove a default
+header from the preflight allowlist.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01SSVXdbku6XCtuRVMMEDqrE
+
+* security(client): name the queuing user on every cookie-session replay
+
+A replay carried `x-lunora-expect-subject` only when the app called
+`getCurrentUser()` or used the identity store. A socket's `identity` frame
+labels queued writes `subj:A` in every app, though. So an app that reads its
+session through better-auth alone replayed A's write without the header. If the
+cookie changed hands while offline (another tab) and the flush ran before the new
+socket's frame, the write committed as B. Every replay without a bearer token
+now carries the header. An app without auth stamps `null` and resolves to nobody,
+so the header always passes there.
+
+Also:
+- `setAuthToken` re-flushes the queue only when a replay verdict input changed.
+  A write the worker refused triggered a probe, and the probe's unchanged answer
+  re-flushed the write into the same refusal. That hot loop is gone.
+- A refusal followed by a probe that names the same user logs one warning:
+  `resolveIdentity` and `/get-session` resolve different ids, or RPC requests
+  carry no cookie.
+- A `403` from `/get-session` is no longer a sign-out. A WAF or bot challenge on
+  that route wiped the screen and the durable read cache of a signed-in user.
+  Only `401` or an empty session is.
+- In a browser, each client listens for a page-wide session-change signal
+  (`shared/session-change.ts`) and re-resolves the session when it fires.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01SSVXdbku6XCtuRVMMEDqrE
+
+* feat(auth): tell the Lunora client about every cookie sign-in and sign-out
+
+Under a cookie session a sign-in or sign-out in place changed nothing the
+Lunora client could see. Its socket kept serving the previous user's rows until
+it dropped, unless the app remembered to call `client.getCurrentUser()`
+afterwards. Neither auth-ui nor a direct better-auth setup did.
+
+- `lunoraSessionSync()` in `@lunora/auth/plugins/client` is a better-auth client
+  plugin. After every successful non-GET auth request it signals every
+  `LunoraClient` in the page to re-resolve the session.
+  `createLunoraAuthClient` always installs it, so the scaffolded auth-ui client
+  has it too. `notifyLunoraSessionChange()` reports a change made any other way.
+- `@lunora/auth-ui` signals on every session change (sign-in, sign-out, 2FA,
+  account switch) from the shared `resolveContext`, so all six ports and the
+  registry copies do it whatever client the app built. The app's own
+  `onSessionChange` runs after.
+- The playground now relies on this alone. It installs `lunoraSessionSync()`,
+  reads its session through better-auth, and makes no manual calls.
+  `?authstore=1` also mounts `useAuth` for the variant that probes. The
+  account cards stay in the page on sign-out, as under an SPA router.
+
+The authentication docs describe the automatic path and the id-equality
+requirement between `resolveIdentity` and better-auth's `user.id`.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01SSVXdbku6XCtuRVMMEDqrE
+
+* fix(errors): register IDENTITY_MISMATCH in the error catalog
+
+The worker's refusal of a replayed write whose cookie changed hands mints
+`IDENTITY_MISMATCH`. It was missing from `ERROR_CATALOG`, which the catalog
+registration test requires of every minted code. It is registered as a 409 with
+a hint that names the one misconfiguration causing it for a signed-in user: a
+`resolveIdentity` whose `userId` differs from better-auth's `user.id`. The
+message carries no backend detail, so the code is not `internal`. The errors
+reference is regenerated.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01SSVXdbku6XCtuRVMMEDqrE
+
+* test(solid): give the Solid 2 auth fake an onIdentityChange
+
+The identity store now subscribes to `LunoraClient.onIdentityChange` so a
+retired cookie session updates the gate. The Solid 2 adapter's `createAuth`
+tests build their own client double without it. Every test in the file then
+died in the store's constructor, which halted Solid 2's reactive system. The
+double gets the method, as the other adapters' fakes already have.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01SSVXdbku6XCtuRVMMEDqrE
+
+* fix(auth-ui): run onSessionChange once the Lunora clients know the new session
+
+auth-ui signalled the session change and then called the app's `onSessionChange`
+straight away, while each Lunora client's `/get-session` probe was still in
+flight. A handler that read `client.currentIdentity()` right after an account
+switch saw the previous user, contrary to the docs.
+
+The session-change signal now returns a promise that settles once every
+listener's work has settled. For a `LunoraClient`, that work is its re-resolve.
+`notifyLunoraSessionChange()` returns it too, so other callers can await it.
+auth-ui runs the app's handler after it, capped at 5s so a probe that never
+answers cannot hold the handler, often the app's own session refresh, back
+forever. The better-auth plugin still fires and forgets.
+* **client:** `AuthUIConfig.onSessionChange` now runs after the Lunora clients
+re-resolve the session, asynchronously, rather than synchronously inside the flow.
+`notifyLunoraSessionChange()` returns `Promise<void>`.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01SSVXdbku6XCtuRVMMEDqrE
+
+* test(auth): await notifyLunoraSessionChange in its listener test
+
+`notifyLunoraSessionChange()` returns a promise since it waits for every Lunora
+client to re-resolve the session. The listener test left it floating, which
+`@typescript-eslint/no-floating-promises` rejects. Awaiting it also makes the
+assertion wait for the listeners rather than rely on them being synchronous.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01SSVXdbku6XCtuRVMMEDqrE
+
+### security
+
+* **client:** retire a cookie session when the server says it changed ([#842](https://github.com/anolilab/lunora/issues/842)) ([301f24c](https://github.com/anolilab/lunora/commit/301f24c44f55655bb8d84fe4ecc8e50508c81796))
+
+
+### Dependencies
+
+* **@lunora/bindings:** upgraded to 1.0.0-alpha.76
+* **@lunora/errors:** upgraded to 1.0.0-alpha.43
+* **@lunora/observability:** upgraded to 1.0.0-alpha.98
+* **@lunora/do:** upgraded to 1.0.0-alpha.169
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.89
+* **@lunora/workflow:** upgraded to 1.0.0-alpha.65
+
+## @lunora/runtime [1.0.0-alpha.148](https://github.com/anolilab/lunora/compare/@lunora/runtime@1.0.0-alpha.147...@lunora/runtime@1.0.0-alpha.148) (2026-09-26)
+
+### ⚠ BREAKING CHANGES
+
+* **runtime:** an app declaring `.jurisdiction(...)` with voice agents or DO-backed auth now
+resolves those objects inside the jurisdiction. The same name maps to a different object per
+jurisdiction, so existing voice sessions and DO-backed auth data stay in the unrestricted
+objects and are not carried over.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01SSVXdbku6XCtuRVMMEDqrE
+
+* fix(codegen): refuse pinning auth and voice until the move is acknowledged
+
+The previous commit pins voice sessions and DO-backed auth to the schema's
+jurisdiction. For an app that already declared `.jurisdiction()`, that
+pinning is a region move: a Durable Object name maps to a different id per
+jurisdiction, so every user, account, session and credential, and every
+voice transcript, resolves to a new, empty object. The upgrade changes
+nothing in the schema, so the drift gate never fired and the first deploy
+would silently lock every user out.
+
+- `.jurisdiction(j, { pinAuthAndVoice: true })` is the explicit
+  acknowledgement. Codegen reads it off the schema chain.
+- Without it, codegen refuses a project that has a voice-enabled agent or an
+  `.auth({ namespace })` call (DO-backed auth), with a diagnostic located at
+  the `.auth()` call when there is one. An `.auth(...)` whose options it
+  cannot read counts as DO-backed: the acknowledgement is a no-op for
+  D1-mode auth, while a miss would start the auth object out empty.
+- The generated worker pins DO-backed auth only when acknowledged; before
+  that it stays on the un-pinned object, where its data is.
+- The data-residency docs gain "Pinning auth and voice": what moves, that
+  `lunora export` does not read the auth object, and how to move its rows by
+  hand from the still-reachable un-pinned object. No copy path ships: the
+  auth tables are better-auth's own and a generic copier is not cheap to
+  get right; voice transcripts left in the old objects are stranded.
+
+Tests (fail without the change): runCodegen refuses voice, then DO-backed
+auth located at src/index.ts, and accepts both once acknowledged; the
+generated DO-auth wiring is not pinned until acknowledged. Plus the
+acknowledgement parse and the `.auth()` detection (quoted `namespace`,
+spread, non-literal options, D1 mode).
+* **runtime:** a project declaring `.jurisdiction(...)` together with a
+voice-enabled agent or DO-backed auth fails codegen until the schema says
+`.jurisdiction("…", { pinAuthAndVoice: true })`.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01SSVXdbku6XCtuRVMMEDqrE
+
+* fix(errors): register the JURISDICTION_MOVE codegen error code
+
+The codegen check that refuses an unacknowledged move of voice sessions
+and DO-backed auth into a jurisdiction mints `JURISDICTION_MOVE`, which was
+not an `ERROR_CATALOG` key, so the repo-wide catalog-registration test
+failed. Registered as 422 "Unacknowledged jurisdiction move"; build-time
+only, never on the RPC wire, so not `internal`. Also Prettier-formats the
+jurisdiction-move test.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01SSVXdbku6XCtuRVMMEDqrE
+
+* docs(errors): add JURISDICTION_MOVE to the error reference
+
+Registering `JURISDICTION_MOVE` left the generated error reference
+(`apps/docs/src/content/docs/errors.mdx`) one code short, which failed
+`Lint (generated files)` and both `error-reference.test.ts` checks.
+
+The catalog entry gains a hint: what triggers the error (a jurisdiction
+plus voice or DO-backed auth), that pinning starts those objects empty,
+and the `{ pinAuthAndVoice: true }` acknowledgement, linking the
+data-residency section. The page is regenerated from it.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01SSVXdbku6XCtuRVMMEDqrE
+
+* fix(codegen): close two ways around the jurisdiction-move check
+
+The check that refuses to pin voice sessions / DO-backed auth without
+`{ pinAuthAndVoice: true }` could be skipped twice over:
+
+- A computed key: `.auth({ ["namespace"]: … })` read as not naming
+  `namespace`. A string-literal computed key now resolves to its value, and
+  any other computed key (`[key]`) counts as possibly `namespace` — the same
+  fail-closed call a spread already gets.
+- `lunora.config.*`: `@lunora/vite` imports the root config into the worker
+  and runs its `app` hook over the `defineApp()` builder, so an
+  `.auth({ namespace })` there wires the deployed worker, but the security
+  scan only covered `lunora/`, `src/server/**`, `src/index.ts` and
+  `src/worker.ts`. `listSecurityScanFiles` now adds the project config file.
+
+That scan also feeds the auth-config lints, the config-call and export-sink
+lints, and the worker-entry cron discovery; each looks for calls that the
+`app` hook can make just as well as the entry can (`.auth()`, `.extend()`,
+the worker-entry factories), so the wider file set is right for them too.
+
+The config filename list and `findProjectConfigFile` move to a leaf module,
+`project-config-path.ts`, so discovery can use them without importing
+`project-config-file` (which imports discovery helpers);
+`project-config-file` re-exports both.
+
+Tests (fail without the change): a computed `["namespace"]` key and a
+computed `[key]` are found while `["d1"]` is not; auth declared only in the
+root `lunora.config.ts` is found.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01SSVXdbku6XCtuRVMMEDqrE
+
+### security
+
+* **runtime:** pin voice-session and DO-backed auth objects to the jurisdiction ([#834](https://github.com/anolilab/lunora/issues/834)) ([abc781f](https://github.com/anolilab/lunora/commit/abc781f7c9cb9071a511e7e9f77905d088184d5f))
+
+
+### Dependencies
+
+* **@lunora/bindings:** upgraded to 1.0.0-alpha.75
+* **@lunora/errors:** upgraded to 1.0.0-alpha.42
+* **@lunora/observability:** upgraded to 1.0.0-alpha.97
+* **@lunora/do:** upgraded to 1.0.0-alpha.168
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.88
+* **@lunora/workflow:** upgraded to 1.0.0-alpha.64
+
+## @lunora/runtime [1.0.0-alpha.147](https://github.com/anolilab/lunora/compare/@lunora/runtime@1.0.0-alpha.146...@lunora/runtime@1.0.0-alpha.147) (2026-09-26)
+
+
+### Dependencies
+
+* **@lunora/workflow:** upgraded to 1.0.0-alpha.63
+
+## @lunora/runtime [1.0.0-alpha.146](https://github.com/anolilab/lunora/compare/@lunora/runtime@1.0.0-alpha.145...@lunora/runtime@1.0.0-alpha.146) (2026-09-25)
+
+
+### Dependencies
+
+* **@lunora/bindings:** upgraded to 1.0.0-alpha.74
+* **@lunora/observability:** upgraded to 1.0.0-alpha.96
+* **@lunora/platform:** upgraded to 1.0.0-alpha.39
+* **@lunora/do:** upgraded to 1.0.0-alpha.166
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.87
+* **@lunora/workflow:** upgraded to 1.0.0-alpha.62
+
+## @lunora/runtime [1.0.0-alpha.145](https://github.com/anolilab/lunora/compare/@lunora/runtime@1.0.0-alpha.144...@lunora/runtime@1.0.0-alpha.145) (2026-09-25)
+
+
+### Dependencies
+
+* **@lunora/observability:** upgraded to 1.0.0-alpha.95
+* **@lunora/do:** upgraded to 1.0.0-alpha.165
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.86
+
+## @lunora/runtime [1.0.0-alpha.144](https://github.com/anolilab/lunora/compare/@lunora/runtime@1.0.0-alpha.143...@lunora/runtime@1.0.0-alpha.144) (2026-09-25)
+
+
+### Dependencies
+
+* **@lunora/bindings:** upgraded to 1.0.0-alpha.73
+* **@lunora/observability:** upgraded to 1.0.0-alpha.94
+* **@lunora/platform:** upgraded to 1.0.0-alpha.38
+* **@lunora/do:** upgraded to 1.0.0-alpha.164
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.85
+
+## @lunora/runtime [1.0.0-alpha.143](https://github.com/anolilab/lunora/compare/@lunora/runtime@1.0.0-alpha.142...@lunora/runtime@1.0.0-alpha.143) (2026-09-25)
+
+
+### Dependencies
+
+* **@lunora/observability:** upgraded to 1.0.0-alpha.93
+* **@lunora/do:** upgraded to 1.0.0-alpha.163
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.84
+
+## @lunora/runtime [1.0.0-alpha.142](https://github.com/anolilab/lunora/compare/@lunora/runtime@1.0.0-alpha.141...@lunora/runtime@1.0.0-alpha.142) (2026-09-25)
+
+
+### Dependencies
+
+* **@lunora/bindings:** upgraded to 1.0.0-alpha.72
+* **@lunora/observability:** upgraded to 1.0.0-alpha.92
+* **@lunora/platform:** upgraded to 1.0.0-alpha.37
+* **@lunora/do:** upgraded to 1.0.0-alpha.162
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.83
+
+## @lunora/runtime [1.0.0-alpha.141](https://github.com/anolilab/lunora/compare/@lunora/runtime@1.0.0-alpha.140...@lunora/runtime@1.0.0-alpha.141) (2026-09-25)
+
+
+### Dependencies
+
+* **@lunora/bindings:** upgraded to 1.0.0-alpha.71
+* **@lunora/observability:** upgraded to 1.0.0-alpha.91
+* **@lunora/platform:** upgraded to 1.0.0-alpha.36
+* **@lunora/do:** upgraded to 1.0.0-alpha.161
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.82
+
+## @lunora/runtime [1.0.0-alpha.140](https://github.com/anolilab/lunora/compare/@lunora/runtime@1.0.0-alpha.139...@lunora/runtime@1.0.0-alpha.140) (2026-09-25)
+
+
+### Dependencies
+
+* **@lunora/observability:** upgraded to 1.0.0-alpha.90
+* **@lunora/do:** upgraded to 1.0.0-alpha.160
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.81
+* **@lunora/workflow:** upgraded to 1.0.0-alpha.61
+
+## @lunora/runtime [1.0.0-alpha.139](https://github.com/anolilab/lunora/compare/@lunora/runtime@1.0.0-alpha.138...@lunora/runtime@1.0.0-alpha.139) (2026-09-25)
+
+
+### Dependencies
+
+* **@lunora/bindings:** upgraded to 1.0.0-alpha.69
+* **@lunora/observability:** upgraded to 1.0.0-alpha.89
+* **@lunora/platform:** upgraded to 1.0.0-alpha.34
+* **@lunora/do:** upgraded to 1.0.0-alpha.159
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.80
+
+## @lunora/runtime [1.0.0-alpha.138](https://github.com/anolilab/lunora/compare/@lunora/runtime@1.0.0-alpha.137...@lunora/runtime@1.0.0-alpha.138) (2026-09-24)
+
+
+### Dependencies
+
+* **@lunora/bindings:** upgraded to 1.0.0-alpha.68
+* **@lunora/errors:** upgraded to 1.0.0-alpha.41
+* **@lunora/observability:** upgraded to 1.0.0-alpha.88
+* **@lunora/do:** upgraded to 1.0.0-alpha.158
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.79
+* **@lunora/workflow:** upgraded to 1.0.0-alpha.60
+
+## @lunora/runtime [1.0.0-alpha.137](https://github.com/anolilab/lunora/compare/@lunora/runtime@1.0.0-alpha.136...@lunora/runtime@1.0.0-alpha.137) (2026-09-24)
+
+### Bug Fixes
+
+* **scheduler:** lease a claimed job instead of unindexing it ([#809](https://github.com/anolilab/lunora/issues/809)) ([72c7bff](https://github.com/anolilab/lunora/commit/72c7bff3a014b2bce1eb25866526f3279992312a)), closes [#803](https://github.com/anolilab/lunora/issues/803) [#801](https://github.com/anolilab/lunora/issues/801) [#793](https://github.com/anolilab/lunora/issues/793)
+
+## @lunora/runtime [1.0.0-alpha.136](https://github.com/anolilab/lunora/compare/@lunora/runtime@1.0.0-alpha.135...@lunora/runtime@1.0.0-alpha.136) (2026-09-24)
+
+
+### Dependencies
+
+* **@lunora/bindings:** upgraded to 1.0.0-alpha.67
+* **@lunora/errors:** upgraded to 1.0.0-alpha.40
+* **@lunora/observability:** upgraded to 1.0.0-alpha.87
+* **@lunora/do:** upgraded to 1.0.0-alpha.157
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.78
+* **@lunora/workflow:** upgraded to 1.0.0-alpha.59
+
+## @lunora/runtime [1.0.0-alpha.135](https://github.com/anolilab/lunora/compare/@lunora/runtime@1.0.0-alpha.134...@lunora/runtime@1.0.0-alpha.135) (2026-09-23)
+
+### ⚠ BREAKING CHANGES
+
+* `SpanEvent` gains an optional `sampled` field; a sink that
+enumerates the shape must accept it.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_012fk2r14izBDQteWpxDZ2jz
+
+* fix(do): fold the ctx.db summary tally onto the dispatch root span
+
+`instrumentDatabase: "summary"` is the default whenever a sink is configured. It
+counted every `ctx.db` call on the hot path and then threw the tally away for
+the commonest handler shape there is — one that reads `ctx.db` and nothing else:
+
+- the dispatch `finally` recorded the root span only when the handler had also
+  touched `ctx.trace` or `ctx.span`, so a db-only dispatch minted no span at
+  all; and
+- even when a root span WAS recorded, `recordDispatchRootSpan` built the
+  attribute bag only inside the `collector !== undefined` branch, so the
+  counters were dropped again unless the handler had opened `ctx.span`.
+
+A non-empty tally now counts as root-span content (`hasRootSpanContent`, shared
+by the dispatch and trigger gates so they cannot drift), and the attributes are
+assembled whether or not a wide event exists. A dispatch that ran no queries and
+recorded nothing still mints nothing, so the bounded span ring keeps its
+"traces worth looking at" property.
+
+No new export traffic: `exportWideEvent` still requires a `ctx.span` collector,
+so this adds no `lunora.dispatch` log record.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_012fk2r14izBDQteWpxDZ2jz
+
+* fix(container): keep an errored span when the head decision dropped its trace
+
+The container gated span export on `parent?.sampled !== false` alone, with no
+error re-check — so a failure inside a head-sampled-out trace was the one thing
+that never reached the collector. That is the exact case the tail bias exists
+for, and the worker and the shard both apply it.
+
+`emitSpan` now calls `shouldExportTrace` from `shared/sampling`, the same
+decision the worker's `emitRpcEvent` and the shard's dispatch `finally` take, so
+there is one implementation of head-verdict-plus-tail-bias rather than three
+spellings of it. The toggle comes from a new `alwaysSampleErrors` option
+falling back to `LUNORA_SAMPLE_ERRORS` (`"0"` turns it off), mirroring how the
+shard reads `x-lunora-sample-errors` so all three tiers default to keep.
+
+Scoped per span, and documented as such: a container is a long-running process
+with no dispatch boundary to re-decide at, so a span that already settled `ok`
+before a sibling failed is not retro-exported. That matches what the worker does
+with its own dispatch events.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_012fk2r14izBDQteWpxDZ2jz
+
+* feat(platform): rate the telemetry surfaces that need a host primitive
+
+No telemetry surface carried a `PlatformCapabilities` rating, so the two that
+genuinely depend on platform-injected request metadata degraded silently off
+Cloudflare with nothing recording that they would.
+
+Three keys, each rated on both targets with the reasoning in its docblock:
+
+- `edgeRequestMetadata` — `request.cf`. Both the
+  `trustInboundTraceContext: "mtls"` trust signal and the OTLP placement
+  resource detector read it directly, and a host that injects none turns the
+  first into "never trust" and the second into "not Cloudflare".
+- `hostTraceFusion` — the sink's `fuseCloudflareTraces` opt-in, the one
+  telemetry surface that reaches past `ShardHost` into a provider API
+  (`cloudflare:workers`' `tracing.enterSpan`).
+- `logArchive` — reading the durable `ctx.log` archive back, which needs an
+  Iceberg catalog over the object store and an SQL engine to query it, not just
+  a bucket.
+
+All three are advisory by nature, recorded as such in the module doc: each is
+configured through a `createWorker` argument or an `ObservabilitySink` field,
+neither of which codegen reads, so there is no app-side declaration to gate on.
+The rest of the pipeline (`ctx.log`, `ctx.trace`, `ctx.span`, `ctx.metrics`,
+traced `ctx.fetch`, W3C propagation) deliberately gets no key — it is sink
+callbacks over the `fetch` global and needs no host primitive.
+
+Where that silence actually bit, the diagnostic now lands at the only tier that
+can observe it: a dropped inbound trace under a named trust signal whose
+metadata bag is absent from the request warns once, naming the signal, instead
+of being silenced along with the deliberate `true`/`false` answers.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_012fk2r14izBDQteWpxDZ2jz
+
+* docs(observability): state what sampling covers on the batch and container paths
+
+The sampling page claimed a trace is kept or dropped whole across every tier,
+which the batch dispatch path and the container exporter did not do. Both now
+do, so the page says so explicitly rather than leaving the reader to assume it:
+a batch rides one verdict, and a container applies the tail bias with the one
+honest limit its lack of a dispatch boundary imposes.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_012fk2r14izBDQteWpxDZ2jz
+
+* feat(container): propagate the dispatch's tail-bias toggle to the container tier
+
+A container previously learned the tail-bias verdict only from its own
+`LUNORA_SAMPLE_ERRORS` env var, so it agreed with the worker and the shard
+because their defaults coincided rather than because it had been told. An
+operator who set `sampling.alwaysSampleErrors: false` on `createWorker` got a
+container that kept exporting errored spans of dropped traces.
+
+The verdict now travels the whole way, beside the `traceparent` it belongs
+with:
+
+- the shard reads `x-lunora-sample-errors` once into a request-scoped field and
+  exposes it as `getCurrentSampleErrors()` — in the same `RequestScope` as
+  `traceparent`, since re-pinning one but not the other would send a parked
+  request's verdict to the container;
+- codegen emits it as the fifth argument to `createContainerContext`, which
+  stamps the header onto every outbound container request (`get` / `any` /
+  `pool` / `.port()` / `exec`);
+- `createContainerTelemetry` gains a `request` option that reads both halves off
+  the inbound request, so a container handler does not have to know which header
+  carries what.
+
+Absent stays distinguishable from `"0"`: a dispatch that propagated no verdict
+(an alarm, a subscription re-run, a non-Lunora caller) omits the header and
+leaves the container on its own configuration, rather than being told "off".
+The env fallback is kept for the case it still serves — a one-shot container
+started with a fixed context and no request to read — and the precedence
+(explicit option, then request, then env, then tier default) is stated once, at
+the point of resolution.
+
+The header name moves to `shared/sampling.ts`, next to the decision it belongs
+to, rather than being spelled out at each of the four sites that now use it.
+
+Internally the container client carries one `OutboundTraceContext` object
+instead of threading a bare `traceparent` positional through six helpers, so a
+future addition cannot be forwarded by some paths and dropped by others.
+* `createContainerContext` takes a fifth `sampleErrors`
+parameter. Generated code passes it; a hand-written caller that omits it keeps
+the previous behaviour.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_012fk2r14izBDQteWpxDZ2jz
+
+* fix(runtime): mint a span id per shard in a batched dispatch
+
+The batch built its sub-request headers ONCE, outside the per-shard fan-out, so
+`injectTraceContext` stamped a single span id into a `traceparent` that every
+shard then received.
+
+Each shard runs its own dispatch and adopts the id it is handed as that
+dispatch's root (`resolveTraceAnchor` takes the inbound `parentSpanId`), then
+stamps it onto its `lunora.dispatch` wide event, every `ctx.log` record, and the
+parent of every `ctx.trace` child. Two shards in one batch therefore put
+unrelated work on the wire under a single `(traceId, spanId)`, and a collector
+resolves that inconsistently — merge, last-write, or duplicate.
+
+The header bag is now built inside the loop with a span id minted per shard, and
+each entry event parents to the span its OWN shard received rather than to the
+batch root. That also groups a batch's waterfall by the hop that actually
+carried each entry instead of flattening every entry under one bar.
+
+This is the rule the per-entry ids already followed, one level up and across
+processes: the comment on `entryTraceFields` describing why entries may not
+share an id applies just as much to the `traceparent`, and that is the one that
+mints spans in another process.
+
+The regression test asserts uniqueness over the whole batch's id set rather than
+comparing ids pairwise, across a three-shard fixture — a pairwise check written
+against two shards passes while a third collides.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_012fk2r14izBDQteWpxDZ2jz
+
+* docs(platform): qualify when the Node log archive fails closed
+
+The Node `logArchive` note read as though the admin route always answers
+`LOG_ARCHIVE_NOT_CONFIGURED` on this host. It does not: the route is registered
+here like anywhere else, and that code is returned only while the `logArchive`
+table or the R2 SQL credentials are absent. Configure both and the route stops
+failing closed — it builds an R2 SQL client and queries Cloudflare's API over
+the network, which is not this host serving the archive.
+
+The rating is unchanged and still honest; what was wrong was the reason given
+for it.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_012fk2r14izBDQteWpxDZ2jz
+
+### Bug Fixes
+
+* five defects in the trace/metric export path ([#794](https://github.com/anolilab/lunora/issues/794)) ([ee1c1a7](https://github.com/anolilab/lunora/commit/ee1c1a7f15e5ee1178a9bf1f0fb8420283e7f004))
+
+
+### Dependencies
+
+* **@lunora/bindings:** upgraded to 1.0.0-alpha.66
+* **@lunora/observability:** upgraded to 1.0.0-alpha.86
+* **@lunora/platform:** upgraded to 1.0.0-alpha.33
+* **@lunora/do:** upgraded to 1.0.0-alpha.156
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.77
+
+## @lunora/runtime [1.0.0-alpha.134](https://github.com/anolilab/lunora/compare/@lunora/runtime@1.0.0-alpha.133...@lunora/runtime@1.0.0-alpha.134) (2026-09-23)
+
+### Bug Fixes
+
+* carry a shard's refusal code to /sync, and bound the post-commit hook wait ([#788](https://github.com/anolilab/lunora/issues/788)) ([f8a222a](https://github.com/anolilab/lunora/commit/f8a222ac4f5df10662d876227336ffaaa7201fc5))
+
+
+### Dependencies
+
+* **@lunora/do:** upgraded to 1.0.0-alpha.155
+* **@lunora/workflow:** upgraded to 1.0.0-alpha.58
+
+## @lunora/runtime [1.0.0-alpha.133](https://github.com/anolilab/lunora/compare/@lunora/runtime@1.0.0-alpha.132...@lunora/runtime@1.0.0-alpha.133) (2026-09-23)
+
+### Bug Fixes
+
+* **runtime:** restore the documented admin exemption on the WS upgrade, and 404 an unknown storage bucket ([#779](https://github.com/anolilab/lunora/issues/779)) ([b354595](https://github.com/anolilab/lunora/commit/b35459560b5606db18571fc9e9c822cbbdfe1eb8))
+
+
+### Dependencies
+
+* **@lunora/do:** upgraded to 1.0.0-alpha.154
+
+## @lunora/runtime [1.0.0-alpha.132](https://github.com/anolilab/lunora/compare/@lunora/runtime@1.0.0-alpha.131...@lunora/runtime@1.0.0-alpha.132) (2026-09-22)
+
+
+### Dependencies
+
+* **@lunora/bindings:** upgraded to 1.0.0-alpha.65
+* **@lunora/observability:** upgraded to 1.0.0-alpha.85
+* **@lunora/do:** upgraded to 1.0.0-alpha.152
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.76
+
+## @lunora/runtime [1.0.0-alpha.131](https://github.com/anolilab/lunora/compare/@lunora/runtime@1.0.0-alpha.130...@lunora/runtime@1.0.0-alpha.131) (2026-09-22)
+
+### Features
+
+* **do:** carry the shard cdc epoch to runShardCdcSync consumers ([#775](https://github.com/anolilab/lunora/issues/775)) ([8fc118a](https://github.com/anolilab/lunora/commit/8fc118a3ba117d4e62ebc107b377c357f4bbf2bf))
+
+
+### Dependencies
+
+* **@lunora/do:** upgraded to 1.0.0-alpha.151
+
+## @lunora/runtime [1.0.0-alpha.130](https://github.com/anolilab/lunora/compare/@lunora/runtime@1.0.0-alpha.129...@lunora/runtime@1.0.0-alpha.130) (2026-09-22)
+
+
+### Dependencies
+
+* **@lunora/observability:** upgraded to 1.0.0-alpha.84
+* **@lunora/do:** upgraded to 1.0.0-alpha.150
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.75
+
+## @lunora/runtime [1.0.0-alpha.129](https://github.com/anolilab/lunora/compare/@lunora/runtime@1.0.0-alpha.128...@lunora/runtime@1.0.0-alpha.129) (2026-09-22)
+
+
+### Dependencies
+
+* **@lunora/workflow:** upgraded to 1.0.0-alpha.57
+
+## @lunora/runtime [1.0.0-alpha.128](https://github.com/anolilab/lunora/compare/@lunora/runtime@1.0.0-alpha.127...@lunora/runtime@1.0.0-alpha.128) (2026-09-21)
+
+### Bug Fixes
+
+* **client:** carry the composing baseline through every replay path ([#764](https://github.com/anolilab/lunora/issues/764)) ([279c577](https://github.com/anolilab/lunora/commit/279c577067dc1debe9c8a5d7455588200758734d))
+
+
+### Dependencies
+
+* **@lunora/do:** upgraded to 1.0.0-alpha.149
+
+## @lunora/runtime [1.0.0-alpha.127](https://github.com/anolilab/lunora/compare/@lunora/runtime@1.0.0-alpha.126...@lunora/runtime@1.0.0-alpha.127) (2026-09-21)
+
+
+### Dependencies
+
+* **@lunora/observability:** upgraded to 1.0.0-alpha.83
+* **@lunora/do:** upgraded to 1.0.0-alpha.148
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.74
+* **@lunora/workflow:** upgraded to 1.0.0-alpha.56
+
+## @lunora/runtime [1.0.0-alpha.126](https://github.com/anolilab/lunora/compare/@lunora/runtime@1.0.0-alpha.125...@lunora/runtime@1.0.0-alpha.126) (2026-09-19)
+
+### Features
+
+* **server:** drop a stale patch instead of clobbering a newer edit ([#762](https://github.com/anolilab/lunora/issues/762)) ([7641eea](https://github.com/anolilab/lunora/commit/7641eea6a4e3e4ea7588baa0ba4479f03778599f))
+
+
+### Dependencies
+
+* **@lunora/observability:** upgraded to 1.0.0-alpha.82
+* **@lunora/do:** upgraded to 1.0.0-alpha.146
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.73
+
+## @lunora/runtime [1.0.0-alpha.125](https://github.com/anolilab/lunora/compare/@lunora/runtime@1.0.0-alpha.124...@lunora/runtime@1.0.0-alpha.125) (2026-09-13)
+
+
+### Dependencies
+
+* **@lunora/bindings:** upgraded to 1.0.0-alpha.64
+* **@lunora/do:** upgraded to 1.0.0-alpha.145
+
+## @lunora/runtime [1.0.0-alpha.124](https://github.com/anolilab/lunora/compare/@lunora/runtime@1.0.0-alpha.123...@lunora/runtime@1.0.0-alpha.124) (2026-09-13)
+
+
+### Dependencies
+
+* **@lunora/bindings:** upgraded to 1.0.0-alpha.63
+* **@lunora/errors:** upgraded to 1.0.0-alpha.39
+* **@lunora/observability:** upgraded to 1.0.0-alpha.81
+* **@lunora/do:** upgraded to 1.0.0-alpha.144
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.72
+* **@lunora/workflow:** upgraded to 1.0.0-alpha.55
+
+## @lunora/runtime [1.0.0-alpha.123](https://github.com/anolilab/lunora/compare/@lunora/runtime@1.0.0-alpha.122...@lunora/runtime@1.0.0-alpha.123) (2026-09-13)
+
+### ⚠ BREAKING CHANGES
+
+* **auth:** `AuthDoOptions.basePath`, `DoAuthWiringOptions.basePath` and
+`PluginFlags.apiKey` are removed. `sinceSeq` reads now return oldest-first.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_012fk2r14izBDQteWpxDZ2jz
+
+* fix(auth): audit the SAML assertion consumer service
+
+`/sso/saml2/sp/acs/:providerId` is where a SAML sign-in completes —
+`processSAMLResponse` validates the assertion, resolves the user and calls
+`setSessionCookie` — but it carries no `/callback/` segment and matched no
+other branch, so it classified as `undefined`. The one endpoint that issues
+every SAML session left no audit row at all, the same hole as the SSO dispatch
+next to it.
+
+Also regenerates the six `registry/auth-ui-*` copies of `core/config.ts` and
+`core/flow-gate.ts`, which `scripts/sync-auth-ui-registry.mjs` mirrors verbatim
+from `packages/auth-ui/src` and `lint:registry:sync` guards. Dropping the inert
+`apiKey` flow flag changed both files; the registry copies had gone stale.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_012fk2r14izBDQteWpxDZ2jz
+
+* fix(auth): audit the two SAML logout endpoints
+
+Neither ends in `/sign-out`, so both went unrecorded while the SAML sign-in next
+to them is now recorded — a trail that shows a session opening and never closing
+cannot tell "still signed in" from "we stopped watching".
+
+Both terminate the local session before redirecting, so both are `sign-out`
+rather than an initiated event:
+
+- `/sso/saml2/logout/:providerId` is SP-initiated. It deletes the SAML session
+  keys, calls `deleteSession` on the current session token and
+  `deleteSessionCookie`, then redirects to the IdP's logout URL.
+- `/sso/saml2/sp/slo/:providerId` is the SP's single-logout receiver, serving
+  the IdP-initiated direction and the response leg of an SP-initiated one.
+  `handleLogoutRequest` and `handleLogoutResponse` both call `deleteSession`
+  and `deleteSessionCookie`.
+
+The test pins `/sso/providers` and `/sso/saml2/sp/metadata` as still unaudited,
+so neither substring can widen into a provider-config read.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_012fk2r14izBDQteWpxDZ2jz
+
+### Bug Fixes
+
+* **auth:** close six defects on the auth surface ([#747](https://github.com/anolilab/lunora/issues/747)) ([974a1a4](https://github.com/anolilab/lunora/commit/974a1a4072ad63ffbd07d53d5899c2a83b9ddf49))
+
+
+### Dependencies
+
+* **@lunora/bindings:** upgraded to 1.0.0-alpha.62
+* **@lunora/errors:** upgraded to 1.0.0-alpha.38
+* **@lunora/observability:** upgraded to 1.0.0-alpha.80
+* **@lunora/do:** upgraded to 1.0.0-alpha.143
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.71
+* **@lunora/workflow:** upgraded to 1.0.0-alpha.54
+
+## @lunora/runtime [1.0.0-alpha.122](https://github.com/anolilab/lunora/compare/@lunora/runtime@1.0.0-alpha.121...@lunora/runtime@1.0.0-alpha.122) (2026-09-13)
+
+
+### Dependencies
+
+* **@lunora/bindings:** upgraded to 1.0.0-alpha.61
+* **@lunora/errors:** upgraded to 1.0.0-alpha.37
+* **@lunora/observability:** upgraded to 1.0.0-alpha.79
+* **@lunora/do:** upgraded to 1.0.0-alpha.142
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.70
+* **@lunora/workflow:** upgraded to 1.0.0-alpha.53
+
+## @lunora/runtime [1.0.0-alpha.121](https://github.com/anolilab/lunora/compare/@lunora/runtime@1.0.0-alpha.120...@lunora/runtime@1.0.0-alpha.121) (2026-09-12)
+
+### ⚠ BREAKING CHANGES
+
+* a cross-table `_id` collision on import is now an entry in
+`errors` instead of a silent increment of `conflicts`.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_012fk2r14izBDQteWpxDZ2jz
+
+* fix(runtime): stop exports reporting a partial snapshot as whole
+
+Two ways a deployment export came back short and said nothing.
+
+Shard discovery unioned each requested table's registered keys and only fell
+back to the default shard when the whole union was empty. A root-DO table has no
+registry entry and never will, so its empty key list means "ask the default
+shard" — but one registered `.shardBy(...)` key was enough to answer that
+question for the entire request, dropping the default shard and with it every
+root-table row. The fallback now applies per table, before the union, which
+fixes the same discovery on the CDC sync fan-out.
+
+A shard whose export failed was skipped outright, so the admin route answered
+200 with a short NDJSON body and the scheduled backup wrote a manifest vouching
+for a snapshot missing that shard's rows — while its own comment claimed no
+manifest could ever be written for a failed export. The fan-out failure is now
+raised before a single row is written: the backup writes nothing, and the
+streamed response ends as an errored body rather than a clean short one, which
+is the one signal a consumer cannot mistake for success (the status line is
+committed before the fan-out runs, and an NDJSON row stream has no envelope to
+carry a failure record a naive reader would not ignore). The CLI already
+discards its staged partial file on exactly that.
+* an export whose shard fan-out lost a shard now fails instead of
+returning the reachable shards' rows.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_012fk2r14izBDQteWpxDZ2jz
+
+### Bug Fixes
+
+* four data-loss defects on the export/import/backup path ([#744](https://github.com/anolilab/lunora/issues/744)) ([09f580f](https://github.com/anolilab/lunora/commit/09f580ffe6f1d098f62020be36a5363b50c9eb5a))
+
+
+### Dependencies
+
+* **@lunora/observability:** upgraded to 1.0.0-alpha.78
+* **@lunora/do:** upgraded to 1.0.0-alpha.141
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.69
+
+## @lunora/runtime [1.0.0-alpha.120](https://github.com/anolilab/lunora/compare/@lunora/runtime@1.0.0-alpha.119...@lunora/runtime@1.0.0-alpha.120) (2026-09-12)
+
+
+### Dependencies
+
+* **@lunora/bindings:** upgraded to 1.0.0-alpha.60
+* **@lunora/observability:** upgraded to 1.0.0-alpha.77
+* **@lunora/platform:** upgraded to 1.0.0-alpha.32
+* **@lunora/do:** upgraded to 1.0.0-alpha.140
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.68
+
+## @lunora/runtime [1.0.0-alpha.119](https://github.com/anolilab/lunora/compare/@lunora/runtime@1.0.0-alpha.118...@lunora/runtime@1.0.0-alpha.119) (2026-09-12)
+
+
+### Dependencies
+
+* **@lunora/bindings:** upgraded to 1.0.0-alpha.59
+* **@lunora/observability:** upgraded to 1.0.0-alpha.76
+* **@lunora/platform:** upgraded to 1.0.0-alpha.31
+* **@lunora/do:** upgraded to 1.0.0-alpha.138
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.66
+
+## @lunora/runtime [1.0.0-alpha.118](https://github.com/anolilab/lunora/compare/@lunora/runtime@1.0.0-alpha.117...@lunora/runtime@1.0.0-alpha.118) (2026-09-12)
+
+
+### Dependencies
+
+* **@lunora/observability:** upgraded to 1.0.0-alpha.75
+* **@lunora/do:** upgraded to 1.0.0-alpha.137
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.65
+
+## @lunora/runtime [1.0.0-alpha.117](https://github.com/anolilab/lunora/compare/@lunora/runtime@1.0.0-alpha.116...@lunora/runtime@1.0.0-alpha.117) (2026-09-12)
+
+### Bug Fixes
+
+* **runtime:** cap admin JSON bodies at the reader ([#699](https://github.com/anolilab/lunora/issues/699)) ([04add3a](https://github.com/anolilab/lunora/commit/04add3a62e803dcfbc1627daf072b5c3b110d173))
+
+### Documentation
+
+* align package docs with the shipped api ([#706](https://github.com/anolilab/lunora/issues/706)) ([40c24b7](https://github.com/anolilab/lunora/commit/40c24b7218d1326ced4d73c8961c6e339d89f562))
+* **cli,runtime:** name the commands these comments describe ([#700](https://github.com/anolilab/lunora/issues/700)) ([b4f7d98](https://github.com/anolilab/lunora/commit/b4f7d9842b611a23c1bb720b923d4e25f4148ede))
+* correct stale symbol names in comments ([#701](https://github.com/anolilab/lunora/issues/701)) ([64536f9](https://github.com/anolilab/lunora/commit/64536f9f8f89c4286ae95635a8c5fe20ef5816db))
+
+## @lunora/runtime [1.0.0-alpha.116](https://github.com/anolilab/lunora/compare/@lunora/runtime@1.0.0-alpha.115...@lunora/runtime@1.0.0-alpha.116) (2026-09-12)
+
+
+### Dependencies
+
+* **@lunora/bindings:** upgraded to 1.0.0-alpha.57
+* **@lunora/errors:** upgraded to 1.0.0-alpha.36
+* **@lunora/observability:** upgraded to 1.0.0-alpha.74
+* **@lunora/platform:** upgraded to 1.0.0-alpha.30
+* **@lunora/do:** upgraded to 1.0.0-alpha.136
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.64
+* **@lunora/workflow:** upgraded to 1.0.0-alpha.51
+
+## @lunora/runtime [1.0.0-alpha.115](https://github.com/anolilab/lunora/compare/@lunora/runtime@1.0.0-alpha.114...@lunora/runtime@1.0.0-alpha.115) (2026-09-12)
+
+
+### Dependencies
+
+* **@lunora/observability:** upgraded to 1.0.0-alpha.73
+* **@lunora/do:** upgraded to 1.0.0-alpha.135
+
+## @lunora/runtime [1.0.0-alpha.114](https://github.com/anolilab/lunora/compare/@lunora/runtime@1.0.0-alpha.113...@lunora/runtime@1.0.0-alpha.114) (2026-09-11)
+
+
+### Dependencies
+
+* **@lunora/observability:** upgraded to 1.0.0-alpha.72
+* **@lunora/do:** upgraded to 1.0.0-alpha.134
+
+## @lunora/runtime [1.0.0-alpha.113](https://github.com/anolilab/lunora/compare/@lunora/runtime@1.0.0-alpha.112...@lunora/runtime@1.0.0-alpha.113) (2026-09-11)
+
+
+### Dependencies
+
+* **@lunora/observability:** upgraded to 1.0.0-alpha.71
+* **@lunora/do:** upgraded to 1.0.0-alpha.133
+* **@lunora/workflow:** upgraded to 1.0.0-alpha.50
+
+## @lunora/runtime [1.0.0-alpha.112](https://github.com/anolilab/lunora/compare/@lunora/runtime@1.0.0-alpha.111...@lunora/runtime@1.0.0-alpha.112) (2026-09-10)
+
+### Features
+
+* **runtime:** run crons and queues where the host has neither ([#684](https://github.com/anolilab/lunora/issues/684)) ([4d11b0c](https://github.com/anolilab/lunora/commit/4d11b0c7912f5b781ad4f7a17dfddae229bae0e1))
+
+
+### Dependencies
+
+* **@lunora/bindings:** upgraded to 1.0.0-alpha.56
+* **@lunora/observability:** upgraded to 1.0.0-alpha.70
+* **@lunora/platform:** upgraded to 1.0.0-alpha.29
+* **@lunora/do:** upgraded to 1.0.0-alpha.132
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.63
+
+## @lunora/runtime [1.0.0-alpha.111](https://github.com/anolilab/lunora/compare/@lunora/runtime@1.0.0-alpha.110...@lunora/runtime@1.0.0-alpha.111) (2026-09-10)
+
+
+### Dependencies
+
+* **@lunora/observability:** upgraded to 1.0.0-alpha.69
+* **@lunora/do:** upgraded to 1.0.0-alpha.131
+
+## @lunora/runtime [1.0.0-alpha.110](https://github.com/anolilab/lunora/compare/@lunora/runtime@1.0.0-alpha.109...@lunora/runtime@1.0.0-alpha.110) (2026-09-08)
+
+
+### Dependencies
+
+* **@lunora/observability:** upgraded to 1.0.0-alpha.68
+* **@lunora/do:** upgraded to 1.0.0-alpha.130
+
+## @lunora/runtime [1.0.0-alpha.109](https://github.com/anolilab/lunora/compare/@lunora/runtime@1.0.0-alpha.108...@lunora/runtime@1.0.0-alpha.109) (2026-09-08)
+
+
+### Dependencies
+
+* **@lunora/observability:** upgraded to 1.0.0-alpha.67
+* **@lunora/do:** upgraded to 1.0.0-alpha.129
+
+## @lunora/runtime [1.0.0-alpha.108](https://github.com/anolilab/lunora/compare/@lunora/runtime@1.0.0-alpha.107...@lunora/runtime@1.0.0-alpha.108) (2026-09-08)
+
+
+### Dependencies
+
+* **@lunora/observability:** upgraded to 1.0.0-alpha.66
+* **@lunora/do:** upgraded to 1.0.0-alpha.128
+
+## @lunora/runtime [1.0.0-alpha.107](https://github.com/anolilab/lunora/compare/@lunora/runtime@1.0.0-alpha.106...@lunora/runtime@1.0.0-alpha.107) (2026-09-08)
+
+
+### Dependencies
+
+* **@lunora/bindings:** upgraded to 1.0.0-alpha.55
+* **@lunora/observability:** upgraded to 1.0.0-alpha.65
+* **@lunora/platform:** upgraded to 1.0.0-alpha.28
+* **@lunora/do:** upgraded to 1.0.0-alpha.127
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.62
+
+## @lunora/runtime [1.0.0-alpha.106](https://github.com/anolilab/lunora/compare/@lunora/runtime@1.0.0-alpha.105...@lunora/runtime@1.0.0-alpha.106) (2026-09-08)
+
+
+### Dependencies
+
+* **@lunora/observability:** upgraded to 1.0.0-alpha.64
+* **@lunora/do:** upgraded to 1.0.0-alpha.126
+
+## @lunora/runtime [1.0.0-alpha.105](https://github.com/anolilab/lunora/compare/@lunora/runtime@1.0.0-alpha.104...@lunora/runtime@1.0.0-alpha.105) (2026-09-08)
+
+
+### Dependencies
+
+* **@lunora/observability:** upgraded to 1.0.0-alpha.63
+* **@lunora/do:** upgraded to 1.0.0-alpha.125
+
+## @lunora/runtime [1.0.0-alpha.104](https://github.com/anolilab/lunora/compare/@lunora/runtime@1.0.0-alpha.103...@lunora/runtime@1.0.0-alpha.104) (2026-09-07)
+
+
+### Dependencies
+
+* **@lunora/observability:** upgraded to 1.0.0-alpha.62
+* **@lunora/do:** upgraded to 1.0.0-alpha.124
+
+## @lunora/runtime [1.0.0-alpha.103](https://github.com/anolilab/lunora/compare/@lunora/runtime@1.0.0-alpha.102...@lunora/runtime@1.0.0-alpha.103) (2026-09-07)
+
+
+### Dependencies
+
+* **@lunora/observability:** upgraded to 1.0.0-alpha.61
+* **@lunora/do:** upgraded to 1.0.0-alpha.123
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.61
+
+## @lunora/runtime [1.0.0-alpha.102](https://github.com/anolilab/lunora/compare/@lunora/runtime@1.0.0-alpha.101...@lunora/runtime@1.0.0-alpha.102) (2026-09-07)
+
+### Bug Fixes
+
+* **do,shard-engine,runtime,client:** repair four core-path defects ([#649](https://github.com/anolilab/lunora/issues/649)) ([6fb9990](https://github.com/anolilab/lunora/commit/6fb99906617ed2811020d5d2ddeda16b312f8e03))
+
+
+### Dependencies
+
+* **@lunora/bindings:** upgraded to 1.0.0-alpha.54
+* **@lunora/errors:** upgraded to 1.0.0-alpha.35
+* **@lunora/observability:** upgraded to 1.0.0-alpha.60
+* **@lunora/do:** upgraded to 1.0.0-alpha.122
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.60
+* **@lunora/workflow:** upgraded to 1.0.0-alpha.49
+
+## @lunora/runtime [1.0.0-alpha.101](https://github.com/anolilab/lunora/compare/@lunora/runtime@1.0.0-alpha.100...@lunora/runtime@1.0.0-alpha.101) (2026-09-07)
+
+### Bug Fixes
+
+* **config:** warn when a SchedulerDO has no LUNORA_ORIGIN_URL ([#646](https://github.com/anolilab/lunora/issues/646)) ([e8c55c7](https://github.com/anolilab/lunora/commit/e8c55c7aa493e6684a7a57facc7928c72bb530e0))
+
+## @lunora/runtime [1.0.0-alpha.100](https://github.com/anolilab/lunora/compare/@lunora/runtime@1.0.0-alpha.99...@lunora/runtime@1.0.0-alpha.100) (2026-09-06)
+
+### Features
+
+* **codegen:** discover the crons configured on createWorker ([#636](https://github.com/anolilab/lunora/issues/636)) ([218342f](https://github.com/anolilab/lunora/commit/218342f8e612b6852f9f918abb78f7a0c7fc7273))
+
+## @lunora/runtime [1.0.0-alpha.99](https://github.com/anolilab/lunora/compare/@lunora/runtime@1.0.0-alpha.98...@lunora/runtime@1.0.0-alpha.99) (2026-09-06)
+
+### ⚠ BREAKING CHANGES
+
+* **runtime:** `trustedClientIp` now takes the declared header as a second argument.
+
+
+Claude-Session: https://claude.ai/code/session_01VUuYamsU1YLmAQhtut9PLZ
+
+Co-authored-by: Claude Opus 5 (1M context) <noreply@anthropic.com>
+
+### security
+
+* **runtime:** let a fronted origin declare its client-ip header ([#635](https://github.com/anolilab/lunora/issues/635)) ([8752db4](https://github.com/anolilab/lunora/commit/8752db49a3a4629a983e8ed7fc66e2b58c6edb55))
+
+
+### Dependencies
+
+* **@lunora/workflow:** upgraded to 1.0.0-alpha.48
+
+## @lunora/runtime [1.0.0-alpha.98](https://github.com/anolilab/lunora/compare/@lunora/runtime@1.0.0-alpha.97...@lunora/runtime@1.0.0-alpha.98) (2026-09-06)
+
+### ⚠ BREAKING CHANGES
+
+* **scheduler,config:** an entry in `triggers.crons` that Lunora did not generate is no
+longer removed, and the first reconcile of an existing config rewrites the file
+to add the ownership marker.
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01VUuYamsU1YLmAQhtut9PLZ
+
+* fix(runtime): test the cron surface for emptiness, not presence
+
+`hasLunoraCrons` decides whether Lunora owns `scheduled` or the framework host
+keeps its own, and it read `options.crons ?? options.cronJobs ?? options.backupCron`.
+`??` stops at the first non-nullish value, and codegen emits `cronJobs:
+LUNORA_CRONS` unconditionally — `{}` for an app that declares no cron. So the
+predicate was `true` for every app built through
+`defineApp().buildFrameworkWorker(host)`, the preservation branch was
+unreachable, and the host's own `scheduled` was dropped in all of them.
+
+Counts the keys instead. The regression test is driven by the committed
+generated shape (`cronJobs: {}`); the existing coverage passed only because
+hand-built option objects omit the key entirely.
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01VUuYamsU1YLmAQhtut9PLZ
+
+* fix(scheduler): name the env var the DO really dispatches from
+
+The SchedulerDO takes its callback origin from `env.LUNORA_ORIGIN_URL` and
+deliberately ignores the `originUrl` on the schedule request (a caller-supplied
+target is an SSRF vector), but the docs described that ignored option as the live
+one and never named the env var. `examples/blog` followed them: it passes
+`LUNORA_WORKER_ORIGIN` as `originUrl` and sets no `LUNORA_ORIGIN_URL`, so every
+`ctx.scheduler.runAfter` in it is refused with `ORIGIN_NOT_CONFIGURED`.
+
+Docs now name the var and what happens without it; the example sets both (they
+are different origins to different readers — the cross-shard relation resolver
+reads `LUNORA_WORKER_ORIGIN`).
+
+The dead required `originUrl` on `createScheduler`/`createWorkpool` is left in
+place: it is live for the Queues-backed `httpDispatcher`, and removing it from
+the shared options type reaches codegen's emitter and committed generated output.
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01VUuYamsU1YLmAQhtut9PLZ
+
+* fix(config): record cron ownership in the manifest
+
+The ownership marker was a `// lunora:crons [...]` comment above `triggers.crons`, written by
+structural position and read back by a non-global regex over the whole file. Those are different
+locations: a stale duplicate marker higher in the file — a merge that repeated a hunk, a copy-paste —
+was read as the record, so the entry it named was cleared. That entry is the hand-written `backupCron`
+trigger, which is the one thing the marker exists to protect.
+
+The comment also broke `wrangler.json`, a supported config name. Wrangler routes it through its JSONC
+parser and survives, but the project's own `JSON.parse`, its deploy wrapper and its editor's JSON
+schema validation do not, and one `lunora deploy` or dev-server schema save was enough.
+
+The record now lives in the project's `package.json` under `lunora.crons`. It is committed, so it
+still survives the fresh CI clone that ruled out gitignored `.lunora/` state; it is valid JSON, so a
+`.json` config behaves exactly like a `.jsonc` one with no second code path; and it is read and
+written at one address, so there is nothing to find in the wrong place. A plain key in the wrangler
+config is not an option — wrangler reports unknown fields on every command.
+
+Per-entry tagging (`"0 * * * *", // lunora`) was weighed and rejected: it is still a comment, so it
+does not fix the `.json` case, and `modify()` rewrites the array wholesale, so the tags would have to
+be hand-serialized with their own indent and line-ending detection.
+
+The wrangler config is now written only when an entry actually moves, so `changed` — which deploy and
+the vite plugin print `synced N cron trigger(s)` on — no longer reports a sync that moved nothing.
+`ReconcileResult.preserved` names the entries kept but not generated, and both callers print them.
+Each file's own indentation and line endings are matched, so a CRLF config no longer grows a bare LF.
+
+`@lunora/vite`'s cron-sync suite is deleted: `cron-sync.ts` is a pure re-export of `@lunora/config`,
+and two suites over one implementation only diverge.
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01VUuYamsU1YLmAQhtut9PLZ
+
+* fix(scheduler): refuse an invalid schedule id
+
+`resolveScheduleId` minted a fresh random id whenever the caller's `RunOptions.id` failed
+`^\w[\w-]{0,63}$` — including the leading-`-` case. But `id` is documented as NOT an idempotency key:
+an id already scheduled is refused with `409 DUPLICATE_SCHEDULE_ID`. Silently swapping an invalid one
+meant `runAt(ts, ref, args, { id: "-daily-2026-09-06" })` minted a different id on every call, so
+calling it twice scheduled the job twice where it used to 409 — and left the handler holding an id no
+record was stored under, so its later `cancel` missed.
+
+An id the caller supplied that is not a safe key segment now throws `INVALID_SCHEDULE_ID`; only an
+absent one is minted. `SchedulerDO` answers the coded `400` envelope its client already re-raises,
+and `@lunora/server`'s deferred facade throws synchronously from the mutation, like its delay and
+instant guards. Id resolution and the duplicate check move behind one `resolveId` on the DO, which is
+a branch cheaper in `handleSchedule` than the pair it replaces.
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01VUuYamsU1YLmAQhtut9PLZ
+
+* fix(config): clear only the crons key, not the whole lunora manifest
+
+Clearing dropped the entire `lunora` object whenever it held a single key,
+without checking that the key was `crons`. So an app carrying any other Lunora
+setting — a `registryUrl`, say — lost it the first time every cron was removed
+from `lunora/crons.ts`: the code whose whole purpose is not to delete user-owned
+config deleted user-owned config.
+
+Test the keys rather than count them. This branch is also what establishes
+`lunora.*` as a namespace worth putting settings in, so the collision was a
+matter of time rather than a hypothetical.
+
+Proven both ways: against the unfixed reconciler the new case reports
+`expected undefined to be 'https://registry.example.test'`; with the fix the
+sibling key survives, `crons` is still cleared, and the user's hand-written
+trigger is still left alone. 13 config cron tests pass.
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01VUuYamsU1YLmAQhtut9PLZ
+
+* fix(config): never let a manifest problem cost the cron write
+
+`readManifest` normalises a non-object `lunora` to `undefined`, but the manifest
+TEXT still holds it — so `modify(text, ["lunora", "crons"], …)` threw
+`Can not add index to parent of type string` on a project whose `package.json`
+had `"lunora": "…"` or an array.
+
+The throw was the smaller half. `recordManagedCrons` ran BEFORE the wrangler
+write, and both callers swallow a throw into a single `warn` line — so `lunora
+deploy` printed one warning among its output and shipped a config whose
+`triggers.crons` had never been updated. Every scheduled function silently never
+fired, for as long as that key stayed in the manifest.
+
+Two changes. Ownership is now recorded AFTER the config is on disk, so a manifest
+failure can never take the write down with it — and recording a set the config
+does not yet reflect would let the next pass clear a cron that is still declared.
+And a `lunora` value that is not a plain object is left completely alone rather
+than replaced: whatever it means it is the app's, and overwriting user config is
+the exact failure this ownership record exists to avoid. The cost is that
+ownership goes unrecorded for that project, so the reconciler degrades to
+add-only until the manifest is repaired — a cron that outlives its declaration,
+versus silent data loss.
+
+Proven both ways: against the unfixed reconciler the new case reports
+`Error: Can not add index to parent of type string` and the config keeps its old
+crons; with the fix the generated cron lands, the hand-written one is preserved,
+and the foreign `lunora` value is untouched. 666 config tests pass.
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01VUuYamsU1YLmAQhtut9PLZ
+
+* fix(config): say so when the cron ownership record is unusable
+
+`lunora.crons` is what tells the reconciler which `triggers.crons` entries it
+generated and may therefore clear. A merge conflict or a hand-edit that leaves it
+a non-array — or an array with non-string entries — degraded silently to "we own
+nothing": the generated cron the reconciler itself wrote on the last pass is then
+reported back to the user as a hand-written trigger and, by this module's design,
+is never cleared again. A permanent orphan, announced as `kept 1 hand-written
+cron trigger(s)`.
+
+Degrading is still the right direction — deleting a trigger on a guess is the
+worse failure — but it now travels as `ReconcileResult.warnings` for the caller
+to print, alongside the existing case where `lunora` itself is a value that
+cannot be indexed into. Mirrors `reconcileWranglerBindings`, which already
+returns warnings both callers loop over.
+
+Also moves the `kept N hand-written cron trigger(s)` line here as
+`describePreservedCrons`: `lunora deploy` and the Vite plugin printed two
+byte-identical copies of it.
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01VUuYamsU1YLmAQhtut9PLZ
+
+* fix(vite): print the kept-cron line only when it is news
+
+`reconcileWranglerExtras` logged `kept N hand-written cron trigger(s)` on every
+codegen pass — in a dev server, on every schema save — for a set that had not
+moved since the last one. A line that repeats is a line the reader learns to
+skip, including on the pass where it finally changes. It now prints when the
+config was actually written or when the preserved set itself moved, and the
+damaged-ownership-record warnings are surfaced next to it.
+
+The two reconcile-plus-log helpers move out of `codegen-plugin.ts` into
+`reconcile-wrangler.ts`: neither touches the plugin, and the file had crossed
+1000 lines. 1003 → 924. `codegenPlugin` is now its file's sole export, so it
+becomes a default one.
+
+`lunora deploy` prints the shared `describePreservedCrons` line and the same
+warnings.
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01VUuYamsU1YLmAQhtut9PLZ
+
+* chore(blog): commit the cron ownership record
+
+`lunora/crons.ts` declares one schedule, so the first `lunora dev` or `lunora
+deploy` writes `lunora.crons` into this tracked manifest — leaving a permanently
+dirty working tree for anyone who runs the example. Committed the same way
+`wrangler.jsonc`'s `triggers.crons` already is; a reconcile over it is now a
+no-op. It is the only workspace project with a hand-written `lunora/crons.ts`.
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01VUuYamsU1YLmAQhtut9PLZ
+
+* fix(scheduler): drop the originUrl nobody reads
+
+`createScheduler` and `createWorkpool` required an `originUrl`, put it in the
+`/schedule` body, and the SchedulerDO declared the field only to ignore it — the
+dispatch target comes from `env.LUNORA_ORIGIN_URL` at fire time, deliberately,
+because a caller-supplied one would be an SSRF vector. So every schedule
+serialised a value so the receiver could pointedly not read it, and the docs had
+grown a comment apologising for it in two places.
+
+Removed from `LunoraSchedulerOptions`, `SchedulerHostOptions`,
+`ScheduleRequestBody` and the guard in `assertSchedulerOptions`.
+
+`SchedulerDeclaration.origin` goes with it — its only consumer was that argument,
+and it gated the whole surface: `.scheduler({ namespace })` without an `origin`
+resolved `ctx.scheduler` to `undefined`, silently, for a value the DO was never
+going to use. The generated resolver now needs only the namespace.
+
+`HttpDispatcherOptions.originUrl` stays: the Queues-backed dispatcher seeds
+`LUNORA_ORIGIN_URL` from it, and that one really is the target.
+* **scheduler,config:** `createScheduler`, `createWorkpool` and `createSchedulerHost` no
+longer accept `originUrl`, and `.scheduler(...)` no longer accepts `origin`. Set
+`LUNORA_ORIGIN_URL` on the SchedulerDO's env instead — it was already the only
+thing that worked.
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01VUuYamsU1YLmAQhtut9PLZ
+
+* fix(vite,errors): unbreak the postinstall gate and catalog the new code
+
+Two defects this branch shipped, both caught only by gates a local
+`pnpm run <script>` never reaches.
+
+**A raw NUL byte in `reconcile-wrangler.ts`.** The separator in
+`preserved.join(...)` was written as a literal 0x00, which makes git classify the
+file as binary and trips the root `scripts/no-nul-bytes.mjs` gate. That gate runs
+from postinstall, so it fails during `pnpm install --frozen-lockfile` — turning
+every CI job red in its setup step, with the cause named in none of them. A local
+script run never installs, so this branch's seven green gates could not see it.
+Now written as the escape form, which is byte-identical at runtime; the gate
+exits 0.
+
+**`INVALID_SCHEDULE_ID` was minted but never catalogued.** `resolveScheduleId`
+began throwing it when this branch made an invalid caller-supplied id an error
+rather than silently minting a replacement, and `catalog-registration.test.ts`
+fails on any code that is not a catalog key: `Found error code(s) minted outside
+
+### Bug Fixes
+
+* **scheduler,config:** stop dead-lettering jobs and deleting crons ([#629](https://github.com/anolilab/lunora/issues/629)) ([1df421d](https://github.com/anolilab/lunora/commit/1df421d771b7dcd9f92952f3438c20959522c3f8)), closes [#621](https://github.com/anolilab/lunora/issues/621)
+
+## @lunora/runtime [1.0.0-alpha.97](https://github.com/anolilab/lunora/compare/@lunora/runtime@1.0.0-alpha.96...@lunora/runtime@1.0.0-alpha.97) (2026-09-06)
+
+### ⚠ BREAKING CHANGES
+
+* **dispatch,scheduler:** `ctx.run(...)` now resolves the function's return value instead of the raw
+`{ result }` envelope. A caller that compensated by reading `.result` must drop that unwrap.
+
+The existing mocks all answered a bare `{ ok: 1 }`, which is exactly why this shipped green; they
+now answer a realistic `{ result: encodeWire(value) }` envelope, plus a bigint/bytes/Date/NaN
+round-trip in both directions.
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01VUuYamsU1YLmAQhtut9PLZ
+
+* fix(runtime): decode a scheduled workflow's args before create({ params })
+
+Review of the wire-bracketing change caught a regression the change itself
+introduced. `ctx.scheduler.runAt` now stores `encodeWire(args)` in one envelope
+that both dispatch targets share, but only one of them decoded it: a function
+target's args are decoded by the shard, while a workflow target never reaches the
+shard — `handleSchedulerDispatch` hands them straight to `create({ params })`.
+
+So `runAt(when, workflows.foo, { total: 5n })` started an instance whose
+`event.payload.total` was `["$lunora.wire$", "bigint", "5"]`. Before the encode
+landed it threw on `JSON.stringify` instead, which is wrong but loud; this turned
+it into a silent corruption, which is worse.
+
+The workflow branch now decodes, so the two targets are symmetric. The docblock on
+the encode named only the shard's decode and now names both, because a reader
+checking whether the round trip closes would have concluded from it that it did.
+
+The regression test drives the workflow branch with a `Date` and a bigint past
+float range and asserts what `create()` receives; it fails against the un-decoded
+version and passes with it.
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01VUuYamsU1YLmAQhtut9PLZ
+
+* fix(runtime): bracket the httpAction scheduler on the same wire as the shard
+
+`ctx.scheduler` on an httpAction context and `@lunora/scheduler`'s
+`createScheduler` write to and read from the SAME SchedulerDO records, but only
+the shard-side one encoded on write and decoded on `list()`/`get()`. So
+`ctx.scheduler.runAt(t, internal.billing.settle, { amount: 1234n })` from a
+webhook threw outright (`JSON.stringify` refuses a bigint), and a record
+scheduled from a shard read back through the httpAction's `get()` as the tagged
+`["$lunora.wire$","bigint","1234"]` tuple while `ctx.db.system.query
+("_scheduled_functions")` on the same record answered `1234n`. Both surfaces now
+encode on write and decode on read.
+
+`get()` also returned the DO's `{ record }` envelope rather than the record, and
+`{}` rather than `null` for an id that matched nothing — both breaking its
+declared `Record<string, unknown> | null` and diverging from
+`createScheduler.get()`. It unwraps now.
+
+The admin proxy behind the studio's scheduled-jobs and dead-letter panels keeps
+forwarding records verbatim, deliberately: it re-serializes with
+`JSON.stringify`, which throws on the very bigint the encode exists to carry, so
+decoding on the way through would turn any such job into a 500. `@lunora/client`
+decodes at the consumer instead (`listScheduledJobs`, `listDeadJobs`, and the
+`subscribeScheduledJobs` live push, which the proxy could never have covered).
+
+Reject a dispatch response body that is not a `{ result }` envelope. `typeof []
+=== "object"`, so a 200 body of `[1,2,3]` — or one with no `result` key — slipped
+the object guard and resolved `decodeWire(undefined)`, i.e. `undefined`, as "the
+function returned nothing". A genuine `undefined` return is emitted as
+`{"result":["$lunora.wire$","undefined"]}` with the key always present, so
+requiring it costs nothing.
+
+Route all four call-envelope producers through one
+`encodeArgsOrThrow(label, path, args)` in `shared/wire-codec.ts`. `encodeWire`
+throws on any non-plain object; three of the four sites dropped the labelled
+error the fourth had, so a bad argument left a bare unattributable `TypeError`
+from `ctx.run` / `ctx.scheduler.runAt` / `pool.enqueue` — useless on a scheduled
+job debugged from a log line.
+* **dispatch,scheduler:** `encodeWire` rejects any non-plain object INCLUDING one with a
+working `toJSON()`, which `JSON.stringify` honoured. So
+`ctx.scheduler.runAfter(60_000, internal.billing.charge, { amount: new
+Decimal("9.99") })` — which serialised before — now throws at schedule time.
+Loud rather than silently wrong; pass a plain value instead.
+
+The same wire-bracketing rationale had been restated five times across three
+files (~25 comment lines against ~15 of code), which is how the scheduler
+docblock came to be wrong without anyone noticing. One canonical note now lives
+at the dispatch runner's encode; the rest point at it.
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01VUuYamsU1YLmAQhtut9PLZ
+
+* fix(workflow): decode a scheduled workflow's params where the handler reads them
+
+Review caught that the earlier fix put the decode on the wrong side of the seam.
+Workflow `params` are JSON-serialised by Cloudflare into durable storage, so
+decoding before `create({ params })` fails creation outright on a `bigint` and
+silently flattens a `Date` back to a string — the wire form was the only shape
+that could survive that hop intact.
+
+The dispatch branch now passes the encoded args through untouched, and
+`createRunContext` decodes at `params`, which is the first point that can hand a
+handler real `bigint`/`Date`/bytes values. `decodeWire` is identity on pure JSON,
+so a directly created or spawned instance is unaffected.
+
+Both sides are pinned. The runtime test asserts the boundary still carries the
+wire form — decoding there is what breaks creation — and the workflow test
+asserts the handler receives the decoded values; it fails against the raw payload.
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01VUuYamsU1YLmAQhtut9PLZ
+* **observability,agent:** `SpanHandle.spanContext()` returns `SpanContextIds`
+(`sampled` alongside the ids); `ctx.trace` accepts an optional fourth
+`SpanIdentity` argument; `WorkerOptions.queue` receives a fourth `TriggerTrace`
+argument, and codegen emits it.
+
+The gates that hid all of this are rewritten to go through the real path: the
+bridge suite drives the real span factory instead of a fake that echoed back
+whatever id it was handed, and the agent suites drive `generateText`/`streamText`
+against a mock model instead of invoking the telemetry hooks by hand.
+
+Not fixed, deliberately: a `ctx.fetch` span still parents to the dispatch rather
+than an enclosing `ctx.trace` (no ambient span stack in the DO profile) — the
+docblock now says so instead of implying otherwise. The Sentry and Braintrust
+model-call spans still end at time-to-first-byte on a streamed turn, because
+their host span must wrap `execute()` to establish the parent context; both
+docblocks now state it and point at the OTLP bridge.
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01VUuYamsU1YLmAQhtut9PLZ
+
+* chore(api): accept the span-identity and trigger-trace surface
+
+The bridge now records under the id it publishes (SpanIdentity), SpanHandle
+reports the propagated sampled bit (SpanContextIds), and a queue consumer accepts
+the trigger's trace (TriggerTrace).
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01VUuYamsU1YLmAQhtut9PLZ
+
+* fix(agent): close every telemetry bridge at the real end of a call
+
+The Sentry and Braintrust bridges wrapped `execute()`, which on a streamed turn
+resolves the instant `doStream` hands the stream back. Both reported every
+streamed generation as a ~1 ms, zero-token, always-OK call, and a stream that
+died mid-way never reached a span at all.
+
+Both now open the host span around `execute()` — still what parents the
+provider's own work — but keep it open past it. Sentry uses `startSpanManual`
+(present on every SDK built on `@sentry/core`, verified against 10.55.0) and ends
+the span from the terminal event; Braintrust parks its `traced` callback on a
+gate the terminal event releases, so the caller still gets `execute()`'s value
+immediately while the span covers the whole generation. Usage is read off the
+SDK's normalized end event, where a LanguageModelV4 provider's nested
+`{ inputTokens: { total } }` has already been flattened.
+
+The lifecycle all three share moves to `telemetry/in-flight-calls.ts`, and with
+it two fixes:
+
+- Aborts and errors now close the call they NAME. Every ai@7 terminal event
+  carries the model call's `callId`, `onAbort` and `onError` included, but the
+  close was indiscriminate — and a bridge built at module scope, which is the
+  documented `defineAgent({ telemetry: { integrations: [...] } })` shape, shares
+  one map across every concurrent run in the isolate. One run's barge-in
+  reported a sibling's live generation as aborted and swallowed its real span.
+- A stream that rejects outright dispatches no telemetry callback at all, so
+  its entry was never removed and pinned the call's prompt for the life of the
+  integration. Entries older than ten minutes are now swept on the next open.
+  The contradictory claim that the map "cannot grow" is gone.
+
+A throwing integration also no longer fails the user's tool. `traceToolExecution`
+runs inside the tool's durable `step.do`, so a host SDK throwing in `executeTool`
+made the step retry a tool that had already run, or report a successful one as
+failed — against that function's own promise that telemetry is never flow
+control. The tool's real outcome is recorded as it happens and always wins.
+
+`SpanIdentity`'s two ids become required: the sole caller always passes both, and
+`identity?:` already expresses "no adapter involved", so a partial object
+type-checked and meant nothing.
+
+The `version_metadata` object unwrap in `readerFromRecord` is keyed to
+`CF_VERSION_METADATA` alone. Applied to any object-valued binding it would export
+the internal `.id` of whatever a future probed key named as a resource attribute.
+
+Every model-call test now drives the real SDK through `generateText`/`streamText`
+rather than invoking the hooks by hand, which is what hid the streaming defect:
+called directly, `execute()` resolves with a finished result and the span looks
+perfect. Each new assertion was confirmed to fail against the pre-fix behaviour.
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01VUuYamsU1YLmAQhtut9PLZ
+
+* fix(agent): release swept calls and stop the wrapper deciding tool outcomes
+
+Two findings from review, both real.
+
+**The abandoned-call sweep dropped the record but stranded the resource.** A
+swept entry was deleted without `onClose`, which is right — a span ending at
+"whenever the next call started" is worse than none. But two bridges carry
+something live in the host SDK: Sentry's `startSpanManual` span ends only when
+someone ends it, and Braintrust's `traced` callback is parked on a gate the
+terminal event releases. Dropping those entries left the span open and the
+callback parked for the life of the isolate — the same leak the sweep exists to
+prevent, one level down.
+
+`createInFlightCalls` takes an `onEvict`, and each bridge releases its own
+resource there without emitting anything. Both new tests fail without it
+("expected undefined to be defined"). Writing the Braintrust one showed the
+abandonment has to be modelled precisely: with an `execute()` that never
+settles, the callback parks on `execute()` rather than on the gate, and nothing
+can release it. The real shape is a stream handed back at first byte that then
+dies — `execute()` resolves, the callback parks on the gate.
+
+**A telemetry wrapper could decide a durable tool outcome.** The ai@7 contract
+hands `executeTool` the tool's `execute` and trusts what it returns. This file
+guarded a wrapper THROW, but not a wrapper that skips `execute` entirely or
+returns a value of its own — so an integration could record a tool that never
+ran, or replace its result, inside the durable `step.do`. That contradicts the
+function's own promise that telemetry is never flow control.
+
+The wrapper's return value and its rejection are now both discarded, and the
+outcome is read from one memoized promise. Memoized rather than re-run: a
+wrapper that starts `execute` without awaiting it leaves no trace by the time it
+returns, and re-running would execute the tool twice. This also deletes the
+`ran`/`failed` bookkeeping — the promise already carries both.
+
+Five new cases; three fail against the previous flow (skip, replace, and the
+un-awaited start), while reject-after-success and the tool's own failure already
+behaved correctly.
+
+Also suppress the secret scanner on a fixture `Bearer admin-token` in
+`trigger-trace.test.ts`, matching how the e2e fixtures do it — `vis secrets`
+reports clean.
+
+464 agent tests, repo `lint:types`, `api:check` (54 snapshots) and `vis secrets`
+all green.
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01VUuYamsU1YLmAQhtut9PLZ
+
+* test(agent): floor the streamed-span assertions on the stream, not wall clock
+
+CI failed with `expected 94 to be greater than 96` on the Sentry streamed-span
+test. The assertion was `spanDuration > wallMs / 2`, but `wallMs` starts before
+the span does — so a runner slow enough to spend ~98ms getting from the timer to
+the first `doStream` call inflates the divisor past the span and the test fails
+on scheduling alone, with nothing wrong.
+
+All three bridge suites carried the same shape. Each now floors on the stream's
+OWN delay budget, which the fixture makes knowable: `streamingModel` waits
+`gapMs` per chunk, so `{ chunks: 3, gapMs: 30 }` is ~90ms regardless of how slow
+the runner is getting there.
+
+The floor still separates what it exists to separate. The defect being guarded is
+a span closed when `execute()` resolves — the instant `doStream` hands the stream
+back — which measured ~1ms. Verified by re-introducing exactly that close: the
+streamed test fails again, along with three others.
+
+464 agent tests pass; `eslint --max-warnings=0` clean (the constant sits above the
+expect group rather than splitting it, which `vitest/padding-around-expect-groups`
+flags).
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01VUuYamsU1YLmAQhtut9PLZ
+
+### Bug Fixes
+
+* **dispatch,scheduler:** wire-bracket ctx.run so it returns the value, not the envelope ([#615](https://github.com/anolilab/lunora/issues/615)) ([404264a](https://github.com/anolilab/lunora/commit/404264a805812b080a8298ff33e10c70e224ca2f))
+* **observability,agent:** make the trace say what actually happened ([#618](https://github.com/anolilab/lunora/issues/618)) ([c07f788](https://github.com/anolilab/lunora/commit/c07f788836fb5724002a80a2031b88a033e304d0))
+
+
+### Dependencies
+
+* **@lunora/bindings:** upgraded to 1.0.0-alpha.52
+* **@lunora/errors:** upgraded to 1.0.0-alpha.33
+* **@lunora/observability:** upgraded to 1.0.0-alpha.59
+* **@lunora/do:** upgraded to 1.0.0-alpha.121
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.58
+* **@lunora/workflow:** upgraded to 1.0.0-alpha.47
+
+## @lunora/runtime [1.0.0-alpha.96](https://github.com/anolilab/lunora/compare/@lunora/runtime@1.0.0-alpha.95...@lunora/runtime@1.0.0-alpha.96) (2026-09-05)
+
+
+### Dependencies
+
+* **@lunora/bindings:** upgraded to 1.0.0-alpha.51
+* **@lunora/observability:** upgraded to 1.0.0-alpha.58
+* **@lunora/platform:** upgraded to 1.0.0-alpha.27
+* **@lunora/do:** upgraded to 1.0.0-alpha.120
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.57
+
+## @lunora/runtime [1.0.0-alpha.95](https://github.com/anolilab/lunora/compare/@lunora/runtime@1.0.0-alpha.94...@lunora/runtime@1.0.0-alpha.95) (2026-09-05)
+
+### Bug Fixes
+
+* **config,runtime:** repair alpha's typecheck, lint and tests after the audit merges ([#614](https://github.com/anolilab/lunora/issues/614)) ([91c89bc](https://github.com/anolilab/lunora/commit/91c89bcd9a86e719b2b946dfddb5d2ac114b065b))
+
+
+### Dependencies
+
+* **@lunora/do:** upgraded to 1.0.0-alpha.119
+
+## @lunora/runtime [1.0.0-alpha.94](https://github.com/anolilab/lunora/compare/@lunora/runtime@1.0.0-alpha.93...@lunora/runtime@1.0.0-alpha.94) (2026-09-05)
+
+### ⚠ BREAKING CHANGES
+
+* **runtime:** `HttpActionCtx` / `HttpActionContext` gain a required `forShard(shardKey)`
+member. Anything constructing one structurally (rather than receiving it from the worker) must
+supply it.
+
+Known ceiling left in place: the SSE `.stream()` pump drives the whole user iterator inside
+`start()` without consulting `controller.desiredSize`, so a generator outrunning its reader
+buffers in worker memory. Cancel is honored, so nothing runs past a disconnect. Documented at the
+site with the upgrade path; the surface is `@experimental`.
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01VUuYamsU1YLmAQhtut9PLZ
+
+* chore(api): accept the HttpRunners and forShard surface
+
+Adding `ctx.forShard(key)` to an HTTP action's context introduces `HttpRunners`
+and widens `HttpActionContext`; the umbrella re-export follows.
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01VUuYamsU1YLmAQhtut9PLZ
+* **ratelimit,auth:** `accessRoles()` and the `@lunora/cloudflare-access/roles` subpath are removed. Use
+`createAccessResolver({ roles })` instead. `AccessRoleMap` now exports from the package root.
+
+Corrects the three places that told a reader the two paths agree: the emit.ts comment claiming
+`composeShapeReadWhere` is "exactly the request-time path", the package docs, and the RLS concept
+page. The golden `_generated/shard.ts` fixture is regenerated for the emitted comment.
+
+Second fix in the same resolver: a platform identity carrying no usable id suppressed the
+configured JWT fallback. `??` falls through on nullish only, and `readPlatformIdentity` returns an
+object for any non-null object result, `{}` included — so a caller presenting a valid
+Cf-Access-Jwt-Assertion resolved anonymous with nothing verified and `onError` never firing. The
+resolver now falls through whenever the platform identity yields no identity, and stays fail-closed
+when neither path does. That trigger was reasoned from the code rather than observed — whether
+Cloudflare ever returns such an identity is unverified — so the fix is deliberately defensive.
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01VUuYamsU1YLmAQhtut9PLZ
+
+* fix(ratelimit): stop a reserve stranding a key and misreporting retry
+
+Three defects on the reserve path, all reachable through the public API and through
+`token-budget.ts`, which clamps an oversized charge to capacity and reserves it.
+
+A fixed window granted exactly one period's `rate` however many periods had elapsed, while the
+rejection path persists nothing. A debt of at least `rate` therefore re-projected against that same
+lone grant on every later call and the key stayed denied forever, told "retry next window" every
+window. The projection now grants one `rate` per elapsed window, the way the token bucket refills
+per elapsed millisecond; the existing capacity cap still bounds the result. The old test reserved 2
+against rate 5 — a debt smaller than `rate`, which is the case that recovers — so it passed
+throughout, and now covers a debt of a full `rate`.
+
+The deny-list was stored verbatim while the incoming key was checked both normalized and raw, under
+a comment claiming either form worked. Only a byte-exact repeat of the stored string matched: with
+a trim+lowercase normalizer, `denyList: ["Abuse@Example.com"]` admitted a request keyed
+`abuse@example.com` that consumed from the same storage bucket, so a banned caller shed the ban by
+lower-casing their own email. Entries are now stored in both forms at construction.
+
+A sliding-window reserve derived its `retryAfter` from the pre-reserve count while persisting
+`currentCount + count`, so the time it reported was still denied when it arrived and the caller
+burned a rejected attempt — a re-queued durable write wakes on that hint verbatim. It is now
+derived from the count the call actually stores. The old assertion pinned 1200 under the title
+"reports when the pressure clears"; the true clear time is 1334, and the test now re-evaluates at
+the reported time to prove it is honoured.
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01VUuYamsU1YLmAQhtut9PLZ
+
+* fix(auth): trust cf-connecting-ip only behind Cloudflare
+
+`resolveIp` in the audit hooks returned `cf-connecting-ip` before consulting `trustProxyHeaders`,
+though that option's own docblock promises the opposite: "Defaults to false: off Cloudflare, with
+no trusted proxy configured, the audit record's ip is omitted rather than populated from a
+spoofable header."
+
+Off Cloudflare nothing overwrites that header, so an attacker setting it per request owned the `ip`
+on every sign-in, password-reset and mfa-disable row they generated — rows Studio surfaces through
+`getAuthAuditLog`. Forensic impact only: nothing enforces on the audit ip.
+
+It now applies the same `onCloudflareEdge()` gate that `create-auth.ts`'s
+`defaultIpAddressHeaders` already applies, so this package's two client-IP resolvers cannot
+disagree about who a request came from. `onCloudflareEdge` moves from a file-private const to a
+named export of `create-auth.ts`; it is not re-exported from the package index, so the public API
+is unchanged.
+
+The existing cases asserting `cf-connecting-ip` did not say which runtime they ran on and passed
+under Node's `navigator.userAgent`; they now stub the Cloudflare one explicitly, alongside two new
+cases for the off-Cloudflare behaviour.
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01VUuYamsU1YLmAQhtut9PLZ
+
+* fix(runtime): key IP-less REST callers and 403 a deny-list hit
+
+`createRestRateLimit` charged its limit with no key at all when `cf-connecting-ip` was absent,
+putting every such caller in that limit's UNKEYED bucket — the same one a deliberately-global
+charge of the name uses — so one anonymous caller could drain an app-wide limit. This is the
+caller-pooling `@lunora/ratelimit`'s own middleware refuses outright. They now share a named
+`no-trusted-ip` bucket, which keeps the blast radius to the IP-less callers themselves and makes
+the pooling visible in storage; pass `options.key` to key them properly.
+
+A deny-list hit carries `retryAfter: Infinity` and was mapped to 429 with the header
+`Retry-After: Infinity`, inviting a client to keep retrying a denial that never clears. It now
+answers 403 FORBIDDEN with no Retry-After, matching what both `@lunora/ratelimit` entry points
+produce. `RateLimiterLike` gains the optional `reason` the limiter already returns.
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01VUuYamsU1YLmAQhtut9PLZ
+
+### Bug Fixes
+
+* **ratelimit,auth:** unstick a bricked limiter and close the deny-list bypass ([#606](https://github.com/anolilab/lunora/issues/606)) ([fd7d6ad](https://github.com/anolilab/lunora/commit/fd7d6ad78e0b02d76c8e9a4f6807c4b95dda88ac))
+* **runtime:** route an HTTP action's ctx.run* through the shared shard dispatcher ([#610](https://github.com/anolilab/lunora/issues/610)) ([9726036](https://github.com/anolilab/lunora/commit/97260367526635da0e9bac952cbae9ac76f7d21f))
+* **scheduler,workflow:** give a scheduled workflow an idempotency key ([#605](https://github.com/anolilab/lunora/issues/605)) ([0f3afb4](https://github.com/anolilab/lunora/commit/0f3afb44a005861c5b06b4be0cca4576ec0ce7e8))
+
+
+### Dependencies
+
+* **@lunora/bindings:** upgraded to 1.0.0-alpha.50
+* **@lunora/errors:** upgraded to 1.0.0-alpha.32
+* **@lunora/observability:** upgraded to 1.0.0-alpha.57
+* **@lunora/do:** upgraded to 1.0.0-alpha.118
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.56
+* **@lunora/workflow:** upgraded to 1.0.0-alpha.46
+
+## @lunora/runtime [1.0.0-alpha.93](https://github.com/anolilab/lunora/compare/@lunora/runtime@1.0.0-alpha.92...@lunora/runtime@1.0.0-alpha.93) (2026-09-05)
+
+### Features
+
+* **auth:** put sign-up invitations on the admin plane and in the studio ([#598](https://github.com/anolilab/lunora/issues/598)) ([4e5a38c](https://github.com/anolilab/lunora/commit/4e5a38cb48e5122c682c96dc1bc1c889d1604603)), closes [#602](https://github.com/anolilab/lunora/issues/602)
+
+## @lunora/runtime [1.0.0-alpha.92](https://github.com/anolilab/lunora/compare/@lunora/runtime@1.0.0-alpha.91...@lunora/runtime@1.0.0-alpha.92) (2026-09-04)
+
+
+### Dependencies
+
+* **@lunora/bindings:** upgraded to 1.0.0-alpha.49
+* **@lunora/workflow:** upgraded to 1.0.0-alpha.45
+
+## @lunora/runtime [1.0.0-alpha.91](https://github.com/anolilab/lunora/compare/@lunora/runtime@1.0.0-alpha.90...@lunora/runtime@1.0.0-alpha.91) (2026-09-04)
+
+### ⚠ BREAKING CHANGES
+
+* `MaterializerReducer` returns `S | typeof UNHANDLED` and `Materializer.apply`
+returns a boolean. A reducer that signalled "not my event type" by returning the input state must
+return `UNHANDLED`; returning the state now means "handled, nothing to do". `EventLogDO`'s
+`GET /state` (and `EventLogDOClient.getState`) answers 413 past 1000 entries.
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01VUuYamsU1YLmAQhtut9PLZ
+
+* fix(codegen): withhold the vector wiring from the shard on a host with no vector store
+
+The platform gate's `vectorStore` verdict reached `emitServer` and `emitApp` and not `emitShard`,
+which recomputed the flag from `schema.vectorIndexes` instead. Running codegen for a target rating
+`vectorStore: "unsupported"` produced a `generated.shard` byte-identical to the Cloudflare one — the
+`@lunora/bindings/vectors` imports, the `createVectorSyncHook` write hook and `vectors` on the
+runtime ctx all emitted — while the type surface was correctly withheld. `emitShard` now takes
+`hasVectors` like its siblings, and the shard-key namespace fragment (with the `ROOT_SHARD_NAME`
+import only it reads) is gated with it. `assertRequiredPackages` was a fourth consumer of the raw
+count and hard-failed the build unless the app installed `@lunora/bindings` for an import the
+emitted code no longer contains; it now takes the same verdict.
+
+The regression test asserted one of the three emitters, which is how this shipped; it now asserts
+all three, plus the required-package check and the sharded fragment.
+
+Also closed, all the same class of a check that skips the caller it exists for:
+
+- A `defineSchemaExtension` key was never validated on either path, and the package-runtime path
+  validated no table names at all — so `defineSchemaExtension("rate-limit", …)` died in emit with an
+  unlocated `INTERNAL` naming `rate-limit_buckets`, a table the user never typed. Both are checked
+  now at the single point both paths namespace through, with a `file:line:column` diagnostic.
+- `assertNoNamespaceCollisions` was fed functions and mutators only, so two `.stream()` route files
+  sanitizing to one namespace emitted a duplicate key into both the `HttpStreamsRef` interface
+  (TS2300) and its object literal (TS1117) — the exact failure the assert exists to name. It now
+  runs once per emitted namespace space.
+- Two `NODE_CAPABILITIES` notes asserted the opposite of the code they describe, in the matrix
+  codegen trusts to decide whether an app can target a host: `objectStorage` claimed the bucket
+  folds `A`/`a` into one object where the code percent-escapes `A-Z` to prevent exactly that, and
+  `workflows` listed "terminate is not a barrier" as a gap where the host has a barrier, a guarded
+  store, and a test named for it.
+- `createNodePlatform` bound nothing for `globalTables`, the fourth `emulated`, gate-bearing
+  capability beside queues / workflows / object storage — so an app with one `.global()` table
+  passed codegen green and failed at the first global read with nothing upstream having warned. It
+  composes `createNodeGlobalStore` from a `globalTablesPath` now, on the same declare-or-omit rule
+  the bucket follows.
+- The reference host supplied the one `SchedulerHost.cron` shape the contract forbids (declared and
+  silently inert), and the TCK leg that would catch it skipped itself because it also keyed on
+  `cronTicks`, which such a host never has.
+* the host conformance suite now fails a host that declares `SchedulerHost.cron`
+without a `cronTicks` observer instead of skipping the leg; a host with no dynamic cron must omit
+the method, as the contract already required. `createReferenceHost` no longer implements `cron`.
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01VUuYamsU1YLmAQhtut9PLZ
+
+* fix(shard-engine): stop silent data loss on CDC replay, relay pokes and durable streams
+
+Three defects on the data plane, each one a place where a write, a delivery or a
+transcript went missing with no error anywhere.
+
+CDC replay's `replace` fallback carried no table scope, so it fell back to
+`locateRowById(id, undefined)` — a probe over every non-global table that rests
+on ids being unique across tables. That premise is false for `.source()` tables:
+`liftSourceId` sets `_id` to the upstream natural primary key, so two sourced
+tables with `id serial` both own a row whose id is `"1"`, and an orders update
+was written into the users row. This is the normal update path, not a corner —
+the incremental tick emits `op: "insert"` for a changed existing row, the PK
+collision maps to a ConflictError, and the catch takes the unscoped replace. The
+delete and insert siblings in the same function already carried the table.
+
+A relay's per-socket cohort memos lived only in an instance WeakMap while
+`ShardDO` builds a fresh `RelayMember` on every wake and the hibernatable sockets
+survive. One eviction — the steady state, since the keepalive answers pings from
+the hibernation auto-response without waking the DO — emptied them, every socket
+was skipped, and the relay still answered 204, so the owner advanced the cohort
+frontier and no later poke could reopen the range. They are now durable in
+`__lunora_relay_memos`, hydrated on a cold miss and dropped through the same
+`releaseRelayShapes` hook that retires the owner's proxy registrations, the way
+`__shape_poke_cursor` and `__lunora_relay_shapes` already are. Deliveries also
+gate on `trySendFrame`'s boolean instead of discarding it: a memo advanced past
+frames that never left froze that shape the same way, and over-counted the
+fan-out metric.
+
+A durable-stream run whose row a TTL sweep took mid-production orphaned every
+chunk it appended afterwards — the sweep's chunk delete is scoped by a subselect
+over the run table, so no future sweep could reach them — and because
+`appendStreamChunk` is `INSERT OR IGNORE`, the next run under that key silently
+inherited them at the colliding seqs. The terminal now reclaims the chunks when
+its run row is gone, and a fresh claim clears the key before inserting. Sweeping
+on every attach makes the mid-run window easier to hit, not harder.
+* a relay DO's `RelayHost.sql()` is now load-bearing rather than
+owner-only; the engine conformance suite drives it on the host under test, so a
+host whose SQL cannot carry the memos fails the suite instead of silently
+freezing its subscribers after the first wake.
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01VUuYamsU1YLmAQhtut9PLZ
+
+* fix(shard-engine)!: report an undelivered relay poke instead of pinning the memo
+
+The relay's delivery gate held a socket's cohort memo back when `trySendFrame`
+returned false, and answered 204 regardless. That inverts the repair it was
+written for. `buildShapePoke` opens each range where the last one closed, so
+consecutive pokes are `(A, B]` then `(B, C]` — a memo held at `A` is BEHIND the
+next poke's base, `pokeAppliesToMemo` refuses it, and refuses every poke after
+it. That is exactly the permanent silent freeze that rule's own docblock
+describes, and the relay cannot self-heal out of it: the owner rewinds only on a
+non-ok response, and the control channel returned `noContent()` for every poke.
+
+The memo now advances for every socket the poke was applied to, the fan-out
+metric counts only the sockets that took every frame, and a poke where those two
+differ answers 503 with the counts — which is the signal `rewindShapeCursor`
+already acts on, the same way it does for a POST that never landed. The frame
+loop is `.map` before `.every`, matching the owner's local path: a short-circuit
+emits a `pokeStart` with no `pokeEnd` and strands the client's buffer.
+
+The durable memos move to `ctx-db-relay-memos.ts`, alongside their two siblings,
+and hydrate ONCE PER WAKE into a `connectionId`-keyed map rather than lazily per
+socket. The per-socket form issued one `WHERE connection_id = ?` per socket in a
+single poke handler, on a tier that exists only past the promotion threshold and
+whose evicted wake is the steady state. A targeted poke now filters by
+`targetConnectionId` before hydrating anything at all.
+
+`__lunora_relay_memos` rows were reclaimed only through `releaseRelayShapes`,
+which runs from `webSocketClose` — never dispatched for a server-initiated close,
+so an expired-credential drop leaked every row it held. A relay clears the table
+when it loses its last socket, the one moment every remaining row is provably
+dead.
+
+Also: `ctx-db-relay-shapes`'s cost docblock claimed the relayed path was strictly
+cheaper per subscriber, which stopped being true the moment a per-subscriber memo
+row landed beside the cohort row; it now describes what the code does and records
+the per-cohort question as open. `durable-stream`'s three copies of the chunk
+delete are one `deleteStreamChunks`.
+* `RelayLink.onShapePoke` returns `RelayPokeDelivery`
+(`{ delivered, matched }`) rather than a bare delivered count, and a relay's
+`relay_shape_poke` response is 503 rather than 204 when a matched socket did not
+take the poke.
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01VUuYamsU1YLmAQhtut9PLZ
+
+* fix(sql-store)!: decode untyped bigint keys and key mirror rows by content
+
+`sqliteEncode` keys off the runtime JS type, so a bigint written to a `v.any()` /
+`v.union()` / `v.from()` column is stored as the same order-preserving key a declared
+`v.bigint()` column gets — but `sqliteDecode` returned it verbatim, so the column read back
+as 40 characters of padding. The min/max companion inherited that: `mayHoldBigintKey`
+matched those kinds and folded them in JS, but the fold coerced the padded string to
+`undefined`, so deleting a group's stored extreme left the companion on a stale value. Decode
+through `decodeBigintSqlKey` instead, which fixes the round-trip and the fold in one place.
+
+That test is by SHAPE — exactly 40 characters, `"0"` or `"1"` then 39 digits — so a stored
+*string* of that shape reads back as a bigint. Preferred to the alternative, which is not "no
+ambiguity" but guaranteed corruption of every bigint in every untyped column, on every read.
+The unambiguous wire marker cannot carry it instead: `sqliteEncode` returns at its `bigint`
+branch first, takes no column kind, and doubles as `serializeColumnValue`, so a second storage
+form would never match a WHERE binding built from the first. The collision is pinned by a test.
+
+The JS fold reads every surviving row of a group, and `mayHoldBigintKey` matches columns holding
+no bigint at all (`v.union(v.number(), v.null())`), so one extreme-removing write against a
+200k-row group put 200k rows in the isolate. It now pages by keyset on `id`, the shape
+`ensureRankBackfilled` already uses.
+* `deriveInsertId` keys an id-less insert by the row's CONTENT rather than by
+the diff that carried it. `subscribeToMirror` re-emits an un-keyed row (an aggregate, or a
+projection dropping the pk) on every frame and stamps each frame with `Date.now()`, so the old
+digest minted a fresh key per frame: a shard writing once a second grew the mirror by ~86,400
+rows a day, nothing ever removed them, and every read returned the whole history. Two id-less
+inserts carrying identical data now collapse onto one row — nothing downstream can tell them
+apart, so that is the only key that stays stable across replays. Derived ids change value.
+
+Also: `applyDiffInto` accepts a `bigint` primary key, matching the SQLite path that already
+did — the two disagreed on where an int64-keyed row lands. And the `unknownEventHandling`
+docblock now says it reacts only to a reducer explicitly returning `UNHANDLED`, since one that
+returns `state` for an unrecognised type makes `"fail"`/`"warn"` inert.
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01VUuYamsU1YLmAQhtut9PLZ
+
+* fix(codegen): gate the studio's vector page on the platform verdict
+
+`buildStudioFeatures` was fed the raw `.vectorize()` count and the raw
+`@lunora/bindings` dependency, so a `target: "node"` build emitted
+`studioFeatures.vectors: true` into the generated shard and the studio rendered
+its Vector browser nav entry — advertising a binding the same build had just
+withheld `ctx.vectors` and the whole Vectorize wiring for. The verdict now AND's
+the entire expression, so both arms fall together; it is the one feature a signal
+can force off, because failing open against a host with no vector binding points
+the nav at what was withheld.
+
+`hasVectors` also meant two different things across the three emitters that take
+it: `emitServer` and `emitShard` took the platform verdict and AND'd the schema
+count internally, while `emitApp` took the CONJUNCTION under the same prop name,
+with optional-vs-required as the only tell. All three now take the raw verdict
+and AND internally — `emitApp` gets the declaration as `vectorIndexCount` — so
+the "declared but gated" decision is made in one place per emitter instead of
+per call site. `platformGate.signals.vectorStore !== false` is named once per
+call-site file rather than re-derived four times.
+
+Also in this change:
+
+- The shard emitter's docblock still said the `@lunora/bindings/vectors` import
+  hangs on the schema alone; it is conditioned on the platform verdict too.
+- `NodePlatform.globalTables` claimed to close the hole where a store nobody
+  bound fails at the first global read. It does not: `.global()` reaches its
+  backend only through `createShardCtxDb({ globalDb })`, `globalDb` comes only
+  from the generated shard's `d1`/`hyperdriveGlobal` thunks, and this
+  composition root builds no shard DO. Softened to what it is — a building block
+  — with the hop a caller has to make written down. Wiring it end to end was the
+  alternative and is out of reach here: nothing in this package constructs a
+  generated shard to route a global read through.
+- The `objectStorage` capability note claimed a lowercase key maps to a
+  byte-identical filename unconditionally; `%`, `:` and a trailing `.`/space are
+  escaped too. Corrected in the matrix and its verbatim docs copy.
+- `EXTENSION_KEY_IDENTIFIER_RE` was a second copy of `TABLE_NAME_IDENTIFIER_RE`
+  in a module that already imports from its home; the constant is exported and
+  reused.
+- `assertTableNameAllowed` ran twice on the AST path, which throws at the precise
+  name node first, so the coarse second gate only ever fired for the
+  package-runtime path. Moved to that path, where the check was actually missing.
+- `RequiredPackageOptions` was a one-field options object with one caller and no
+  importer; it is a positional parameter now.
+- Four copies of the same `emulated` ⇒ codegen-emits-the-surface argument in
+  `node-platform.ts` are one copy, on the composition comment.
+* `EmitAppOptions.hasVectors` is optional and now means the
+platform's `vectorStore` verdict, not "emit `.vectors()`" — pass the schema's
+index count as the new `vectorIndexCount` alongside it. `assertRequiredPackages`
+and `requiredPackagesFor` take the verdict as a positional `hasVectors` argument
+and the `RequiredPackageOptions` type is gone.
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01VUuYamsU1YLmAQhtut9PLZ
+
+* fix(payment): stop losing refunds, retried captures and chargeback amounts
+
+Four money-path defects on the webhook ledger, each of which left the store holding a number
+that did not match the money the provider had actually moved.
+
+**Creem refunds never reached the ledger.** `refund.created` keyed the session on
+`transaction.id`, but every Creem payment row is written under the CHECKOUT id
+(`checkout.completed` stores `CheckoutEntity.id`, and `getPaymentStatus` retrieves the same id
+via `checkouts.retrieve`). `RefundEntity.transaction` is required while `checkout` is optional,
+so the transaction read always won and the checkout fallback was dead code. Every dashboard
+refund therefore hit a nonexistent row: orphaned, 500, one retry, then silently unhandled, with
+the row left `captured` and `refundedAmount = 0` forever. Creem's `refundPayment` throws, so
+this webhook is the only path a Creem refund has. The existing regression test pinned the bug
+(it asserted `sessionId === "tx_1"` from a fixture with no `checkout`); it now asserts the
+checkout id from a fixture carrying both fields, plus a second test that pins the refund key
+against the key `checkout.completed` writes.
+
+**A payment that failed and then succeeded was dropped.** `failed` was modelled as terminal,
+but a declined Stripe PaymentIntent returns to `requires_payment_method` and the same `pi_` can
+be confirmed again and reach `succeeded` (or `requires_capture` on a manual-capture intent).
+The confirming `payment_intent.succeeded` was rejected as `illegal_transition` with a 200, so
+Stripe stopped retrying while the money was captured and the row read `failed` with
+`capturedAmount = 0`. `failed` now permits exactly the transitions the provider performs —
+`capture`, `authorize`, and a `fail` self-loop for a second decline on the same intent — while
+refunds stay illegal, since nothing was captured to reverse. `failed` accordingly leaves
+`PAYMENT_TERMINAL_STATES`, so a reconcile sweep over non-terminal rows now covers it.
+
+**A lost Dodo chargeback reversed zero.** `GetDispute.amount` is a string, so `readNumber`
+yielded `undefined` and a lost dispute recorded `0` while moving the row to
+`partially_refunded`. The fixture used a number the real API never sends, so the gate asserted
+nothing. A whole-number string is now read as minor units, matching every money field Dodo does
+document; a non-integer string is refused rather than scaled, because the dispute amount's unit
+is undocumented and choosing between "25.00" meaning 25 and meaning 2500 is a 100x error on a
+reversal — the action then carries no amount, which records a full reversal with the money
+untouched instead of a guessed figure. No other numeric read in that adapter reads a field the
+SDK types as a string.
+
+**Every provider guide taught the webhook wiring the overview forbids.** All five pages wired
+the route with `Response.json(await ctx.runAction(...))`, which collapses the deliberate 500 on
+an orphaned event to a 200 and makes the whole orphan/one-retry mechanism inert for anyone who
+copies a provider page. They now use `webhookResponse`, and a new test asserts no docs page
+regresses to the hand-built response.
+
+Also corrects the `paymentsFromContext` comment that claimed `??` normalises an empty-string
+identity to `undefined`; it does not, and the invariant rests on the authorizer's `trim()`
+clause, which the comment now says so nobody removes it.
+* `PAYMENT_TERMINAL_STATES` no longer contains `failed`, and the payment FSM
+accepts `capture`, `authorize` and `fail` out of `failed`. A caller sweeping non-terminal rows
+will now include failed payments, which is the point: they may have succeeded on a retry.
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01VUuYamsU1YLmAQhtut9PLZ
+
+* test(codegen): stop pinning the heaviest suite below the shared timeout
+
+Every full `vis run test:coverage` sweep reported one or two
+`Error: Test timed out in 10000ms` from `codegen:test:coverage` with zero
+assertion failures, varying which specs lost the race. Run alone the project
+passed 1674/1674. That was written off as sweep contention five sweeps running,
+which made a real codegen failure indistinguishable from the noise.
+
+It was not generic contention. `getVitestConfig` stopped keying its timeouts on
+`process.env.CI` and settled on a flat 30s, because `vis` fans the suite across
+a developer's machine while CI gets a dedicated runner — local is the MORE
+contended environment and the ternary gave it the shorter fuse. Two packages
+kept hand-rolled copies of the old idiom and were missed. codegen's read
+`CI ? 60_000 : 10_000`, so the intent was double headroom but the effect was
+that the single heaviest suite in the repo ran at a THIRD of the shared ceiling
+— the one project pinned below the default.
+
+Measured, the 10s ceiling was not margin at all. Nearly every codegen spec
+builds a fresh ts-morph `Project`; constructing one costs ~1ms, but the first
+type-checker query against it builds a TypeScript program and parses
+`lib.d.ts` at 390-710ms, paid again per Project because nothing is shared.
+
+    codegen alone, coverage      20 specs >5s, slowest 10,625ms -> FAILED
+    sweep-shaped (slots=5+load)  13 specs >5s, slowest  9,459ms -> 5% margin
+
+Both configs now use a flat timeout. The specs cannot be made cheaper by
+sharing a Project: they overwrite the same fixture paths and assert on which
+declarations are visible, so reuse would leak one case's types into the next.
+Concurrency is already handled — codegen inherits the `VIS_TASK_SLOTS` worker
+cap from the shared config; only the timeout half of that fix was missing. No
+assertion changed.
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01VUuYamsU1YLmAQhtut9PLZ
+
+* fix(advisor): stop the KV IDOR lint failing builds on internal procedures
+
+`kv_unscoped_user_key_idor` is the third arg-derived sink at ERROR, and the only one without the
+`internal` downgrade its two siblings carry. ERROR is the build-failing tier (`advisory-gate`
+defaults `strictAdvisories` on in CI), so an `internalMutation` doing `ctx.kv.put(args.key, …)`
+aborted `lunora codegen` / `lunora deploy` over "any caller can read/overwrite/delete another user's
+entry" — false by construction for a procedure no caller can reach. The evidence was missing too:
+`run-codegen` handed the resolved function table to the owner-field and storage-key discovers and
+not to the KV one, so `AdvisorKvKeyAccess` had no visibility to branch on.
+* `AdvisorKvKeyAccess` and `KvKeyAccessIR` gain an optional `visibility`, and
+`discoverKvKeyAccesses` takes the function table as a third argument (defaulted, matching its two
+siblings). Findings for `internal` procedures now emit at INFO/INTERNAL, and every finding's
+metadata carries `visibility`.
+
+Also in the advisor:
+
+- `workflow_unused` guarded on the DECLARATION array and defaulted the usage array, so `workflows`
+  without `workflowCalls` reported every declared workflow as never started — a verdict about call
+  sites nobody supplied. It now requires both, which is what `geo_index_unused`'s comment already
+  claimed it did.
+- `parseAdvisorMap` validated every field `compareToBaseline` dereferences except `checks`, which
+  `checksWorsened` calls `.map` on. A row of `checks: {}` survives `?? []` and threw a TypeError
+  inside the CI gate — the merge-conflicted-artifact case the docblock says it defends against.
+- Column masking was documented two opposite ways in one package: the relation-load evidence
+  modules said masking does not descend into `with` hops, while the lint implements (and the runtime
+  does) the opposite — the loader applies the READING procedure's policy at every depth. Corrected
+  in all three places.
+- The docs advertised a `Lint.weight` override that no interface declares and nothing reads;
+  dropped, along with the `weightOf` seam in `attributeFindings` that existed only for it. The docs
+  also claimed `parseAdvisorMap` rejects an older-version baseline, which `baseline.ts` deliberately
+  does not.
+
+Four gates asserted nothing for the shape production emits, all now covered:
+
+- `fan_out_breadth` was only ever exercised with a `group` set, yet the runtime's `ShardTrafficEntry`
+  has no such field — the ungrouped deployment-wide prose and cacheKey every real run produces were
+  asserted nowhere. Same for `hot_shard`'s root-shard label (`shardKey: ""`).
+- `relation_references_unknown_field`'s `many`-side column swap — its only non-trivial logic — had
+  three fixtures, all `r.one`. Dropping the swap raises a false ERROR on every to-many relation.
+- `allow_unauthenticated_shard_access_enabled` had no fixture for the `lunora()` callee, which per
+  its own docblock is the only way a default-Vite app can set the flag.
+- `circular_fk`'s Johnson unblock cascade had no fixture; without it a real cycle is silently
+  dropped while all ten existing tests stay green. The MAX_CYCLES cap was untested too, and the
+  rotation the docblock calls load-bearing genuinely is — the search order is locale-collated while
+  the rotation compares by codepoint, and they disagree on mixed-case names.
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01VUuYamsU1YLmAQhtut9PLZ
+
+* security(do)!: close the socket-plane gaps in the stream cap, expiry drop and admin gate
+
+Three defects on the WebSocket path, each one a control the code claims to enforce and does not.
+
+`MAX_STREAMS_PER_SOCKET` was defeated by re-sending one stream id. The cap reads `cancellers.size`
+and `id` comes straight off the client frame, so N `stream` frames sharing an id all passed the cap
+and each started its own pump under a single map entry. The overwritten `AbortController` became
+unreachable (neither `unsubscribe` nor `webSocketClose` could abort it) and whichever pump finished
+first deleted the entry its siblings were still cancelled through. A duplicate id is now refused
+with the new `STREAM_ID_IN_USE` code. The cap itself was asserted by no test at all; it is now
+pinned, together with the duplicate-id case.
+
+The credential-expiry drop ran on four of five outbound socket paths. Whisper fan-out skipped it,
+and on the canonical whisper workload — presence, cursors, typing indicators — none of the other
+four ever fires: no SQLite write means no refresh flush, no shape poke and no global poll, and a
+passive receiver sends nothing inbound. A lapsed socket kept receiving every whisper on its joined
+topics, including the sender's userId, for its whole life. The same gap existed on three further
+outbound paths found by sweeping every send site: the legacy `broadcastDelta` fan-out, and both
+stream pumps, where the inbound check ran once on the frame that started a run that can outlive the
+credential by hours. All four now drop the socket.
+
+An admin socket was never re-authorized. `refreshSubscriptions` recomputed `isAdmin` from the
+function path alone, two lines below an `isPaidFunction` re-check that exists precisely because the
+registration-time gate can no longer see a later change. Rotating or clearing `LUNORA_ADMIN_TOKEN`
+closed the HTTP admin plane instantly and closed nothing here: the 60-second sub-token bounded only
+how long an attacker had to OPEN a socket that then served `runSql`, `readTablePage` and `getLogs`
+output indefinitely, and `isSocketExpired` cannot help because an admin socket carries no identity
+expiry. The upgrade now stamps an HMAC fingerprint of the authorizing token on the attachment, and
+both the subscribe gate and the refresh path re-derive it from `env` and compare exactly, so a
+rotation revokes the live socket. Fails closed on an unset token, an unstamped attachment, or a
+mismatch.
+* `SocketAttachment` gains `adminBinding`, and an admin socket without one is
+refused. Attachments minted before this change lose their admin subscriptions at the next flush;
+clients reconnect and re-upgrade. `ERROR_CATALOG` gains `STREAM_ID_IN_USE` (409).
+
+Also corrects two comments that asserted properties the adjacent code does not provide:
+`withRequestIdentity` claimed a single caller and used that to argue it is race-free, but
+`dispatchLifecycle` is a second caller reached from `webSocketClose`; and
+`x-lunora-shard-binding` was documented as riding every forwarded request when the owner `/rpc`
+path never sends it.
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01VUuYamsU1YLmAQhtut9PLZ
+
+* fix(studio): stop reporting verdicts for checks that never ran
+
+Six defects where a panel answered confidently about work the server never did, plus the two
+gates that were sitting on the worst of them.
+
+Permissions playground: the probe dispatched `runAs` with whatever was in "Run as (userId)",
+including nothing. The server rejects a blank `userId` with a BAD_REQUEST before dispatching,
+and the probe's catch-all painted every throw as a red **Denied** — a security-diagnostic tool
+answering DENY for a call that was never made, invited by the field's own "Leave empty to run
+as admin" placeholder. The guard now lives in the shared probe (the function runner and the CLI
+already had it at their own dispatch sites) and refuses with a neutral "Not run" outcome; the
+placeholder says the field is required. The happy-path test clicked Run with the field empty
+and passed only because the mock answered `runAs` unconditionally — the mock now models the
+server's own argument validation.
+
+Storage integrity check: past 10,000 bucket keys the check deliberately skips the RPC, and the
+failure path bails the same way; both set `references = []`, which the panel renders as "No
+dangling references. Every record's file reference points at an object that exists in the
+bucket." The truncation warning written for exactly that case was nested inside the
+`length > 0` branch, so it could never appear there. A check with no verdict now reports none
+(`undefined`), the notice renders independently, and the all-clear needs a completed scan. A
+bucket of exactly the cap that enumerated to its end is no longer called truncated.
+
+KV browser: clicking Filter cleared the key list but only re-keyed the load effect when the
+prefix changed, so a no-op Filter — including the very first click — blanked the list for the
+rest of the session. The action bumps the reload nonce.
+
+Studio shell: the login gate opens on the raw token while the client was built from the
+debounced one, so every panel's first admin read after a login ran on a credential-less client
+for 300 ms. The mirror now snaps on the empty/non-empty transition; editing an existing token
+stays debounced.
+
+`useAdminSpec`: the "fetcher must be stable" contract was violated at both call sites, and
+because `classify` mints a fresh object every settled fetch re-rendered and refetched. Under
+vitest the loop is unbounded (a test asserting one fetch times out); in the build only React
+Compiler's silent bail held it. The effect reads both callbacks through effect events, so it is
+keyed on `inlineSpec` alone and a caller cannot get it wrong.
+
+Bulk drain: `written` was assigned only from the resolved result, so a failed delete/patch
+always reported "at least 0 rows were already deleted" no matter how many batches had committed.
+The count is accumulated at the transport, where a batch is on disk the moment its call
+resolves.
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01VUuYamsU1YLmAQhtut9PLZ
+
+* fix(client): hold, never destroy, an offline write of unknown identity
+
+The built-in offline queue purged the queuing user's own durable writes on every
+reload. `passesReplayIdentityGate` had no branch for "nobody signed in yet": the
+constructor hydrates the queue and opens a socket itself, the socket's `open`
+flushes with no auth gating, and the app's session resolve lands a tick later —
+so a write stamped `subj:u1` met a `null` current identity, was rejected
+`OFFLINE_IDENTITY_CHANGED` and unpersisted. Irreversible.
+
+The client already owned the rule: `replayIdentityVerdict` returns `"unknown"`
+for exactly that state and its docblock says dropping there destroys the write.
+The outbox path honoured it; the queue path — the default for the standalone
+client — never did. Both now route through the one verdict, which grew a third
+outcome: hold (stay queued and persisted, stamp intact) instead of a boolean.
+`rejectQueuedForIdentityChange` gets the same per-item treatment, so signing in
+from signed-out no longer drains the signing-in user's own restored writes, and
+no longer wipes the whole durable read cache on every cold boot.
+
+The sticky-`subject` machinery that keeps a token refresh from reading as a user
+switch was unreachable in production: every shipped adapter calls
+`setAuthToken(token)` with no subject, and `useAuth`'s `setToken` gave apps no
+way to pass one. `getCurrentUser` now establishes it from the resolved user —
+the one call every adapter's identity store already makes — so a refresh keeps
+the identity, the queue and the read cache. A subject carried across a token
+change is unconfirmed until the next session resolve attributes the NEW
+credential, and every replay verdict holds for that window: the client cannot
+yet tell a refresh from an account switch, and must not replay one user's writes
+under the other's token.
+
+Also: re-stamp `ShardConnection.identity` alongside the queue and watermarks, or
+every read cached after a late subject resolve is filed under a fingerprint the
+next session's identity gate rejects; bound `clientWatermarks` by identity;
+open sockets for queued-write shards when a `crossTabSync` tab self-promotes,
+which a write-only shard's restored writes otherwise never got.
+* clearing the auth token now clears an established subject. A
+credential-less subject would let the next sign-in inherit the previous user's
+identity, queue and read cache.
+
+Two tests asserted the destroyed-write behaviour with a signed-out fixture
+titled "a different identity"; both are rewritten to hold, with separate cases
+for a genuinely different identity that still drops.
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01VUuYamsU1YLmAQhtut9PLZ
+
+* security(server): close the policy gates that failed open on the request edge
+
+`mask()`'s `bypass` was the one policy hook evaluated by TRUTHINESS, and it failed
+open: a `bypass` returning a claim rather than a decision (`({ auth }) =>
+auth.identity?.role`, the `.can(...)` forgotten) skipped the whole mask for every
+caller whose claim was merely present, serving `ssn` / `email` / `hashedPassword`
+raw with no error and nothing in the logs. Narrowed to `=== true`, matching every
+sibling gate. No test covered it; one now returns a truthy non-boolean and asserts
+the column stays masked.
+
+`storageRules()` rebuilt `ctx.storage` as an allowlist literal and dropped
+`deleteAfterCommit`, which the generated ctx installs on every dispatch that can
+host a mutation handler — so a guarded mutation threw a bare `TypeError` on a
+method its own type promises. It is now a guarded method, gated as a `delete` at
+ENQUEUE time (the queue replays `delete(key)` after the transaction commits, past
+every wrapper, so the enqueue is the only point a rule can see the key).
+
+`ctx.db.system` reached the same R2 adapter `storageRules` fences, ungated: a query
+under a `read` prefix rule could still enumerate key/size/sha256 for every object
+in the bucket, and fetch any one by key. Bytes were gated; keys and hashes were
+not. The middleware now rewrites `ctx.db.system` too — the `_storage` enumeration
+is filtered to the objects that clear both `list` and `read`, and the by-key `get`
+is refused like `getMetadata`/`head`. `list` rules consequently govern something
+real, which their docblock previously admitted they did not.
+* `httpRoute(...).output(v)` now binds `.stream()`, so a stream
+handler must yield the declared output type and each chunk is parsed through the
+validator before its SSE frame is written. `.output()` used to be accepted and
+silently discarded on a stream route — SSE was the one result path that skipped
+`applyOutput`, whose contract is that every transport routes through it. A chunk
+that violates the schema ends the stream with a redacted `event: error` frame.
+* `defineListArgs(...).toQueryArgs()` now rejects an over-long
+`in`/`notIn` array instead of truncating it, matching what the validated `.input()`
+path does with the same value. Truncating `in` merely narrows; truncating `notIn`
+DROPPED exclusions and returned rows the caller asked to exclude.
+
+Also in `@lunora/server`:
+
+- `document-history`'s `redact()` now walks `Map` and `Set`. Both round-trip
+  through the wire codec and a `Map` holds NAMED keys, so a column holding
+  `new Map([["refreshToken", tok]])` was retained verbatim against the module's
+  "secret-shaped fields are dropped recursively" claim.
+- `listForDocument`'s `limit` is clamped. It was the one preset read with no
+  ceiling on `take()`, and it returns full un-RLS'd row snapshots.
+- `defineActionCache`'s "What it does not do" now states that the cache is global:
+  the key is `(name, args)` with no identity component, so a `compute` closure that
+  reads `ctx.auth.userId` serves one caller's result to every other caller.
+
+In `@lunora/runtime`:
+
+- `serverQuery` and an `httpRoute`'s `ctx.run*` skipped `assertDispatchableEnvelope`,
+  leaving the RLS-blind `__lunora_relation__:*` read reachable single-shard — and
+  the shard applies no gate of its own, citing the worker's refusal as the reason.
+  The refusal is now one shared guard applied on every dispatch surface, the
+  scheduler/cron root included. `ctx.run*` also stamps `x-lunora-system: "1"`, so
+  an unguarded dispatch there read raw rows as a trusted caller.
+- The two admin RPCs the worker serves itself at `/_lunora/rpc` never evaluated
+  `adminGate` (it is scoped to `/_lunora/admin/*` to stay off the data hot path), so
+  an Access-only deployment got 403 on the Studio's auth-audit and
+  notification-device reads. The grant is now recorded once the envelope has named
+  one of them, leaving ordinary RPC traffic untouched.
+- `resolveX402Charge` served every paid procedure FREE when `options.functions` was
+  absent, under a docblock promising the paywall is fail-closed by construction. It
+  warns once now, like the identical missing-registry condition for `replicaReads`.
+- `health-routes` sorted by `localeCompare` under a comment claiming snapshot
+  stability; `localeCompare` resolves against the runtime's locale and ICU version,
+  which the repo says twice in writing. Now UTF-16 code unit.
+- The two scheduler admin routes reading a bare `request.json()` read under the
+  shared byte budget like every sibling.
+
+New gate: `admin-route-table.test.ts` walks every `/_lunora/admin/*` path declared
+in the source through a credential-less worker and asserts none of them answers.
+Nothing previously enumerated the route table, so a newly added admin route that
+forgets its gate was caught by no test. Verified by ungating one route and watching
+it go red.
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01VUuYamsU1YLmAQhtut9PLZ
+
+* chore(shard-engine): record adminBinding on the socket attachment snapshot
+
+`SocketAttachment` gained `adminBinding` when the socket plane started
+re-authorizing admin subscriptions, but the type lives in `shard-engine` while
+the change landed in `@lunora/do`, so the per-package `api:check` that ran there
+never saw this snapshot.
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01VUuYamsU1YLmAQhtut9PLZ
+
+* fix(advisor,platform-node): validate baseline check entries and unwind a failed compose
+
+`parseAdvisorMap` guarded the `checks` container but not its entries, which left the same
+defect one level in: `checksWorsened` keys a Map on `check.name` and compares
+`check.occurrences` with `>`, so a `null` entry throws inside the CI gate the same way a
+`checks: {}` did, and a non-numeric `occurrences` makes every comparison `false` — a corrupt
+baseline then reads as "no regression". Both the procedure rows and the project bucket now
+require each entry to carry a string `name` and a finite `occurrences`, the only two fields a
+baseline's checks are ever read for; `level` and `weight` stay unchecked because nothing reads
+them off a baseline.
+
+`createNodePlatform` built the shard connection, the registry and the scheduler before queues,
+object storage and global tables. Several of the later steps throw on bad input — a queue whose
+dead-letter target nothing declares, a `globalTablesPath` that cannot be opened — and the throw
+escaped before any platform object existed, so the sqlite handle (with its WAL/SHM sidecars),
+the registry's live shards and the scheduler's armed timers leaked for the life of the process.
+Construction now records each resource's own teardown thunk — they are three different shapes,
+a bare `dispose()`, a `close()` method and a `dispose()` method — and unwinds them in reverse
+on the way out, swallowing a teardown error so the construction error still reaches the caller.
+* `close()` unwinds the same list, so it now runs in reverse construction order
+(global store, scheduler, registry, shard) rather than the previous scheduler-shard-registry-
+global-store order. Scheduler timers still come before the connection they would fire against.
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01VUuYamsU1YLmAQhtut9PLZ
+
+* security(runtime)!: refuse to build an x402 paywall that cannot see its paid functions
+
+`.x402({ price })` tags are read off the `functions` registry, so a worker configured with an
+`x402Charge` gate and no registry paywalled nothing: `resolveX402Charge` returned `undefined` for
+every path, and EVERY paid procedure dispatched free — no 402, no settlement, no receipt — under
+a docblock promising the paywall is fail-closed by construction. The condition warned once per
+worker and served the request, trading an authorization hole for a log line nobody reads.
+
+Move the refusal to worker construction: `createWorker` now throws `MISCONFIGURED` when
+`x402Charge` is supplied without `functions`, naming both ways to fix it. A misconfigured paywall
+should fail at boot with an actionable message, not serve paid functions free at runtime. Per-RPC
+refusal was the wrong lever — it would have taken a free app down over a paid-function config,
+which is the objection the warn-instead choice was answering; construction-time refusal answers it
+without leaving the gate inert.
+* `createWorker({ x402Charge })` without `functions` now throws instead of building
+a worker that serves paid procedures free. `defineApp()` always supplies the registry, so only a
+hand-rolled `createWorker` can hit this; no example or template passes `x402Charge` today.
+
+The identical missing-registry condition on `replicaReads` is left as a warning. It is a placement
+optimization, not a gate: inert means every read is served by the shard owner, which is correct and
+merely slower, so refusing to boot over it would trade availability for nothing.
+
+Also enforce the studio orphan check's live-key cap during iteration, not only between pages.
+`StorageListFunction` is a caller-supplied seam and the admin route returns its result unchanged,
+so nothing enforces `objects.length <= limit`; the walk pushed every object of every page and
+only then re-tested the cap. An over-sized cursorless page therefore produced a key list past the
+bound while reporting `truncated: false` — a complete verdict over work it did not bound. Take
+only what fits and mark the walk truncated when a page's keys were dropped.
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01VUuYamsU1YLmAQhtut9PLZ
+
+* fix(replica): key rows on the wire form and bound the /state body
+
+Three defects around the content-derived row id and the event-log DO's unpaged read.
+
+Derived row ids hashed a JSON encoding of the row AFTER the wire decoder had run, so every
+value with no own enumerable key rendered as `{}`. A `Date`, a `URL`, a `Map`, a `Set`, an
+`ArrayBuffer` and a literal `{}` therefore shared one digest and one mirror row — the upsert
+that content-keying exists to enable was overwriting unrelated rows. `NaN`/`+-Infinity`
+collapsed onto `null`, a typed array aliased the plain object with the same indices, and a
+`bigint` did not hash at all: `JSON.stringify` threw, and in `applyDiffToDb` that throw is
+inside the transaction, discarding every well-keyed row in the batch. Encode with
+`stableWireKey` (`encodeWire` + `stableStringify`) instead, which is already what
+`subscribeToMirror` keys its `known` map with, so the keyed and un-keyed paths now agree on
+what "the same row content" means.
+* derived ids change for any row holding a `bigint`/`Date`/`Map`/`Set`/`URL`/
+bytes/non-finite number, and an `undefined` array element is now distinct from `null`. Pure-
+JSON rows are unchanged. `canonicalizeForHash` is gone (it was exported for the bench and
+tests only, never from `src/index.ts`).
+
+`MaterializerRuntime.applyEntries` reported an entry as unknown whenever no reducer that RAN
+handled it — but a materializer already past the entry's seq does not run. Replaying an entry
+to catch up a lagging materializer, over events a snapshot-recovered sibling had applied, was
+therefore classified unknown and `"fail"` aborted on an event that was in fact processed.
+Unknown now means no materializer handled it, not that the subset still behind it declined.
+
+`GET /state` checked only the entry COUNT, and parsed every payload before that check, so
+exactly 1000 valid-but-large entries built the whole body inside a 128 MB isolate. Both bounds
+are now decided on the raw rows before a single payload is parsed, `/since` shortens a page
+that would exceed the same budget (reporting it through `truncated`/`cursor`), and `/append`
+carries a matching per-event cap in the same units — so an event the log accepts is always
+readable, and no read can pull more than the cap times the page size.
+* `/append` now rejects an event whose serialized payload exceeds 32768
+characters, and one with no `payload` at all (which previously reached the NOT NULL column and
+surfaced as a 500).
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01VUuYamsU1YLmAQhtut9PLZ
+
+### Bug Fixes
+
+* close 4 audit rounds across the data path, request edge, socket plane and money path ([#590](https://github.com/anolilab/lunora/issues/590)) ([c2a8377](https://github.com/anolilab/lunora/commit/c2a8377e01c6b34926a3fe9810b3a404702ab479))
+
+
+### Dependencies
+
+* **@lunora/bindings:** upgraded to 1.0.0-alpha.48
+* **@lunora/errors:** upgraded to 1.0.0-alpha.31
+* **@lunora/observability:** upgraded to 1.0.0-alpha.56
+* **@lunora/platform:** upgraded to 1.0.0-alpha.26
+* **@lunora/do:** upgraded to 1.0.0-alpha.117
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.55
+* **@lunora/workflow:** upgraded to 1.0.0-alpha.44
+
+## @lunora/runtime [1.0.0-alpha.90](https://github.com/anolilab/lunora/compare/@lunora/runtime@1.0.0-alpha.89...@lunora/runtime@1.0.0-alpha.90) (2026-09-03)
+
+### Bug Fixes
+
+* audit rounds 14-16 ([#586](https://github.com/anolilab/lunora/issues/586)) ([6a09b74](https://github.com/anolilab/lunora/commit/6a09b746cfc9fb36f451c208b7a1c3eac16e56f4))
+
+
+### Dependencies
+
+* **@lunora/observability:** upgraded to 1.0.0-alpha.55
+* **@lunora/do:** upgraded to 1.0.0-alpha.116
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.54
+
+## @lunora/runtime [1.0.0-alpha.89](https://github.com/anolilab/lunora/compare/@lunora/runtime@1.0.0-alpha.88...@lunora/runtime@1.0.0-alpha.89) (2026-09-03)
+
+### ⚠ BREAKING CHANGES
+
+* 34 public API changes across mail, storage, payment, replica,
+studio, workflow, agent, codegen, cli and the shard runtime. The full list is in
+
+### Bug Fixes
+
+* audit rounds 7-11 ([#579](https://github.com/anolilab/lunora/issues/579)) ([224a42a](https://github.com/anolilab/lunora/commit/224a42a741f524e0110da55917c79fd08c90a885))
+
+
+### Dependencies
+
+* **@lunora/bindings:** upgraded to 1.0.0-alpha.47
+* **@lunora/errors:** upgraded to 1.0.0-alpha.30
+* **@lunora/observability:** upgraded to 1.0.0-alpha.54
+* **@lunora/platform:** upgraded to 1.0.0-alpha.25
+* **@lunora/do:** upgraded to 1.0.0-alpha.115
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.53
+* **@lunora/workflow:** upgraded to 1.0.0-alpha.43
+
+## @lunora/runtime [1.0.0-alpha.88](https://github.com/anolilab/lunora/compare/@lunora/runtime@1.0.0-alpha.87...@lunora/runtime@1.0.0-alpha.88) (2026-09-02)
+
+### ⚠ BREAKING CHANGES
+
+* `lunora import` and `lunora backup restore` against a remote
+URL now require `--yes`, as does `lunora seed --reset` off a TTY.
+`lunora deploy --allow-schema-drift` no longer advances the schema baseline;
+use `--update-schema-baseline` for that.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01VUuYamsU1YLmAQhtut9PLZ
+
+* fix(protocol): close the wire-codec divergences the fixture never asserted
+
+All eight non-JS ports accepted a map entry with MORE than two elements while
+the reference rejects it, so `[["k","v","EXTRA"]]` threw in the JS client and the
+Durable Object runtime and decoded to `Map{k→v}` everywhere else — two peers of
+one deployment reading different values from identical bytes.
+
+The cause is instructive: an earlier fix hardened the reference in both
+directions and added only the too-short case to
+`protocol/fixtures/wire-codec.json`. Every port was written against the fixture,
+not against the reference, so the too-long half was never implemented. The
+fixture is the contract, and it was incomplete.
+
+So each divergence here is fixed fixture-first — add the entry, watch all eight
+go red, then fix — which is both the repair and the permanent guard. Kotlin
+turned out to have no map-entry check at all, and its rejection helper was
+catching the resulting `ClassCastException` only by accident.
+
+Also aligned: a typed-array payload whose byte length is not a multiple of its
+element size is now rejected rather than handed back as raw bytes for the
+consumer to misread; an unknown typed-array constructor name decodes to raw
+bytes and drops the name, which is what the protocol README already specified
+and only the reference did, and which matters because the name survived into
+`stableWireKey` and therefore into subscription dedup; and duplicate map keys
+collapse last-wins to match the reference. That last one was measured rather
+than assumed — `Map.prototype.set` overwrites at the FIRST occurrence's position
+and collapses under SameValueZero, so bigint keys merge while structurally equal
+`Date` and bytes keys do not, and a second fixture case pins that half.
+
+Python's decoder leaked `IndexError`, `TypeError` and `ValueError` out of a read
+loop whose guard catches only `WireFormatError`, so one malformed frame killed
+every subscription on the client — and on the built-in socket path it was
+swallowed instead, leaving the query silently stale. Fixed at the source: the
+decoder now raises only `WireFormatError`, and `_is_bigint_literal` no longer
+uses Unicode-aware `str.isdigit()`, which accepted digits `int()` refuses. A
+string `set`/`arr` payload decoded to a set of its characters — inventing data —
+where the `map` branch in the same file already had the type guard its siblings
+lacked; Ruby raised a `NoMethodError` its own assertion could not accept. Java
+and Kotlin charged the WebSocket frame envelope against the value's depth
+budget, so a value the reference legitimately encodes at the cap produced a
+frame they refused.
+
+Two reference behaviours are tightened rather than reproduced. A payload-less
+`date` decoded `undefined` into an Invalid Date and re-encoded it as a NaN
+timestamp, and a non-object `error` props slot ran `Object.keys` over a string
+and produced `{0:"a",1:"b"}` where every port produced `{}`. Both are JS
+accidents rather than contracts, both are shapes `encodeWire` never emits, and
+every port already rejected them — so the reference now agrees with the ports
+instead of eight languages reproducing the accident.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01VUuYamsU1YLmAQhtut9PLZ
+
+* fix(sql-store): store a global bigint in an order-preserving key
+
+`v.bigint()` on a `.global()` table was stored as plain decimal text, so every
+range filter, `ORDER BY`, page cursor and `MAX` over it compared
+lexicographically. `where: { cents: { gt: 9n } }` returned ZERO rows while 10n
+and 100n sat in the table, and `max` answered 9 for a set whose maximum was 100.
+`=` stayed exact under both encodings, which is why nothing ever surfaced
+loudly and five audit rounds went past it.
+
+The shard plane solved this and says so in its own comment: "Plain decimal text
+(`"10"`) is exact for `=` but sorts `"9"` after `"10"`, so ranges and `ORDER BY`
+would silently return the wrong rows instead." Same schema, `.shardBy()`
+correct, `.global()` wrong. That encoder is now exported and imported rather
+than restated — a second copy of an order-preserving encoding is the thing that
+drifts, and a cross-plane parity test compares the two answers row for row.
+
+A backfill ships with it, because read-tolerance alone would be a NEW silent
+break: with the format changed, `eq: 10n` binds the key and stops matching a row
+written as `"10"`. The rewrite is keyset-paged and in-place, self-terminating
+(its probe matches nothing on a converted table), and the decoder still reads
+plain decimal text so no row is garbage mid-conversion. Reductions over a padded
+key are refused with a typed error naming the aggregate index that answers them,
+where `sum` past 2^53 previously escaped as a raw driver `RangeError`.
+
+MySQL `.global()` tables inherited `utf8mb4_0900_ai_ci`, folding distinct values
+together: `count` for tenant "Acme" answered 3 where two rows were "Acme" and
+one "acme", `.unique()` rejected `alice@` against `Alice@`, and `rankPage`
+partitioned by tenant returned another tenant's row. Every character column now
+declares `utf8mb4_0900_bin` — column-level because a column's own collation
+beats the connection's on every `column = 'literal'` comparison, and the `0900`
+variant because `utf8mb4_bin` is PAD SPACE and would still disagree with SQLite
+and Postgres on trailing whitespace. Pre-existing tables keep their collation;
+`CREATE TABLE IF NOT EXISTS` cannot reshape one, so that is an operator `ALTER`,
+documented in the dialect.
+
+Three more: adding a field to an existing global table provisioned nothing and
+every later insert died on `table p has no column named slug` — an untyped
+driver message that never mentioned `lunora migrate` — while two siblings in the
+same package already ALTER their own tables; `patch`/`replace`/`delete` ran
+their compare-and-swap through `all`, which had no `onBookmark`, so D1's session
+bookmark never advanced and read-your-writes was lost for exactly the write path
+it exists for; and the admin import iterated only declared columns, so a field
+renamed since the snapshot was dropped and reported as a clean success, where
+the shard twin refuses the identical row.
+* `v.bigint()` columns on `.global()` tables are re-encoded once,
+automatically and in place, on the next migration. Values past 39 digits are now
+refused with a typed `BAD_REQUEST` rather than mis-sorted. Existing MySQL tables
+need `ALTER TABLE <t> CONVERT TO CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_bin`
+to pick up the collation fix.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01VUuYamsU1YLmAQhtut9PLZ
+
+* fix(agent): bound what a delegated run, a voice session and a retry can spend
+
+An unauthenticated caller could start a run on another user's owned thread: both
+owner guards read `owner !== undefined`, so a named stranger was refused and the
+identity-less caller was not. That admits second-order prompt injection — the
+injected row persists and is read into the model context on the victim's NEXT
+turn, with the victim's tools — plus victim-billed inference and, under
+`onConcurrentRun: "replace"`, termination of their in-flight run. The docblock
+asserted the opposite ("the owner is immutable"), and the test that covered it
+blessed the gap in its comment. The match is exact in both directions now: no
+owner is an identity that owns nothing, not a wildcard.
+
+`agent.asTool` had no depth bound. Each child gets a distinct thread key, so the
+per-thread run-queue cap never applied across a delegation chain, and a
+timed-out parent did not terminate its child — it reported "did not finish"
+while the subtree kept growing and billing. Depth rides the run input; the
+refusal is returned as the tool's answer rather than thrown, so the parent's
+model answers with what it has instead of failing and retrying its durable step.
+
+A voice session had no bound of any kind — no turn cap, no text-frame cap, and
+an audio overflow that reset its own counter, so the utterance limit bounded
+peak memory rather than throughput and never closed the socket. Voice turns also
+ignored the agent's `compaction` config while text turns honoured it, on a
+thread the two share, and the greeting was re-synthesised on every reconnect.
+Turns, text length and audio are capped; wall-clock is not, deliberately — a
+hibernating socket is not billed for time, and every paid action now is.
+
+The scheduler's `recordRetry` wrote the time index while skipping every guard
+`handleSchedule` enforces on the same value, two hundred lines below a comment
+explaining that anything past 15 digits breaks the index's lexical ordering and
+anything at 1e21 "would corrupt the index outright". A raised `maxAttempts`
+walked the backoff ladder past both: the job sorted above every alarm bound and
+was never dispatched again, then `parseInt` on the exponential form armed the
+alarm at epoch millisecond 8 — permanently in the past, so the object re-woke
+forever. Over-cap retries dead-letter now rather than firing at the cap, which
+would park the job in year 33658 with no `/dead` row and nothing to act on.
+
+A leaked workpool slot had no reset path in any shipped surface: `/status`
+diagnosed the wedge perfectly and offered no way out. An admin release route
+proxies the DO's existing `/complete`; a lease was the wrong shape, since it
+would steal the slot of a job that is legitimately running long.
+
+Also: `/list` and `/dead` are cursored and their clients walk every page, so a
+dedupe check past 100 pending jobs stops silently scheduling duplicates and the
+dead-letter panel stops hiding the backlog it exists to show; a cron trigger
+that matches no registered key warns instead of reporting success; and a queue
+message is only recorded as dead-lettered when a dead-letter queue exists.
+
+One bad subscription used to abort an entire client reconnect — nothing
+resubscribed, offline mutations never flushed, streams never resumed — while the
+status still read `connected`. Args are encoded once at subscribe time, the way
+the shape path already did it, and a decode failure reaches the subscription's
+`onError` instead of escaping the socket listener. Subscribers are no longer
+deduped by callback identity, so two consumers sharing one function reference
+get two registrations rather than the first unsubscribe silently killing the
+second.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01VUuYamsU1YLmAQhtut9PLZ
+
+* fix(auth): key the rate limiter on a header the client cannot write
+
+better-auth reads only `x-forwarded-for`, which Cloudflare does not set and any
+client can send, and nothing in the repo configured otherwise. Every request
+whose XFF was not exactly one bare IP collapsed onto a single shared bucket, so
+three clients behind any proxy chain exhausted it and a fourth was denied
+sign-in on its first attempt — at 3 requests per 10 seconds, app-wide. The same
+package already refuses that header elsewhere as "attacker-chosen" and reads
+`cf-connecting-ip` instead; the limiter now expresses that same policy through
+better-auth's own configuration rather than a second one beside it.
+
+Reading a header the client cannot write closes both directions of the hazard,
+which matters because it was not possible to verify whether the edge appends to
+a client-supplied XFF (shared-bucket denial of service) or replaces it (limiter
+bypass). When no trustworthy IP resolves at all, a catch-all rule applies a
+coarse global flood cap instead — a shared bucket cannot be sized for one
+client, and dropping the limit discards the protection entirely.
+
+A `javascript:` OAuth `redirectURI` reached `location.assign` in the auth app's
+origin. The surrounding docblock argues correctly that the value is
+authorization-server-vetted against registered redirect URIs — a claim about
+HOST trust that says nothing about scheme.
+
+A storage-rule table and a shape both gained a registration-time refusal rather
+than a silent wrong answer. A `defineShape` over a `.memory()` table seeded once
+and then never updated: the poke path replicates from the changelog and a memory
+table is deliberately never appended to it, so the diff could not move. Making
+memory tables pokeable is not implementable correctly — without the log nothing
+records which keys LEFT, so a presence row for a departed user would survive on
+the client forever — and the same root cause let the resume path vouch for a
+table it has no record of, so a reconnecting client kept its pre-disconnect
+state indefinitely. Both refuse now, and the docs page that promised live
+queries "work exactly as they do on a durable one" says what is true.
+
+A hard delete followed by a re-insert of the same id in one poke window emitted
+no delta, because the changelog reports only the latest op per id and the
+diff's never-replicated exemption assumed a sole op.
+
+The remaining half is coverage for controls that had none. Deleting the RLS
+filter from the legacy reader, or the masking from `.filter()`/`.first()`, left
+the entire server suite green; so did removing the bulk-insert methods from the
+writer guard's gated list. Those gaps are closed with tests proven RED by
+mutation, and the gated-method list is now a `Record` over the writer interface,
+so a new table-first method fails to compile until it is classified. The DO
+admin read dispatch table was reachable but never driven by a test, leaving its
+prototype-pollution guard with a permanently-dead branch. And the playground's
+tests, excluded from CI as a hang, were a 15-second cold codegen against a
+10-second local timeout — they run now.
+* a `defineShape` over a `.memory()` table is refused at
+subscribe with `SHAPE_MEMORY_TABLE`, and a read of a memory table marks its
+subscription un-resumable. Both were previously silent wrong answers.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01VUuYamsU1YLmAQhtut9PLZ
+
+* fix(cli): keep the provisioned config in scope for the artifacts built from it
+
+`lunora build --emit-bindings` handed an IaC deployer a manifest describing the
+UN-provisioned config — the exact failure the function's own docblock says it
+exists to prevent ("reading it earlier would describe the requirements the
+project happened to have written down, not the ones the bundle actually has").
+The dry-run rollback added last round restored the file before the artifact
+steps ran, so a project with a declared nightly cron emitted `"crons": []` for
+Terraform and the deployed worker never fired it. Two fixes in one branch
+cancelled out. The rollback now belongs to whoever produces the last artifact,
+so the manifest and the wrangler bundle are both built inside the provisioned
+window.
+
+`lunora add --from <dir>` skipped the untrusted-source confirmation that
+`--source` triggers, and the same predicate was duplicated one file over, so
+fixing only the reported site would still have written a files-only item
+silently. One shared check covers both.
+
+Registry output stripped C0/C1 controls but not the Unicode bidirectional
+overrides that are the actual terminal-spoofing vector, and `JSON.stringify`
+carried them through binding and env-var values regardless. There were also two
+subtly different strippers in one directory, one citing the other; there is one
+now, at the render boundary — deliberately not at parse time, because that
+layer's output is WRITTEN to the user's manifests and it validates by rejection
+rather than silent mutation.
+
+Also: an export whose atomic rename failed left the complete plaintext dump in
+its staging file; the `d1-to-hyperdrive` self-migration guard compared raw URLs,
+so a trailing slash walked past it while both legs resolved to one worker; and
+`lunora verify --format json` reported only the first platform diagnostic from
+the documented CI gate.
+
+A signed image URL decoded to a transform the signer never authorised: values
+were not escaped, so a user-influenced `background` spliced new keys under a
+valid signature. The sibling builder in the same directory already guarded this.
+Escaping the separators fixes it without rejecting the legitimate overlay URLs
+that guard would have refused.
+
+Every live studio panel stopped streaming after an admin-token change: the
+subscription effect omitted `client` from its deps under a comment claiming it
+was provider-stable, while a docblock in the same file said the opposite. And
+`vite build` continued after codegen threw, bundling the previous run's
+generated output — the plugin failed the build on the softer signal (an ERROR
+advisory) while the hard one was log-only.
+
+Also in the studio: "Delete N matching" could send a predicate-free request
+during the search debounce, because the button read the raw search box while the
+request sent the debounced one — and the server accepted it as a full-table
+delete, indistinguishable from `clearTable`. Both halves are closed. The
+operation tape now names what a truncate or a restore actually targeted, the
+"Apply index" button says Copy because that is what it does, and the flags
+documented as making the studio "read-only" now say they hide controls, which is
+all they ever did.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01VUuYamsU1YLmAQhtut9PLZ
+
+* ci: auto-review pull requests stacked on the audit branch
+
+CodeRabbit only auto-reviews a pull request whose base branch is listed in
+`reviews.auto_review.base_branches`; every other base gets a "Review skipped"
+notice and a manual `@coderabbitai review` runs against an empty file set. The
+audit fixes ship as one pull request per subsystem stacked on
+`fix/audit-round-5` so each is a bounded, reviewable diff, which means that
+branch has to be on the list.
+
+Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01VUuYamsU1YLmAQhtut9PLZ
+
+* fix: close the review findings on rounds 5-6
+
+Sixteen review threads plus the two the description left open, each with a
+regression test verified RED against the unfixed code.
+
+The two open ones:
+
+`.meta()` cleared the unbounded-string lint and enforces nothing. The
+predicate matched source TEXT, so `.meta({ schema: { maxLength: 200 } })`
+cleared it — and so did the bare substrings `length`/`max` anywhere in the
+initializer: a comment, a nested field NAME, a default string. Detection is
+now an AST walk over the validator chain, and the 132 call sites across
+examples, templates and the registry that believed they were bounded now use
+`.max(n)`, which emits the same JSON Schema fragment AND enforces it.
+`v.string().max(<literal>)` is modelled in the AOT args compiler rather than
+declining the node, so adding the bound the advisor asks for does not cost
+the function its fast path; a repeated bound keeps the tighter one.
+
+`describeObject` skipped the truncation every sibling branch applies. A JSON
+body carrying its own `constructor` property is a plain object whose OWN
+`constructor.name` is whatever was sent, so a client sized the validation
+error it got back, and that lands in logs.
+
+Also fixed:
+
+- The staged export wrote at 0666-before-umask and was world-readable for the
+  length of the dump.
+- The registry display sanitiser passed LF through, so a manifest value could
+  forge its own CLI output lines.
+- The custom-source confirmation named `--source` when the resolver reads
+  `--from`, asking the operator to confirm a place nothing read from.
+- A voice control frame was JSON-parsed in full before its size was checked,
+  so a 32MiB message was parsed once per frame on the DO's single thread.
+- `cf-connecting-ip` was trusted off Cloudflare, where nothing sets it:
+  rotate the header, get a fresh rate-limit bucket. Gated on the runtime;
+  declared proxies still get `x-forwarded-for`.
+- Import validation used `key in shape`, so a snapshot key named
+  `constructor` read as declared and reached the writer unvalidated.
+- A dead-letter park that got its row durable and then failed to clear the
+  pending rows had its time-index claim restored, re-dispatching a job the
+  dead-letter says is finished.
+- A shape joining a `.memory()` relation target froze the same way a
+  memory-backed shape table does; the walk now rejects both.
+- A `staged: true` search index over an empty table refused every query
+  forever, because nothing ever wrote its progress row.
+- The bigint re-encoding pass scanned the whole table on every ctx-db — per
+  request on a Hyperdrive binding — because completion was never recorded,
+  and its length-only predicate skipped every negative 39-digit value,
+  leaving one stored as decimal text that `eq` no longer matches.
+- Studio's advisory-index metadata accepted `[null]`/`[42]` as fields, and
+  its operation tape threw on a null import row before the RPC could
+  validate it.
+- Two docblocks in `value-codec.ts` described symbols that had moved out, so
+  IDE hover attributed them to `sqliteEncode`.
+- The `__agg_` companion is a DOUBLE, so it is exact per contribution, not
+  per total; the aggregate refusal said otherwise.
+- The CodeQL suppression named `js/unsafe-code-construction`; the alert is
+  `js/bad-code-sanitization`.
+
+`__lunora_*` tables are excluded from the studio table browser, and a
+pre-existing `lint:types` failure in `@lunora/client`'s test is fixed.
+* a `v.string().meta({ schema: { maxLength: n } })` never
+bounded anything at runtime and now reads as unbounded to the
+`unbounded_string_arg` lint. Replace it with `.max(n)`, which emits the same
+schema fragment and enforces the length.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_019dhrsvdiJJuDAMjmiKVrae
+
+* test(client): type the dead-jobs fetch mock's request input
+
+`fetch`'s input is `string | URL | Request`; the mock narrowed only the `URL`
+case and called `.includes` on the rest, which fails `tsc` on the `Request`
+member. Only a URL string can be substring-matched for the cursor.
+
+Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01VUuYamsU1YLmAQhtut9PLZ
+
+* ci: list every audit chain branch as a CodeRabbit base
+
+Each audit-round group PR is based on the previous group's branch so the
+reviewer sees one bounded diff; CodeRabbit auto-reviews only the bases on
+this list.
+
+Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01VUuYamsU1YLmAQhtut9PLZ
+
+* ci: run the lint, test and scan workflows for PRs based on fix branches
+
+The audit fixes ship as a chain of pull requests, each based on the previous
+`fix/*` branch so a reviewer sees one bounded diff. The lint, test, CodeQL and
+dependency-review workflows only triggered for pull requests targeting the
+release branches, so every PR in the chain was green with nothing but the
+metadata checks. A `fix/**` base pattern runs the real gates for them.
+
+Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01VUuYamsU1YLmAQhtut9PLZ
+
+* ci: run an app's codegen before its tests
+
+The vis `test` and `test:coverage` targets depended only on upstream builds,
+while the lint targets also depend on the app's own `codegen`. The playground's
+`lunora/_generated` is gitignored, so a fresh CI checkout had none of it and
+its tests failed on a missing module while passing locally, where the directory
+already existed.
+
+Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01VUuYamsU1YLmAQhtut9PLZ
+
+* ci: match any audit-chain branch as a CodeRabbit base
+
+Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01VUuYamsU1YLmAQhtut9PLZ
+
+### Bug Fixes
+
+* rounds 5-6 — session expiry, global bigint ordering, MySQL collation, agent bounds, CLI safety, SDK parity ([#544](https://github.com/anolilab/lunora/issues/544)) ([811de77](https://github.com/anolilab/lunora/commit/811de77004306ce4556a63b045628a9de2244202)), closes [#545](https://github.com/anolilab/lunora/issues/545)
+
+
+### Dependencies
+
+* **@lunora/bindings:** upgraded to 1.0.0-alpha.46
+* **@lunora/errors:** upgraded to 1.0.0-alpha.29
+* **@lunora/platform:** upgraded to 1.0.0-alpha.24
+* **@lunora/do:** upgraded to 1.0.0-alpha.114
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.52
+* **@lunora/workflow:** upgraded to 1.0.0-alpha.42
+
+## @lunora/runtime [1.0.0-alpha.87](https://github.com/anolilab/lunora/compare/@lunora/runtime@1.0.0-alpha.86...@lunora/runtime@1.0.0-alpha.87) (2026-09-01)
+
+
+### Dependencies
+
+* **@lunora/bindings:** upgraded to 1.0.0-alpha.45
+* **@lunora/errors:** upgraded to 1.0.0-alpha.28
+* **@lunora/do:** upgraded to 1.0.0-alpha.113
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.51
+* **@lunora/workflow:** upgraded to 1.0.0-alpha.41
+
+## @lunora/runtime [1.0.0-alpha.86](https://github.com/anolilab/lunora/compare/@lunora/runtime@1.0.0-alpha.85...@lunora/runtime@1.0.0-alpha.86) (2026-09-01)
+
+### ⚠ BREAKING CHANGES
+
+* **shard-engine:** close round-3 audit findings across the data path, guards, mirrors and tests (#541)
+
+### Bug Fixes
+
+* **shard-engine:** close round-3 audit findings across the data path, guards, mirrors and tests ([#541](https://github.com/anolilab/lunora/issues/541)) ([dfc2d4d](https://github.com/anolilab/lunora/commit/dfc2d4d07bf8f67214122dc7f14d83a9b1533d07))
+
+
+### Dependencies
+
+* **@lunora/do:** upgraded to 1.0.0-alpha.112
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.50
+* **@lunora/workflow:** upgraded to 1.0.0-alpha.40
+
+## @lunora/runtime [1.0.0-alpha.85](https://github.com/anolilab/lunora/compare/@lunora/runtime@1.0.0-alpha.84...@lunora/runtime@1.0.0-alpha.85) (2026-09-01)
+
+### ⚠ BREAKING CHANGES
+
+* `ctx.scheduler.runAfter` and `runAt` resolve the bare job id
+instead of `{ id, scheduledFor }`. Four gates — the type, the docs, the
+platform contract and the generated surface — already said `Promise<string>`;
+only `@lunora/scheduler` resolved an object, and the install is a cast, so
+nothing caught the disagreement. `scheduler-host.ts` assembles the platform
+contract's `ScheduledJob` from the instant it already computed, so no
+information is lost. The one in-repo call site is updated.
+
+`@lunora/ai`'s default model and embedding model were settable only through
+options codegen does not thread, so an app could not change either. Both now
+read `LUNORA_AI_DEFAULT_MODEL` / `LUNORA_AI_DEFAULT_EMBEDDING_MODEL` from
+`env`, the seam codegen does thread, mirroring the existing
+`LUNORA_AI_GATEWAY_*` convention; explicit options still win.
+
+`SocketHost.idFor` is kept but its doc no longer claims the engine uses it to
+reassociate a rehydrated socket — per-socket state is keyed on the handle
+object and durable identity is the engine's own `connectionId`. It is the
+conformance suite's identity oracle in 8 legs, which is a real consumer.
+
+* fix(codegen): scan the worker entry so the security lints can fire
+
+Five ERROR-level advisor lints could never fire. `listLunoraSourceFiles`
+recurses only `lunora/`, but `createBrowser`, `createPayment` and
+`createInboundEmailHandler` are called from the worker entry under `src/`,
+so `discoverConfigCalls` found nothing and every lint keyed on it returned
+clean regardless of the code. `mail_inbound_dispatch_without_verify`,
+`payment_create_without_authorize`, `browser_allow_private_targets`,
+`export_sink_misconfigured` and `browser_user_url_without_allowlist`'s
+suppression arm are now live.
+
+The fix is a second, explicitly-scoped walk rather than widening the
+existing one: `listLunoraSourceFiles` also feeds `refreshCodegenProject`'s
+add/remove reconciliation, which drops Project files under `lunoraDirectory`
+that vanished from disk, so widening it globally would have changed that set
+too. Only `config-calls.ts` and `export-sinks.ts` are switched over.
+
+`apps/playground`'s inbound email handler declares no `verify`, so it now
+produces a real ERROR advisory — which is the point, but it will surprise a
+gate until it is fixed.
+
+Also inert: the umbrella's `lunorash/flags/flagship` specifier was not in the
+flagship provider set, so an app importing through the umbrella got no
+binding inference; and `fsTool` never registered the sandbox dispatcher, so
+declaring it produced an app whose tool had nothing to dispatch to.
+
+`constraint_validator` is kept — `runAdvisor`, the lint and
+`AdvisorTableSample` are all public API and the README's example is a caller
+passing its own samples. What was false was the claim that the studio feeds
+it: `LintContext.tableSamples` said the studio "reads up to the configured
+row cap from each table via readTablePage", which nothing does. Building a
+feeder needs a bounded-sample admin read that does not exist, so the docs now
+state there is no shipped feeder rather than implying one.
+
+The generated Drizzle schemas were documented nowhere despite
+`@lunora/server/drizzle` existing as a published subpath whose own docs point
+at them; they now have a section explaining the global/shard split.
+
+* fix(templates): stop scaffolding insecure cookies and a shared rate-limit bucket
+
+`templates/expo` set `AUTH_URL: "http://localhost:8787"` in wrangler's
+`vars`, which is baked into the deployed Worker. better-auth derives
+`useSecureCookies` from that URL, so every project scaffolded from this
+template shipped session cookies without `Secure` in production. The value
+moved to `.dev.vars.example`; unset, better-auth resolves per request and the
+weak-secret guard throws. The README was actively instructing users to put it
+in `vars`.
+
+All 12 non-expo templates keyed their rate limiter
+`(ctx) => ctx.auth.userId ?? "anon"`, so every unauthenticated caller shared
+one bucket — one client could exhaust it for all of them. Now
+`ctx.auth.userId ?? ctx.ip ?? "anon"`, verbatim from the advisor lint that
+prescribes it. The hand-rolled inline limiter is replaced by the copy-in
+`lunora/ratelimit/schema.ts`, whose `limits` map was previously dead config:
+its only key was never read, so tuning it did nothing.
+
+`templates/expo` had no `imports` map, so `lunora registry add` produced
+files importing `#lunora/_generated/server.js` that could not resolve.
+
+In examples: `auth-playground`'s document list claimed membership isolation
+in a comment while reading every row for an organization the caller merely
+named; the index now pins the equality prefix to the session's own ownerId.
+A procedure context deliberately carries no raw Headers, so `getActiveMember`
+is unreachable from a query — the doc says so and points at the httpAction
+recipe rather than implying a check that cannot happen.
+
+`blog`'s cron was documented but never wired: no `crons.ts`, no trigger, and
+`scheduled()` was never exported, so it would have fired into nothing even
+once declared. Its `drafts.save` patched any id the client sent, which is an
+IDOR; it now re-reads and checks the author, returning an indistinguishable
+NOT_FOUND. Its bare `Error` throws were becoming redacted 500s rather than
+the 401s they read as. The unused `users` table carrying a `passwordHash`
+column is gone — shipping a second, empty credential store teaches worse
+than losing the `.global()` demo, and the README now points at `team-chat`
+for that.
+
+* fix(playground): take the message author from the verified identity
+
+`lunora/mutators.ts` accepted `userId` as an argument and wrote it verbatim
+as the author, so any caller could post as any user. It is publicly
+dispatchable — codegen registers `mutators:sendMessage` and exposes it on the
+`api` proxy — so this was not a local-only path. Fixed with the framework's
+existing control, `owner: "userId"` on `defineMutator`, which requires a
+verified identity, rejects a mismatched argument, and overwrites the column
+before the authoritative impl runs.
+
+The same path also bypassed `messages.send`'s rate limit and its 4096-char
+cap by pushing an identical row through a second entry point; both now match.
+
+`apps/studio` read `VITE_LUNORA_ADMIN_TOKEN` unconditionally, so a production
+build inlined an admin bearer token into a shipped bundle. The neighbouring
+`baseUrl` was already gated on `import.meta.env.PROD`; the token now sits
+behind `import.meta.env.DEV`, which is statically false in a production
+build, so the variable is never read and cannot be inlined.
+
+The signed-upload content-type check ran only when the URL had pinned one,
+so an unpinned URL accepted any content type — the guard is unconditional
+now, and the e2e helper forwards `contentType` so it can still mint a usable
+pinned PUT.
+
+`seedKv` stays a public action deliberately. Making it internal was
+considered and would have stranded it with no caller at all: the internal
+gate reads `x-lunora-system`, set only by scheduler/cron/queue dispatch,
+while the Studio runner and `lunora run --as` both re-enter through the
+ordinary RPC path. It takes no caller input — fixed values at six fixed keys
+— so the exposure is resetting demo data. The docstring records why, and
+warns that a seeder writing caller-supplied keys must not copy the shape.
+
+Deletes a 443-line throwaway spike the file itself labelled as such.
+
+* docs: make the non-callable examples callable and correct the wrong claims
+
+Nineteen snippets across the concept docs used the object form
+`query({ args, handler })`, which is not callable — the same page set's
+migration guide says so explicitly. Every one is now the chainable builder
+form the code actually exposes.
+
+The Hyperdrive recipes assigned `ctx.sql = …`, which does not work: the
+facade is wired by codegen from the app's config, not assigned in a handler.
+The caching page hand-rolled 110 lines of cache bookkeeping that
+`defineActionCache` does in three.
+
+Corrections where the prose was simply false: the payment integration
+claimed 12 tables where it creates 5; the read-replica page described
+fallback behaviour the implementation does not have; and the offline-first
+page contradicted the `.meta()` documentation this round introduced.
+
+`packages/hyperdrive`'s README documented "Tagged-template queries" and
+"Unsafe / raw queries" sections for APIs that do not exist —
+`fromPostgresJs()` returns a `SqlClient` whose only member is `query(text,
+params)`; `.unsafe()` belongs to the raw postgres.js client it wraps.
+
+`sdks/python`'s `stable_stringify` docstring was the last copy of the
+"code-point order" claim; the sort is UTF-16 code-unit order, which its own
+`_utf16_sort_key` already implemented correctly.
+
+* fix(examples): sort the expo manifest after adding the imports map
+
+The `imports` map that lets `lunora registry add` resolve
+`#lunora/_generated/server.js` was inserted in the wrong position.
+Key order is enforced by one CI job that nothing else covers.
+
+* style(client): satisfy the lint rules the new code tripped
+
+Mostly mechanical, but two are real changes rather than suppressions.
+
+The deferred-close WebSocket double added for the teardown regression test
+duplicated the shared one except for a single method, which sonarjs
+correctly flagged twice. The shared double now takes a `deferClose` flag and
+the copy is gone. Verified the test still fails with the teardown fix
+reverted, so the consolidation kept its diagnostic power.
+
+The offline-flush barrier chained off `.then()` without returning a value.
+It is a sequencing barrier with nothing to pass along, so it is an async
+IIFE now — no rule to satisfy, and it reads as what it is.
+
+The stream drain discarded its chunks into an unused binding; it collects
+them and asserts the torn-down stream yielded none, which is the property
+the test is actually about.
+
+The remaining jsdoc/no-secrets disables follow the convention already used
+in `@lunora/advisor` and `@lunora/codegen`: intentional bullet lists, and
+back-ticked identifiers in prose that the entropy heuristic reads as
+credentials.
+
+* docs(scheduler): correct the three places still destructuring the old return
+
+`runAfter`/`runAt` resolve the bare job id now, so `const { id } = await
+ctx.scheduler.runAfter(...)` binds `undefined`. The package README and the
+`lunora-setup-scheduler` CLI skill both taught exactly that, and the skill
+also stated the old `{ id, scheduledFor }` shape in prose.
+
+These are the siblings of the call site that was already fixed —
+`docs/index.mdx` was updated with the signature change and its neighbours
+were not.
+
+* style(server): drop the now-redundant casts on the middleware context
+
+`validateArgs` already returns `Record<string, unknown>`, so the two
+`parsed as Record<string, unknown>` assertions at the `withCallContext`
+call sites became unnecessary once it took `parsed` directly.
+
+* fix(client): model the browser's asynchronous close in the shared socket double
+
+The double dispatched `close` synchronously inside `close()`, which no browser
+does. That hid a whole class of teardown-ordering bug from all 148 tests using
+it: `teardownConnection` clears `conn.socket` AFTER calling `close()`, so a
+same-tick event still found the identity guard satisfied and reached
+`handleDisconnect`. The teardown regression test added earlier in this branch
+had to opt into deferred close to see its own bug — which left the unfaithful
+behaviour as the default for everything else.
+
+Deferred close is now the only behaviour. Flipping it turned four tests red,
+and all four were the double's fault rather than the code's: `readyState` must
+flip synchronously (a browser sets it before returning from `close()`) while
+only the EVENT is deferred. Fixed there; 783 pass.
+
+Verified the teardown regression test still fails with its fix reverted, so
+consolidating on one double did not cost it its teeth.
+
+Also from review:
+
+- `resolveRunnableTargetOrThrow` was written twice — once in the CLI, once in
+  the Vite plugin — with two hand-written messages that would drift. The
+  predicate is a property of the driver registry, not of either tool, so
+  `isRunnableTarget`/`runnableTargetIds` now live in `@lunora/config` beside
+  `resolveTargetOrThrow`, whose own docblock already argued the Vite plugin
+  needs the same guard. Both callers keep their own wording; neither keeps its
+  own logic.
+
+- `check-project-json-targets.js` floored only its TOTAL count, so a declared
+  workspace group that exists but holds no members passed vacuously while its
+  two sibling checks failed. Floored per group, on member directories rather
+  than on `project.json` files — not every member has one, by design.
+
+- `WORKER_ENTRY_ROOTS` claimed to mirror `@lunora/config`'s
+  `WORKER_ENTRY_FALLBACKS` and does not. Kept separate deliberately — one picks
+  THE entry file, the other decides what a security lint may see, and equal
+  lists would be wrong for one of the two jobs — but the comment now says that
+  instead of inviting the reader to assume equality.
+
+- Two `{@link}` targets are qualified, which removes the need for the
+  `jsdoc/no-undefined-types` half of a suppression.
+
+* fix(client): restore follower subscribe, and reset backoff on a frame-less socket
+
+Two regressions this branch introduced, both found by review.
+
+**`crossTabSync` was broken for every follower tab.** `subscribe()` was added
+to the leader-only guard on the reasoning that a follower's subscribe "reached
+the server only when the leader happened to hold the same
+`(fn, args, shardKey)`". That is not an accident — it is the mechanism. The
+follower's registration is what puts a `SubscriptionState` in
+`this.subscriptions`, and `onSubscriptionData` drops any broadcast whose key it
+cannot find there. Guarding it did not make a silent failure loud; it made the
+leader's entire broadcast path dead code and threw `NOT_IMPLEMENTED`
+synchronously out of every `useQuery`, `useInfiniteQuery`, `@lunora/db`
+collection and svelte `query` in every non-leader tab.
+
+`subscribeShape`, `whisper*`, `setConnectionContext` and
+`acquireConnectionContext` genuinely have no relay path and keep their throws.
+
+The existing follower tests could not catch this: each calls `subscribe()`
+without any other tab announcing leadership, so the client is still inside its
+startup claim window and the guard never fires. The new test establishes the
+leader FIRST, then subscribes, then asserts the broadcast is delivered —
+re-adding the guard turns it red.
+
+**A socket that receives no JSON frame never reset its reconnect backoff.**
+Moving the reset off `onOpen` was right (an upgrade is accepted before the
+credential is read, so resetting there turns a lapsed token into a storm), but
+"first non-error frame" is unreachable for some clients: the server sends no ack
+for the `connect` envelope, and the keepalive pong is a plain string answered by
+the runtime without waking the DO, so `JSON.parse` rejects it before the reset.
+A whisper sender, a presence-only client, or any `ensureSocket` warm-up with no
+active subscription therefore doubled its delay on every blip with nothing ever
+resetting it, parking a healthy connection at the 30s cap.
+
+Surviving a 5s window is now the second proof of acceptance — a rejected
+credential closes 4001 well inside it, and that path clears the timer. The test
+covers both directions: a socket held open past the window reconnects at the
+initial delay again, and one closed at 100ms does not.
+
+**`apps/playground` could not build.** The worker-entry scan added earlier in
+this branch makes `mail_inbound_dispatch_without_verify` fire on an inbound
+handler that really does dispatch spoofable mail into a function running with
+the admin bearer and RLS off. `vite build` fails unconditionally on an
+ERROR-level advisory, and `lint:types` fails under CI only — which is why the
+pre-flight gate run reported green. Added the `verify` gate the lint asks for:
+DMARC pass, or SPF and DKIM both passing. Fails closed, since a `null` verdict
+means the receiving MX stamped no `Authentication-Results` header at all.
+
+* fix(codegen): type the emitted scheduler config so the compiler guards the install
+
+The scheduler return type had drifted from `Promise<string>` across four gates
+with nothing failing, and the fix earlier in this branch corrected the type
+while leaving the mechanism intact: the emitted config field was
+`(env) => unknown`, which forced `as SchedulerLike` at all four use sites and
+made the compiler blind to exactly this class of drift. The field now carries
+`SchedulerLike`, the casts are gone, and the next disagreement is a build
+error. Golden fixtures and all 13 example `_generated` trees regenerated.
+
+Also from review:
+
+- The registry's new auth and target guards threw bare `Error`, which the
+  templates commit in this same branch identified as becoming a redacted 500.
+  An unauthenticated caller was told the server had faulted. They are coded
+  now: `UNAUTHORIZED` for the auth gate, `BAD_REQUEST` for a malformed or
+  non-`https:` URL, `FORBIDDEN` for a host outside the allowlist. The
+  missing-binding throws stay bare — a misconfigured deployment IS a 500.
+
+- `@lunora/container` telemetry is batched now, so nothing leaves the process
+  until a timer elapses or `flush()` drains it. Every emit used to be its own
+  POST, so an existing job that exits promptly without flushing went from
+  reporting everything to reporting nothing. `flush()` is documented as
+  required rather than as an optimisation, including the oldest-first drop at
+  the item cap.
+
+- `examples/auth-playground` memoised the init PROMISE, so one failed
+  cold-start migration was replayed to every later request for the isolate's
+  life with no path back. Cleared on failure so the next request retries.
+
+- The SDK port-discovery gates treated every directory under `sdks/` except
+  `smoke` as a port, so a stray `node_modules` or `.venv` would have failed
+  both permanently on a difference that is not a missing port. Anchored on the
+  README every real port ships. Demonstrated both ways: a stray directory no
+  longer trips it, a genuine new port still does.
+
+- `discoverSandboxUsage` drove its scan from `TOOL_FLAGS` but kept a
+  hand-written conjunction for the early break; that is the third flag waiting
+  to be forgotten, so it reads the table too.
+
+- `registry/tsconfig.json`'s exclusion rationale had grown to a ~1,100-character
+  JSON string — unwrappable, unreadable in review, unlintable. Moved to
+  `registry/TYPECHECK.md` with a pointer left behind.
+
+- Noted in `withCallContext`'s JSDoc that every builder procedure now receives a
+  cloned context, not only those declaring `.meta()`.
+
+* revert(codegen): keep the scheduler config field untyped, and record why
+
+Typing the emitted `scheduler?: (env) => …` field as `SchedulerLike` — so the
+compiler would guard the seam the `Promise<string>` drift slipped through —
+does not compile. `@lunora/scheduler`'s public `Scheduler.runAfter`/`runAt` are
+generic with a REQUIRED `args`, while `SchedulerLike` takes it optional, so a
+function needing three parameters is not assignable to one callable with two.
+Every app that calls `createScheduler` directly fails, `apps/playground` and
+`examples/blog` among them.
+
+So the `as SchedulerLike` cast was not a loose annotation over two agreeing
+shapes; it was hiding a real incompatibility between the scheduler package's
+public type and what the DO accepts. Reconciling those two signatures is the
+fix, and it is an API change to `@lunora/scheduler` rather than a cast removal.
+
+Reverted to `unknown`, with the exact cause written at the field so the next
+reader learns why the cast is there instead of rediscovering it. The
+`Promise<string>` correction itself stands — that was the actual defect.
+
+Adds `isRunnableTarget` / `runnableTargetIds` to the `@lunora/config` snapshot.
+
+* fix(client): keep the framework-called follower surfaces inert instead of throwing
+
+A second review pass over the fixes the first one prompted. Its highest finding
+is the same shape the branch keeps producing: the earlier commit un-guarded
+`subscribe` because a follower's registration is what the leader's broadcast is
+matched against, and stopped there. `acquireConnectionContext` and
+`subscribeShape` are not app-level calls — all five `usePresence` adapters
+(react, vue, svelte, solid, angular) call the first from a component effect, and
+`@lunora/db`'s shape-backed `createCollection` calls the second from its sync
+path. Neither is something an app can opt out of, so the guard threw
+`NOT_IMPLEMENTED` out of an effect and unwound the entire tab to an error
+boundary. Before this branch presence merely failed to update.
+
+Both are inert on a follower now. The loud throw is kept for `whisper`,
+`whisperSubscribe` and `setConnectionContext`, which no first-party package
+calls — those are app code, which can handle a failure.
+
+`@lunora/agent`'s inbound handler had the same call-site-vs-layer problem with
+a security edge: it built `createInboundEmailHandler` with no `verify` and
+`AgentEmailTarget` gave apps no way to add one, while its own header instructs
+mappers not to trust `email.from`. A claimed message starts a durable run whose
+tools execute RLS-bypassed, so the gate now runs before any mapper — the same
+fail-closed DKIM/SPF/DMARC check the playground got. The advisor lint could
+never have caught this: it scans user projects, not this repo's sources.
+
+Also from the pass:
+
+- `runnableTargetIds` repeated the predicate `isRunnableTarget` defines, five
+  lines below it, in the commit whose purpose was removing that duplication.
+  Both moved to `driver-registry.ts`, beside the registry they query rather than
+  in the module that reads `lunora.json`, and `isRunnableTarget` answers `false`
+  for an unregistered id instead of throwing.
+- Three registry JSON files had every em dash rewritten to `—` and their
+  arrays exploded by a serializer that was not the repo's Prettier, mangling
+  user-facing `description` copy. Restored.
+- The emitted `scheduler?:` docblock carried a ~600-character maintainer
+  post-mortem into every user's `_generated/shard.ts`. One sentence there now;
+  the explanation lives in `emit.ts` where maintainers read it.
+- The SDK README marker added last round NARROWED the gate it was meant to
+  protect: a new port shipping without a README was invisible to discovery AND
+  absent from the list, so no drift fired. Replaced with an explicit ignore
+  list — a non-port directory costs one deliberate line, anything else fails.
+- `examples/auth-playground` still memoised a rejected promise if `buildAuth`
+  threw, one line above the fix for exactly that.
+- The browser item echoed the rejected hostname back to the caller, letting an
+  authenticated caller enumerate `ALLOWED_RENDER_HOSTS` by probing. Logged
+  server-side, generic to the client.
+- `clearConnectionTimers` replaces three copies of the same clear block across
+  two teardown paths, so a fourth timer cannot be half-remembered.
+- Comment trimming where the prior review's "rationale as changelog" note
+  applied again, and a `jsdoc/check-indentation` suppression deleted by removing
+  the list that needed it.
+
+* perf(server): skip the per-call context clone when no middleware can read it
+
+CodSpeed flagged 15 regressed benchmarks on this branch, all in
+`packages/server`, with `N=0: no .use (dispatch floor)` down 21.5% — a
+procedure with no middleware at all. That is the tell: `withCallContext`
+was cloning the dispatch context on every call, where the previous
+`withMeta` cloned only when `.meta()` was declared.
+
+`ctx.args` and `ctx.meta` exist for `.use()` steps to read; a handler already
+receives `args` as its own parameter. So a procedure with no middleware and no
+meta is handed the dispatch context unchanged.
+
+Measured locally rather than inferred from the instruction-count delta:
+
+  N=0 dispatch floor   3.06M -> 4.37M ops/s   (1.43x)
+  empty args           3.06M -> 4.43M ops/s   (1.44x)
+  single id arg        2.71M -> 4.04M ops/s   (1.49x)
+
+Procedures that DO declare middleware still pay the clone, and that cost is
+real — it is what makes `ctx.args` reach a `.use()` step, which is what fixed
+`emailGateMiddleware` and `verifyTurnstileMiddleware` throwing FORBIDDEN on
+every call. Prototype delegation would avoid the property copy, but
+`@lunora/auth`'s own docs teach `next({ ctx: { ...ctx, … } })`, and a spread
+drops inherited properties — so the full clone is required for correctness.
+
+* test(vite): cover the runnable-target guard
+
+Codecov put `packages/vite/src/index.ts` at 66% patch coverage: the guard
+that stops `vite build --target node` running the Cloudflare pipeline had no
+test at all. Verified the two positive cases fail with the guard reverted.
+
+* ci: keep CodeRabbit under its file cap so it reviews the code at all
+
+CodeRabbit skipped this PR entirely — "116 files, 16 over the limit of 100" —
+so a change touching every package got no automated review. The cap counts
+files that survive `path_filters`, and 44 of those were markdown.
+
+Excluded two kinds that cost review budget without earning it:
+
+- `**/CHANGELOG.md` — semantic-release writes them; reviewing generated
+  release notes is noise.
+- `**/docs/**` — the long-form prose docs under `packages/*/docs/` and
+  `apps/docs/src/content/`.
+
+That brings the reviewable set to 92. READMEs stay in deliberately: they are
+what a user reads first, and a wrong snippet there costs the most — this
+branch fixed several.
+
+The trade is explicit. Prose review is worth less than code review, and the
+previous setting bought neither: over the cap, CodeRabbit reviews nothing.
+* `useFlag`, `useFlags`, `createFlag`, `createFlags` and `flag`/
+`flags` no longer take a targeting `context`, and `FlagContext` is no longer
+exported. Any call passing one was passing a value the server discarded.
+
+`react-native.api.md` drifts too: it re-exports `@lunora/react` wholesale, so it
+carried a `FlagContext` row nothing would think to look for.
+
+* refactor(runtime): stop exporting four symbols nothing outside them uses
+
+Audited as "dead exports". Only one was dead code; the other three have live
+in-file callers, so it was the EXPORT that was unused, not the function — and
+deleting them would have broken working paths. `readShardKey` is the only thing
+that reads `?shardKey=` / `x-lunora-shard-key` for REST dispatch;
+`exportShardTable` is what `exportShardRows` delegates to per table;
+`hydrateDocsById` is the `IN (...)` hydration that keeps `computeRankPage` off
+an N+1. All three are now module-private.
+
+`DEFAULT_LOG_LIMIT` was genuinely dead: a public alias of the module-private
+`DEFAULT_LIMIT = 500` that nothing read except one `{@link}`. Deleted, and the
+`PipelineLogQuery.limit` doc states the default literally instead of linking a
+symbol that no longer exists.
+
+Also removes an unreachable diagnostic in the advisor command. It printed
+"advisor evidence unavailable — codegen ran with linting disabled" when
+`advisorContext` was undefined, which requires `CodegenOptions.lint` to be set —
+and that option is set at 47 call sites, every one of them inside codegen's own
+tests. No production caller passes it, so the branch could not run. Deleted
+rather than given a `--no-lint` flag to justify it: a user running `lunora
+advisor` wants the advisor evidence by definition. The option stays for library
+callers.
+
+* fix(codegen): gate `.commitOrdered()` against the target's capability matrix
+
+`commitOrderedTables` was rated in every platform capability matrix and read by
+nothing. A host rating it `unsupported` emitted the full `.commitOrdered()`
+surface with no diagnostic and silently dropped the ordering guarantee — which
+is the only thing that feature is.
+
+Promoted to a real `PlatformSignals` entry, read off the same IR that already
+feeds `globalTables`, so an unsupported rating now emits
+`platform_unsupported_feature` at codegen time. The test fails without the
+signal key wired in.
+
+`@lunora/platform`'s docblock called this "the outstanding case"; it now records
+that it was promoted, and that `memoryTables`, `objectStorageBackups` and
+`objectStorageCdcArchive` remain unpromoted instances of the same shape — rated
+in every matrix, consulted by nothing.
+
+* fix(examples): re-bless the five schema baselines that reported deploy drift
+
+`feedback-board`, `team-chat`, `kanban-board`, `chess` and `tanstack-start` all
+call `.extend(ratelimit.extension)` but their committed
+`lunora/.lunora-schema.json` had no `ratelimit_buckets`, so `lunora deploy`
+reported drift on each. Refreshed through the documented path.
+
+Two of them carried more than the ratelimit drift, and re-blessing accepts it:
+`kanban-board` had a required `tasks.status`, `chess` had `games.drawOfferedBy`
+and `lobbies.guestId` widening `string -> union`. Both were pre-existing and
+breaking; naming them here beats letting them ride in silently.
+
+`--update-schema-baseline` was reported as crashing with "Cannot read properties
+of undefined (reading 'filter')". It does not, under any condition that could be
+constructed — a refactor wrapped every reconcile step in try/catch, so a
+TypeError there now surfaces as a warning rather than killing the command, and
+the likely original home (`DeployDriver.provision`) is dead code no CLI path
+calls. No speculative fix. What the path did lack was any coverage at all, so it
+now has an end-to-end test: capture a baseline, age it into breaking drift,
+assert `prepare` blocks, assert the flag re-blesses it. Neutering the flag turns
+it red.
+
+The rate-limit copy-in paths taught two names for one thing: `registry/ratelimit`
+called its only bucket `default` while all 13 templates and all 9 example
+schemas use operation-shaped names. Reconciled on `send`. `lunora init`'s overlay
+was a third copy — and was internally inconsistent, emitting `default` while the
+`LUNORA_MESSAGES` it writes alongside declared `send`.
+
+`.lunora-schema.json` is now Prettier-ignored. `serializeSchemaSnapshot` writes
+2-space and Prettier rewrites it to 4, so every re-bless produced a file that
+failed `lint:prettier` until someone ran `--write`. The serializer owns that
+format and cannot change: its exact output is the input to `hashSchemaSnapshot`,
+which is a schema version's identity in the DO's `__lunora_schema_history`
+ledger. Ignoring is safe because that hash is taken from the re-serialized
+object, never from the file's bytes.
+
+Docs: `plans/README.md` described a deleted playground prototype as a live spike
+deliverable, and `protocol/README.md` documented the wire grammar without the
+two fixture-schema additions that now drive all eight SDK suites — `reencoded`
+(for shapes that are legitimately not fixed points of `encode(decode(x)) == x`)
+and `rejected[]`. Two claims those additions falsified are corrected with them.
+
+### Bug Fixes
+
+* close the round-2 package audit findings across registry, protocol, client and CI ([#539](https://github.com/anolilab/lunora/issues/539)) ([e3dd702](https://github.com/anolilab/lunora/commit/e3dd70282af1aff606fe03a4ebd29c33d0029ce5)), closes [#540](https://github.com/anolilab/lunora/issues/540)
+
+
+### Dependencies
+
+* **@lunora/bindings:** upgraded to 1.0.0-alpha.44
+* **@lunora/errors:** upgraded to 1.0.0-alpha.27
+* **@lunora/platform:** upgraded to 1.0.0-alpha.23
+* **@lunora/do:** upgraded to 1.0.0-alpha.111
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.49
+* **@lunora/workflow:** upgraded to 1.0.0-alpha.39
+
+## @lunora/runtime [1.0.0-alpha.84](https://github.com/anolilab/lunora/compare/@lunora/runtime@1.0.0-alpha.83...@lunora/runtime@1.0.0-alpha.84) (2026-08-31)
+
+### Bug Fixes
+
+* close the silent-success class across all 55 packages ([#536](https://github.com/anolilab/lunora/issues/536)) ([dad6b74](https://github.com/anolilab/lunora/commit/dad6b74b79dd336b13f0b922a6ab32d3345c9657))
+
+
+### Dependencies
+
+* **@lunora/bindings:** upgraded to 1.0.0-alpha.43
+* **@lunora/platform:** upgraded to 1.0.0-alpha.22
+* **@lunora/do:** upgraded to 1.0.0-alpha.110
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.48
+
+## @lunora/runtime [1.0.0-alpha.83](https://github.com/anolilab/lunora/compare/@lunora/runtime@1.0.0-alpha.82...@lunora/runtime@1.0.0-alpha.83) (2026-08-30)
+
+### Bug Fixes
+
+* **runtime:** stop migration and CDC sync reporting success over zero shards ([#533](https://github.com/anolilab/lunora/issues/533)) ([d55aaec](https://github.com/anolilab/lunora/commit/d55aaecd00f5621e9173aaa9c3d7af1f0de2cdb3)), closes [#527](https://github.com/anolilab/lunora/issues/527) [#527](https://github.com/anolilab/lunora/issues/527)
+
+## @lunora/runtime [1.0.0-alpha.82](https://github.com/anolilab/lunora/compare/@lunora/runtime@1.0.0-alpha.81...@lunora/runtime@1.0.0-alpha.82) (2026-08-30)
+
+### Documentation
+
+* **sharding:** .global() adoption path; drop a runtime lint that never fired ([#528](https://github.com/anolilab/lunora/issues/528)) ([e390e3f](https://github.com/anolilab/lunora/commit/e390e3f94a7aa7efc031e95411ade96a059a4528))
+
+
+### Dependencies
+
+* **@lunora/workflow:** upgraded to 1.0.0-alpha.38
+
+## @lunora/runtime [1.0.0-alpha.81](https://github.com/anolilab/lunora/compare/@lunora/runtime@1.0.0-alpha.80...@lunora/runtime@1.0.0-alpha.81) (2026-08-29)
+
+### Bug Fixes
+
+* **runtime:** stop export from silently skipping every shard-local row ([#527](https://github.com/anolilab/lunora/issues/527)) ([f2541e3](https://github.com/anolilab/lunora/commit/f2541e3b0f130469cef49edbbbeed184f2e1c28a))
+
+## @lunora/runtime [1.0.0-alpha.80](https://github.com/anolilab/lunora/compare/@lunora/runtime@1.0.0-alpha.79...@lunora/runtime@1.0.0-alpha.80) (2026-08-29)
+
+### ⚠ BREAKING CHANGES
+
+* eleven packages now declare peerDependencies. Consumers that
+relied on those packages resolving through hoisting must install them; the
+alternative was shipping types that fail to resolve off this repo's node_modules.
+
+`@lunora/workflow` is an optional peer of `@lunora/runtime`, so packem inlines
+its types rather than importing them — the published `@lunora/runtime` carries no
+`@lunora/workflow` dependency, as its source comments already promised.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01AWDgSnuBJaeQHfEitB2zeL
+
+* fix: satisfy eslint and the template matrix after the packem gate
+
+Two CI failures from making packem warnings fatal, each a gate that the local
+packem sweep does not cover.
+
+`@lunora/advisor` back to a real dependency on `@lunora/errors`. `ae-metrics.ts`
+imports `LunoraError` as a VALUE, and import/no-extraneous-dependencies requires
+that for anything under `src/` regardless of whether the module reaches the
+bundle. packem cannot see it because that module's value exports are
+quarantined — `src/index.ts` re-exports only its types — so the throwing code is
+tree-shaken out. The two rules disagree by construction; the packem side is now a
+commented `unused` exclusion that says which condition would end it.
+
+`@lunora/workflow` becomes a REQUIRED peer of `@lunora/runtime`. As an optional
+peer it was auto-installed anyway, and every one of the twelve templates then
+resolved `@lunora/workflow` from the npm REGISTRY instead of this checkout — the
+scaffold matrix builds its local-tarball map from required peers only, on the
+assumption that optional ones are never pulled in. Forcing the type to inline
+instead (`resolveExternals.exclude`) does not work: that option governs the JS
+bundle, and the declaration build has its own resolver, so the import survived.
+A required peer matches the other seven packages here and keeps the type
+resolvable for consumers.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01AWDgSnuBJaeQHfEitB2zeL
+
+### Build System
+
+* ship .mjs everywhere and make packem warnings fatal ([#526](https://github.com/anolilab/lunora/issues/526)) ([b3eaacc](https://github.com/anolilab/lunora/commit/b3eaacc5a31fe4634a5f4a6c59fda6fbbc8315e1))
+
+
+### Dependencies
+
+* **@lunora/bindings:** upgraded to 1.0.0-alpha.42
+* **@lunora/errors:** upgraded to 1.0.0-alpha.26
+* **@lunora/platform:** upgraded to 1.0.0-alpha.21
+* **@lunora/do:** upgraded to 1.0.0-alpha.109
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.47
+* **@lunora/workflow:** upgraded to 1.0.0-alpha.37
+
+## @lunora/runtime [1.0.0-alpha.79](https://github.com/anolilab/lunora/compare/@lunora/runtime@1.0.0-alpha.78...@lunora/runtime@1.0.0-alpha.79) (2026-08-28)
+
+
+### Dependencies
+
+* **@lunora/bindings:** upgraded to 1.0.0-alpha.41
+* **@lunora/errors:** upgraded to 1.0.0-alpha.25
+* **@lunora/platform:** upgraded to 1.0.0-alpha.20
+* **@lunora/do:** upgraded to 1.0.0-alpha.108
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.46
+* **@lunora/workflow:** upgraded to 1.0.0-alpha.36
+
+## @lunora/runtime [1.0.0-alpha.78](https://github.com/anolilab/lunora/compare/@lunora/runtime@1.0.0-alpha.77...@lunora/runtime@1.0.0-alpha.78) (2026-08-27)
+
+### Features
+
+* **do:** archive trimmed changelog rows to R2 ([#507](https://github.com/anolilab/lunora/issues/507)) ([9daef2e](https://github.com/anolilab/lunora/commit/9daef2eb4b4fa2ec7163390e3155c32d5e814294))
+
+
+### Dependencies
+
+* **@lunora/bindings:** upgraded to 1.0.0-alpha.40
+* **@lunora/platform:** upgraded to 1.0.0-alpha.19
+* **@lunora/do:** upgraded to 1.0.0-alpha.106
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.44
+
+## @lunora/runtime [1.0.0-alpha.77](https://github.com/anolilab/lunora/compare/@lunora/runtime@1.0.0-alpha.76...@lunora/runtime@1.0.0-alpha.77) (2026-08-27)
+
+### Bug Fixes
+
+* **shard-engine:** reject cursors minted before the tiebreak changed direction ([#503](https://github.com/anolilab/lunora/issues/503)) ([fdc58bc](https://github.com/anolilab/lunora/commit/fdc58bc6acc6c4f794da42e038c6953d2554c0fe))
+
+
+### Dependencies
+
+* **@lunora/do:** upgraded to 1.0.0-alpha.105
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.43
+
+## @lunora/runtime [1.0.0-alpha.76](https://github.com/anolilab/lunora/compare/@lunora/runtime@1.0.0-alpha.75...@lunora/runtime@1.0.0-alpha.76) (2026-08-26)
+
+### Performance Improvements
+
+* five profiled hot-path optimizations ([#487](https://github.com/anolilab/lunora/issues/487)) ([12e867c](https://github.com/anolilab/lunora/commit/12e867ceeeae59d364c4d7dc234febab187d0150))
+
+
+### Dependencies
+
+* **@lunora/do:** upgraded to 1.0.0-alpha.101
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.40
+* **@lunora/workflow:** upgraded to 1.0.0-alpha.35
+
+## @lunora/runtime [1.0.0-alpha.75](https://github.com/anolilab/lunora/compare/@lunora/runtime@1.0.0-alpha.74...@lunora/runtime@1.0.0-alpha.75) (2026-08-26)
+
+
+### Dependencies
+
+* **@lunora/bindings:** upgraded to 1.0.0-alpha.39
+* **@lunora/errors:** upgraded to 1.0.0-alpha.24
+* **@lunora/platform:** upgraded to 1.0.0-alpha.18
+* **@lunora/do:** upgraded to 1.0.0-alpha.100
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.39
+* **@lunora/workflow:** upgraded to 1.0.0-alpha.33
+
+## @lunora/runtime [1.0.0-alpha.74](https://github.com/anolilab/lunora/compare/@lunora/runtime@1.0.0-alpha.73...@lunora/runtime@1.0.0-alpha.74) (2026-08-26)
+
+
+### Dependencies
+
+* **@lunora/bindings:** upgraded to 1.0.0-alpha.38
+* **@lunora/errors:** upgraded to 1.0.0-alpha.23
+* **@lunora/do:** upgraded to 1.0.0-alpha.99
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.38
+* **@lunora/workflow:** upgraded to 1.0.0-alpha.32
+
+## @lunora/runtime [1.0.0-alpha.73](https://github.com/anolilab/lunora/compare/@lunora/runtime@1.0.0-alpha.72...@lunora/runtime@1.0.0-alpha.73) (2026-08-25)
+
+### ⚠ BREAKING CHANGES
+
+* authorizeShard takes a single ShardCaller object
+({ identity, shardKey }) instead of two positional arguments. Both
+previously-natural shapes now fail to compile, which is deliberate -- an
+optional argument would have documented the trap while leaving every
+un-updated gate silently breaking cron dispatch.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_013fJuLhuqLNnWwP1F9zqmPc
+
+* fix(examples): update authorizeShard call sites
+
+team-chat's gate no longer type-checks against the ShardCaller object.
+The remaining changes are code samples and comments that would otherwise
+teach the positional shape that no longer exists.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_013fJuLhuqLNnWwP1F9zqmPc
+
+* fix(studio): mask the global data browser
+
+The .global() browser had no mask preview at all: a table carrying a
+.use(mask(...)) policy rendered in cleartext, with no toggle and no
+header chips, while the sharded browser honoured the same policy on every
+surface.
+
+The policy metadata was reachable all along -- maskPolicies is
+schema-wide rather than shard-scoped, and a .global() table's declared
+field names join against it identically.
+
+Covers the grid cells, header chips, the toggle, the facet sidebar, and
+the drill-down filter chips. That last one is the non-obvious surface:
+facet a covered column with the preview off, click a value, toggle back
+on, and the chip still held the secret.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_013fJuLhuqLNnWwP1F9zqmPc
+
+* build(api): pin re-exports to one printed signature
+
+A subpath re-exporting another subpath's declaration printed the whole
+signature again, so auth-ui's six framework ports each re-printed core's
+271 declarations and the snapshot reached 39,299 lines -- a real surface
+change was unreviewable inside it.
+
+A declaration now prints in full once, under the subpath whose entry
+directory contains it, and every other subpath records a pin naming where
+the signature is tracked. Keyed by declaration identity rather than name,
+so two subpaths exporting the same name from different files stay two
+sections. The same rule the script already applied across packages, now
+applied within one.
+
+Coverage is unchanged: every export is still recorded per subpath, so
+losing a re-export still fails for that port by name. auth-ui drops to
+16,691 lines.
+
+Also fixes the drift reporter, which keyed sections by bare export name:
+in a multi-subpath snapshot the last section overwrote the others, so a
+real signature change could summarise as no change. The gate always
+compared whole files, so this affected the message, not the verdict.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_013fJuLhuqLNnWwP1F9zqmPc
+
+* test(runtime): format and annotate the fixture bearer
+
+The scheduler-dispatch test's authorization header trips the secret
+scanner's kingfisher.http.2 rule; it is a fixture matching the stub admin
+token asserted a few lines below, so it carries an inline allow naming
+what it is rather than a baseline entry.
+
+Both files also went in unformatted -- they predate the pre-commit hooks
+being wired up, which is what would otherwise have caught this.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_013fJuLhuqLNnWwP1F9zqmPc
+
+* fix(examples): regenerate every stale _generated tree
+
+All 13 examples carried generated output predating a codegen change --
+the lifecycle field on RegisteredLunoraFunction, runShardInit/runReactor
+dispatch, the inTransaction predicate and the untracked ctx.runQuery
+path. 26 files, and nothing had ever noticed.
+
+Output is deterministic (two consecutive sweeps produced byte-identical
+diffs) and every regenerated tree typechecks clean.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_013fJuLhuqLNnWwP1F9zqmPc
+
+* build: gate lunora codegen output
+
+check-generated-files.mjs proved three generators reproduce their
+committed output and did not cover lunora codegen -- the repo's primary
+generator -- so every _generated tree under examples/ drifted unwatched.
+All 13 were stale.
+
+The generator list now discovers an entry per example with a codegen
+script, so a new example is covered as soon as it has one. Templates are
+not gated because they commit no generated output at all: every one of
+the 13 lists lunora/_generated in its .gitignore, so there is nothing to
+hold to a generator.
+
+The job gains the build the sweep needs, matching what the api-surface
+job already pays.
+
+The gate was also not triggering: the generated_files filter matched
+manifests and generate-*.js, so a change to packages/codegen/src/emit.ts
+-- the exact thing that caused this drift -- matched nothing and the job
+never ran. The filter now covers packages/codegen, examples, and the
+script itself.
+
+Known limitation, unchanged and now documented: the script compares git
+status codes rather than content, so drift inside a file that was already
+dirty before the sweep is invisible. Harmless in CI, which starts clean;
+it means a local run mid-change cannot detect drift in files you have
+already modified.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_013fJuLhuqLNnWwP1F9zqmPc
+
+* docs(studio): record why filter rows stay unmasked
+
+The question of whether the sharded browser's filter bar should mask has
+now been asked twice and answered from memory both times. The answer is
+no, and the reason is an invariant rather than a preference: a filter
+clause rendered in that bar is always simultaneously rendered verbatim in
+the address bar, because useDataBrowser mirrors toFilterClauses through
+onViewChange into ?filters=. Masking a row would blank a value legible
+three inches above it while making the input uneditable.
+
+That is what separates it from the .global() drill-down chips, which are
+masked: those are read-only, fed only by a facet click, and held in local
+state that never reaches the URL. The two data-derived paths into a
+sharded filter are already closed at the source -- a facet click cannot
+reach a covered column while the preview is on, and FK traversal seeds
+search rather than filters.
+
+Two tests now pin the halves the rationale rests on, so it fails loudly
+rather than rotting into a stale comment.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_013fJuLhuqLNnWwP1F9zqmPc
+
+* fix(sdk): chain the dart generated-check analysis
+
+A `\` continuation followed by a comment terminates the command, so the
+prose spliced mid-chain detached everything after it: the analysis ran
+unchained from the `cp` that stages the smoke, in a script that runs
+without `set -e`.
+
+That is the hole the chain was added to close, still open on the one leg
+this script exists to gate. The comment moves above the case label, with a
+note saying why it cannot live inside the chain. No other shell file in
+the repo has the pattern.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_013fJuLhuqLNnWwP1F9zqmPc
+
+* refactor(shared): one fnv1a, not four
+
+`shared/fnv1a.ts` argues in its own header that a shared definition is
+what enforces non-drift. Four definitions existed, one of them
+`shared/content-digest.ts` in the same directory, and
+`notify`'s carried a comment requiring it to reproduce the algorithm
+byte-for-byte or delete the wrong subscription row -- a hand-maintained
+contract against a function it did not import.
+
+Equivalence was proven before consolidating, across 4,016 inputs
+including astral characters and lone surrogates, because a digest change
+here picks which row gets deleted. The offset is now a parameter so
+`contentDigest` can run its second pass through the same function.
+
+`@lunora/client`'s `hashToken` is deliberately NOT folded in: it uses
+`charCodeAt` and combines FNV with djb2, so it is a different digest.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_013fJuLhuqLNnWwP1F9zqmPc
+
+* refactor(studio): share the toolbar button classes
+
+Five copies across the data feature, several commenting themselves
+"shared", two already differing in class order. A theme tweak had to land
+in five files.
+
+Two exports rather than one, because three of the five carried
+`aria-pressed:` styling and two did not. The pressed classes are inert
+without the attribute so a single constant would render identically --
+but which buttons are toggles is the thing a reader needs.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_013fJuLhuqLNnWwP1F9zqmPc
+
+* refactor(codegen): let tsc classify the capabilities
+
+The gate map was `Partial`, with the unmapped keys repeated in a second
+list and a test asserting the two partitioned `CapabilityKey`. The map is
+now total and credential-based is spelled `null`, so an unclassified
+capability fails `tsc` where it is written instead of a test at CI time
+-- verified by deleting an entry and reading TS2741.
+
+The surviving test covers what the type cannot: `CAPABILITIES` is a
+runtime array, so a row added there without widening `CapabilityKey`
+would still leave a real capability out of the map. That is the fail-open
+`notify` had.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_013fJuLhuqLNnWwP1F9zqmPc
+
+* fix(runtime): throw the typed error on a denied voice shard
+
+The voice upgrade returned a bare 403 `Response` where every other shard
+path throws `FORBIDDEN_SHARD`, so a denied caller there got a status with
+no error code to branch on.
+
+Deliberately NOT collapsed into `assertShardAuthorized`, despite reading
+like a copy of it: that helper default-denies only a NON-default shard,
+and there is no default voice shard, so routing through it would admit a
+caller who names the default shard as their threadKey. The difference now
+says so in a comment.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_013fJuLhuqLNnWwP1F9zqmPc
+
+* fix(studio): mask the foreign-key hover preview
+
+Hovering an FK cell fetched the TARGET row and rendered its first eight
+fields verbatim. The grid's mask view covers the browsed table and says
+nothing about another table's columns, so a target's covered columns
+showed in the clear in a tooltip beside a grid masking exactly those.
+
+The policies are deployment-wide, so the target resolves without another
+fetch. The test uses a column the NAME HEURISTIC cannot catch: the first
+version used `apiKey`, which the heuristic masks whichever table is
+looked up, so it passed against the unfixed code and proved nothing.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_013fJuLhuqLNnWwP1F9zqmPc
+
+* docs: fix an authorizeShard that 403s the default shard
+
+`assertShardAuthorized` runs the callback for EVERY shard the caller
+names once one is configured -- the non-default test is in the `else`,
+reached only when there is no callback. So `identity?.userId === shardKey`
+rejects the default shard, which is where an unsharded table lives, and an
+app copying the snippet 403s every unsharded RPC it has.
+
+The snippets are corrected across the concept docs, the scaling tutorial
+and the template comments, and the package's own docs already recommended
+the safe form -- the two contradicted each other on lines this branch had
+just touched.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_013fJuLhuqLNnWwP1F9zqmPc
+
+* ci: self-list lint.yml in the generated_files filter
+
+The job's workflow now carries the `build:packages` step the codegen
+sweep cannot run without. A PR editing only `lint.yml` to drop it matched
+`frontend_lintable` -- so eslint ran -- but not `generated_files`, so the
+generated-files job was skipped and its required check stayed green while
+the guard it protects was removed. The file's own header states this
+self-listing rule; four other filters already follow it.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_013fJuLhuqLNnWwP1F9zqmPc
+
+* test: pin the AI filter grounding and drop two tautologies
+
+The studio's rationale for leaving filter rows unmasked cited
+generateFilter sending column names only, in a comment about another
+package with nothing checking it. Now asserted subtractively -- everything
+the caller supplied is removed from the serialised payload and the residue
+must contain no user data -- rather than as a not.toContain of a value the
+test never supplied, which would pass whatever the code did.
+
+Also: a bigint equality assertion that called one pure function twice with
+the same argument, and an admin-function count pinned at 50 that would
+fail the day someone legitimately adds one.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_013fJuLhuqLNnWwP1F9zqmPc
+
+* style(studio): format useMaskView
+
+An eslint --fix arrow-body-style rewrite landed after the file was
+formatted, and the version restored from a mutation-test backup captured
+that state -- so the concise body became a block body Prettier had never
+seen. CI's `prettier --check .` caught it.
+
+This is the ordering CLAUDE.md warns about, in reverse: Prettier must run
+BEFORE eslint --fix, and anything restored from a backup afterwards needs
+the check re-run against it.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_013fJuLhuqLNnWwP1F9zqmPc
+
+### Bug Fixes
+
+* restore guards and gates that passed silently ([#478](https://github.com/anolilab/lunora/issues/478)) ([62af245](https://github.com/anolilab/lunora/commit/62af2456030c28cba83814e410a9dc2ea1d3e580))
+
+
+### Dependencies
+
+* **@lunora/bindings:** upgraded to 1.0.0-alpha.37
+* **@lunora/do:** upgraded to 1.0.0-alpha.98
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.37
+
+## @lunora/runtime [1.0.0-alpha.72](https://github.com/anolilab/lunora/compare/@lunora/runtime@1.0.0-alpha.71...@lunora/runtime@1.0.0-alpha.72) (2026-08-25)
+
+### ⚠ BREAKING CHANGES
+
+* **runtime:** `serveStorageObject`'s structural storage parameter now
+requires `head` alongside `download`. `@lunora/storage` provides it (with
+its own fallback to a 0-length ranged `get()` on a binding with no HEAD);
+a hand-rolled double must add it.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01EjmVJXmP8D1Amh6t49vS4T
+
+* refactor(shared): extract memoizePromise, stop poisoning the HMAC key cache
+
+Three lazily-built async singletons had each hand-rolled the same keyed
+memo: look the key up, store the PROMISE so concurrent callers coalesce
+onto one run, drop the entry if it rejects. `shared/promise-memo.ts` is
+the one definition; `@lunora/mcp`'s per-tool charge middleware,
+`@lunora/x402`'s per-procedure one, and the per-secret HMAC key cache now
+use it.
+
+It also fixes two bugs the copies had between them.
+
+`shared/hmac-url.ts` never evicted on rejection at all, so a single failed
+`crypto.subtle.importKey` stayed in the map and every later verify against
+that secret was served the original failure for the isolate's whole life.
+
+The two that did evict deleted whatever sat under the key at rejection
+time, not necessarily their own entry. A slow first attempt failing after
+a healthy retry had taken the slot would delete that retry. The shared
+helper compares identity before deleting, so an entry can only ever evict
+itself.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01EjmVJXmP8D1Amh6t49vS4T
+
+* feat(runtime): store the declared REST cache policy at the edge
+
+`.expose({ rest: true, cache })` emitted `Cache-Control` and `Vary` and
+stopped there. A response a Worker GENERATES is not stored by the colo
+cache on its own, so the declared policy bought browser revalidation and
+nothing else — every request still paid a shard dispatch. `caches.default`
+was used exactly zero times in the repo.
+
+`rest-edge-cache` adds the missing half: a `match` before dispatch and a
+`waitUntil`-deferred `put` after, wrapped in the guards that make storing
+a procedure-backed response safe rather than a cross-user leak.
+
+- Only a genuinely anonymous, effective-`public` exchange is stored,
+  reusing the credential check the header path already applies. A
+  declared-`private` policy is never stored: it is caller-specific by
+  definition and this cache is shared by everyone hitting the colo.
+- `Vary` is enforced in the KEY. Cloudflare's cache honours `Vary` for
+  `Accept-Encoding` only, so a body that varies on `x-lunora-shard-key`
+  would otherwise be handed to a caller with a different key. Every
+  varying header's value is folded into the stored URL, which turns the
+  hazard into a miss.
+- The lookup runs after the rate-limit gate, the order a CDN uses: a hit
+  still costs a Worker invocation and is still the caller's request, so it
+  is metered — it just skips the shard.
+- A cache read or write that rejects is treated as a miss, never as a
+  failed request.
+
+`@lunora/platform` gains the `HttpCacheLike` contract and rates `httpCache`
+in both matrices: `native` on Cloudflare, `unsupported` on Node, where the
+surface degrades to emitting `Cache-Control` alone.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01EjmVJXmP8D1Amh6t49vS4T
+
+* fix(runtime): let createWorker reach the REST edge cache, and test the wiring
+
+`buildRestRoutes` took an `edgeCache` dep that `createWorker` never
+forwarded, so the documented opt-out was unreachable for anyone going
+through the normal entry point — and nothing could inject a double either,
+which is why the gap survived review. `restEdgeCache` now plumbs through,
+mirroring `restRateLimit`. It is forwarded when PRESENT rather than when
+truthy, since `null` is the meaningful opt-out value.
+
+The unit tests covered `rest-edge-cache`'s store/lookup decisions in
+isolation but nothing exercised what the route does with them. Added, at
+the `createWorker` level where a shard spy can count dispatches:
+
+- a second identical request is served from the cache with NO second shard
+  dispatch (this is the whole feature, and it was unasserted)
+- a credentialed caller stores nothing and dispatches every time
+- the rate-limit gate is consulted BEFORE the cache, so a warm entry does
+  not hand a limited caller a free body
+- `restEdgeCache: null` keeps the declared `Cache-Control` on the wire
+  while storing nothing
+- an endpoint with no declared policy is never stored
+
+Plus `defaultHttpCache` (absent `caches`, present, and a throwing accessor),
+and one for `serveStorageObject`'s 206 headers coming from the head rather
+than the ranged read — a deliberate choice that no test pinned, so nothing
+would have caught it flipping.
+
+Each new assertion was mutation-checked: reverting the plumbing, moving the
+lookup ahead of the limiter, and swapping the 206 header source each fail
+exactly the test that claims to cover them.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01EjmVJXmP8D1Amh6t49vS4T
+
+* fix(runtime): keep paid and per-caller responses out of the edge cache
+
+The edge cache sat upstream of the x402 charge gate, which runs inside
+`invokeExposed`. A hit returned before dispatch, so it ran neither the
+challenge nor the settlement — and `x-payment` was in no credential list,
+so a payer read as anonymous and their 200 was stored. Every later caller
+in that colo got the paid body free, together with the payer's
+`X-PAYMENT-RESPONSE` receipt, for the whole `maxAge`.
+
+`x-payment` is now a credential header, so a paid exchange is `private` on
+the header path and unstorable on the cache path by the same derivation. A
+response carrying a settlement receipt is refused separately — a second
+lock on a money path.
+
+That derivation is now singular. `effectiveRestScope` is the one answer to
+"may a shared cache have this", called by both halves; the store no longer
+re-derives scope and credentials for itself, where gaining a credential
+source on one side alone would have silently stored a per-caller body.
+
+Also closed, all of them reachable without an attacker:
+
+- `__lunora_vary` was documented as reserved but nothing reserved it. It
+  reached the procedure as an argument while `set` overwrote it in the key,
+  making it the one query key a caller could vary without varying the key.
+  It is now excluded from args and deleted before the key is built.
+- A shard response's `x-d1-bookmark` / `x-lunora-shard-key` were stored and
+  replayed, so a caller holding a newer bookmark could adopt a stale one and
+  lose read-your-writes. Both are dropped from the stored copy.
+- `applyRestCache` merges the procedure's own `Vary` into the emitted
+  header, but the key folds only the policy's names, so a response could
+  advertise more than the key fenced. Storing now requires the advertised
+  set to be fenced; `Vary: *` never stores.
+- The store path evaluated the key and `clone()` as arguments, outside its
+  `.catch`. A policy with a malformed `vary` (`"Accept Language"`) made
+  `Headers.get` throw and turned every request to that endpoint into a 500 —
+  for a policy that emitted a valid `Vary` header before. Both paths now
+  degrade to a miss, as the read path already did.
+- `X-Lunora-Edge-Cache` is CORS-exposed, so the browser clients the docs
+  point at it can actually read it.
+
+Structurally, the two `undefined`-threading functions become one per-route
+builder: what a policy decides on its own is decided once at construction,
+and a route that can never edge-cache has no cache code path at all. Only
+the cache handle stays late-bound, since `caches.default` cannot be read at
+construction time in workerd. The seven exports with no consumers are gone
+from the package surface rather than frozen in two snapshots.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_017M3tmDNVKV9Dq3GSVTcvYL
+
+* fix(storage): make head serializable, declared, and stubbed
+
+Three ways the new body-free read did not survive contact with a caller.
+
+`head()` returned `download()`'s `withSha256` Proxy. That Proxy exists to
+keep R2's native body accessors alive, and its own docblock says why it must
+not be used for a body-free read: a Proxy over a non-extensible host object
+cannot advertise the synthetic checksum fields as own keys, so
+`JSON.stringify` drops them. A head result is exactly what a query returns,
+so `sha256`/`sha256Base64` vanished on the wire. It now uses the same
+`toListObject` projection `list()` does. The test could not catch it — it
+asserted by property access, which the get trap serves, against an
+extensible object literal — so it now round-trips through JSON against a
+`preventExtensions`'d double.
+
+`ctx.storage.head` was documented in the capability table and the file-storage
+guide but declared on neither `ReadOnlyStorage` nor `Storage`, so calling it
+was a type error. It is declared now, returning `StorageObjectHead` — the
+richer public mirror an HTTP layer needs, keeping the validator, the base64
+digest and `uploaded` as a `Date`.
+
+Codegen's `storageStub` did not list `head`, so an app with no storage
+configured met `TypeError: context.storage.head is not a function` on any
+ranged request instead of the "no storage configured" message every other
+operation gives.
+
+Separately: a `Range` that cannot produce a 206 anyway — absent, multi-range,
+malformed — no longer pays for a metadata read it then discards, which also
+closes the window where the object could vanish between the two reads and
+turn a 200 into a 404. The full-object answer is decidable from the header
+alone.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_017M3tmDNVKV9Dq3GSVTcvYL
+
+* refactor(shared): bound memoizePromise by size, not by callback
+
+`onInsert` was an extension point with one consumer, on a helper whose whole
+justification is that three call sites were the same shape. The thing that
+one consumer did with it — `evictOldestEntry(map, capacity)` — is what
+`evict-oldest`'s contract already assumes: "every caller inserts exactly one
+entry immediately after calling". A `maxEntries` bound makes that structural
+instead of a promise each caller keeps, with no closure per call.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_017M3tmDNVKV9Dq3GSVTcvYL
+
+### Features
+
+* **runtime:** store the declared REST cache policy at the edge ([#476](https://github.com/anolilab/lunora/issues/476)) ([9ababee](https://github.com/anolilab/lunora/commit/9ababeebc68cd74adfef5d923cfa9e1d70f0f690))
+
+
+### Dependencies
+
+* **@lunora/bindings:** upgraded to 1.0.0-alpha.36
+* **@lunora/platform:** upgraded to 1.0.0-alpha.17
+* **@lunora/do:** upgraded to 1.0.0-alpha.97
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.36
+
+## @lunora/runtime [1.0.0-alpha.71](https://github.com/anolilab/lunora/compare/@lunora/runtime@1.0.0-alpha.70...@lunora/runtime@1.0.0-alpha.71) (2026-08-25)
+
+### Bug Fixes
+
+* **runtime:** decode wire values for third parties ([#452](https://github.com/anolilab/lunora/issues/452)) ([2cb2678](https://github.com/anolilab/lunora/commit/2cb267886df50d2a79a5649dcd6784ee17ae8bd0))
+
+
+### Dependencies
+
+* **@lunora/do:** upgraded to 1.0.0-alpha.96
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.35
+
+## @lunora/runtime [1.0.0-alpha.70](https://github.com/anolilab/lunora/compare/@lunora/runtime@1.0.0-alpha.69...@lunora/runtime@1.0.0-alpha.70) (2026-08-24)
+
+
+### Dependencies
+
+* **@lunora/bindings:** upgraded to 1.0.0-alpha.35
+* **@lunora/do:** upgraded to 1.0.0-alpha.95
+* **@lunora/workflow:** upgraded to 1.0.0-alpha.31
+
+## @lunora/runtime [1.0.0-alpha.69](https://github.com/anolilab/lunora/compare/@lunora/runtime@1.0.0-alpha.68...@lunora/runtime@1.0.0-alpha.69) (2026-08-23)
+
+### Build System
+
+* migrate to @cloudflare/vitest-plugin v1 ([#470](https://github.com/anolilab/lunora/issues/470)) ([05c4937](https://github.com/anolilab/lunora/commit/05c49371c30d65907eec8719f27a117f9bcaaefc))
+
+
+### Dependencies
+
+* **@lunora/bindings:** upgraded to 1.0.0-alpha.33
+* **@lunora/platform:** upgraded to 1.0.0-alpha.15
+* **@lunora/do:** upgraded to 1.0.0-alpha.93
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.34
+
+## @lunora/runtime [1.0.0-alpha.68](https://github.com/anolilab/lunora/compare/%40lunora%2Fruntime%401.0.0-alpha.67...%40lunora%2Fruntime%401.0.0-alpha.68) (2026-08-19)
+
+## @lunora/runtime [1.0.0-alpha.67](https://github.com/anolilab/lunora/compare/%40lunora%2Fruntime%401.0.0-alpha.66...%40lunora%2Fruntime%401.0.0-alpha.67) (2026-08-18)
+
+
+### Dependencies
+
+* **@lunora/bindings:** upgraded to 1.0.0-alpha.32
+* **@lunora/platform:** upgraded to 1.0.0-alpha.14
+* **@lunora/do:** upgraded to 1.0.0-alpha.90
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.31
+
+## @lunora/runtime [1.0.0-alpha.66](https://github.com/anolilab/lunora/compare/%40lunora%2Fruntime%401.0.0-alpha.65...%40lunora%2Fruntime%401.0.0-alpha.66) (2026-08-18)
+
+
+### Dependencies
+
+* **@lunora/bindings:** upgraded to 1.0.0-alpha.31
+* **@lunora/platform:** upgraded to 1.0.0-alpha.13
+* **@lunora/do:** upgraded to 1.0.0-alpha.89
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.30
+
+## @lunora/runtime [1.0.0-alpha.65](https://github.com/anolilab/lunora/compare/%40lunora%2Fruntime%401.0.0-alpha.64...%40lunora%2Fruntime%401.0.0-alpha.65) (2026-08-15)
+
+
+### Dependencies
+
+* **@lunora/bindings:** upgraded to 1.0.0-alpha.30
+* **@lunora/platform:** upgraded to 1.0.0-alpha.12
+* **@lunora/do:** upgraded to 1.0.0-alpha.88
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.29
+
+## @lunora/runtime [1.0.0-alpha.64](https://github.com/anolilab/lunora/compare/%40lunora%2Fruntime%401.0.0-alpha.63...%40lunora%2Fruntime%401.0.0-alpha.64) (2026-08-14)
+
+
+### Dependencies
+
+* **@lunora/do:** upgraded to 1.0.0-alpha.87
+
+## @lunora/runtime [1.0.0-alpha.63](https://github.com/anolilab/lunora/compare/%40lunora%2Fruntime%401.0.0-alpha.62...%40lunora%2Fruntime%401.0.0-alpha.63) (2026-08-14)
+
+
+### Dependencies
+
+* **@lunora/bindings:** upgraded to 1.0.0-alpha.29
+* **@lunora/errors:** upgraded to 1.0.0-alpha.22
+* **@lunora/platform:** upgraded to 1.0.0-alpha.11
+* **@lunora/do:** upgraded to 1.0.0-alpha.86
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.28
+* **@lunora/workflow:** upgraded to 1.0.0-alpha.29
+
+## @lunora/runtime [1.0.0-alpha.62](https://github.com/anolilab/lunora/compare/%40lunora%2Fruntime%401.0.0-alpha.61...%40lunora%2Fruntime%401.0.0-alpha.62) (2026-08-11)
+
+
+### Dependencies
+
+* **@lunora/do:** upgraded to 1.0.0-alpha.84
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.27
+* **@lunora/workflow:** upgraded to 1.0.0-alpha.28
+
+## @lunora/runtime [1.0.0-alpha.61](https://github.com/anolilab/lunora/compare/%40lunora%2Fruntime%401.0.0-alpha.60...%40lunora%2Fruntime%401.0.0-alpha.61) (2026-08-11)
+
+
+### Dependencies
+
+* **@lunora/bindings:** upgraded to 1.0.0-alpha.28
+* **@lunora/errors:** upgraded to 1.0.0-alpha.21
+* **@lunora/platform:** upgraded to 1.0.0-alpha.10
+* **@lunora/do:** upgraded to 1.0.0-alpha.82
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.25
+* **@lunora/workflow:** upgraded to 1.0.0-alpha.27
+
+## @lunora/runtime [1.0.0-alpha.60](https://github.com/anolilab/lunora/compare/%40lunora%2Fruntime%401.0.0-alpha.59...%40lunora%2Fruntime%401.0.0-alpha.60) (2026-08-10)
+
+
+### Dependencies
+
+* **@lunora/do:** upgraded to 1.0.0-alpha.80
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.23
+
+## @lunora/runtime [1.0.0-alpha.59](https://github.com/anolilab/lunora/compare/%40lunora%2Fruntime%401.0.0-alpha.58...%40lunora%2Fruntime%401.0.0-alpha.59) (2026-08-09)
+
+
+### Dependencies
+
+* **@lunora/bindings:** upgraded to 1.0.0-alpha.25
+* **@lunora/errors:** upgraded to 1.0.0-alpha.18
+* **@lunora/do:** upgraded to 1.0.0-alpha.79
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.20
+* **@lunora/workflow:** upgraded to 1.0.0-alpha.25
+
+## @lunora/runtime [1.0.0-alpha.58](https://github.com/anolilab/lunora/compare/%40lunora%2Fruntime%401.0.0-alpha.57...%40lunora%2Fruntime%401.0.0-alpha.58) (2026-08-09)
+
+
+### Dependencies
+
+* **@lunora/bindings:** upgraded to 1.0.0-alpha.24
+* **@lunora/errors:** upgraded to 1.0.0-alpha.17
+* **@lunora/platform:** upgraded to 1.0.0-alpha.8
+* **@lunora/do:** upgraded to 1.0.0-alpha.76
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.18
+* **@lunora/workflow:** upgraded to 1.0.0-alpha.24
+
+## @lunora/runtime [1.0.0-alpha.57](https://github.com/anolilab/lunora/compare/%40lunora%2Fruntime%401.0.0-alpha.56...%40lunora%2Fruntime%401.0.0-alpha.57) (2026-08-07)
+
+
+### Dependencies
+
+* **@lunora/bindings:** upgraded to 1.0.0-alpha.23
+* **@lunora/platform:** upgraded to 1.0.0-alpha.7
+* **@lunora/do:** upgraded to 1.0.0-alpha.73
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.16
+
+## @lunora/runtime [1.0.0-alpha.56](https://github.com/anolilab/lunora/compare/%40lunora%2Fruntime%401.0.0-alpha.55...%40lunora%2Fruntime%401.0.0-alpha.56) (2026-08-07)
+
+
+### Dependencies
+
+* **@lunora/do:** upgraded to 1.0.0-alpha.72
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.15
+
+## @lunora/runtime [1.0.0-alpha.55](https://github.com/anolilab/lunora/compare/%40lunora%2Fruntime%401.0.0-alpha.54...%40lunora%2Fruntime%401.0.0-alpha.55) (2026-08-07)
+
+
+### Dependencies
+
+* **@lunora/bindings:** upgraded to 1.0.0-alpha.22
+* **@lunora/errors:** upgraded to 1.0.0-alpha.16
+* **@lunora/do:** upgraded to 1.0.0-alpha.71
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.14
+* **@lunora/workflow:** upgraded to 1.0.0-alpha.23
+
+## @lunora/runtime [1.0.0-alpha.54](https://github.com/anolilab/lunora/compare/%40lunora%2Fruntime%401.0.0-alpha.53...%40lunora%2Fruntime%401.0.0-alpha.54) (2026-08-07)
+
+
+### Dependencies
+
+* **@lunora/bindings:** upgraded to 1.0.0-alpha.21
+* **@lunora/errors:** upgraded to 1.0.0-alpha.15
+* **@lunora/do:** upgraded to 1.0.0-alpha.70
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.13
+* **@lunora/workflow:** upgraded to 1.0.0-alpha.22
+
+## @lunora/runtime [1.0.0-alpha.53](https://github.com/anolilab/lunora/compare/%40lunora%2Fruntime%401.0.0-alpha.52...%40lunora%2Fruntime%401.0.0-alpha.53) (2026-08-04)
+
+
+### Dependencies
+
+* **@lunora/bindings:** upgraded to 1.0.0-alpha.20
+* **@lunora/errors:** upgraded to 1.0.0-alpha.14
+* **@lunora/platform:** upgraded to 1.0.0-alpha.6
+* **@lunora/do:** upgraded to 1.0.0-alpha.68
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.11
+* **@lunora/workflow:** upgraded to 1.0.0-alpha.21
+
+## @lunora/runtime [1.0.0-alpha.52](https://github.com/anolilab/lunora/compare/%40lunora%2Fruntime%401.0.0-alpha.51...%40lunora%2Fruntime%401.0.0-alpha.52) (2026-08-04)
+
+
+### Dependencies
+
+* **@lunora/bindings:** upgraded to 1.0.0-alpha.19
+* **@lunora/errors:** upgraded to 1.0.0-alpha.13
+* **@lunora/platform:** upgraded to 1.0.0-alpha.5
+* **@lunora/do:** upgraded to 1.0.0-alpha.67
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.10
+* **@lunora/workflow:** upgraded to 1.0.0-alpha.19
+
+## @lunora/runtime [1.0.0-alpha.51](https://github.com/anolilab/lunora/compare/%40lunora%2Fruntime%401.0.0-alpha.50...%40lunora%2Fruntime%401.0.0-alpha.51) (2026-08-02)
+
+
+### Dependencies
+
+* **@lunora/bindings:** upgraded to 1.0.0-alpha.18
+* **@lunora/platform:** upgraded to 1.0.0-alpha.4
+* **@lunora/do:** upgraded to 1.0.0-alpha.64
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.7
+
+## @lunora/runtime [1.0.0-alpha.50](https://github.com/anolilab/lunora/compare/%40lunora%2Fruntime%401.0.0-alpha.49...%40lunora%2Fruntime%401.0.0-alpha.50) (2026-08-02)
+
+
+### Dependencies
+
+* **@lunora/do:** upgraded to 1.0.0-alpha.62
+
+## @lunora/runtime [1.0.0-alpha.49](https://github.com/anolilab/lunora/compare/%40lunora%2Fruntime%401.0.0-alpha.48...%40lunora%2Fruntime%401.0.0-alpha.49) (2026-07-31)
+
+
+### Dependencies
+
+* **@lunora/do:** upgraded to 1.0.0-alpha.61
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.4
+
+## @lunora/runtime [1.0.0-alpha.48](https://github.com/anolilab/lunora/compare/%40lunora%2Fruntime%401.0.0-alpha.47...%40lunora%2Fruntime%401.0.0-alpha.48) (2026-07-31)
+
+
+### Dependencies
+
+* **@lunora/bindings:** upgraded to 1.0.0-alpha.15
+* **@lunora/errors:** upgraded to 1.0.0-alpha.10
+* **@lunora/do:** upgraded to 1.0.0-alpha.60
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.3
+* **@lunora/workflow:** upgraded to 1.0.0-alpha.15
+
+## @lunora/runtime [1.0.0-alpha.47](https://github.com/anolilab/lunora/compare/%40lunora%2Fruntime%401.0.0-alpha.46...%40lunora%2Fruntime%401.0.0-alpha.47) (2026-07-31)
+
+
+### Dependencies
+
+* **@lunora/do:** upgraded to 1.0.0-alpha.59
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.2
+
+## @lunora/runtime [1.0.0-alpha.46](https://github.com/anolilab/lunora/compare/%40lunora%2Fruntime%401.0.0-alpha.45...%40lunora%2Fruntime%401.0.0-alpha.46) (2026-07-30)
+
+
+### Dependencies
+
+* **@lunora/bindings:** upgraded to 1.0.0-alpha.14
+* **@lunora/platform:** upgraded to 1.0.0-alpha.1
+* **@lunora/do:** upgraded to 1.0.0-alpha.58
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.1
+
+## @lunora/runtime [1.0.0-alpha.45](https://github.com/anolilab/lunora/compare/%40lunora%2Fruntime%401.0.0-alpha.44...%40lunora%2Fruntime%401.0.0-alpha.45) (2026-07-29)
+
+
+### Dependencies
+
+* **@lunora/do:** upgraded to 1.0.0-alpha.55
+
+## @lunora/runtime [1.0.0-alpha.44](https://github.com/anolilab/lunora/compare/%40lunora%2Fruntime%401.0.0-alpha.43...%40lunora%2Fruntime%401.0.0-alpha.44) (2026-07-28)
+
+
+### Dependencies
+
+* **@lunora/bindings:** upgraded to 1.0.0-alpha.13
+* **@lunora/errors:** upgraded to 1.0.0-alpha.9
+* **@lunora/do:** upgraded to 1.0.0-alpha.53
+* **@lunora/workflow:** upgraded to 1.0.0-alpha.14
+
+## @lunora/runtime [1.0.0-alpha.43](https://github.com/anolilab/lunora/compare/%40lunora%2Fruntime%401.0.0-alpha.42...%40lunora%2Fruntime%401.0.0-alpha.43) (2026-07-28)
+
+## @lunora/runtime [1.0.0-alpha.42](https://github.com/anolilab/lunora/compare/%40lunora%2Fruntime%401.0.0-alpha.41...%40lunora%2Fruntime%401.0.0-alpha.42) (2026-07-27)
+
+
+### Dependencies
+
+* **@lunora/bindings:** upgraded to 1.0.0-alpha.12
+* **@lunora/do:** upgraded to 1.0.0-alpha.52
+
+## @lunora/runtime [1.0.0-alpha.41](https://github.com/anolilab/lunora/compare/%40lunora%2Fruntime%401.0.0-alpha.40...%40lunora%2Fruntime%401.0.0-alpha.41) (2026-07-27)
+
+
+### Dependencies
+
+* **@lunora/do:** upgraded to 1.0.0-alpha.50
+
+## @lunora/runtime [1.0.0-alpha.40](https://github.com/anolilab/lunora/compare/%40lunora%2Fruntime%401.0.0-alpha.39...%40lunora%2Fruntime%401.0.0-alpha.40) (2026-07-26)
+
+
+### Dependencies
+
+* **@lunora/do:** upgraded to 1.0.0-alpha.48
+
+## @lunora/runtime [1.0.0-alpha.39](https://github.com/anolilab/lunora/compare/%40lunora%2Fruntime%401.0.0-alpha.38...%40lunora%2Fruntime%401.0.0-alpha.39) (2026-07-25)
+
+
+### Dependencies
+
+* **@lunora/do:** upgraded to 1.0.0-alpha.46
+
+## @lunora/runtime [1.0.0-alpha.38](https://github.com/anolilab/lunora/compare/%40lunora%2Fruntime%401.0.0-alpha.37...%40lunora%2Fruntime%401.0.0-alpha.38) (2026-07-25)
+
+
+### Dependencies
+
+* **@lunora/do:** upgraded to 1.0.0-alpha.45
+
+## @lunora/runtime [1.0.0-alpha.37](https://github.com/anolilab/lunora/compare/%40lunora%2Fruntime%401.0.0-alpha.36...%40lunora%2Fruntime%401.0.0-alpha.37) (2026-07-25)
+
+
+### Dependencies
+
+* **@lunora/bindings:** upgraded to 1.0.0-alpha.11
+* **@lunora/errors:** upgraded to 1.0.0-alpha.8
+* **@lunora/do:** upgraded to 1.0.0-alpha.44
+* **@lunora/workflow:** upgraded to 1.0.0-alpha.13
+
+## @lunora/runtime [1.0.0-alpha.36](https://github.com/anolilab/lunora/compare/%40lunora%2Fruntime%401.0.0-alpha.35...%40lunora%2Fruntime%401.0.0-alpha.36) (2026-07-24)
+
+
+### Dependencies
+
+* **@lunora/do:** upgraded to 1.0.0-alpha.43
+
+## @lunora/runtime [1.0.0-alpha.35](https://github.com/anolilab/lunora/compare/%40lunora%2Fruntime%401.0.0-alpha.34...%40lunora%2Fruntime%401.0.0-alpha.35) (2026-07-23)
+
+
+### Dependencies
+
+* **@lunora/workflow:** upgraded to 1.0.0-alpha.12
+
+## @lunora/runtime [1.0.0-alpha.34](https://github.com/anolilab/lunora/compare/%40lunora%2Fruntime%401.0.0-alpha.33...%40lunora%2Fruntime%401.0.0-alpha.34) (2026-07-22)
+
+## @lunora/runtime [1.0.0-alpha.33](https://github.com/anolilab/lunora/compare/%40lunora%2Fruntime%401.0.0-alpha.32...%40lunora%2Fruntime%401.0.0-alpha.33) (2026-07-21)
+
+
+### Dependencies
+
+* **@lunora/do:** upgraded to 1.0.0-alpha.37
+
+## @lunora/runtime [1.0.0-alpha.32](https://github.com/anolilab/lunora/compare/%40lunora%2Fruntime%401.0.0-alpha.31...%40lunora%2Fruntime%401.0.0-alpha.32) (2026-07-21)
+
+## @lunora/runtime [1.0.0-alpha.31](https://github.com/anolilab/lunora/compare/%40lunora%2Fruntime%401.0.0-alpha.30...%40lunora%2Fruntime%401.0.0-alpha.31) (2026-07-21)
+
+
+### Dependencies
+
+* **@lunora/do:** upgraded to 1.0.0-alpha.36
+
+## @lunora/runtime [1.0.0-alpha.30](https://github.com/anolilab/lunora/compare/%40lunora%2Fruntime%401.0.0-alpha.29...%40lunora%2Fruntime%401.0.0-alpha.30) (2026-07-21)
+
+
+### Dependencies
+
+* **@lunora/do:** upgraded to 1.0.0-alpha.35
+
+## @lunora/runtime [1.0.0-alpha.29](https://github.com/anolilab/lunora/compare/%40lunora%2Fruntime%401.0.0-alpha.28...%40lunora%2Fruntime%401.0.0-alpha.29) (2026-07-20)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.6
+* **@lunora/do:** upgraded to 1.0.0-alpha.34
+* **@lunora/workflow:** upgraded to 1.0.0-alpha.11
+
+## @lunora/runtime [1.0.0-alpha.28](https://github.com/anolilab/lunora/compare/%40lunora%2Fruntime%401.0.0-alpha.27...%40lunora%2Fruntime%401.0.0-alpha.28) (2026-07-17)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.5
+* **@lunora/do:** upgraded to 1.0.0-alpha.31
+* **@lunora/workflow:** upgraded to 1.0.0-alpha.10
+
+## @lunora/runtime [1.0.0-alpha.27](https://github.com/anolilab/lunora/compare/%40lunora%2Fruntime%401.0.0-alpha.26...%40lunora%2Fruntime%401.0.0-alpha.27) (2026-07-13)
+
+
+### Dependencies
+
+* **@lunora/do:** upgraded to 1.0.0-alpha.29
+
+## @lunora/runtime [1.0.0-alpha.26](https://github.com/anolilab/lunora/compare/%40lunora%2Fruntime%401.0.0-alpha.25...%40lunora%2Fruntime%401.0.0-alpha.26) (2026-07-12)
+
+
+### Dependencies
+
+* **@lunora/do:** upgraded to 1.0.0-alpha.28
+
+## @lunora/runtime [1.0.0-alpha.25](https://github.com/anolilab/lunora/compare/%40lunora%2Fruntime%401.0.0-alpha.24...%40lunora%2Fruntime%401.0.0-alpha.25) (2026-07-11)
+
+## @lunora/runtime [1.0.0-alpha.24](https://github.com/anolilab/lunora/compare/%40lunora%2Fruntime%401.0.0-alpha.23...%40lunora%2Fruntime%401.0.0-alpha.24) (2026-07-11)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.4
+* **@lunora/do:** upgraded to 1.0.0-alpha.27
+* **@lunora/workflow:** upgraded to 1.0.0-alpha.9
+
+## @lunora/runtime [1.0.0-alpha.23](https://github.com/anolilab/lunora/compare/%40lunora%2Fruntime%401.0.0-alpha.22...%40lunora%2Fruntime%401.0.0-alpha.23) (2026-07-10)
+
+## @lunora/runtime [1.0.0-alpha.22](https://github.com/anolilab/lunora/compare/%40lunora%2Fruntime%401.0.0-alpha.21...%40lunora%2Fruntime%401.0.0-alpha.22) (2026-07-08)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.3
+* **@lunora/do:** upgraded to 1.0.0-alpha.26
+* **@lunora/workflow:** upgraded to 1.0.0-alpha.8
+
+## @lunora/runtime [1.0.0-alpha.21](https://github.com/anolilab/lunora/compare/%40lunora%2Fruntime%401.0.0-alpha.20...%40lunora%2Fruntime%401.0.0-alpha.21) (2026-07-07)
+
+## @lunora/runtime [1.0.0-alpha.20](https://github.com/anolilab/lunora/compare/%40lunora%2Fruntime%401.0.0-alpha.19...%40lunora%2Fruntime%401.0.0-alpha.20) (2026-07-04)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.2
+* **@lunora/do:** upgraded to 1.0.0-alpha.24
+* **@lunora/workflow:** upgraded to 1.0.0-alpha.7
+
+## @lunora/runtime [1.0.0-alpha.19](https://github.com/anolilab/lunora/compare/%40lunora%2Fruntime%401.0.0-alpha.18...%40lunora%2Fruntime%401.0.0-alpha.19) (2026-07-04)
+
+## @lunora/runtime [1.0.0-alpha.18](https://github.com/anolilab/lunora/compare/%40lunora%2Fruntime%401.0.0-alpha.17...%40lunora%2Fruntime%401.0.0-alpha.18) (2026-07-03)
+
+## @lunora/runtime [1.0.0-alpha.17](https://github.com/anolilab/lunora/compare/%40lunora%2Fruntime%401.0.0-alpha.16...%40lunora%2Fruntime%401.0.0-alpha.17) (2026-07-03)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.1
+* **@lunora/do:** upgraded to 1.0.0-alpha.22
+* **@lunora/workflow:** upgraded to 1.0.0-alpha.6
+
+## @lunora/runtime [1.0.0-alpha.16](https://github.com/anolilab/lunora/compare/%40lunora%2Fruntime%401.0.0-alpha.15...%40lunora%2Fruntime%401.0.0-alpha.16) (2026-07-03)
+
+## @lunora/runtime [1.0.0-alpha.15](https://github.com/anolilab/lunora/compare/%40lunora%2Fruntime%401.0.0-alpha.14...%40lunora%2Fruntime%401.0.0-alpha.15) (2026-07-02)
+
+
+### Dependencies
+
+* **@lunora/do:** upgraded to 1.0.0-alpha.19
+
+## @lunora/runtime [1.0.0-alpha.14](https://github.com/anolilab/lunora/compare/%40lunora%2Fruntime%401.0.0-alpha.13...%40lunora%2Fruntime%401.0.0-alpha.14) (2026-07-02)
+
+
+### Dependencies
+
+* **@lunora/do:** upgraded to 1.0.0-alpha.18
+
+## @lunora/runtime [1.0.0-alpha.13](https://github.com/anolilab/lunora/compare/%40lunora%2Fruntime%401.0.0-alpha.12...%40lunora%2Fruntime%401.0.0-alpha.13) (2026-07-02)
+
+## @lunora/runtime [1.0.0-alpha.12](https://github.com/anolilab/lunora/compare/%40lunora%2Fruntime%401.0.0-alpha.11...%40lunora%2Fruntime%401.0.0-alpha.12) (2026-07-02)
+
+
+### Dependencies
+
+* **@lunora/do:** upgraded to 1.0.0-alpha.16
+
+## @lunora/runtime [1.0.0-alpha.11](https://github.com/anolilab/lunora/compare/%40lunora%2Fruntime%401.0.0-alpha.10...%40lunora%2Fruntime%401.0.0-alpha.11) (2026-07-02)
+
+
+### Dependencies
+
+* **@lunora/do:** upgraded to 1.0.0-alpha.15
+
+## @lunora/runtime [1.0.0-alpha.10](https://github.com/anolilab/lunora/compare/%40lunora%2Fruntime%401.0.0-alpha.9...%40lunora%2Fruntime%401.0.0-alpha.10) (2026-07-01)
+
+
+### Dependencies
+
+* **@lunora/do:** upgraded to 1.0.0-alpha.14
+
+## @lunora/runtime [1.0.0-alpha.9](https://github.com/anolilab/lunora/compare/%40lunora%2Fruntime%401.0.0-alpha.8...%40lunora%2Fruntime%401.0.0-alpha.9) (2026-06-30)
+
+## @lunora/runtime [1.0.0-alpha.8](https://github.com/anolilab/lunora/compare/%40lunora%2Fruntime%401.0.0-alpha.7...%40lunora%2Fruntime%401.0.0-alpha.8) (2026-06-30)
+
+
+### Dependencies
+
+* **@lunora/do:** upgraded to 1.0.0-alpha.9
+
+## @lunora/runtime [1.0.0-alpha.7](https://github.com/anolilab/lunora/compare/%40lunora%2Fruntime%401.0.0-alpha.6...%40lunora%2Fruntime%401.0.0-alpha.7) (2026-06-29)
+
+## @lunora/runtime [1.0.0-alpha.6](https://github.com/anolilab/lunora/compare/%40lunora%2Fruntime%401.0.0-alpha.5...%40lunora%2Fruntime%401.0.0-alpha.6) (2026-06-29)
+
+## @lunora/runtime [1.0.0-alpha.5](https://github.com/anolilab/lunora/compare/@lunora/runtime@1.0.0-alpha.4...@lunora/runtime@1.0.0-alpha.5) (2026-06-27)
+
+### Features
+
+* **queue:** add queues, pipelines, secrets bindings + studio queues page ([#30](https://github.com/anolilab/lunora/issues/30)) ([131460c](https://github.com/anolilab/lunora/commit/131460c5826f2ef600fa0ef81248ede91835dd0c)), closes [#29](https://github.com/anolilab/lunora/issues/29) [#31](https://github.com/anolilab/lunora/issues/31) [visulima#714](https://github.com/visulima/visulima/issues/714)
+
+
+### Dependencies
+
+* **@lunora/do:** upgraded to 1.0.0-alpha.6
+* **@lunora/workflow:** upgraded to 1.0.0-alpha.3
+
+## @lunora/runtime [1.0.0-alpha.4](https://github.com/anolilab/lunora/compare/@lunora/runtime@1.0.0-alpha.3...@lunora/runtime@1.0.0-alpha.4) (2026-06-27)
+
+### Features
+
+* **server:** pin durable objects to a data-residency jurisdiction ([#29](https://github.com/anolilab/lunora/issues/29)) ([0fcdc94](https://github.com/anolilab/lunora/commit/0fcdc94a836ea1b54a0eba78b6926de52aa3a767))
+
+## @lunora/runtime [1.0.0-alpha.3](https://github.com/anolilab/lunora/compare/@lunora/runtime@1.0.0-alpha.2...@lunora/runtime@1.0.0-alpha.3) (2026-06-27)
+
+### Performance Improvements
+
+* **runtime:** skip route lookup when no custom routes ([#33](https://github.com/anolilab/lunora/issues/33)) ([e829b9b](https://github.com/anolilab/lunora/commit/e829b9b7d2a5c8a9f533f91706cdae8dd75b564d))
+
+### Miscellaneous Chores
+
+* update our og pacakge image ([63e6811](https://github.com/anolilab/lunora/commit/63e6811e2dfb94bc2cc38c05292b527e884660b5))
+
+
+### Dependencies
+
+* **@lunora/do:** upgraded to 1.0.0-alpha.5
+* **@lunora/workflow:** upgraded to 1.0.0-alpha.2
+
+## @lunora/runtime [1.0.0-alpha.2](https://github.com/anolilab/lunora/compare/@lunora/runtime@1.0.0-alpha.1...@lunora/runtime@1.0.0-alpha.2) (2026-06-25)
+
+### Bug Fixes
+
+* **runtime:** resolve admin token from env for the studio ([0952305](https://github.com/anolilab/lunora/commit/09523057d187c32b24cdf65ad23935bb851b61c6))
+
+### Miscellaneous Chores
+
+* **deps:** wire fallow into every package ([896a81d](https://github.com/anolilab/lunora/commit/896a81d39a064293234bba3b734cde1036e81a67))
+
+### Code Refactoring
+
+* remove dead code flagged by fallow ([be57eca](https://github.com/anolilab/lunora/commit/be57ecaf4d6f3bc95d7b1a5876305dfb2af80e45))
+
+## @lunora/runtime 1.0.0-alpha.1 (2026-06-21)
+
+### Features
+
+* publish all packages publicly for the initial alpha release ([91781b4](https://github.com/anolilab/lunora/commit/91781b485bf7a9891805c6851fe393de5f87ef40))
+
+### Miscellaneous Chores
+
+* lunora start ([786b573](https://github.com/anolilab/lunora/commit/786b5735d986bca4df64ccf642273a085bf7d574))
+* normalize package.json key order ([d7a25f0](https://github.com/anolilab/lunora/commit/d7a25f00e0f665dd113ad17e98081b9bd69a1989))
+
+
+### Dependencies
+
+* **@lunora/do:** upgraded to 1.0.0-alpha.1
+* **@lunora/workflow:** upgraded to 1.0.0-alpha.1

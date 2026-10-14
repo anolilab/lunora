@@ -1,14 +1,14 @@
 import type { WorkflowInstanceAction, WorkflowInstanceDetail, WorkflowInstanceStatus, WorkflowInstanceSummary } from "@lunora/client";
 import { useLunora } from "@lunora/react";
 import type { ReactElement } from "react";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 import { Button } from "../../components/ui/button";
 import { Card, CardContent } from "../../components/ui/card";
 import { EmptyState } from "../../components/ui/empty-state";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "../../components/ui/table";
 import { useT } from "../../i18n/i18n-context";
-import { errorMessage, fireAndForget } from "../../lib/internal";
+import { errorMessage, fireAndForget, jsonRowReplacer } from "../../lib/internal";
 
 /** The status values offered as table filters (the common lifecycle states). */
 const STATUS_FILTERS: WorkflowInstanceStatus[] = ["queued", "running", "paused", "waiting", "complete", "errored", "terminated"];
@@ -43,7 +43,7 @@ const formatStepPayload = (step: { error?: unknown; output?: unknown }): string 
     }
 
     try {
-        return JSON.stringify(value);
+        return JSON.stringify(value, jsonRowReplacer);
     } catch {
         return "(unserializable)";
     }
@@ -57,10 +57,11 @@ const formatStepPayload = (step: { error?: unknown; output?: unknown }): string 
  * timeline, and (when client-owned) pause / resume / terminate it.
  *
  * Requires the worker to be built with a `workflowsClient` (a Cloudflare account
- * id + API token); absent it, the proxy reports `WORKFLOWS_NOT_CONFIGURED` and
- * this renders a "set credentials" state while the workflows keep running.
+ * id + API token); absent it, the list responds with `configured: false` (an
+ * older worker reports `WORKFLOWS_NOT_CONFIGURED` instead) and this renders a
+ * "set credentials" state while the workflows keep running.
  *
- * Works under `&lt;LunoraProvider>` via the client's workflow methods; pass the
+ * Works under `<LunoraProvider>` via the client's workflow methods; pass the
  * loader props to override the transport (a custom `loadInstances` ⇒ read-only).
  */
 export const WorkflowInstanceHistory = ({ loadDetail, loadInstances, readOnly, runAction, workflowName }: WorkflowInstanceHistoryProps): ReactElement => {
@@ -73,14 +74,14 @@ export const WorkflowInstanceHistory = ({ loadDetail, loadInstances, readOnly, r
     const [error, setError] = useState<null | string>(null);
     const [notConfigured, setNotConfigured] = useState(false);
     const [busyId, setBusyId] = useState<null | string>(null);
+    // Staleness guards, compared after each await. `scopeSeq` bumps when the
+    // workflow or status filter changes; `listSeq` / `detailSeq` bump per request.
+    // Without them a slow response for the previous workflow (its list, an open
+    // step timeline, or an action's follow-up reload) painted over the current one.
+    const scopeSeq = useRef(0);
+    const listSeq = useRef(0);
+    const detailSeq = useRef(0);
 
-    const listImpl =
-        loadInstances ??
-        (async (arguments_: { name: string; status?: WorkflowInstanceStatus }) => {
-            const page = await client.listWorkflowInstances(arguments_);
-
-            return page.instances;
-        });
     const detailImpl = loadDetail ?? ((arguments_: { id: string; name: string }) => client.getWorkflowInstance(arguments_));
     // Lifecycle actions are available only when the list is client-sourced (a
     // custom `loadInstances` ⇒ read-only) or an explicit `runAction` is supplied.
@@ -91,12 +92,50 @@ export const WorkflowInstanceHistory = ({ loadDetail, loadInstances, readOnly, r
     const actionImpl = readOnly ? undefined : (runAction ?? clientAction);
 
     const load = async (): Promise<void> => {
+        listSeq.current += 1;
+        const seq = listSeq.current;
+
         setError(null);
         setNotConfigured(false);
 
+        const status = statusFilter === "" ? undefined : statusFilter;
+
         try {
-            setInstances(await listImpl({ name: workflowName, status: statusFilter === "" ? undefined : statusFilter }));
+            // The client-owned path reads the page's `configured` flag: a current
+            // worker reports "unconfigured" as a 200 sentinel (no failed request in
+            // the console), while an older worker still throws the
+            // `WORKFLOWS_NOT_CONFIGURED` code — caught below for back-compat. A
+            // custom `loadInstances` override only yields summaries, so it can't be
+            // unconfigured.
+            if (loadInstances === undefined) {
+                const page = await client.listWorkflowInstances({ name: workflowName, status });
+
+                if (seq !== listSeq.current) {
+                    return;
+                }
+
+                if (page.configured === false) {
+                    setInstances(null);
+                    setNotConfigured(true);
+
+                    return;
+                }
+
+                setInstances(page.instances);
+
+                return;
+            }
+
+            const instancesPage = await loadInstances({ name: workflowName, status });
+
+            if (seq === listSeq.current) {
+                setInstances(instancesPage);
+            }
         } catch (error_) {
+            if (seq !== listSeq.current) {
+                return;
+            }
+
             setInstances(null);
 
             if (isNotConfigured(error_)) {
@@ -108,20 +147,38 @@ export const WorkflowInstanceHistory = ({ loadDetail, loadInstances, readOnly, r
     };
 
     useEffect(() => {
-        // eslint-disable-next-line react-x/set-state-in-effect -- intentionally close any open detail when the workflow/filter changes
+        /* eslint-disable react-x/set-state-in-effect, react-you-might-not-need-an-effect/no-chain-state-updates, react-you-might-not-need-an-effect/no-adjust-state-on-prop-change -- the effect drives an async reload; closing any open detail is coupled to that fetch (no render-derivable value, and a key-reset would remount and drop the status filter) */
+        scopeSeq.current += 1;
+        detailSeq.current += 1;
+        // react-doctor-disable-next-line react-hooks-js/set-state-in-effect, react-doctor/no-chain-state-updates -- async reload; the coupled detail close is justified in the eslint-disable above
         setDetail(null);
         fireAndForget(load());
+        /* eslint-enable react-x/set-state-in-effect, react-you-might-not-need-an-effect/no-chain-state-updates, react-you-might-not-need-an-effect/no-adjust-state-on-prop-change */
         // eslint-disable-next-line react-hooks/exhaustive-deps -- reload when the workflow or status filter changes
     }, [workflowName, statusFilter]);
 
     const openDetail = async (id: string): Promise<void> => {
+        detailSeq.current += 1;
+        const seq = detailSeq.current;
+
         setError(null);
 
         try {
-            setDetail(await detailImpl({ id, name: workflowName }));
+            const next = await detailImpl({ id, name: workflowName });
+
+            if (seq === detailSeq.current) {
+                setDetail(next);
+            }
         } catch (error_) {
-            setError(errorMessage(error_));
+            if (seq === detailSeq.current) {
+                setError(errorMessage(error_));
+            }
         }
+    };
+
+    const closeDetail = (): void => {
+        detailSeq.current += 1;
+        setDetail(null);
     };
 
     const act = async (id: string, action: WorkflowInstanceAction): Promise<void> => {
@@ -129,17 +186,24 @@ export const WorkflowInstanceHistory = ({ loadDetail, loadInstances, readOnly, r
             return;
         }
 
+        const scope = scopeSeq.current;
+
         setBusyId(id);
         setError(null);
 
         try {
             await actionImpl({ action, id, name: workflowName });
-            await load();
+
+            // Reload only while the same workflow + filter is on screen: this
+            // closure's `load` would list the one the action started in.
+            if (scope === scopeSeq.current) {
+                await load();
+            }
         } catch (error_) {
             setError(errorMessage(error_));
-        } finally {
-            setBusyId(null);
         }
+
+        setBusyId(null);
     };
 
     return (
@@ -253,15 +317,7 @@ export const WorkflowInstanceHistory = ({ loadDetail, loadInstances, readOnly, r
                             <span className="font-mono text-xs">
                                 {t("Steps")} · {detail.id}
                             </span>
-                            <Button
-                                data-testid="workflow-instance-detail-close"
-                                onClick={() => {
-                                    setDetail(null);
-                                }}
-                                size="xs"
-                                type="button"
-                                variant="ghost"
-                            >
+                            <Button data-testid="workflow-instance-detail-close" onClick={closeDetail} size="xs" type="button" variant="ghost">
                                 {t("Close")}
                             </Button>
                         </div>

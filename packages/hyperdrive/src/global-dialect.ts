@@ -4,11 +4,13 @@
  *
  * Both mirror `@lunora/d1`'s `sqliteDialect`, differing only where the engines
  * genuinely diverge: column types, the catalog probe, unique-violation
- * detection, `RETURNING` support, and the MySQL index key-prefix. Every backend
- * stores **SQLite-shaped values** (boolean → 1/0, JSON → text/json, bigint →
- * decimal string), so the value codec is shared (`sqliteEncode`/`sqliteDecode`)
- * — `sqliteDecode` is robust to a driver returning either the stored string or a
- * natively-parsed value (e.g. mysql2 returns JSON pre-parsed, node-postgres
+ * detection, the MySQL index key-prefix, and the MySQL column collation (see
+ * {@link MYSQL_COLLATION} — the server default folds case and accents, which the
+ * other two engines do not). Every backend stores **SQLite-shaped values**
+ * (boolean → 1/0, composites → JSON text, bigint → an order-preserving text key)
+ * through the store core's own `sqliteEncode`/`sqliteDecode`,
+ * which is not a dialect member — `sqliteDecode` is robust to a driver returning
+ * either the stored string or a natively-parsed value (e.g. node-postgres
  * returns bigint as a string).
  *
  * Identifier quoting, placeholder numbering, upserts and NULL-safe equality are
@@ -18,23 +20,122 @@
  * can't infer from a dynamic, column-per-field schema.
  */
 import type { SqlDialect } from "@lunora/sql-store";
-import { sqliteDecode, sqliteEncode } from "@lunora/sql-store";
+import type { SQL } from "drizzle-orm";
 import { sql } from "drizzle-orm";
+
+/** Companion columns for the Postgres native layout: the document id and its indexed vector. */
+const VECTOR_ID_COLUMN = "__id__";
+const VECTOR_COLUMN = "__vector__";
+
+/** The companion's vector column, qualified by the alias the reader joins under. */
+const vectorRef = (companion: string): SQL => sql`${sql.identifier(companion)}.${sql.identifier(VECTOR_COLUMN)}`;
+
+/**
+ * Build the stored vector from an already-analyzed token stream.
+ *
+ * `simple` is deliberate on three counts: it applies no stemming or stopword
+ * list of its own (Lunora's analyzer already did that, and a second pass would
+ * disagree with every other backend), it makes `to_tsvector`/`to_tsquery`
+ * IMMUTABLE rather than STABLE — which is what lets Hyperdrive cache the read —
+ * and it keeps the stored vector a pure function of the tokens we hand it.
+ */
+const toVector = (analyzed: string): SQL => sql`to_tsvector('simple', ${analyzed})`;
+
+/** The query form of the same: every term ANDed, the final one as a prefix so it matches as-you-type. */
+const toQuery = (terms: ReadonlyArray<string>): SQL =>
+    sql`to_tsquery('simple', ${terms.map((term, index) => (index === terms.length - 1 ? `${term}:*` : term)).join(" & ")})`;
 
 /** Postgres unique-violation message (the SQLSTATE 23505 fallback when the driver omits `.code`). */
 const PG_UNIQUE_VIOLATION_RE = /duplicate key value violates unique constraint/iu;
 
-/** MySQL storage type for a validator `kind`. Shared by `columnType` and the index-prefix decision below. */
-const mysqlColumnType = (kind: string | undefined): string => {
-    switch (kind) {
-        case "array":
-        case "object":
-        case "record": {
-            return "JSON";
+/**
+ * The collation every MySQL character column this dialect declares is pinned to.
+ *
+ * MySQL 8's server default is `utf8mb4_0900_ai_ci` — **accent- and
+ * case-insensitive**. SQLite compares TEXT byte for byte and Postgres compares
+ * `text` for equality byte for byte, so an unqualified column inherited a third
+ * set of semantics and `.global()` stopped meaning the same thing per engine:
+ * `"Acme"` and `"acme"` folded into one row in an `__agg_` counter, `.unique()`
+ * rejected `alice@` against `Alice@`, `ne "CAFE"` excluded `"café"`, and — the
+ * one that makes this a security bug rather than a papercut — a `rankPage`
+ * partitioned on a tenant key returned another tenant's rows.
+ *
+ * `utf8mb4_0900_bin`, not `utf8mb4_bin`: the former compares code points with NO
+ * PAD, which is what SQLite and Postgres do. `utf8mb4_bin` is PAD SPACE, so
+ * `'a' = 'a  '` would still be true on MySQL and false on the other two. It is
+ * MySQL 8.0+ only, which is the floor Hyperdrive's MySQL support targets; an
+ * older server rejects the DDL loudly rather than silently folding case.
+ *
+ * Declared per **column** rather than per table or per connection. A connection
+ * collation loses to the column's own on every `column = 'literal'` comparison
+ * (the column has the lower coercibility), so it would fix nothing; a table
+ * default would need a new `SqlDialect` member for the DDL builder to render,
+ * for an answer the column type already carries to every site that declares one
+ * — the main tables, the rank companion's sort columns, and the companion keys.
+ *
+ * **Pre-existing tables keep the collation they were created with.**
+ * `CREATE TABLE IF NOT EXISTS` does not reshape one, and neither does anything
+ * here: converting is a full table rebuild, which is not something to run from a
+ * cold start. A binding provisioned before this ships needs the operator to run
+ * `ALTER TABLE <t> CONVERT TO CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_bin`
+ * once per table, companions included.
+ *
+ * The same rule covers `NOT NULL` on a column whose validator now accepts null:
+ * relaxing it takes a `MODIFY COLUMN`, so the store only reports it, with the
+ * statement to run (`relaxNullAcceptingColumns` in `@lunora/sql-store`). And a
+ * wide `in` list past the placeholder cap compares under the column's collation
+ * only when that is `utf8mb4_0900_ai_ci` or a `_bin` one; another legacy
+ * collation raises "Illegal mix of collations" until the table is converted.
+ */
+const MYSQL_COLLATION = "utf8mb4_0900_bin";
+
+/** A character column's declaration with {@link MYSQL_COLLATION} pinned onto it. */
+const collated = (type: string): string => `${type} COLLATE ${MYSQL_COLLATION}`;
+
+/**
+ * MySQL storage type for a validator `kind`. Shared by `columnType` and the
+ * index-prefix decision below.
+ *
+ * `unique` bounds a character column so InnoDB can index it in FULL. The
+ * alternative is what shipped: `LONGTEXT` cannot be indexed without a key
+ * prefix, `indexKeyPrefix` supplies 191, and the synthesized `.unique()` index
+ * then enforces uniqueness of the first 191 characters — two distinct
+ * 200-character emails sharing that prefix raised ER_DUP_ENTRY and surfaced as
+ * "unique constraint violation", on MySQL only. 768 × 4 bytes under utf8mb4 is
+ * exactly InnoDB's 3072-byte single-column key limit, so a `.unique()` string
+ * indexes whole; a longer value is a loud write error, not a wrong conflict.
+ *
+ * **Pre-existing tables keep the type they were created with** — same caveat as
+ * {@link MYSQL_COLLATION}: `CREATE TABLE IF NOT EXISTS` does not reshape one, so
+ * a binding provisioned before this needs a one-off
+ * `ALTER TABLE <t> MODIFY <col> VARCHAR(768) COLLATE utf8mb4_0900_bin`.
+ */
+const mysqlColumnType = (kind: string | undefined, options?: { unique?: boolean }): string => {
+    if (options?.unique === true) {
+        switch (kind) {
+            // Already indexable whole: the numeric types, and bigint's
+            // `VARCHAR(64)` key. Only the LONGTEXT arm below needs bounding.
+            case "bigint":
+            case "boolean":
+            case "date":
+            case "number":
+            case "timestamp": {
+                break;
+            }
+            case "bytes": {
+                return "VARBINARY(768)";
+            }
+            default: {
+                return collated("VARCHAR(768)");
+            }
         }
+    }
+
+    switch (kind) {
         case "bigint": {
-            // stored as a decimal string (max 20 digits — never truncates).
-            return "VARCHAR(64)";
+            // stored as the order-preserving 40-character key `bigintSqlKey`
+            // builds (sign + 39 digits) — never truncates.
+            return collated("VARCHAR(64)");
         }
         case "boolean": {
             return "TINYINT";
@@ -48,9 +149,19 @@ const mysqlColumnType = (kind: string | undefined): string => {
             return "DOUBLE";
         }
         default: {
-            // string/id/literal/union/any → unbounded text so a value never
+            // Everything else — string/id/literal/geoPoint/union/any/from AND the
+            // composites (object/array/record) — is unbounded text so a value never
             // truncates; `indexKeyPrefix` adds a key prefix wherever one is indexed.
-            return "LONGTEXT";
+            //
+            // The composites are NOT a MySQL `JSON` column, which matches Postgres's
+            // plain `TEXT` for them. `sqliteEncode` stores a composite holding a
+            // bigint, bytes, `Date`, `Map`, `Set` or `NaN` in the wire-marked form
+            // `$lunora.wire$[…]` — deliberately not valid JSON, so the reader can
+            // tell it from ordinary JSON — and MySQL validates a `JSON` column on
+            // insert, rejecting it outright with ER_3140. A `union`/`any`/`from`
+            // column is stored by its runtime JS type for the same reason: a
+            // `v.from(z.string())` column holds a bare `hello`.
+            return collated("LONGTEXT");
         }
     }
 };
@@ -86,13 +197,13 @@ export const postgresDialect: SqlDialect = {
                 return "DOUBLE PRECISION";
             }
             default: {
-                // string/id/literal, bigint (decimal string), object/array/record/union/any (JSON text).
+                // string/id/literal, bigint (the order-preserving 40-character
+                // key `bigintSqlKey` builds, same as the MySQL arm above),
+                // object/array/record/union/any (JSON text).
                 return "TEXT";
             }
         }
     },
-    decode: (value, kind) => sqliteDecode(value, kind),
-    encode: (value) => sqliteEncode(value),
     frameworkColumns: () => [
         { name: "id", type: "TEXT PRIMARY KEY" },
         { name: "_creationTime", type: "DOUBLE PRECISION NOT NULL" },
@@ -102,10 +213,53 @@ export const postgresDialect: SqlDialect = {
 
         return code === "23505" || (error instanceof Error && PG_UNIQUE_VIOLATION_RE.test(error.message));
     },
+    /** Postgres allows 1,600 columns per table (fewer once wide types are involved, which the engine reports on its own). */
+    maxTableColumns: 1600,
     name: "postgres",
+    searchBackfillHint: "call backfillSqlSearchIndexes from @lunora/sql-store with the store's exec from a host-side admin path",
+    supportsFts5: false,
+
+    /**
+     * Postgres full text, opted into per index with `strategy: "native"`.
+     *
+     * The `simple` configuration is deliberate on three counts: it applies no
+     * stemming or stopword list of its own (Lunora's analyzer already did that,
+     * and a second pass would disagree with every other backend), it makes
+     * `to_tsvector`/`to_tsquery` IMMUTABLE rather than STABLE — which is what
+     * lets Hyperdrive cache the read — and it keeps the stored vector a pure
+     * function of the tokens we hand it.
+     *
+     * The final term gets `:*` so a native index prefix-matches as-you-type,
+     * matching what the portable path does with `LIKE`.
+     */
+    nativeTextSearch: {
+        createCompanion: (companion, keyType) =>
+            sql`CREATE TABLE IF NOT EXISTS ${sql.identifier(companion)} (${sql.identifier(VECTOR_ID_COLUMN)} ${sql.raw(keyType)} PRIMARY KEY, ${sql.identifier(VECTOR_COLUMN)} tsvector)`,
+        createIndexes: (companion) => [
+            sql`CREATE INDEX IF NOT EXISTS ${sql.identifier(`${companion}__gin`)} ON ${sql.identifier(companion)} USING GIN (${sql.identifier(VECTOR_COLUMN)})`,
+        ],
+        // An upsert on the id key, so two writers of one document converge
+        // instead of one failing on the key. The guard sits in the SELECT: a
+        // writer that lost the race to a newer one inserts and updates nothing.
+        indexDocument: (companion, id, analyzed, guard) =>
+            sql`INSERT INTO ${sql.identifier(companion)} (${sql.identifier(VECTOR_ID_COLUMN)}, ${sql.identifier(VECTOR_COLUMN)}) SELECT ${id}, ${toVector(analyzed)} WHERE ${guard} ON CONFLICT (${sql.identifier(VECTOR_ID_COLUMN)}) DO UPDATE SET ${sql.identifier(VECTOR_COLUMN)} = EXCLUDED.${sql.identifier(VECTOR_COLUMN)}`,
+        matches: (companion, terms) => sql`${vectorRef(companion)} @@ ${toQuery(terms)}`,
+        rank: (companion, terms) => sql`ts_rank_cd(${vectorRef(companion)}, ${toQuery(terms)})`,
+    },
     supportsReturning: true,
 
-    tableExists: (table) => sql`SELECT table_name FROM information_schema.tables WHERE table_name = ${table}`,
+    // The search companion's token btree is scanned with `LIKE 'prefix%'` for a
+    // query's final term. A default `text_ops` btree built under a linguistic
+    // collation (e.g. `en_US.UTF-8`) can't answer that, so the token index
+    // declares the pattern operator class and the scan stays indexed.
+    textPatternOperatorClass: "text_pattern_ops",
+
+    // Restrict to schemas on the effective search_path (excluding the implicit
+    // pg_catalog with `false`) so an unqualified name resolves exactly as CREATE
+    // TABLE / SELECT would. Without this filter the probe sees same-named tables in
+    // OTHER schemas of the same database (a common multi-tenant/multi-env Hyperdrive
+    // setup), reporting a companion table that does not exist on the search_path.
+    tableExists: (table) => sql`SELECT table_name FROM information_schema.tables WHERE table_schema = ANY (current_schemas(false)) AND table_name = ${table}`,
 };
 
 /**
@@ -123,26 +277,36 @@ export const mysqlDialect: SqlDialect = {
         integer: "INTEGER",
         // VARCHAR so it can be a PRIMARY KEY and be fully indexed (TEXT cannot,
         // without a prefix length). 768 = InnoDB utf8mb4 single-column index limit.
-        key: "VARCHAR(768)",
+        // Collated like every other character column: `__key__` carries the
+        // aggregate/group key tuple and `__partition__` the rank partition, and
+        // a case-folding comparison on either merges two distinct groups into one.
+        key: collated("VARCHAR(768)"),
         real: "DOUBLE",
         // Unbounded post-image storage (CDC `doc`); never an index key, so no bound.
-        text: "LONGTEXT",
+        text: collated("LONGTEXT"),
     },
-    columnType: (kind) => mysqlColumnType(kind),
-    decode: (value, kind) => sqliteDecode(value, kind),
-    encode: (value) => sqliteEncode(value),
+    columnType: mysqlColumnType,
     frameworkColumns: () => [
-        { name: "id", type: "VARCHAR(768) PRIMARY KEY" },
+        { name: "id", type: `${collated("VARCHAR(768)")} PRIMARY KEY` },
         { name: "_creationTime", type: "DOUBLE NOT NULL" },
     ],
-    // InnoDB can't index a TEXT/LONGTEXT/BLOB column without a key prefix; bound it to 768 chars.
-    indexKeyPrefix: (kind) => (MYSQL_PREFIX_INDEX_RE.test(mysqlColumnType(kind)) ? 768 : undefined),
+    // InnoDB can't index a TEXT/LONGTEXT/BLOB column without a key prefix. Bound it
+    // to 191 chars (191 × 4 = 764 bytes under utf8mb4), matching the rank-companion
+    // convention: a flat 768-char prefix is 3072 bytes — exactly InnoDB's whole-index
+    // key limit — so ANY composite index containing a string field (e.g.
+    // `.index("by_project", ["projectId", "seq"])`) would exceed 3072 and fail CREATE
+    // INDEX with ER_TOO_LONG_KEY. 191 leaves room for several columns under the cap.
+    indexKeyPrefix: (kind) => (MYSQL_PREFIX_INDEX_RE.test(mysqlColumnType(kind)) ? 191 : undefined),
     isUniqueViolation: (error) => {
         const candidate = error as { code?: unknown; errno?: unknown };
 
         return candidate.errno === 1062 || candidate.code === "ER_DUP_ENTRY";
     },
+    /** MySQL's hard ceiling is 4,096 columns per table; InnoDB's practical limit is lower and row-size-bound, which the engine reports on its own. */
+    maxTableColumns: 4096,
     name: "mysql",
+    searchBackfillHint: "call backfillSqlSearchIndexes from @lunora/sql-store with the store's exec from a host-side admin path",
+    supportsFts5: false,
     supportsReturning: false,
 
     tableExists: (table) => sql`SELECT table_name FROM information_schema.tables WHERE table_schema = DATABASE() AND table_name = ${table}`,

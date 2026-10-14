@@ -17,10 +17,15 @@
  * for `:read`, a count for `:count`. The coordinator merges them with `concat`
  * (rows) / `sum` (counts).
  *
- * The reserved `__lunora_relation__:*` reader reads the child through the raw
- * ctx-db (no read policy applied — matching same-backend relation reads, which
- * also bypass RLS), so the rows it returns are identity-independent. The
- * `x-lunora-userid` / `x-lunora-identity` headers are still forwarded from the
+ * RLS ACROSS THE HOP: the reserved `__lunora_relation__:*` reader reads the child
+ * through the RAW ctx-db, which applies no read policy of its own — so the policy
+ * has to arrive as data. `@lunora/d1`'s ctx-db folds the child's `baseWhere` into
+ * `where` and projects `relationBaseWhere` into a `relationPolicies` map
+ * (`CrossShardReadArgs`) before calling in here; both are forwarded verbatim and
+ * re-applied by `serveRelationFanout`. Without them the hop returns every child
+ * row for the FK regardless of the caller's row policy — a cross-tenant read.
+ *
+ * The `x-lunora-userid` / `x-lunora-identity` headers are still forwarded from the
  * per-request context the generated `createShardDO` threads into the `d1`
  * factory, but the public `/_lunora/rpc` re-resolves identity from credentials
  * and ignores them — so they have no effect today (see the per-shard reader).
@@ -35,18 +40,23 @@
 
 // Type-only: keeps `@lunora/runtime` free of a hard (value) dependency on
 // `@lunora/do` while reusing its canonical writer types (see the alias note).
-import type { DatabaseWriterLike } from "@lunora/do";
+import type { CrossShardReadArgs, DatabaseWriterLike, QueryPage } from "@lunora/shard-engine";
+
+import { encodeIdentityHeader, encodeUserIdHeader } from "../../../shared/identity-header";
+import { decodeWire } from "../../../shared/wire-codec";
+import { LunoraError } from "./errors";
 
 /**
- * Reader / counter capabilities, typed against the SAME canonical
- * `DatabaseWriterLike` the `@lunora/d1` ctx-db derives its `crossShardReader` /
- * `crossShardCounter` options from (`DatabaseWriterLike["findMany"]` /
- * `["count"]`) — so the pair drops straight into `createD1CtxDb` with no cast and
- * no structural drift. The import is type-only: `@lunora/runtime` keeps no hard
- * (value) dependency on `@lunora/do`.
+ * Reader / counter capabilities, typed against the SAME canonical shard-engine
+ * types the `@lunora/d1` ctx-db derives its `crossShardReader` /
+ * `crossShardCounter` options from — so the pair drops straight into
+ * `createD1CtxDb` with no cast and no structural drift. The reader takes
+ * {@link CrossShardReadArgs} (not `QueryArgs`) because the hop is a JSON envelope
+ * and the RLS filters must travel as data. The import is type-only:
+ * `@lunora/runtime` keeps no hard (value) dependency on `@lunora/do`.
  */
 type CrossShardCounter = DatabaseWriterLike["count"];
-type CrossShardReader = DatabaseWriterLike["findMany"];
+type CrossShardReader = (table: string, args: CrossShardReadArgs) => Promise<QueryPage>;
 
 interface CrossShardRelationOptions {
     /**
@@ -58,8 +68,10 @@ interface CrossShardRelationOptions {
     identity?: Record<string, unknown>;
 
     /**
-     * Origin the worker is reachable at (`LUNORA_WORKER_ORIGIN`). The DO issues a
-     * loopback subrequest to `${origin}/_lunora/rpc`.
+     * Origin the worker is reachable at. The DO issues a loopback subrequest to
+     * `${origin}/_lunora/rpc`, so this is the app's own public URL — the same
+     * value the SchedulerDO dispatches from, which is why apps wire
+     * `.global({ origin })` to the `LUNORA_ORIGIN_URL` binding.
      */
     origin: string;
     /** Forwarded user id (the `x-lunora-userid` header), when authenticated. */
@@ -82,11 +94,13 @@ const buildIdentityHeaders = (options: CrossShardRelationOptions): Record<string
     const headers: Record<string, string> = { "content-type": "application/json" };
 
     if (options.userId !== undefined && options.userId.length > 0) {
-        headers["x-lunora-userid"] = options.userId;
+        // Base64url-encoded when non-Latin-1 (HTTP header values are WebIDL
+        // `ByteString`s); see shared/identity-header.ts.
+        headers["x-lunora-userid"] = encodeUserIdHeader(options.userId);
     }
 
     if (options.identity !== undefined) {
-        headers["x-lunora-identity"] = JSON.stringify(options.identity);
+        headers["x-lunora-identity"] = encodeIdentityHeader(options.identity);
     }
 
     return headers;
@@ -112,7 +126,7 @@ const fanOutRelation = async (options: CrossShardRelationOptions, body: Record<s
     );
 
     if (!response.ok) {
-        throw new Error(`cross-shard relation ${label} failed: worker returned ${String(response.status)}`);
+        throw new LunoraError(`cross-shard relation ${label} failed: worker returned ${String(response.status)}`);
     }
 
     // eslint-disable-next-line @typescript-eslint/no-unnecessary-type-assertion -- workers-types Response.json() is typed `unknown` under tsc (eslint's view sees `any`); the cast is required by `lint:types`
@@ -121,12 +135,19 @@ const fanOutRelation = async (options: CrossShardRelationOptions, body: Record<s
     if (typeof result.failed === "number" && result.failed > 0) {
         const reached = (typeof result.ok === "number" ? result.ok : 0) + result.failed;
 
-        throw new Error(
+        throw new LunoraError(
             `cross-shard relation ${label} failed on ${String(result.failed)} of ${String(reached)} shard(s) — refusing to return a partial result`,
         );
     }
 
-    return result.data;
+    // The producing shard encodes its result to wire form (`shard-do.ts`'s
+    // relation-fanout path runs `encodeWire`), so bigints / byte arrays arrive as
+    // `["$lunora.wire$", …]` tags. Decode symmetrically here or every child row's
+    // 64-bit id and every `bytes` column reaches the parent as a tag array.
+    // CONTRACT: producer `encodeWire` ⇄ consumer `decodeWire`; changing one side
+    // without the other silently corrupts the relation payload rather than
+    // failing.
+    return decodeWire(result.data);
 };
 
 /**
@@ -139,7 +160,14 @@ const createCrossShardRelationCapabilities = (options: CrossShardRelationOptions
         const data = await fanOutRelation(
             options,
             {
-                args: { orderBy: args?.orderBy, table, where: args?.where, with: args?.with },
+                // Spread rather than re-list the fields: `where` already carries
+                // this hop's read policy (folded in by the caller) and
+                // `relationPolicies` carries it for the nested `with` hops, so a
+                // field silently stopping at this forwarder is an RLS bypass. A
+                // hand-written list is exactly how that happens when
+                // `CrossShardReadArgs` grows. `JSON.stringify` drops `undefined`,
+                // so the wire bytes are identical either way.
+                args: { ...args, table },
                 fanOut: { merge: { kind: "concat" }, table },
                 functionPath: "__lunora_relation__:read",
             },

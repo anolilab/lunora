@@ -1,3 +1,4 @@
+import { lunoraLine } from "@lunora/config";
 import type { Plugin } from "vite";
 
 import type { FrameworkDetection } from "./detect-framework";
@@ -30,6 +31,7 @@ const FRAMEWORK_LABELS: Record<FrameworkDetection["framework"], string> = {
     sveltekit: "SvelteKit",
     "tanstack-start": "TanStack Start",
     "tanstack-start-solid": "TanStack Start (Solid)",
+    vinext: "Next.js on Vite (vinext)",
 };
 
 /**
@@ -40,16 +42,16 @@ const formatFrameworkDetection = (detection: FrameworkDetection): string => {
     const label = FRAMEWORK_LABELS[detection.framework];
 
     if (detection.framework === "none") {
-        return "[lunora] no meta-framework detected — running standalone (class C).";
+        return lunoraLine("no meta-framework detected — running standalone.");
     }
 
     if (detection.class === "B") {
         // Class-B (own CF adapter) composition is hook-injection and lands in a
         // later milestone; we still surface the detection so the dev knows.
-        return `[lunora] detected ${label} (class B) — hook-injection composition is handled by the framework adapter (not yet wired here).`;
+        return lunoraLine(`detected ${label} — composition is handled by the framework adapter.`);
     }
 
-    return `[lunora] detected ${label} (class ${detection.class}) — composing the Lunora worker into one Cloudflare Worker.`;
+    return lunoraLine(`detected ${label} — composing the Lunora worker into one Cloudflare Worker.`);
 };
 
 /**

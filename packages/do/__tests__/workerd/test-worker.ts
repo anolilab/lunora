@@ -1,5 +1,5 @@
 /**
- * Test entry-point Worker for the `@cloudflare/vitest-pool-workers` Miniflare
+ * Test entry-point Worker for the `@cloudflare/vitest-plugin` Miniflare
  * runtime.
  *
  * The pool boots this worker inside a real `workerd` process. Our tests then
@@ -12,17 +12,26 @@
  * runtime API directly the adapter is gone and `DurableObjectState` is
  * passed straight through — structurally compatible with `ShardDOState`.
  */
+import { readRequestLog } from "@lunora/observability";
+import type { DatabaseWriterLike, MutationDelta } from "@lunora/shard-engine";
+import { createShardCtxDb, runShardMigrations } from "@lunora/shard-engine";
 import { DurableObject } from "cloudflare:workers";
 
+import { mergeDurableObjects } from "../../src/merge-durable-objects";
 import { SessionDO } from "../../src/session-do";
 import type { ShardDOState } from "../../src/shard-do";
 import { ShardDO } from "../../src/shard-do";
-import type { MutationDelta } from "../../src/types";
+import { ShardRegistryDO } from "../../src/shard-registry-do";
+import messagesSchema from "../_helpers/messages-schema";
 
 interface Env {
+    COUNTER: DurableObjectNamespace<TestCounterDO>;
+    ECHO: DurableObjectNamespace<TestEchoDO>;
     LUNORA_ALLOWED_ORIGINS?: string;
+    MERGED: DurableObjectNamespace;
     SESSION: DurableObjectNamespace<TestSessionDO>;
     SHARD: DurableObjectNamespace<TestShardDO>;
+    SYNC: DurableObjectNamespace<TestSyncDO>;
 }
 
 class ConcreteShard extends ShardDO {
@@ -69,8 +78,400 @@ class TestShardDO extends DurableObject<Env> {
         return this.shard.webSocketClose(ws, code, reason, wasClean);
     }
 
+    /**
+     * Deliver alarms to the shard. Without this override workerd has no alarm
+     * handler to wake, so any alarm the host-contract suite (or the global-poll
+     * loop) arms would surface as a runtime error instead of a dispatch.
+     */
+    public override alarm(): Promise<void> {
+        return this.shard.alarm();
+    }
+
     public broadcast(delta: MutationDelta): void {
         this.shard.broadcastDelta(delta);
+    }
+}
+
+/** Paths {@link ConcreteCountingShard} reports as ACTIONS — ungated, so a parked one really is interleavable with a sibling dispatch. */
+const COUNTER_ACTION_PATHS = new Set([
+    "counter:hang",
+    "counter:hangRelease",
+    "counter:hangStats",
+    "counter:park",
+    "counter:release",
+    "counter:reqlog",
+    "counter:slow",
+    "counter:slowRelease",
+    "counter:slowRuns",
+]);
+
+/**
+ * A shard whose handler bumps a counter INSIDE a transaction and commits the
+ * mutation-replay dedup row atomically with it via `commitMutationBookkeeping`
+ * — exactly the pattern generated `handleRpc` mutation branches use
+ * (`packages/codegen/src/emit/shard-dispatch.ts`, the `registered.kind === "mutation"`
+ * branch), and NOT the post-`handleRpc` `recordPostDispatchBookkeeping`
+ * fallback that exists for actions/queries. Real generated mutations commit
+ * the dedup row inside the handler's own transaction, so this is the shape
+ * that has to be race-free under real `blockConcurrencyWhile` nesting.
+ */
+class ConcreteCountingShard extends ShardDO {
+    public runs = 0;
+
+    /**
+     * How many times `counter:slow` has entered its handler. Only the FIRST run
+     * parks; every later one returns at once. That asymmetry is what lets the
+     * in-flight-claim test assert a run COUNT rather than time out — an unfixed
+     * shard runs the second dispatch concurrently, and a second dispatch that
+     * also parked would hang the test instead of failing it.
+     */
+    public slowRuns = 0;
+
+    /** `counter:hang` bookkeeping: handler entries, and how many of them ran to completion. */
+    public hangStats = { finished: 0, released: false, runs: 0 };
+
+    private migrated = false;
+
+    /** Resolver for the in-flight `counter:park` dispatch, fired by `counter:release`. */
+    private releasePark: (() => void) | undefined;
+
+    /** Resolver for the parked first `counter:slow` dispatch, fired by `counter:slowRelease`. */
+    private releaseSlow: (() => void) | undefined;
+
+    public override async handleRpc(functionPath: string): Promise<unknown> {
+        this.ensureMigrated();
+
+        // `counter:park` and `counter:release` are ACTIONS (see
+        // `isMutationFunction`), so neither takes the single-writer gate and a
+        // parked one really is interleavable with a sibling dispatch — the
+        // window `restoreRequestScope` exists for.
+        if (functionPath === "counter:park") {
+            await new Promise<void>((resolve) => {
+                this.releasePark = resolve;
+            });
+
+            return { parked: true };
+        }
+
+        if (functionPath === "counter:release") {
+            this.releasePark?.();
+            this.releasePark = undefined;
+
+            return { released: true };
+        }
+
+        // The long ACTION the scheduler's at-least-once re-delivery can land on
+        // top of (#803): ungated, so nothing but the in-flight claim stops a
+        // second delivery of the same `x-lunora-mutation-id` running alongside.
+        if (functionPath === "counter:slow") {
+            this.slowRuns += 1;
+
+            const run = this.slowRuns;
+
+            if (run === 1) {
+                await new Promise<void>((resolve) => {
+                    this.releaseSlow = resolve;
+                });
+            }
+
+            return { run };
+        }
+
+        if (functionPath === "counter:slowRelease") {
+            this.releaseSlow?.();
+            this.releaseSlow = undefined;
+
+            return { released: true };
+        }
+
+        // Parked on real TIMER I/O rather than a bare promise, so the wait is
+        // owned by the request's I/O context the way an outbound call is.
+        if (functionPath === "counter:hang") {
+            this.hangStats.runs += 1;
+
+            while (!this.hangStats.released) {
+                // eslint-disable-next-line no-await-in-loop -- polling a flag is the point: each wait is request-owned timer I/O
+                await new Promise<void>((resolve) => {
+                    setTimeout(resolve, 10);
+                });
+            }
+
+            this.hangStats.finished += 1;
+
+            return { run: this.hangStats.runs };
+        }
+
+        if (functionPath === "counter:hangRelease") {
+            this.hangStats.released = true;
+
+            return { released: true };
+        }
+
+        if (functionPath === "counter:hangStats") {
+            return { ...this.hangStats };
+        }
+
+        if (functionPath === "counter:slowRuns") {
+            return { runs: this.slowRuns };
+        }
+
+        // The durable request log, as the studio and Logpush see it. Read
+        // through the shard's own sql handle so the rows are the ones this DO
+        // actually wrote.
+        if (functionPath === "counter:reqlog") {
+            return readRequestLog(this.sql as Parameters<typeof readRequestLog>[0]);
+        }
+
+        return this.runInTransaction(() => {
+            this.runs += 1;
+
+            const result = { runs: this.runs };
+
+            this.commitMutationBookkeeping(result);
+
+            return result;
+        });
+    }
+
+    protected override ensureMigrated(): void {
+        if (this.migrated) {
+            return;
+        }
+
+        runShardMigrations(this.sql as Parameters<typeof runShardMigrations>[0], messagesSchema);
+        this.migrated = true;
+    }
+
+    // eslint-disable-next-line class-methods-use-this -- pure predicate over the path, mirroring the codegen override
+    protected override isMutationFunction(functionPath: string): boolean {
+        return !COUNTER_ACTION_PATHS.has(functionPath);
+    }
+}
+
+class TestCounterDO extends DurableObject<Env> {
+    private readonly shard: ConcreteCountingShard;
+
+    public constructor(context: DurableObjectState, env: Env) {
+        super(context, env);
+        this.shard = new ConcreteCountingShard(context as unknown as ShardDOState, env);
+    }
+
+    public override fetch(request: Request): Promise<Response> {
+        return this.shard.fetch(request);
+    }
+}
+
+/**
+ * A minimal Durable Object that echoes its own id.
+ *
+ * The `ShardDirectory` conformance tests need a dispatch target whose response
+ * body is a pure function of *which* object was resolved — that is what makes
+ * "the same shard key resolves to the same shard" an observable assertion
+ * rather than a coincidence of two identical 404s.
+ */
+class TestEchoDO extends DurableObject<Env> {
+    public override async fetch(request: Request): Promise<Response> {
+        return new Response(`${new URL(request.url).pathname}:${this.ctx.id.toString()}`);
+    }
+}
+
+/**
+ * A real, sync-engine-capable `ShardDO` for the local-first poke protocol e2e.
+ *
+ * Unlike {@link ConcreteShard} (an RPC echo), this subclass runs migrations and
+ * writes through a real `createShardCtxDb` writer inside the live Durable
+ * Object, so the full pipeline executes against workerd's SQLite + the
+ * Hibernation WebSocket API.
+ *
+ * The `messagesByChannel(channelId)` shape seeds the current membership on
+ * `shape_subscribe` and each write pokes the membership diff. The
+ * `messages:sendMutator` custom mutator orders a watermarked push (`clientId` +
+ * numeric `clientSeq`) against `__client_watermark`, writes authoritatively, and
+ * echoes the applied `lastMutationId` on the response.
+ */
+class ConcreteSyncShard extends ShardDO {
+    private migrated = false;
+
+    /**
+     * `race:list` — a live query whose FIRST run reads `messages`, then parks on
+     * timer I/O until `race:release`. Timer I/O opens the input gate exactly as
+     * a `.global()` D1 read, `ctx.vectors` or R2 does, so a write can commit and
+     * flush while the seed is parked. `race:failRefreshes` makes every later run
+     * throw (until `race:healRefreshes`), leaving the parked seed as the only
+     * value that can reach the socket.
+     */
+    private readonly race = { calls: 0, failRefreshes: false, released: false, settled: false };
+
+    private writer: DatabaseWriterLike | undefined;
+
+    public override async handleRpc(functionPath: string, args: Record<string, unknown>): Promise<unknown> {
+        if (functionPath.startsWith("race:")) {
+            return this.raceControl(functionPath);
+        }
+
+        const writer = this.getWriter();
+
+        switch (functionPath) {
+            case "messages:remove": {
+                await writer.delete(args["_id"] as string);
+
+                break;
+            }
+            case "messages:send":
+            case "messages:sendMutator": {
+                await writer.insert(
+                    "messages",
+                    { _id: args["_id"], authorId: args["authorId"] ?? "u1", channelId: args["channelId"], text: args["text"] ?? "x" },
+                    { allowExplicitId: true },
+                );
+
+                break;
+            }
+            default: {
+                break;
+            }
+        }
+
+        this.recordChangedTable("messages");
+
+        return { id: args["_id"], ok: true };
+    }
+
+    // eslint-disable-next-line class-methods-use-this -- override classifies by `functionPath` alone, no instance state.
+    protected override isCustomMutator(functionPath: string): boolean {
+        return functionPath === "messages:sendMutator";
+    }
+
+    protected override resolveShape(
+        name: string,
+        args: Record<string, unknown>,
+        identity?: { userId?: string },
+    ): { effectiveWhere?: Record<string, unknown>; table: string } | undefined {
+        this.ensureMigrated();
+
+        // Identity-INDEPENDENT (relay-uniform): the where depends only on args, so
+        // every caller resolves the same query — eligible for relay multicast.
+        if (name === "messagesByChannel") {
+            return { effectiveWhere: { channelId: args["channelId"] }, table: "messages" };
+        }
+
+        // Identity-DEPENDENT (non-uniform): scoped to the caller, so it must stay
+        // owner-served and never be registered for relay multicast (plan 075 C2).
+        if (name === "myInbox") {
+            return { effectiveWhere: { authorId: identity?.userId ?? "anon" }, table: "messages" };
+        }
+
+        return undefined;
+    }
+
+    protected override async executeSubscription(functionPath: string): Promise<{ result: unknown; tables: Set<string> } | null> {
+        if (functionPath !== "race:list") {
+            return null;
+        }
+
+        this.ensureMigrated();
+        this.race.calls += 1;
+
+        const first = this.race.calls === 1;
+
+        if (!first && this.race.failRefreshes) {
+            throw new Error("race:list refresh failed");
+        }
+
+        const [row] = (this.sql as { exec: (query: string) => { toArray: () => { n: number }[] } }).exec(`SELECT COUNT(*) AS n FROM "messages"`).toArray();
+
+        if (first) {
+            while (!this.race.released) {
+                // eslint-disable-next-line no-await-in-loop -- polling timer I/O is the point: it opens the input gate
+                await new Promise<void>((resolve) => {
+                    setTimeout(resolve, 10);
+                });
+            }
+
+            this.race.settled = true;
+        }
+
+        return { result: { count: row?.n ?? 0 }, tables: new Set(["messages"]) };
+    }
+
+    protected override ensureMigrated(): void {
+        if (this.migrated) {
+            return;
+        }
+
+        runShardMigrations(this.sql as Parameters<typeof runShardMigrations>[0], messagesSchema, { cdc: true });
+        this.migrated = true;
+    }
+
+    private getWriter(): DatabaseWriterLike {
+        this.ensureMigrated();
+        this.writer ??= createShardCtxDb({
+            broadcast: () => undefined,
+            cdc: true,
+            clock: () => 1_700_000_000_000,
+            schema: messagesSchema,
+            sql: this.sql as Parameters<typeof createShardCtxDb>[0]["sql"],
+        });
+
+        return this.writer;
+    }
+
+    private raceControl(functionPath: string): { calls: number; settled: boolean } {
+        if (functionPath === "race:release") {
+            this.race.released = true;
+        }
+
+        if (functionPath === "race:failRefreshes" || functionPath === "race:healRefreshes") {
+            this.race.failRefreshes = functionPath === "race:failRefreshes";
+        }
+
+        return { calls: this.race.calls, settled: this.race.settled };
+    }
+}
+
+class TestSyncDO extends DurableObject<Env> {
+    private readonly shard: ConcreteSyncShard;
+
+    public constructor(context: DurableObjectState, env: Env) {
+        super(context, env);
+        this.shard = new ConcreteSyncShard(context as unknown as ShardDOState, env);
+    }
+
+    public override fetch(request: Request): Promise<Response> {
+        return this.shard.fetch(request);
+    }
+
+    public override webSocketMessage(ws: WebSocket, message: string | ArrayBuffer): Promise<void> {
+        return this.shard.webSocketMessage(ws, message);
+    }
+
+    public override webSocketClose(ws: WebSocket, code: number, reason: string, wasClean: boolean): Promise<void> {
+        return this.shard.webSocketClose(ws, code, reason, wasClean);
+    }
+
+    /**
+     * Accept-time tags of every live socket, for the durable-socket-id test.
+     *
+     * Exposed here because the property under test — that `ShardDO`'s upgrade
+     * path accepts through `SocketHost` rather than calling
+     * `state.acceptWebSocket` directly — is only observable from inside the DO.
+     */
+    public socketTags(): string[][] {
+        return this.ctx.getWebSockets().map((ws) => this.ctx.getTags(ws));
+    }
+
+    /**
+     * The owner's relayed-shape retention floor (`OwnerRelay.minShapeCursor()`).
+     *
+     * Reached through the `private relay` field because that is the only way to
+     * observe it: `ShardDO.retentionFloor` folds it into the CDC sweep, which is
+     * gated behind two retention env knobs and a 60s interval — so a test that
+     * drove the sweep would prove the sweep works, not that the floor exists.
+     * `private` is compile-time only, and this file already reaches past it for
+     * `broadcastDelta`.
+     */
+    public relayShapeFloor(): number | undefined {
+        return (this.shard as unknown as { relay?: { minShapeCursor: () => number | undefined } }).relay?.minShapeCursor();
     }
 }
 
@@ -87,6 +488,49 @@ class TestSessionDO extends DurableObject<Env> {
     }
 }
 
+/** The shard role of {@link TestMergedDO}: answers with its own instance name. */
+class MergedShardRole {
+    readonly #state: DurableObjectState;
+
+    public constructor(state: DurableObjectState) {
+        this.#state = state;
+    }
+
+    public fetch(): Response {
+        return new Response(`shard:${String(this.#state.id.name)}`);
+    }
+}
+
+/**
+ * The scheduler role of {@link TestMergedDO}: `/arm` sets an alarm, the alarm
+ * records which instance name it woke under, `/fired` reads that back. The wake
+ * is the case under test — the merged class re-reads `ctx.id.name` on a cold
+ * start with no request to go by.
+ */
+class MergedSchedulerRole {
+    readonly #state: DurableObjectState;
+
+    public constructor(state: DurableObjectState) {
+        this.#state = state;
+    }
+
+    public async alarm(): Promise<void> {
+        await this.#state.storage.put("fired", `scheduler:${String(this.#state.id.name)}`);
+    }
+
+    public async fetch(request: Request): Promise<Response> {
+        if (new URL(request.url).pathname === "/arm") {
+            await this.#state.storage.setAlarm(Date.now() + 20);
+
+            return new Response("armed");
+        }
+
+        return new Response((await this.#state.storage.get<string>("fired")) ?? "pending");
+    }
+}
+
+const TestMergedDO = mergeDurableObjects({ scheduler: MergedSchedulerRole, shard: MergedShardRole, shardRegistry: ShardRegistryDO });
+
 const handler = {
     async fetch(_request: Request, _env: Env): Promise<Response> {
         return new Response("test-worker", { status: 200 });
@@ -94,5 +538,5 @@ const handler = {
 };
 
 export default handler;
-export { TestSessionDO, TestShardDO };
+export { TestCounterDO, TestEchoDO, TestMergedDO, TestSessionDO, TestShardDO, TestSyncDO };
 export type { Env };

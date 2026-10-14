@@ -7,51 +7,75 @@ import { existsSync, readFileSync, writeFileSync } from "node:fs";
 
 import { join } from "@visulima/path";
 
+import { detectPackageManager, installArgsFor } from "../../util/detect-package-manager";
+import { EXIT_CODE } from "../../util/exit-code";
 import type { Logger } from "../../util/logger";
-import { confirmDepMutation } from "./apply";
+import { confirmDepMutation, resolveDepRange, resolvePinnedDepVersions } from "./apply";
 import { buildRegistryIndex, collectCatalog } from "./catalog";
-import reconcileItems from "./reconcile";
+import safe from "./display";
+import { readItemFile, reconcileItems } from "./reconcile";
 import { readManifest, resolveItemDirectory, resolvePlan, resolveRegistryRoot, sourceGateError } from "./resolve";
-import type { AddCommandOptions, AddCommandResult, RegistryManifest } from "./types";
+import type { AddCommandOptions, AddCommandResult, RegistryManifest, RegistryPlanItem } from "./types";
 import { emptyResult } from "./types";
 
-/** Render the human-readable plan for one item. */
-const printPlan = (logger: Logger, manifest: RegistryManifest): void => {
+/**
+ * Render the human-readable plan for one item. `pinned` is the plan's resolved
+ * dependency-name → concrete-version map, so the printed range is the one that
+ * will actually be written.
+ */
+const printPlan = (logger: Logger, manifest: RegistryManifest, pinned?: ReadonlyMap<string, string>): void => {
     const label = manifest.title ?? manifest.description;
 
-    logger.info(`plan: ${manifest.name}${label ? ` — ${label}` : ""}`);
+    logger.info(`plan: ${safe(manifest.name)}${label ? ` — ${safe(label)}` : ""}`);
 
     for (const file of manifest.files) {
-        logger.info(`  file  ${file.to}  (${file.merge})`);
+        logger.info(`  file  ${safe(file.to)}  (${safe(file.merge)})`);
     }
 
+    // Show the range that will actually be WRITTEN, not the manifest's internal
+    // one. Registry manifests pin siblings with `workspace:*` so development
+    // resolves to the local checkout, but that protocol is meaningless in a
+    // consumer's package.json — printing it raw made the plan look like it was
+    // about to break `pnpm install`.
+    // `resolveDepRange` resolves the CLI's dist-tag to the concrete version in
+    // `pinned` for every bare `workspace:` specifier — the same resolution the
+    // write path uses, so preview and package.json cannot disagree.
     for (const [dep, range] of Object.entries(manifest.deps ?? {})) {
-        logger.info(`  dep   ${dep}@${range}`);
+        logger.info(`  dep   ${safe(dep)}@${safe(resolveDepRange(range, pinned, dep))}`);
     }
 
     for (const [dep, range] of Object.entries(manifest.devDependencies ?? {})) {
-        logger.info(`  dev   ${dep}@${range}`);
+        logger.info(`  dev   ${safe(dep)}@${safe(resolveDepRange(range, pinned, dep))}`);
     }
 
     for (const binding of manifest.bindings ?? []) {
         // Render the concrete value so a reviewer can audit what gets written into
         // wrangler.jsonc (e.g. an attempt to set an exec/entrypoint key) before it
         // is applied — a bare key path hides the payload.
-        logger.info(`  bind  ${binding.path.join(".")} = ${JSON.stringify(binding.value)}`);
+        // `JSON.stringify` escapes control bytes but NOT the BIDI overrides that
+        // reorder the rendered line, so the serialized value is sanitized too.
+        logger.info(`  bind  ${safe(binding.path.join("."))} = ${safe(JSON.stringify(binding.value))}`);
     }
 
     for (const variable of manifest.envVars ?? []) {
         // Show non-secret values; secrets are scaffolded as empty placeholders so
         // there is nothing to leak.
-        const valueSuffix = variable.secret ? " (secret)" : ` = ${JSON.stringify(variable.value ?? "")}`;
+        const valueSuffix = variable.secret ? " (secret)" : ` = ${safe(JSON.stringify(variable.value ?? ""))}`;
 
-        logger.info(`  env   ${variable.name}${valueSuffix}`);
+        logger.info(`  env   ${safe(variable.name)}${valueSuffix}`);
+    }
+
+    for (const reexport of manifest.entrypointReexports ?? []) {
+        const specifier = `./lunora/${safe(reexport.module)}`;
+        const suffix = reexport.comment ? `  // ${safe(reexport.comment)}` : "";
+
+        logger.info(`  entry ${specifier}${suffix}`);
     }
 };
 
-/** Emit the `--json` plan snapshot for the resolved items to stdout. */
-const printJsonPlan = (items: ReadonlyArray<{ manifest: RegistryManifest }>): void => {
-    const planSnapshot = items.map(({ manifest }) => {
+/** Build the `--format json` plan snapshot for the resolved items. */
+const buildPlanSnapshot = (items: ReadonlyArray<{ manifest: RegistryManifest }>): RegistryPlanItem[] =>
+    items.map(({ manifest }) => {
         return {
             // Include the concrete value so a JSON-plan consumer can audit the
             // mutation (not just the key path) before it is applied.
@@ -60,6 +84,9 @@ const printJsonPlan = (items: ReadonlyArray<{ manifest: RegistryManifest }>): vo
             }),
             deps: Object.keys(manifest.deps ?? {}),
             devDependencies: Object.keys(manifest.devDependencies ?? {}),
+            entrypointReexports: (manifest.entrypointReexports ?? []).map((reexport) => {
+                return { module: reexport.module, ...(reexport.comment ? { comment: reexport.comment } : {}) };
+            }),
             envVars: (manifest.envVars ?? []).map((variable) => {
                 return { name: variable.name, ...(variable.secret ? { secret: true } : { value: variable.value ?? "" }) };
             }),
@@ -72,7 +99,21 @@ const printJsonPlan = (items: ReadonlyArray<{ manifest: RegistryManifest }>): vo
         };
     });
 
-    process.stdout.write(`${JSON.stringify({ items: planSnapshot }, undefined, 2)}\n`);
+/**
+ * The copy-pastable "install what was just added" command for `cwd`'s project.
+ * `deps` are already written into package.json by `reconcileItems` — this is a
+ * plain re-install, not an add, so it goes through `installArgsFor`, not
+ * `addArgsFor`. Falls back to a manager-neutral placeholder when
+ * `detectPackageManager` itself can't resolve one.
+ */
+const installHint = (cwd: string): string => {
+    try {
+        const { args, command } = installArgsFor(detectPackageManager(cwd));
+
+        return `${command} ${args.join(" ")}`;
+    } catch {
+        return "<your-package-manager> install";
+    }
 };
 
 /** Print the post-reconcile report: summary, next steps, and per-item `docs` guidance. */
@@ -82,18 +123,19 @@ const reportAddResult = (
     written: number,
     skipped: number,
     logger: Logger,
+    cwd: string,
 ): void => {
     logger.success(`add complete: ${String(written)} written, ${String(skipped)} skipped`);
     logger.info("next steps:");
     logger.info("  lunora codegen   # regenerate _generated/ so the new tables/functions appear");
 
     if (deps.length > 0) {
-        logger.info("  pnpm install     # install newly-added dependencies");
+        logger.info(`  ${installHint(cwd)}  # install newly-added dependencies`);
     }
 
     for (const { manifest } of items) {
         if (manifest.docs) {
-            logger.info(`${manifest.name}: ${manifest.docs}`);
+            logger.info(`${safe(manifest.name)}: ${safe(manifest.docs)}`);
         }
     }
 };
@@ -106,8 +148,10 @@ const runListCommand = async (options: AddCommandOptions): Promise<AddCommandRes
     if (gate) {
         options.logger.error(gate);
 
-        return { ...empty, code: 1 };
+        return { ...empty, code: EXIT_CODE.USAGE, error: gate };
     }
+
+    const { logger } = options;
 
     let cleanup: () => void = () => {};
 
@@ -118,23 +162,25 @@ const runListCommand = async (options: AddCommandOptions): Promise<AddCommandRes
 
         const items = collectCatalog(resolved.root);
 
-        if (options.json) {
-            process.stdout.write(`${JSON.stringify(items, undefined, 2)}\n`);
-
-            return empty;
+        if (options.format === "json") {
+            return { ...empty, data: { items } };
         }
 
-        options.logger.info(`available registry items (${String(items.length)}):`);
+        logger.info(`available registry items (${String(items.length)}):`);
 
         for (const item of items) {
-            options.logger.info(`  ${item.name}${item.description ? ` — ${item.description}` : ""}`);
+            logger.info(`  ${item.name}${item.description ? ` — ${item.description}` : ""}`);
         }
 
         return empty;
     } catch (error) {
-        options.logger.error(`list failed: ${error instanceof Error ? error.message : String(error)}`);
+        // The message can quote the untrusted manifest back (a rejected env-var
+        // name, a bad path), so it is sanitized like every other render site.
+        const message = safe(`list failed: ${error instanceof Error ? error.message : String(error)}`);
 
-        return { ...empty, code: 1 };
+        logger.error(message);
+
+        return { ...empty, code: 1, error: message };
     } finally {
         cleanup();
     }
@@ -144,70 +190,104 @@ const runListCommand = async (options: AddCommandOptions): Promise<AddCommandRes
 const runAddCommand = async (options: AddCommandOptions): Promise<AddCommandResult> => {
     const cwd = options.cwd ?? process.cwd();
     const empty = emptyResult();
-
     if (options.list) {
         return runListCommand(options);
     }
 
-    if (options.names.length === 0) {
-        options.logger.error("add requires at least one item name. Usage: lunora registry add <name> [...names]");
+    // In `--format json` mode every human line — the plan, the diff preview, the
+    // "add complete" report — moves to stderr so stdout carries only the document.
+    const { logger } = options;
 
-        return { ...empty, code: 1 };
+    if (options.names.length === 0) {
+        const message = "add requires at least one item name. Usage: lunora registry add <name> [...names]";
+
+        logger.error(message);
+
+        return { ...empty, code: EXIT_CODE.USAGE, error: message };
     }
 
     const gate = sourceGateError("add", options);
 
     if (gate) {
-        options.logger.error(gate);
+        logger.error(gate);
 
-        return { ...empty, code: 1 };
+        return { ...empty, code: EXIT_CODE.USAGE, error: gate };
     }
 
     let cleanups: (() => void)[] = [];
 
     try {
-        const { cleanups: planCleanups, items } = await resolvePlan(options.names, options);
+        const { cleanups: planCleanups, items: resolvedItems } = await resolvePlan(options.names, options);
 
         cleanups = planCleanups;
 
+        // Let the caller inject user-chosen values into the static manifests (e.g.
+        // the R2 bucket_name the init storage prompt asks for) before anything is
+        // printed or written, so the plan preview and the wrangler edits agree.
+        const { transformManifest } = options;
+        const items = transformManifest
+            ? resolvedItems.map((item) => {
+                  return { ...item, manifest: transformManifest(item.manifest) };
+              })
+            : resolvedItems;
+
         // --- Plan ---
+        // One batched registry lookup for the whole plan: every bare
+        // `workspace:` range resolves to the CONCRETE version the CLI's channel
+        // dist-tag points at. Written into package.json rather than the floating
+        // tag, because a tag lets a stale lockfile keep an older release — the
+        // same reason `init` pins. Offline, the map is empty and the tag stands.
+        const pinnedVersions = await resolvePinnedDepVersions(items.map((item) => item.manifest));
+
         for (const { manifest } of items) {
-            printPlan(options.logger, manifest);
+            printPlan(logger, manifest, pinnedVersions);
         }
 
-        if (options.json) {
-            printJsonPlan(items);
-        }
+        // The plan IS the document: it says what this invocation resolved, and it
+        // is the whole answer under `--dry-run`.
+        const data = { items: buildPlanSnapshot(items) };
 
         if (options.dryRun) {
-            options.logger.info("dry-run: stopping before any files are written");
+            logger.info("dry-run: stopping before any files are written");
 
-            return empty;
+            return { ...empty, data };
         }
 
         // --- Diff preview: show file-level changes, mutate nothing ---
         if (options.diff) {
-            reconcileItems(items, cwd, options.logger, { diff: true });
-            options.logger.info("diff: preview only — re-run without --diff to apply");
+            reconcileItems(items, cwd, logger, { diff: true });
+            logger.info("diff: preview only — re-run without --diff to apply");
 
-            return empty;
+            return { ...empty, data };
         }
 
         // --- Confirm package.json mutation (if any item adds deps) ---
-        if (!(await confirmDepMutation(items, options))) {
-            return { ...empty, code: 1 };
+        const confirmation = await confirmDepMutation(items, options);
+
+        if (!confirmation.ok) {
+            // The two cases differ: a non-TTY run without `--yes` is a wrong
+            // invocation (USAGE), a declined prompt is a deliberate abort
+            // (CANCELLED). Collapsing them told automation a user said no when
+            // nobody was ever asked.
+            return confirmation.reason === "declined"
+                ? { ...empty, code: EXIT_CODE.CANCELLED, data, error: "registry add: the package.json change was declined" }
+                : { ...empty, code: EXIT_CODE.USAGE, data, error: "registry add: stdin is not a TTY — re-run with --yes to confirm" };
         }
 
         // --- Reconcile ---
-        const { bindings, deps, skipped, written } = reconcileItems(items, cwd, options.logger, { overwrite: options.overwrite });
+        const { bindings, deps, skipped, written } = reconcileItems(items, cwd, logger, { overwrite: options.overwrite, pinnedVersions });
 
-        reportAddResult(items, deps, written.length, skipped.length, options.logger);
+        reportAddResult(items, deps, written.length, skipped.length, logger, cwd);
 
-        return { bindings, code: 0, deps, skipped, written };
+        return { bindings, code: 0, data, deps, skipped, written };
     } catch (error) {
-        options.logger.error(`add failed: ${error instanceof Error ? error.message : String(error)}`);
+        // The message can quote the untrusted manifest back (a rejected env-var
+        // name, a bad path), so it is sanitized like every other render site.
+        const message = safe(`add failed: ${error instanceof Error ? error.message : String(error)}`);
 
-        return { ...empty, code: 1 };
+        logger.error(message);
+
+        return { ...empty, code: 1, error: message };
     } finally {
         for (const cleanup of cleanups) {
             cleanup();
@@ -224,9 +304,11 @@ const runRegistryViewCommand = async (options: AddCommandOptions): Promise<AddCo
     const empty = emptyResult();
 
     if (options.names.length === 0) {
-        options.logger.error("view requires an item name. Usage: lunora registry view <name>");
+        const message = "view requires an item name. Usage: lunora registry view <name>";
 
-        return { ...empty, code: 1 };
+        options.logger.error(message);
+
+        return { ...empty, code: EXIT_CODE.USAGE, error: message };
     }
 
     const gate = sourceGateError("view", options);
@@ -234,7 +316,7 @@ const runRegistryViewCommand = async (options: AddCommandOptions): Promise<AddCo
     if (gate) {
         options.logger.error(gate);
 
-        return { ...empty, code: 1 };
+        return { ...empty, code: EXIT_CODE.USAGE, error: gate };
     }
 
     const cleanups: (() => void)[] = [];
@@ -248,22 +330,28 @@ const runRegistryViewCommand = async (options: AddCommandOptions): Promise<AddCo
 
             const manifest = readManifest(directory, name);
 
-            printPlan(options.logger, manifest);
+            // eslint-disable-next-line no-await-in-loop -- one lookup per viewed item; the loop is already sequential by design
+            printPlan(options.logger, manifest, await resolvePinnedDepVersions([manifest]));
 
             for (const file of manifest.files) {
-                options.logger.info(`--- ${file.to} (${file.merge}) ---`);
+                options.logger.info(`--- ${safe(file.to)} (${safe(file.merge)}) ---`);
 
-                const content = readFileSync(join(directory, file.from), "utf8");
+                // Shared with `add` so both read paths carry the same symlink
+                // refusal. `useUmbrella: false` — `view` shows the item's source
+                // verbatim, not the per-project umbrella rewrite `add` writes.
+                const content = readItemFile(directory, file, false, name);
 
                 for (const line of content.split("\n")) {
-                    options.logger.info(line);
+                    options.logger.info(safe(line));
                 }
             }
         }
 
         return empty;
     } catch (error) {
-        options.logger.error(`view failed: ${error instanceof Error ? error.message : String(error)}`);
+        // The message can quote the untrusted manifest back (a rejected env-var
+        // name, a bad path), so it is sanitized like every other render site.
+        options.logger.error(safe(`view failed: ${error instanceof Error ? error.message : String(error)}`));
 
         return { ...empty, code: 1 };
     } finally {
@@ -284,15 +372,19 @@ const runBuildIndexCommand = async (options: AddCommandOptions): Promise<AddComm
     const root = options.from;
 
     if (root === undefined) {
-        options.logger.error("registry build requires --from <registry root>");
+        const error = "registry build requires --from <registry root>";
 
-        return { ...empty, code: 1 };
+        options.logger.error(error);
+
+        return { ...empty, code: EXIT_CODE.USAGE, error };
     }
 
     if (!existsSync(root)) {
-        options.logger.error(`registry root not found: ${root}`);
+        const error = `registry root not found: ${root}`;
 
-        return { ...empty, code: 1 };
+        options.logger.error(error);
+
+        return { ...empty, code: EXIT_CODE.NOT_FOUND, error };
     }
 
     const index = buildRegistryIndex(root);
@@ -304,9 +396,11 @@ const runBuildIndexCommand = async (options: AddCommandOptions): Promise<AddComm
         const drift = JSON.stringify(current.items ?? []) !== JSON.stringify(index.items);
 
         if (drift) {
-            options.logger.error(`registry: ${outputPath} is stale — run \`lunora registry build\` to regenerate it`);
+            const error = `registry: ${outputPath} is stale — run \`lunora registry build\` to regenerate it`;
 
-            return { ...empty, code: 1 };
+            options.logger.error(error);
+
+            return { ...empty, code: EXIT_CODE.USAGE, error };
         }
 
         options.logger.success(`registry: ${outputPath} is up to date (${String(index.items.length)} items)`);
@@ -320,4 +414,4 @@ const runBuildIndexCommand = async (options: AddCommandOptions): Promise<AddComm
     return empty;
 };
 
-export { runAddCommand, runBuildIndexCommand, runListCommand, runRegistryViewCommand };
+export { runAddCommand, runBuildIndexCommand, runRegistryViewCommand };

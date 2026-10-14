@@ -22,7 +22,7 @@
  * `createPool({ flags: ["FOUND_ROWS"] })`) so the affected-rows OCC guard sees
  * matched (not changed) rows — see {@link buildMysqlExec}.
  */
-import type { DatabaseWriterLike } from "@lunora/do";
+import type { DatabaseWriterLike } from "@lunora/shard-engine";
 import type { SqlCtxDbOptions, SqlExec } from "@lunora/sql-store";
 import { createSqlCtxDb } from "@lunora/sql-store";
 
@@ -61,3 +61,5 @@ export const createMysqlGlobalCtxDb = (connection: Mysql2Execute, options: Omit<
 export { mysqlDialect, postgresDialect } from "./global-dialect";
 export type { Mysql2Execute, RowClient } from "./global-exec";
 export { buildMysqlExec, buildPgExec } from "./global-exec";
+export type { PgVectorIndexOptions } from "./pg-vector";
+export { createPgVectorIndex } from "./pg-vector";

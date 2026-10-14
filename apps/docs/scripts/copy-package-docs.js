@@ -3,6 +3,8 @@ import { existsSync, promises as fs } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
+import { CATEGORY_TITLES, categorySlugForPackageDir, categoryTitleForSlug, orderPackagesInCategory } from "./package-categories.js";
+
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
@@ -20,48 +22,6 @@ const KNOWN_ROUTES_PATTERN = [...KNOWN_ROUTES].join("|");
  * Lunora keeps all its docs in-repo, so there are none.
  */
 const EXTERNAL_DOCS = [];
-
-/**
- * Category display names and order for the packages sidebar.
- * Mirrors the `category:*` tags on each package's project.json.
- */
-const CATEGORY_CONFIG = {
-    runtime: {
-        title: "Core Runtime",
-        packages: ["lunorash", "server", "values", "runtime", "do", "d1"],
-    },
-    client: {
-        title: "Client & UI",
-        packages: ["client", "react", "vue", "solid", "svelte", "db", "studio"],
-    },
-    "vite-plugin": { title: "Build & Tooling", packages: ["vite", "astro"] },
-    codegen: { title: "Codegen", packages: ["codegen"] },
-    cli: { title: "CLI", packages: ["cli"] },
-    "dev-tools": { title: "Dev Tools", packages: ["config", "testing"] },
-    advisor: { title: "Advisor", packages: ["advisor"] },
-    "add-on": {
-        title: "Add-ons",
-        packages: [
-            "auth",
-            "mail",
-            "storage",
-            "scheduler",
-            "container",
-            "ai",
-            "vectors",
-            "ratelimit",
-            "mcp",
-            "hyperdrive",
-            "payment",
-            "kv",
-            "images",
-            "analytics",
-            "browser",
-            "seed",
-            "workflow",
-        ],
-    },
-};
 
 /**
  * Derives the docs/showcase slug from an npm name — kept in sync with
@@ -193,7 +153,12 @@ async function sanitizeMdx(filePath) {
 
         if (fmEnd !== -1) {
             const frontmatter = content.substring(3, fmEnd);
-            const fixedFm = frontmatter.replaceAll(/^(\w[\w-]*):\s+(?!["'|>])(.+)$/gm, (match, key, value) => {
+            // `[ \t]+`, not `\s+`: `\s` matches the newline, so a key whose value
+            // is a block below it — `related:` and its list of links — captured
+            // the *next* line as its value, found a colon in it, and quoted the
+            // whole thing. That flattens the list into a string and the page then
+            // fails to parse its own frontmatter.
+            const fixedFm = frontmatter.replaceAll(/^(\w[\w-]*):[ \t]+(?!["'|>])(.+)$/gm, (match, key, value) => {
                 if (/[@:#{}[\],&*?|><!%`]/.test(value)) {
                     const escapedValue = value.replaceAll("\\", "\\\\").replaceAll('"', String.raw`\"`);
 
@@ -415,20 +380,44 @@ async function rewriteDocsLinks(destPath, pkgName, pkgRoot) {
             const original = await fs.readFile(fullPath, "utf8");
             let content = original;
 
-            // Rewrite /docs/ links (markdown syntax)
-            content = content.replaceAll(/(\[.*?\]\()\/docs\/(?!packages\/)(.*?\))/g, (match, prefix, restPath) => {
-                if (restPath.startsWith(`${pkgName}/`) || restPath.startsWith(`${pkgName})`)) {
-                    return `${prefix}/docs/packages/${restPath}`;
+            // Rewrite /docs/ links (markdown syntax). Only re-home a /docs/<x> link under
+            // this package when <x> is actually a page inside the package; otherwise it's a
+            // cross-section link to a top-level doc route (/docs/concepts, /docs/architecture,
+            // …) and must be left intact — rewriting it would create a dead path that the
+            // broken-link pass then strips to plain text.
+            content = content.replaceAll(/(\[.*?\]\()\/docs\/(?!packages\/)(.*?)(\))/g, (match, prefix, restPath, close) => {
+                if (restPath.startsWith(`${pkgName}/`) || restPath === pkgName) {
+                    return `${prefix}/docs/packages/${restPath}${close}`;
                 }
-                return `${prefix}/docs/packages/${pkgName}/${restPath}`;
+                const cleanPath = restPath.replace(/#.*$/, "").replace(/\/$/, "");
+                const resolved = path.join(pkgRoot, cleanPath);
+                if (
+                    existsSync(`${resolved}.mdx`) ||
+                    existsSync(`${resolved}.md`) ||
+                    existsSync(path.join(resolved, "index.mdx")) ||
+                    existsSync(path.join(resolved, "index.md"))
+                ) {
+                    return `${prefix}/docs/packages/${pkgName}/${restPath}${close}`;
+                }
+                return match;
             });
 
-            // Rewrite /docs/ links (JSX href syntax)
+            // Rewrite /docs/ links (JSX href syntax) — same package-vs-cross-section guard.
             content = content.replaceAll(/href="\/docs\/(?!packages\/)(.*?)"/g, (match, restPath) => {
                 if (restPath.startsWith(`${pkgName}/`) || restPath === pkgName) {
                     return `href="/docs/packages/${restPath}"`;
                 }
-                return `href="/docs/packages/${pkgName}/${restPath}"`;
+                const cleanPath = restPath.replace(/#.*$/, "").replace(/\/$/, "");
+                const resolved = path.join(pkgRoot, cleanPath);
+                if (
+                    existsSync(`${resolved}.mdx`) ||
+                    existsSync(`${resolved}.md`) ||
+                    existsSync(path.join(resolved, "index.mdx")) ||
+                    existsSync(path.join(resolved, "index.md"))
+                ) {
+                    return `href="/docs/packages/${pkgName}/${restPath}"`;
+                }
+                return match;
             });
 
             // Rewrite root-relative links (e.g. /usage/foo, /usage#anchor) that match existing package docs (markdown syntax)
@@ -594,6 +583,11 @@ async function main() {
     // Scan flat packages/{package}/docs (Lunora has no category sub-folders)
     const packages = await fs.readdir(PACKAGES_DIR, { withFileTypes: true });
 
+    // Docs slug → category slug (from the package's project.json `category:*`
+    // tag), collected while copying so the sidebar below is derived from the
+    // filesystem instead of a hard-coded package list.
+    const categoryBySlug = new Map();
+
     let copied = 0;
 
     for (const pkg of packages) {
@@ -621,6 +615,8 @@ async function main() {
         // slug generate-packages.js emits and the packages index links to.
         const slug = await slugForPackageDir(pkg.name);
         const destPath = path.join(DEST_DIR, slug);
+
+        categoryBySlug.set(slug, categorySlugForPackageDir(path.join(PACKAGES_DIR, pkg.name)));
 
         await copyDirectory(docsPath, destPath);
         console.log(`  ${pkg.name}/docs → packages/${slug}`);
@@ -686,31 +682,42 @@ async function main() {
     await fixBrokenDocsLinks(DEST_DIR);
     console.log("Validated internal doc links (broken links converted to plain text)");
 
-    // Generate root packages/meta.json with categorized sidebar navigation
+    // Generate root packages/meta.json with categorized sidebar navigation.
+    // Membership comes from each package's project.json `category:*` tag
+    // (collected above), so every copied docs folder surfaces — packages with
+    // an unknown category get a humanized section after the known ones, and
+    // anything without a tag (e.g. external docs) lands under "Other".
     const copiedPackages = await fs.readdir(DEST_DIR, { withFileTypes: true });
     const availablePackages = new Set(copiedPackages.filter((d) => d.isDirectory()).map((d) => d.name));
 
-    const pages = [];
+    const slugsByCategory = new Map();
 
-    for (const config of Object.values(CATEGORY_CONFIG)) {
-        const categoryPackages = config.packages.filter((pkg) => availablePackages.has(pkg));
+    for (const slug of availablePackages) {
+        const categorySlug = categoryBySlug.get(slug) ?? null;
+        const bucket = slugsByCategory.get(categorySlug) ?? [];
 
-        if (categoryPackages.length === 0) {
-            continue;
-        }
-
-        pages.push(`---${config.title}---`, ...categoryPackages);
-
-        // Remove from available set to track uncategorized packages
-        for (const pkg of categoryPackages) {
-            availablePackages.delete(pkg);
-        }
+        bucket.push(slug);
+        slugsByCategory.set(categorySlug, bucket);
     }
 
-    // Add any uncategorized packages at the end
-    if (availablePackages.size > 0) {
+    // Known categories in declared order, then any unknown category slugs.
+    const orderedCategorySlugs = [
+        ...Object.keys(CATEGORY_TITLES).filter((slug) => slugsByCategory.has(slug)),
+        ...[...slugsByCategory.keys()].filter((slug) => slug !== null && !(slug in CATEGORY_TITLES)).sort((a, b) => a.localeCompare(b)),
+    ];
+
+    const pages = [];
+
+    for (const categorySlug of orderedCategorySlugs) {
+        pages.push(`---${categoryTitleForSlug(categorySlug)}---`, ...orderPackagesInCategory(categorySlug, slugsByCategory.get(categorySlug)));
+    }
+
+    // Packages without a category tag at the end
+    const uncategorized = slugsByCategory.get(null);
+
+    if (uncategorized && uncategorized.length > 0) {
         pages.push("---Other---");
-        pages.push(...[...availablePackages].sort());
+        pages.push(...uncategorized.sort((a, b) => a.localeCompare(b)));
     }
 
     const rootMeta = {
@@ -753,7 +760,58 @@ async function copyRootMarkdown() {
     }
 }
 
-Promise.all([main(), copyRootMarkdown()]).catch((error) => {
+/**
+ * Copies each package's generated CHANGELOG.md into
+ * src/content/changelogs/<slug>.md (with a `title` frontmatter naming the
+ * package) so the changelog route can bundle and render every package's
+ * release notes. Packages without a CHANGELOG.md (not yet released) are
+ * skipped. The destination dir is gitignored — these are build artifacts.
+ */
+async function copyChangelogs() {
+    const destDir = path.join(__dirname, "..", "src", "content", "changelogs");
+    await fs.mkdir(destDir, { recursive: true });
+
+    const entries = await fs.readdir(PACKAGES_DIR, { withFileTypes: true });
+    let copied = 0;
+
+    for (const entry of entries) {
+        if (!entry.isDirectory()) {
+            continue;
+        }
+
+        const changelogPath = path.join(PACKAGES_DIR, entry.name, "CHANGELOG.md");
+
+        if (!existsSync(changelogPath)) {
+            continue;
+        }
+
+        const slug = await slugForPackageDir(entry.name);
+
+        let npmName = slug;
+
+        try {
+            const pkgJson = JSON.parse(await fs.readFile(path.join(PACKAGES_DIR, entry.name, "package.json"), "utf8"));
+            npmName = pkgJson.name ?? slug;
+        } catch {
+            // ignore — fall back to the slug as the display title
+        }
+
+        const body = await fs.readFile(changelogPath, "utf8");
+
+        // The page already renders the package name as a section title, so drop
+        // the redundant "## @scope/name " prefix from each version heading,
+        // leaving just "## 1.2.3 (date)".
+        const trimmed = body.replaceAll(`# ${npmName} `, "# ");
+        const frontmatter = `---\ntitle: "${npmName}"\n---\n\n`;
+
+        await fs.writeFile(path.join(destDir, `${slug}.md`), frontmatter + trimmed);
+        copied += 1;
+    }
+
+    console.log(`Copied ${copied} package changelog(s) → src/content/changelogs`);
+}
+
+Promise.all([main(), copyRootMarkdown(), copyChangelogs()]).catch((error) => {
     console.error("Fatal error:", error);
     process.exit(1);
 });

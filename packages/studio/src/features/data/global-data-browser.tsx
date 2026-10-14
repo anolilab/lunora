@@ -1,18 +1,19 @@
 import type { GlobalFacetResult, GlobalFilterClause, GlobalTableInfo, GlobalTablePage } from "@lunora/client";
 import { useLunora } from "@lunora/react";
-import type { MouseEvent, ReactElement, ReactNode } from "react";
-import { useCallback, useEffect, useRef, useState } from "react";
+import type { ReactElement, ReactNode } from "react";
+import { useEffect, useRef, useState } from "react";
 
-import { EmptyState } from "../../components/ui/empty-state";
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "../../components/ui/table";
+import { useClientQuery } from "../../hooks/use-admin-query";
 import { useAutoRefresh } from "../../hooks/use-auto-refresh";
+import useMirroredRef from "../../hooks/use-mirrored-ref";
 import { useT } from "../../i18n/i18n-context";
 import { CLOUDFLARE_D1_URL } from "../../lib/cf-links";
-import { errorMessage, fireAndForget } from "../../lib/internal";
+import { facetFilterValue } from "../../lib/internal";
 import DataFacets from "./data-facets";
-import { CellValue, GridContainer } from "./data-grid";
-import GridPagination from "./grid-pagination";
+import GlobalDataPage from "./global-data-page";
+import GlobalTablesEmptyState from "./global-tables-empty-state";
 import { useFacets } from "./hooks/use-facets";
+import { useMaskView } from "./hooks/use-mask-view";
 import { TableListSidebar } from "./table-list-sidebar";
 
 interface GlobalDataBrowserProps {
@@ -50,34 +51,6 @@ const NO_TABLES: ReadonlyArray<GlobalTableInfo> = [];
 const NO_COLUMNS: ReadonlyArray<string> = [];
 
 /**
- * A stable React key for a global-table row. `.global()` docs carry an `_id`
- * primary key; the positional fallback only applies to the rare idless page.
- */
-const rowKey = (row: Record<string, unknown>, index: number): string => {
-    const id = row["_id"];
-
-    return typeof id === "string" || typeof id === "number" ? String(id) : `row-${index.toString()}`;
-};
-
-/** Render a facet/filter value for a removable chip, distinguishing NULL and the empty string from a real value. */
-const chipValue = (value: unknown): string => {
-    if (value === null || value === undefined) {
-        return "∅";
-    }
-
-    if (value === "") {
-        return "(empty)";
-    }
-
-    if (typeof value === "object") {
-        return JSON.stringify(value);
-    }
-
-    // eslint-disable-next-line @typescript-eslint/no-base-to-string -- non-object primitives stringify meaningfully; objects are handled above.
-    return String(value);
-};
-
-/**
  * Read-only browser for `.global()` (D1-backed) tables. Twin of `DataBrowser`,
  * but not shard-scoped: it lists tables via `listGlobalTables()` and pages rows
  * via `readGlobalTablePage()`. Laid out like Supabase's Table Editor — a left
@@ -93,26 +66,22 @@ export const GlobalDataBrowser = ({
     const client = useLunora();
     const t = useT();
 
-    const [tables, setTables] = useState<GlobalTableInfo[] | null>(null);
-    const [tablesError, setTablesError] = useState<null | string>(null);
-
     // Seed from `initialTable` (a cross-tier ref jump from the Table editor) so the
     // initial selection comes from an initializer, never a synchronous setState in
-    // an effect; the page itself is fetched in the mount effect below.
+    // an effect; the page query refetches itself once a table is selected.
     const [selectedTable, setSelectedTable] = useState<null | string>(initialTable ?? null);
     const [offset, setOffset] = useState<number>(0);
     // Rows-per-page is user-adjustable via the footer's selector; the prop seeds it.
     const [pageSize, setPageSize] = useState<number>(initialPageSize);
-    const [page, setPage] = useState<GlobalTablePage | null>(null);
-    const [pageError, setPageError] = useState<null | string>(null);
 
     // Active drill-down: the `column = value` eq constraints a facet-value click
     // adds. Unlike the shard browser there's no free-form filter bar — these come
     // only from facet clicks (and their removable chips). Mirrored into a ref so the
     // page/facet fetches and the poll tick read the latest set without re-binding.
     const [filters, setFilters] = useState<GlobalFilterClause[]>([]);
-    const filtersRef = useRef(filters);
-    filtersRef.current = filters;
+    // The handlers below still assign directly — a write inside an event handler
+    // is already outside render, so it needs no mirror.
+    const filtersRef = useMirroredRef(filters);
 
     // Datasette-style per-column value/count summaries the operator has toggled on.
     // Opt-in per column (faceting a wide column is costly); each reflects the active
@@ -121,49 +90,25 @@ export const GlobalDataBrowser = ({
     // poll tick can refetch the open ones; only the per-view fetch call is ours.
     const { clearFacets, facets, refetchFacets: refetchFacetsViaHook, toggleFacet } = useFacets();
 
-    const fetchTables = useCallback(async (): Promise<void> => {
-        setTablesError(null);
+    // ── Reads via TanStack Query (`useClientQuery`): the D1 browser is HTTP-only
+    // (no live channel), so these are one-shot reads polled by `useAutoRefresh`
+    // below. The page query's key IS the view (table / offset / size / filters), so
+    // selecting a table or paginating / drilling down transparently refetches.
+    const tablesQuery = useClientQuery<GlobalTableInfo[]>(["lunora-global-tables"], () => client.listGlobalTables());
+    const tables = tablesQuery.data ?? null;
+    const tablesError = tablesQuery.error;
 
-        try {
-            setTables(await client.listGlobalTables());
-        } catch (error) {
-            setTables(null);
-            setTablesError(errorMessage(error));
-        }
-    }, [client]);
-
-    // Monotonic request counter so an out-of-order page read can't overwrite a
-    // newer one — rapid pagination / drill-down clicks can resolve in any order,
-    // so only the latest issued request commits its result (mirrors `useRunSql`).
-    const fetchSeqRef = useRef(0);
-
-    const fetchPage = useCallback(
-        async (table: string, nextOffset: number, limit: number = pageSize, activeFilters: GlobalFilterClause[] = filtersRef.current): Promise<void> => {
-            fetchSeqRef.current += 1;
-            const seq = fetchSeqRef.current;
-
-            setPageError(null);
-
-            try {
-                const result = await client.readGlobalTablePage({ filters: activeFilters, limit, offset: nextOffset, table });
-
-                if (fetchSeqRef.current !== seq) {
-                    return;
-                }
-
-                setPage(result);
-                setOffset(nextOffset);
-            } catch (error) {
-                if (fetchSeqRef.current !== seq) {
-                    return;
-                }
-
-                setPage(null);
-                setPageError(errorMessage(error));
-            }
-        },
-        [client, pageSize],
+    // `keepPreviousData` is off: the placeholder isn't table-aware, so holding the
+    // last page across a `selectedTable` change would render table A's rows while
+    // the sidebar/URL already point at table B (and facet clicks would then act on
+    // the new table using the stale visible rows). Disabled until a table is open.
+    const pageQuery = useClientQuery<GlobalTablePage>(
+        ["lunora-global-page", selectedTable ?? "", offset, pageSize, JSON.stringify(filters)],
+        () => client.readGlobalTablePage({ filters, limit: pageSize, offset, table: selectedTable ?? "" }),
+        { enabled: selectedTable !== null, keepPreviousData: false },
     );
+    const page = pageQuery.data ?? null;
+    const pageError = pageQuery.error;
 
     // A column's facet summary is fetched over the active view via `facetGlobalColumn`.
     // `GlobalFacetResult` is structurally the studio's `FacetResult`, so it drops
@@ -179,19 +124,16 @@ export const GlobalDataBrowser = ({
         refetchFacetsViaHook(facetFetcher(table, activeFilters));
     };
 
-    useEffect(() => {
-        fireAndForget(fetchTables());
-    }, [fetchTables]);
-
     // D1 is HTTP-only (no subscription channel), so poll to keep the table list
     // and the current page current without a manual reload — `useAutoRefresh`
     // pauses while the tab is hidden. The tick closure is held in a ref, so it
-    // always sees the latest selection/offset.
+    // always sees the latest selection/filters; it re-runs the two TanStack reads
+    // and the open facets.
     useAutoRefresh(() => {
-        fireAndForget(fetchTables());
+        tablesQuery.refetch();
 
         if (selectedTable !== null) {
-            fireAndForget(fetchPage(selectedTable, offset));
+            pageQuery.refetch();
             refetchFacets(selectedTable, filtersRef.current);
         }
     }, true);
@@ -202,20 +144,19 @@ export const GlobalDataBrowser = ({
     // when the same value bounces back in via the `initialTable` prop.
     const appliedInitialTable = useRef<string | undefined>(undefined);
 
-    const selectTable = useCallback(
-        (table: string): void => {
-            setSelectedTable(table);
-            appliedInitialTable.current = table;
-            // A fresh table means the previous drill-down filters and facets no longer apply.
-            setFilters([]);
-            filtersRef.current = [];
-            clearFacets();
-            fireAndForget(fetchPage(table, 0, pageSize, []));
-            // Mirror the selection to the URL so it's shareable and back/forward works.
-            onSelectTable?.(table);
-        },
-        [clearFacets, fetchPage, onSelectTable, pageSize],
-    );
+    const selectTable = (table: string): void => {
+        setSelectedTable(table);
+        appliedInitialTable.current = table;
+        // A fresh table means the previous drill-down filters and facets no longer apply.
+        setFilters([]);
+        filtersRef.current = [];
+        clearFacets();
+        // Reset to the first page in the handler (not an effect); the page query
+        // refetches itself once `selectedTable`/`offset`/`filters` change.
+        setOffset(0);
+        // Mirror the selection to the URL so it's shareable and back/forward works.
+        onSelectTable?.(table);
+    };
 
     // Toggle a column into / out of the facet sidebar. Turning it on seeds a loading
     // slot and fetches its summary for the active view; turning it off drops it. With
@@ -224,14 +165,16 @@ export const GlobalDataBrowser = ({
         toggleFacet(column, selectedTable === null ? null : facetFetcher(selectedTable, filtersRef.current));
     };
 
-    // Apply a new filter set: re-read the first page and refetch the open facets so
-    // both reflect the drill-down. `next` is passed explicitly (state is async).
+    // Apply a new filter set: jump back to the first page (in the handler, not an
+    // effect — the page query refetches on the `filters`/`offset` change) and refetch
+    // the open facets so both reflect the drill-down. `next` is passed explicitly to
+    // the facet refetch (state is async).
     const applyFilters = (next: GlobalFilterClause[]): void => {
         setFilters(next);
         filtersRef.current = next;
+        setOffset(0);
 
         if (selectedTable !== null) {
-            fireAndForget(fetchPage(selectedTable, 0, pageSize, next));
             refetchFacets(selectedTable, next);
         }
     };
@@ -239,22 +182,21 @@ export const GlobalDataBrowser = ({
     // Clicking a facet value adds an `eq` filter for that column/value, narrowing the
     // view. Replaces any existing clause for the same column so repeated clicks don't stack.
     const onFacetFilter = (column: string, value: unknown): void => {
-        applyFilters([...filtersRef.current.filter((clause) => clause.column !== column), { column, value }]);
+        applyFilters([...filtersRef.current.filter((clause) => clause.column !== column), { column, value: facetFilterValue(value) }]);
     };
 
     // Remove one active drill-down filter (its chip's ✕).
-    const removeFilter = (event: MouseEvent<HTMLButtonElement>): void => {
-        const index = Number(event.currentTarget.dataset["index"]);
-
+    const removeFilter = (index: number): void => {
         applyFilters(filtersRef.current.filter((_, position) => position !== index));
     };
 
     // Reconcile the `initialTable` the Table editor hands us via the URL into the
     // selection: a cross-tier `v.id` ref jump, a deep link, or browser back/forward.
-    // It defers to `selectTable`, which sets BOTH `selectedTable` (so the sidebar
-    // highlight and pagination track the displayed table) and fetches its page — a
-    // bare `fetchPage` here would desync the two on back/forward while the browser
-    // stays mounted. Applied once per distinct value (ref claimed up front), so a
+    // It defers to `selectTable`, which sets `selectedTable` (so the sidebar
+    // highlight and pagination track the displayed table) and resets the view — the
+    // page query then refetches off that state change. Setting `selectedTable`
+    // directly here would skip the filter/facet/offset reset. Applied once per
+    // distinct value (ref claimed up front), so a
     // page-size change or a value this component itself just selected doesn't re-run.
     //
     // NB: structurally identical to the shard hook's URL-reconcile effect
@@ -262,6 +204,22 @@ export const GlobalDataBrowser = ({
     // don't run synchronously in the effect. Kept inline rather than shared because
     // each browser's `selectTable` differs (the shard one also resets sort/filter/
     // staged state and is shard-keyed); only this ~6-line wiring would be common.
+    //
+    // `selectTable` is read via a ref so the effect fires on `initialTable` changes
+    // ALONE. Its identity churns with the host's per-render `onSelectTable`, and
+    // depending on it re-ran the effect in the window between a user click (which
+    // claims `appliedInitialTable` optimistically) and the async URL commit — the
+    // stale `initialTable` then reverted the selection to the previous table.
+    const selectTableRef = useRef(selectTable);
+
+    // Keep the ref pointing at the latest `selectTable` from an effect, not
+    // during render — a render-phase ref write is impure (React can replay or
+    // discard the render). This effect runs after every commit, so the ref is
+    // fresh before the `[initialTable]` effect's deferred `queueMicrotask` fires.
+    useEffect(() => {
+        selectTableRef.current = selectTable;
+    });
+
     useEffect(() => {
         /* eslint-disable react-you-might-not-need-an-effect/no-event-handler -- URL → selection sync: open the global table named in the URL (cross-tier jump / deep link / back-forward). A given value applies at most once (ref-guarded); there is no user event to hook into. */
         if (initialTable === undefined || initialTable === "" || appliedInitialTable.current === initialTable) {
@@ -272,18 +230,25 @@ export const GlobalDataBrowser = ({
         const target = initialTable;
 
         queueMicrotask(() => {
-            selectTable(target);
+            selectTableRef.current(target);
         });
         /* eslint-enable react-you-might-not-need-an-effect/no-event-handler */
-    }, [initialTable, selectTable]);
+    }, [initialTable]);
 
     const goToPage = (nextOffset: number): void => {
         if (selectedTable === null) {
             return;
         }
 
-        fireAndForget(fetchPage(selectedTable, Math.max(0, nextOffset)));
+        // The page query is keyed on `offset`, so setting it refetches that page.
+        setOffset(Math.max(0, nextOffset));
     };
+
+    // The "Mask sensitive columns" preview for the open table, same hook the shard
+    // browser uses: `maskPolicies` is deployment-wide `(table, column, strategy)`
+    // and a `.global()` table is browsed under its logical schema name, so a
+    // `.use(mask(...))` policy resolves here exactly as it does there.
+    const { maskColumns, maskOn, maskView, onToggleMask } = useMaskView({ columns: page?.columns ?? NO_COLUMNS, selectedTable });
 
     const total = page?.total ?? 0;
     const hasPrevious = offset > 0;
@@ -292,7 +257,7 @@ export const GlobalDataBrowser = ({
     const rangeEnd = page === null ? 0 : offset + page.rows.length;
 
     const reloadTables = (): void => {
-        fireAndForget(fetchTables());
+        tablesQuery.refetch();
     };
 
     const goPrevious = (): void => {
@@ -307,14 +272,12 @@ export const GlobalDataBrowser = ({
         goToPage(Math.max(0, (targetPage - 1) * pageSize));
     };
 
-    // Change rows-per-page and re-read the first page at the new size (passed
-    // explicitly so it doesn't wait for the state-updated closure).
+    // Change rows-per-page and jump back to the first page (in the handler, not an
+    // effect); the page query is keyed on `pageSize`/`offset`, so it refetches the
+    // first page at the new size.
     const changePageSize = (size: number): void => {
         setPageSize(size);
-
-        if (selectedTable !== null) {
-            fireAndForget(fetchPage(selectedTable, 0, size));
-        }
+        setOffset(0);
     };
 
     return (
@@ -348,29 +311,7 @@ export const GlobalDataBrowser = ({
                     </p>
                 )}
 
-                {tables !== null && tables.length === 0 && (
-                    <div className="flex flex-1 items-center justify-center p-6">
-                        <EmptyState
-                            description={t("Tables marked .global() (D1-backed, region-replicated) will appear here.")}
-                            icon={
-                                <svg
-                                    aria-hidden="true"
-                                    fill="none"
-                                    stroke="currentColor"
-                                    strokeLinecap="round"
-                                    strokeLinejoin="round"
-                                    strokeWidth={1.6}
-                                    viewBox="0 0 24 24"
-                                >
-                                    <circle cx="12" cy="12" r="9" />
-                                    <path d="M3 12h18M12 3a14 14 0 0 1 0 18 14 14 0 0 1 0-18Z" />
-                                </svg>
-                            }
-                            testId="gdb-empty"
-                            title={t("No global tables.")}
-                        />
-                    </div>
-                )}
+                {tables !== null && tables.length === 0 && <GlobalTablesEmptyState />}
 
                 {pageError !== null && (
                     <p className="shrink-0 border-b border-border px-4 py-2 text-sm text-destructive" data-testid="gdb-page-error" role="alert">
@@ -385,78 +326,25 @@ export const GlobalDataBrowser = ({
                 )}
 
                 {page !== null && (
-                    <div className="flex min-h-0 flex-1 flex-col" data-testid="gdb-page">
-                        {filters.length > 0 && (
-                            <div className="flex shrink-0 flex-wrap items-center gap-1.5 border-b border-border px-4 py-2 text-xs" data-testid="gdb-filters">
-                                {filters.map((filter, index) => (
-                                    <span
-                                        className="inline-flex items-center gap-1 rounded border border-border bg-muted px-1.5 py-0.5"
-                                        data-testid="gdb-filter-chip"
-                                        key={`${filter.column}:${chipValue(filter.value)}`}
-                                    >
-                                        <span className="font-medium text-foreground">{filter.column}</span>
-                                        <span className="text-muted-foreground">=</span>
-                                        <span className="font-mono text-foreground">{chipValue(filter.value)}</span>
-                                        <button
-                                            aria-label={t("Remove filter")}
-                                            className="ml-0.5 text-muted-foreground hover:text-foreground"
-                                            data-index={index}
-                                            data-testid="gdb-filter-remove"
-                                            onClick={removeFilter}
-                                            type="button"
-                                        >
-                                            ✕
-                                        </button>
-                                    </span>
-                                ))}
-                            </div>
-                        )}
-
-                        <GridContainer layout="fill">
-                            <div className="min-h-0 flex-1 overflow-auto">
-                                <Table data-testid="gdb-rows">
-                                    <TableHeader>
-                                        <TableRow>
-                                            {page.columns.map((column) => (
-                                                <TableHead key={column}>{column}</TableHead>
-                                            ))}
-                                        </TableRow>
-                                    </TableHeader>
-                                    <TableBody>
-                                        {page.rows.map((row, rowIndex) => (
-                                            <TableRow data-testid="gdb-row" key={rowKey(row, rowIndex)}>
-                                                {page.columns.map((column) => (
-                                                    <TableCell className="max-w-xs truncate font-mono text-xs" key={column}>
-                                                        <CellValue value={row[column]} />
-                                                    </TableCell>
-                                                ))}
-                                            </TableRow>
-                                        ))}
-                                    </TableBody>
-                                </Table>
-                            </div>
-                        </GridContainer>
-
-                        <div className="flex shrink-0 items-center border-t border-border px-4 py-2">
-                            <GridPagination
-                                hasNext={hasNext}
-                                hasPrevious={hasPrevious}
-                                onJumpToPage={jumpToPage}
-                                onNext={goNext}
-                                onPageSizeChange={changePageSize}
-                                onPrevious={goPrevious}
-                                pageSize={pageSize}
-                                prefix="gdb"
-                                rangeEnd={rangeEnd}
-                                rangeStart={rangeStart}
-                                total={total}
-                            />
-                        </div>
-                    </div>
+                    <GlobalDataPage
+                        filters={filters}
+                        hasMaskedColumns={maskColumns.size > 0}
+                        mask={maskView}
+                        maskOn={maskOn}
+                        onChangePageSize={changePageSize}
+                        onJumpToPage={jumpToPage}
+                        onNext={goNext}
+                        onPrevious={goPrevious}
+                        onRemoveFilter={removeFilter}
+                        onToggleMask={onToggleMask}
+                        page={page}
+                        pageSize={pageSize}
+                        pagination={{ hasNext, hasPrevious, rangeEnd, rangeStart, total }}
+                    />
                 )}
             </div>
 
-            <DataFacets columns={page?.columns ?? NO_COLUMNS} facets={facets} onFacetFilter={onFacetFilter} onToggleFacet={onToggleFacet} />
+            <DataFacets columns={page?.columns ?? NO_COLUMNS} facets={facets} mask={maskView} onFacetFilter={onFacetFilter} onToggleFacet={onToggleFacet} />
         </div>
     );
 };

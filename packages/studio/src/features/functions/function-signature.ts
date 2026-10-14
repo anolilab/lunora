@@ -1,7 +1,8 @@
+import { encodeWire } from "../../../../../shared/wire-codec";
 import type { FunctionArgumentDescriptor } from "../../lib/types";
 
 /**
- * The display type of one argument: `id&lt;table>` for foreign keys, `kind[]`
+ * The display type of one argument: `id<table>` for foreign keys, `kind[]`
  * for arrays whose element kind is known, otherwise the bare validator kind.
  */
 const argumentType = (argument: FunctionArgumentDescriptor): string => {
@@ -18,7 +19,7 @@ const argumentType = (argument: FunctionArgumentDescriptor): string => {
 
 /**
  * A one-line, human-readable function signature from its argument descriptors,
- * e.g. `(channelId: id&lt;channels>, text: string, limit?: number)`. Optional
+ * e.g. `(channelId: id<channels>, text: string, limit?: number)`. Optional
  * arguments are marked with `?`. Returns `()` when there are no arguments.
  */
 const formatSignature = (arguments_: FunctionArgumentDescriptor[] | undefined): string => {
@@ -35,18 +36,25 @@ const placeholderValue = (kind: string): unknown => {
         case "array": {
             return [];
         }
-        case "bigint":
-        case "number": {
-            return 0;
+        // A `v.bigint()` / `v.bytes()` arg rejects a number or string, so the
+        // template shows the tagged form the runner wire-decodes before sending.
+        case "bigint": {
+            return encodeWire(0n);
         }
         case "boolean": {
             return false;
+        }
+        case "bytes": {
+            return encodeWire(new ArrayBuffer(0));
+        }
+        case "number": {
+            return 0;
         }
         case "object":
         case "record": {
             return {};
         }
-        // string / id / literal / bytes / date / timestamp / any / unknown
+        // string / id / literal / date / timestamp / any / unknown
         default: {
             return "";
         }

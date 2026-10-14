@@ -1,77 +1,371 @@
 import type { DurableObjectStorage } from "@cloudflare/workers-types";
-import type { DrizzleSqliteDODatabase } from "drizzle-orm/durable-sqlite";
-import { drizzle as drizzleDO } from "drizzle-orm/durable-sqlite";
-
-import type { ExportRow, ImportShardResult } from "./admin-export-import";
-import { parseExportShardArgs, parseImportShardArgs } from "./admin-export-import";
-import { appendAuditEntry, ensureAuditTable, readAuditLog } from "./audit-log";
-import type { AuthMetrics } from "./auth-metrics";
-import { readAuthMetrics, recordAuthEvent } from "./auth-metrics";
-import type { CdcChange, SqlExec } from "./ctx-db";
-import { bumpCdcEpoch, CDC_LOG_TABLE, minCdcSeq, readCdcChanges, readCdcCursor, readCdcEpoch, readIdempotent, trimIdempotent, writeIdempotent } from "./ctx-db";
-import type { MigrationDirection, MigrationRunResult } from "./data-migration";
-import { DATA_MIGRATION_STATE_TABLE, readMigrationStatus } from "./data-migration";
-import type { DependencyTracker } from "./dependency-tracker";
-import { createDependencyTracker, SCAN_DEP, tableFromDepKey } from "./dependency-tracker";
-import type { FunctionMetricBucket, FunctionMetricIndexHit, IndexHit } from "./function-metrics";
+import { isLunoraError, LunoraError, toErrorBody } from "@lunora/errors";
+import type {
+    AppendRequestLogEntry,
+    ContextFetch,
+    ContextLogLevel,
+    ContextMetrics,
+    ContextTracer,
+    DatabaseInstrumentation,
+    DatabaseTally,
+    DatabaseTelemetryDeps,
+    FunctionMetricBucket,
+    FunctionMetricBucketsResult,
+    FunctionMetricIndexHit,
+    HostTracingLike,
+    IndexHit,
+    IssueState,
+    IssueStatePatch,
+    LogEventInput,
+    MetricHistoryOptions,
+    QueryStatEntry,
+    RequestLogWriteOptions,
+    SpanCollection,
+    SpanCollector,
+    SqlClientLike,
+    TallySurface,
+    TraceAnchor,
+} from "@lunora/observability";
 import {
+    appendRequestLogEntry,
+    applyHostRootSpan,
+    buildSecurityAudit,
+    createDatabaseTally,
+    createMetrics,
+    createSpanCollector,
+    createTracedFetch,
+    createTracer,
+    dispatchRootSpan,
+    emitLogEvent,
+    emitRequestLogEvent,
+    explainIssue,
+    foldTraces,
+    formatTally,
+    FUNCTION_METRICS_MAX_PATHS,
+    instrumentDatabase,
+    instrumentSqlClient,
+    ISSUE_STATE_TABLE,
+    LogBuffer,
     mergeScanAttribution,
+    MetricBuffer,
+    parseLogArgs,
+    readErrorIssues,
     readFunctionMetricBuckets,
     readFunctionMetricIndexHits,
     readFunctionMetrics,
     readFunctionMetricsTotals,
+    readMetricHistory,
+    readQueryMetrics,
+    recordAuthEvent,
     recordFunctionMetric,
-} from "./function-metrics";
+    recordMetricHistory,
+    recordQueryMetric,
+    redactArgs,
+    REQUEST_LOG_TABLE,
+    resolveTraceAnchor,
+    SpanBuffer,
+    upsertIssueState,
+} from "@lunora/observability";
+import type { ShardHost, SocketHost } from "@lunora/platform";
+import { createShardHost, createSocketHost } from "@lunora/platform-cloudflare";
 import type {
+    AdvisorProcedure,
     AdvisoryFinding,
-    AuditLogResult,
+    CdcChange,
+    CdcChangeKey,
     ColumnMeta,
     CreateWorkflowInstanceResult,
-    FilterClause,
-    FilterOperator,
+    DependencyTracker,
+    DurableStreamSink,
+    ExportRow,
+    FanoutMetricsResult,
+    FlagsResult,
     FunctionCallStat,
     FunctionStatsResult,
+    GlobalPollCounters,
+    ImportShardResult,
+    IndexKeyEntry,
+    KeyRange,
+    LifecycleDispatchInfo,
+    LifecycleEvent,
     MaskPoliciesResult,
-    OrderByClause,
+    MigrationRunResult,
+    MutationDelta,
+    OwnerRelay,
+    QueueMetadata,
+    QueuesResult,
+    ReactiveCacheOptions,
+    ReactorMetadata,
+    ReactorState,
+    ReadFootprint,
+    RelatedPage,
+    RelayHost,
+    RelayMember,
+    ReplicaOwnerHost,
+    ResolvedShape,
     RlsPoliciesResult,
+    RpcRequest,
+    ScheduleOutbox,
+    ScheduleOutboxEnvelope,
+    ScheduleOutboxRow,
+    SchedulerLike,
+    SearchBackfillProgress,
+    ShapeDiffCache,
+    ShapePokeCursorRow,
+    ShapePokePart,
+    ShapeProbeCounters,
+    ShapeRow,
+    ShapeRowOp,
+    ShapeSubscriptionQuery,
+    ShardRankPageResult,
+    ShardSiblingHost,
+    ShardSocketLike,
+    SocketAttachment,
+    SqlExec,
     StorageRulesResult,
     StudioFeaturesResult,
+    SubscriptionEnvelope,
+    SubscriptionIdentity,
+    SubscriptionQuery,
     SubscriptionsResult,
     TableIndexInfo,
+    TransactionLimits,
+    TransactionSqlLike,
+    TtlSweepSpec,
+    VectorBackfillProgress,
     WorkflowInstanceStatusResult,
     WorkflowsResult,
-} from "./introspect";
+} from "@lunora/shard-engine";
 import {
     ADMIN_FUNCTION_PREFIX,
     ADMIN_FUNCTIONS,
-    facetColumn,
-    findStorageReferences,
+    advanceClientWatermark,
+    appendAuditEntry,
+    armRestore,
+    awaitWsDrain,
+    buildPokeFrames,
+    buildSettings,
+    buildShapeDiff,
+    bumpCdcEpoch,
+    CDC_LOG_TABLE,
+    cdcCanVouchFor,
+    cdcForkedError,
+    cdcTouchesTables,
+    cdcTrimmedError,
+    clearCapturedMail,
+    clearCompanionSignatures,
+    clearQueueMessages,
+    ConflictError,
+    createDependencyTracker,
+    createFanoutCounters,
+    createGlobalPollCounters,
+    createReadFootprint,
+    createRelayLink,
+    createReplicaLink,
+    createShapeDiffCache,
+    createShapeProbeCounters,
+    cursorBelowRetainedFloor,
+    DATA_MIGRATION_STATE_TABLE,
+    DEFAULT_MAX_RELAYS,
+    deferScheduleOutbox,
+    deleteGlobalShapeSnapshot,
+    deleteGlobalShapeSnapshotsForConnection,
+    deleteShapePokeCursor,
+    deleteShapePokeCursorsForConnection,
+    diffGlobalMembership,
+    DurableStreamRunner,
+    envOptionalPositiveInt,
+    FLAGS_FUNCTION_PREFIX,
+    forgetScheduleOutbox,
+    gateReplicaDispatch,
+    GlobalPollTick,
+    globalShapeReadKey,
+    handleReplicaControl,
+    isDevEnvironment,
+    isLossyBody,
+    listReactorStates,
     listTables,
     MAX_PAGE_SIZE,
+    mergeChangedKeys,
+    migrateClientWatermark,
+    minCdcReplayableSeq,
+    minCdcSeq,
+    minShapePokeCursor,
+    parkScheduleOutbox,
+    parseExportShardArgs,
+    parseImportShardArgs,
+    probeScheduleOutbox,
+    projectColumns,
+    quoteIdentifier,
+    ReactiveCache,
+    reactiveCacheKey,
+    reactorNeedsRun,
+    readBookmark,
+    readCdcChangeKeys,
+    readCdcChanges,
+    readCdcCursor,
+    readCdcEpoch,
+    readClientWatermark,
+    readDeployInfo,
+    readDueScheduleOutbox,
+    readGlobalShapeSnapshot,
+    readIdempotent,
+    readMigrationStatus,
+    readQueueMessageById,
+    readReactorState,
+    readShapePokeCursor,
     readTablePage,
+    recordCapturedMail,
+    recordChangedKeys,
+    recordFanoutPass,
+    recordGlobalPollPass,
+    recordQueueMessages,
+    recordScheduleOutbox,
+    recordShapeProbePass,
     RELATION_FUNCTION_PREFIX,
+    runSocketPool,
+    SCAN_DEP,
+    selectExpiredIds,
     selectMatchingIds,
+    selectShapeRows,
+    ShardRunner,
+    stableStringify,
+    stableWireKey,
+    stubByName,
+    subscriptionFrames,
+    summarizeFanoutTopics,
     summarizeSubscriptions,
-} from "./introspect";
-import type { LogEntry } from "./log-buffer";
-import { LogBuffer } from "./log-buffer";
-import type { RecordMailInput } from "./mail-catcher";
-import { clearCapturedMail, MAIL_TABLE, readCapturedMail, recordCapturedMail } from "./mail-catcher";
-import { armRestore, readBookmark } from "./pitr";
-import type { QueryStatEntry } from "./query-metrics";
-import { readQueryMetrics, recordQueryMetric } from "./query-metrics";
-import type { ShardRankPageResult } from "./rank";
-import type { ReactiveCacheOptions } from "./reactive-cache";
-import { ReactiveCache, reactiveCacheKey } from "./reactive-cache";
-import type { AppendRequestLogEntry, ContextLogLevel, LogEventInput, RequestLogResult, RequestLogWriteOptions } from "./request-log";
-import { appendRequestLogEntry, emitLogEvent, emitRequestLogEvent, ensureRequestLogTable, readRequestLog, renderLogMessage } from "./request-log";
-import { buildSecurityAudit } from "./security-audit";
-import { buildSettings, isDevEnvironment } from "./settings";
-import { runReadonlySql } from "./sql-console";
-import { findDanglingReferences } from "./storage-correlation";
-import type { TransactionSqlLike } from "./transaction";
-import { ConflictError } from "./transaction";
-import type { LifecycleDispatchInfo, LifecycleEvent, MutationDelta, RpcRequest, SocketAttachment, SubscriptionEnvelope, SubscriptionQuery } from "./types";
+    TransactionHeadroomTracker,
+    trimIdempotent,
+    trimScheduleOutbox,
+    trySendFrame,
+    UNVOUCHABLE_DEP,
+    VECTOR_BACKFILL_MAX_PAGES,
+    writeGlobalShapeSnapshot,
+    writeIdempotent,
+    writeReactorState,
+    writeShapePokeCursor,
+    writeShapePokeCursors,
+    writeTouchesMemo,
+} from "@lunora/shard-engine";
+import type { DrizzleSqliteDODatabase } from "drizzle-orm/durable-sqlite";
+import { drizzle as drizzleDO } from "drizzle-orm/durable-sqlite";
+
+import type { BatchEntry } from "../../../shared/batch-wire";
+import { MAX_BATCH_ENTRIES } from "../../../shared/batch-wire";
+import { constantTimeEqual } from "../../../shared/constant-time-equal";
+import { DISPATCH_DECLINED_HEADER, DISPATCH_IN_PROGRESS } from "../../../shared/dispatch-claim";
+import type { ErrorDetail } from "../../../shared/error-detail";
+import { describeError, encodeErrorDetail, ERROR_DETAIL_HEADER, findLoggedError, WANT_ERROR_DETAIL_HEADER } from "../../../shared/error-detail";
+import { evictOldestEntry } from "../../../shared/evict-oldest";
+import { decodeIdentityExpiryHeader, decodeUserIdHeader, dropExpiredCredentialSocket, isIdentityExpired } from "../../../shared/identity-header";
+import { jsonResponse } from "../../../shared/json-response";
+import type { LogSinkContext } from "../../../shared/log-event";
+import type { LogFields } from "../../../shared/log-fields";
+import type { MetricEvent } from "../../../shared/metric-event";
+import { ORIGIN_PAYWALL_APPLIED, ORIGIN_PAYWALL_HEADER } from "../../../shared/origin-paywall";
+import { buildTraceparent, LUNORA_ATTR, parseTraceparent } from "../../../shared/otlp";
+import { PAGE_DELTA_CAPABILITY } from "../../../shared/page-result";
+import { RAY_ID_HEADER } from "../../../shared/ray-id";
+import { parseRelayName } from "../../../shared/relay-name";
+import { parseReplicaName } from "../../../shared/replica-name";
+import { SAMPLE_ERRORS_HEADER } from "../../../shared/sampling";
+import type { SpanEvent, SpanHandle } from "../../../shared/span-event";
+import { decodeWire, encodeWire } from "../../../shared/wire-codec";
+import { resolveWorkflowHandle } from "../../../shared/workflow-binding";
+import { adminSocketBinding, verifyWsAdminToken } from "../../../shared/ws-admin-token";
+import {
+    batchedTableLookup,
+    readAdminAuditLog,
+    readAdminDurableSignal,
+    readAdminFacetColumn,
+    readAdminIssues,
+    readAdminRequestLog,
+    readAdminRunSql,
+    readAdminStorageOrphans,
+    readAdminStorageReferences,
+} from "./admin-readers";
+import type {
+    QueueBindingHandle,
+    RunShardApplyCdcArgs,
+    RunShardApplyCdcResult,
+    RunShardBulkRowArgs,
+    RunShardBulkRowResult,
+    RunShardCdcSyncArgs,
+    RunShardExportArgs,
+    RunShardFindRelatedArgs,
+    RunShardImportArgs,
+    RunShardMigrationArgs,
+    RunShardRankBeforeArgs,
+    RunShardRankPageArgs,
+    RunShardWriteArgs,
+    RunShardWriteResult,
+    WorkflowBindingHandle,
+} from "./admin-rpc-args";
+import {
+    bookmarkHeaders,
+    buildTestMailInput,
+    cdcSuffix,
+    decodeIndexHitKey,
+    dispatchSpanKey,
+    extractBearerToken,
+    parseApplyCdcArgs,
+    parseAssigneeArgument,
+    parseBaselineSeqHeader,
+    parseBulkDeleteArgs,
+    parseBulkPatchArgs,
+    parseCdcSyncArgs,
+    parseClearTableArgs,
+    parseClientSeqHeader,
+    parseCreateWorkflowInstanceArgs,
+    parseEmit,
+    parseFindRelatedArgs,
+    parseGetWorkflowInstanceStatusArgs,
+    parseIdentityHeader,
+    parseIssueHash,
+    parsePositiveInt,
+    parseRankBeforeArgs,
+    parseRankPageArgs,
+    parseRecordAuthEventArgs,
+    parseRecordContainerEventArgs,
+    parseRecordMailArgs,
+    parseRecordQueueMessageArgs,
+    parseReleaseShardRegistrationArgs,
+    parseReplayQueueMessageArgs,
+    parseRunAsArgs,
+    parseRunMigrationArgs,
+    parseSampleErrorsHeader,
+    parseSampleRate,
+    parseSendQueueMessageArgs,
+    parseSeverityArgument,
+    parseTablePageFilters,
+    parseTablePageOrderBy,
+    parseWriteRowArgs,
+    sampleHit,
+    setsIntersect,
+    tablesFromDeps,
+    toWorkflowInstanceError,
+    toWorkflowInstanceState,
+} from "./admin-rpc-args";
+import type { RearmAdmission } from "./alarm-rearm-breaker";
+import {
+    admitRearm,
+    ALARM_REARM_WINDOW_MS,
+    alarmRearmLimitFrom,
+    ensureRearmWindowTable,
+    estimateRearms,
+    readRearmWindow,
+    recoveryWakeAt,
+    writeRearmWindow,
+} from "./alarm-rearm-breaker";
+import { buildBatchEntryRequest } from "./batch";
+import { CdcRetentionRunner } from "./cdc-retention";
+import type { InFlightClaim } from "./in-flight-claims";
+import { InFlightClaims } from "./in-flight-claims";
+import { ensureScheduleRateTable, readScheduleRateWindow, scheduleRateLimitFrom, writeScheduleRateWindow } from "./schedule-rate-breaker";
+import { resolveSchemaHistoryRead } from "./schema-history-reads";
+import { registerShardKey, SHARD_REGISTRY_DO_NAME, unregisterShardKey } from "./shard-registry-do";
+import { generateChart, generateFilter, generateSql } from "./sql-assistant";
 
 /**
  * Client→server text frame the runtime answers with {@link WS_KEEPALIVE_PONG}
@@ -80,20 +374,262 @@ import type { LifecycleDispatchInfo, LifecycleEvent, MutationDelta, RpcRequest, 
  * stays alive across hibernation without a billable request. Clients send this
  * payload on their heartbeat instead of an app-level ping.
  */
+
+/**
+ * The success envelope for every admin RPC.
+ *
+ * `jsonResponse` is plain `Response.json`, and admin handlers return values read
+ * straight out of the row store — `decodeDocJson` hands back a real `bigint` for
+ * a `v.bigint()` column and a real `ArrayBuffer` for `v.bytes()`. Uncoded, the
+ * first throws `TypeError: Do not know how to serialize a BigInt` (a whole shard
+ * export 500s) and the second flattens to `{}` in a consumer's backup. Wrapping
+ * the envelope once here covers every handler rather than leaving each to
+ * remember; `createShardClient` already runs `decodeWire(body.result)` on every
+ * admin call (`@lunora/runtime`'s `shard-client`), and both codecs are the
+ * identity on pure-JSON payloads, so nothing else changes shape.
+ */
+const adminResponse = (result: unknown): Response => jsonResponse({ result: encodeWire(result) }, 200);
+
+/**
+ * Wire-encode a dispatch's return value, turning the codec's refusal into a
+ * coded, non-redacted `WIRE_ENCODE_FAILED` so the handler author sees WHICH
+ * value it choked on.
+ *
+ * `encodeWire` rejects any non-plain object (a `Decimal`, an ORM entity, a
+ * `Temporal.*`, `RegExp`, `Headers`) and anything nested past its depth cap. Left
+ * as the bare `TypeError`/`RangeError` it raises, the dispatch mapper classes it
+ * as an unrecognized throw and answers a redacted `RPC_FAILED` 500 — the message
+ * naming the offending constructor reaching nobody.
+ *
+ * A mutation calls this from INSIDE its transaction (see
+ * {@link ShardDO.commitMutationBookkeeping}), which is the load-bearing part. The
+ * encode used to happen only in the dedup write, wrapped in that method's
+ * best-effort `catch`, and then again on the response AFTER the transaction had
+ * committed — so an unencodable return committed its writes, wrote no dedup row,
+ * and answered 500. `RPC_FAILED` is not a transient code, so the client dropped
+ * the write as failed while the effect stood, and a retry re-applied it.
+ */
+const encodeDispatchResult = (result: unknown): unknown => {
+    try {
+        return encodeWire(result);
+    } catch (error: unknown) {
+        throw new LunoraError("WIRE_ENCODE_FAILED", error instanceof Error ? error.message : String(error), { cause: error });
+    }
+};
+
+/**
+ * The ingress half of {@link adminResponse}, so a payload this shard exported
+ * can be handed straight back — `cdcSync` → `applyCdc`, `exportShard` →
+ * `importShard` — with its `bigint`/bytes intact. Identity for pure-JSON args,
+ * so every other op is unaffected.
+ * @throws LunoraError `BAD_REQUEST` when the args are malformed — `decodeWire` raises a bare `RangeError` past its depth / bigint-digit bounds, and these are caller-supplied, so that is a 400 rather than the unmapped 500 it would otherwise become
+ */
+const decodeAdminArgs = (rawArgs: Record<string, unknown>): Record<string, unknown> => {
+    let decoded: unknown;
+
+    try {
+        decoded = decodeWire(rawArgs);
+    } catch {
+        throw new LunoraError("BAD_REQUEST", "malformed admin RPC arguments");
+    }
+
+    // Decoding can change the SHAPE, not just the leaves: a top-level tagged
+    // `undefined` decodes to a primitive and a root array stays an array.
+    // Handlers index `args` before validating it, so the object-ness has to be
+    // re-established here rather than assumed from the parameter type.
+    if (decoded === null || typeof decoded !== "object" || Array.isArray(decoded)) {
+        throw new LunoraError("BAD_REQUEST", "malformed admin RPC arguments");
+    }
+
+    return decoded as Record<string, unknown>;
+};
+
 const WS_KEEPALIVE_PING = "lunora-ping";
 /** Canned reply the runtime returns for {@link WS_KEEPALIVE_PING}; never reaches a message handler. */
 const WS_KEEPALIVE_PONG = "lunora-pong";
 
 /**
- * Optional programmatic log sink, resolved from `createShardDO({ observability })`.
- * Structurally a subset of `@lunora/runtime`'s `ObservabilitySink`, so a user can
- * pass the SAME sink object to `createWorker` (which drives `onRpc`) and
- * `createShardDO` (which drives `onLog` from `ctx.log`). Typed structurally so
- * `@lunora/do` takes no dependency on `@lunora/runtime`; the event is the same
- * {@link LogEventInput} shape `emitLogEvent` consumes, built once per call.
+ * Hard ceiling on a single inbound WS frame — 1Mi UTF-16 code units for a text
+ * frame, 1 MiB for a binary one. Every subscription envelope the protocol defines
+ * (`connect` / `subscribe` / `unsubscribe` / a mutator push) is kilobytes at most;
+ * without an explicit cap the only bound is the platform's own per-message limit,
+ * which is orders of magnitude larger than anything legitimate and leaves a decode
+ * + `JSON.parse` of that size reachable per frame.
+ *
+ * Named UNITS, not BYTES: a text frame is measured with `String.length`, so an
+ * all-astral-plane payload is up to ~4x this in bytes. That is the intended
+ * trade — counting real bytes means encoding the string first, which is the exact
+ * work the cap exists to avoid. It bounds the parse, not the wire.
  */
-interface LogSink {
-    onLog?: (event: LogEventInput) => void;
+const MAX_WS_FRAME_UNITS = 1024 * 1024;
+
+/** Get the per-socket `Map` stored under `ws` in `store`, creating it on first use. */
+const socketMap = <V>(store: WeakMap<ShardSocketLike, Map<string, V>>, ws: ShardSocketLike): Map<string, V> => {
+    let map = store.get(ws);
+
+    if (!map) {
+        map = new Map<string, V>();
+        store.set(ws, map);
+    }
+
+    return map;
+};
+
+/**
+ * The sink surface the DO hands its three signals to: `ctx.log` lines, `ctx.trace`
+ * spans, and `ctx.metrics` measurements. Structurally compatible with
+ * `@lunora/runtime`'s `ObservabilitySink` without taking a dependency on it.
+ */
+interface TelemetrySink {
+    /**
+     * Ship anything the sink has buffered, now. Called at the end of every
+     * dispatch (and of an alarm / socket message), so a batching sink — which
+     * exports one request per invocation instead of one per event — is never left
+     * holding telemetry a quiet shard would sit on indefinitely. Optional: a
+     * non-buffering sink simply omits it. Mirror of `@lunora/runtime`'s
+     * `ObservabilitySink.flush`.
+     */
+    flush?: (context?: LogSinkContext) => void;
+
+    /**
+     * **Opt-in, EXPERIMENTAL, default off.** When `true`, each `ctx.trace` span is
+     * ALSO emitted as a Cloudflare **custom span** (`tracing.enterSpan` from
+     * `cloudflare:workers`, GA 2026-06-16) so it nests inside CF's native trace
+     * tree on the hosted path — capability-probed, and a safe no-op off-CF / on an
+     * older compat date / when unsampled. This only ADDS a CF-side span; the
+     * `onSpan` event below (our `SpanBuffer`/`otlpSink`) is unchanged and stays the
+     * source of truth. Where the runtime has them, failures also get a native
+     * `recordException` and the `ctx.span` wide event is mirrored onto
+     * `tracing.getActiveSpan()` (the invocation root). The bridge is now
+     * workerd-validated as available and side-effect-free inside a real DO (our
+     * recorded spans stay intact); CF's
+     * exported parent-linking under sampling is still unverified, so it stays
+     * EXPERIMENTAL. Mirror of `@lunora/runtime`'s `ObservabilitySink`
+     * `fuseCloudflareTraces`; see {@link createTracer} for the double-export caveat.
+     */
+    fuseCloudflareTraces?: boolean;
+
+    /**
+     * Detail level for automatic `ctx.db` instrumentation — and for the
+     * action-only `ctx.sql` (Hyperdrive), which rides the same knob with its own
+     * `sql.*` tally. Default `"summary"` —
+     * aggregate counters folded onto the dispatch's root span when one is recorded,
+     * so cost does not grow with call count and an uninstrumented handler still
+     * emits nothing extra. Mirror of `@lunora/runtime`'s `ObservabilitySink`.
+     */
+    instrumentDatabase?: DatabaseInstrumentation;
+
+    /**
+     * **Opt-in, default off.** Durable per-minute `ctx.metrics.*` rollups written to
+     * the reserved per-shard SQLite table (the Studio's local trend chart). Off by
+     * default because every measurement then costs a durable SQLite write on the
+     * request path — the live cross-instance path is `onMetric`, this is only the
+     * local convenience. An object tunes the caps (`maxSeries` / `retentionBuckets`);
+     * `true` uses the built-in defaults. Mirror of `@lunora/runtime`'s
+     * `ObservabilitySink`.
+     */
+    metricHistory?: boolean | MetricHistoryOptions;
+    onLog?: (event: LogEventInput, context?: LogSinkContext) => void;
+    onMetric?: (event: MetricEvent, context?: LogSinkContext) => void;
+    onSpan?: (event: SpanEvent, context?: LogSinkContext) => void;
+
+    /**
+     * Whether `ctx.fetch` is instrumented — a CLIENT span per outbound call plus
+     * W3C `traceparent` propagation to the callee. Default on; set `false` to get
+     * the bare platform `fetch`, or an object to control which destinations
+     * receive trace context. Mirror of `@lunora/runtime`'s `ObservabilitySink`.
+     */
+    traceFetch?: boolean | { propagate?: ((url: URL) => boolean) | boolean };
+}
+
+/**
+ * Memoized resolution of CF's `tracing` namespace, or `undefined` when custom
+ * spans are unavailable. Backs the opt-in `makeTracer` Cloudflare custom-spans
+ * bridge (see {@link createTracer}).
+ *
+ * Deliberately a guarded DYNAMIC import, not a top-level
+ * `import { tracing } from "cloudflare:workers"`. A static named import of
+ * `tracing` would be a module link-time dependency — on a compat date predating
+ * custom spans the binding may not exist, and `@lunora/do` is also imported in
+ * plain Node (the `@lunora/testing` harness), where `cloudflare:workers` cannot
+ * resolve at all. The dynamic import runs ONLY when the bridge is enabled
+ * (default off), and its `catch` turns any absence into a safe `undefined`.
+ * `enterSpan` is additionally feature-probed (`typeof … === "function"`) so an
+ * older runtime exposing a partial `tracing` still no-ops rather than throwing.
+ *
+ * Resolved at most once per isolate and cached (including the "unavailable"
+ * verdict), so the import cost is paid a single time.
+ */
+let cloudflareTracingResolved = false;
+
+let cloudflareTracing: HostTracingLike | undefined;
+
+const resolveHostTracing = async (): Promise<HostTracingLike | undefined> => {
+    if (!cloudflareTracingResolved) {
+        cloudflareTracingResolved = true;
+
+        try {
+            const cloudflareModule = (await import("cloudflare:workers")) as { tracing?: unknown };
+            const candidate = cloudflareModule.tracing;
+
+            cloudflareTracing =
+                candidate !== null && typeof candidate === "object" && typeof (candidate as HostTracingLike).enterSpan === "function"
+                    ? (candidate as HostTracingLike)
+                    : undefined;
+        } catch {
+            // Off-Cloudflare (e.g. the Node test harness) or a runtime without the
+            // module — custom spans simply aren't available. A safe no-op.
+            cloudflareTracing = undefined;
+        }
+    }
+
+    return cloudflareTracing;
+};
+
+/**
+ * Structural shape of the `ctx.log` logger the DO builds (see the server
+ * `LunoraLogger`). Declared locally so `@lunora/do` takes no dependency on
+ * `@lunora/server`; the overloaded public method type lives there.
+ */
+interface ContextLogger {
+    debug: (...args: unknown[]) => void;
+    error: (...args: unknown[]) => void;
+
+    /**
+     * Emit a **structured event** — OTel's Events API — rather than a log line.
+     *
+     * The difference is what carries the meaning. A log line's payload is its
+     * message: prose, written for a human, free to be reworded next week. An
+     * event's payload is its `fields` under a stable `name`, written for a query.
+     * Only the second can answer "how many checkouts failed, by plan, this hour"
+     * without a substring search over English.
+     *
+     * On the wire this sets OTel's `LogRecord.eventName` (plus the `event.name`
+     * attribute for collectors predating that field), so any OTLP backend
+     * recognises it without Lunora-specific configuration.
+     */
+    event: (name: string, fields?: LogFields) => void;
+    fatal: (...args: unknown[]) => void;
+    info: (...args: unknown[]) => void;
+    log: (...args: unknown[]) => void;
+    trace: (...args: unknown[]) => void;
+    warn: (...args: unknown[]) => void;
+    with: (fields: LogFields) => ContextLogger;
+}
+
+/**
+ * The only part of a trace anchor an alarm-path log site needs: the id it files
+ * the line under.
+ *
+ * Declared here as a structural projection rather than re-exporting
+ * `@lunora/observability`'s `TraceAnchor`, because `@lunora/do` deliberately
+ * does not re-export observability (see this package's index) and the generated
+ * shard — which forwards this value into `recordExternalSourceError` — must be
+ * able to name the type without taking on that dependency. A real `TraceAnchor`
+ * satisfies it, so internal callers pass theirs unchanged.
+ */
+interface TraceRefLike {
+    traceId: string;
 }
 
 /**
@@ -116,14 +652,30 @@ interface ShardDOState {
     /**
      * Concurrency-blocking gate — `state.blockConcurrencyWhile(fn)` delays
      * the next fetch dispatch until `fn` resolves. Used by
-     * {@link ShardDO.runInTransaction} to serialize the BEGIN/COMMIT span
-     * against concurrent RPCs so a raw-SQL transaction is isolated from
-     * other in-flight handlers on the same DO.
+     * {@link ShardDO.runInTransaction} to serialize the whole transaction span
+     * against concurrent RPCs, so the handler's reads and writes are isolated
+     * from other in-flight handlers on the same DO.
      */
     blockConcurrencyWhile?: <T>(callback: () => Promise<T>) => Promise<T>;
+
+    /**
+     * Loopback bindings to the Worker's own top-level exports (`ctx.exports`) —
+     * where Cloudflare exposes the workflows and agents declared in wrangler
+     * `exports`, keyed by class name. Absent off Cloudflare.
+     */
+    exports?: unknown;
     getWebSockets: (tag?: string) => WebSocket[];
-    /** Optional pointer to the DO instance id so we can detect `__root__`. */
-    id?: { name?: string };
+
+    /**
+     * Optional pointer to the DO instance id so we can detect `__root__`.
+     *
+     * `jurisdiction` is the Cloudflare data-residency the id was minted under
+     * (`env.SHARD.jurisdiction("eu").idFromName(...)`), preserved on the id
+     * itself. It is the ONLY place a DO can learn its own residency, and the
+     * DO→DO tiers need it: a sibling resolved off the raw namespace binding is
+     * a different object entirely.
+     */
+    id?: { jurisdiction?: string; name?: string };
 
     /**
      * Register a constant ping/pong auto-response so the runtime answers a
@@ -139,6 +691,14 @@ interface ShardDOState {
         getCurrentBookmark?: () => Promise<string>;
         /** Native PITR: arm a restore to `bookmark` on next restart; returns the undo bookmark. */
         onNextSessionRestoreBookmark?: (bookmark: string) => Promise<string>;
+
+        /**
+         * Arm the DO's single alarm to fire at `scheduledTime` (ms epoch),
+         * waking {@link ShardDO.alarm}. Used by the global-shape poll loop.
+         * Optional: present on the real runtime, absent in the unit harness
+         * (where the poll loop degrades to seed-only).
+         */
+        setAlarm?: (scheduledTime: Date | number) => Promise<void>;
         sql: {
             [key: string]: unknown;
 
@@ -149,9 +709,9 @@ interface ShardDOState {
             readonly databaseSize?: number;
 
             /**
-             * Run a SQL statement without parameters — used by the
-             * transaction helper for BEGIN / COMMIT / ROLLBACK. The runtime
-             * exposes this as `state.storage.sql.exec(...)`.
+             * Run a SQL statement without parameters. The runtime exposes this as
+             * `state.storage.sql.exec(...)`; {@link ShardDO.runInTransaction} also
+             * probes for it to confirm the handler will have a SQL connection.
              */
             exec?: (query: string) => unknown;
         };
@@ -183,385 +743,499 @@ interface HibernatableWebSocket {
  * hook) — the shard uses it to decide which writes should trigger a re-run.
  */
 interface SubscriptionOutcome {
+    /**
+     * Index slices the run was provably confined to, per table — see
+     * {@link SubscriptionMemo.ranges}. Absent when the run reported no
+     * narrowable read.
+     */
+    ranges?: Map<string, KeyRange[]>;
     result: unknown;
     tables: Set<string>;
 }
 
 /**
- * Identity a subscription query is executed under, threaded EXPLICITLY into
- * `executeSubscription` → `buildCtx` rather than read from the shared,
- * per-request `currentRequestUserId`/`currentRequestIdentity` instance fields.
+ * What one reactor dispatch reports back to {@link ShardDO.dispatchReactors}.
  *
- * The value passed is the socket's OWN verified identity, captured at the WS
- * upgrade from the runtime-forwarded, server-minted `x-lunora-userid` /
- * `x-lunora-identity` headers (the client cannot forge them — the runtime
- * strips any client-supplied copies) and stamped on the {@link SocketAttachment}.
- * `seedSubscription` and `refreshSubscriptions` read it off the attachment and
- * pass it here BY VALUE — never by reading the mutable per-request
- * `currentRequestUserId`/`currentRequestIdentity` instance fields, which a
- * deferred (`waitUntil`) refresh or a concurrently-interleaved RPC could be
- * mutating. That value-passing is what keeps a subscription re-run from
- * observing or clobbering an in-flight RPC's identity.
- *
- * Developer-facing consequence: a query that authorizes or filters on the
- * caller's identity — via `.use(rls(...))` or by reading `ctx.auth.userId` —
- * evaluates over the live channel under the CONNECTING user, so its seed and
- * every write-driven refresh return that user's rows, matching the one-shot
- * `fetch` RPC. An anonymous socket (no identity resolved at upgrade) leaves
- * both fields `undefined`, so such a query fails closed (empty/denied) rather
- * than leaking another user's data. See the lunora-realtime skill
- * ("Authorization & live queries").
+ * `digest` becomes the reactor's new baseline; `tables` is the read footprint
+ * that decides whether a later flush needs to re-run it at all. The shard cannot
+ * derive either without running the reactor, which is why the generated
+ * `runReactor` override returns both rather than the base computing them.
  */
-interface SubscriptionIdentity {
-    identity?: Record<string, unknown>;
-    userId?: string;
+interface ReactorRunOutcome {
+    digest: string;
+    ran: boolean;
+    tables: ReadonlyArray<string>;
+}
+
+/** Per-socket, per-shape poke baseline: the `__cdc_log` cursor this shape's view has been poked through. */
+interface ShapeMemo {
+    cursor: number;
+
+    /**
+     * The cursor of the last poke that actually carried ROWS for this shape —
+     * i.e. what the client's own cursor for it is, since a client advances only
+     * on a part it receives. Distinct from `cursor`, which also advances on an
+     * empty diff (nothing to deliver, but the op range is covered); stamping
+     * `cursor` as the client's expected base would fire a spurious gap on every
+     * shape that had ever seen an empty flush.
+     *
+     * In-memory only, and `undefined` until this wake has delivered a part: a
+     * hibernation eviction simply leaves the next part's base unstamped, which
+     * disarms the gap check for one poke rather than guessing at it.
+     *
+     * Only `cursor` is written durably, and {@link ShardDO.retentionFloor} reads
+     * that column — so the retention sweep trims against a value that can sit
+     * above where the client actually is. See that method for why the gap it
+     * opens is always empty.
+     */
+    delivered?: number;
+
+    /**
+     * This shape computed rows that were never handed to the socket — the send
+     * threw mid-poke, or the resolve/diff itself threw before one could be built.
+     * `cursor` is left where it was in that case, so the range is still owed.
+     *
+     * It exists because leaving `cursor` alone is not enough on its own: the very
+     * next flush on an UNRELATED table finds the shape absent from `changed` and
+     * force-advances `cursor` straight past the owed range, while `delivered`
+     * stays behind — so the re-poke never happens AND the poke after it stamps a
+     * `baseCheckpoint` the client agrees with, passing its gap check over a view
+     * that is permanently missing rows. While this is set,
+     * {@link ShardDO.collectShapePokeParts} diffs the shape unconditionally
+     * instead, the op-log equivalent of the `.global()` poll loop's
+     * `tick.requestResync()`. Cleared by {@link ShardDO.recordShapeMemo}, i.e. by
+     * any advance — a delivered poke, or a diff that came back genuinely empty.
+     */
+    owed?: boolean;
 }
 
 /**
- * Optional shard-level configuration passed through `super(state, env, …)`.
- * Reserved as a bag rather than positional args so subclasses don't break
- * when new knobs land. Today the only knob is the reactive cache; future
- * additions should keep the same shape (per-feature options object).
+ * One distinct statement's folded activity within a dispatch — see
+ * {@link ShardDO.currentStmtSamples}. `count` is how many raw executions
+ * folded into this entry; `totalDurationMs`/`rowsRead`/`rowsWritten` are sums
+ * across all of them, so `totalDurationMs / count` recovers the per-execution
+ * average `recordQueryMetric`'s bucket histogram places the entry by.
+ */
+interface StmtSample {
+    count: number;
+    rowsRead: number;
+    rowsWritten: number;
+    totalDurationMs: number;
+}
+
+/**
+ * Classification of a watermarked custom-mutator push against the shard's
+ * `__client_watermark`: `expected` is the next in-order sequence, `kind`
+ * whether the push is a replay (`"already"`), the next one (`"next"`), or an
+ * out-of-order arrival (`"gap"`).
+ */
+type ClientMutationClass = { expected: number; kind: "already" | "gap" | "next" };
+
+/**
+ * The per-request identity/replay fields a dispatch must run under. Captured
+ * before the mutation-replay gate and re-pinned inside it, because the gate only
+ * delays ENTRY: a sibling `fetch()`'s prologue can overwrite the shared
+ * `currentRequest*` fields while this dispatch waits its turn. Kept as one named
+ * shape so the capture list lives in exactly one place instead of being an
+ * unenforced "remember to add the next field here too" invariant.
+ *
+ * It stays a hand-written LIST rather than "snapshot every `currentRequest*`
+ * field", because membership is a judgement, not a category: `currentRequestTrace`
+ * is ALSO threaded by value as `dispatchTrace` (it is here too only because the
+ * outbound-container traceparent reads the shared field),
+ * `currentResponseBookmark` is PRODUCED by the dispatch (the restore
+ * clears it on purpose), and `mutationBookkeeping` is written DURING the handler
+ * — re-pinning the captured `undefined` at the tail would wipe the handshake the
+ * post-dispatch bookkeeping reads next. A mechanism that cannot forget a field
+ * would still have to be told which of those three answers each new field wants,
+ * so it would relocate the judgement rather than remove it. What the shape does
+ * buy is that adding a field here is a compile error in
+ * {@link ShardDO.captureRequestScope}'s object literal until it is captured —
+ * the answer stays a judgement, but a half-made one cannot compile.
+ */
+interface RequestScope {
+    /**
+     * The inbound `x-d1-bookmark`. In the scope for the same reason `userId` is:
+     * a queued mutation admitted after a sibling's prologue would otherwise have
+     * `getInboundBookmark()` hand its `.global()` reads ANOTHER request's D1
+     * session pin, which is read-your-writes reading someone else's.
+     */
+    /** The caller's CDC baseline (`x-lunora-base-seq`); see {@link ShardDO.currentRequestBaselineSeq}. */
+    baselineSeq: number | undefined;
+    bookmark: string | undefined;
+    clientId: string | undefined;
+    clientSeq: number | undefined;
+
+    /**
+     * The caller's CLAIMS — active org, role, tenant. Distinct from `userId` and
+     * far more load-bearing than the pairing suggests: RLS grants roles from this
+     * object (`readIdentityRoles`), and it is what `ctx.auth.getIdentity()`
+     * returns. Left out of the scope, a mutation admitted at the gate ran under
+     * its own `userId` and the SIBLING's role and tenant — an admin sibling
+     * handed it admin RLS; a finished one handed it no claims at all.
+     */
+    identity: Record<string, unknown> | undefined;
+
+    /**
+     * The caller's IP. In the scope for the same reason `userId` is: a nested
+     * call that re-pins the identity fields but not this one leaves `ctx.ip`
+     * reading whatever the guest left behind.
+     */
+    ip: string | undefined;
+    mutationId: string | undefined;
+    mutatorClass: ClientMutationClass | undefined;
+
+    /** The request's origin; in the scope for the same reason `ip` is. */
+    origin: string | undefined;
+
+    /**
+     * The propagated tail-bias toggle, travelling with `traceparent` below for
+     * the same reason and with the same hazard: `buildCtx` hands both to
+     * `createContainerContext`, so a guest dispatch that re-pinned one but not
+     * the other would send a parked request's verdict to the container.
+     */
+    sampleErrors: boolean | undefined;
+
+    system: boolean;
+
+    /**
+     * The dispatch's own trace anchor, minted when the request carried no
+     * `traceparent`. `getCurrentTraceparent` falls back to it for outbound
+     * container calls, so it travels with `traceparent` for the same reason:
+     * a queued mutation admitted after a sibling's prologue would otherwise
+     * forward the sibling's trace.
+     */
+    trace: TraceAnchor | undefined;
+
+    /**
+     * The inbound W3C `traceparent`, which `buildCtx` hands to
+     * `createContainerContext` so an outbound container fetch joins the caller's
+     * trace. Telemetry rather than authorization, but the same shared field with
+     * the same interleaving — a guest dispatch that did not re-pin it filed its
+     * container spans under a parked request's trace.
+     */
+    traceparent: string | undefined;
+    userId: string | undefined;
+}
+
+/**
+ * The read-set / cache-hit attribution for ONE `/rpc` dispatch, filled in by
+ * {@link ShardDO.runCachedQuery} and read back by {@link ShardDO.recordRequestLog}.
+ *
+ * A mutable object THREADED BY VALUE rather than a `currentRequest*` field on
+ * the instance, for the same reason `dispatchHeadroom` and `dispatchTrace`
+ * already are: a Durable Object serves concurrent `/rpc` dispatches, and every
+ * one of these values is written after the handler's awaits. Off a shared field
+ * they were whatever the LAST dispatch to resolve wrote — so the request log
+ * filed one request's cache hit and read tables under another's, and a sibling's
+ * prologue/epilogue could blank them out entirely. Both fields stay `undefined`
+ * when the dispatch never reached the cache (a write/action, a cache-less shard,
+ * or a query that fell through the re-entry guard) — the request log renders
+ * that as "unknown" rather than asserting a read set.
+ */
+interface QueryAttribution {
+    cacheHit?: boolean;
+    readTables?: Set<string>;
+}
+
+/**
+ * The reactive-cache read capture for ONE query dispatch: the dependency
+ * tracker the cache indexes the entry by, plus the range footprint its
+ * range-precise invalidation reads.
+ *
+ * Minted by {@link ShardDO.runCachedQuery} and threaded BY VALUE — handed to
+ * its `run` callback, on through `handleRpc`'s fourth parameter, and into the
+ * generated `buildCtx`, which binds it into the ctx-db read hooks via
+ * {@link ShardDO.getCtxDbReadHook} / {@link ShardDO.getCtxDbReadRangeHook}. It
+ * is NOT an instance field: a Durable Object serves concurrent `/rpc`
+ * dispatches, and a shared field holds one capture for all of them — the second
+ * query's reads would land in the first one's dep set and the second would be
+ * skipped by the re-entry guard entirely (never read from the cache, never
+ * stored).
+ *
+ * `AsyncLocalStorage` would carry it implicitly, but workerd only enables ALS
+ * under `nodejs_compat` and shard DOs run the slimmer `sqlite_compat` profile —
+ * see the header of `@lunora/shard-engine`'s `dependency-tracker.ts`.
+ */
+interface QueryReadScope {
+    /** Range footprint for this dispatch — the `onReadRange` channel. */
+    footprint: ReadFootprint;
+
+    /**
+     * Record that this dispatch's handler read `ctx.ip` — the ambient-read
+     * channel, and the reason the generated `buildCtx` exposes `ip` as a getter
+     * rather than a plain field.
+     *
+     * `ctx.ip` is per-request state of exactly the kind the cache's identity
+     * discriminator exists to separate, but unlike userId/claims it cannot be
+     * folded in blind: keying every entry by caller address would shard the
+     * cache per client for the overwhelming majority of queries that never read
+     * it. So {@link ShardDO.runCachedQuery} keys on it only for a `functionPath`
+     * some dispatch has been observed reading it through — this mark is that
+     * observation.
+     */
+    markIpRead: () => void;
+    /** Dependency tracker for this dispatch — the `onRead` channel. */
+    tracker: DependencyTracker;
+}
+
+/**
+ * The outbound D1 Sessions bookmark ONE dispatch's `.global()` writes produced —
+ * the value echoed back as `x-d1-bookmark` so the caller's next global read pins
+ * a replica that has seen them.
+ *
+ * Threaded BY VALUE exactly like {@link QueryReadScope}: minted per dispatch by
+ * `beginDispatch`, handed to `handleRpc`'s fifth parameter, and bound into the
+ * generated `buildCtx`'s `onBookmark` callback. A shared instance field cannot
+ * carry it. A MUTATION is input-gated, so nothing interleaves, but an ACTION is
+ * not — it writes a global row, `await`s a third party, and every other dispatch
+ * on the DO runs inside that window. A sibling's `beginDispatch`/`endDispatch`
+ * cleared the field, so the action answered with no `x-d1-bookmark` at all and
+ * the client's next global read went unpinned: read-your-writes silently lost on
+ * a replica, which is the one thing the bookmark exists to prevent.
+ *
+ * `undefined` where there is no HTTP response to carry it (an alarm tick, a
+ * lifecycle dispatch, `runAs`); the bookmark is then simply dropped, which is
+ * what those paths did before.
+ */
+interface DispatchBookmark {
+    /** The bookmark this dispatch's last global write reported. */
+    value: string | undefined;
+}
+
+/**
+ * How an RPC dispatch resolved: the handler ran (`"ran"`), or the mutation-replay
+ * cache already held this `(identity, mutationId)`'s result (`"cached"`).
+ * Tagged rather than inferred from which half is `undefined`, so a `"cached"`
+ * outcome whose stored value happens to BE `undefined` cannot be misread as a
+ * fresh run.
+ */
+type DispatchOutcome = { cached: { value: unknown }; kind: "cached" } | { kind: "ran"; result: unknown };
+
+/**
+ * Shard-level configuration passed through `super(state, env, …)` by the
+ * generated subclass, which sources every key from the app's
+ * `createShardDO(config)` argument. A bag rather than positional args so
+ * subclasses don't break when a knob lands.
  */
 interface ShardDOOptions {
     /**
-     * Enable the per-shard reactive query cache. When provided, the dispatch
-     * path uses {@link ShardDO.runCachedQuery} to memoize query results by
-     * `(functionPath, stable-stringified args)`. Omit to keep the legacy
-     * behavior (every dispatch re-runs the handler).
+     * Whether every writer this shard builds spreads {@link ShardDO.ctxDbTuning}.
+     * The emitter sets it, because it is the only thing that can see inside the
+     * generated `buildCtx` and the admin/maintenance writers to know.
      *
-     * The cache is invisible to the WS subscription bridge: invalidations
-     * land via the ctx-db write hooks (`@lunora/do`'s `createShardCtxDb`
-     * `cache` option) BEFORE the broadcast goes out, so subscribers that
-     * re-run their queries in response always observe the post-write state.
+     * Left unset (a hand-written subclass), {@link ShardDO.recordChangedTable}
+     * keeps its coarse per-table invalidation backstop, so a writer that never
+     * received the cache cannot serve a pre-write read. Set wrongly, it would
+     * disable that backstop — which is why it is declared rather than inferred
+     * from a call to the accessor.
+     */
+    ctxDbCacheWired?: boolean;
+
+    /**
+     * Ceiling on the join keys one relation-crossing `where` predicate may pull
+     * back via semijoin pre-resolution before failing closed. Reaches
+     * `createShardCtxDb` through {@link ShardDO.ctxDbTuning}; `undefined` keeps
+     * the engine default (`DEFAULT_MAX_RELATION_KEYS`).
+     */
+    maxRelationKeys?: number;
+
+    /**
+     * Enable the per-shard reactive query cache. When provided, the dispatch
+     * path routes every registered `query` through {@link ShardDO.runCachedQuery},
+     * memoizing results by `(identity, functionPath, stable-stringified args)`.
+     * Omit for the zero-overhead default (every dispatch re-runs the handler).
+     *
+     * The cache is invisible to the WS subscription bridge: invalidations land
+     * via the ctx-db write hooks (the `cache` option {@link ShardDO.ctxDbTuning}
+     * supplies) BEFORE the broadcast goes out, so subscribers that re-run their
+     * queries in response always observe the post-write state.
      */
     reactiveCache?: ReactiveCacheOptions;
-}
 
-/** Arguments accepted by the `__lunora_admin__:runMigration` admin RPC. */
-interface RunShardMigrationArgs {
-    batchSize?: number;
-    direction?: MigrationDirection;
-    dryRun?: boolean;
-    id: string;
-    maxBatches?: number;
-}
+    /**
+     * Resolution policy for relation-crossing `where` predicates whose child is
+     * co-located in this shard — `"auto"` (cost-based, the engine default),
+     * `"always"` (inline correlated EXISTS) or `"never"` (universal semijoin).
+     * All three return identical rows. Reaches `createShardCtxDb` through
+     * {@link ShardDO.ctxDbTuning}.
+     */
+    relationExistsPushDown?: "always" | "auto" | "never";
 
-/** Arguments accepted by the `__lunora_admin__:exportShard` admin RPC. */
-interface RunShardExportArgs {
-    batchSize?: number;
-    tables?: ReadonlyArray<string>;
-}
-
-/** Arguments accepted by the `__lunora_admin__:importShard` admin RPC. */
-interface RunShardImportArgs {
-    rows: ReadonlyArray<ExportRow>;
-    startLine?: number;
+    /**
+     * Resolves the app's configured telemetry sink (`config.observability`)
+     * without a ctx. The constructor seeds {@link ShardDO.lastTelemetrySink} from
+     * it, so a trigger that fails before any ctx is built — an alarm on a fresh
+     * Durable Object — still flushes and still reaches `fuseCloudflareTraces`.
+     * The emitter wires it; a hand-written subclass leaves it unset.
+     */
+    telemetrySink?: () => TelemetrySink | undefined;
 }
 
 /**
- * The single-row mutation the data browser's edit actions issue. `op` selects
- * the writer method:
+ * The per-SOCKET facts a subscription push needs, resolved once per socket per
+ * write-flush rather than once per subscription.
  *
- * - `insert` — create a row from `doc` (the writer assigns `_id`/`_creationTime`).
- * - `patch` — shallow-merge `doc` into the row `id`.
- * - `replace` — overwrite the row `id`'s fields with `doc` (keeping `_id`).
- * - `delete` — remove the row `id`.
- *
- * Routing through the schema-aware writer (not raw SQL) is deliberate: it keeps
- * the FTS / aggregate / rank shadow tables in sync and runs validators, exactly
- * like a user mutation would.
+ * Both depend only on the socket, never on the subscription being pushed, and a
+ * single flush pushes many subscriptions down one socket — so recomputing them
+ * inside {@link ShardDO.pushSubscriptionData} would repeat a
+ * `__client_watermark` SELECT and an attachment read per subscription.
  */
-interface RunShardWriteArgs {
-    doc?: Record<string, unknown>;
-    id?: string;
-    op: "delete" | "insert" | "patch" | "replace";
-    table: string;
-}
+interface SocketDelivery {
+    /** This socket's custom-mutator watermark, stamped on every outgoing frame. */
+    clientWatermark: number | undefined;
 
-/** Outcome of a {@link RunShardWriteArgs} operation. `id` is the affected row's primary key. */
-interface RunShardWriteResult {
-    id: null | string;
-    op: "delete" | "insert" | "patch" | "replace";
-}
-
-/**
- * The bulk delete the data browser's "delete matching" / "clear table" actions
- * issue. The matching rows are collected on the shard (via the same
- * `filters` + `search` predicate `readTablePage` previews), then removed one at
- * a time THROUGH the schema-aware writer — never raw `DELETE` — so the FTS /
- * aggregate / rank shadow tables and `onDelete` cascades stay in sync, exactly
- * like a user mutation would.
- *
- * Bounded by design: at most {@link SHARD_BULK_DELETE_CAP} rows are removed per
- * call and the result reports `hasMore`, so the caller loops a single bounded
- * server round-trip rather than deleting an unbounded set in one transaction.
- * The `clearTable` op is the same path with no predicate (it matches every row).
- */
-interface RunShardBulkDeleteArgs {
-    filters?: FilterClause[];
-    /** Per-call row cap; clamped server-side to `[1, SHARD_BULK_DELETE_CAP]`. */
-    limit?: number;
-    search?: string;
-    table: string;
-}
-
-/** Outcome of a {@link RunShardBulkDeleteArgs} operation. */
-interface RunShardBulkDeleteResult {
-    /** Rows removed through the writer in this call. */
-    deleted: number;
-    /** `true` when matching rows remain beyond this batch — loop the call to drain them. */
-    hasMore: boolean;
-}
-
-/**
- * Arguments accepted by the `__lunora_admin__:rankBefore` admin RPC. The query
- * coordinator fans this out to every shard to count, for the row identified by
- * `rowId`, how many rows precede it under `index` within `partitionKey`; the
- * coordinator sums the per-shard `{before, total}` into a global rank.
- */
-interface RunShardRankBeforeArgs {
-    index: string;
-    partitionKey: string;
-    rowId: string;
-    sortValues: unknown[];
-    table: string;
-}
-
-/**
- * Arguments accepted by the `__lunora_admin__:rankPage` admin RPC. The query
- * coordinator (`orchestrateRankPage`) fans this out to every live shard of a
- * `.shardBy(...)` table to gather each shard's local ranked slice, then k-way
- * merges them into one globally-ranked page. `take` bounds the per-shard slice;
- * `after` is the structured per-shard resume key (`{ partitionKey, sortValues,
- * rowId }`) the coordinator forwards so the shard pages strictly-after the prior
- * page's last globally-consumed row; `partitionKey` pins a single partition;
- * `directions` (`asc`/`desc` per sort key) parallels the index's `sortBy`
- * directions so a shard's `ORDER BY` matches the coordinator's comparator. Only
- * `table` and `index` are required.
- */
-interface RunShardRankPageArgs {
-    after?: { partitionKey: string; rowId: string; sortValues: unknown[] };
-    cursor?: null | string;
-    directions?: ("asc" | "desc")[];
-    index: string;
-    partitionKey?: string;
-    table: string;
-    take?: number;
+    /** Whether this socket announced {@link PAGE_DELTA_CAPABILITY} on `connect`. */
+    pageDeltas: boolean;
 }
 
 /** Per-subscription memo used to suppress no-op pushes. */
 interface SubscriptionMemo {
+    /**
+     * {@link ShardDO.writeGeneration} captured before the run that produced this
+     * baseline started reading. A later push carrying a LOWER generation read
+     * state older than this baseline and is dropped instead of sent.
+     */
+    generation: number;
+
     lastJson: string;
+
+    /**
+     * Index slices this subscription's reads were provably confined to, keyed
+     * by table. A table present here was read ONLY through the listed ranges,
+     * so a write landing outside all of them cannot change the result. A table
+     * in {@link SubscriptionMemo.tables} but absent here was read in some
+     * unnarrowable way (a scan, a search, a join) and always re-runs.
+     */
+    ranges?: Map<string, KeyRange[]>;
     tables: Set<string>;
 }
 
-/** Identity field every Lunora document row carries. */
-const ROW_ID_FIELD = "_id";
-
 /**
- * Fallback table name stamped on a delta when the subscription's read-table
- * set is empty. The client only uses `table` for its structural guard
- * ({@link MutationDelta} recognition) — `key`/`row`/`op` drive the actual
- * merge — so any non-empty string is safe.
+ * Sentinel diff baseline meaning "no value has ever been delivered to this
+ * socket for this subscription". Stored as a memo's `lastJson` when the very
+ * first push to a socket fails to leave the outbound buffer. It can never equal
+ * `JSON.stringify(value)` (which always yields valid JSON) and is not itself
+ * valid JSON, so `subscriptionListDeltas` rejects it — the next write-flush
+ * always re-sends a full snapshot rather than a delta against a value the client
+ * never saw. See {@link ShardDO.pushSubscriptionData}.
  */
-const DELTA_FALLBACK_TABLE = "__lunora__";
 
 /**
- * Read a row's `_id` as a string; `undefined` when the row isn't a plain object with a string `_id`.
- * @returns the `_id` string, or `undefined` when the row is not a plain object with a string `_id`
- */
-const readRowId = (row: unknown): string | undefined => {
-    if (typeof row !== "object" || row === null || Array.isArray(row)) {
-        return undefined;
-    }
-
-    const id = (row as Record<string, unknown>)[ROW_ID_FIELD];
-
-    return typeof id === "string" ? id : undefined;
-};
-
-/**
- * Index an array of rows by `_id`, preserving insertion order. Returns
- * `undefined` the moment any element lacks a string `_id` (the diff can't key
- * such a list) — the caller then falls back to a full snapshot.
+ * Run every side effect a committed transaction queued, in order.
  *
- * Also bails on a duplicate `_id`: the delta protocol keys rows by `_id`, so a
- * list carrying the same `_id` twice (e.g. a relational join that fans a parent
- * out across children) cannot be expressed as deltas — the client would merge
- * the collisions down to a single row and silently lose the duplicates, leaving
- * its view shorter than the snapshot path. Returning `undefined` here forces the
- * full-snapshot fallback so both paths agree.
- * @returns the indexed map and insertion order, or `undefined` when any row lacks a string `_id` or ids are duplicated
+ * Sequential, because the queue is one row's history: an update queued after an
+ * insert of the same id must apply after it, and a parallel fan-out has no
+ * ordering to give.
+ *
+ * Never throws. The transaction has already committed — the rows are durable and,
+ * for a mutation dispatch, so is the replay-dedup row that answers the client's
+ * retry from cache. Rejecting here would report a write that DID happen as
+ * failed, and a caller acting on that error by retrying a non-idempotent insert
+ * writes the row twice. So a failure is a reported divergence, not a failed
+ * response: the row exists, its external projection does not, and re-running the
+ * (idempotent) write converges.
+ *
+ * Containing every failure per item is also what keeps the shard's hook chain
+ * alive: {@link ShardDO.runInTransaction} links these flushes into one promise
+ * tail to hold them in commit order, and a tail that ever latched rejected would
+ * make every LATER transaction on this shard skip its hooks, silently and for
+ * the life of the instance.
  */
-const indexRowsById = (rows: unknown[]): undefined | { byId: Map<string, Record<string, unknown>>; order: string[] } => {
-    const byId = new Map<string, Record<string, unknown>>();
-    const order: string[] = [];
-
-    for (const row of rows) {
-        const id = readRowId(row);
-
-        if (id === undefined || byId.has(id)) {
-            return undefined;
-        }
-
-        byId.set(id, row as Record<string, unknown>);
-        order.push(id);
-    }
-
-    return { byId, order };
-};
-
-/**
- * True when the rows present in BOTH lists keep the same relative order. The
- * client merges updates in place and never reorders, so a survivor that moved
- * can't be expressed as deltas.
- */
-const survivorsKeepOrder = (
-    previous: { byId: Map<string, Record<string, unknown>>; order: string[] },
-    next: { byId: Map<string, Record<string, unknown>>; order: string[] },
-): boolean => {
-    const survivingPrevious = previous.order.filter((id) => next.byId.has(id));
-    const survivingNext = next.order.filter((id) => previous.byId.has(id));
-
-    if (survivingPrevious.length !== survivingNext.length) {
-        return false;
-    }
-
-    return survivingPrevious.every((id, index) => survivingNext[index] === id);
-};
-
-/** An `_id`-indexed row set: the lookup map plus the preserved insertion order. */
-type RowIndex = { byId: Map<string, Record<string, unknown>>; order: string[] };
-
-/** A diff delta paired with its pre-serialized `delta` frame body (`JSON.stringify(delta)`). */
-type FramedDelta = { delta: MutationDelta; frame: string };
-
-/**
- * Collect `delete` deltas for every prev row absent from `next`, in prev order.
- * Each delete's `frame` is byte-identical to `JSON.stringify({key, op, table})`.
- */
-const collectDeleteDeltas = (previous: RowIndex, next: RowIndex, deltaTable: string, tableJson: string): FramedDelta[] => {
-    const out: FramedDelta[] = [];
-
-    for (const id of previous.order) {
-        if (!next.byId.has(id)) {
-            out.push({
-                delta: { key: id, op: "delete", table: deltaTable },
-                frame: `{"key":${JSON.stringify(id)},"op":"delete","table":${tableJson}}`,
-            });
+const flushAfterCommit = async (queued: (() => Promise<void> | void)[]): Promise<void> => {
+    for (const work of queued) {
+        try {
+            // eslint-disable-next-line no-await-in-loop -- ordered replay of one row's history; see the docblock
+            await work();
+        } catch (error) {
+            // eslint-disable-next-line no-console -- server-side diagnostic for a committed write whose external projection diverged
+            console.error("[@lunora/do] after-commit write hook failed; the write committed and its external projection did not:", error);
         }
     }
-
-    return out;
 };
 
 /**
- * Collect `insert`/`update` deltas for every next row that is new or whose body
- * changed, in next order. Each next row is fingerprinted with a SINGLE
- * `JSON.stringify` (finding #6) reused for both the `prev !== next` compare and
- * the `row` slot of the frame; each prev row is fingerprinted once too. Frames
- * are byte-identical to `JSON.stringify({key, op, row, table})`.
+ * How long a dispatch waits for its own after-commit hooks before answering
+ * without them.
+ *
+ * A healthy hook is a remote embed plus a Vectorize upsert — hundreds of
+ * milliseconds — so it is always awaited and the response keeps meaning "this
+ * write's external projection was attempted". The case this bounds is an
+ * embedder that never settles: its link on the shard's hook chain stays pending
+ * forever, and since every later transaction links behind it and awaits its own
+ * link, one stuck remote call otherwise hangs every subsequent mutation response
+ * on the shard — including mutations that queue no hooks at all.
  */
-const collectUpsertDeltas = (previous: RowIndex, next: RowIndex, deltaTable: string, tableJson: string): FramedDelta[] => {
-    const out: FramedDelta[] = [];
-
-    for (const id of next.order) {
-        const nextRow = next.byId.get(id) as Record<string, unknown>;
-        const previousRow = previous.byId.get(id);
-        const nextFingerprint = JSON.stringify(nextRow);
-        const previousFingerprint = previousRow === undefined ? undefined : JSON.stringify(previousRow);
-
-        if (previousFingerprint === nextFingerprint) {
-            continue;
-        }
-
-        const op = previousFingerprint === undefined ? "insert" : "update";
-
-        out.push({
-            delta: { key: id, op, row: nextRow, table: deltaTable },
-            frame: `{"key":${JSON.stringify(id)},"op":"${op}","row":${nextFingerprint},"table":${tableJson}}`,
-        });
-    }
-
-    return out;
-};
+const AFTER_COMMIT_WAIT_MS = 15_000;
 
 /**
- * Diff the previously-sent list snapshot (`previousJson`, the memo's
- * `lastJson`) against the new query result and produce per-row
- * {@link MutationDelta}s the client can merge in place via `applyDelta` —
- * Convex-parity live-pagination deltas (server half of gap #20).
+ * Wait for `link`, at most {@link AFTER_COMMIT_WAIT_MS}. `true` when it settled
+ * in time, `false` when the deadline won.
  *
- * Returns `undefined` (caller falls back to a full `{type:"data"}` snapshot)
- * unless ALL of these hold:
- *
- * 1. `previousJson` parses to an array (there IS a previous list to diff against).
- * 2. `nextResult` is also an array.
- * 3. Every row in both arrays is a plain object carrying a string `_id`.
- * 4. Order preservation — rows present in BOTH arrays appear in the same relative order.
- * 5. Chattiness cap — the number of deltas does not exceed the new array length (a near-total change is cheaper as a snapshot).
- *
- * Diff is keyed by `_id`: rows only in prev → `delete`; rows only in next →
- * `insert`; rows in both whose JSON differs → `update`. Insert/update carry the
- * full new `row`; delete omits it (matching the wire contract `@lunora/client`
- * parses). Deltas are ordered deletes-then-inserts/updates so the client never
- * sees a transient over-length page.
- *
- * Per-row serialization is done exactly **once** per refresh (finding #6). Each
- * row is stringified a single time into a fingerprint reused for both the
- * `prev !== next` change-detection compare and — when the caller passes the
- * optional `frames` sink — the pre-serialized delta frame body. The returned
- * `MutationDelta[]` shape is unchanged; `frames`, when supplied, receives the
- * exact `JSON.stringify(delta)` string for each returned delta, in the same
- * order, so the caller can splice it straight into the `{type:"delta"}` frame
- * without serializing the delta (and the row inside it) a second time.
- * @returns the per-row deltas to send, or `undefined` when any precondition fails and a full snapshot should be sent instead
+ * `link` is left RUNNING and in place on the chain either way — the bound is on
+ * the wait, never on the chain. Racing the chain itself would advance it past a
+ * hook that is still going to write, and the stalled hook's upsert would then
+ * land after the one that overwrote it: the row at `"v2"` with its vector at
+ * `"v1"`, which is exactly the reordering the chain exists to prevent. Nothing
+ * here can make the timed-out work unable to write — the queued closures reach
+ * Vectorize through `@lunora/bindings` (and, for a hand-rolled `onWrite`,
+ * through application code), and no signal this side of them can recall a remote
+ * call that is already in flight. So the ordering obligation is kept and only the
+ * dispatch stops waiting.
  */
-const subscriptionListDeltas = (previousJson: string, nextResult: unknown, table: string, frames?: string[]): MutationDelta[] | undefined => {
-    let parsed: unknown;
+const waitForAfterCommit = async (link: Promise<void>): Promise<boolean> => {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+
+    const deadline = new Promise<boolean>((resolve) => {
+        timer = setTimeout(resolve, AFTER_COMMIT_WAIT_MS, false);
+    });
 
     try {
-        parsed = JSON.parse(previousJson);
-    } catch {
-        return undefined;
-    }
-
-    // (1) + (2): both sides must be arrays. (3): both must be id-keyable.
-    if (!Array.isArray(parsed) || !Array.isArray(nextResult)) {
-        return undefined;
-    }
-
-    const previous = indexRowsById(parsed);
-    const next = indexRowsById(nextResult);
-
-    if (previous === undefined || next === undefined) {
-        return undefined;
-    }
-
-    // (4): survivors keep their relative order.
-    if (!survivorsKeepOrder(previous, next)) {
-        return undefined;
-    }
-
-    const deltaTable = table === "" ? DELTA_FALLBACK_TABLE : table;
-    const tableJson = JSON.stringify(deltaTable);
-    // Deletes precede upserts so the client never sees a transient over-length page.
-    const framed = [...collectDeleteDeltas(previous, next, deltaTable, tableJson), ...collectUpsertDeltas(previous, next, deltaTable, tableJson)];
-
-    // (5): a near-total change is better sent as a single snapshot.
-    if (framed.length > next.order.length) {
-        return undefined;
-    }
-
-    if (frames !== undefined) {
-        for (const { frame } of framed) {
-            frames.push(frame);
+        return await Promise.race([link.then(() => true), deadline]);
+    } finally {
+        if (timer !== undefined) {
+            clearTimeout(timer);
         }
     }
-
-    return framed.map(({ delta }) => delta);
 };
+
+const DIGITS = /^\d+$/u;
+
+/**
+ * Read a backfill admin op's `maxPages`: absent when the caller gave none (each
+ * op picks its own default), a 400 `rejection` for anything that is not a whole
+ * number in `[1, ceiling]` — given as an integer or as a string of digits, nothing
+ * else (`true`, `[5]`, `" 5 "`, `2.5`). Strict because a lenient read of an
+ * operator's typo does the expensive thing quietly — `{"maxPages":"20 pages"}`,
+ * `0` and `-1` used to read as "run to completion" on exactly the tables that
+ * cannot be walked in one request. Same reason the retention knobs parse strictly
+ * (`env-int.ts`).
+ */
+const parseMaxPages = (args: Record<string, unknown>, op: string, ceiling: number): { maxPages?: number } | { rejection: Response } => {
+    const raw = args["maxPages"];
+
+    if (raw === undefined) {
+        return {};
+    }
+
+    let parsed = Number.NaN;
+
+    if (typeof raw === "number") {
+        parsed = raw;
+    } else if (typeof raw === "string" && DIGITS.test(raw)) {
+        parsed = Number(raw);
+    }
+
+    if (!Number.isInteger(parsed) || parsed < 1 || parsed > ceiling) {
+        const range = Number.isFinite(ceiling) ? `an integer from 1 to ${String(ceiling)}` : "a positive integer";
+
+        return { rejection: jsonResponse({ error: { code: "BAD_REQUEST", message: `${op}: maxPages must be ${range}, or omitted` } }, 400) };
+    }
+
+    return { maxPages: parsed };
+};
+
+const UNDELIVERED_BASELINE = "<undelivered>";
 
 /**
  * Threshold at which a `__root__` DO triggers the size warning. 1 GiB —
@@ -569,15 +1243,6 @@ const subscriptionListDeltas = (previousJson: string, nextResult: unknown, table
  * to plan a `.shardBy()` migration before the wall hits.
  */
 const ROOT_DO_SIZE_WARN_BYTES = 1_073_741_824;
-
-/**
- * Upper bound on CDC rows `evaluateResume` scans to decide whether a
- * reconnecting subscription can resume. Mirrors `readCdcChanges`'s own
- * hard clamp (10 000): once this many changes have accumulated since the
- * client's `sinceSeq`, a touching change may sit beyond the scanned page, so
- * the server can't prove the read-set is untouched and re-snapshots instead.
- */
-const CDC_RESUME_SCAN_LIMIT = 10_000;
 
 /**
  * Retention window for mutation-replay dedup rows. A `(identity, mutationId)`
@@ -594,10 +1259,150 @@ const IDEMPOTENCY_RETENTION_MS = 86_400_000;
 const IDEMPOTENCY_GC_INTERVAL_MS = 3_600_000;
 
 /**
+ * The encoded caller context of a plain anonymous request: no userId, no identity
+ * claims, no address in the key, and not a trusted system dispatch. The one
+ * context {@link ShardDO.runCachedQuery} maps onto `reactiveCacheKey`'s documented
+ * `null` bucket.
+ *
+ * Written as the encoding of a whole caller object rather than as a conjunction
+ * of field tests, so that a member added to the caller context and not mirrored
+ * here fails by no longer matching — every caller then gets its own bucket,
+ * which costs hit rate and leaks nothing.
+ */
+// eslint-disable-next-line unicorn/no-null -- mirrors the caller object `runCachedQuery` encodes, where absent fields serialize as null
+const ANONYMOUS_CALLER = stableStringify({ claims: null, ip: null, system: false, userId: null });
+
+/**
+ * How many deferred-schedule outbox entries one alarm tick may attempt. The
+ * dispatches are outbound RPCs, so a backlog is drained across several ticks
+ * rather than held open in one — the same bound `TTL_SWEEP_BATCH` puts on the
+ * sweep tier for the same reason.
+ */
+const SCHEDULE_OUTBOX_BATCH = 32;
+
+/**
+ * How many times a deferred schedule is re-offered to the scheduler before the
+ * entry is parked. Together with {@link SCHEDULE_OUTBOX_BACKOFF_MS} this spans a
+ * little over an hour — long enough to ride out a scheduler restart or a
+ * rebalance, short enough that a job the scheduler will never accept (a caller
+ * error it refuses as `INVALID_INPUT`) stops costing alarms and starts being a
+ * reported fact instead.
+ */
+const SCHEDULE_OUTBOX_MAX_ATTEMPTS = 8;
+
+/**
+ * The retry ladder, indexed by attempt count: 5s, 15s, 45s, 2m, 6m, 18m, 30m,
+ * 30m. Exponential until it flattens, so a transient blip is picked up almost
+ * immediately while a persistent outage does not spin the alarm.
+ */
+const SCHEDULE_OUTBOX_BACKOFF_MS: ReadonlyArray<number> = [5000, 15_000, 45_000, 120_000, 360_000, 1_080_000, 1_800_000, 1_800_000];
+
+/**
+ * How long after a failed hand-off the first retry is offered — also the wake the
+ * settle and the cold-start probe ask for, so custody that survived a dispatch is
+ * re-offered promptly rather than at whatever cadence another tier happens to
+ * want.
+ */
+const SCHEDULE_OUTBOX_FIRST_RETRY_MS = 5000;
+
+/** The ladder's rung for `attempts` failures so far, flattening at its last entry. */
+const scheduleOutboxBackoffFor = (attempts: number): number =>
+    SCHEDULE_OUTBOX_BACKOFF_MS[Math.min(attempts, SCHEDULE_OUTBOX_BACKOFF_MS.length - 1)] ?? SCHEDULE_OUTBOX_FIRST_RETRY_MS;
+
+/**
+ * How long a PARKED outbox entry is kept. A job that exhausted its attempts is
+ * evidence — the operator needs to know what was promised and never enqueued —
+ * so it is retained for a week rather than deleted, and trimmed after. Live
+ * entries are never trimmed; the attempt ceiling is what bounds those.
+ */
+const SCHEDULE_OUTBOX_RETENTION_MS = 604_800_000;
+
+/**
+ * The refusal a paid (`.x402`) procedure gets on a socket. The paywall lives at
+ * the origin worker (`/_lunora/rpc`, REST, `serverQuery`), which a WebSocket
+ * never crosses — and neither a live subscription (seed plus every poke) nor a
+ * stream (one ack plus N chunks) is the one call one payment buys. Shared by the
+ * `subscribe` gate, the `stream` gate and the refresh sweep so the three cannot
+ * drift apart.
+ */
+const paidSocketRefusal = (functionPath: string, verb: "streamed" | "subscribed"): string =>
+    `paid (\`.x402\`) function "${functionPath}" cannot be ${verb}; call it individually over /_lunora/rpc`;
+
+/**
+ * What the client is told when a socket cannot take another registration.
+ *
+ * Both refusals name the limit AND a way around it. An app only ever meets one
+ * of them at runtime, in production, on the connection it was relying on — so
+ * "cap reached" without a number to design against and a remedy to reach for is
+ * a wall, not a diagnostic. The queries and shapes share one budget, which is
+ * the part nobody guesses.
+ */
+const subscriptionRefusal = (kind: "count" | "size", cap: number, bytes: number): string =>
+    kind === "count"
+        ? `subscription cap of ${String(cap)} reached on this socket (live queries and shapes share it); unsubscribe an idle one, or open a second socket`
+        : `failed to persist the socket attachment, which must stay under the ${String(bytes)}-byte hibernation limit (live queries and shapes share it); shrink the subscription's arguments, unsubscribe an idle one, or open a second socket`;
+
+/**
+ * The run-key component for a caller with no verified identity.
+ *
+ * Anonymous callers must not share a transcript with each other — collapsing
+ * them onto a constant hands the second caller the first one's answer without
+ * ever running the handler. But they should still resume their OWN run across a
+ * reload, which is the whole point of a durable stream, so the key has to be
+ * something stable across sockets.
+ *
+ * The client's own `clientId` (the stable id it sends on `connect`, already
+ * trusted for the mutation watermark) is that. It is client-supplied, so it
+ * separates honest callers rather than defending against a hostile one — which
+ * is the right bar here: `userId` takes precedence whenever the socket has an
+ * identity to check, so this path only ever governs anonymous traffic sharing
+ * its own answers. A client that sent none falls back to its connection, which
+ * isolates correctly and simply cannot resume.
+ */
+const anonymousStreamCaller = (attachment: SocketAttachment, streamId: string): string =>
+    attachment.clientId === undefined ? `conn:${attachment.connectionId ?? streamId}` : `client:${attachment.clientId}`;
+
+/**
+ * The stream wire vocabulary, bound to one socket + stream id.
+ *
+ * Both stream paths — the ephemeral per-socket iterator and the durable
+ * runner's sink — speak the same four frames. Building them in one place keeps
+ * the two from drifting (they already had, on canceller cleanup), and keeps the
+ * shape of an `error` frame in a single spot, which matters because the durable
+ * path PERSISTS the message it sends and replays it to every later attach.
+ */
+const streamFrames = (
+    ws: ShardSocketLike,
+    id: string,
+): {
+    ack: () => void;
+    chunk: (data: unknown, seq?: number, generation?: number) => boolean;
+    complete: () => boolean;
+    fail: (failure: { code: string; message: string }) => boolean;
+} => {
+    return {
+        ack: () => {
+            trySendFrame(ws, JSON.stringify({ id, type: "ack" }));
+        },
+        // `generation` rides only durable chunks (an `undefined` key is dropped
+        // by JSON.stringify) — the client echoes it on resume so the server can
+        // refuse to splice a different run's tail onto the prefix it holds.
+        chunk: (data, seq, generation) =>
+            trySendFrame(ws, JSON.stringify(seq === undefined ? { data, id, type: "chunk" } : { data, generation, id, seq, type: "chunk" })),
+        complete: () => trySendFrame(ws, JSON.stringify({ id, type: "complete" })),
+        fail: (failure) => trySendFrame(ws, JSON.stringify({ error: failure, id, type: "error" })),
+    };
+};
+
+/**
  * Reserved shard name for the fallback Durable Object that hosts every
  * table without an explicit `.shardBy()` or `.global()` modifier.
  */
+
 const ROOT_SHARD_NAME = "__root__";
+
+/** How long a failed shard-registry registration waits before a later write retries it. */
+const SHARD_REGISTRY_RETRY_MS = 30_000;
 
 /**
  * Dependency-set sentinel for admin introspection subscriptions that aren't
@@ -609,935 +1414,131 @@ const ROOT_SHARD_NAME = "__root__";
 const ADMIN_WILDCARD = "*";
 
 /**
- * Defensive WS backpressure helper. When the runtime exposes
- * `bufferedAmount` on the socket, pause iteration whenever the outbound
- * buffer is past 1 MiB; otherwise treat the socket as drained. Capped at
- * 100 sleeps of 20 ms (≈ 2 s total) so a permanently-stuck buffer can't
- * pin the iterator forever — past that we drop through and let the next
- * `ws.send` surface the failure.
- */
-const awaitWsDrain = async (ws: WebSocket): Promise<void> => {
-    let attempts = 0;
-
-    while (attempts < 100) {
-        attempts += 1;
-
-        const buffered = (ws as { bufferedAmount?: unknown }).bufferedAmount;
-
-        if (typeof buffered !== "number" || buffered < 1_048_576) {
-            return;
-        }
-
-        // eslint-disable-next-line no-await-in-loop -- intentional backpressure poll: sleep, then re-check the drained buffer on the next iteration
-        await new Promise((resolve) => {
-            setTimeout(resolve, 20);
-        });
-    }
-};
-
-/**
- * The trailing `,"cursor":&lt;n>,"epoch":"&lt;e>"` fragment appended to a
- * `data`/`delta`/`resume` frame so a client can persist a resume position it can
- * prove still belongs to this shard's timeline (see `evaluateResume`). Each part
- * is omitted when absent, keeping the wire byte-identical to the pre-cursor /
- * pre-epoch format on non-CDC shards. Single source of the wire rule so the
- * resume frame and `pushSubscriptionData` can never drift apart.
- */
-const cdcSuffix = (cursor?: number, epoch?: string): string =>
-    (cursor === undefined ? "" : `,"cursor":${String(cursor)}`) + (epoch === undefined ? "" : `,"epoch":${JSON.stringify(epoch)}`);
-
-/** True when `a` and `b` share at least one element. */
-const setsIntersect = (a: Set<string>, b: Set<string>): boolean => {
-    // Iterate the smaller set for fewer lookups.
-    const [small, large] = a.size <= b.size ? [a, b] : [b, a];
-
-    for (const value of small) {
-        if (large.has(value)) {
-            return true;
-        }
-    }
-
-    return false;
-};
-
-/**
- * Coerce the loosely-typed `runMigration` admin args into a typed shape.
- * `id` is required; `direction` defaults to `"up"` and only flips to `"down"`
- * on an exact match; numeric limits pass through when present.
- */
-const parseRunMigrationArgs = (args: Record<string, unknown>): RunShardMigrationArgs => {
-    const id = typeof args["id"] === "string" ? args["id"] : "";
-
-    if (id.trim() === "") {
-        throw Object.assign(new Error("runMigration: `id` is required"), { code: "MIGRATION_ID_REQUIRED", name: "LunoraError", status: 400 });
-    }
-
-    return {
-        batchSize: typeof args["batchSize"] === "number" ? args["batchSize"] : undefined,
-        direction: args["direction"] === "down" ? "down" : "up",
-        dryRun: args["dryRun"] === true,
-        id,
-        maxBatches: typeof args["maxBatches"] === "number" ? args["maxBatches"] : undefined,
-    };
-};
-
-/**
- * Hard server-side ceiling on rows removed per `deleteRows` / `clearTable` call.
- * The op never deletes more than this in one round-trip; the result's `hasMore`
- * tells the caller to loop. Bound TO `readTablePage`'s `MAX_PAGE_SIZE` (not just
- * documented as matching it) so one "delete matching" batch drains exactly one
- * full preview page's worth of rows and the two can't silently drift apart.
- */
-const SHARD_BULK_DELETE_CAP = MAX_PAGE_SIZE;
-
-/**
- * Validate the `__lunora_admin__:writeRow` payload. Enforces that `id` is
- * present for ops that target an existing row and that `doc` is present for ops
- * that carry one, throwing a 400 `LunoraError` otherwise — the writer would
- * reject these too, but failing here keeps the error shape uniform.
- */
-const parseWriteRowArgs = (args: Record<string, unknown>): RunShardWriteArgs => {
-    const { op } = args;
-    const table = typeof args["table"] === "string" ? args["table"] : "";
-
-    if (op !== "insert" && op !== "patch" && op !== "replace" && op !== "delete") {
-        throw Object.assign(new Error("writeRow: `op` must be insert|patch|replace|delete"), { code: "BAD_REQUEST", name: "LunoraError", status: 400 });
-    }
-
-    if (table.trim() === "") {
-        throw Object.assign(new Error("writeRow: `table` is required"), { code: "BAD_REQUEST", name: "LunoraError", status: 400 });
-    }
-
-    const id = typeof args["id"] === "string" ? args["id"] : undefined;
-    const record =
-        typeof args["doc"] === "object" && args["doc"] !== null && !Array.isArray(args["doc"]) ? (args["doc"] as Record<string, unknown>) : undefined;
-
-    if (op !== "insert" && (id === undefined || id === "")) {
-        throw Object.assign(new Error(`writeRow: \`id\` is required for op "${op}"`), { code: "BAD_REQUEST", name: "LunoraError", status: 400 });
-    }
-
-    if (op !== "delete" && record === undefined) {
-        throw Object.assign(new Error(`writeRow: \`doc\` is required for op "${op}"`), { code: "BAD_REQUEST", name: "LunoraError", status: 400 });
-    }
-
-    return { doc: record, id, op, table };
-};
-
-/* eslint-disable no-secrets/no-secrets -- reserved admin RPC + workflow type names are framework constants, not credentials */
-
-/**
- * Minimal structural shape of a created/fetched workflow instance handle, mirrored
- * from `@lunora/workflow`'s `WorkflowInstanceLike` so `@lunora/do` stays free of a
- * dependency on the workflow package. Only the members the admin ops touch (`id`
- * and `status()`) are modelled.
- */
-interface WorkflowInstanceHandle {
-    id: string;
-    status: () => Promise<{ error?: { message?: unknown; name?: unknown }; output?: unknown; status?: unknown }>;
-}
-
-/**
- * Minimal structural shape of a Cloudflare Workflows binding (the `env.WORKFLOW_*`
- * object), mirrored from `@lunora/workflow`'s `WorkflowBindingLike`. Only `create`
- * and `get` — the members the studio's start/observe ops call — are modelled.
- */
-interface WorkflowBindingHandle {
-    create: (options?: { id?: string; params?: unknown }) => Promise<WorkflowInstanceHandle>;
-    get: (id: string) => Promise<WorkflowInstanceHandle>;
-}
-
-/** Parsed `__lunora_admin__:createWorkflowInstance` payload: which declared workflow to start, plus optional id/params. */
-interface CreateWorkflowInstanceArgs {
-    exportName: string;
-    id?: string;
-    params?: unknown;
-}
-
-/**
- * Validate the `__lunora_admin__:createWorkflowInstance` payload. Requires a
- * non-empty `exportName` (the `lunora/workflows.ts` export the handle is addressed
- * by); `id` and `params` are optional. Throws a 400 `LunoraError` on a bad shape.
- */
-const parseCreateWorkflowInstanceArgs = (args: Record<string, unknown>): CreateWorkflowInstanceArgs => {
-    const exportName = typeof args["exportName"] === "string" ? args["exportName"].trim() : "";
-
-    if (exportName === "") {
-        throw Object.assign(new Error("createWorkflowInstance: `exportName` is required"), { code: "BAD_REQUEST", name: "LunoraError", status: 400 });
-    }
-
-    const id = typeof args["id"] === "string" && args["id"] !== "" ? args["id"] : undefined;
-
-    return { exportName, id, params: args["params"] };
-};
-
-/** Parsed `__lunora_admin__:getWorkflowInstanceStatus` payload: which workflow and which instance to inspect. */
-interface GetWorkflowInstanceStatusArgs {
-    exportName: string;
-    id: string;
-}
-
-/**
- * Validate the `__lunora_admin__:getWorkflowInstanceStatus` payload. Requires both
- * a non-empty `exportName` and a non-empty instance `id`. Throws a 400
- * `LunoraError` otherwise.
- */
-const parseGetWorkflowInstanceStatusArgs = (args: Record<string, unknown>): GetWorkflowInstanceStatusArgs => {
-    const exportName = typeof args["exportName"] === "string" ? args["exportName"].trim() : "";
-    const id = typeof args["id"] === "string" ? args["id"].trim() : "";
-
-    if (exportName === "") {
-        throw Object.assign(new Error("getWorkflowInstanceStatus: `exportName` is required"), { code: "BAD_REQUEST", name: "LunoraError", status: 400 });
-    }
-
-    if (id === "") {
-        throw Object.assign(new Error("getWorkflowInstanceStatus: `id` is required"), { code: "BAD_REQUEST", name: "LunoraError", status: 400 });
-    }
-
-    return { exportName, id };
-};
-
-/** The lifecycle states a workflow instance can report (mirrors `@lunora/workflow`'s `WorkflowInstanceStatus`). */
-const WORKFLOW_INSTANCE_STATES: ReadonlySet<string> = new Set<WorkflowInstanceStatusResult["status"]>([
-    "complete",
-    "errored",
-    "paused",
-    "queued",
-    "running",
-    "terminated",
-    "unknown",
-    "waiting",
-    "waitingForPause",
-]);
-
-/** Coerce an unknown `status()` payload field into a known instance state, defaulting to `"unknown"`. */
-const toWorkflowInstanceState = (raw: unknown): WorkflowInstanceStatusResult["status"] =>
-    typeof raw === "string" && WORKFLOW_INSTANCE_STATES.has(raw) ? (raw as WorkflowInstanceStatusResult["status"]) : "unknown";
-
-/**
- * Narrow an unknown `status()` error field into the `{ message, name }` wire shape, or `undefined` when absent.
- * @returns the narrowed error object, or `undefined` when the value is not a plain object
- */
-const toWorkflowInstanceError = (raw: unknown): WorkflowInstanceStatusResult["error"] => {
-    if (typeof raw !== "object" || raw === null) {
-        return undefined;
-    }
-
-    const { message, name } = raw as { message?: unknown; name?: unknown };
-
-    return { message: typeof message === "string" ? message : "", name: typeof name === "string" ? name : "Error" };
-};
-/* eslint-enable no-secrets/no-secrets */
-
-/** The structured-filter operators accepted over the wire (mirrors `FilterOperator`). */
-const FILTER_OPERATORS: ReadonlySet<string> = new Set<FilterOperator>(["contains", "eq", "gt", "gte", "lt", "lte", "ne"]);
-
-/**
- * Parse the loosely-typed `filters` admin arg into validated {@link FilterClause}s,
- * dropping any malformed entry (non-object, missing/blank column, unknown
- * operator). Returns `undefined` when nothing valid remains so `readTablePage`
- * takes its no-predicate fast path.
- * @returns the validated filter clauses, or `undefined` when no valid clauses remain
- */
-const parseTablePageFilters = (raw: unknown): FilterClause[] | undefined => {
-    if (!Array.isArray(raw)) {
-        return undefined;
-    }
-
-    const clauses: FilterClause[] = [];
-
-    for (const item of raw) {
-        if (typeof item !== "object" || item === null) {
-            continue;
-        }
-
-        const record = item as Record<string, unknown>;
-        const { column, operator } = record;
-
-        if (typeof column !== "string" || column === "" || typeof operator !== "string" || !FILTER_OPERATORS.has(operator)) {
-            continue;
-        }
-
-        clauses.push({ column, operator: operator as FilterOperator, value: record["value"] });
-    }
-
-    return clauses.length > 0 ? clauses : undefined;
-};
-
-/**
- * Parse the loosely-typed `orderBy` admin arg into a validated {@link OrderByClause}.
- * Requires a non-empty `column`; `direction` defaults to `asc` and is coerced to
- * `desc` only on an explicit `"desc"`. Returns `undefined` for anything malformed
- * so `readTablePage` keeps its natural-order read.
- * @returns the validated order-by clause, or `undefined` for malformed input
- */
-const parseTablePageOrderBy = (raw: unknown): OrderByClause | undefined => {
-    if (typeof raw !== "object" || raw === null) {
-        return undefined;
-    }
-
-    const { column, direction } = raw as Record<string, unknown>;
-
-    if (typeof column !== "string" || column === "") {
-        return undefined;
-    }
-
-    return { column, direction: direction === "desc" ? "desc" : "asc" };
-};
-
-/**
- * Validate the `__lunora_admin__:deleteRows` payload. `table` must be a
- * non-empty string; `filters`/`search` mirror `readTablePage`'s predicate args
- * (so "delete matching" removes exactly the previewed rows) and a numeric
- * `limit` passes through to be clamped against {@link SHARD_BULK_DELETE_CAP}.
- * Throws a 400 `LunoraError` on a missing table, keeping the error shape uniform.
- */
-const parseBulkDeleteArgs = (args: Record<string, unknown>): RunShardBulkDeleteArgs => {
-    const table = typeof args["table"] === "string" ? args["table"] : "";
-
-    if (table.trim() === "") {
-        throw Object.assign(new Error("deleteRows: `table` is required"), { code: "BAD_REQUEST", name: "LunoraError", status: 400 });
-    }
-
-    return {
-        filters: parseTablePageFilters(args["filters"]),
-        limit: typeof args["limit"] === "number" ? args["limit"] : undefined,
-        search: typeof args["search"] === "string" ? args["search"] : undefined,
-        table,
-    };
-};
-
-/**
- * Validate the `__lunora_admin__:clearTable` payload — the "empty this table"
- * action. Only `table` is meaningful (clearTable carries no predicate: it
- * matches every row); a numeric `limit` passes through for the per-call cap.
- * Throws a 400 `LunoraError` on a missing table.
- */
-const parseClearTableArgs = (args: Record<string, unknown>): RunShardBulkDeleteArgs => {
-    const table = typeof args["table"] === "string" ? args["table"] : "";
-
-    if (table.trim() === "") {
-        throw Object.assign(new Error("clearTable: `table` is required"), { code: "BAD_REQUEST", name: "LunoraError", status: 400 });
-    }
-
-    return { limit: typeof args["limit"] === "number" ? args["limit"] : undefined, table };
-};
-
-/**
- * Validate the `__lunora_admin__:recordAuthEvent` payload — the worker's
- * fire-and-forget record of one auth attempt (PLAN3 §2.3). `outcome` must be
- * exactly `"ok"` or `"fail"`; anything else throws a 400 `LunoraError`, keeping
- * the error shape uniform with the other admin write parsers. Returns the
- * narrowed outcome the {@link recordAuthEvent} helper consumes.
- */
-const parseRecordAuthEventArgs = (args: Record<string, unknown>): { outcome: "fail" | "ok" } => {
-    const { outcome } = args;
-
-    if (outcome !== "ok" && outcome !== "fail") {
-        throw Object.assign(new Error('recordAuthEvent: `outcome` must be "ok" or "fail"'), { code: "BAD_REQUEST", name: "LunoraError", status: 400 });
-    }
-
-    return { outcome };
-};
-
-/**
- * The mapped {@link LogEntry} one container lifecycle event becomes once parsed.
- * `functionPath` is the synthetic `container:&lt;name>` source so the Studio Logs
- * panel renders the row alongside `ctx.log` lines; `level` is folded to the
- * buffer's level set; `message` is a compact `&lt;event>` / `&lt;event>: &lt;detail>`.
- */
-type ContainerLogEntry = LogEntry & { functionPath: string };
-
-/**
- * Validate the `__lunora_admin__:recordContainerEvent` payload — the Container
- * DO's best-effort push of one lifecycle transition (`@lunora/container`'s
- * `reportContainerLifecycle`). The reserved op carries the same envelope
- * `emitContainerLifecycle` prints to the dev terminal under `args.event`, so the
- * terminal and the Studio Logs panel never diverge. Maps it to a {@link LogEntry}
- * with `functionPath: "container:&lt;name>"`. A malformed envelope throws a 400
- * `LunoraError`, matching the other admin write parsers.
- */
-const parseRecordContainerEventArgs = (args: Record<string, unknown>): ContainerLogEntry => {
-    const raw = args["event"];
-
-    if (typeof raw !== "object" || raw === null || Array.isArray(raw)) {
-        throw Object.assign(new Error("recordContainerEvent: `event` must be an object"), { code: "BAD_REQUEST", name: "LunoraError", status: 400 });
-    }
-
-    const envelope = raw as Record<string, unknown>;
-    const container = typeof envelope["container"] === "string" ? envelope["container"] : "";
-    const event = typeof envelope["event"] === "string" ? envelope["event"] : "";
-
-    if (container.trim() === "" || event.trim() === "") {
-        throw Object.assign(new Error("recordContainerEvent: `event.container` and `event.event` are required"), {
-            code: "BAD_REQUEST",
-            name: "LunoraError",
-            status: 400,
-        });
-    }
-
-    // Fold the envelope's `error`/`info` level into the buffer's level set
-    // (anything but `error` is informational, keeping the panel's filters stable).
-    const level = envelope["level"] === "error" ? "error" : "info";
-    const detail = typeof envelope["message"] === "string" ? envelope["message"] : undefined;
-    const timestamp = typeof envelope["ts"] === "number" ? envelope["ts"] : Date.now();
-
-    return {
-        functionPath: `container:${container}`,
-        level,
-        message: detail === undefined || detail === "" ? event : `${event}: ${detail}`,
-        timestamp,
-    };
-};
-
-/**
- * Arguments accepted by the `__lunora_admin__:runAs` admin RPC — the studio's
- * "Run as identity" tool. `functionPath` + `args` name the target function to
- * dispatch; `userId` (and the optional `identity` claims envelope) are the
- * forged identity it runs under. Admin-gated by `handleAdminRpc`; intended for
- * loopback-dev only (the studio UI exposes it only on a dev gate).
- */
-interface RunAsArgs {
-    args: Record<string, unknown>;
-    functionPath: string;
-    identity?: Record<string, unknown>;
-    userId: string;
-}
-
-/**
- * Validate the `__lunora_admin__:runAs` payload. `functionPath` and `userId`
- * must be non-empty strings; `args` defaults to `{}` and `identity` (if present)
- * must be a plain object of claims. The target `functionPath` must NOT itself be
- * a reserved admin path — forging an identity to re-enter the admin plane is
- * never allowed. Anything malformed throws a 400 `LunoraError`, matching the
- * other admin parsers.
- */
-const parseRunAsArgs = (args: Record<string, unknown>): RunAsArgs => {
-    const functionPath = typeof args["functionPath"] === "string" ? args["functionPath"] : "";
-    const userId = typeof args["userId"] === "string" ? args["userId"] : "";
-
-    if (functionPath.trim() === "") {
-        throw Object.assign(new Error("runAs: `functionPath` is required"), { code: "BAD_REQUEST", name: "LunoraError", status: 400 });
-    }
-
-    if (functionPath.startsWith(ADMIN_FUNCTION_PREFIX)) {
-        throw Object.assign(new Error("runAs: cannot target a reserved admin function"), { code: "BAD_REQUEST", name: "LunoraError", status: 400 });
-    }
-
-    if (userId.trim() === "") {
-        throw Object.assign(new Error("runAs: `userId` is required"), { code: "BAD_REQUEST", name: "LunoraError", status: 400 });
-    }
-
-    const rawArgs = args["args"];
-
-    if (rawArgs !== undefined && (typeof rawArgs !== "object" || rawArgs === null || Array.isArray(rawArgs))) {
-        throw Object.assign(new Error("runAs: `args` must be an object"), { code: "BAD_REQUEST", name: "LunoraError", status: 400 });
-    }
-
-    const rawIdentity = args["identity"];
-
-    if (rawIdentity !== undefined && (typeof rawIdentity !== "object" || rawIdentity === null || Array.isArray(rawIdentity))) {
-        throw Object.assign(new Error("runAs: `identity` must be an object"), { code: "BAD_REQUEST", name: "LunoraError", status: 400 });
-    }
-
-    return {
-        args: rawArgs === undefined ? {} : (rawArgs as Record<string, unknown>),
-        functionPath,
-        userId,
-        ...(rawIdentity === undefined ? {} : { identity: rawIdentity as Record<string, unknown> }),
-    };
-};
-
-/**
- * Validate the `__lunora_admin__:recordMail` payload — the dev mail catcher's
- * capture of one outbound message (a rendered, already-validated `SendPayload`
- * from `@lunora/mail`). `subject` must be a string and `to` a string or string
- * array; the optional address/body/header fields are shape-checked. Anything
- * else throws a 400 `LunoraError`, matching the other admin write parsers.
+ * Whether a subscription's memo proves this write cannot have changed its
+ * result — the skip `refreshSubscriptions` applies before re-running a query.
  *
- * This is the trust-boundary re-check for the admin RPC edge — it stays even
- * though the wire type is now centralized. Its return type `RecordMailInput` is
- * a compile-time mirror of `@lunora/mail`'s canonical `SendPayload` (guarded in
- * `mail-catcher.ts`). Adding a captured-mail field is therefore a two-place
- * change: the canonical `SendPayload`/`CapturedMail` in `@lunora/mail`, and the
- * field-by-field validation here (the mirror types update themselves, and their
- * drift guards point you back here). Keep the shapes in lockstep.
+ * A MISSING memo means "unknown deps" and never skips. A memo carrying the
+ * admin wildcard always re-runs: its value is not bound to any single table.
+ * Otherwise the write is irrelevant either because none of the tables the memo
+ * recorded changed at all, or because they did but every one of them was read
+ * through a narrowed index slice and no written position falls inside one — any
+ * table the memo did not narrow, or any write whose position was unknown, makes
+ * `writeTouchesMemo` answer true and the re-run proceeds.
  */
-const parseRecordMailArgs = (args: Record<string, unknown>): RecordMailInput => {
-    const bad = (message: string): never => {
-        throw Object.assign(new Error(`recordMail: ${message}`), { code: "BAD_REQUEST", name: "LunoraError", status: 400 });
-    };
-
-    const { bcc, cc, from, headers, html, replyTo, subject, text, to } = args;
-
-    if (typeof subject !== "string") {
-        bad("`subject` must be a string");
-    }
-
-    const toOk = typeof to === "string" || (Array.isArray(to) && to.every((entry) => typeof entry === "string"));
-
-    if (!toOk) {
-        bad("`to` must be a string or string[]");
-    }
-
-    /** @returns the string array when valid, or `undefined` when the value is absent */
-    const optionalStringList = (value: unknown, label: string): string[] | undefined => {
-        if (value === undefined) {
-            return undefined;
-        }
-
-        if (!Array.isArray(value) || !value.every((entry) => typeof entry === "string")) {
-            bad(`\`${label}\` must be a string[]`);
-        }
-
-        return value as string[];
-    };
-
-    const optionalString = (value: unknown, label: string): string | undefined => {
-        if (value !== undefined && typeof value !== "string") {
-            bad(`\`${label}\` must be a string`);
-        }
-
-        return value as string | undefined;
-    };
-
-    return {
-        bcc: optionalStringList(bcc, "bcc"),
-        cc: optionalStringList(cc, "cc"),
-        from: optionalString(from, "from"),
-        headers: headers !== undefined && typeof headers === "object" && headers !== null ? (headers as Record<string, string>) : undefined,
-        html: optionalString(html, "html"),
-        replyTo: optionalString(replyTo, "replyTo"),
-        subject: subject as string,
-        text: optionalString(text, "text"),
-        to: to as string | string[],
-    };
-};
-
-/** Default recipient for the studio "Send test" action when no `to` is supplied. */
-const TEST_MAIL_DEFAULT_TO = "test@lunora.sh";
+const memoProvesUnchanged = (
+    memo: SubscriptionMemo | undefined,
+    changed: Set<string>,
+    changedKeys: Map<string, IndexKeyEntry[] | undefined> | undefined,
+): boolean => memo !== undefined && !memo.tables.has(ADMIN_WILDCARD) && (!setsIntersect(memo.tables, changed) || !writeTouchesMemo(memo, changed, changedKeys));
 
 /**
- * Build the synthetic captured message the studio "Send test" button populates
- * the dev inbox with. A short html+text body carrying a verify link so the
- * catcher's link-extraction + preview have realistic content to render. `to`
- * is validated (optional string, 400 on a bad shape) and defaults to
- * {@link TEST_MAIL_DEFAULT_TO}.
- */
-const buildTestMailInput = (args: Record<string, unknown>): RecordMailInput => {
-    const { to } = args;
-
-    if (to !== undefined && typeof to !== "string") {
-        throw Object.assign(new Error("sendTestMail: `to` must be a string"), { code: "BAD_REQUEST", name: "LunoraError", status: 400 });
-    }
-
-    const recipient = to ?? TEST_MAIL_DEFAULT_TO;
-    const link = "https://example.test/verify?token=demo";
-
-    return {
-        from: "Lunora <noreply@lunora.sh>",
-        html: `<p>This is a test email from the Lunora dev mail catcher.</p><p><a href="${link}">Verify your email</a></p>`,
-        subject: "Lunora test email",
-        text: `This is a test email from the Lunora dev mail catcher.\n\nVerify your email: ${link}`,
-        to: recipient,
-    };
-};
-
-/**
- * Validate the `__lunora_admin__:rankBefore` payload. `table`, `index`,
- * `partitionKey`, and `rowId` must be non-empty strings and `sortValues` must
- * be an array; anything else throws a 400 `LunoraError` so the cross-shard
- * coordinator surfaces a uniform error rather than a downstream SQL failure.
- */
-const parseRankBeforeArgs = (args: Record<string, unknown>): RunShardRankBeforeArgs => {
-    const table = typeof args["table"] === "string" ? args["table"] : "";
-    const index = typeof args["index"] === "string" ? args["index"] : "";
-    const rowId = typeof args["rowId"] === "string" ? args["rowId"] : "";
-
-    if (table.trim() === "") {
-        throw Object.assign(new Error("rankBefore: `table` is required"), { code: "BAD_REQUEST", name: "LunoraError", status: 400 });
-    }
-
-    if (index.trim() === "") {
-        throw Object.assign(new Error("rankBefore: `index` is required"), { code: "BAD_REQUEST", name: "LunoraError", status: 400 });
-    }
-
-    // `partitionKey` is the encoded partition tuple — `""` is legitimate for a
-    // rankIndex with no `partitionBy`, so only the type is enforced, not
-    // non-emptiness.
-    if (typeof args["partitionKey"] !== "string") {
-        throw Object.assign(new Error("rankBefore: `partitionKey` must be a string"), { code: "BAD_REQUEST", name: "LunoraError", status: 400 });
-    }
-
-    if (rowId.trim() === "") {
-        throw Object.assign(new Error("rankBefore: `rowId` is required"), { code: "BAD_REQUEST", name: "LunoraError", status: 400 });
-    }
-
-    if (!Array.isArray(args["sortValues"])) {
-        throw Object.assign(new Error("rankBefore: `sortValues` must be an array"), { code: "BAD_REQUEST", name: "LunoraError", status: 400 });
-    }
-
-    return { index, partitionKey: args["partitionKey"], rowId, sortValues: args["sortValues"], table };
-};
-
-/** Throw a uniform 400 `LunoraError` for a malformed admin payload field. */
-const badRequest = (message: string): never => {
-    throw Object.assign(new Error(message), { code: "BAD_REQUEST", name: "LunoraError", status: 400 });
-};
-
-/** Narrow a required non-empty string admin arg or 400 with `&lt;field> is required`. */
-const requireNonEmptyString = (value: unknown, field: string): string => {
-    if (typeof value !== "string" || value.trim() === "") {
-        badRequest(`rankPage: \`${field}\` is required`);
-    }
-
-    return value as string;
-};
-
-/**
- * Validate the optional `__lunora_admin__:rankPage` `after` resume key the
- * coordinator forwards (`{ partitionKey, sortValues, rowId }`), so a malformed
- * cursor is rejected at the boundary rather than mid-SQL. `undefined` (first
- * page) passes through.
- * @returns the validated after-key object, or `undefined` for a first-page request
- */
-const parseRankPageAfter = (raw: unknown): RunShardRankPageArgs["after"] => {
-    if (raw === undefined) {
-        return undefined;
-    }
-
-    if (typeof raw !== "object" || raw === null || Array.isArray(raw)) {
-        badRequest("rankPage: `after` must be an object");
-    }
-
-    const record = raw as Record<string, unknown>;
-
-    if (typeof record["partitionKey"] !== "string" || typeof record["rowId"] !== "string" || !Array.isArray(record["sortValues"])) {
-        badRequest("rankPage: `after` must have a string partitionKey, string rowId, and array sortValues");
-    }
-
-    return { partitionKey: record["partitionKey"] as string, rowId: record["rowId"] as string, sortValues: record["sortValues"] as unknown[] };
-};
-
-/**
- * Validate the `__lunora_admin__:rankPage` payload. `table` and `index` are
- * required non-empty strings; `take`/`cursor`/`after`/`partitionKey`/`directions`
- * are optional and shape-checked just enough to reject obvious garbage before it
- * reaches the rank reader. The error shape stays uniform with the other admin
- * parsers so the cross-shard coordinator surfaces a 400 rather than a downstream
- * SQL failure.
- */
-const parseRankPageArgs = (args: Record<string, unknown>): RunShardRankPageArgs => {
-    const table = requireNonEmptyString(args["table"], "table");
-    const index = requireNonEmptyString(args["index"], "index");
-
-    if (args["take"] !== undefined && typeof args["take"] !== "number") {
-        badRequest("rankPage: `take` must be a number");
-    }
-
-    if (args["cursor"] !== undefined && args["cursor"] !== null && typeof args["cursor"] !== "string") {
-        badRequest("rankPage: `cursor` must be a string or null");
-    }
-
-    if (args["partitionKey"] !== undefined && typeof args["partitionKey"] !== "string") {
-        badRequest("rankPage: `partitionKey` must be a string");
-    }
-
-    if (args["directions"] !== undefined && !Array.isArray(args["directions"])) {
-        badRequest("rankPage: `directions` must be an array");
-    }
-
-    const directions = args["directions"] === undefined ? undefined : (args["directions"] as unknown[]).map((d) => (d === "desc" ? "desc" : "asc"));
-
-    return {
-        after: parseRankPageAfter(args["after"]),
-        cursor: typeof args["cursor"] === "string" ? args["cursor"] : undefined,
-        directions,
-        index,
-        partitionKey: typeof args["partitionKey"] === "string" ? args["partitionKey"] : undefined,
-        take: typeof args["take"] === "number" ? args["take"] : undefined,
-        table,
-    };
-};
-
-/**
- * Decode a `JSON.stringify([table, index])` index-hit key (stamped by
- * `getCtxDbIndexUseHook`) back into `{ table, index }`. Returns `undefined` for
- * a malformed key so a corrupt entry is skipped rather than throwing on the
- * metrics path.
- * @returns the decoded index hit, or `undefined` for a malformed key
- */
-const decodeIndexHitKey = (key: string): IndexHit | undefined => {
-    try {
-        const parsed = JSON.parse(key) as unknown;
-
-        if (Array.isArray(parsed) && typeof parsed[0] === "string" && typeof parsed[1] === "string") {
-            return { index: parsed[1], table: parsed[0] };
-        }
-    } catch {
-        // Malformed key — skip it.
-    }
-
-    return undefined;
-};
-
-/** Arguments accepted by the `__lunora_admin__:cdcSync` admin RPC. */
-interface RunShardCdcSyncArgs {
-    limit?: number;
-    sinceSeq: number;
-}
-
-/** Arguments accepted by the `__lunora_admin__:applyCdc` admin RPC. */
-interface RunShardApplyCdcArgs {
-    changes: ReadonlyArray<CdcChange>;
-}
-
-/** Result of an `applyCdc` replay batch. */
-interface RunShardApplyCdcResult {
-    applied: number;
-}
-
-/**
- * Validate the `__lunora_admin__:applyCdc` payload. `changes` must be an array
- * of CDC entries (`{ table, id, op, doc? }`); each is shape-checked just enough
- * to reject obvious garbage before it reaches the writer.
- */
-const parseApplyCdcArgs = (args: Record<string, unknown>): RunShardApplyCdcArgs => {
-    const raw = args["changes"];
-
-    if (!Array.isArray(raw)) {
-        throw Object.assign(new Error("applyCdc: `changes` must be an array"), { code: "BAD_REQUEST", name: "LunoraError", status: 400 });
-    }
-
-    const changes = raw.map((entry, index): CdcChange => {
-        const record = entry as Record<string, unknown>;
-        const { op } = record;
-        const table = typeof record["table"] === "string" ? record["table"] : "";
-        const id = typeof record["id"] === "string" ? record["id"] : "";
-
-        if (table === "" || id === "" || (op !== "insert" && op !== "update" && op !== "delete")) {
-            throw Object.assign(new Error(`applyCdc: changes[${String(index)}] must have a table, id, and op of insert|update|delete`), {
-                code: "BAD_REQUEST",
-                name: "LunoraError",
-                status: 400,
-            });
-        }
-
-        const rawDocument = record["doc"];
-
-        // `typeof [] === "object"`, so an explicit Array.isArray guard is
-        // required to keep arrays out of the writer (which expects a
-        // Record). Failing here surfaces the malformed change at the parse
-        // boundary instead of mid-replay.
-        if (rawDocument !== undefined && (typeof rawDocument !== "object" || rawDocument === null || Array.isArray(rawDocument))) {
-            throw Object.assign(new Error(`applyCdc: changes[${String(index)}].doc must be an object`), {
-                code: "BAD_REQUEST",
-                name: "LunoraError",
-                status: 400,
-            });
-        }
-
-        const document = rawDocument as Record<string, unknown> | undefined;
-
-        // When the post-image carries an id it must agree with the entry id,
-        // otherwise the replay would write a row whose id contradicts the CDC
-        // cursor — reject the inconsistency at the boundary.
-        if (document !== undefined && typeof document["_id"] === "string" && document["_id"] !== id) {
-            throw Object.assign(new Error(`applyCdc: changes[${String(index)}].doc._id must match the entry id`), {
-                code: "BAD_REQUEST",
-                name: "LunoraError",
-                status: 400,
-            });
-        }
-
-        return {
-            doc: document,
-            id,
-            op,
-            seq: typeof record["seq"] === "number" ? record["seq"] : 0,
-            table,
-            ts: typeof record["ts"] === "number" ? record["ts"] : 0,
-        };
-    });
-
-    return { changes };
-};
-
-/**
- * Validate the `__lunora_admin__:cdcSync` payload. `sinceSeq` is the caller's
- * per-shard cursor (defaults to 0 = from the beginning); `limit` is an optional
- * page cap. Both are coerced to finite non-negative integers.
- */
-const parseCdcSyncArgs = (args: Record<string, unknown>): RunShardCdcSyncArgs => {
-    const toCount = (value: unknown): number | undefined => {
-        const n = typeof value === "number" ? value : Number(value);
-
-        return Number.isFinite(n) && n >= 0 ? Math.floor(n) : undefined;
-    };
-
-    return { limit: toCount(args["limit"]), sinceSeq: toCount(args["sinceSeq"]) ?? 0 };
-};
-
-const jsonResponse = (body: unknown, status = 200, bookmark?: string): Response => {
-    const headers: Record<string, string> = { "content-type": "application/json" };
-
-    if (bookmark) {
-        headers["x-d1-bookmark"] = bookmark;
-    }
-
-    return Response.json(body, { headers, status });
-};
-
-/**
- * Decode the JSON envelope shipped on the `x-lunora-identity` header.
- * Malformed payloads collapse to `undefined` rather than throwing — the
- * shard should still serve requests whose identity claims didn't round-trip.
- * @returns the decoded identity object, or `undefined` when the header is absent or malformed
- */
-const parseIdentityHeader = (raw: string | null): Record<string, unknown> | undefined => {
-    if (!raw) {
-        return undefined;
-    }
-
-    try {
-        const parsed = JSON.parse(raw) as unknown;
-
-        if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
-            return parsed as Record<string, unknown>;
-        }
-    } catch {
-        // fall through to undefined
-    }
-
-    return undefined;
-};
-
-/**
- * Reduce a dependency-tracker dep set (`table:id` / `table:*scan` keys, see
- * `dependency-tracker.ts`) to the distinct table names it touched. Used to
- * source the request log's `tablesRead` from the per-query tracker without
- * leaking the row-level dep encoding into the log.
- */
-const tablesFromDeps = (deps: Set<string>): Set<string> => {
-    const tables = new Set<string>();
-
-    for (const dep of deps) {
-        const table = tableFromDepKey(dep);
-
-        if (table !== "") {
-            tables.add(table);
-        }
-    }
-
-    return tables;
-};
-
-/**
- * Parse a positive-integer env override (e.g. `LUNORA_REQUEST_LOG_RETENTION`); `undefined` when unset/invalid so the caller keeps its default.
- * @returns the parsed positive integer, or `undefined` when unset or invalid
- */
-const parsePositiveInt = (raw: string | undefined): number | undefined => {
-    if (raw === undefined) {
-        return undefined;
-    }
-
-    const value = Number.parseInt(raw, 10);
-
-    return Number.isFinite(value) && value > 0 ? value : undefined;
-};
-
-/**
- * Resolve the per-dispatch console-stream toggle (`LUNORA_REQUEST_LOG_EMIT`).
- * An explicit `"1"`/`"true"` forces it on and `"0"`/`"false"` forces it off
- * (even in dev); when the var is unset/empty it falls back to `devDefault` —
- * which the caller passes as {@link isDevEnvironment}, so a dev deployment
- * streams every successful dispatch by default while production stays quiet
- * unless an operator opts in. Errors always stream regardless — see
- * `recordRequestLog`.
- */
-const parseEmit = (raw: string | undefined, devDefault: boolean): boolean => {
-    if (raw === "1" || raw === "true") {
-        return true;
-    }
-
-    if (raw === "0" || raw === "false") {
-        return false;
-    }
-
-    return devDefault;
-};
-
-/** Parse a 0..1 sample rate (`LUNORA_REQUEST_LOG_SAMPLE`); clamped to `[0, 1]`, defaulting to `1` (record all) when unset/invalid. */
-const parseSampleRate = (raw: string | undefined): number => {
-    if (raw === undefined) {
-        return 1;
-    }
-
-    const value = Number.parseFloat(raw);
-
-    return Number.isFinite(value) ? Math.min(1, Math.max(0, value)) : 1;
-};
-
-/** Whether a sampled event survives at `rate` (`1` = always, `0` = never, else a uniform draw). */
-const sampleHit = (rate: number): boolean => {
-    if (rate >= 1) {
-        return true;
-    }
-
-    if (rate <= 0) {
-        return false;
-    }
-
-    // eslint-disable-next-line sonarjs/pseudo-random -- observability sampling, not a security-sensitive draw; an attacker biasing which request logs is not a threat.
-    return Math.random() < rate;
-};
-
-/**
- * @returns the bearer token from the Authorization header, or `undefined` when absent or not a Bearer scheme
- */
-const extractBearerToken = (authorization: string | null): string | undefined => {
-    if (!authorization) {
-        return undefined;
-    }
-
-    const [scheme, ...rest] = authorization.split(" ");
-
-    if (scheme?.toLowerCase() !== "bearer") {
-        return undefined;
-    }
-
-    const value = rest.join(" ").trim();
-
-    return value.length > 0 ? value : undefined;
-};
-
-/**
- * Constant-time string equality. Compares full length (capped at the longer
- * input) so a shorter candidate can't short-circuit the loop. The
- * `lengthDiff` term folds a length mismatch into the result so unequal-length
- * strings still take the same number of XOR ops as equal-length ones.
+ * The caller context a socket's DEFERRED work runs under, read off its
+ * hibernation attachment and passed BY VALUE.
  *
- * Keep in sync with `packages/runtime/src/create-worker.ts` constantTimeEqual —
- * the two packages don't import from each other to avoid a circular dep.
+ * One place, not six: every socket-driven read — the subscription seed, a
+ * write-flush re-run, a stream pull, a shape seed/poke/global-poll — runs
+ * outside the dispatch that triggered it, so each must take the socket's own
+ * identity AND ip from here rather than from the shared per-request fields a
+ * concurrent `/rpc` owns. Adding a field to {@link SubscriptionIdentity} and
+ * missing one call site is exactly how `ip` came to be read from the shared
+ * field on every one of them.
  */
-const constantTimeEqual = (a: string, b: string): boolean => {
-    const max = Math.max(a.length, b.length);
-    // eslint-disable-next-line no-bitwise -- constant-time compare folds length + every code-unit delta into one accumulator
-    let diff = a.length ^ b.length;
-
-    for (let index = 0; index < max; index += 1) {
-        // charCodeAt returns NaN past the end of the string; coerce to 0
-        // so the XOR still folds into `diff` without poisoning it.
-        // eslint-disable-next-line unicorn/prefer-code-point -- compare per UTF-16 code unit so timing stays independent of surrogate boundaries
-        const charA = index < a.length ? a.charCodeAt(index) : 0;
-        // eslint-disable-next-line unicorn/prefer-code-point -- compare per UTF-16 code unit so timing stays independent of surrogate boundaries
-        const charB = index < b.length ? b.charCodeAt(index) : 0;
-
-        // eslint-disable-next-line no-bitwise -- accumulate per-code-unit difference without branching to keep the compare constant-time
-        diff |= charA ^ charB;
-    }
-
-    return diff === 0;
+const socketIdentity = (attachment: SocketAttachment): SubscriptionIdentity => {
+    return { identity: attachment.identity, ip: attachment.ip, userId: attachment.userId };
 };
+
+/**
+ * Hard server-side ceiling on rows written per bulk admin call — `deleteRows`,
+ * `clearTable`, `patchRows`. The op never touches more than this in one
+ * round-trip; the result's `hasMore` tells the caller to loop. Bound TO
+ * `readTablePage`'s `MAX_PAGE_SIZE` (not just documented as matching it) so one
+ * "delete matching" / "set matching" batch drains exactly one full preview
+ * page's worth of rows and the two can't silently drift apart.
+ */
+const SHARD_BULK_ROW_CAP = MAX_PAGE_SIZE;
+
+/** Rows swept per TTL batch, and the max batches drained per alarm tick (bounds one sweep's work so it can't stall the shard). */
+const TTL_SWEEP_BATCH = 200;
+const TTL_SWEEP_MAX_BATCHES = 20;
+/** Cadence the TTL sweep re-arms its shared-alarm tier at while any `.ttl()` table exists — a coarse, bounded expiry window. */
+const TTL_SWEEP_INTERVAL_MS = 30_000;
+
+/**
+ * FIFO bound on {@link ShardDO.dispatchSpans}. A dispatch deletes its own entry
+ * in the `finally`, so this only matters for ctxs built outside one (an alarm, a
+ * subscription re-run) which mint an anchor and never reach that boundary. Sized
+ * well above any realistic interleave depth — it is a leak backstop, not a
+ * working set.
+ */
+const MAX_TRACKED_DISPATCH_SPANS = 256;
+
+/**
+ * Bound on the per-trace held-span array a sampled-out dispatch accumulates for
+ * the tail-bias flush (see {@link ShardDO.recordSpan}). Matches the span ring's
+ * capacity — a trace holding more spans than the whole ring could retain is
+ * already pathological, and the array is dropped wholesale when the dispatch
+ * `finally` deletes the `traceSampling` entry, so this is a backstop against a
+ * runaway single trace, not a working set.
+ */
+const MAX_HELD_SPANS_PER_TRACE = 500;
+
+/**
+ * Bound on distinct normalised statements folded into
+ * {@link ShardDO.currentStmtSamples} per dispatch. Mirrors
+ * `database-telemetry.ts`'s `MAX_CLIENT_SPANS_PER_TALLY`: a handler that queries in a
+ * loop already folds repeats of the SAME statement into one running entry (see
+ * `sql` getter), so this only bounds the number of DISTINCT statement shapes one
+ * dispatch can accumulate before {@link ShardDO.flushStmtSamples} starts
+ * dropping brand-new ones — a handler building ad-hoc SQL per iteration
+ * (dynamic column lists, generated `IN (...)` clauses) would otherwise grow the
+ * buffer, and the flush that drains it, without bound.
+ */
+const MAX_STMT_SAMPLES_PER_DISPATCH = 200;
+
+/**
+ * `event.name` of the per-dispatch wide event. Namespaced so it never collides
+ * with an application's own `ctx.log.event(...)` names, and stable because
+ * dashboards and alerts will filter on it.
+ */
+const WIDE_EVENT_NAME = "lunora.dispatch";
+
+/**
+ * Flatten a {@link ReadFootprint.ranges} snapshot into the flat array
+ * `ReactiveCache.run`'s `ranges` thunk expects. `undefined` (nothing
+ * narrowable) becomes `[]` — the thunk's own default — rather than a special
+ * case the caller has to know about.
+ */
+const flattenReadRanges = (byTable: Map<string, KeyRange[]> | undefined): KeyRange[] => (byTable ? [...byTable.values()].flat() : []);
+
+/** One dispatch's telemetry side-channel: the `ctx.span` wide event, the `ctx.db` / `ctx.sql` tallies, and the sink they go to. */
+interface DispatchSpanEntry {
+    collector?: SpanCollector;
+    sink?: TelemetrySink;
+    /** One auto-instrumentation tally per surface, kept apart and folded under its own prefix (`db.*`, `sql.*`). */
+    tallies?: Partial<Record<TallySurface, DatabaseTally>>;
+}
+
+/** The dispatch's tallies that counted at least one call, by surface. */
+const nonEmptyTallies = (entry: DispatchSpanEntry | undefined): [TallySurface, DatabaseTally][] =>
+    (Object.entries(entry?.tallies ?? {}) as [TallySurface, DatabaseTally | undefined][]).filter(
+        (pair): pair is [TallySurface, DatabaseTally] => pair[1] !== undefined && pair[1].calls > 0,
+    );
+
+/**
+ * Whether a finished dispatch produced anything the synthetic root span would
+ * carry — so the caller can skip minting a bar for a dispatch that recorded
+ * nothing rather than filling the bounded ring with empty traces.
+ *
+ * A wide event counts: it is the span its attributes live on, so skipping the
+ * span would discard everything the handler attached. **So does a non-empty
+ * `ctx.db` tally** — `instrumentDatabase: "summary"` exists to answer "was this
+ * request database-bound", and a handler that only reads `ctx.db` (the common
+ * shape) has no other way to say so. Counting it here is what makes those
+ * counters reach a reader instead of being tallied on the hot path and dropped.
+ * A non-empty `ctx.sql` tally counts for the same reason.
+ */
+const hasRootSpanContent = (entry: DispatchSpanEntry | undefined): boolean =>
+    entry !== undefined && (entry.collector !== undefined || nonEmptyTallies(entry).length > 0);
 
 /**
  * Base class for shard Durable Objects.
@@ -1559,15 +1560,107 @@ abstract class ShardDO {
     protected static readonly MAX_STREAMS_PER_SOCKET = 8;
 
     /**
-     * Per-socket subscription cap. Each subscription is stored in the
-     * hibernation attachment (which is serialized JSON), and runaway
-     * subscribe loops would let a single client wedge the attachment past
-     * the runtime's size budget — keep the per-socket ceiling well below
-     * that. 32 is enough for any reasonable client (one per visible
-     * panel/query) and small enough that an attachment serialization
-     * failure stays unlikely.
+     * The runtime's hard ceiling on one hibernation attachment.
+     *
+     * MEASURED against workerd rather than taken from a doc page: a
+     * `serializeAttachment` of 16385 bytes throws
+     * `A WebSocket 'attachment' cannot be larger than 16384 bytes.`, and 8192
+     * succeeds. The measurement lives in
+     * `__tests__/shard-do.subscription-cap.test.ts`; the workerd half is
+     * `__tests__/workerd/shard-do.workerd.test.ts`.
+     *
+     * This is the bound that actually binds, and the runtime is the only thing
+     * that enforces it — deliberately. A pre-flight size check here would need a
+     * second size model, and `JSON.stringify` is not it: an attachment
+     * legitimately holds the decoded wire types (`bigint`, `Date`, bytes), and
+     * stringifying a `bigint` throws. So `subscribe`/`shapeSubscribe` let the
+     * runtime refuse, roll the registry back, and spend this constant on saying
+     * WHY — the hibernation API makes them swallow the throw itself, and
+     * "failed to persist subscription attachment" is not something an app can
+     * act on.
+     */
+    protected static readonly MAX_ATTACHMENT_BYTES = 16_384;
+
+    /**
+     * Per-socket cap on `subs` + `shapes` together — a coarse backstop on
+     * per-poke fan-out work, NOT the storage bound.
+     *
+     * The storage bound is {@link ShardDO.MAX_ATTACHMENT_BYTES}, and it is the
+     * one that can actually stop a legitimate app: every registration is
+     * persisted in the hibernation attachment as `{functionPath, table, args,
+     * sinceSeq, sinceEpoch}` beside `connectionId`/`userId`/`identity`/
+     * `clientId`/`context`/`whispers`, and `args` is the client's to choose, so
+     * no fixed count can bound it.
+     *
+     * 32 against the measured numbers: a realistic registration (a function
+     * path, one id argument, a limit, a cursor and an epoch uuid) costs ~218
+     * bytes, and a fully decorated socket's fixed fields — identity claims, app
+     * `context`, whisper topics — about 550. 32 of them is ~7.5 KB, under half
+     * the 16384-byte ceiling, so the count cap never fires before the byte
+     * budget for a record of that shape. It fires only for registrations small
+     * enough that 32 of them are cheap, which is where a fan-out backstop
+     * belongs.
+     *
+     * This was briefly 8, derived from a 2048-byte attachment budget that the
+     * runtime does not impose — 8× too small, and low enough to break an app
+     * holding a dozen live queries on one socket at runtime, which is the
+     * failure this number exists to avoid.
+     *
+     * Both numbers are asserted in `__tests__/shard-do.subscription-cap.test.ts`.
      */
     protected static readonly MAX_SUBSCRIPTIONS_PER_SOCKET = 32;
+
+    /**
+     * How many times one `onQueryChange` reactor may run within a single refresh
+     * drain before it is treated as non-converging and dropped for the rest of
+     * that drain.
+     *
+     * This is a correctness backstop, not a performance knob. A reactor's handler
+     * writes, those writes flush, and that flush re-evaluates reactors — so a
+     * handler that always changes what its own `select` returns never settles and
+     * would spin the shard indefinitely. 8 is generously above any legitimate
+     * cascade: an actor advancing a state machine converges in a handful of steps
+     * (each one removing rows from the set it watched), and anything needing more
+     * than 8 rounds off a single mutation is describing a loop, not a workflow.
+     *
+     * Scoped per DRAIN, so sustained legitimate write load is never throttled —
+     * each new drain restarts every reactor's budget. Only a cascade WITHIN one
+     * drain, which is exactly the non-convergence signature, can exhaust it.
+     */
+    protected static readonly MAX_REACTOR_RUNS_PER_DRAIN = 8;
+
+    /**
+     * Poll interval (ms) for `.global()`-table shapes. A global table lives in
+     * D1 with no per-DO op-log, so its shapes can't be poke-live; the DO re-reads
+     * each subscribed global shape's membership from D1 on an alarm every
+     * `GLOBAL_SHAPE_POLL_INTERVAL_MS` and pokes only the diff. This is the
+     * latency floor for a global-shape update — deliberately coarse (seconds, not
+     * the sub-millisecond poke-live path) since the D1 read fans out per tick.
+     */
+    protected static readonly GLOBAL_SHAPE_POLL_INTERVAL_MS = 2000;
+
+    /**
+     * Upper bound on a `.global()`-shape's materialized membership. Each global
+     * shape keeps its ENTIRE current membership as a per-socket snapshot
+     * (`Map<rowKey, hash>`) so the poll loop can diff it; that snapshot — and the
+     * read buffer feeding it — scale with the membership size, multiplied by every
+     * subscribed socket. An unbounded membership (a global table with no narrowing
+     * shape predicate or RLS read scope) would grow them without limit and evict
+     * the DO. A shape whose membership exceeds this cap is failed closed (left
+     * empty, logged) rather than retained — the developer must narrow it. Sized
+     * well above any reasonable per-identity replicated set so legitimate shapes
+     * never trip it.
+     */
+    protected static readonly GLOBAL_SHAPE_MAX_ROWS = 50_000;
+
+    /**
+     * How long a `.global()` poll may go without an unconditional membership
+     * pass. Between resyncs the poll trusts the global changelog and skips
+     * unchanged tables; a resync re-reads regardless, so a write that left no
+     * changelog row (another system writing the same database) still surfaces
+     * within this window instead of never.
+     */
+    protected static readonly GLOBAL_SHAPE_RESYNC_MS = 30_000;
 
     /**
      * Per-socket whisper-topic cap. Topic membership rides the same hibernation
@@ -1577,6 +1670,35 @@ abstract class ShardDO {
      * best-effort, never acked).
      */
     protected static readonly MAX_WHISPER_TOPICS_PER_SOCKET = 64;
+
+    /**
+     * Cap on the number of distinct `(action, topic)` pairs one socket may have
+     * an `onWhisper` verdict decided for — enforced BEFORE the authorizer runs,
+     * in {@link ShardDO.authorizeWhisper}.
+     *
+     * {@link ShardDO.MAX_WHISPER_TOPICS_PER_SOCKET} does not bound this: a join
+     * is authorized before membership is recorded, and a `whisper` send is
+     * authorized whether or not the sender is a member, so neither over-cap
+     * joins nor non-member sends are stopped by the membership cap. Without this
+     * ceiling a socket that names a fresh topic per frame grows
+     * {@link ShardDO.whisperVerdicts} without bound AND re-runs the authorizer —
+     * which is a database query — once per new name.
+     *
+     * The check alone would not hold it: the dispatch it guards yields, and
+     * frames delivered during that yield would all read the same pre-dispatch
+     * size. It binds because each pair's slot is reserved with its in-flight
+     * verdict promise before the first await — see
+     * {@link ShardDO.authorizeWhisper}.
+     *
+     * Sized against what a legitimate client can reach rather than against the
+     * membership cap: a socket at full membership that also broadcasts on every
+     * topic it joined legitimately decides 2 × 64 = 128 pairs, so this leaves
+     * one whole membership's worth of headroom for a session that rotates
+     * topics (opening documents one after another). The memo is in-memory, so
+     * the ceiling is per warm instance, not per session — a hibernation clears
+     * it, as does a reconnect.
+     */
+    protected static readonly MAX_WHISPER_VERDICTS_PER_SOCKET = 256;
 
     /**
      * Cap on the serialized size (bytes) of a whisper `data` payload. Whispers
@@ -1611,22 +1733,132 @@ abstract class ShardDO {
         ShardDO.rootSizeWarned = false;
     }
 
+    /**
+     * Compute the shared poll alarm's next wake time from both tiers' signals.
+     * Global shapes need the fixed `GLOBAL_SHAPE_POLL_INTERVAL_MS` floor whenever
+     * any are subscribed (a global table has no per-DO op-log, so it can only be
+     * polled). External-source ingest instead reports the earliest NEXT-DUE
+     * timestamp across its non-manual sources (or `undefined` when none exist) —
+     * a source with a large `refresh.everyMs` must sleep until it's actually due,
+     * not spin at the global-shape floor. The TTL sweep and the deferred-schedule
+     * outbox report the same way; the outbox is `undefined` in the steady state,
+     * since an entry exists only between a mutation's COMMIT and the moment the
+     * scheduler accepts its job. Returns `undefined` when NO tier has pending
+     * work, so the DO can go fully idle instead of re-arming for no reason;
+     * otherwise the earliest candidate time (never later than `nowMs`, so a tier
+     * that's already due arms essentially immediately).
+     */
+    private static nextPollAlarmTarget(
+        globalShapesRemaining: number,
+        nextSourceDueAt: number | undefined,
+        nextTtlDueAt: number | undefined,
+        nextOutboxDueAt: number | undefined,
+        nowMs: number,
+    ): number | undefined {
+        const globalTarget = globalShapesRemaining > 0 ? nowMs + ShardDO.GLOBAL_SHAPE_POLL_INTERVAL_MS : undefined;
+
+        // The earliest of the tiers that report a pending time; a tier that's
+        // already due (past timestamp) is floored to `nowMs` so it arms promptly.
+        const candidates = [globalTarget, nextSourceDueAt, nextTtlDueAt, nextOutboxDueAt]
+            .filter((value): value is number => value !== undefined)
+            .map((value) => Math.max(value, nowMs));
+
+        return candidates.length > 0 ? Math.min(...candidates) : undefined;
+    }
+
     protected state: ShardDOState;
 
     protected env: unknown;
 
     /**
-     * Opt-in per-shard reactive query cache. When the subclass passes
-     * `ReactiveCacheOptions` to `super(state, env, { reactiveCache: { … } })`
-     * the cache is instantiated here and exposed to subclasses via
-     * `runCachedQuery`; when omitted (today's default) it stays
-     * undefined and the dispatch path runs with zero cache overhead.
+     * Opt-in per-shard reactive query cache. Instantiated when the generated
+     * subclass passes `reactiveCache` through
+     * `super(state, env, { reactiveCache: { … } })`; otherwise undefined and the
+     * dispatch path runs with zero cache overhead.
      *
-     * The cache is per-shard and in-memory only — it is lost on DO restart
-     * and on workerd hibernation. That's fine: a cold shard simply re-runs
-     * the query on the first call, just like it does today.
+     * The cache is per-shard and in-memory only — it is lost on DO restart and
+     * on workerd hibernation. That's fine: a cold shard simply re-runs the query
+     * on the first call.
      */
     protected readonly reactiveCache: ReactiveCache | undefined;
+
+    /**
+     * Function paths a dispatch has been observed reading `ctx.ip` through, and
+     * whose reactive-cache entries are therefore keyed by the caller's address
+     * as well as by identity — see the discriminator {@link ShardDO.runCachedQuery}
+     * builds.
+     *
+     * Learned at runtime rather than declared, because the honest signal is the
+     * property read itself: a handler may reach `ctx.ip` through a helper, and a
+     * source scan that missed one would leave the cache serving one caller's
+     * address to another. Marking is monotone and per-path, so it can only ever
+     * over-key. Its lifetime is the instance's, the same as the cache it guards,
+     * so a restart clears both together.
+     */
+    protected readonly ipKeyedFunctionPaths: Set<string> = new Set<string>();
+
+    /**
+     * Running read tallies for the shape-poke path, surfaced next to
+     * {@link ShardDO.fanout} on `getFanoutMetrics`. `run` counts the reads this
+     * instance issued to SQLite; `served` counts the ones the per-flush
+     * {@link ShapeDiffCache} answered because another socket had already asked the
+     * identical question. BOTH halves of the diff are counted — the changed-key
+     * scan keyed by `(table, op range)` and the membership probe keyed by
+     * `(effectiveWhere, that same range)` — so the reported sharing rate covers
+     * the work the cache actually does rather than half of it.
+     *
+     * Without the split the sharing is invisible: a flush that collapsed a
+     * hundred reads into one looks exactly like a flush that only ever had one
+     * shape.
+     */
+    protected shapeProbe: ShapeProbeCounters = createShapeProbeCounters();
+
+    /**
+     * Running `.global()` poll tallies, reported alongside {@link ShardDO.shapeProbe}.
+     * `run` counts membership drains actually issued to the global backend;
+     * `served` counts the (socket, shape) pairs a tick skipped because the global
+     * changelog proved their table had not moved.
+     */
+    protected globalPoll: GlobalPollCounters = createGlobalPollCounters();
+
+    /** ctx-db relation knobs from {@link ShardDOOptions}, handed on by {@link ShardDO.ctxDbTuning}. */
+    private readonly ctxDbRelationOptions: Pick<ShardDOOptions, "maxRelationKeys" | "relationExistsPushDown">;
+
+    /**
+     * Whether {@link ShardDO.ctxDbTuning} has been consulted, i.e. whether the
+     * subclass's `createShardCtxDb` call is wired to the precise, per-row
+     * invalidation half of the cache contract.
+     *
+     * It gates a coarse fallback in {@link ShardDO.recordChangedTable}: a shard
+     * whose writer never received the cache would otherwise keep serving
+     * memoized results across writes — stale reads, silently. The fallback drops
+     * every entry on a written table, which is strictly more invalidation than
+     * the wired path does, so the two never disagree about correctness; only
+     * about hit rate.
+     */
+    private readonly ctxDbCacheWired: boolean;
+
+    /**
+     * The host-neutral engine runner. `fetch` and `alarm` delegate through it, so
+     * the dispatch entry points name a platform contract rather than a Durable
+     * Object. While the engine extraction is in progress the runner forwards back
+     * to the Cloudflare implementations below through its `handlers` seam.
+     */
+    private readonly runner: ShardRunner;
+
+    /**
+     * This shard's storage/execution slot. Replaces direct `state.storage` reach-
+     * through, so the SQL hot path and the transaction boundary are expressed
+     * against a contract any host can satisfy.
+     */
+    private readonly shardHost: ShardHost;
+
+    /**
+     * Hibernated socket accept/enumerate/tag, alongside {@link ShardDO.shardHost}.
+     * Enumeration yields handles rather than raw sockets, which is what lets the
+     * per-socket memo maps key identically on the event and fan-out paths.
+     */
+    private readonly socketHost: SocketHost;
 
     /**
      * Lazily-built drizzle handle over `state.storage`. Memoised so a single
@@ -1637,11 +1869,57 @@ abstract class ShardDO {
     private drizzleHandle: DrizzleSqliteDODatabase<Record<string, unknown>> | undefined;
 
     /**
-     * Tracks BEGIN/COMMIT nesting so we can reject nested transactions —
+     * Tracks transaction nesting so we can reject nested transactions —
      * SQLite-in-DO does not support them and the runtime would crash with
      * "cannot start a transaction within a transaction".
      */
+
+    /**
+     * The once-per-instance shard-init run, memoized. Absent until the first
+     * dispatch on this instance; absent again after an eviction drops the heap,
+     * which is precisely when init has to happen. See
+     * {@link ShardDO.ensureShardInit}.
+     */
+    private shardInitOnce?: Promise<void>;
+
     private transactionDepth: number = 0;
+
+    /**
+     * Side effects queued by {@link ShardDO.deferAfterCommit} while a transaction
+     * is open, in the order they were queued. Present only for the span of
+     * {@link ShardDO.runInTransaction}; `undefined` means "nothing to wait for,
+     * run it now".
+     */
+    private afterCommitQueue?: (() => Promise<void> | void)[];
+
+    /**
+     * Chain that holds every committed transaction's after-commit side effects
+     * in commit order. Each link is one transaction's `flushAfterCommit`, joined
+     * inside the single-writer gate so the chain order IS the commit order; see
+     * {@link ShardDO.runInTransaction}. Never rejects — `flushAfterCommit` does
+     * not throw.
+     */
+    private afterCommitTail: Promise<void> = Promise.resolve();
+
+    /**
+     * True once a dispatch's bounded wait for its link on
+     * {@link ShardDO.afterCommitTail} expired — i.e. a hook is stuck on a remote
+     * call that is not coming back.
+     *
+     * Later transactions then still LINK onto the chain (commit order is never
+     * given up) but stop waiting for it, so a stuck embedder costs
+     * {@link AFTER_COMMIT_WAIT_MS} once rather than on every mutation behind it.
+     * Cleared when the chain drains back to its newest link.
+     */
+    private afterCommitStalled: boolean = false;
+
+    /**
+     * True while a `backfillVectors` call runs on this shard. A second call would
+     * read the same cursor before the first records progress and embed the same
+     * page again, so it is refused instead. `backfillSearch` needs no guard: it
+     * runs synchronously, so two calls cannot interleave.
+     */
+    private vectorBackfillRunning: boolean = false;
 
     /**
      * Per-request D1 Sessions API bookmark, read from the inbound
@@ -1652,9 +1930,14 @@ abstract class ShardDO {
     private currentRequestBookmark: string | undefined;
 
     /**
-     * Per-request D1 bookmark to echo on the outbound response. Handlers
-     * call `setOutboundBookmark` after a global-table write so the
-     * client can pin subsequent reads on the same replica.
+     * The D1 bookmark to echo on the outbound response, so the client can pin
+     * subsequent reads on a replica that has seen its own write.
+     *
+     * Assigned ONLY by the dispatch tail, from that dispatch's own
+     * {@link DispatchBookmark} sink, at a point where nothing else can be
+     * mid-handler on this instance. Handlers write `sink.value`, never this
+     * field: an action holds its bookmark across `await`s a sibling dispatch runs
+     * inside, and a shared field loses it there.
      */
     private currentResponseBookmark: string | undefined;
 
@@ -1669,11 +1952,122 @@ abstract class ShardDO {
 
     /**
      * Per-request caller IP forwarded from the runtime via the
-     * `x-lunora-client-ip` header (sourced server-side from Cloudflare's trusted
-     * `CF-Connecting-IP`). Surfaced to handlers as `ctx.ip` via `getCurrentIp`;
-     * cleared in the `finally` block of `fetch` like the other per-request fields.
+     * `x-lunora-client-ip` header. The runtime sources it from Cloudflare's
+     * `CF-Connecting-IP` and only while running ON Cloudflare, where the edge
+     * stamps that header itself; off the edge it forwards nothing rather than a
+     * value the caller typed, so this stays `undefined`. Surfaced to handlers as
+     * `ctx.ip` via `getCurrentIp`; cleared in the `finally` block of `fetch` like
+     * the other per-request fields.
      */
     private currentRequestIp: string | undefined;
+
+    /**
+     * The origin the current `/rpc` request reached the worker on, forwarded by
+     * the runtime as `x-lunora-origin` (read off the request URL there, never a
+     * client header). `buildCtx` hands it to the storage factory as the fallback
+     * base for signed object URLs, so a `.storage()` with no `publicBaseUrl`
+     * signs against the host that asked. Cleared with the other per-request
+     * fields.
+     */
+    private currentRequestOrigin: string | undefined;
+
+    /**
+     * The caller's CDC baseline — the changelog cursor its view of the data was at
+     * when it composed this write — forwarded by the runtime as
+     * `x-lunora-base-seq`. Read only by `.dropStalePatches()` tables, which
+     * compare a patch's fields against the row as it stood at this cursor.
+     *
+     * In the request scope like `userId` and for the same reason: a queued
+     * mutation admitted after a sibling's prologue would otherwise be judged
+     * against ANOTHER caller's baseline, which is the exact clobber this exists to
+     * prevent, inverted.
+     */
+    private currentRequestBaselineSeq: number | undefined;
+
+    /** The runtime's propagated tail-bias toggle (`x-lunora-sample-errors`); `undefined` when none was sent. */
+    private currentRequestSampleErrors: boolean | undefined;
+
+    /** W3C `traceparent` of the inbound RPC; forwarded onto outbound container fetches. */
+    private currentRequestTraceparent: string | undefined;
+
+    /**
+     * Trace ids for the in-flight dispatch, resolved once at entry (see
+     * {@link resolveTraceAnchor}). Shared by `ctx.trace` and by the synthetic
+     * root span recorded on the way out so both agree even with no inbound
+     * `traceparent`. Cleared in the same `finally` as the other per-request
+     * fields.
+     */
+    private currentRequestTrace: TraceAnchor | undefined;
+
+    /**
+     * Anchor of the in-flight trigger (`withTriggerTrace`), handed across the
+     * `runner.handleAlarm()` boundary that stops the alarm handler from just
+     * taking it as an argument.
+     *
+     * A field only because of that indirection, and read under one rule: capture
+     * it into a local SYNCHRONOUSLY at the top of the handler, before any `await`.
+     * Read later it is no safer than `currentRequestTrace` — a socket frame
+     * interleaving at an await point would pick up the alarm's trace and file its
+     * own failure under it. Everything downstream takes the captured value as a
+     * parameter for exactly that reason.
+     */
+    private currentTriggerTrace: TraceAnchor | undefined;
+
+    /**
+     * Per-trace head-sampling state, keyed by `traceId` so concurrent dispatches on
+     * the same DO instance can't clobber each other's decision. A DO interleaves
+     * dispatches across `await` points, and the span-recording and error-flush
+     * choke points run after a span body (or the whole dispatch) settles — by which
+     * point a flat per-instance field could have been overwritten by a sibling
+     * dispatch (the same hazard `dispatchTrace` guards against for the trace anchor).
+     * Each entry holds `sampled` (the inbound `traceparent` flag; absent means keep,
+     * so alarms, subscription re-runs and non-Lunora callers export exactly as
+     * before — when false, `ctx.trace` INTERNAL spans are held out of the live export
+     * and re-decided in the dispatch `finally` as a tail bias), `keepErrors` (the
+     * runtime's `x-lunora-sample-errors` / `alwaysSampleErrors` toggle — a sampled-out
+     * trace that errored is still exported whole unless off), `sink` (captured
+     * when a sampled-out span is first held, so the `finally` can flush the trace's
+     * held spans), and `held` (the sampled-out spans themselves, buffered ON THIS
+     * ENTRY rather than read back from the shared span ring — the ring is bounded and
+     * a concurrent trace could evict this trace's error spans before the flush, which
+     * would silently defeat `alwaysSampleErrors`; bounded by
+     * {@link MAX_HELD_SPANS_PER_TRACE}). Registered at dispatch entry by the
+     * dispatch's own `traceId`, read by `span.traceId`, and deleted in the `finally`
+     * (which drops `held` with it, so no spans leak past the dispatch).
+     */
+    private traceSampling = new Map<string, { held?: SpanEvent[]; keepErrors: boolean; sampled: boolean; sink?: TelemetrySink }>();
+
+    /**
+     * The per-dispatch **wide event** — everything a handler attached through
+     * `ctx.span` — keyed by `traceId` for exactly the reason `traceSampling`
+     * is: a DO interleaves dispatches across `await` points, and a flat field
+     * would let a sibling dispatch's attributes land on this one's span.
+     *
+     * A wide event is the answer to "monitor everything without drowning in
+     * logs": rather than a dozen `ctx.log.info` lines whose only readers are
+     * humans grepping, a handler accumulates its facts onto the ONE span the
+     * dispatch already emits, and the collector gets a single richly-attributed
+     * record it can group and aggregate. Cost is flat — one span per request,
+     * however much you attach.
+     *
+     * Keyed by {@link dispatchSpanKey} (trace id AND root span id) rather than
+     * `traceId` alone — see there for the concurrent-dispatch collision that
+     * distinction prevents.
+     *
+     * Bounded by {@link MAX_TRACKED_DISPATCH_SPANS}: the dispatch `finally`
+     * deletes its own entry, but a ctx built outside a dispatch (an alarm, a
+     * subscription re-run) mints its own anchor and has no such boundary, so the
+     * map is FIFO-capped rather than trusted to drain.
+     */
+    private dispatchSpans = new Map<string, DispatchSpanEntry>();
+
+    /**
+     * The most recent telemetry sink seen while building a ctx — the flush handle
+     * for paths that have no ctx of their own (see `flushTelemetry`). Seeded at
+     * construction from {@link ShardDOOptions.telemetrySink}, so it is set before
+     * the first ctx is.
+     */
+    private lastTelemetrySink: TelemetrySink | undefined;
 
     /**
      * Client-issued idempotency key for the in-flight mutation, forwarded via the
@@ -1687,6 +2081,50 @@ abstract class ShardDO {
     private currentRequestMutationId: string | undefined;
 
     /**
+     * Stable per-device client id for the in-flight custom-mutator push,
+     * forwarded via the `x-lunora-client-id` header. Backs the
+     * `__client_watermark` table: the dispatch path classifies the paired
+     * `currentRequestClientSeq` against the stored high-watermark (already
+     * processed / next / out-of-order gap). Absent on legacy mutations and
+     * queries (those keep the `__idempotency` path). Cleared in `fetch`'s
+     * `finally`.
+     */
+    private currentRequestClientId: string | undefined;
+
+    /**
+     * Monotonic per-client mutation sequence for the in-flight custom-mutator
+     * push, forwarded via the `x-lunora-client-seq` header (numeric). Paired
+     * with `currentRequestClientId` to drive the watermark classification.
+     * `undefined` when absent or non-numeric.
+     */
+    private currentRequestClientSeq: number | undefined;
+
+    /**
+     * The in-flight push's custom-mutator classification, stashed by `fetch`
+     * before `handleRpc` so the in-transaction bookkeeping ({@link
+     * ShardDO.commitMutationBookkeeping}) can advance the `__client_watermark` for
+     * a `"next"` push inside the same commit as the writes. `undefined` for an
+     * ordinary mutation / non-mutator push. Cleared per request.
+     */
+    private currentMutatorClass: ClientMutationClass | undefined;
+
+    /**
+     * Set once a mutation's replay bookkeeping (idempotency row + watermark
+     * advance) has committed INSIDE the handler transaction, so the post-dispatch
+     * path skips the now-redundant best-effort writes. Cleared per request; stays
+     * `undefined` for actions/queries (no transaction wrapper) so their
+     * dispatch-level idempotency persist still runs.
+     *
+     * It carries the committing dispatch's `x-lunora-mutation-id` rather than being
+     * a bare boolean, because this is a SHARED field on an instance that serves
+     * concurrent dispatches — see {@link ShardDO.recordPostDispatchBookkeeping} for
+     * what a bare boolean let a concurrent mutation do to an action's replay guard.
+     * A mutation carrying no id records `{ mutationId: undefined }`, which is still
+     * distinguishable from "nothing committed".
+     */
+    private mutationBookkeeping: { mutationId: string | undefined } | undefined;
+
+    /**
      * Wall-clock millis of the last `__idempotency` GC sweep on this warm
      * instance. The dedup write throttles `trimIdempotent` to at most once an
      * hour off this field (in-memory, so a fresh instance just sweeps on its
@@ -1694,6 +2132,40 @@ abstract class ShardDO {
      * hot path without needing a separate alarm/cron.
      */
     private lastIdempotencyTrimAt = 0;
+
+    /**
+     * Claims on idempotency ids whose handler is running on the UNGATED
+     * dispatch path right now. See {@link InFlightClaims} for the whole
+     * at-least-once argument, the staleness ceiling, and the single-live-instance
+     * requirement it places on the `ShardHost`.
+     */
+    private readonly inFlightClaims = new InFlightClaims();
+
+    /**
+     * Changelog retention: the throttled sweep that bounds `__cdc_log` and the
+     * archive-backed read that serves a consumer once it can no longer be
+     * answered from the live log.
+     *
+     * Every input is a thunk, so this field initializer can run before the
+     * constructor has assigned `env` — and so `sql` and the retention floor are
+     * read at the moment the sweep uses them rather than the moment this was
+     * built, which is the property the deferred destructive step depends on.
+     */
+    private readonly cdcRetention = new CdcRetentionRunner({
+        enabled: () => this.cdcEnabled(),
+        env: () => this.env,
+        epoch: () => this.currentCdcEpoch(),
+        recordError: (scope, error) => {
+            this.recordShapeError(scope, error);
+        },
+        retentionFloor: (sql) => this.retentionFloor(sql),
+        sealTimeline: () => {
+            this.sealForkedTimeline();
+        },
+        shardKey: () => this.currentShardKey(),
+        sql: () => this.sql as SqlExec,
+        waitUntil: (promise) => this.shardHost.waitUntil?.(promise),
+    });
 
     /**
      * Per-request identity envelope forwarded from the runtime via the
@@ -1721,16 +2193,151 @@ abstract class ShardDO {
     private pendingChangedTables: Set<string> | undefined = undefined;
 
     /**
+     * Index positions written during the current RPC, keyed by table. A value of
+     * `undefined` means at least one write to that table had no derivable
+     * position, so the table cannot be narrowed for this batch. Drained
+     * alongside {@link ShardDO.pendingChangedTables}.
+     */
+    private pendingChangedKeys: Map<string, IndexKeyEntry[] | undefined> | undefined = undefined;
+
+    /** Coalesced twin of {@link ShardDO.pendingChangedKeys} for the in-flight refresh pass. */
+    private pendingRefreshKeys: Map<string, IndexKeyEntry[] | undefined> | undefined = undefined;
+
+    /**
+     * Coalesced set of tables awaiting a subscription-refresh pass, merged
+     * across every {@link ShardDO.flushChangedTables} call that lands while a
+     * pass is already draining. The single drain loop
+     * ({@link ShardDO.drainSubscriptionRefreshes}) owns this set; a burst of N
+     * writes to the same table therefore collapses into one (or two) refresh
+     * passes instead of N, so each affected subscription's handler re-runs once
+     * per burst rather than once per write. `undefined` when nothing is pending.
+     */
+    private pendingRefreshTables: Set<string> | undefined = undefined;
+
+    /** True while {@link ShardDO.drainSubscriptionRefreshes} is running; the single-waiter gate that coalesces concurrent flushes. */
+    private refreshInFlight = false;
+
+    /**
      * Last pushed result per `(socket, subId)`, keyed by socket. Lets
      * `refreshSubscriptions` skip re-running queries whose tables were
      * untouched and suppress pushes when the re-run result is unchanged. Held
      * in memory only — it does not survive hibernation, which is safe: a cold
      * memo simply forces one re-run and (at most) one redundant push.
      */
-    private readonly subMemos = new WeakMap<WebSocket, Map<string, SubscriptionMemo>>();
+    private readonly subMemos = new WeakMap<ShardSocketLike, Map<string, SubscriptionMemo>>();
+
+    /**
+     * Count of committed write batches handed to {@link ShardDO.flushChangedTables}.
+     * A subscription run captures it BEFORE it reads, and the value lands on the
+     * memo it produces ({@link SubscriptionMemo.generation}), so a run that parked
+     * on non-storage I/O (the input gate is open there) while a write committed
+     * and a newer run pushed cannot overwrite that newer value with its own.
+     * In-memory only, like the memos it orders.
+     */
+    private writeGeneration = 0;
+
+    /**
+     * Per-socket poke baseline for shape subscriptions: maps each shape's
+     * subscription id to the `__cdc_log` cursor it has been poked through.
+     * `pokeShapeSubscribers` reads each op page since this cursor and advances
+     * it to the flush watermark.
+     *
+     * This is a hot in-memory **cache** over the durable `__shape_poke_cursor`
+     * table (keyed by the socket's `connectionId` + subId), mirroring
+     * {@link ShardDO.globalShapeSnapshots}: a hibernation eviction clears the
+     * WeakMap, so on the next wake {@link ShardDO.readShapeMemoCursor} misses
+     * and falls back to the stored cursor, then the shape's subscribe-time
+     * `sinceSeq` off the attachment, and finally `0` — without the durable
+     * fallback, every wake's first write would rescan the entire retained
+     * `__cdc_log` for that table from `0` instead of resuming where the
+     * socket left off.
+     */
+    private readonly shapeMemos = new WeakMap<ShardSocketLike, Map<string, ShapeMemo>>();
+
+    /**
+     * Per-socket, per-**global**-shape membership snapshot: maps each global
+     * shape's subscription id to a `key → projected-value JSON` map of the rows
+     * last poked to that socket. A `.global()` (D1) table has no op-log to diff,
+     * so {@link ShardDO.refreshGlobalShape} re-reads the full membership on each
+     * alarm tick and diffs it against this snapshot to compute the poke. Parallel
+     * to {@link ShardDO.shapeMemos} (the cursor baseline for poke-live shapes).
+     *
+     * This is a hot in-memory **cache** over the durable `__global_shape_snapshot`
+     * table (keyed by the socket's `connectionId` + subId): a hibernation eviction
+     * clears the WeakMap, so on the next alarm wake {@link ShardDO.readGlobalSnapshot}
+     * misses and re-loads the baseline from SQLite — without it, the diff would run
+     * against an empty baseline and a row deleted from D1 while the DO slept would
+     * never be poked as a `delete`, lingering on the client as a phantom row.
+     */
+    private readonly globalShapeSnapshots = new WeakMap<ShardSocketLike, Map<string, Map<string, string>>>();
+
+    /**
+     * Whether the `__global_shape_snapshot` table has actually answered a read on
+     * this instance.
+     *
+     * Separates "the durable row is missing" from "there is no durable store at
+     * all". A unit harness passes a stub `sql` handle, so every snapshot read and
+     * write throws and the baseline lives only in
+     * {@link ShardDO.globalShapeSnapshots} — the documented pre-durable behaviour,
+     * and not something to log or to treat as a lost baseline. On a real shard the
+     * table is created by migration, so the first read sets this and a missing row
+     * from then on means exactly what it says.
+     */
+    private durableSnapshotStoreAvailable = false;
+
+    /**
+     * When the currently armed poll alarm is due, or `undefined` when none is.
+     * Guards {@link ShardDO.scheduleGlobalPoll} from re-arming on every seed;
+     * cleared in {@link ShardDO.alarm} before the poll so a still-subscribed shape
+     * re-arms.
+     *
+     * The TIME, not a bare boolean. The alarm is shared by three tiers, and the
+     * one an alarm tick re-arms is the EARLIEST due across them — with no global
+     * subscribers that is a `.source()` refresh which can be hours out. A bare
+     * flag made every later caller a no-op, so a fresh `.global()` shape seed
+     * (which wants the 2 s floor) waited out that pending alarm on every warm
+     * instance until eviction. Comparing targets re-arms whenever an EARLIER wake
+     * is asked for, and stays a no-op otherwise — a DO has one alarm, and
+     * `setAlarm` replaces it.
+     */
+    private globalPollArmedAt: number | undefined;
+
+    /**
+     * Whether this instance has already logged the current breaker trip. Reset when
+     * a re-arm is admitted again. In-memory on purpose: a new instance logs once more,
+     * which is the right amount of noise for a trip that outlives an eviction.
+     */
+    private alarmRearmTripLogged = false;
+
+    /**
+     * When each schedule-rate target's trip was last logged on this instance (see
+     * schedule-rate-breaker.ts). A target logs at most once per window. Steady load sitting
+     * at the limit alternates admits and refusals, so a flag cleared on admit would log on
+     * every refusal. In-memory on purpose, like the alarm breaker's trip flag.
+     */
+    private readonly scheduleRateTripLoggedAt = new Map<string, number>();
+
+    /** Monotonic per-DO poke id source; correlates a poke's `pokeStart`/`pokePart`/`pokeEnd` frames. */
+    private pokeSequence = 0;
 
     /** Per-socket whisper-rate token bucket (see {@link ShardDO.WHISPER_RATE_BURST}). In-memory; resets on hibernation. */
-    private readonly whisperBuckets = new WeakMap<WebSocket, { last: number; tokens: number }>();
+    private readonly whisperBuckets = new WeakMap<ShardSocketLike, { last: number; tokens: number }>();
+
+    /**
+     * Memoised `onWhisper` verdicts for this socket, keyed `"<action>:<topic>"`
+     * (see {@link ShardDO.authorizeWhisper}). In-memory and deliberately so: a
+     * cursor stream whispers many times a second and the authorizer is a database
+     * query, so re-running it per frame would make the cheap primitive expensive.
+     * Resetting on hibernation is the fail-safe direction — the next frame after a
+     * wake re-checks. Bounded by
+     * {@link ShardDO.MAX_WHISPER_VERDICTS_PER_SOCKET}.
+     *
+     * An entry is a `Promise<boolean>` while its authorizer is in flight and the
+     * settled verdict afterwards. The pending form is what makes the bound hold:
+     * it occupies the slot from before the first await, so concurrent frames see
+     * the pair as taken rather than all passing an unchanged size check.
+     */
+    private readonly whisperVerdicts = new WeakMap<ShardSocketLike, Map<string, Promise<boolean> | boolean>>();
 
     /**
      * Per-socket {@link AbortController} map keyed by stream id, used to
@@ -1739,15 +2346,146 @@ abstract class ShardDO {
      * fine because the corresponding socket is gone too — the iterator
      * pumping into it would have nowhere to write.
      */
-    private readonly streamCancellers = new WeakMap<WebSocket, Map<string, AbortController>>();
+    private readonly streamCancellers = new WeakMap<ShardSocketLike, Map<string, AbortController>>();
+
+    /**
+     * Live producers for durable streams, keyed by run key. In-memory on
+     * purpose: it tracks who is *currently* producing, while the transcript
+     * itself lives in SQLite. A run whose entry is missing but whose row still
+     * says `running` was interrupted by an eviction — see
+     * {@link ShardDO.attachDurableStream}.
+     */
+
+    /**
+     * Durable-stream runs for this shard. The engine owns the state machine and
+     * the producer; this class only adapts sockets onto it.
+     */
+    private readonly durableStreams = new DurableStreamRunner({ sql: () => this.sql as SqlExec, waitUntil: (promise) => this.shardHost.waitUntil?.(promise) });
 
     /**
      * Lifetime request counters surfaced by the `__lunora_admin__:getMetrics`
      * RPC. In-memory only — they reset when the DO hibernates or restarts, which
      * is the right granularity for a "since this instance woke" health readout
      * (durable aggregation would be a separate, heavier feature).
+     *
+     * `subscriptionRefreshErrors` (DO-01) rides along the same lifetime/in-memory
+     * shape: incremented, alongside a structured log, wherever a live-query
+     * refresh or shape poke swallows a per-subscription/per-socket error so its
+     * siblings can keep flushing (`refreshSubscriptions`, `pokeShapeSubscribers`
+     * via `recordSubscriptionRefreshError`). It IS on the `getMetrics` wire
+     * response (`collectMetrics`); a studio panel charting it is a follow-up.
      */
-    private readonly metrics = { errors: 0, requests: 0, sinceMs: Date.now() };
+    private readonly metrics = { errors: 0, requests: 0, sinceMs: Date.now(), subscriptionRefreshErrors: 0 };
+
+    /**
+     * Running fan-out cost counters surfaced by the
+     * `__lunora_admin__:getFanoutMetrics` RPC — one tally for the reactive
+     * shape-poke path (`pokeShapeSubscribers`) and one for the whisper broadcast
+     * path (`broadcastWhisper`). Each pass records the sockets it iterated (the
+     * O(subscribers) cost) and delivered to. In-memory and reset on
+     * hibernation/restart, sharing `metrics.sinceMs` as the "since this instance
+     * woke" epoch. This is the observability half of plan 075's auto-elastic
+     * relay tier (Phase 1): measure the per-flush fan-out cost so the promotion
+     * threshold is grounded in real numbers, with no behavior change.
+     */
+    private readonly fanout = { shapePoke: createFanoutCounters(), whisper: createFanoutCounters() };
+
+    /**
+     * The `.global()` changelog position the last poll tick observed, or
+     * `undefined` on a cold instance. In-memory on purpose: losing it costs one
+     * full re-read pass, which is the safe direction — a stale persisted cursor
+     * would let a tick skip a table that HAD changed.
+     */
+    private globalPollCursor: number | undefined;
+
+    /**
+     * Set when a shape failed to settle in the last poll tick, forcing the next one
+     * to read every shape unconditionally. See {@link GlobalPollTick.resyncRequested}
+     * for why a shared cursor leaves no cheaper recovery.
+     */
+    private globalResyncRequested = false;
+
+    /**
+     * Whether this wake has already re-minted the epoch to seal a rolled-back
+     * timeline. In-memory on purpose — see {@link ShardDO.sealForkedTimeline} for
+     * why the seal is capped at one per wake, and why losing the flag on eviction
+     * is the correct direction.
+     */
+    private forkSealed = false;
+
+    /**
+     * Wall-clock millis of the last unconditional `.global()` membership pass.
+     * Bounds how long a write this deployment cannot see in its own changelog —
+     * an out-of-band writer against the global database — can go unnoticed.
+     */
+    private lastGlobalResyncAt = 0;
+
+    /**
+     * The runtime's Durable Object namespace binding name (e.g. `"SHARD"`),
+     * learned from `x-lunora-shard-binding` so a DO can address its siblings
+     * (`this.env[binding].getByName(...)`) for the relay hub. Absent in single-DO
+     * mode / the unit harness — when absent, the relay tier is inert and whispers
+     * stay shard-local (no behavior change).
+     *
+     * NOT sent on every inbound request: the worker stamps it on the WebSocket
+     * upgrade and on a replica-routed RPC, and a sibling DO stamps it on the
+     * relay/replica POSTs — the owner `/rpc` path does not. So this field is
+     * "whatever the last request that carried one said", which is why it is kept
+     * across requests rather than re-read per request, and why `OwnerRelay`
+     * persists the learned value in SQLite instead of trusting it to be live.
+     */
+    private shardBinding: string | undefined;
+
+    /**
+     * The `.shardBy()` tables this instance has registered with the shard
+     * registry, or is registering right now — claimed before the round trip so
+     * two concurrent first writes send one. Registration is idempotent, so this
+     * only saves round trips; it resets with the instance.
+     */
+    private readonly registeredTables = new Set<string>();
+
+    /**
+     * Epoch millis before which registration is not retried, set when one
+     * fails: a registry outage costs one attempt per window rather than one per
+     * write, against the single DO that has to recover.
+     */
+    private registryRetryAt = 0;
+
+    /**
+     * Every registry round trip this shard makes, in order — see
+     * {@link ShardDO.serializeRegistry}. Never rejects.
+     */
+    private registryTail: Promise<void> = Promise.resolve();
+
+    /**
+     * Memoised {@link ShardDO.currentAdminBinding} result, keyed by the token it
+     * was derived from so a rotation within one isolate re-derives rather than
+     * serving the old fingerprint.
+     */
+    private adminBindingMemo: { binding: Promise<string>; token: string } | undefined;
+
+    /**
+     * The auto-elastic fan-out relay collaborator (plan 075) — an {@link OwnerRelay}
+     * or {@link RelayMember} chosen ONCE from this DO's name, or `undefined` for an
+     * unnamed (single-DO) DO where the relay tier is inert. All relay state +
+     * transport lives on it, reached back through the {@link RelayHost} adapter, so
+     * owner-only state can never sit next to relay-only state on this class.
+     */
+    private readonly relay: OwnerRelay | RelayMember | undefined;
+
+    /**
+     * The read-replica collaborator — set only on a DO whose name marks it as a
+     * replica of another shard, `undefined` on an owner (and on an unnamed
+     * single-DO shard, where there is nothing to replicate from).
+     */
+    private readonly replica: ReturnType<typeof createReplicaLink>;
+
+    /**
+     * The owner half of the replica seam — what answers `/_lunora/replica` for
+     * the replicas following this shard. Present on every DO, because a DO
+     * cannot know whether anything follows it until something asks.
+     */
+    private readonly replicaOwnerHost: ReplicaOwnerHost;
 
     /**
      * Declared indexes (`table:index`) a query has exercised since this instance
@@ -1758,10 +2496,14 @@ abstract class ShardDO {
 
     /**
      * Per-function execution counters surfaced by the
-     * `__lunora_admin__:getFunctionStats` RPC, keyed by `&lt;file>:&lt;function>`
+     * `__lunora_admin__:getFunctionStats` RPC, keyed by `<file>:<function>`
      * path. Shares the `metrics` lifecycle: in-memory, reset on
-     * hibernation/restart. The map is naturally bounded by the app's registered
-     * function count (a finite set), so no eviction is needed. Maintained by
+     * hibernation/restart. `functionPath` is caller-controlled (the runtime
+     * forwards it unchecked), so the map is NOT bounded by the app's registered
+     * function count — every path that reaches a metrics-recording dispatch
+     * lands here, including one that resolves to nothing. `recordFunctionCall`
+     * therefore caps it at {@link FUNCTION_METRICS_MAX_PATHS} the same way the
+     * durable `__lunora_metrics` twin caps its table. Maintained by
      * `recordFunctionCall` at the one dispatch site that also bumps the
      * aggregate `metrics` counters.
      */
@@ -1778,22 +2520,29 @@ abstract class ShardDO {
     private readonly logs = new LogBuffer();
 
     /**
-     * In-flight dependency tracker for the currently-executing query. Set by
-     * `runCachedQuery` so the ctx-db hooks (wired via `onRead`) can
-     * stamp deps without threading the tracker explicitly through every
-     * generated handler signature. Cleared in the `finally` of the same
-     * call so a leaked tracker can never bleed into a sibling RPC.
+     * Recent `ctx.trace` spans (plus the synthetic per-dispatch root), powering
+     * the studio's Traces panel. In-memory and hibernation-volatile like
+     * `logs` — production tracing ships to a collector via `otlpSink`.
      */
-    private currentTracker: DependencyTracker | undefined;
+    private readonly spans = new SpanBuffer();
+
+    /**
+     * Running aggregates of `ctx.metrics.*` measurements, powering the studio's
+     * Metrics panel. In-memory and hibernation-volatile like `logs` and
+     * `spans`, but folds samples into per-series totals rather than ringing
+     * raw events — production aggregation ships to a collector via the sink.
+     */
+    private readonly metricSeries = new MetricBuffer();
 
     /**
      * Tables the in-flight dispatch full-scanned (read via `SCAN_DEP`, no index
      * / point lookup). Allocated at the top of each `/rpc` dispatch and drained
      * into `recordFunctionCall` once the handler returns, so the durable
      * `__lunora_metrics_scans` attribution can pin a slow function to the
-     * table(s) it scanned. Independent of `currentTracker` (which only exists
-     * when the reactive cache is enabled), so the causal signal is collected
-     * even on a cache-less shard. Stamped by `getCtxDbReadHook`.
+     * table(s) it scanned. Independent of the per-dispatch
+     * {@link QueryReadScope} (which only exists when the reactive cache is
+     * enabled), so the causal signal is collected even on a cache-less shard.
+     * Stamped by `getCtxDbReadHook`.
      */
     private currentScannedTables: Set<string> | undefined;
 
@@ -1808,405 +2557,226 @@ abstract class ShardDO {
     private currentIndexHits: Set<string> | undefined;
 
     /**
-     * Read-tables + cache-hit captured for the current `/rpc` dispatch, so the
-     * dispatch site can fold them into the durable request log
-     * (`request-log.ts`). Populated by `runCachedQuery` — the one place that
-     * both holds the per-query dependency tracker AND learns whether the
-     * reactive cache served the result — and reset per request in `fetch`.
-     * `undefined`/empty when the reactive cache is disabled or the path is a
-     * write/action (which doesn't run through the cache), which is exactly why
-     * the request log treats those fields as "unknown" rather than asserting a
-     * read set on the hot path.
+     * Per-DISTINCT-statement SQL samples collected during the current `/rpc`
+     * dispatch by the instrumented `sql` getter, keyed by the raw query text.
+     * Drained into the durable `__lunora_metrics_queries` table after the
+     * handler returns (same pattern as `currentScannedTables` /
+     * `currentIndexHits`). `undefined` when no dispatch is in flight; allocated
+     * fresh per dispatch so a previous request's samples never leak into the
+     * next one.
+     *
+     * Keyed by the raw query string rather than a growing array: a handler
+     * that queries in a loop reuses the SAME prepared-statement text on every
+     * iteration (bind parameters travel separately via `...params`, never
+     * inlined into `query`), so folding each call into its entry as it lands
+     * collapses the loop to one entry — {@link ShardDO.flushStmtSamples} then
+     * pays one upsert per DISTINCT statement instead of one per raw execution.
+     * Bounded at {@link MAX_STMT_SAMPLES_PER_DISPATCH} distinct entries; past
+     * that, a brand-new statement shape (ad-hoc SQL built per iteration) is
+     * dropped and `currentStmtSamplesTruncated` is set — already-tracked
+     * statements keep folding regardless.
+     *
+     * `rowsRead`/`rowsWritten` come from the cursor's own counters — rows
+     * SCANNED and WRITTEN, which is what storage bills — falling back to the
+     * result-set size only on a host that doesn't expose them.
      */
-    private currentRequestReadTables: Set<string> | undefined;
+    private currentStmtSamples: Map<string, StmtSample> | undefined;
 
     /**
-     * Per-statement SQL samples collected during the current `/rpc` dispatch by
-     * the instrumented `sql` getter. Drained into the durable
-     * `__lunora_metrics_queries` table after the handler returns (same pattern as
-     * `currentScannedTables` / `currentIndexHits`). `undefined` when no dispatch
-     * is in flight; allocated fresh per dispatch so a previous request's samples
-     * never leak into the next one.
+     * The instrumented `sql` proxy built for {@link ShardDO.currentStmtSamples},
+     * and the samples map it was built for.
      *
-     * Each entry is `[rawSql, durationMs, rowsRead, rowsWritten]`. DML rows
-     * written is always 0 here — the ctx-db adapter doesn't expose a
-     * `changes()` count through the structural `SqlExec` surface, so we
-     * attribute only SELECT result sizes as `rowsRead`.
+     * `get sql()` is read on essentially every storage call, and a fresh `Proxy`
+     * per read is not only an allocation: the resume path memoizes this shard's
+     * table catalog in a `WeakMap` keyed by the handle, so a new object each read
+     * meant that memo never once hit during a dispatch — it re-scanned
+     * `sqlite_master` every time, which is the 18% of `evaluateResume` the memo
+     * exists to remove.
      */
-    private currentStmtSamples: [string, number, number, number][] | undefined;
+    private instrumentedSql: undefined | { proxy: unknown; samples: Map<string, StmtSample> };
 
-    /** Whether the current dispatch's cached query was served from cache; `undefined` until `runCachedQuery` resolves one. */
-    private currentRequestCacheHit: boolean | undefined;
+    /**
+     * Set when `currentStmtSamples` hit {@link MAX_STMT_SAMPLES_PER_DISPATCH}
+     * distinct statements and a brand-new shape was dropped this dispatch.
+     * Folded onto the dispatch's wide event as `db.stmt_samples_truncated`
+     * (mirrors `database-telemetry.ts`'s `db.spans_truncated`) so a truncated
+     * leaderboard contribution reads as partial rather than complete.
+     */
+    private currentStmtSamplesTruncated: boolean | undefined;
 
     public constructor(state: ShardDOState, env: unknown, options: ShardDOOptions = {}) {
         this.state = state;
         this.env = env;
 
+        // Settle the host-tracing probe before the first dispatch, so every
+        // dispatch — including the isolate's first — reads it synchronously (the
+        // root-span mirror in `recordDispatchRootSpan` has no await to wait on).
+        // Memoized and self-catching, so the gate costs one dynamic import once.
+        state
+            .blockConcurrencyWhile?.(async () => {
+                await resolveHostTracing();
+            })
+            .catch(() => {
+                /* unreachable: the probe catches its own failures */
+            });
+
+        // Build the provider-neutral Cloudflare host adapters and mount the
+        // host-neutral shard engine runner. The runner owns the platform contract
+        // seam; `fetch`/`alarm` delegate through it. First slice: the runner
+        // forwards back to the existing Cloudflare-specific implementations so
+        // tests and public API stay stable.
+        this.shardHost = createShardHost(state as never);
+        this.socketHost = createSocketHost(state as never);
+        this.runner = new ShardRunner(this.shardHost, this.socketHost, {
+            handlers: {
+                handleAlarm: () => this.handleAlarmCloudflare(),
+                handleFetch: (request) => this.handleFetchCloudflare(request),
+            },
+        });
+
         if (options.reactiveCache) {
             this.reactiveCache = new ReactiveCache(options.reactiveCache);
         }
 
+        this.ctxDbCacheWired = options.ctxDbCacheWired ?? false;
+
+        try {
+            this.lastTelemetrySink = options.telemetrySink?.();
+        } catch {
+            // Best-effort — a throwing sink factory must not stop the Durable
+            // Object from constructing; the first ctx resolves it again.
+        }
+        this.ctxDbRelationOptions = {
+            ...(options.maxRelationKeys === undefined ? {} : { maxRelationKeys: options.maxRelationKeys }),
+            ...(options.relationExistsPushDown === undefined ? {} : { relationExistsPushDown: options.relationExistsPushDown }),
+        };
+
+        // What every internal tier needs from this DO: its own name (the role
+        // signal), the env, the namespace binding, and SQLite. Built once and
+        // spread into each tier's host so the four can never drift apart.
+        const sibling: ShardSiblingHost = {
+            doName: () => this.runner.shardKey,
+            env: () => this.env,
+            shardBinding: () => this.shardBinding,
+            // Read off THIS DO's own id, not off config or a request header: the
+            // id carries the jurisdiction it was minted under, so a shard always
+            // resolves siblings through the same subnamespace it lives in — with
+            // nothing to configure, nothing to transport, and no way for a
+            // request to claim a different one.
+            shardJurisdiction: () => this.state.id?.jurisdiction,
+            sql: () => this.sql as SqlExec,
+        };
+
+        // The relay tier reaches this DO back through a narrow adapter; the role-typed
+        // collaborator (owner vs relay) is fixed once from the DO name (plan 075).
+        const host: RelayHost = {
+            ...sibling,
+            buildShapeDiff: (resolved, fromCursor, toCursor) => this.diffRelayedShape(resolved, fromCursor, toCursor),
+            computeOpLogShapeSeed: (shape, resolved) => this.computeOpLogShapeSeed(shape, resolved),
+            currentCdcEpoch: () => this.currentCdcEpoch(),
+            deliverWhisperLocal: (topic, frame, exclude) => this.deliverWhisperLocal(topic, frame, exclude),
+            getWebSockets: () => this.runner.sockets(),
+            maskMetadata: () => this.maskMetadata(),
+            nextPokeId: () => {
+                this.pokeSequence += 1;
+
+                return `poke-${String(this.pokeSequence)}`;
+            },
+            readAttachment: (ws) => this.readAttachment(ws),
+            recordShapePokeFanout: (iterated, delivered, elapsedMs) => {
+                this.fanout.shapePoke = recordFanoutPass(this.fanout.shapePoke, iterated, delivered, elapsedMs);
+            },
+            resolveShape: (name, args, identity) => this.resolveShape(name, args, identity),
+            rlsMetadata: () => this.rlsMetadata(),
+        };
+
+        this.relay = createRelayLink(host);
+
+        // Region-local read replicas. Same rule as the relay tier: the role is
+        // fixed once from the DO name. The owner half is what SERVES
+        // `/_lunora/replica`; `this.replica` is set only on a DO that follows one.
+        //
+        // The three CDC readers pass `undefined` straight through — it means
+        // "this shard has no changelog", and the replica tier refuses to
+        // replicate a shard that cannot be followed rather than inventing a
+        // timeline out of a sentinel.
+        this.replicaOwnerHost = {
+            ...sibling,
+            exportRows: async () => this.runShardExport({}),
+            ownerCursor: () => this.currentCdcCursor(),
+            ownerEpoch: () => this.currentCdcEpoch(),
+            // The PAYLOAD floor, not the key floor. A replica replays post-images,
+            // and payload compaction keeps keys while dropping documents — so
+            // `minCdcSeq` would advertise a position from which replay is
+            // impossible, and the follower would sit below the real floor forever
+            // without ever being told to bootstrap.
+            ownerFloor: () => (this.cdcEnabled() ? minCdcReplayableSeq(this.sql as SqlExec) : undefined),
+            readChanges: (sinceSeq, limit) => this.runShardCdcSync({ limit, sinceSeq }),
+            // `COUNT(*)` per user table — cheap next to building the snapshot,
+            // which is the whole point: the bootstrap cap has to be decided
+            // before the rows are materialized, not after. Only the tables the
+            // export ships count: a schema table has declared columns, while the
+            // CDC log, index companions and any non-schema table on this shard do
+            // not — counted, they made a modest shard refuse every replica.
+            rowCount: () =>
+                listTables(this.sql as SqlExec)
+                    .filter((table) => this.tableColumns(table.name).length > 0)
+                    .reduce((total, table) => total + table.rowCount, 0),
+        };
+        this.replica = createReplicaLink({
+            ...sibling,
+            applyChanges: async (changes) => {
+                const { applied } = await this.runShardApplyCdc({ changes });
+
+                // Same post-replay step the `applyCdc` admin RPC takes: replayed
+                // rows are real writes, so any live subscriber on this DO has to
+                // see them.
+                await this.flushChangedTables();
+
+                return applied;
+            },
+            importRows: async (rows) => this.runShardImport({ rows }),
+        });
+
         this.armWebSocketKeepalive();
     }
 
-    /** SQLite handle scoped to this Durable Object. */
-
     /**
-     * Worker-side fetch entry point. Handles WebSocket upgrades and the
-     * shard-local RPC endpoint forwarded by `@lunora/runtime`.
+     * Worker-side fetch entry point. Delegates to the host-neutral
+     * {@link ShardRunner}, which forwards to the Cloudflare implementation below.
      */
     public async fetch(request: Request): Promise<Response> {
-        const url = new URL(request.url);
+        await this.ensureShardInit();
 
-        if (request.headers.get("Upgrade") === "websocket") {
-            return this.handleWebSocketUpgrade(request);
-        }
-
-        if (url.pathname !== "/rpc" || request.method !== "POST") {
-            return new Response("Not found", { status: 404 });
-        }
-
-        let payload: RpcRequest;
-
-        try {
-            payload = await request.json();
-        } catch {
-            return jsonResponse({ error: { code: "BAD_REQUEST", message: "invalid JSON body" } }, 400);
-        }
-
-        // Reserved admin-introspection RPCs are intercepted before user
-        // dispatch — they read raw SQLite directly rather than running a
-        // registered function, and carry their own bearer-token gate.
-        if (payload.functionPath.startsWith(ADMIN_FUNCTION_PREFIX)) {
-            return this.handleAdminRpc(request, payload.functionPath, payload.args ?? {});
-        }
-
-        // Stash the inbound D1 bookmark and identity headers for the
-        // duration of the handler call so getters return the right
-        // values. Cleared on exit so the next request starts fresh.
-        this.currentRequestBookmark = request.headers.get("x-d1-bookmark") ?? undefined;
-        this.currentResponseBookmark = undefined;
-        this.currentRequestUserId = request.headers.get("x-lunora-userid") ?? undefined;
-        this.currentRequestMutationId = request.headers.get("x-lunora-mutation-id") ?? undefined;
-        this.currentRequestIdentity = parseIdentityHeader(request.headers.get("x-lunora-identity"));
-        // The caller's IP, forwarded server-side from Cloudflare's trusted
-        // `CF-Connecting-IP` (never copied from a client header). Surfaced as
-        // `ctx.ip` so handlers/middleware can key on it (e.g. rate-limit
-        // unauthenticated traffic by IP).
-        this.currentRequestIp = request.headers.get("x-lunora-client-ip") ?? undefined;
-        this.currentRequestSystem = request.headers.get("x-lunora-system") === "1";
-        // Reset the per-request read/cache capture (filled by `runCachedQuery`
-        // for cached query paths) so a previous dispatch can't leak into this
-        // entry's logged read set / cache-hit flag.
-        this.currentRequestReadTables = undefined;
-        this.currentRequestCacheHit = undefined;
-
-        this.metrics.requests += 1;
-        const dispatchStartedAt = Date.now();
-
-        // Collect the tables this dispatch full-scans (stamped by the
-        // ctx-db read hook) so `recordFunctionCall` can persist the causal
-        // attribution. Fresh per request; drained below.
-        this.currentScannedTables = new Set<string>();
-
-        // Collect the declared indexes this dispatch exercises (stamped by
-        // the ctx-db index-use hook) so `recordFunctionCall` can persist the
-        // per-index hit counter behind the dead-index lint. Fresh per
-        // request; drained below.
-        this.currentIndexHits = new Set<string>();
-
-        // Collect per-statement SQL samples from the instrumented `sql`
-        // getter so `flushStmtSamples` can persist them to the durable
-        // `__lunora_metrics_queries` table after the handler resolves.
-        // Allocating a fresh array here activates the instrumentation (the
-        // `sql` getter only wraps when this field is defined).
-        this.currentStmtSamples = [];
-
-        try {
-            // Reserved cross-shard relation read/count (reverse cross-backend
-            // relations). Served BEFORE user dispatch and returned BARE (row
-            // array / number) — never `{ result }`-wrapped — so the Query
-            // Coordinator's `concat`/`sum` merge composes the per-shard
-            // values. Runs under the forwarded identity stashed above; the
-            // worker refuses this prefix on a single-shard envelope, so it's
-            // only reachable through the authorizeFanOut-gated fan-out path.
-            if (payload.functionPath.startsWith(RELATION_FUNCTION_PREFIX)) {
-                const value = await this.runRelationFanoutRead(payload.functionPath, payload.args ?? {});
-
-                return jsonResponse(value, 200, this.currentResponseBookmark);
-            }
-
-            // Mutation-replay dedup: if this `(identity, mutationId)` already
-            // committed, return its cached result without re-running the
-            // handler (so a client that replays an unacked write — same id —
-            // sees exactly-once semantics). The id rides the
-            // `x-lunora-mutation-id` header (stashed into `currentRequestMutationId`
-            // above), the same source `persistIdempotentResult` reads when it
-            // records the row after the handler commits.
-            const cached = this.readIdempotentResult(this.currentRequestMutationId);
-
-            if (cached !== undefined) {
-                this.recordFunctionCall(payload.functionPath, Date.now() - dispatchStartedAt, undefined, this.currentScannedTables, this.currentIndexHits);
-
-                return jsonResponse({ result: cached.value }, 200, this.currentResponseBookmark);
-            }
-
-            const result = await this.handleRpc(payload.functionPath, payload.args ?? {});
-
-            // Mutation-replay dedup WRITE: now that the handler's writes have
-            // auto-committed, record the result against this request's
-            // `(identity, mutationId)` so a replay of the same id short-circuits
-            // through the cached-read check above. No-op for queries / legacy
-            // clients (no `x-lunora-mutation-id` header).
-            this.persistIdempotentResult(result);
-
-            const durationMs = Date.now() - dispatchStartedAt;
-
-            // Record the handler's own latency (before the subscription
-            // write-flush below) against the per-function counters, along
-            // with any tables it full-scanned (causal attribution).
-            this.recordFunctionCall(payload.functionPath, durationMs, undefined, this.currentScannedTables, this.currentIndexHits);
-
-            // Flush per-statement SQL samples accumulated during dispatch to
-            // the durable `__lunora_metrics_queries` table. Best-effort:
-            // a flush failure (e.g. no sql handle in tests) must never fail
-            // the response.
-            this.flushStmtSamples();
-
-            // Snapshot the written-table set BEFORE `flushChangedTables`
-            // drains it — afterwards `pendingChangedTables` is `undefined`,
-            // so the request log would record an empty write set.
-            const tablesWritten = [...(this.pendingChangedTables ?? [])];
-
-            this.recordRequestLog(payload.functionPath, payload.args ?? {}, durationMs, "ok", tablesWritten);
-
-            // Inspect the post-write size before responding. SQLite-in-DO
-            // exposes `databaseSize` as a real getter; reading it is a
-            // cheap stat call, not a full table scan.
-            this.maybeWarnRootSize();
-
-            // Snapshot the response before re-running subscriptions so the
-            // bookmark captured by the handler is preserved verbatim.
-            const response = jsonResponse({ result }, 200, this.currentResponseBookmark);
-
-            await this.flushChangedTables();
-
-            return response;
-        } catch (error: unknown) {
-            this.metrics.errors += 1;
-            const durationMs = Date.now() - dispatchStartedAt;
-            const message = error instanceof Error ? error.message : String(error);
-            // Count only OCC conflicts as write contention — a unique-index
-            // breach / onDelete-restrict / trigger-overflow also surfaces as a
-            // 409 ConflictError but is a constraint failure, not contention, and
-            // would mis-fire the write-contention advisor.
-            const conflicted = error instanceof ConflictError && error.kind === "occ";
-
-            // Do NOT record per-function metrics for an unregistered/`FUNCTION_NOT_FOUND`
-            // dispatch: `functionPath` is caller-controlled and the runtime forwards it
-            // without checking it against the registry, so recording here would let a
-            // flood of random paths grow both the durable `__lunora_metrics` table and the
-            // in-memory `functionStats` map without bound (the Map's "bounded by the app's
-            // finite registered-function set" assumption only holds for real functions).
-            // The request log + error buffer below still capture the failure, and both are
-            // bounded (retention / fixed buffer).
-            const code = (error as { code?: unknown } | null)?.code;
-
-            if (code !== "FUNCTION_NOT_FOUND") {
-                this.recordFunctionCall(payload.functionPath, durationMs, message, this.currentScannedTables, this.currentIndexHits, conflicted);
-            }
-            // Flush statement samples even on error paths — partial sampling
-            // is better than losing the timing signal entirely.
-            this.flushStmtSamples();
-            this.recordRequestLog(payload.functionPath, payload.args ?? {}, durationMs, "error", [...(this.pendingChangedTables ?? [])], message);
-            this.logs.push({
-                functionPath: payload.functionPath,
-                level: "error",
-                message,
-                timestamp: Date.now(),
-            });
-
-            return this.errorToResponse(error);
-        } finally {
-            this.currentRequestBookmark = undefined;
-            this.currentResponseBookmark = undefined;
-            this.currentRequestUserId = undefined;
-            this.currentRequestMutationId = undefined;
-            this.currentRequestIdentity = undefined;
-            this.currentRequestIp = undefined;
-            this.currentRequestSystem = false;
-            this.currentScannedTables = undefined;
-            this.currentIndexHits = undefined;
-            this.currentRequestReadTables = undefined;
-            this.currentRequestCacheHit = undefined;
-            this.currentStmtSamples = undefined;
-        }
+        return this.runner.handleFetch(request);
     }
 
     /**
      * Hibernation API: invoked by the runtime when a message arrives on a
      * hibernated socket. Subclasses can override this to intercept; the
      * default decodes a {@link SubscriptionEnvelope} and updates the registry.
+     *
+     * Deliberately NOT wrapped in {@link withTriggerTrace}, unlike `alarm`. Frame
+     * rate here is unbounded — a whisper fan-out or presence stream drives many
+     * per second — and minting a trace anchor per frame costs two `crypto`
+     * draws plus hex encoding, which measurably regressed the fan-out benchmark
+     * (~30% on `broadcastWhisper` to 128 members). The trade is also worse than it
+     * looks: a frame's work is a subscription re-evaluation whose data flow is
+     * already attributable to the RPC that wrote the data, so the root span buys
+     * little. An alarm is the opposite — low frequency, and genuinely
+     * un-attributable background work — which is why that one keeps the wrapper.
+     *
+     * `ctx.trace`/`ctx.span` inside a frame still record; they just anchor to the
+     * ctx's own trace rather than a per-frame root.
      */
-    // eslint-disable-next-line sonarjs/cognitive-complexity -- Workers hibernation message router: the type/credential/route branching is the wire protocol and stays clearer inline than split across helpers sharing the socket + envelope
     public async webSocketMessage(ws: WebSocket, message: string | ArrayBuffer): Promise<void> {
-        // Token-expiry: a socket whose credential lapsed is dropped before its
-        // frame is processed, so the client reconnects and re-resolves identity.
-        // This is the inbound-activity check; the load-bearing one is in
-        // `refreshSubscriptions`, which drops an expired socket BEFORE pushing it
-        // the user's live data (a passive subscriber sends no frames — its
-        // keepalive pings auto-respond and never reach here — so inbound checks
-        // alone would never fire for the common case).
-        if (this.isSocketExpired(ws)) {
-            this.dropExpiredSocket(ws);
+        await this.ensureShardInit();
 
-            return;
-        }
-
-        const text = typeof message === "string" ? message : new TextDecoder().decode(message);
-        let envelope: SubscriptionEnvelope;
-
-        try {
-            envelope = JSON.parse(text) as SubscriptionEnvelope;
-        } catch {
-            ws.send(JSON.stringify({ message: "invalid envelope", type: "error" }));
-
-            return;
-        }
-
-        if (envelope.type === "connect") {
-            // One-shot control frame the client sends right after the socket
-            // opens: record its connection `context` on the attachment (so it
-            // survives hibernation and can be replayed at close) and fire the
-            // `onConnect` lifecycle hooks under the socket's verified identity.
-            const attachment = this.readAttachment(ws);
-
-            // Idempotent: a socket announces `connect` exactly once. A re-sent
-            // (or duplicate) frame must not re-fire `onConnect`, or it would
-            // out-number the single `onDisconnect` at close.
-            if (attachment.connected === true) {
-                return;
-            }
-
-            if (envelope.context !== undefined) {
-                attachment.context = envelope.context;
-            }
-
-            attachment.connected = true;
-
-            try {
-                (ws as HibernatableWebSocket).serializeAttachment?.(attachment);
-            } catch {
-                // Over-large context can't be persisted; the hook still runs
-                // with the supplied context this turn, but it won't survive
-                // to disconnect. Never throw out of webSocketMessage.
-            }
-
-            await this.dispatchLifecycle("connect", this.lifecycleInfo(attachment));
-
-            return;
-        }
-
-        if (envelope.type === "subscribe" && envelope.query) {
-            const { functionPath } = envelope.query;
-            const isAdmin = functionPath?.startsWith(ADMIN_FUNCTION_PREFIX) === true;
-
-            // Admin introspection subscriptions read shard internals (raw rows,
-            // metrics, logs), so they are gated by the same `LUNORA_ADMIN_TOKEN`
-            // as the HTTP admin RPCs — recorded on the socket at upgrade. A
-            // socket that only cleared the user-subscription gate must never be
-            // able to read admin data by naming a reserved functionPath.
-            if (isAdmin && this.readAttachment(ws).admin !== true) {
-                ws.send(JSON.stringify({ id: envelope.id, message: "admin subscription requires admin authorization", type: "error" }));
-
-                return;
-            }
-
-            const status = this.subscribe(ws, envelope.id, envelope.query);
-
-            if (status !== "ok") {
-                const code = status === "too_many" ? "TOO_MANY_SUBSCRIPTIONS" : "SUBSCRIPTION_PERSIST_FAILED";
-                const errorMessage =
-                    status === "too_many"
-                        ? `subscription cap of ${String(ShardDO.MAX_SUBSCRIPTIONS_PER_SOCKET)} reached on this socket`
-                        : "failed to persist subscription attachment";
-
-                try {
-                    ws.send(JSON.stringify({ code, error: { code, message: errorMessage }, id: envelope.id, type: "error" }));
-                } catch {
-                    // Socket may already be closed; nothing else we can do —
-                    // never let the webSocketMessage handler throw.
-                }
-
-                return;
-            }
-
-            ws.send(JSON.stringify({ id: envelope.id, type: "ack" }));
-
-            // Seed the subscriber with the query's current result so the first
-            // value arrives over the same channel as later updates. When the
-            // subclass doesn't support re-execution (base default), this is a
-            // no-op and the subscriber relies on its initial HTTP query.
-            if (functionPath) {
-                await this.seedSubscription(ws, envelope.id, envelope.query, functionPath, isAdmin);
-            }
-
-            return;
-        }
-
-        if (envelope.type === "stream" && envelope.query?.functionPath) {
-            // Streams are public-only: there is no admin-streaming surface, so
-            // anything matching the admin prefix is rejected up front rather
-            // than allowed to slip through executeStream().
-            if (envelope.query.functionPath.startsWith(ADMIN_FUNCTION_PREFIX)) {
-                ws.send(JSON.stringify({ id: envelope.id, message: "streams must be public", type: "error" }));
-
-                return;
-            }
-
-            // Fire-and-forget: handleStream owns its own error reporting (it
-            // sends `type:"error"` frames to the socket). The trailing no-op
-            // catch only guards the rare pre-try throw path (e.g. ws.send on a
-            // socket the runtime already tore down) so a dead socket can't
-            // surface as an unhandled rejection.
-            this.handleStream(ws, envelope.id, envelope.query.functionPath, envelope.query.args ?? {}).catch(() => {
-                /* socket already gone; nothing to report */
-            });
-
-            return;
-        }
-
-        if (envelope.type === "whisper_subscribe" || envelope.type === "whisper_unsubscribe") {
-            if (typeof envelope.topic === "string" && envelope.topic.length > 0) {
-                this.setWhisperMembership(ws, envelope.topic, envelope.type === "whisper_subscribe");
-            }
-
-            return;
-        }
-
-        if (envelope.type === "whisper") {
-            if (typeof envelope.topic === "string" && envelope.topic.length > 0) {
-                this.broadcastWhisper(ws, envelope.topic, envelope.data);
-            }
-
-            return;
-        }
-
-        if (envelope.type === "unsubscribe") {
-            // Stream cancel: abort the in-flight iterator (if any) before
-            // touching the subscription registry. unsubscribe() on a non-sub
-            // id is a no-op, so this stays safe even when id namespaces overlap.
-            const cancellers = this.streamCancellers.get(ws);
-            const controller = cancellers?.get(envelope.id);
-
-            if (controller) {
-                controller.abort();
-                cancellers?.delete(envelope.id);
-            }
-
-            this.unsubscribe(ws, envelope.id);
-            ws.send(JSON.stringify({ id: envelope.id, type: "ack" }));
-        }
+        // Map the runtime socket to the handle enumeration also yields, so
+        // per-socket memo state is keyed identically on both paths. Falls back to
+        // the raw socket only when the host cannot map it — in which case
+        // enumeration cannot see it either, so the two stay consistent.
+        return this.handleWebSocketMessage(this.runner.socketFor(ws), message);
     }
 
     /**
@@ -2214,7 +2784,14 @@ abstract class ShardDO {
      * closed the socket by the time we're called — calling `ws.close()`
      * again would throw "WebSocket has been closed" in the Workers runtime.
      */
-    public async webSocketClose(ws: WebSocket, _code: number, _reason: string, _wasClean: boolean): Promise<void> {
+    public async webSocketClose(rawSocket: WebSocket, _code: number, _reason: string, _wasClean: boolean): Promise<void> {
+        await this.ensureShardInit();
+
+        // Same boundary conversion as `webSocketMessage`: per-socket state is keyed
+        // on the handle, so the close path must resolve the same identity or it
+        // would tear down nothing.
+        const ws = this.runner.socketFor(rawSocket);
+
         // Fire `onDisconnect` lifecycle hooks the instant the socket drops —
         // replaying the identity + context recorded at connect — so presence and
         // other cleanup happen immediately, not after a TTL. Only a socket that
@@ -2222,44 +2799,190 @@ abstract class ShardDO {
         // dispatches; the hooks run under the connecting user's identity.
         const attachment = this.readAttachment(ws);
 
-        if (attachment.connectionId !== undefined) {
-            await this.dispatchLifecycle("disconnect", this.lifecycleInfo(attachment));
-        }
+        // The hooks deliberately run before any teardown so they observe
+        // pre-cleanup state; the `finally` guarantees the deterministic
+        // teardown below still runs when the dispatch machinery itself throws
+        // (e.g. a malformed attachment in `lifecycleInfo`). The failure is held
+        // rather than left in flight so a teardown step can't displace it, and
+        // rethrown once cleanup is done.
+        //
+        // The two relay posts below are NOT held that way: they are logged and
+        // swallowed. They are fire-and-forget control frames by contract
+        // (`RelayHub.releaseRelayShapes` / `announceDrain`), so a dropped one
+        // leaves the registration to the coarser detach/full-drain reclamation
+        // — while a throw out of `webSocketClose` is a Durable Object close
+        // handler failing, which the runtime can only answer by breaking the
+        // actor, taking every OTHER live socket on this shard down with it.
+        // Trading a transient cross-DO post failure for that is a bad deal, and
+        // there is nobody to hand the rejection to anyway: the socket is
+        // already gone and nothing retries a close. The `webSocketMessage`
+        // sibling that releases a single shape reasons identically. A lifecycle
+        // hook throwing is a different class — that is the app's own code
+        // failing, and it still propagates.
+        let dispatchError: { error: unknown } | undefined;
 
-        // Abort in-flight stream iterators bound to this socket so user
-        // handlers stop pumping into a closed channel rather than discovering
-        // it on the next yield.
-        const cancellers = this.streamCancellers.get(ws);
+        try {
+            if (attachment.connectionId !== undefined) {
+                await this.dispatchLifecycle("disconnect", this.lifecycleInfo(attachment));
+            }
+        } catch (error) {
+            dispatchError = { error };
+        } finally {
+            // Abort in-flight stream iterators bound to this socket so user
+            // handlers stop pumping into a closed channel rather than discovering
+            // it on the next yield.
+            const cancellers = this.streamCancellers.get(ws);
 
-        if (cancellers) {
-            for (const controller of cancellers.values()) {
-                controller.abort();
+            if (cancellers) {
+                for (const controller of cancellers.values()) {
+                    controller.abort();
+                }
+
+                this.streamCancellers.delete(ws);
             }
 
-            this.streamCancellers.delete(ws);
+            // Drop the per-socket subscription memo too — leaving it would pin
+            // the socket in the WeakMap until GC and (more importantly) keep the
+            // stale memo set around if the same socket id is reused after a
+            // bounce. Cheap to recompute on the next subscribe.
+            this.subMemos.delete(ws);
+            this.shapeMemos.delete(ws);
+            this.globalShapeSnapshots.delete(ws);
+
+            this.purgeDurableSocketBaselines(attachment.connectionId);
+
+            // Release this socket's owner-side relayed-shape registrations
+            // BEFORE the attachment is cleared — the relay reads `connectionId`
+            // off it to address the release. Per-socket, so it covers the far
+            // more common case than the detach below: a relay that keeps other
+            // sockets never detaches, and each of its retired connections would
+            // otherwise leave a permanent row pinning op-log retention.
+            try {
+                await this.relay?.releaseRelayShapes(ws);
+            } catch (error) {
+                // eslint-disable-next-line no-console -- server-side diagnostic for a dropped relay-shape release; a close handler must not reject (see above)
+                console.error("[@lunora/do] relay shape release failed during socket close:", error);
+            }
+
+            // Clear the attachment so a future reconnection starts clean.
+            (ws as HibernatableWebSocket).serializeAttachment?.(undefined);
+
+            // Relay tier collapse (plan 075 Phase 2): a relay that just lost its last
+            // socket detaches from its owner, so the owner stops forwarding to it.
+            // The detach is a network post, so it can reject — logged like the
+            // release above rather than escaping the `finally`, where it would
+            // both break the actor and displace a dispatch failure the caller
+            // still has to see.
+            try {
+                await this.relay?.announceDrain(ws);
+            } catch (error) {
+                // eslint-disable-next-line no-console -- server-side diagnostic for a dropped relay detach; a close handler must not reject (see above)
+                console.error("[@lunora/do] relay drain failed during socket close:", error);
+            }
         }
 
-        // Drop the per-socket subscription memo too — leaving it would pin
-        // the socket in the WeakMap until GC and (more importantly) keep the
-        // stale memo set around if the same socket id is reused after a
-        // bounce. Cheap to recompute on the next subscribe.
-        this.subMemos.delete(ws);
-
-        // Clear the attachment so a future reconnection starts clean.
-        (ws as HibernatableWebSocket).serializeAttachment?.(undefined);
+        // Rethrown outside the `finally` so no teardown step can displace it.
+        if (dispatchError !== undefined) {
+            throw dispatchError.error;
+        }
     }
-
-    /** Hibernation API: invoked on socket error. */
-    // eslint-disable-next-line class-methods-use-this -- Workers hibernation handler: the platform invokes it on the instance; the signature must stay an instance method
-    public webSocketError(_ws: WebSocket, _error: unknown): void {
-        // Subclasses can override with proper logging. Avoid throwing.
-    }
-
-    /** Subclasses implement function dispatch. */
-    public abstract handleRpc(functionPath: string, args: Record<string, unknown>): Promise<unknown>;
 
     /**
-     * The registered function paths to dispatch when a socket connects/disconnects.
+     * Hibernation API: invoked on socket error — and, for an error-terminated
+     * socket, invoked INSTEAD OF {@link ShardDO.webSocketClose}, not before it.
+     *
+     * workerd's hibernation manager dispatches exactly one termination event per
+     * socket (`legacy-hibernation-manager.c++`, `handleSocketTermination`): a
+     * premature `DISCONNECTED` becomes a synthetic 1006 close event, and EVERY
+     * other exception — a protocol error, an event timeout, a `webSocketMessage`
+     * handler that threw — becomes an error event with no close to follow. So
+     * the teardown `webSocketClose` owns (the `onDisconnect` dispatch, the
+     * per-socket memos, and the durable `__shape_poke_cursor` /
+     * `__lunora_global_shape_snapshot` rows keyed by a `connectionId` that can
+     * never reconnect) has to run from here too. One orphaned poke-cursor row
+     * pins `minShapePokeCursor` — a `SELECT MIN(cursor)` over the whole table —
+     * and with it the CDC log's retention floor, permanently.
+     *
+     * Delegating is safe to run twice: `webSocketClose` clears the attachment,
+     * so a second pass finds no `connectionId` and does nothing.
+     *
+     * The error handler must not throw (the runtime is already tearing the
+     * socket down and there is nothing left to retry), so a teardown failure is
+     * logged rather than propagated. Subclasses overriding this for logging must
+     * call `super.webSocketError(...)` or the rows above leak.
+     */
+    public async webSocketError(rawSocket: WebSocket, error: unknown): Promise<void> {
+        try {
+            // 1006 / `wasClean: false` — the same shape workerd synthesizes for
+            // the disconnect half of this branch.
+            await this.webSocketClose(rawSocket, 1006, "websocket error", false);
+        } catch (teardownError) {
+            // eslint-disable-next-line no-console -- server-side diagnostic: the socket is already gone, so there is nothing to propagate a teardown failure to
+            console.error("[@lunora/do] socket error teardown failed:", teardownError, "(original socket error:", error, ")");
+        }
+    }
+
+    /**
+     * Durable Object alarm handler — the heartbeat for `.global()`-table shapes
+     * AND external-source (`.source(...)`) ingest, which share one alarm. The
+     * runtime wakes this when the poll alarm armed by `scheduleGlobalPoll` fires;
+     * it refreshes every subscribed global shape (diff-poke from the global
+     * backend), materializes any due sourced tables, and re-arms at
+     * {@link ShardDO.nextPollAlarmTarget} — the fixed floor while global shapes
+     * are subscribed, or the earliest source next-due time when only ingest
+     * remains (so a 1-hour-`refresh` source sleeps ~1 hour instead of waking
+     * every 2 s). With neither tier pending, the alarm is not re-armed and the DO
+     * goes idle. A base-only / global-free / source-free DO never arms it, so
+     * this stays dormant there.
+     */
+    public async alarm(): Promise<void> {
+        await this.ensureShardInit();
+
+        return this.withTriggerTrace("alarm", async () => this.runner.handleAlarm());
+    }
+
+    /**
+     * Subclasses implement function dispatch.
+     *
+     * `headroom` is an optional BY-VALUE override, mirroring
+     * {@link ShardDO.runShardWrite}'s pattern: the main `/rpc` dispatch
+     * (`handleFetchCloudflare`) captures its freshly-minted tracker in a LOCAL and
+     * passes it here explicitly, so the ctx this dispatch builds is metered
+     * against ITS OWN tracker however the (possibly `await`-interleaved) handler
+     * interleaves with a concurrent one. Callers that dispatch
+     * through here without minting their own tracker (`dispatchLifecycle`,
+     * `handleRunAs`) omit it and the codegen subclass falls back to
+     * `this.transactionHeadroom()`, which mints a FRESH per-ctx budget — never
+     * the in-flight dispatch's.
+     *
+     * `scope` is the same shape of BY-VALUE thread for the reactive cache: the
+     * `/rpc` query path routes through {@link ShardDO.runCachedQuery}, which
+     * mints a {@link QueryReadScope} per dispatch and passes it here so the ctx
+     * this dispatch builds stamps reads into ITS OWN tracker and footprint.
+     * Implementations must hand it to `getCtxDbReadHook(scope)` /
+     * `getCtxDbReadRangeHook(scope)` on the `createShardCtxDb(...)` call that
+     * builds the ctx; both factories return unbound (tracker-less) hooks when it
+     * is omitted, which is what every non-cached dispatch passes.
+     *
+     * `bookmarks` is the third such thread — see {@link DispatchBookmark}.
+     * Implementations must record the bookmark on it from the global database's
+     * `onBookmark` callback so the bookmark a `.global()` write produced reaches
+     * THIS dispatch's response rather than a shared field a concurrent action can
+     * clear.
+     */
+    public abstract handleRpc(
+        functionPath: string,
+        args: Record<string, unknown>,
+        headroom?: TransactionHeadroomTracker,
+        scope?: QueryReadScope,
+        bookmarks?: DispatchBookmark,
+    ): Promise<unknown>;
+
+    /**
+     * The registered function paths to dispatch on a lifecycle moment —
+     * `connect`/`disconnect` per socket, `init` once per Durable Object instance,
+     * `reactor` after each write flush, `whisper` before a topic join or
+     * broadcast.
      * Base default is empty; the codegen subclass overrides it to return the
      * generated lifecycle manifest keyed by `event`. Kept as a data hook (like
      * `tableRefs`/`rlsMetadata`) so the security-load-bearing dispatch — running
@@ -2267,7 +2990,7 @@ abstract class ShardDO {
      * base and can't be mis-wired by generated code.
      */
     // eslint-disable-next-line class-methods-use-this -- base-class override hook: the codegen subclass returns the generated lifecycle manifest
-    protected lifecycleHookPaths(_event: "connect" | "disconnect"): ReadonlyArray<string> {
+    protected lifecycleHookPaths(_event: "connect" | "disconnect" | "init" | "reactor" | "whisper"): ReadonlyArray<string> {
         return [];
     }
 
@@ -2287,7 +3010,7 @@ abstract class ShardDO {
                 // enforces the internal-visibility gate, which the system flag
                 // satisfies.
                 // eslint-disable-next-line no-await-in-loop -- sequential by design: hooks share the DO's single-threaded write snapshot deterministically, and a throwing hook must not skip the rest
-                await this.withRequestIdentity(info.userId, info.identity, () =>
+                await this.withRequestIdentity(info.userId, info.identity, info.ip, () =>
                     this.withSystemDispatch(() => this.handleRpc(functionPath, info.event as unknown as Record<string, unknown>)),
                 );
             } catch (error: unknown) {
@@ -2297,6 +3020,131 @@ abstract class ShardDO {
                     message: error instanceof Error ? error.message : String(error),
                     timestamp: Date.now(),
                 });
+            }
+        }
+    }
+
+    /**
+     * Re-evaluate every registered `onQueryChange` reactor after a write flush,
+     * and run the ones whose watched read actually changed.
+     *
+     * The cheap gate first: a reactor whose stored footprint is disjoint from
+     * `changed` cannot have had its result altered by this flush, so its `select`
+     * is not even re-run. An unknown footprint (never run, or an unparseable row)
+     * counts as "touches everything" — the same degradation direction the rest of
+     * the reactive layer takes, where a redundant run is acceptable and a missed
+     * one is not.
+     *
+     * Then the real test, which is what separates a reactor from a trigger: the
+     * dispatch re-runs `select`, digests the result, and invokes the app's handler
+     * ONLY when that digest differs from the stored baseline. A write that touched
+     * a watched table but did not change what the read returns costs one query and
+     * stops there.
+     *
+     * `runs` is the drain-scoped convergence bound. A reactor's handler writes;
+     * those writes flush; that flush re-enters this method. That cascade is the
+     * feature — it is how an actor advances a state machine a step at a time — and
+     * a reactor whose handler always changes its own read never settles. Rather
+     * than trust every app to converge, a reactor that exceeds
+     * {@link ShardDO.MAX_REACTOR_RUNS_PER_DRAIN} within one drain is dropped for
+     * the rest of that drain and the failure is logged. The shard stays
+     * responsive and the broken reactor is named.
+     *
+     * A throwing reactor is contained per reactor, like every other background
+     * dispatch here: its baseline is left untouched, so it is retried on the next
+     * flush rather than being silently skipped forever.
+     */
+    protected async dispatchReactors(changed: Set<string>, runs: Map<string, number>): Promise<void> {
+        const paths = this.lifecycleHookPaths("reactor");
+
+        if (paths.length === 0) {
+            return;
+        }
+
+        const sqlHandle = this.sql as SqlExec;
+
+        for (const path of paths) {
+            // Reading the baseline is itself a SQL call, and the storage failure
+            // that breaks a reactor breaks this too. Unguarded it would abort the
+            // whole drain — stranding every table merged into the pending set and
+            // every live subscriber waiting on it — for one reactor's bad read.
+            // An unreadable baseline degrades to `undefined`, which
+            // `reactorNeedsRun` treats as "must run": the same direction every
+            // other unknown in this feature takes.
+            let state: ReactorState | undefined;
+
+            try {
+                state = readReactorState(sqlHandle, path);
+            } catch (error: unknown) {
+                this.recordReactorError(path, error);
+            }
+
+            if (!reactorNeedsRun(state, changed)) {
+                continue;
+            }
+
+            if (!this.claimReactorBudget(path, runs)) {
+                continue;
+            }
+
+            // eslint-disable-next-line no-await-in-loop -- reactors run sequentially by design: each observes the writes the previous one committed, and one throwing reactor must not skip the rest
+            await this.dispatchOneReactor(sqlHandle, path, state?.digest);
+        }
+    }
+
+    /**
+     * Run one reactor dispatch and report what it saw.
+     *
+     * A no-op seam here; the generated subclass overrides it, because running a
+     * reactor needs two things the base cannot build — a ctx (for `select` and the
+     * handler) and a read footprint around it. Mirrors `executeSubscription`, which
+     * has the identical shape for the socket-terminated side of reactivity.
+     * @returns the run's digest and read footprint, or `undefined` when the path
+     * resolves to nothing (a manifest naming a function this build does not have).
+     */
+    // eslint-disable-next-line class-methods-use-this -- a seam: the base cannot build a ctx, the generated subclass overrides
+    protected async runReactor(_path: string, _previousDigest?: string): Promise<ReactorRunOutcome | undefined> {
+        await Promise.resolve();
+
+        return undefined;
+    }
+
+    /**
+     * Record a contained reactor failure into the log ring. Mirrors
+     * {@link ShardDO.recordExternalSourceError}: the dispatch loop needs to write
+     * this line and the log ring is private.
+     */
+    protected recordReactorError(path: string, error: unknown, trace?: TraceRefLike): void {
+        this.recordShapeError(`reactor:${path}`, error, trace);
+    }
+
+    /**
+     * Run every registered `onShardInit` hook, once, on a freshly-constructed
+     * instance. Called by the generated {@link ShardDO.runShardInit} override
+     * AFTER it has cleared the schema's `.memory()` tables — that order is the
+     * contract: a hook exists to refill what the clear emptied.
+     *
+     * Dispatched with NO request identity, under the system flag (which satisfies
+     * the internal-visibility gate). There is genuinely no caller here — the
+     * instance was constructed because the runtime needed it, not because a user
+     * asked — so `ctx.auth` is anonymous and RLS does not apply, exactly as for a
+     * cron tick. `withRequestIdentity` is deliberately NOT used: inheriting
+     * whatever identity happens to be on the instance would run a rebuild as an
+     * arbitrary user.
+     *
+     * Sequential, and a throw is contained per hook: one hook that cannot rebuild
+     * its slice must not skip the others, and none of them may fail the dispatch
+     * that woke the shard (see {@link ShardDO.ensureShardInit}).
+     */
+    protected async dispatchShardInit(): Promise<void> {
+        const event = { shardKey: this.currentShardKey() };
+
+        for (const functionPath of this.lifecycleHookPaths("init")) {
+            try {
+                // eslint-disable-next-line no-await-in-loop -- sequential by design: a later hook may depend on state an earlier one rebuilt, and a throwing hook must not skip the rest
+                await this.withSystemDispatch(() => this.handleRpc(functionPath, event));
+            } catch (error: unknown) {
+                this.recordShardInitError(functionPath, error);
             }
         }
     }
@@ -2318,16 +3166,14 @@ abstract class ShardDO {
      */
     // eslint-disable-next-line class-methods-use-this -- base-class override hook: the codegen subclass overrides this with a schema-aware reader that uses `this`
     protected runRelationFanoutRead(_functionPath: string, _args: Record<string, unknown>): Promise<unknown> {
-        throw Object.assign(new Error("__lunora_relation__: no schema bound — the base ShardDO cannot serve cross-shard relation reads"), {
-            code: "NOT_IMPLEMENTED",
-            name: "LunoraError",
+        throw new LunoraError("NOT_IMPLEMENTED", "__lunora_relation__: no schema bound — the base ShardDO cannot serve cross-shard relation reads", {
             status: 500,
         });
     }
 
     /**
      * Instrumented SQL handle. Wraps `state.storage.sql` so that every `exec`
-     * call during a user RPC dispatch is timed and its result size captured into
+     * call during a user RPC dispatch is timed and its result size folded into
      * `currentStmtSamples`. The samples are flushed to the durable
      * `__lunora_metrics_queries` table after the handler returns (same lifecycle
      * as `currentScannedTables`/`currentIndexHits`).
@@ -2344,12 +3190,16 @@ abstract class ShardDO {
      * after the handler fully resolves.
      */
     protected get sql(): unknown {
-        const rawSql = this.state.storage.sql;
+        const rawSql = this.shardHost.sql;
         const samples = this.currentStmtSamples;
 
         // Only instrument during a live user dispatch.
         if (samples === undefined) {
             return rawSql;
+        }
+
+        if (this.instrumentedSql?.samples === samples) {
+            return this.instrumentedSql.proxy;
         }
 
         const rawExec = (rawSql as { exec?: unknown }).exec;
@@ -2358,69 +3208,111 @@ abstract class ShardDO {
             return rawSql;
         }
 
+        // Fold one execution's timing/result-size into its statement's running
+        // entry (keyed by the raw query text — see `currentStmtSamples`), rather
+        // than appending a new array entry per execution. A handler that queries
+        // in a loop reuses the same prepared-statement text every iteration, so
+        // this collapses the loop to one entry that `flushStmtSamples` drains
+        // with a single upsert. Bounded at `MAX_STMT_SAMPLES_PER_DISPATCH`
+        // DISTINCT entries; a brand-new statement shape past that cap is
+        // dropped and `currentStmtSamplesTruncated` is set — already-tracked
+        // statements keep folding regardless of the cap.
+        const foldSample = (query: string, durationMs: number, rowsRead: number, rowsWritten: number): void => {
+            const existing = samples.get(query);
+
+            if (existing !== undefined) {
+                existing.count += 1;
+                existing.totalDurationMs += durationMs;
+                existing.rowsRead += rowsRead;
+                existing.rowsWritten += rowsWritten;
+
+                return;
+            }
+
+            if (samples.size >= MAX_STMT_SAMPLES_PER_DISPATCH) {
+                this.currentStmtSamplesTruncated = true;
+
+                return;
+            }
+
+            samples.set(query, { count: 1, rowsRead, rowsWritten, totalDurationMs: durationMs });
+        };
+
         const instrumentedExec = (query: string, ...params: unknown[]): unknown => {
             const start = Date.now();
             const cursor = (rawExec as (...args: unknown[]) => unknown).call(rawSql, query, ...params);
             // We wrap `.toArray()` and `.one()` on the cursor to capture result
             // sizes synchronously without buffering the rows ourselves.
+            let wrapped = false;
 
             if (cursor !== null && typeof cursor === "object") {
                 const c = cursor as Record<string, unknown>;
 
-                if (typeof c["toArray"] === "function") {
-                    // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment -- intentional: binding a dynamic method from a cast cursor object
-                    const originalToArray = c["toArray"].bind(c);
+                /**
+                 * Rows the statement SCANNED and WROTE, read off the cursor
+                 * after iteration. This is the number SQLite actually did work
+                 * for and the one storage bills — a query filtering on an
+                 * unindexed column scans the whole table to return three rows,
+                 * so the result-set size reports 3 while the real cost grows
+                 * with the table. Reading the result array instead would make
+                 * the leaderboard understate exactly the queries it exists to
+                 * surface.
+                 *
+                 * Falls back to the result-set size when the host doesn't
+                 * expose the counters (test doubles, non-workerd hosts), which
+                 * is the previous behaviour and still orders a leaderboard
+                 * sensibly — just without the scan/return distinction.
+                 */
+                const counterOf = (key: "rowsRead" | "rowsWritten"): number | undefined => {
+                    const value = c[key];
 
-                    c["toArray"] = () => {
-                        const rows = (originalToArray as () => unknown[])();
-                        const durationMs = Date.now() - start;
+                    return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+                };
 
-                        samples.push([query, durationMs, rows.length, 0]);
+                const wrap = (name: "one" | "toArray", rowsOf: (value: unknown) => number): boolean => {
+                    const method = c[name];
 
-                        return rows;
+                    if (typeof method !== "function") {
+                        return false;
+                    }
+
+                    const original = method.bind(c) as () => unknown;
+
+                    c[name] = () => {
+                        const value = original();
+
+                        foldSample(query, Date.now() - start, counterOf("rowsRead") ?? rowsOf(value), counterOf("rowsWritten") ?? 0);
+
+                        return value;
                     };
-                }
 
-                if (typeof c["one"] === "function") {
-                    // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment -- intentional: binding a dynamic method from a cast cursor object
-                    const originalOne = c["one"].bind(c);
+                    return true;
+                };
 
-                    c["one"] = () => {
-                        const row = (originalOne as () => unknown)();
-                        const durationMs = Date.now() - start;
+                const wrappedToArray = wrap("toArray", (rows) => (rows as unknown[]).length);
+                const wrappedOne = wrap("one", () => 1);
 
-                        samples.push([query, durationMs, 1, 0]);
+                wrapped = wrappedToArray || wrappedOne;
+            }
 
-                        return row;
-                    };
-                }
-
-                // When neither `.toArray()` nor `.one()` will be called (e.g.
-                // DDL / DML that the caller discards without iterating), record
-                // a zero-rows sample immediately so the statement still appears
-                // in the leaderboard. The `toArray`/`one` overrides above take
-                // priority when they are used — they push their own samples and
-                // the caller never reaches a point where this fallback fires
-                // again for the same execution.
-                if (typeof c["toArray"] !== "function" && typeof c["one"] !== "function") {
-                    const durationMs = Date.now() - start;
-
-                    samples.push([query, durationMs, 0, 0]);
-                }
-            } else {
-                // Non-object return (shouldn't happen with workerd's SqlStorage
-                // but guard defensively).
-                const durationMs = Date.now() - start;
-
-                samples.push([query, durationMs, 0, 0]);
+            // When neither `.toArray()` nor `.one()` will fold a sample — DDL /
+            // DML the caller discards without iterating, or a defensive guard
+            // against a non-object return — record a zero-rows sample immediately
+            // so the statement still appears in the leaderboard. The wrapped
+            // methods take priority when they are used: they fold their own
+            // samples and this fallback never fires for the same execution.
+            if (!wrapped) {
+                foldSample(query, Date.now() - start, 0, 0);
             }
 
             return cursor;
         };
 
-        // Return a structural proxy that looks like the real sql handle to the
-        // callers that cast it to `SqlExec`, with our instrumented `exec`.
-        return new Proxy(rawSql, {
+        // A structural proxy that looks like the real sql handle to the callers
+        // that cast it to `SqlExec`, with our instrumented `exec`. Cached against
+        // the samples map it folds into, so it is one object for the whole
+        // dispatch and identity-keyed memos downstream keep working.
+        const proxy = new Proxy(rawSql, {
             get(target, prop) {
                 if (prop === "exec") {
                     return instrumentedExec;
@@ -2430,6 +3322,10 @@ abstract class ShardDO {
                 return Reflect.get(target, prop, target);
             },
         });
+
+        this.instrumentedSql = { proxy, samples };
+
+        return proxy;
     }
 
     /**
@@ -2462,103 +3358,231 @@ abstract class ShardDO {
      * loudly rather than silently flattening them.
      *
      * Drizzle queries issued via `db` inside the handler participate
-     * in this transaction implicitly — drizzle and the BEGIN/COMMIT below
-     * both write through the same `state.storage.sql` handle, so the tx
-     * boundary is shared. Do **not** call `this.db.transaction(...)` from
-     * inside a handler; that would attempt a nested SQLite transaction.
+     * in this transaction implicitly — drizzle writes through the same
+     * `state.storage.sql` handle the transaction below is opened on, and that
+     * transaction is connection-scoped, so the boundary is shared without any
+     * handle being threaded through. Do **not** call `this.db.transaction(...)`
+     * from inside a handler; that would attempt a nested SQLite transaction.
      *
-     * Why raw BEGIN/COMMIT/ROLLBACK strings instead of `this.db.transaction(handler)`?
-     * Two reasons, both verified against drizzle-orm 0.45.2's
-     * `durable-sqlite/session.js`:
+     * Why `state.storage.transaction(closure)` and not raw BEGIN/COMMIT SQL, and
+     * not `this.db.transaction(handler)` either:
      *
-     * 1. The DO driver does NOT issue BEGIN/COMMIT/ROLLBACK SQL — it
-     * delegates to `state.storage.transactionSync(callback)`, the
-     * DO platform's native transaction primitive. Swapping in
-     * `db.transaction()` would silently change the wire-level
-     * contract observed by tests and any tooling that intercepts
-     * `storage.sql`.
+     * 1. workerd FORBIDS raw `BEGIN`/`COMMIT`/`SAVEPOINT` inside a Durable Object
+     * — it answers "please use the state.storage.transaction() … APIs
+     * instead", so issuing them fails every transactional mutation. (An
+     * earlier revision of this method did use raw SQL; do not go back.)
      *
-     * 2. `transactionSync` invokes the callback synchronously and does
-     * not await its return value. Drizzle's `transaction()` matches
-     * that — it passes the tx handle through and then returns.
-     * Handing it an async handler would let the transaction commit
-     * before the handler resolves, breaking the `() => Promise&lt;T> | T`
-     * contract.
+     * 2. `transactionSync` is synchronous: it invokes the callback and does not
+     * await its return value, so an async handler would let the transaction
+     * commit before the handler resolves. Drizzle's `db.transaction()` has the
+     * same shape and the same problem.
      *
-     * The raw-SQL approach below is async-safe and gives the
-     * connection-scoped semantics SQLite-in-DO is designed for.
+     * The async `state.storage.transaction(closure)` is the platform primitive
+     * that fits: atomic, rolled back automatically when the closure throws, and
+     * isolated from concurrent dispatch.
      */
+
+    /**
+     * Is an atomic write boundary open on this instance right now?
+     *
+     * Exposed for the generated `ctx.db`, whose `_commitSeq` allocation is only
+     * allowed to reuse one sequence across writes that commit together. A
+     * mutation dispatch runs inside {@link ShardDO.runInTransaction}; an action
+     * deliberately does not (its external I/O cannot be rolled back), so its
+     * writes commit independently and each needs its own sequence.
+     *
+     * A live predicate rather than a flag threaded at ctx-construction time: the
+     * boundary opens AFTER `buildCtx` has already run, and a flag would have to be
+     * passed correctly at every one of the many `buildCtx` call sites — a
+     * requirement that fails silently when missed.
+     * @returns `true` while a storage transaction is open.
+     */
+    protected isInTransaction(): boolean {
+        return this.transactionDepth > 0;
+    }
+
+    /**
+     * Let `work` outlive this dispatch where the host supports it.
+     *
+     * The generated dispatches use this to flush `ctx.storage`'s deferred object
+     * deletes once their writes have committed — cleanup that is already durable
+     * on the row side and so must not hold up the response.
+     *
+     * Falls back to awaiting inline when the host has no `waitUntil`, so the work
+     * still happens — dropping it there would make a leaked object look like
+     * passing behaviour. On such a host the caller DOES wait for the work.
+     * @param work already-started work; a rejection is the caller's to contain
+     */
+    protected async deferPastResponse(work: Promise<unknown>): Promise<void> {
+        if (this.runner.background(work)) {
+            return;
+        }
+
+        await work;
+    }
+
+    /**
+     * Run `work` once the open transaction has COMMITTED — or right now when
+     * none is open.
+     *
+     * For the side effects a transaction cannot roll back: the write-through
+     * vector sync (`ctx.db`'s `onWrite`) upserts into Vectorize, which lives
+     * outside this shard's SQLite. Run inline, such a side effect survives a
+     * rollback that takes its row away, leaving a vector that points at a
+     * document which does not exist — and a search surfaces it. The mirror image
+     * is worse on the delete path: the vector is gone and the row is back.
+     *
+     * Queued work that never commits is DROPPED, which is the point. The trade
+     * is the opposite failure: work queued for a commit that did happen can
+     * still fail on its own (Vectorize unreachable), and then the row exists
+     * with no vector. See `flushAfterCommit` for why that is reported rather
+     * than thrown.
+     *
+     * Ordering: queued work runs in the order it was queued, and one
+     * transaction's queue drains entirely before the next transaction's — see
+     * the hook chain in {@link ShardDO.runInTransaction}. Two writes to the same
+     * row therefore reach the external index in commit order.
+     *
+     * With no transaction open — an action's `ctx.db` write, already committed —
+     * the work joins that same chain as its own link and this waits for it, so
+     * the caller still sees the work done (and its error) before it returns, as
+     * when it ran inline. Running it loose instead let it land before a hook, or
+     * a vector backfill page, that the chain was still holding, and that older
+     * work then overwrote it. The cost is the chain's: the action now also waits
+     * for work committed before it, bounded like a mutation by
+     * {@link AFTER_COMMIT_WAIT_MS} — past that it returns without waiting, the
+     * work stays linked, and a later failure is logged rather than thrown.
+     *
+     * Code already RUNNING on the chain must not write through a hook-carrying
+     * `ctx.db` outside a transaction: its work would queue behind itself, and the
+     * bounded wait turns that into a stall rather than a deadlock.
+     * @param work the side effect to hold until the commit lands
+     */
+    protected async deferAfterCommit(work: () => Promise<void> | void): Promise<void> {
+        if (this.afterCommitQueue) {
+            this.afterCommitQueue.push(work);
+
+            return;
+        }
+
+        let waiting = true;
+        let failure: { error: unknown } | undefined;
+        const link = this.linkAfterCommit(async () => {
+            try {
+                await work();
+            } catch (error) {
+                if (waiting) {
+                    failure = { error };
+                } else {
+                    // eslint-disable-next-line no-console -- server-side diagnostic for a committed write whose external projection diverged
+                    console.error("[@lunora/do] after-commit write hook failed; the write committed and its external projection did not:", error);
+                }
+            }
+        });
+
+        if (this.afterCommitStalled || !(await waitForAfterCommit(link))) {
+            waiting = false;
+            this.afterCommitStalled = true;
+
+            return;
+        }
+
+        if (failure) {
+            throw failure.error;
+        }
+    }
+
     protected async runInTransaction<T>(handler: () => Promise<T> | T): Promise<T> {
         if (this.transactionDepth > 0) {
-            throw Object.assign(new Error("nested transactions are not supported in SQLite-in-DO"), {
-                code: "NESTED_TRANSACTION",
-                name: "LunoraError",
-                status: 500,
-            });
+            throw new LunoraError("NESTED_TRANSACTION", "nested transactions are not supported in SQLite-in-DO", { status: 500 });
         }
 
-        const sqlHandle = this.state.storage.sql as TransactionSqlLike | undefined;
+        const sqlHandle = this.shardHost.sql as TransactionSqlLike | undefined;
 
         if (!sqlHandle || typeof sqlHandle.exec !== "function") {
-            throw Object.assign(new Error("storage.sql is not available on this ShardDO state"), {
-                code: "SQL_UNAVAILABLE",
-                name: "LunoraError",
-                status: 500,
-            });
+            throw new LunoraError("SQL_UNAVAILABLE", "storage.sql is not available on this ShardDO state", { status: 500 });
         }
 
-        // Capture `exec` into a const so the nested closure below doesn't
-        // re-widen `sqlHandle.exec` to a possibly-undefined function via
-        // the narrowing-loss control flow has after the guard.
-        const sqlExec = sqlHandle.exec.bind(sqlHandle);
+        // workerd FORBIDS raw `BEGIN`/`COMMIT`/`SAVEPOINT` SQL inside a Durable
+        // Object ("please use the state.storage.transaction() ... APIs instead")
+        // — issuing them throws and fails every transactional mutation. Both
+        // guarantees the handler needs are contract primitives:
+        // `ShardHost.runSerialized` is the single-writer gate and
+        // `ShardHost.transaction` the atomic, auto-rolling-back boundary, and
+        // `ShardRunner.runInTransaction` composes them in that order. The
+        // `storage.sql` guard above still ensures the handler's SQL has a
+        // connection.
+        //
+        // Only the depth bookkeeping stays here: it is `ShardDO` state, and the
+        // nested-transaction error above reads it.
+        // Opened INSIDE the gate, next to `transactionDepth`, so a dispatch still
+        // waiting on `runSerialized` cannot install its queue over the one the
+        // running transaction is filling. `queued` escapes to the flush below;
+        // when the transaction throws we never reach it and the work is dropped.
+        let queued: (() => Promise<void> | void)[] = [];
+        // This transaction's link in the shard-wide hook chain. Assigned by
+        // `onCommitted` below, which the runner calls before it releases the gate.
+        let flushed: Promise<void> = Promise.resolve();
 
-        // Raw `BEGIN`/`COMMIT` via `sqlHandle.exec` is not isolated from
-        // concurrent fetch dispatch — a sibling RPC running between the
-        // two would observe (or worse, write through) the open
-        // transaction. `blockConcurrencyWhile` serializes ALL requests to
-        // this DO for the duration of the callback, which is what we need
-        // here. The cost is real: every concurrent reader stalls for the
-        // length of the transaction, not just writers. This is fine for
-        // the workloads SQLite-in-DO is built for (one DO per shard;
-        // bounded concurrency by design), but if a future workload is
-        // contention-sensitive we should migrate to `storage.transactionSync`
-        // (the platform's native, properly-scoped transaction primitive)
-        // and drop this gate.
-        // TODO(perf): switch to `state.storage.transactionSync(...)` once
-        // the workers-types definitions and our async-handler contract are
-        // both compatible — that primitive is sync-only today.
-        const run = async (): Promise<T> => {
-            this.transactionDepth = 1;
-            sqlExec("BEGIN");
+        const result = await this.runner.runInTransaction(
+            async () => {
+                this.transactionDepth = 1;
+                queued = [];
+                this.afterCommitQueue = queued;
 
-            try {
-                const value = await handler();
-
-                sqlExec("COMMIT");
-
-                return value;
-            } catch (error) {
                 try {
-                    sqlExec("ROLLBACK");
-                } catch {
-                    // The rollback itself may fail if the connection is in a
-                    // bad state — swallow it so the original error propagates.
+                    return await handler();
+                } finally {
+                    this.transactionDepth = 0;
+                    this.afterCommitQueue = undefined;
+                }
+            },
+            () => {
+                // The hooks themselves must NOT run under the gate — one is a
+                // remote embed plus a Vectorize upsert, and holding the gate for
+                // that stalls every dispatch on the shard. But run loose, two of
+                // them race: the gate admits the next mutation the moment this
+                // one commits, so a slow hook for `body: "v1"` can land AFTER the
+                // fast hook for the `"v2"` that overwrote it — and the row then
+                // says "v2" while its vector says "v1", permanently, until the
+                // next write to that row. Insert-then-delete is the worse shape:
+                // the delete's hook lands first, the insert's upsert after it,
+                // and the vector outlives the row it points at.
+                //
+                // So only the LINKING happens here, inside the gate, where commit
+                // order is the one thing that is knowable; the work itself runs
+                // on the chain, outside it. Ordered, not serialized: the next
+                // transaction still commits while this hook is in flight.
+                // A transaction that queued nothing has no hooks to order, so it
+                // takes no link: an empty one would grow the chain on every
+                // mutation of a shard that has no hooks at all, and — the reason
+                // it matters here — would make such a mutation inherit the wait
+                // of a stalled hook it has nothing to do with.
+                if (queued.length === 0) {
+                    return;
                 }
 
-                throw error;
-            } finally {
-                this.transactionDepth = 0;
-            }
-        };
+                // Stall recovery rides on the link itself — see `linkAfterCommit`.
+                flushed = this.linkAfterCommit(async () => flushAfterCommit(queued));
+            },
+        );
 
-        if (typeof this.state.blockConcurrencyWhile === "function") {
-            return this.state.blockConcurrencyWhile(run);
+        // Wait for THIS transaction's link (and, transitively, every earlier one)
+        // rather than for `afterCommitTail`, which a later transaction may have
+        // already extended. The dispatch's response still implies its own hooks
+        // were attempted, as it did before the chain.
+        //
+        // Bounded, and bounded on the WAIT rather than on the chain — see
+        // {@link waitForAfterCommit} for why the distinction is the whole fix.
+        // A transaction that queued no hooks has no link and skips this outright;
+        // one arriving at an already-stalled chain links and skips it too.
+        if (queued.length === 0 || this.afterCommitStalled) {
+            return result;
         }
 
-        // Test doubles may not supply `blockConcurrencyWhile`; fall through to
-        // the bare path so existing unit tests keep working. Production state
-        // always carries the gate.
-        return run();
+        this.afterCommitStalled = !(await waitForAfterCommit(flushed));
+
+        return result;
     }
 
     /**
@@ -2572,16 +3596,6 @@ abstract class ShardDO {
     }
 
     /**
-     * Record the post-write D1 bookmark that should be echoed back to the
-     * client on the outbound `x-d1-bookmark` header. Safe to call multiple
-     * times — the last value wins; only the most recent write's bookmark
-     * is meaningful for downstream read pinning.
-     */
-    protected setOutboundBookmark(bookmark: string | undefined): void {
-        this.currentResponseBookmark = bookmark;
-    }
-
-    /**
      * The userId forwarded by the runtime's `resolveIdentity` hook for the
      * current request, or `undefined` when the request is anonymous. Use
      * this to populate `ctx.auth.userId` inside `buildCtx`.
@@ -2592,11 +3606,109 @@ abstract class ShardDO {
 
     /**
      * The caller's IP for the current request (Cloudflare's `CF-Connecting-IP`,
-     * forwarded server-side), or `undefined` when unknown. Use this to populate
-     * `ctx.ip` inside `buildCtx`.
+     * forwarded server-side by the runtime, and only while running on Cloudflare
+     * — off the edge that header is client-written, so the runtime forwards
+     * nothing), or `undefined` when nothing trustworthy says. Use this to populate
+     * `ctx.ip` inside `buildCtx` on the SYNCHRONOUS `/rpc` dispatch path only.
+     *
+     * A deferred caller must NOT read it: subscription seeds and refreshes,
+     * stream pulls and shape reads all run outside the dispatch that owns this
+     * field — a refresh in particular runs inside the writing dispatch's own
+     * `flushChangedTables`, before its `endDispatch`, so it would read the
+     * MUTATING caller's IP and hand it to every subscriber. Those paths take the
+     * socket's own IP by value instead, via {@link SubscriptionIdentity.ip}.
+     *
+     * Under `.reactiveCache(true)` the memo is keyed by the caller's address as
+     * well as by identity, but only for function paths a dispatch has been seen
+     * reading `ctx.ip` through. That observation is the generated `buildCtx`'s
+     * `ip` GETTER calling {@link QueryReadScope.markIpRead} — so a subclass that
+     * surfaces this value to handlers by some other route, bypassing that
+     * getter, gets no mark and no address in the key, and two anonymous callers
+     * would share one entry again.
      */
     protected getCurrentIp(): string | undefined {
         return this.currentRequestIp;
+    }
+
+    /**
+     * The origin the current request reached the worker on, or `undefined` when
+     * none was forwarded (an alarm, a subscription re-run, a server-side
+     * `createShardClient` call). Like {@link ShardDO.getCurrentIp} it is
+     * per-dispatch state, so only the synchronous `/rpc` path may read it.
+     */
+    protected getCurrentOrigin(): string | undefined {
+        return this.currentRequestOrigin;
+    }
+
+    /**
+     * The caller's CDC baseline for this dispatch, handed to `ctx.db` so
+     * `.dropStalePatches()` tables can judge a patch against the row as the caller
+     * last saw it. `undefined` when the client sent none.
+     */
+    protected getCurrentBaselineSeq(): number | undefined {
+        return this.currentRequestBaselineSeq;
+    }
+
+    /**
+     * Record a patch `.dropStalePatches()` discarded.
+     *
+     * The drop is invisible everywhere else by design — no row change, no CDC
+     * entry, no broadcast — and a silent data loss with no trace is the worst of
+     * both worlds. This is the trace: table, row and the fields the caller tried
+     * to write, on the request log the studio and `ctx.log` readers already show.
+     */
+    protected recordStalePatchDropped(event: { fields: string[]; id: string; table: string }): void {
+        this.logs.push({
+            level: "warn",
+            message: `dropStalePatches: discarded a stale patch on "${event.table}" row ${event.id} (fields: ${event.fields.join(", ")}) — those fields changed after the caller's baseline`,
+            timestamp: Date.now(),
+        });
+    }
+
+    /**
+     * W3C `traceparent` for outbound container fetches: the inbound RPC's
+     * (forwarded by the runtime) or, when the dispatch carried none, this
+     * dispatch's own minted anchor under its root span. `buildCtx` passes it to
+     * `createContainerContext` so the container's spans join the shard's trace
+     * rather than each starting a disconnected one. `undefined` only outside a
+     * dispatch.
+     *
+     * Both fields are re-pinned with the rest of the request scope, so a
+     * gate-queued mutation forwards its own trace. Known limit: an RPC dispatch
+     * that begins while an ALARM is in flight still overwrites
+     * `currentRequestTrace`, so a ctx the alarm builds after that point
+     * forwards the RPC's trace (and vice versa) — the same trade
+     * `withTriggerTrace` documents for inner spans. Fixing it means passing the
+     * dispatch's anchor into `buildCtx` by value.
+     */
+    protected getCurrentTraceparent(): string | undefined {
+        const trace = this.currentRequestTrace;
+
+        return this.currentRequestTraceparent ?? (trace === undefined ? undefined : buildTraceparent(trace.traceId, trace.rootSpanId));
+    }
+
+    /**
+     * The tail-bias toggle the runtime propagated for this dispatch
+     * (`x-lunora-sample-errors`), or `undefined` when none was sent.
+     *
+     * `buildCtx` hands it to `createContainerContext` alongside the
+     * `traceparent`, so a container decides what to export from the verdict this
+     * dispatch settled rather than from its own environment. `undefined` leaves
+     * the container on its own configuration, which is right for the callers
+     * that propagate nothing: an alarm, a subscription re-run, a non-Lunora
+     * caller.
+     */
+    protected getCurrentSampleErrors(): boolean | undefined {
+        return this.currentRequestSampleErrors;
+    }
+
+    /**
+     * The in-flight dispatch's trace ids, for the generated `buildCtx` to hand to
+     * {@link makeTracer}. `undefined` outside a dispatch (an alarm, a lifecycle
+     * hook), where the tracer mints its own anchor.
+     */
+    protected getCurrentTrace(): TraceAnchor | undefined {
+        return this.currentRequestTrace;
     }
 
     /**
@@ -2607,6 +3719,15 @@ abstract class ShardDO {
      */
     protected getCurrentIdentity(): Record<string, unknown> | undefined {
         return this.currentRequestIdentity;
+    }
+
+    /**
+     * The replay key the caller sent (`x-lunora-mutation-id`) for this dispatch, or
+     * `undefined`. `ctx.newId()` derives its ids from it, so only the top-level
+     * dispatch may read it: a nested call shares the request and must not.
+     */
+    protected getCurrentMutationId(): string | undefined {
+        return this.currentRequestMutationId;
     }
 
     /**
@@ -2628,9 +3749,108 @@ abstract class ShardDO {
      */
     // eslint-disable-next-line class-methods-use-this -- base-class override hook: the codegen subclass overrides this and uses `this` to reach the generated migration registry
     protected runShardDataMigration(args: RunShardMigrationArgs): Promise<MigrationRunResult> {
+        return Promise.reject(new LunoraError("MIGRATION_NOT_FOUND", `data migration "${args.id}" is not registered`, { status: 404 }));
+    }
+
+    /**
+     * Index the rows that predate a `.searchIndex()` into its companion, a
+     * bounded number of pages per call, and report whether anything is left.
+     *
+     * This is the exit from `staged: true`. A staged index is skipped by every
+     * migration pass by design — the option exists for tables too large to walk
+     * during a cold start — so without an explicit run its pre-existing rows are
+     * unsearchable forever. The base class can't reach the project's generated
+     * `schema`, so it reports the op unsupported; the codegen subclass overrides
+     * it to call `backfillSearchIndexes`.
+     */
+    // eslint-disable-next-line class-methods-use-this -- base-class override hook: the codegen subclass overrides this and uses `this` to reach the generated schema
+    protected runShardSearchBackfill(_options: { maxPages?: number }): SearchBackfillProgress {
+        // `NOT_IMPLEMENTED`, not `INTERNAL`: the latter is catalogued `internal`, so
+        // `errorToResponse` would replace this message with "internal error" and the
+        // caller would get a bare 501 with nothing actionable in it.
+        throw new LunoraError("NOT_IMPLEMENTED", "search backfill is unavailable: this shard was built without a generated schema");
+    }
+
+    /**
+     * Embed the rows that predate a vector index — or a change to one — into
+     * Vectorize, `maxPages` pages per call. The write-through sync hook only sees
+     * rows written after the index existed; without this those rows are never
+     * findable. The base class has no schema or vector bindings, so it reports the
+     * op unsupported; the codegen subclass overrides it (only when the schema
+     * declares a vector index and the target has a vector store) to call
+     * the shard engine's vector backfill with the same sync hook `ctx.db` uses.
+     */
+    // eslint-disable-next-line class-methods-use-this -- base-class override hook: the codegen subclass overrides this and uses `this` to reach the generated schema and vector bindings
+    protected runShardVectorBackfill(_options: { maxPages?: number; restart?: boolean }): Promise<VectorBackfillProgress> {
         return Promise.reject(
-            Object.assign(new Error(`data migration "${args.id}" is not registered`), { code: "MIGRATION_NOT_FOUND", name: "LunoraError", status: 404 }),
+            new LunoraError("NOT_IMPLEMENTED", "vector backfill is unavailable: this shard declares no vector index, or its host has no vector store"),
         );
+    }
+
+    /**
+     * `read` inside the single-writer gate, then `work` on its result as a link of
+     * the commit-ordered after-commit chain — so `work` runs after the hooks of
+     * every write committed before `read` and before the hooks of every write
+     * committed after it. Resolves with `work`'s result once it has finished,
+     * rejecting with its error.
+     *
+     * This is what lets a backfill write to an external index without racing live
+     * writes: its snapshot and its position on the chain are taken at the same
+     * instant, so a newer write's hook always lands after it.
+     *
+     * The wait is bounded by {@link AFTER_COMMIT_WAIT_MS} from the call, like a
+     * mutation's: behind a stalled earlier link `work` may not start for as long
+     * as that link hangs. Past the bound this rejects with a retryable
+     * `SERVICE_UNAVAILABLE`, and `work` stays queued, so ordering is kept. A
+     * caller that records progress only after `work` resolves (the vector
+     * backfill's cursor) therefore retries the same snapshot next time.
+     */
+    protected async runOrderedAfterWrites<T, U>(read: () => T, work: (value: T) => Promise<U>): Promise<U> {
+        // Settles with the error rather than rejecting: nothing awaits it until the
+        // transaction below returns, and a rejection in between would be reported
+        // as unhandled.
+        type Outcome = { error: unknown; ok: false } | { ok: true; value: U };
+
+        let settle = (_outcome: Outcome): void => undefined;
+        const outcome = new Promise<Outcome>((resolve) => {
+            settle = resolve;
+        });
+        // Armed before the transaction, so a wait `runInTransaction` already
+        // spent on a stalled chain counts toward this one bound, not a second.
+        const finished = waitForAfterCommit(outcome.then(() => undefined));
+
+        try {
+            await this.runInTransaction(async () => {
+                const value = read();
+
+                // Inside the transaction this only queues the work; it runs once the
+                // transaction commits, as this transaction's link on the chain.
+                await this.deferAfterCommit(async () => {
+                    try {
+                        settle({ ok: true, value: await work(value) });
+                    } catch (error) {
+                        settle({ error, ok: false });
+                    }
+                });
+            });
+        } catch (error) {
+            // Rolled back: the work was dropped with the queue, so nothing else settles it.
+            settle({ error, ok: false });
+
+            throw error;
+        }
+
+        if (!(await finished)) {
+            throw new LunoraError("SERVICE_UNAVAILABLE", "ordered work did not finish in time: an earlier after-commit hook is stalled; retry later");
+        }
+
+        const settled = await outcome;
+
+        if (!settled.ok) {
+            throw settled.error;
+        }
+
+        return settled.value;
     }
 
     /**
@@ -2711,6 +3931,21 @@ abstract class ShardDO {
     }
 
     /**
+     * Every declared procedure, surfaced via
+     * `__lunora_admin__:getAdvisorProcedures`. Discovered by the codegen feeder
+     * and emitted into the generated subclass, which overrides this.
+     *
+     * Separate from {@link advisories} because it is the denominator, not the
+     * numerator: findings say what is wrong, this says how much exists to be
+     * right, and the studio's health score needs both. The base class can't see
+     * the user's functions, so it reports none.
+     */
+    // eslint-disable-next-line class-methods-use-this -- base-class override hook: the codegen subclass overrides this with the generated procedure list
+    protected advisorProcedures(): AdvisorProcedure[] {
+        return [];
+    }
+
+    /**
      * Row-level-security metadata for this deployment, surfaced via
      * `__lunora_admin__:rlsPolicies` to the studio's read-only RLS inspector:
      * which `definePolicy`s guard which `(table, on)` and which `defineRole`s
@@ -2765,7 +4000,64 @@ abstract class ShardDO {
      */
     // eslint-disable-next-line class-methods-use-this -- base-class override hook: the codegen subclass overrides this with the statically-discovered feature flags
     protected studioFeatures(): StudioFeaturesResult {
-        return { mail: false, payments: false, scheduler: false, storage: false, vectors: false, workflows: false };
+        return {
+            analytics: false,
+            auth: false,
+            containers: false,
+            flags: false,
+            kv: false,
+            mail: false,
+            notifications: false,
+            payments: false,
+            privacy: false,
+            queues: false,
+            scheduler: false,
+            storage: false,
+            vectors: false,
+            workflows: false,
+        };
+    }
+
+    /**
+     * Evaluate every statically-discovered feature flag under `context` for the
+     * studio's read-only Flags page (`__lunora_admin__:listFlags`). The flag keys
+     * + value types are discovered by `@lunora/codegen` from the app's
+     * `ctx.flags.<type>("key", …)` reads and evaluated through the configured
+     * `@lunora/flags` provider — work only the codegen subclass can do, so it
+     * overrides this. The base class wires no provider and reports
+     * `configured: false` with zero flags (an un-generated `ShardDO` has none).
+     */
+    // eslint-disable-next-line class-methods-use-this -- base-class override hook: the codegen subclass overrides this with live OpenFeature evaluation over the discovered flag keys
+    protected evaluateFlags(_context?: Record<string, unknown>): Promise<FlagsResult> {
+        return Promise.resolve({ configured: false, flags: [] });
+    }
+
+    /**
+     * Serve one reserved {@link FLAGS_FUNCTION_PREFIX} live flag read for the
+     * React client's `useFlag`/`useFlags`. `functionPath` carries the flag key +
+     * type and `args` the per-subscriber targeting context; the codegen subclass
+     * overrides this to evaluate the flag through the app's `@lunora/flags`
+     * provider under `identity` and return the resolved value. The base class
+     * wires no provider, so it returns `null` — `resolveReactiveOutcome` reads
+     * `null` as "nothing to deliver" and the subscriber keeps its default.
+     */
+    // eslint-disable-next-line class-methods-use-this -- base-class override hook: the codegen subclass overrides this to evaluate the flag through the configured provider
+    protected runFlagSubscriptionRead(_functionPath: string, _arguments: Record<string, unknown>, _identity?: SubscriptionIdentity): Promise<unknown> {
+        // eslint-disable-next-line unicorn/no-null -- the "nothing to deliver" sentinel resolveReactiveOutcome reads
+        return Promise.resolve(null);
+    }
+
+    /**
+     * The Cloudflare Queues declared by this app, surfaced via
+     * `__lunora_admin__:listQueues` for the studio's Queues page. Queues are NOT
+     * Durable Objects and hold no shard state, so this is pure declaration
+     * metadata statically discovered by `@lunora/codegen` from `lunora/queues.ts`
+     * and emitted into the generated subclass, which overrides this. The base
+     * class can't see the user's project, so it reports none.
+     */
+    // eslint-disable-next-line class-methods-use-this -- base-class override hook: the codegen subclass overrides this with the statically-discovered queue metadata
+    protected queuesMetadata(): QueuesResult {
+        return { queues: [] };
     }
 
     /**
@@ -2856,63 +4148,68 @@ abstract class ShardDO {
      * so it reports the table as unknown; the codegen-generated subclass overrides
      * this to run the op against a live `createShardCtxDb(...)` writer (which
      * maintains the FTS/aggregate/rank shadow tables and runs validators).
+     *
+     * The single seam every writer-routed single-row write goes through — a studio
+     * row edit, a bulk row op, a TTL expiry. `headroom` is an optional BY-VALUE
+     * meter: an admin caller omits it and the override falls back to
+     * `this.transactionHeadroom()`, which mints a fresh per-call budget, while
+     * {@link ShardDO.pollTtlSweeps} (an alarm work item draining many rows under
+     * ONE ceiling) passes its own tracker explicitly.
      */
     // eslint-disable-next-line class-methods-use-this -- base-class override hook: the codegen subclass overrides this and uses `this` to build a schema-aware writer
-    protected runShardWrite(args: RunShardWriteArgs): Promise<RunShardWriteResult> {
-        return Promise.reject(Object.assign(new Error(`unknown table: ${args.table}`), { code: "UNKNOWN_TABLE", name: "LunoraError", status: 404 }));
+    protected runShardWrite(args: RunShardWriteArgs, _headroom?: TransactionHeadroomTracker): Promise<RunShardWriteResult> {
+        return Promise.reject(new LunoraError("UNKNOWN_TABLE", `unknown table: ${args.table}`, { status: 404 }));
     }
 
     /**
-     * Delete one row by primary key THROUGH the schema-aware writer — the
-     * per-row seam {@link runShardBulkDelete} loops over. Routing each delete
-     * through the writer (not raw SQL) is the whole point: it keeps the FTS /
-     * aggregate / rank shadow tables in sync and fires `onDelete` cascades,
-     * exactly like {@link runShardWrite}'s single-row delete.
+     * The engine behind every writer-routed BULK row op — `deleteRows`,
+     * `clearTable`, `patchRows`. Collects one bounded batch of matching ids with
+     * the same predicate {@link readTablePage} previews, then hands each to
+     * `apply` ONE AT A TIME so the FTS / aggregate / rank shadow tables stay
+     * correct. Bounded to {@link SHARD_BULK_ROW_CAP} per call; `hasMore` tells
+     * the caller to loop rather than writing an unbounded set at once.
      *
-     * The base class can't build a writer without the user's `schema.ts`, so it
-     * reports the table as unknown; the codegen-generated subclass overrides
-     * this to call `writer.delete(id)` on a live `createShardCtxDb(...)` writer.
-     */
-    // eslint-disable-next-line class-methods-use-this -- base-class override hook: the codegen subclass overrides this and uses `this` to build a schema-aware writer
-    protected deleteRowThroughWriter(_table: string, _id: string): Promise<void> {
-        return Promise.reject(Object.assign(new Error(`unknown table: ${_table}`), { code: "UNKNOWN_TABLE", name: "LunoraError", status: 404 }));
-    }
-
-    /**
-     * Bulk-delete the rows of `table` matching the active `filters`/`search`
-     * (or every row, for `clearTable`), bounded to {@link SHARD_BULK_DELETE_CAP}
-     * per call. Concrete in the base: it collects the matching ids with the same
-     * predicate {@link readTablePage} previews, then deletes them ONE AT A TIME
-     * through {@link deleteRowThroughWriter} so the FTS / aggregate / rank shadow
-     * tables stay correct. Returns `{ deleted, hasMore }` so the caller loops a
-     * single bounded round-trip rather than deleting an unbounded set at once.
+     * The three ops differ only in the per-row call and in what they name the
+     * count, so they share this and rename `count` at the wire boundary.
      *
-     * Deletes are sequential by design — parallel writes to one DO would contend
-     * on OCC — so the per-row `await` is intentional.
+     * `after` is the KEYSET CURSOR, passed explicitly rather than read off `args`
+     * so that "this scan was ordered" and "a cursor may be returned" cannot drift
+     * apart: a cursor comes back only when one went in. The last id of an
+     * UNORDERED scan is an arbitrary point in id space, and a caller resuming from
+     * it would skip every matching row sorting below it — silently.
+     *
+     * Applications are sequential by design — parallel writes to one DO would
+     * contend on OCC — so the per-row `await` is intentional. That also makes each
+     * row an interleaving point, so a mid-batch throw is reachable (an OCC
+     * conflict, or a `.unique()` column patched to a constant across two rows).
+     * Rows applied before it are ALREADY COMMITTED — the writer commits per row —
+     * so the caller must flush on the failure path too; {@link handleBulkRowOp}
+     * owns that, alongside every other admin arm's flush.
      */
-    protected async runShardBulkDelete(args: RunShardBulkDeleteArgs): Promise<RunShardBulkDeleteResult> {
-        const limit = Math.min(Math.max(Math.trunc(args.limit ?? SHARD_BULK_DELETE_CAP), 1), SHARD_BULK_DELETE_CAP);
+    protected async runShardBulkRowOp(args: RunShardBulkRowArgs, apply: (id: string) => Promise<void>, after?: string): Promise<RunShardBulkRowResult> {
+        const limit = Math.min(Math.max(Math.trunc(args.limit ?? SHARD_BULK_ROW_CAP), 1), SHARD_BULK_ROW_CAP);
 
-        // Collect this batch's ids first (a read; raw SQL is fine), then remove
-        // each through the writer. `hasMore` reflects whether matches remained
-        // beyond `limit`, so the caller can loop to drain the rest.
+        // Collect this batch's ids first (a read; raw SQL is fine), then write
+        // each through the writer.
         const { hasMore, ids } = selectMatchingIds(this.sql as SqlExec, {
+            after,
+            columnKinds: this.columnKinds(args.table),
             filters: args.filters,
             limit,
             search: args.search,
             table: args.table,
         });
 
-        let deleted = 0;
+        let count = 0;
 
         for (const id of ids) {
-            // Sequential: serialise writes to avoid OCC contention on this DO.
-            // eslint-disable-next-line no-await-in-loop -- per-row writer deletes must serialise to avoid OCC contention on the shard DO
-            await this.deleteRowThroughWriter(args.table, id);
-            deleted += 1;
+            // eslint-disable-next-line no-await-in-loop -- see the note above: per-row writer calls must serialise to avoid OCC contention on the shard DO
+            await apply(id);
+            count += 1;
         }
 
-        return { deleted, hasMore };
+        // Only an ordered scan yields a resumable boundary — see the note above.
+        return { count, cursor: after === undefined ? undefined : ids.at(-1), hasMore };
     }
 
     /**
@@ -2928,9 +4225,23 @@ abstract class ShardDO {
      */
     // eslint-disable-next-line class-methods-use-this -- base-class override hook: the codegen subclass overrides this and uses `this` to build a schema-aware writer
     protected runShardRankBefore(_args: RunShardRankBeforeArgs): Promise<{ before: number; total: number }> {
-        return Promise.reject(
-            Object.assign(new Error("rankBefore is not implemented in base ShardDO"), { code: "NOT_IMPLEMENTED", name: "LunoraError", status: 500 }),
-        );
+        return Promise.reject(new LunoraError("NOT_IMPLEMENTED", "rankBefore is not implemented in base ShardDO", { status: 500 }));
+    }
+
+    /**
+     * Walk this shard's relation graph out of `{ table, id }` — the read-only
+     * `ctx.db.related(...)` traversal behind `__lunora_admin__:findRelated`, so
+     * an agent can follow the schema's foreign keys without the app having to
+     * write a query for it.
+     *
+     * Same base/codegen split as {@link runShardRankBefore}, and for the same
+     * reason: the edge set is derived from the user's `schema.ts`, which the
+     * base class cannot see, so the codegen subclass overrides this to call
+     * `related(...)` on a live `createShardCtxDb(...)` writer.
+     */
+    // eslint-disable-next-line class-methods-use-this -- base-class override hook: the codegen subclass overrides this and uses `this` to build a schema-aware writer
+    protected runShardFindRelated(_args: RunShardFindRelatedArgs): Promise<RelatedPage> {
+        return Promise.reject(new LunoraError("NOT_IMPLEMENTED", "findRelated is not implemented in base ShardDO", { status: 500 }));
     }
 
     /**
@@ -2945,9 +4256,7 @@ abstract class ShardDO {
      */
     // eslint-disable-next-line class-methods-use-this -- base-class override hook: the codegen subclass overrides this and uses `this` to build a schema-aware writer
     protected runShardRankPage(_args: RunShardRankPageArgs): Promise<ShardRankPageResult> {
-        return Promise.reject(
-            Object.assign(new Error("rankPage is not implemented in base ShardDO"), { code: "NOT_IMPLEMENTED", name: "LunoraError", status: 500 }),
-        );
+        return Promise.reject(new LunoraError("NOT_IMPLEMENTED", "rankPage is not implemented in base ShardDO", { status: 500 }));
     }
 
     /**
@@ -2956,16 +4265,155 @@ abstract class ShardDO {
      * implements it directly (no codegen override needed). Returns an empty
      * page that leaves the cursor untouched when CDC was never enabled on this
      * shard, so the coordinator tolerates shards that predate CDC.
+     *
+     * Every served page carries the `epoch` the `cursor` beside it belongs to,
+     * and a consumer MAY echo it back as `args.sinceEpoch` on the next call.
+     * Both halves are additive: a consumer that ignores the field behaves
+     * exactly as it did before, and one that never echoes keeps exactly the
+     * guarantee it had (the high-watermark proof below, and nothing more).
+     *
+     * The field exists because the watermark proof is perishable and this plane
+     * has an unattended detector that outlives it. `cdcArchiveRewound` seals a
+     * fork during a retention sweep with no consumer present at all, and every
+     * other epoch-carrying consumer — subscriber frames, replica pulls —
+     * inherits that seal. This path had no field to inherit it through, so a
+     * connector sailed past a sealed fork the moment post-restore writes carried
+     * the AUTOINCREMENT back over its cursor. The epoch is the fan-out of that
+     * detection, never a detection of its own.
      */
-    protected runShardCdcSync(args: RunShardCdcSyncArgs): { changes: CdcChange[]; cursor: number } {
+    protected runShardCdcSync(args: RunShardCdcSyncArgs): { changes: CdcChange[]; cursor: number; epoch?: string } {
         const sql = this.sql as SqlExec;
         const present = sql.exec(`SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?`, CDC_LOG_TABLE).toArray().length > 0;
 
         if (!present) {
+            // No changelog, so no timeline to name. The field is omitted rather
+            // than guessed, matching {@link ShardDO.currentCdcEpoch} — and a
+            // `sinceEpoch` cannot be judged against a shard that has never had
+            // one, so it is ignored here rather than refused.
             return { changes: [], cursor: args.sinceSeq };
         }
 
-        return readCdcChanges(sql, { limit: args.limit, sinceSeq: args.sinceSeq });
+        // Rollback guard, ahead of both retention levels because it is the only
+        // one that says the cursor itself is meaningless rather than merely out
+        // of range.
+        //
+        // A consumer cannot legitimately hold a `seq` above the high-watermark:
+        // it is monotonic and outlives a trim (`readCdcCursor` reads
+        // `sqlite_sequence`). A cursor above it is therefore proof that the log
+        // rolled back under the consumer — a native point-in-time restore, which
+        // reverts this shard's whole SQLite database and with it every durable
+        // record of the pre-restore timeline, the `__cdc_meta` epoch included.
+        //
+        // Returning the empty page this read would otherwise produce tells that
+        // consumer it is caught up, and the shard's post-restore writes then
+        // climb back through seqs the consumer has already passed — skipped one
+        // by one, permanently, with nothing anywhere reporting it. So refuse,
+        // and seal the fork for everyone else at the same time: the subscription
+        // path already treats exactly this proof this way (see
+        // {@link ShardDO.sealForkedTimeline} and {@link ShardDO.evaluateResume}),
+        // and this path — the one warehouse connectors and `cdcSync` use — did
+        // not. The freshly minted epoch also re-prefixes the changelog archive,
+        // so the rewound timeline stops writing segments over the old one's.
+        const cursor = readCdcCursor(sql);
+        // Read once: it gates the echo guard below AND is stamped on the page
+        // this returns, so a served consumer never costs a second read.
+        const epoch = readCdcEpoch(sql);
+
+        // Echo guard, ahead of the watermark one because it answers a strictly
+        // longer-lived question. The watermark proof expires — a rewound log
+        // re-issues the seqs it lost, and once post-restore writes have carried
+        // it back past this consumer's cursor there is nothing left to refuse
+        // it with. A mismatched epoch does not expire: it says the shard sealed
+        // a fork at some point after the page this consumer last read, whoever
+        // presented the proof.
+        //
+        // So this one does NOT seal. An epoch mismatch is not evidence of a new
+        // fork — it is evidence of one already detected and already sealed, and
+        // re-minting on it would invalidate every other consumer's resume for a
+        // fork they have already been told about. Only the watermark proof
+        // below is a fresh detection, and only it seals.
+        //
+        // A consumer echoing the CURRENT epoch with a cursor above the
+        // watermark falls through to that guard and seals there — the same
+        // ordering, and the same verdict, `evaluateResume` already applies to
+        // the same pair of claims.
+        if (args.sinceEpoch !== undefined && args.sinceEpoch !== epoch) {
+            throw new LunoraError(
+                "CDC_TIMELINE_FORKED",
+                `cdc epoch ${args.sinceEpoch} is not this shard's current epoch ${epoch}; the changelog forked after the page you last read (a point-in-time restore, or a rolled-back archive) and an incremental cursor cannot cross a fork — re-seed from a snapshot and resume at epoch ${epoch}`,
+                { data: { cursor, epoch }, status: 409 },
+            );
+        }
+
+        if (args.sinceSeq > cursor) {
+            throw cdcForkedError(cursor, args.sinceSeq, "shard", this.sealForkedTimeline());
+        }
+
+        // Retention-gap guard, and it comes first of the two retention levels
+        // because it is the more destructive of them. `trimCdcChanges` DELETES rows, so a
+        // consumer resuming below the retained floor would be handed the surviving
+        // tail with an advanced cursor and no indication that anything was
+        // skipped — a warehouse table permanently missing the trimmed range, and
+        // nothing anywhere reporting it. The resume and shape-seed paths already
+        // gate on this floor (they re-seed instead); this path, the one warehouse
+        // connectors and `cdcSync` use, did not. `+ 1` because a consumer sitting
+        // exactly at `floor - 1` has seen everything below the floor.
+        const floor = minCdcSeq(sql);
+
+        if (floor !== undefined && cursorBelowRetainedFloor(floor, args.sinceSeq)) {
+            throw cdcTrimmedError(floor, args.sinceSeq, "shard");
+        }
+
+        const page = readCdcChanges(sql, { limit: args.limit, sinceSeq: args.sinceSeq });
+
+        // Payload-compaction guard. A compacted row keeps its key and loses its
+        // `doc`, which is exactly what a shape diff wants and exactly what a
+        // change-feed consumer must never be handed silently: a doc-less
+        // insert/update is indistinguishable on the wire from a delete, so
+        // serving one would corrupt a warehouse table rather than fail. A
+        // consumer whose page contains one is told so, and re-syncs from a
+        // snapshot.
+        //
+        // The test is "a row that SHOULD carry a post-image and doesn't", not
+        // "the oldest row that carries one": a `delete` stores a NULL doc by
+        // design, so a log whose retained prefix opens with deletes — a fresh
+        // changelog, or one this sweep trimmed to a delete boundary — is
+        // perfectly serveable and must not be refused. Compaction only ever
+        // clears a PREFIX of the log, so a compacted row in the requested range
+        // always lands in this first page.
+        const compacted = page.changes.find((change) => change.op !== "delete" && change.doc === undefined);
+
+        if (compacted !== undefined) {
+            throw new LunoraError(
+                "CDC_PAYLOAD_COMPACTED",
+                `cdc payloads at or before seq ${String(compacted.seq)} have been compacted; resume from a snapshot (sinceSeq ${String(args.sinceSeq)} is below the retained payload window)`,
+                { status: 409 },
+            );
+        }
+
+        return { ...page, epoch };
+    }
+
+    /**
+     * Page the changelog the way {@link ShardDO.runShardCdcSync} does, with the
+     * R2 cold tier behind it — see {@link CdcRetentionRunner.syncPage}.
+     *
+     * Deliberately layered around the sync method rather than folded into it,
+     * and the reason is latency, not signatures. `runShardCdcSync` is also the
+     * replica link's `readChanges`; that path is sync only as far as
+     * `servePull`, whose own caller is already async, so threading a promise
+     * through it would cost one `await` in one function. What it would also cost
+     * is an R2 round trip on the replica pull path, which runs per follower per
+     * poll — and `servePull` gates on the floor before it reads, so it would
+     * have to be restructured to reach the fallback at all rather than merely
+     * awaited.
+     *
+     * The consequence is real and not merely theoretical: a follower below the
+     * floor still pays a full bootstrap where a connector no longer does. It is
+     * tracked as a follow-up, not absorbed silently here.
+     */
+    protected cdcSyncPage(args: RunShardCdcSyncArgs): Promise<{ changes: CdcChange[]; cursor: number; epoch?: string }> {
+        return this.cdcRetention.syncPage(() => this.runShardCdcSync(args), args);
     }
 
     /**
@@ -2991,18 +4439,107 @@ abstract class ShardDO {
     }
 
     /**
+     * Mint a fresh CDC epoch because a resume claim just proved this shard's
+     * changelog forked under it, and return the new value for the outgoing frame.
+     *
+     * The trigger is a client presenting `sinceEpoch === epoch` with `sinceSeq >
+     * cursor`: it holds a cursor this shard once issued on THIS timeline and can
+     * no longer account for. Only a rollback produces that — in practice a native
+     * PITR restore, which is armed in {@link handlePitrAdminOp}.
+     *
+     * **Why the signal has to come from outside SQLite.** A restore reverts the
+     * whole SQLite database, `__cdc_meta` included, so the proactive bump
+     * `pitrRestore` performs is rolled back along with everything else — the
+     * epoch cannot detect the one event it exists for. Nothing durable inside a
+     * SQLite-backed Durable Object escapes that: the KV half of `state.storage`
+     * is the same database, and an alarm is a row in it. So every record of the
+     * pre-restore timeline that survives is somewhere the restore could not
+     * reach, and this shard has exactly two: the cursor a CONSUMER cached (a
+     * subscriber's `sinceSeq` here, a connector's in
+     * {@link ShardDO.runShardCdcSync}, a follower's in `replica.ts`), and the
+     * changelog ARCHIVE's own segments, which R2 keeps while the watermark
+     * naming them rolls back (`cdcArchiveRewound`, consulted by the retention
+     * sweep). Either one calls this, and turning one witness into a shard-wide
+     * epoch bump is what extends the protection to clients that reconnect later,
+     * after post-restore writes have climbed the AUTOINCREMENT back past their
+     * own `sinceSeq` and the `sinceSeq > cursor` guard no longer fires for them.
+     *
+     * **What it detects.** Any rollback under a live subscriber base, promptly: a
+     * restore restarts the object (`ctx.abort()`, or the eviction that lets a
+     * deferred restore apply), which drops every hibernated socket, so the whole
+     * subscriber set reconnects with pre-restore cursors while the restored
+     * cursor is still low. The first of them seals the fork for the rest.
+     *
+     * **What it cannot detect.** A rollback on a shard whose consumers ALL stay
+     * offline until the cursor has climbed back past their cursors, and which
+     * archives nothing — nobody is left to present the proof. A shard with no
+     * subscribers, no connector, no follower and no archive bucket is the
+     * degenerate case of that, and is also the case where nothing is stale.
+     *
+     * **On trusting `sinceSeq`.** It is client-supplied, so a caller that already
+     * knows this shard's epoch can force a bump, and a bump is shard-wide: every
+     * subscriber takes a full snapshot instead of a resume on its NEXT reconnect.
+     * The cost is bounded (the once-per-wake latch below) and deferred — nothing
+     * is pushed and no live subscription is interrupted — and it stays strictly
+     * less than what the same caller can already spend by subscribing without a
+     * `sinceSeq` at all.
+     * @returns the freshly minted epoch, to stamp on the frame this verdict produces
+     */
+    protected sealForkedTimeline(): string {
+        // At most once per wake, and that bound is a security property rather
+        // than an optimisation.
+        //
+        // The proof this acts on — "a client presents a cursor ahead of ours on
+        // our own epoch" — is CLIENT-SUPPLIED, and the epoch it must match is
+        // stamped on every frame the client has ever received. So any subscriber
+        // can manufacture the proof at will, and without a bound each forged
+        // frame would cost one SQLite write and invalidate the cached resume of
+        // every other subscriber on the shard: a one-frame request amplified into
+        // N full snapshots.
+        //
+        // One seal is all a real restore needs — it re-mints the epoch shard-wide,
+        // so every client that reconnects afterwards is refused by the epoch
+        // comparison above rather than by re-proving the rollback. Latching after
+        // the first therefore costs the genuine case nothing.
+        //
+        // What it caps the forged case AT is one epoch bump per wake, and that is
+        // not free: an eviction leaves the epoch intact and every client resumes
+        // across it, whereas a bump forces all N subscribers to take a full
+        // snapshot on their next reconnect. So the honest bound is "one forged
+        // frame buys N snapshots, once per wake", not "the cost of a cold wake" —
+        // still bounded, still deferred (nothing is pushed and no live
+        // subscription is interrupted), and still strictly less than the same
+        // caller can spend by simply subscribing without a `sinceSeq`. Stated
+        // plainly because a latch defended by an understated threat is a latch
+        // someone deletes as unnecessary. A restore evicts the object, so the next
+        // real fork gets a fresh instance and a fresh latch.
+        if (this.forkSealed) {
+            // Already sealed this wake: hand back the epoch minted then, so the
+            // caller still stamps the post-fork timeline on its refusal.
+            return readCdcEpoch(this.sql as SqlExec);
+        }
+
+        this.forkSealed = true;
+
+        return bumpCdcEpoch(this.sql as SqlExec);
+    }
+
+    /**
      * Decide whether a reconnecting subscription can resume from `sinceSeq`
      * without a full snapshot. Returns the current high-watermark `cursor` plus
      * a `resumable` verdict.
      *
-     * `resumable: true` means `sinceSeq` is within the CDC retention window and
-     * no table in the query's `readSet` changed in `(sinceSeq, cursor]` — the
-     * client's cached value is still current, so the caller emits a lightweight
-     * `resume` frame instead of re-shipping the snapshot.
+     * `resumable: true` means `sinceSeq` is within the CDC retention window,
+     * every entry in the query's `readSet` is one the changelog can speak for,
+     * and none of them changed in `(sinceSeq, cursor]` — the client's cached
+     * value is still current, so the caller emits a lightweight `resume` frame
+     * instead of re-shipping the snapshot.
      *
-     * `resumable: false` means either the log was compacted past `sinceSeq` (a
+     * `resumable: false` means the log was compacted past `sinceSeq` (a
      * retention gap), a read table changed (the client needs the fresh value),
-     * or CDC is off — the caller falls back to the full-snapshot seed.
+     * the read-set contains something the changelog cannot vouch for (see
+     * {@link cdcCanVouchFor}), or CDC is off — the caller falls back to the
+     * full-snapshot seed.
      */
     protected evaluateResume(
         sinceSeq: number,
@@ -3033,14 +4570,31 @@ abstract class ShardDO {
 
         // Rollback guard: a legitimate `sinceSeq` can never exceed the current
         // high-watermark (the cursor is monotonic and survives trims). A client
-        // claiming to have seen MORE than the shard holds means the log rolled
-        // back (e.g. a PITR restore) under a matching epoch — re-snapshot.
+        // claiming to have seen MORE than the shard holds, on THIS epoch, is
+        // proof the log rolled back under it — one of the few such proofs that
+        // survive a restore at all (see {@link sealForkedTimeline}). Refuse this
+        // client, and seal the fork for every other one.
         if (sinceSeq > cursor) {
+            return { cursor, epoch: this.sealForkedTimeline(), resumable: false };
+        }
+
+        // Everything below this line reasons from `__cdc_log`, so first ask
+        // whether the log is entitled to speak for what this query read at all
+        // — a `.global()` table, the `"*"` flags/admin wildcard, or any other
+        // dependency it never records makes "nothing changed" a claim it cannot
+        // support. See {@link cdcCanVouchFor}; an unrecorded (empty) read-set is
+        // an instance of the same rule, not a separate case.
+        //
+        // This gate sits BEFORE the at-the-high-watermark fast path deliberately:
+        // a `.global()` write bumps no cursor on this shard, so `sinceSeq ===
+        // cursor` is exactly the state a client that missed one arrives in.
+        if (!cdcCanVouchFor(sql, readSet)) {
             return { cursor, epoch, resumable: false };
         }
 
         // Client already at the high-watermark: nothing newer exists, so it is
-        // trivially current regardless of the read-set.
+        // trivially current — the read-set is vouchable, so no unlogged source
+        // can have moved under it.
         if (sinceSeq === cursor) {
             return { cursor, epoch, resumable: true };
         }
@@ -3055,50 +4609,84 @@ abstract class ShardDO {
         //     compacted away.
         const floor = minCdcSeq(sql);
 
-        if (floor === undefined || floor > sinceSeq + 1) {
+        // The `floor === undefined` half is this path's own, not the shared
+        // predicate's: an empty log with `sinceSeq < cursor` means the log was
+        // fully trimmed while the watermark lived on through `sqlite_sequence`,
+        // so every missed change is gone.
+        if (floor === undefined || cursorBelowRetainedFloor(floor, sinceSeq)) {
             return { cursor, epoch, resumable: false };
         }
 
-        // An empty read-set means we never recorded which tables the query
-        // depends on (unknown deps), so we can't prove it was untouched — force
-        // a full snapshot rather than resuming blindly on stale data.
-        if (readSet.size === 0) {
-            return { cursor, epoch, resumable: false };
+        // Resumable iff no table the query reads changed since `sinceSeq`. That
+        // is a metadata question — which TABLES appear in `(sinceSeq, cursor]` —
+        // so it is answered by an existence probe against the `("table", seq)`
+        // index rather than by materializing the changes. The scan this replaced
+        // read a bounded page of changes WITH their post-images and, past that
+        // page, gave up and re-snapshotted: a client offline long enough to
+        // accumulate the cap was the one guaranteed to be re-sent its whole
+        // query result, precisely when the delta was worth the most.
+        return { cursor, epoch, resumable: !cdcTouchesTables(sql, sinceSeq, readSet) };
+    }
+
+    /**
+     * The `__idempotency` namespace for the in-flight request, or `undefined` when
+     * the mutation must not be deduped at all.
+     *
+     * An authenticated caller namespaces by its server-minted user id, so a forged
+     * `mutation_id` can only ever collide with that caller's own mutations. An
+     * ANONYMOUS caller has no such id: namespacing every one of them under `""`
+     * puts distinct clients in ONE key space, where a reused or guessable
+     * `mutation_id` makes one client's mutation short-circuit to another's cached
+     * result — suppressed without ever running. So an anonymous caller namespaces
+     * by its `x-lunora-client-id` instead (minted client-side — stable per device
+     * for an app with a durable outbox, which persists the id alongside each
+     * queued write; per session otherwise, so a reload widens the dedup window
+     * rather than defeating it); one that sends none gets `undefined` and simply
+     * skips the cache, which fails
+     * OPEN (the handler re-runs, the pre-idempotency behaviour) rather than
+     * risking another client's mutation.
+     *
+     * A server-initiated dispatch (`x-lunora-system`, e.g. a queue/scheduler
+     * retry) shares one namespace even when it carries no identity: it originates
+     * INSIDE the trust boundary and its `mutationId` is server-minted, so there is
+     * no untrusted party to collide with — and it is exactly the caller that needs
+     * dedup most.
+     */
+    protected idempotencyNamespace(): string | undefined {
+        const userId = this.currentRequestUserId;
+
+        if (userId !== undefined && userId.length > 0) {
+            return userId;
         }
 
-        // Resumable iff no table the query reads changed since `sinceSeq`. We
-        // read the missed changes (bounded) and test intersection with the
-        // read-set.
-        const { changes } = readCdcChanges(sql, { limit: CDC_RESUME_SCAN_LIMIT, sinceSeq });
-
-        // Cap hit: more than `CDC_RESUME_SCAN_LIMIT` changes accumulated since
-        // `sinceSeq`, so a touching change may sit beyond the page we scanned.
-        // We can't prove the read-set is untouched — force a full snapshot.
-        if (changes.length >= CDC_RESUME_SCAN_LIMIT) {
-            return { cursor, epoch, resumable: false };
+        if (this.currentRequestSystem) {
+            return "system:";
         }
 
-        const touchedReadSet = changes.some((change) => readSet.has(change.table));
+        const clientId = this.currentRequestClientId;
 
-        return { cursor, epoch, resumable: !touchedReadSet };
+        return clientId !== undefined && clientId.length > 0 ? `anon:${clientId}` : undefined;
     }
 
     /**
      * Look up a previously-committed mutation for the in-flight request's
      * `(identity, mutationId)`. Returns `{ value }` (the cached, JSON-decoded
      * handler result) on a hit so the dispatch path can short-circuit, or
-     * `undefined` when `mutationId` is absent (queries / legacy clients) or the
+     * `undefined` when `mutationId` is absent (queries / legacy clients), the
+     * caller has no dedup namespace (see {@link idempotencyNamespace}), or the
      * mutation has not run yet. Tolerates a stub `sql` handle without the dedup
      * table (returns a miss) so unit harnesses that skip migrations still work.
      * @returns the cached result box on a hit, or `undefined` for a miss or absent mutationId
      */
     protected readIdempotentResult(mutationId: string | undefined): { value: unknown } | undefined {
-        if (mutationId === undefined) {
+        const namespace = this.idempotencyNamespace();
+
+        if (mutationId === undefined || namespace === undefined) {
             return undefined;
         }
 
         try {
-            const record = readIdempotent(this.sql as SqlExec, this.currentRequestUserId ?? "", mutationId);
+            const record = readIdempotent(this.sql as SqlExec, namespace, mutationId);
 
             return record === undefined ? undefined : { value: JSON.parse(record.resultJson) };
         } catch {
@@ -3113,42 +4701,371 @@ abstract class ShardDO {
      * so a later replay of the same id short-circuits through
      * {@link readIdempotentResult} instead of re-running the handler. A no-op
      * unless the request carried an `x-lunora-mutation-id` header (queries and
-     * legacy clients leave `currentRequestMutationId` undefined).
+     * legacy clients leave `currentRequestMutationId` undefined) AND the caller
+     * has a dedup namespace — the read side skips the same two cases, so the two
+     * never disagree about whether a key exists.
      *
-     * Called on the live dispatch path right after the handler's writes have
-     * auto-committed, through the same `this.sql` handle, so the dedup row is
-     * durable iff those writes are. (The DO has no ambient BEGIN/COMMIT around a
-     * mutation — `handleRpc` invokes the user handler directly — so this can't
-     * piggyback on a surrounding transaction; it commits as its own statement
-     * immediately after.) `INSERT OR IGNORE` keeps a concurrent double-dispatch
-     * of the same id idempotent. Also runs the throttled dedup-table GC.
+     * For a mutation this runs INSIDE the handler's transaction (via
+     * {@link ShardDO.commitMutationBookkeeping}, which `handleRpc` invokes before
+     * the transaction commits), so the dedup row is durable iff the writes are —
+     * closing the crash window where the writes commit but the replay guard does
+     * not. Actions/queries aren't transaction-wrapped, so they call this on the
+     * live dispatch path right after the handler resolves, through the same
+     * `this.sql` handle. `INSERT OR IGNORE` keeps a concurrent double-dispatch (or
+     * the now-skipped post-dispatch call) of the same id idempotent. Also runs the
+     * throttled dedup-table GC.
+     *
+     * `encodedResult` has ALREADY been through {@link encodeDispatchResult}, so
+     * the cache holds JSON-safe wire bytes (a raw `bigint` result would otherwise
+     * throw `JSON.stringify`) and a replay answers byte-identical wire form
+     * without a second `encodeWire`. Encoding is the caller's job precisely so it
+     * happens OUTSIDE the swallow below: that `catch` is for a missing dedup table
+     * (pre-migration shard / test stub), not for a return value the codec refuses,
+     * and swallowing the latter is what let an unencodable mutation commit its
+     * writes with no replay guard.
      */
-    protected persistIdempotentResult(result: unknown): void {
-        if (this.currentRequestMutationId === undefined) {
+    protected persistIdempotentResult(encodedResult: unknown): void {
+        const namespace = this.idempotencyNamespace();
+
+        if (this.currentRequestMutationId === undefined || namespace === undefined) {
             return;
         }
 
         const now = Date.now();
+        // Stringified outside the try for the same reason: this can only fail on a
+        // value `encodeDispatchResult` already vouched for, so a throw here is a
+        // codec bug worth surfacing, not bookkeeping to swallow. `encodeWire` maps
+        // a void mutation's `undefined` to a tagged array, so the result is always
+        // a real string.
+        const resultJson = JSON.stringify(encodedResult);
 
         try {
-            // `JSON.stringify(undefined)` is `undefined`, not a string — a void
-            // mutation must still cache a non-null `result_json`, so fall back to
-            // the literal `"null"`. (`JSON.stringify` is typed `=> string`, hence
-            // the disable: the `??` is load-bearing at runtime despite the type.)
-            // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- JSON.stringify(undefined) returns undefined at runtime
-            writeIdempotent(this.sql as SqlExec, this.currentRequestUserId ?? "", this.currentRequestMutationId, JSON.stringify(result) ?? "null", now);
+            writeIdempotent(this.sql as SqlExec, namespace, this.currentRequestMutationId, resultJson, now);
 
             // Throttled GC: drop dedup rows past the retention window at most once
             // per interval per warm instance.
             if (now - this.lastIdempotencyTrimAt > IDEMPOTENCY_GC_INTERVAL_MS) {
-                trimIdempotent(this.sql as SqlExec, now - IDEMPOTENCY_RETENTION_MS);
+                // Stamp BEFORE the sweep, not after: the throttle guard is the
+                // only thing that stops this running again, so a trim that
+                // throws must still push the next attempt out by a full
+                // interval. Stamping after left a persistently failing
+                // full-scan DELETE re-running inside every subsequent
+                // mutation's write transaction, swallowed by the catch below
+                // and getting more expensive each time. Both siblings
+                // (`durable-stream-runner.trim`, `cdc-retention`) stamp first.
                 this.lastIdempotencyTrimAt = now;
+                trimIdempotent(this.sql as SqlExec, now - IDEMPOTENCY_RETENTION_MS);
             }
         } catch {
             // Missing dedup table (pre-migration shard / test stub) or a stub
             // `sql` handle — best-effort bookkeeping must never fail a mutation
             // whose writes already committed. The replay just re-runs (the read
             // side also treats a missing row as a miss).
+        }
+    }
+
+    /**
+     * Whether `functionPath` names a registered custom mutator (a `defineMutator`
+     * declaration) rather than an ordinary `mutation`. The base class knows of no
+     * mutators, so the default is `false`; the codegen-generated subclass
+     * overrides this to consult its mutator registry. When `true` (and the push
+     * carries a `clientId`/`clientSeq`), the dispatch path applies the
+     * `__client_watermark` ordering semantics instead of the legacy idempotency
+     * dedup.
+     */
+    // eslint-disable-next-line class-methods-use-this -- base-class override hook: the codegen subclass overrides this to consult its mutator registry
+    protected isCustomMutator(_functionPath: string): boolean {
+        return false;
+    }
+
+    /**
+     * Whether `functionPath` names a registered `mutation` — the only function
+     * kind whose dispatch may enter the single-writer gate.
+     *
+     * The gate is `ShardHost.runSerialized`, which on Cloudflare is
+     * `state.blockConcurrencyWhile`: it stalls EVERY other dispatch on the
+     * shard (queries, WebSocket frames, alarms) for as long as the closure
+     * runs. A mutation already ran inside it — `runInTransaction` composes the
+     * same gate — so wrapping its dedup check costs nothing extra. An action
+     * does not: it is dispatched straight off `handleRpc` and routinely awaits
+     * seconds of outbound I/O (an LLM call, a payment round-trip). Gating one
+     * would let any caller freeze the whole shard for that long, repeatedly and
+     * cheaply, just by attaching an `x-lunora-mutation-id` header — which the
+     * runtime forwards verbatim for every kind. Queries are the same story with
+     * a smaller constant.
+     *
+     * A non-mutation DOES still dedup: it takes the same cache read, and
+     * {@link ShardDO.recordPostDispatchBookkeeping} writes its row once the
+     * handler resolves. Only the GATE is skipped — and the concurrency that
+     * skipping it admits is handled by {@link ShardDO.inFlightClaims} instead,
+     * which is one in-memory claim rather than a shard-wide stall.
+     *
+     * The base class has no function registry, so the default is `true` — the
+     * conservative answer, preserving the gate wherever the kind is unknown.
+     * The codegen-generated subclass overrides it with the real
+     * `LUNORA_FUNCTIONS` lookup, which is what production dispatch uses.
+     */
+    // eslint-disable-next-line class-methods-use-this -- base-class override hook: the codegen subclass overrides this to consult `LUNORA_FUNCTIONS`
+    protected isMutationFunction(_functionPath: string): boolean {
+        return true;
+    }
+
+    /**
+     * Classify an in-flight custom-mutator push against the shard's stored
+     * high-watermark for `currentRequestClientId`. The watermark is the highest
+     * per-client sequence the DO has applied, so the push is exactly one of:
+     *
+     * - `"already"` — `seq <= watermark`: a replay of a confirmed (or in-flight,
+     * now-resent) mutation. The handler must NOT re-run; the dispatch path returns
+     * a benign ack so the client drops the pending overlay.
+     * - `"next"` — `seq == watermark + 1`: the next mutation in order. Run the
+     * authoritative `server` impl and advance the watermark in the same commit.
+     * - `"gap"` — `seq > watermark + 1`: an out-of-order arrival (an earlier push
+     * was lost). Halt: the client must resend from `watermark + 1`.
+     *
+     * Returns `undefined` when the push is not a watermarked custom mutator
+     * (missing client id/seq, or a stub `sql` handle without the table) so the
+     * caller falls through to the legacy idempotency path.
+     */
+    protected classifyClientMutation(): ClientMutationClass | undefined {
+        const clientId = this.currentRequestClientId;
+        const seq = this.currentRequestClientSeq;
+
+        if (clientId === undefined || seq === undefined) {
+            return undefined;
+        }
+
+        // Scope the watermark to the authenticated identity (as `__idempotency`
+        // does), so a reused/spoofed `clientId` under a different user can't
+        // suppress the real owner's sequence.
+        const identity = this.currentRequestUserId ?? "";
+
+        let watermark: number;
+
+        try {
+            watermark = readClientWatermark(this.sql as SqlExec, identity, clientId);
+        } catch {
+            // The `__client_watermark` table is missing. Rather than silently
+            // downgrade a mutator-enabled push to the legacy path (which never
+            // emits `lastMutationId`), try to create it and re-read so the shard
+            // self-heals. A genuine stub `sql` handle (unit harness) throws on
+            // the DDL too — only then do we fall back to the legacy path.
+            try {
+                migrateClientWatermark(this.sql as SqlExec);
+                watermark = readClientWatermark(this.sql as SqlExec, identity, clientId);
+            } catch {
+                return undefined;
+            }
+        }
+
+        const expected = watermark + 1;
+
+        if (seq <= watermark) {
+            return { expected, kind: "already" };
+        }
+
+        return seq === expected ? { expected, kind: "next" } : { expected, kind: "gap" };
+    }
+
+    /**
+     * Terminal response for a watermarked custom-mutator push that is NOT the
+     * next-in-order mutation — an idempotent replay ack (`"already"`) or an
+     * out-of-order halt (`"gap"`). Returns `undefined` for an ordinary mutation
+     * or a `"next"` push so `fetch` proceeds to the authoritative handler. Records
+     * the function call on the short-circuit paths so metrics stay attributed.
+     */
+    protected rejectNonNextMutation(functionPath: string, mutatorClass: ClientMutationClass | undefined, dispatchStartedAt: number): Response | undefined {
+        if (mutatorClass === undefined || mutatorClass.kind === "next") {
+            return undefined;
+        }
+
+        this.recordFunctionCall(functionPath, Date.now() - dispatchStartedAt, undefined, this.currentScannedTables, this.currentIndexHits);
+
+        if (mutatorClass.kind === "already") {
+            // Replay of a confirmed (or now-resent) mutation — ack without
+            // re-running, echoing the watermark so the client can drop the
+            // pending optimistic overlay.
+            // eslint-disable-next-line unicorn/no-null -- `result: null` is the explicit on-the-wire "no fresh result" sentinel for a replay ack; `undefined` would be dropped by JSON serialization.
+            return jsonResponse({ lastMutationId: mutatorClass.expected - 1, result: null }, 200, bookmarkHeaders(this.currentResponseBookmark));
+        }
+
+        // Out-of-order gap — an earlier push was lost. Halt the batch so the
+        // client resends from `expected`; never apply out of order.
+        return jsonResponse(
+            {
+                error: {
+                    code: "OUT_OF_ORDER",
+                    expectedMutationId: mutatorClass.expected,
+                    message: `out-of-order mutation; expected sequence ${String(mutatorClass.expected)}`,
+                },
+            },
+            409,
+            bookmarkHeaders(this.currentResponseBookmark),
+        );
+    }
+
+    /**
+     * Respond to a dispatch that hit the `(identity, mutationId)` idempotency
+     * cache. Records the (zero-work) function call, then: for a `"next"` custom
+     * mutator whose handler already committed but whose watermark advance was
+     * lost to a crash in between, re-advance and echo `lastMutationId` exactly as
+     * the post-commit path does (otherwise the cached branch returns a bare
+     * result with a stale watermark and the client reports every later seq as a
+     * gap forever); for everything else, return the bare cached `{ result }`.
+     */
+    protected respondFromIdempotencyCache(
+        functionPath: string,
+        dispatchStartedAt: number,
+        mutatorClass: ClientMutationClass | undefined,
+        cachedValue: unknown,
+    ): Response {
+        this.recordFunctionCall(functionPath, Date.now() - dispatchStartedAt, undefined, this.currentScannedTables, this.currentIndexHits);
+
+        if (mutatorClass?.kind === "next") {
+            this.advanceClientMutationWatermark();
+
+            return this.buildDispatchResponse(mutatorClass, cachedValue);
+        }
+
+        // A replayed plain mutation already committed in a prior dispatch, so its
+        // real commit cursor is in the past; the current high-watermark is a safe
+        // conservative bound (CDC only grows, so a frame at `>= ` it is also `>= `
+        // the original), letting an in-session requeue still drop its optimistic
+        // overlay. {@link mutationCommitCursor} applies the same mutation/CDC scope.
+        const commitCursor = this.mutationCommitCursor();
+
+        return jsonResponse(
+            commitCursor === undefined ? { result: cachedValue } : { commitCursor, result: cachedValue },
+            200,
+            bookmarkHeaders(this.currentResponseBookmark),
+        );
+    }
+
+    /**
+     * The CDC cursor a just-committed plain mutation landed at — the post-write
+     * high-watermark, on the same scale as the `cursor` on `data`/`delta` frames.
+     * The client drops a pending per-call optimistic overlay once it sees a frame
+     * with `cursor >= commitCursor` (gapless reconciliation that keeps mutations
+     * concurrent, without the serialized custom-mutator watermark). Scoped to a
+     * mutation (carries an `x-lunora-mutation-id`) on a CDC-enabled shard;
+     * `undefined` otherwise, leaving the wire byte-identical for queries/actions
+     * and CDC-off shards.
+     */
+    protected mutationCommitCursor(): number | undefined {
+        return this.currentRequestMutationId === undefined ? undefined : this.currentCdcCursor();
+    }
+
+    /**
+     * Build the success response for a dispatched RPC. A `"next"` custom-mutator
+     * push echoes the applied `lastMutationId` so the client drops the pending
+     * optimistic overlay as soon as the ack lands; a plain mutation echoes
+     * `commitCursor` (see {@link mutationCommitCursor}); other calls return the
+     * bare `{ result }` envelope unchanged.
+     */
+    protected buildDispatchResponse(mutatorClass: ClientMutationClass | undefined, result: unknown): Response {
+        if (mutatorClass?.kind === "next") {
+            return jsonResponse({ lastMutationId: this.currentRequestClientSeq, result }, 200, bookmarkHeaders(this.currentResponseBookmark));
+        }
+
+        const commitCursor = this.mutationCommitCursor();
+
+        return jsonResponse(commitCursor === undefined ? { result } : { commitCursor, result }, 200, bookmarkHeaders(this.currentResponseBookmark));
+    }
+
+    /**
+     * Commit a mutation's replay bookkeeping — the `(identity, mutationId)`
+     * idempotency dedup row and, for a `"next"` custom-mutator push, the
+     * `__client_watermark` advance — INSIDE the handler's transaction. Called by
+     * the generated `handleRpc` mutation branch after the user handler resolves
+     * but before the transaction commits, so the writes, the dedup row, and the
+     * watermark land in one atomic commit: a crash can't leave the writes durable
+     * without the replay guard (which a re-dispatch would otherwise re-run) nor
+     * without the watermark. Records {@link ShardDO.mutationBookkeeping} under this
+     * dispatch's mutation id so `fetch` skips the redundant post-dispatch persist.
+     *
+     * The wire encode of `result` happens HERE, first, so a return value the codec
+     * refuses (a class instance, nesting past its depth cap) throws while the
+     * transaction is still open and rolls the whole mutation back. It runs
+     * unconditionally — a request carrying no `x-lunora-mutation-id` writes no
+     * dedup row but must still not commit writes behind a response that cannot be
+     * serialized.
+     */
+    protected commitMutationBookkeeping(result: unknown): void {
+        this.persistIdempotentResult(encodeDispatchResult(result));
+
+        // Strict: a watermark write that throws here rolls the whole mutation back
+        // rather than committing writes whose watermark was never advanced.
+        if (this.currentMutatorClass?.kind === "next") {
+            this.advanceClientMutationWatermark({ strict: true });
+        }
+
+        this.mutationBookkeeping = { mutationId: this.currentRequestMutationId };
+    }
+
+    /**
+     * Best-effort replay bookkeeping for the live dispatch path, run after
+     * `handleRpc` returns. A generated mutation already committed it atomically
+     * inside its transaction (via {@link ShardDO.commitMutationBookkeeping}, which
+     * sets the flag), so this skips. Actions/queries aren't transaction-wrapped,
+     * so they record their dedup row here (a no-op without an `x-lunora-mutation-id`),
+     * and a `"next"` push advances its watermark (the gap self-heals on replay).
+     *
+     * The skip is matched on the MUTATION ID, not on a bare "someone committed"
+     * flag. A Durable Object serves concurrent `fetch`es over one instance, and
+     * only mutation FUNCTIONS take the `runSerialized` gate — an action carrying an
+     * `x-lunora-mutation-id` dispatches straight through. So a mutation could
+     * commit its bookkeeping while such an action sat on an await, and the action's
+     * tail then read the shared flag as its own, skipped its `__idempotency` write,
+     * and left a client retry free to re-run the handler (a second charge, a second
+     * outbound call). `currentRequestMutationId` is re-pinned from this dispatch's
+     * `RequestScope` immediately above the call, so comparing against it asks the
+     * question that actually matters: did MY dispatch already commit?
+     *
+     * The comparison can only ever be wrong in the safe direction. A sibling
+     * dispatch's prologue clearing the record makes this re-run a write that is
+     * idempotent by construction; nothing makes it skip a write it owes.
+     */
+    protected recordPostDispatchBookkeeping(result: unknown, mutatorClass: ClientMutationClass | undefined): void {
+        if (this.mutationBookkeeping !== undefined && this.mutationBookkeeping.mutationId === this.currentRequestMutationId) {
+            return;
+        }
+
+        this.persistIdempotentResult(encodeDispatchResult(result));
+
+        if (mutatorClass?.kind === "next") {
+            this.advanceClientMutationWatermark();
+        }
+    }
+
+    /**
+     * Advance the stored high-watermark for the in-flight custom mutator to
+     * `currentRequestClientSeq` through the same `this.sql` handle. On the
+     * transactional path ({@link ShardDO.commitMutationBookkeeping}, `strict`) it
+     * runs inside the handler's commit, so the watermark is durable iff the writes
+     * are; a failure rethrows to roll the mutation back. On the best-effort
+     * cache-hit recovery path (`strict` omitted) a missing table is swallowed —
+     * the replay re-runs and re-advances (the read side treats a missing row as
+     * watermark 0), so the gap self-heals.
+     */
+    protected advanceClientMutationWatermark(options?: { strict?: boolean }): void {
+        const clientId = this.currentRequestClientId;
+        const seq = this.currentRequestClientSeq;
+
+        if (clientId === undefined || seq === undefined) {
+            return;
+        }
+
+        try {
+            advanceClientWatermark(this.sql as SqlExec, this.currentRequestUserId ?? "", clientId, seq);
+        } catch (error) {
+            // On the strict (in-transaction) path, fail loudly so the mutation
+            // rolls back instead of committing without its watermark.
+            if (options?.strict) {
+                throw error;
+            }
+
+            // Best-effort cache-hit recovery: a missing table / stub handle is
+            // tolerated — the replay re-runs and re-advances.
         }
     }
 
@@ -3160,9 +5077,24 @@ abstract class ShardDO {
      */
     // eslint-disable-next-line class-methods-use-this -- base-class override hook: the codegen subclass overrides this and uses `this` to build a schema-aware writer
     protected runShardApplyCdc(_args: RunShardApplyCdcArgs): Promise<RunShardApplyCdcResult> {
-        return Promise.reject(
-            Object.assign(new Error("applyCdc is not implemented in base ShardDO"), { code: "NOT_IMPLEMENTED", name: "LunoraError", status: 500 }),
-        );
+        return Promise.reject(new LunoraError("NOT_IMPLEMENTED", "applyCdc is not implemented in base ShardDO", { status: 500 }));
+    }
+
+    /**
+     * Whether `functionPath` is a paid (`.x402({ price })`) procedure. The paywall
+     * lives at the origin worker (`/_lunora/rpc`, REST, `serverQuery`), which a
+     * WebSocket subscription never crosses — so the shard must refuse to seed or
+     * poke a paid query itself, or it is served free. The base class has no
+     * function registry, so the default is `false`; the codegen-generated
+     * subclass overrides it with the real `LUNORA_FUNCTIONS` lookup.
+     *
+     * Also backs the `/rpc` backstop: an origin built without a `functions`
+     * registry cannot read the tag at all, so it charges nothing and marks
+     * nothing — and this is the only place left that still knows the call is paid.
+     */
+    // eslint-disable-next-line class-methods-use-this -- base-class override hook: the codegen subclass overrides this to consult `LUNORA_FUNCTIONS`
+    protected isPaidFunction(_functionPath: string): boolean {
+        return false;
     }
 
     /**
@@ -3170,14 +5102,33 @@ abstract class ShardDO {
      * `ws.serializeAttachment` so it survives hibernation.
      *
      * Returns a status so the caller can surface a structured error frame
-     * when the cap is hit or the attachment fails to serialize. We never
-     * throw out of this path — the WS hibernation API treats a thrown
-     * `webSocketMessage` as a fatal-channel error.
+     * when the query is paid, the cap is hit or the attachment fails to
+     * serialize. We never throw out of this path — the WS hibernation API
+     * treats a thrown `webSocketMessage` as a fatal-channel error.
+     *
+     * The `paid` refusal sits here rather than at the envelope so every
+     * registration path — not only the `subscribe` frame — goes through it.
      */
-    protected subscribe(ws: WebSocket, subId: string, query: SubscriptionQuery): "ok" | "serialize_failed" | "too_many" {
-        const attachment = this.readAttachment(ws);
+    protected subscribe(ws: ShardSocketLike, subId: string, query: SubscriptionQuery): "ok" | "paid" | "serialize_failed" | "too_many" {
+        if (query.functionPath !== undefined && this.isPaidFunction(query.functionPath)) {
+            return "paid";
+        }
 
-        if (Object.keys(attachment.subs).length >= ShardDO.MAX_SUBSCRIPTIONS_PER_SOCKET) {
+        const attachment = this.readAttachment(ws);
+        // A `subscribe` for an id this socket already holds REPLACES it — the
+        // client's re-snapshot request after a delta it could not merge is
+        // exactly that. It adds nothing to the count, so it must not be refused
+        // at the cap.
+        const previous = Object.hasOwn(attachment.subs, subId) ? attachment.subs[subId] : undefined;
+
+        // Counts BOTH registries, exactly as `shapeSubscribe` does: the cap
+        // bounds what one socket's attachment holds, and subs and shapes share
+        // that attachment. Counting only `subs` here let a socket that
+        // registered shapes first hold up to twice the ceiling.
+        if (
+            previous === undefined &&
+            Object.keys(attachment.subs).length + Object.keys(attachment.shapes ?? {}).length >= ShardDO.MAX_SUBSCRIPTIONS_PER_SOCKET
+        ) {
             return "too_many";
         }
 
@@ -3190,16 +5141,26 @@ abstract class ShardDO {
             // past the runtime's per-socket limit. Roll back the in-memory
             // mutation so a retry has a chance to land and surface a
             // structured error to the caller.
-            // eslint-disable-next-line @typescript-eslint/no-dynamic-delete -- `subs` is a Record keyed by dynamic subscription id; removal is the intended rollback
-            delete attachment.subs[subId];
+            if (previous === undefined) {
+                // eslint-disable-next-line @typescript-eslint/no-dynamic-delete -- `subs` is a Record keyed by dynamic subscription id; removal is the intended rollback
+                delete attachment.subs[subId];
+            } else {
+                attachment.subs[subId] = previous;
+            }
 
             return "serialize_failed";
         }
 
+        // Drop the diff baseline. A (re)subscribe asks for the current value, so
+        // the seed must go out as a full snapshot; diffed against the old memo it
+        // is answered `settled` (or a delta against a value the client just
+        // discarded) and the client never gets the snapshot it asked for.
+        this.subMemos.get(ws)?.delete(subId);
+
         return "ok";
     }
 
-    protected unsubscribe(ws: WebSocket, subId: string): void {
+    protected unsubscribe(ws: ShardSocketLike, subId: string): void {
         const attachment = this.readAttachment(ws);
 
         // Capture the current query so we can roll back on serialization failure.
@@ -3226,10 +5187,121 @@ abstract class ShardDO {
     }
 
     /**
+     * Register a live shape subscription on a socket — the partial-replication
+     * parallel to {@link ShardDO.subscribe}. Stores the descriptor in the
+     * attachment's `shapes` registry (created lazily) so it survives
+     * hibernation, sharing the per-socket cap with `subs`. Returns a status the
+     * caller surfaces as a structured error frame; never throws (a thrown
+     * `webSocketMessage` is a fatal-channel error under the hibernation API).
+     */
+    protected shapeSubscribe(ws: ShardSocketLike, subId: string, shape: ShapeSubscriptionQuery): "ok" | "serialize_failed" | "too_many" {
+        const attachment = this.readAttachment(ws);
+        const shapes = attachment.shapes ?? {};
+        // Re-subscribing a held shape id (the client's re-seed on a diverged
+        // base) replaces it and adds nothing to the count — see `subscribe`.
+        const previous = Object.hasOwn(shapes, subId) ? shapes[subId] : undefined;
+
+        if (previous === undefined && Object.keys(attachment.subs).length + Object.keys(shapes).length >= ShardDO.MAX_SUBSCRIPTIONS_PER_SOCKET) {
+            return "too_many";
+        }
+
+        shapes[subId] = shape;
+        attachment.shapes = shapes;
+
+        try {
+            (ws as HibernatableWebSocket).serializeAttachment?.(attachment);
+        } catch {
+            if (previous === undefined) {
+                // eslint-disable-next-line @typescript-eslint/no-dynamic-delete -- `shapes` is a Record keyed by dynamic subscription id; removal is the intended rollback
+                delete attachment.shapes[subId];
+            } else {
+                attachment.shapes[subId] = previous;
+            }
+
+            return "serialize_failed";
+        }
+
+        return "ok";
+    }
+
+    /** Remove a shape subscription and its poke baseline. Mirrors {@link ShardDO.unsubscribe}'s rollback-on-serialize-failure contract. */
+    protected shapeUnsubscribe(ws: ShardSocketLike, subId: string): void {
+        const attachment = this.readAttachment(ws);
+        const { shapes } = attachment;
+
+        if (!shapes) {
+            return;
+        }
+
+        const captured = shapes[subId];
+
+        // eslint-disable-next-line @typescript-eslint/no-dynamic-delete -- `shapes` is a Record keyed by dynamic subscription id; removal is the intended unsubscribe
+        delete shapes[subId];
+
+        try {
+            (ws as HibernatableWebSocket).serializeAttachment?.(attachment);
+        } catch {
+            if (captured !== undefined) {
+                shapes[subId] = captured;
+            }
+
+            return;
+        }
+
+        this.shapeMemos.get(ws)?.delete(subId);
+        this.globalShapeSnapshots.get(ws)?.delete(subId);
+
+        // Drop the durable baselines for this shape too (no-op for a
+        // connection-id-less socket), so an unsubscribe doesn't leave a stale
+        // snapshot/cursor a later resubscribe would diff/resume against.
+        if (attachment.connectionId !== undefined) {
+            try {
+                deleteGlobalShapeSnapshot(this.sql as SqlExec, attachment.connectionId, subId);
+            } catch {
+                /* stub sql / missing table — nothing durable to clean up */
+            }
+
+            try {
+                deleteShapePokeCursor(this.sql as SqlExec, attachment.connectionId, subId);
+            } catch {
+                /* stub sql / missing table — nothing durable to clean up */
+            }
+        }
+
+        // The relayed twin of those two deletes. A socket on a RELAY registers
+        // its shape in the OWNER's `__lunora_relay_shapes`, which this DO cannot
+        // reach with a local DELETE — and nothing else reclaims that row until
+        // the whole relay detaches, while every surviving row pins the op-log
+        // retention floor (`OwnerRelay.minShapeCursor`). Fire-and-forget through
+        // `waitUntil`: it is a cross-DO post, the unsubscribe must not block on
+        // it, and it is a no-op on an owner.
+        const released = this.relay?.releaseRelayShapes(ws, subId).catch((error: unknown) => {
+            // Never reject out of here: this runs under `webSocketMessage`,
+            // where a throw is a fatal-channel error. The release is
+            // best-effort anyway — a dropped frame leaves the registration to
+            // the coarser detach/full-drain reclamation.
+            // eslint-disable-next-line no-console -- server-side diagnostic for a dropped relay-shape release
+            console.error("[@lunora/do] relay shape release failed:", error);
+        });
+
+        if (released !== undefined) {
+            this.shardHost.waitUntil?.(released);
+        }
+    }
+
+    /**
      * Decide whether a single subscription is interested in a mutation
      * delta. The default implementation checks the table name, then runs a
      * shallow-equality predicate over `query.args` against `delta.row`. A
      * subscription with no `args` matches every row in the table.
+     *
+     * `query.table` is whatever the CLIENT registered, compared verbatim — no
+     * table-dependency analysis stands behind it. `@lunora/client` has no table
+     * name to give (a function reference carries only its `namespace:fn` id) and
+     * registers the function path there, so a shard that broadcasts real table
+     * names reaches none of its subscriptions. That is not a gap to close here:
+     * re-execution (`recordChangedTable` → `refreshSubscriptions`) is the routing
+     * every generated app uses, and it keys off read tables properly.
      *
      * Subclasses can override this to implement range queries, joins, or
      * full-text matching — anything more elaborate than equality. When
@@ -3272,25 +5344,59 @@ abstract class ShardDO {
      * identical, so we build a payload keyed by `subId` lazily.
      */
     protected broadcastDelta(delta: MutationDelta): void {
-        const sockets = this.state.getWebSockets();
+        const sockets = this.runner.sockets();
         // Pre-stringify the immutable portion. The only per-message variation
         // is `id`, which we splice in below — cheaper than calling
         // JSON.stringify(...) for every (socket, sub) pair.
-        const deltaJson = JSON.stringify(delta);
+        //
+        // Wire-encode first, matching every sibling outbound path
+        // (`pushSubscriptionData`, poke frames, whisper, stream chunks):
+        // `delta.row` is the fully-decoded document a write just applied, which
+        // can carry `bigint`/`Date`/`ArrayBuffer` — a raw `JSON.stringify` drops
+        // an `ArrayBuffer` to `{}` and throws outright on a `bigint`.
+        //
+        // `encodeWire` is STRICT where the old raw `JSON.stringify` was lossy: a
+        // value the wire refuses (a `RegExp`, a class instance) used to broadcast
+        // as `{}` and now throws here. That is deliberate — a subscriber silently
+        // receiving `{}` for a row field is corruption it cannot detect — but it
+        // IS a behaviour change for a subclass or trigger that puts such a value
+        // in a row, and this runs after the write committed, so the throw
+        // surfaces on an otherwise-successful mutation. Keep rows to values the
+        // wire round-trips; every other outbound path already requires that.
+        const deltaJson = JSON.stringify(encodeWire(delta));
 
         for (const ws of sockets) {
             const attachment = this.readAttachment(ws);
 
-            for (const [subId, query] of Object.entries(attachment.subs)) {
-                if (!this.matchesSubscription(query, delta)) {
+            // Same outbound token-expiry rule every other fan-out applies: a
+            // socket whose credential lapsed must not keep receiving its user's
+            // rows. This path is subclass-driven (see the README's `broadcast`
+            // hook), so nothing upstream of it has already checked.
+            if (isIdentityExpired(attachment.expiresAt)) {
+                this.dropExpiredSocket(ws);
+
+                continue;
+            }
+
+            // `Object.keys`, not `Object.entries`: this runs once per socket for
+            // every mutation, and `entries` allocates a pair array per socket
+            // before any subscription has been tested — so sockets that match
+            // nothing pay the same as sockets that do.
+            //
+            // NOT `for...in`: it walks inherited enumerable keys, where
+            // `Object.entries` was own-only. See the "never inherited ones" test.
+            const { subs } = attachment;
+
+            for (const subId of Object.keys(subs)) {
+                const query = subs[subId];
+
+                if (query === undefined || !this.matchesSubscription(query, delta)) {
                     continue;
                 }
 
-                try {
-                    ws.send(`{"type":"delta","id":${JSON.stringify(subId)},"delta":${deltaJson}}`);
-                } catch {
-                    /* socket may have been closed mid-broadcast */
-                }
+                // Delivery is best-effort here (legacy broadcast path has no diff
+                // baseline to protect), so the boolean is intentionally ignored.
+                trySendFrame(ws, `{"type":"delta","id":${JSON.stringify(subId)},"delta":${deltaJson}}`);
             }
         }
     }
@@ -3303,12 +5409,15 @@ abstract class ShardDO {
      * disables server re-execution and leaves the legacy `broadcastDelta`
      * path as the only live-update mechanism.
      *
-     * `identity` is the EXPLICIT subscriber identity the query runs under. It
-     * is passed by value (anonymous by default — see {@link SubscriptionIdentity})
-     * and forwarded straight into the codegen subclass's `buildCtx`, so a
-     * subscription re-run never reads or mutates the shared, per-request
-     * `currentRequestUserId`/`currentRequestIdentity` instance fields from a
-     * deferred (`waitUntil`) or concurrently-interleaved context.
+     * `identity` is the EXPLICIT subscriber context the query runs under —
+     * identity claims, userId, and the socket's own `ip`. It is passed by value
+     * (anonymous by default — see {@link SubscriptionIdentity}) and forwarded
+     * straight into the codegen subclass's `buildCtx`, so a subscription re-run
+     * never reads the shared, per-request
+     * `currentRequestUserId`/`currentRequestIdentity`/`currentRequestIp` instance
+     * fields from a deferred (`waitUntil`) or concurrently-interleaved context.
+     * A refresh runs while the write that triggered it still owns those fields,
+     * so reading `ip` there would hand every subscriber the MUTATING caller's IP.
      */
     // eslint-disable-next-line class-methods-use-this -- base-class override hook: the codegen subclass overrides this and uses `this` to dispatch via the generated function map
     protected executeSubscription(
@@ -3321,54 +5430,531 @@ abstract class ShardDO {
     }
 
     /**
+     * Resolve a named shape to its concrete query plan for `identity`. The base
+     * class has no shape registry, so it returns `undefined` — partial
+     * replication is disabled and a `shape_subscribe` is rejected. The
+     * codegen-generated subclass overrides this to look the shape up in the
+     * project's `defineShape` registry, evaluate its `where(ctx, args)` under the
+     * subscriber's verified identity, and AND-compose it with the table's RLS
+     * read base-where into {@link ResolvedShape.effectiveWhere}.
+     *
+     * `identity` is the socket's OWN verified identity (the same unforgeable
+     * value `refreshSubscriptions` threads), passed by value so this never reads
+     * the mutable per-request identity fields. Returning `undefined` is the
+     * fail-closed signal — an unknown shape, or an RLS-required table with no
+     * policy resolving for this identity, yields no subscription rather than
+     * leaking rows.
+     */
+    // eslint-disable-next-line class-methods-use-this -- base-class override hook: the codegen subclass overrides this and uses `this` to dispatch via the generated shape registry
+    protected resolveShape(_name: string, _args: Record<string, unknown>, _identity?: SubscriptionIdentity): ResolvedShape | undefined {
+        return undefined;
+    }
+
+    /**
+     * The RLS-uniform gate (plan 075 Phase 3): whether a reactive shape may be
+     * relay-multicast — i.e. one delta is correct for **every** subscriber. The owner
+     * decides it (see {@link OwnerRelay.isShapeRelayUniform} — a static RLS read-policy
+     * guard plus claim-exhaustive `Proxy` probes, fail-closed); this thin delegation
+     * is the seam the gate test exercises. A non-owner DO is never relay-uniform.
+     */
+    protected isShapeRelayUniform(name: string, args: Record<string, unknown>): boolean {
+        return this.relay?.isShapeRelayUniform(name, args) ?? false;
+    }
+
+    /**
+     * Read the FULL current membership of a `.global()`-table shape from its D1
+     * (or Hyperdrive) backend — the seed/poll source for the latency-tiered
+     * global shape path. A `.global()` table lives in another store with no
+     * per-DO op-log, so this is the only way to learn its rows from inside the
+     * shard DO; {@link ShardDO.seedGlobalShape} calls it once on subscribe and
+     * {@link ShardDO.refreshGlobalShape} on every alarm tick, diffing the result
+     * against the per-socket snapshot to compute the poke.
+     *
+     * The base class has no global backend, so it returns `[]` (a base-only DO,
+     * or a project with no global tables, never resolves a global shape). The
+     * codegen subclass overrides it to drain `globalDb.findMany(table, { where:
+     * effectiveWhere })` under the socket's verified `identity` — the same
+     * unforgeable value `resolveShape` composed the RLS predicate with, so the
+     * D1 read is identity-scoped exactly like the poke-live path.
+     */
+    // eslint-disable-next-line class-methods-use-this -- base-class override hook: the codegen subclass overrides this to read the global (D1) backend; the base has none
+    protected readGlobalShapeRows(_resolved: ResolvedShape, _identity?: SubscriptionIdentity): Promise<ShapeRow[]> {
+        return Promise.resolve([]);
+    }
+
+    /**
+     * Poll external-source (`.source(...)`) tables once (plan 077): materialize
+     * each sourced table's freshly-pulled tenant slice into this DO's SQLite. The
+     * base `ShardDO` has no sourced tables, so it returns `undefined` and the
+     * ingest tier stays dormant — zero behavior change for every existing DO. The
+     * codegen subclass overrides it to, per sourced table, build a
+     * `createShardCtxDb` writer, read the tenant slice from Hyperdrive under this
+     * DO's shard key, and run `runExternalSourceTick` (read local baseline → diff
+     * → apply via the validated CDC writer).
+     *
+     * Returns the EARLIEST next-due timestamp (absolute epoch ms) across every
+     * non-manual sourced table — `polledAt.get(table) ?? now` plus that source's
+     * `refresh.everyMs` — or `undefined` when every sourced table is
+     * `refresh: "manual"` (or there are none). NOT a bare active count: the
+     * shared poll alarm ({@link ShardDO.alarm}) uses this to re-arm at the exact
+     * next time ingest needs to run, instead of spinning at the fixed
+     * `GLOBAL_SHAPE_POLL_INTERVAL_MS` floor for a source whose `refresh.everyMs`
+     * is, say, an hour away.
+     */
+    // eslint-disable-next-line class-methods-use-this -- base-class override hook: the codegen subclass implements the real Hyperdrive-backed poll, and is the only consumer of `_trace`
+    protected pollExternalSources(_trace?: TraceRefLike): Promise<number | undefined> {
+        return Promise.resolve(undefined);
+    }
+
+    /**
+     * Arm the shared poll alarm for external-source ingest (plan 077). The alarm is
+     * shared with the global-shape poll tier; the codegen subclass calls this once
+     * (on construction / first sourced write) so a sourced DO starts its ingest
+     * loop, after which {@link ShardDO.alarm} re-arms itself while
+     * {@link ShardDO.pollExternalSources} reports remaining work. Idempotent; a
+     * no-op when the runtime exposes no `setAlarm` (unit harness).
+     */
+    protected scheduleSourcePoll(): Promise<void> {
+        return this.scheduleBootstrapPoll();
+    }
+
+    /**
+     * The resolved TTL policies (`.ttl(field, { after })`) for this DO's schema —
+     * one {@link TtlSweepSpec} per table that declares a TTL. The base `ShardDO`
+     * has no schema, so it returns `[]` and the TTL tier stays dormant. The
+     * codegen subclass overrides it to read each table's `ttlPolicy` (+ its
+     * `.softDelete()` marker) off the imported schema.
+     */
+    // eslint-disable-next-line class-methods-use-this -- base-class override hook: the codegen subclass reads the imported schema
+    protected ttlSweeps(): ReadonlyArray<TtlSweepSpec> {
+        return [];
+    }
+
+    /**
+     * Sweep every `.ttl()` table once: page the rows past their expiry and remove
+     * each THROUGH the schema-aware writer (`runShardWrite`) so companions
+     * / CDC / live subscriptions stay correct and a `.softDelete()` table soft-deletes
+     * instead of physically removing the row. Work is bounded per tick
+     * ({@link TTL_SWEEP_BATCH} × {@link TTL_SWEEP_MAX_BATCHES}) so a large backlog
+     * drains across several alarms without stalling the shard.
+     *
+     * Returns the next-due timestamp (a coarse {@link TTL_SWEEP_INTERVAL_MS}
+     * cadence, so freshly-written rows expire within a bounded window) while any
+     * TTL table exists, or `undefined` when there are none — so a DO with no TTL
+     * table never arms this tier.
+     *
+     * One {@link ShardDO.alarmHeadroom} tracker covers the WHOLE sweep pass (every
+     * spec, every batch) — not per-row or per-spec — because the ceiling exists to
+     * bound one alarm tick's total isolate cost, not any single table's. A
+     * `TRANSACTION_LIMIT_EXCEEDED` mid-batch is "batch full", not a genuine
+     * failure: `selectExpiredIds` never re-selects an already-deleted row, so
+     * deletion IS the resumable checkpoint here — no separate cursor is needed.
+     * The sweep stops immediately, logs a `warn` (not `recordShapeError`, which
+     * would surface as a genuine failure), and returns `Date.now()` so the shared
+     * alarm re-arms promptly via `nextPollAlarmTarget`'s existing due-now floor,
+     * rather than waiting out the full `TTL_SWEEP_INTERVAL_MS` cadence.
+     */
+    protected async pollTtlSweeps(trace?: TraceRefLike): Promise<number | undefined> {
+        const specs = this.ttlSweeps();
+
+        if (specs.length === 0) {
+            return undefined;
+        }
+
+        const sql = this.sql as SqlExec;
+        const now = Date.now();
+        const headroom = this.alarmHeadroom();
+
+        for (const spec of specs) {
+            let batches = 0;
+            let hasMore = true;
+
+            while (hasMore && batches < TTL_SWEEP_MAX_BATCHES) {
+                const page = selectExpiredIds(sql, spec, now, TTL_SWEEP_BATCH);
+
+                for (const id of page.ids) {
+                    // eslint-disable-next-line no-await-in-loop -- per-row writer deletes must serialise to avoid OCC contention on the shard DO (same reasoning as `runShardBulkRowOp`)
+                    const limitHit = await this.deleteExpiredTtlRow(spec.table, id, headroom, trace);
+
+                    if (limitHit) {
+                        return Date.now();
+                    }
+                }
+
+                hasMore = page.hasMore;
+                batches += 1;
+            }
+        }
+
+        return now + TTL_SWEEP_INTERVAL_MS;
+    }
+
+    /**
+     * Arm the shared poll alarm for the TTL sweep. Mirrors {@link scheduleSourcePoll};
+     * the codegen subclass calls it once on construction when the schema declares a
+     * `.ttl()` table so the sweep loop starts, after which {@link ShardDO.alarm}
+     * re-arms itself. Idempotent; a no-op when the runtime exposes no `setAlarm`.
+     */
+    protected scheduleTtlSweep(): Promise<void> {
+        return this.scheduleBootstrapPoll();
+    }
+
+    /**
+     * Durable custody for this shard's deferred `ctx.scheduler` calls — the
+     * `ScheduleOutbox` the generated `buildCtx` hands to
+     * `withDeferredSchedules`.
+     *
+     * The two halves land on opposite sides of the COMMIT on purpose:
+     *
+     * - `record` runs while the handler is still inside its transaction, so the
+     * entry is durable exactly when the writes are and rolls back with them.
+     * It deliberately does NOT swallow: a failure here is still inside the span,
+     * so letting it throw rolls the mutation back — the one moment at which
+     * failing is free. Swallowing would put us back where we started, committing
+     * writes whose job nothing is holding.
+     * - `forget` runs after the dispatch, so it must never fail the response. A
+     * delete that does not land leaves an entry the retry loop re-offers, which
+     * the scheduler refuses as a duplicate and which is then dropped — the error
+     * self-heals into one wasted RPC.
+     *
+     * What survives a settle is therefore exactly the set of jobs that were
+     * promised and not enqueued, which is what {@link ShardDO.pollScheduleOutbox}
+     * drains.
+     */
+    protected scheduleOutbox(): ScheduleOutbox {
+        return {
+            forget: (id: string): void => {
+                try {
+                    forgetScheduleOutbox(this.sql as SqlExec, id);
+                } catch {
+                    // Post-commit: a missing table (pre-migration shard / test stub)
+                    // or a stub handle must not fail a mutation that succeeded. The
+                    // stale entry is re-offered and refused as a duplicate.
+                }
+            },
+            record: (id, envelope): void => {
+                recordScheduleOutbox(this.sql as SqlExec, id, JSON.stringify(envelope), Date.now());
+            },
+            wake: (): void => {
+                // Fire-and-forget: this is called from a settle that is about to
+                // throw, and arming the alarm is not allowed to change what it
+                // throws. `scheduleGlobalPoll` already no-ops when an earlier wake
+                // is pending and absorbs a host that cannot arm.
+                this.scheduleGlobalPoll(Date.now() + SCHEDULE_OUTBOX_FIRST_RETRY_MS).catch(() => {
+                    /* the host could not arm; the next cold start probes again */
+                });
+            },
+            admit: (target: string): number | undefined => this.admitScheduleRate(target),
+        };
+    }
+
+    /**
+     * The scheduler the outbox retry loop dispatches through.
+     *
+     * A seam, like {@link ShardDO.ttlSweeps}: the base has no `createShardDO`
+     * config to read, so it reports `undefined` and the tier stays dormant. The
+     * generated subclass overrides it with the app's configured scheduler —
+     * and only when one is configured, so a shard whose `ctx.scheduler` is the
+     * throwing stub does not retry against a stub eight times before parking.
+     * @returns the scheduler to retry through, or `undefined` when this shard has none
+     */
+    // eslint-disable-next-line class-methods-use-this -- base-class override hook: the generated subclass returns `config.scheduler?.(env)`
+    protected scheduleOutboxScheduler(): SchedulerLike | undefined {
+        return undefined;
+    }
+
+    /**
+     * Re-offer the deferred schedules that were promised to a caller and never
+     * reached the scheduler — the retry half of {@link ShardDO.scheduleOutbox}.
+     * Shares the poll alarm with the source-ingest and TTL tiers, and reports the
+     * earliest next-due time the same way, so a shard with an empty outbox (the
+     * steady state — an entry lives only between a COMMIT and its dispatch) arms
+     * nothing.
+     *
+     * Each attempt reuses the id the caller was already handed, so an entry whose
+     * original dispatch DID land — the failure was the `forget`, or the isolate
+     * died between the two — is refused as a duplicate rather than scheduled
+     * twice. A refusal and an acceptance are therefore both "the scheduler has
+     * it", and both end custody.
+     *
+     * The bound is {@link SCHEDULE_OUTBOX_MAX_ATTEMPTS}: a job the scheduler will
+     * never accept stops costing alarms and becomes a reported fact instead —
+     * parked, logged at `error` with its id and target, and kept for
+     * {@link SCHEDULE_OUTBOX_RETENTION_MS} so an operator can see what was
+     * promised and never enqueued. The queue is bounded on both sides: the
+     * ceiling stops live entries accumulating, the retention sweep stops parked
+     * ones doing so. The sweep rides whatever tick reaches this tier, so a shard
+     * holding ONLY parked entries keeps them until something else wakes it —
+     * which is the right trade: they are one row per genuinely lost job, not a
+     * loop that grows on its own.
+     */
+    protected async pollScheduleOutbox(trace?: TraceRefLike): Promise<number | undefined> {
+        const sql = this.sql as SqlExec;
+        const now = Date.now();
+        let probe: { dueAt: number | undefined; populated: boolean };
+
+        try {
+            probe = probeScheduleOutbox(sql);
+        } catch {
+            // No table (a shard whose store predates it, a harness with a stub
+            // handle) means no custody, which is a dormant tier and not a tier
+            // failure — re-arming the alarm over it would wake an idle DO forever.
+            return undefined;
+        }
+
+        if (!probe.populated) {
+            return undefined;
+        }
+
+        if (probe.dueAt !== undefined && probe.dueAt <= now) {
+            const scheduler = this.scheduleOutboxScheduler();
+
+            for (const entry of readDueScheduleOutbox(sql, now, SCHEDULE_OUTBOX_BATCH)) {
+                // eslint-disable-next-line no-await-in-loop -- each attempt is an outbound RPC to one DO; firing the batch at once is what the per-tick bound exists to prevent
+                await this.retryScheduleOutboxEntry(sql, scheduler, entry, trace);
+            }
+        }
+
+        trimScheduleOutbox(sql, now - SCHEDULE_OUTBOX_RETENTION_MS);
+
+        return probeScheduleOutbox(sql).dueAt;
+    }
+
+    /** This DO's shard key (its DO name), or `__root__` for the single-DO default. The `tenantBy` mapper binds it into the source query. */
+    protected currentShardKey(): string {
+        return this.runner.shardKey ?? ROOT_SHARD_NAME;
+    }
+
+    /**
+     * The `ShardRegistryDO` namespace this shard reports to, and which of its
+     * tables are `.shardBy()`. The generated subclass overrides it for a schema
+     * with `.shardBy()` tables and answers `undefined` until the app declares
+     * `.shardRegistry(...)`; the default registers nothing.
+     */
+    // eslint-disable-next-line class-methods-use-this -- base-class override hook: the codegen subclass returns the registry binding and its sharded tables
+    protected shardRegistry(): undefined | { namespace: unknown; shardedTables: ReadonlySet<string> } {
+        return undefined;
+    }
+
+    /**
+     * Run the once-per-instance shard init — clear `.memory()` tables, then fire
+     * every `onShardInit` hook — before the caller's dispatch proceeds.
+     *
+     * **Why this lives in the base class and is awaited at every entry point.**
+     * A memory table is emptied by the eviction that dropped this instance's
+     * heap, and the init hooks are what refill it. Any dispatch that reached user
+     * code before they finished would read a silently empty table — not an error,
+     * just wrong data — which is the single hazard `.memory()` carries. Putting
+     * the gate on `fetch` / `webSocketMessage` / `webSocketClose` / `alarm`
+     * means a new dispatch path cannot forget it: there is no fifth way into this
+     * object from the runtime.
+     *
+     * Memoized as a PROMISE, not a boolean: concurrent entries (an alarm racing
+     * an RPC on a freshly-woken shard) must all wait on the same run rather than
+     * each starting their own. The field lives on the instance, so it is absent
+     * exactly when the heap was dropped — the same signal `ensureMigrated` uses.
+     *
+     * A failure is absorbed here, deliberately: an init hook that cannot rebuild
+     * presence must not take down the request that woke the shard. Absorbing also
+     * keeps the memo from caching a rejected promise, which would turn one bad
+     * init into a permanently broken instance.
+     *
+     * What the shard is left holding depends on WHERE it failed, and neither state
+     * is "empty" by default — a memory table's rows sit in SQLite until
+     * `clearMemoryTables` deletes them, so an eviction alone does not remove them:
+     *
+     * - **After the clear** (a hook threw) — the tables are cleared but not
+     * refilled, so reads see nothing. The safe direction.
+     * - **Before or during the clear** (`ensureMigrated` or `clearMemoryTables`
+     * itself threw) — the PREVIOUS instance's rows are still there, so reads see
+     * stale presence rather than none. The worse of the two, and the reason the
+     * error is recorded rather than swallowed.
+     */
+    protected async ensureShardInit(): Promise<void> {
+        this.shardInitOnce ??= (async (): Promise<void> => {
+            try {
+                await this.runShardInit();
+            } catch (error: unknown) {
+                this.recordShardInitError("__shard_init__", error);
+            }
+
+            // After init, not instead of it: the probe is a read, and a shard whose
+            // init failed is exactly one that may be holding custody.
+            this.armScheduleOutboxRetry();
+        })();
+
+        await this.shardInitOnce;
+    }
+
+    /**
+     * The shard-init body. A no-op here; the generated subclass overrides it to
+     * clear the schema's `.memory()` tables and dispatch the `onShardInit`
+     * manifest. Kept as a seam (rather than the base reaching for a schema it
+     * does not have) for the same reason `pollExternalSources` is one.
+     * @returns a promise that settles when init is complete.
+     */
+    // eslint-disable-next-line class-methods-use-this -- a seam: the base has no schema to clear, the generated subclass overrides
+    protected async runShardInit(): Promise<void> {
+        await Promise.resolve();
+    }
+
+    /**
+     * Record a contained `onShardInit` failure into the log ring. Mirrors
+     * {@link ShardDO.recordExternalSourceError}: the generated override needs to
+     * write this line and the log ring is private, so the seam keeps the buffer
+     * encapsulated. `hookPath` is the failing hook's function path, or
+     * `__shard_init__` when the failure was outside any single hook.
+     */
+    protected recordShardInitError(hookPath: string, error: unknown, trace?: TraceRefLike): void {
+        this.recordShapeError(`init:${hookPath}`, error, trace);
+    }
+
+    /**
+     * Record a contained external-source ingest failure (one sourced table's
+     * poll) into the log ring without aborting the others.
+     *
+     * `trace` is the alarm's anchor, forwarded by the generated
+     * `pollExternalSources` override from the value it was handed. Optional so a
+     * subclass generated before this parameter existed still compiles and simply
+     * records an uncorrelated line.
+     */
+    protected recordExternalSourceError(table: string, error: unknown, trace?: TraceRefLike): void {
+        this.recordShapeError(`source:${table}`, error, trace);
+    }
+
+    /**
+     * Record a contained external-source BACK-OFF — a transaction-limit hit
+     * mid-batch, which is "batch full" rather than a failure, so it lands at
+     * `warn` and does NOT group as an Issue the way
+     * {@link ShardDO.recordExternalSourceError} does.
+     *
+     * Exists because the generated poll loop needs to write this line and the log
+     * ring is private: emitting `this.logs.push(...)` into the subclass does not
+     * compile, which went unnoticed only because no fixture or example declares a
+     * `.source()` table. A protected seam keeps the buffer encapsulated and gives
+     * the line the same trace correlation as its sibling above.
+     */
+    protected recordExternalSourceWarning(table: string, message: string, trace?: TraceRefLike): void {
+        this.logs.push({
+            functionPath: `source:${table}`,
+            level: "warn",
+            message,
+            timestamp: Date.now(),
+            traceId: trace?.traceId,
+        });
+    }
+
+    /* eslint-disable no-secrets/no-secrets -- JSDoc names the `AsyncIterable<unknown>` type, not a credential */
+
+    /**
      * Look up a streaming-query function and return a thunk that produces the
-     * `AsyncIterable&lt;unknown>` when handed an {@link AbortSignal}. The codegen
+     * `AsyncIterable<unknown>` when handed an {@link AbortSignal}. The codegen
      * subclass overrides this to dispatch via `LUNORA_FUNCTIONS`; the base
      * default returns `null`, which surfaces as `{type:"error", code:"NOT_FOUND"}`
      * to the client.
      *
-     * The deferred-iterator shape (`(signal) => AsyncIterable&lt;unknown>`) keeps
+     * The deferred-iterator shape (`(signal) => AsyncIterable<unknown>`) keeps
      * the cancel signal pluggable per-call without coupling this signature to
      * the wire-frame loop in `handleStream`.
+     *
+     * `identity` is the socket's verified identity plus its `ip`, threaded BY
+     * VALUE exactly as {@link ShardDO.executeSubscription} threads it and for the
+     * same reason: a `stream` frame is dispatched fire-and-forget and its
+     * iterator is pulled long after, interleaved with unrelated `/rpc`
+     * dispatches, so reading the shared per-request fields instead would run an
+     * `rls()` / `ctx.auth`-scoped stream as nobody (and report no `ctx.ip`) while
+     * the shard is idle — and as whoever else is mid-flight while it is not.
      */
     // eslint-disable-next-line class-methods-use-this -- base-class override hook: the codegen subclass overrides this and uses `this` to dispatch via the generated function map
-    protected executeStream(_functionPath: string, _args: Record<string, unknown>): null | { iterator: (signal: AbortSignal) => AsyncIterable<unknown> } {
+    protected executeStream(
+        _functionPath: string,
+        _args: Record<string, unknown>,
+        _identity?: SubscriptionIdentity,
+    ): null | { durable?: { ttlMs?: number }; iterator: (signal: AbortSignal) => AsyncIterable<unknown> } {
         // eslint-disable-next-line unicorn/no-null -- base default: `null` = "no such streaming function"; the codegen subclass overrides and also returns null
         return null;
     }
 
+    /* eslint-enable no-secrets/no-secrets */
+
     /**
-     * Wrap a query handler in the reactive cache. The subclass passes the
-     * function path, parsed args, and a `run` callback that resolves to the
-     * handler's return value. When the cache is configured we key by
-     * `(functionPath, stable-stringified args)`, allocate a fresh dep
-     * tracker, store it on `this.currentTracker` so `getCtxDbReadHook` reads
-     * stamp into it, and restore the prior tracker in `finally`. When the
-     * cache is absent we just call `run()` — same shape, zero overhead.
+     * Wrap a query handler in the reactive cache. The `/rpc` dispatch path calls
+     * this for every path {@link ShardDO.isCacheableQuery} admits, so a
+     * subclass does NOT wrap its own `handleRpc` — see the re-entry guard below
+     * for why doing both would be worse than doing neither. When the cache is
+     * configured we key by `(identity, functionPath, stable-stringified args)`,
+     * mint a fresh {@link QueryReadScope} (dep tracker + read footprint) and
+     * hand it to `run` — which threads it through `handleRpc` into the ctx the
+     * handler reads through, so this dispatch's reads stamp THIS dispatch's
+     * tracker even while a sibling dispatch is parked on an await. When the
+     * cache is absent we just call `run()` with no scope — same shape, zero
+     * overhead.
      *
-     * Subclasses should ALSO pass `getCtxDbReadHook()` as the `onRead`
+     * Subclasses must ALSO pass `getCtxDbReadHook(scope)` as the `onRead`
      * option on their `createShardCtxDb(...)` call so the tracker actually
-     * collects deps. Without that wiring the cache will memoize results
-     * with empty dep sets, so writes never invalidate them and stale
-     * results stick around — the {@link ReactiveCache} class is contract-
-     * neutral about who fills `deps`.
+     * collects deps. Without that wiring the cache memoizes results with empty
+     * dep sets, so the write hooks never invalidate them — the
+     * {@link ReactiveCache} class is contract-neutral about who fills `deps`,
+     * and dep-less entries survive `invalidate` AND `invalidateTable` alike, so
+     * neither the ctx-db hooks nor the {@link ShardDO.recordChangedTable}
+     * backstop can rescue that omission.
+     *
+     * The scope's {@link ReadFootprint} is the ranges channel:
+     * `getCtxDbReadRangeHook(scope)` — and the range-marking half of
+     * `getCtxDbReadHook(scope)` — stamp it. Its
+     * `ranges()` is handed to `reactiveCache.run` as a LAZY 4th argument (a
+     * thunk, evaluated only after `run()` resolves), the same deferral
+     * `deps` already relies on: the footprint is only complete once the
+     * handler has actually run. Subclasses that also want range-precise
+     * invalidation should pass `getCtxDbReadRangeHook(scope)` as `onReadRange`
+     * on the same `createShardCtxDb(...)` call — mirroring `onRead` above. A
+     * subclass that only wires `onRead` still works: `ranges()` degrades to
+     * `undefined` and every read is treated as a whole-table dependency, per
+     * `ReactiveCache.run`'s own default. When `onReadRange` IS wired, a table
+     * `footprint.ranges()` could not narrow (any by-id/scan read, or a
+     * provable range mixed with one) still falls back to a whole-table
+     * `SCAN_DEP`, stamped after `run()` resolves — see the fallback in this
+     * method's body. Only a table read EXCLUSIVELY through provable ranges
+     * gets range-precise invalidation instead.
      */
-    protected async runCachedQuery<R>(functionPath: string, args: Record<string, unknown>, run: () => Promise<R>): Promise<R> {
+    protected async runCachedQuery<R>(
+        functionPath: string,
+        args: Record<string, unknown>,
+        run: (scope?: QueryReadScope) => Promise<R>,
+        attribution?: QueryAttribution,
+        outer?: QueryReadScope,
+    ): Promise<R> {
         if (!this.reactiveCache) {
             return run();
         }
 
-        // Snapshot the in-flight tracker BEFORE allocating a fresh one, so
-        // the `finally` restores it correctly. The previous implementation
-        // allocated inside `reactiveCache.run(...)` before capturing
-        // `previous` in a separate `withTracker` helper, so `previous`
-        // captured the just-allocated tracker and the leftover never got
-        // cleared — a stray read between requests would land in the wrong
-        // dep set and corrupt the next cache miss.
-        const previous = this.currentTracker;
-        const tracker = createDependencyTracker();
+        // Already inside a cached query — a nested `ctx.runQuery`, or a subclass
+        // that wraps its own dispatch under the base one. Such a caller threads
+        // the scope it was handed as `outer`, and we pass straight through ON
+        // THAT SCOPE. Memoizing here would be actively wrong, not merely
+        // redundant: the inner call would build its own ctx off its own scope, so
+        // every read the handler makes from that point lands in the INNER dep set
+        // and the outer entry is stored with no deps at all — permanently
+        // un-invalidatable stale data. Passing `outer` back keeps the reads
+        // landing where they belong.
+        //
+        // Note this is a per-CALL signal, not instance state: two independent
+        // concurrent dispatches each mint their own scope below and neither sees
+        // the other, which is the whole point of threading it.
+        if (outer) {
+            return run(outer);
+        }
 
-        this.currentTracker = tracker;
+        const tracker = createDependencyTracker();
+        const footprint = createReadFootprint();
+        let ipRead = false;
+        const scope: QueryReadScope = {
+            footprint,
+            markIpRead: () => {
+                ipRead = true;
+            },
+            tracker,
+        };
 
         // Detect a cache hit cheaply by diffing the cache's lifetime hit
         // counter across the `run` call — a hit means the callback (and thus
@@ -3378,38 +5964,155 @@ abstract class ShardDO {
         // whether the cache is even enabled.
         const hitsBefore = this.reactiveCache.stats().hits;
 
-        try {
-            // Scope the cache entry to the caller's identity so a per-user /
-            // RLS-filtered result is never served across users on a shared DO.
-            // eslint-disable-next-line unicorn/no-null -- reactiveCacheKey's identity arg is `null | string`; null is the documented "anonymous caller" discriminator
-            const result = await this.reactiveCache.run(reactiveCacheKey(functionPath, args, this.getCurrentUserId() ?? null), tracker.collect(), run);
+        // Scope the cache entry to the caller's FULL context, resolved as ONE
+        // object on one pass over the per-request state. Everything a cache HIT
+        // would skip has to be in here, because a hit returns the stored result
+        // without ever running the callback: not just what the handler reads
+        // (userId, the RLS-keyable claims, the address) but what the GATES
+        // around it branch on. The emitted `handleRpc` refuses an `internal`
+        // function to a caller without the trusted-dispatch flag — and that
+        // check lives inside the callback, so leaving the flag out of the key
+        // let a cron-primed `internalQuery` entry be handed to an anonymous
+        // client verbatim.
+        //
+        // One object rather than a field-per-expression for the same reason the
+        // emitted `buildCtx` resolves its caller on a single discriminant:
+        // parallel per-field expressions are how a field comes to be forgotten.
+        // A fifth field belongs here and nowhere else.
+        //
+        // `ip` is the one member NOT read unconditionally. Folding the address
+        // in always would key every entry by caller, collapsing the hit rate for
+        // the overwhelming majority of queries that never touch `ctx.ip`: on the
+        // default single-`__root__`-DO topology one public list read by N
+        // anonymous visitors would become N entries instead of one. So it joins
+        // only for a `functionPath` some dispatch has been OBSERVED reading
+        // `ctx.ip` through — the generated `buildCtx` exposes `ip` as a getter
+        // that calls `scope.markIpRead`, recorded below once the handler ran.
+        //
+        // The dispatch that DISCOVERS the read is the one case the mark cannot
+        // precede: its own key was already computed without the address. It is
+        // still safe, because the mark lands before its entry is stored (the
+        // range fallback below runs inside `ReactiveCache.run`'s callback, and
+        // the store happens after that resolves), while every later dispatch
+        // computes its key and probes the cache in one synchronous stretch. A
+        // dispatch that can see the discovering entry therefore keyed on the
+        // address and cannot be looking under the key that entry sits at: the
+        // orphan is unreachable and simply ages out.
+        const caller = {
+            // eslint-disable-next-line unicorn/no-null -- absent fields serialize as null so the encoded shape stays canonical
+            claims: this.getCurrentIdentity() ?? null,
+            // eslint-disable-next-line unicorn/no-null -- as above
+            ip: (this.ipKeyedFunctionPaths.has(functionPath) ? this.getCurrentIp() : undefined) ?? null,
+            system: this.isSystemDispatch(),
+            // eslint-disable-next-line unicorn/no-null -- as above
+            userId: this.getCurrentUserId() ?? null,
+        };
+        // `stableStringify` canonicalizes key order, so equal contexts yield
+        // equal discriminators (the same guarantee the args encoding relies on).
+        // The plain anonymous caller keeps `reactiveCacheKey`'s documented `null`
+        // bucket — matched on the ENCODED string rather than field by field, so a
+        // member added above that nobody mirrors in `ANONYMOUS_CALLER` simply
+        // stops matching and every caller gets its own bucket: a hit-rate
+        // regression the tests catch, never a shared entry.
+        const encoded = stableStringify(caller);
+        const identity =
+            encoded === ANONYMOUS_CALLER
+                ? // eslint-disable-next-line unicorn/no-null -- reactiveCacheKey's identity arg is `null | string`; null is the documented "anonymous caller" discriminator
+                  null
+                : encoded;
 
-            this.currentRequestCacheHit = this.reactiveCache.stats().hits > hitsBefore;
-            this.currentRequestReadTables = tablesFromDeps(tracker.collect());
+        // Wraps `run` so that, once the handler has actually executed and the
+        // footprint is final, every table it touched that `footprint.ranges()`
+        // could NOT narrow gets a whole-table `SCAN_DEP` stamped into the same
+        // tracker `deps` set the cache indexes by — mirroring the whole-table
+        // fallback `executeSubscription` gets for free from `footprint.tables`
+        // (see `writeTouchesMemo` in `subscription-range-gate.ts`, which treats
+        // any table in a subscription's memo without a narrowed range as
+        // "assume touched"). Two reads land here: a table read only through an
+        // unprovable path (scan / by-id), which the tracker already deps via
+        // `getCtxDbReadHook`, and — the gap this closes — a table read through
+        // BOTH a provable range (`onReadRange`, deps nothing on its own) AND a
+        // by-id read (`onRead`, which marks the table unnarrowable so
+        // `ReadFootprint.ranges()` drops its slices). That mix used to leave
+        // the cache entry with deps `{table:id}` and ranges `[]`: an insert of
+        // a NEW row into the range matched neither and the stale entry
+        // survived. A table `ranges()` DID narrow is deliberately left alone —
+        // adding a fallback there would defeat the range-precise invalidation
+        // this cache exists to provide. This does not touch `ReadFootprint`'s
+        // unnarrowable semantics (which subscriptions also rely on); it only
+        // changes what `runCachedQuery` derives FROM that footprint.
+        //
+        // Ordering relies on `ReactiveCache.run`'s own contract: it awaits
+        // `run()` in full, THEN calls the `ranges` thunk, and only THEN reads
+        // `deps` to index the entry. `tracker.collect()` below hands the cache
+        // a live `Set` reference, so stamping it here — after the real
+        // handler resolved but before either later step — lands in time.
+        const runWithRangeFallback = async (): Promise<R> => {
+            const result = await run(scope);
+
+            // Before the entry is stored, so the key every LATER dispatch of
+            // this path computes already carries the caller's address. See the
+            // discriminator comment above for why that ordering is what makes
+            // the discovering dispatch's own ip-less entry unreachable rather
+            // than servable.
+            if (ipRead) {
+                this.ipKeyedFunctionPaths.add(functionPath);
+            }
+
+            const narrowed = footprint.ranges();
+
+            for (const table of footprint.tables) {
+                if (!narrowed?.has(table)) {
+                    tracker.recordRead(table, SCAN_DEP);
+                }
+            }
 
             return result;
-        } finally {
-            this.currentTracker = previous;
+        };
+
+        const result = await this.reactiveCache.run(reactiveCacheKey(functionPath, args, identity), tracker.collect(), runWithRangeFallback, () =>
+            flattenReadRanges(footprint.ranges()),
+        );
+
+        if (attribution) {
+            // `attribution` is an out-parameter by design — the per-dispatch
+            // sink `beginDispatch` minted and the dispatch tail reads back.
+            Object.assign(attribution, { cacheHit: this.reactiveCache.stats().hits > hitsBefore, readTables: tablesFromDeps(tracker.collect()) });
         }
+
+        return result;
     }
 
     /**
      * Returns an `onRead` callback suitable to hand to `createShardCtxDb`'s
-     * `onRead` option. The returned function stamps the in-flight tracker (set
-     * by `runCachedQuery`) when one exists and is a no-op otherwise — so
+     * `onRead` option, BOUND to the dispatch whose {@link QueryReadScope} is
+     * passed in. `runCachedQuery` mints that scope and threads it through
+     * `handleRpc`; a dispatch with no cache scope (a mutation, an action, a
+     * cache-less shard) passes nothing and gets a hook that stamps no deps — so
      * subclasses can wire this hook unconditionally without checking whether
      * the cache is enabled.
      *
      * It ALSO records the table into {@link currentScannedTables} whenever the
-     * read was a full-table scan (the `SCAN_DEP` sentinel). That set is drained
-     * into `recordFunctionCall` after dispatch to build the durable per-function
-     * full-scan attribution — and unlike the tracker, it's collected even when
-     * the reactive cache is off, since the causal signal is independent of
-     * caching.
+     * read was a full-table scan (the `SCAN_DEP` sentinel), scope or no scope.
+     * That set is drained into `recordFunctionCall` after dispatch to build the
+     * durable per-function full-scan attribution — unlike the tracker, it's
+     * collected even when the reactive cache is off, since the causal signal is
+     * independent of caching.
+     *
+     * It ALSO marks the table unnarrowable on the scope's `footprint`,
+     * mirroring `executeSubscription`'s wiring (which hands a single
+     * `ReadFootprint`'s `onRead`/`onReadRange` pair straight to `buildCtx`).
+     * `ctx-db.ts`'s reader calls this `onRead` and `onReadRange` mutually
+     * exclusively per read — a provable index slice fires ONLY `onReadRange`,
+     * everything else (by-id, scan, an unprovable slice) fires ONLY this
+     * `onRead` — so folding the footprint's `onRead` in here is exactly the
+     * "read this table outside a range" signal {@link ReadFootprint.ranges}
+     * needs to drop that table from the narrowed set.
      */
-    protected getCtxDbReadHook(): (table: string, idOrScan?: string) => void {
+    protected getCtxDbReadHook(scope?: QueryReadScope): (table: string, idOrScan?: string) => void {
         return (table, idOrScan) => {
-            this.currentTracker?.recordRead(table, idOrScan ?? SCAN_DEP);
+            scope?.tracker.recordRead(table, idOrScan ?? SCAN_DEP);
+            scope?.footprint.onRead(table, idOrScan ?? SCAN_DEP);
 
             // Attribute a scan ONLY on the explicit `SCAN_DEP` sentinel. A
             // predicated (indexed) `findMany` calls `onRead(table)` with no id
@@ -3422,6 +6125,25 @@ abstract class ShardDO {
             if (idOrScan === SCAN_DEP) {
                 this.currentScannedTables?.add(table);
             }
+        };
+    }
+
+    /**
+     * Returns an `onReadRange` callback suitable to hand to
+     * `createShardCtxDb`'s `onReadRange` option, alongside
+     * `getCtxDbReadHook(scope)` as `onRead` on the same call — the pairing
+     * `executeSubscription` already uses via `ReadFootprint`. Stamps the
+     * footprint of the {@link QueryReadScope} passed in and is a no-op when
+     * none is, so subclasses can wire this hook unconditionally regardless of
+     * whether the cache is enabled. Without this wiring `runCachedQuery`'s
+     * ranges thunk always observes an empty footprint and every cached query
+     * degrades to the prior whole-table dependency — safe, just not
+     * range-precise.
+     */
+    // eslint-disable-next-line class-methods-use-this -- symmetry with `getCtxDbReadHook`: both are the scope-binding factories a generated `buildCtx` calls
+    protected getCtxDbReadRangeHook(scope?: QueryReadScope): (range: KeyRange) => void {
+        return (range) => {
+            scope?.footprint.onReadRange(range);
         };
     }
 
@@ -3448,13 +6170,164 @@ abstract class ShardDO {
     }
 
     /**
+     * The `createShardCtxDb` options this DO's configuration decides, as one
+     * spreadable slice: the reactive cache (invalidation half of the contract)
+     * plus the two relation-resolution knobs from {@link ShardDOOptions}.
+     *
+     * The generated `buildCtx` spreads this FIRST into its `createShardCtxDb`
+     * call, so a per-request option it sets afterwards still wins:
+     *
+     * ```ts
+     * createShardCtxDb({ ...this.ctxDbTuning(), auth: …, schema, sql, … })
+     * ```
+     *
+     * One accessor rather than three, because it is one decision — "how this
+     * deployment configured its ctx-db" — and the emitter should not have to
+     * grow a line per knob. Only keys the app actually set are present, so
+     * spreading never overwrites an engine default with `undefined`.
+     *
+     * Handing over `cache` is what makes writes invalidate at row + index-range
+     * precision (`ctx-db.ts` calls `cache.invalidate(table, id, indexKeys)` on
+     * every `insert`/`patch`/`replace`/`delete`). EVERY writer the emitter builds
+     * spreads this — the user-facing ctx and all three admin/maintenance writers —
+     * because a writer that skips it leaves post-write reads answering from the
+     * pre-write snapshot.
+     *
+     * Pure: it reports the slice and records nothing. Whether the emitter actually
+     * wired it is a fact the emitter knows statically and declares through
+     * {@link ShardDOOptions.ctxDbCacheWired}; inferring it from a call to this
+     * accessor made reading the slice — in a test, or to log it — silently disarm
+     * the invalidation backstop in {@link ShardDO.recordChangedTable}.
+     */
+    protected ctxDbTuning(): { cache?: ReactiveCache; maxRelationKeys?: number; relationExistsPushDown?: "always" | "auto" | "never" } {
+        return {
+            ...this.ctxDbRelationOptions,
+            ...(this.reactiveCache === undefined ? {} : { cache: this.reactiveCache }),
+        };
+    }
+
+    /**
+     * Whether `functionPath` may have its result memoized by the reactive cache.
+     *
+     * Named for the decision rather than for the `kind` lookup that mostly
+     * answers it, because the `kind` is not the whole test. A cache HIT returns
+     * the stored result without running the dispatch callback, so every gate
+     * inside that callback is skipped — including the emitted `handleRpc`'s
+     * refusal of an `internal` function to an untrusted caller. An
+     * `internalQuery` is a registered `query`, and classifying on kind alone let
+     * a cron-primed entry be served to an anonymous client. So a function the
+     * gate can refuse is not cacheable, whatever its kind.
+     *
+     * The same holds for a gate the APP author wrote. A procedure's `.use()`
+     * chain is part of the registered function's handler, so it too runs inside
+     * the callback: a `.use(rateLimit(...))` query was charged on its first
+     * dispatch and on none of the ones the memo answered — while every one of
+     * those still arrived at this Durable Object and still cost it a dispatch,
+     * so only the accounting was skipped. The builder marks such a chain
+     * (`perDispatch`) and the generated override refuses it here. Metering and
+     * memoizing are mutually exclusive: the memo's whole value is not running
+     * the thing again.
+     *
+     * The base class has no function registry, so the default is `false`: the
+     * conservative answer, since caching an `action` would skip its outbound
+     * side effects on a hit and caching a `mutation` is meaningless. The
+     * codegen-generated subclass overrides it with the real `LUNORA_FUNCTIONS`
+     * lookup, which is what production dispatch uses.
+     */
+    // eslint-disable-next-line class-methods-use-this -- base-class override hook: the codegen subclass overrides this to consult `LUNORA_FUNCTIONS`
+    protected isCacheableQuery(_functionPath: string): boolean {
+        return false;
+    }
+
+    /**
+     * Ceilings for one transaction. The base class uses the engine defaults
+     * (sized for a 128 MiB Durable Object isolate); a subclass overrides this
+     * to raise them for a deployment that genuinely needs bigger transactions.
+     */
+    // eslint-disable-next-line class-methods-use-this -- override seam; the base answer is deliberately constant
+    protected transactionLimits(): Partial<TransactionLimits> {
+        return {};
+    }
+
+    /**
+     * A fresh budget for a dispatch that brought none of its own.
+     *
+     * This used to hand back an INSTANCE FIELD stamped by `beginDispatch` — "the
+     * meter of whichever `/rpc` is in flight". Nothing that reaches it is that
+     * dispatch: the `/rpc` path value-threads its own tracker into `handleRpc`
+     * and never consults this. What reached it were the out-of-band callers —
+     * `dispatchLifecycle`'s `onConnect`/`onDisconnect` hooks, `handleRunAs`, the
+     * admin `runShardWrite` behind the studio's row editor — which either
+     * charged their writes to an unrelated in-flight mutation's budget (failing
+     * one of the two with a ceiling neither caused) or, with no dispatch in
+     * flight, ran completely unmetered.
+     *
+     * So: mint one, the same by-value answer {@link ShardDO.subscriptionHeadroom}
+     * and {@link ShardDO.alarmHeadroom} give their own out-of-band callers, and
+     * for the same reason — an ambient field says "a dispatch is in flight", not
+     * "this caller is that dispatch".
+     */
+    protected transactionHeadroom(): TransactionHeadroomTracker {
+        return new TransactionHeadroomTracker(this.transactionLimits());
+    }
+
+    /**
+     * A fresh budget for one deferred subscription re-run.
+     *
+     * The re-run is dispatched from inside the WRITING request's `try` and may
+     * outlive it via `waitUntil`, so it must not spend the mutation's budget:
+     * metering reader work against writer budget would trip the ceiling and
+     * surface as `refreshOne`'s swallowed catch, silently dropping a live
+     * update.
+     *
+     * Handed to `buildCtx` BY VALUE from the generated `executeSubscription`,
+     * the same way {@link SubscriptionIdentity} is threaded — deliberately not
+     * signalled through an instance flag. A flag would say "a refresh is in
+     * flight", not "this caller is the refresh", and the drain runs in the
+     * background: a concurrent `/rpc` dispatch building its `ctx.db` during the
+     * drain would take the refresh branch and lose its own ceiling entirely.
+     */
+    protected subscriptionHeadroom(): TransactionHeadroomTracker {
+        return new TransactionHeadroomTracker(this.transactionLimits());
+    }
+
+    /**
+     * A fresh budget for one alarm-driven work item — one external-source
+     * table's tick, or one TTL sweep pass.
+     *
+     * Alarm work runs with no client waiting and no `/rpc` dispatch in flight,
+     * so `transactionHeadroom()`'s per-dispatch tracker is `undefined` there —
+     * leaving external-source ingest and TTL sweeps completely unmetered, the
+     * exact isolate-exhaustion class the meter exists to bound. Handed to the
+     * writer BY VALUE, the same pattern as `subscriptionHeadroom()` and for the
+     * same reason: an ambient instance-field flag would race a concurrently
+     * in-flight `/rpc` dispatch, or a sibling alarm work item, clearing or
+     * substituting the wrong tracker mid-flight.
+     */
+    protected alarmHeadroom(): TransactionHeadroomTracker {
+        return new TransactionHeadroomTracker(this.transactionLimits());
+    }
+
+    /**
      * Record that `table` was written during the current RPC. Wired into the
      * db adapter's `broadcast` callback by the generated subclass so that
      * `flushChangedTables` can re-run only the affected subscriptions.
      */
-    protected recordChangedTable(table: string): void {
+    protected recordChangedTable(table: string, indexKeys?: ReadonlyArray<IndexKeyEntry>): void {
         this.pendingChangedTables ??= new Set<string>();
         this.pendingChangedTables.add(table);
+        this.pendingChangedKeys = recordChangedKeys(this.pendingChangedKeys, table, indexKeys);
+
+        // Backstop for a subclass whose `createShardCtxDb` call never took
+        // `ctxDbTuning()`'s `cache`: without it nothing would invalidate, and the
+        // reactive cache would answer post-write reads from the pre-write
+        // snapshot. This signal has no row id, so it can only be table-wide —
+        // coarser than the wired path, never wronger. Runs before the delta
+        // broadcast (this IS the broadcast hook), so a subscriber re-running its
+        // query already sees the post-write state.
+        if (!this.ctxDbCacheWired) {
+            this.reactiveCache?.invalidateTable(table);
+        }
     }
 
     /**
@@ -3488,23 +6361,53 @@ abstract class ShardDO {
      * Unlike request-log args, `ctx.log` args are NOT redacted: the developer
      * chose to log them, exactly like a raw `console.log`.
      */
-    protected recordUserLog(functionPath: string, level: ContextLogLevel, args: unknown[], sink?: LogSink): void {
+    protected recordUserLog(
+        functionPath: string,
+        level: ContextLogLevel,
+        args: unknown[],
+        message: string,
+        fields: Record<string, unknown> | undefined,
+        sink?: TelemetrySink,
+        eventName?: string,
+        anchor?: TraceAnchor,
+        // The `Error` the line logged. Searched in `fields` too, which covers
+        // `ctx.log.event(name, { err })`; `makeLogger` passes it explicitly when
+        // the Error sat in a `with()` bound field, which `fields` has already
+        // stringified by the time it gets here.
+        error: ErrorDetail | undefined = findLoggedError(fields === undefined ? args : [...args, fields]),
+    ): void {
+        // Correlate the line to its dispatch span. Read from the resolved anchor
+        // rather than re-parsing the inbound `traceparent`, so a dispatch that
+        // MINTED its ids (no inbound context — a subscription re-run, an alarm, a
+        // server-initiated call) still correlates: re-parsing would yield
+        // `undefined` there and silently split a handler's logs from its spans,
+        // which is exactly what the docs promise doesn't happen.
+        //
+        // An explicit `anchor` pins the trace for a caller that runs AFTER the
+        // handler's awaits — the dispatch `finally` emitting the wide event —
+        // where the shared field may already belong to an interleaved dispatch.
+        const trace = anchor ?? this.currentRequestTrace;
+
         // One canonical event built once, fed to all three destinations. Only the
-        // console event drops `args` (see emitLogEvent); the buffer and sink get
-        // the full payload.
+        // console event drops raw `args` (see emitLogEvent); the buffer and sink
+        // get the full payload. Structured `fields` DO ride every destination.
         const event: LogEventInput = {
             args,
+            ...(error === undefined ? {} : { error }),
+            ...(eventName === undefined ? {} : { eventName }),
+            fields,
             functionPath,
             level,
-            message: renderLogMessage(args),
-            shardKey: this.state.id?.name,
+            message,
+            ...(trace?.rayId === undefined ? {} : { rayId: trace.rayId }),
+            shardKey: this.runner.shardKey,
+            spanId: trace?.rootSpanId,
+            traceId: trace?.traceId,
             ts: Date.now(),
             userId: this.getCurrentUserId(),
         };
 
-        // The LogBuffer enum has no distinct `log` level; fold it into `info`
-        // (console.log is informational), keeping the panel's level set stable.
-        this.logs.push({ functionPath, level: level === "log" ? "info" : level, message: event.message, timestamp: event.ts });
+        this.logs.push({ fields, functionPath, level, message, timestamp: event.ts, traceId: event.traceId });
 
         try {
             emitLogEvent(event);
@@ -3514,10 +6417,1836 @@ abstract class ShardDO {
 
         if (sink?.onLog) {
             try {
-                sink.onLog(event);
+                // Thread the DO's `waitUntil` so a durable sink (e.g. a
+                // Pipeline → R2 log sink) can keep its send alive past the
+                // response; `undefined` when the state doesn't expose it, where
+                // the sink falls back to fire-and-forget.
+                sink.onLog(event, { waitUntil: this.shardHost.waitUntil });
             } catch {
                 // A buggy log sink must not break the handler — see emitLogEvent.
             }
+        }
+    }
+
+    /**
+     * Build the `ctx.log` logger for one dispatched function. Each severity method
+     * accepts either the structured form (`(message, fields)`) or console-style
+     * varargs (see {@link parseLogArgs}); `with(fields)` returns a child that
+     * stamps `fields` onto every line. The generated `buildCtx` calls this once
+     * per dispatch and assigns the result to `ctx.log`.
+     */
+    protected makeLogger(functionPath: string, sink?: TelemetrySink, boundFields?: Record<string, unknown>): ContextLogger {
+        const at =
+            (level: ContextLogLevel) =>
+            (...args: unknown[]): void => {
+                const { fields, message } = parseLogArgs(args, boundFields);
+                // Searched before `parseLogArgs` stringified any Error in the fields.
+                const error = findLoggedError(boundFields === undefined ? args : [...args, boundFields]);
+
+                this.recordUserLog(functionPath, level, args, message, fields, sink, undefined, undefined, error);
+            };
+
+        return {
+            debug: at("debug"),
+            error: at("error"),
+            event: (name: string, fields?: LogFields) => {
+                // The event NAME is the record's message, so a plain-text log
+                // viewer still shows something meaningful; the structured payload
+                // is `fields`, and `eventName` is what makes a collector treat the
+                // record as a queryable event rather than prose.
+                this.recordUserLog(functionPath, "info", [name], name, boundFields ? { ...boundFields, ...fields } : fields, sink, name);
+            },
+            fatal: at("fatal"),
+            info: at("info"),
+            log: at("log"),
+            trace: at("trace"),
+            warn: at("warn"),
+            with: (fields: Record<string, unknown>) => this.makeLogger(functionPath, sink, boundFields ? { ...boundFields, ...fields } : fields),
+        };
+    }
+
+    /**
+     * Build the `ctx.trace` span factory for one dispatched function. The
+     * generated `buildCtx` calls this once per dispatch and assigns the result to
+     * `ctx.trace`.
+     *
+     * Thin wiring over {@link createTracer}, which owns the span semantics (see
+     * there for why nesting is explicit rather than ambient). Everything it needs
+     * from the shard is passed explicitly.
+     *
+     * `anchor` is the trace this ctx's spans belong to; omit it for a ctx with no
+     * owning dispatch (an alarm, a subscription re-run) to mint a fresh anchor, so
+     * `ctx.trace` still yields a coherent self-contained trace there.
+     *
+     * The Cloudflare custom-spans bridge is threaded here but stays off unless the
+     * resolved sink sets `fuseCloudflareTraces` (see {@link resolveHostTracing}).
+     */
+    protected makeTracer(functionPath: string, sink?: TelemetrySink, anchor?: TraceAnchor): ContextTracer {
+        // Resolve the anchor once so its `sampled` verdict is snapshotted for every
+        // span this tracer records — carried to `recordSpan` rather than re-looked-up
+        // from `traceSampling` at span-close time, so a span that ends AFTER the
+        // dispatch tore its entry down still honours the trace's sampling decision.
+        const resolvedAnchor = anchor ?? resolveTraceAnchor(undefined);
+
+        return createTracer({
+            anchor: resolvedAnchor,
+            // Raw span error messages/stacktraces in dev only — production
+            // defaults to the same redacted posture as the request log and
+            // function-metrics sinks (see `context-telemetry.ts`'s `captureRaw`).
+            captureRaw: isDevEnvironment(this.env),
+            fuseHostSpans: sink?.fuseCloudflareTraces === true,
+            functionPath,
+            record: (span) => {
+                this.recordSpan(span, sink, resolvedAnchor.sampled);
+            },
+            resolveHostTracing,
+            shardKey: this.runner.shardKey,
+            userId: () => this.getCurrentUserId(),
+        });
+    }
+
+    /**
+     * The trace anchor a ctx's `trace` and `span` both hang off.
+     *
+     * Resolved once per `buildCtx` and shared, so `ctx.trace` spans and the
+     * `ctx.span` wide event land in the SAME trace. Previously each consumer
+     * minted its own fallback when there was no current trace, which was fine
+     * while `ctx.trace` was the only consumer and silently splits the two now
+     * that there are two.
+     *
+     * `identityScoped` marks a deferred/interleaved caller (a subscription seed
+     * or refresh): those must NOT inherit the shared per-request trace, which a
+     * concurrent RPC may have re-set, so they mint their own self-contained one.
+     */
+    protected resolveDispatchAnchor(identityScoped: boolean): TraceAnchor {
+        return (identityScoped ? undefined : this.getCurrentTrace()) ?? resolveTraceAnchor(undefined);
+    }
+
+    /**
+     * Wrap `ctx.db` in automatic instrumentation — see {@link instrumentDatabase}
+     * for why the default is aggregate counters rather than a span per call.
+     *
+     * A no-op (returning the database untouched) with no sink configured or with
+     * `instrumentDatabase: "off"`, so a deployment that collects nothing pays
+     * nothing.
+     */
+    protected instrumentDb<T extends object>(database: T, functionPath: string, anchor: TraceAnchor, sink?: TelemetrySink): T {
+        const deps = this.databaseTelemetryDeps("db", functionPath, anchor, sink);
+
+        return deps === undefined ? database : instrumentDatabase(database, deps);
+    }
+
+    /**
+     * Wrap the action-only `ctx.sql` (Hyperdrive) client in the same automatic
+     * instrumentation as `ctx.db` — see {@link instrumentSqlClient}. Same knob
+     * (`instrumentDatabase`), same levels, same span cap; its own tally, folded
+     * onto the dispatch root span as `sql.*` so external-database time stays
+     * distinguishable from the shard's own SQLite. The generated `buildCtx`
+     * calls this for a configured `sql` thunk (never for the throwing stub).
+     *
+     * `fuseCloudflareTraces` applies exactly as it does to `ctx.db`: per-call
+     * spans go to the sink, and the folded counters reach the host invocation
+     * span through the root-span mirroring in `recordDispatchRootSpan`.
+     */
+    protected instrumentSql<T extends SqlClientLike>(client: T, functionPath: string, anchor: TraceAnchor, sink?: TelemetrySink): T {
+        const deps = this.databaseTelemetryDeps("sql", functionPath, anchor, sink);
+
+        return deps === undefined ? client : instrumentSqlClient(client, deps);
+    }
+
+    /**
+     * Build `ctx.fetch` — the platform `fetch`, instrumented.
+     *
+     * Every outbound call becomes a CLIENT span and carries a `traceparent` to
+     * the callee, so time spent waiting on someone else's service stops being an
+     * unexplained gap in the waterfall and the callee's spans join this trace
+     * instead of starting an unrelated one.
+     *
+     * Falls back to the bare global `fetch` when no sink is configured or the
+     * sink opted out via `traceFetch: false` — there is no point paying for spans
+     * nobody collects, and an app calling a third party it would rather not send
+     * trace ids to needs a way to say so.
+     */
+    protected makeFetch(functionPath: string, anchor: TraceAnchor, sink?: TelemetrySink): ContextFetch {
+        const base: ContextFetch = (input, init) => globalThis.fetch(input, init);
+
+        if (sink === undefined || sink.traceFetch === false) {
+            return base;
+        }
+
+        // Captured now, not read when the span is built: that happens after the
+        // network await, and `currentRequestUserId` is per-instance state a
+        // concurrent request may have re-set by then.
+        const userId = this.getCurrentUserId();
+
+        return createTracedFetch(
+            {
+                anchor,
+                // Raw fetch error messages in dev only. A failed `ctx.fetch` throws
+                // a message that embeds the request URL, query string included, and
+                // spans fan out to third-party collectors — so production takes the
+                // same redacted posture as `makeTracer` (see `context-telemetry.ts`).
+                captureRaw: isDevEnvironment(this.env),
+                functionPath,
+                ...(typeof sink.traceFetch === "object" && sink.traceFetch.propagate !== undefined ? { propagate: sink.traceFetch.propagate } : {}),
+                record: (span) => {
+                    this.recordSpan(span, sink, anchor.sampled);
+                },
+                shardKey: this.runner.shardKey,
+                userId: () => userId,
+            },
+            base,
+        );
+    }
+
+    protected makeDispatchSpan(anchor: TraceAnchor, sink?: TelemetrySink): SpanHandle {
+        const spanKey = dispatchSpanKey(anchor);
+
+        /**
+         * The collector is LAZY on purpose. `buildCtx` builds `ctx.span` for every
+         * dispatch, but most handlers never touch it — allocating a collector and a
+         * Map entry per request for them would put pure waste on the hot path, and
+         * would make `dispatchSpans.has(...)` useless as the "did this dispatch
+         * record a wide event?" signal the root-span gate depends on.
+         *
+         * The sink IS registered eagerly (when there is one — with no sink there is
+         * nothing to remember, and a dispatch that collects nothing should pay
+         * nothing; this was a measured hot-path cost). It is captured here rather
+         * than looked up at flush time because the dispatch `finally` that flushes
+         * a batching sink has no ctx and so no way back to `config.observability`.
+         */
+        this.lastTelemetrySink = sink ?? this.lastTelemetrySink;
+
+        if (sink !== undefined) {
+            evictOldestEntry(this.dispatchSpans, MAX_TRACKED_DISPATCH_SPANS);
+            this.dispatchSpans.set(spanKey, this.dispatchSpans.get(spanKey) ?? { sink });
+        }
+
+        const collector = (): SpanCollector => {
+            evictOldestEntry(this.dispatchSpans, MAX_TRACKED_DISPATCH_SPANS);
+
+            const entry = this.dispatchSpans.get(spanKey) ?? { sink };
+
+            // Raw `recordException` stacktraces/messages in dev only — matches
+            // `makeTracer`'s `captureRaw` posture for the wide event's collector.
+            entry.collector ??= createSpanCollector(
+                { ...(anchor.sampled === undefined ? {} : { sampled: anchor.sampled }), spanId: anchor.rootSpanId, traceId: anchor.traceId },
+                isDevEnvironment(this.env),
+            );
+            this.dispatchSpans.set(spanKey, entry);
+
+            return entry.collector;
+        };
+
+        return {
+            addEvent: (name, attributes) => {
+                collector().handle.addEvent(name, attributes);
+            },
+            // Answerable without materializing a collector — the ids come from the
+            // anchor, not from anything the handler recorded. Reading the dispatch's
+            // trace id must not itself count as "this dispatch produced a wide event".
+            spanContext: () => {
+                // `sampled` rides along so anything that ANNOUNCES this dispatch
+                // downstream from the ids alone — a hand-built `traceparent`, the
+                // `@opentelemetry/api` bridge's `SpanContext` — carries the settled
+                // verdict instead of claiming SAMPLED on a trace that was dropped.
+                return { ...(anchor.sampled === undefined ? {} : { sampled: anchor.sampled }), spanId: anchor.rootSpanId, traceId: anchor.traceId };
+            },
+            addLink: (link) => {
+                collector().handle.addLink(link);
+            },
+            recordEvaluation: (evaluation) => {
+                collector().handle.recordEvaluation(evaluation);
+            },
+            recordException: (error) => {
+                collector().handle.recordException(error);
+            },
+            setAttribute: (key, value) => {
+                collector().handle.setAttribute(key, value);
+            },
+            setAttributes: (fields) => {
+                collector().handle.setAttributes(fields);
+            },
+        };
+    }
+
+    /**
+     * Build the `ctx.metrics` recorder for one dispatched function. Thin wiring
+     * over {@link createMetrics}, which owns the instrument semantics.
+     */
+    protected makeMetrics(functionPath: string, sink?: TelemetrySink): ContextMetrics {
+        return createMetrics({
+            functionPath,
+            record: (event) => {
+                this.recordMetric(event, sink);
+            },
+            shardKey: this.runner.shardKey,
+        });
+    }
+
+    /**
+     * Fold one measurement into the in-memory {@link metricSeries} readout and
+     * hand it to the optional `sink.onMetric`. Best-effort like
+     * {@link recordUserLog} and {@link recordSpan}: recording a measurement must
+     * never break the handler that recorded it.
+     *
+     * The buffer folds rather than rings: a measurement's value is in its
+     * aggregate over a window, which a bounded ring of raw samples can't represent
+     * (it evicts the oldest samples, the ones a running total needs). So the
+     * buffer keeps one running aggregate per series and resets on hibernation like
+     * logs and spans — a "recent metrics on this instance" dev readout. Durable,
+     * cross-instance aggregation is still the sink's job.
+     */
+    protected recordMetric(event: MetricEvent, sink?: TelemetrySink): void {
+        // Stamp the exemplar: the measurement inherits the recording dispatch's
+        // trace id (when it ran inside one), so a metric point can link to a trace.
+        // Owned here, not by `createMetrics` — the shard is what knows the current
+        // request's trace context.
+        const exemplarTraceId = this.currentRequestTrace?.traceId;
+        const stamped: MetricEvent = exemplarTraceId === undefined ? event : { ...event, traceId: exemplarTraceId };
+
+        // Every target is best-effort: recording a measurement must never break the
+        // handler that recorded it (a malformed event, a SQLite write failure, a
+        // buggy sink). One swallow so the policy is stated once, not per target.
+        const bestEffort = (run: () => void): void => {
+            try {
+                run();
+            } catch {
+                // Telemetry is best-effort — see above.
+            }
+        };
+
+        // Live in-memory fold (the "recent on this instance" readout).
+        bestEffort(() => {
+            this.metricSeries.push(stamped);
+        });
+
+        // Durable per-minute rollups — OPT-IN (default off). Every measurement
+        // otherwise pays a billed, rate-limited SQLite write on the request path,
+        // competing with app data for the shard's write budget; the payoff is only
+        // the Studio's 24h local trend chart. The live cross-instance path is
+        // `sink.onMetric` below. Gated BEFORE touching `rawSql` so a disabled sink
+        // allocates nothing and runs no SQL.
+        const metricHistory = sink?.metricHistory;
+
+        if (metricHistory !== undefined && metricHistory !== false) {
+            // Use the RAW storage handle, NOT `this.sql`: the getter instruments
+            // statements into the Query Insights leaderboard during a dispatch, and
+            // these housekeeping writes would be misattributed to the user function
+            // that recorded the metric (matching recordFunctionMetric et al., which
+            // all write through the raw handle for the same reason).
+            const rawSql = this.shardHost.sql as unknown as SqlExec;
+            // Pass the tune object straight through: `recordMetricHistory` already
+            // coalesces every field with `?? DEFAULT`, so stripping `undefined`
+            // keys here bought nothing. `true` (no tuning) becomes `{}`.
+            const historyOptions: MetricHistoryOptions = typeof metricHistory === "object" ? metricHistory : {};
+
+            bestEffort(() => {
+                recordMetricHistory(rawSql, stamped, exemplarTraceId, historyOptions);
+            });
+        }
+
+        // Optional export sink (the durable, cross-instance path).
+        if (sink?.onMetric) {
+            bestEffort(() => sink.onMetric?.(stamped, { waitUntil: this.shardHost.waitUntil }));
+        }
+    }
+
+    /** The decode + route body of {@link webSocketMessage}, split out so the trace wrapper stays a one-liner. */
+    // eslint-disable-next-line sonarjs/cognitive-complexity -- Workers hibernation message router: the type/credential/route branching is the wire protocol and stays clearer inline than split across helpers sharing the socket + envelope
+    protected async handleWebSocketMessage(ws: ShardSocketLike, message: string | ArrayBuffer): Promise<void> {
+        // Token-expiry: a socket whose credential lapsed is dropped before its
+        // frame is processed, so the client reconnects and re-resolves identity.
+        // This is the inbound-activity check; the load-bearing one is in
+        // `refreshSubscriptions`, which drops an expired socket BEFORE pushing it
+        // the user's live data (a passive subscriber sends no frames — its
+        // keepalive pings auto-respond and never reach here — so inbound checks
+        // alone would never fire for the common case).
+        if (this.isSocketExpired(ws)) {
+            this.dropExpiredSocket(ws);
+
+            return;
+        }
+
+        // Frame-size cap BEFORE the decode+parse: without it the only bound on an
+        // inbound frame is the platform's own per-message limit, so a client can
+        // make the DO decode and `JSON.parse` a multi-megabyte body per frame.
+        // Byte length for a binary frame, UTF-16 code units for a text one (see
+        // the constant). An over-cap frame is refused, never truncated.
+        const rawSize = typeof message === "string" ? message.length : message.byteLength;
+
+        if (rawSize > MAX_WS_FRAME_UNITS) {
+            trySendFrame(ws, JSON.stringify({ message: "frame too large", type: "error" }));
+
+            return;
+        }
+
+        const text = typeof message === "string" ? message : new TextDecoder().decode(message);
+        let envelope: SubscriptionEnvelope;
+
+        try {
+            envelope = JSON.parse(text) as SubscriptionEnvelope;
+        } catch {
+            trySendFrame(ws, JSON.stringify({ message: "invalid envelope", type: "error" }));
+
+            return;
+        }
+
+        if (envelope.type === "connect") {
+            // One-shot control frame the client sends right after the socket
+            // opens: record its connection `context` on the attachment (so it
+            // survives hibernation and can be replayed at close) and fire the
+            // `onConnect` lifecycle hooks under the socket's verified identity.
+            const attachment = this.readAttachment(ws);
+
+            // Tell the client which user this socket was authenticated as, and
+            // "nobody" as an explicit `null`. A cookie-session client holds no
+            // token, so this answer is the only way it can tell a sign-out or a
+            // different user's sign-in from the session it already shows. Sent
+            // on every `connect`, including a re-sent one: the answer is the
+            // socket's, and repeating it costs one small frame.
+            // eslint-disable-next-line unicorn/no-null -- `null` is the wire's "no user" value
+            trySendFrame(ws, JSON.stringify({ subject: attachment.userId ?? null, type: "identity" }));
+
+            // Idempotent: a socket announces `connect` exactly once. A re-sent
+            // (or duplicate) frame must not re-fire `onConnect`, or it would
+            // out-number the single `onDisconnect` at close.
+            if (attachment.connected === true) {
+                return;
+            }
+
+            if (envelope.context !== undefined) {
+                attachment.context = envelope.context;
+            }
+
+            // Record the client's stable id so shape pokes to this socket can
+            // echo its `__client_watermark` as `lastMutationId` (overlay-drop).
+            if (envelope.clientId !== undefined) {
+                attachment.clientId = envelope.clientId;
+            }
+
+            // Resolve the announced capabilities to the decisions they gate,
+            // rather than persisting the raw tokens. `caps` is client-supplied
+            // and otherwise unbounded — the sibling attachment arrays (`subs`,
+            // `whispers`) are both explicitly capped for exactly that reason,
+            // and an over-large one here would either starve `subs` or make
+            // `serializeAttachment` throw, dropping the whole attachment. A
+            // fixed set of booleans is bounded by construction, and nothing
+            // reads an unrecognised token back: the server can only act on ones
+            // it understands, so keeping them would store input with no reader.
+            if (Array.isArray(envelope.caps)) {
+                attachment.pageDeltas = envelope.caps.includes(PAGE_DELTA_CAPABILITY);
+            }
+
+            attachment.connected = true;
+
+            // `connected` lives on the SAME object the `try` below persists —
+            // if `context` is what made it too large and the whole attachment
+            // fails to serialize, `connected` doesn't survive either, even
+            // though only `context` was ever documented as at-risk. A resent
+            // `connect` (the `identity` reply above is no ack — an older server
+            // sends none — so a client may legitimately retry after a
+            // timeout) would then re-enter this
+            // branch and re-fire `onConnect` — `webSocketClose` still only fires
+            // `onDisconnect` once, breaking the symmetry the `connected === true`
+            // check above exists to guarantee.
+            //
+            // Retry once with `context` omitted so `connected`/`clientId`/
+            // `pageDeltas` still persist even when `context` alone is what
+            // doesn't fit. Only if THAT also fails is nothing here persistable;
+            // in that case, don't fire `onConnect` at all — an unpersisted
+            // `connected` flag means the next `deserializeAttachment` read sees
+            // `connected: false`, so a resent `connect` frame correctly re-enters
+            // this branch and retries, rather than silently never firing again.
+            let persisted = true;
+
+            try {
+                (ws as HibernatableWebSocket).serializeAttachment?.(attachment);
+            } catch {
+                const withoutContext: SocketAttachment = { ...attachment };
+
+                delete withoutContext.context;
+
+                try {
+                    (ws as HibernatableWebSocket).serializeAttachment?.(withoutContext);
+                } catch {
+                    // Neither attempt persisted. Roll back the in-memory flip so
+                    // this local `attachment` object agrees with what's actually
+                    // in storage — the same defensive move `subscribe`/
+                    // `unsubscribe` above make on their own serialize failure.
+                    attachment.connected = false;
+                    persisted = false;
+                }
+            }
+
+            // The in-memory `attachment` still carries `context` regardless of
+            // which serialize attempt (if any) succeeded, so a persisted-retry
+            // still fires the hook with the caller's supplied context THIS turn
+            // — it just won't survive to `onDisconnect` at close.
+            if (persisted) {
+                await this.dispatchLifecycle("connect", this.lifecycleInfo(attachment));
+            }
+
+            return;
+        }
+
+        if (envelope.type === "subscribe" && envelope.query) {
+            const { functionPath } = envelope.query;
+            const isAdmin = functionPath?.startsWith(ADMIN_FUNCTION_PREFIX) === true;
+
+            // Admin introspection subscriptions read shard internals (raw rows,
+            // metrics, logs), so they are gated by the same `LUNORA_ADMIN_TOKEN`
+            // as the HTTP admin RPCs — recorded on the socket at upgrade and
+            // re-derived from `env` here, so a rotation revokes the socket rather
+            // than only the HTTP plane. A socket that only cleared the
+            // user-subscription gate must never be able to read admin data by
+            // naming a reserved functionPath.
+            if (isAdmin && !(await this.attachmentAdminAuthorized(this.readAttachment(ws)))) {
+                trySendFrame(ws, JSON.stringify({ id: envelope.id, message: "admin subscription requires admin authorization", type: "error" }));
+
+                return;
+            }
+
+            // Decode the wire-encoded subscription args ONCE, at the entry point —
+            // BEFORE the attachment store and the seed — so every downstream
+            // consumer (re-execution on poke, `reactiveCacheKey`, RLS predicate
+            // eval) sees REAL values (`bigint`/`Date`/bytes), and the
+            // structured-clone attachment carries them through hibernation.
+            // `decodeWire` is identity for pure-JSON args (legacy frames included).
+            let query: SubscriptionQuery;
+
+            try {
+                query =
+                    envelope.query.args === undefined
+                        ? envelope.query
+                        : { ...envelope.query, args: decodeWire(envelope.query.args) as Record<string, unknown> };
+            } catch {
+                // A malformed tagged payload (over-long bigint, over-deep nesting)
+                // must not throw out of `webSocketMessage` — surface a structured
+                // error frame instead, mirroring the persist-failure path.
+                trySendFrame(
+                    ws,
+                    JSON.stringify({
+                        code: "BAD_SUBSCRIPTION_ARGS",
+                        error: { code: "BAD_SUBSCRIPTION_ARGS", message: "subscription args failed wire decoding" },
+                        id: envelope.id,
+                        type: "error",
+                    }),
+                );
+
+                return;
+            }
+
+            const status = this.subscribe(ws, envelope.id, query);
+
+            if (status !== "ok") {
+                // The `paid` refusal mirrors the origin's batch gate (`BAD_REQUEST`):
+                // a paid query is one payment for one call, which a live
+                // subscription (seed + every poke) cannot be.
+                const { code, message: errorMessage } = {
+                    paid: { code: "BAD_REQUEST", message: paidSocketRefusal(String(functionPath), "subscribed") },
+                    serialize_failed: {
+                        code: "SUBSCRIPTION_PERSIST_FAILED",
+                        message: subscriptionRefusal("size", ShardDO.MAX_SUBSCRIPTIONS_PER_SOCKET, ShardDO.MAX_ATTACHMENT_BYTES),
+                    },
+                    too_many: {
+                        code: "TOO_MANY_SUBSCRIPTIONS",
+                        message: subscriptionRefusal("count", ShardDO.MAX_SUBSCRIPTIONS_PER_SOCKET, ShardDO.MAX_ATTACHMENT_BYTES),
+                    },
+                }[status];
+
+                trySendFrame(ws, JSON.stringify({ code, error: { code, message: errorMessage }, id: envelope.id, type: "error" }));
+
+                return;
+            }
+
+            trySendFrame(ws, JSON.stringify({ id: envelope.id, type: "ack" }));
+
+            // Seed the subscriber with the query's current result so the first
+            // value arrives over the same channel as later updates. When the
+            // subclass doesn't support re-execution (base default), this is a
+            // no-op and the subscriber relies on its initial HTTP query.
+            if (functionPath) {
+                await this.seedSubscriptionGuarded(ws, envelope.id, query, functionPath, isAdmin);
+            }
+
+            return;
+        }
+
+        if (envelope.type === "shape_subscribe" && envelope.shape) {
+            // Decode-at-entry, mirroring the `subscribe` branch above: the stored
+            // descriptor and every `resolveShape` see real values.
+            let shapeArgs: Record<string, unknown> | undefined;
+
+            try {
+                shapeArgs = envelope.shape.args === undefined ? undefined : (decodeWire(envelope.shape.args) as Record<string, unknown>);
+            } catch {
+                this.sendSubscriptionError(ws, envelope.id, "BAD_SUBSCRIPTION_ARGS", "shape args failed wire decoding");
+
+                return;
+            }
+
+            await this.handleShapeSubscribe(ws, envelope.id, {
+                args: shapeArgs,
+                name: envelope.shape.name,
+                sinceEpoch: envelope.sinceEpoch,
+                sinceSeq: envelope.sinceCheckpoint,
+            });
+
+            return;
+        }
+
+        if (envelope.type === "shape_unsubscribe") {
+            this.shapeUnsubscribe(ws, envelope.id);
+            trySendFrame(ws, JSON.stringify({ id: envelope.id, type: "ack" }));
+
+            return;
+        }
+
+        if (envelope.type === "stream" && envelope.query?.functionPath) {
+            // Streams are public-only: there is no admin-streaming surface, so
+            // anything matching the admin prefix is rejected up front rather
+            // than allowed to slip through executeStream().
+            if (envelope.query.functionPath.startsWith(ADMIN_FUNCTION_PREFIX)) {
+                trySendFrame(ws, JSON.stringify({ id: envelope.id, message: "streams must be public", type: "error" }));
+
+                return;
+            }
+
+            // `.x402({ price }).stream(...)` carries the price tag into
+            // `LUNORA_FUNCTIONS` like any other paid procedure, but this frame
+            // never crosses the origin's paywall — so a paid stream served here
+            // is served free. Refuse it the same way `subscribe` refuses a paid
+            // live query.
+            if (this.isPaidFunction(envelope.query.functionPath)) {
+                this.sendSubscriptionError(ws, envelope.id, "BAD_REQUEST", paidSocketRefusal(envelope.query.functionPath, "streamed"));
+
+                return;
+            }
+
+            // Decode the wire-encoded stream args (bigint/bytes survive the WS hop)
+            // before handing them to the stream handler — mirrors the `/rpc` path,
+            // and the `subscribe` / `shape_subscribe` branches above.
+            //
+            // Decoded into a local FIRST, not inline in the call below. `decodeWire`
+            // throws a `RangeError` on an over-long bigint or past its 64-level
+            // nesting cap, and inline it threw during ARGUMENT EVALUATION — before
+            // `handleStream` had returned a promise, so the trailing `.catch()`
+            // could not see it. Neither `handleWebSocketMessage` nor
+            // `webSocketMessage` wraps this, so under the hibernation API one
+            // malformed frame killed the whole socket instead of failing one stream.
+            let streamArgs: Record<string, unknown>;
+
+            try {
+                streamArgs = decodeWire(envelope.query.args ?? {}) as Record<string, unknown>;
+            } catch {
+                trySendFrame(
+                    ws,
+                    JSON.stringify({
+                        error: { code: "BAD_SUBSCRIPTION_ARGS", message: "stream args failed wire decoding" },
+                        id: envelope.id,
+                        type: "error",
+                    }),
+                );
+
+                return;
+            }
+
+            // Fire-and-forget: handleStream owns its own error reporting (it
+            // sends `type:"error"` frames to the socket). The trailing no-op
+            // catch only guards the rare pre-try throw path (e.g. ws.send on a
+            // socket the runtime already tore down) so a dead socket can't
+            // surface as an unhandled rejection.
+            this.handleStream(
+                ws,
+                envelope.id,
+                envelope.query.functionPath,
+                streamArgs,
+                // Client input: a non-integer or negative watermark would seed
+                // `delivered` past real chunks and silently truncate the stream,
+                // so it is normalised here rather than trusted.
+                Number.isInteger(envelope.sinceChunk) && (envelope.sinceChunk as number) > 0 ? (envelope.sinceChunk as number) : 0,
+                // Same trust boundary for the resume generation: only a positive
+                // integer counts; anything else behaves like an older client
+                // that never sent one.
+                Number.isInteger(envelope.generation) && (envelope.generation as number) > 0 ? (envelope.generation as number) : undefined,
+            ).catch(() => {
+                /* socket already gone; nothing to report */
+            });
+
+            return;
+        }
+
+        if (envelope.type === "whisper_subscribe" || envelope.type === "whisper_unsubscribe") {
+            if (typeof envelope.topic === "string" && envelope.topic.length > 0) {
+                const join = envelope.type === "whisper_subscribe";
+
+                // Only a JOIN is authorized. Leaving a topic is always permitted —
+                // an app that revokes access mid-session must not also strand the
+                // client subscribed to something it can no longer leave.
+                if (join && !(await this.authorizeWhisper(ws, envelope.topic, "subscribe"))) {
+                    return;
+                }
+
+                this.setWhisperMembership(ws, envelope.topic, join);
+
+                // Relay tier (plan 075 Phase 2): once a relay holds a subscriber, it
+                // announces itself so the owner forwards whisper frames to it.
+                if (join) {
+                    await this.relay?.announce();
+                }
+            }
+
+            return;
+        }
+
+        if (envelope.type === "whisper") {
+            if (typeof envelope.topic === "string" && envelope.topic.length > 0 && (await this.authorizeWhisper(ws, envelope.topic, "send"))) {
+                await this.broadcastWhisper(ws, envelope.topic, envelope.data);
+            }
+
+            return;
+        }
+
+        if (envelope.type === "unsubscribe") {
+            // Stream cancel: abort the in-flight iterator (if any) before
+            // touching the subscription registry. unsubscribe() on a non-sub
+            // id is a no-op, so this stays safe even when id namespaces overlap.
+            const cancellers = this.streamCancellers.get(ws);
+            const controller = cancellers?.get(envelope.id);
+
+            if (controller) {
+                controller.abort();
+                cancellers?.delete(envelope.id);
+            }
+
+            this.unsubscribe(ws, envelope.id);
+            trySendFrame(ws, JSON.stringify({ id: envelope.id, type: "ack" }));
+        }
+    }
+
+    /**
+     * Cloudflare-specific fetch implementation — WebSocket upgrades and the RPC
+     * routes. Injected into {@link ShardRunner} as the host-specific handler while
+     * the engine is progressively extracted.
+     */
+    // eslint-disable-next-line sonarjs/cognitive-complexity -- the DO's central request router; the branching IS the route table, and splitting the request lifecycle across helpers would hurt readability more than the score costs
+    protected async handleFetchCloudflare(request: Request): Promise<Response> {
+        const url = new URL(request.url);
+
+        // Learn the DO namespace binding the runtime routes through, so this DO can
+        // address its siblings for the relay hub (plan 075 Phase 2). Only SOME
+        // inbound requests carry it (the WS upgrade, a replica-routed RPC, and a
+        // sibling DO's relay/replica POST — not the owner `/rpc` path), so it is
+        // kept across requests once known rather than expected on each one.
+        //
+        // An EMPTY header is treated as "not supplied", not as a value. A sibling
+        // POST stamps `shardBinding() ?? ""` (see `relay-hub.ts`), so a peer that
+        // does not yet know its own binding sends the empty string — and `??`
+        // alone would let that overwrite a binding this DO already knew, because
+        // `headers.get` returns `""` rather than `null`. `siblingStub` then
+        // resolves `env[""]` to nothing and the whole relay tier goes silently
+        // dark until some later request happens to carry a real value.
+        const suppliedBinding = request.headers.get("x-lunora-shard-binding");
+
+        this.shardBinding = suppliedBinding === null || suppliedBinding === "" ? this.shardBinding : suppliedBinding;
+
+        // The non-RPC routes (WS upgrade + the internal owner↔relay control channel)
+        // are handled up front; everything past here is the shard-local RPC endpoint.
+        const early = await this.routeNonRpc(url, request);
+
+        if (early !== undefined) {
+            return early;
+        }
+
+        if (url.pathname !== "/rpc" || request.method !== "POST") {
+            return new Response("Not found", { status: 404 });
+        }
+
+        let payload: RpcRequest;
+
+        try {
+            payload = await request.json();
+        } catch {
+            return jsonResponse({ error: { code: "BAD_REQUEST", message: "invalid JSON body" } }, 400);
+        }
+
+        // A replica serves ONLY the reads the runtime explicitly routed to it,
+        // and only once it has caught up far enough to answer them.
+        if (this.replica !== undefined) {
+            const refusal = await gateReplicaDispatch(this.replica, request, payload.functionPath);
+
+            if (refusal !== undefined) {
+                return refusal;
+            }
+        }
+
+        const answered = this.preDispatchAnswer(request, payload);
+
+        if (answered !== undefined) {
+            return await answered;
+        }
+
+        // Stash the inbound D1 bookmark and identity headers for the
+        // duration of the handler call so getters return the right
+        // values. Cleared on exit so the next request starts fresh.
+        const { dispatchAttribution, dispatchBookmark, dispatchHeadroom, dispatchStartedAt, dispatchTrace } = this.beginDispatch(request);
+
+        // Outcome of the dispatch, for the synthetic root span recorded in the
+        // `finally` below. A sentinel rather than a boolean so the `catch` can
+        // hand the thrown value straight through to the span's error classifier.
+        let dispatchError: { thrown: unknown } | undefined;
+        // Whether that failure is the server's, read off the Response actually
+        // sent (see the `catch`) — for the host invocation span's status.
+        let dispatchServerFault = false;
+
+        // The {@link ShardDO.inFlightClaims} claim this dispatch holds, if any.
+        // Hoisted so the `finally` releases it — after the tail's dedup row.
+        let heldClaim: InFlightClaim | undefined;
+
+        // Hoisted for the `catch` in the same way and for the same reason: the
+        // error path files a durable `__lunora_reqlog__` row (and a Logpush/SIEM
+        // event with it) that reads the caller off `this`, after every await this
+        // dispatch took — so without a re-pin a failed request is attributed to
+        // whichever sibling's prologue ran last.
+        //
+        // Captured TWICE, deliberately, and this first one has to be here rather
+        // than at the second site: the relation fan-out branch below awaits a
+        // whole schema-aware child-table read before that site is reached, and a
+        // throw from inside it would otherwise find nothing to restore. Taken
+        // straight after `beginDispatch`, so it is exactly the prologue's own
+        // values (`mutatorClass` included — still `undefined` here, which is the
+        // truthful answer for a dispatch that has not been classified yet).
+        //
+        // The second capture, after the classification is stamped, is the one the
+        // replay gate and the tail re-pin: it is the only one that carries a real
+        // `currentMutatorClass`, so hoisting it in place of this would re-pin a
+        // blank classification over the real one and break the in-transaction
+        // watermark handshake.
+        let dispatchScope: RequestScope = this.captureRequestScope();
+
+        try {
+            // Reserved cross-shard relation read/count (reverse cross-backend
+            // relations). Served BEFORE user dispatch and returned BARE (row
+            // array / number) — never `{ result }`-wrapped — so the Query
+            // Coordinator's `concat`/`sum` merge composes the per-shard
+            // values. Runs under the forwarded identity stashed above; the
+            // worker refuses this prefix on a single-shard envelope, so it's
+            // only reachable through the authorizeFanOut-gated fan-out path.
+            //
+            // BARE but still WIRE-ENCODED, for the reason {@link adminResponse}
+            // spells out: these rows come straight out of the row store, where
+            // `decodeDocJson` has already restored a real `bigint` for a
+            // `v.int64()` column and a real `ArrayBuffer` for `v.bytes()`.
+            // Uncoded, the first makes `Response.json` throw
+            // `TypeError: Do not know how to serialize a BigInt` (the whole
+            // fan-out 500s) and the second flattens to `{}` — a silently emptied
+            // column in the parent's `with:` result. The consumer half is
+            // `decodeWire` in `@lunora/runtime`'s `cross-shard-relations`; both
+            // codecs are the identity on pure-JSON payloads, so a relation with
+            // no exotic columns is byte-identical to before.
+            if (payload.functionPath.startsWith(RELATION_FUNCTION_PREFIX)) {
+                const value = await this.runRelationFanoutRead(payload.functionPath, payload.args ?? {});
+
+                // THIS dispatch's own by-value sink, never the shared field: a
+                // fan-out read performs no `.global()` write, so the sink is
+                // `undefined` and no bookmark is echoed — which is the honest
+                // answer. Read off `this` instead, the header could only ever
+                // carry a bookmark a sibling wrote during the await above, i.e. a
+                // stranger's D1 write position reported as this caller's.
+                return jsonResponse(encodeWire(value), 200, bookmarkHeaders(dispatchBookmark.value));
+            }
+
+            // Custom-mutator ordering: a watermarked push (`clientId` +
+            // numeric `clientSeq`) on a registered mutator is classified against
+            // `__client_watermark` BEFORE the handler runs, so out-of-order and
+            // replayed pushes never reach the authoritative impl. Ordinary
+            // mutations (and pushes without the headers) get `undefined` here and
+            // ride the idempotency path below unchanged.
+            const mutatorClass = this.isCustomMutator(payload.functionPath) ? this.classifyClientMutation() : undefined;
+
+            // Stash it so the in-transaction bookkeeping (run from `handleRpc`'s
+            // mutation transaction) advances the watermark for a `"next"` push in
+            // the same commit as the writes.
+            this.currentMutatorClass = mutatorClass;
+
+            const watermarkShortCircuit = this.rejectNonNextMutation(payload.functionPath, mutatorClass, dispatchStartedAt);
+
+            if (watermarkShortCircuit !== undefined) {
+                return watermarkShortCircuit;
+            }
+
+            // Mutation-replay dedup: if this `(identity, mutationId)` already
+            // committed, return its cached result without re-running the
+            // handler (so a client that replays an unacked write — same id —
+            // sees exactly-once semantics). The id rides the
+            // `x-lunora-mutation-id` header (stashed into `currentRequestMutationId`
+            // above), the same source `persistIdempotentResult` reads when it
+            // records the row after the handler commits.
+            //
+            // For a MUTATION the read and the `handleRpc` call run inside ONE
+            // `ShardHost.runSerialized` span — the same single-writer gate
+            // `ShardRunner.runInTransaction` composes with `transaction` — so two
+            // concurrent dispatches carrying the same `mutationId` can't both
+            // observe a cache miss and both run the handler. A mutation was
+            // already going to hold that gate, so the widened span costs it
+            // nothing.
+            //
+            // An action or query takes the SAME dedup read WITHOUT the gate. The
+            // gate is `blockConcurrencyWhile`: it stalls every other dispatch on
+            // the shard, and an action routinely awaits seconds of outbound I/O
+            // it can never roll back. Gating one would let any caller freeze the
+            // whole shard for that long — repeatedly, and for free — by attaching
+            // an `x-lunora-mutation-id` header the runtime forwards verbatim for
+            // every kind. See {@link isMutationFunction}. What an action gets
+            // instead is {@link ShardDO.inFlightClaims}: the ungated branch
+            // below claims the key before running and declines a second delivery
+            // of a live key, without holding anything the rest of the shard
+            // waits on.
+            //
+            // `(identity, mutationId)` is captured into a LOCAL scope here and
+            // re-pinned onto the instance fields as the FIRST statement inside
+            // the gated closure. The gate itself only delays entry — while THIS
+            // dispatch waits its turn, another dispatch's prologue (a sibling
+            // `fetch()`, same "concurrent fetches" characteristic the gate exists
+            // to guard against) can run and overwrite these same shared fields
+            // before this closure is admitted. `readIdempotentResult`, and the
+            // write-side calls `handleRpc` makes via `commitMutationBookkeeping`
+            // (persisting the result, advancing the client watermark), all read
+            // them straight off `this`, so without the re-pin a dedup check (or
+            // its commit) could silently run under ANOTHER dispatch's identity —
+            // exactly the kind of corruption this fix exists to close, just moved
+            // one field over. (`dispatchTrace`/`dispatchHeadroom` above capture
+            // the same way, for the same reason, on the other side of `handleRpc`.)
+            const requestScope = this.captureRequestScope();
+
+            dispatchScope = requestScope;
+
+            // Decode the wire codec (`bytes`/`bigint`/typed-array/±Infinity
+            // leaves) ONLY for the handler, so `validateArgs` sees real
+            // `ArrayBuffer`/`bigint` values. `payload.args` stays in wire form for
+            // the request log/metrics below (JSON-safe — a raw `bigint` there
+            // would throw `JSON.stringify`).
+            const runHandler = (): Promise<unknown> => {
+                const handlerArgs = decodeWire(payload.args ?? {}) as Record<string, unknown>;
+
+                // A registered `query` goes through the reactive cache when one
+                // is configured; every other kind dispatches straight through. The
+                // decoded args are what get keyed (`stableWireKey` handles the
+                // `bigint`/bytes leaves), so two calls that differ only in wire
+                // encoding still share an entry. `runCachedQuery` is a pass-through
+                // when `reactiveCache` is undefined, but the cacheability lookup is
+                // skipped in that case so a cache-less shard pays nothing.
+                return this.reactiveCache !== undefined && this.isCacheableQuery(payload.functionPath)
+                    ? this.runCachedQuery(
+                          payload.functionPath,
+                          handlerArgs,
+                          // The scope is threaded BY VALUE into the handler's ctx
+                          // (see `handleRpc`), so this dispatch's reads stamp its
+                          // own tracker even while a sibling is mid-await.
+                          (scope) => this.handleRpc(payload.functionPath, handlerArgs, dispatchHeadroom, scope, dispatchBookmark),
+                          dispatchAttribution,
+                      )
+                    : this.handleRpc(payload.functionPath, handlerArgs, dispatchHeadroom, undefined, dispatchBookmark);
+            };
+
+            const dedupMutationId = requestScope.mutationId;
+
+            const dedupedDispatch = async (cacheKey: string): Promise<DispatchOutcome> => {
+                const cached = this.readIdempotentResult(cacheKey);
+
+                return cached === undefined ? { kind: "ran", result: await runHandler() } : { cached, kind: "cached" };
+            };
+
+            let dispatchOutcome: DispatchOutcome;
+
+            if (dedupMutationId === undefined) {
+                dispatchOutcome = { kind: "ran", result: await runHandler() };
+            } else if (this.isMutationFunction(payload.functionPath)) {
+                dispatchOutcome = await this.shardHost.runSerialized(async () => {
+                    this.restoreRequestScope(requestScope);
+
+                    return await dedupedDispatch(dedupMutationId);
+                });
+            } else {
+                // The UNGATED path: an action or query carrying an
+                // `x-lunora-mutation-id`. The cache read, the claim and the
+                // handler start are synchronous with no `await` between them, so
+                // they are atomic against every sibling dispatch.
+                const cached = this.readIdempotentResult(dedupMutationId);
+
+                if (cached === undefined) {
+                    const claim = this.inFlightClaims.claim(this.idempotencyNamespace(), dedupMutationId);
+
+                    if (claim === "declined") {
+                        // Returned, not thrown: an expected at-least-once
+                        // re-delivery is not a failed call, so it must skip the
+                        // `catch` (error metrics, an error reqlog row, the
+                        // Issues view). Temporary by construction — a 409 is not
+                        // 2xx, so every caller keeps the work and retries.
+                        //
+                        // Marked with a header only this path sets: the code
+                        // alone is forgeable, since a handler-thrown error's
+                        // code is echoed as-is (see shared/dispatch-claim.ts).
+                        const declined = this.errorToResponse(
+                            new LunoraError(
+                                DISPATCH_IN_PROGRESS,
+                                `A dispatch of "${payload.functionPath}" carrying this idempotency id is already running on this shard`,
+                            ),
+                        );
+
+                        declined.headers.set(DISPATCH_DECLINED_HEADER, "1");
+
+                        return declined;
+                    }
+
+                    heldClaim = claim;
+
+                    dispatchOutcome = { kind: "ran", result: await runHandler() };
+                } else {
+                    dispatchOutcome = { cached, kind: "cached" };
+                }
+            }
+
+            // Re-pin for the TAIL, for the same reason the gated closure re-pins
+            // on the way in: the post-dispatch bookkeeping below (the dedup row
+            // for a non-transactional dispatch, the client-watermark advance)
+            // reads `currentRequest*` straight off `this`, and every await
+            // since the prologue — the handler's own, and the gate's queueing
+            // time — is a window for a sibling `fetch()`'s prologue to have
+            // overwritten them. Without this the tail could commit under another
+            // dispatch's identity.
+            this.restoreRequestScope(requestScope);
+
+            // AFTER the restore, which clears the field on purpose. The value
+            // comes from THIS dispatch's own sink (see {@link DispatchBookmark}),
+            // so a sibling that ran inside the handler's awaits cannot have
+            // cleared or replaced it. A cached outcome never ran a handler, so
+            // its sink is still `undefined` — the right answer: it performed no
+            // `.global()` write to report.
+            this.currentResponseBookmark = dispatchBookmark.value;
+
+            if (dispatchOutcome.kind === "cached") {
+                return this.respondFromIdempotencyCache(payload.functionPath, dispatchStartedAt, mutatorClass, dispatchOutcome.cached.value);
+            }
+
+            const { result } = dispatchOutcome;
+
+            this.recordPostDispatchBookkeeping(result, mutatorClass);
+
+            // Custom-mutator watermark WRITE: advance the per-client high-water
+            // mark to this sequence now that the authoritative writes committed.
+            // No-op unless this dispatch was classified `"next"` above.
+            //
+            // NOT atomic with the handler: the handler's writes auto-commit per
+            // statement, then `persistIdempotentResult` and this advance run as
+            // two further separate writes. A crash after the handler commits but
+            // before this advance leaves the watermark behind — the client's
+            // unacked replay re-classifies as `"next"` (the read side treats a
+            // missing/lower row as already-processed) and re-runs idempotently,
+            // re-advancing. So the gap self-heals; it never drops or double-applies
+            // the write. The advance helper below documents the same
+            // replay-recovery contract for a failed watermark write.
+            if (mutatorClass?.kind === "next") {
+                this.advanceClientMutationWatermark();
+            }
+
+            const durationMs = Date.now() - dispatchStartedAt;
+
+            // Record the handler's own latency (before the subscription
+            // write-flush below) against the per-function counters, along
+            // with any tables it full-scanned (causal attribution).
+            this.recordFunctionCall(payload.functionPath, durationMs, undefined, this.currentScannedTables, this.currentIndexHits);
+
+            // Flush per-statement SQL samples accumulated during dispatch to
+            // the durable `__lunora_metrics_queries` table. Best-effort:
+            // a flush failure (e.g. no sql handle in tests) must never fail
+            // the response.
+            this.flushStmtSamples();
+
+            // Snapshot the written-table set BEFORE `flushChangedTables`
+            // drains it — afterwards `pendingChangedTables` is `undefined`,
+            // so the request log would record an empty write set.
+            const tablesWritten = [...(this.pendingChangedTables ?? [])];
+
+            this.recordRequestLog(payload.functionPath, payload.args ?? {}, durationMs, "ok", tablesWritten, dispatchTrace, dispatchAttribution);
+
+            // Inspect the post-write size before responding. SQLite-in-DO
+            // exposes `databaseSize` as a real getter; reading it is a
+            // cheap stat call, not a full table scan.
+            this.maybeWarnRootSize();
+
+            // Snapshot the response before re-running subscriptions so the
+            // bookmark captured by the handler is preserved verbatim. A custom
+            // mutator echoes the applied `lastMutationId` so the client can drop
+            // the pending optimistic overlay as soon as the ack lands (the poke
+            // frame carries the same watermark for passive subscribers).
+            // Encode the result to wire form exactly here (the fresh path). The
+            // idempotency cache also stores the encoded form (see
+            // `persistIdempotentResult`), so `respondFromIdempotencyCache` /
+            // `buildDispatchResponse` never re-encode — no double-encoding.
+            //
+            // A MUTATION has already encoded this exact value inside its
+            // transaction (`commitMutationBookkeeping`), so this pass is a pure
+            // re-derivation that cannot fail: an unencodable return rolled back
+            // and never reached here. An action/query encodes for the first time
+            // here, which is fine — it committed nothing transactionally, and the
+            // coded error names the value either way.
+            const response = this.buildDispatchResponse(mutatorClass, encodeDispatchResult(result));
+
+            await this.flushChangedTables();
+
+            return response;
+        } catch (error: unknown) {
+            // Re-pin before anything below attributes the failure, exactly as the
+            // ok path does before ITS `recordRequestLog`. `recordRequestLog` reads
+            // `currentRequestIdentity` and `getCurrentUserId()` straight off
+            // `this`, and the throw can come from any await in the dispatch — by
+            // which point a sibling `fetch()`'s prologue may own those fields. The
+            // row it writes is durable and ships to Logpush/SIEM, so a mis-pinned
+            // one blames a principal that never made the call.
+            this.restoreRequestScope(dispatchScope);
+
+            this.metrics.errors += 1;
+            dispatchError = { thrown: error };
+            const durationMs = Date.now() - dispatchStartedAt;
+            const message = error instanceof Error ? error.message : String(error);
+            // Count only OCC conflicts as write contention — a unique-index
+            // breach / onDelete-restrict / trigger-overflow also surfaces as a
+            // 409 ConflictError but is a constraint failure, not contention, and
+            // would mis-fire the write-contention advisor.
+            const conflicted = error instanceof ConflictError && error.kind === "occ";
+
+            // Do NOT record per-function metrics for an unregistered/`FUNCTION_NOT_FOUND`
+            // dispatch: `functionPath` is caller-controlled and the runtime forwards it
+            // without checking it against the registry, so recording here would let a
+            // flood of random paths grow both the durable `__lunora_metrics` table and the
+            // in-memory `functionStats` map without bound (the Map's "bounded by the app's
+            // finite registered-function set" assumption only holds for real functions).
+            // The request log + error buffer below still capture the failure, and both are
+            // bounded (retention / fixed buffer).
+            const code = (error as { code?: unknown } | null)?.code;
+
+            if (code !== "FUNCTION_NOT_FOUND") {
+                // Redact BEFORE either function-metrics sink sees it: `recordFunctionCall`
+                // feeds this same string into both the durable `__lunora_metrics.last_error_message`
+                // column and the in-memory `functionStats` cache served by
+                // `__lunora_admin__:getFunctionStats`, so redacting once here — with the
+                // same `standardRules` treatment and `captureRaw` dev escape hatch the
+                // request-log sinks use — keeps every error-message sink consistent. The
+                // RAW `message` still goes to `recordRequestLog` below (which redacts
+                // internally, at the durable-row/Logpush boundary) and the in-memory
+                // `this.logs` dev buffer, unaffected by this local redaction.
+                const redactedErrorMessage = redactArgs(message, isDevEnvironment(this.env)) as string;
+
+                this.recordFunctionCall(payload.functionPath, durationMs, redactedErrorMessage, this.currentScannedTables, this.currentIndexHits, conflicted);
+            }
+            // Flush statement samples even on error paths — partial sampling
+            // is better than losing the timing signal entirely.
+            this.flushStmtSamples();
+            this.recordRequestLog(
+                payload.functionPath,
+                payload.args ?? {},
+                durationMs,
+                "error",
+                [...(this.pendingChangedTables ?? [])],
+                dispatchTrace,
+                dispatchAttribution,
+                message,
+            );
+            this.logs.push({
+                functionPath: payload.functionPath,
+                level: "error",
+                message,
+                timestamp: Date.now(),
+                // The local, not the shared field: this runs after the handler's
+                // awaits, where an interleaved dispatch may have re-set it.
+                traceId: dispatchTrace.traceId,
+            });
+
+            // A fresh error row landed, but the failed dispatch's own writes (if
+            // any) rolled back, so nothing else drives a refresh. Mark the reqlog
+            // table changed and flush so the live `getLogs`/`getIssues`
+            // admin-wildcard subscriptions re-run and surface the throw in real
+            // time — the ok path flushes here too. Any rolled-back data tables
+            // still in the pending set re-read committed state, so no stale push.
+            this.recordChangedTable(REQUEST_LOG_TABLE);
+            await this.flushChangedTables();
+
+            const errorResponse = this.errorToResponse(error);
+
+            // Read off the Response actually sent, not re-derived from `error`:
+            // `errorToResponse` is overridable, and the host span must agree with
+            // what the caller saw.
+            dispatchServerFault = errorResponse.status >= 500;
+
+            // The body is redacted for the client; the worker that asked gets the
+            // real error (stack included) for its `onRpc` sinks, and strips it.
+            if (request.headers.get(WANT_ERROR_DETAIL_HEADER) === "1") {
+                errorResponse.headers.set(ERROR_DETAIL_HEADER, encodeErrorDetail(describeError(error)));
+            }
+
+            return errorResponse;
+        } finally {
+            // Guard hoisted to the call site so the common case — a handler that
+            // produced no telemetry at all — is visibly a no-op here.
+            const dispatchSpan = this.dispatchSpans.get(dispatchSpanKey(dispatchTrace));
+            const rootSpan =
+                this.spans.hasTrace(dispatchTrace.traceId) || hasRootSpanContent(dispatchSpan)
+                    ? this.recordDispatchRootSpan(payload.functionPath, dispatchStartedAt, dispatchError, dispatchTrace)
+                    : undefined;
+
+            // Outside that gate: a handler that threw before recording anything
+            // is the most common server fault, and its invocation span must still
+            // read as failed. The sink was registered eagerly by `makeDispatchSpan`.
+            this.mirrorHostRootSpan(dispatchSpan?.sink, rootSpan, dispatchError, dispatchServerFault);
+
+            this.dispatchSpans.delete(dispatchSpanKey(dispatchTrace));
+
+            // Invocation boundary for the shard, mirroring the worker's: a batching
+            // sink is told to ship what this dispatch produced. Without it the DO's
+            // spans and logs would sit in a buffer until the next dispatch happened
+            // to fill it — arbitrarily late, or never on a quiet shard.
+            if (dispatchSpan?.sink?.flush) {
+                try {
+                    dispatchSpan.sink.flush({ waitUntil: this.shardHost.waitUntil });
+                } catch {
+                    // Best-effort — a telemetry flush must never fail a served request.
+                }
+            }
+            // Export boundary for a sampled-out trace: now that the dispatch has
+            // settled we know whether it errored, so flush its held `ctx.trace`
+            // spans (tail bias) or drop them. A no-op for sampled-in traces (their
+            // spans already streamed live).
+            this.flushSampledOutTrace(dispatchTrace, dispatchError !== undefined);
+            this.traceSampling.delete(dispatchTrace.traceId);
+            // Released LAST, after the tail has written the dedup row (or the
+            // `catch` has decided there is none). A handler that threw leaves
+            // neither, so the next delivery runs it — at-least-once.
+            if (heldClaim !== undefined) {
+                this.inFlightClaims.release(heldClaim);
+            }
+
+            this.endDispatch();
+        }
+    }
+
+    /**
+     * Cloudflare-specific alarm implementation, injected into {@link ShardRunner}
+     * as the host-specific handler while the engine is progressively extracted.
+     */
+    protected async handleAlarmCloudflare(): Promise<void> {
+        // A replica runs the owner's class, so every background tier the schema
+        // arms — external-source polling, TTL sweeps, global-shape polls — would
+        // otherwise fire here too, against a COPY. The damage is not theoretical:
+        // an external source resolves its tenant from `currentShardKey()`, which
+        // on a replica is the replica's own name, so a full pull would match
+        // nothing and diff every replicated row into a delete. Background work
+        // belongs to the single writer; a follower only ever replays.
+        if (this.replica !== undefined) {
+            return;
+        }
+
+        // Captured before the first `await`, then passed by value everywhere below:
+        // this handler is the alarm's own scope, so nothing has interleaved yet.
+        // `undefined` when the alarm ran outside `withTriggerTrace` (a direct call
+        // in a test), which simply leaves these log lines uncorrelated.
+        const trace = this.currentTriggerTrace;
+
+        this.globalPollArmedAt = undefined;
+
+        let globalShapesRemaining: number;
+
+        try {
+            globalShapesRemaining = await this.pollGlobalShapes(trace);
+        } catch (error) {
+            // `pollGlobalShapes` already contains per-socket/per-shape failures;
+            // this guards a catastrophic failure (e.g. `getWebSockets` throwing)
+            // so the poll heartbeat re-arms and retries next tick instead of
+            // dying permanently and silently dropping every global subscriber.
+            this.recordShapeError("shape:poll", error, trace);
+            globalShapesRemaining = 1;
+        }
+
+        // A contained tier failure re-arms at the fixed floor (a conservative
+        // retry) rather than stranding its loop or spinning immediately.
+        const pollTier = async (tag: string, run: () => Promise<number | undefined>): Promise<number | undefined> => {
+            try {
+                return await run();
+            } catch (error) {
+                this.recordShapeError(tag, error, trace);
+
+                return Date.now() + ShardDO.GLOBAL_SHAPE_POLL_INTERVAL_MS;
+            }
+        };
+
+        // External-source (`.source(...)`) ingest shares this alarm (plan 077). The
+        // base hook returns `undefined` (dormant); the codegen subclass overrides
+        // it to materialize each sourced table and report the earliest NEXT-DUE
+        // timestamp across every non-manual source.
+        const nextSourceDueAt = await pollTier("source:poll", async () => this.pollExternalSources(trace));
+
+        // Declarative TTL expiry (`.ttl(...)`) shares this alarm too. The base hook
+        // returns `undefined` (no TTL tables); the codegen subclass overrides
+        // `ttlSweeps()` from the schema so the sweep pages + removes expired rows and
+        // reports its next-due.
+        const nextTtlDueAt = await pollTier("ttl:sweep", async () => this.pollTtlSweeps(trace));
+
+        // Deferred-schedule custody shares this alarm too. Entries exist only
+        // between a mutation's COMMIT and the scheduler accepting its job, so in
+        // the steady state this reports `undefined` and arms nothing; when a
+        // dispatch failed (or never ran) it is what stops the job being lost.
+        const nextOutboxDueAt = await pollTier("scheduler:outbox", async () => this.pollScheduleOutbox(trace));
+
+        // Drain the tables the ingest poll just wrote: a sourced table is local, so
+        // its `defineShape` subscribers are poked through the standard
+        // changed-table → `pokeShapeSubscribers` path (the same one a mutation
+        // uses), NOT the global-shape poke path. Without this, materialized rows land
+        // in SQLite but live subscribers never see the incremental update. A no-op
+        // when nothing was queued (non-sourced DOs, or a steady-state tick).
+        await this.flushChangedTables();
+
+        const nextAlarmAt = ShardDO.nextPollAlarmTarget(globalShapesRemaining, nextSourceDueAt, nextTtlDueAt, nextOutboxDueAt, Date.now());
+
+        // The runaway breaker (see alarm-rearm-breaker.ts). A pending outbox entry is
+        // exempt: it is a user job the scheduler has not accepted, and refusing its
+        // re-arm would strand that job until some unrelated trigger.
+        if (nextAlarmAt !== undefined) {
+            await (this.admitAlarmRearm(nextOutboxDueAt !== undefined) ? this.scheduleGlobalPoll(nextAlarmAt) : this.armRecoveryWake());
+        }
+    }
+
+    /**
+     * Build `ctx.span` — the handle onto the **dispatch's own span**, and with it
+     * the wide-event surface.
+     *
+     * `ctx.trace(...)` creates a *new* child span for a sub-operation; this
+     * attaches to the one that already exists for the request. That is the
+     * distinction between "time this thing" and "record a fact about this
+     * request", and conflating them is why instrumentation usually degrades into
+     * log spam: with nowhere to put a fact, people reach for `ctx.log.info`.
+     *
+     * Attributes accumulate across the whole dispatch and are folded into the
+     * root span in `recordDispatchRootSpan` — the OTel-native form of a
+     * wide event, needing no non-standard "canonical log line" convention on the
+     * collector side.
+     *
+     * Keyed by `dispatchSpanKey` — trace id AND root span id — so two concurrent
+     * dispatches forwarded under the same client trace accumulate separately.
+     */
+
+    /**
+     * Snapshot the per-request identity/replay fields into a {@link RequestScope}.
+     * Paired with {@link ShardDO.restoreRequestScope}; see that type's docstring
+     * for why the dispatch path needs it.
+     */
+    private captureRequestScope(): RequestScope {
+        return {
+            baselineSeq: this.currentRequestBaselineSeq,
+            bookmark: this.currentRequestBookmark,
+            clientId: this.currentRequestClientId,
+            clientSeq: this.currentRequestClientSeq,
+            identity: this.currentRequestIdentity,
+            ip: this.currentRequestIp,
+            mutationId: this.currentRequestMutationId,
+            mutatorClass: this.currentMutatorClass,
+            origin: this.currentRequestOrigin,
+            sampleErrors: this.currentRequestSampleErrors,
+            system: this.currentRequestSystem,
+            trace: this.currentRequestTrace,
+            traceparent: this.currentRequestTraceparent,
+            userId: this.currentRequestUserId,
+        };
+    }
+
+    /**
+     * Re-pin a {@link RequestScope} captured by {@link ShardDO.captureRequestScope}.
+     *
+     * Also clears the OUTBOUND bookmark, which is produced rather than captured:
+     * whatever sits in the field on the way in belongs to whichever dispatch ran
+     * during the wait, and echoing it would report a stranger's D1 write position
+     * as this request's. The dispatch path re-pins its own afterwards.
+     */
+    private restoreRequestScope(scope: RequestScope): void {
+        this.currentRequestBaselineSeq = scope.baselineSeq;
+        this.currentRequestBookmark = scope.bookmark;
+        this.currentResponseBookmark = undefined;
+        this.currentRequestClientId = scope.clientId;
+        this.currentRequestClientSeq = scope.clientSeq;
+        this.currentRequestIdentity = scope.identity;
+        this.currentRequestIp = scope.ip;
+        this.currentRequestOrigin = scope.origin;
+        this.currentRequestMutationId = scope.mutationId;
+        this.currentMutatorClass = scope.mutatorClass;
+        this.currentRequestSampleErrors = scope.sampleErrors;
+        this.currentRequestSystem = scope.system;
+        this.currentRequestTrace = scope.trace;
+        this.currentRequestTraceparent = scope.traceparent;
+        this.currentRequestUserId = scope.userId;
+    }
+
+    /**
+     * What `instrumentDb` / `instrumentSql` hand their instrumenter, or
+     * `undefined` when nothing collects (no sink, or `instrumentDatabase: "off"`).
+     */
+    private databaseTelemetryDeps(
+        surface: TallySurface,
+        functionPath: string,
+        anchor: TraceAnchor,
+        sink: TelemetrySink | undefined,
+    ): DatabaseTelemetryDeps | undefined {
+        const mode = sink === undefined ? "off" : (sink.instrumentDatabase ?? "summary");
+
+        if (mode === "off") {
+            // Bail before touching `dispatchSpans`: with nothing collecting, the
+            // tally allocation and its map insert would be per-dispatch waste on
+            // the hot path (it showed up as a benchmark regression).
+            return undefined;
+        }
+
+        // Captured now, not read when a span is built: that happens after the
+        // call's await, and `currentRequestUserId` is per-instance state a
+        // concurrent request may have re-set by then.
+        const userId = this.getCurrentUserId();
+
+        return {
+            anchor,
+            // Raw driver/constraint error messages in dev only — matches
+            // `makeTracer`'s `captureRaw` posture.
+            captureRaw: isDevEnvironment(this.env),
+            functionPath,
+            mode,
+            record: (recorded) => {
+                this.recordSpan(recorded, sink, anchor.sampled);
+            },
+            shardKey: this.runner.shardKey,
+            // Parked on the dispatch entry rather than written through `ctx.span`:
+            // a query pays only integer increments, and the tally is read ONCE in
+            // `recordDispatchRootSpan`. A non-empty tally IS reason enough to
+            // record that root span (see `hasRootSpanContent`) — otherwise the
+            // counters were computed on the hot path of every db-touching
+            // dispatch and discarded, which is the common shape.
+            tally: this.dispatchTally(anchor, surface),
+            userId: () => userId,
+        };
+    }
+
+    /**
+     * The dispatch entry's tally for one surface, created on first use. Shares
+     * the entry with `ctx.span`'s collector but is deliberately a separate slot
+     * per surface — see `instrumentDb` / `instrumentSql`.
+     */
+    private dispatchTally(anchor: TraceAnchor, surface: TallySurface): DatabaseTally {
+        evictOldestEntry(this.dispatchSpans, MAX_TRACKED_DISPATCH_SPANS);
+
+        const key = dispatchSpanKey(anchor);
+        const entry = this.dispatchSpans.get(key) ?? {};
+        const tallies = entry.tallies ?? {};
+        const tally = tallies[surface] ?? createDatabaseTally();
+
+        tallies[surface] = tally;
+        entry.tallies = tallies;
+        this.dispatchSpans.set(key, entry);
+
+        return tally;
+    }
+
+    /**
+     * Give a NON-`fetch` Durable Object trigger — an alarm, an inbound socket
+     * frame — the same telemetry an RPC dispatch gets: its own trace anchor, a
+     * dispatch root span, and a flush of the batching sink when it finishes.
+     *
+     * These paths were previously invisible. An alarm can drive `.global()` shape
+     * refreshes and external-source ingest, and a socket frame can run a whole
+     * subscription re-evaluation, but neither produced a root span — so any
+     * `ctx.trace` span they created hung off a freshly-minted anchor with nothing
+     * above it, and a collector showed orphans with no bar explaining what caused
+     * them. Alarms are also precisely where a silent failure hides longest,
+     * because no client is waiting on a response to notice.
+     *
+     * The anchor is published on `currentRequestTrace` ONLY when nothing else has
+     * claimed it, and restored afterwards, so a concurrently-interleaved RPC
+     * dispatch (which captured its own anchor in a local at entry) keeps its
+     * attribution. Worst case under interleaving is a mis-attributed inner span —
+     * the same trade the surrounding code already makes with this field — never a
+     * corrupted or lost one.
+     */
+    private async withTriggerTrace<T>(name: string, run: () => Promise<T>): Promise<T> {
+        const anchor = resolveTraceAnchor(undefined);
+        const startedAt = Date.now();
+        const claimed = this.currentRequestTrace === undefined;
+
+        if (claimed) {
+            this.currentRequestTrace = anchor;
+        }
+
+        // Published unconditionally, unlike the shared dispatch field above: this
+        // one is written only here, and a trigger is the only thing that reads it
+        // (synchronously, at entry — see the field's docstring).
+        const previousTrigger = this.currentTriggerTrace;
+
+        this.currentTriggerTrace = anchor;
+
+        let failure: { thrown: unknown } | undefined;
+
+        try {
+            return await run();
+        } catch (error) {
+            failure = { thrown: error };
+
+            throw error;
+        } finally {
+            this.currentTriggerTrace = previousTrigger;
+
+            if (claimed && this.currentRequestTrace === anchor) {
+                this.currentRequestTrace = undefined;
+            }
+
+            // Only when the trigger actually produced telemetry — an idle alarm
+            // that did nothing should not mint a bar in the studio waterfall and
+            // evict a real trace from the bounded ring.
+            const triggerSpan = this.dispatchSpans.get(dispatchSpanKey(anchor));
+            const rootSpan =
+                this.spans.hasTrace(anchor.traceId) || hasRootSpanContent(triggerSpan)
+                    ? this.recordDispatchRootSpan(name, startedAt, failure, anchor)
+                    : undefined;
+
+            // A trigger re-throws, so any failure is a real one — a 4xx-coded
+            // `LunoraError` included; there is no client response to classify.
+            // No ctx may have registered a sink, so fall back to the last seen.
+            this.mirrorHostRootSpan(triggerSpan?.sink ?? this.lastTelemetrySink, rootSpan, failure, true);
+
+            this.dispatchSpans.delete(dispatchSpanKey(anchor));
+            this.flushTelemetry();
+        }
+    }
+
+    /**
+     * Ask the last-seen telemetry sink to ship what it has buffered.
+     *
+     * Used by the trigger paths ({@link withTriggerTrace}), which have no `ctx`
+     * and therefore no direct handle on `config.observability`. The sink is a
+     * per-worker singleton in every real configuration, so remembering the most
+     * recent one is exact in practice and harmless otherwise: a flush is
+     * idempotent and a sink with an empty buffer is a no-op.
+     */
+    private flushTelemetry(): void {
+        try {
+            this.lastTelemetrySink?.flush?.({ waitUntil: this.shardHost.waitUntil });
+        } catch {
+            // Best-effort — a telemetry flush must never fail the trigger.
+        }
+    }
+
+    /**
+     * Buffer the synthetic root span for a finished dispatch. The caller gates
+     * this on the dispatch having actually produced spans (the `hasTrace` check at
+     * the call site): every request minting a root would fill the bounded ring
+     * with single-bar traces from uninstrumented handlers and evict the
+     * instrumented ones the panel exists to show.
+     *
+     * `anchor` carries the dispatch's trace ids, captured at entry rather than
+     * read from `this` here — this runs after the handler's awaits, where the
+     * shared field may already belong to an interleaved dispatch.
+     *
+     * When the handler attached a **wide event** through `ctx.span`, this also
+     * exports it — see {@link exportWideEvent} for why it goes out as an OTel
+     * Event record rather than on the span itself.
+     */
+    private recordDispatchRootSpan(
+        functionPath: string,
+        startedAt: number,
+        failure: { thrown: unknown } | undefined,
+        anchor: TraceAnchor,
+    ): SpanEvent | undefined {
+        const wide = this.dispatchSpans.get(dispatchSpanKey(anchor));
+        const durationMs = Date.now() - startedAt;
+        // Auto-instrumentation counters ride whatever root span is being recorded,
+        // each surface under its own prefix (`db.*`, `sql.*`).
+        const tallyAttributes: LogFields = {};
+
+        for (const [surface, tally] of nonEmptyTallies(wide)) {
+            Object.assign(tallyAttributes, formatTally(tally, surface));
+        }
+
+        // Mirrors `db.spans_truncated`: the per-dispatch statement-sample buffer
+        // (see `currentStmtSamples`) hit its distinct-statement cap, so the
+        // query-metrics leaderboard's contribution from this dispatch is partial.
+        const stmtSamplesAttributes: LogFields | undefined = this.currentStmtSamplesTruncated ? { "db.stmt_samples_truncated": true } : undefined;
+        const attributes = { ...tallyAttributes, ...stmtSamplesAttributes, ...wide?.collector?.collected.attributes };
+        // Built whenever there is anything to carry, not only when the handler
+        // opened a `ctx.span` — the auto-instrumentation counters are attributes
+        // in their own right, and gating them on the wide event's collector is
+        // what dropped them for every handler that only read `ctx.db`.
+        // With no `ctx.span` there are no `events`/`links` — those come from the
+        // wide-event collector alone — so an attribute-only collection is the
+        // whole of it, and an empty one is nothing worth carrying.
+        const withoutWideEvent = Object.keys(attributes).length === 0 ? undefined : { attributes, events: [], links: [] };
+        const collected = wide?.collector === undefined ? withoutWideEvent : { ...wide.collector.collected, attributes };
+
+        let rootSpan: SpanEvent | undefined;
+
+        try {
+            rootSpan = dispatchRootSpan({
+                anchor,
+                // Raw failure messages in dev only — matches `makeTracer`'s
+                // `captureRaw` posture for this synthetic root span.
+                captureRaw: isDevEnvironment(this.env),
+                // The wide event, if the handler attached one through `ctx.span`.
+                ...(collected === undefined ? {} : { collected }),
+                durationMs,
+                failure,
+                functionPath,
+                shardKey: this.runner.shardKey,
+                startTs: startedAt,
+                userId: this.getCurrentUserId(),
+            });
+
+            this.spans.push(rootSpan);
+        } catch {
+            // Best-effort — span capture must never fail a served request.
+        }
+
+        if (wide?.collector !== undefined) {
+            this.exportWideEvent(functionPath, durationMs, failure, anchor, { collected: collected ?? wide.collector.collected, sink: wide.sink });
+        }
+
+        return rootSpan;
+    }
+
+    /**
+     * Mirror a finished dispatch or trigger onto the host's invocation span, for
+     * a sink with `fuseCloudflareTraces`: the root span's (already redacted)
+     * wide-event attributes when one was recorded, and error status for a server
+     * fault. `serverFault` is the caller's verdict — the sent Response's status
+     * for an RPC (which never throws out of the DO, so the host would see a
+     * served request), `true` for a trigger. The policy lives in
+     * `applyHostRootSpan`; the probe verdict settled at construction.
+     */
+    private mirrorHostRootSpan(
+        sink: TelemetrySink | undefined,
+        rootSpan: SpanEvent | undefined,
+        failure: { thrown: unknown } | undefined,
+        serverFault: boolean,
+    ): void {
+        if (sink?.fuseCloudflareTraces !== true) {
+            return;
+        }
+
+        try {
+            applyHostRootSpan(cloudflareTracing, {
+                ...(rootSpan?.attributes === undefined ? {} : { attributes: rootSpan.attributes }),
+                ...(failure === undefined
+                    ? {}
+                    : {
+                          error: {
+                              // Redacted exactly as the root span's own error message.
+                              message: redactArgs(
+                                  failure.thrown instanceof Error ? failure.thrown.message : String(failure.thrown),
+                                  isDevEnvironment(this.env),
+                              ) as string,
+                              serverFault,
+                          },
+                      }),
+            });
+        } catch {
+            // Best-effort — the host mirror must never fail a served request.
+        }
+    }
+
+    /**
+     * Export a dispatch's wide event as a standard OTel **Event** log record
+     * (`lunora.dispatch`), correlated to the dispatch's trace and span.
+     *
+     * **Why a log record rather than the span's attributes.** The local dispatch
+     * root span shares its `spanId` with the SERVER span `@lunora/runtime` emits
+     * for the same dispatch — they are the same logical span, seen from the two
+     * sides of the shard hop. Exporting our copy too would put two partial spans
+     * with identical `trace_id`/`span_id` on the wire, which collectors resolve
+     * inconsistently (merge, last-write, or duplicate). An Event record carrying
+     * `traceId`/`spanId` is unambiguous, is the OTel-sanctioned shape for exactly
+     * this ("a named, structured occurrence"), and every OTLP backend can group
+     * and aggregate it with no Lunora-specific configuration.
+     *
+     * The span still carries the attributes LOCALLY, which is what the Studio
+     * waterfall renders — so the wide event is visible in both places, exported
+     * exactly once.
+     */
+    private exportWideEvent(
+        functionPath: string,
+        durationMs: number,
+        failure: { thrown: unknown } | undefined,
+        anchor: TraceAnchor,
+        wide: { collected: SpanCollection; sink?: TelemetrySink },
+    ): void {
+        try {
+            const { attributes } = wide.collected;
+
+            this.recordUserLog(
+                functionPath,
+                // An errored dispatch's wide event is an error record, so severity
+                // routing/alerting works on it without inspecting attributes.
+                failure === undefined ? "info" : "error",
+                [WIDE_EVENT_NAME],
+                WIDE_EVENT_NAME,
+                {
+                    ...attributes,
+                    // The always-present skeleton, under OTel-ish names so the
+                    // record is useful even from a handler that attached nothing
+                    // but a couple of business fields.
+                    [LUNORA_ATTR.durationMs]: durationMs,
+                    [LUNORA_ATTR.functionPath]: functionPath,
+                    [LUNORA_ATTR.ok]: failure === undefined,
+                },
+                wide.sink,
+                WIDE_EVENT_NAME,
+                anchor,
+            );
+        } catch {
+            // Best-effort — see recordUserLog.
+        }
+    }
+
+    /**
+     * Buffer one span for the studio Traces panel and hand it to the optional
+     * `sink.onSpan`. Best-effort throughout, exactly like {@link recordUserLog}:
+     * a span is recorded *after* its body already settled, so letting a telemetry
+     * failure escape here would turn a succeeded operation into a failed request.
+     *
+     * The span is ALWAYS buffered locally (the Studio Traces panel is a full
+     * "recent traces on this instance" readout, unaffected by sampling). Only the
+     * export to the sink is sampled: when the active dispatch's trace was sampled
+     * OUT (its inbound `traceparent` flag was `00`), the span is held back rather
+     * than streamed — the dispatch `finally` re-decides once the trace's error
+     * status is known ({@link flushSampledOutTrace}), so an errored trace is still
+     * exported whole (tail bias). Spans from a sampled-in dispatch, or from another
+     * trace (a subscription re-run mints its own anchor), stream immediately.
+     */
+    // eslint-disable-next-line @typescript-eslint/member-ordering -- kept in the span-recording cluster (next to recordDispatchRootSpan) for cohesion rather than hoisted above every private member
+    protected recordSpan(span: SpanEvent, sink?: TelemetrySink, sampledSnapshot?: boolean): void {
+        try {
+            this.spans.push(span);
+        } catch {
+            // Best-effort — never let span capture fail the handler.
+        }
+
+        if (!sink?.onSpan) {
+            return;
+        }
+
+        // Look the live verdict up by the SPAN's own `traceId` (not the shared
+        // `currentRequestTrace`, which a sibling dispatch may have overwritten by now).
+        const sampling = this.traceSampling.get(span.traceId);
+
+        if (sampling !== undefined) {
+            if (!sampling.sampled) {
+                // Sampled out, dispatch still in flight: hold this span back and
+                // remember the sink so the `finally` can flush the trace's held
+                // spans if it turns out to error. Held ON THIS PER-TRACE ENTRY —
+                // NOT re-read from the shared span ring at flush time, where a
+                // concurrent trace could have evicted these error spans first.
+                sampling.sink = sink;
+
+                // The synthetic dispatch root never goes to `onSpan`, so it is not
+                // held either — flushSampledOutTrace only ever emits `ctx.trace` spans.
+                if (span.dispatch !== true) {
+                    const held = sampling.held ?? (sampling.held = []);
+
+                    held.push(span);
+
+                    if (held.length > MAX_HELD_SPANS_PER_TRACE) {
+                        held.shift();
+                    }
+                }
+
+                return;
+            }
+
+            this.emitSpan(span, sink, true);
+
+            return;
+        }
+
+        // No LIVE `traceSampling` entry. Either a span from a self-anchored trace
+        // (an alarm or subscription re-run mints its own anchor and never registers
+        // one — those must export) or a LATE span whose dispatch already tore its
+        // entry down in the `finally` (a streaming AI-SDK span, a detached hook).
+        // Decide from the verdict snapshotted onto the span when it OPENED (the
+        // `createTracedFetch`/`anchor.sampled` pattern) rather than the deleted
+        // entry: a sampled-OUT late span is dropped (previously it fell through and
+        // exported unconditionally, leaking an orphan child of a sampled-out trace),
+        // a sampled-in one still exports.
+        if (sampledSnapshot === false) {
+            return;
+        }
+
+        this.emitSpan(span, sink, true);
+    }
+
+    /**
+     * Hand one span to `sink.onSpan`, swallowing sink throws. The DO's `waitUntil`
+     * is threaded so a network sink (otlpSink) can keep its export alive past the
+     * response, matching the log path. Extracted so both the live-stream path in
+     * {@link recordSpan} and the deferred error-keep flush in
+     * {@link flushSampledOutTrace} share one guarded emit.
+     */
+    private emitSpan(span: SpanEvent, sink: TelemetrySink, sampled: boolean): void {
+        if (!sink.onSpan) {
+            return;
+        }
+
+        try {
+            // Stamp the verdict here, at the single funnel every exported span
+            // passes through, rather than on each of the three builders. The OTLP
+            // encoder writes it into the span's `flags`; a span shipped without
+            // one reads as UNSAMPLED at the collector. The two call sites are
+            // exactly the two states: streamed live (kept) and flushed by the
+            // tail bias (head-sampled out, rescued because the trace errored).
+            sink.onSpan({ ...span, sampled }, { waitUntil: this.shardHost.waitUntil });
+        } catch {
+            // A buggy span sink must not break the handler.
+        }
+    }
+
+    /**
+     * Export-boundary decision for a sampled-out trace, run from the dispatch
+     * `finally` once the error status is known. A sampled-in trace already
+     * streamed live, so this returns early for it; a sampled-out trace exports its
+     * held `ctx.trace` spans only when `alwaysSampleErrors` is set AND the trace
+     * errored (the dispatch threw, or a held span settled `ok: false`) — the tail
+     * bias — and otherwise drops them. Held spans are drained from the per-trace
+     * `held` array `recordSpan` accumulated (the synthetic dispatch root is never
+     * held, since it never goes to `onSpan`) — NOT re-read from the shared span
+     * ring, whose bound a concurrent trace could have used to evict these very
+     * error spans before this flush ran.
+     */
+    private flushSampledOutTrace(trace: { traceId: string }, dispatchFailed: boolean): void {
+        // Read THIS trace's own verdict + held sink (keyed by traceId), so an
+        // interleaved sibling dispatch's state can't drop this trace's error spans.
+        const sampling = this.traceSampling.get(trace.traceId);
+
+        if (!sampling || sampling.sampled || !sampling.keepErrors) {
+            return;
+        }
+
+        const { held, sink } = sampling;
+
+        // Allocation-free short-circuit for the common sampled-out dispatch: no
+        // sink, or nothing was held (a handler that never touched `ctx.trace`).
+        if (!sink?.onSpan || held === undefined || held.length === 0) {
+            return;
+        }
+
+        const traceHasError = dispatchFailed || held.some((span) => !span.ok);
+
+        if (!traceHasError) {
+            return;
+        }
+
+        for (const span of held) {
+            // `false`: the head decision dropped this trace and only the tail
+            // bias is exporting it, which is exactly what the cleared flag says.
+            this.emitSpan(span, sink, false);
         }
     }
 
@@ -3529,13 +8258,13 @@ abstract class ShardDO {
     private lifecycleInfo(attachment: SocketAttachment): LifecycleDispatchInfo {
         const event: LifecycleEvent = {
             connectionId: attachment.connectionId ?? "",
-            shardKey: this.state.id?.name ?? ROOT_SHARD_NAME,
+            shardKey: this.runner.shardKey ?? ROOT_SHARD_NAME,
             // eslint-disable-next-line unicorn/no-null -- LifecycleEvent.userId is `string | null`; null is the contractual anonymous sentinel mirrored on ctx.auth
             userId: attachment.userId ?? null,
             ...(attachment.context === undefined ? {} : { context: attachment.context }),
         };
 
-        return { event, identity: attachment.identity, userId: attachment.userId };
+        return { event, ...socketIdentity(attachment) };
     }
 
     /**
@@ -3579,6 +8308,13 @@ abstract class ShardDO {
      * fields. `indexHits` is shaped exactly as the advisor's `AdvisorIndexHit`
      * (`{ table, index, reads }`), so the studio passes it straight to
      * `runLints({ ..., indexHits })` after summing the per-shard arrays.
+     *
+     * `subscriptionRefreshErrors` (DO-01) rides along the same way: an
+     * in-memory-only lifetime count (no durable table, unlike `requests`/
+     * `errors`), incremented by `recordSubscriptionRefreshError` whenever a live
+     * query refresh or shape poke swallows a per-subscription error to protect
+     * its siblings. The field is on the wire so it is queryable/testable now;
+     * charting it in the studio's metrics panel is a follow-up.
      */
     private collectMetrics(): {
         cache: null | { bytes: number; entries: number; evictions: number; hits: number; misses: number };
@@ -3586,15 +8322,24 @@ abstract class ShardDO {
         errors: number;
         functions: FunctionCallStat[];
         history: (FunctionMetricBucket & { path: string })[];
+
+        /**
+         * True when the durable bucket table held more rows than
+         * {@link readFunctionMetricBuckets}'s read limit could return, so
+         * `history` is a partial (newest) window rather than the app's full
+         * retained history. Additive — absent on a worker predating the signal,
+         * so an older studio build simply never renders the notice.
+         */
+        historyTruncated: boolean;
         indexHits: FunctionMetricIndexHit[];
         queryStats: QueryStatEntry[];
         requests: number;
         shard: string;
         sinceMs: number;
+        subscriptionRefreshErrors: number;
         uptimeMs: number;
     } {
-        // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- structural state: a test double may omit `storage.sql` even though the type marks it required
-        const size = this.state.storage.sql?.databaseSize;
+        const size = this.shardHost.sql.databaseSize;
 
         // Durable totals are the source of truth; fall back to the in-memory
         // counters only if the persisted read is unavailable.
@@ -3602,7 +8347,7 @@ abstract class ShardDO {
         let { errors } = this.metrics;
 
         try {
-            const totals = readFunctionMetricsTotals(this.state.storage.sql as unknown as SqlExec);
+            const totals = readFunctionMetricsTotals(this.shardHost.sql);
 
             requests = totals.requests;
             errors = totals.errors;
@@ -3616,7 +8361,7 @@ abstract class ShardDO {
         let indexHits: FunctionMetricIndexHit[] = [];
 
         try {
-            indexHits = readFunctionMetricIndexHits(this.state.storage.sql as unknown as SqlExec);
+            indexHits = readFunctionMetricIndexHits(this.shardHost.sql);
         } catch {
             // No durable index-hit table yet — report an empty feed.
         }
@@ -3627,10 +8372,12 @@ abstract class ShardDO {
         let queryStats: QueryStatEntry[] = [];
 
         try {
-            queryStats = readQueryMetrics(this.state.storage.sql as unknown as SqlExec);
+            queryStats = readQueryMetrics(this.shardHost.sql);
         } catch {
             // No durable query-metrics table yet — report an empty feed.
         }
+
+        const historyResult = this.collectFunctionMetricBuckets();
 
         return {
             // eslint-disable-next-line unicorn/no-null -- metrics wire shape: `cache` is `null | {...}`, null reported when the reactive cache is disabled
@@ -3639,20 +8386,58 @@ abstract class ShardDO {
             databaseSize: typeof size === "number" ? size : null,
             errors,
             functions: this.collectFunctionStats().functions,
-            history: this.collectFunctionMetricBuckets(),
+            history: historyResult.buckets,
+            historyTruncated: historyResult.truncated,
             indexHits,
             queryStats,
             requests,
-            shard: this.state.id?.name ?? ROOT_SHARD_NAME,
+            shard: this.runner.shardKey ?? ROOT_SHARD_NAME,
             sinceMs: this.metrics.sinceMs,
+            subscriptionRefreshErrors: this.metrics.subscriptionRefreshErrors,
             uptimeMs: Date.now() - this.metrics.sinceMs,
         };
     }
 
     /**
+     * Drop the durable global-shape and shape-poke-cursor baselines a closing
+     * socket leaves behind. Leaving them orphans rows under a `connectionId`
+     * that can never reconnect (a fresh upgrade mints a new id), slowly leaking
+     * both tables — and an orphaned poke cursor also pins `minShapePokeCursor`,
+     * and with it the CDC log's retention floor. No-op for a socket that never
+     * recorded a connection id (it wrote no rows to begin with).
+     *
+     * Each delete is swallowed on its own: a stub `sql` handle or a
+     * pre-migration shard has nothing durable to clean up, and neither may fail
+     * the close path.
+     */
+    private purgeDurableSocketBaselines(connectionId: string | undefined): void {
+        if (connectionId === undefined) {
+            return;
+        }
+
+        try {
+            deleteGlobalShapeSnapshotsForConnection(this.sql as SqlExec, connectionId);
+        } catch {
+            /* stub sql / missing table — nothing durable to clean up */
+        }
+
+        try {
+            deleteShapePokeCursorsForConnection(this.sql as SqlExec, connectionId);
+        } catch {
+            /* stub sql / missing table — nothing durable to clean up */
+        }
+    }
+
+    /**
      * Fold one dispatch into the per-function counters keyed by `functionPath`,
      * creating the entry on first sight. `errorMessage` is supplied only when
-     * the handler threw, in which case the failure counters advance too.
+     * the handler threw, in which case the failure counters advance too. The
+     * caller is expected to have already redacted `errorMessage` (via
+     * `redactArgs`, the same `standardRules` treatment the request-log sinks
+     * use) — this method persists/caches it verbatim into BOTH the durable
+     * `__lunora_metrics.last_error_message` column and the in-memory
+     * `functionStats.lastErrorMessage` served by `getFunctionStats`, so an
+     * un-redacted message reaching here leaks into the Studio.
      * `scannedTables` carries the tables the dispatch full-scanned (collected by
      * `getCtxDbReadHook`), which advance the causal scan attribution.
      * `indexHits` carries the declared indexes it exercised (collected by
@@ -3688,7 +8473,7 @@ abstract class ShardDO {
         // statements plus a bounded bucket trim, plus one upsert per scanned
         // table and one per exercised index. Survives restart/hibernation.
         try {
-            recordFunctionMetric(this.state.storage.sql as unknown as SqlExec, {
+            recordFunctionMetric(this.shardHost.sql, {
                 conflicted,
                 durationMs,
                 errored: errorMessage !== undefined,
@@ -3744,14 +8529,32 @@ abstract class ShardDO {
         }
 
         if (existing === undefined) {
+            // Distinct-path cap, mirroring the durable twin's
+            // `FUNCTION_METRICS_MAX_PATHS` admission rule: `functionPath` is
+            // caller-controlled, and the recording paths that never resolve it
+            // (the idempotency cache hit, the watermark short-circuit) can be
+            // driven with a fresh path per request. Refuse the new path rather
+            // than evict — protecting the incumbents is the reason the cap
+            // exists, exactly as `admitPath` argues on the durable side.
+            if (this.functionStats.size >= FUNCTION_METRICS_MAX_PATHS) {
+                return;
+            }
+
             this.functionStats.set(functionPath, stat);
         }
     }
 
     /**
-     * Flush per-statement SQL samples accumulated during the current dispatch
-     * into the durable `__lunora_metrics_queries` table. Called after
-     * `recordFunctionCall` on both the success and error paths.
+     * Flush the per-DISTINCT-statement SQL samples accumulated during the
+     * current dispatch into the durable `__lunora_metrics_queries` table.
+     * Called after `recordFunctionCall` on both the success and error paths.
+     *
+     * Already folded by the instrumented `sql` getter (see
+     * `currentStmtSamples`), so this pays exactly one `recordQueryMetric` call
+     * — one accumulator upsert plus one bucket upsert — per distinct statement
+     * the dispatch ran, however many times it actually ran. `count` carries the
+     * real execution count through so the durable `exec_count`/`total_duration_ms`
+     * still reflect every execution, not just one.
      *
      * Best-effort: a SQL failure (e.g. a test double without a usable `sql`
      * handle) must never fail the response, so every call is swallowed.
@@ -3762,16 +8565,16 @@ abstract class ShardDO {
     private flushStmtSamples(): void {
         const samples = this.currentStmtSamples;
 
-        if (!samples || samples.length === 0) {
+        if (!samples || samples.size === 0) {
             return;
         }
 
         try {
-            const sqlHandle = this.state.storage.sql as unknown as SqlExec;
+            const sqlHandle = this.shardHost.sql as unknown as SqlExec;
 
-            for (const [rawSql, durationMs, rowsRead, rowsWritten] of samples) {
+            for (const [rawSql, sample] of samples) {
                 try {
-                    recordQueryMetric(sqlHandle, rawSql, durationMs, rowsRead, rowsWritten);
+                    recordQueryMetric(sqlHandle, rawSql, sample.totalDurationMs, sample.rowsRead, sample.rowsWritten, Date.now(), sample.count);
                 } catch {
                     // Per-statement failures are swallowed so a bad statement
                     // never breaks the whole flush.
@@ -3797,7 +8600,7 @@ abstract class ShardDO {
      */
     private collectFunctionStats(): FunctionStatsResult {
         try {
-            const functions = readFunctionMetrics(this.state.storage.sql as unknown as SqlExec);
+            const functions = readFunctionMetrics(this.shardHost.sql);
 
             return { functions, sinceMs: this.metrics.sinceMs };
         } catch {
@@ -3810,14 +8613,14 @@ abstract class ShardDO {
     /**
      * Per-function coarse time-series served additively by the metrics RPC, so
      * the studio can chart call/error history. Reads the durable
-     * `__lunora_metrics_buckets` table; returns `[]` when persistence is
-     * unavailable so the response stays well-formed.
+     * `__lunora_metrics_buckets` table; returns an empty, non-truncated result
+     * when persistence is unavailable so the response stays well-formed.
      */
-    private collectFunctionMetricBuckets(): (FunctionMetricBucket & { path: string })[] {
+    private collectFunctionMetricBuckets(): FunctionMetricBucketsResult {
         try {
-            return readFunctionMetricBuckets(this.state.storage.sql as unknown as SqlExec);
+            return readFunctionMetricBuckets(this.shardHost.sql);
         } catch {
-            return [];
+            return { buckets: [], truncated: false };
         }
     }
 
@@ -3826,14 +8629,13 @@ abstract class ShardDO {
             return;
         }
 
-        const idName = this.state.id?.name;
+        const idName = this.runner.shardKey;
 
         if (idName !== ROOT_SHARD_NAME) {
             return;
         }
 
-        // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- structural state: a test double may omit `storage.sql` even though the type marks it required
-        const size = this.state.storage.sql?.databaseSize;
+        const size = this.shardHost.sql.databaseSize;
 
         if (typeof size !== "number" || size < ROOT_DO_SIZE_WARN_BYTES) {
             return;
@@ -3854,29 +8656,236 @@ abstract class ShardDO {
      */
     // eslint-disable-next-line class-methods-use-this -- cohesive DO instance method (groups with the request handlers); kept non-static so subclasses can override the error mapping
     private errorToResponse(error: unknown): Response {
-        // Structural duck-typing so this package does not need a runtime
-        // dependency on `@lunora/values` or `@lunora/runtime`. The shapes
-        // below are the public surface of those error types.
-        if (error instanceof ConflictError) {
-            return jsonResponse({ error: { code: error.code, message: error.message } }, error.status);
+        // Delegate the envelope + redaction to the shared `toErrorBody` so this
+        // edge applies the identical "internal-coded errors never echo their
+        // message" invariant as the runtime/streaming edges. A non-internal
+        // `LunoraError` (`ConflictError`, `NotFoundError`, `@lunora/server`'s
+        // `LunoraError`, …) is echoed with its hint/docsUrl + wire-encoded data;
+        // `isLunoraError` is structural, so this package takes no hard dep on the
+        // packages that throw these.
+        const { body, redacted, status } = toErrorBody(error, { encodeData: encodeWire, fallbackCode: "RPC_FAILED", redactedMessage: "internal error" });
+
+        if (redacted) {
+            // eslint-disable-next-line no-console -- server-side diagnostic for an internal/unhandled error
+            console.error("[@lunora/do] internal error:", error);
         }
 
-        if (error && typeof error === "object" && (error as { name?: string }).name === "ValidationError") {
-            const message = error instanceof Error ? error.message : "validation failed";
+        return jsonResponse({ error: body }, status);
+    }
 
-            return jsonResponse({ error: { code: "VALIDATION_ERROR", message } }, 400);
+    /**
+     * Batch dispatch (plan 088). Applies each `calls[]` entry through the SAME
+     * single-call `/rpc` path (via a nested `this.fetch`), **sequentially**, so
+     * the per-`(identity, mutationId)` idempotency dedup and the per-client
+     * `__client_watermark` ordering are enforced entry-by-entry exactly as for an
+     * individual call — no duplication of the dispatch core, no reordering.
+     *
+     * Failures are **per-slot, not fail-fast**: an entry that throws (or a
+     * custom-mutator `OUT_OF_ORDER` gap) is captured in its own result slot and
+     * later entries still run. Ordering is still safe — a later same-client
+     * mutator after a gap re-classifies as a gap too (the watermark never
+     * advanced), so it cannot apply out of order; unrelated entries/queries are
+     * independent. The response is `{ results: [{ id, status, body }] }` in
+     * request order; each `body` is the untouched single-call envelope (its
+     * `result` already wire-encoded), so the client demuxes + decodes each
+     * exactly as one call.
+     */
+    private async handleBatchRpc(request: Request): Promise<Response> {
+        let payload: { calls?: unknown };
+
+        try {
+            payload = await request.json();
+        } catch {
+            return jsonResponse({ error: { code: "BAD_REQUEST", message: "invalid JSON body" } }, 400);
         }
 
-        if (error && typeof error === "object" && (error as { name?: string }).name === "LunoraError") {
-            const lunoraError = error as { code?: string; message?: string; status?: number };
-            const status = typeof lunoraError.status === "number" ? lunoraError.status : 500;
-
-            return jsonResponse({ error: { code: lunoraError.code ?? "INTERNAL", message: lunoraError.message ?? "internal error" } }, status);
+        if (!Array.isArray(payload.calls)) {
+            return jsonResponse({ error: { code: "BAD_REQUEST", message: "batch `calls` must be an array" } }, 400);
         }
 
-        const message = error instanceof Error ? error.message : "unknown error";
+        // Defense-in-depth against a single request pinning this single-threaded
+        // DO with a huge sequential loop (the worker caps this too).
+        if (payload.calls.length > MAX_BATCH_ENTRIES) {
+            return jsonResponse({ error: { code: "BAD_REQUEST", message: `batch exceeds the ${String(MAX_BATCH_ENTRIES)}-call limit` } }, 400);
+        }
 
-        return jsonResponse({ error: { code: "RPC_FAILED", message } }, 500);
+        const results: { body: unknown; errorDetail?: string; id: unknown; status: number }[] = [];
+        let latestBookmark: string | undefined;
+
+        for (const raw of payload.calls) {
+            // eslint-disable-next-line no-await-in-loop -- sequential BY DESIGN: preserves per-client watermark ordering + idempotency across the batch
+            const outcome = await this.dispatchBatchEntry(request, raw as BatchEntry);
+
+            if (outcome.bookmark !== undefined) {
+                latestBookmark = outcome.bookmark;
+            }
+
+            // `errorDetail` is the per-slot form of the single call's
+            // `ERROR_DETAIL_HEADER`; the worker reads it and drops it before replying.
+            results.push({
+                body: outcome.body,
+                ...(outcome.errorDetail === undefined ? {} : { errorDetail: outcome.errorDetail }),
+                id: outcome.id,
+                status: outcome.status,
+            });
+        }
+
+        return jsonResponse({ results }, 200, bookmarkHeaders(latestBookmark));
+    }
+
+    /** Dispatch one batch entry through the single-call `/rpc` path and capture its envelope (plan 088). */
+    private async dispatchBatchEntry(
+        batchRequest: Request,
+        entry: BatchEntry,
+    ): Promise<{ body: unknown; bookmark: string | undefined; errorDetail?: string; id: unknown; status: number }> {
+        try {
+            const response = await this.fetch(buildBatchEntryRequest(batchRequest, entry));
+
+            return {
+                body: await response.json(),
+                bookmark: response.headers.get("x-d1-bookmark") ?? undefined,
+                errorDetail: response.headers.get(ERROR_DETAIL_HEADER) ?? undefined,
+                id: entry.id,
+                status: response.status,
+            };
+        } catch (error: unknown) {
+            // A malformed entry (non-object, or missing `functionPath`) makes the
+            // per-entry request builder / the nested `/rpc` dispatch throw *before*
+            // the single-call path's own try/catch. Contain it to this slot so one
+            // bad entry can't 500 the whole batch (per-slot isolation is the contract).
+            // Routed through `toErrorBody` so a genuine `LunoraError` still surfaces
+            // its real code/status/message, while any other throw is redacted behind
+            // the generic `BATCH_ENTRY_FAILED`/500 this slot always returned before.
+            const { body, status } = toErrorBody(error, { fallbackCode: "BATCH_ENTRY_FAILED" });
+
+            return {
+                body: { error: body },
+                bookmark: undefined,
+                id: (entry as BatchEntry | null | undefined)?.id,
+                status,
+            };
+        }
+    }
+
+    /**
+     * Serve the writer-routed BULK row ops — `deleteRows`, `clearTable`,
+     * `patchRows`. One seam rather than three arms of {@link handleAdminRpc}'s
+     * dispatch chain, because all three share the same shape: parse a predicate,
+     * run a bounded batch THROUGH the schema-aware writer, flush the touched
+     * tables so live subscribers re-run, and audit the counts.
+     *
+     * The caller checks the three paths before calling, so this always answers.
+     */
+    private async handleBulkRowOp(functionPath: string, args: Record<string, unknown>): Promise<Response> {
+        let applied = 0;
+
+        // ONE meter for the whole batch, threaded by value into every per-row
+        // `runShardWrite` — the same shape {@link ShardDO.pollTtlSweeps} uses for
+        // its own many-rows-under-one-ceiling pass, and for the same reason.
+        //
+        // Letting each row fall through to the override's
+        // `headroom ?? this.transactionHeadroom()` fallback minted a FRESH
+        // tracker per row: up to {@link SHARD_BULK_ROW_CAP} allocations and, more
+        // to the point, a ceiling that resets every row and therefore bounds
+        // nothing. A bulk op is precisely the unbounded-work case the meter
+        // exists for — 500 rows is where a clear-table can actually exhaust the
+        // isolate — so it gets one budget, charged across the batch.
+        const headroom = this.transactionHeadroom();
+
+        try {
+            // `clearTable` is `deleteRows` with no predicate — the same
+            // writer-routed bounded loop, matching every row — so the two share an
+            // arm and differ only in which parser reads the args and which verb the
+            // audit carries. Neither resumes, so neither passes a cursor.
+            const isClear = functionPath === ADMIN_FUNCTIONS.clearTable;
+
+            if (isClear || functionPath === ADMIN_FUNCTIONS.deleteRows) {
+                const parsed = isClear ? parseClearTableArgs(args) : parseBulkDeleteArgs(args);
+                // `hard: true` — the admin bulk delete REMOVES rows, on a
+                // `.softDelete()` table too.
+                //
+                // Two reasons, and they agree. The first is that the whole
+                // cursorless delete path is built on "its own writes take the rows
+                // out of the match set" (see `selectMatchingIds` and `drainBulkOp`):
+                // a soft delete leaves the tombstone in the physical table the next
+                // batch's raw scan re-reads, so the scan re-matched what it had just
+                // stamped, every `apply` after the first page no-opped, `hasMore`
+                // never dropped, and the drain spun to its batch ceiling reporting
+                // rows it had not removed. The second is that this is the posture
+                // the rest of the admin plane already takes: `readTablePage` scans
+                // the physical table with no soft-delete scope (so the operator is
+                // looking at tombstones, marker column and all), `exportShardRows`
+                // passes `includeDeleted: true` because a snapshot is not a
+                // user-facing list read, and `wipeShard` — the whole-table erasure
+                // primitive — sweeps with `{ hard: true }`.
+                //
+                // The single-row `writeRow` delete is deliberately NOT changed: one
+                // row neither has a scan to converge nor a count to overstate, and
+                // it is the path that should keep a table's declared `.softDelete()`
+                // behaviour. The studio's confirm dialogs say which is which.
+                const result = await this.runShardBulkRowOp(parsed, async (id) => {
+                    await this.runShardWrite({ hard: true, id, op: "delete", table: parsed.table }, headroom);
+                    applied += 1;
+                });
+
+                this.recordAudit(isClear ? "clearTable" : "deleteRows", { table: parsed.table, detail: { deleted: result.count, hasMore: result.hasMore } });
+
+                return adminResponse(result);
+            }
+
+            const parsed = parseBulkPatchArgs(args);
+            // Each row goes through `runShardWrite` — the same single-row seam the
+            // studio's row editor uses — so the `.global()` guard, the validators
+            // and the reactive invalidation apply unchanged and codegen needs no
+            // second writer override.
+            //
+            // A row that vanished between the id scan and here is SKIPPED, not
+            // fatal: the scan and the write are separated by an `await` per row, so
+            // a concurrent client mutation, another operator, or this table's own
+            // `.ttl()` sweep can remove one mid-batch. The delete arm is already
+            // silent on a missing row (`writer.delete` is idempotent); this makes
+            // the patch arm match rather than 500 on a routine race.
+            const result = await this.runShardBulkRowOp(
+                parsed,
+                async (id) => {
+                    try {
+                        await this.runShardWrite({ doc: parsed.doc, id, op: "patch", table: parsed.table }, headroom);
+                        applied += 1;
+                    } catch (error) {
+                        if (!(error instanceof LunoraError) || error.code !== "NOT_FOUND") {
+                            throw error;
+                        }
+                    }
+                },
+                parsed.after,
+            );
+
+            // Field NAMES only — the patched values are operator data.
+            this.recordAudit("patchRows", { table: parsed.table, detail: { fields: Object.keys(parsed.doc), hasMore: result.hasMore, patched: result.count } });
+
+            return adminResponse(result);
+        } catch (error) {
+            // Rows applied before the throw are ALREADY COMMITTED (the writer
+            // commits per row), so a privileged partial write still gets an audit
+            // record — otherwise a batch that wrote 200 rows and then failed leaves
+            // no trace at all.
+            if (applied > 0) {
+                this.recordAudit("bulkRowOpFailed", { table: typeof args["table"] === "string" ? args["table"] : undefined, detail: { applied } });
+            }
+
+            throw error;
+        } finally {
+            // Flushed here, alongside every other admin arm's flush, and on the
+            // failure path too: without it the tables a partial batch touched stay
+            // un-drained and live subscribers keep serving pre-write values until
+            // some unrelated later write happens to flush them.
+            //
+            // Swallowed rather than awaited bare: a flush rejection would REPLACE
+            // the per-row error above, losing which row actually failed.
+            await this.flushChangedTables().catch((flushError: unknown) => {
+                this.recordShapeError("bulkRowOp:flush", flushError);
+            });
+        }
     }
 
     /**
@@ -3887,19 +8896,21 @@ abstract class ShardDO {
      * is raw table contents, so the default is closed — unlike the WebSocket
      * upgrade gate, which defaults open for local dev.
      */
-    private async handleAdminRpc(request: Request, functionPath: string, args: Record<string, unknown>): Promise<Response> {
+    private async handleAdminRpc(request: Request, functionPath: string, rawArgs: Record<string, unknown>): Promise<Response> {
         if (!this.isAdminAuthorized(request)) {
             return jsonResponse({ error: { code: "ADMIN_FORBIDDEN", message: "admin introspection is disabled or the bearer token is invalid" } }, 403);
         }
 
         try {
+            const args = decodeAdminArgs(rawArgs);
+
             // Read-only introspection ops share their logic with the WS
             // subscription bridge (see readAdminOp / executeAdminSubscription),
             // so a live subscriber and a one-shot POST observe the same shape.
             const read = this.readAdminOp(functionPath, args);
 
             if (read) {
-                return jsonResponse({ result: read.result }, 200);
+                return adminResponse(read.result);
             }
 
             if (functionPath === ADMIN_FUNCTIONS.runMigration) {
@@ -3916,7 +8927,7 @@ abstract class ShardDO {
                     detail: { changed: result.changed, direction: result.direction, dryRun: result.dryRun, processed: result.processed },
                 });
 
-                return jsonResponse({ result }, 200);
+                return adminResponse(result);
             }
 
             if (functionPath === ADMIN_FUNCTIONS.exportShard) {
@@ -3930,7 +8941,7 @@ abstract class ShardDO {
                 // `batchSize` × tables) and the worker pipes them serially.
                 const rows = await this.runShardExport({ batchSize: parsed.batchSize, tables: parsed.tables });
 
-                return jsonResponse({ result: { rows } }, 200);
+                return adminResponse({ rows });
             }
 
             if (functionPath === ADMIN_FUNCTIONS.importShard) {
@@ -3943,7 +8954,7 @@ abstract class ShardDO {
 
                 this.recordAudit("importShard", { detail: { conflicts: result.conflicts, errors: result.errors.length, inserted: result.inserted } });
 
-                return jsonResponse({ result }, 200);
+                return adminResponse(result);
             }
 
             if (functionPath === ADMIN_FUNCTIONS.writeRow) {
@@ -3956,35 +8967,11 @@ abstract class ShardDO {
 
                 this.recordAudit("writeRow", { table: parsed.table, id: result.id ?? parsed.id, detail: { op: result.op } });
 
-                return jsonResponse({ result }, 200);
+                return adminResponse(result);
             }
 
-            if (functionPath === ADMIN_FUNCTIONS.deleteRows) {
-                const parsed = parseBulkDeleteArgs(args);
-                const result = await this.runShardBulkDelete(parsed);
-
-                // Every row was removed through the writer, which records each
-                // touched table; flush so live subscribers re-run against the
-                // shrunken set.
-                await this.flushChangedTables();
-
-                this.recordAudit("deleteRows", { table: parsed.table, detail: { deleted: result.deleted, hasMore: result.hasMore } });
-
-                return jsonResponse({ result }, 200);
-            }
-
-            if (functionPath === ADMIN_FUNCTIONS.clearTable) {
-                const parsed = parseClearTableArgs(args);
-
-                // `clearTable` is `deleteRows` with no predicate — the same
-                // writer-routed bounded loop, matching every row.
-                const result = await this.runShardBulkDelete(parsed);
-
-                await this.flushChangedTables();
-
-                this.recordAudit("clearTable", { table: parsed.table, detail: { deleted: result.deleted, hasMore: result.hasMore } });
-
-                return jsonResponse({ result }, 200);
+            if (functionPath === ADMIN_FUNCTIONS.deleteRows || functionPath === ADMIN_FUNCTIONS.clearTable || functionPath === ADMIN_FUNCTIONS.patchRows) {
+                return await this.handleBulkRowOp(functionPath, args);
             }
 
             if (functionPath === ADMIN_FUNCTIONS.rankBefore) {
@@ -3993,7 +8980,7 @@ abstract class ShardDO {
                 // coordinator sums the `{before, total}` from every shard.
                 const result = await this.runShardRankBefore(parseRankBeforeArgs(args));
 
-                return jsonResponse({ result }, 200);
+                return adminResponse(result);
             }
 
             if (functionPath === ADMIN_FUNCTIONS.rankPage) {
@@ -4003,16 +8990,16 @@ abstract class ShardDO {
                 // `{ rows, hasMore }` slices from every shard into one page.
                 const result = await this.runShardRankPage(parseRankPageArgs(args));
 
-                return jsonResponse({ result }, 200);
+                return adminResponse(result);
             }
 
             if (functionPath === ADMIN_FUNCTIONS.cdcSync) {
                 // Read-only: page this shard's change-data-capture log past the
                 // caller's per-shard cursor. The coordinator collects each
                 // shard's `{ changes, cursor }` into one streaming-export batch.
-                const result = this.runShardCdcSync(parseCdcSyncArgs(args));
+                const result = await this.cdcSyncPage(parseCdcSyncArgs(args));
 
-                return jsonResponse({ result }, 200);
+                return adminResponse(result);
             }
 
             if (functionPath === ADMIN_FUNCTIONS.applyCdc) {
@@ -4024,7 +9011,7 @@ abstract class ShardDO {
 
                 this.recordAudit("applyCdc", { detail: { applied: result.applied } });
 
-                return jsonResponse({ result }, 200);
+                return adminResponse(result);
             }
 
             if (functionPath === ADMIN_FUNCTIONS.runAs) {
@@ -4045,42 +9032,229 @@ abstract class ShardDO {
 
     /**
      * Dispatch the side-effecting / non-read admin ops that `handleAdminRpc`
-     * doesn't handle inline: the auth-event + mail-capture writes and the native
-     * PITR ops. Returns the op's `Response`, or `undefined` when `functionPath`
+     * doesn't handle inline: the auth-event + mail-capture writes, the search
+     * backfill, and the native PITR ops. Returns the op's `Response`, or `undefined` when `functionPath`
      * isn't one of these (so the caller answers 404). Kept out of
      * `handleAdminRpc` to hold that dispatcher under the complexity budget,
      * mirroring `handlePitrAdminOp`.
      */
     private async handleExtraAdminOp(functionPath: string, args: Record<string, unknown>): Promise<Response | undefined> {
-        if (functionPath === ADMIN_FUNCTIONS.recordAuthEvent) {
-            return this.handleRecordAuthEvent(args);
+        // One `path → handler` lookup rather than an arm per op: each of these is
+        // the same shape (take the decoded args, answer a Response), and growing
+        // the chain by one `if` per new op is what pushed this dispatcher past
+        // its complexity budget.
+        const handler = this.simpleAdminHandlers()[functionPath];
+
+        if (handler !== undefined) {
+            return handler(args);
         }
 
-        if (functionPath === ADMIN_FUNCTIONS.recordContainerEvent) {
-            return this.handleRecordContainerEvent(args);
+        // The three AI-assistant writes share one shape (parse → call → audit →
+        // respond), so they dispatch from a map rather than three more arms.
+        const aiHandler = this.aiAdminHandlers()[functionPath];
+
+        if (aiHandler !== undefined) {
+            return aiHandler(args);
         }
 
-        if (functionPath === ADMIN_FUNCTIONS.recordMail) {
-            return this.handleRecordMail(args);
+        const triaged = await this.handleIssueTriageOp(functionPath, args);
+
+        if (triaged !== undefined) {
+            return triaged;
         }
 
-        if (functionPath === ADMIN_FUNCTIONS.clearCapturedMail) {
-            return this.handleClearCapturedMail();
+        // `??` rather than another `if` arm: this method is a long dispatch chain
+        // held deliberately at the complexity budget, and each additional arm costs
+        // against it (which is why `handleIssueTriageOp` / `handleInspectAdminOp` /
+        // `handlePitrAdminOp` exist at all).
+        return this.handleInspectAdminOp(functionPath) ?? this.handlePitrAdminOp(functionPath, args);
+    }
+
+    /**
+     * Serve the argument-free, read-only inspection reads. A sibling of
+     * {@link ShardDO.handleIssueTriageOp} / {@link ShardDO.handlePitrAdminOp} for
+     * the same reason they exist: `handleExtraAdminOp` is a long `functionPath`
+     * chain, and every arm added to it costs a point of cognitive complexity
+     * against that method's budget.
+     *
+     * Synchronous, unlike its siblings — nothing here awaits, because these reads
+     * touch only this shard's own SQLite. Returns `undefined` for any path it does
+     * not own so the caller keeps walking the chain.
+     */
+    private handleInspectAdminOp(functionPath: string): Response | undefined {
+        if (functionPath === ADMIN_FUNCTIONS.listReactors) {
+            return this.handleListReactors();
         }
 
-        if (functionPath === ADMIN_FUNCTIONS.sendTestMail) {
-            return this.handleSendTestMail(args);
+        return undefined;
+    }
+
+    /**
+     * Serve the four Issue-triage admin writes — `resolveIssue` / `ignoreIssue`
+     * (a status change), `assignIssue` (set/clear an owner), `setIssueSeverity`
+     * (tag/clear severity). Each upserts one row in the reserved
+     * `__lunora_issue_state__` side table keyed by the Issue's fingerprint
+     * `hash`, then re-derives at read time in {@link readErrorIssues}. Returns
+     * `undefined` for any path it doesn't own so `handleExtraAdminOp` falls
+     * through. Admin-gated by `handleAdminRpc`'s caller (the `LUNORA_ADMIN_TOKEN`
+     * bearer); a bad/missing `hash` (or a bad status/severity value) is a 400.
+     *
+     * The write lands through raw SQL the change-tracker can't observe, so it
+     * marks {@link ISSUE_STATE_TABLE} changed and flushes — the live Issues
+     * subscription is an admin-wildcard memo that re-runs whenever a flush finds
+     * a changed table, so the triage shows up without an unrelated write.
+     */
+    private async handleIssueTriageOp(functionPath: string, args: Record<string, unknown>): Promise<Response | undefined> {
+        const patch = this.parseIssueTriagePatch(functionPath, args);
+
+        if (patch === undefined) {
+            return undefined;
         }
 
-        if (functionPath === ADMIN_FUNCTIONS.createWorkflowInstance) {
-            return this.handleCreateWorkflowInstance(args);
+        const hash = parseIssueHash(args);
+        const updatedBy = typeof args["updatedBy"] === "string" ? args["updatedBy"] : undefined;
+        const sql = this.shardHost.sql as unknown as SqlExec;
+        const state: IssueState = upsertIssueState(sql, hash, patch, Date.now(), updatedBy);
+
+        this.recordChangedTable(ISSUE_STATE_TABLE);
+        await this.flushChangedTables();
+
+        this.recordAudit(functionPath.slice(ADMIN_FUNCTION_PREFIX.length), { detail: { ...patch, hash } });
+
+        return adminResponse({ state });
+    }
+
+    /**
+     * Map an Issue-triage admin path to the `IssueStatePatch` it applies, or
+     * `undefined` when the path isn't a triage write. `assignIssue`/
+     * `setIssueSeverity` accept an explicit `null` to CLEAR the field (unassign /
+     * untag); a missing or malformed value is a 400 rather than a silent no-op.
+     */
+    // eslint-disable-next-line class-methods-use-this -- kept an instance method for symmetry with the other `parse*`/handler seams
+    private parseIssueTriagePatch(functionPath: string, args: Record<string, unknown>): IssueStatePatch | undefined {
+        if (functionPath === ADMIN_FUNCTIONS.resolveIssue) {
+            return { status: "resolved" };
         }
 
-        if (functionPath === ADMIN_FUNCTIONS.getWorkflowInstanceStatus) {
-            return this.handleGetWorkflowInstanceStatus(args);
+        if (functionPath === ADMIN_FUNCTIONS.ignoreIssue) {
+            return { status: "ignored" };
         }
 
-        return this.handlePitrAdminOp(functionPath, args);
+        if (functionPath === ADMIN_FUNCTIONS.assignIssue) {
+            // Assigning implicitly reopens (someone owns it now); the two moves stay one round-trip.
+            return { assignee: parseAssigneeArgument(args), status: "open" };
+        }
+
+        if (functionPath === ADMIN_FUNCTIONS.setIssueSeverity) {
+            return { severity: parseSeverityArgument(args) };
+        }
+
+        return undefined;
+    }
+
+    /**
+     * `__lunora_admin__:backfillSearch` — index the rows that predate this
+     * shard's `.searchIndex()` declarations, `maxPages` pages at a time.
+     *
+     * Bounded rather than run-to-completion because a DO request has a CPU and
+     * wall-clock budget, and the tables `staged: true` exists for are precisely
+     * the ones a single unbounded walk cannot finish. Progress is durable, so an
+     * operator drives it with repeated calls until `done` — `lunora run
+     * '__lunora_admin__:backfillSearch' --args '{"maxPages":20}'` needs no new
+     * CLI surface. Admin-gated by `handleAdminRpc`'s caller.
+     */
+    private handleBackfillSearch(args: Record<string, unknown>): Response {
+        // ABSENT means "no cap" for search — a small shard finishes in one call.
+        // (`backfillVectors` defaults to ONE page instead: each of its rows is a
+        // remote call.)
+        const budget = parseMaxPages(args, "backfillSearch", Number.POSITIVE_INFINITY);
+
+        if ("rejection" in budget) {
+            return budget.rejection;
+        }
+
+        const result = this.runShardSearchBackfill(budget);
+
+        this.recordAudit("backfillSearch", { detail: { done: result.done, pages: result.pages } });
+
+        return adminResponse(result);
+    }
+
+    /**
+     * Append `task` to the after-commit chain and return its link. The link never
+     * rejects (`task` must not), and clears {@link ShardDO.afterCommitStalled}
+     * once the chain has drained to it with nothing queued behind.
+     */
+    private linkAfterCommit(task: () => Promise<void>): Promise<void> {
+        const link: Promise<void> = this.afterCommitTail.then(async () =>
+            task().finally(() => {
+                if (this.afterCommitTail === link) {
+                    this.afterCommitStalled = false;
+                }
+            }),
+        );
+
+        this.afterCommitTail = link;
+
+        return link;
+    }
+
+    /**
+     * `__lunora_admin__:backfillVectors` — embed the rows that predate this
+     * shard's vector indexes (or a change to one) into Vectorize.
+     *
+     * Bounded by default, unlike `backfillSearch`: every row is a remote embed plus
+     * a Vectorize upsert per index, so even a modest table cannot be embedded in
+     * one request. Absent `maxPages` runs ONE page, and more than the engine's
+     * per-call page ceiling is refused; the caller repeats until `done` —
+     * `lunora run '__lunora_admin__:backfillVectors' --args '{"maxPages":5}'`. `restart: true` re-embeds every vectorized table from the
+     * top, for a change the recorded profile cannot see (an `embed` swap with no
+     * declared `model`, a Shape B `select`/`metadata` edit). Admin-gated by
+     * `handleAdminRpc`'s caller.
+     */
+    private async handleBackfillVectors(args: Record<string, unknown>): Promise<Response> {
+        const rawRestart = args["restart"];
+        const budget = parseMaxPages(args, "backfillVectors", VECTOR_BACKFILL_MAX_PAGES);
+
+        if ("rejection" in budget) {
+            return budget.rejection;
+        }
+
+        // Strict for the same reason as `maxPages`: `restart` re-embeds whole
+        // tables, so `"false"` must not read as yes.
+        if (rawRestart !== undefined && typeof rawRestart !== "boolean") {
+            return jsonResponse({ error: { code: "BAD_REQUEST", message: "backfillVectors: restart must be a boolean" } }, 400);
+        }
+
+        if (this.vectorBackfillRunning) {
+            return jsonResponse(
+                { error: { code: "CONFLICT", message: "backfillVectors: a backfill is already running on this shard; retry once it returns" } },
+                409,
+            );
+        }
+
+        this.vectorBackfillRunning = true;
+
+        let result: VectorBackfillProgress;
+
+        try {
+            result = await this.runShardVectorBackfill({ ...budget, ...(rawRestart === true ? { restart: true } : {}) });
+        } finally {
+            this.vectorBackfillRunning = false;
+        }
+
+        this.recordAudit("backfillVectors", {
+            detail: { done: result.done, error: result.error, failed: result.failed, pages: result.pages, restart: rawRestart === true, rows: result.rows },
+        });
+
+        // A page that failed as a whole (embedder or Vectorize unreachable) is a
+        // 503 the caller retries — but the progress made before it still counts,
+        // so it rides along instead of being thrown away.
+        if (result.error !== undefined) {
+            return jsonResponse({ error: { code: "SERVICE_UNAVAILABLE", message: `backfillVectors: ${result.error}` }, result }, 503);
+        }
+
+        return adminResponse(result);
     }
 
     /**
@@ -4096,12 +9270,12 @@ abstract class ShardDO {
         const parsed = parseRecordAuthEventArgs(args);
 
         try {
-            recordAuthEvent(this.state.storage.sql as unknown as SqlExec, { outcome: parsed.outcome, ts: Date.now() });
+            recordAuthEvent(this.shardHost.sql, { outcome: parsed.outcome, ts: Date.now() });
         } catch {
             // Best-effort: a metrics write must never fail the call.
         }
 
-        return jsonResponse({ result: { recorded: true } }, 200);
+        return adminResponse({ recorded: true });
     }
 
     /**
@@ -4110,17 +9284,57 @@ abstract class ShardDO {
      * surfaces in the Studio Logs panel — not just the dev terminal. The
      * Container DO pushes this best-effort (its `console` print stays the source
      * of truth), so a missing/garbage envelope is rejected up front (400) rather
-     * than corrupting the buffer. Mapped to `functionPath: "container:&lt;name>"` so
+     * than corrupting the buffer. Mapped to `functionPath: "container:<name>"` so
      * the panel renders it alongside `ctx.log` lines. Admin-gated by
      * `handleAdminRpc`'s caller (the same `LUNORA_ADMIN_TOKEN` bearer as every
      * other admin write).
+     *
+     * An `error`-level lifecycle event (a crash/`onError`, or a non-zero-exit
+     * `stop`) is ALSO appended as an `error`-outcome row to the durable
+     * `__lunora_reqlog__` — the same readout `getIssues` groups over — so a
+     * crash-looping container folds into the Issues list right beside Worker
+     * errors (they share the `fingerprintError` hash over `functionPath ::
+     * bucket(message)`). The in-memory buffer stays the live Logs feed; the
+     * durable row is what survives hibernation for triage.
      */
-    private handleRecordContainerEvent(args: Record<string, unknown>): Response {
+    private async handleRecordContainerEvent(args: Record<string, unknown>): Promise<Response> {
         const entry = parseRecordContainerEventArgs(args);
 
         this.logs.push(entry);
 
-        return jsonResponse({ result: { recorded: true } }, 200);
+        // A crash is either an explicit `error`-level event (an `onError`) OR a
+        // `stop` that exited non-zero — the normal crash-loop signal. The exit
+        // code rides the `stop` message as `(exit <n>)` and is parsed onto
+        // `entry.exitCode`; a `stop` is always `level: "info"`, so without the
+        // exit-code arm the common crash path would never fold into Issues (only
+        // `onError` would), contradicting this method's contract.
+        const crashed = entry.level === "error" || (entry.exitCode !== undefined && entry.exitCode !== 0);
+
+        if (crashed) {
+            const logEntry: AppendRequestLogEntry = {
+                durationMs: 0,
+                errorMessage: entry.message,
+                functionPath: entry.functionPath,
+                outcome: "error",
+                shardKey: this.runner.shardKey,
+                ts: entry.timestamp,
+            };
+
+            // Shared seam with `recordRequestLog` — persists the durable row AND
+            // streams the Logpush event, so a container crash reaches external
+            // sinks like every other error (best-effort throughout).
+            this.persistRequestLog(logEntry, this.requestLogConfig());
+
+            // The row lands through raw SQL the change-tracker can't observe, and
+            // a container push carries no other write — so without this the live
+            // `getIssues`/`getLogs` subscriptions (admin-wildcard memos, re-run
+            // only when a flush finds a changed table) would show the crash only
+            // once some unrelated write happened to flush.
+            this.recordChangedTable(REQUEST_LOG_TABLE);
+            await this.flushChangedTables();
+        }
+
+        return adminResponse({ recorded: true });
     }
 
     /**
@@ -4137,12 +9351,25 @@ abstract class ShardDO {
      * overwritten here for the duration of the dispatch and restored after, so
      * the forge can't leak into a later request. The target path is validated to
      * be a non-admin function, so it can't be used to re-enter the admin plane.
-     * The studio only surfaces this tool behind a loopback-dev gate.
+     * And the dispatch runs under the admin plane's own request scope
+     * ({@link ShardDO.withAdminRequestScope}) — the identity is the only thing
+     * forged here, never the system flag or the mutation-replay fields, which
+     * would otherwise be whatever a concurrent `/rpc` happened to leave behind.
+     *
+     * Callers: the studio surfaces it behind a loopback-dev gate (`runAsIdentity`),
+     * and `lunora run --as` dispatches through it from the CLI. That gate was
+     * always UI-only — the server-side authority is, and remains, the admin
+     * bearer check above.
      */
     private async handleRunAs(args: Record<string, unknown>): Promise<Response> {
         const parsed = parseRunAsArgs(args);
 
-        const result = await this.withRequestIdentity(parsed.userId, parsed.identity, () => this.handleRpc(parsed.functionPath, parsed.args));
+        // No IP, deliberately. The admin branch of `fetch` answers before
+        // `beginDispatch`, so `x-lunora-client-ip` is never read on this path and
+        // `currentRequestIp` holds either nothing or a concurrently-parked
+        // `/rpc`'s address — the admin request scope clears it for exactly that
+        // reason. The identity is forged here; an IP would be borrowed.
+        const result = await this.withRequestIdentity(parsed.userId, parsed.identity, undefined, () => this.handleRpc(parsed.functionPath, parsed.args));
 
         // The forged dispatch may have written through the writer (a mutation run
         // as the user); flush touched tables so live subscribers re-run, matching
@@ -4151,47 +9378,40 @@ abstract class ShardDO {
 
         this.recordAudit("runAs", { detail: { functionPath: parsed.functionPath, runAsUserId: parsed.userId } });
 
-        return jsonResponse({ result }, 200);
+        return adminResponse(result);
     }
 
     /* eslint-disable no-secrets/no-secrets -- reserved admin RPC names are framework constants, not credentials */
 
     /**
-     * Resolve a declared workflow's runtime binding handle from this shard's `env`.
-     * Looks the `exportName` up in {@link workflowsMetadata} (the codegen subclass's
-     * statically-discovered list) to find its generated `WORKFLOW_*` binding, then
-     * reads `env[binding]` and validates it carries the `create`/`get` methods. A
-     * bad export name or a missing/malformed binding throws a 400 `LunoraError` so
-     * the studio surfaces an actionable message instead of a generic 500.
+     * Resolve a declared workflow's runtime binding handle. Looks the
+     * `exportName` up in {@link workflowsMetadata} (the codegen subclass's
+     * statically-discovered list) to find its export key (the generated class
+     * name), then reads it off this shard's `ctx.exports` — or `env`, on a host
+     * without workflow exports — and validates it carries the `create`/`get`
+     * methods. A bad export name or a missing/malformed binding throws a 400
+     * `LunoraError` so the studio surfaces an actionable message instead of a
+     * generic 500.
      */
-    private resolveWorkflowBinding(exportName: string): WorkflowBindingHandle {
+    private declaredWorkflowHandle(exportName: string): WorkflowBindingHandle {
         const metadata = this.workflowsMetadata().workflows.find((workflow) => workflow.exportName === exportName);
 
         if (!metadata) {
-            throw Object.assign(new Error(`workflow "${exportName}" is not declared`), { code: "BAD_REQUEST", name: "LunoraError", status: 400 });
+            throw new LunoraError("BAD_REQUEST", `workflow "${exportName}" is not declared`);
         }
 
-        const binding = (this.env as Record<string, unknown> | undefined)?.[metadata.binding];
+        const binding = resolveWorkflowHandle<WorkflowBindingHandle>(this.env, this.state.exports, metadata.className, ["create", "get"]);
 
-        if (
-            typeof binding !== "object" ||
-            binding === null ||
-            typeof (binding as WorkflowBindingHandle).create !== "function" ||
-            typeof (binding as WorkflowBindingHandle).get !== "function"
-        ) {
-            throw Object.assign(new Error(`workflow binding "${metadata.binding}" is not available on this deployment`), {
-                code: "BAD_REQUEST",
-                name: "LunoraError",
-                status: 400,
-            });
+        if (binding === undefined) {
+            throw new LunoraError("BAD_REQUEST", `workflow "${metadata.className}" is not available on this deployment`);
         }
 
-        return binding as WorkflowBindingHandle;
+        return binding;
     }
 
     /**
      * Serve `__lunora_admin__:createWorkflowInstance` — the studio's "Start
-     * instance" button. Resolves the declared workflow's `WORKFLOW_*` binding and
+     * instance" button. Resolves the declared workflow's binding and
      * calls `.create({ id?, params })`, returning the new instance's id and initial
      * status. No SQLite write happens (workflows are not Durable Objects and hold
      * no shard state), so this only records an audit entry — there's nothing to
@@ -4199,7 +9419,7 @@ abstract class ShardDO {
      */
     private async handleCreateWorkflowInstance(args: Record<string, unknown>): Promise<Response> {
         const parsed = parseCreateWorkflowInstanceArgs(args);
-        const binding = this.resolveWorkflowBinding(parsed.exportName);
+        const binding = this.declaredWorkflowHandle(parsed.exportName);
 
         const instance = await binding.create({ id: parsed.id, params: parsed.params });
         const snapshot = await instance.status();
@@ -4207,7 +9427,7 @@ abstract class ShardDO {
 
         this.recordAudit("createWorkflowInstance", { id: instance.id, detail: { exportName: parsed.exportName } });
 
-        return jsonResponse({ result }, 200);
+        return adminResponse(result);
     }
 
     /**
@@ -4219,7 +9439,7 @@ abstract class ShardDO {
      */
     private async handleGetWorkflowInstanceStatus(args: Record<string, unknown>): Promise<Response> {
         const parsed = parseGetWorkflowInstanceStatusArgs(args);
-        const binding = this.resolveWorkflowBinding(parsed.exportName);
+        const binding = this.declaredWorkflowHandle(parsed.exportName);
 
         const instance = await binding.get(parsed.id);
         const snapshot = await instance.status();
@@ -4230,9 +9450,246 @@ abstract class ShardDO {
             status: toWorkflowInstanceState(snapshot.status),
         };
 
-        return jsonResponse({ result }, 200);
+        return adminResponse(result);
     }
     /* eslint-enable no-secrets/no-secrets */
+
+    /**
+     * Run one reactor dispatch and record what it did.
+     *
+     * Split out of {@link ShardDO.dispatchReactors} so that loop stays inside the
+     * complexity budget. The three-way split is the contract: a successful
+     * dispatch advances the baseline AND a counter, a failure advances only the
+     * counter (its baseline must stay put so the next flush retries it), and BOTH
+     * flush afterwards.
+     */
+    private async dispatchOneReactor(sqlHandle: SqlExec, path: string, previousDigest: string | undefined): Promise<void> {
+        try {
+            const outcome = await this.runReactor(path, previousDigest);
+
+            if (outcome !== undefined) {
+                writeReactorState(sqlHandle, path, {
+                    digest: outcome.digest,
+                    now: Date.now(),
+                    // `ran` distinguishes the two non-failure outcomes an operator
+                    // needs to tell apart: the handler fired, or `select` re-ran and
+                    // the digest matched so it did not. A high suppressed:runs ratio
+                    // is the signal that a reactor is watching more than it needs to.
+                    result: outcome.ran ? "ran" : "suppressed",
+                    // The sentinel is stripped for the same reason the delta frame
+                    // strips it (see `pushSubscriptionData`): `tables` is persisted
+                    // in `__reactor_state` and rendered as the reactor's watched-table
+                    // list in the Studio, so a reactor that read `ctx.kv` would show an
+                    // internal marker to an operator. Inert either way —
+                    // `reactorNeedsRun` intersects against a changed-table set the
+                    // sentinel can never be in — but it is not a name to publish.
+                    tables: outcome.tables.filter((dep) => dep !== UNVOUCHABLE_DEP),
+                });
+            }
+        } catch (error: unknown) {
+            // Report FIRST. The counter write below goes through `runDrizzle` and
+            // throws on a SQL failure — and a reactor that threw because storage is
+            // unhealthy is exactly the condition that makes this bookkeeping write
+            // fail too. Ordered the other way, that second throw would swallow the
+            // reason the reactor failed, escape `dispatchReactors`, and abort the
+            // whole refresh drain mid-loop.
+            this.recordReactorError(path, error);
+
+            // Baseline deliberately NOT advanced — a reactor that threw has not
+            // observed this result, so the next flush must offer it again — but the
+            // counter and message ARE recorded, which is the whole reason
+            // `writeReactorState` takes an outcome rather than a row.
+            //
+            // Best-effort, like every other durable bookkeeping write on a
+            // background path here (`persistIdempotentResult`, `saveShapePokeCursor`,
+            // `saveGlobalSnapshot`): losing a counter is not worth failing the drain
+            // that other reactors and every live subscriber are waiting on.
+            try {
+                writeReactorState(sqlHandle, path, {
+                    error: error instanceof Error ? error.message : String(error),
+                    now: Date.now(),
+                    result: "error",
+                });
+            } catch (writeError: unknown) {
+                this.recordReactorError(path, writeError);
+            }
+        } finally {
+            // A reactor's handler writes through `ctx.db`, which only STAGES the
+            // touched tables (`recordChangedTable`) — the request path is what
+            // normally flushes them, and a reactor has no request. Without this, a
+            // reactor's writes would sit unflushed until some unrelated RPC came
+            // along: no subscriber would see them, and the cascade that lets an
+            // actor advance a state machine would never happen.
+            //
+            // Safe inside the drain: `flushChangedTables` sees `refreshInFlight` and
+            // merges into THIS drain's pending set rather than starting a second one,
+            // so the loop simply gets another pass. In the `catch` case the reactor's
+            // transaction already rolled back, so at worst this stages a table whose
+            // re-run finds nothing changed — the same outcome a failed RPC mutation
+            // produces today.
+            await this.flushChangedTables();
+        }
+    }
+
+    /**
+     * Claim one run against a reactor's per-drain convergence budget.
+     *
+     * Split out of {@link ShardDO.dispatchReactors} so that loop stays inside the
+     * complexity budget, and because the "log exactly once" bookkeeping is fiddly
+     * enough to deserve naming: the counter is advanced one step PAST the ceiling
+     * on the first refusal, so the error is recorded once per drain rather than on
+     * every subsequent pass — a non-converging reactor would otherwise flood the
+     * very log ring that reports it.
+     * @returns `true` when the reactor may run; `false` when its budget is spent.
+     */
+    private claimReactorBudget(path: string, runs: Map<string, number>): boolean {
+        const used = runs.get(path) ?? 0;
+
+        if (used < ShardDO.MAX_REACTOR_RUNS_PER_DRAIN) {
+            runs.set(path, used + 1);
+
+            return true;
+        }
+
+        if (used === ShardDO.MAX_REACTOR_RUNS_PER_DRAIN) {
+            runs.set(path, used + 1);
+            this.recordReactorError(
+                path,
+                new Error(
+                    `reactor did not converge: ran ${String(ShardDO.MAX_REACTOR_RUNS_PER_DRAIN)} times in one refresh drain and its watched read kept changing. Its handler is rewriting what its own select observes; stopped for this drain.`,
+                ),
+            );
+        }
+
+        return false;
+    }
+
+    /**
+     * Serve `__lunora_admin__:listReactors` — the studio's read-only Reactors
+     * panel.
+     *
+     * Joins the generated manifest against `__reactor_state` rather than reading
+     * either alone. The manifest alone cannot say whether a reactor is doing
+     * anything; the state table alone cannot show a reactor that has been
+     * declared but never dispatched — and "declared, never run" is exactly the
+     * state an operator is looking for when a reactor appears not to work. The
+     * join makes both visible, with the manifest as the authoritative roster.
+     *
+     * Read-only: a reactor listing mutates no shard state, so nothing is flushed
+     * or audited. Admin-gated by `handleAdminRpc`'s caller.
+     */
+    private handleListReactors(): Response {
+        const states = new Map<string, ReactorState>(listReactorStates(this.sql as SqlExec).map((entry) => [entry.path, entry.state] as const));
+
+        // Named `stored` rather than `state` because `ShardDO.state` is the Durable
+        // Object handle, and the row also carries a `state` FIELD in the response.
+        const reactors: ReactorMetadata[] = this.lifecycleHookPaths("reactor").map((path) => {
+            const stored = states.get(path);
+
+            if (stored === undefined) {
+                return { errors: 0, path, runs: 0, state: "idle", suppressed: 0 };
+            }
+
+            return {
+                errors: stored.stats.errors,
+                ...(stored.lastError === undefined ? {} : { lastError: stored.lastError }),
+                ...(stored.lastRanAt === 0 ? {} : { lastRanAt: stored.lastRanAt }),
+                path,
+                runs: stored.stats.runs,
+                // `failing` reads the LAST dispatch, not the lifetime count: a
+                // reactor that failed once a week ago and has run cleanly since is
+                // active, not failing. `lastError` is retained either way so the
+                // panel can still show what went wrong.
+                state: stored.lastError === undefined ? "active" : "failing",
+                suppressed: stored.stats.suppressed,
+                ...(stored.tables === undefined ? {} : { tables: stored.tables }),
+            };
+        });
+
+        return adminResponse({ reactors });
+    }
+
+    /**
+     * Serve `__lunora_admin__:listFlags` — the studio's read-only Flags page.
+     * Evaluates every statically-discovered feature flag under an optional
+     * `args.context` targeting context (the studio's editable context editor)
+     * via the {@link evaluateFlags} hook, which the codegen subclass overrides
+     * with live OpenFeature evaluation. Read-only: a flag lookup mutates no shard
+     * state, so nothing is flushed or audited. Admin-gated by `handleAdminRpc`'s
+     * caller.
+     */
+    private async handleListFlags(args: Record<string, unknown>): Promise<Response> {
+        const rawContext = args.context;
+        const context =
+            typeof rawContext === "object" && rawContext !== null && !Array.isArray(rawContext) ? (rawContext as Record<string, unknown>) : undefined;
+        const result = await this.evaluateFlags(context);
+
+        return adminResponse(result);
+    }
+
+    /**
+     * Run the admin plane's `run()` under its OWN per-request scope, restoring
+     * whatever was there on the way out.
+     *
+     * The admin branch of `fetch` returns before `beginDispatch`, so every field
+     * that call would have stamped is left holding the last `/rpc`'s values. Two
+     * of them are load-bearing. `currentRequestSystem` is the flag the generated
+     * `handleRpc` gates `internal` functions on (`registered.visibility ===
+     * "internal" && !this.isSystemDispatch()`), and `runAs` dispatches straight
+     * through that gate — so an `x-lunora-system: 1` request that is parked on an
+     * await while an admin call arrives lends it the system bit. The replay fields
+     * (`currentRequestMutationId` / `currentRequestClientId` / `currentMutatorClass`)
+     * are the other: `commitMutationBookkeeping` reads them off `this`, so a
+     * mutation dispatched through `runAs` could commit a dedup row and advance a
+     * client watermark under the parked request's identity.
+     *
+     * `currentRequestIdentity` is the third, and the sharpest: it is the claims
+     * object RLS grants roles from, so a `runAs` dispatch that inherited a parked
+     * `/rpc`'s claims would evaluate row policies as that caller's role and tenant.
+     *
+     * `currentRequestIp` and `currentRequestTraceparent` are the remainder, and
+     * are cleared rather than carried for the same reason: the admin plane
+     * genuinely has neither to offer (nothing on this branch reads either header),
+     * so leaving them alone would let a `runAs` dispatch run — and log, and
+     * rate-limit — under a parked `/rpc`'s address, and file its container spans
+     * under that request's trace. `undefined` is the honest answer for both.
+     *
+     * Restoring rather than clearing on exit is deliberate: an admin call is a
+     * guest on a thread another dispatch may own, and clearing would take that
+     * dispatch's scope with it. (The `/rpc` tail re-pins its own scope after every
+     * await regardless — see `captureRequestScope`'s call site.)
+     *
+     * The gate is the admin bearer token either way, which already permits
+     * `runSql`/`writeRow`/`clearTable`; this closes a gate that does not hold, not
+     * a path past the trust boundary.
+     */
+    private async withAdminRequestScope<R>(run: () => Promise<R>): Promise<R> {
+        const previousScope = this.captureRequestScope();
+        const previousBookkeeping = this.mutationBookkeeping;
+
+        this.currentRequestBookmark = undefined;
+        this.currentResponseBookmark = undefined;
+        this.currentRequestUserId = undefined;
+        this.currentRequestIdentity = undefined;
+        this.currentRequestClientId = undefined;
+        this.currentRequestClientSeq = undefined;
+        this.currentRequestBaselineSeq = undefined;
+        this.currentRequestIp = undefined;
+        this.currentRequestOrigin = undefined;
+        this.currentRequestMutationId = undefined;
+        this.currentMutatorClass = undefined;
+        this.mutationBookkeeping = undefined;
+        this.currentRequestSampleErrors = undefined;
+        this.currentRequestSystem = false;
+        this.currentRequestTraceparent = undefined;
+
+        try {
+            return await run();
+        } finally {
+            this.restoreRequestScope(previousScope);
+            this.mutationBookkeeping = previousBookkeeping;
+        }
+    }
 
     /**
      * Run `run()` with the per-request identity pinned to (`userId`, `identity`),
@@ -4242,25 +9699,59 @@ abstract class ShardDO {
      * so pinning the fields around the call makes the dispatched function observe the
      * chosen identity without threading it through the generated signature.
      *
-     * The single caller is {@link handleRunAs} (pins a forged user — the dev
-     * "Run as identity" tool), which runs synchronously on the request thread
-     * with no intervening concurrent dispatch. Subscriptions deliberately do NOT
-     * use this primitive: they run in deferred/interleaved contexts where
-     * mutating the shared field would race a concurrent RPC, so they thread an
-     * explicit {@link SubscriptionIdentity} into `executeSubscription` instead.
+     * Two callers, and they do NOT share a safety argument.
+     *
+     * {@link handleRunAs} (pins a forged user — the dev "Run as identity" tool)
+     * runs synchronously on the request thread with no intervening concurrent
+     * dispatch, so the shared field is uncontended for its whole window.
+     *
+     * {@link dispatchLifecycle} runs from `webSocketClose` (a hibernation close
+     * handler that carries no request of its own) and from the `connect`
+     * envelope — exactly the deferred/interleaved contexts where a concurrent
+     * `/rpc` CAN interleave. What keeps it correct today is downstream, not here:
+     * the generated `buildCtx` reads `getCurrentUserId`/`getCurrentIdentity`
+     * synchronously when it constructs the ctx, and the `/rpc` tail re-pins the
+     * request scope after its own await. A hook path that read the field back
+     * after an await would observe the other dispatch's identity, and the
+     * `finally` here would then restore values captured before that interleaving.
+     *
+     * `ip` is scoped here on the same terms as `userId`/`identity`, and inherits
+     * the same accepted limitation rather than a new one: for the width of a
+     * lifecycle hook the shared field holds the SOCKET's address, so a concurrent
+     * `/rpc` whose `buildCtx` runs inside that window reads it as its own. Stated
+     * rather than closed, because closing it is not an `ip` change — it means
+     * threading the whole caller context into `handleRpc` so the hook's ctx never
+     * touches the shared fields at all, which is a signature change across
+     * codegen and moves all three fields at once. The `/rpc` tail re-pins its own
+     * scope (`ip` and the claims included, since {@link RequestScope} carries
+     * both) after every await, so the exposure is bounded by that window and does
+     * not survive it.
+     *
+     * Subscriptions deliberately do NOT use this primitive at all: they thread an
+     * explicit {@link SubscriptionIdentity} into `executeSubscription` by value,
+     * which is the pattern to reach for when a new deferred caller appears — and
+     * the pattern to convert lifecycle dispatch to, when someone does.
      */
-    private async withRequestIdentity<R>(userId: string | undefined, identity: Record<string, unknown> | undefined, run: () => Promise<R> | R): Promise<R> {
+    private async withRequestIdentity<R>(
+        userId: string | undefined,
+        identity: Record<string, unknown> | undefined,
+        ip: string | undefined,
+        run: () => Promise<R> | R,
+    ): Promise<R> {
         const previousUserId = this.currentRequestUserId;
         const previousIdentity = this.currentRequestIdentity;
+        const previousIp = this.currentRequestIp;
 
         this.currentRequestUserId = userId;
         this.currentRequestIdentity = identity;
+        this.currentRequestIp = ip;
 
         try {
             return await run();
         } finally {
             this.currentRequestUserId = previousUserId;
             this.currentRequestIdentity = previousIdentity;
+            this.currentRequestIp = previousIp;
         }
     }
 
@@ -4282,16 +9773,16 @@ abstract class ShardDO {
      */
     private handleRecordMail(args: Record<string, unknown>): Response {
         const parsed = parseRecordMailArgs(args);
-        const result = recordCapturedMail(this.state.storage.sql as unknown as SqlExec, parsed, Date.now());
+        const result = recordCapturedMail(this.shardHost.sql, parsed, Date.now());
 
-        return jsonResponse({ result }, 200);
+        return adminResponse(result);
     }
 
     /** Empty the dev mail-catcher inbox (studio "clear inbox" action). Admin-gated by the caller. */
     private handleClearCapturedMail(): Response {
-        const result = clearCapturedMail(this.state.storage.sql as unknown as SqlExec);
+        const result = clearCapturedMail(this.shardHost.sql);
 
-        return jsonResponse({ result }, 200);
+        return adminResponse(result);
     }
 
     /**
@@ -4303,9 +9794,350 @@ abstract class ShardDO {
      */
     private handleSendTestMail(args: Record<string, unknown>): Response {
         const input = buildTestMailInput(args);
-        const result = recordCapturedMail(this.state.storage.sql as unknown as SqlExec, input, Date.now());
+        const result = recordCapturedMail(this.shardHost.sql, input, Date.now());
 
-        return jsonResponse({ result }, 200);
+        return adminResponse(result);
+    }
+
+    /**
+     * Serve `__lunora_admin__:recordQueueMessage` — the capture sink the generated
+     * worker `queue()` handler (via `@lunora/queue`'s `dispatchQueueBatch`) posts
+     * every consumed message batch to. Records it into the reserved
+     * `__lunora_queue_messages` table (bounded, auto-trimmed) so the studio Queues
+     * panel shows one unified consumed-message log across every push consumer. Like
+     * the mail catcher, the gate is the admin token alone — a token holder can
+     * already mutate the shard, so a token-gated capture insert adds no privilege.
+     */
+    private handleRecordQueueMessage(args: Record<string, unknown>): Response {
+        const messages = parseRecordQueueMessageArgs(args);
+        const result = recordQueueMessages(this.shardHost.sql, messages, Date.now());
+
+        return adminResponse(result);
+    }
+
+    /** Empty the dev queue consumed-message log (studio "clear log" action). Admin-gated by the caller. */
+    private handleClearQueueMessages(): Response {
+        const result = clearQueueMessages(this.shardHost.sql);
+
+        return adminResponse(result);
+    }
+
+    /**
+     * `__lunora_admin__:rebuildCompanions` — forget every aggregate/rank
+     * companion's durable rebuild marker, so each one is rebuilt from its source
+     * table on its next touch. The way out of a companion that drifted while
+     * nothing maintained it: a `wrangler rollback` to a build that predates the
+     * marker, with the index undeclared or declared differently there, leaves a
+     * marker that still matches on roll-forward. Admin-gated by the caller.
+     */
+    private handleRebuildCompanions(): Response {
+        clearCompanionSignatures(this.shardHost.sql);
+        this.recordAudit("rebuildCompanions");
+
+        return adminResponse({ ok: true });
+    }
+
+    /**
+     * Serve `__lunora_admin__:sendQueueMessage` — the studio's "Send test message"
+     * button. Resolves the declared queue's `QUEUE_*` producer binding and calls
+     * `.send(body, { delaySeconds?, contentType? })`, or `.sendBatch(...)` when a
+     * `batch` array is supplied. No SQLite write happens here (the message is only
+     * captured once a consumer processes it), so this only records an audit entry.
+     * Admin-gated by `handleAdminRpc`'s caller.
+     */
+    private async handleSendQueueMessage(args: Record<string, unknown>): Promise<Response> {
+        const parsed = parseSendQueueMessageArgs(args);
+        const { binding } = this.resolveQueueBinding(parsed.exportName);
+
+        let sent: number;
+
+        if (parsed.batch === undefined) {
+            await binding.send(parsed.body, { contentType: parsed.contentType, delaySeconds: parsed.delaySeconds });
+            sent = 1;
+        } else {
+            await binding.sendBatch(
+                parsed.batch.map((body) => {
+                    return { body, contentType: parsed.contentType, delaySeconds: parsed.delaySeconds };
+                }),
+            );
+            sent = parsed.batch.length;
+        }
+
+        this.recordAudit("sendQueueMessage", { detail: { count: sent, exportName: parsed.exportName } });
+
+        return adminResponse({ sent });
+    }
+
+    /**
+     * Serve `__lunora_admin__:explainIssue` — the Studio Issues panel's opt-in
+     * "Explain in plain language" action. The flow itself lives in
+     * {@link explainIssue} (`./issue-explainer`); this method only supplies the
+     * deployment's `env.AI` binding and records the audit entry. A one-shot async
+     * action (never a subscription read) so the model call fires once per click,
+     * not on every write-flush. Admin-gated by `handleAdminRpc`'s caller.
+     *
+     * Audited whenever the model was actually invoked — including the `ai-error`
+     * and `empty-response` outcomes, which are the ones that matter for spend and
+     * abuse accountability on a billed external call. Only `no-ai-binding` reached
+     * no binding at all and so records nothing.
+     */
+    private async handleExplainIssue(args: Record<string, unknown>): Promise<Response> {
+        const result = await explainIssue((this.env as Record<string, unknown> | undefined)?.["AI"], args);
+
+        if (!result.degraded) {
+            this.recordAudit("explainIssue", { detail: { groundedId: result.groundedId, model: result.model } });
+        } else if (result.reason !== "no-ai-binding") {
+            this.recordAudit("explainIssue", { detail: { groundedId: result.groundedId, reason: result.reason } });
+        }
+
+        return adminResponse(result);
+    }
+
+    /**
+     * Serve `__lunora_admin__:aiGenerateSql` — the SQL editor's opt-in
+     * natural-language draft / repair.
+     *
+     * Grounds the prompt in this shard's REAL tables and columns, so the model
+     * names things that exist rather than plausible fiction. The engine validates
+     * its own output against the same read-only gate `runSql` enforces, so what
+     * comes back here is already safe to hand the editor — and is handed over
+     * UNEXECUTED regardless.
+     *
+     * Audited like every other privileged admin action: an AI-drafted statement
+     * is still an operator asking the database a question.
+     */
+    private async handleGenerateSql(args: Record<string, unknown>): Promise<Response> {
+        this.ensureMigrated();
+
+        const sql = this.state.storage.sql as unknown as SqlExec;
+        // Reuse the same column reader `describeTables` serves the Studio from —
+        // a second schema path would be a second thing to keep in step.
+        const schema = listTables(sql).map((table) => {
+            return { columns: this.tableColumns(table.name).map((column) => column.name), table: table.name };
+        });
+        const result = await generateSql((this.env as Record<string, unknown> | undefined)?.["AI"], args, schema);
+
+        if (result.degraded) {
+            if (result.reason !== "no-ai-binding") {
+                this.recordAudit("aiGenerateSql", { detail: { reason: result.reason } });
+            }
+        } else {
+            // The statement itself is recorded: it is what the operator is about
+            // to be handed, and an audit trail that omits it explains nothing.
+            this.recordAudit("aiGenerateSql", { detail: { sql: result.sql } });
+        }
+
+        return adminResponse(result);
+    }
+
+    /**
+     * Serve `__lunora_admin__:findRelated` — a read-only relation-graph
+     * traversal. No `flushChangedTables()`: it writes nothing, so there is
+     * nothing for live subscribers to re-run against. Admin-gated by
+     * `handleAdminRpc`'s caller.
+     */
+    private async handleFindRelated(args: Record<string, unknown>): Promise<Response> {
+        return adminResponse(await this.runShardFindRelated(parseFindRelatedArgs(args)));
+    }
+
+    /**
+     * The single-shape admin ops (decode args → Response), keyed by function
+     * path. Mostly writes; a read belongs here too when it needs an async,
+     * schema-aware writer — `readAdminOp` is synchronous and shared with the
+     * live-subscription bridge, so it cannot serve one.
+     */
+    private simpleAdminHandlers(): Record<string, (args: Record<string, unknown>) => Promise<Response> | Response> {
+        return {
+            [ADMIN_FUNCTIONS.backfillSearch]: (args) => this.handleBackfillSearch(args),
+            [ADMIN_FUNCTIONS.backfillVectors]: (args) => this.handleBackfillVectors(args),
+            [ADMIN_FUNCTIONS.findRelated]: (args) => this.handleFindRelated(args),
+            [ADMIN_FUNCTIONS.clearCapturedMail]: () => this.handleClearCapturedMail(),
+            [ADMIN_FUNCTIONS.clearQueueMessages]: () => this.handleClearQueueMessages(),
+            [ADMIN_FUNCTIONS.createWorkflowInstance]: (args) => this.handleCreateWorkflowInstance(args),
+            [ADMIN_FUNCTIONS.explainIssue]: (args) => this.handleExplainIssue(args),
+            [ADMIN_FUNCTIONS.getWorkflowInstanceStatus]: (args) => this.handleGetWorkflowInstanceStatus(args),
+            [ADMIN_FUNCTIONS.listFlags]: (args) => this.handleListFlags(args),
+            [ADMIN_FUNCTIONS.rebuildCompanions]: () => this.handleRebuildCompanions(),
+            [ADMIN_FUNCTIONS.recordAuthEvent]: (args) => this.handleRecordAuthEvent(args),
+            [ADMIN_FUNCTIONS.recordContainerEvent]: (args) => this.handleRecordContainerEvent(args),
+            [ADMIN_FUNCTIONS.recordMail]: (args) => this.handleRecordMail(args),
+            [ADMIN_FUNCTIONS.recordQueueMessage]: (args) => this.handleRecordQueueMessage(args),
+            [ADMIN_FUNCTIONS.releaseShardRegistration]: (args) => this.handleReleaseShardRegistration(args),
+            [ADMIN_FUNCTIONS.replayQueueMessage]: (args) => this.handleReplayQueueMessage(args),
+            [ADMIN_FUNCTIONS.sendQueueMessage]: (args) => this.handleSendQueueMessage(args),
+            [ADMIN_FUNCTIONS.sendTestMail]: (args) => this.handleSendTestMail(args),
+        };
+    }
+
+    /** The AI-assistant admin writes, keyed by function path. */
+    private aiAdminHandlers(): Record<string, (args: Record<string, unknown>) => Promise<Response>> {
+        return {
+            [ADMIN_FUNCTIONS.aiAvailable]: () => Promise.resolve(this.handleAiAvailable()),
+            [ADMIN_FUNCTIONS.aiChartConfig]: async (args) => this.handleAiChartConfig(args),
+            [ADMIN_FUNCTIONS.aiGenerateSql]: async (args) => this.handleGenerateSql(args),
+            [ADMIN_FUNCTIONS.aiTableFilter]: async (args) => this.handleAiTableFilter(args),
+        };
+    }
+
+    /**
+     * Serve `__lunora_admin__:aiTableFilter` — a natural-language filter for the
+     * data browser, grounded in the browsed table's real columns.
+     *
+     * Returns STRUCTURED clauses, never SQL, so the browser's existing filter
+     * validation and parameter binding apply unchanged.
+     */
+    private async handleAiTableFilter(args: Record<string, unknown>): Promise<Response> {
+        this.ensureMigrated();
+
+        const table = typeof args["table"] === "string" ? args["table"] : "";
+        const columns = table === "" ? [] : this.tableColumns(table).map((column) => column.name);
+        const result = await generateFilter((this.env as Record<string, unknown> | undefined)?.["AI"], args, columns);
+
+        if (result.degraded && result.reason !== "no-ai-binding") {
+            this.recordAudit("aiTableFilter", { detail: { reason: result.reason, table } });
+        }
+
+        return adminResponse(result);
+    }
+
+    /**
+     * Serve `__lunora_admin__:aiAvailable` — does this deployment have an `AI`
+     * binding at all?
+     *
+     * The studio asks ONCE on mount so it can decide whether to paint the
+     * assistant affordances. Without it the only way to find out was to issue a
+     * real request and read `no-ai-binding` off the failure — which meant an app
+     * with no binding rendered "Draft SQL" and "Suggest chart" buttons that did
+     * nothing until the operator clicked one, and only then made them vanish.
+     *
+     * Deliberately NOT part of `studioFeatures()`: those flags are computed at
+     * codegen time from imports and declared dependencies, while a binding is a
+     * runtime property of `env`. Folding a runtime probe into that codegen-owned
+     * contract would make its drift guard meaningless.
+     *
+     * No model call, no audit entry — it reads one property off `env`.
+     */
+    private handleAiAvailable(): Response {
+        return adminResponse({ available: (this.env as Record<string, unknown> | undefined)?.["AI"] !== undefined });
+    }
+
+    /**
+     * Serve `__lunora_admin__:aiChartConfig` — infer a chart for a result set.
+     *
+     * The caller sends the result's SHAPE (column names, inferred types, row
+     * count), never its values: per plan 202's Phase 0, inference running on the
+     * user's own account is not the same as the operator expecting a model to
+     * read their rows, and the shape is enough to choose an axis.
+     */
+    private async handleAiChartConfig(args: Record<string, unknown>): Promise<Response> {
+        // Bounded at the boundary: these names are CALLER-supplied (a result set
+        // the studio just rendered), and every other input on this surface is
+        // capped. An uncapped list is an unbounded prompt, twice over with the retry.
+        const columns = Array.isArray(args["columns"])
+            ? (args["columns"] as unknown[]).filter((name): name is string => typeof name === "string").slice(0, 64)
+            : [];
+        const rawTypes = typeof args["types"] === "object" && args["types"] !== null ? (args["types"] as Record<string, unknown>) : undefined;
+        const types =
+            rawTypes === undefined
+                ? undefined
+                : Object.fromEntries(Object.entries(rawTypes).filter((entry): entry is [string, string] => typeof entry[1] === "string"));
+        const rowCount = typeof args["rowCount"] === "number" ? args["rowCount"] : 0;
+        const result = await generateChart((this.env as Record<string, unknown> | undefined)?.["AI"], args, { columns, rowCount, types });
+
+        if (result.degraded && result.reason !== "no-ai-binding") {
+            this.recordAudit("aiChartConfig", { detail: { reason: result.reason } });
+        }
+
+        return adminResponse(result);
+    }
+
+    /**
+     * Serve `__lunora_admin__:replayQueueMessage` — the studio's one-click replay /
+     * DLQ redrive. Looks the captured row up by id, resolves the destination export
+     * (explicit `target` → the parent queue when the message was captured off a
+     * dead-letter queue → the queue it was consumed from), and re-enqueues the
+     * stored body onto that producer. Records an audit entry; no SQLite write beyond
+     * that (the replayed message is re-captured when a consumer processes it).
+     * Admin-gated by `handleAdminRpc`'s caller.
+     */
+    private async handleReplayQueueMessage(args: Record<string, unknown>): Promise<Response> {
+        const parsed = parseReplayQueueMessageArgs(args);
+        const row = readQueueMessageById(this.shardHost.sql, parsed.id);
+
+        if (row === undefined) {
+            throw new LunoraError("BAD_REQUEST", `replayQueueMessage: captured message "${parsed.id}" was not found`, { status: 404 });
+        }
+
+        // The catcher caps oversized bodies and stands in a marker for unserializable
+        // ones (see `queue-catcher.ts`), so the stored body isn't always the original.
+        // Refuse to replay a lossy body rather than deliver a corrupted message the
+        // producer never sent.
+        if (isLossyBody(row.body)) {
+            throw new LunoraError(
+                "BAD_REQUEST",
+                `replayQueueMessage: captured message "${parsed.id}" has a truncated or unserializable body and can't be replayed faithfully`,
+                { status: 422 },
+            );
+        }
+
+        const target = parsed.target ?? this.resolveReplayTarget(row.queue) ?? row.exportName;
+
+        if (typeof target !== "string" || target === "") {
+            throw new LunoraError(
+                "BAD_REQUEST",
+                `replayQueueMessage: captured message "${parsed.id}" has no declared producer to replay onto (pass \`target\`)`,
+            );
+        }
+
+        const { binding } = this.resolveQueueBinding(target);
+
+        await binding.send(row.body);
+
+        this.recordAudit("replayQueueMessage", { detail: { messageId: row.messageId, target }, id: parsed.id });
+
+        return adminResponse({ sent: 1, target });
+    }
+
+    /**
+     * Resolve a declared queue's runtime producer binding from this shard's `env`.
+     * Looks the `exportName` up in {@link queuesMetadata} (the codegen subclass's
+     * statically-discovered list) to find its generated `QUEUE_*` binding, then
+     * reads `env[binding]` and validates it carries `send`/`sendBatch`. A bad export
+     * name or a missing/malformed binding throws a 400 `LunoraError` so the studio
+     * surfaces an actionable message. Mirrors {@link declaredWorkflowHandle}.
+     */
+    private resolveQueueBinding(exportName: string): { binding: QueueBindingHandle; metadata: QueueMetadata } {
+        const metadata = this.queuesMetadata().queues.find((queue) => queue.exportName === exportName);
+
+        if (!metadata) {
+            throw new LunoraError("BAD_REQUEST", `queue "${exportName}" is not declared`);
+        }
+
+        const binding = (this.env as Record<string, unknown> | undefined)?.[metadata.binding];
+
+        if (typeof binding !== "object" || binding === null || typeof (binding as QueueBindingHandle).send !== "function") {
+            throw new LunoraError("BAD_REQUEST", `queue binding "${metadata.binding}" is not available on this deployment`);
+        }
+
+        return { binding: binding as QueueBindingHandle, metadata };
+    }
+
+    /**
+     * Pick the replay destination export for a captured message's origin queue.
+     * When the message was consumed off a queue that is another queue's dead-letter
+     * queue, prefer that PARENT queue's producer (a DLQ usually has no producer of
+     * its own) so replay redrives onto the original; otherwise re-enqueue onto the
+     * queue the message came from. Returns `undefined` when neither is declared.
+     */
+    private resolveReplayTarget(queueName: string): string | undefined {
+        const { queues } = this.queuesMetadata();
+        const parent = queues.find((queue) => queue.deadLetterQueue === queueName);
+
+        if (parent !== undefined) {
+            return parent.exportName;
+        }
+
+        return queues.find((queue) => queue.name === queueName)?.exportName;
     }
 
     /**
@@ -4316,7 +10148,7 @@ abstract class ShardDO {
      * never blocks or fails the response.
      */
     private recordAudit(op: string, fields: { detail?: Record<string, unknown>; id?: string; table?: string } = {}): void {
-        const sql = this.state.storage.sql as unknown as SqlExec;
+        const sql = this.shardHost.sql as unknown as SqlExec;
         const userId = this.getCurrentUserId();
         const detail = userId === undefined ? fields.detail : { ...fields.detail, userId };
 
@@ -4326,7 +10158,7 @@ abstract class ShardDO {
     /**
      * Append one structured entry to the durable request log (`request-log.ts`)
      * for a `/rpc` dispatch that just completed — the per-request readout
-     * (`&lt;file>:&lt;function>`, shard key, acting user/identity, redacted args,
+     * (`<file>:<function>`, shard key, acting user/identity, redacted args,
      * outcome, duration, tables read/written, cache hit) that Cloudflare cannot
      * attribute (PLAN3 §1.1). When `LUNORA_REQUEST_LOG_EMIT` is set, the same
      * entry is ALSO emitted as a structured console event for CF Workers Logs /
@@ -4345,10 +10177,15 @@ abstract class ShardDO {
      * The correlated fields all come from data the dispatch already holds, with
      * no extra hot-path bookkeeping. `tablesWritten` is snapshotted from
      * `pendingChangedTables` by the caller before `flushChangedTables` drains it.
-     * `tablesRead` and `cacheHit` are captured by `runCachedQuery`, so they are
-     * present only for cached query paths — a write/action doesn't run through
-     * the cache, and an instance with the reactive cache disabled never captures
-     * them — and are left empty/`undefined` rather than recomputed here.
+     * `tablesRead` and `cacheHit` arrive in `attribution`, the per-dispatch
+     * object `beginDispatch` minted and `runCachedQuery` filled in — passed BY
+     * VALUE for the same reason `trace` is, since both are read here, after the
+     * handler's awaits, where a shared field belongs to whichever concurrent
+     * dispatch resolved last. They are present only for cached query paths — a
+     * write/action doesn't run through the cache, an instance with the reactive
+     * cache disabled never captures them, and a query that hit the re-entry
+     * guard passed through uncached — and are left empty/`undefined` rather
+     * than recomputed here.
      * `subscriptionsReRun` is left `0`: the write-driven subscription refresh
      * runs off the response path via `waitUntil` (see `flushChangedTables`), so a
      * per-request count isn't available synchronously at this site, and threading
@@ -4361,6 +10198,8 @@ abstract class ShardDO {
         durationMs: number,
         outcome: "error" | "ok",
         tablesWritten: string[],
+        trace: TraceAnchor,
+        attribution: QueryAttribution,
         errorMessage?: string,
     ): void {
         const config = this.requestLogConfig();
@@ -4379,40 +10218,94 @@ abstract class ShardDO {
         // SIEMs (PLAN3 §3.3). Both redact args/identity from this same raw entry
         // (unless `captureRaw` in dev), so the two stay byte-consistent.
         const entry: AppendRequestLogEntry = {
-            cacheHit: this.currentRequestCacheHit,
+            cacheHit: attribution.cacheHit,
             durationMs,
             errorMessage,
             functionPath,
             identity: this.currentRequestIdentity,
             outcome,
+            // Same by-value capture as `traceId` below.
+            ...(trace.rayId === undefined ? {} : { rayId: trace.rayId }),
             redactedArgs: Object.keys(args).length === 0 ? undefined : args,
-            shardKey: this.state.id?.name,
-            tablesRead: this.currentRequestReadTables === undefined ? [] : [...this.currentRequestReadTables],
+            shardKey: this.runner.shardKey,
+            tablesRead: attribution.readTables === undefined ? [] : [...attribution.readTables],
             tablesWritten,
+            // Passed BY VALUE, never read off `currentRequestTrace` here: this
+            // method runs after the handler's awaits, by which point an
+            // interleaved dispatch may have re-set (or cleared) that shared
+            // field — which would file this row, and the Logpush event carrying
+            // it, under another request's trace. Same hazard, and same fix, as
+            // the dispatch root span's `dispatchTrace` capture.
+            traceId: trace.traceId,
             ts: Date.now(),
             userId: this.getCurrentUserId(),
         };
 
+        this.persistRequestLog(entry, config);
+    }
+
+    /**
+     * The single durable-row + Logpush write seam for `__lunora_reqlog__`. Both
+     * the per-dispatch {@link recordRequestLog} and the container-crash path
+     * ({@link handleRecordContainerEvent}) funnel through here so they can't
+     * drift — before this was extracted the container writer persisted the row
+     * but silently skipped the Logpush emit every other error got.
+     *
+     * Best-effort by contract: a SQL failure (e.g. a test double with no `sql`
+     * handle) or a serialization hiccup in the emit must NEVER turn a served
+     * request — or a container event push — into a failed one, so each half is
+     * swallowed independently.
+     *
+     * Errors are always streamed to `console` (rare, high-value — they ride CF
+     * Workers Logs at error level and the dev-server formats them in the
+     * terminal), redacted in prod like any other event. The full per-dispatch
+     * summary stream (successful OKs too) stays opt-in behind
+     * `LUNORA_REQUEST_LOG_EMIT` so a hot shard doesn't emit a line per call.
+     */
+    private persistRequestLog(entry: AppendRequestLogEntry, config: { captureRaw: boolean; emit: boolean; retention: number | undefined }): void {
         const writeOptions: RequestLogWriteOptions = { captureRaw: config.captureRaw, retention: config.retention };
+        const attributed = this.attributeToDeploy(entry);
 
         try {
-            appendRequestLogEntry(this.state.storage.sql as unknown as SqlExec, entry, writeOptions);
+            appendRequestLogEntry(this.shardHost.sql, attributed, writeOptions);
         } catch {
-            // Best-effort: never let request-log persistence fail the request.
+            // Best-effort: never let request-log persistence fail the caller.
         }
 
-        // Errors are always streamed to `console` (rare, high-value — they ride
-        // CF Workers Logs at error level and the dev-server formats them in the
-        // terminal), redacted in prod like any other event. The full per-dispatch
-        // summary stream (successful OKs too) stays opt-in behind
-        // `LUNORA_REQUEST_LOG_EMIT` so a hot shard doesn't emit a line per call.
-        if (config.emit || outcome === "error") {
+        if (config.emit || attributed.outcome === "error") {
             try {
-                emitRequestLogEvent(entry, writeOptions);
+                emitRequestLogEvent(attributed, writeOptions);
             } catch {
-                // Best-effort: never let event emission fail the request.
+                // Best-effort: never let event emission fail the caller.
             }
         }
+    }
+
+    /**
+     * Stamp the deploying Worker's version onto a request-log entry, so the
+     * durable row AND the emitted Workers-Logs event both carry it.
+     *
+     * This is the attribution half of request logging: an alert tells you the
+     * error rate moved, but only a version on the event itself turns "did this
+     * start with a deploy?" into a group-by. Doing it at deploy time (here) is
+     * the point — correlating a spike against a deploy timeline after the fact
+     * is the archaeology this avoids.
+     *
+     * Reads the `CF_VERSION_METADATA` binding via the shared
+     * {@link readDeployInfo}, which returns an empty object when the binding
+     * isn't declared — so an app that hasn't added it logs exactly as before.
+     * Resolved per call rather than cached: `this.env` is the DO's own env and a
+     * new version gets a new isolate, but re-reading two fields off a bound
+     * object costs nothing and removes the staleness question entirely.
+     */
+    private attributeToDeploy(entry: AppendRequestLogEntry): AppendRequestLogEntry {
+        const { deploymentId, versionTag } = readDeployInfo(this.env);
+
+        if (deploymentId === undefined && versionTag === undefined) {
+            return entry;
+        }
+
+        return { ...entry, ...(deploymentId === undefined ? {} : { deploymentId }), ...(versionTag === undefined ? {} : { versionTag }) };
     }
 
     /**
@@ -4458,7 +10351,7 @@ abstract class ShardDO {
 
         if (functionPath === ADMIN_FUNCTIONS.getPitrBookmark) {
             // Read-only — native ≤30-day tier, no write, nothing to flush.
-            return jsonResponse({ result: await readBookmark(this.state.storage, time) }, 200);
+            return adminResponse(await readBookmark(this.state.storage, time));
         }
 
         if (functionPath !== ADMIN_FUNCTIONS.pitrRestore) {
@@ -4472,21 +10365,35 @@ abstract class ShardDO {
 
         // Roll the CDC epoch so live subscribers re-snapshot rather than try to
         // resume across the timeline fork a restore introduces. This bump is the
-        // proactive half (it takes effect immediately, before any `restart`);
-        // the native restore itself reverts SQLite — including this epoch row —
-        // so the post-restore safety net is `evaluateResume`'s `sinceSeq >
-        // cursor` rollback guard. Best-effort: `cdcEnabled()` is false on a stub
-        // `sql` handle or a pre-CDC shard, so the bump simply no-ops there.
+        // proactive half only, and it is genuinely half: the native restore
+        // reverts all of SQLite — this epoch row with it — so a deferred restore
+        // (`restart: false`) that applies on some later eviction lands on a shard
+        // whose epoch is back to its pre-bump value. The window this half does
+        // cover is the one between arming and the restart.
+        //
+        // The other half is reactive and lives in
+        // {@link ShardDO.sealForkedTimeline}: the first witness from OUTSIDE
+        // SQLite — a subscriber's cursor, a `cdcSync` consumer's, a replica
+        // follower's, or the changelog archive's own segments — proves the fork
+        // and re-mints the epoch for everyone. Read that comment for what the
+        // pair can and cannot detect.
+        //
+        // Best-effort: `cdcEnabled()` is false on a stub `sql` handle or a
+        // pre-CDC shard, so the bump simply no-ops there.
         if (this.cdcEnabled()) {
             bumpCdcEpoch(this.sql as SqlExec);
         }
 
         this.recordAudit("pitrRestore", { detail: { restart, restoredTo: armed.restoredTo, undoBookmark: armed.undoBookmark } });
 
-        const response = jsonResponse({ result: { ...armed, restarted: restart } }, 200);
+        const response = adminResponse({ ...armed, restarted: restart });
 
         if (restart) {
             // Apply now: restart the DO so it reopens at the armed bookmark.
+            // Deliberately WITHOUT `{ retryAlarm: false }`: this is an admin
+            // request, not the alarm, and an in-flight alarm it interrupts (the
+            // scheduler / poll tick that re-arms itself) must retry against the
+            // restored state, or the self-re-arming chain could stop for good.
             this.state.abort?.("lunora PITR restore");
         }
 
@@ -4514,7 +10421,7 @@ abstract class ShardDO {
         // data browser sees a freshly-provisioned shard instead of an empty one.
         this.ensureMigrated();
 
-        const sql = this.state.storage.sql as unknown as SqlExec;
+        const sql = this.shardHost.sql as unknown as SqlExec;
 
         // The wildcard-bound counter/config reads aren't tied to a single table,
         // so they share one branch and the {@link ADMIN_WILDCARD} sentinel; a
@@ -4527,14 +10434,18 @@ abstract class ShardDO {
         }
 
         if (functionPath === ADMIN_FUNCTIONS.getAuditLog) {
-            return this.readAdminAuditLog(sql, args);
+            return readAdminAuditLog(sql, args);
         }
 
         if (functionPath === ADMIN_FUNCTIONS.getRequestLog) {
-            return this.readAdminRequestLog(sql, args);
+            return readAdminRequestLog(sql, args);
         }
 
-        const durable = this.readAdminDurableSignal(functionPath, sql, args);
+        if (functionPath === ADMIN_FUNCTIONS.getIssues) {
+            return readAdminIssues(sql, args);
+        }
+
+        const durable = readAdminDurableSignal(functionPath, sql, args);
 
         if (durable) {
             return durable;
@@ -4545,11 +10456,20 @@ abstract class ShardDO {
         }
 
         if (functionPath === ADMIN_FUNCTIONS.facetColumn) {
-            return this.readAdminFacetColumn(sql, args);
+            return readAdminFacetColumn(sql, args, this.columnKinds(typeof args["table"] === "string" ? args["table"] : ""));
         }
 
         if (functionPath === ADMIN_FUNCTIONS.runSql) {
-            return this.readAdminRunSql(sql, args);
+            return readAdminRunSql(sql, args);
+        }
+
+        // The SQL linter + schema-version ledger reads live in their own module
+        // and register through a lookup, so this chain does not grow an arm per
+        // resolver — see `schema-history-reads.ts`.
+        const schemaHistoryRead = resolveSchemaHistoryRead(functionPath, ADMIN_FUNCTION_PREFIX, sql, args, ADMIN_WILDCARD);
+
+        if (schemaHistoryRead !== undefined) {
+            return schemaHistoryRead;
         }
 
         const tableSignal = this.readAdminTableSignal(functionPath, sql, args);
@@ -4572,11 +10492,13 @@ abstract class ShardDO {
      * Resolve the table-scoped introspection reads whose payload is a single
      * `this.*()` lookup keyed by an optional `table` arg — `listTableIndexes`
      * (declared indexes), `describeTable` (declared columns) and `migrationStatus`
-     * (the migration ledger). The first two carry their `table` (or the
-     * {@link ADMIN_WILDCARD} sentinel when unscoped); `migrationStatus` is
-     * deployment-wide, so it always carries the wildcard. Returns `undefined` for
-     * any other path so {@link readAdminOp} falls through; folded into one helper
-     * to keep that dispatcher under its complexity budget.
+     * (the migration ledger); plus their batched siblings `describeTables` and
+     * `listTablesIndexes` (one RPC for N tables via {@link batchedTableLookup}).
+     * The single-table pair carries its `table` (or the {@link ADMIN_WILDCARD}
+     * sentinel when unscoped); `migrationStatus` is deployment-wide, so it always
+     * carries the wildcard. Returns `undefined` for any other path so
+     * {@link readAdminOp} falls through; folded into one helper to keep that
+     * dispatcher under its complexity budget.
      * @returns the read result and its table-dependency set, or `undefined` when the path is not owned by this resolver
      */
     private readAdminTableSignal(functionPath: string, sql: SqlExec, args: Record<string, unknown>): undefined | { result: unknown; tables: Set<string> } {
@@ -4588,10 +10510,18 @@ abstract class ShardDO {
         }
 
         if (functionPath === ADMIN_FUNCTIONS.describeTables) {
-            const requested = Array.isArray(args["tables"]) ? args["tables"].filter((table): table is string => typeof table === "string") : [];
-            const columnsByTable: Record<string, ColumnMeta[]> = Object.fromEntries(requested.map((table) => [table, this.tableColumns(table)]));
+            const { byTable: columnsByTable, tables } = batchedTableLookup(args, (table) => this.tableColumns(table));
 
-            return { result: { columnsByTable }, tables: new Set(requested.length === 0 ? [ADMIN_WILDCARD] : requested) };
+            return { result: { columnsByTable }, tables };
+        }
+
+        // Batched sibling of `listTableIndexes` — one admin RPC for N tables
+        // instead of N, following `describeTables`'s exact shape: the fan-out
+        // this collapses used to cost a full admin RPC PER table.
+        if (functionPath === ADMIN_FUNCTIONS.listTablesIndexes) {
+            const { byTable: indexesByTable, tables } = batchedTableLookup(args, (table) => this.tableIndexes(table));
+
+            return { result: { indexesByTable }, tables };
         }
 
         if (functionPath === ADMIN_FUNCTIONS.migrationStatus) {
@@ -4615,53 +10545,14 @@ abstract class ShardDO {
      */
     private readAdminStorageSignal(functionPath: string, sql: SqlExec, args: Record<string, unknown>): undefined | { result: unknown; tables: Set<string> } {
         if (functionPath === ADMIN_FUNCTIONS.storageReferences) {
-            return this.readAdminStorageReferences(sql, args);
+            return readAdminStorageReferences(sql, args, this.storageColumns());
         }
 
         if (functionPath === ADMIN_FUNCTIONS.storageOrphans) {
-            return this.readAdminStorageOrphans(sql, args);
+            return readAdminStorageOrphans(sql, args, this.storageColumns());
         }
 
         return undefined;
-    }
-
-    /**
-     * Resolve a `storageReferences` admin read — the file browser's records↔files
-     * join: given the object keys on the page, return the rows that reference each
-     * (via a `v.storage()` column) plus the schema's declared storage columns.
-     * Scans only those columns through {@link findStorageReferences}. Carries the
-     * {@link ADMIN_WILDCARD} (it spans every storage table) so a live subscription
-     * re-runs on any write.
-     */
-    private readAdminStorageReferences(sql: SqlExec, args: Record<string, unknown>): { result: unknown; tables: Set<string> } {
-        const keys = Array.isArray(args["keys"]) ? args["keys"].filter((key): key is string => typeof key === "string") : [];
-
-        return { result: findStorageReferences(sql, this.storageColumns(), keys), tables: new Set([ADMIN_WILDCARD]) };
-    }
-
-    /**
-     * Resolve a `storageOrphans` admin read — the inverse of the records↔files
-     * join: given the set of object keys that actually exist in the bucket
-     * (`liveKeys`, the studio's enumerated listing), return every record
-     * `v.storage()` field whose value points at a key the bucket DOES NOT have — a
-     * **dangling reference**. CF's R2 browser can never make this join. Scans only
-     * the schema's declared storage columns through {@link findDanglingReferences},
-     * bounded with a `truncated` flag (logged once when set). Carries the
-     * {@link ADMIN_WILDCARD} (it spans every storage table) so a live subscription
-     * re-runs on any write.
-     */
-    private readAdminStorageOrphans(sql: SqlExec, args: Record<string, unknown>): { result: unknown; tables: Set<string> } {
-        const liveKeys = Array.isArray(args["liveKeys"]) ? args["liveKeys"].filter((key): key is string => typeof key === "string") : [];
-        const result = findDanglingReferences(sql, this.storageColumns(), liveKeys);
-
-        if (result.truncated) {
-            // eslint-disable-next-line no-console -- intentional operational notice: the dangling-reference scan was clipped by its bound, so the studio's view is partial
-            console.warn(
-                `[@lunora/do] storageOrphans scan truncated after checking ${String(result.scanned)} storage references; reporting the first ${String(result.references.length)} dangling reference(s).`,
-            );
-        }
-
-        return { result, tables: new Set([ADMIN_WILDCARD]) };
     }
 
     /**
@@ -4673,9 +10564,10 @@ abstract class ShardDO {
      * wraps each in the {@link ADMIN_WILDCARD} sentinel, keeping that one fact in
      * a single place and `readAdminOp` under its complexity budget.
      */
+    // eslint-disable-next-line sonarjs/cognitive-complexity -- a flat admin-RPC dispatch chain (one trivial branch per function); #149 added the getTraces/getMetrics branches. A lookup table would obscure the 1:1 path→reader mapping this deliberately keeps.
     private readAdminWildcardOp(functionPath: string): unknown {
         if (functionPath === ADMIN_FUNCTIONS.listTables) {
-            return listTables(this.state.storage.sql as unknown as SqlExec);
+            return listTables(this.shardHost.sql);
         }
 
         if (functionPath === ADMIN_FUNCTIONS.getMetrics) {
@@ -4690,8 +10582,49 @@ abstract class ShardDO {
             return this.collectSubscriptions();
         }
 
+        if (functionPath === ADMIN_FUNCTIONS.getFanoutMetrics) {
+            // Per-topic subscriber counts + running fan-out cost counters (plan
+            // 075 Phase 1 observability). Deployment-wide live state, so it carries
+            // the wildcard like the other read-only admin reads.
+            return this.collectFanoutMetrics();
+        }
+
         if (functionPath === ADMIN_FUNCTIONS.getLogs) {
-            return { entries: this.logs.entries() };
+            // `dropped` rides along so the panel can say "newest 500 of N" — a
+            // full ring is otherwise indistinguishable from an instance that
+            // logged exactly 500 lines.
+            return { dropped: this.logs.dropped, entries: this.logs.entries() };
+        }
+
+        if (functionPath === ADMIN_FUNCTIONS.getTraces) {
+            // Recent `ctx.trace` waterfalls from the in-memory span ring, folded
+            // per trace (newest first) with depth/offset precomputed so the panel
+            // renders rows without re-deriving the tree. `total` reports the
+            // distinct traces available so the panel can flag when the newest
+            // `DEFAULT_TRACE_LIMIT` shown is only part of the ring.
+            const folded = foldTraces(this.spans.entries());
+
+            // `dropped` counts spans the ring evicted before this read, so a
+            // truncated waterfall reads as truncated rather than as complete.
+            return { dropped: this.spans.dropped, total: folded.total, traces: folded.traces };
+        }
+
+        if (functionPath === ADMIN_FUNCTIONS.getMetricSeries) {
+            // Running aggregates of `ctx.metrics.*` measurements from the in-memory
+            // fold, most-recently-updated first. The counterpart to getLogs/getTraces
+            // for the third signal — a "recent metrics on this instance" readout that
+            // resets on hibernation; durable aggregation is the sink's job.
+            return { series: this.metricSeries.entries() };
+        }
+
+        if (functionPath === ADMIN_FUNCTIONS.getMetricHistory) {
+            // Durable per-minute rollups of `ctx.metrics.*` from the shard's SQLite,
+            // grouped per series with buckets oldest-first — the trend counterpart to
+            // getMetricSeries' live snapshot. Survives hibernation; each bucket carries
+            // an exemplar traceId so the panel can link a point to a trace. Read whole
+            // (clamped by the module's row limit) and windowed client-side, like the
+            // getMetrics history the metrics panel already charts.
+            return readMetricHistory(this.sql as SqlExec);
         }
 
         if (functionPath === ADMIN_FUNCTIONS.getSettings) {
@@ -4704,7 +10637,7 @@ abstract class ShardDO {
             // Deployment-level security findings derived from the Worker `env`
             // (admin-token strength, WS gate, request-log redaction) — the
             // Security Advisor's signal. No raw secret crosses the wire.
-            return buildSecurityAudit(this.env);
+            return buildSecurityAudit(this.env, { dev: isDevEnvironment(this.env) });
         }
 
         if (functionPath === ADMIN_FUNCTIONS.getAdvisories) {
@@ -4712,6 +10645,11 @@ abstract class ShardDO {
             // runtime ones derived from observed signal (`unused_index`).
             // Deployment-wide, so it carries the wildcard like the other reads.
             return { advisories: [...this.advisories(), ...this.runtimeAdvisories()] };
+        }
+
+        if (functionPath === ADMIN_FUNCTIONS.getAdvisorProcedures) {
+            // The health map's denominator — deployment-wide, like the advisories above.
+            return { procedures: this.advisorProcedures() };
         }
 
         if (functionPath === ADMIN_FUNCTIONS.rlsPolicies) {
@@ -4750,6 +10688,14 @@ abstract class ShardDO {
             return this.workflowsMetadata();
         }
 
+        if (functionPath === ADMIN_FUNCTIONS.listQueues) {
+            // Read-only declared-queue metadata (codegen-emitted, via
+            // `queuesMetadata()`): the Cloudflare Queues the studio's Queues page
+            // lists. Deployment-wide static declaration data (queues hold no
+            // shard state).
+            return this.queuesMetadata();
+        }
+
         return undefined;
     }
 
@@ -4761,120 +10707,49 @@ abstract class ShardDO {
      * Read-only: it touches no SQLite and mutates no socket state.
      */
     private collectSubscriptions(): SubscriptionsResult {
-        return summarizeSubscriptions(this.state.getWebSockets().map((ws) => this.readAttachment(ws)));
-    }
-
-    /** Resolve a `getAuditLog` admin read, parsing the optional `limit`/`sinceSeq` cursor args and ensuring the reserved table first. */
-    // eslint-disable-next-line class-methods-use-this -- kept an instance method for symmetry with the other `readAdmin*` resolvers and future per-instance state
-    private readAdminAuditLog(sql: SqlExec, args: Record<string, unknown>): { result: unknown; tables: Set<string> } {
-        // Defensive: the table may not exist yet on a shard that has never
-        // recorded an admin op, so ensure it before the read.
-        ensureAuditTable(sql);
-
-        const limit = typeof args["limit"] === "number" ? args["limit"] : undefined;
-        const sinceSeq = typeof args["sinceSeq"] === "number" ? args["sinceSeq"] : undefined;
-        const result: AuditLogResult = { entries: readAuditLog(sql, { limit, sinceSeq }) };
-
-        return { result, tables: new Set([ADMIN_WILDCARD]) };
+        return summarizeSubscriptions(this.runner.sockets().map((ws) => this.readAttachment(ws)));
     }
 
     /**
-     * Resolve a `getRequestLog` admin read, parsing the optional correlation
-     * filters (function-path prefix, exact userId/shardKey/outcome, table-touched)
-     * plus the `limit`/`sinceSeq` cursor, and ensuring the reserved table first.
-     * Carries the {@link ADMIN_WILDCARD} like the other log reads so a live Logs
-     * subscription re-runs on every write-flush (the per-socket JSON memo still
-     * suppresses byte-identical pushes).
+     * Assemble the `__lunora_admin__:getFanoutMetrics` payload for the Studio
+     * fan-out observability panel (plan 075 Phase 1). The point-in-time topic
+     * subscriber counts are folded live from each socket's attachment via
+     * {@link summarizeFanoutTopics}; the running per-path cost counters are the
+     * in-memory {@link ShardDO.fanout} tallies, sharing `metrics.sinceMs` as the
+     * "since this instance woke" epoch. Touches no SQLite and mutates no socket
+     * state; it does call `relay.relayCount()`, which advances the promotion
+     * latch — safe here because that transition is a pure, monotonic function of
+     * the live socket count (DOs are single-threaded), so a metrics poll only ever
+     * drives the latch to the same state the routing path would compute for the
+     * same count, never a divergent one.
      */
-    // eslint-disable-next-line class-methods-use-this -- kept an instance method for symmetry with the other `readAdmin*` resolvers and future per-instance state
-    private readAdminRequestLog(sql: SqlExec, args: Record<string, unknown>): { result: unknown; tables: Set<string> } {
-        // Defensive: the table may not exist yet on a shard that has never
-        // served a logged dispatch, so ensure it before the read.
-        ensureRequestLogTable(sql);
+    private collectFanoutMetrics(): FanoutMetricsResult {
+        const summary = summarizeFanoutTopics(this.runner.sockets().map((ws) => this.readAttachment(ws)));
+        const relayCount = this.relay?.relayCount() ?? 0;
 
-        const outcome = args["outcome"] === "ok" || args["outcome"] === "error" ? args["outcome"] : undefined;
-        const result: RequestLogResult = {
-            entries: readRequestLog(sql, {
-                functionPathPrefix: typeof args["functionPathPrefix"] === "string" ? args["functionPathPrefix"] : undefined,
-                limit: typeof args["limit"] === "number" ? args["limit"] : undefined,
-                outcome,
-                shardKey: typeof args["shardKey"] === "string" ? args["shardKey"] : undefined,
-                sinceSeq: typeof args["sinceSeq"] === "number" ? args["sinceSeq"] : undefined,
-                tableTouched: typeof args["tableTouched"] === "string" ? args["tableTouched"] : undefined,
-                userId: typeof args["userId"] === "string" ? args["userId"] : undefined,
-            }),
+        return {
+            ...summary,
+            globalPoll: this.globalPoll,
+            maxRelays: this.relay?.maxRelays() ?? DEFAULT_MAX_RELAYS,
+            promoted: relayCount > 0,
+            relayCount,
+            shapePoke: this.fanout.shapePoke,
+            shapeProbe: this.shapeProbe,
+            sinceMs: this.metrics.sinceMs,
+            whisper: this.fanout.whisper,
         };
-
-        return { result, tables: new Set([ADMIN_WILDCARD]) };
     }
 
     /**
-     * Resolve a `getAuthMetrics` admin read: the durable app-level auth
-     * attempt/failure counters + minute-bucketed history the studio SLO panel
-     * charts (PLAN3 §2.3). Auth runs as a top-level `/api/auth/*` worker route,
-     * NOT through lunora functions, so the worker records each attempt against
-     * the root shard via `recordAuthEvent` and this read surfaces the rollup.
-     *
-     * Best-effort: a SQL failure (e.g. a test double without a real `sql`
-     * handle) returns an empty all-zero {@link AuthMetrics} rather than throwing,
-     * so the SLO signal is simply absent instead of breaking the studio.
-     * Carries the {@link ADMIN_WILDCARD} like the other counter reads so a live
-     * subscription re-runs on every write-flush (the per-socket JSON memo still
-     * suppresses byte-identical pushes).
+     * Declared kind per field of `table` (`{ amountMinor: "bigint" }`), from
+     * {@link tableColumns}. The admin filter/facet/bulk paths need it to bind a
+     * filter value in the projected form a `v.bigint()`/`v.bytes()` field is
+     * stored in; `undefined` on the schema-free base class.
      */
+    private columnKinds(table: string): Record<string, string> | undefined {
+        const columns = this.tableColumns(table);
 
-    /**
-     * Resolve the durable app-signal reads that aren't bound to a user table —
-     * the auth-metrics rollup and the dev mail-catcher inbox. Returns the read's
-     * `{ result, tables }`, or `undefined` for any path it doesn't own (so
-     * `readAdminOp` falls through). Keeps `readAdminOp` under its complexity
-     * budget by holding these two in one branch.
-     * @returns the read result and its table-dependency set, or `undefined` when the path is not owned by this resolver
-     */
-    private readAdminDurableSignal(functionPath: string, sql: SqlExec, args: Record<string, unknown>): { result: unknown; tables: Set<string> } | undefined {
-        if (functionPath === ADMIN_FUNCTIONS.getAuthMetrics) {
-            return this.readAdminAuthMetrics(sql);
-        }
-
-        if (functionPath === ADMIN_FUNCTIONS.getCapturedMail) {
-            return this.readAdminCapturedMail(sql, args);
-        }
-
-        return undefined;
-    }
-
-    // eslint-disable-next-line class-methods-use-this -- kept an instance method for symmetry with the other `readAdmin*` resolvers
-    private readAdminAuthMetrics(sql: SqlExec): { result: unknown; tables: Set<string> } {
-        let result: AuthMetrics;
-
-        try {
-            result = readAuthMetrics(sql);
-        } catch {
-            result = { attempts: 0, failureRate: 0, failures: 0, history: [], sinceMs: 0 };
-        }
-
-        return { result, tables: new Set([ADMIN_WILDCARD]) };
-    }
-
-    /**
-     * Resolve a `getCapturedMail` admin read — the dev mail catcher's inbox
-     * (`mail-catcher.ts`), newest-first. Best-effort: a SQL failure returns an
-     * empty inbox rather than throwing. Bound to the {@link MAIL_TABLE} so a live
-     * studio subscription re-runs when a new message is recorded (the per-socket
-     * JSON memo still suppresses byte-identical pushes).
-     */
-    // eslint-disable-next-line class-methods-use-this -- kept an instance method for symmetry with the other `readAdmin*` resolvers
-    private readAdminCapturedMail(sql: SqlExec, args: Record<string, unknown>): { result: unknown; tables: Set<string> } {
-        const limit = typeof args["limit"] === "number" ? args["limit"] : undefined;
-        let result: { entries: unknown[] };
-
-        try {
-            result = readCapturedMail(sql, { limit });
-        } catch {
-            result = { entries: [] };
-        }
-
-        return { result, tables: new Set([MAIL_TABLE]) };
+        return columns.length === 0 ? undefined : Object.fromEntries(columns.map((column) => [column.name, column.type]));
     }
 
     /** Resolve a `readTablePage` admin read, parsing the loosely-typed args into the reader's options. */
@@ -4885,48 +10760,16 @@ abstract class ShardDO {
             limit: typeof args["limit"] === "number" ? args["limit"] : undefined,
             offset: typeof args["offset"] === "number" ? args["offset"] : undefined,
             orderBy: parseTablePageOrderBy(args["orderBy"]),
+            columnKinds: this.columnKinds(table),
             refs: this.tableRefs(table),
             search: typeof args["search"] === "string" ? args["search"] : undefined,
+            skipCount: typeof args["skipCount"] === "boolean" ? args["skipCount"] : undefined,
             table,
         });
 
         // An empty table name can't bind to a real dependency, so fall back
         // to the wildcard rather than a set that never intersects a write.
         return { result: page, tables: new Set([table === "" ? ADMIN_WILDCARD : table]) };
-    }
-
-    /**
-     * Resolve a `facetColumn` admin read — Datasette-style per-column value/count
-     * summary over the active view. Reuses {@link readTablePage}'s predicate args
-     * (`filters` + `search`) so the facet reflects exactly the previewed rows; the
-     * `column` is validated + bound inside {@link facetColumn} (never interpolated).
-     * Read-only `SELECT … GROUP BY`. Depends on its table like {@link readAdminTablePage}.
-     */
-    // eslint-disable-next-line class-methods-use-this -- instance method for symmetry with the other `readAdmin*` resolvers
-    private readAdminFacetColumn(sql: SqlExec, args: Record<string, unknown>): { result: unknown; tables: Set<string> } {
-        const table = typeof args["table"] === "string" ? args["table"] : "";
-        const result = facetColumn(sql, {
-            column: typeof args["column"] === "string" ? args["column"] : "",
-            filters: parseTablePageFilters(args["filters"]),
-            limit: typeof args["limit"] === "number" ? args["limit"] : undefined,
-            search: typeof args["search"] === "string" ? args["search"] : undefined,
-            table,
-        });
-
-        return { result, tables: new Set([table === "" ? ADMIN_WILDCARD : table]) };
-    }
-
-    /**
-     * Resolve a `runSql` admin read: execute a read-only SQL query against the
-     * shard's SQLite via {@link runReadonlySql} (which rejects every mutating
-     * statement). Carries the {@link ADMIN_WILDCARD} since an arbitrary query can
-     * touch any table; it is a one-shot read, never a live subscription.
-     */
-    // eslint-disable-next-line class-methods-use-this -- instance method for symmetry with the other `readAdmin*` resolvers
-    private readAdminRunSql(sql: SqlExec, args: Record<string, unknown>): { result: unknown; tables: Set<string> } {
-        const query = typeof args["sql"] === "string" ? args["sql"] : "";
-
-        return { result: runReadonlySql(sql, query), tables: new Set([ADMIN_WILDCARD]) };
     }
 
     /**
@@ -4940,6 +10783,105 @@ abstract class ShardDO {
 
         // eslint-disable-next-line unicorn/no-null -- mirrors the SubscriptionOutcome contract (`| null`) codegen subclasses override against
         return read ? { result: read.result, tables: read.tables } : null;
+    }
+
+    /**
+     * Resolve one subscription (seed or refresh) to its {@link SubscriptionOutcome}
+     * by routing the `functionPath` to the right read path — shared by
+     * {@link seedSubscription} and {@link refreshSubscriptions} so both branch
+     * identically:
+     * - `__lunora_admin__:*` → {@link executeAdminSubscription} (raw SQLite read).
+     * - {@link FLAGS_FUNCTION_PREFIX} → {@link runFlagSubscriptionRead} (the codegen subclass evaluates the flag through the configured provider). The value isn't bound to any table, so it is tagged with the {@link ADMIN_WILDCARD} dep — re-evaluated on every write-flush so a live `useFlag` stays current within a session. A `null` read means "nothing to deliver" (no provider, or a flag that resolved to `null`).
+     * - everything else → {@link executeSubscription} (the user query, under the socket's own by-value identity).
+     */
+    private async resolveReactiveOutcome(
+        functionPath: string,
+        args: Record<string, unknown>,
+        isAdmin: boolean,
+        identity: SubscriptionIdentity,
+    ): Promise<SubscriptionOutcome | null> {
+        if (isAdmin) {
+            return this.executeAdminSubscription(functionPath, args);
+        }
+
+        if (functionPath.startsWith(FLAGS_FUNCTION_PREFIX)) {
+            const result = await this.runFlagSubscriptionRead(functionPath, args, identity);
+
+            // eslint-disable-next-line unicorn/no-null -- matches the flag-read "nothing to deliver" sentinel
+            return result === null ? null : { result, tables: new Set([ADMIN_WILDCARD]) };
+        }
+
+        // Ranges ride on the outcome, reported by the subscription's OWN read
+        // (the generated `executeSubscription` collects them through a
+        // `ReadFootprint`). They deliberately do NOT come from a per-request
+        // field on `this`: a deferred subscription re-run interleaves with
+        // unrelated RPC dispatches, so a shared field would stamp one request's
+        // slices onto another subscriber's memo and suppress its invalidations.
+        return this.executeSubscription(functionPath, args, identity);
+    }
+
+    /**
+     * SECURITY BOUNDARY for cross-socket reactive dedup. A read is
+     * identity-INDEPENDENT only when its result cannot vary by the caller's
+     * verified identity — i.e. the admin/reserved introspection reads, which
+     * route to {@link executeAdminSubscription} and ignore the
+     * {@link SubscriptionIdentity} entirely.
+     *
+     * Everything else is identity-DEPENDENT and must NEVER be shared across
+     * sockets: a user query may be `rls()` / `ctx.auth`-scoped (different rows
+     * per identity), and a flag read ({@link FLAGS_FUNCTION_PREFIX}) evaluates
+     * the provider with the subscriber's identity (per-user targeting). Sharing
+     * one socket's result with another would leak one identity's rows/flags to a
+     * different identity, so this predicate gates {@link ShardDO.resolveReactiveOutcomeDeduped}
+     * shut for them.
+     */
+    // eslint-disable-next-line class-methods-use-this, @typescript-eslint/member-ordering -- pure predicate over the function path; a protected method so the security boundary lives in one named place (and tests can probe it), co-located with the reactive dedup it gates rather than hoisted away from its only caller
+    protected isIdentityIndependent(functionPath: string): boolean {
+        return functionPath.startsWith(ADMIN_FUNCTION_PREFIX);
+    }
+
+    /**
+     * Memoizing wrapper over {@link resolveReactiveOutcome}: flush-local sharing across sockets.
+     * Within a single {@link refreshSubscriptions} pass, N sockets subscribed to
+     * the SAME identity-independent `(functionPath, args)` re-run the query N
+     * times today (see the Case-6 fan-out characterization). When the read is
+     * identity-independent (admin/reserved — see {@link isIdentityIndependent})
+     * its result is the same for every socket, so the first run is cached (by its
+     * in-flight Promise, since the bounded worker pool runs sockets in parallel)
+     * and shared with the rest — collapsing N runs to ONE.
+     *
+     * Identity-DEPENDENT reads are passed straight through, UNCACHED: each socket
+     * must evaluate under its own by-value identity (RLS / `ctx.auth` / per-user
+     * flags), so they never share a result. The `cache` is created fresh per
+     * flush by the caller, so a result is never reused across passes (it would go
+     * stale after the next write).
+     */
+    private resolveReactiveOutcomeDeduped(
+        functionPath: string,
+        args: Record<string, unknown>,
+        isAdmin: boolean,
+        identity: SubscriptionIdentity,
+        cache: Map<string, Promise<SubscriptionOutcome | null>>,
+    ): Promise<SubscriptionOutcome | null> {
+        if (!this.isIdentityIndependent(functionPath)) {
+            return this.resolveReactiveOutcome(functionPath, args, isAdmin, identity);
+        }
+
+        // Identity is irrelevant for these reads, so the null-identity key is
+        // identical across every sharing socket.
+        // eslint-disable-next-line unicorn/no-null -- reactiveCacheKey's identity arg is `null | string`; null = the identity-independent bucket
+        const key = reactiveCacheKey(functionPath, args, null);
+        const cached = cache.get(key);
+
+        if (cached !== undefined) {
+            return cached;
+        }
+
+        const pending = this.resolveReactiveOutcome(functionPath, args, isAdmin, identity);
+
+        cache.set(key, pending);
+
+        return pending;
     }
 
     /**
@@ -4971,20 +10913,46 @@ abstract class ShardDO {
      * `{type:"error"}`. Either way drop the controller.
      */
 
-    private async handleStream(ws: WebSocket, id: string, functionPath: string, args: Record<string, unknown>): Promise<void> {
-        const iterable = this.executeStream(functionPath, args);
+    private async handleStream(
+        ws: ShardSocketLike,
+        id: string,
+        functionPath: string,
+        args: Record<string, unknown>,
+        sinceSeq = 0,
+        generation?: number,
+    ): Promise<void> {
+        // Read once, up front: the identity the handler runs under must be
+        // captured BEFORE the first await and passed by value, because the
+        // iterator is pulled long after this frame was dispatched.
+        const attachment = this.readAttachment(ws);
+        const iterable = this.executeStream(functionPath, args, socketIdentity(attachment));
 
         if (!iterable) {
-            ws.send(JSON.stringify({ error: { code: "NOT_FOUND", message: `stream not registered: ${functionPath}` }, id, type: "error" }));
+            trySendFrame(ws, JSON.stringify({ error: { code: "NOT_FOUND", message: `stream not registered: ${functionPath}` }, id, type: "error" }));
 
             return;
         }
 
-        let cancellers = this.streamCancellers.get(ws);
+        const cancellers = socketMap(this.streamCancellers, ws);
 
-        if (!cancellers) {
-            cancellers = new Map();
-            this.streamCancellers.set(ws, cancellers);
+        // One live stream per `id`, refused rather than silently replacing the
+        // incumbent. `id` is client-chosen (straight off the frame) and the cap
+        // below reads `cancellers.size`, so re-sending one id used to defeat the
+        // cap outright: N pumps ran under a single map entry, the second `set`
+        // orphaned the first `AbortController` (so neither `unsubscribe` nor
+        // `webSocketClose` could reach it), and whichever pump finished first
+        // deleted the entry its siblings were still cancelled through.
+        if (cancellers.has(id)) {
+            trySendFrame(
+                ws,
+                JSON.stringify({
+                    error: { code: "STREAM_ID_IN_USE", message: `stream id ${JSON.stringify(id)} is already live on this socket` },
+                    id,
+                    type: "error",
+                }),
+            );
+
+            return;
         }
 
         // Enforce the per-socket in-flight cap before allocating any state
@@ -4992,17 +10960,20 @@ abstract class ShardDO {
         // canceller map, so a flurry of rejections can't push the count
         // past the cap.
         if (cancellers.size >= ShardDO.MAX_STREAMS_PER_SOCKET) {
-            try {
-                ws.send(
-                    JSON.stringify({
-                        error: { code: "TOO_MANY_STREAMS", message: `stream cap of ${String(ShardDO.MAX_STREAMS_PER_SOCKET)} reached on this socket` },
-                        id,
-                        type: "error",
-                    }),
-                );
-            } catch {
-                /* socket may be closed */
-            }
+            trySendFrame(
+                ws,
+                JSON.stringify({
+                    error: { code: "TOO_MANY_STREAMS", message: `stream cap of ${String(ShardDO.MAX_STREAMS_PER_SOCKET)} reached on this socket` },
+                    id,
+                    type: "error",
+                }),
+            );
+
+            return;
+        }
+
+        if (iterable.durable) {
+            await this.attachDurableStream(ws, id, functionPath, args, { durable: iterable.durable, iterator: iterable.iterator }, sinceSeq, generation);
 
             return;
         }
@@ -5010,11 +10981,22 @@ abstract class ShardDO {
         const controller = new AbortController();
 
         cancellers.set(id, controller);
-        ws.send(JSON.stringify({ id, type: "ack" }));
+        trySendFrame(ws, JSON.stringify({ id, type: "ack" }));
 
         try {
             for await (const chunk of iterable.iterator(controller.signal)) {
                 if (controller.signal.aborted) {
+                    break;
+                }
+
+                // A credential can lapse mid-stream: the inbound check ran once,
+                // on the frame that STARTED this stream, and a pump can outlive
+                // it indefinitely. Tear the iterator down rather than keep
+                // pushing the user's data at an expired socket.
+                if (this.isSocketExpired(ws)) {
+                    this.dropExpiredSocket(ws);
+                    controller.abort();
+
                     break;
                 }
 
@@ -5025,19 +11007,28 @@ abstract class ShardDO {
                 // while we keep pumping `ws.send` calls.
                 await awaitWsDrain(ws);
 
-                ws.send(JSON.stringify({ data: chunk, id, type: "chunk" }));
+                ws.send(JSON.stringify({ data: encodeWire(chunk), id, type: "chunk" }));
             }
 
             if (!controller.signal.aborted) {
                 ws.send(JSON.stringify({ id, type: "complete" }));
             }
         } catch (error: unknown) {
-            const { code } = error as { code?: string };
-            const message = error instanceof Error ? error.message : String(error);
+            // Apply the shared redaction invariant: a non-internal `LunoraError`
+            // keeps its intentional, developer-facing message; an internal-coded
+            // or bare/unexpected throw is redacted so SQL fragments, file paths,
+            // or internal identifiers never reach the client.
+            const { body, redacted } = toErrorBody(error, { fallbackCode: "INTERNAL_SERVER_ERROR", redactedMessage: "internal error" });
 
-            ws.send(
+            if (redacted) {
+                // eslint-disable-next-line no-console -- server-side diagnostic for an internal/unhandled stream error
+                console.error("[@lunora/do] unhandled stream error:", error);
+            }
+
+            trySendFrame(
+                ws,
                 JSON.stringify({
-                    error: { code: typeof code === "string" ? code : "INTERNAL_SERVER_ERROR", message },
+                    error: { code: body.code, message: body.message },
                     id,
                     type: "error",
                 }),
@@ -5055,6 +11046,260 @@ abstract class ShardDO {
     }
 
     /**
+     * Attach a socket to a **durable** stream run.
+     *
+     * Everything about the run's lifecycle — who may attach to a stored
+     * transcript, when a dead run is reclaimed, driving the producer — lives in
+     * `@lunora/shard-engine`'s {@link DurableStreamRunner}, because none of it is
+     * Cloudflare-specific. This method is the socket adapter: it derives the run
+     * key, turns the WebSocket into a sink, and wires the client's cancel.
+     *
+     * The run key folds in the socket's **verified identity**. Sharing a live run
+     * is the feature — a second tab of the same user watches one generation
+     * instead of paying for two — but an attach never drives the handler, so a
+     * run shared across identities would also skip the procedure's RLS
+     * middleware. Identity-scoping the key is what keeps that impossible.
+     */
+    private async attachDurableStream(
+        ws: ShardSocketLike,
+        id: string,
+        functionPath: string,
+        args: Record<string, unknown>,
+        registration: { durable: { ttlMs?: number }; iterator: (signal: AbortSignal) => AsyncIterable<unknown> },
+        sinceChunk: number,
+        generation?: number,
+    ): Promise<void> {
+        const attachment = this.readAttachment(ws);
+        // An ANONYMOUS caller shares nothing. Falling back to a constant here
+        // collapsed every anonymous caller onto one key, so the second caller
+        // read the first one's transcript and the handler never ran for them —
+        // the same cross-caller leak the identity scope closes for signed-in
+        // users, on the path where there is no identity to check. The socket's
+        // connection id keeps each one to its own run; the cost is that an
+        // anonymous reload starts over, which is the honest answer when nothing
+        // durable identifies the caller.
+        const caller = attachment.userId ?? anonymousStreamCaller(attachment, id);
+        const runKey = `${caller}\u0000${functionPath}:${stableWireKey(args)}`;
+        const cancellers = socketMap(this.streamCancellers, ws);
+        const controller = new AbortController();
+        const frames = streamFrames(ws, id);
+
+        cancellers.set(id, controller);
+        frames.ack();
+
+        const detach = (): void => {
+            cancellers.delete(id);
+
+            // Drop the now-empty per-socket canceller map so a socket that churns
+            // through many short-lived streams doesn't accumulate empty `Map`s.
+            if (cancellers.size === 0) {
+                this.streamCancellers.delete(ws);
+            }
+        };
+
+        let delivered = 0;
+
+        const sink: DurableStreamSink = {
+            chunk: (chunk) => {
+                if (chunk.seq <= delivered) {
+                    return true;
+                }
+
+                // Same mid-run expiry rule as the ephemeral pump. `false` is the
+                // sink contract's "this consumer is gone", so the runner drops it
+                // and the transcript keeps producing for whoever else is attached.
+                if (this.isSocketExpired(ws)) {
+                    this.dropExpiredSocket(ws);
+                    detach();
+
+                    return false;
+                }
+
+                delivered = chunk.seq;
+
+                return frames.chunk(chunk.data, chunk.seq, chunk.generation);
+            },
+            complete: () => {
+                frames.complete();
+                detach();
+            },
+            fail: (failure) => {
+                frames.fail(failure);
+                detach();
+            },
+        };
+
+        // Cancelling a durable stream detaches this consumer; the producer keeps
+        // going so the transcript completes for whoever attaches next. That is
+        // the whole point of declaring it durable.
+        controller.signal.addEventListener("abort", () => {
+            this.durableStreams.detach(runKey, sink);
+            detach();
+        });
+
+        await this.durableStreams.attach({
+            ...(generation === undefined ? {} : { generation }),
+            iterator: registration.iterator,
+            runKey,
+            sinceChunk,
+            sink,
+            ...(registration.durable.ttlMs === undefined ? {} : { ttlMs: registration.durable.ttlMs }),
+        });
+    }
+
+    /**
+     * Run one registry step after every step before it. Registration and release
+     * both go through here, so a release's emptiness check and unregister can
+     * never interleave with a registration: a write that lands mid-release
+     * registers AFTER the unregister, not before it.
+     */
+    private async serializeRegistry<T>(work: () => Promise<T>): Promise<T> {
+        const run = this.registryTail.then(work);
+
+        this.registryTail = run.then(
+            () => undefined,
+            () => undefined,
+        );
+
+        return run;
+    }
+
+    /** The registry stub, pinned to this DO's own jurisdiction — the subnamespace the worker pins the registry it reads. */
+    private registryStub(namespace: unknown): ReturnType<typeof stubByName> {
+        return stubByName(namespace, SHARD_REGISTRY_DO_NAME, this.state.id?.jurisdiction);
+    }
+
+    /**
+     * Tell the shard registry this shard holds rows of each `.shardBy()` table
+     * the flushed write touched, once per table per instance. The cross-shard
+     * fan-outs (export, CDC sync, migrations) only reach the shards the registry
+     * lists, so a shard that never registers is left out of every one of them.
+     *
+     * Runs past the response (see `flushChangedTables`) and never rejects: the
+     * write has already committed, so a failure is logged, the table's claim
+     * released, and the first write after {@link SHARD_REGISTRY_RETRY_MS} retries.
+     */
+    private async registerWrittenShard(changed: ReadonlySet<string>): Promise<void> {
+        await this.serializeRegistry(async () => {
+            const registry = this.shardRegistry();
+
+            if (registry === undefined || Date.now() < this.registryRetryAt) {
+                return;
+            }
+
+            const shardKey = this.currentShardKey();
+
+            // A replica or relay is a copy of (or a door to) another shard, not a
+            // shard of its own. Listed, it would join every fan-out and refuse the
+            // admin RPCs it was sent — a replica answers 421 to anything not routed
+            // to it as a read — so every export and backup of the table would fail.
+            if (parseReplicaName(shardKey) !== undefined || parseRelayName(shardKey) !== undefined) {
+                return;
+            }
+
+            const tables = [...changed].filter((table) => registry.shardedTables.has(table) && !this.registeredTables.has(table));
+
+            if (tables.length === 0) {
+                return;
+            }
+
+            const stub = this.registryStub(registry.namespace);
+
+            if (stub === undefined) {
+                // eslint-disable-next-line no-console -- server-side diagnostic: a misbound registry leaves this shard out of every fan-out
+                console.error(
+                    `[@lunora/do] shard registry binding is not a Durable Object namespace in this shard's jurisdiction; shard "${shardKey}" is not registered`,
+                );
+
+                return;
+            }
+
+            await Promise.all(
+                tables.map(async (table) => {
+                    this.registeredTables.add(table);
+
+                    try {
+                        await registerShardKey(stub, table, shardKey);
+                    } catch (error: unknown) {
+                        this.registeredTables.delete(table);
+                        this.registryRetryAt = Date.now() + SHARD_REGISTRY_RETRY_MS;
+                        // eslint-disable-next-line no-console -- server-side diagnostic for a committed write whose registration failed
+                        console.error(
+                            `[@lunora/do] could not register shard "${shardKey}" for "${table}"; cross-shard export, sync and migrations miss it until a later write registers it:`,
+                            error,
+                        );
+                    }
+                }),
+            );
+        });
+    }
+
+    /**
+     * `__lunora_admin__:releaseShardRegistration`: drop this shard from the
+     * registry for each named table it holds no rows of, and keep it for the rest.
+     *
+     * The shard decides rather than the caller because only here can the check
+     * be ordered against this shard's own writes. It runs on the registry chain
+     * (see {@link ShardDO.serializeRegistry}) and clears the table's claim, so a
+     * row written before the check is seen by it and keeps the table, and one
+     * written after re-registers once the unregister has landed. A caller that
+     * probed first and unregistered second could hide a shard written in between:
+     * its claim would say "registered" while the registry said otherwise.
+     *
+     * A soft-deleted row still counts as a row — the shard is kept.
+     */
+    private async handleReleaseShardRegistration(args: Record<string, unknown>): Promise<Response> {
+        const { dryRun, tables } = parseReleaseShardRegistrationArgs(args);
+
+        const result = await this.serializeRegistry(async () => {
+            const registry = this.shardRegistry();
+            const stub = registry === undefined ? undefined : this.registryStub(registry.namespace);
+
+            if (registry === undefined || stub === undefined) {
+                throw new LunoraError("BAD_REQUEST", "releaseShardRegistration: this shard has no shard registry bound", { status: 400 });
+            }
+
+            const shardKey = this.currentShardKey();
+            const kept: string[] = [];
+            const released: string[] = [];
+
+            for (const table of tables) {
+                if (this.tableHasRows(table)) {
+                    kept.push(table);
+                    continue;
+                }
+
+                if (!dryRun) {
+                    // eslint-disable-next-line no-await-in-loop -- one small round trip per table this shard is listed for; ordered with the rest of the chain
+                    await unregisterShardKey(stub, table, shardKey);
+                    this.registeredTables.delete(table);
+                }
+
+                released.push(table);
+            }
+
+            return { kept, released };
+        });
+
+        if (!dryRun && result.released.length > 0) {
+            this.recordAudit("releaseShardRegistration", { detail: { released: result.released } });
+        }
+
+        return adminResponse(result);
+    }
+
+    /** Whether this shard's SQLite holds at least one row of `table` — `false` for a table it never created. */
+    private tableHasRows(table: string): boolean {
+        const sql = this.sql as SqlExec;
+
+        if (sql.exec("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?", table).toArray().length === 0) {
+            return false;
+        }
+
+        return sql.exec(`SELECT 1 FROM ${quoteIdentifier(table)} LIMIT 1`).toArray().length > 0;
+    }
+
+    /**
      * Drain the tables written during the in-flight RPC and re-run every
      * subscription that depends on one of them. Called after `handleRpc`
      * resolves, and per-batch during a data migration via
@@ -5069,28 +11314,143 @@ abstract class ShardDO {
      */
     private async flushChangedTables(): Promise<void> {
         const changed = this.pendingChangedTables;
+        const changedKeys = this.pendingChangedKeys;
 
         this.pendingChangedTables = undefined;
+        this.pendingChangedKeys = undefined;
 
         if (!changed || changed.size === 0) {
             return;
         }
 
-        // `refreshSubscriptions` re-runs each subscription under the socket's OWN
+        // Past the response: the write is durable and nothing below depends on
+        // the registry having heard about it. Checked here first so a shard with
+        // no registry pays nothing on the write path.
+        if (this.shardRegistry() !== undefined) {
+            await this.deferPastResponse(this.registerWrittenShard(changed));
+        }
+
+        this.writeGeneration += 1;
+
+        // Merge this request's written tables into the coalesced refresh set.
+        if (this.pendingRefreshTables) {
+            for (const table of changed) {
+                this.pendingRefreshTables.add(table);
+            }
+        } else {
+            this.pendingRefreshTables = changed;
+        }
+
+        this.pendingRefreshKeys = mergeChangedKeys(this.pendingRefreshKeys, changedKeys, changed);
+
+        // Single-waiter coalescing: if a refresh pass is already draining, it
+        // will observe the tables we just merged before it finishes, so a burst
+        // of mutations collapses into one extra pass instead of one pass each.
+        // This mirrors the in-flight evaluation lock that keeps a hot shard from
+        // re-running every live query once per write.
+        if (this.refreshInFlight) {
+            return;
+        }
+
+        // The drain loop re-runs each subscription under the socket's OWN
         // verified identity (stamped on the attachment at upgrade), threaded as
         // an explicit `SubscriptionIdentity` by value — so the deferred re-run
-        // below neither reads nor mutates the shared per-request identity fields.
+        // neither reads nor mutates the shared per-request identity fields.
         // Crucial here because this refresh is dispatched via `waitUntil` (a
         // LATER macrotask), where a concurrent in-flight RPC owns
         // `currentRequestUserId`. See {@link SubscriptionIdentity}.
 
-        if (typeof this.state.waitUntil === "function") {
-            this.state.waitUntil(this.refreshSubscriptions(changed));
+        // Two independent fan-outs share the post-write watermark: the legacy
+        // subscription re-execution path and the shape poke protocol (poke
+        // subscribers only exist on shape-aware shards, so the poke arm is a
+        // no-op there). Both run inside the coalescing drain loop so a burst of
+        // writes collapses into one extra pass, and both defer off the response
+        // path when `waitUntil` is available so the write's tail latency stays
+        // flat.
+        // `background` returns false when the host cannot outlive the response,
+        // in which case the drain has to be awaited inline. Built once and passed
+        // in, NOT called twice: `drainSubscriptionRefreshes()` starts the drain,
+        // so evaluating it in both arms would start a second one.
+        const drain = this.drainSubscriptionRefreshes();
 
+        if (this.runner.background(drain)) {
             return;
         }
 
-        await this.refreshSubscriptions(changed);
+        await drain;
+    }
+
+    /**
+     * Drain {@link ShardDO.pendingRefreshTables} one coalesced batch at a time
+     * until it is empty, then release the {@link ShardDO.refreshInFlight} gate.
+     * Tables merged by a `flushChangedTables` that lands mid-pass are picked up
+     * by the next loop iteration, so every committed write is observed by a
+     * refresh that runs after it — bursts simply share a pass. The post-write
+     * high-watermark and live-socket set are re-read inside each
+     * `refreshSubscriptions` / `pokeShapeSubscribers` call, so a later batch
+     * always reflects the latest committed state.
+     */
+    private async drainSubscriptionRefreshes(): Promise<void> {
+        // Defensive re-entry guard: the real coalescing gate lives in the sole
+        // caller (`flushChangedTables` returns early when a drain is in flight),
+        // so this should never fire. It is belt-and-suspenders against a future
+        // direct caller — not the load-bearing coalescer.
+        if (this.refreshInFlight) {
+            return;
+        }
+
+        this.refreshInFlight = true;
+
+        // Per-DRAIN run counter, keyed by reactor path — the convergence bound.
+        // Scoped to the drain rather than to the instance so an app under
+        // sustained legitimate write load is never throttled: a new drain starts
+        // every reactor's budget over. What it does catch is the reactor whose own
+        // writes keep changing its own read, which cascades within ONE drain and
+        // would otherwise spin the shard forever.
+        const reactorRuns = new Map<string, number>();
+
+        try {
+            let batch = this.pendingRefreshTables;
+            let batchKeys = this.pendingRefreshKeys;
+
+            while (batch && batch.size > 0) {
+                this.pendingRefreshTables = undefined;
+                this.pendingRefreshKeys = undefined;
+
+                // Resolve the post-write cut once per coalesced batch; it covers
+                // every write merged into this batch. Run the legacy refresh and
+                // the shape poke fan-out together off the same watermark.
+                const frameCursor = this.currentCdcCursor();
+                const frameEpoch = this.currentCdcEpoch();
+
+                // eslint-disable-next-line no-await-in-loop -- passes are intentionally sequential: each observes the prior pass's committed state and the tables merged while it ran
+                await Promise.all([
+                    this.refreshSubscriptions(batch, batchKeys),
+                    this.pokeShapeSubscribers(batch, frameCursor, frameEpoch),
+                    this.relay?.onFlush(batch, frameCursor ?? 0),
+                ]);
+
+                // Reactors run AFTER the read fan-out, not alongside it. Two
+                // reasons: subscribers should observe the state the mutation
+                // committed before a reactor mutates it further (the reactor's own
+                // writes re-enter this loop and push again), and a reactor opens a
+                // write transaction — which has no business racing the read
+                // fan-out inside one `Promise.all`.
+                // eslint-disable-next-line no-await-in-loop -- same sequencing contract as the fan-out above
+                await this.dispatchReactors(batch, reactorRuns);
+
+                batch = this.pendingRefreshTables;
+                batchKeys = this.pendingRefreshKeys;
+            }
+
+            // Every consumer that was going to advance its durable cursor for
+            // these writes has done so, so this is the point at which the
+            // retention floor is highest and a sweep reclaims the most. Throttled
+            // internally, and a no-op unless retention is configured.
+            this.cdcRetention.sweep();
+        } finally {
+            this.refreshInFlight = false;
+        }
     }
 
     /**
@@ -5138,26 +11498,77 @@ abstract class ShardDO {
      * run would have to fan one failure to every sharing socket while preserving
      * the "leave memo untouched ⇒ re-run next flush" contract.
      *
-     * The framework's INTENDED answer to this fan-out already exists: the opt-in
-     * {@link ReactiveCache} (`ShardDOOptions.reactiveCache`). Refreshes run with
-     * an explicit anonymous {@link SubscriptionIdentity}, so the cache key
-     * `reactiveCacheKey(functionPath, args, null)` is identical across all
-     * sockets — N identical subscriptions collapse to ONE handler run plus N
-     * cache hits, with every per-run side effect honored exactly once by design.
-     * Recommended remediation is to document/enable ReactiveCache for
-     * high-fanout shards rather than bolt a second, semantically-divergent dedup
-     * into this loop.
+     * The opt-in {@link ReactiveCache} (`ShardDOOptions.reactiveCache`) does NOT
+     * cover this, despite the shared key shape: it wraps `/rpc` query dispatch
+     * (see {@link ShardDO.runCachedQuery}), while a refresh runs through
+     * `executeSubscription`, which never consults it. It cannot, either — a
+     * subscription's re-run is only half about the value. The other half is the
+     * `tables`/`ranges` footprint it reports, which is what decides whether the
+     * NEXT write re-runs it; a cache hit produces a value with no footprint, so
+     * routing refreshes through the cache would quietly empty every memo's
+     * dependency set and stop the subscription updating at all.
+     *
+     * So this fan-out stands as characterized. Collapsing it needs a dedup that
+     * shares the footprint alongside the value — {@link ShardDO.resolveReactiveOutcomeDeduped}
+     * is that, per flush, for the identity-independent subset — not a second
+     * memo bolted into this loop.
      */
-    private async refreshSubscriptions(changed: Set<string>): Promise<void> {
-        const sockets = [...this.state.getWebSockets()];
+
+    /**
+     * Count and log a subscription-delivery error that its caller is about to
+     * swallow (DO-01) — `refreshSubscriptions`' per-`(socket, sub)` catch and
+     * `pokeShapeSubscribers`' per-socket catch both call this instead of a bare
+     * `catch { continue; }`, so a live query or shape poke that throws
+     * DETERMINISTICALLY on every flush is counted on `metrics.subscriptionRefreshErrors`
+     * and shows up in the studio's Live Logs, rather than repeating silently for
+     * the life of the socket. Factored out because both call sites need the
+     * identical counter-then-best-effort-log shape, and duplicating it inline
+     * pushed each closure over the file's cognitive-complexity budget.
+     *
+     * `lastTelemetrySink` (not a threaded `sink`) because both flush workers run
+     * with no `ctx` — the same stand-in `flushTelemetry` uses.
+     *
+     * `error` is a caught INTERNAL failure surfaced from a background
+     * refresh/poke pass, not a value a developer chose to log via `ctx.log` —
+     * so `recordUserLog`'s "args are not redacted" contract (see its
+     * docstring) does not apply here: a thrown value can carry an arbitrary
+     * `cause`, stack, or custom own property (a handler can `throw
+     * Object.assign(new Error(...), { row })`), and `args` rides raw into any
+     * `sink.onLog` an operator has configured. Route it through the same
+     * `toErrorBody` envelope every other error-crossing boundary in this file
+     * uses (see `errorToResponse`, the shape-seed catches above) so only a
+     * bounded `{ code, message }` — not the raw error — reaches the sink.
+     */
+    private recordSubscriptionRefreshError(functionPath: string, error: unknown, fields: Record<string, unknown>): void {
+        this.metrics.subscriptionRefreshErrors += 1;
+
+        try {
+            const { body } = toErrorBody(error, { fallbackCode: "SUBSCRIPTION_REFRESH_FAILED", redactedMessage: "subscription refresh failed" });
+
+            this.recordUserLog(functionPath, "error", [body], body.message, fields, this.lastTelemetrySink, "subscriptionRefreshError");
+        } catch {
+            // Best-effort, matching every other telemetry call on this path.
+        }
+    }
+
+    private async refreshSubscriptions(changed: Set<string>, changedKeys?: Map<string, IndexKeyEntry[] | undefined>): Promise<void> {
+        const sockets = [...this.runner.sockets()];
 
         // The post-write high-watermark is the same for every sub flushed in
         // this pass (they all observe the committed state), so resolve it once
         // and stamp it on every frame as the cursor each subscriber advances to.
         const frameCursor = this.currentCdcCursor();
         const frameEpoch = this.currentCdcEpoch();
+        const generation = this.writeGeneration;
 
-        const refreshOne = async (ws: WebSocket): Promise<void> => {
+        // Flush-local dedup of identity-INDEPENDENT reactive runs: N sockets on
+        // the same admin/reserved `(functionPath, args)` share ONE query run this
+        // pass instead of re-running it per socket. Created fresh per flush so a
+        // result is never reused across writes; identity-dependent reads bypass it
+        // entirely (see resolveReactiveOutcomeDeduped).
+        const reactiveRunCache = new Map<string, Promise<SubscriptionOutcome | null>>();
+
+        const refreshOne = async (ws: ShardSocketLike): Promise<void> => {
             // Enforce token-expiry on the OUTBOUND path: a lapsed socket must not
             // keep receiving its user's live (RLS/`ctx.auth`-scoped) data. This is
             // the load-bearing check — a passive subscriber never sends an inbound
@@ -5171,34 +11582,78 @@ abstract class ShardDO {
 
             const attachment = this.readAttachment(ws);
 
-            for (const [subId, query] of Object.entries(attachment.subs)) {
+            // Resolved once per socket per flush, not once per affected
+            // subscription below — both depend only on this socket, and are
+            // identical for every subscription on it. See {@link SocketDelivery}.
+            const delivery = this.socketDelivery(attachment);
+            // Resolved once per socket per flush for the same reason: an admin
+            // subscription's authorization is REVOCABLE, and the loop below
+            // re-derives `isAdmin` from the function path alone.
+            const adminAuthorized = await this.attachmentAdminAuthorized(attachment);
+
+            // `Object.keys` for the same reason as `broadcastDelta` — see there.
+            const { subs } = attachment;
+
+            for (const subId of Object.keys(subs)) {
+                const query = subs[subId];
+
+                // One guard, not two: a truthy `functionPath` already proves
+                // `query` is present, and splitting them pushed this function
+                // past the cognitive-complexity ceiling for no benefit.
+                if (!query?.functionPath) {
+                    continue;
+                }
+
                 const { functionPath } = query;
 
-                if (!functionPath) {
+                // A subscription registered BEFORE the procedure was paywalled
+                // is still sitting in this socket's hibernated attachment, and
+                // the registration-time gate in `subscribe` can no longer see
+                // it. Without this it keeps being re-run and pushed on every
+                // write for the life of the socket — the paid result, free.
+                if (this.isPaidFunction(functionPath)) {
+                    this.unsubscribe(ws, subId);
+                    this.sendSubscriptionError(ws, subId, "BAD_REQUEST", paidSocketRefusal(functionPath, "subscribed"));
+
                     continue;
                 }
 
                 const isAdmin = functionPath.startsWith(ADMIN_FUNCTION_PREFIX);
+
+                // Same drift as the paywall above, on the credential rather than
+                // the price: `isAdmin` is recomputed from the PATH, so without
+                // this an admin subscription registered under a token that has
+                // since been rotated or cleared keeps being re-run and pushed —
+                // arbitrary read-only SQL over the shard — for the life of the
+                // socket. The token is checked at upgrade and never again.
+                if (isAdmin && !adminAuthorized) {
+                    this.unsubscribe(ws, subId);
+                    this.sendSubscriptionError(ws, subId, "FORBIDDEN", "admin authorization for this socket is no longer valid");
+
+                    continue;
+                }
+
                 const memo = this.subMemos.get(ws)?.get(subId);
 
-                // Skip when we already know this subscription's tables and none
-                // of them changed. A missing memo means "unknown deps" — re-run
-                // to be safe. A memo carrying the admin wildcard always re-runs
-                // (its value isn't bound to any single table).
-                if (memo && !memo.tables.has(ADMIN_WILDCARD) && !setsIntersect(memo.tables, changed)) {
+                if (memoProvesUnchanged(memo, changed, changedKeys)) {
                     continue;
                 }
 
                 try {
-                    const outcome = isAdmin
-                        ? this.executeAdminSubscription(functionPath, query.args ?? {})
-                        : // Re-run under the socket's OWN verified identity (stamped on the
-                          // attachment at upgrade, unforgeable by the client) — passed BY
-                          // VALUE, so this deferred re-run never reads or mutates the shared
-                          // per-request identity fields. Without it an `rls()` / `ctx.auth`
-                          // scoped live query would evaluate anonymous and return zero rows.
-                          // eslint-disable-next-line no-await-in-loop -- subscriptions on a socket re-run sequentially; each shares the single SQLite handle
-                          await this.executeSubscription(functionPath, query.args ?? {}, { identity: attachment.identity, userId: attachment.userId });
+                    // Re-run under the socket's OWN verified identity (stamped on the
+                    // attachment at upgrade, unforgeable by the client) — passed BY
+                    // VALUE, so this deferred re-run never reads or mutates the shared
+                    // per-request identity fields. Without it an `rls()` / `ctx.auth`
+                    // scoped live query would evaluate anonymous and return zero rows.
+                    // (Admin + reserved flag reads ignore the identity payload.)
+                    // eslint-disable-next-line no-await-in-loop -- subscriptions on a socket re-run sequentially; each shares the single SQLite handle
+                    const outcome = await this.resolveReactiveOutcomeDeduped(
+                        functionPath,
+                        query.args ?? {},
+                        isAdmin,
+                        socketIdentity(attachment),
+                        reactiveRunCache,
+                    );
 
                     if (!outcome) {
                         continue;
@@ -5213,37 +11668,66 @@ abstract class ShardDO {
                     // eslint-disable-next-line no-await-in-loop -- intentional per-socket backpressure: drain before pushing the next subscription's frame
                     await awaitWsDrain(ws);
 
-                    this.pushSubscriptionData(ws, subId, outcome, frameCursor, frameEpoch);
-                } catch {
+                    this.pushSubscriptionData(ws, subId, outcome, { cursor: frameCursor, epoch: frameEpoch, generation }, delivery);
+                } catch (error) {
                     // A throwing subscription must not abort the refresh of its
                     // siblings, nor fail the mutation that triggered it. The memo
                     // is left untouched ("unknown deps"), so this subscription
-                    // re-runs on the next flush.
-                    /* refresh error contained to this subscription */ continue;
+                    // re-runs on the next flush — but until now that failure was
+                    // silent (DO-01): a subscription whose refresh throws
+                    // DETERMINISTICALLY (a bad handler cast, say) repeated
+                    // unnoticed for the life of the socket with no signal an
+                    // operator could see anywhere. See `recordSubscriptionRefreshError`.
+                    this.recordSubscriptionRefreshError(functionPath, error, { subId });
+
+                    continue;
                 }
             }
         };
 
-        // Bounded fan-out: at most 8 sockets refresh in parallel. Larger
-        // batches don't help (subscription handlers spend their time on
-        // SQLite, which is single-threaded inside the DO) and risk
-        // exhausting the I/O budget.
-        const concurrency = 8;
-        let cursor = 0;
-        const worker = async (): Promise<void> => {
-            let socket = sockets[cursor];
+        // Bounded fan-out (default 8 in flight): each worker drains its sockets
+        // one at a time so the per-subscription `awaitWsDrain` gate above paces a
+        // slow consumer. See {@link runSocketPool}.
+        await runSocketPool(sockets, refreshOne);
+    }
 
-            cursor += 1;
+    /**
+     * Run {@link ShardDO.seedSubscription} and fail the ONE subscription — never
+     * the socket — when its handler throws.
+     *
+     * The seed dispatches the user's query: it re-validates the args and runs
+     * the procedure's auth/RLS middleware, so an anonymous socket subscribing to
+     * an `authQuery`, a bad argument, or a handler `NOT_FOUND` rejects here.
+     * Under the WS hibernation API a throw out of `webSocketMessage` is a
+     * FATAL-CHANNEL error (see the analysis on `webSocketError`): the runtime
+     * tears the socket down, taking every OTHER live subscription on it with
+     * it — and the client already saw this subscribe's `ack`, which resets its
+     * reconnect backoff, so it reconnects, resubscribes, throws again, and
+     * spins at the initial delay for the life of the page.
+     *
+     * So: drop the just-registered subscription from the attachment and answer
+     * with a structured `error` frame carrying the thrown error's code. Mirrors
+     * `refreshSubscriptions`' per-`(socket, sub)` catch on the write-flush half
+     * of the same path, and `handleShapeSubscribe`'s rollback-then-error on a
+     * failed shape seed.
+     */
+    private async seedSubscriptionGuarded(ws: ShardSocketLike, subId: string, query: SubscriptionQuery, functionPath: string, isAdmin: boolean): Promise<void> {
+        try {
+            await this.seedSubscription(ws, subId, query, functionPath, isAdmin);
+        } catch (error: unknown) {
+            // Deregister first: a subscription that never seeded must not be
+            // refreshed by the next write flush either.
+            this.unsubscribe(ws, subId);
+            this.recordSubscriptionRefreshError(functionPath, error, { subId });
 
-            while (socket !== undefined) {
-                // eslint-disable-next-line no-await-in-loop -- each worker drains the shared cursor sequentially; parallelism comes from running `concurrency` workers
-                await refreshOne(socket);
-                socket = sockets[cursor];
-                cursor += 1;
-            }
-        };
+            // Same redaction envelope as every other error-crossing boundary in
+            // this file: a deliberate `LunoraError` keeps its code and message
+            // (`UNAUTHORIZED`, `NOT_FOUND`, a validator's `BAD_REQUEST`), an
+            // internal or bare throw is redacted.
+            const { body } = toErrorBody(error, { fallbackCode: "SUBSCRIPTION_SEED_FAILED", redactedMessage: "subscription seed failed" });
 
-        await Promise.all(Array.from({ length: Math.min(concurrency, sockets.length) }, () => worker()));
+            this.sendSubscriptionError(ws, subId, body.code, body.message);
+        }
     }
 
     /**
@@ -5260,8 +11744,12 @@ abstract class ShardDO {
      *
      * Either way the fresh result memoises this socket's diff baseline so later
      * write-flushes ({@link refreshSubscriptions}) can emit incremental deltas.
+     *
+     * MAY THROW: it runs the real handler (arg re-validation plus the whole
+     * auth/RLS middleware chain). Every caller goes through
+     * {@link ShardDO.seedSubscriptionGuarded}, which owns that failure.
      */
-    private async seedSubscription(ws: WebSocket, subId: string, query: SubscriptionQuery, functionPath: string, isAdmin: boolean): Promise<void> {
+    private async seedSubscription(ws: ShardSocketLike, subId: string, query: SubscriptionQuery, functionPath: string, isAdmin: boolean): Promise<void> {
         const seedArgs = query.args ?? {};
         // Seed under the socket's OWN verified identity (stamped on the attachment
         // at upgrade, unforgeable by the client) — read here and passed BY VALUE,
@@ -5271,9 +11759,18 @@ abstract class ShardDO {
         // what makes an `rls()` / `ctx.auth`-scoped live query return the
         // subscriber's own rows instead of evaluating anonymous.
         const attachment = this.readAttachment(ws);
-        const outcome = isAdmin
-            ? this.executeAdminSubscription(functionPath, seedArgs)
-            : await this.executeSubscription(functionPath, seedArgs, { identity: attachment.identity, userId: attachment.userId });
+        // The cursor, epoch and write generation are read BEFORE the run, and
+        // that order is the point. The run may park on non-storage I/O (a
+        // `.global()` D1 read, vectors, R2), which opens the input gate: a write
+        // can commit there and its refresh push the post-write value. A cursor
+        // read afterwards would stamp this pre-write result as covering that
+        // write, and a reconnect presenting it would be answered `resume` and
+        // keep the stale value until some later write. Stamped before, the
+        // cursor can only under-claim, which costs a reconnect one snapshot.
+        const readCursor = this.currentCdcCursor();
+        const readEpoch = isAdmin ? undefined : this.currentCdcEpoch();
+        const generation = this.writeGeneration;
+        const outcome = await this.resolveReactiveOutcome(functionPath, seedArgs, isAdmin, socketIdentity(attachment));
 
         if (!outcome) {
             return;
@@ -5281,18 +11778,19 @@ abstract class ShardDO {
 
         const { sinceEpoch, sinceSeq } = query;
         const resume = isAdmin || sinceSeq === undefined ? undefined : this.evaluateResume(sinceSeq, outcome.tables, sinceEpoch);
-        // `evaluateResume` already read the epoch; reuse it and only fall back to
-        // a fresh read when no resume was evaluated (first subscribe / admin).
-        const epoch = isAdmin ? undefined : (resume?.epoch ?? this.currentCdcEpoch());
+        // A resume that sealed a forked timeline hands back the NEW epoch, which
+        // the client must receive; otherwise the pre-run epoch pairs with the
+        // pre-run cursor.
+        const epoch = isAdmin ? undefined : (resume?.epoch ?? readEpoch);
 
         if (resume?.resumable) {
             // Keep the per-socket baseline current (so the next change diffs
             // cleanly) but send only the cursor + epoch — the client already
             // holds an equivalent value at `sinceSeq`.
-            this.seedSubscriptionMemo(ws, subId, outcome);
+            this.seedSubscriptionMemo(ws, subId, outcome, generation);
 
             try {
-                ws.send(`{"type":"resume","id":${JSON.stringify(subId)}${cdcSuffix(resume.cursor ?? 0, epoch)}}`);
+                trySendFrame(ws, `{"type":"resume","id":${JSON.stringify(subId)}${cdcSuffix(resume.cursor ?? 0, epoch)}}`);
             } catch {
                 /* socket may have closed between the ack and this seed */
             }
@@ -5300,7 +11798,1941 @@ abstract class ShardDO {
             return;
         }
 
-        this.pushSubscriptionData(ws, subId, outcome, resume?.cursor ?? this.currentCdcCursor(), epoch);
+        // A FRESH attachment read, not the one captured above: that one predates
+        // the `resolveReactiveOutcome` await, and a `connect` envelope can land
+        // during it. The identity above is deliberately by-value (see there);
+        // the delivery facts are not, and reading them stale would drop a
+        // `clientId`/capability this socket has since announced.
+        this.pushSubscriptionData(ws, subId, outcome, { cursor: readCursor, epoch, generation }, this.socketDelivery(this.readAttachment(ws)));
+    }
+
+    /**
+     * Resolve the per-socket delivery facts a subscription push needs, from the
+     * attachment the caller already holds.
+     *
+     * Takes the attachment rather than the socket deliberately: neither field
+     * needs anything else from `ws`, and every caller has just read one. An
+     * earlier shape took `ws` with the attachment as an optional hint, which
+     * did not do what it claimed — `socketClientWatermark` read the attachment
+     * again internally, so the "already read it" fast path still deserialized
+     * twice on the refresh path and three times on the seed path.
+     */
+    private socketDelivery(attachment: SocketAttachment): SocketDelivery {
+        return {
+            clientWatermark: this.socketClientWatermark(attachment),
+            pageDeltas: attachment.pageDeltas === true,
+        };
+    }
+
+    /**
+     * Drive the full `shape_subscribe` flow as one failure-aware unit: persist the
+     * attachment, seed the shape, and ack ONLY once both succeed. A persist
+     * rejection (`too_many`/`serialize_failed`) or a seed that can't resolve the
+     * shape (unknown / RLS-denied / cross-shard-invalid) rolls the attachment back
+     * and sends an `error` frame instead of acking — so a client is never left
+     * acked but subscribed to a shape that will never deliver. Never throws (a
+     * thrown `webSocketMessage` is fatal to the hibernating socket).
+     */
+    private async handleShapeSubscribe(ws: ShardSocketLike, subId: string, shape: ShapeSubscriptionQuery): Promise<void> {
+        const status = this.shapeSubscribe(ws, subId, shape);
+
+        if (status !== "ok") {
+            const code = status === "too_many" ? "TOO_MANY_SUBSCRIPTIONS" : "SUBSCRIPTION_PERSIST_FAILED";
+            const message = subscriptionRefusal(status === "too_many" ? "count" : "size", ShardDO.MAX_SUBSCRIPTIONS_PER_SOCKET, ShardDO.MAX_ATTACHMENT_BYTES);
+
+            this.sendSubscriptionError(ws, subId, code, message);
+
+            return;
+        }
+
+        // Seed the fresh shape with its initial membership as one insert-poke (or a
+        // catch-up diff when the client is still current). On a resolve failure,
+        // roll back the just-persisted attachment and error instead of acking.
+        const seed = await this.seedShapeSubscription(ws, subId, shape);
+
+        if (seed !== "ok") {
+            this.shapeUnsubscribe(ws, subId);
+            this.sendSubscriptionError(ws, subId, seed.code, seed.message);
+
+            return;
+        }
+
+        // Both persistence and seeding succeeded — ack last (the client keys pokes
+        // by shape id, not the ack, so the seed poke arriving first is fine).
+        try {
+            trySendFrame(ws, JSON.stringify({ id: subId, type: "ack" }));
+        } catch {
+            /* socket may already be closed; never throw out of webSocketMessage */
+        }
+    }
+
+    /** Send a structured `error` frame for a failed `subscribe`/`shape_subscribe`, swallowing a send on an already-closed socket. */
+    // eslint-disable-next-line class-methods-use-this -- groups with the subscribe flows; uses only its args + the socket
+    private sendSubscriptionError(ws: ShardSocketLike, subId: string, code: string, message: string): void {
+        try {
+            trySendFrame(ws, JSON.stringify({ code, error: { code, message }, id: subId, type: "error" }));
+        } catch {
+            /* socket may already be closed; never throw out of webSocketMessage */
+        }
+    }
+
+    /**
+     * Seed a freshly-registered shape subscription. Resolves the shape under the
+     * socket's verified identity, then ships either:
+     *
+     * - a **catch-up** poke (the membership diff in `(sinceCheckpoint, cursor]`)
+     * when the client supplied a still-current checkpoint within the CDC retention
+     * window and on this epoch — the cheap reconnect path; or
+     * - a **full** insert-poke of the shape's entire current membership — a
+     * first-time subscribe, or a reconnect that fell outside retention / forked
+     * epoch.
+     *
+     * Either way the per-socket shape memo advances to the flush watermark so
+     * later `pokeShapeSubscribers` passes diff from the right point.
+     *
+     * Returns `"ok"` once the shape resolved and its seed poke was attempted, or a
+     * `{ code, message }` failure when the shape can't be resolved — an unknown /
+     * RLS-denied shape (a base class with no registry resolves nothing), or a
+     * `resolveShape` that threw (e.g. a cross-shard-join guard). The caller rolls
+     * back the persisted attachment and errors instead of acking, so a client is
+     * never left subscribed to a shape that will never deliver.
+     */
+    private async seedShapeSubscription(ws: ShardSocketLike, subId: string, shape: ShapeSubscriptionQuery): Promise<"ok" | { code: string; message: string }> {
+        const attachment = this.readAttachment(ws);
+        const identity = socketIdentity(attachment);
+
+        // Relay tier (plan 075 Phase 3): a relay holds no op-log, so it forwards the
+        // seed to the owner — the only DO that can resolve the shape against real
+        // data, under this socket's verified identity (RLS-correct) — and delivers
+        // the owner-computed frames. A non-relay DO returns `undefined` here, falling
+        // through to the owner-served path (unchanged).
+        const relayed = await this.relay?.seedRelayShape(ws, subId, shape, identity);
+
+        if (relayed !== undefined) {
+            return relayed;
+        }
+
+        let resolved: ResolvedShape | undefined;
+
+        try {
+            resolved = this.resolveShape(shape.name, shape.args ?? {}, identity);
+        } catch (error) {
+            // A throwing `resolveShape` must not reject the whole `shape_subscribe`
+            // (and with it the socket's message handling). Surface it for diagnosis
+            // and report a failure so the caller errors instead of acking. Preserve
+            // a structured error's `code` (e.g. the cross-shard-join guard).
+            this.recordShapeError(`shape:seed:${subId}`, error);
+
+            const { body } = toErrorBody(error, { fallbackCode: "SHAPE_RESOLVE_FAILED", redactedMessage: "shape resolution failed" });
+
+            return { code: body.code, message: body.message };
+        }
+
+        if (!resolved) {
+            return { code: "SHAPE_NOT_FOUND", message: `shape "${shape.name}" not found or not permitted` };
+        }
+
+        // A shard-local shape is replicated FROM the changelog: `pokeShapeSubscribers`
+        // diffs it out of `__cdc_log` on every flush. With CDC off that table does
+        // not exist, so the seed below succeeds (it reads the table, not the log)
+        // and every later diff throws `no such table` into a per-shape catch — the
+        // client renders its initial snapshot and is then never told about another
+        // row, for the life of the socket, with nothing but a
+        // `subscriptionRefreshErrors` counter to say so.
+        //
+        // Refused at subscribe time instead, naming the switch. `.global()` shapes
+        // are driven by the poll loop rather than this log and are unaffected.
+        if (!resolved.global && !this.cdcEnabled()) {
+            return {
+                code: "SHAPE_REQUIRES_CDC",
+                message: `shape "${shape.name}" replicates from the changelog, which this app has not enabled — call .cdc() on defineApp()`,
+            };
+        }
+
+        // Everything past resolution — the global D1 read, the op-log diff/seed
+        // build, and the membership probes inside them — can throw (a missing
+        // backend, a stub `sql` handle, an over-cap global membership). Wrap the
+        // whole seed so any failure becomes a structured `{ code, message }` the
+        // caller rolls back and errors on, rather than rejecting `webSocketMessage`
+        // and tearing down the socket's message handling.
+        try {
+            // A `.global()`-table shape has no op-log to resume/diff: seed it from D1
+            // and let the alarm poll loop drive updates (latency-tiered, not poke-live).
+            if (resolved.global) {
+                return await this.seedGlobalShape(ws, subId, resolved, identity, attachment.connectionId ?? "");
+            }
+
+            return await this.seedOpLogShape(ws, attachment.connectionId ?? "", subId, shape, resolved);
+        } catch (error) {
+            this.recordShapeError(`shape:seed:${subId}`, error);
+
+            const { body } = toErrorBody(error, { fallbackCode: "SHAPE_SEED_FAILED", redactedMessage: "shape seed failed" });
+
+            return { code: body.code, message: body.message };
+        }
+    }
+
+    /**
+     * Seed a non-`.global()` (op-log-backed) shape: either a catch-up diff over
+     * `(sinceSeq, cursor]` when the client supplied a still-current checkpoint on
+     * this epoch within the CDC retention window, or a full membership insert-poke
+     * otherwise. The memo advances to `cursor` only once the poke is delivered, so
+     * a failed send re-diffs from the prior point rather than skipping rows. May
+     * throw (a stub `sql` handle, a membership probe failure); the caller converts
+     * it to a structured `shape_subscribe` error.
+     */
+    private async seedOpLogShape(
+        ws: ShardSocketLike,
+        connectionId: string,
+        subId: string,
+        shape: ShapeSubscriptionQuery,
+        resolved: ResolvedShape,
+    ): Promise<"ok"> {
+        // Await drain before the (potentially large) seed poke so a slow consumer
+        // can't grow this socket's outbound buffer without bound. BEFORE the
+        // compute, not between it and the send: the drain wait is timer I/O, a
+        // write can commit and poke this shape during it, and a seed computed
+        // earlier would then land after that poke and roll the client back.
+        await awaitWsDrain(ws);
+
+        const { baseCheckpoint, cursor, epoch, reset, rowsPatch } = this.computeOpLogShapeSeed(shape, resolved);
+
+        // `reset` marks the full-membership branch so the client REPLACES its view
+        // instead of splicing onto it. A seed is inserts-only, so without the flag a
+        // row deleted while the client was away is never removed on reconnect.
+        if (this.sendPoke(ws, [{ baseCheckpoint, reset, rowsPatch, shapeId: subId }], cursor, epoch, baseCheckpoint)) {
+            this.recordShapeMemo(ws, connectionId, subId, cursor, { carriedRows: true });
+        }
+
+        return "ok";
+    }
+
+    /**
+     * Compute an op-log shape seed (cursor, epoch, the resume base, and the
+     * membership `rowsPatch`) WITHOUT sending — the shared core of
+     * {@link ShardDO.seedOpLogShape} (sends to a local socket) and the owner relay's
+     * `buildShapeSeedFrames` (serializes the frames for a relay to deliver, plan 075
+     * Phase 3, via the {@link RelayHost} seam). Resume only when CDC is on, the client is on this
+     * epoch, its checkpoint doesn't run ahead of ours, and the log still covers it;
+     * else a full re-seed. A fully-compacted log only proves "nothing missed" when
+     * the client is already at `cursor`.
+     *
+     * `reset` is the inverse of the resume decision and MUST ride the wire: the
+     * re-seed branch returns the whole membership as inserts, which can only ever
+     * add rows, so a client that splices it onto a stale view keeps every row that
+     * left the shape while it was disconnected. Callers stamp it on the poke part.
+     * @returns the cursor/epoch, the resume base (`baseCheckpoint`), whether this is a full re-seed, and the membership patch
+     */
+    private computeOpLogShapeSeed(
+        shape: ShapeSubscriptionQuery,
+        resolved: ResolvedShape,
+    ): { baseCheckpoint: number | undefined; cursor: number; epoch: string | undefined; reset: boolean; rowsPatch: ShapeRowOp[] } {
+        const sql = this.sql as SqlExec;
+        const cursor = this.currentCdcCursor() ?? 0;
+        const currentEpoch = this.currentCdcEpoch();
+        const floor = this.cdcEnabled() ? minCdcSeq(sql) : undefined;
+        const onThisTimeline = currentEpoch !== undefined && shape.sinceEpoch === currentEpoch;
+
+        // Same rollback proof the subscription path acts on, and for the same
+        // reason: a checkpoint ahead of our cursor on OUR epoch is the only
+        // evidence of a PITR restore that the restore itself cannot revert. Seal
+        // the fork here too, or a shape client that reconnects while the rewound
+        // cursor is still low would re-seed correctly while every LATER one — by
+        // then back inside the range — resumes across it. See
+        // {@link ShardDO.sealForkedTimeline}.
+        const rolledBack = this.cdcEnabled() && shape.sinceSeq !== undefined && onThisTimeline && shape.sinceSeq > cursor;
+        const epoch = rolledBack ? this.sealForkedTimeline() : currentEpoch;
+
+        const canResume =
+            this.cdcEnabled() &&
+            shape.sinceSeq !== undefined &&
+            onThisTimeline &&
+            shape.sinceSeq <= cursor &&
+            // Not simply `!cursorBelowRetainedFloor(...)`: that is true for an
+            // empty log too, and an empty log cannot vouch for the range.
+            (shape.sinceSeq === cursor || (floor !== undefined && !cursorBelowRetainedFloor(floor, shape.sinceSeq)));
+
+        const rowsPatch =
+            canResume && shape.sinceSeq !== undefined
+                ? this.diffShape(sql, resolved, shape.sinceSeq, cursor, createShapeDiffCache())
+                : this.buildShapeSeed(sql, resolved);
+
+        return { baseCheckpoint: canResume ? shape.sinceSeq : undefined, cursor, epoch, reset: !canResume, rowsPatch };
+    }
+
+    /**
+     * Fan the membership diff of every shape affected by this flush to its
+     * subscribers — the partial-replication parallel to
+     * {@link ShardDO.refreshSubscriptions}, called alongside it from
+     * {@link ShardDO.flushChangedTables}. For each socket (bounded fan-out, same
+     * concurrency + `awaitWsDrain` backpressure as the subscription path) it
+     * resolves each shape under the socket's identity, diffs the shapes whose
+     * table changed in `(memoCursor, frameCursor]` — plus any still owing rows an
+     * earlier flush failed to deliver — and emits one poke carrying a part per
+     * changed shape. No-op when no socket holds a shape.
+     */
+    private async pokeShapeSubscribers(changed: Set<string>, frameCursor: number | undefined, frameEpoch: string | undefined): Promise<void> {
+        const sockets = [...this.runner.sockets()];
+        const checkpoint = frameCursor ?? this.currentCdcCursor() ?? 0;
+        const sql = this.sql as SqlExec;
+
+        // Flush-local diff cache: shapes over the same op range share ONE changed-key
+        // scan, and shapes resolving to the same predicate share ONE membership
+        // probe, however many sockets hold them. Created fresh per flush so neither
+        // is ever reused across writes (both would go stale). See {@link ShapeDiffCache}.
+        const diffCache = createShapeDiffCache();
+
+        // Observability (plan 075 Phase 1): count sockets this flush actually
+        // poked so `getFanoutMetrics` can report the delivered-vs-iterated split.
+        // Pure measurement — it never alters which sockets are poked.
+        let delivered = 0;
+
+        // Durable poke baselines for this whole fan-out, flushed in batches once
+        // every socket has been visited. The in-memory memo is still set per
+        // socket inside `recordShapeMemo`, so a read during this same flush sees
+        // the new value without touching SQLite.
+        const pendingCursors: ShapePokeCursorRow[] = [];
+
+        const pokeOne = async (ws: ShardSocketLike): Promise<void> => {
+            if (this.isSocketExpired(ws)) {
+                this.dropExpiredSocket(ws);
+
+                return;
+            }
+
+            const attachment = this.readAttachment(ws);
+            const { shapes } = attachment;
+
+            if (!shapes) {
+                return;
+            }
+
+            const connectionId = attachment.connectionId ?? "";
+
+            try {
+                const identity = socketIdentity(attachment);
+                const { emptyAdvanced, partAdvanced, parts } = this.collectShapePokeParts(
+                    ws,
+                    connectionId,
+                    shapes,
+                    identity,
+                    changed,
+                    checkpoint,
+                    sql,
+                    diffCache,
+                );
+
+                // Empty-diff shapes advance regardless (nothing to deliver for them),
+                // so the next flush doesn't re-scan the same op range.
+                for (const subId of emptyAdvanced) {
+                    this.recordShapeMemo(ws, connectionId, subId, checkpoint, { carriedRows: false, pending: pendingCursors });
+                }
+
+                // Await drain before the (potentially large) poke so a slow consumer
+                // can't grow this socket's outbound buffer without bound — the same
+                // backpressure the seed/refresh paths apply. Part-bearing shapes
+                // advance only after the poke lands; a failed send leaves their memos
+                // so the next flush re-emits the rows.
+                if (parts.length > 0) {
+                    // Marked owed BEFORE the send, not after a failure: `awaitWsDrain`
+                    // and `sendPoke` can both throw out to the socket-level catch
+                    // below, and a shape that owes rows must not be left looking
+                    // settled on the way out. `recordShapeMemo` clears it on delivery.
+                    for (const subId of partAdvanced) {
+                        this.markShapeOwed(ws, subId);
+                    }
+
+                    await awaitWsDrain(ws);
+
+                    if (this.sendPoke(ws, parts, checkpoint, frameEpoch, undefined)) {
+                        delivered += 1;
+
+                        for (const subId of partAdvanced) {
+                            this.recordShapeMemo(ws, connectionId, subId, checkpoint, { carriedRows: true, pending: pendingCursors });
+                        }
+                    }
+                }
+            } catch (error) {
+                // A throwing socket (e.g. awaitWsDrain/sendPoke rejecting on a dead
+                // connection) must not abort the poke fan-out to its siblings — the
+                // bounded pool runs sockets in parallel and one bad socket would
+                // otherwise reject the whole Promise.all. Memos are left untouched,
+                // so the next flush re-pokes this socket. Mirrors refreshSubscriptions,
+                // including the DO-01 fix — see `recordSubscriptionRefreshError`. No
+                // single `functionPath` applies to a shape poke (one socket can hold
+                // several shapes), so the log is tagged with the admin-namespaced
+                // pseudo-path below and the live shape ids.
+                this.recordSubscriptionRefreshError(`${ADMIN_FUNCTION_PREFIX}pokeShapeSubscribers`, error, { shapeIds: Object.keys(shapes) });
+            }
+        };
+
+        // Bounded fan-out matching `refreshSubscriptions`: each worker drains its
+        // sockets one at a time so the per-send `awaitWsDrain` gate above applies
+        // backpressure on a slow consumer. See {@link runSocketPool}.
+        const startMs = Date.now();
+
+        await runSocketPool(sockets, pokeOne);
+
+        // One batched upsert per ~33 baselines instead of one statement per
+        // delivered poke. Flushed after the pool rather than inside it so a socket
+        // that threw (caught above) does not take its siblings' baselines with it.
+        if (pendingCursors.length > 0) {
+            try {
+                writeShapePokeCursors(this.sql as SqlExec, pendingCursors);
+            } catch {
+                // Degrade to in-memory-only, exactly as the per-row write did: a
+                // stub sql handle or a missing table must not fail the poke. The
+                // baseline then falls back to the durable/sinceSeq chain, which
+                // only ever degrades DOWNWARD (a re-scan, never a skipped row).
+            }
+        }
+
+        // Record the fan-out cost of this flush (plan 075 Phase 1). `startMs` wraps
+        // the whole pool, so the elapsed time captures the awaited drain/send I/O
+        // across every socket; it is coarse (a DO clock advances only on I/O) but
+        // the socket counts are exact. Recorded even for a zero-delivery flush so
+        // the iterated-vs-delivered ratio reflects wasted work honestly.
+        this.fanout.shapePoke = recordFanoutPass(this.fanout.shapePoke, sockets.length, delivered, Date.now() - startMs);
+        this.shapeProbe = recordShapeProbePass(this.shapeProbe, diffCache.probesRun, diffCache.probesServed);
+    }
+
+    /**
+     * The highest `seq` this sweep may compact or delete through without stranding
+     * an in-shard consumer: the lowest cursor any durable local consumer has
+     * durably reached, or the log's head when there is none.
+     *
+     * The direction is what matters. Every input can only pull the floor DOWN, and
+     * a consumer whose cursor cannot be read contributes nothing rather than a
+     * guess — a floor that is too low leaves rows around for one more sweep, while
+     * a floor that is too high deletes a range a live subscription still has to be
+     * told about.
+     *
+     * Two in-shard consumers, and they are tracked in different places. Local
+     * sockets record `__shape_poke_cursor` per `(connection, subscription)` on
+     * every delivered poke, so that table carries their position. **Relayed
+     * subscribers are not in it**: a relay's cohort frontier and its per-socket
+     * proxies are the owner's shape registry (`__lunora_relay_shapes`, read back
+     * through `RelayLink.minShapeCursor`). Reading only the local table would
+     * therefore see a fully relayed shard — the high-fan-out case, i.e. exactly
+     * the shard an operator turns retention on for — as having no subscribers,
+     * and delete the rows the next relayed diff had to read. Both are folded in
+     * here.
+     *
+     * **The floor is each consumer's `cursor`, not its `delivered`** (see
+     * {@link ShapeMemo.delivered}), and the two differ: a client's own position is
+     * `delivered`, which can sit BELOW the `cursor` this floor is computed from.
+     * Trimming to the higher of the two is nonetheless safe, and only for one
+     * reason: `cursor` runs ahead of `delivered` exclusively across ranges where
+     * that shape's table saw no change at all — that is what an empty diff means,
+     * and empty diffs are the only thing that advances `cursor` alone. So the rows
+     * this deletes in `(delivered, cursor]` are never rows that shape still owes
+     * its client. Change what advances `cursor` and this stops holding.
+     *
+     * **Known ceiling: a relayed cohort on a quiet table pins this floor.** A
+     * scalar MIN over every consumer is only as good as the slowest consumer's
+     * ability to advance, and the relay tier's cannot: `OwnerRelay.buildShapePoke`
+     * must leave a cohort's cursor where the last DELIVERED poke reached, because
+     * advancing it without a poke puts every relay socket's memo below the next
+     * poke's `fromCursor` and freezes them (the failure `relay-hub.test.ts` pins).
+     * Local sockets have no such constraint — the shard computes their diffs from
+     * its own memo — so `collectShapePokeParts` advances them on every flush. The
+     * asymmetry means a shard whose shapes are all relayed can still see retention
+     * do nothing.
+     *
+     * The upgrade is a floor PER TABLE rather than one scalar: `readCdcChangeKeys`
+     * already filters by table, so a cohort watching a quiet table never needs the
+     * busy table's rows and should not be holding them. That is a real change to
+     * how the sweep is expressed, not a tweak here, so it waits for a deployment
+     * that needs it.
+     */
+    private retentionFloor(sql: SqlExec): number {
+        const head = this.currentCdcCursor() ?? 0;
+        const floors = [minShapePokeCursor(sql), this.relay?.minShapeCursor()].filter((cursor): cursor is number => cursor !== undefined);
+
+        return Math.max(0, floors.length === 0 ? head : Math.min(head, ...floors));
+    }
+
+    /**
+     * Diff every op-log-backed shape a socket holds against this flush, splitting
+     * the results into the poke parts to send and the per-shape memo advances. A
+     * `.global()` shape (driven by the alarm poll loop, not this flush) and a shape
+     * whose table didn't change are skipped; a shape whose resolve/diff throws is
+     * counted and logged via `recordSubscriptionRefreshError` (DO-01) and marked
+     * owed with its memo unadvanced so a later flush retries. Empty diffs advance
+     * unconditionally; part-bearing shapes advance only once the caller confirms
+     * the poke was delivered.
+     *
+     * A shape that owes rows — or whose memo this wake has not established at all
+     * — is diffed even when its table is absent from `changed`. That is the op-log
+     * counterpart of `tick.requestResync()` on the `.global()` poll path, and
+     * without it an undelivered range is skipped rather than retried; see
+     * {@link ShapeMemo.owed}.
+     */
+    private collectShapePokeParts(
+        ws: ShardSocketLike,
+        connectionId: string,
+        shapes: Record<string, ShapeSubscriptionQuery>,
+        identity: SubscriptionIdentity,
+        changed: Set<string>,
+        checkpoint: number,
+        sql: SqlExec,
+        diffCache: ShapeDiffCache,
+    ): { emptyAdvanced: string[]; partAdvanced: string[]; parts: ShapePokePart[] } {
+        const parts: ShapePokePart[] = [];
+        const emptyAdvanced: string[] = [];
+        const partAdvanced: string[] = [];
+
+        for (const [subId, shape] of Object.entries(shapes)) {
+            try {
+                const resolved = this.resolveShape(shape.name, shape.args ?? {}, identity);
+
+                // Unresolvable, or driven by the `.global()` poll loop rather than
+                // this flush: nothing this pass can say about it.
+                if (!resolved || resolved.global) {
+                    continue;
+                }
+
+                // The shape's table saw no write in this flush, so its diff over
+                // `(memo, checkpoint]` is empty WITHOUT reading the log. Advance
+                // it anyway rather than skipping outright.
+                //
+                // That is not a micro-optimisation, it is what makes retention
+                // work at all. `retentionFloor` is a MIN over every
+                // `__shape_poke_cursor` row, so one subscriber to a quiet table —
+                // a profile shape on a tab left open overnight — used to hold the
+                // whole log's floor at its seed cursor forever, and an operator
+                // who set `LUNORA_CDC_LOG_RETENTION` watched the log keep growing
+                // with no error, no metric, and nothing to grep. Every flush
+                // advances every shape now, so a cursor lags only by the flushes
+                // that genuinely could not settle.
+                // …with one exception, and it is the whole reason this is a
+                // condition rather than a plain `changed.has`. "Empty WITHOUT
+                // reading the log" only holds while the memo is known to cover
+                // everything before this flush. It does not when the shape still
+                // owes rows a previous flush computed but never delivered
+                // ({@link ShapeMemo.owed}), and it cannot be known at all when
+                // there is no in-memory memo yet — a hibernation eviction drops
+                // `owed` with the rest of the map, and the durable cursor alone
+                // cannot say whether the wake before it settled. Either way, take
+                // one unconditional diff pass instead of advancing: a re-scan of a
+                // range the client already has costs a probe, while skipping one it
+                // does not is a silently incomplete view for the life of the socket.
+                const memo = this.shapeMemos.get(ws)?.get(subId);
+
+                if (memo !== undefined && memo.owed !== true && !changed.has(resolved.table)) {
+                    emptyAdvanced.push(subId);
+
+                    continue;
+                }
+
+                const memoCursor = this.readShapeMemoCursor(ws, connectionId, subId, shape.sinceSeq);
+                const rowsPatch = this.diffShape(sql, resolved, memoCursor, checkpoint, diffCache);
+
+                if (rowsPatch.length > 0) {
+                    // Stamp the base the client is ACTUALLY at for this shape — the
+                    // cursor of the last poke that carried rows for it, not
+                    // `memoCursor` (which also advances on an empty diff and would
+                    // read as a gap the client never had). Absent on the first
+                    // delivery of a wake; the check is simply disarmed then.
+                    const baseCheckpoint = this.shapeMemos.get(ws)?.get(subId)?.delivered;
+
+                    parts.push({ baseCheckpoint, rowsPatch, shapeId: subId });
+                    partAdvanced.push(subId);
+                } else {
+                    emptyAdvanced.push(subId);
+                }
+            } catch (error) {
+                // Counted and logged like the socket-level catch in the caller
+                // (see `recordSubscriptionRefreshError`) so a resolve/diff
+                // failure contained to one shape still shows up on
+                // `metrics.subscriptionRefreshErrors` and the structured
+                // telemetry event — not just the socket-level failures that
+                // escape this loop entirely.
+                //
+                // Marked owed for the same reason a failed send is: the memo did
+                // not advance, so the range this pass gave up on is unscanned, and
+                // the next flush on another table would otherwise advance straight
+                // over it. A shape that keeps throwing now retries every flush
+                // rather than only the ones touching its table — louder, but a
+                // shape that cannot resolve is already an error on every flush that
+                // does touch it.
+                this.markShapeOwed(ws, subId);
+                this.recordSubscriptionRefreshError(`${ADMIN_FUNCTION_PREFIX}pokeShapeSubscribers`, error, { subId });
+            }
+        }
+
+        return { emptyAdvanced, partAdvanced, parts };
+    }
+
+    /**
+     * Read the changed row keys for a shape diff. A thin protected seam over
+     * {@link readCdcChangeKeys}, kept for the one thing nothing else observes:
+     * the `sinceSeq` each diff resumed FROM. Which baseline a poke picked — the
+     * durable memo, the attachment's subscribe-time cursor, or a clamped one
+     * after a PITR rollback — is the assertion in three tests, and it is not
+     * recoverable from the outside.
+     *
+     * It is NOT the read counter. `ShapeDiffCache.probesRun`/`probesServed` count
+     * the reads the per-flush memo collapses, and that is what the sharing tests
+     * assert against.
+     */
+    // eslint-disable-next-line class-methods-use-this, @typescript-eslint/member-ordering -- thin pass-through seam over the module-level reader; a protected method so the per-flush cache + tests share one read point, co-located with the poke path it serves rather than hoisted away from its only caller
+    protected readShapeCdcKeys(sql: SqlExec, table: string, sinceSeq: number, upTo: number): CdcChangeKey[] {
+        return readCdcChangeKeys(sql, table, sinceSeq, upTo);
+    }
+
+    /**
+     * One relayed shape's diff, on its own cache.
+     *
+     * The relay tier computes one delta per cohort or proxy rather than per
+     * socket, so there is nothing to share WITHIN a call — the cache exists
+     * because the pipeline requires one. Its counters are still folded back into
+     * {@link ShardDO.shapeProbe}, because they are reads this instance issued:
+     * discarding them would under-report exactly the shards the fan-out panel
+     * exists for, since a shard is relayed precisely when its fan-out is large.
+     */
+    private diffRelayedShape(resolved: ResolvedShape, fromCursor: number, toCursor: number): ShapeRowOp[] {
+        const cache = createShapeDiffCache();
+        const ops = this.diffShape(this.sql as SqlExec, resolved, fromCursor, toCursor, cache);
+
+        this.shapeProbe = recordShapeProbePass(this.shapeProbe, cache.probesRun, cache.probesServed);
+
+        return ops;
+    }
+
+    /**
+     * This shard's shape diff: {@link buildShapeDiff} with the changelog read
+     * routed through {@link ShardDO.readShapeCdcKeys}, so the DO's one seam over
+     * that read stays the DO's.
+     *
+     * The pipeline itself is host-neutral and lives in `@lunora/shard-engine` —
+     * it reads through the `sql` handle and touches no instance state.
+     */
+    private diffShape(sql: SqlExec, resolved: ResolvedShape, sinceSeq: number, upTo: number, cache: ShapeDiffCache): ShapeRowOp[] {
+        return buildShapeDiff(sql, resolved, sinceSeq, upTo, cache, (handle, table, from, to) => this.readShapeCdcKeys(handle, table, from, to));
+    }
+
+    /** Build the full insert-poke of a shape's current membership — the first-seed/full-reseed rowset. */
+    // eslint-disable-next-line class-methods-use-this -- instance method for symmetry with `buildShapeDiff`; reads via the passed `sql` handle
+    private buildShapeSeed(sql: SqlExec, resolved: ResolvedShape): ShapeRowOp[] {
+        return selectShapeRows(sql, resolved.table, resolved.effectiveWhere).map((row) => {
+            return {
+                key: row.id,
+                op: "insert" as const,
+                table: resolved.table,
+                value: projectColumns(row.doc, resolved.columns),
+            };
+        });
+    }
+
+    /**
+     * Seed a `.global()`-table shape: read its full membership from D1, ship it
+     * as one insert-poke, record the membership snapshot the alarm poll loop will
+     * diff against, and arm the poll alarm. A global shape has no op-log cursor,
+     * so the poke is stamped at this DO's current cursor (informational only) and
+     * carries no resume base — a reconnect always re-seeds full.
+     */
+    private async seedGlobalShape(
+        ws: ShardSocketLike,
+        subId: string,
+        resolved: ResolvedShape,
+        identity: SubscriptionIdentity,
+        connectionId: string,
+    ): Promise<"ok" | { code: string; message: string }> {
+        const rows = await this.readGlobalShapeRows(resolved, identity);
+
+        // Refuse to materialize an unbounded membership into a per-socket snapshot
+        // (and never arm the poll loop for it) — fail this one shape closed. Report
+        // the over-cap as a structured error so the caller errors the subscribe
+        // instead of acking "ok" without ever delivering data.
+        if (!this.withinGlobalShapeBound(rows.length, `shape:seed:${subId}`, resolved.table)) {
+            return {
+                code: "SHAPE_GLOBAL_TOO_LARGE",
+                message: `global shape membership for "${resolved.table}" exceeds the ${String(ShardDO.GLOBAL_SHAPE_MAX_ROWS)}-row cap; narrow it with a shape predicate or an RLS read policy`,
+            };
+        }
+
+        // Seeding is a diff against an empty baseline — every surviving row an insert.
+        const { next: snapshot, rowsPatch } = diffGlobalMembership(rows, new Map<string, string>(), { columns: resolved.columns, table: resolved.table });
+
+        // Advance the baseline only after the seed poke lands; a failed send leaves
+        // the snapshot empty so the next poll re-diffs the full membership and
+        // re-seeds rather than skipping the rows this poke carried.
+        await awaitWsDrain(ws);
+
+        // `reset` — a global shape re-seeds in full on EVERY (re)subscribe, and the
+        // seed is inserts-only. Without the flag a reconnecting client merges the
+        // fresh membership into whatever it still holds and keeps rendering rows
+        // that were deleted while it was away, for the life of the tab.
+        if (this.sendPoke(ws, [{ reset: true, rowsPatch, shapeId: subId }], this.currentCdcCursor() ?? 0, this.currentCdcEpoch(), undefined)) {
+            this.recordGlobalSnapshot(ws, subId, snapshot);
+            this.saveGlobalSnapshot(connectionId, subId, snapshot);
+        }
+
+        await this.scheduleGlobalPoll();
+
+        return "ok";
+    }
+
+    /**
+     * Re-read a global shape's membership from D1 and poke only the diff against
+     * the socket's last snapshot: a new key → `insert`, a changed projected value
+     * → `update`, a vanished key → `delete`. The snapshot advances to the fresh
+     * membership even when the diff is empty, so the next tick compares from here.
+     * No frame is sent when nothing changed (the common steady-state tick).
+     */
+    private async refreshGlobalShape(
+        ws: ShardSocketLike,
+        subId: string,
+        resolved: ResolvedShape,
+        identity: SubscriptionIdentity,
+        connectionId: string,
+        tick: GlobalPollTick,
+    ): Promise<void> {
+        const rows = await this.readGlobalShapeRowsCached(resolved, identity, tick);
+
+        // An over-cap membership: leave the prior snapshot untouched (so the diff
+        // recovers if it later shrinks) and skip this tick rather than retaining it.
+        // Like a thrown failure, this leaves the socket un-settled against a cursor
+        // that has already advanced, so the next tick must not skip the table.
+        if (!this.withinGlobalShapeBound(rows.length, `shape:poll:${subId}`, resolved.table)) {
+            tick.requestResync();
+
+            return;
+        }
+
+        const { lost, snapshot: previous } = this.readGlobalSnapshot(ws, subId, connectionId);
+        const { next, rowsPatch } = diffGlobalMembership(rows, previous, { columns: resolved.columns, table: resolved.table });
+
+        // A lost baseline (see `readGlobalSnapshot`) makes the diff a fiction: it
+        // is computed against an empty map, so it can emit an `insert` for every
+        // surviving row and a `delete` for none — and a row that left the shape
+        // while this DO slept would stay on the client for the life of the tab.
+        // Send the membership as a full `reset` instead, which is the one frame
+        // that drops what the client still holds. Same shape the seed uses.
+        if (lost) {
+            await awaitWsDrain(ws);
+
+            if (this.sendPoke(ws, [{ reset: true, rowsPatch, shapeId: subId }], this.currentCdcCursor() ?? 0, this.currentCdcEpoch(), undefined)) {
+                this.recordGlobalSnapshot(ws, subId, next);
+                this.saveGlobalSnapshot(connectionId, subId, next);
+
+                return;
+            }
+
+            tick.requestResync();
+
+            return;
+        }
+
+        if (rowsPatch.length === 0) {
+            // Unchanged tick: membership equals `previous`, so refreshing the
+            // in-memory cache to `next` is a no-op-equivalent and never strands
+            // rows. Skip the SQLite write (the common steady-state path).
+            this.recordGlobalSnapshot(ws, subId, next);
+
+            return;
+        }
+
+        // Membership changed: poke the diff, and advance the baseline (in-memory +
+        // durable) only once the poke lands. A failed send leaves the prior
+        // snapshot so the next tick re-diffs and re-pokes the change rather than
+        // losing it.
+        await awaitWsDrain(ws);
+
+        if (this.sendPoke(ws, [{ rowsPatch, shapeId: subId }], this.currentCdcCursor() ?? 0, this.currentCdcEpoch(), undefined)) {
+            this.recordGlobalSnapshot(ws, subId, next);
+            this.saveGlobalSnapshot(connectionId, subId, next);
+
+            return;
+        }
+
+        // The poke did not land, so the baseline still predates this diff — and the
+        // tick's cursor has moved past the changes it was built from. Ask for an
+        // unconditional pass so the next tick rebuilds it rather than skipping.
+        tick.requestResync();
+    }
+
+    /**
+     * Read a socket's global-shape baseline, preferring the hot in-memory cache
+     * and falling back to the durable `__global_shape_snapshot` table on a miss (a
+     * cold socket after a hibernation eviction). The loaded baseline repopulates
+     * the cache so subsequent ticks in this wake hit memory. An empty
+     * `connectionId` (a socket that never went through the lifecycle-aware upgrade,
+     * e.g. a unit harness) skips the durable read and behaves as in-memory-only.
+     */
+    private readGlobalSnapshot(ws: ShardSocketLike, subId: string, connectionId: string): { lost: boolean; snapshot: Map<string, string> } {
+        const cached = this.globalShapeSnapshots.get(ws)?.get(subId);
+
+        if (cached) {
+            return { lost: false, snapshot: cached };
+        }
+
+        const stored = this.loadGlobalSnapshot(connectionId, subId);
+        const snapshot = stored ?? new Map<string, string>();
+
+        this.recordGlobalSnapshot(ws, subId, snapshot);
+
+        // `lost` = both copies of this subscription's baseline are gone: the
+        // in-memory one to a hibernation eviction, the durable one because the
+        // read found no row (a persist that failed, or a socket evicted before
+        // its first save). Only a poll tick that KNOWS its baseline is missing
+        // can avoid diffing against a fabricated empty one — see
+        // `refreshGlobalShape`. `undefined` from `loadGlobalSnapshot` means the
+        // durable path itself is unavailable (a stub `sql`, a connection-id-less
+        // harness socket), which is in-memory-only mode, not a lost baseline.
+        return { lost: stored === undefined && this.durableSnapshotStoreAvailable, snapshot };
+    }
+
+    /** Record a socket's latest global-shape membership snapshot in the in-memory cache (creating the per-socket map lazily). */
+    private recordGlobalSnapshot(ws: ShardSocketLike, subId: string, snapshot: Map<string, string>): void {
+        socketMap(this.globalShapeSnapshots, ws).set(subId, snapshot);
+    }
+
+    /**
+     * Load a durable global-shape baseline from SQLite, or `undefined` when no row
+     * is stored / the durable path is unavailable. A stub `sql` handle (unit
+     * harness) or a missing table degrades to in-memory-only behavior rather than
+     * failing the poll tick — and marks the durable store unavailable, so
+     * {@link ShardDO.readGlobalSnapshot} does not mistake it for a lost baseline.
+     */
+    private loadGlobalSnapshot(connectionId: string, subId: string): Map<string, string> | undefined {
+        if (connectionId === "") {
+            return undefined;
+        }
+
+        try {
+            const stored = readGlobalShapeSnapshot(this.sql as SqlExec, connectionId, subId);
+
+            this.durableSnapshotStoreAvailable = true;
+
+            return stored;
+        } catch {
+            this.durableSnapshotStoreAvailable = false;
+
+            return undefined;
+        }
+    }
+
+    /**
+     * Persist a socket's global-shape baseline to SQLite so the poll-loop diff
+     * survives hibernation. A no-op for a connection-id-less socket (the in-memory
+     * cache then carries the baseline for the DO's lifetime, matching the
+     * pre-durable behavior).
+     *
+     * A failure is LOGGED rather than swallowed, and the in-memory cache has
+     * already advanced past it, so an unreported one would only surface as lost
+     * deletes after a hibernation eviction — arbitrarily later and nowhere near
+     * the write that failed. The over-cap refusal from `writeGlobalShapeSnapshot`
+     * names the subscription to narrow, and is reported unconditionally because
+     * it is raised before `sql` is touched at all.
+     */
+    private saveGlobalSnapshot(connectionId: string, subId: string, snapshot: Map<string, string>): void {
+        if (connectionId === "") {
+            return;
+        }
+
+        try {
+            writeGlobalShapeSnapshot(this.sql as SqlExec, connectionId, subId, snapshot);
+            this.durableSnapshotStoreAvailable = true;
+        } catch (error: unknown) {
+            // The over-cap refusal is raised by `writeGlobalShapeSnapshot` BEFORE
+            // it touches `sql`, so it can never be a stub-handle artifact — it is
+            // always a real, actionable failure and is always reported. Gating it
+            // on the availability flag hid it on exactly the path it was written
+            // for: an over-wide shape throws on its very first write, so the flag
+            // had never been set true and the message naming the subscription was
+            // swallowed until some later hibernation eviction happened to flip it.
+            //
+            // An untyped throw is the other case: a stub `sql` handle (unit
+            // harness) has no durable store at all, which is in-memory-only mode
+            // rather than a failure worth logging.
+            if (isLunoraError(error) || this.durableSnapshotStoreAvailable) {
+                this.recordShapeError(`shape:snapshot:${subId}`, error);
+            }
+        }
+    }
+
+    /**
+     * Arm the poll alarm if one isn't already pending. Idempotent — every
+     * global-shape seed calls it, but only the first arms the alarm. Degrades to
+     * a no-op when the runtime exposes no `setAlarm` (the unit harness): a global
+     * shape is then seed-only, which the poll-loop tests assert by driving
+     * {@link ShardDO.alarm} directly.
+     *
+     * `atMs` lets {@link ShardDO.alarm} re-arm at a computed target — the
+     * earlier of the fixed global-shape floor and the earliest external-source
+     * next-due time — instead of always the fixed floor. Every OTHER caller
+     * (a fresh global-shape seed, {@link ShardDO.scheduleSourcePoll}'s initial
+     * kick) omits it and gets the original `GLOBAL_SHAPE_POLL_INTERVAL_MS`
+     * default, since neither knows a more precise due time yet.
+     *
+     * "Already pending" is decided against {@link ShardDO.globalPollArmedAt}'s
+     * TIME: an alarm due later than the requested target is replaced, one due at
+     * or before it is left alone. Only ever moves the wake EARLIER, so repeated
+     * seeds cannot walk the alarm out.
+     */
+    private async scheduleGlobalPoll(atMs?: number): Promise<void> {
+        const target = atMs ?? Date.now() + ShardDO.GLOBAL_SHAPE_POLL_INTERVAL_MS;
+        const pendingAt = this.globalPollArmedAt;
+
+        if (pendingAt !== undefined && pendingAt <= target) {
+            return;
+        }
+
+        this.globalPollArmedAt = target;
+
+        try {
+            // `ShardHost.alarms` owns the "host cannot arm" case: it resolves
+            // silently rather than throwing, which is the same outcome the
+            // previous `if (!setAlarm) return` produced — no alarm, no crash.
+            await this.shardHost.alarms.set(target);
+        } catch {
+            // A failed arm restores the previous pending time (not `undefined`)
+            // so a later seed/tick retries without forgetting an alarm that is
+            // still armed at the older, later target — but only while this call
+            // still owns the field. Fetches and alarm ticks interleave across
+            // the `await`, so another `scheduleGlobalPoll` may have armed an
+            // EARLIER target meanwhile (or the alarm may have fired and cleared
+            // it); writing the older `pendingAt` back over that makes every
+            // later caller compare against an alarm that is not the one armed,
+            // and delays the next poll.
+            if (this.globalPollArmedAt === target) {
+                this.globalPollArmedAt = pendingAt;
+            }
+        }
+    }
+
+    /**
+     * The cold-start arm behind {@link ShardDO.scheduleSourcePoll} and
+     * {@link ShardDO.scheduleTtlSweep}. The codegen constructor calls those on every
+     * instance, including the one an alarm wakes after an eviction, so an ungated
+     * arm here would re-arm a tripped loop at the global floor forever. It counts
+     * against the same budget. A refusal arms the recovery wake instead, so an
+     * idle tripped shard still polls and sweeps once the window drains.
+     *
+     * A call that would arm nothing is not a re-arm and is not counted:
+     * {@link ShardDO.scheduleGlobalPoll} leaves an alarm that is already due at or
+     * before the default target alone, and the generated callers invoke this after every
+     * sourced write, so counting those would spend the budget with no alarm armed.
+     * `globalPollArmedAt` lives in memory, so an eviction-driven cold start still counts.
+     */
+    private scheduleBootstrapPoll(): Promise<void> {
+        const pendingAt = this.globalPollArmedAt;
+
+        if (pendingAt !== undefined && pendingAt <= Date.now() + ShardDO.GLOBAL_SHAPE_POLL_INTERVAL_MS) {
+            return this.scheduleGlobalPoll();
+        }
+
+        if (!this.admitAlarmRearm(false)) {
+            return this.armRecoveryWake();
+        }
+
+        return this.scheduleGlobalPoll();
+    }
+
+    /**
+     * Arm the one recovery wake a refused re-arm owes: a single alarm one window out
+     * (see {@link recoveryWakeAt}). It is not counted against the budget, because it
+     * arms a wake rather than a re-arm; the tick it wakes is counted when that tick
+     * re-arms.
+     *
+     * It reads the host's own alarm slot first and does nothing when an earlier alarm
+     * is still ahead. A fresh instance has no memo of the platform's alarm, so
+     * without this a burst of refused cold starts would push the recovery later on
+     * every request, and a steady trickle of traffic could postpone it indefinitely.
+     * A slot time that is already past is the alarm that just fired, not a pending
+     * one, so it does not count: skipping on it would leave the shard idle.
+     */
+    private async armRecoveryWake(): Promise<void> {
+        const now = Date.now();
+        const target = recoveryWakeAt(now);
+        const pending = await Promise.resolve(this.shardHost.alarms.get()).catch((): undefined => undefined);
+
+        if (typeof pending === "number" && pending > now && pending <= target) {
+            return;
+        }
+
+        await this.scheduleGlobalPoll(target);
+    }
+
+    /**
+     * Whether the poll alarm may re-arm itself on this tick — the runaway breaker
+     * (see alarm-rearm-breaker.ts). `exempt` admits regardless but is still counted.
+     *
+     * Fails open on any storage fault: a breaker that cannot read its window must
+     * not stall a shard, and the worst case is one unthrottled tick.
+     */
+    private admitAlarmRearm(exempt: boolean): boolean {
+        const limit = alarmRearmLimitFrom(this.env);
+
+        if (limit === undefined) {
+            return true;
+        }
+
+        const { sql } = this.shardHost;
+        let admission: RearmAdmission;
+
+        try {
+            ensureRearmWindowTable(sql);
+            admission = admitRearm(readRearmWindow(sql), Date.now(), exempt ? Number.POSITIVE_INFINITY : limit);
+            writeRearmWindow(sql, admission.window);
+        } catch {
+            return true;
+        }
+
+        if (admission.admitted) {
+            this.alarmRearmTripLogged = false;
+        } else if (!this.alarmRearmTripLogged) {
+            this.alarmRearmTripLogged = true;
+            this.recordAlarmRearmTrip(limit, estimateRearms(admission.window, Date.now()));
+        }
+
+        return admission.admitted;
+    }
+
+    /**
+     * Surface one breaker trip: a single `error` log through the same path as
+     * `ctx.log` (buffer, structured console event, `sink.onLog`) and one counter.
+     * Logged once per instance per trip, so a burst of refusals does not flood the
+     * log. The first refusal of a trip arms the recovery wake, which is what keeps
+     * the shard polling after the window drains.
+     */
+    private recordAlarmRearmTrip(limit: number, rearms: number): void {
+        const message = `alarm re-arm breaker tripped: ${String(rearms)} re-arms in the last ${String(ALARM_REARM_WINDOW_MS)} ms (limit ${String(limit)}). Re-arms are refused until the window drains, and a recovery wake is armed one window out. Tune with LUNORA_ALARM_REARM_LIMIT, or set it to 0 to disable.`;
+
+        try {
+            this.recordUserLog(
+                "alarm:rearm",
+                "error",
+                [message],
+                message,
+                { limit, rearms, windowMs: ALARM_REARM_WINDOW_MS },
+                this.lastTelemetrySink,
+                "alarmRearmBreakerTripped",
+            );
+            this.recordMetric(
+                { functionPath: "alarm:rearm", kind: "counter", name: "shard.alarm_rearm.refused", ts: Date.now(), value: 1 },
+                this.lastTelemetrySink,
+            );
+        } catch {
+            // Best-effort, like every other telemetry call on the alarm path.
+        }
+    }
+
+    /**
+     * The schedule-rate budget for `target` (schedule-rate-breaker.ts). The facade asks once
+     * per target per dispatch, so this counts invocations, not schedules. Returns the instant
+     * a schedule to `target` may not fire before, or `undefined` when it is within budget.
+     *
+     * Fails open on any storage fault: a breaker that cannot read its window admits the
+     * schedule rather than failing the invocation that made it.
+     */
+    private admitScheduleRate(target: string): number | undefined {
+        const limit = scheduleRateLimitFrom(this.env);
+
+        if (limit === undefined) {
+            return undefined;
+        }
+
+        const { sql } = this.shardHost;
+        let admission: RearmAdmission;
+
+        try {
+            ensureScheduleRateTable(sql);
+            admission = admitRearm(readScheduleRateWindow(sql, target), Date.now(), limit);
+            writeScheduleRateWindow(sql, target, admission.window);
+        } catch {
+            return undefined;
+        }
+
+        if (admission.admitted) {
+            return undefined;
+        }
+
+        const now = Date.now();
+
+        this.recordScheduleRateDeferral(target, limit, estimateRearms(admission.window, now));
+
+        return recoveryWakeAt(now);
+    }
+
+    /**
+     * Count one deferred schedule, and log the trip at most once per window per target. The
+     * deferral itself is the caller's job: this only reports it.
+     */
+    private recordScheduleRateDeferral(target: string, limit: number, invocations: number): void {
+        try {
+            const now = Date.now();
+
+            this.recordMetric(
+                { functionPath: "schedule:rate", kind: "counter", name: "shard.schedule_rate.deferred", ts: now, value: 1 },
+                this.lastTelemetrySink,
+            );
+
+            const loggedAt = this.scheduleRateTripLoggedAt.get(target);
+
+            if (loggedAt !== undefined && now - loggedAt < ALARM_REARM_WINDOW_MS) {
+                return;
+            }
+
+            this.scheduleRateTripLoggedAt.set(target, now);
+
+            const message = `schedule rate breaker tripped: ${target} was scheduled by ${String(invocations)} invocations in the last ${String(ALARM_REARM_WINDOW_MS)} ms (limit ${String(limit)}). Its schedules are deferred one window, not dropped. Tune with LUNORA_SCHEDULE_RATE_LIMIT, or set it to 0 to disable.`;
+
+            this.recordUserLog(
+                "schedule:rate",
+                "error",
+                [message],
+                message,
+                { invocations, limit, target, windowMs: ALARM_REARM_WINDOW_MS },
+                this.lastTelemetrySink,
+                "scheduleRateBreakerTripped",
+            );
+        } catch {
+            // Best-effort, like every other telemetry call on the schedule path.
+        }
+    }
+
+    /**
+     * One outbox attempt: replay the stored call, then either end custody or push
+     * the entry out along {@link SCHEDULE_OUTBOX_BACKOFF_MS} — parking it once the
+     * ladder runs out.
+     *
+     * An envelope that will not parse is parked immediately rather than retried:
+     * no number of attempts turns malformed JSON into a job, and the log line is
+     * the only useful output left.
+     */
+    private async retryScheduleOutboxEntry(sql: SqlExec, scheduler: SchedulerLike | undefined, entry: ScheduleOutboxRow, trace?: TraceRefLike): Promise<void> {
+        const attempts = entry.attempts + 1;
+        let envelope: ScheduleOutboxEnvelope | undefined;
+
+        try {
+            envelope = JSON.parse(entry.envelopeJson) as ScheduleOutboxEnvelope;
+        } catch {
+            envelope = undefined;
+        }
+
+        if (scheduler === undefined || envelope === undefined) {
+            this.parkScheduleOutboxEntry(
+                sql,
+                entry.id,
+                attempts,
+                envelope?.target,
+                scheduler === undefined ? "no scheduler is configured on this shard" : "its stored payload is unreadable",
+                trace,
+            );
+
+            return;
+        }
+
+        try {
+            // `runAt`, never `runAfter`: the envelope stores the absolute instant
+            // the caller asked for, so an entry that spent an hour in custody still
+            // fires when it was meant to rather than an hour late.
+            await (scheduler.runAt as (timestampMs: number, target: never, args: never, options?: never) => Promise<string>)(
+                envelope.when,
+                envelope.target as never,
+                decodeWire(envelope.args) as never,
+                { ...envelope.options, id: entry.id } as never,
+            );
+
+            forgetScheduleOutbox(sql, entry.id);
+        } catch (error) {
+            // A duplicate id means the scheduler already has this job — the first
+            // dispatch landed and only the bookkeeping was lost. Custody ends the
+            // same way an acceptance ends it.
+            if (isLunoraError(error) && error.code === "DUPLICATE_SCHEDULE_ID") {
+                forgetScheduleOutbox(sql, entry.id);
+
+                return;
+            }
+
+            if (attempts >= SCHEDULE_OUTBOX_MAX_ATTEMPTS) {
+                this.parkScheduleOutboxEntry(
+                    sql,
+                    entry.id,
+                    attempts,
+                    envelope.target,
+                    `${String(SCHEDULE_OUTBOX_MAX_ATTEMPTS)} attempts all failed — last: ${error instanceof Error ? error.message : String(error)}`,
+                    trace,
+                );
+
+                return;
+            }
+
+            deferScheduleOutbox(sql, entry.id, attempts, Date.now() + scheduleOutboxBackoffFor(attempts));
+        }
+    }
+
+    /** Park one entry and say so at `error` — a job was promised to a caller and will not be enqueued. */
+    private parkScheduleOutboxEntry(sql: SqlExec, id: string, attempts: number, target: unknown, why: string, trace?: TraceRefLike): void {
+        parkScheduleOutbox(sql, id, attempts);
+
+        this.logs.push({
+            functionPath: "scheduler:outbox",
+            level: "error",
+            message: `deferred schedule ${id} (target ${target === undefined ? "<unreadable>" : JSON.stringify(target)}) will not be enqueued: ${why}. Its mutation committed; the job did not.`,
+            timestamp: Date.now(),
+            traceId: trace?.traceId,
+        });
+    }
+
+    /**
+     * Arm the poll alarm once per warm instance if this shard is holding deferred
+     * schedules nobody has enqueued.
+     *
+     * The settle asks for a wake when its own dispatch fails, but the window that
+     * loses a job most quietly is the one where no settle ran at all: the DO is
+     * evicted between the COMMIT and the dispatch, and the entry sits with nothing
+     * pointing at it. Every entry point into this object goes through shard init,
+     * so hooking it here means the next time anything wakes this shard the retry
+     * loop starts — for the cost of one indexed read per cold start.
+     *
+     * Swallows: a shard whose store predates the table (or a harness with a stub
+     * handle) simply has no custody to resume, and init must not fail for it.
+     */
+    private armScheduleOutboxRetry(): void {
+        try {
+            if (probeScheduleOutbox(this.sql as SqlExec).dueAt !== undefined) {
+                this.scheduleGlobalPoll(Date.now() + SCHEDULE_OUTBOX_FIRST_RETRY_MS).catch(() => {
+                    /* the host could not arm; the next cold start probes again */
+                });
+            }
+        } catch {
+            // No table, no custody to resume.
+        }
+    }
+
+    /**
+     * Delete one expired row through {@link ShardDO.runShardWrite}, passing this
+     * sweep's own by-value meter (the override's `this.transactionHeadroom()`
+     * fallback would mint a fresh budget per row, bounding nothing),
+     * absorbing a `TRANSACTION_LIMIT_EXCEEDED` as "batch full" rather than
+     * letting it propagate — split out of {@link ShardDO.pollTtlSweeps} to keep
+     * that method's own complexity down. Returns `true` when the limit was hit
+     * (the caller must stop the sweep pass) and logs a `warn` recording it; `false`
+     * on an ordinary successful delete. Any OTHER thrown error still propagates —
+     * only the meter's own signal is contained here.
+     */
+    private async deleteExpiredTtlRow(table: string, id: string, headroom: TransactionHeadroomTracker, trace?: TraceRefLike): Promise<boolean> {
+        try {
+            await this.runShardWrite({ id, op: "delete", table }, headroom);
+
+            return false;
+        } catch (error) {
+            if (error instanceof LunoraError && error.code === "TRANSACTION_LIMIT_EXCEEDED") {
+                this.logs.push({
+                    functionPath: "ttl:sweep",
+                    level: "warn",
+                    message: `TTL sweep for "${table}" hit the transaction limit mid-batch; resuming next tick: ${error.message}`,
+                    timestamp: Date.now(),
+                    traceId: trace?.traceId,
+                });
+
+                return true;
+            }
+
+            throw error;
+        }
+    }
+
+    /**
+     * Record a contained shape-tier error (poll / poke / seed) into the DO's log
+     * ring without aborting the rest of the pass. The shape pipeline is a
+     * best-effort fan-out: one socket's read or one shape's resolve failing must
+     * never take down the others — so callers swallow the throw and surface it
+     * here for diagnosis. `context` is a synthetic `shape:phase:subId` path.
+     *
+     * `trace` is passed by the alarm path, which has an anchor to attribute the
+     * failure to; the socket-frame callers omit it because their path is
+     * deliberately untraced (see `webSocketMessage`). It is a parameter rather
+     * than a field read so an alarm interleaving with a socket frame cannot file
+     * one path's failure under the other's trace.
+     */
+    private recordShapeError(context: string, error: unknown, trace?: TraceRefLike): void {
+        this.logs.push({
+            functionPath: context,
+            level: "error",
+            message: error instanceof Error ? error.message : String(error),
+            timestamp: Date.now(),
+            traceId: trace?.traceId,
+        });
+    }
+
+    /**
+     * Guard a global shape's materialized membership against {@link
+     * ShardDO.GLOBAL_SHAPE_MAX_ROWS}. Returns `true` when the row count is within
+     * the cap; otherwise records a diagnosable error and returns `false` so the
+     * caller fails the shape closed (no snapshot retained, no poke sent) rather
+     * than risking a DO eviction on an unbounded global table. The transient read
+     * buffer is bounded by the same gate — an over-cap membership is dropped, not
+     * snapshotted per socket.
+     */
+    private withinGlobalShapeBound(rowCount: number, context: string, table: string): boolean {
+        if (rowCount <= ShardDO.GLOBAL_SHAPE_MAX_ROWS) {
+            return true;
+        }
+
+        this.recordShapeError(
+            context,
+            new Error(
+                `global shape membership for "${table}" (${String(rowCount)} rows) exceeds the ${String(ShardDO.GLOBAL_SHAPE_MAX_ROWS)}-row cap; narrow it with a shape predicate or an RLS read policy`,
+            ),
+        );
+
+        return false;
+    }
+
+    /**
+     * The changelog settings the generated code hands to the `.global()` writer.
+     *
+     * `cdc` is the app's own opt-in, forwarded from the shard config so the two
+     * logs are governed by ONE switch: a deployment that turns CDC on gets a
+     * changelog on both tiers, and one that leaves it off pays for neither. Until
+     * this was threaded, the global writer was built without it unconditionally —
+     * so the global `__cdc_log` was never written, and the poll's
+     * changed-tables fast path was unreachable in every generated app while
+     * looking, from the shard side, exactly like a backend that had CDC disabled.
+     *
+     * `cdcRetentionMs` is read here rather than in the generated factory so every
+     * deployment knob goes through one strict parser (see
+     * {@link CdcRetentionRunner.sweep} for why lenient parsing on a delete path
+     * is a footgun). Absent means the global log is never trimmed.
+     */
+    // eslint-disable-next-line @typescript-eslint/member-ordering -- co-located with `readGlobalChangedTables` and the poll tick they both serve, rather than hoisted to the protected block away from its only callers
+    protected globalCdcOptions(cdc: boolean): { cdc: boolean; cdcRetentionMs?: number } {
+        const retentionMs = envOptionalPositiveInt(this.env, "LUNORA_GLOBAL_CDC_RETENTION_MS");
+
+        return { cdc, ...(retentionMs === undefined ? {} : { cdcRetentionMs: retentionMs }) };
+    }
+
+    /**
+     * Ask the `.global()` backend which tables it recorded a write to after
+     * `sinceSeq`. The base class has no global backend, so it reports no
+     * visibility (`undefined`) and every poll tick falls back to re-reading
+     * membership; the codegen-generated subclass overrides this to forward the
+     * question to the global store's changelog. Emitted only for a project that
+     * has both shapes and `.global()` tables.
+     *
+     * `cursorOnly` says the caller has already committed to reading everything
+     * this pass and wants only the cursor — see the contract on
+     * `DatabaseWriterLike.cdcChangedTables`.
+     */
+    // eslint-disable-next-line class-methods-use-this, @typescript-eslint/member-ordering -- base-class override hook (the codegen subclass overrides it and uses `this` to build the global writer), co-located with the poll tick it opens rather than hoisted away from its only caller
+    protected readGlobalChangedTables(_sinceSeq: number, _cursorOnly?: boolean): Promise<{ cursor: number; floor?: number; tables: string[] } | undefined> {
+        return Promise.resolve(undefined);
+    }
+
+    /**
+     * The two answers a `/rpc` can earn between the replica gate and
+     * `beginDispatch`: a reserved admin RPC (served under its own scope and
+     * bearer gate) and the paid-procedure backstop.
+     *
+     * Split out of {@link ShardDO.handleFetchCloudflare} because both are the same
+     * shape — request in, response out, no dispatch bookkeeping in scope — while
+     * everything after them shares eight dispatch locals. `undefined` means
+     * "nothing answered it here; go dispatch".
+     *
+     * Deliberately NOT `async`: the admin branch is the only one that awaits, and
+     * an `async` wrapper would spend a microtask on the common path where this
+     * returns `undefined` — which is enough to move `beginDispatch` after a
+     * concurrent admin request that overlaps it (see
+     * `__tests__/shard-do.system-dispatch.test.ts`).
+     * @param request The inbound `/rpc` request.
+     * @param payload Its parsed body.
+     * @returns The response to return, or `undefined` to continue into dispatch.
+     */
+    private preDispatchAnswer(request: Request, payload: RpcRequest): Promise<Response> | Response | undefined {
+        // Reserved admin-introspection RPCs are intercepted before user
+        // dispatch — they read raw SQLite directly rather than running a
+        // registered function, and carry their own bearer-token gate. Run under
+        // their own request scope: this branch returns before `beginDispatch`, so
+        // without it the admin plane inherits whatever a concurrent `/rpc` left on
+        // `this`. See {@link ShardDO.withAdminRequestScope}.
+        if (payload.functionPath.startsWith(ADMIN_FUNCTION_PREFIX)) {
+            return this.withAdminRequestScope(async () => await this.handleAdminRpc(request, payload.functionPath, payload.args ?? {}));
+        }
+
+        // Paid (`.x402`) backstop. The paywall itself lives at the origin worker,
+        // which reads the price off the `functions` registry it was built with — so
+        // a worker built WITHOUT one (`createLunoraHandler()`, a hand-rolled
+        // `createWorker({ shardDO })`) cannot see the tag and would dispatch every
+        // paid procedure free. The shard always knows: the generated subclass
+        // overrides `isPaidFunction` from `LUNORA_FUNCTIONS`. So an unmarked paid
+        // dispatch is refused here rather than served.
+        //
+        // Placed after the admin branch and before `beginDispatch` so a refusal
+        // costs no dispatch bookkeeping. The batch transport replays each entry
+        // through this same `/rpc` path, so it is covered by this one guard.
+        if (request.headers.get(ORIGIN_PAYWALL_HEADER) !== ORIGIN_PAYWALL_APPLIED && this.isPaidFunction(payload.functionPath)) {
+            return jsonResponse(
+                {
+                    error: {
+                        code: "MISCONFIGURED",
+                        message: `paid (\`.x402\`) function "${payload.functionPath}" reached the shard without passing the origin paywall, so nothing charged for it; an origin worker must be built with \`defineApp()\` (or passed \`functions\`) to read the \`.x402\` tag, and a server-side \`createShardClient\` caller must keep its default system privilege`,
+                    },
+                },
+                500,
+            );
+        }
+
+        return undefined;
+    }
+
+    /**
+     * Stamp everything one RPC dispatch needs off its request, and reset every
+     * per-request capture the handler will fill.
+     *
+     * Split from {@link ShardDO.handleFetchCloudflare} together with
+     * {@link ShardDO.endDispatch}, and the pairing is the point: these two own
+     * the same set of fields, and the whole correctness story for them is that
+     * every field one sets, the other clears. Spread across a 479-line method
+     * the two ends were 350 lines apart, so a newly-added per-request field
+     * stamped here and forgotten there leaks into the NEXT request on the same
+     * DO instance — a cross-request identity bleed with no local symptom.
+     * `__tests__/dispatch-lifecycle.test.ts` asserts the symmetry directly.
+     *
+     * Returns the two values the caller must hold in locals rather than read
+     * back off `this`: an `await`-interleaved concurrent dispatch can re-set the
+     * shared fields, and the `finally` would then file this dispatch's telemetry
+     * under another request's trace (see the comments inside).
+     * @returns this dispatch's trace anchor and its transaction-headroom tracker
+     */
+    private beginDispatch(request: Request): {
+        dispatchAttribution: QueryAttribution;
+        dispatchBookmark: DispatchBookmark;
+        dispatchHeadroom: TransactionHeadroomTracker;
+        dispatchStartedAt: number;
+        dispatchTrace: TraceAnchor;
+    } {
+        this.currentRequestBookmark = request.headers.get("x-d1-bookmark") ?? undefined;
+        this.currentResponseBookmark = undefined;
+        // `decodeUserIdHeader` inverts the runtime's `encodeUserIdHeader`: a
+        // Latin-1-safe id is forwarded unchanged, a non-Latin-1 one arrives
+        // base64url-encoded behind a leading `=` sentinel. See shared/identity-header.ts.
+        this.currentRequestUserId = decodeUserIdHeader(request.headers.get("x-lunora-userid"));
+        this.currentRequestMutationId = request.headers.get("x-lunora-mutation-id") ?? undefined;
+        // Custom-mutator push identity: a stable per-device client id plus a
+        // monotonic per-client sequence. Present only on custom-mutator pushes;
+        // the watermark dispatch below classifies the sequence against the
+        // shard's `__client_watermark`. A non-numeric/absent seq disables the
+        // watermark path (the call falls back to the legacy idempotency dedup).
+        this.currentRequestClientId = request.headers.get("x-lunora-client-id") ?? undefined;
+        this.currentRequestClientSeq = parseClientSeqHeader(request.headers.get("x-lunora-client-seq"));
+        // Its OWN parser, not the client-sequence one: a baseline of `0` is valid
+        // ("had seen nothing") where a mutation sequence starts at 1. An absent or
+        // malformed baseline degrades to "absent", which applies the write unchanged.
+        this.currentRequestBaselineSeq = parseBaselineSeqHeader(request.headers.get("x-lunora-base-seq"));
+        // Reset the in-transaction bookkeeping handshake: `handleRpc` sets the
+        // classification + flag for a mutation push so the writes, dedup row, and
+        // watermark advance all commit atomically (see `commitMutationBookkeeping`).
+        this.currentMutatorClass = undefined;
+        this.mutationBookkeeping = undefined;
+        this.currentRequestIdentity = parseIdentityHeader(request.headers.get("x-lunora-identity"));
+        // The caller's IP, forwarded server-side from Cloudflare's
+        // `CF-Connecting-IP` — and only on Cloudflare, where the edge stamps that
+        // header itself. Off the edge the runtime forwards nothing rather than a
+        // client-written value, so this is absent. Surfaced as `ctx.ip` so
+        // handlers/middleware can key on it (e.g. rate-limit unauthenticated
+        // traffic by IP).
+        this.currentRequestIp = request.headers.get("x-lunora-client-ip") ?? undefined;
+        this.currentRequestOrigin = request.headers.get("x-lunora-origin") ?? undefined;
+        this.currentRequestSystem = request.headers.get("x-lunora-system") === "1";
+        this.currentRequestTraceparent = request.headers.get("traceparent") ?? undefined;
+        // The runtime's tail-bias toggle, read ONCE here. Two consumers: the
+        // export gate below, and `buildCtx`, which forwards it to an outbound
+        // container so that tier is TOLD the verdict rather than falling back to
+        // its own configuration and agreeing by coincidence. `undefined` means
+        // no verdict was propagated (an alarm, a subscription re-run, a
+        // non-Lunora caller), which every tier reads as keep.
+        this.currentRequestSampleErrors = parseSampleErrorsHeader(request.headers.get(SAMPLE_ERRORS_HEADER));
+        // Resolve the dispatch's trace anchor once, here, so `ctx.trace` spans and
+        // the synthetic root span recorded on the way out agree on the ids even
+        // when there is no inbound `traceparent` to derive them from.
+        // The Cloudflare Ray ID rides the anchor too, forwarded by the runtime next
+        // to `traceparent`, so this dispatch's logs and spans carry it. Telemetry
+        // only — nothing on the shard ever branches on it.
+        this.currentRequestTrace = resolveTraceAnchor(this.currentRequestTraceparent, request.headers.get(RAY_ID_HEADER));
+        // Captured into a local as well: the `finally` below runs after the
+        // handler's awaits, by which point an interleaved dispatch may have
+        // re-set the shared field — reading it there would file this dispatch's
+        // root span under another request's trace (and leave that one rootless).
+        const dispatchTrace = this.currentRequestTrace;
+        // Trace-sampling verdict propagated by the runtime: the `traceparent`
+        // sampled flag carries the head decision (absent → keep, so this path is
+        // unchanged for alarms / subscription re-runs / non-Lunora callers) and
+        // `x-lunora-sample-errors` carries the tail-bias toggle. Registered keyed by
+        // THIS dispatch's `traceId` (not a flat field) so a concurrent dispatch's
+        // `recordSpan` / `finally` reads its own verdict — see `traceSampling`.
+        this.traceSampling.set(dispatchTrace.traceId, {
+            keepErrors: this.currentRequestSampleErrors ?? true,
+            sampled: parseTraceparent(this.currentRequestTraceparent)?.sampled ?? true,
+        });
+        this.metrics.requests += 1;
+        const dispatchStartedAt = Date.now();
+
+        // Collect the tables this dispatch full-scans (stamped by the
+        // ctx-db read hook) so `recordFunctionCall` can persist the causal
+        // attribution. Fresh per request; drained below.
+        this.currentScannedTables = new Set<string>();
+
+        // A LOCAL, never an instance field: `handleRpc` below receives it BY
+        // VALUE (see its docstring), so this dispatch's ctx-build never depends
+        // on a shared field still pointing at THIS tracker by the time an
+        // `await`-interleaved concurrent dispatch's `finally` runs.
+        const dispatchHeadroom = new TransactionHeadroomTracker(this.transactionLimits());
+
+        // Collect the declared indexes this dispatch exercises (stamped by
+        // the ctx-db index-use hook) so `recordFunctionCall` can persist the
+        // per-index hit counter behind the dead-index lint. Fresh per
+        // request; drained below.
+        this.currentIndexHits = new Set<string>();
+
+        // Collect per-statement SQL samples from the instrumented `sql`
+        // getter so `flushStmtSamples` can persist them to the durable
+        // `__lunora_metrics_queries` table after the handler resolves.
+        // Allocating a fresh map here activates the instrumentation (the
+        // `sql` getter only wraps when this field is defined).
+        this.currentStmtSamples = new Map<string, StmtSample>();
+        this.currentStmtSamplesTruncated = undefined;
+
+        // The per-request read/cache capture `runCachedQuery` fills in for a
+        // cached query path. Handed BACK to the caller, never parked on `this`:
+        // it is written and read on both sides of the handler's awaits, so a
+        // shared field would attribute it to whichever concurrent dispatch
+        // happened to resolve last. See {@link QueryAttribution}.
+        //
+        // `dispatchBookmark` is the same story on the write side, and for the
+        // same reason: see {@link DispatchBookmark}.
+        return { dispatchAttribution: {}, dispatchBookmark: { value: undefined }, dispatchHeadroom, dispatchStartedAt, dispatchTrace };
+    }
+
+    /** Clear every per-request field {@link ShardDO.beginDispatch} stamped. */
+    private endDispatch(): void {
+        this.currentRequestTrace = undefined;
+        this.currentRequestBookmark = undefined;
+        this.currentResponseBookmark = undefined;
+        this.currentRequestUserId = undefined;
+        this.currentRequestMutationId = undefined;
+        this.currentRequestClientId = undefined;
+        this.currentRequestClientSeq = undefined;
+        this.currentRequestBaselineSeq = undefined;
+        this.currentMutatorClass = undefined;
+        this.mutationBookkeeping = undefined;
+        this.currentRequestIdentity = undefined;
+        this.currentRequestIp = undefined;
+        this.currentRequestOrigin = undefined;
+        this.currentRequestSampleErrors = undefined;
+        this.currentRequestSystem = false;
+        this.currentRequestTraceparent = undefined;
+        this.currentScannedTables = undefined;
+        this.currentIndexHits = undefined;
+        this.currentStmtSamples = undefined;
+        this.currentStmtSamplesTruncated = undefined;
+        // Drop the cached proxy with the samples map it folds into, so the
+        // finished dispatch's map is not held alive by it.
+        this.instrumentedSql = undefined;
+    }
+
+    /**
+     * Open one `.global()` poll tick: ask the global changelog what moved since
+     * the last tick, and decide whether this tick may use that answer to skip
+     * membership reads.
+     *
+     * Two things force a full pass regardless of what the changelog says. The
+     * first is having no cursor to compare against — a cold instance, or a
+     * backend with CDC disabled, has no basis for "unchanged" and must read. The
+     * second is the resync interval, and it is the honest part of this design: a
+     * `.global()` table can be written by something that is not this deployment,
+     * and such a write leaves no row in our changelog. Trusting the changelog
+     * forever would mean a shape silently frozen against an out-of-band writer,
+     * so the fast path is a bounded skip — at worst {@link ShardDO.GLOBAL_SHAPE_RESYNC_MS}
+     * of staleness for a change we could not see, against the full membership
+     * re-read of every shape on every socket every two seconds that it replaces.
+     *
+     * That same bound now covers a second case worth naming: a shape whose
+     * membership moves WITHOUT a write — a predicate over wall-clock, like
+     * `_creationTime > now - 1h`. It used to converge on the poll interval
+     * because every tick re-read it; it now converges on the resync interval,
+     * because no changelog row marks its table as having moved. Bounded and
+     * intended, but a different guarantee than the one this path used to give.
+     */
+    private async openGlobalPollTick(trace?: TraceRefLike): Promise<GlobalPollTick> {
+        const now = Date.now();
+        // A shape that failed to settle last tick asks for an unconditional pass
+        // regardless of how recently the interval elapsed — see `resyncRequested`.
+        const dueForResync = this.globalResyncRequested || now - this.lastGlobalResyncAt >= ShardDO.GLOBAL_SHAPE_RESYNC_MS;
+
+        this.globalResyncRequested = false;
+
+        if (dueForResync) {
+            this.lastGlobalResyncAt = now;
+        }
+
+        // A cold instance has no cursor to compare against and a resync pass
+        // deliberately ignores one, so in both cases the changelog cannot narrow
+        // this tick — and asking it would bill a `.global()` round trip for an
+        // answer that is discarded. Adopt the cursor without the table list.
+        const cursorOnly = this.globalPollCursor === undefined || dueForResync;
+
+        try {
+            const changed = await this.readGlobalChangedTables(this.globalPollCursor ?? 0, cursorOnly);
+
+            if (changed === undefined) {
+                return new GlobalPollTick();
+            }
+
+            // The changelog was trimmed past this instance's cursor, so the rows
+            // that would have named the tables it needs are gone and `tables`
+            // under-reports. That is indistinguishable from "nothing changed"
+            // unless the floor is checked, and acting on it would freeze every
+            // shape whose table moved inside the swept range. Degrade to the
+            // full pass — the same answer a changelog error already produces,
+            // and self-healing rather than merely bounded.
+            //
+            // `+ 1` because a cursor sitting exactly at `floor - 1` has seen
+            // everything below the floor.
+            const trimmedPastUs = cursorBelowRetainedFloor(changed.floor, this.globalPollCursor ?? 0);
+
+            this.globalPollCursor = changed.cursor;
+
+            return new GlobalPollTick(cursorOnly || trimmedPastUs ? undefined : new Set(changed.tables));
+        } catch (error) {
+            // No visibility is always a safe answer — it degrades this tick to the
+            // full re-read every tick used to do.
+            this.recordShapeError("shape:poll:cdc", error, trace);
+
+            return new GlobalPollTick();
+        }
+    }
+
+    /**
+     * Read a `.global()` shape's membership through this tick's cache.
+     *
+     * The key is the resolved predicate **and the caller's identity**, and the
+     * second half is not redundant with the first. The op-log path can share a
+     * probe on the predicate alone because it reads this shard's own SQLite with
+     * nothing but that predicate — identity has no other channel into the query.
+     * A `.global()` read does not have that property: the backend writer is built
+     * per request from `{ identity, userId }`, so an application's own `d1` /
+     * `hyperdriveGlobal` factory may scope rows by the caller before this code
+     * ever sees them. Two sockets with equal predicates and different identities
+     * can therefore be entitled to different rows, and sharing one read between
+     * them would hand one user the other's.
+     *
+     * What remains shareable is what is genuinely identical: every socket of the
+     * same user (tabs, devices, reconnects), and every socket of an anonymous or
+     * public shape — which is where the fan-out that made this path expensive
+     * lives. An identity or predicate that cannot be stably keyed falls back to
+     * an un-shared read.
+     */
+    private async readGlobalShapeRowsCached(resolved: ResolvedShape, identity: SubscriptionIdentity, tick: GlobalPollTick): Promise<ShapeRow[]> {
+        return tick.rows(globalShapeReadKey(resolved, identity), async () => this.readGlobalShapeRows(resolved, identity));
+    }
+
+    /**
+     * Refresh every `.global()`-table shape held across all live sockets, one
+     * diff-poke per (socket, shape). Returns the number of global shapes still
+     * subscribed so {@link ShardDO.alarm} knows whether to re-arm. Expired sockets
+     * are dropped in passing (mirrors {@link ShardDO.pokeShapeSubscribers}).
+     */
+    private async pollGlobalShapes(trace?: TraceRefLike): Promise<number> {
+        const sockets = [...this.runner.sockets()];
+        let remaining = 0;
+
+        // Resolve who this tick has work for BEFORE opening it. The tick's own
+        // changelog probe is a read against the global backend, and this alarm is
+        // shared with the TTL and external-source tiers — so opening it up front
+        // would bill a `.global()` round-trip on every tick of a shard whose
+        // alarm is armed for something else entirely, which is the cost this
+        // whole path exists to remove.
+        const pending: { attachment: SocketAttachment; ws: ShardSocketLike }[] = [];
+
+        for (const ws of sockets) {
+            if (this.isSocketExpired(ws)) {
+                this.dropExpiredSocket(ws);
+
+                continue;
+            }
+
+            const attachment = this.readAttachment(ws);
+
+            if (attachment.shapes) {
+                pending.push({ attachment, ws });
+            }
+        }
+
+        if (pending.length === 0) {
+            return 0;
+        }
+
+        const tick = await this.openGlobalPollTick(trace);
+
+        for (const { attachment, ws } of pending) {
+            const identity = socketIdentity(attachment);
+
+            // eslint-disable-next-line no-await-in-loop -- per-socket reads are intentionally serialized to bound concurrent global reads per tick
+            remaining += await this.pollSocketGlobalShapes(ws, attachment.shapes ?? {}, identity, attachment.connectionId ?? "", tick, trace);
+        }
+
+        this.globalPoll = recordGlobalPollPass(this.globalPoll, tick.readCount, tick.skipped);
+        this.globalResyncRequested = tick.resyncRequested;
+
+        return remaining;
+    }
+
+    /**
+     * Refresh one socket's `.global()`-table shapes, containing per-shape
+     * failures so a single throw never aborts the poll tick (and with it the
+     * re-arm). Returns the count of global shapes still subscribed on this socket
+     * — a failed `resolveShape`/read keeps its shape counted so the alarm keeps
+     * polling and retries next tick.
+     */
+    private async pollSocketGlobalShapes(
+        ws: ShardSocketLike,
+        shapes: Record<string, ShapeSubscriptionQuery>,
+        identity: SubscriptionIdentity,
+        connectionId: string,
+        tick: GlobalPollTick,
+        trace?: TraceRefLike,
+    ): Promise<number> {
+        let count = 0;
+
+        for (const [subId, shape] of Object.entries(shapes)) {
+            let resolved: ResolvedShape | undefined;
+
+            try {
+                resolved = this.resolveShape(shape.name, shape.args ?? {}, identity);
+            } catch (error) {
+                count += 1;
+                this.recordShapeError(`shape:poll:${subId}`, error, trace);
+
+                continue;
+            }
+
+            if (!resolved?.global) {
+                continue;
+            }
+
+            count += 1;
+
+            // Nothing wrote to this shape's table since the last tick, and this
+            // tick is not a resync — so its membership cannot have moved and the
+            // diff would be empty. Skipping is the whole point: the steady state
+            // of a `.global()` shape is "unchanged", and it used to cost a full
+            // membership drain per socket to establish that.
+            if (!tick.shouldRead(resolved.table)) {
+                continue;
+            }
+
+            try {
+                // eslint-disable-next-line no-await-in-loop -- per-shape D1 reads serialized within a socket to bound concurrency
+                await this.refreshGlobalShape(ws, subId, resolved, identity, connectionId, tick);
+            } catch (error) {
+                // This tick's cursor has already moved past the rows that marked
+                // the table changed, so a later tick would skip this shape rather
+                // than retry it. Ask for one unconditional pass instead.
+                tick.requestResync();
+                this.recordShapeError(`shape:poll:${subId}`, error, trace);
+            }
+        }
+
+        return count;
+    }
+
+    /**
+     * Send one poke (`pokeStart` → `pokePart` per shape → `pokeEnd`) to a socket.
+     * All parts apply atomically at `pokeEnd`. Returns `true` when every frame was
+     * handed to the socket, `false` when a send threw mid-poke (the socket closed)
+     * — callers must NOT advance their shape baselines on a `false` so the client
+     * re-receives the rows on its next flush/reconnect instead of losing them.
+     *
+     * A `false` can leave a `pokeStart` on the wire with no `pokeEnd` behind it
+     * (the throw is per frame). That is safe by construction on the client: parts
+     * are buffered and applied only at `pokeEnd`, so an abandoned poke leaves the
+     * view untouched, and `PokeAssembler.start` (packages/client/src/shape-state.ts) evicts the oldest buffer once the map
+     * exceeds its cap — the abandoned ones are always the oldest.
+     */
+    private sendPoke(
+        ws: ShardSocketLike,
+        parts: ReadonlyArray<ShapePokePart>,
+        checkpoint: number,
+        epoch: string | undefined,
+        baseCheckpoint: number | undefined,
+    ): boolean {
+        this.pokeSequence += 1;
+        const pokeId = `poke-${String(this.pokeSequence)}`;
+        const frames = buildPokeFrames(parts, {
+            baseCheckpoint,
+            checkpoint,
+            epoch,
+            lastMutationId: this.socketClientWatermark(this.readAttachment(ws)),
+            pokeId,
+        });
+
+        try {
+            for (const frame of frames) {
+                ws.send(frame);
+            }
+
+            return true;
+        } catch {
+            /* socket may have closed mid-poke; the client re-seeds on reconnect */
+            return false;
+        }
+    }
+
+    /**
+     * The recipient client's `__client_watermark` for stamping a poke's
+     * `lastMutationId`, or `undefined` when the socket announced no `clientId`
+     * (a client that doesn't use custom mutators — nothing to drop an overlay
+     * for). Read off the attachment so it survives hibernation.
+     */
+    private socketClientWatermark(attachment: SocketAttachment): number | undefined {
+        const { clientId } = attachment;
+
+        if (clientId === undefined) {
+            return undefined;
+        }
+
+        // Scope by the socket's verified identity, matching how the dispatch path
+        // advanced the watermark (`currentRequestUserId`); the upgrade resolves
+        // both from the same `x-lunora-userid`.
+        try {
+            return readClientWatermark(this.sql as SqlExec, attachment.userId ?? "", clientId);
+        } catch {
+            // Missing table / stub handle — no watermark to echo.
+            return undefined;
+        }
+    }
+
+    /**
+     * Record a shape's poke baseline cursor on a socket (creating the
+     * per-socket map lazily), and write it through to the durable
+     * `__shape_poke_cursor` table so it survives hibernation. Called only on
+     * a delivered/advanced poke (never on a computed-but-unsent diff) — see
+     * the call sites in {@link ShardDO.pokeShapeSubscribers}. Takes
+     * `connectionId` from the caller rather than re-deserializing the
+     * attachment (`deserializeAttachment()` is a structured-clone read) —
+     * every caller already holds it from resolving the socket's shapes.
+     */
+    private recordShapeMemo(
+        ws: ShardSocketLike,
+        connectionId: string,
+        subId: string,
+        cursor: number,
+        options: { carriedRows: boolean; pending?: ShapePokeCursorRow[] },
+    ): void {
+        const { carriedRows } = options;
+        const memos = socketMap(this.shapeMemos, ws);
+        // `delivered` only moves when this poke actually put rows on the wire for
+        // the shape — that, not `cursor`, is where the client's own cursor sits.
+        // See {@link ShapeMemo.delivered}.
+        const delivered = carriedRows ? cursor : memos.get(subId)?.delivered;
+
+        // The replacement drops `owed` (see {@link ShapeMemo.owed}), which is the
+        // point: both callers advance `cursor` past the range that was owed, either
+        // by delivering it or by finding it genuinely empty.
+        memos.set(subId, { cursor, ...(delivered === undefined ? {} : { delivered }) });
+        // A fan-out passes `pending` so one flush upserts every socket's baseline
+        // instead of each poke issuing its own statement. Everything else writes
+        // straight through: making buffering the default would mean every future
+        // caller has to remember to flush, and a forgotten flush loses the
+        // hibernation baseline silently.
+        if (options.pending === undefined) {
+            this.saveShapePokeCursor(connectionId, subId, cursor);
+        } else if (connectionId !== "") {
+            options.pending.push({ connectionId, cursor, subId });
+        }
+    }
+
+    /**
+     * Flag a shape as owing rows it computed but never delivered, so the next
+     * flush diffs it unconditionally instead of force-advancing its cursor past
+     * the range. See {@link ShapeMemo.owed}.
+     *
+     * Deliberately does NOT create a memo entry when there is none: a missing
+     * entry already forces the same unconditional pass in
+     * {@link ShardDO.collectShapePokeParts}, and inventing a cursor here would be
+     * guessing at a baseline the durable row can answer for real.
+     */
+    private markShapeOwed(ws: ShardSocketLike, subId: string): void {
+        const memo = this.shapeMemos.get(ws)?.get(subId);
+
+        if (memo !== undefined) {
+            memo.owed = true;
+        }
+    }
+
+    /**
+     * Read a socket's poke baseline cursor for a shape: the hot in-memory
+     * {@link ShardDO.shapeMemos} cache, falling back to the durable
+     * `__shape_poke_cursor` row on a miss (a cold socket after a hibernation
+     * eviction), then the shape's subscribe-time `sinceSeq` (passed in by the
+     * caller, which already holds the attachment this came from — see
+     * {@link ShardDO.recordShapeMemo}), and finally `0`. Every fallback
+     * degrades DOWNWARD only — a baseline that is too high would silently
+     * skip rows a client never saw, while too low is merely a wasted rescan
+     * of a range the client already has. The `sinceSeq` rung is a raw
+     * client-supplied wire value (unlike `stored`, which this shard wrote
+     * itself), so it is clamped against the current high-watermark: after a
+     * PITR restore — the same rollback {@link ShardDO.evaluateResume} guards
+     * against — a `sinceSeq` above the cursor must degrade to `0`, not be
+     * trusted as a baseline. A durable/`sinceSeq` hit repopulates the
+     * in-memory cache so later reads this wake hit memory.
+     */
+    private readShapeMemoCursor(ws: ShardSocketLike, connectionId: string, subId: string, sinceSeq: number | undefined): number {
+        const cached = this.shapeMemos.get(ws)?.get(subId)?.cursor;
+
+        if (cached !== undefined) {
+            return cached;
+        }
+
+        const stored = this.loadShapePokeCursor(connectionId, subId);
+        const fallback = stored ?? sinceSeq ?? 0;
+        const baseline = fallback > (this.currentCdcCursor() ?? 0) ? 0 : fallback;
+
+        socketMap(this.shapeMemos, ws).set(subId, { cursor: baseline });
+
+        return baseline;
+    }
+
+    /**
+     * Load a durable shape poke-baseline cursor from SQLite, or `undefined`
+     * when none is stored / the durable path is unavailable. A stub `sql`
+     * handle (unit harness), a missing table, or a connection-id-less socket
+     * degrades to "nothing stored" rather than throwing.
+     */
+    private loadShapePokeCursor(connectionId: string, subId: string): number | undefined {
+        if (connectionId === "") {
+            return undefined;
+        }
+
+        try {
+            return readShapePokeCursor(this.sql as SqlExec, connectionId, subId);
+        } catch {
+            return undefined;
+        }
+    }
+
+    /**
+     * Persist a socket's shape poke-baseline cursor to SQLite so it survives
+     * hibernation. A no-op for a connection-id-less socket (never went
+     * through the lifecycle-aware upgrade, e.g. a unit harness) or a stub
+     * `sql` handle / missing table — degrades to in-memory-only behavior
+     * rather than failing the poke.
+     */
+    private saveShapePokeCursor(connectionId: string, subId: string, cursor: number): void {
+        if (connectionId === "") {
+            return;
+        }
+
+        try {
+            writeShapePokeCursor(this.sql as SqlExec, connectionId, subId, cursor);
+        } catch {
+            /* stub sql / missing table — degrade to in-memory cache only */
+        }
     }
 
     /**
@@ -5309,16 +13741,21 @@ abstract class ShardDO {
      * cached value but the server still needs a baseline so the next
      * write-flush can diff against it.
      */
-    private seedSubscriptionMemo(ws: WebSocket, subId: string, outcome: SubscriptionOutcome): void {
-        let memos = this.subMemos.get(ws);
+    private seedSubscriptionMemo(ws: ShardSocketLike, subId: string, outcome: SubscriptionOutcome, generation: number): void {
+        const memos = socketMap(this.subMemos, ws);
 
-        if (!memos) {
-            memos = new Map<string, SubscriptionMemo>();
-            this.subMemos.set(ws, memos);
+        // A refresh that started after this seed already recorded a newer baseline.
+        if ((memos.get(subId)?.generation ?? -1) > generation) {
+            return;
         }
 
-        // eslint-disable-next-line unicorn/no-null -- mirrors pushSubscriptionData: an undefined result serializes to JSON null so the baseline matches the wire form
-        memos.set(subId, { lastJson: JSON.stringify(outcome.result ?? null), tables: outcome.tables });
+        memos.set(subId, {
+            generation,
+            // eslint-disable-next-line unicorn/no-null -- mirrors pushSubscriptionData: an undefined result serializes to JSON null so the baseline matches the wire form
+            lastJson: JSON.stringify(encodeWire(outcome.result ?? null)),
+            ranges: outcome.ranges,
+            tables: outcome.tables,
+        });
     }
 
     /**
@@ -5327,82 +13764,153 @@ abstract class ShardDO {
      * so dependency tracking stays current even when the value is unchanged.
      *
      * When the result is a diffable list (Convex-parity live-pagination, gap
-     * #20), emit one `{type:"delta"}` frame per changed row instead of a full
-     * `{type:"data"}` snapshot — see {@link subscriptionListDeltas} for the
-     * five conditions under which deltas are safe. The first send (and any
-     * non-list / large-change result) falls back to the snapshot. The memo is
-     * always advanced to the new `lastJson`/`tables` regardless of path.
+     * #20), the push can go out as one `{type:"delta"}` frame per changed row
+     * instead of a full `{type:"data"}` snapshot. Which of the two is sent is
+     * `subscriptionFrames`' call, made by rendering both and measuring them —
+     * this method just sends what it is handed. The memo is always advanced to
+     * the new `lastJson`/`tables` regardless of path.
      *
      * `cursor` (when supplied) is the `__cdc_log` high-watermark this frame
      * covers; it is appended to the emitted `data`/`delta` JSON so a client can
      * persist its resume position and replay it as `sinceSeq` on reconnect
      * (Pillar 1b). Omitted on shards without CDC, keeping the wire byte-identical
      * to the pre-cursor format.
+     *
+     * `delivery` carries the facts that depend on the SOCKET and not on the
+     * subscription — read once by the caller and passed in, never recomputed
+     * here. A single write-flush calls this method many times for one socket
+     * (once per affected subscription — see `refreshOne`), and both fields are
+     * identical across those calls: `clientWatermark` would otherwise be a
+     * redundant `SELECT … FROM __client_watermark` per subscription, and
+     * `pageDeltas` a redundant attachment read.
      */
-    private pushSubscriptionData(ws: WebSocket, subId: string, outcome: SubscriptionOutcome, cursor?: number, epoch?: string): void {
-        let memos = this.subMemos.get(ws);
-
-        if (!memos) {
-            memos = new Map<string, SubscriptionMemo>();
-            this.subMemos.set(ws, memos);
-        }
-
-        const cursorSuffix = cdcSuffix(cursor, epoch);
-
-        // eslint-disable-next-line unicorn/no-null -- WS frame payload: an undefined result serializes to JSON null so the delta frame carries an explicit value
-        const json = JSON.stringify(outcome.result ?? null);
+    private pushSubscriptionData(
+        ws: ShardSocketLike,
+        subId: string,
+        outcome: SubscriptionOutcome,
+        stamp: { cursor: number | undefined; epoch: string | undefined; generation: number },
+        delivery: SocketDelivery,
+    ): void {
+        const memos = socketMap(this.subMemos, ws);
         const existing = memos.get(subId);
 
+        // Newer value wins. A run that began before the write that produced the
+        // current baseline read older state; sending it would roll the client
+        // back to a value a later write already replaced (and stamp a cursor on
+        // it). The baseline's own run already delivered the newer value.
+        if (existing !== undefined && stamp.generation < existing.generation) {
+            return;
+        }
+
+        const { cursor, epoch, generation } = stamp;
+        const cursorSuffix = cdcSuffix(cursor, epoch);
+        const { clientWatermark, pageDeltas } = delivery;
+
+        // Wire-encode the result so a `bytes`/`bigint` column survives the frame
+        // (raw `JSON.stringify` drops a buffer to `{}` / throws on a bigint). A
+        // pure-JSON result encodes byte-identically, so this baseline + `data`
+        // frame stay unchanged for the common case, and the delta path (which
+        // encodes its next rows too) diffs against a consistently-encoded baseline.
+        // eslint-disable-next-line unicorn/no-null -- WS frame payload: an undefined result serializes to JSON null so the delta frame carries an explicit value
+        const json = JSON.stringify(encodeWire(outcome.result ?? null));
+
         if (existing?.lastJson === json) {
+            existing.generation = generation;
             existing.tables = outcome.tables;
+            // `ranges` legitimately shifts run-to-run even when the result is
+            // byte-identical (a recency-windowed query is the obvious case) — it's
+            // recomputed per execution from the index slices actually touched, not
+            // derived from the result. Leaving it stale here would violate
+            // `subscription-range-gate`'s "assume touched on any uncertainty" law:
+            // a later write landing in the REFRESHED range but outside the STALE
+            // one would never re-trigger this subscription. Refresh it every run,
+            // suppressed or not — matches the non-suppressed branch below.
+            existing.ranges = outcome.ranges;
+
+            // The result is byte-identical to the last frame, so no data/delta
+            // frame goes out (frame suppression). But a confirmed write whose
+            // authoritative result did NOT change this query still committed at
+            // this cursor, and BOTH overlay mechanisms need the cursor to drop
+            // their pending optimistic state, or it sticks forever with no frame:
+            //   - a `@lunora/db` custom-mutator client (announced a `clientId`)
+            //     advances its checkpoint gate off `lastMutationId`;
+            //   - a plain `useQuery` client with a per-call `optimistic` layer
+            //     drops it once `cursor >= commitCursor`.
+            // So emit a lightweight `settled` frame (carrying the cursor/epoch)
+            // unconditionally, with `lastMutationId` only when this socket has a
+            // watermark. An old client ignores the unknown frame.
+            const watermarkField = clientWatermark === undefined ? "" : `,"lastMutationId":${String(clientWatermark)}`;
+
+            trySendFrame(ws, `{"type":"settled","id":${JSON.stringify(subId)}${watermarkField}${cursorSuffix}}`);
 
             return;
         }
 
-        // Try an incremental delta push when there's a prior list to diff
-        // against. `undefined` => not diffable, fall back to the snapshot below.
-        // `deltaFrames` receives the pre-serialized `delta` body for each delta
-        // (finding #6) so we never re-`JSON.stringify` a row that the diff has
-        // already fingerprinted.
-        const deltaFrames: string[] = [];
-        const deltas =
-            existing === undefined
-                ? undefined
-                : subscriptionListDeltas(existing.lastJson, outcome.result, outcome.tables.values().next().value ?? "", deltaFrames);
+        // Row deltas or the full snapshot — `subscriptionFrames` renders both and
+        // returns whichever is smaller on the wire, so the frame layout and the
+        // choice between the two stay in one place (this method has no business
+        // re-deriving the delta envelope just to size it). `existing?.lastJson`
+        // is the last value that actually LEFT the socket, so a first send — or
+        // one whose predecessor was dropped — has no baseline and gets the
+        // snapshot. `clientWatermark` rides on every frame either way, so the
+        // client's checkpoint gate can trust what THIS frame's rows reflect
+        // instead of a provisional RPC-ack that can race ahead of it (plan 266
+        // finding d).
+        const frames = subscriptionFrames({
+            cursorSuffix,
+            lastMutationId: clientWatermark,
+            nextResult: outcome.result,
+            pageDeltas,
+            previousJson: existing?.lastJson,
+            snapshotJson: json,
+            subId,
+            // First REAL dependency, never the unvouchable sentinel. `tables` is
+            // insertion-ordered, so a query that read `ctx.kv` before touching a
+            // table would otherwise put `UNVOUCHABLE_DEP` on the wire as this
+            // frame's `table` — an internal name leaking to every client and all
+            // eight SDK ports. The field is a structural guard rather than a
+            // routing key, so a wrong value is inert, but an internal marker is
+            // not something to publish and then rely on nobody reading.
+            table: [...outcome.tables].find((dep) => dep !== UNVOUCHABLE_DEP) ?? "",
+        });
 
-        memos.set(subId, { lastJson: json, tables: outcome.tables });
+        // At-least-once delivery: advance the diff BASELINE (`lastJson`) only once
+        // EVERY frame for this value has left the socket. `ws.send` throws when the
+        // socket has closed or its outbound buffer is gone, and a partial delta run
+        // must keep the baseline at the last fully-delivered value so the next flush
+        // re-diffs the whole change (keyed list deltas are idempotent on replay, so
+        // re-sending an already-applied row is harmless). Advancing unconditionally
+        // would diff the NEXT value against one the client never received, silently
+        // losing that update until it reconnected. `.map` before `.every` on purpose:
+        // every frame is attempted, and only then is the verdict taken. `tables`
+        // always advances so dependency tracking stays accurate even on failure.
+        const delivered = frames.map((frame) => trySendFrame(ws, frame)).every(Boolean);
 
-        if (deltas !== undefined) {
-            const idJson = JSON.stringify(subId);
-
-            for (const deltaBody of deltaFrames) {
-                try {
-                    ws.send(`{"type":"delta","id":${idJson},"delta":${deltaBody}${cursorSuffix}}`);
-                } catch {
-                    /* socket may have been closed mid-flush */
-                }
-            }
-
-            return;
-        }
-
-        try {
-            ws.send(`{"type":"data","id":${JSON.stringify(subId)},"data":${json}${cursorSuffix}}`);
-        } catch {
-            /* socket may have been closed between checks */
-        }
+        memos.set(subId, {
+            // Tracks `lastJson`: an undelivered value leaves the baseline, and so
+            // its generation, where the last delivered one put it.
+            generation: delivered ? generation : (existing?.generation ?? generation),
+            lastJson: delivered ? json : (existing?.lastJson ?? UNDELIVERED_BASELINE),
+            ranges: outcome.ranges,
+            tables: outcome.tables,
+        });
     }
 
     /**
      * Gate the upgrade request against two complementary controls:
      *
-     * 1. Origin allowlist via `env.LUNORA_ALLOWED_ORIGINS` (comma-separated).
-     * When unset, any origin is accepted — convenient for local dev,
-     * not suitable for production.
+     * 1. Origin allowlist via `env.LUNORA_ALLOWED_ORIGINS` (comma-separated,
+     * a single `*` permitting any origin). When unset, any origin is
+     * accepted — convenient for local dev, not suitable for production.
+     * The wildcard must be honoured here because the worker's CORS layer
+     * honours it (`@lunora/runtime`'s `parseEnvCors`): reading the same
+     * variable more strictly took every WebSocket upgrade down with a bare
+     * 403 on a configuration the CORS side documents as supported, and a
+     * browser sends its real `Origin`, never `*`, so nothing else matched.
      * 2. Bearer token via `env.LUNORA_WS_BEARER`. When set, the upgrade
      * must present a matching token. We accept either an
-     * `Authorization: Bearer &lt;token>` header (preferred) or a
-     * `?token=&lt;token>` query parameter (the only escape hatch for
+     * `Authorization: Bearer <token>` header (preferred) or a
+     * `?token=<token>` query parameter (the only escape hatch for
      * browsers, which can't customise headers on the WebSocket
      * constructor). The match runs in constant time to avoid leaking
      * the token via response-timing differences.
@@ -5411,10 +13919,15 @@ abstract class ShardDO {
      * server logs, browser history, and `Referer` headers on any
      * subresource the upgrade page loads after the handshake. Use a
      * short-lived rotating token in production rather than a long-lived
-     * secret.
+     * secret — for the ADMIN credential specifically, the worker mints one
+     * (`POST /_lunora/admin/ws-token`) and {@link isAdminSocket} accepts it, so
+     * the master `LUNORA_ADMIN_TOKEN` never rides the URL.
+     *
+     * Async because the admin fallback ({@link isAdminSocket}) verifies the
+     * ephemeral sub-token with WebCrypto HMAC.
      */
-    private isUpgradeAllowed(request: Request): boolean {
-        const env = (this.env ?? {}) as { LUNORA_ALLOWED_ORIGINS?: string; LUNORA_WS_BEARER?: string };
+    private async isUpgradeAllowed(request: Request): Promise<boolean> {
+        const env = (this.env ?? {}) as { LUNORA_ADMIN_TOKEN?: string; LUNORA_ALLOWED_ORIGINS?: string; LUNORA_WS_BEARER?: string };
         const allowedOrigins = env.LUNORA_ALLOWED_ORIGINS;
 
         if (allowedOrigins && allowedOrigins.trim() !== "") {
@@ -5424,12 +13937,14 @@ abstract class ShardDO {
                 return false;
             }
 
-            const list = allowedOrigins
-                .split(",")
-                .map((entry) => entry.trim())
-                .filter((entry) => entry.length > 0);
+            const list = new Set(
+                allowedOrigins
+                    .split(",")
+                    .map((entry) => entry.trim())
+                    .filter((entry) => entry.length > 0),
+            );
 
-            if (!list.includes(origin)) {
+            if (!list.has("*") && !list.has(origin)) {
                 return false;
             }
         }
@@ -5438,12 +13953,24 @@ abstract class ShardDO {
 
         if (expectedBearer && expectedBearer.length > 0) {
             const supplied = this.suppliedWsToken(request);
+            const adminToken = env.LUNORA_ADMIN_TOKEN;
 
-            // The admin token is accepted as an alternate credential so a
-            // studio can open its socket even when `LUNORA_WS_BEARER` gates
-            // ordinary subscribers. The socket is flagged admin separately (see
-            // `isAdminSocket`); matching the bearer alone never grants it.
-            if (!supplied || (!constantTimeEqual(supplied, expectedBearer) && !this.isAdminSocket(request))) {
+            // The master token in `?token=` is refused even when it matches the bearer:
+            // the query string is where it leaks (see `isAdminSocket`).
+            const masterInQuery =
+                supplied !== undefined &&
+                adminToken !== undefined &&
+                adminToken.length > 0 &&
+                extractBearerToken(request.headers.get("authorization")) === undefined &&
+                constantTimeEqual(supplied, adminToken);
+
+            // The admin credential is accepted as an alternate so a studio can open
+            // its socket even when `LUNORA_WS_BEARER` gates ordinary subscribers: a
+            // minted ephemeral sub-token (header or `?token=`), or the master token
+            // in the `Authorization` header only. The socket is flagged admin
+            // separately (see `isAdminSocket`); matching the bearer alone never
+            // grants it.
+            if (masterInQuery || !supplied || (!constantTimeEqual(supplied, expectedBearer) && !(await this.isAdminSocket(request)))) {
                 return false;
             }
         }
@@ -5469,22 +13996,85 @@ abstract class ShardDO {
     }
 
     /**
-     * Whether the upgrade presented a token matching `LUNORA_ADMIN_TOKEN`,
-     * constant-time compared. Closed (returns `false`) when the admin token is
-     * unset, mirroring `isAdminAuthorized` for the HTTP path so admin
-     * streaming is opt-in rather than exposed by default.
+     * Whether the upgrade presented an admin credential. Two shapes are admitted:
+     * a short-lived sub-token the worker minted (`POST /_lunora/admin/ws-token`)
+     * from either the `Authorization` header or the `?token=` query parameter
+     * (HMAC-verified statelessly here, since both isolates hold the master token
+     * in `env`), and the master `LUNORA_ADMIN_TOKEN` from the `Authorization`
+     * header only (constant-time compared). Browsers can't set that header on a
+     * WS upgrade, so the master token never rides a URL.
+     *
+     * The master token in `?token=` is never admitted: the query string is exactly
+     * where it leaks (access logs / history / `Referer`). Closed (resolves `false`)
+     * when the admin token is unset, mirroring `isAdminAuthorized` for the HTTP
+     * path so admin streaming is opt-in rather than exposed by default.
      */
-    private isAdminSocket(request: Request): boolean {
-        const env = (this.env ?? {}) as { LUNORA_ADMIN_TOKEN?: string };
-        const adminToken = env.LUNORA_ADMIN_TOKEN;
+    private async isAdminSocket(request: Request): Promise<boolean> {
+        const adminToken = ((this.env ?? {}) as { LUNORA_ADMIN_TOKEN?: string }).LUNORA_ADMIN_TOKEN;
 
         if (!adminToken || adminToken.length === 0) {
             return false;
         }
 
-        const supplied = this.suppliedWsToken(request);
+        // Read the header once: it is the first choice for the token, and the only
+        // place the master token is admitted from.
+        const headerBearer = extractBearerToken(request.headers.get("authorization"));
+        const supplied = headerBearer ?? new URL(request.url).searchParams.get("token") ?? undefined;
 
-        return supplied !== undefined && constantTimeEqual(supplied, adminToken);
+        if (supplied === undefined) {
+            return false;
+        }
+
+        if (await verifyWsAdminToken(adminToken, supplied)) {
+            return true;
+        }
+
+        return headerBearer !== undefined && constantTimeEqual(headerBearer, adminToken);
+    }
+
+    /**
+     * Fingerprint of the admin token this DO holds RIGHT NOW, or `undefined`
+     * when none is configured. Memoised per token value: the derivation is an
+     * HMAC and this is consulted once per socket per write flush.
+     */
+    private async currentAdminBinding(): Promise<string | undefined> {
+        const token = (this.env as { LUNORA_ADMIN_TOKEN?: string } | undefined)?.LUNORA_ADMIN_TOKEN;
+
+        if (token === undefined || token.length === 0) {
+            return undefined;
+        }
+
+        if (this.adminBindingMemo?.token !== token) {
+            this.adminBindingMemo = { binding: adminSocketBinding(token), token };
+        }
+
+        return this.adminBindingMemo.binding;
+    }
+
+    /**
+     * Whether `attachment` still carries a LIVE admin authorization.
+     *
+     * The upgrade gate runs once and the socket then lives for hours, so the
+     * stamped `admin` flag alone is an authorization that can never be revoked:
+     * clearing or rotating `LUNORA_ADMIN_TOKEN` shuts the HTTP admin plane on
+     * the next request (`isAdminAuthorized` fails closed) and used to shut
+     * nothing here — a 60-second sub-token bought 60 seconds to OPEN a socket
+     * that then served `runSql`/`readTablePage`/`getLogs` output for its whole
+     * life. Re-deriving the fingerprint from `env` makes rotation a revocation
+     * on this plane too.
+     *
+     * Fails closed on every uncertain input: no configured token, no stamped
+     * binding, or a mismatch. Both sides are server-derived (the client supplies
+     * neither), so an exact comparison is the right one.
+     */
+    private async attachmentAdminAuthorized(attachment: SocketAttachment): Promise<boolean> {
+        if (attachment.admin !== true) {
+            return false;
+        }
+
+        const current = await this.currentAdminBinding();
+
+        return current !== undefined && attachment.adminBinding === current;
     }
 
     /**
@@ -5507,16 +14097,72 @@ abstract class ShardDO {
         setter.call(this.state, new WebSocketRequestResponsePair(WS_KEEPALIVE_PING, WS_KEEPALIVE_PONG));
     }
 
-    private handleWebSocketUpgrade(request: Request): Response {
-        if (!this.isUpgradeAllowed(request)) {
+    /**
+     * Route the non-RPC requests `fetch` handles before the shard-local RPC
+     * endpoint: a WebSocket upgrade, and the internal `/_lunora/relay` owner↔relay
+     * control channel (never reachable by a client — the runtime forwards only
+     * worker-internal traffic there). Returns `undefined` for an RPC request, which
+     * `fetch` then dispatches.
+     * @returns the routed response, or `undefined` when this is an RPC request
+     */
+    private async routeNonRpc(url: URL, request: Request): Promise<Response | undefined> {
+        if (url.pathname === "/_lunora/relay" && request.method === "POST") {
+            // The relay tier is inert on an unnamed (single-DO) DO — nothing forwards
+            // control frames there, so a 404 is the honest answer.
+            return this.relay ? await this.relay.handleControl(request) : new Response("relay tier inactive", { status: 404 });
+        }
+
+        // The replica follow channel: a replica pulls its owner's changelog (or
+        // takes a bootstrap snapshot) here. Authenticated by the same
+        // `LUNORA_RELAY_SECRET` HMAC as the relay channel, and refused by a DO
+        // that is itself a replica.
+        if (url.pathname === "/_lunora/replica" && request.method === "POST") {
+            return handleReplicaControl(this.replicaOwnerHost, request);
+        }
+
+        // Promotion probe (plan 075 Phase 2): the runtime asks the owner how many
+        // relays to spread new connections across before a WS upgrade. Internal —
+        // reachable only via the runtime's worker-side forward, returns just a count.
+        if (url.pathname === "/_lunora/route" && request.method === "GET") {
+            return jsonResponse({ relayCount: this.relay?.relayCount() ?? 0 });
+        }
+
+        // Batch dispatch (plan 088): each entry replays through the single-call
+        // `/rpc` path (see `handleBatchRpc`), so idempotency + watermark ordering
+        // are preserved without duplicating the dispatch core.
+        if (url.pathname === "/rpc-batch" && request.method === "POST") {
+            return this.handleBatchRpc(request);
+        }
+
+        if (request.headers.get("Upgrade") === "websocket") {
+            return this.handleWebSocketUpgrade(request);
+        }
+
+        return undefined;
+    }
+
+    private async handleWebSocketUpgrade(request: Request): Promise<Response> {
+        // A replica has no live pipeline: its rows advance only when a READ
+        // happens to trigger a catch-up, so a subscription served from here
+        // would be a live query that mostly is not. Nothing routes an upgrade to
+        // a replica name — only a hand-written `?shard=` can reach this — and it
+        // is refused for the same reason the dispatch gate refuses writes.
+        if (this.replica !== undefined) {
+            return new Response("replica does not serve subscriptions", { status: 421 });
+        }
+
+        if (!(await this.isUpgradeAllowed(request))) {
             return new Response("Forbidden", { status: 403 });
         }
+
+        // Resolve the admin flag BEFORE accepting the socket: the (async)
+        // sub-token HMAC verify must not sit between `acceptWebSocket` and the
+        // attachment stamp, or an early frame could race an unstamped socket.
+        const admin = await this.isAdminSocket(request);
 
         const pair = new WebSocketPair();
         const client = pair[0];
         const server = pair[1];
-
-        this.state.acceptWebSocket(server);
 
         // Capture the verified identity the runtime forwarded on the upgrade
         // (`resolveIdentity` wired into the WS upgrade) and mint a stable
@@ -5524,22 +14170,47 @@ abstract class ShardDO {
         // hibernation and can be replayed to the connection-lifecycle hooks at
         // connect/close — including `webSocketClose`, when the socket carries no
         // request of its own.
-        const userId = request.headers.get("x-lunora-userid") ?? undefined;
+        const userId = decodeUserIdHeader(request.headers.get("x-lunora-userid"));
         const identity = parseIdentityHeader(request.headers.get("x-lunora-identity"));
-        // Optional credential expiry (epoch ms) forwarded by the runtime. A
-        // malformed value is ignored (the socket simply never auto-expires).
-        const expiresAtRaw = Number(request.headers.get("x-lunora-identity-exp"));
-        const expiresAt = Number.isFinite(expiresAtRaw) && expiresAtRaw > 0 ? expiresAtRaw : undefined;
+        const expiresAt = decodeIdentityExpiryHeader(request.headers.get("x-lunora-identity-exp"));
+        // The subscriber's IP, forwarded on the upgrade exactly as it is on
+        // `/rpc`. Captured HERE and nowhere else: the upgrade is the only request
+        // this socket ever makes, and every read it later drives is deferred, so
+        // the shared per-request field is either empty (a `subscribe` frame
+        // carries no request) or belongs to a concurrent writer. An IP is tens of
+        // bytes against the attachment's 16 KiB ceiling.
+        const ip = request.headers.get("x-lunora-client-ip") ?? undefined;
+
+        // Fingerprint of the token that authorized this socket, so a later
+        // rotation of `LUNORA_ADMIN_TOKEN` revokes it rather than leaving a
+        // socket whose one-shot upgrade check can never be re-run. Only for an
+        // admin socket: an ordinary one has nothing to revoke, and the
+        // attachment is a scarce 16 KiB budget.
+        const adminBinding = admin ? await this.currentAdminBinding() : undefined;
 
         // Stamp admin authorization onto the socket at upgrade so later
         // `__lunora_admin__:*` subscribe envelopes (which carry no credential of
-        // their own) can be gated without re-checking a token per message.
-        (server as HibernatableWebSocket).serializeAttachment?.({
-            admin: this.isAdminSocket(request),
+        // their own) can be gated without re-verifying a presented token per
+        // message — `attachmentAdminAuthorized` compares the fingerprint above
+        // instead, so the flag is re-checked but the credential is not replayed.
+        //
+        // Accepted through `SocketHost`, not `state.acceptWebSocket` directly, so
+        // the socket carries the host's accept-time id tag. That tag is what makes
+        // `SocketHost.idFor` durable across hibernation and what lets `handleFor`
+        // answer in O(1) after a wake instead of scanning the socket set —
+        // accepting behind the host's back would leave both to fall back.
+        //
+        // Accept and stamp are one call for the same reason they were adjacent
+        // before: the runtime only tracks attachments for sockets it has accepted,
+        // and no frame can arrive against an unstamped socket in between.
+        this.socketHost.accept(server, {
+            admin,
             connectionId: crypto.randomUUID(),
             subs: {},
+            ...(adminBinding === undefined ? {} : { adminBinding }),
             ...(expiresAt === undefined ? {} : { expiresAt }),
             ...(identity === undefined ? {} : { identity }),
+            ...(ip === undefined ? {} : { ip }),
             ...(userId === undefined ? {} : { userId }),
         } satisfies SocketAttachment);
 
@@ -5562,27 +14233,177 @@ abstract class ShardDO {
         }
     }
 
-    /** Whether `ws` carries a credential whose expiry (stamped at upgrade) is now past. */
-    private isSocketExpired(ws: WebSocket): boolean {
-        const { expiresAt } = this.readAttachment(ws);
-
-        return typeof expiresAt === "number" && Date.now() >= expiresAt;
+    /**
+     * Whether `ws` carries a credential whose expiry (stamped at upgrade) is
+     * now past. Delegates to the shared boundary check `@lunora/agent`'s
+     * voice DO uses for the same decision, so the two DOs can never disagree
+     * about it.
+     */
+    private isSocketExpired(ws: ShardSocketLike): boolean {
+        return isIdentityExpired(this.readAttachment(ws).expiresAt);
     }
 
     /**
-     * Send the `TOKEN_EXPIRED` error frame and close the socket with code 4001 so
-     * the client distinguishes an expired-credential drop from an ordinary one
-     * and refreshes before reconnecting. Best-effort: a throw (socket already
-     * gone) is swallowed — this must never escape the hibernation handlers.
+     * Drop an expired-credential socket via the shared `TOKEN_EXPIRED`/`4001`
+     * helper `@lunora/agent`'s voice DO also calls, so both DOs send the
+     * client-facing wire shape from one place.
      */
     // eslint-disable-next-line class-methods-use-this -- cohesive socket helper grouped with isSocketExpired; operates only on the passed socket
-    private dropExpiredSocket(ws: WebSocket): void {
-        try {
-            ws.send(JSON.stringify({ code: "TOKEN_EXPIRED", error: { code: "TOKEN_EXPIRED", message: "authentication token expired" }, type: "error" }));
-            ws.close(4001, "token_expired");
-        } catch {
-            /* socket already gone */
+    private dropExpiredSocket(ws: ShardSocketLike): void {
+        dropExpiredCredentialSocket(ws);
+    }
+
+    /**
+     * Decide whether this socket may join (`"subscribe"`) or broadcast to
+     * (`"send"`) a whisper `topic`, by running every registered `onWhisper`
+     * authorizer under the socket's own verified identity.
+     *
+     * **No registered authorizer allows everything.** That is the historical
+     * behaviour — a whisper topic's only boundary was the shard — and it is kept
+     * as the default so an app that never declared one is unaffected. Declaring
+     * one governs every topic on the shard; route on the topic name inside the
+     * handler if some namespaces should stay open.
+     *
+     * **It fails closed.** Every authorizer must return a literal `true`; the
+     * first that does not — or that throws — denies, and a throw is logged with
+     * the authorizer's path. A broken check must not open a topic.
+     *
+     * **The verdict is memoised per (socket, action, topic)** in
+     * {@link ShardDO.whisperVerdicts}, because the authorizer is a database query
+     * and a live-cursor stream would otherwise run one per frame. The ceiling: a
+     * membership revoked after the join does not evict the socket — it keeps
+     * receiving until the socket closes or the DO hibernates. Whispers carry
+     * transient awareness and leave no durable trace; anything that must stop the
+     * instant access is revoked belongs behind a query with RLS, not on a topic.
+     *
+     * **Distinct pairs are capped** at
+     * {@link ShardDO.MAX_WHISPER_VERDICTS_PER_SOCKET}, checked before the
+     * dispatch. Past the cap the socket is refused with a `TOO_MANY_WHISPER_TOPICS`
+     * error frame and the authorizer does not run — otherwise a socket naming a
+     * fresh topic per frame would grow the memo and re-enter the authorizer's
+     * query without bound.
+     * @returns `true` when the socket may proceed
+     */
+    private async authorizeWhisper(ws: ShardSocketLike, topic: string, action: "send" | "subscribe"): Promise<boolean> {
+        const paths = this.lifecycleHookPaths("whisper");
+
+        if (paths.length === 0) {
+            return true;
         }
+
+        const memoKey = `${action}:${topic}`;
+        let memo = this.whisperVerdicts.get(ws);
+        const cached = memo?.get(memoKey);
+
+        if (cached !== undefined) {
+            // A pending entry is this same pair's dispatch, still in flight —
+            // awaiting it collapses a burst of frames naming one topic onto a
+            // single authorizer run instead of one run per frame.
+            return await cached;
+        }
+
+        // Cap the DISTINCT pairs before dispatching, not after memoising: the
+        // authorizer is a database query, so an uncapped socket buys one query
+        // per never-seen topic name as well as one memo entry. Refused pairs are
+        // deliberately NOT memoised — recording them would let the refusal path
+        // grow the very map it exists to bound.
+        if (memo !== undefined && memo.size >= ShardDO.MAX_WHISPER_VERDICTS_PER_SOCKET) {
+            // Typed and actionable, unlike an ordinary denial (which stays silent
+            // so an error frame can't be used to probe topic existence). This
+            // message names only the socket's own ceiling — it says nothing about
+            // the topic or about what the authorizer would have answered.
+            const message = `whisper authorization cap of ${String(ShardDO.MAX_WHISPER_VERDICTS_PER_SOCKET)} distinct topics reached on this socket; reconnect to reset it`;
+
+            trySendFrame(ws, JSON.stringify({ code: "TOO_MANY_WHISPER_TOPICS", error: { code: "TOO_MANY_WHISPER_TOPICS", message }, type: "error" }));
+
+            return false;
+        }
+
+        if (!memo) {
+            memo = new Map();
+            this.whisperVerdicts.set(ws, memo);
+        }
+
+        // Reserve the pair's slot BEFORE the first await. An authorizer that does
+        // any non-storage async work yields, and a Durable Object keeps delivering
+        // socket frames across a non-storage yield — so without the reservation
+        // every frame of a burst clears the size check above while the map is
+        // still short, and the cap bounds neither the authorizer dispatches nor
+        // the entries the map ends up holding. The reservation is the verdict
+        // promise itself, so a burst naming ONE pair also collapses onto one run.
+        const pending = this.runWhisperAuthorizers(paths, ws, topic, action);
+
+        memo.set(memoKey, pending);
+
+        let allowed: boolean;
+
+        try {
+            allowed = await pending;
+        } catch (error: unknown) {
+            // Nothing in the run path rejects today — an authorizer's failure is
+            // caught there and read as a denial — but a reservation must never
+            // outlive its dispatch: a rejected promise left in the map would
+            // re-throw for every later frame naming this pair, and hold the slot
+            // until the socket closes.
+            memo.delete(memoKey);
+
+            throw error;
+        }
+
+        memo.set(memoKey, allowed);
+
+        return allowed;
+    }
+
+    /**
+     * Run every registered `onWhisper` authorizer for one `(action, topic)` pair
+     * as a sequential AND, under the socket's own verified identity.
+     *
+     * Split out of {@link ShardDO.authorizeWhisper} for one reason: the verdict
+     * promise has to exist before the first await so it can be memoised as the
+     * pair's reservation.
+     */
+    private async runWhisperAuthorizers(paths: ReadonlyArray<string>, ws: ShardSocketLike, topic: string, action: "send" | "subscribe"): Promise<boolean> {
+        const info = this.lifecycleInfo(this.readAttachment(ws));
+        const event = { ...info.event, action, topic };
+        let allowed = true;
+
+        for (const functionPath of paths) {
+            try {
+                // Same dispatch shape as `dispatchLifecycle`: the socket's verified
+                // identity replayed (so `ctx.auth` is the asking user and `ctx.db`
+                // is RLS-scoped to them) under a trusted system dispatch (so the
+                // internal-visibility gate lets it through). The registration is a
+                // QUERY, so `handleRpc` runs it without a write span.
+                //
+                // eslint-disable-next-line no-await-in-loop -- sequential AND: the first denial stops the rest, and one authorizer's read may depend on the shard's single-threaded snapshot
+                const verdict = await this.withRequestIdentity(info.userId, info.identity, info.ip, () =>
+                    this.withSystemDispatch(() => this.handleRpc(functionPath, event as unknown as Record<string, unknown>)),
+                );
+
+                if (verdict !== true) {
+                    allowed = false;
+
+                    break;
+                }
+            } catch (error: unknown) {
+                // Unlike a lifecycle hook — whose failure is logged and otherwise
+                // ignored — a failed authorizer is a DENIAL. There is no safe way to
+                // read "the check crashed" as permission.
+                this.logs.push({
+                    functionPath,
+                    level: "error",
+                    message: error instanceof Error ? error.message : String(error),
+                    timestamp: Date.now(),
+                });
+
+                allowed = false;
+
+                break;
+            }
+        }
+
+        return allowed;
     }
 
     /**
@@ -5592,7 +14413,7 @@ abstract class ShardDO {
      * whispering is never acked, and an over-cap join or a serialize failure is
      * simply dropped (the join just doesn't take).
      */
-    private setWhisperMembership(ws: WebSocket, topic: string, join: boolean): void {
+    private setWhisperMembership(ws: ShardSocketLike, topic: string, join: boolean): void {
         const attachment = this.readAttachment(ws);
         const topics = attachment.whispers ?? [];
         const has = topics.includes(topic);
@@ -5631,7 +14452,7 @@ abstract class ShardDO {
      * the bucket is empty. Per-socket, in-memory — a hibernation resets it to a
      * full burst, which is the safe direction (never under-counts into a denial).
      */
-    private allowWhisper(ws: WebSocket): boolean {
+    private allowWhisper(ws: ShardSocketLike): boolean {
         const now = Date.now();
         const bucket = this.whisperBuckets.get(ws) ?? { last: now, tokens: ShardDO.WHISPER_RATE_BURST };
         const refilled = Math.min(ShardDO.WHISPER_RATE_BURST, bucket.tokens + ((now - bucket.last) / 1000) * ShardDO.WHISPER_RATE_PER_SEC);
@@ -5654,18 +14475,25 @@ abstract class ShardDO {
      * AnyCable "whisper" primitive: typing indicators, live cursors). The sender
      * is excluded; an over-limit or over-rate whisper is dropped.
      *
-     * Authorization note: whisper topics are NOT access-controlled beyond the
-     * shard boundary — any socket on this shard can join and read/inject on any
-     * topic name. That matches the AnyCable model (and `from` is unforgeable),
-     * but per-topic auth does not exist here; see `whisperSubscribe` on the client.
+     * Authorization happened before this point, in
+     * {@link ShardDO.authorizeWhisper}: with no `onWhisper` authorizer declared a
+     * topic's only boundary is the shard (the AnyCable model — any socket here can
+     * join and inject on any topic name), and with one declared, both the join and
+     * this send were checked under the socket's verified identity. `from` is
+     * unforgeable either way.
      */
-    private broadcastWhisper(sender: WebSocket, topic: string, data: unknown): void {
+    private async broadcastWhisper(sender: ShardSocketLike, topic: string, data: unknown): Promise<void> {
         // Rate-limit first — cheapest rejection, and it bounds the O(connections)
         // fan-out cost a tight whisper loop would otherwise impose.
         if (!this.allowWhisper(sender)) {
             return;
         }
 
+        // The client already wire-encoded `data` before sending, and the receiving
+        // client `decodeWire`s it — so relay the encoded value verbatim rather than
+        // re-encoding it (a second `encodeWire` pass would double-tag it). An older
+        // client that sent raw JSON-safe data is unaffected: `encodeWire` was
+        // identity for that data, so the passthrough form is byte-identical.
         // eslint-disable-next-line unicorn/no-null -- JSON payload: an undefined whisper body serializes to null so the frame carries an explicit value
         const dataJson = JSON.stringify(data ?? null);
 
@@ -5680,21 +14508,64 @@ abstract class ShardDO {
         const fromSuffix = from === undefined ? "" : `,"from":${JSON.stringify(from)}`;
         const frame = `{"type":"whisper","topic":${JSON.stringify(topic)},"data":${dataJson}${fromSuffix}}`;
 
-        for (const ws of this.state.getWebSockets()) {
-            if (ws === sender || this.readAttachment(ws).whispers?.includes(topic) !== true) {
+        // Deliver to THIS DO's sockets (excluding the sender), then — when the shard
+        // is promoted (plan 075 Phase 2) — forward the opaque frame through the relay
+        // hub so it reaches the sockets on every other DO serving the shard.
+        this.deliverWhisperLocal(topic, frame, sender);
+        await this.relay?.forwardWhisper(topic, frame);
+    }
+
+    /**
+     * Deliver an already-serialized whisper `frame` to every local socket joined to
+     * `topic`, excluding `exclude` (the sender, or `undefined` for a frame the relay
+     * hub forwarded in — its sender lives on another DO). Records the fan-out pass
+     * for `getFanoutMetrics` (plan 075 Phase 1). Pure delivery — no SQLite, no CDC.
+     * @returns the number of sockets the frame was sent to
+     */
+    private deliverWhisperLocal(topic: string, frame: string, exclude: undefined | ShardSocketLike): number {
+        let scanned = 0;
+        let delivered = 0;
+
+        for (const ws of this.runner.sockets()) {
+            scanned += 1;
+
+            if (ws === exclude) {
                 continue;
             }
 
-            try {
-                ws.send(frame);
-            } catch {
-                /* socket may have been closed mid-broadcast */
+            const attachment = this.readAttachment(ws);
+
+            if (attachment.whispers?.includes(topic) !== true) {
+                continue;
             }
+
+            // Enforce token-expiry on THIS outbound path too. It is not
+            // redundant with the other four checks — on the canonical whisper
+            // workload (presence, cursors, typing indicators) none of them ever
+            // runs: `broadcastWhisper` does no SQLite write, so there is no
+            // refresh flush, no shape poke and no global poll, and a passive
+            // receiver sends no inbound frame for `handleWebSocketMessage` to
+            // check. Without this a lapsed socket keeps receiving every whisper
+            // on its joined topics — including the sender's `from` userId — for
+            // the rest of its life.
+            if (isIdentityExpired(attachment.expiresAt)) {
+                this.dropExpiredSocket(ws);
+
+                continue;
+            }
+
+            // Best-effort fan-out; a closed socket is simply skipped.
+            trySendFrame(ws, frame);
+            delivered += 1;
         }
+
+        this.fanout.whisper = recordFanoutPass(this.fanout.whisper, scanned, delivered, 0);
+
+        return delivered;
     }
 
     // eslint-disable-next-line class-methods-use-this -- cohesive DO instance method grouped with the hibernation/attachment helpers; reads only the socket
-    private readAttachment(ws: WebSocket): SocketAttachment {
+    private readAttachment(ws: ShardSocketLike): SocketAttachment {
         const raw = (ws as HibernatableWebSocket).deserializeAttachment?.();
 
         if (raw && typeof raw === "object" && "subs" in raw && (raw as { subs?: unknown }).subs) {
@@ -5705,22 +14576,24 @@ abstract class ShardDO {
     }
 }
 
-export { ROOT_DO_SIZE_WARN_BYTES, ROOT_SHARD_NAME, ShardDO, subscriptionListDeltas };
+export { ROOT_DO_SIZE_WARN_BYTES, ROOT_SHARD_NAME, ShardDO };
 export type {
-    HibernatableWebSocket,
-    LogSink,
     RunShardApplyCdcArgs,
     RunShardApplyCdcResult,
-    RunShardBulkDeleteArgs,
-    RunShardBulkDeleteResult,
+    RunShardBulkRowArgs,
+    RunShardBulkRowResult,
     RunShardExportArgs,
+    RunShardFindRelatedArgs,
     RunShardImportArgs,
     RunShardMigrationArgs,
     RunShardRankBeforeArgs,
     RunShardRankPageArgs,
     RunShardWriteArgs,
     RunShardWriteResult,
-    ShardDOOptions,
-    ShardDOState,
-    SubscriptionOutcome,
-};
+} from "./admin-rpc-args";
+
+// Re-exported so existing import sites (`./index`, tests) keep their path; the
+// canonical home is `./subscription-delivery`.
+export { subscriptionListDeltas } from "@lunora/shard-engine";
+
+export type { DispatchBookmark, HibernatableWebSocket, QueryReadScope, ShardDOOptions, ShardDOState, SubscriptionOutcome, TelemetrySink, TraceRefLike };

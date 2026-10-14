@@ -1,3 +1,5 @@
+import { LunoraError } from "@lunora/errors";
+
 import type { LunoraAuth } from "./create-auth";
 
 /**
@@ -13,7 +15,7 @@ interface MiddlewareNext<ContextIn> {
 
 /**
  * Decide whether a `ctx.authApi.*` call carried `headers`. Mirrors the static
- * advisor's `hasHeaders` rule (`@lunora/codegen`'s `discover-authapi-calls`) so
+ * advisor's `hasHeaders` rule (`@lunora/codegen`'s `discover/authapi-calls`) so
  * the runtime guard and the lint agree on what counts as a header-bearing call:
  *
  * - **No argument at all** → no headers (the lint flags `method()`).
@@ -42,18 +44,24 @@ const callHasHeaders = (argument: unknown): boolean => {
 };
 
 /**
- * Wrap a better-auth `api` surface in a Proxy that throws
- * {@link LunoraAuthHeadersError} when any endpoint is invoked without `headers`.
+ * Wrap a better-auth `api` surface in a Proxy that synthesises the
+ * `withoutHeaders()` escape hatch and — when `enforce` is set — throws
+ * {@link LunoraAuthHeadersError} for any endpoint invoked without `headers`.
  *
  * The proxy is transparent: property reads return guarded function wrappers for
  * callable endpoints and pass everything else (non-function properties) through
  * untouched, so the wrapped surface stays structurally identical to `auth.api`.
  *
- * One synthetic property is added — `withoutHeaders()` — the explicit, loud
- * escape hatch that returns the raw, unguarded `auth.api` for the rare,
- * deliberate server-to-server call that must run unauthenticated.
+ * One synthetic property is always added — `withoutHeaders()` — the explicit,
+ * loud escape hatch that returns the raw, unguarded `auth.api` for the rare,
+ * deliberate server-to-server call that must run unauthenticated. It is
+ * synthesised even with `enforce` off, because `LunoraAuthApiContext`'s type
+ * declares it unconditionally: an app that wrote the documented
+ * `ctx.authApi.withoutHeaders().createOrganization(…)` for a cron path would
+ * otherwise start throwing `is not a function` the day it sets
+ * `enforceHeaders: false`, with tsc silent about it.
  */
-const guardAuthApi = <Api extends Record<string, unknown>>(api: Api): Api => {
+const guardAuthApi = <Api extends Record<string, unknown>>(api: Api, enforce: boolean): Api => {
     const withoutHeaders = (): Api => api;
 
     return new Proxy(api, {
@@ -76,7 +84,7 @@ const guardAuthApi = <Api extends Record<string, unknown>>(api: Api): Api => {
             const method = property;
 
             return (...arguments_: unknown[]): unknown => {
-                if (!callHasHeaders(arguments_[0])) {
+                if (enforce && !callHasHeaders(arguments_[0])) {
                     // better-auth endpoints are async, so surface the guard as a
                     // rejected promise — it composes with `await`/`.catch` the
                     // same way an endpoint error would, instead of throwing
@@ -103,12 +111,13 @@ const guardAuthApi = <Api extends Record<string, unknown>>(api: Api): Api => {
  * advisor lint — both treat a header-less `ctx.authApi.*` call as an
  * authorization bypass, so a call that trips the lint also trips this guard.
  */
-export class LunoraAuthHeadersError extends Error {
-    /** The `ctx.authApi.&lt;method>` that was called without `headers`. */
+export class LunoraAuthHeadersError extends LunoraError {
+    /** The `ctx.authApi.<method>` that was called without `headers`. */
     public readonly method: string;
 
     public constructor(method: string) {
         super(
+            "AUTH_HEADERS_MISSING",
             `@lunora/auth: ctx.authApi.${method}(…) was called without \`headers\`. ` +
                 "better-auth treats a header-less call as a trusted server-to-server " +
                 "invocation and skips session authorization entirely — an authorization " +
@@ -117,9 +126,9 @@ export class LunoraAuthHeadersError extends Error {
                 "If you genuinely intend an unauthenticated server-to-server call, opt " +
                 "out explicitly via ctx.authApi.withoutHeaders().<method>(…), or disable " +
                 "the guard for the whole middleware with withAuthPlugins(auth, { enforceHeaders: false }).",
+            { name: "LunoraAuthHeadersError" },
         );
 
-        this.name = "LunoraAuthHeadersError";
         this.method = method;
     }
 }
@@ -132,7 +141,7 @@ export interface WithAuthPluginsOptions {
      * Whether to install the runtime header guard around `ctx.authApi`.
      *
      * **Defaults to `true` — the safe default.** When enabled, every
-     * `ctx.authApi.&lt;method>(…)` call that omits `headers` throws
+     * `ctx.authApi.<method>(…)` call that omits `headers` throws
      * {@link LunoraAuthHeadersError} instead of silently running with full
      * server-to-server privileges. For a deliberate, per-call unauthenticated
      * invocation, use the explicit `ctx.authApi.withoutHeaders()` escape hatch
@@ -186,7 +195,7 @@ export interface LunoraAuthApiContext<Auth extends LunoraAuth> {
      * statically; the guard is the runtime backstop for the cases the lint
      * can't see (dynamic method names, indirected calls). For the rare,
      * deliberate unauthenticated server-to-server call, opt out explicitly with
-     * `ctx.authApi.withoutHeaders().&lt;method>(…)`.
+     * `ctx.authApi.withoutHeaders().<method>(…)`.
      *
      * Lunora's procedure context carries only the resolved identity, not the
      * raw inbound `Headers`, so this middleware CANNOT pre-bind them for you.
@@ -246,23 +255,33 @@ export interface LunoraAuthApiContext<Auth extends LunoraAuth> {
  * Lunora's procedure context does not currently carry the raw request headers
  * (only the resolved identity — see `AuthState` in `@lunora/server`), so
  * this middleware **cannot** pre-bind headers for you and does **not** do so.
- * You MUST pass the inbound `Headers` explicitly into **every** `ctx.authApi.*`
- * call, from a transport that has them — typically an HTTP action:
+ * You MUST pass `Headers` explicitly into **every** `ctx.authApi.*` call. A
+ * procedure has no inbound `Headers` object, so rebuild one from what the
+ * transport forwarded in `args`:
  *
  * ```ts
  * // lunora/orgs.ts
- * import { httpAction } from "@lunora/server";
- * import { withAuthPlugins } from "@lunora/auth/middleware";
- * import { auth } from "./auth.js";
+ * export const createOrg = mutation
+ *     .input({ cookie: v.string(), name: v.string() })
+ *     .use(withAuthPlugins(auth))
+ *     .mutation(async ({ args, ctx }) =>
+ *         ctx.authApi.createOrganization({
+ *             body: { name: args.name },
+ *             // Rebuilt from the transport — the middleware cannot pre-bind them.
+ *             headers: new Headers({ cookie: args.cookie }),
+ *         }),
+ *     );
+ * ```
  *
- * export const createOrg = httpAction(async (ctx, request) => {
+ * `ctx.authApi` is a PROCEDURE-context surface — this middleware installs it
+ * through the builder's `.use()` chain, which `httpAction` / `httpRoute` do not
+ * have (see `HttpActionCtx` in `@lunora/server`). An HTTP action already holds
+ * the real inbound `Headers`, so call the auth instance there directly:
+ *
+ * ```ts
+ * export const createOrgHttp = httpAction(async (ctx, request) => {
  *     const { name } = await request.json();
- *
- *     // ctx.authApi is installed by withAuthPlugins(auth) on the builder.
- *     const org = await ctx.authApi.createOrganization({
- *         body: { name },
- *         headers: request.headers,
- *     });
+ *     const org = await auth.api.createOrganization({ body: { name }, headers: request.headers });
  *
  *     return Response.json(org);
  * });
@@ -278,7 +297,7 @@ export interface LunoraAuthApiContext<Auth extends LunoraAuth> {
  * Shape of the middleware {@link withAuthPlugins} returns: a callable generic
  * over the incoming ctx so chaining `.use(...)` preserves whatever ctx fields
  * the upstream middleware already installed. Lives as its own interface
- * because TypeScript doesn't allow declaring `const fn: &lt;CtxIn>() => ...` —
+ * because TypeScript doesn't allow declaring `const fn: <CtxIn>() => ...` —
  * the generic must live on a callable type alias or interface.
  */
 export type WithAuthPluginsMiddleware<Auth extends LunoraAuth> = <ContextIn>(options: {
@@ -291,9 +310,9 @@ export const withAuthPlugins = <Auth extends LunoraAuth>(auth: Auth, options: Wi
 
     // Build the surface once per middleware, not per request: the guard proxy
     // is stateless, so the same wrapped object is safe to share across calls.
-    const authApi = enforceHeaders
-        ? (guardAuthApi(auth.api as Record<string, unknown>) as LunoraAuthApiContext<Auth>["authApi"])
-        : (auth.api as LunoraAuthApiContext<Auth>["authApi"]);
+    // The wrapper goes on either way — with `enforceHeaders` off it only
+    // synthesises `withoutHeaders()` and passes every endpoint through.
+    const authApi = guardAuthApi(auth.api as Record<string, unknown>, enforceHeaders) as LunoraAuthApiContext<Auth>["authApi"];
 
     // The callable is generic over CtxIn so `next({ ctx: { authApi } })`
     // returns `CtxIn & { authApi }` — fields the upstream middleware

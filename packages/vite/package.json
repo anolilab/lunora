@@ -1,6 +1,6 @@
 {
     "name": "@lunora/vite",
-    "version": "0.0.0",
+    "version": "1.0.0-alpha.344",
     "description": "The Lunora Vite plugin: codegen, type sync, wrangler validation, and an error overlay over @cloudflare/vite-plugin",
     "keywords": [
         "cloudflare",
@@ -25,7 +25,7 @@
         "directory": "packages/vite"
     },
     "files": [
-        "dist",
+        "./dist",
         "__assets__",
         "README.md",
         "LICENSE.md"
@@ -41,37 +41,45 @@
         },
         "./package.json": "./package.json"
     },
+    "publishConfig": {
+        "access": "public"
+    },
     "scripts": {
         "build": "pnpm exec packem build --development",
         "build:prod": "pnpm exec packem build --production",
-        "lint:eslint": "eslint .",
+        "lint:eslint": "eslint . --max-warnings=0",
         "lint:eslint:fix": "eslint . --fix",
-        "lint:prettier": "prettier --check .",
-        "lint:prettier:fix": "prettier --write .",
+        "lint:prettier": "prettier --check . --ignore-path ../../.prettierignore",
+        "lint:prettier:fix": "prettier --write . --ignore-path ../../.prettierignore",
         "lint:types": "tsc --noEmit",
         "test": "vitest run",
-        "test:coverage": "vitest run --coverage"
+        "test:coverage": "vitest run --coverage",
+        "fallow:audit": "fallow audit",
+        "fallow:dead-code": "fallow dead-code",
+        "fallow:health": "fallow health --score"
     },
     "dependencies": {
         "@cloudflare/vite-plugin": "catalog:vite",
-        "@lunora/codegen": "workspace:*",
-        "@lunora/config": "workspace:*",
-        "@visulima/vite-overlay": "catalog:vite",
-        "jsonc-parser": "catalog:vite",
-        "ts-morph": "catalog:tooling"
+        "@lunora/codegen": "1.0.0-alpha.298",
+        "@lunora/config": "1.0.0-alpha.346",
+        "@lunora/errors": ">=1.0.0-alpha.51 <2.0.0-0",
+        "@visulima/vite-overlay": "catalog:vite"
     },
     "devDependencies": {
         "@types/node": "catalog:types",
         "@visulima/packem": "catalog:build",
         "@vitest/coverage-v8": "catalog:test",
         "esbuild": "catalog:build",
+        "fallow": "catalog:lint",
+        "jsonc-parser": "catalog:vite",
+        "ts-morph": "catalog:tooling",
         "typescript": "catalog:tsc",
         "vite": "catalog:vite",
         "vitest": "catalog:test"
     },
     "peerDependencies": {
-        "@lunora/studio": "workspace:*",
-        "vite": "catalog:vite"
+        "@lunora/studio": ">=1.0.0-alpha.50 <2.0.0-0",
+        "vite": "^6.1.0 || ^7.0.0 || ^8.0.0"
     },
     "peerDependenciesMeta": {
         "@lunora/studio": {

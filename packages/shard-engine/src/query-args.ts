@@ -1,0 +1,738 @@
+/**
+ * Pure `orderBy` + keyset-cursor helpers shared by both ORM dialects.
+ *
+ * The query layer compiles `where` through `compileWhereSql`; this module
+ * owns the two remaining pure pieces:
+ *
+ * - `orderBy` → a deterministic `ORDER BY` clause with a stable `id`
+ * tiebreak, so pagination has a total order to seek against.
+ * - keyset cursors — `encodeCursor`/`decodeCursor` round-trip the last
+ * row's sort key, and `buildSeekWhere` turns that key into a `where` tree
+ * that selects the rows strictly *after* the cursor. Keyset (not offset)
+ * pagination stays O(page) and is stable under concurrent inserts.
+ *
+ * Everything here is I/O-free and dialect-agnostic: the seek predicate is
+ * emitted as a {@link WhereInput} so the shared drizzle compiler
+ * (`compileWhereSql`) renders it per dialect.
+ *
+ * One thing it is NOT free of is the dialect's NULL ordering. A keyset seek has
+ * to place NULLs exactly where the ORDER BY does or a nullable ordered column
+ * cannot be paged at all. {@link pivotCondition} reads each key's placement — the
+ * SQLite/MySQL default (NULLs first ascending, last descending) unless the key
+ * carries an explicit one — and is the same on every dialect, because the seek
+ * tree it returns is compiled by a shared dialect-blind compiler. Postgres
+ * defaults the other way, so `@lunora/sql-store` writes the placement out as an
+ * explicit `NULLS FIRST`/`NULLS LAST` on the nullable keys of its ORDER BY; see
+ * `compileOrderBySql` there.
+ */
+import { LunoraError } from "@lunora/errors";
+
+import { validatorAcceptsNull } from "../../../shared/accepts-null";
+import { readFieldPath } from "../../../shared/json-field-path";
+import { decodeWire, encodeWire } from "../../../shared/wire-codec";
+import type { NullPlacement, OrderByInput, OrderKey, SortDirection, ValidatorLike } from "./schema-types";
+import type { WhereInput } from "./where-types";
+import { SEEK_RANGE } from "./where-types";
+
+/** The implicit tiebreak appended to every sort so the order is total. */
+const TIEBREAK_FIELD = "id";
+
+/**
+ * Which way the implicit `id` tiebreak sorts: the same way the last real sort
+ * key does.
+ *
+ * It used to be pinned `asc`. That made a descending read emit
+ * `_creationTime DESC, id ASC` — two directions in one ORDER BY, which no
+ * single-direction index can satisfy. SQLite answered it with
+ * `USE TEMP B-TREE FOR LAST TERM OF ORDER BY`, sorting each tie group instead
+ * of walking the index backwards, and a descending page measured 1.4-2.0x
+ * slower than the aligned form. The DO builds every declared index as
+ * `(<fields>, _creationTime, id)`, so following the last key's direction is
+ * exactly what lets that index be read forwards OR backwards.
+ *
+ * {@link buildSeek} and every ORDER BY builder MUST use this one rule. A cursor
+ * seek that disagrees with its own ORDER BY about tie direction skips or repeats
+ * rows at a page boundary where the sort keys tie.
+ */
+const tiebreakDirectionFor = (keys: ReadonlyArray<{ direction?: string }>): SortDirection => (keys.at(-1)?.direction === "desc" ? "desc" : "asc");
+
+const ID_FIELDS = new Set(["_id", "id"]);
+
+/**
+ * Framework columns the store stamps on every row. Never null, whatever a shape
+ * lookup would say — they are not IN the shape, so without this they would read
+ * as "unknown" and take {@link columnIsNullable}'s conservative branch.
+ */
+const NEVER_NULL_FIELDS = new Set(["_creationTime", "_id", "id"]);
+
+/**
+ * Can an ordered column hold SQL NULL? This is what gates {@link pivotCondition}'s
+ * `OR col IS NULL` arm, and that arm is what turns an index seek into a table
+ * scan — so the answer has to come from the schema, not from a guess.
+ *
+ * Three spellings make a column nullable, and all have to be read: `.nullable()`
+ * clears `column.notNull` and keeps the base kind, `v.optional(inner)` wraps it
+ * in a fresh `"optional"` validator whose own column meta is the DEFAULT
+ * `notNull: true`, and `v.union(x, v.null())` / `v.any()` / `v.null()` parse
+ * `null` while keeping that same default flag (`validatorAcceptsNull`). A check
+ * that only read `notNull` would call each of them non-nullable and lose
+ * exactly the rows this arm exists for.
+ *
+ * A field the shape does not declare answers `true` (emit the arm, take the
+ * slow plan). Both stores read undeclared fields out of a JSON document, where
+ * "absent" comes back as NULL, so `true` is the accurate answer as well as the
+ * safe one — omitting the arm silently drops rows, emitting it only costs. Every
+ * in-repo caller passes the shape, and every ordered field a user can name in a
+ * typed `orderBy` is declared in it, so this branch is a floor rather than a path.
+ */
+const columnIsNullable = (field: string, shape: Record<string, ValidatorLike> | undefined): boolean => {
+    if (NEVER_NULL_FIELDS.has(field)) {
+        return false;
+    }
+
+    const validator = shape?.[field];
+
+    if (validator === undefined) {
+        return true;
+    }
+
+    return validator.kind === "optional" || validator._meta?.column?.notNull === false || validatorAcceptsNull(validator);
+};
+
+/** Boolean combinator keys in a `where` tree — never a column, so never a pin. */
+const WHERE_COMBINATORS = new Set(["AND", "NOT", "OR"]);
+
+/**
+ * The fields a `where` fixes to ONE value, from its top-level conjunction.
+ *
+ * A top-level `where` object is an implicit AND of its keys, so a bare literal
+ * or a lone `{ eq: … }` on any of them holds across every row the read returns.
+ * Deliberately shallow and deliberately conservative: a combinator key
+ * contributes nothing (its members are alternatives, not pins) and so does every
+ * other operator, including a one-element `in`. Over-reporting a pin drops a
+ * real sort key, so "not sure" must mean "not pinned".
+ * @returns the set of equality-pinned field names
+ */
+const equalityPinnedFields = (where: undefined | WhereInput): ReadonlySet<string> => {
+    const pinned = new Set<string>();
+
+    if (typeof where !== "object" || Array.isArray(where)) {
+        return pinned;
+    }
+
+    for (const [field, value] of Object.entries(where)) {
+        if (WHERE_COMBINATORS.has(field)) {
+            continue;
+        }
+
+        if (value === null || typeof value !== "object" || Array.isArray(value)) {
+            pinned.add(field);
+
+            continue;
+        }
+
+        const operators = Object.keys(value);
+
+        if (operators.length === 1 && operators[0] === "eq") {
+            pinned.add(field);
+        }
+    }
+
+    return pinned;
+};
+
+/**
+ * The field tuples this table is UNIQUE on: its `unique: true` declared indexes,
+ * plus the single-column `.unique()` constraints, which synthesize a UNIQUE
+ * index of their own (`migrateSecondaryIndexes`). Both are created WITHOUT the
+ * `(…, _creationTime, id)` sort keys, which is what {@link normalizeOrderKeys}
+ * needs to know.
+ * @returns one entry per unique constraint, holding its field names in index order
+ */
+const uniqueIndexFields = (
+    indexes: ReadonlyArray<{ fields: ReadonlyArray<string>; unique?: boolean }> | undefined,
+    shape: Record<string, ValidatorLike> | undefined,
+): ReadonlyArray<ReadonlyArray<string>> => {
+    const tuples: ReadonlyArray<string>[] = [];
+
+    for (const index of indexes ?? []) {
+        if (index.unique === true) {
+            tuples.push(index.fields);
+        }
+    }
+
+    for (const [field, validator] of Object.entries(shape ?? {})) {
+        if (validator._meta?.column?.unique === true) {
+            tuples.push([field]);
+        }
+    }
+
+    return tuples;
+};
+
+/**
+ * Whether the fields the read has already fixed cover some unique constraint —
+ * in which case no two returned rows can tie on the sort key and a further
+ * tiebreak is redundant. An empty tuple is not a constraint and never counts.
+ * @returns true when some unique tuple is wholly determined by `determined`
+ */
+const uniquelyOrdered = (determined: ReadonlySet<string>, uniqueBy: ReadonlyArray<ReadonlyArray<string>> | undefined): boolean =>
+    (uniqueBy ?? []).some((fields) => fields.length > 0 && fields.every((field) => determined.has(field)));
+
+/** What a read knows about its own shape, beyond the `orderBy` itself — see {@link normalizeOrderKeys}. */
+interface OrderKeyConstraints {
+    /** Fields an equality in the read's `where` (or `.withIndex()` range) fixes to one value. */
+    pinned?: ReadonlySet<string>;
+    /** The table's unique field tuples, from {@link uniqueIndexFields}. */
+    uniqueBy?: ReadonlyArray<ReadonlyArray<string>>;
+}
+
+/**
+ * Do this key's NULLs sort before its other values? The default is the SQLite/MySQL one — first
+ * ascending, last descending — unless the key carries an explicit placement.
+ */
+const nullsFirstOf = (key: Pick<OrderKey, "direction" | "nulls">): boolean => (key.nulls === undefined ? key.direction !== "desc" : key.nulls === "first");
+
+/** The ORDER BY suffix that states a NULL placement: the one spelling the SQL text of every dialect shares. */
+const nullsOrderSuffix = (nullsFirst: boolean): string => (nullsFirst ? " NULLS FIRST" : " NULLS LAST");
+
+/**
+ * Is `spec` a well-formed `{ sort, nulls }`? `orderBy` arrives from callers the type system does not
+ * reach (an RPC argument), so a malformed entry is refused loudly rather than silently sorted some
+ * other way.
+ */
+const isPlacementSpec = (spec: unknown): spec is { nulls: NullPlacement; sort: SortDirection } => {
+    if (typeof spec !== "object" || spec === null) {
+        return false;
+    }
+
+    const { nulls, sort } = spec as { nulls?: unknown; sort?: unknown };
+
+    return (sort === "asc" || sort === "desc") && (nulls === "first" || nulls === "last");
+};
+
+/**
+ * The sort key for one `orderBy` entry. A NULL placement is recorded only when it differs from the
+ * default AND the column can hold NULL, so otherwise the key is byte-identical to the one an
+ * un-annotated `orderBy` produces — and a column that never holds NULL never gets the clause that
+ * could cost its index.
+ */
+const orderKeyFor = (field: string, spec: OrderByInput[string], shape: Record<string, ValidatorLike> | undefined): OrderKey => {
+    if (spec !== "asc" && spec !== "desc" && !isPlacementSpec(spec)) {
+        throw new LunoraError("VALIDATION_ERROR", `orderBy "${field}": expected "asc", "desc" or { sort: "asc" | "desc", nulls: "first" | "last" }`);
+    }
+
+    const direction = typeof spec === "string" ? spec : spec.sort;
+    const nullable = columnIsNullable(field, shape);
+
+    if (typeof spec === "string" || !nullable || nullsFirstOf({ direction }) === (spec.nulls === "first")) {
+        return { direction, field, nullable };
+    }
+
+    return { direction, field, nullable, nulls: spec.nulls };
+};
+
+/**
+ * Flatten the `{ field: dir }[]` authoring form into an ordered list of sort
+ * keys. An absent or empty `orderBy` defaults to creation order, matching the
+ * legacy reader.
+ *
+ * `shape` is the ordered table's declared columns, used only to stamp each key's
+ * `nullable` — see {@link columnIsNullable}. Omitting it makes every user column
+ * read as nullable, which is correct but costs the slow seek plan on every page.
+ *
+ * `constraints` is what the read knows that the `orderBy` alone does not, and
+ * both halves exist to keep the emitted sort on an index rather than in a temp
+ * B-tree. Omitting it is always CORRECT — every key stays, the order is the same
+ * — it just costs the sort. See the two comments in the body.
+ */
+const normalizeOrderKeys = (orderBy: OrderByInput[] | undefined, shape?: Record<string, ValidatorLike>, constraints?: OrderKeyConstraints): OrderKey[] => {
+    const keys: OrderKey[] = [];
+    // Every field the read has already fixed, by an equality or by ordering on
+    // it — what {@link uniquelyOrdered} tests the unique-index cover against.
+    const determined = new Set<string>(constraints?.pinned);
+    let lastDirection: SortDirection = "asc";
+
+    for (const entry of orderBy ?? []) {
+        for (const [field, spec] of Object.entries(entry)) {
+            const key = orderKeyFor(field, spec, shape);
+            const { direction } = key;
+
+            lastDirection = direction;
+            determined.add(field);
+
+            // An equality-pinned column holds ONE value across every row this
+            // read can return, so ordering by it is semantically a no-op — but
+            // SQLite does not treat it as one over an expression index, and
+            // repeating the pinned field in `orderBy` sorted every match into a
+            // temp B-tree (`ORDER BY <pinned>, priority` measured 93x the plain
+            // `ORDER BY priority` at 50k rows). The fluent reader has dropped
+            // these since `unpinnedIndexFields`; dropping them here is the same
+            // rule for the object form.
+            if (constraints?.pinned?.has(field)) {
+                continue;
+            }
+
+            keys.push(key);
+        }
+    }
+
+    if (keys.length === 0) {
+        // `lastDirection` rather than a pinned `asc`: an `orderBy` whose every
+        // key was pinned away still asked for a direction, and the fallback
+        // creation order should honour it (the rows tie on the real key, so any
+        // total order is a correct answer — but the paging direction is not).
+        return [{ direction: lastDirection, field: "_creationTime", nullable: false }];
+    }
+
+    // Skipped when an id field is already ordered: `id` is unique, so nothing
+    // after it can change the order, and the extra key would only cost a cursor
+    // column and a seek disjunct.
+    if (keys.some((key) => ID_FIELDS.has(key.field) || key.field === "_creationTime")) {
+        return keys;
+    }
+
+    // Every NON-unique declared index is built `(<fields>, _creationTime, id)` —
+    // see `INDEX_SORT_KEYS` in `ctx-db-migrations.ts`. An ORDER BY that jumps
+    // straight from the declared fields to `id` skips the index's middle column,
+    // so the index cannot answer the sort and SQLite sorts every match into a
+    // temp B-tree instead. Splicing `_creationTime` in here — the one place both
+    // ORDER BY builders AND `buildSeek` read their key list from — is what keeps
+    // the emitted order, the emitted seek, and the physical index shape in
+    // agreement. Doing it in the ORDER BY builders alone would give the seek a
+    // different total order than the sort it pages, which skips or repeats rows.
+    //
+    // A UNIQUE index is the exception, and splicing into one was strictly
+    // harmful: it gets NO sort keys (they would join what is unique, and
+    // `(email, _creationTime, id)` is unique for every row, so the constraint
+    // would stop rejecting duplicates), so `ORDER BY email DESC, _creationTime
+    // DESC, id DESC` cannot walk `(email)` at all. Measured at 50k rows: a full
+    // `SCAN … USE TEMP B-TREE FOR ORDER BY` at 10.8ms against `SCAN … USING
+    // INDEX m_by_email` at 0.02ms once `_creationTime` is left out. It is also
+    // redundant there — the index's own fields already order the rows totally —
+    // and the `id` tiebreak the ORDER BY builders and {@link buildSeek} append
+    // still breaks a tie among the multiple NULLs a SQL UNIQUE index permits.
+    if (!uniquelyOrdered(determined, constraints?.uniqueBy)) {
+        keys.push({ direction: tiebreakDirectionFor(keys), field: "_creationTime", nullable: false });
+    }
+
+    return keys;
+};
+
+/** Any code point outside ASCII — the test gating {@link toBase64}'s fast path. */
+const NON_ASCII = /[\u0080-\u{10FFFF}]/u;
+
+const toBase64 = (text: string): string => {
+    // `btoa` already takes a latin-1 string, and an all-ASCII string IS its own
+    // UTF-8 byte sequence — so for one the encode and the byte-by-byte rebuild
+    // below are both the identity. Cursors are `JSON.stringify` of a creation
+    // time and an id, so that is nearly always the case, and skipping the two
+    // passes measured ~7x on the encode. A non-ASCII id pays one extra scan.
+    if (!NON_ASCII.test(text)) {
+        return btoa(text);
+    }
+
+    const bytes = new TextEncoder().encode(text);
+    let binary = "";
+
+    for (const byte of bytes) {
+        binary += String.fromCodePoint(byte);
+    }
+
+    return btoa(binary);
+};
+
+const fromBase64 = (encoded: string): string => {
+    const binary = atob(encoded);
+    const bytes = Uint8Array.from(binary, (character) => character.codePointAt(0) ?? 0);
+
+    return new TextDecoder().decode(bytes);
+};
+
+/**
+ * Prefix stamped on every cursor this build mints.
+ *
+ * A cursor is an opaque `[...sortValues, id]` tuple with no self-describing
+ * shape, so its BYTES cannot tell you which seek predicate was meant to read
+ * them. When the implicit `id` tiebreak changed direction (see
+ * {@link tiebreakDirectionFor}), the bytes stayed identical and only their
+ * MEANING moved: a cursor minted under `… DESC, id ASC` fed to the `… DESC,
+ * id DESC` predicate seeks the wrong way through a group of rows that tie on
+ * the real sort key.
+ *
+ * That is not hypothetical. A mounted paginated feed holds its page boundaries
+ * in client state for the life of the component and replays them on every
+ * reactive re-run, so a deploy hands pre-change cursors straight to the changed
+ * predicate. Measured on six rows tied on one `_creationTime`: the page came
+ * back holding a row from the PREVIOUS page while four rows became unreachable.
+ *
+ * `~` is deliberately outside the base64 alphabet, so a legacy (unprefixed)
+ * cursor can never be mistaken for a prefixed one whatever its payload.
+ *
+ * Bumped `~2` -> `~3` when the sort key list changed shape twice over: every
+ * `orderBy` now carries `_creationTime` before the `id` tiebreak (see
+ * {@link normalizeOrderKeys}), and a `.withIndex()` read drops the fields its
+ * range pins with `.eq()` (see `unpinnedIndexFields`). The second is what makes
+ * the bump mandatory rather than tidy: a `.withIndex(q => q.eq(f, v)).paginate()`
+ * cursor was `[v, id]` and is now `[creationTime, id]` — SAME LENGTH, so the
+ * arity check in {@link buildSeek} cannot catch it, and the old payload would be
+ * seeked as a `_creationTime` pivot with a channel id in it. Silently, and
+ * shaped like a correct page.
+ *
+ * Bumped `~3` -> `~4` when {@link normalizeOrderKeys} learned to drop an
+ * equality-pinned `orderBy` key and to skip the `_creationTime` splice over a
+ * unique index. Both make the key list SHORTER, and {@link buildSeek} only
+ * refuses a cursor with too FEW values — a longer legacy payload is accepted and
+ * its leading value read as the wrong column's pivot. Mandatory for the same
+ * reason as last time: silent, and shaped like a correct page.
+ */
+const CURSOR_PREFIX = "~4";
+
+/**
+ * Encode the sort key of `doc` (the values of each `orderBy` field, then its
+ * id) as an opaque base64 cursor. The id is always included so the seek has a
+ * unique terminal column.
+ */
+const encodeCursor = (record: Record<string, unknown>, keys: OrderKey[]): string => {
+    // Absent and `null` are one thing to a keyset seek — both mean "this row sorts
+    // in the NULL group" — so they are collapsed HERE, at the one place a cursor
+    // value is produced, rather than downstream. Without this an optional column
+    // missing from a document puts a genuine `undefined` in the cursor:
+    // `encodeWire` tags it in array position, `decodeWire` restores it, and it
+    // reaches the driver as a bound `undefined`. Normalising here also keeps the
+    // shared `where` compiler free of any `undefined` handling, so a user's
+    // `where: { col: { eq: undefined } }` keeps failing loudly instead of
+    // quietly becoming `col IS NULL`.
+    // eslint-disable-next-line unicorn/no-null -- SQL NULL is the domain value a cursor carries, not a JS absence
+    const values: unknown[] = keys.map((key) => readFieldPath(record, key.field) ?? null);
+
+    values.push(record["_id"]);
+
+    // `encodeWire`, not a bare `JSON.stringify`: the values come straight out of
+    // a decoded document, so ordering by a `v.bigint()` column put a real bigint
+    // in here and threw `TypeError: Do not know how to serialize a BigInt` — the
+    // same defect class this store's blob codec exists to fix, surviving in the
+    // cursor. Identity for pure-JSON keys, so existing cursors are byte-identical.
+    return CURSOR_PREFIX + toBase64(JSON.stringify(encodeWire(values)));
+};
+
+/**
+ * The cursor is client-supplied, so any decode failure is a bad request, not
+ * a server fault. Returns a `LunoraError`-shaped error the runtime's error
+ * mapper renders as a 400 (a raw `TypeError`/`SyntaxError` would fall through
+ * to a generic 500).
+ */
+const invalidCursor = (): LunoraError => new LunoraError("BAD_REQUEST", "invalid cursor");
+
+/** Decode a cursor back into its ordered sort-key values (orderBy fields, then id). */
+const decodeCursor = (cursor: string): unknown[] => {
+    // Refuse an unprefixed cursor rather than seek with it. It was minted by a
+    // build whose tiebreak ran the other way, so reading it here returns rows
+    // from the wrong side of the tie group — silently, and looking exactly like
+    // a correct page. A typed 400 is recoverable (the client resets the feed);
+    // wrong rows presented as right ones are not.
+    if (!cursor.startsWith(CURSOR_PREFIX)) {
+        throw invalidCursor();
+    }
+
+    let decoded: unknown;
+
+    try {
+        decoded = decodeWire(JSON.parse(fromBase64(cursor.slice(CURSOR_PREFIX.length))));
+    } catch {
+        // atob() throws InvalidCharacterError on non-base64 input, JSON.parse
+        // throws SyntaxError on malformed JSON, and `decodeWire` throws
+        // RangeError past its depth/bigint bounds. Normalize every
+        // client-supplied failure to the same typed 400 error.
+        throw invalidCursor();
+    }
+
+    if (!Array.isArray(decoded)) {
+        throw invalidCursor();
+    }
+
+    // Collapse a legacy `undefined` to SQL NULL here, where the cursor is read,
+    // rather than at each place a value is used. `encodeCursor` normalises at
+    // mint time, but a cursor minted BEFORE that carries a real `undefined`
+    // (`encodeWire` tags array-position `undefined`, `decodeWire` restores it)
+    // and the prefix is unchanged, so those cursors are still accepted. Handling
+    // it only at the pivot was not enough: a multi-key seek also builds prefix
+    // predicates as `{ eq: value }`, and the shared `where` compiler binds
+    // `undefined` verbatim rather than treating it as NULL — deliberately, so a
+    // dropped variable in a user's query fails loudly instead of matching every
+    // null row.
+    // eslint-disable-next-line unicorn/no-null -- SQL NULL is the domain value a cursor carries
+    return (decoded as unknown[]).map((value: unknown) => value ?? null);
+};
+
+/**
+ * The pivot comparison for ONE column of the lexicographic seek: the rows on the
+ * wanted side of `value` under this column's direction.
+ *
+ * `wantLater` is which side is being sought — `true` for the strict "after"
+ * seek, `false` for the mirrored "at or before" bound. `inclusive` applies to the
+ * terminal column only, so a page's own end cursor stays inside the page it
+ * terminates.
+ *
+ * NULL is why this is not a comparator lookup. `col > NULL` and `col < NULL` are
+ * both UNKNOWN, so no comparator expresses either side of a NULL pivot, and none
+ * matches a NULL row sitting on the far side of a non-null pivot — a nullable
+ * ordered column cannot be paged without writing the ordering's NULL placement
+ * out. The placement is the key's own ({@link nullsFirstOf}): the SQLite/MySQL
+ * default — NULLs FIRST ascending, LAST descending — unless the caller asked for
+ * another with `{ sort, nulls }`. Every ORDER BY builder that pairs with this
+ * seek has to agree with it (Postgres does not by default, so `sql-store` states
+ * it explicitly; MySQL has no syntax for it, so a non-default one is emulated).
+ * Hence a non-null row is on the wanted side of a NULL pivot exactly when
+ * `nullsFirst === wantLater`, and NULL rows are on the wanted side of a non-null
+ * pivot exactly when it is not.
+ *
+ * `undefined` is the same pivot as `null`: a column absent from a document reads
+ * back as SQL NULL, and {@link encodeCursor} takes the ordered field verbatim, so
+ * an absent one arrives here as `undefined`.
+ */
+const pivotCondition = (column: OrderKey, value: unknown, wantLater: boolean, inclusive: boolean): WhereInput => {
+    const { field } = column;
+    // Which way the value comparison runs: later rows are greater under `asc`, smaller under `desc`.
+    const greaterWanted = (column.direction !== "desc") === wantLater;
+    // The NULL group lies on the side the seek is moving away from.
+    const nullsBehind = nullsFirstOf(column) === wantLater;
+
+    // Only `null`: both a fresh cursor (normalised at mint) and a legacy one
+    // (normalised in `decodeCursor`) carry SQL NULL by the time they reach here.
+    if (value === null) {
+        // Non-null rows are on the wanted side of a NULL pivot when the NULL group is behind the seek.
+        if (nullsBehind) {
+            // Inclusive at a NULL pivot is "the non-nulls, plus the NULL group itself" — every row.
+            return inclusive ? { OR: [{ [field]: { isNull: false } }, { [field]: { isNull: true } }] } : { [field]: { isNull: false } };
+        }
+
+        // Nothing sorts past NULL on this side; inclusive still keeps the NULL group.
+        return inclusive ? { [field]: { isNull: true } } : { OR: [] };
+    }
+
+    let operator = greaterWanted ? "gt" : "lt";
+
+    if (inclusive) {
+        operator = greaterWanted ? "gte" : "lte";
+    }
+
+    // `SEEK_RANGE`: the seek continues the ORDER BY, which sorts every JSON type of a path together.
+    const comparison: WhereInput = { [field]: { [operator]: value, [SEEK_RANGE]: true } };
+
+    // NULL rows are on the wanted side of a non-null pivot when the NULL group is ahead of the seek.
+    // Otherwise a comparator reaches everything wanted, and a column that never holds NULL has
+    // nothing more to reach.
+    if (nullsBehind || !column.nullable) {
+        return comparison;
+    }
+
+    // The NULL rows sort on the wanted side of this pivot and no comparator can reach them.
+    //
+    // Gated on `nullable` because the arm is expensive, not merely redundant: a
+    // second disjunct on the pivot column is not answerable from the same index
+    // range, so the planner drops the seek for a full scan (or a `MULTI-INDEX OR`
+    // plus a temp B-tree for the ORDER BY). That turns a page from O(page) into
+    // O(table) and full pagination from O(n) into O(n^2). Measured on
+    // `node:sqlite`, 50k rows, `ORDER BY priority DESC, id DESC LIMIT 20` over a
+    // covering `(priority, id)` index: 9.3us seeking, 469us scanning. On the DO's
+    // `json_extract` expression index the same shape went 23us -> 5033us.
+    //
+    // Under the default placement the arm lands on EVERY `desc` pivot of the forward seek —
+    // "newest first", the dominant read shape — which is why an unconditional arm was not a corner case.
+    // A non-default placement (`asc` + `nulls: "last"`, `desc` + `nulls: "first"`) hits the same arm on every
+    // page after the first, so only the first page is served from the index walk.
+    return { OR: [comparison, { [field]: { isNull: true } }] };
+};
+
+/**
+ * Shared lexicographic-seek builder behind {@link buildSeekWhere} /
+ * {@link buildSeekBeforeWhere}: one disjunct per pivot column, each ANDing the
+ * prefix equalities with the pivot comparison for the side being sought.
+ */
+const buildSeek = (keys: OrderKey[], cursorValues: unknown[], wantLater: boolean, inclusiveFinal: boolean): WhereInput => {
+    const columns: OrderKey[] = keys.some((key) => ID_FIELDS.has(key.field))
+        ? keys
+        : // `id` is minted by the store on every row, so the tiebreak is never nullable.
+          [...keys, { direction: tiebreakDirectionFor(keys), field: TIEBREAK_FIELD, nullable: false }];
+
+    // Every position the loop below reads must exist. A truncated cursor would
+    // otherwise index past the end, and those missing positions read as
+    // `undefined` — which `pivotCondition` deliberately accepts as SQL NULL for
+    // pre-normalisation cursors. The two together would turn a malformed cursor
+    // into a silent seek against the NULL group rather than the typed 400 a
+    // client-supplied value deserves.
+    if (cursorValues.length < columns.length) {
+        throw invalidCursor();
+    }
+
+    // Nested, not flattened. The flat expansion repeats the prefix equalities in
+    // every disjunct — `(a>?) OR (a=? AND b>?) OR (a=? AND b=? AND id>?)` — and
+    // binds `k(k+1)/2` parameters for `k` columns. `paginateWhere` can AND TWO
+    // seeks (the cursor and a reactive page's fixed end cursor), so that is
+    // `k(k+1)`: with `orderBy` capped at 8 keys, plus `_creationTime` and the id
+    // tiebreak, 10 columns bound 110 parameters against Workerd's per-statement
+    // cap of 100 — the statement fails to PREPARE with a bare `SQLITE_ERROR`,
+    // which is a broken page rather than a slow one.
+    //
+    // Factoring the shared prefix out — `(a>?) OR (a=? AND ((b>?) OR (b=? AND id>?)))`
+    // — is the same predicate (distribute it and you get the flat form back,
+    // term for term) at `2k-1` parameters: 19 instead of 55. Measured identical
+    // on both the plan and the returned rows.
+    const nest = (pivot: number): WhereInput => {
+        const column = columns[pivot];
+
+        if (column === undefined) {
+            throw invalidCursor();
+        }
+
+        const comparison = pivotCondition(column, cursorValues[pivot], wantLater, inclusiveFinal && pivot === columns.length - 1);
+
+        if (pivot === columns.length - 1) {
+            return comparison;
+        }
+
+        return { OR: [comparison, { AND: [{ [column.field]: { eq: cursorValues[pivot] } }, nest(pivot + 1)] }] };
+    };
+
+    const seek: WhereInput = nest(0);
+    const [leading] = columns;
+
+    // A REDUNDANT leading-column bound, ANDed onto the disjunction above.
+    //
+    // Every branch of that disjunction constrains the leading column — the first
+    // strictly, the rest by equality — so every row it can match already
+    // satisfies `leading >=|<= pivot`. SQLite cannot see that: an OR over
+    // several columns gives the planner no range on any single one, so it walks
+    // the whole index (`SCAN … USING INDEX`) testing each row. Stating the bound
+    // separately hands it back the range and the walk becomes a seek. Measured
+    // on `node:sqlite`, 50k rows, a `.withIndex(...)` page 2: `SCAN` at 799us
+    // vs `SEARCH … (<expr><?)` at 18.5us.
+    //
+    // It is a pure `WhereInput` addition, so no dialect learns anything new, and
+    // it constrains only the LEADING column — whose direction is uniform by
+    // definition — so a mixed-direction `orderBy` stays correct where a row-value
+    // comparison `(a, b) < (?, ?)` would not. Row-value is also no help here:
+    // SQLite does not apply its range optimisation to an EXPRESSION index, and
+    // every DO index is on `json_extract(...)` (measured: 523us, still `SCAN`).
+    //
+    // Gated on a non-nullable leading key with a non-null pivot, because that is
+    // exactly when `pivotCondition` emits a bare comparator. With the
+    // `OR col IS NULL` arm present the conjunct is a second disjunction rather
+    // than a bound and the planner drops the range again (measured 816 -> 478us,
+    // still `SCAN`) — same gate `pivotCondition` already computes.
+    if (columns.length < 2 || leading === undefined || leading.nullable || cursorValues[0] === null) {
+        return seek;
+    }
+
+    // `inclusive`, always: only the FIRST branch is strict on this column; the
+    // rest pin it by equality, so the tightest bound covering all of them is the
+    // non-strict one.
+    return { AND: [pivotCondition(leading, cursorValues[0], wantLater, true), seek] };
+};
+
+/**
+ * Build the `where` tree that selects rows strictly after the cursor under the
+ * given sort. For keys `[a ASC, b DESC]` (plus the id tiebreak) it expands to
+ * the lexicographic seek `(a > ?) OR (a = ? AND b < ?) OR (a = ? AND b = ? AND id > ?)`,
+ * letting the shared compiler render it per dialect. A key whose `nullable` is
+ * set swaps its comparator for the NULL-aware form — see {@link pivotCondition}.
+ */
+const buildSeekWhere = (keys: OrderKey[], cursorValues: unknown[]): WhereInput => buildSeek(keys, cursorValues, true, false);
+
+/**
+ * Build the `where` tree that selects rows at-or-before the cursor under the
+ * given sort — the inclusive upper bound that pairs with {@link buildSeekWhere}
+ * to express a half-open page range `(start, end]`. For keys `[a ASC, b DESC]`
+ * (plus the id tiebreak) it expands to the lexicographic seek
+ * `(a lt ?) OR (a eq ? AND b gt ?) OR (a eq ? AND b eq ? AND id lte ?)`: the
+ * strict direction is the mirror of {@link buildSeekWhere} on every column, and
+ * the final id tiebreak is `lte` (inclusive) so the boundary row itself stays in
+ * the page it terminates. Reactive pagination uses this for a page's fixed end
+ * cursor; the shared compiler renders it per dialect.
+ */
+const buildSeekBeforeWhere = (keys: OrderKey[], cursorValues: unknown[]): WhereInput => buildSeek(keys, cursorValues, false, true);
+
+/** System fields a `select` projection always retains so cursors + by-id reuse keep working. */
+const SELECT_SYSTEM_FIELDS = ["_id", "_creationTime"] as const;
+
+/**
+ * Project `page` rows down to `select` — plus the always-kept system fields and
+ * the relation/`_count` keys attached by a `with` load (passed as `withInput`,
+ * the same object handed to `findMany`). Returns the page unchanged when
+ * `select` is undefined. Pure; callers apply it AFTER relation resolution +
+ * cursor encoding so only the returned payload is trimmed (dependency tracking +
+ * the cursor still see the full row).
+ */
+const applySelect = (
+    page: Record<string, unknown>[],
+    select: ReadonlyArray<string> | undefined,
+    withInput?: Record<string, unknown>,
+): Record<string, unknown>[] => {
+    if (!select) {
+        return page;
+    }
+
+    const keep = new Set<string>([...select, ...SELECT_SYSTEM_FIELDS, ...(withInput ? Object.keys(withInput) : [])]);
+
+    return page.map((document) => {
+        const projected: Record<string, unknown> = {};
+
+        for (const key of keep) {
+            if (key in document) {
+                projected[key] = document[key];
+            }
+        }
+
+        return projected;
+    });
+};
+
+/**
+ * The read-scope predicate that hides soft-deleted rows — `{ [field]: { isNull:
+ * true } }` matching the live rows whose soft-delete column is null/absent — or
+ * `undefined` when the table isn't `.softDelete()` or the read opted in via
+ * `includeDeleted`. AND-merge it into a list read's `where` (the by-id path
+ * never calls this, so `get`/`patch`/`replace`/`restore` still address the row).
+ */
+const softDeleteScope = (softDeleteMode: { field: string } | undefined, includeDeleted: boolean | undefined): undefined | WhereInput =>
+    softDeleteMode && includeDeleted !== true ? { [softDeleteMode.field]: { isNull: true } } : undefined;
+
+/**
+ * The same rule as {@link softDeleteScope}, applied to a decoded row instead of
+ * compiled into a `where`: is this row LIVE?
+ *
+ * The aggregate companions tally live rows only, and a companion row carries no
+ * marker column of its own — so the tally is only as correct as this predicate's
+ * agreement with the scope it stands in for. They live adjacent for that reason;
+ * a difference between them is a maintained counter that silently disagrees with
+ * the scan it replaces.
+ *
+ * `field` `undefined` means the table has no soft-delete mode, and every row is
+ * live. Not to be confused with the exported `isSoftDeleted` in
+ * `external-source-pull.ts`, which reads an UPSTREAM tombstone column with
+ * deliberately looser semantics (`false`/`0` are live, `""` is deleted).
+ * @returns `true` when the row contributes to a companion tally
+ */
+const isLiveForCompanion = (document: Record<string, unknown>, field: string | undefined): boolean =>
+    field === undefined || document[field] === null || document[field] === undefined;
+
+export {
+    applySelect,
+    buildSeekBeforeWhere,
+    buildSeekWhere,
+    CURSOR_PREFIX,
+    decodeCursor,
+    encodeCursor,
+    equalityPinnedFields,
+    fromBase64,
+    isLiveForCompanion,
+    normalizeOrderKeys,
+    nullsFirstOf,
+    nullsOrderSuffix,
+    type OrderKeyConstraints,
+    softDeleteScope,
+    tiebreakDirectionFor,
+    toBase64,
+    uniqueIndexFields,
+};

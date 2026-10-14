@@ -12,6 +12,8 @@
  * are silent no-ops so a duplicate `complete` frame after a cancel doesn't
  * crash the page.
  */
+import { LunoraError } from "@lunora/errors";
+
 const DEFAULT_MAX_BUFFER = 1024;
 
 interface StreamHandle<T = unknown> {
@@ -127,9 +129,10 @@ const createStream = <T>(options: { maxBuffer?: number; onCancel: () => void }):
 
             if (buffer.length >= maxBuffer) {
                 handle.fail(
-                    Object.assign(new Error(`stream buffer overflow (max=${maxBuffer.toString()}); the consumer cannot keep up with the producer`), {
-                        code: "STREAM_BACKPRESSURE",
-                    }),
+                    new LunoraError(
+                        "STREAM_BACKPRESSURE",
+                        `stream buffer overflow (max=${maxBuffer.toString()}); the consumer cannot keep up with the producer`,
+                    ),
                 );
 
                 return;

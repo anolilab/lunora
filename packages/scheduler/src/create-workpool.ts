@@ -1,41 +1,16 @@
+import { LunoraError } from "@lunora/errors";
+
+import { encodeArgsOrThrow } from "../../../shared/wire-codec";
+import { assertSchedulerOptions, callDO, getDO } from "./do-client";
 import type { ArgsOf, EnqueueOptions, FunctionReference, Workpool, WorkpoolOptions } from "./types";
-
-const callDO = async <T>(options: WorkpoolOptions, path: string, body: unknown): Promise<T> => {
-    const stub = options.namespace.get(options.namespace.idFromName(options.instanceName ?? "default"));
-    const response = await stub.fetch(`https://scheduler.internal${path}`, {
-        body: JSON.stringify(body),
-        headers: { "content-type": "application/json" },
-        method: "POST",
-    });
-
-    if (!response.ok) {
-        const text = await response.text();
-
-        throw new Error(`@lunora/scheduler: SchedulerDO ${path} failed (${String(response.status)}): ${text}`);
-    }
-
-    return await response.json();
-};
-
-const getDO = async <T>(options: WorkpoolOptions, path: string): Promise<T> => {
-    const stub = options.namespace.get(options.namespace.idFromName(options.instanceName ?? "default"));
-    const response = await stub.fetch(`https://scheduler.internal${path}`, { method: "GET" });
-
-    if (!response.ok) {
-        const text = await response.text();
-
-        throw new Error(`@lunora/scheduler: SchedulerDO ${path} failed (${String(response.status)}): ${text}`);
-    }
-
-    return await response.json();
-};
+import assertScheduleDelay from "./validate-delay";
 
 /**
  * Bounded-concurrency action queue — the Lunora equivalent of
  * `@convex-dev/workpool`. Mirrors `createScheduler`'s `namespace` /
- * `originUrl` / `instanceName` options and is built on the SAME `SchedulerDO`:
+ * `instanceName` options and is built on the SAME `SchedulerDO`:
  * a workpool is just a NAMED logical pool inside that DO (concurrency counter
- * keyed by {@link WorkpoolOptions.name} under the `pool:&lt;name>` storage key).
+ * keyed by {@link WorkpoolOptions.name} under the `pool:<name>` storage key).
  * It needs no extra Durable Object or wrangler binding beyond the SchedulerDO
  * the scheduler already uses.
  *
@@ -43,8 +18,24 @@ const getDO = async <T>(options: WorkpoolOptions, path: string): Promise<T> => {
  * `maxConcurrency` of the pool's jobs at once and queues the rest durably,
  * draining them as the runtime reports completions (`POST /complete`).
  *
+ * The ceiling the platform adds: one alarm drain keeps at most SIX dispatches in
+ * flight, because a Durable Object may have only six connections simultaneously
+ * waiting for response headers. A `maxConcurrency` above six is therefore not
+ * wrong, just not reachable within a single drain — the surplus drains on the
+ * following alarms. The same invocation is bounded by the 15-minute alarm wall
+ * clock, which covers the WHOLE drain rather than one job; work that does not
+ * fit is deferred to the next alarm, never dropped.
+ *
+ * For jobs that are individually long — an LLM call, an export, a payment
+ * round-trip — prefer `createQueueWorkpool`: the dispatch this DO awaits
+ * only returns once the function has finished running, so a long job occupies
+ * one of those six slots and one slice of that 15-minute budget for its whole
+ * duration. A Queues consumer gets a fresh Worker invocation per batch, with its
+ * own connection budget and its own clock, and its `max_concurrency` is not
+ * capped at six. You give up the hard cap, per-job cancel, and per-job status.
+ *
  * ```ts
- * const pool = createWorkpool({ namespace: env.SCHEDULER, originUrl, maxConcurrency: 5 });
+ * const pool = createWorkpool({ namespace: env.SCHEDULER, maxConcurrency: 5 });
  * await pool.enqueue(internal.stripe.sync, { invoiceId }, { retry: { maxAttempts: 3 } });
  * ```
  *
@@ -61,18 +52,10 @@ const getDO = async <T>(options: WorkpoolOptions, path: string): Promise<T> => {
  * `step.sleep` / `step.waitForEvent`).
  */
 const createWorkpool = (options: WorkpoolOptions): Workpool => {
-    // Defensive runtime guards: required by the type, but JS callers can omit them.
-    // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- guards untrusted JS callers despite the required type
-    if (!options.namespace) {
-        throw new Error("@lunora/scheduler: `namespace` (SchedulerDO binding) is required");
-    }
-
-    if (!options.originUrl) {
-        throw new Error("@lunora/scheduler: `originUrl` is required so the DO can dispatch back to the Worker");
-    }
+    assertSchedulerOptions(options);
 
     if (!Number.isInteger(options.maxConcurrency) || options.maxConcurrency <= 0) {
-        throw new Error("@lunora/scheduler: `maxConcurrency` must be a positive integer");
+        throw new LunoraError("INTERNAL", "@lunora/scheduler: `maxConcurrency` must be a positive integer");
     }
 
     const name = typeof options.name === "string" && options.name.length > 0 ? options.name : "default";
@@ -84,19 +67,19 @@ const createWorkpool = (options: WorkpoolOptions): Workpool => {
     ): Promise<{ id: string; scheduledFor: number }> => {
         const delayMs = options_.delayMs ?? 0;
 
-        if (!Number.isFinite(delayMs) || delayMs < 0) {
-            throw new Error("@lunora/scheduler: `delayMs` must be a non-negative finite number");
-        }
+        assertScheduleDelay(delayMs, "workpool.enqueue");
 
         return callDO<{ id: string; scheduledFor: number }>(options, "/schedule", {
-            args,
+            // Wire-encoded on the same hop as `ctx.scheduler.runAt`; see
+            // `create-scheduler.ts`.
+            args: encodeArgsOrThrow("workpool.enqueue", function_.__lunoraRef, args),
             functionPath: function_.__lunoraRef,
             instanceName: options.instanceName ?? "default",
             maxConcurrency: options.maxConcurrency,
-            originUrl: options.originUrl,
             pool: name,
             retry: options_.retry,
-            scheduledFor: Date.now() + delayMs,
+            // Whole milliseconds, rounded up — see `createScheduler`'s `runAt`.
+            scheduledFor: Math.ceil(Date.now() + delayMs),
             shardKey: options_.shardKey,
         });
     };

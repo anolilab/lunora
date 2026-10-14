@@ -1,0 +1,17 @@
+name: "lunora"
+description: "Hand-written Lunora transport for Dart and Flutter — wire codec, stable subscription key, and RPC/WebSocket client."
+version: "0.0.0"
+publish_to: "none"
+
+# No `dependencies:` and no `dev_dependencies:`, deliberately. The transport
+# imports only `dart:convert` and `dart:typed_data`, and the conformance suite is
+# a plain `main()` under `test/` rather than a `package:test` case — the same
+# shape the java and kotlin ports use. That keeps `dart pub get --offline`
+# resolvable with nothing fetched, so the suite runs on a machine that has never
+# reached pub.dev and CI needs no package cache.
+#
+# It also keeps the VENDORED copy honest: `lunora sdk generate` writes `lib/`
+# into a consumer's project, and a transport with dependencies would make the
+# generated SDK's pubspec carry them too.
+environment:
+    sdk: "^3.6.0"

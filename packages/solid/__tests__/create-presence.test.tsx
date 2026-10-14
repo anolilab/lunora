@@ -9,13 +9,23 @@ import { LunoraProvider } from "../src/lunora-provider";
 
 const HEARTBEAT = { __lunoraRef: "presence:heartbeat" } as unknown as HeartbeatReference;
 const LIST_PRESENT = { __lunoraRef: "presence:listPresent" } as unknown as ListPresentReference;
-const SESS_ID_PATTERN = /^sess-/;
+// `randomSessionId`'s non-`randomUUID` arm (shared/random-session-id.ts) hex-encodes
+// 16 bytes of `crypto.getRandomValues`, so the id is exactly 32 lowercase hex chars.
+// There is deliberately no arm below that: a runtime with no Web Crypto throws
+// rather than mint a `Date.now()` string two sessions can share.
+const SESS_ID_PATTERN = /^[\da-f]{32}$/;
 
 const createPresenceFakeClient = () => {
     type Callback = (value: unknown) => void;
 
     const mutationCalls: { args: unknown; functionPath: string }[] = [];
-    const subscribeCalls: { args: unknown; callback: Callback; functionPath: string; unsubscribed: boolean }[] = [];
+    const subscribeCalls: {
+        args: unknown;
+        callback: Callback;
+        functionPath: string;
+        onError?: (error: { code?: string; message: string }) => void;
+        unsubscribed: boolean;
+    }[] = [];
     // Each acquired connection-context holder; `released` flips when the returned
     // release fn runs, so tests can assert refcounted (non-stomping) behaviour.
     const connectionContextHolders: { context: Record<string, unknown>; released: boolean }[] = [];
@@ -35,11 +45,17 @@ const createPresenceFakeClient = () => {
 
             return Promise.resolve(undefined);
         },
-        subscribe: (function_: FunctionReference, args: Record<string, unknown>, callback: Callback) => {
+        subscribe: (
+            function_: FunctionReference,
+            args: Record<string, unknown>,
+            callback: Callback,
+            options?: { onError?: (error: { code?: string; message: string }) => void },
+        ) => {
             const call = {
                 args,
                 callback,
                 functionPath: function_.__lunoraRef,
+                onError: options?.onError,
                 unsubscribed: false,
             };
 
@@ -106,6 +122,68 @@ describe("createPresence (Solid)", () => {
         expect(fake.mutationCalls).toHaveLength(3);
     });
 
+    it("setData called during render sends no heartbeat before mount", async () => {
+        // jsdom cannot run a real server render; a render-body call runs before
+        // `onMounted`, which is the same pre-mount path an SSR render takes.
+        const fake = createPresenceFakeClient();
+        let mutationsBeforeMount = -1;
+
+        render(
+            () => {
+                const { setData } = createPresence("room-1", {
+                    heartbeat: HEARTBEAT,
+                    intervalMs: 500,
+                    listPresent: LIST_PRESENT,
+                    sessionId: "sess-fixed",
+                });
+
+                setData({ status: "typing" });
+                mutationsBeforeMount = fake.mutationCalls.length;
+
+                return <div />;
+            },
+            { wrapper: (props) => <LunoraProvider client={fake.client}>{props.children}</LunoraProvider> },
+        );
+
+        expect(mutationsBeforeMount).toBe(0);
+
+        await flushAsync();
+
+        // The stored value is still delivered by the first mount heartbeat.
+        expect(fake.mutationCalls).toHaveLength(1);
+        expect(fake.mutationCalls[0]?.args).toMatchObject({ data: { status: "typing" }, roomId: "room-1" });
+    });
+
+    it("setData after mount sends a heartbeat carrying the new data", async () => {
+        const fake = createPresenceFakeClient();
+        let setDataFn: ((next: Record<string, unknown> | undefined) => void) | undefined;
+
+        render(
+            () => {
+                const { setData } = createPresence("room-1", {
+                    heartbeat: HEARTBEAT,
+                    intervalMs: 500,
+                    listPresent: LIST_PRESENT,
+                    sessionId: "sess-fixed",
+                });
+
+                setDataFn = setData;
+
+                return <div />;
+            },
+            { wrapper: (props) => <LunoraProvider client={fake.client}>{props.children}</LunoraProvider> },
+        );
+
+        await flushAsync();
+
+        expect(fake.mutationCalls).toHaveLength(1);
+
+        setDataFn?.({ status: "typing" });
+
+        expect(fake.mutationCalls).toHaveLength(2);
+        expect(fake.mutationCalls[1]?.args).toMatchObject({ data: { status: "typing" }, roomId: "room-1" });
+    });
+
     it("subscribes to listPresent and returns pushed values", async () => {
         const fake = createPresenceFakeClient();
         let capturedPresent: (() => unknown) | undefined;
@@ -140,12 +218,17 @@ describe("createPresence (Solid)", () => {
         expect(capturedPresent!()).toStrictEqual(members);
     });
 
-    it("generates fallback session id when crypto is unavailable", async () => {
+    it("mints a session id from getRandomValues when crypto.randomUUID is unavailable", async () => {
         const fake = createPresenceFakeClient();
         // eslint-disable-next-line n/no-unsupported-features/node-builtins -- accessing globalThis.crypto to save/restore it for the test
         const originalCrypto = globalThis.crypto;
 
-        Object.defineProperty(globalThis, "crypto", { configurable: true, value: undefined });
+        // A non-secure origin (a plain-HTTP LAN dev/preview server) leaves
+        // `crypto.randomUUID` undefined while still shipping `getRandomValues`.
+        Object.defineProperty(globalThis, "crypto", {
+            configurable: true,
+            value: { getRandomValues: (array: Uint8Array) => array.fill(171) },
+        });
 
         let capturedSessionId: string | undefined;
 
@@ -255,5 +338,40 @@ describe("createPresence (Solid)", () => {
         await flushAsync();
 
         expect(fake.connectionContextHolders[1]?.released).toBe(true);
+    });
+
+    // An RLS denial or a session expiry on the `listPresent` subscription used to be
+    // dropped on the floor: `present` simply froze at its last value with nothing to
+    // read and no handler to call. Matches React's `usePresence` error channel.
+    it("surfaces a listPresent subscription error on `error` and through `onError`", async () => {
+        const fake = createPresenceFakeClient();
+        const seen: { code?: string; message: string }[] = [];
+        let captured: ReturnType<typeof createPresence> | undefined;
+
+        render(
+            () => {
+                captured = createPresence("room-1", {
+                    heartbeat: HEARTBEAT,
+                    listPresent: LIST_PRESENT,
+                    onError: (subscriptionError) => seen.push(subscriptionError),
+                    sessionId: "sess-fixed",
+                });
+
+                return <pre />;
+            },
+            { wrapper: (props) => <LunoraProvider client={fake.client}>{props.children}</LunoraProvider> },
+        );
+
+        await flushAsync();
+
+        const call = fake.subscribeCalls[0]!;
+
+        call.callback([{ sessionId: "sess-fixed" }]);
+        call.onError?.({ code: "FORBIDDEN", message: "denied" });
+
+        expect(captured!.error()?.message).toBe("denied");
+        expect(seen).toStrictEqual([{ code: "FORBIDDEN", message: "denied" }]);
+        // The last good value is retained — the error is additive, not a reset.
+        expect(captured!.present()).toStrictEqual([{ sessionId: "sess-fixed" }]);
     });
 });

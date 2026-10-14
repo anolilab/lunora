@@ -86,6 +86,18 @@ describe("sQL renderers", () => {
         expect(sql).toBe('ALTER TABLE "users" ADD COLUMN "nickname" TEXT;');
     });
 
+    it("renderAddColumn adds a required column as nullable, since SQLite rejects NOT NULL on a populated table", () => {
+        expect.assertions(1);
+
+        expect(renderAddColumn("users", "updatedAt", { nullable: false, sqlType: "REAL" })).toBe(
+            [
+                'ALTER TABLE "users" ADD COLUMN "updatedAt" REAL;',
+                '-- "users"."updatedAt" is required, so rows written before it read NULL. Backfill them:',
+                '-- UPDATE "users" SET "updatedAt" = <value> WHERE "updatedAt" IS NULL;',
+            ].join("\n"),
+        );
+    });
+
     it("renderDropTable emits DROP TABLE IF EXISTS", () => {
         expect.assertions(1);
 

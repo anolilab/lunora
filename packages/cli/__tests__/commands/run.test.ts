@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import type { FetchLike } from "../../src/commands/run/handler";
 import { runRpcCommand } from "../../src/commands/run/handler";
+import { EXIT_CODE } from "../../src/util/exit-code";
 import type { Logger } from "../../src/util/logger";
 
 const silentLogger = (): Logger => {
@@ -10,6 +11,30 @@ const silentLogger = (): Logger => {
         info: () => {},
         success: () => {},
         warn: () => {},
+    };
+};
+
+/**
+ * A fetch stub for the "must never reach the network" cases: it records that it
+ * was called — which is the failure those tests pin — and answers a bare 200.
+ */
+const recordingFetch = (): { called: () => boolean; fetchImpl: FetchLike } => {
+    let called = false;
+
+    return {
+        called: () => called,
+        fetchImpl: async () => {
+            called = true;
+
+            return {
+                json: async () => {
+                    return {};
+                },
+                ok: true,
+                status: 200,
+                text: async () => "",
+            };
+        },
     };
 };
 
@@ -137,7 +162,7 @@ describe("lunora run", () => {
             logger: silentLogger(),
         });
 
-        expect(result.code).toBe(1);
+        expect(result.code).toBe(EXIT_CODE.UNAVAILABLE);
         expect(bodyRead).toBe(true);
         expect(result.body).toBe("<html><body>502 Bad Gateway</body></html>");
     });
@@ -165,7 +190,186 @@ describe("lunora run", () => {
             logger: { ...silentLogger(), error: (message) => errors.push(message) },
         });
 
-        expect(result.code).toBe(1);
+        expect(result.code).toBe(EXIT_CODE.USAGE);
         expect(errors.join("\n")).toContain("failed to parse --args");
+    });
+
+    it("returns non-zero when --args parses to a non-object", async () => {
+        expect.assertions(2);
+
+        const errors: string[] = [];
+        const { called, fetchImpl } = recordingFetch();
+
+        const result = await runRpcCommand({
+            args: "5",
+            fetchImpl,
+            functionPath: "x:y",
+            logger: { ...silentLogger(), error: (message) => errors.push(message) },
+        });
+
+        expect(result.code).toBe(EXIT_CODE.USAGE);
+        expect(called()).toBe(false);
+    });
+
+    it("refuses --claims without --as instead of making an anonymous call", async () => {
+        expect.assertions(3);
+
+        const errors: string[] = [];
+        const { called, fetchImpl } = recordingFetch();
+
+        // Regression: `claims` was only threaded into the `runAs` branch, so this
+        // exited 0 having made an ANONYMOUS call — an authoritative-looking wrong
+        // answer when debugging a claims-gated procedure.
+        const result = await runRpcCommand({
+            claims: JSON.stringify({ role: "admin" }),
+            fetchImpl,
+            functionPath: "x:y",
+            logger: { ...silentLogger(), error: (message) => errors.push(message) },
+            url: "http://localhost:9999",
+        });
+
+        expect(result.code).toBe(EXIT_CODE.USAGE);
+        expect(called()).toBe(false);
+        expect(errors.join("\n")).toContain("--claims requires --as");
+    });
+});
+
+describe("lunora run --as", () => {
+    /** Capture the single request a run makes, answering with `status`/`text`. */
+    const capturing = (
+        calls: { body: Record<string, unknown>; headers?: Record<string, string>; url: string }[],
+        replyStatus = 200,
+        replyText = "{}",
+    ): FetchLike => {
+        const reply = { status: replyStatus, text: replyText };
+
+        return async (url, init) => {
+            calls.push({ body: init?.body ? (JSON.parse(init.body) as Record<string, unknown>) : {}, headers: init?.headers, url });
+
+            return {
+                json: async () => JSON.parse(reply.text) as unknown,
+                ok: reply.status < 400,
+                status: reply.status,
+                text: async () => reply.text,
+            };
+        };
+    };
+
+    it("dispatches through the admin runAs op, nesting the target call", async () => {
+        expect.assertions(3);
+
+        const calls: { body: Record<string, unknown>; headers?: Record<string, string>; url: string }[] = [];
+
+        await runRpcCommand({
+            args: JSON.stringify({ text: "hi" }),
+            as: "user_123",
+            fetchImpl: capturing(calls),
+            functionPath: "messages:send",
+            logger: silentLogger(),
+            token: "admin-secret",
+            url: "http://localhost:9999",
+        });
+
+        // A plain RPC carries no session, so an app with `authorizeShard` denies
+        // it; `runAs` forges the identity and is admin-gated instead.
+        expect(calls[0]?.body["functionPath"]).toBe("__lunora_admin__:runAs");
+        // `identity` is absent, not null: an undefined claims bag drops out of the JSON body.
+        expect(calls[0]?.body["args"]).toStrictEqual({ args: { text: "hi" }, functionPath: "messages:send", userId: "user_123" });
+        expect(calls[0]?.headers?.["authorization"]).toBe("Bearer admin-secret");
+    });
+
+    it("forwards extra claims alongside the user id", async () => {
+        expect.assertions(1);
+
+        const calls: { body: Record<string, unknown>; headers?: Record<string, string>; url: string }[] = [];
+
+        await runRpcCommand({
+            as: "user_123",
+            claims: JSON.stringify({ org: "acme" }),
+            fetchImpl: capturing(calls),
+            functionPath: "messages:list",
+            logger: silentLogger(),
+            token: "admin-secret",
+            url: "http://localhost:9999",
+        });
+
+        expect((calls[0]?.body["args"] as Record<string, unknown>)["identity"]).toStrictEqual({ org: "acme" });
+    });
+
+    it("refuses to run as an identity without an admin bearer", async () => {
+        expect.assertions(2);
+
+        const calls: { body: Record<string, unknown>; headers?: Record<string, string>; url: string }[] = [];
+        const messages: string[] = [];
+        const logger = { ...silentLogger(), error: (message: string) => messages.push(message) };
+
+        // A remote target never falls back to `.dev.vars`, so this has no source.
+        const result = await runRpcCommand({
+            as: "user_123",
+            fetchImpl: capturing(calls),
+            functionPath: "messages:list",
+            logger,
+            url: "https://app.example.com",
+        });
+
+        expect(result.code).toBe(EXIT_CODE.AUTH);
+        expect(calls).toHaveLength(0);
+    });
+
+    it("sends the admin bearer for a reserved admin path even without --as", async () => {
+        expect.assertions(2);
+
+        const calls: { body: Record<string, unknown>; headers?: Record<string, string>; url: string }[] = [];
+
+        await runRpcCommand({
+            fetchImpl: capturing(calls),
+            functionPath: "__lunora_admin__:listTables",
+            logger: silentLogger(),
+            token: "admin-secret",
+            url: "http://localhost:9999",
+        });
+
+        expect(calls[0]?.headers?.["authorization"]).toBe("Bearer admin-secret");
+        expect(calls[0]?.body["functionPath"]).toBe("__lunora_admin__:listTables");
+    });
+
+    it("refuses to put the admin bearer on the wire in cleartext to a remote host", async () => {
+        expect.assertions(2);
+
+        const calls: { body: Record<string, unknown>; headers?: Record<string, string>; url: string }[] = [];
+        const messages: string[] = [];
+        const logger = { ...silentLogger(), error: (message: string) => messages.push(message) };
+
+        // The bearer is full-access admin; a MITM on a plaintext hop would own the
+        // deployment. Every other bearer-carrying command refuses this, and so
+        // must `run --as`.
+        const result = await runRpcCommand({
+            as: "user_123",
+            fetchImpl: capturing(calls),
+            functionPath: "messages:list",
+            logger,
+            token: "admin-secret",
+            url: "http://staging.example.com",
+        });
+
+        expect(result.code).toBe(EXIT_CODE.USAGE);
+        expect(calls).toHaveLength(0);
+    });
+
+    it("points a shard denial at --as instead of leaving the operator to guess", async () => {
+        expect.assertions(1);
+
+        const calls: { body: Record<string, unknown>; headers?: Record<string, string>; url: string }[] = [];
+        const messages: string[] = [];
+        const logger = { ...silentLogger(), info: (message: string) => messages.push(message) };
+
+        await runRpcCommand({
+            fetchImpl: capturing(calls, 403, '{"error":{"code":"FORBIDDEN_SHARD","message":"Forbidden shard"}}'),
+            functionPath: "messages:list",
+            logger,
+            url: "http://localhost:9999",
+        });
+
+        expect(messages.some((message) => message.includes("--as"))).toBe(true);
     });
 });

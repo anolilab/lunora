@@ -36,6 +36,7 @@
  */
 import type { LunoraAuth } from "@lunora/auth";
 import { createAuth, DEFAULT_AUTH_BASE_PATH, ensureMigrated, handleAuthRequest, lunoraD1Adapter } from "@lunora/auth";
+import { uiConfig } from "@lunora/auth/plugins";
 import { createMailerFromEnv } from "@lunora/mail";
 
 /**
@@ -84,8 +85,12 @@ export interface AuthEnv {
  * logs where anyone with log access could use them to take over the account.
  * Cast through the full `env` since the mailer reads bindings (`SHARD`,
  * `SEND_EMAIL`) and vars (`MAIL_FROM`) outside {@link AuthEnv}'s slice.
+ *
+ * `html` is optional so the `auth-emails` registry item's recipe compiles as
+ * documented: `renderEmail(<ResetPasswordEmail … />)` returns `{ html, text }`
+ * and both are passed straight through to `@lunora/mail`.
  */
-const sendAuthEmail = async (env: AuthEnv, message: { subject: string; text: string; to: string }): Promise<void> => {
+const sendAuthEmail = async (env: AuthEnv, message: { html?: string; subject: string; text: string; to: string }): Promise<void> => {
     const fullEnv = env as unknown as Record<string, unknown>;
 
     if (typeof fullEnv["MAIL_FROM"] !== "string") {
@@ -106,15 +111,13 @@ const sendAuthEmail = async (env: AuthEnv, message: { subject: string; text: str
 
     const cloudflareSend = async (from: string, to: string, raw: string): Promise<void> => {
         const { EmailMessage } = await import("cloudflare:email");
-        const binding = fullEnv["SEND_EMAIL"] as { send: (m: InstanceType<typeof EmailMessage>) => Promise<void> } | undefined;
-
-        if (binding === undefined) {
-            throw new Error("auth: no SEND_EMAIL binding to deliver mail — run `lunora add email` or set RESEND_API_KEY.");
-        }
+        const binding = fullEnv["SEND_EMAIL"] as { send: (m: InstanceType<typeof EmailMessage>) => Promise<void> };
 
         await binding.send(new EmailMessage(from, to, raw));
     };
 
+    // `createMailerFromEnv` uses `cloudflareSend` only when `SEND_EMAIL` is bound,
+    // falling back to `RESEND_API_KEY` otherwise.
     await createMailerFromEnv(fullEnv, { cloudflareSend }).send(message);
 };
 
@@ -141,6 +144,7 @@ export const buildAuth = (env: AuthEnv): LunoraAuth =>
         database: lunoraD1Adapter(env.DB as never),
         emailAndPassword: {
             enabled: true,
+            requireEmailVerification: true,
             sendResetPassword: async ({ url, user }) => {
                 await sendAuthEmail(env, { subject: "Reset your password", text: `Reset your password:\n${url}`, to: user.email });
             },
@@ -150,6 +154,12 @@ export const buildAuth = (env: AuthEnv): LunoraAuth =>
                 await sendAuthEmail(env, { subject: "Verify your email address", text: `Verify your email address:\n${url}`, to: user.email });
             },
         },
+        // Publishes which plugins and social providers you enabled at
+        // `GET /api/auth/ui-config`, so `lunora add auth-ui`'s screens configure
+        // themselves — add a social provider here and its button appears, with
+        // no second list to keep in sync client-side. Only facts a sign-in page
+        // reveals by existing are exposed; drop the plugin to turn it off.
+        plugins: [uiConfig()],
         secret: env.BETTER_AUTH_SECRET,
     });
 
@@ -165,7 +175,7 @@ const buildMigrationAuth = (env: AuthEnv): LunoraAuth =>
         baseURL: env.BETTER_AUTH_URL,
         // Raw D1 on purpose — the migration runner resolves Kysely itself.
         database: env.DB as never,
-        emailAndPassword: { enabled: true },
+        emailAndPassword: { enabled: true, requireEmailVerification: true },
         secret: env.BETTER_AUTH_SECRET,
     });
 

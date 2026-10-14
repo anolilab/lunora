@@ -230,6 +230,27 @@ describe("stream", () => {
     // --- LunoraClient.stream() integration tests --------------------------------
 
     describe("lunoraClient.stream()", () => {
+        it("fails fast on a tab that holds no socket instead of hanging forever", async () => {
+            expect.assertions(1);
+
+            // `ensureSocket` returns before creating a connection whenever this
+            // tab is not the cross-tab leader — which includes the window every
+            // `crossTabSync` client spends as a follower before it self-promotes.
+            // Both send branches were guarded on a connection existing, so this
+            // case fell off the end: the stream was recorded and its iterable
+            // returned having sent nothing and queued nothing, and the consumer
+            // never yielded, never errored and never completed. Cross-tab relays
+            // only subscription frames, so a follower genuinely has no stream
+            // path — the honest answer is a named failure, not a hang.
+            const client = new LunoraClient({ crossTabSync: true, url: "https://app.example", WebSocket: createMockWebSocket() });
+
+            const iterable = client.stream(fnRef<number>("metrics:tick"), {});
+
+            await expect(iterable[Symbol.asyncIterator]().next()).rejects.toMatchObject({ code: "STREAM_DISCONNECTED" });
+
+            client.close();
+        });
+
         it("opens a WS, sends a stream frame, and yields chunks until complete", async () => {
             expect.assertions(3);
 
@@ -337,6 +358,108 @@ describe("stream", () => {
             const consumer = iterable[Symbol.asyncIterator]().next();
 
             await expect(consumer).rejects.toMatchObject({ code: "CLIENT_CLOSED" });
+        });
+
+        it("fails an in-flight stream when the socket disconnects instead of hanging forever", async () => {
+            expect.assertions(1);
+
+            const client = new LunoraClient({ url: "https://app.example", WebSocket: createMockWebSocket() });
+
+            const iterable = client.stream(fnRef<number>("metrics:tick"), {});
+
+            // Open so the start frame is sent — the server now holds the iterator.
+            latestSocket().open();
+
+            const consumer = iterable[Symbol.asyncIterator]().next();
+
+            // Socket bounces (flaky Wi-Fi): the server-side iterator is gone and
+            // nothing will resume it. The consumer must see a deterministic
+            // rejection rather than an unresolved next().
+            latestSocket().close();
+
+            await expect(consumer).rejects.toMatchObject({ code: "STREAM_DISCONNECTED" });
+
+            client.close();
+        });
+
+        it("re-sends a durable start frame with the resume watermark and run generation after a bounce", async () => {
+            expect.assertions(3);
+
+            vi.useFakeTimers();
+
+            const client = new LunoraClient({ url: "https://app.example", WebSocket: createMockWebSocket() });
+            const iterable = client.stream(fnRef<number>("chat:answer"), {});
+
+            const first = latestSocket();
+
+            first.open();
+
+            const { id } = first.sent.map((raw) => JSON.parse(raw) as Record<string, unknown>).find((f) => f.type === "stream") as { id: string };
+
+            // A seq-bearing chunk marks the stream durable; `generation` is the
+            // server's stamp for the run these chunks belong to.
+            first.receive({ data: 1, generation: 1234, id, seq: 1, type: "chunk" });
+            first.receive({ data: 2, generation: 1234, id, seq: 2, type: "chunk" });
+
+            // Socket bounces; the scheduled reconnect brings up a new socket.
+            first.close();
+            vi.runOnlyPendingTimers();
+
+            const second = latestSocket();
+
+            second.open();
+
+            const resume = second.sent.map((raw) => JSON.parse(raw) as Record<string, unknown>).find((f) => f.type === "stream" && f.id === id);
+
+            expect(resume).toBeDefined();
+            // The resume proves both WHERE it left off and WHICH run it left off
+            // in, so the server never splices a different run's tail on.
+            expect(resume?.sinceChunk).toBe(2);
+            expect(resume?.generation).toBe(1234);
+
+            iterable.cancel();
+            client.close();
+        });
+
+        it("drops the cancel of a durable stream made while disconnected, and never resumes it", async () => {
+            expect.assertions(2);
+
+            vi.useFakeTimers();
+
+            const client = new LunoraClient({ url: "https://app.example", WebSocket: createMockWebSocket() });
+            const iterable = client.stream(fnRef<number>("chat:answer"), {});
+
+            const first = latestSocket();
+
+            first.open();
+
+            const { id } = first.sent.map((raw) => JSON.parse(raw) as Record<string, unknown>).find((f) => f.type === "stream") as { id: string };
+
+            // A seq-bearing chunk marks the run durable — it outlives the socket.
+            first.receive({ data: 1, generation: 1234, id, seq: 1, type: "chunk" });
+
+            // Socket drops. The disconnect path queues a resume frame, and the
+            // server detaches this consumer from the run as the socket closes.
+            first.close();
+
+            // Consumer gives up while still disconnected. There is nothing left
+            // to tell the server: an `unsubscribe` on the next socket would reach
+            // a socket the run was never attached to.
+            iterable.cancel();
+
+            vi.runOnlyPendingTimers();
+
+            const second = latestSocket();
+
+            second.open();
+
+            const frames = second.sent.map((raw) => JSON.parse(raw) as Record<string, unknown>);
+
+            expect(frames.some((f) => f.type === "unsubscribe" && f.id === id)).toBe(false);
+            // And no resume may be sent for a run we just cancelled.
+            expect(frames.some((f) => f.type === "stream" && f.id === id)).toBe(false);
+
+            client.close();
         });
 
         it("buffers the start frame while the socket is connecting and flushes it on open", async () => {

@@ -1,5 +1,5 @@
 import type { ReactElement, RefObject } from "react";
-import { useState } from "react";
+import { useCallback, useState } from "react";
 
 import { useT } from "../../i18n/i18n-context";
 import { cn } from "../../lib/utils";
@@ -94,6 +94,8 @@ interface SqlAutocomplete {
     readonly close: () => void;
     /** Apply the highlighted suggestion into the editor text; returns whether one was applied. */
     readonly commit: () => boolean;
+    /** Apply the suggestion at `index` (the mouse path) — see the implementation for why this can't go through `move`. */
+    readonly commitAt: (index: number) => boolean;
     /** Re-derive suggestions from the current caret/value (call on change + caret moves). */
     readonly refresh: (value: string, caret: number) => void;
     /** The popover's listbox state, or `null` when closed. */
@@ -116,20 +118,44 @@ const useSqlAutocomplete = (
 ): SqlAutocomplete & { move: (delta: number) => void } => {
     const [state, setState] = useState<AutocompleteState | null>(null);
 
-    const refresh = (value: string, caret: number): void => {
-        const suggestions = suggestionsFor(value, caret, schema);
+    // Stable across renders (only re-created when the schema data changes) so the
+    // panel's "re-derive once a probe resolves" effect keys off it without firing
+    // after every render. The functional setState bails to the CURRENT state when
+    // the derived session is unchanged — without that bail, a refresh from an
+    // effect would loop forever: fresh state object → re-render → effect →
+    // refresh → fresh state object … (the studio's SQL-editor render-loop hang).
+    // react-doctor-disable-next-line react-doctor/react-compiler-no-manual-memoization -- load-bearing: `refresh` is a dependency of the probe-refresh effect; a stable identity is what stops that effect firing every render (the render-loop hang described above). React Compiler would memoize it in the build, but the vitest suite runs the JSX through esbuild without the compiler transform, so the explicit useCallback is what holds the identity stable in the tests that now gate CI.
+    const refresh = useCallback(
+        (value: string, caret: number): void => {
+            const suggestions = suggestionsFor(value, caret, schema);
 
-        if (suggestions.length === 0) {
-            setState(null);
+            if (suggestions.length === 0) {
+                setState(null);
 
-            return;
-        }
+                return;
+            }
 
-        const node = textareaRef.current;
-        const { left, top } = node === null ? { left: 0, top: 0 } : caretOffset(node, caret);
+            const node = textareaRef.current;
+            const { left, top } = node === null ? { left: 0, top: 0 } : caretOffset(node, caret);
 
-        setState({ active: 0, left, suggestions, top });
-    };
+            setState((current) => {
+                const unchanged =
+                    current !== null &&
+                    current.active === 0 &&
+                    current.left === left &&
+                    current.top === top &&
+                    current.suggestions.length === suggestions.length &&
+                    current.suggestions.every((existing, index) => {
+                        const next = suggestions.at(index);
+
+                        return existing.kind === next?.kind && existing.label === next.label && existing.detail === next.detail;
+                    });
+
+                return unchanged ? current : { active: 0, left, suggestions, top };
+            });
+        },
+        [schema, textareaRef],
+    );
 
     const close = (): void => {
         setState(null);
@@ -148,14 +174,22 @@ const useSqlAutocomplete = (
         });
     };
 
-    const commit = (): boolean => {
+    /**
+     * Accept a suggestion by index, defaulting to the highlighted one.
+     *
+     * The index is a parameter because the mouse path cannot get there via
+     * {@link move}: `move` schedules a state update, so a `commit()` called straight
+     * after it still reads the pre-move `active` and inserts whatever was highlighted
+     * rather than what was clicked.
+     */
+    const commitAt = (index?: number): boolean => {
         const textarea = textareaRef.current;
 
         if (state === null || textarea === null) {
             return false;
         }
 
-        const chosen = state.suggestions[state.active];
+        const chosen = state.suggestions[index ?? state.active];
 
         if (chosen === undefined) {
             return false;
@@ -179,7 +213,9 @@ const useSqlAutocomplete = (
         return true;
     };
 
-    return { close, commit, move, refresh, state };
+    const commit = (): boolean => commitAt();
+
+    return { close, commit, commitAt, move, refresh, state };
 };
 
 interface AutocompletePopoverProps {

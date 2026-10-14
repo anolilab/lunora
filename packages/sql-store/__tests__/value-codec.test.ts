@@ -1,7 +1,65 @@
-import type { ValidatorLike } from "@lunora/do";
+import type { ValidatorLike } from "@lunora/shard-engine";
 import { describe, expect, it } from "vitest";
 
 import { decodeBigint, effectiveColumnKind, sqliteDecode, sqliteEncode, tryJsonParse } from "../src/value-codec";
+
+describe("nested wire-typed values", () => {
+    it("round-trips a bigint and bytes nested inside a composite column", () => {
+        expect.assertions(2);
+
+        // A bare `JSON.stringify` threw an untyped `TypeError` on a nested bigint
+        // (surfacing as an opaque 500) and flattened nested bytes to `{}` — data
+        // destroyed with no error at all. The shard twin round-trips both.
+        const withBigint = sqliteEncode({ n: 1n });
+
+        expect(sqliteDecode(withBigint, "object")).toStrictEqual({ n: 1n });
+
+        const bytes = new Uint8Array([1, 2, 3]).buffer;
+        const decoded = sqliteDecode(sqliteEncode({ b: bytes }), "object") as { b: ArrayBuffer };
+
+        expect(new Uint8Array(decoded.b)).toStrictEqual(new Uint8Array([1, 2, 3]));
+    });
+
+    it("stores an ordinary composite byte-identically to plain JSON", () => {
+        expect.assertions(1);
+
+        // `encodeWire` is identity for pure JSON, so existing rows keep their
+        // stored form and still read back unchanged.
+        expect(sqliteEncode({ a: 1, b: [true, "x"], c: null })).toBe(JSON.stringify({ a: 1, b: [true, "x"], c: null }));
+    });
+
+    it.each(["array", "object", "record", "any", "union"])("returns a legacy %s row that looks wire-encoded unchanged", (kind) => {
+        expect.assertions(1);
+
+        // Legitimate app data that happens to be shaped like a wire payload, and
+        // written before this path existed — so it never passed through
+        // `encodeWire`'s `"arr"` escape. Sniffing the content for the tag decodes
+        // it as `42n`, and the next patch/replace persists that corruption. Only
+        // the explicit prefix that `sqliteEncode` writes marks a wire value.
+        const legacy = ["$lunora.wire$", "bigint", "42"];
+
+        expect(sqliteDecode(JSON.stringify(legacy), kind)).toStrictEqual(legacy);
+    });
+
+    it("still round-trips that same array when it is written through the encoder", () => {
+        expect.assertions(2);
+
+        // The escape hatch has to keep working: written through `sqliteEncode` the
+        // array is escaped, marked, and must come back as itself — not as `42n`.
+        const hostile = ["$lunora.wire$", "bigint", "42"];
+        const stored = sqliteEncode(hostile) as string;
+
+        expect(stored.startsWith("$lunora.wire$")).toBe(true);
+        expect(sqliteDecode(stored, "array")).toStrictEqual(hostile);
+    });
+
+    it("marks a genuinely wire-encoded value and leaves ordinary JSON unmarked", () => {
+        expect.assertions(2);
+
+        expect(sqliteEncode({ n: 1n }) as string).toMatch(/^\$lunora\.wire\$/);
+        expect(sqliteEncode({ n: 1 }) as string).not.toMatch(/^\$lunora\.wire\$/);
+    });
+});
 
 describe("sqliteEncode", () => {
     it("maps booleans to 1/0", () => {
@@ -19,10 +77,38 @@ describe("sqliteEncode", () => {
         expect(sqliteEncode(null)).toBeNull();
     });
 
-    it("stringifies bigints as decimal", () => {
+    it("encodes bigints as a fixed-width, order-preserving text key", () => {
+        expect.assertions(3);
+
+        // Sign character + 39 digits of magnitude. Exact past 2^53, where
+        // `Number()` would collapse neighbouring values onto one double.
+        expect(sqliteEncode(9_007_199_254_740_993n)).toBe(`1${"9007199254740993".padStart(39, "0")}`);
+        expect(sqliteEncode(0n)).toBe(`1${"0".repeat(39)}`);
+        // Negatives: nines' complement under the lower sign character.
+        expect(sqliteEncode(-5n)).toBe(`0${"9".repeat(38)}4`);
+    });
+
+    /**
+     * The defect this encoding exists for. Plain decimal text is exact for `=`
+     * but sorts `"9"` after `"10"`, so a range filter, an `ORDER BY`, a page
+     * cursor and `MIN`/`MAX` over a `v.bigint()` column all returned the wrong
+     * rows — `where: { n: { gt: 9n } }` matched nothing while `10n` and `100n`
+     * sat in the table. Byte order over the encoded keys has to BE numeric order.
+     */
+    it("sorts lexicographically in numeric order, across zero", () => {
         expect.assertions(1);
 
-        expect(sqliteEncode(9_007_199_254_740_993n)).toBe("9007199254740993");
+        const values = [2n, 9n, 10n, 100n, -5n, -200n, 0n, 9_007_199_254_740_993n, -9_007_199_254_740_993n];
+        const byKey = values.toSorted((a, b) => String(sqliteEncode(a)).localeCompare(String(sqliteEncode(b))));
+        const numerically = values.toSorted((a, b) => Number(a - b));
+
+        expect(byKey).toStrictEqual(numerically);
+    });
+
+    it("refuses a magnitude past the fixed key width rather than mis-sorting it", () => {
+        expect.assertions(1);
+
+        expect(() => sqliteEncode(10n ** 39n)).toThrow(/over the 39-digit limit/u);
     });
 
     it("jSON-encodes objects and arrays", () => {
@@ -30,6 +116,86 @@ describe("sqliteEncode", () => {
 
         expect(sqliteEncode({ x: 1 })).toBe('{"x":1}');
         expect(sqliteEncode([1, 2])).toBe("[1,2]");
+    });
+});
+
+/**
+ * An untyped column (`v.union()`/`v.any()`/`v.from()`) is TEXT on every engine,
+ * so a number written to one has to be stored as text — and the marked JSON that
+ * used to carry it (`$lunora.wire$42`) sorts `"10"` before `"2"`. The key form
+ * below is the same fix `bigintSqlKey` is, applied to the last column kind left
+ * on the lossy form.
+ */
+describe("sqliteEncode — untyped columns store a number as an order-preserving key", () => {
+    /** Text order over the stored forms, which is the order SQLite applies to the column. */
+    const byStorage = (values: ReadonlyArray<number>): number[] =>
+        values.toSorted((left, right) => {
+            const a = String(sqliteEncode(left, "union"));
+            const b = String(sqliteEncode(right, "union"));
+
+            if (a < b) {
+                return -1;
+            }
+
+            return a > b ? 1 : 0;
+        });
+
+    it("orders numbers numerically, across zero and across magnitudes", () => {
+        expect.assertions(1);
+
+        const values = [1.5, 2, 9, 10, 100, 0, -0.5, -7, -1000, 1e300, -1e300, 5e-324, 2 ** 53];
+
+        expect(byStorage(values)).toStrictEqual(values.toSorted((left, right) => left - right));
+    });
+
+    it("round-trips every number through the marker alone, no kind needed on the way out", () => {
+        expect.assertions(1);
+
+        const values = [0, -0, 1.5, -7, 1e300, 5e-324, Number.MAX_SAFE_INTEGER, Number.MIN_SAFE_INTEGER];
+
+        // `-0` normalizes to `0`: SQL compares the two equal, so two distinct
+        // keys would make an `eq` binding miss half the rows it should match.
+        expect(values.map((value) => sqliteDecode(sqliteEncode(value, "union"), "union"))).toStrictEqual([
+            0,
+            0,
+            1.5,
+            -7,
+            1e300,
+            5e-324,
+            Number.MAX_SAFE_INTEGER,
+            Number.MIN_SAFE_INTEGER,
+        ]);
+    });
+
+    it("keeps every number sorting below `false` and `true`, the position they already held", () => {
+        expect.assertions(1);
+
+        // Asserted as already-ascending rather than by sorting: `<` on these
+        // ASCII forms is byte order, which is the order SQLite applies to the
+        // column, and no JS sort comparator reproduces that for arbitrary text.
+        const forms = [Number.MAX_VALUE, false, true].map((value) => String(sqliteEncode(value, "union")));
+
+        expect(forms.every((form, index) => index === 0 || (forms[index - 1] ?? "") < form)).toBe(true);
+    });
+
+    it("still reads back a number written in the marked JSON an earlier build wrote", () => {
+        expect.assertions(2);
+
+        // What makes a table correct between the format change and the rewrite
+        // pass that converts it — the read side accepts both forms.
+        expect(sqliteDecode("$lunora.wire$42", "union")).toBe(42);
+        expect(sqliteDecode("$lunora.wire$-1.5", "any")).toBe(-1.5);
+    });
+
+    it("leaves a string, a bigint and a composite in the form they already had", () => {
+        expect.assertions(3);
+
+        // The WHERE path binds through `sqliteEncode` for these too, and
+        // `contains`/`startsWith` run their substring test against the stored
+        // string — so only the numbers moved.
+        expect(sqliteEncode("42", "union")).toBe("42");
+        expect(sqliteEncode(42n, "union")).toBe(`1${"42".padStart(39, "0")}`);
+        expect(sqliteEncode({ x: 1 }, "union")).toBe('{"x":1}');
     });
 });
 
@@ -55,11 +221,37 @@ describe("sqliteDecode — round-trips with sqliteEncode by kind", () => {
         expect(sqliteDecode(sqliteEncode([1, 2]), "array")).toEqual([1, 2]);
     });
 
+    it("geoPoint: JSON string → the { lat, lng } object", () => {
+        expect.assertions(2);
+
+        // `sqliteEncode` stores the point as JSON in a TEXT column. Without a
+        // `geoPoint` case the decode fell through to `default:` and every client
+        // read the raw JSON text back — `doc.at.lat` was `undefined`.
+        const at = { lat: 52.52, lng: 13.405 };
+
+        expect(sqliteEncode(at)).toBe('{"lat":52.52,"lng":13.405}');
+        expect(sqliteDecode(sqliteEncode(at), "geoPoint")).toEqual(at);
+    });
+
     it("union/any: parses JSON non-scalars, leaves plain strings", () => {
         expect.assertions(2);
 
         expect(sqliteDecode('{"x":1}', "union")).toEqual({ x: 1 });
         expect(sqliteDecode("plain", "any")).toBe("plain");
+    });
+
+    it("from: round-trips an object without turning a numeric string into a number", () => {
+        expect.assertions(4);
+
+        // `v.from(externalSchema)` is heterogeneous — the schema may describe an
+        // object OR a scalar — and `sqliteEncode` keys off the runtime JS type.
+        // So `from` rides the union/any rule, not object/array/record: parsing
+        // unconditionally would read a `v.from(z.string())` column holding "123"
+        // back as the number 123, and the generated type promises a string.
+        expect(sqliteDecode(sqliteEncode({ command: "run" }), "from")).toEqual({ command: "run" });
+        expect(sqliteDecode(sqliteEncode(["a"]), "from")).toEqual(["a"]);
+        expect(sqliteDecode(sqliteEncode("123"), "from")).toBe("123");
+        expect(sqliteDecode(sqliteEncode("plain"), "from")).toBe("plain");
     });
 
     it("null is preserved regardless of kind", () => {
@@ -74,9 +266,95 @@ describe("sqliteDecode — round-trips with sqliteEncode by kind", () => {
         expect(sqliteDecode("2026-06-20", "date")).toBe("2026-06-20");
         expect(sqliteDecode(7, "number")).toBe(7);
     });
+
+    describe("bytes (plan 265)", () => {
+        // `v.bytes()` validates `value instanceof ArrayBuffer` — a BLOB read back
+        // as any other view (node:sqlite `Uint8Array`, pg/mysql2 `Buffer`) fails
+        // re-validation without this branch. Pre-fix: `sqliteDecode` had no
+        // `"bytes"` case, so the switch's `default` returned the view unconverted.
+        it("passes a genuine ArrayBuffer through unchanged", () => {
+            expect.assertions(1);
+
+            const { buffer } = new Uint8Array([1, 2, 3, 4]);
+
+            expect(sqliteDecode(buffer, "bytes")).toBe(buffer);
+        });
+
+        it("converts a Uint8Array view to an ArrayBuffer with the same bytes", () => {
+            expect.assertions(2);
+
+            const view = new Uint8Array([9, 8, 7, 6]);
+            const decoded = sqliteDecode(view, "bytes");
+
+            expect(decoded).toBeInstanceOf(ArrayBuffer);
+            expect(new Uint8Array(decoded as ArrayBuffer)).toStrictEqual(new Uint8Array([9, 8, 7, 6]));
+        });
+
+        it("slices to the view's own window — a Buffer-pool view does not leak neighboring bytes", () => {
+            expect.assertions(3);
+
+            // A single larger backing pool, with a 4-byte view starting at offset 8 —
+            // mirrors how Node's Buffer allocator shares one backing ArrayBuffer
+            // across several small Buffers.
+            const pool = new ArrayBuffer(16);
+            const poolBytes = new Uint8Array(pool);
+
+            poolBytes.set([255, 255, 255, 255, 255, 255, 255, 255, 11, 22, 33, 44, 255, 255, 255, 255]);
+
+            const view = new Uint8Array(pool, 8, 4);
+            const decoded = sqliteDecode(view, "bytes");
+
+            // Pre-fix (no "bytes" case): `decoded` is the original view object
+            // itself, not a genuine ArrayBuffer — this is the assertion that
+            // actually distinguishes pre-fix from post-fix; byteLength/contents
+            // alone happen to already match since the view was already windowed.
+            expect(decoded).toBeInstanceOf(ArrayBuffer);
+            expect((decoded as ArrayBuffer).byteLength).toBe(4);
+            expect(new Uint8Array(decoded as ArrayBuffer)).toStrictEqual(new Uint8Array([11, 22, 33, 44]));
+        });
+
+        it("returns a genuine ArrayBuffer for a SharedArrayBuffer-backed view", () => {
+            expect.assertions(3);
+
+            // `.slice()` on a BUFFER preserves its species, so slicing the backing
+            // store of a shared-memory view hands back a SharedArrayBuffer — which
+            // fails `v.bytes()`'s `instanceof ArrayBuffer` check just as the raw view
+            // would. Copying through an owned Uint8Array is what forces a real
+            // ArrayBuffer regardless of the backing store.
+            const shared = new SharedArrayBuffer(8);
+
+            new Uint8Array(shared).set([255, 255, 5, 6, 7, 8, 255, 255]);
+
+            const decoded = sqliteDecode(new Uint8Array(shared, 2, 4), "bytes");
+
+            expect(decoded).toBeInstanceOf(ArrayBuffer);
+            expect((decoded as ArrayBuffer).byteLength).toBe(4);
+            expect(new Uint8Array(decoded as ArrayBuffer)).toStrictEqual(new Uint8Array([5, 6, 7, 8]));
+        });
+
+        it("null stays null", () => {
+            expect.assertions(1);
+
+            expect(sqliteDecode(null, "bytes")).toBeNull();
+        });
+    });
 });
 
 describe("decodeBigint / tryJsonParse edge cases", () => {
+    /**
+     * A column written before the key encoding holds plain decimal text. It is
+     * never 40 characters with a `"0"`/`"1"` sign character (`toString()` emits
+     * no leading zero), so the key test cannot claim it and it decodes through
+     * the `BigInt(raw)` fallback — reads keep working on an unconverted row.
+     */
+    it("decodeBigint still reads a decimal string written before the key encoding", () => {
+        expect.assertions(3);
+
+        expect(decodeBigint("10")).toBe(10n);
+        expect(decodeBigint("-5")).toBe(-5n);
+        expect(decodeBigint("9007199254740993")).toBe(9_007_199_254_740_993n);
+    });
+
     it("decodeBigint leaves non-numeric strings and non-strings alone", () => {
         expect.assertions(2);
 
@@ -92,7 +370,9 @@ describe("decodeBigint / tryJsonParse edge cases", () => {
 });
 
 describe("effectiveColumnKind", () => {
-    const validator = (kind: string, inner?: ValidatorLike): ValidatorLike => ({ _meta: inner ? { inner } : {}, kind }) as unknown as ValidatorLike;
+    const validator = (kind: string, inner?: ValidatorLike): ValidatorLike => {
+        return { _meta: inner ? { inner } : {}, kind };
+    };
 
     it("returns the validator's own kind when not optional", () => {
         expect.assertions(1);
@@ -110,5 +390,86 @@ describe("effectiveColumnKind", () => {
         expect.assertions(1);
 
         expect(effectiveColumnKind(validator("optional", validator("optional", validator("object"))))).toBe("object");
+    });
+
+    it('unwraps v.optional(v.bytes()) to "bytes" (plan 265)', () => {
+        expect.assertions(1);
+
+        expect(effectiveColumnKind(validator("optional", validator("bytes")))).toBe("bytes");
+    });
+});
+
+describe("effectiveColumnKind — a literal resolves to the kind of its payload", () => {
+    const literal = (value: unknown): ValidatorLike => {
+        return { _meta: { value }, kind: "literal" };
+    };
+
+    // `v.literal(x)` holds exactly one value, so its STORAGE kind is that
+    // value's. Answering `"literal"` sends every payload to a TEXT column with
+    // no encode/decode pairing: SQLite's TEXT affinity rewrites the bound number
+    // `1` as the text `"1.0"`, and the decode has no kind to reverse it with —
+    // so the column reads back a string and the next `patch` fails validation
+    // against its own literal.
+    it.each([
+        ["bigint", 7n, "bigint"],
+        ["boolean", true, "boolean"],
+        ["number", 1, "number"],
+        ["string", "x", "string"],
+        ["null", null, "null"],
+    ])("resolves a %s literal to that kind", (_label, value, expected) => {
+        expect.assertions(1);
+
+        expect(effectiveColumnKind(literal(value))).toBe(expected);
+    });
+
+    it("resolves v.optional(v.literal(1)) the same way", () => {
+        expect.assertions(1);
+
+        expect(effectiveColumnKind({ _meta: { inner: literal(1) }, kind: "optional" })).toBe("number");
+    });
+
+    it('falls back to "literal" when the validator declares no payload', () => {
+        expect.assertions(1);
+
+        // A hand-built validator with no `_meta.value` keeps the behaviour it
+        // already had rather than silently acquiring a different column type.
+        expect(effectiveColumnKind({ _meta: {}, kind: "literal" })).toBe("literal");
+    });
+});
+
+describe("sqliteEncode/sqliteDecode — a user string that looks like a wire payload", () => {
+    // The wire marker is a bare prefix on the stored text, so a user string that
+    // merely BEGINS with it was decoded as the payload it resembles: the string
+    // `"$lunora.wire$hello"` read back as `"hello"`, and `"$lunora.wire$42"` read
+    // back as the NUMBER 42 — a string field returning a number.
+    it.each(["any", "from", "union"])("round-trips a %s column string beginning with the sentinel", (kind) => {
+        expect.assertions(2);
+
+        expect(sqliteDecode(sqliteEncode("$lunora.wire$hello", kind), kind)).toBe("$lunora.wire$hello");
+        expect(sqliteDecode(sqliteEncode("$lunora.wire$42", kind), kind)).toBe("$lunora.wire$42");
+    });
+
+    it("round-trips a string beginning with the ESCAPED form", () => {
+        expect.assertions(1);
+
+        // The escape must itself be escaped, or the fix only moves the collision
+        // one character along.
+        expect(sqliteDecode(sqliteEncode("$lunora.wire$$abc", "any"), "any")).toBe("$lunora.wire$$abc");
+    });
+
+    it("leaves an ordinary string byte-identical", () => {
+        expect.assertions(2);
+
+        expect(sqliteEncode("plain", "any")).toBe("plain");
+        expect(sqliteDecode("plain", "any")).toBe("plain");
+    });
+
+    it("reads a row stored BEFORE the escape exactly as it did before", () => {
+        expect.assertions(1);
+
+        // Pre-fix rows hold the unescaped text. The decode must not start
+        // reinterpreting them — it keeps returning what it already returned, so
+        // the fix changes no stored row's meaning.
+        expect(sqliteDecode("$lunora.wire$hello", "any")).toBe("hello");
     });
 });

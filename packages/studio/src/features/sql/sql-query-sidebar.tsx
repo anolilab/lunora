@@ -1,5 +1,4 @@
 import type { ChangeEvent, MouseEvent, ReactElement, RefObject } from "react";
-import { useMemo } from "react";
 
 import { useT } from "../../i18n/i18n-context";
 import { cn } from "../../lib/utils";
@@ -115,9 +114,23 @@ interface SqlQuerySidebarProps {
     readonly onNew: () => void;
     readonly onSearchChange: (event: ChangeEvent<HTMLInputElement>) => void;
     readonly onSelect: (id: string) => void;
+    /** Flip whether the history outlives the tab. */
+    readonly onToggleRememberHistory: (remember: boolean) => void;
     readonly queries: ReadonlyArray<SavedQuery>;
+    /** True when the history is written to disk rather than kept to this tab. */
+    readonly rememberHistory: boolean;
     readonly search: string;
 }
+
+/** The history-persistence checkbox's id. A constant, not `useId`: the sidebar is a singleton. */
+const REMEMBER_ID = "sql-history-remember";
+
+/** Saved queries whose name contains `search` (case-insensitive); all of them when it is blank. */
+const matchingQueries = (queries: ReadonlyArray<SavedQuery>, search: string): SavedQuery[] => {
+    const needle = search.trim().toLowerCase();
+
+    return needle === "" ? [...queries] : queries.filter((query) => query.name.toLowerCase().includes(needle));
+};
 
 /**
  * The SQL editor's left rail: a search box + new-query button, the browser-persisted
@@ -136,15 +149,17 @@ const SqlQuerySidebar = ({
     onNew,
     onSearchChange,
     onSelect,
+    onToggleRememberHistory,
     queries,
+    rememberHistory,
     search,
 }: SqlQuerySidebarProps): ReactElement => {
     const t = useT();
-    const filtered = useMemo<SavedQuery[]>(() => {
-        const needle = search.trim().toLowerCase();
+    const filtered = matchingQueries(queries, search);
 
-        return needle === "" ? [...queries] : queries.filter((query) => query.name.toLowerCase().includes(needle));
-    }, [queries, search]);
+    const onRememberChange = (event: ChangeEvent<HTMLInputElement>): void => {
+        onToggleRememberHistory(event.target.checked);
+    };
 
     return (
         <aside className="flex h-full w-64 shrink-0 flex-col border-e border-border bg-sidebar">
@@ -239,6 +254,12 @@ const SqlQuerySidebar = ({
                                 {t("Clear history")}
                             </button>
                         </div>
+                        {/* Next to the list it governs rather than in a settings pane: this is
+                            where an operator is when they think about what the history keeps. */}
+                        <label className="flex cursor-pointer items-center gap-1.5 px-1 pb-1.5 text-[11px] text-muted-foreground" htmlFor={REMEMBER_ID}>
+                            <input checked={rememberHistory} data-testid="sql-history-remember" id={REMEMBER_ID} onChange={onRememberChange} type="checkbox" />
+                            {t("Keep history on this browser")}
+                        </label>
                         <ul className="flex flex-col gap-px" data-testid="sql-history">
                             {history.map((entry) => (
                                 <li key={`${entry.at.toString()}:${entry.sql}`}>

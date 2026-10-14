@@ -5,17 +5,17 @@ description: Bring-your-own Postgres/MySQL via Cloudflare Hyperdrive — an acti
 
 `@lunora/hyperdrive` lets an **action** read and write an existing
 Postgres/MySQL database through [Cloudflare
-Hyperdrive](https://developers.cloudflare.com/hyperdrive/) — pooled, cached
+Hyperdrive](https://developers.cloudflare.com/hyperdrive/): pooled, cached
 connections from the edge. It surfaces the binding's connection string and a
 driver-agnostic `ctx.sql` client.
 
 <Callout type="warn">
-**Integrate an existing database — don't replace the Lunora data layer.**
+**Integrate an existing database; don't replace the Lunora data layer.**
 Hyperdrive points at a database Lunora has no visibility into, so two
 invariants the rest of Lunora relies on do **not** hold for it:
 
 1. **Non-deterministic.** A SQL query over the network is an external,
-   mutable read — exactly like `fetch`. It is therefore **forbidden in
+   mutable read, exactly like `fetch`. It is therefore **forbidden in
    `query`/`mutation`** and available only on `ActionCtx`. The
    `hyperdrive_outside_action` advisor lint flags any `ctx.sql` reached from a
    query or mutation.
@@ -53,7 +53,7 @@ bun add @lunora/hyperdrive
 
 </Tabs>
 
-No driver is bundled — `postgres`, `pg`, and `mysql2` are heavy and the choice
+No driver is bundled: `postgres`, `pg`, and `mysql2` are heavy and the choice
 is yours. They are declared as **optional peer dependencies**; install the one
 you use:
 
@@ -91,26 +91,52 @@ pnpm add mysql2          # mysql2        → fromMysql2
     ```
 
 Lunora validates the binding (it errors when `binding` is missing and warns when
-`id` is empty — a placeholder id can't connect), but it does **not**
+`id` is empty, since a placeholder id can't connect), but it does **not**
 auto-provision the `id`: that's a remote resource only `wrangler hyperdrive create`
 can mint, so importing `@lunora/hyperdrive` surfaces a hint rather than writing the
 binding for you.
 
 ## The canonical recipe
 
-Construct your driver from the connection string and wrap it with the matching
-adapter to get a `ctx.sql`. **Do this only inside an action:**
+`ctx.sql` is **wired once, at the app level**, not inside a handler: the
+generated `ctx.sql` is a `readonly` property (assigning to it is a `TS2540`).
+Codegen cannot build the client for you — `createHyperdrive` returns connection
+info, and turning that into a `SqlClient` needs the driver you chose — so it
+emits a `sql` config thunk instead. Wire it on the app builder:
 
-```ts
+```ts title="src/server/index.ts"
+import type { HyperdriveLike } from "@lunora/hyperdrive";
 import { createHyperdrive, fromPostgresJs } from "@lunora/hyperdrive";
 import postgres from "postgres";
 
+import { defineApp } from "../../lunora/_generated/app";
+
+const app = defineApp<Env>()
+    .shard((env) => env.SHARD)
+    // Called once per shard construction, not per request.
+    .hyperdrive((env) => fromPostgresJs(postgres(createHyperdrive(env.HYPERDRIVE as HyperdriveLike).connectionString)))
+    .build();
+
+export const ShardDO = app.ShardDO;
+```
+
+Hand-composing the worker instead? The same thunk is `createShardDO({ sql })`:
+
+```ts
+export const ShardDO = createShardDO({
+    sql: (env) => fromPostgresJs(postgres(createHyperdrive(env.HYPERDRIVE as HyperdriveLike).connectionString)),
+});
+```
+
+Without the thunk `ctx.sql` is a stub whose every method throws a message
+pointing back at this wiring.
+
+Handlers then just read it. **Only inside an action:**
+
+```ts
 import { action, v } from "@/lunora/_generated/server";
 
 export const importLegacyOrders = action.input({ orgId: v.string() }).action(async ({ ctx, args: { orgId } }) => {
-    const { connectionString } = createHyperdrive(ctx.env.HYPERDRIVE);
-    ctx.sql = fromPostgresJs(postgres(connectionString));
-
     // Read from external Postgres ($1, $2, … placeholders).
     const orders = await ctx.sql.query<{ id: string; total: number }>("select id, total from orders where org = $1", [orgId]);
 
@@ -119,7 +145,7 @@ export const importLegacyOrders = action.input({ orgId: v.string() }).action(asy
 ```
 
 When the codegen detects `ctx.sql` usage it adds `sql: SqlClient` to **`ActionCtx`
-only** — never `QueryCtx` or `MutationCtx` — with a JSDoc restating the
+only** (never `QueryCtx` or `MutationCtx`), with a JSDoc restating the
 determinism/realtime caveat.
 
 ### Drivers & placeholders
@@ -130,26 +156,51 @@ determinism/realtime caveat.
 | `pg` (node-postgres)     | `fromNodePg`     | `$1, $2, …`  |
 | `mysql2/promise`         | `fromMysql2`     | `?`          |
 
-The package never rewrites SQL — use your driver's native positional syntax.
+The package never rewrites SQL; use your driver's native positional syntax.
+
+### Telemetry
+
+With an observability sink configured, `ctx.sql` is instrumented automatically
+at the same level as `ctx.db` — the sink's `instrumentDatabase` field (see
+[Observability: database telemetry](/docs/concepts/observability)):
+
+- **`"summary"` (default)** folds `sql.calls`, `sql.duration_ms`, `sql.errors`
+  and a per-operation count (`sql.op.SELECT`, `sql.op.INSERT`, …) onto the
+  dispatch's root span. These are separate from `ctx.db`'s `db.*` counters, so
+  time spent in your external database stays distinguishable from the shard's
+  own SQLite.
+- **`"spans"`** adds one CLIENT span per `query` (`sql.SELECT`, …), capped at
+  100 per dispatch (`sql.spans_truncated` past that), carrying
+  `db.system.name` (`postgresql` for `fromPostgresJs` / `fromNodePg`, `mysql`
+  for `fromMysql2`, `other_sql` for a hand-built client), `db.operation.name`
+  and `db.response.returned_rows`.
+- **`"off"`** hands the action your client untouched.
+
+The operation is the statement's leading keyword only. **Statement text and
+parameters are never recorded**, there is no `db.collection.name`, and a failed
+query records its error type rather than the driver's message (outside
+development), since Postgres and MySQL errors quote row values. `SqlClient` has
+a single `query` method, so there are no transaction or batch spans — a
+`BEGIN`/`COMMIT` you issue yourself is counted under its own keyword.
+
+Queries you run through your own driver or ORM instance **outside** `ctx.sql`
+are not seen. For a Drizzle instance on Hyperdrive,
+[`cloudflare-drizzle-tracing`](https://github.com/Cherry/cloudflare-drizzle-tracing)'s
+`instrumentDrizzle()` adds Cloudflare-native `drizzle.execute` / `transaction` /
+`batch` spans — be aware it records query text and parameters.
 
 ## Making external data reactive
 
 Lunora cannot observe external writes, so a subscription over a `defineSchema`
 table won't re-fire when Postgres changes. To make external data reactive,
-**project** it into a DO/D1 table inside the same action — that write _is_ on
+**project** it into a DO/D1 table inside the same action. That write _is_ on
 the change-feed, so live queries reading the projection re-run:
 
 ```ts
-import { createHyperdrive, fromPostgresJs } from "@lunora/hyperdrive";
-import postgres from "postgres";
-
 import { api } from "@/lunora/_generated/api";
 import { action, v } from "@/lunora/_generated/server";
 
 export const syncOrder = action.input({ id: v.string() }).action(async ({ ctx, args: { id } }) => {
-    const { connectionString } = createHyperdrive(ctx.env.HYPERDRIVE);
-    ctx.sql = fromPostgresJs(postgres(connectionString));
-
     const [row] = await ctx.sql.query<{ id: string; total: number }>("select id, total from orders where id = $1", [id]);
 
     // This write is tracked — a `query` over `orders` re-runs for subscribers.
@@ -157,12 +208,175 @@ export const syncOrder = action.input({ id: v.string() }).action(async ({ ctx, a
 });
 ```
 
+### Per-agent shape ingest (multitenant Postgres → per-tenant DOs)
+
+A common shape of the pattern above: a **multitenant** Postgres is the source of
+truth, and you want each tenant (or agent) to work against **only its own slice**,
+materialized into its own sharded Durable Object, with clients riding the same
+live slice. `.shardBy()` gives each tenant a private DO + SQLite; `pullSourceRows`
+(read side) and `materializeExternalRows` (write side) bridge the Postgres slice
+into it; `defineShape` carries it to clients with no extra wiring.
+
+```ts
+// lunora/schema.ts — one DO per tenant, plus a shape clients subscribe to
+export default defineSchema({
+    documents: defineTable({ title: v.string(), body: v.string(), orgId: v.string() }).shardBy("orgId").externallyManaged(), // rows are written by the ingest bridge, not user mutations
+});
+
+export const tenantDocs = defineShape({ table: "documents", where: () => ({}) });
+```
+
+```ts
+// The action pulls THIS tenant's slice (the shard key binds into the WHERE — the
+// tenant-isolation boundary), then a mutation materializes it.
+import { pullSourceRows } from "@lunora/hyperdrive";
+
+import { api } from "@/lunora/_generated/api";
+import { action, mutation, v } from "@/lunora/_generated/server";
+import { materializeExternalRows } from "@lunora/shard-engine";
+
+export const refreshTenant = action.input({ orgId: v.string() }).action(async ({ ctx, args: { orgId } }) => {
+    const docs = await pullSourceRows(ctx.sql, {
+        query: 'select id, title, body, org_id as "orgId" from documents where org_id = $1',
+        params: [orgId], // ← tenant scope. NEVER omit this on a sharded source.
+        map: (row) => ({ body: row.body, orgId: row.orgId, title: row.title }),
+    });
+
+    // One mutation, so the whole slice materializes atomically: a failure part
+    // way through leaves the tenant's DO on its previous snapshot, not half-updated.
+    await ctx.runMutation(api.documents.ingest, { orgId, docs });
+});
+
+export const ingest = mutation.input({ orgId: v.string(), docs: v.array(v.any()) }).mutation(async ({ ctx, args: { docs } }) => {
+    // Empty baseline = upsert-only (inserts + updates, no deletes). The materialized
+    // rows append to the CDC log, so `tenantDocs` subscribers are poked live.
+    await materializeExternalRows(ctx.db, docs, new Map(), { table: "documents" });
+});
+```
+
+Clients consume the same slice with the shape they'd use over any table:
+
+```ts
+const docs = useShape(api.shapes.tenantDocs, {}); // RLS-filtered, live, per-tenant
+```
+
+Refresh on a schedule with `@lunora/scheduler` (`ctx.scheduler.runAfter(...)` /
+a cron) so each tenant's slice stays current.
+
+> **Tenant scoping is the correctness boundary.** Per-shard SQLite isolation only
+> controls _where_ rows land, not _what the query pulls_. The shard key MUST bind
+> into the source `WHERE` (as a parameter), or every tenant's DO would replicate the
+> whole table. **Deletes:** the empty-baseline call above is upsert-only; to
+> propagate upstream deletes, pass the table's current membership as the baseline so
+> `materializeExternalRows` can diff it.
+
+### Or skip the boilerplate: the declarative `.source()` modifier
+
+The manual bridge above is the escape hatch. For the common case, declare the
+source on the table and Lunora runs the whole loop on the DO's alarm: full-pull
+diff, tenant scoping, and a poll cadence, with no action, mutation, or cron to write:
+
+```ts
+// lunora/schema.ts
+export default defineSchema({
+    documents: defineTable({ title: v.string(), body: v.string(), orgId: v.string() })
+        .shardBy("orgId")
+        .source({
+            binding: "HYPERDRIVE_DOCS",
+            query: 'select id, title, body, org_id as "orgId" from documents where org_id = $1',
+            tenantBy: (shardKey) => [shardKey], // mandatory under .shardBy() — the tenant boundary
+        }),
+});
+
+export const tenantDocs = defineShape({ table: "documents", where: () => ({}) });
+```
+
+You provide the driver once, on the app builder: one resolver for every sourced
+binding (build the `SqlClient` exactly as above). Lunora memoizes it per binding and
+polls each tenant's slice on the alarm. It is **required** — without it every tick
+records `no sourceClient resolved for binding "…"` and the table stays empty.
+
+```ts
+// worker.ts
+export default defineApp<Env>()
+    .shard((env) => env.SHARD)
+    .sourceClient((env, binding) => fromPostgresJs(postgres((env[binding] as { connectionString: string }).connectionString)))
+    .build();
+```
+
+`.sourceClient()` appears on the builder only when your schema declares a
+`.source(...)` table. Composing the shard DO by hand instead, pass the same resolver
+as `createShardDO({ sourceClient })`.
+
+Tenant scoping is enforced two ways: `defineSchema` **throws** at load if a sourced
+`.shardBy()` table omits `tenantBy` (the runtime fail-safe), and the
+`external_source_unscoped` advisor lint flags it earlier, at build time, in your
+terminal + Studio. `defineSchema` likewise rejects combining `.source()` with
+`.global()` (contradictory tiers). Clients consume the slice with
+`useShape(api.shapes.tenantDocs)`, with no client change, since it is an ordinary table.
+
+**Refresh cadence.** Omit `refresh` to poll on every DO alarm tick (the floor), or
+pass `refresh: { everyMs }` to throttle a large slice to at most one pull per
+interval. `refresh: "manual"` tells Lunora **not** to auto-poll; use it when you
+drive the refresh yourself (the manual `pullSourceRows` → `materializeExternalRows`
+bridge above, on your own schedule).
+
+**Delete detection: `mode`.** The default `mode: "full-pull"` reads the whole tenant
+slice each tick and diffs it, so upstream deletes are observed for free, but it
+costs a full read per tick (bench ceiling ~10k rows). For a large, low-churn slice
+past that cap, `mode: "incremental"` pulls **only rows changed since a durable
+watermark**:
+
+```ts
+documents: defineTable({ title: v.string(), body: v.string(), orgId: v.string(), updatedAt: v.number() })
+    .shardBy("orgId")
+    .source({
+        binding: "HYPERDRIVE_DOCS",
+        mode: "incremental",
+        query: 'select id, title, body, org_id as "orgId", updated_at as "updatedAt" from documents where org_id = $1',
+        // cursor.query pulls only rows past the watermark — tenantBy params bind first ($1), the watermark last ($2).
+        cursor: {
+            column: "updatedAt",
+            query: 'select id, title, body, org_id as "orgId", updated_at as "updatedAt" from documents where org_id = $1 and updated_at >= $2 order by updated_at',
+        },
+        // Delete visibility — REQUIRED for incremental (pick one):
+        reconcileEveryMs: 3_600_000, // periodic full-pull sweep GCs upstream deletes, OR:
+        // softDeleteColumn: "deletedAt", // upstream tombstone column the cursor query returns
+        tenantBy: (shardKey) => [shardKey],
+    }),
+```
+
+How it runs: the first poll (and every `reconcileEveryMs` sweep) does a full-pull to
+seed membership + the watermark and GC deletes; every other tick binds the stored
+watermark as the cursor query's trailing param and **upserts** the returned slice.
+The watermark (the max `cursor.column` value seen) and the last-reconcile time persist
+per `(table, shard)` in the DO's reserved `__lunora_source_cursor` table, so they
+survive hibernation. Use `>=` in the cursor query (rows sharing a boundary timestamp
+re-pull idempotently rather than being skipped).
+
+Because an incremental slice can't see a delete (an absent row means "unchanged", not
+"deleted"), incremental **requires** a delete-visibility path: `reconcileEveryMs` (a
+periodic full-pull sweep) or `softDeleteColumn` (an upstream tombstone column the
+cursor query returns, turned into a local delete; don't filter it out of the query).
+`defineSchema` throws, and the `external_source_incremental_no_delete_path` advisor
+lint fails the build, if an incremental source declares neither.
+
+The cursor column must be **strictly commit-monotonic**: a value that only ever
+increases as rows become visible, never assigned below the current max after a later
+commit. A plain `updated_at` set from wall-clock time can violate this under clock
+skew or a long transaction (a row commits with a timestamp below a watermark already
+advanced past it), and an incremental slice would then miss it permanently. A
+`reconcileEveryMs` sweep is the backstop that re-establishes such rows; **`softDeleteColumn`
+alone does not** (it only catches deletes, not missed inserts), so prefer
+`reconcileEveryMs` unless your cursor is provably monotonic (e.g. a gapless sequence
+or a logical replication LSN).
+
 ## Reactive `.global()` over Hyperdrive
 
 The `@lunora/hyperdrive/global` subpath is the inverse trade-off: instead of an
 escape hatch onto a DB Lunora doesn't own, it makes a Postgres/MySQL database a
-**first-class, reactive** `.global()` storage backend, alongside D1. Lunora owns
-the schema — a `.global()` table gets a real column-per-field layout and every
+**reactive** `.global()` storage backend, alongside D1. Lunora owns
+the schema: a `.global()` table gets a real column-per-field layout and every
 write routes through the shared store core, so live queries stay reactive with no
 extra wiring.
 
@@ -194,14 +408,163 @@ const globalDb = createMysqlGlobalCtxDb(pool, { schema });
 
 </Tabs>
 
+### Tables provisioned by an earlier version
+
+The store creates missing tables and adds missing columns on its own, but it
+does not rewrite a column that already exists. Two gaps can remain on a table
+provisioned before a release changed the column it would declare:
+
+- **A field that accepts `null` but whose column is `NOT NULL`.** Required
+  `v.any()`, `v.null()`, `v.literal(null)` and unions with a nullable member
+  used to be provisioned `NOT NULL`, so storing `null` there fails. Postgres
+  drops the constraint itself at startup (a catalog-only change). MySQL does not:
+  its only way to relax a column is `MODIFY COLUMN`, which restates the whole
+  column and can rebuild the table. The store logs one warning per column with
+  the exact statement to run instead, built from the column's current type and
+  collation, for example:
+
+    ```sql
+    ALTER TABLE `notes` MODIFY COLUMN `note` longtext CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci NULL;
+    ```
+
+    Run it once per table in a maintenance window.
+
+- **MySQL collation.** Text columns are now declared `utf8mb4_0900_bin`, which
+  compares byte for byte like SQLite and Postgres. A column created earlier keeps
+  the server default (usually `utf8mb4_0900_ai_ci`, case- and
+  accent-insensitive). Convert a table with
+  `ALTER TABLE <t> CONVERT TO CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_bin`.
+  Until then, an `in` filter too long for one statement's placeholders compares
+  under the column's own collation on `utf8mb4_0900_ai_ci` and `_bin` columns.
+  On any other legacy collation (`utf8mb4_general_ci`, `utf8mb4_unicode_ci`)
+  MySQL refuses such a filter with "Illegal mix of collations" instead of
+  answering it — convert the table.
+
+### Full-text search
+
+`.searchIndex()` works on a Hyperdrive-backed `.global()` table exactly as it
+does on D1: same tokenizer, same matching rules, same relevance order (see
+[Full-text search](/docs/concepts/search)). Neither Postgres nor MySQL ships
+SQLite's FTS5, so the store maintains a portable inverted companion instead: one
+indexed `(token, document, occurrences)` row per distinct token, updated with
+each row write and read back in a single indexed query. On Postgres its token
+index declares `text_pattern_ops` so the prefix match of a query's final term
+stays indexed under any collation; on MySQL both columns take the InnoDB key
+prefix.
+
+Rows that predate the index are backfilled a bounded page per request, with
+progress recorded in `__lunora_search_state`, so a large table becomes
+searchable progressively rather than stalling the first request after a deploy.
+Pass `staged: true` to keep that work out of the request path entirely and drive
+it yourself with `backfillSqlSearchIndexes`.
+
+Ranking aggregates over every matching token row, so the 1024-document limit
+bounds what you get back, not what the database reads. On Postgres you can trade
+that away with `.searchIndex({ strategy: "native" })`, which stores a `tsvector`
+per document and lets a GIN index answer the match: same documents, ordered by
+the engine rather than by Lunora's scorer.
+
 The convenience constructors cover the common path. For custom wiring, the
 lower-level pieces are also exported:
 
-- `buildPgExec(client)` / `buildMysqlExec(connection)` — turn a driver into the
+- `buildPgExec(client)` / `buildMysqlExec(connection)` turn a driver into the
   store's `SqlExec`.
-- `postgresDialect` / `mysqlDialect` — the engine dialects.
-- `createHyperdriveGlobalCtxDb({ engine, exec, ...storeOptions })` — the
+- `postgresDialect` / `mysqlDialect` are the engine dialects.
+- `createHyperdriveGlobalCtxDb({ engine, exec, ...storeOptions })` is the
   general factory the two convenience constructors call.
+
+## Vector search on your own Postgres
+
+`.vectorize()` normally writes through to a Cloudflare Vectorize binding. If you
+have already moved the relational tier onto your own Postgres, that split is
+awkward: full-text search runs natively (see `strategy: "native"` above) while
+vectors alone still reach for a Cloudflare service.
+
+`createPgVectorIndex` closes it. The shard takes
+`vectors: (env) => Record<string, VectorizeIndexLike>`, and everything above that
+— the write-through sync hook, `ctx.vectors`, codegen — is written against the
+interface rather than the provider, so a `pgvector` index drops in where the
+binding went:
+
+```ts title="src/server/index.ts"
+import { createHyperdrive, fromPostgresJs } from "@lunora/hyperdrive";
+import { createPgVectorIndex } from "@lunora/hyperdrive/global";
+import postgres from "postgres";
+
+// Built once, not per request: `vectors` is called on every dispatch, and a fresh
+// index object means a fresh provisioning memo — five extra round trips each time.
+let index: ReturnType<typeof createPgVectorIndex> | undefined;
+
+createShardDO({
+    vectors: (env) => {
+        index ??= createPgVectorIndex({
+            client: fromPostgresJs(postgres(createHyperdrive((env as Env).HYPERDRIVE).connectionString)),
+            dimensions: 768,
+            metric: "cosine",
+            name: "posts_search",
+        });
+
+        return { posts_search: index };
+    },
+});
+```
+
+Nothing else changes: `.vectorize()` in the schema, `ctx.vectors.query(...)` in a
+function, and the automatic write-through sync all behave the same.
+
+The table (`__vec_<name>`), the `vector` extension, an HNSW index in the metric's
+operator class, and btree/GIN indexes on the two filterable columns are
+provisioned lazily on first use — every
+statement is `IF NOT EXISTS`, so it is safe against a live table. The connecting
+role needs to be able to run `CREATE EXTENSION vector`; on a managed Postgres
+where it cannot, install the extension once out-of-band and the statement becomes
+a no-op.
+
+<Callout type="warn">
+    Four deliberate differences from Vectorize. **Metadata filters are JSONB
+    containment** — equality for scalars, but for containers it is containment, not
+    equality: `{ tags: ["x"] }` also matches a row whose tags are `["x", "y"]`, and
+    `{ author: {} }` matches every row carrying an `author` key. A filter value
+    JSON cannot represent (`undefined`, a function, a symbol) is rejected, because
+    dropping it would widen the filter to match every row. A comparison operator
+    like `{ views: { $gt: 10 } }` and Vectorize's dot-addressed `"author.role"`
+    syntax throw for the same reason. **`returnMetadata: "indexed"` behaves as
+    `"all"`**, since Postgres indexes the whole JSONB document — note this defeats
+    a deliberate default: `ctx.vectors` asks for `"indexed"` precisely so a query
+    that opted into nothing does not return every stored field. And **`dimensions`
+    is fixed at first provisioning**: `CREATE TABLE IF NOT EXISTS` no-ops on a
+    later change, so writes fail against the original width. Finally **`mutationId`
+    is a local counter**: Vectorize's is a handle for an async mutation queue,
+    while a Postgres write is already durable when its promise resolves.
+
+</Callout>
+
+<Callout type="info">
+    Two ceilings worth knowing. `dimensions` is capped at 2000, pgvector's HNSW limit — rejected at construction rather than failing opaquely at `CREATE INDEX`
+    (Vectorize itself tops out at 1536, so most ports are unaffected). And `name` is capped at 34 characters, because the longest index name derived from it
+    (`__vec_` + name + `__ann_` + the operator class) has to stay under Postgres' 63-byte identifier truncation — past that, two indexes would collapse onto one
+    name and the second `CREATE INDEX IF NOT EXISTS` would silently no-op.
+</Callout>
+
+Pass the **same `metric` the schema's `.vectorize(...)` declares**. Nothing
+cross-checks the two: mismatch them and the index is built for one operator and
+queried with another, so the ordering is wrong for the declared metric and every
+score is on a different scale — with no error at any layer.
+
+The indexes on `namespace` and `metadata` are not an optimisation. pgvector
+applies `WHERE` **after** scanning the ANN index, so without a usable index on the
+filtered column the planner's only path is the approximate one, and a filter
+matching a small slice of the table returns a short page with no error. Indexing
+both lets the planner answer the filter exactly instead. (`hnsw.iterative_scan` is
+pgvector's own answer to this, but it is a session setting, and a pooled client can
+run the `SET` and the query on different sessions.)
+
+`metric` picks the distance operator and the matching index operator class —
+`cosine` (default), `euclidean`, or `dot-product`. `score` is reported the way
+Vectorize reports it: cosine similarity (1 = identical), raw L2 distance
+(0 = identical), or the NEGATIVE inner
+dot product — Cloudflare's own convention, where a score of -1000 is more similar
+than -500.
 
 ## Non-goals
 
@@ -214,28 +577,31 @@ lower-level pieces are also exported:
 
 ## Public API
 
-| Export                                                                                              | Purpose                                                  |
-| --------------------------------------------------------------------------------------------------- | -------------------------------------------------------- |
-| `createHyperdrive(binding)`                                                                         | Lift `connectionString` + discrete parts off the binding |
-| `fromPostgresJs(client)`                                                                            | Wrap a postgres.js client as a `SqlClient`               |
-| `fromNodePg(client)`                                                                                | Wrap a `pg` Client/Pool as a `SqlClient`                 |
-| `fromMysql2(connection)`                                                                            | Wrap a `mysql2/promise` connection/pool as a `SqlClient` |
-| `SqlClient`, `HyperdriveLike`, `HyperdriveConnection`, `PostgresJsLike`, `NodePgLike`, `Mysql2Like` | Type-only                                                |
+| Export                                                                                                                                     | Purpose                                                                           |
+| ------------------------------------------------------------------------------------------------------------------------------------------ | --------------------------------------------------------------------------------- |
+| `createHyperdrive(binding)`                                                                                                                | Lift `connectionString` + discrete parts off the binding                          |
+| `fromPostgresJs(client)`                                                                                                                   | Wrap a postgres.js client as a `SqlClient`                                        |
+| `fromNodePg(client)`                                                                                                                       | Wrap a `pg` Client/Pool as a `SqlClient`                                          |
+| `fromMysql2(connection)`                                                                                                                   | Wrap a `mysql2/promise` connection/pool as a `SqlClient`                          |
+| `pullSourceRows(sql, { query, params, idColumn?, map? })`                                                                                  | Run a tenant query + project rows to Lunora docs (read side of the ingest bridge) |
+| `projectSourceRow(row, { idColumn?, map? })`                                                                                               | Project one external row → a document with `_id`                                  |
+| `SqlClient`, `HyperdriveLike`, `HyperdriveConnection`, `PostgresJsLike`, `NodePgLike`, `Mysql2Like`, `ProjectOptions`, `PullSourceOptions` | Type-only                                                                         |
 
 From `@lunora/hyperdrive/global` (reactive `.global()` backend):
 
-| Export                                             | Purpose                                                        |
-| -------------------------------------------------- | -------------------------------------------------------------- |
-| `createPostgresGlobalCtxDb(client, options)`       | Build a reactive Postgres `.global()` writer (`globalDb`)      |
-| `createMysqlGlobalCtxDb(connection, options)`      | Build a reactive MySQL `.global()` writer (needs `FOUND_ROWS`) |
-| `createHyperdriveGlobalCtxDb({ engine, exec, … })` | General factory the two convenience constructors call          |
-| `buildPgExec(client)` / `buildMysqlExec(conn)`     | Wrap a driver as the store's `SqlExec`                         |
-| `postgresDialect` / `mysqlDialect`                 | The engine dialects                                            |
+| Export                                              | Purpose                                                                                                                           |
+| --------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------- |
+| `createPostgresGlobalCtxDb(client, options)`        | Build a reactive Postgres `.global()` writer (`globalDb`)                                                                         |
+| `createMysqlGlobalCtxDb(connection, options)`       | Build a reactive MySQL `.global()` writer (needs `FOUND_ROWS`)                                                                    |
+| `createHyperdriveGlobalCtxDb({ engine, exec, … })`  | General factory the two convenience constructors call                                                                             |
+| `buildPgExec(client)` / `buildMysqlExec(conn)`      | Wrap a driver as the store's `SqlExec`                                                                                            |
+| `postgresDialect` / `mysqlDialect`                  | The engine dialects                                                                                                               |
+| `createPgVectorIndex({ client, name, dimensions })` | A `pgvector`-backed index for `ctx.vectors` (no Vectorize binding); `name` is the SQL table identifier, not the `vectors` map key |
 
 ## See also
 
-- [Concepts: queries & mutations](/docs/concepts/queries-mutations) — why
+- [Concepts: queries & mutations](/docs/concepts/queries-mutations): why
   actions are the only non-deterministic context
-- [Concepts: advisors](/docs/concepts/advisors) — the
+- [Concepts: advisors](/docs/concepts/advisors): the
   `hyperdrive_outside_action` lint
-- [Concepts: real-time](/docs/concepts/realtime) — what the change-feed tracks
+- [Concepts: real-time](/docs/concepts/realtime): what the change-feed tracks

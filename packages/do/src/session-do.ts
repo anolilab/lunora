@@ -1,32 +1,34 @@
 /**
- * Durable Object that owns auth session state.
+ * Durable Object that owns TTL'd session records.
  *
- * `@lunora/auth` used to write sessions directly into D1 alongside user
- * records. That worked but coupled session lifecycle to a global database —
- * every read had to cross the region, every write contended with user
- * inserts. SessionDO owns sessions in a DO-local KV store: same-prefix
- * tokens co-locate (via `idFromName(token.slice(0, 16))`) so the DO instance
- * count stays bounded; reads and writes never round-trip to D1.
+ * A standalone TTL'd token store, NOT the auth package's session backend.
+ * `@lunora/auth` has never called this class — sessions live in the auth
+ * database, and the Durable Object path for auth is `LunoraAuthDO` /
+ * `.auth({ namespace })`, which puts the whole better-auth schema in an object
+ * with real transactions. Exporting this DO and binding it as `SESSION` gets a
+ * correctly-configured object that nothing calls. It stays because a TTL'd
+ * token store keyed by prefix is independently useful: same-prefix tokens
+ * co-locate (via `idFromName(token.slice(0, 16))`) so the instance count stays
+ * bounded, and neither read nor write round-trips to a global database.
  *
- * Wire shape: HTTP only, never RPC. The auth package calls
+ * Wire shape: HTTP only, never RPC. A caller does
  *
  * `await env.SESSION.get(env.SESSION.idFromName(prefix)).fetch(...)`
  *
  * with one of:
  *
  * POST   /create   body: { token, userId, ttlSeconds }
- * GET    /get      header: `x-lunora-session-token: &lt;token>`
- * DELETE /revoke   header: `x-lunora-session-token: &lt;token>`
+ * GET    /get      header: `x-lunora-session-token: <token>`
+ * DELETE /revoke   header: `x-lunora-session-token: <token>`
  *
- * Every request must additionally carry an `x-lunora-session-secret` header
+ * Every request must additionally carry an `x-lunora-session-do-secret` header
  * whose value matches `env.SESSION_DO_SECRET`. The DO is reachable from any
  * worker bound to its namespace, so a shared secret is the only thing that
  * prevents a compromised or misbehaving worker from reading arbitrary
  * sessions — the binding alone is not an auth surface.
  *
- * The DO returns JSON bodies that `@lunora/auth` reshapes into its public
- * `AuthSession` type. Keep the surface narrow — anything more elaborate
- * should ride on top via a wrapper, not by widening this contract.
+ * The DO returns plain JSON bodies. Keep the surface narrow — anything more
+ * elaborate should ride on top via a wrapper, not by widening this contract.
  *
  * # Subclassing
  *
@@ -35,6 +37,11 @@
  * a concrete `DurableObject` class today; the structural state shape used by
  * the unit tests is preserved so plain-object doubles still work.
  */
+import type { ShardAlarms, ShardKvStore } from "@lunora/platform";
+import { createShardAlarms, createShardKvStore } from "@lunora/platform-cloudflare";
+
+import { constantTimeEqual } from "../../../shared/constant-time-equal";
+import { jsonResponse } from "../../../shared/json-response";
 
 /** Default TTL for new sessions (7 days), matching `@lunora/auth`. */
 const SESSION_DO_TTL_DEFAULT: number = 7 * 24 * 60 * 60;
@@ -87,7 +94,9 @@ interface SessionDOState {
         getAlarm?: () => Promise<number | null>;
         list?: <T = unknown>(options?: { prefix?: string }) => Promise<Map<string, T>>;
         put: (key: string, value: unknown) => Promise<void>;
-        setAlarm?: (scheduledTime: number) => Promise<void>;
+        // `number | Date` to match the runtime `DurableObjectStorage.setAlarm`
+        // and the platform `ShardAlarms.set`; SessionDO only ever passes a number.
+        setAlarm?: (scheduledTime: number | Date) => Promise<void>;
     };
 }
 
@@ -102,36 +111,6 @@ interface SessionDOState {
 interface SessionDOEnv {
     SESSION_DO_SECRET?: string;
 }
-
-const jsonResponse = (status: number, body: unknown): Response =>
-    Response.json(body, {
-        headers: { "content-type": "application/json" },
-        status,
-    });
-
-/**
- * Length-independent constant-time string compare. Mirrors the helper in
- * `packages/do/src/shard-do.ts` and `packages/runtime/src/create-worker.ts` —
- * duplicated rather than imported to keep SessionDO's surface free of
- * package-internal couplings.
- */
-const constantTimeEqual = (a: string, b: string): boolean => {
-    const max = Math.max(a.length, b.length);
-    // eslint-disable-next-line no-bitwise -- constant-time compare folds length + every code-unit delta into one accumulator
-    let diff = a.length ^ b.length;
-
-    for (let index = 0; index < max; index += 1) {
-        // eslint-disable-next-line unicorn/prefer-code-point -- compare per UTF-16 code unit so timing stays independent of surrogate boundaries
-        const charA = index < a.length ? a.charCodeAt(index) : 0;
-        // eslint-disable-next-line unicorn/prefer-code-point -- compare per UTF-16 code unit so timing stays independent of surrogate boundaries
-        const charB = index < b.length ? b.charCodeAt(index) : 0;
-
-        // eslint-disable-next-line no-bitwise -- accumulate per-code-unit difference without branching to keep the compare constant-time
-        diff |= charA ^ charB;
-    }
-
-    return diff === 0;
-};
 
 const isAuthorized = (request: Request, env: SessionDOEnv): boolean => {
     const expected = env.SESSION_DO_SECRET;
@@ -210,16 +189,31 @@ class SessionDO {
 
     protected env: unknown;
 
+    /**
+     * Durable record store, bound to the `@lunora/platform` contract rather
+     * than reached through `state.storage` directly. `SessionDO` keeps plain
+     * session records — ordered key lookup and a prefix sweep — which is the KV
+     * surface, not the reactive engine's `ShardHost`. Binding it here is what
+     * lets the same session logic run on a non-Cloudflare host that supplies a
+     * `ShardKvStore`.
+     */
+    private readonly kv: ShardKvStore;
+
+    /** GC-sweep alarm, via the shared platform alarm contract. */
+    private readonly alarms: ShardAlarms;
+
     public constructor(state: SessionDOState, env: unknown) {
         this.state = state;
         this.env = env;
+        this.kv = createShardKvStore(state.storage);
+        this.alarms = createShardAlarms(state.storage);
     }
 
     public async fetch(request: Request): Promise<Response> {
         const env = (this.env ?? {}) as SessionDOEnv;
 
         if (!isAuthorized(request, env)) {
-            return jsonResponse(401, { error: { code: "UNAUTHORIZED", message: "missing or invalid SessionDO secret" } });
+            return jsonResponse({ error: { code: "UNAUTHORIZED", message: "missing or invalid SessionDO secret" } }, 401);
         }
 
         const url = new URL(request.url);
@@ -236,7 +230,7 @@ class SessionDO {
             return this.handleRevoke(request);
         }
 
-        return jsonResponse(404, { error: { code: "NOT_FOUND", message: "no such session route" } });
+        return jsonResponse({ error: { code: "NOT_FOUND", message: "no such session route" } }, 404);
     }
 
     /**
@@ -246,14 +240,16 @@ class SessionDO {
      * fully idle (no billable alarm) once it's empty.
      */
     public async alarm(): Promise<void> {
-        const { storage } = this.state;
-
-        if (!storage.list) {
+        // `list` is the one KV op that may be absent on the plain-object doubles
+        // the unit tests pass (they exercise only create/get/revoke). Probe the
+        // underlying storage before routing through the contract so the sweep
+        // stays a no-op there rather than throwing.
+        if (typeof this.state.storage.list !== "function") {
             return;
         }
 
         const now = Date.now();
-        const entries = await storage.list<SessionRecord>({ prefix: "s:" });
+        const entries = await this.kv.list<SessionRecord>({ prefix: "s:" });
         const expired: string[] = [];
         let remaining = 0;
 
@@ -266,12 +262,12 @@ class SessionDO {
         }
 
         for (const key of expired) {
-            // eslint-disable-next-line no-await-in-loop -- bounded GC sweep; storage.delete takes one key in this structural surface
-            await storage.delete(key);
+            // eslint-disable-next-line no-await-in-loop -- bounded GC sweep; ShardKvStore.delete takes one key
+            await this.kv.delete(key);
         }
 
-        if (remaining > 0 && storage.setAlarm) {
-            await storage.setAlarm(now + SESSION_GC_INTERVAL_MS);
+        if (remaining > 0) {
+            await this.alarms.set(now + SESSION_GC_INTERVAL_MS);
         }
     }
 
@@ -281,34 +277,34 @@ class SessionDO {
         try {
             body = await request.json();
         } catch {
-            return jsonResponse(400, { error: "invalid_request" });
+            return jsonResponse({ error: "invalid_request" }, 400);
         }
 
         const token = validateToken(body.token);
 
         if (token === undefined) {
-            return jsonResponse(400, { error: "invalid_request" });
+            return jsonResponse({ error: "invalid_request" }, 400);
         }
 
         const { userId } = body;
 
         if (typeof userId !== "string" || userId.length === 0 || userId.length > MAX_USER_ID_LENGTH) {
-            return jsonResponse(400, { error: "invalid_request" });
+            return jsonResponse({ error: "invalid_request" }, 400);
         }
 
         const ttlSeconds = resolveTtlSeconds(body.ttlSeconds);
 
         if (ttlSeconds === undefined) {
-            return jsonResponse(400, { error: "invalid_request" });
+            return jsonResponse({ error: "invalid_request" }, 400);
         }
 
         const now = Date.now();
         const record: SessionRecord = { createdAt: now, expiresAt: now + ttlSeconds * 1000, userId };
 
-        await this.state.storage.put(`s:${token}`, record);
+        await this.kv.put(`s:${token}`, record);
         await this.armGcAlarm();
 
-        return jsonResponse(201, { token, ...record });
+        return jsonResponse({ token, ...record }, 201);
     }
 
     /**
@@ -318,16 +314,13 @@ class SessionDO {
      * the alarm API.
      */
     private async armGcAlarm(): Promise<void> {
-        const { storage } = this.state;
-
-        if (!storage.getAlarm || !storage.setAlarm) {
-            return;
-        }
-
-        const existing = await storage.getAlarm();
+        // On doubles without the alarm API, `get` reads `null` and `set` is a
+        // no-op, so the whole method degrades to nothing — the same outcome as
+        // the previous explicit capability guard.
+        const existing = await this.alarms.get();
 
         if (existing === null) {
-            await storage.setAlarm(Date.now() + SESSION_GC_INTERVAL_MS);
+            await this.alarms.set(Date.now() + SESSION_GC_INTERVAL_MS);
         }
     }
 
@@ -335,38 +328,38 @@ class SessionDO {
         const token = request.headers.get(SESSION_TOKEN_HEADER);
 
         if (!token) {
-            return jsonResponse(400, { error: { code: "INVALID_INPUT", message: "token required" } });
+            return jsonResponse({ error: { code: "INVALID_INPUT", message: "token required" } }, 400);
         }
 
-        const record = await this.state.storage.get<SessionRecord>(`s:${token}`);
+        const record = await this.kv.get<SessionRecord>(`s:${token}`);
 
         if (!record) {
-            return jsonResponse(404, { error: { code: "NOT_FOUND", message: "session not found" } });
+            return jsonResponse({ error: { code: "NOT_FOUND", message: "session not found" } }, 404);
         }
 
         // Expire lazily on read for correctness; the GC alarm ({@link alarm})
         // separately reclaims storage for sessions that are never read again.
         if (record.expiresAt < Date.now()) {
-            await this.state.storage.delete(`s:${token}`);
+            await this.kv.delete(`s:${token}`);
 
-            return jsonResponse(404, { error: { code: "EXPIRED", message: "session expired" } });
+            return jsonResponse({ error: { code: "EXPIRED", message: "session expired" } }, 404);
         }
 
-        return jsonResponse(200, { token, ...record });
+        return jsonResponse({ token, ...record }, 200);
     }
 
     private async handleRevoke(request: Request): Promise<Response> {
         const token = request.headers.get(SESSION_TOKEN_HEADER);
 
         if (!token) {
-            return jsonResponse(400, { error: { code: "INVALID_INPUT", message: "token required" } });
+            return jsonResponse({ error: { code: "INVALID_INPUT", message: "token required" } }, 400);
         }
 
-        await this.state.storage.delete(`s:${token}`);
+        await this.kv.delete(`s:${token}`);
 
-        return jsonResponse(200, { ok: true });
+        return jsonResponse({ ok: true }, 200);
     }
 }
 
-export { SESSION_DO_TTL_DEFAULT, SESSION_DO_TTL_MAX, SessionDO };
+export { SESSION_DO_TTL_DEFAULT, SessionDO };
 export type { SessionRecord };

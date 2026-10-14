@@ -1,3 +1,10 @@
+/// <reference types="@cloudflare/workers-types" />
+// This file drives a REAL worker in workerd, so it needs Cloudflare's ambient
+// globals. The reference lives here rather than in the package's tsconfig
+// `types` array because `src/` is platform-neutral (plan 114 §5.1 rates this
+// package none/light) — making the whole package ambient-Cloudflare would let a
+// `DurableObjectNamespace` reference slip into shipped code and still compile.
+
 /**
  * Phase 3 verification gate: real `LunoraClient` ↔ real `workerd` worker.
  *
@@ -38,20 +45,27 @@ const fetchViaSelf: typeof fetch = (...arguments_) => SELF.fetch(...(arguments_ 
  * constructor-shaped wrapper.
  */
 class SelfWebSocket {
-    public onclose: ((event: unknown) => void) | null = null;
-
-    public onerror: ((event: unknown) => void) | null = null;
-
-    public onmessage: ((event: { data: unknown }) => void) | null = null;
-
-    public onopen: ((event: unknown) => void) | null = null;
-
     private socket: WebSocket | null = null;
 
     private pendingSends: string[] = [];
 
+    // The client subscribes through the standard `socket.addEventListener(type, fn)`
+    // API, so the polyfill must expose it. (It previously exposed only `on*` handler
+    // props, which the client no longer uses — the source of the
+    // "socket.addEventListener is not a function" failure.)
+    private readonly listeners: Record<string, Set<(event: unknown) => void>> = {};
+
     public constructor(url: string) {
         this.connect(url);
+    }
+
+    public addEventListener(type: string, listener: (event: unknown) => void): void {
+        this.listeners[type] ??= new Set();
+        this.listeners[type].add(listener);
+    }
+
+    public removeEventListener(type: string, listener: (event: unknown) => void): void {
+        this.listeners[type]?.delete(listener);
     }
 
     public send(data: string): void {
@@ -66,27 +80,39 @@ class SelfWebSocket {
         this.socket?.close();
     }
 
+    private dispatch(type: string, event: unknown): void {
+        for (const listener of this.listeners[type] ?? new Set<(event: unknown) => void>()) {
+            listener(event);
+        }
+    }
+
     private connect(url: string): void {
-        SELF.fetch(url, { headers: { Upgrade: "websocket" } })
+        // The client builds a browser `wss://`/`ws://` URL, but workerd's
+        // `SELF.fetch` upgrades over `https://`/`http://` — rewrite the scheme so
+        // the upgrade actually lands on the worker (a `wss://` URL silently fails
+        // to upgrade, which left the DO with zero registered sockets).
+        const httpUrl = url.replace(/^wss:\/\//, "https://").replace(/^ws:\/\//, "http://");
+
+        SELF.fetch(httpUrl, { headers: { Upgrade: "websocket" } })
             .then((response) => {
                 const ws = (response as unknown as { webSocket: WebSocket | null }).webSocket;
 
                 if (!ws) {
-                    this.onerror?.({});
-                    this.onclose?.({});
+                    this.dispatch("error", {});
+                    this.dispatch("close", {});
 
                     return false;
                 }
 
                 this.socket = ws;
                 ws.addEventListener("message", (event) => {
-                    this.onmessage?.(event);
+                    this.dispatch("message", event);
                 });
                 ws.addEventListener("close", (event) => {
-                    this.onclose?.(event);
+                    this.dispatch("close", event);
                 });
                 ws.addEventListener("error", (event) => {
-                    this.onerror?.(event);
+                    this.dispatch("error", event);
                 });
                 ws.accept();
 
@@ -96,13 +122,13 @@ class SelfWebSocket {
 
                 this.pendingSends = [];
 
-                this.onopen?.({});
+                this.dispatch("open", {});
 
                 return true;
             })
             .catch(() => {
-                this.onerror?.({});
-                this.onclose?.({});
+                this.dispatch("error", {});
+                this.dispatch("close", {});
             });
     }
 }
@@ -168,7 +194,8 @@ describe("lunoraClient (workerd integration)", () => {
             requestHeaders.push(new Headers(init?.headers));
 
             // Have the worker echo a synthetic bookmark on the mutation response.
-            // The shard sets the response bookmark via `setOutboundBookmark`,
+            // The shard sets the response bookmark by writing the per-dispatch
+            // `DispatchBookmark` sink its generated `onBookmark` is handed,
             // which the runtime then forwards. We piggy-back by stamping it
             // into the response that comes back from SELF.
             return SELF.fetch(input as never, init as never).then((response: Response) => {
@@ -242,6 +269,14 @@ describe("lunoraClient (workerd integration)", () => {
             // Trigger a broadcast from inside the DO. The DO must call
             // `broadcastDelta` from its own context — calling it from outside
             // via a stub method won't see the runtime's WS attachments.
+            //
+            // `table` is the FUNCTION PATH, not a table name, and deliberately
+            // so: `matchesSubscription` compares `delta.table` to whatever the
+            // client registered, and `@lunora/client` has no table name to give
+            // (a function reference carries only its `namespace:fn` id). Broadcast
+            // `{ table: "messages" }` here and this subscription matches nothing —
+            // which is exactly why generated shards route their ctx-db hook to
+            // `recordChangedTable` and get re-execution instead.
             await runInDurableObject(rootStub(), async (instance) => {
                 instance.broadcast({ key: "m-1", op: "insert", row: { id: "m-1", text: "hi" }, table: "messages:list" });
             });
@@ -249,6 +284,94 @@ describe("lunoraClient (workerd integration)", () => {
             await waitFor(() => received.length > 0);
 
             expect(received[0]).toEqual({ key: "m-1", op: "insert", row: { id: "m-1", text: "hi" }, table: "messages:list" });
+        } finally {
+            client.close();
+        }
+    });
+
+    it("subscribes with bigint/Date args end-to-end: decode-at-entry, real-value seed, attachment fidelity (plan 090)", async () => {
+        expect.assertions(3);
+
+        const client = makeClient();
+        const received: unknown[] = [];
+        const args = { at: new Date(5000), since: 123n };
+
+        try {
+            // Pre-change this threw client-side at the registry key; the frame's
+            // JSON.stringify would have thrown on the bigint anyway.
+            client.subscribe(ref("counters:since"), args, (value) => {
+                received.push(value);
+            });
+
+            // The seed (executeSubscription echo) ships the DECODED args back as
+            // the subscription's first value — the full client → workerd → client
+            // round-trip preserves the real bigint/Date.
+            await waitFor(() => received.length > 0);
+
+            expect(received[0]).toStrictEqual({ args: { at: new Date(5000), since: 123n }, functionPath: "counters:since" });
+
+            await runInDurableObject(rootStub(), async (instance, state) => {
+                // The DO's executeSubscription ran with REAL values (not tagged arrays).
+                expect(instance.lastSubscribeArgs).toStrictEqual({ at: new Date(5000), since: 123n });
+
+                // The hibernation attachment (real workerd structured clone) carries
+                // the decoded args, so a post-hibernation re-execution sees them too.
+                const [socket] = state.getWebSockets();
+                const attachment = socket?.deserializeAttachment() as { subs: Record<string, { args?: Record<string, unknown> }> };
+                const stored = Object.values(attachment.subs).find((sub) => sub.args?.["since"] !== undefined);
+
+                expect(stored?.args).toStrictEqual({ at: new Date(5000), since: 123n });
+            });
+        } finally {
+            client.close();
+        }
+    });
+
+    it("drains a paced reconnect resubscribe against the real server, well inside the stall watchdog (issue #796)", async () => {
+        expect.assertions(3);
+
+        // Seven subscriptions, a window of three: this only completes if the
+        // REAL server's reply frames release the drain's slots. A mock that
+        // answers more readily than workerd would hide exactly that, so the
+        // deadline below (2s) is deliberately far under the 10s per-frame
+        // watchdog — the watchdog alone would need ~20s to get seven out.
+        const client = makeClient();
+        const count = 7;
+
+        try {
+            for (let index = 0; index < count; index += 1) {
+                client.subscribe(ref(`queries:q${String(index)}`), {}, () => undefined);
+            }
+
+            const allAcked = (): boolean => client.debug().subscriptions.filter((sub) => sub.acked).length === count;
+
+            await waitFor(allAcked);
+
+            expect(allAcked()).toBe(true);
+
+            // Drop the socket from the SERVER side, the way a backend restart
+            // does. The reconnect re-sends all seven — three frames at a time.
+            await runInDurableObject(rootStub(), (_instance, state) => {
+                for (const socket of state.getWebSockets()) {
+                    socket.close(1000, "restart");
+                }
+            });
+
+            await waitFor(() => !allAcked());
+            await waitFor(allAcked);
+
+            expect(allAcked()).toBe(true);
+
+            // …and the server really holds all seven again, not just the first
+            // window: an ack the drain mis-reads would leave four unsent.
+            await runInDurableObject(rootStub(), async (_instance, state) => {
+                const live = state
+                    .getWebSockets()
+                    .map((socket) => socket.deserializeAttachment() as { subs?: Record<string, unknown> } | null)
+                    .reduce((total, attachment) => total + Object.keys(attachment?.subs ?? {}).length, 0);
+
+                expect(live).toBeGreaterThanOrEqual(count);
+            });
         } finally {
             client.close();
         }

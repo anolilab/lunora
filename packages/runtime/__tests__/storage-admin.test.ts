@@ -3,12 +3,14 @@ import { describe, expect, it, vi } from "vitest";
 import type {
     ExecutionContextLike,
     StorageDeleteFn as StorageDeleteFunction,
+    StorageDownloadFn as StorageDownloadFunction,
     StorageListFn as StorageListFunction,
     StorageSignedUrlFn as StorageSignedUrlFunction,
     StorageUploadFn as StorageUploadFunction,
 } from "../src/create-worker";
 import { createWorker } from "../src/create-worker";
 import type { ShardNamespaceLike } from "../src/resolve-shard";
+import { STORAGE_UPLOAD_MAX_BODY_BYTES } from "../src/storage-admin-routes";
 
 const fakeContext: ExecutionContextLike = {
     passThroughOnException: () => undefined,
@@ -245,8 +247,8 @@ describe("createWorker — storage admin upload", () => {
         });
         const worker = createWorker({ adminToken: ADMIN_TOKEN, shardDO: noopNamespace, storageUpload });
 
-        // One byte past the 1 MiB MAX_BODY_BYTES cap.
-        const oversized = "x".repeat(1_048_577);
+        // One byte past the route's own 32 MiB budget.
+        const oversized = new Uint8Array(STORAGE_UPLOAD_MAX_BODY_BYTES + 1);
         const response = await worker.fetch(
             new Request("https://app.example/_lunora/admin/storage?key=docs/big.bin", {
                 body: oversized,
@@ -259,6 +261,280 @@ describe("createWorker — storage admin upload", () => {
 
         expect(response.status).toBe(413);
         expect(storageUpload).not.toHaveBeenCalled();
+    });
+
+    it("accepts an object above the shared 1 MiB JSON cap — blobs get the route's own budget", async () => {
+        expect.assertions(2);
+
+        const storageUpload = vi.fn<StorageUploadFunction>(async (key: string) => {
+            return { key };
+        });
+        const worker = createWorker({ adminToken: ADMIN_TOKEN, shardDO: noopNamespace, storageUpload });
+
+        const response = await worker.fetch(
+            new Request("https://app.example/_lunora/admin/storage?key=docs/photo.jpg", {
+                body: new Uint8Array(2 * 1_048_576),
+                headers: { authorization: `Bearer ${ADMIN_TOKEN}`, "content-type": "image/jpeg" },
+                method: "PUT",
+            }),
+            {},
+            fakeContext,
+        );
+
+        expect(response.status).toBe(200);
+        expect(storageUpload).toHaveBeenCalledTimes(1);
+    });
+
+    it("rejects a mismatched expectedSize with 400 before invoking the uploader", async () => {
+        expect.assertions(3);
+
+        const storageUpload = vi.fn<StorageUploadFunction>(async (key: string) => {
+            return { etag: "e9", key };
+        });
+        const worker = createWorker({ adminToken: ADMIN_TOKEN, shardDO: noopNamespace, storageUpload });
+
+        const response = await worker.fetch(
+            new Request("https://app.example/_lunora/admin/storage?key=docs/readme.txt&expectedSize=999", {
+                body: "hello",
+                headers: { authorization: `Bearer ${ADMIN_TOKEN}`, "content-type": "text/plain" },
+                method: "PUT",
+            }),
+            {},
+            fakeContext,
+        );
+
+        expect(response.status).toBe(400);
+
+        const body: { error: { code: string } } = await response.json();
+
+        expect(body.error.code).toBe("STORAGE_CHECKSUM_MISMATCH");
+        expect(storageUpload).not.toHaveBeenCalled();
+    });
+
+    it("rejects a mismatched expectedSha256 with 400 before invoking the uploader", async () => {
+        expect.assertions(3);
+
+        const storageUpload = vi.fn<StorageUploadFunction>(async (key: string) => {
+            return { etag: "e9", key };
+        });
+        const worker = createWorker({ adminToken: ADMIN_TOKEN, shardDO: noopNamespace, storageUpload });
+
+        const response = await worker.fetch(
+            new Request("https://app.example/_lunora/admin/storage?key=docs/readme.txt&expectedSha256=deadbeef", {
+                body: "hello",
+                headers: { authorization: `Bearer ${ADMIN_TOKEN}`, "content-type": "text/plain" },
+                method: "PUT",
+            }),
+            {},
+            fakeContext,
+        );
+
+        expect(response.status).toBe(400);
+
+        const body: { error: { code: string } } = await response.json();
+
+        expect(body.error.code).toBe("STORAGE_CHECKSUM_MISMATCH");
+        expect(storageUpload).not.toHaveBeenCalled();
+    });
+
+    it("accepts a matching expectedSize + expectedSha256, writes the blob, and echoes the hash", async () => {
+        expect.assertions(4);
+
+        const storageUpload = vi.fn<StorageUploadFunction>(async (key: string) => {
+            return { etag: "e9", key };
+        });
+        const worker = createWorker({ adminToken: ADMIN_TOKEN, shardDO: noopNamespace, storageUpload });
+
+        // sha256("hello"), base16 lowercase — the base64-encoded form the
+        // verification path must reject if the caller passes it (case/blobs).
+        const sha256 = "2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824";
+        const response = await worker.fetch(
+            new Request(`https://app.example/_lunora/admin/storage?key=docs/readme.txt&expectedSize=5&expectedSha256=${sha256}`, {
+                body: "hello",
+                headers: { authorization: `Bearer ${ADMIN_TOKEN}`, "content-type": "text/plain" },
+                method: "PUT",
+            }),
+            {},
+            fakeContext,
+        );
+
+        expect(response.status).toBe(200);
+        await expect(response.json()).resolves.toEqual({ etag: "e9", key: "docs/readme.txt", sha256 });
+        expect(storageUpload).toHaveBeenCalledTimes(1);
+
+        const [, storedBody] = storageUpload.mock.calls[0] as unknown as [string, ArrayBuffer];
+
+        expect(new TextDecoder().decode(storedBody)).toBe("hello");
+    });
+
+    it("hands the computed digest to storage so R2 records it", async () => {
+        expect.assertions(2);
+
+        const uploadOptions: { sha256?: string }[] = [];
+        const storageUpload = vi.fn<StorageUploadFunction>(async (key: string, _body: ArrayBuffer, options?: { sha256?: string }) => {
+            uploadOptions.push({ sha256: options?.sha256 });
+
+            return { key };
+        });
+        const worker = createWorker({ adminToken: ADMIN_TOKEN, shardDO: noopNamespace, storageUpload });
+        const digest = "2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824"; // sha256("hello")
+
+        const response = await worker.fetch(
+            new Request(`https://app.example/_lunora/admin/storage?key=a.txt&expectedSha256=${digest}&expectedSize=5`, {
+                body: "hello",
+                headers: { authorization: `Bearer ${ADMIN_TOKEN}`, "content-type": "text/plain" },
+                method: "PUT",
+            }),
+            {},
+            fakeContext,
+        );
+
+        expect(response.status).toBe(200);
+        // Without this, R2 reports no checksum on `list()`/`head()` and every
+        // downstream integrity check silently degrades to comparing sizes.
+        expect(uploadOptions[0]?.sha256).toBe(digest);
+    });
+
+    it("accepts a case-variant expectedSha256 (comparison is case-insensitive)", async () => {
+        expect.assertions(1);
+
+        const storageUpload = vi.fn<StorageUploadFunction>(async (key: string) => {
+            return { etag: "e9", key };
+        });
+        const worker = createWorker({ adminToken: ADMIN_TOKEN, shardDO: noopNamespace, storageUpload });
+
+        const response = await worker.fetch(
+            new Request(
+                // eslint-disable-next-line no-secrets/no-secrets -- example admin URL fixture, not a secret
+                "https://app.example/_lunora/admin/storage?key=docs/readme.txt&expectedSize=5&expectedSha256=2CF24DBA5FB0A30E26E83B2AC5B9E29E1B161E5C1FA7425E73043362938B9824",
+                {
+                    body: "hello",
+                    headers: { authorization: `Bearer ${ADMIN_TOKEN}`, "content-type": "text/plain" },
+                    method: "PUT",
+                },
+            ),
+            {},
+            fakeContext,
+        );
+
+        expect(response.status).toBe(200);
+    });
+});
+
+describe("createWorker — storage admin object read", () => {
+    const OBJECT_URL = "https://app.example/_lunora/admin/storage/object?key=backups/snap.ndjson";
+    const NDJSON = '{"table":"users","doc":{"_id":"u1"}}\n';
+
+    const bodyOf = (text: string): ReadableStream =>
+        new ReadableStream({
+            start(controller) {
+                controller.enqueue(new TextEncoder().encode(text));
+                controller.close();
+            },
+        });
+
+    it("rejects without a valid admin bearer (403)", async () => {
+        expect.assertions(1);
+
+        const worker = createWorker({
+            adminToken: ADMIN_TOKEN,
+            shardDO: noopNamespace,
+            storageDownload: async () => {
+                return { body: bodyOf(NDJSON) };
+            },
+        });
+
+        const response = await worker.fetch(new Request(OBJECT_URL, { method: "GET" }), {}, fakeContext);
+
+        expect(response.status).toBe(403);
+    });
+
+    it("reports STORAGE_DOWNLOAD_NOT_CONFIGURED when no reader is bound (400)", async () => {
+        expect.assertions(2);
+
+        const worker = createWorker({ adminToken: ADMIN_TOKEN, shardDO: noopNamespace });
+
+        const response = await worker.fetch(new Request(OBJECT_URL, { headers: { authorization: `Bearer ${ADMIN_TOKEN}` }, method: "GET" }), {}, fakeContext);
+
+        expect(response.status).toBe(400);
+
+        const body: { error: { code: string } } = await response.json();
+
+        expect(body.error.code).toBe("STORAGE_DOWNLOAD_NOT_CONFIGURED");
+    });
+
+    // The stored content type is whatever an uploader pinned, and this route
+    // answers from the app origin: it must never render as a page there.
+    it("serves a stored object as a non-executable download", async () => {
+        expect.assertions(3);
+
+        const worker = createWorker({
+            adminToken: ADMIN_TOKEN,
+            shardDO: noopNamespace,
+            storageDownload: async () => {
+                return { body: bodyOf("<script>alert(1)</script>"), httpMetadata: { contentType: "text/html" } };
+            },
+        });
+
+        const response = await worker.fetch(new Request(OBJECT_URL, { headers: { authorization: `Bearer ${ADMIN_TOKEN}` }, method: "GET" }), {}, fakeContext);
+
+        expect(response.status).toBe(200);
+        expect(response.headers.get("x-content-type-options")).toBe("nosniff");
+        expect(response.headers.get("content-disposition")).toBe("attachment");
+    });
+
+    it("streams the object body back, with its bucket and content type", async () => {
+        expect.assertions(4);
+
+        const storageDownload = vi.fn<StorageDownloadFunction>(async () => {
+            return { body: bodyOf(NDJSON), httpMetadata: { contentType: "application/x-ndjson" }, size: NDJSON.length };
+        });
+        const worker = createWorker({ adminToken: ADMIN_TOKEN, shardDO: noopNamespace, storageDownload });
+
+        const response = await worker.fetch(
+            new Request(`${OBJECT_URL}&bucket=media`, { headers: { authorization: `Bearer ${ADMIN_TOKEN}` }, method: "GET" }),
+            {},
+            fakeContext,
+        );
+
+        expect(response.status).toBe(200);
+        expect(response.headers.get("content-type")).toBe("application/x-ndjson");
+        await expect(response.text()).resolves.toBe(NDJSON);
+        expect(storageDownload).toHaveBeenCalledWith("backups/snap.ndjson", { bucket: "media" });
+    });
+
+    it("404s for a key that is not there", async () => {
+        expect.assertions(2);
+
+        const worker = createWorker({ adminToken: ADMIN_TOKEN, shardDO: noopNamespace, storageDownload: async () => null });
+
+        const response = await worker.fetch(new Request(OBJECT_URL, { headers: { authorization: `Bearer ${ADMIN_TOKEN}` }, method: "GET" }), {}, fakeContext);
+
+        expect(response.status).toBe(404);
+
+        const body: { error: { code: string } } = await response.json();
+
+        expect(body.error.code).toBe("STORAGE_OBJECT_NOT_FOUND");
+    });
+
+    it("requires a key", async () => {
+        expect.assertions(1);
+
+        const worker = createWorker({
+            adminToken: ADMIN_TOKEN,
+            shardDO: noopNamespace,
+            storageDownload: async () => {
+                return { body: bodyOf(NDJSON) };
+            },
+        });
+
+        const response = await worker.fetch(
+            new Request("https://app.example/_lunora/admin/storage/object", { headers: { authorization: `Bearer ${ADMIN_TOKEN}` }, method: "GET" }),
+            {},
+            fakeContext,
+        );
+
+        expect(response.status).toBe(400);
     });
 });
 
@@ -299,7 +575,9 @@ describe("createWorker — storage admin signed URL", () => {
         expect(response.status).toBe(200);
         await expect(response.json()).resolves.toEqual({ key: "avatars/a.png", url: "https://cdn.example/avatars/a.png?sig=abc" });
         // No `expiresIn` query → the host gets `undefined` (its own default applies).
-        expect(storageSignedUrl).toHaveBeenCalledWith("avatars/a.png", { bucket: undefined, expiresInSeconds: undefined });
+        // `origin` is the host the admin request reached: a signer with no declared
+        // base signs against it, and the signed-URL route verifies that same host.
+        expect(storageSignedUrl).toHaveBeenCalledWith("avatars/a.png", { bucket: undefined, expiresInSeconds: undefined, origin: "https://app.example" });
     });
 
     it("forwards a positive expiresIn as the share-link lifetime", async () => {
@@ -318,7 +596,7 @@ describe("createWorker — storage admin signed URL", () => {
         );
 
         expect(response.status).toBe(200);
-        expect(storageSignedUrl).toHaveBeenCalledWith("a.png", { bucket: undefined, expiresInSeconds: 900 });
+        expect(storageSignedUrl).toHaveBeenCalledWith("a.png", { bucket: undefined, expiresInSeconds: 900, origin: "https://app.example" });
     });
 
     it("clamps an over-max expiresIn to the 7-day ceiling", async () => {
@@ -338,6 +616,216 @@ describe("createWorker — storage admin signed URL", () => {
 
         // The worker clamps to 7 days (604800s) instead of letting the host throw a 500.
         expect(response.status).toBe(200);
-        expect(storageSignedUrl).toHaveBeenCalledWith("a.png", { bucket: undefined, expiresInSeconds: 604_800 });
+        expect(storageSignedUrl).toHaveBeenCalledWith("a.png", { bucket: undefined, expiresInSeconds: 604_800, origin: "https://app.example" });
+    });
+
+    it("signs a PUT URL with the pinned content-type for a large-blob upload", async () => {
+        expect.assertions(2);
+
+        const storageSignedUrl = vi.fn<StorageSignedUrlFunction>(async (key: string) => `https://cdn.example/${key}?sig=abc`);
+        const worker = createWorker({ adminToken: ADMIN_TOKEN, shardDO: noopNamespace, storageSignedUrl });
+
+        const response = await worker.fetch(
+            new Request(`https://app.example/_lunora/admin/storage/url?key=a.bin&method=PUT&contentType=${encodeURIComponent("image/png")}`, {
+                headers: { authorization: `Bearer ${ADMIN_TOKEN}` },
+                method: "GET",
+            }),
+            {},
+            fakeContext,
+        );
+
+        expect(response.status).toBe(200);
+        expect(storageSignedUrl).toHaveBeenCalledWith("a.bin", {
+            bucket: undefined,
+            contentType: "image/png",
+            expiresInSeconds: undefined,
+            method: "PUT",
+            origin: "https://app.example",
+        });
+    });
+
+    it("refuses to sign a method outside the GET/PUT allowlist (400, nothing signed)", async () => {
+        expect.assertions(2);
+
+        const storageSignedUrl = vi.fn<StorageSignedUrlFunction>(async (key: string) => `https://cdn.example/${key}?sig=abc`);
+        const worker = createWorker({ adminToken: ADMIN_TOKEN, shardDO: noopNamespace, storageSignedUrl });
+
+        const response = await worker.fetch(
+            new Request("https://app.example/_lunora/admin/storage/url?key=a.png&method=DELETE", {
+                headers: { authorization: `Bearer ${ADMIN_TOKEN}` },
+                method: "GET",
+            }),
+            {},
+            fakeContext,
+        );
+
+        expect(response.status).toBe(400);
+        expect(storageSignedUrl).not.toHaveBeenCalled();
+    });
+});
+
+/**
+ * An unresolvable `?bucket=` used to be indistinguishable from no bucket at all:
+ * both fell through to the default. A typo, a case difference, and a bucket the
+ * app declares but this environment does not bind all landed the operator —
+ * or `lunora import --with-storage --bucket X`, which forwards the name verbatim
+ * — on the DEFAULT bucket, including for `delete`. The route now refuses an
+ * unknown name the way `kv-admin-routes` refuses an unknown namespace binding.
+ *
+ * Every driver is exercised, not just delete: the picker they share is what
+ * broke, so a fix proven on one route says nothing about the other four.
+ */
+describe("createWorker — storage admin unknown bucket", () => {
+    const BUCKETS = ["default", "avatars"];
+
+    /** Build a worker with all five storage drivers bound and the bucket list declared. */
+    const workerWithBuckets = (): {
+        storageDelete: ReturnType<typeof vi.fn<StorageDeleteFunction>>;
+        storageDownload: ReturnType<typeof vi.fn<StorageDownloadFunction>>;
+        storageList: ReturnType<typeof vi.fn<StorageListFunction>>;
+        storageSignedUrl: ReturnType<typeof vi.fn<StorageSignedUrlFunction>>;
+        storageUpload: ReturnType<typeof vi.fn<StorageUploadFunction>>;
+        worker: ReturnType<typeof createWorker>;
+    } => {
+        const storageDelete = vi.fn<StorageDeleteFunction>(async () => undefined);
+        const storageDownload = vi.fn<StorageDownloadFunction>(async () => {
+            return {
+                body: new ReadableStream({
+                    start(controller) {
+                        controller.enqueue(new TextEncoder().encode("x"));
+                        controller.close();
+                    },
+                }),
+                httpMetadata: { contentType: "image/png" },
+                size: 1,
+            };
+        });
+        const storageList = vi.fn<StorageListFunction>(async () => PAGE);
+        const storageSignedUrl = vi.fn<StorageSignedUrlFunction>(async (key: string) => `https://cdn.example/${key}?sig=abc`);
+        const storageUpload = vi.fn<StorageUploadFunction>(async (key: string) => {
+            return { key, size: 1 };
+        });
+
+        return {
+            storageDelete,
+            storageDownload,
+            storageList,
+            storageSignedUrl,
+            storageUpload,
+            worker: createWorker({
+                adminToken: ADMIN_TOKEN,
+                shardDO: noopNamespace,
+                storageBuckets: BUCKETS,
+                storageDelete,
+                storageDownload,
+                storageList,
+                storageSignedUrl,
+                storageUpload,
+            }),
+        };
+    };
+
+    const adminGet = (path: string): Request =>
+        new Request(`https://app.example${path}`, { headers: { authorization: `Bearer ${ADMIN_TOKEN}` }, method: "GET" });
+
+    it.each([
+        ["a declared-but-unbound bucket", "archive"],
+        ["a case-differing bucket", "AVATARS"],
+        ["a prototype key", "__proto__"],
+    ])("refuses a delete naming %s (404, nothing deleted)", async (_label, bucket) => {
+        expect.assertions(3);
+
+        const { storageDelete, worker } = workerWithBuckets();
+        const response = await worker.fetch(
+            new Request(`https://app.example/_lunora/admin/storage?key=a.png&bucket=${encodeURIComponent(bucket)}`, {
+                headers: { authorization: `Bearer ${ADMIN_TOKEN}` },
+                method: "DELETE",
+            }),
+            {},
+            fakeContext,
+        );
+
+        expect(response.status).toBe(404);
+
+        const body: { error: { code: string } } = await response.json();
+
+        expect(body.error.code).toBe("NOT_FOUND");
+        expect(storageDelete).not.toHaveBeenCalled();
+    });
+
+    it("refuses a list naming an unknown bucket (404, nothing listed)", async () => {
+        expect.assertions(2);
+
+        const { storageList, worker } = workerWithBuckets();
+        const response = await worker.fetch(adminGet("/_lunora/admin/storage?bucket=archive"), {}, fakeContext);
+
+        expect(response.status).toBe(404);
+        expect(storageList).not.toHaveBeenCalled();
+    });
+
+    it("refuses a download naming an unknown bucket (404, nothing read)", async () => {
+        expect.assertions(2);
+
+        const { storageDownload, worker } = workerWithBuckets();
+        // eslint-disable-next-line no-secrets/no-secrets -- example admin URL fixture, not a secret
+        const response = await worker.fetch(adminGet("/_lunora/admin/storage/object?key=a.png&bucket=archive"), {}, fakeContext);
+
+        expect(response.status).toBe(404);
+        expect(storageDownload).not.toHaveBeenCalled();
+    });
+
+    it("refuses a signed-URL mint naming an unknown bucket (404, nothing signed)", async () => {
+        expect.assertions(2);
+
+        const { storageSignedUrl, worker } = workerWithBuckets();
+        const response = await worker.fetch(adminGet("/_lunora/admin/storage/url?key=a.png&bucket=archive"), {}, fakeContext);
+
+        expect(response.status).toBe(404);
+        expect(storageSignedUrl).not.toHaveBeenCalled();
+    });
+
+    it("refuses an upload naming an unknown bucket (404, nothing written)", async () => {
+        expect.assertions(2);
+
+        const { storageUpload, worker } = workerWithBuckets();
+        const response = await worker.fetch(
+            new Request("https://app.example/_lunora/admin/storage?key=b.png&bucket=archive", {
+                body: new Uint8Array([1, 2, 3]),
+                headers: { authorization: `Bearer ${ADMIN_TOKEN}`, "content-type": "image/png" },
+                method: "POST",
+            }),
+            {},
+            fakeContext,
+        );
+
+        expect(response.status).toBe(404);
+        expect(storageUpload).not.toHaveBeenCalled();
+    });
+
+    it("still serves a declared bucket, and a request that names none", async () => {
+        expect.assertions(2);
+
+        const { storageList, worker } = workerWithBuckets();
+
+        await worker.fetch(adminGet("/_lunora/admin/storage?bucket=avatars"), {}, fakeContext);
+        await worker.fetch(adminGet("/_lunora/admin/storage"), {}, fakeContext);
+
+        expect(storageList).toHaveBeenNthCalledWith(1, undefined, { bucket: "avatars", cursor: undefined });
+        expect(storageList).toHaveBeenNthCalledWith(2, undefined, { bucket: undefined, cursor: undefined });
+    });
+
+    it("cannot judge a bucket name when the worker declares no bucket list, so it forwards", async () => {
+        expect.assertions(2);
+
+        // A hand-written worker may bind `storageList` without `storageBuckets`.
+        // There is then no declared set to call a name unknown against, so the
+        // name rides through — the same posture `requireKnownNamespace` takes
+        // when the introspector reports no namespaces.
+        const storageList = vi.fn<StorageListFunction>(async () => PAGE);
+        const worker = createWorker({ adminToken: ADMIN_TOKEN, shardDO: noopNamespace, storageList });
+        const response = await worker.fetch(adminGet("/_lunora/admin/storage?bucket=archive"), {}, fakeContext);
+
+        expect(response.status).toBe(200);
+        expect(storageList).toHaveBeenCalledWith(undefined, { bucket: "archive", cursor: undefined });
     });
 });

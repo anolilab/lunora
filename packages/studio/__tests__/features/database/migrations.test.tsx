@@ -82,7 +82,7 @@ describe("migrationsPanel", () => {
     });
 
     it("subscribes to migrationStatus on mount and folds in pushed progress", async () => {
-        expect.assertions(1);
+        expect.hasAssertions();
 
         const mock = createClient();
 
@@ -117,6 +117,10 @@ describe("migrationsPanel", () => {
             });
         });
 
-        expect(screen.getByTestId("mg-row-0001_backfill").textContent).toContain("in_progress");
+        // The push flows through the query cache, whose observer notification
+        // lands asynchronously — poll for the re-render instead of asserting sync.
+        await waitFor(() => {
+            expect(screen.getByTestId("mg-row-0001_backfill").textContent).toContain("in_progress");
+        });
     });
 });

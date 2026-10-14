@@ -1,11 +1,46 @@
 export { default as createAi } from "./create-ai";
-export type { AiBindingLike, AiGatewayOptions, EmbeddingModelInput, LunoraAi, LunoraAiOptions, ModelInput, WorkersAiProviderLike } from "./types";
+export type { AiGatewayMetadata, ResolvedAiGateway } from "./gateway";
+export {
+    AI_DEFAULT_EMBEDDING_MODEL_ENV,
+    AI_DEFAULT_MODEL_ENV,
+    AI_GATEWAY_ACCOUNT_ID_ENV,
+    AI_GATEWAY_ID_ENV,
+    AI_GATEWAY_METADATA_MAX_KEYS,
+    AI_GATEWAY_TAGS_ENV,
+    AI_GATEWAY_TOKEN_ENV,
+    AI_PROXY_TOKEN_ENV,
+    AI_PROXY_URL_ENV,
+    buildAiGatewayMetadataFields,
+    readAiGatewayEnvTags,
+    resolveAiGateway,
+} from "./gateway";
+export type { ModelPrice, ModelUsage } from "./pricing";
+export { DEFAULT_MODEL_PRICES, estimateModelCost, lookupModelPrice } from "./pricing";
+export type {
+    AiBindingLike,
+    AiGatewayOptions,
+    AiMetrics,
+    AiModelOptions,
+    AiRunOptions,
+    AiSpan,
+    AiTelemetry,
+    AiTracer,
+    AiWebSearchItem,
+    AiWebSearchOptions,
+    AiWebSearchProvider,
+    AiWebSearchResult,
+    EmbeddingModelInput,
+    LunoraAi,
+    LunoraAiOptions,
+    ModelInput,
+    WorkersAiProviderLike,
+} from "./types";
 
 // Re-export the AI SDK primitives apps reach for, so `@lunora/ai` is a single
 // import for the whole inference surface. These are provider-agnostic — pass
 // them a Workers AI model (via `ctx.ai.model(...)`) or any other AI SDK model.
 export type { EmbeddingModel, LanguageModel } from "ai";
-export { embed, embedMany, generateObject, generateText, streamObject, streamText, tool } from "ai";
+export { embed, embedMany, generateObject, generateText, hasToolCall, jsonSchema, streamObject, streamText, tool } from "ai";
 // The Workers AI provider factory, for callers who want to build/configure the
 // provider themselves before handing it to `createAi({ provider })`.
 export { createWorkersAI } from "workers-ai-provider";

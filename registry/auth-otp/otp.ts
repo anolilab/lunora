@@ -18,16 +18,18 @@
  * Merge this plugin into the `plugins` array in `lunora/auth/index.ts`:
  *
  * ```ts
- * // lunora/auth/index.ts
+ * // lunora/auth/index.ts — ADD to what the base `auth` item scaffolded; don't replace it.
  * import { emailOtpPlugin } from "./otp.js";
  *
  * export const buildAuth = (env: AuthEnv): LunoraAuth =>
  *     createAuth({
- *         baseURL: env.BETTER_AUTH_URL,
- *         database: env.DB as never,
- *         emailAndPassword: { enabled: true },
- *         secret: env.BETTER_AUTH_SECRET,
- *         plugins: [emailOtpPlugin(env)],
+ *         // ... everything the base item already set (baseURL, database, emailAndPassword,
+ *         // emailVerification, secret) stays exactly as it is. In particular keep
+ *         // `database: lunoraD1Adapter(env.DB as never)` — passing raw `env.DB` makes
+ *         // better-auth resolve its Kysely adapter through a runtime `await import(...)`
+ *         // that never settles under the Cloudflare Vite worker runner, hanging every
+ *         // auth request in `lunora dev`.
+ *         plugins: [uiConfig(), emailOtpPlugin(env)],
  *     });
  * ```
  *
@@ -93,19 +95,14 @@ const sendPluginEmail = async (env: EmailOtpEnv, message: { subject: string; tex
 
     const cloudflareSend = async (from: string, to: string, raw: string): Promise<void> => {
         const { EmailMessage } = await import("cloudflare:email");
-        const binding = fullEnv["SEND_EMAIL"] as { send: (m: InstanceType<typeof EmailMessage>) => Promise<void> } | undefined;
-
-        if (binding === undefined) {
-            throw new Error("auth: no SEND_EMAIL binding to deliver mail — run `lunora add email` or set RESEND_API_KEY.");
-        }
+        const binding = fullEnv["SEND_EMAIL"] as { send: (m: InstanceType<typeof EmailMessage>) => Promise<void> };
 
         await binding.send(new EmailMessage(from, to, raw));
     };
 
-    // Only hand over `cloudflareSend` when the binding exists: `createMailerFromEnv`
-    // prefers it over `RESEND_API_KEY`, so passing it unconditionally would break a
-    // Resend-only deployment (the documented "SEND_EMAIL binding or RESEND_API_KEY" path).
-    await createMailerFromEnv(fullEnv, fullEnv["SEND_EMAIL"] === undefined ? {} : { cloudflareSend }).send(message);
+    // `createMailerFromEnv` uses `cloudflareSend` only when `SEND_EMAIL` is bound,
+    // falling back to `RESEND_API_KEY` otherwise.
+    await createMailerFromEnv(fullEnv, { cloudflareSend }).send(message);
 };
 
 /**

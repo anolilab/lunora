@@ -1,0 +1,24 @@
+{
+    "$schema": "node_modules/wrangler/config-schema.json",
+    "name": "lunora-example-team-chat",
+    "main": "src/server/index.ts",
+    "compatibility_date": "2026-10-01",
+    "compatibility_flags": ["nodejs_compat"],
+    "durable_objects": {
+        "bindings": [{ "name": "SHARD", "class_name": "ShardDO" }],
+    },
+    "migrations": [{ "tag": "v1", "new_sqlite_classes": ["ShardDO"] }],
+    "observability": { "enabled": true, "head_sampling_rate": 1 },
+    "d1_databases": [
+        // better-auth's identity tables (user, session, account, verification)
+        // plus the `.global()` `profiles` table, which has to be readable from
+        // every message shard.
+        { "binding": "DB", "database_name": "lunora-example-team-chat", "database_id": "<replace-with-d1-create-id>" },
+    ],
+    // No storage base URL: the worker serves `/files/*` itself, and `.storage()`
+    // without a `publicBaseUrl` signs object URLs against the origin each request
+    // arrived on — the dev server, a preview and the deploy alike.
+    "r2_buckets": [{ "binding": "FILES", "bucket_name": "lunora-example-team-chat-files" }],
+    // `AUTH_SECRET` and `STORAGE_SECRET` are secrets, not vars: they live in
+    // `.dev.vars` locally and are pushed with `wrangler secret put` for production.
+}

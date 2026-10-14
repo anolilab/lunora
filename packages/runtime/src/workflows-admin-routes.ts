@@ -22,7 +22,9 @@
  */
 import type { WorkflowInstanceStatus, WorkflowsRestClient } from "@lunora/workflow";
 
+import { readLooseJsonBody } from "./body-readers";
 import { LunoraError } from "./errors";
+import { assertMethod } from "./method-guard";
 
 const WORKFLOWS_INSTANCES_PATH = "/_lunora/admin/workflows/instances";
 const WORKFLOWS_INSTANCE_PATH = "/_lunora/admin/workflows/instance";
@@ -92,8 +94,12 @@ const requireQuery = (url: URL, key: string): string => {
 /**
  * Throw the 501 used when no Cloudflare credentials are configured. Raised as a
  * {@link LunoraError} so it serializes through the worker's standard
- * `{ error: { code, message } }` envelope — the client surfaces `.code`, and the
- * studio renders the `WORKFLOWS_NOT_CONFIGURED` case as a "set credentials" state.
+ * `{ error: { code, message } }` envelope — the client surfaces `.code`. Used by
+ * the detail/status endpoints only; those are reachable solely once instances
+ * exist, so they never fire while unconfigured. The instances *list* — the one
+ * endpoint the studio fetches on mount — instead answers a 200 `configured:
+ * false` sentinel (see `handleInstances`) so the studio renders its "set
+ * credentials" state without the browser logging a failed request.
  */
 const throwNotConfigured = (): never => {
     throw new LunoraError("Workflow inspection is unconfigured. Set CLOUDFLARE_ACCOUNT_ID + CLOUDFLARE_API_TOKEN in your .dev.vars to enable it.", {
@@ -109,15 +115,21 @@ const buildWorkflowsAdminRoutes = (
     const { assertAdmin, resolveWorkflowsClient } = deps;
 
     const handleInstances = async (request: Request, env: unknown, url: URL): Promise<Response> => {
-        if (request.method !== "GET") {
-            throw new LunoraError("Workflows instances endpoint requires GET", { code: "METHOD_NOT_ALLOWED", status: 405 });
-        }
+        assertMethod(request, "GET", "Workflows instances");
 
         assertAdmin(request);
         const client = resolveWorkflowsClient(env);
 
+        // The instance list is the one workflows endpoint the studio fetches
+        // automatically on mount, so an unconfigured worker would log a 501 to
+        // the console on every visit. Mirror the OpenAPI/OpenRPC introspection
+        // routes instead: return a 200 `configured: false` sentinel (an empty
+        // page) so the studio renders its "set credentials" state without the
+        // browser surfacing a failed request. The detail/status endpoints keep
+        // throwing `WORKFLOWS_NOT_CONFIGURED` — they're only reachable once
+        // instances exist, so they never fire while unconfigured.
         if (!client) {
-            return throwNotConfigured();
+            return Response.json({ configured: false, instances: [], page: 1, perPage: 0, totalCount: 0 });
         }
 
         const workflowName = requireQuery(url, "name");
@@ -134,9 +146,7 @@ const buildWorkflowsAdminRoutes = (
     };
 
     const handleInstance = async (request: Request, env: unknown, url: URL): Promise<Response> => {
-        if (request.method !== "GET") {
-            throw new LunoraError("Workflows instance endpoint requires GET", { code: "METHOD_NOT_ALLOWED", status: 405 });
-        }
+        assertMethod(request, "GET", "Workflows instance");
 
         assertAdmin(request);
         const client = resolveWorkflowsClient(env);
@@ -149,9 +159,7 @@ const buildWorkflowsAdminRoutes = (
     };
 
     const handleStatus = async (request: Request, env: unknown): Promise<Response> => {
-        if (request.method !== "POST") {
-            throw new LunoraError("Workflows status endpoint requires POST", { code: "METHOD_NOT_ALLOWED", status: 405 });
-        }
+        assertMethod(request, "POST", "Workflows status");
 
         assertAdmin(request);
         const client = resolveWorkflowsClient(env);
@@ -160,7 +168,14 @@ const buildWorkflowsAdminRoutes = (
             return throwNotConfigured();
         }
 
-        const body = (await request.json().catch(() => undefined)) as { action?: unknown; id?: unknown; name?: unknown } | undefined;
+        // Read under the shared byte budget, like every sibling admin route: a
+        // bare `request.json()` drains whatever is sent, so a chunked body slips
+        // the cap the `Content-Length` fast path only loosely enforces.
+        // `| null`, not `| undefined`: the reader returns `{}` for an empty body,
+        // the parsed value, or throws — so it never resolves `undefined`, but
+        // `JSON.parse("null")` is a perfectly good parsed value, and reading a
+        // property off it would 500 a request that deserves the 400 below.
+        const body = (await readLooseJsonBody(request, "Workflows status")) as { action?: unknown; id?: unknown; name?: unknown } | null;
 
         if (typeof body?.name !== "string" || body.name === "" || typeof body.id !== "string" || body.id === "") {
             throw new LunoraError("Workflows status action requires string `name` and `id`", { code: "BAD_REQUEST", status: 400 });

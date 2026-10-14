@@ -108,6 +108,47 @@ describe("createDynamicShardRegistry", () => {
         expect(namespace.instanceCalls).toContain(SHARD_REGISTRY_DO_NAME);
     });
 
+    it("resolves a fresh stub per call, since workerd refuses a stub from another request", async () => {
+        expect.assertions(1);
+
+        const fakeDO = createFakeRegistryDO({ messages: ["a"] });
+        const namespace = createFakeNamespace(fakeDO);
+        const registry = createDynamicShardRegistry({ cacheTtlMs: 0, namespace });
+
+        await registry.listShardKeys("messages");
+        await registry.listShardKeys("messages");
+
+        expect(namespace.instanceCalls).toHaveLength(2);
+    });
+
+    it("routes through a jurisdiction-pinned subnamespace when configured", async () => {
+        expect.assertions(2);
+
+        const fakeDO = createFakeRegistryDO({ messages: ["a"] });
+        const inner = createFakeNamespace(fakeDO);
+        const jurisdictionCalls: string[] = [];
+        const namespace: ShardNamespaceLike = {
+            get: () => {
+                throw new Error("should resolve via the jurisdiction subnamespace, not the root namespace");
+            },
+            idFromName: () => {
+                throw new Error("should resolve via the jurisdiction subnamespace, not the root namespace");
+            },
+            jurisdiction: (j) => {
+                jurisdictionCalls.push(j);
+
+                return inner;
+            },
+        };
+
+        const registry = createDynamicShardRegistry({ jurisdiction: "us", namespace });
+
+        const result = await registry.listShardKeys("messages");
+
+        expect(jurisdictionCalls).toStrictEqual(["us"]);
+        expect([...result]).toStrictEqual(["a"]);
+    });
+
     it("honors a custom instanceName", async () => {
         expect.assertions(2);
 

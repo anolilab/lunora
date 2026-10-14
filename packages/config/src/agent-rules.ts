@@ -1,6 +1,8 @@
 import { existsSync } from "node:fs";
 import { join } from "node:path";
 
+import { claimOncePerProcessTree } from "./process-tree-once";
+
 /**
  * Project-relative directory the Lunora agent skills ("rules") install into.
  * This is the portable [Agent Skills](https://tanstack.com/intent/latest/docs/registry)
@@ -15,6 +17,12 @@ const AGENT_RULES_HINT_ENV = "LUNORA_RULES_HINT_SHOWN";
  * The Lunora agent skills shipped by `@lunora/cli`. The first entry (`lunora`)
  * is the router skill — its presence is what {@link detectAgentRules} treats as
  * "rules installed", since every other skill is reachable through it.
+ *
+ * `lunora rules install` enumerates `@lunora/cli`'s `skills/` directory rather
+ * than reading this list, so a skill missing here still installs — but
+ * `lunora rules check` counts against it, and reported "9/9 skills" with an
+ * empty "Missing:" line for a project holding all 14. The CLI's rules test
+ * pins the two together, since this package cannot see that directory.
  */
 const LUNORA_SKILL_NAMES: ReadonlyArray<string> = [
     "lunora",
@@ -22,6 +30,11 @@ const LUNORA_SKILL_NAMES: ReadonlyArray<string> = [
     "lunora-functions",
     "lunora-realtime",
     "lunora-setup-auth",
+    "lunora-setup-hyperdrive",
+    "lunora-setup-hyperdrive-global",
+    "lunora-setup-mail",
+    "lunora-setup-scheduler",
+    "lunora-setup-storage",
     "lunora-create-package",
     "lunora-migration-helper",
     "lunora-deploy",
@@ -44,15 +57,7 @@ const AGENT_RULES_HINT = "Lunora AI rules not installed — run `lunora rules in
  * Vite dev-server restart, or a child process that inherited the env) read it
  * and stay quiet. Returns `true` the first time, `false` afterwards.
  */
-const claimAgentRulesHint = (): boolean => {
-    if (process.env[AGENT_RULES_HINT_ENV] === "1") {
-        return false;
-    }
-
-    process.env[AGENT_RULES_HINT_ENV] = "1";
-
-    return true;
-};
+const claimAgentRulesHint = (): boolean => claimOncePerProcessTree(AGENT_RULES_HINT_ENV);
 
 interface AgentRulesStatus {
     /**
@@ -61,10 +66,10 @@ interface AgentRulesStatus {
      * still counts as installed and isn't nagged.
      */
     readonly installed: boolean;
-    /** Skill names with no `SKILL.md` under `&lt;root>/.agents/skills/&lt;name>/`. */
+    /** Skill names with no `SKILL.md` under `<root>/.agents/skills/<name>/`. */
     readonly missing: ReadonlyArray<string>;
 
-    /** Skill names found under `&lt;root>/.agents/skills/&lt;name>/SKILL.md`. */
+    /** Skill names found under `<root>/.agents/skills/<name>/SKILL.md`. */
     readonly present: ReadonlyArray<string>;
 }
 

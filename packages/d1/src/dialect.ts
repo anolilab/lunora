@@ -13,11 +13,13 @@
  * so the CLI can import it without pulling the D1 runtime.
  */
 
+// The one canonical SQL identifier quoter, bundler-inlined from `shared/` (zero
+// runtime dep, keeps this module pure) and re-exported to preserve the
+// `@lunora/d1/dialect` public API.
+import { quoteIdentifier } from "../../../shared/quote-identifier";
+
 /** SQLite column type affinities Lunora emits. */
 export type SqlAffinity = "BLOB" | "INTEGER" | "REAL" | "TEXT";
-
-/** Double-quote (and escape) a SQL identifier. */
-export const quoteIdentifier = (name: string): string => `"${name.replaceAll('"', '""')}"`;
 
 /**
  * SQLite affinity for a column by its validator `kind`, chosen so the value the
@@ -25,9 +27,11 @@ export const quoteIdentifier = (name: string): string => `"${name.replaceAll('"'
  * - `boolean` → INTEGER (stored as 1/0)
  * - `number`/`timestamp`/`date` → REAL (numeric, never coerced to text)
  * - `bytes` → BLOB
- * - everything else → TEXT — string/id/literal, `bigint` (serialized as a
- * decimal string), and object/array/record/union/any (JSON). A numeric affinity
- * would coerce a numeric-looking string and corrupt the decode.
+ * - everything else → TEXT — string/id/literal, `bigint` (the order-preserving
+ * 40-character key `bigintSqlKey` builds: a sign character plus 39 digits, so
+ * text comparison agrees with numeric comparison and an index range scan is
+ * correct), and object/array/record/union/any (JSON). A numeric affinity would
+ * coerce a numeric-looking string and corrupt the decode.
  */
 export const sqlAffinityForKind = (kind: string | undefined): SqlAffinity => {
     switch (kind) {
@@ -47,6 +51,17 @@ export const sqlAffinityForKind = (kind: string | undefined): SqlAffinity => {
         }
     }
 };
+
+/**
+ * Most columns one D1 table may carry, framework columns included.
+ *
+ * D1 runs Workerd's SQLite build, which sets `SQLITE_LIMIT_COLUMN` to 100 where
+ * stock SQLite allows 2,000. Exported so the two producers of global-table DDL
+ * — the runtime auto-provisioner in `@lunora/sql-store` and the
+ * `lunora migrate generate` emitter — check the same number rather than each
+ * carrying its own copy.
+ */
+export const MAX_D1_TABLE_COLUMNS = 100;
 
 /** Framework columns every global table carries: the physical `id` (exposed as `_id`) and `_creationTime`. */
 export const frameworkColumnDdl = (): ReadonlyArray<string> => [
@@ -70,5 +85,8 @@ export const columnRef = (field: string): string => {
     return quoteIdentifier(field);
 };
 
-/** Physical index identifier — `&lt;table>_&lt;name>`, so two tables' like-named indexes don't collide in SQLite's flat index namespace. */
+/** Physical index identifier — `<table>_<name>`, so two tables' like-named indexes don't collide in SQLite's flat index namespace. */
 export const physicalIndexName = (tableName: string, indexName: string): string => quoteIdentifier(`${tableName}_${indexName}`);
+
+export { OCC_VERSION_COLUMN } from "../../../shared/occ-version-column";
+export { quoteIdentifier } from "../../../shared/quote-identifier";

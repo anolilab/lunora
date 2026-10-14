@@ -215,6 +215,29 @@ describe("createSeedClient", () => {
         expect(seed.$store.posts!.every((post) => userIds.has(post.authorId as string))).toBe(true);
     });
 
+    it("serializes overlapping calls through the persist await so deterministic ids never collide (regression: offset race)", async () => {
+        // Both calls auto-seed `users` then `posts`. Without serialization, both
+        // would read `createdCount.posts === 0` across the persist await and
+        // generate byte-identical `_id`s (hashes of the absolute index) — duplicate
+        // primary keys. Serialization gives the second call a fresh offset.
+        expect.hasAssertions();
+
+        const seed = createSeedClient<InsertModel>(schema, {
+            persist: async () => {
+                // Yield so an unserialized client would interleave here.
+                await Promise.resolve();
+            },
+            seed: 3,
+        });
+
+        const [a, b] = await Promise.all([seed.posts(5), seed.posts(5)]);
+        const postIds = [...a.posts, ...b.posts];
+
+        expect(postIds).toHaveLength(10);
+        expect(new Set(postIds).size).toBe(10);
+        expect(new Set(seed.$ids.posts).size).toBe(seed.$ids.posts?.length ?? 0);
+    });
+
     it("is deterministic for a given seed and varies across seeds", async () => {
         expect.hasAssertions();
 
@@ -228,5 +251,28 @@ describe("createSeedClient", () => {
 
         expect(a.users).toEqual(b.users);
         expect(a.users).not.toEqual(c.users);
+    });
+
+    // Ids are hashed from `seed` alone, so the determinism the other cases prove
+    // survives an unpinned clock. Time-valued columns do not: without `now` they
+    // fall back to `Date.now()` per call, and two runs of the same seed differ.
+    it("pins time-valued columns to the supplied now", async () => {
+        expect.hasAssertions();
+
+        const temporalSchema = defineSchema({ sessions: defineTable({ expiresAt: v.timestamp() }) });
+        const rowsAt = async (now: number): Promise<ReadonlyArray<Record<string, unknown>>> => {
+            const seed = createSeedClient<{ sessions: { expiresAt: number } }>(temporalSchema, { now, seed: 5 });
+
+            await seed.sessions(3);
+
+            return seed.$store.sessions ?? [];
+        };
+
+        const pinned = await rowsAt(1_700_000_000_000);
+        const earlier = await rowsAt(1_600_000_000_000);
+
+        expect(pinned).toStrictEqual(await rowsAt(1_700_000_000_000));
+        expect(pinned.map((row) => row.expiresAt)).not.toStrictEqual(earlier.map((row) => row.expiresAt));
+        expect(pinned.every((row) => typeof row.expiresAt === "number" && row.expiresAt <= 1_700_000_000_000)).toBe(true);
     });
 });

@@ -1,10 +1,23 @@
-import { embedText } from "./embed.js";
-import type { Id } from "./_generated/server.js";
-import { action, mutation, query, v } from "./_generated/server.js";
+import { rateLimit } from "lunorash/ratelimit";
+import { LunoraError } from "lunorash/server";
 
-interface PostDoc {
+import type { ActionCtx, Id, MutationCtx } from "./_generated/server.js";
+import { action, mutation, query, v } from "./_generated/server.js";
+import { embedText } from "./embed.js";
+import { makeRateLimiter } from "./ratelimit/schema.js";
+
+/**
+ * One limiter per context kind: a middleware's context type flows into the
+ * handler, so a single limiter typed loosely enough for both would erase
+ * `ctx.storage` on the action and `ctx.db` on the mutation.
+ */
+const actionLimiter = (ctx: ActionCtx) => makeRateLimiter(ctx);
+const mutationLimiter = (ctx: MutationCtx) => makeRateLimiter(ctx);
+const byUser = { key: (ctx: { auth: { userId?: null | string }; ip?: string }): string => ctx.auth.userId ?? ctx.ip ?? "anon" };
+
+interface PostDocument {
     _id: Id<"posts">;
-    authorId: Id<"users">;
+    authorId: string;
     body: string;
     imageKey?: string;
     publishedAt: number;
@@ -14,13 +27,13 @@ interface PostDoc {
 /**
  * Public feed — list every post, newest first. Open to anonymous readers.
  */
-export const list = query.query(async ({ ctx }): Promise<PostDoc[]> => {
-    const rows = await ctx.db.query("posts").withIndex("by_published").collect();
+export const list = query.query(async ({ ctx }): Promise<PostDocument[]> =>
+    // `.order("desc")` on the `by_published` index — the database does the
+    // ordering, so this stays right (and cheap) as the feed grows.
+    ctx.db.query("posts").withIndex("by_published").order("desc").collect(),
+);
 
-    return [...rows].sort((a, b) => b.publishedAt - a.publishedAt);
-});
-
-export const get = query.input({ id: v.id("posts") }).query(async ({ args: { id }, ctx }): Promise<PostDoc | null> => (await ctx.db.get(id)) ?? null);
+export const get = query.input({ id: v.id("posts") }).query(async ({ args: { id }, ctx }): Promise<PostDocument | null> => (await ctx.db.get(id)) ?? null);
 
 /**
  * Semantic search over post bodies. `.vectorize("body", …)` keeps the
@@ -29,19 +42,21 @@ export const get = query.input({ id: v.id("posts") }).query(async ({ args: { id 
  * Vectorize metadata, so a result preview needs no extra DB read.
  */
 export const search = query
-    .input({ text: v.string(), topK: v.optional(v.number()) })
-    .query(async ({ args: { text, topK }, ctx }): Promise<Array<{ id: Id<"posts">; score: number; title: string }>> => {
+    .input({ text: v.string().max(1000), topK: v.optional(v.number()) })
+    .query(async ({ args: { text, topK }, ctx }): Promise<{ id: Id<"posts">; score: number; title: string }[]> => {
         // Bound user-supplied inputs: clamp `topK` to a sane ceiling and cap the
         // query text length so a caller can't ask for unbounded work.
         const boundedTopK = Math.min(Math.max(topK ?? 5, 1), 50);
         const input = text.slice(0, 1000);
         const result = await ctx.vectors.query("posts_search", { embed: embedText, input, topK: boundedTopK });
 
-        return result.matches.map((match) => ({
-            id: match.id as Id<"posts">,
-            score: match.score,
-            title: String(match.metadata?.title ?? ""),
-        }));
+        return result.matches.map((match) => {
+            return {
+                id: match.id as Id<"posts">,
+                score: match.score,
+                title: typeof match.metadata?.title === "string" ? match.metadata.title : "",
+            };
+        });
     });
 
 /**
@@ -57,22 +72,32 @@ const ALLOWED_IMAGE_TYPES = new Set(["image/avif", "image/gif", "image/jpeg", "i
  * to a real user and the client-supplied content type is on the allowlist.
  */
 export const requestImageUpload = action
-    .input({ contentType: v.string() })
+    .input({ contentType: v.string().max(128) })
+    .use(rateLimit(actionLimiter, "upload", byUser))
     .action(async ({ args: { contentType }, ctx }): Promise<{ key: string; url: string }> => {
         if (!ctx.auth.userId) {
-            throw new Error("not signed in");
+            throw new LunoraError("UNAUTHORIZED", "sign in to upload an image");
         }
 
         if (!ALLOWED_IMAGE_TYPES.has(contentType)) {
-            throw new Error(`unsupported content type: ${contentType}`);
+            throw new LunoraError("BAD_REQUEST", `unsupported content type: ${contentType}`);
         }
 
         // Minting a PUT upload URL is a write-side storage capability, so this is
         // an `action` (queries/mutations only get the read-only storage surface).
         const key = `posts/${ctx.auth.userId}/${crypto.randomUUID()}`;
-        const url = await ctx.storage.generateUploadUrl(key, { contentType, expiresInSeconds: 60 });
 
-        return { key, url };
+        try {
+            const url = await ctx.storage.generateUploadUrl(key, { contentType, expiresInSeconds: 60 });
+
+            return { key, url };
+        } catch (error) {
+            // Signing fails loudly when `STORAGE_SECRET` is missing (see
+            // `.dev.vars.example`). The URL is signed against the origin this
+            // request reached the worker on, which serves the PUT. Naming the
+            // dependency here beats the caller receiving a bare 500.
+            throw new LunoraError("INTERNAL", "could not mint an R2 upload URL", { cause: error });
+        }
     });
 
 /**
@@ -80,14 +105,19 @@ export const requestImageUpload = action
  * resolved from the `@lunora/auth` cookie/token by the runtime.
  */
 export const publish = mutation
-    .input({ title: v.string(), body: v.string(), imageKey: v.optional(v.string()) })
+    .input({
+        title: v.string().max(256),
+        body: v.string().max(100_000),
+        imageKey: v.optional(v.string().max(512)),
+    })
+    .use(rateLimit(mutationLimiter, "write", byUser))
     .mutation(async ({ args: { title, body, imageKey }, ctx }): Promise<Id<"posts">> => {
         if (!ctx.auth.userId) {
-            throw new Error("not signed in");
+            throw new LunoraError("UNAUTHORIZED", "sign in to publish");
         }
 
         return ctx.db.insert("posts", {
-            authorId: ctx.auth.userId as Id<"users">,
+            authorId: ctx.auth.userId,
             body,
             imageKey,
             publishedAt: Date.now(),

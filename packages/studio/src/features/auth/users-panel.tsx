@@ -1,7 +1,6 @@
-import type { AuthUser } from "@lunora/client";
 import { useLunora } from "@lunora/react";
 import type { ReactElement } from "react";
-import { useEffect, useState } from "react";
+import { useState } from "react";
 
 import { Badge } from "../../components/ui/badge";
 import { Button } from "../../components/ui/button";
@@ -9,11 +8,14 @@ import { Card, CardContent } from "../../components/ui/card";
 import { EmptyState } from "../../components/ui/empty-state";
 import { Input } from "../../components/ui/input";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "../../components/ui/table";
-import { useAuthCapabilities } from "../../hooks/use-auth-capabilities";
+import { useClientQuery } from "../../hooks/use-admin-query";
+import useAuthCapabilities from "../../hooks/use-auth-capabilities";
 import { useAutoRefresh } from "../../hooks/use-auto-refresh";
 import useDebounced from "../../hooks/use-debounced";
 import { useT } from "../../i18n/i18n-context";
-import { errorMessage, fireAndForget, formatTimestamp } from "../../lib/internal";
+import { formatTimestamp } from "../../lib/internal";
+import { AuthPager } from "./auth-pager";
+import SignUpInvitationsPanel from "./sign-up-invitations-panel";
 import { UserCreateDialog } from "./user-create-dialog";
 import { UserDetailDrawer } from "./user-detail-drawer";
 
@@ -36,52 +38,53 @@ export const UsersPanel = ({ pageSize = DEFAULT_PAGE_SIZE }: UsersPanelProps = {
     const client = useLunora();
     const t = useT();
 
-    const [users, setUsers] = useState<AuthUser[] | null>(null);
-    const [usersError, setUsersError] = useState<null | string>(null);
-
     const [search, setSearch] = useState<string>("");
     const [roleFilter, setRoleFilter] = useState<string>("");
+    // Reset to the first page by the handlers that narrow the list, so an offset
+    // can never point past a smaller filtered total.
+    const [offset, setOffset] = useState<number>(0);
     const debouncedSearch = useDebounced(search);
 
     const [selectedUserId, setSelectedUserId] = useState<null | string>(null);
     const [createOpen, setCreateOpen] = useState<boolean>(false);
     const { capabilities } = useAuthCapabilities();
 
-    const fetchUsers = async (): Promise<void> => {
-        setUsersError(null);
+    const trimmedSearch = debouncedSearch.trim();
+    const trimmedRole = roleFilter.trim();
 
-        const trimmedSearch = debouncedSearch.trim();
-        const trimmedRole = roleFilter.trim();
-
-        try {
-            const page = await client.listAuthUsers({
-                filterField: trimmedRole === "" ? undefined : "role",
-                filterValue: trimmedRole === "" ? undefined : trimmedRole,
-                limit: pageSize,
-                search: trimmedSearch === "" ? undefined : trimmedSearch,
-            });
-
-            setUsers(page.rows);
-        } catch (error_) {
-            setUsers(null);
-            setUsersError(errorMessage(error_));
-        }
-    };
+    // The auth store is HTTP-only (no admin-RPC path), so it's a `useClientQuery`
+    // over `client.listAuthUsers`, keyed on the search / role / page size.
+    const usersQuery = useClientQuery(
+        ["lunora-auth-users", trimmedSearch, trimmedRole, pageSize, offset],
+        () =>
+            client
+                .listAuthUsers({
+                    filterField: trimmedRole === "" ? undefined : "role",
+                    filterValue: trimmedRole === "" ? undefined : trimmedRole,
+                    limit: pageSize,
+                    offset,
+                    search: trimmedSearch === "" ? undefined : trimmedSearch,
+                })
+                .then((page) => {
+                    // Tagged with the offset it was read at: `keepPreviousData` shows this
+                    // page while the next one loads, and the pager must describe (and page
+                    // from) the rows on screen, not the offset already requested.
+                    return { ...page, offset };
+                }),
+        { keepPreviousData: true },
+    );
+    const users = usersQuery.data?.rows ?? null;
+    const usersError = usersQuery.error;
 
     // Post-mutation refetch callback for the detail drawer / create dialog.
     const reloadUsers = (): void => {
-        fireAndForget(fetchUsers());
+        usersQuery.refetch();
     };
 
-    useEffect(() => {
-        fireAndForget(fetchUsers());
-    }, [fetchUsers]);
-
-    // The auth store is HTTP-only (no subscription channel), so polling is the
-    // honest "live" — always re-list to catch new sign-ups / bans without a
-    // reload button (paused while the tab is hidden).
+    // No subscription channel, so poll — honest "live" that catches new sign-ups /
+    // bans without a reload button (paused while the tab is hidden).
     useAutoRefresh(() => {
-        fireAndForget(fetchUsers());
+        usersQuery.refetch();
     }, true);
 
     // Derive the inspected user from the latest list so the drawer reflects
@@ -97,6 +100,7 @@ export const UsersPanel = ({ pageSize = DEFAULT_PAGE_SIZE }: UsersPanelProps = {
                     data-testid="us-search"
                     onChange={(event) => {
                         setSearch(event.target.value);
+                        setOffset(0);
                     }}
                     placeholder={t("Search by email or name…")}
                     value={search}
@@ -107,6 +111,7 @@ export const UsersPanel = ({ pageSize = DEFAULT_PAGE_SIZE }: UsersPanelProps = {
                     data-testid="us-role-filter"
                     onChange={(event) => {
                         setRoleFilter(event.target.value);
+                        setOffset(0);
                     }}
                     placeholder={t("Filter by role")}
                     value={roleFilter}
@@ -211,6 +216,17 @@ export const UsersPanel = ({ pageSize = DEFAULT_PAGE_SIZE }: UsersPanelProps = {
                 </Card>
             )}
 
+            {users !== null && (
+                <AuthPager
+                    count={users.length}
+                    offset={usersQuery.data?.offset ?? 0}
+                    onOffsetChange={setOffset}
+                    pageSize={pageSize}
+                    prefix="us"
+                    total={usersQuery.data?.total}
+                />
+            )}
+
             {selectedUser !== null && (
                 <UserDetailDrawer
                     capabilities={capabilities}
@@ -230,6 +246,14 @@ export const UsersPanel = ({ pageSize = DEFAULT_PAGE_SIZE }: UsersPanelProps = {
                     onCreated={reloadUsers}
                 />
             )}
+
+            {/*
+             * Sits with the users it decides on rather than as its own nav entry:
+             * an invitation is who may *become* a user. Hidden entirely unless the
+             * `inviteOnly` plugin is installed, like every other capability-gated
+             * auth surface.
+             */}
+            {capabilities.inviteOnly && <SignUpInvitationsPanel />}
         </div>
     );
 };

@@ -4,11 +4,9 @@ import { join } from "node:path";
 
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
+import { isSecretKeyName } from "../../../shared/secret-key";
 import { PACKAGE_SECRETS_REGISTRY, secretsForPackages } from "../src/package-secrets-registry";
-import { buildPackageSecretsBlock, ensureDevVarsExample, isPlaceholderValue } from "../src/scaffold-dev-variables";
-
-/** Keys whose name implies a secret value — mirrors the scaffolder's SECRET_KEY regex. */
-const SECRET_KEY_PATTERN = /(?:KEY|PASSWORD|SECRET|TOKEN)$/u;
+import { buildPackageSecretsBlock, ensureDevVariables, ensureDevVarsExample, isPlaceholderValue } from "../src/scaffold-dev-variables";
 
 /** Strip one layer of surrounding quotes from a raw value string. */
 const stripQuotes = (raw: string): string =>
@@ -16,7 +14,7 @@ const stripQuotes = (raw: string): string =>
 
 /**
  * Parse a `.dev.vars` block and return the unquoted values of every
- * secret-keyed assignment (keys matching {@link SECRET_KEY_PATTERN}).
+ * secret-keyed assignment (keys {@link isSecretKeyName} accepts).
  * Uses a functional pipeline — no `if` branches in test scope.
  */
 const secretEntryValues = (text: string): string[] =>
@@ -31,7 +29,7 @@ const secretEntryValues = (text: string): string[] =>
         .map(({ trimmed, equalsIndex }) => {
             return { key: trimmed.slice(0, equalsIndex).trim(), rawValue: trimmed.slice(equalsIndex + 1).trim() };
         })
-        .filter(({ key }) => SECRET_KEY_PATTERN.test(key))
+        .filter(({ key }) => isSecretKeyName(key))
         .map(({ rawValue }) => stripQuotes(rawValue));
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -54,7 +52,7 @@ describe("secretsForPackages", () => {
     it("returns entries for multiple packages in the order supplied", () => {
         expect.assertions(2);
 
-        const entries = secretsForPackages(["@lunora/auth", "@lunora/payment"]);
+        const entries = secretsForPackages(["@lunora/auth", "@lunora/payment/stripe"]);
         const keys = entries.map((entry) => entry.key);
 
         // Auth entries come before payment entries.
@@ -89,11 +87,11 @@ describe("packageSecretsRegistry", () => {
         expect.hasAssertions();
 
         // Reviewer-visible assertion: the registry can never emit a real secret
-        // value for keys that match the SECRET_KEY_PATTERN. Non-secret keys
+        // value for secret-named keys. Non-secret keys
         // (like AUTH_URL) may carry real default values (e.g. a localhost URL).
         const secretEntries = Object.values(PACKAGE_SECRETS_REGISTRY)
             .flat()
-            .filter((entry) => SECRET_KEY_PATTERN.test(entry.key));
+            .filter((entry) => isSecretKeyName(entry.key));
 
         for (const entry of secretEntries) {
             expect(isPlaceholderValue(entry.placeholderValue), `${entry.key}.placeholderValue must be a placeholder`).toBe(true);
@@ -114,16 +112,24 @@ describe("packageSecretsRegistry", () => {
 // ─────────────────────────────────────────────────────────────────────────────
 
 describe("buildPackageSecretsBlock", () => {
-    it("returns empty string when no packages have secret requirements", () => {
+    it("contributes no package secrets when no packages have requirements (core token already present)", () => {
         expect.assertions(1);
 
-        expect(buildPackageSecretsBlock(["@lunora/runtime"], new Set())).toBe("");
+        // `LUNORA_ADMIN_TOKEN` is an always-included core secret; mark it present
+        // so this asserts only that the package itself contributes nothing.
+        expect(buildPackageSecretsBlock(["@lunora/runtime"], new Set(["LUNORA_ADMIN_TOKEN"]))).toBe("");
     });
 
-    it("returns empty string for an empty package list", () => {
+    it("contributes no package secrets for an empty package list (core token already present)", () => {
         expect.assertions(1);
 
-        expect(buildPackageSecretsBlock([], new Set())).toBe("");
+        expect(buildPackageSecretsBlock([], new Set(["LUNORA_ADMIN_TOKEN"]))).toBe("");
+    });
+
+    it("always emits the core LUNORA_ADMIN_TOKEN even with no package secrets", () => {
+        expect.assertions(1);
+
+        expect(buildPackageSecretsBlock([], new Set())).toContain("LUNORA_ADMIN_TOKEN=");
     });
 
     it("includes key=placeholder lines for each secret of the given packages", () => {
@@ -160,7 +166,8 @@ describe("buildPackageSecretsBlock", () => {
     it("returns empty string when all keys are already present", () => {
         expect.assertions(1);
 
-        const authKeys = new Set(secretsForPackages(["@lunora/auth"]).map((entry) => entry.key));
+        // Include the always-present core token so the block is genuinely empty.
+        const authKeys = new Set([...secretsForPackages(["@lunora/auth"]).map((entry) => entry.key), "LUNORA_ADMIN_TOKEN"]);
 
         expect(buildPackageSecretsBlock(["@lunora/auth"], authKeys)).toBe("");
     });
@@ -168,7 +175,7 @@ describe("buildPackageSecretsBlock", () => {
     it("never emits a real secret value — secret-keyed entries have placeholder values", () => {
         expect.assertions(1);
 
-        const block = buildPackageSecretsBlock(["@lunora/auth", "@lunora/payment"], new Set());
+        const block = buildPackageSecretsBlock(["@lunora/auth", "@lunora/payment/stripe"], new Set());
         const values = secretEntryValues(block);
 
         expect(values.every((value) => isPlaceholderValue(value))).toBe(true);
@@ -207,8 +214,8 @@ describe("ensureDevVarsExample", () => {
 
         const added = ensureDevVarsExample(dir, ["@lunora/auth"]);
 
-        // AUTH_SECRET was already there; only AUTH_URL should be added.
-        expect(added).toStrictEqual(["AUTH_URL"]);
+        // AUTH_SECRET was already there; the core admin token + AUTH_URL are added.
+        expect(added).toStrictEqual(["LUNORA_ADMIN_TOKEN", "AUTH_URL"]);
 
         const content = readFileSync(join(dir, ".dev.vars.example"), "utf8");
 
@@ -236,9 +243,9 @@ describe("ensureDevVarsExample", () => {
     it("returns an empty array when all secrets are already present", () => {
         expect.assertions(1);
 
-        // Pre-populate with all auth entries.
+        // Pre-populate with all auth entries plus the always-present core token.
         const authEntries = secretsForPackages(["@lunora/auth"]);
-        const existing = `${authEntries.map((entry) => `${entry.key}="${entry.placeholderValue}"`).join("\n")}\n`;
+        const existing = `LUNORA_ADMIN_TOKEN="x"\n${authEntries.map((entry) => `${entry.key}="${entry.placeholderValue}"`).join("\n")}\n`;
 
         writeFileSync(join(dir, ".dev.vars.example"), existing, "utf8");
 
@@ -250,31 +257,41 @@ describe("ensureDevVarsExample", () => {
     it("produces entries for multiple packages (auth + payment)", () => {
         expect.assertions(4);
 
-        const added = ensureDevVarsExample(dir, ["@lunora/auth", "@lunora/payment"]);
+        const added = ensureDevVarsExample(dir, ["@lunora/auth", "@lunora/payment", "@lunora/payment/creem"]);
 
         expect(added).toContain("AUTH_SECRET");
-        expect(added).toContain("STRIPE_SECRET_KEY");
-        expect(added).toContain("POLAR_ACCESS_TOKEN");
+        expect(added).toContain("CREEM_API_KEY");
+        // Only the imported adapter's secrets, not every provider's (#1022).
+        expect(added).not.toContain("STRIPE_SECRET_KEY");
 
         const content = readFileSync(join(dir, ".dev.vars.example"), "utf8");
 
         expect(content).toContain("AUTH_SECRET=");
     });
 
-    it("produces no entries for packages with no registered secrets", () => {
+    it("emits only the configured notify channel's secrets (#1039)", () => {
+        expect.assertions(2);
+
+        const added = ensureDevVarsExample(dir, ["@lunora/notify", "@lunora/notify:webPush"]);
+
+        expect(added).toStrictEqual(expect.arrayContaining(["VAPID_PUBLIC_KEY", "VAPID_PRIVATE_KEY", "VAPID_SUBJECT"]));
+        expect(added.filter((key) => key.startsWith("FCM_"))).toStrictEqual([]);
+    });
+
+    it("emits only the core LUNORA_ADMIN_TOKEN for packages with no registered secrets", () => {
         expect.assertions(2);
 
         const added = ensureDevVarsExample(dir, ["@lunora/runtime", "@lunora/client"]);
 
-        expect(added).toStrictEqual([]);
-        // No file created — nothing to write.
-        expect(existsSync(join(dir, ".dev.vars.example"))).toBe(false);
+        // The packages contribute nothing, but the always-present core token is written.
+        expect(added).toStrictEqual(["LUNORA_ADMIN_TOKEN"]);
+        expect(existsSync(join(dir, ".dev.vars.example"))).toBe(true);
     });
 
     it("never writes a real secret value — secret-keyed entries have placeholder values", () => {
         expect.assertions(1);
 
-        ensureDevVarsExample(dir, ["@lunora/auth", "@lunora/payment", "@lunora/mail"]);
+        ensureDevVarsExample(dir, ["@lunora/auth", "@lunora/payment/stripe", "@lunora/mail"]);
 
         const content = readFileSync(join(dir, ".dev.vars.example"), "utf8");
         const values = secretEntryValues(content);
@@ -308,5 +325,55 @@ describe("ensureDevVarsExample", () => {
 
         expect(content).toMatch(/^#.+/mu);
         expect(content).toContain("# Docs: https://lunora.sh/docs/packages/auth");
+    });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// End-to-end: example → real .dev.vars carries the core admin token
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe("dev admin-token end-to-end", () => {
+    let dir: string;
+
+    beforeEach(() => {
+        dir = mkdtempSync(join(tmpdir(), "lunora-devvars-e2e-"));
+    });
+
+    afterEach(() => {
+        rmSync(dir, { force: true, recursive: true });
+    });
+
+    /**
+     * Regression guard for the studio login gate appearing in dev. `lunora add`
+     * writes `.dev.vars.example` (the core `LUNORA_ADMIN_TOKEN` is always
+     * included), then the dev flow scaffolds the real `.dev.vars` from it with
+     * the secret auto-filled. The `@lunora/vite` studio host reads that token to
+     * skip its login page — so this whole pipeline MUST carry it through, even
+     * for a project that pulled in NO add-on packages.
+     */
+    it("scaffolds a real .dev.vars with a filled admin token from an example with no add-on packages", async () => {
+        expect.assertions(3);
+
+        // 1. `lunora add` (no add-on packages) — only the core token is required.
+        const added = ensureDevVarsExample(dir, []);
+
+        expect(added).toStrictEqual(["LUNORA_ADMIN_TOKEN"]);
+
+        // 2. dev scaffolds the real `.dev.vars` from the example, auto-filling secrets.
+        const result = await ensureDevVariables({
+            confirm: async () => true,
+            cwd: dir,
+            info: () => undefined,
+            randomHex: (bytes) => "a".repeat(bytes * 2),
+        });
+
+        expect(result.generatedKeys).toContain("LUNORA_ADMIN_TOKEN");
+
+        const devVars = readFileSync(join(dir, ".dev.vars"), "utf8");
+
+        // The token is present AND filled with a real generated value (the 64-char
+        // hex), not left as a placeholder — a placeholder/empty token would
+        // re-trigger the studio login gate in dev.
+        expect(devVars).toContain(`LUNORA_ADMIN_TOKEN="${"a".repeat(64)}"`);
     });
 });

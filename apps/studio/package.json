@@ -8,25 +8,30 @@
     "scripts": {
         "build": "vite build",
         "dev": "vite",
-        "lint:eslint": "eslint .",
+        "lint:eslint": "eslint . --max-warnings=0",
         "lint:eslint:fix": "eslint . --fix",
         "lint:types": "tsc --noEmit",
-        "preview": "vite preview"
+        "preview": "vite preview",
+        "fallow:audit": "fallow audit",
+        "fallow:dead-code": "fallow dead-code",
+        "fallow:health": "fallow health --score"
     },
     "dependencies": {
         "@fontsource-variable/geist": "catalog:ui",
         "@lunora/studio": "workspace:*",
-        "motion": "catalog:frontend",
         "react": "catalog:frontend",
         "react-dom": "catalog:frontend",
-        "recharts": "catalog:frontend",
         "shadcn": "catalog:ui"
     },
     "devDependencies": {
+        "@rolldown/plugin-babel": "catalog:web",
         "@tailwindcss/vite": "catalog:vite",
         "@types/node": "catalog:types",
         "@types/react": "catalog:frontend",
         "@types/react-dom": "catalog:frontend",
+        "@vitejs/plugin-react": "catalog:web",
+        "babel-plugin-react-compiler": "catalog:build",
+        "fallow": "catalog:lint",
         "tailwindcss": "catalog:vite",
         "tw-animate-css": "catalog:vite",
         "typescript": "catalog:tsc",

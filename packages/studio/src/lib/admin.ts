@@ -15,7 +15,13 @@
 
 // Canonical captured-mail wire type, owned by `@lunora/mail`. Type-only: erased
 // at build time, so no mail *runtime* enters the studio's browser bundle.
+import type { AdvisorProcedureProtection, Finding } from "@lunora/advisor";
 import type { CapturedMail } from "@lunora/mail";
+// Canonical registered-device wire type, owned by `@lunora/notify` (the
+// secret-stripped projection the `listPushSubscriptions` RPC returns). Type-only,
+// so no notify *runtime* enters the browser bundle — same allowed direction as
+// the `@lunora/mail` type import above.
+import type { PushSubscriptionDevice } from "@lunora/notify";
 
 export const ADMIN_FUNCTION_PREFIX = "__lunora_admin__:";
 
@@ -27,41 +33,72 @@ export const ADMIN_FUNCTION_PREFIX = "__lunora_admin__:";
  * `LUNORA_ADMIN_TOKEN`.
  */
 export const ADMIN_FUNCTIONS = {
+    aiAvailable: "__lunora_admin__:aiAvailable",
+    aiChartConfig: "__lunora_admin__:aiChartConfig",
+    aiGenerateSql: "__lunora_admin__:aiGenerateSql",
+    aiTableFilter: "__lunora_admin__:aiTableFilter",
+    assignIssue: "__lunora_admin__:assignIssue",
+    backRelationCounts: "__lunora_admin__:backRelationCounts",
     clearCapturedMail: "__lunora_admin__:clearCapturedMail",
+    clearQueueMessages: "__lunora_admin__:clearQueueMessages",
     clearTable: "__lunora_admin__:clearTable",
     createWorkflowInstance: "__lunora_admin__:createWorkflowInstance",
     deleteRows: "__lunora_admin__:deleteRows",
     describeTable: "__lunora_admin__:describeTable",
     describeTables: "__lunora_admin__:describeTables",
+    explainIssue: "__lunora_admin__:explainIssue",
     exportShard: "__lunora_admin__:exportShard",
     facetColumn: "__lunora_admin__:facetColumn",
     getAdvisories: "__lunora_admin__:getAdvisories",
+    getAdvisorProcedures: "__lunora_admin__:getAdvisorProcedures",
     getAuditLog: "__lunora_admin__:getAuditLog",
+    getAuthAuditLog: "__lunora_admin__:getAuthAuditLog",
     getAuthMetrics: "__lunora_admin__:getAuthMetrics",
     getCapturedMail: "__lunora_admin__:getCapturedMail",
+    getFanoutMetrics: "__lunora_admin__:getFanoutMetrics",
     getFunctionStats: "__lunora_admin__:getFunctionStats",
+    getIssues: "__lunora_admin__:getIssues",
+    lintSql: "__lunora_admin__:lintSql",
+    listFlags: "__lunora_admin__:listFlags",
+    listReactors: "__lunora_admin__:listReactors",
+    listPushSubscriptions: "__lunora_admin__:listPushSubscriptions",
+    listQueues: "__lunora_admin__:listQueues",
     listSubscriptions: "__lunora_admin__:listSubscriptions",
     listTableIndexes: "__lunora_admin__:listTableIndexes",
+    listTablesIndexes: "__lunora_admin__:listTablesIndexes",
     listWorkflows: "__lunora_admin__:listWorkflows",
     getLogs: "__lunora_admin__:getLogs",
+    getMetricHistory: "__lunora_admin__:getMetricHistory",
+    getMetricSeries: "__lunora_admin__:getMetricSeries",
     getMetrics: "__lunora_admin__:getMetrics",
     getPitrBookmark: "__lunora_admin__:getPitrBookmark",
+    getQueryInsights: "__lunora_admin__:getQueryInsights",
+    getQueueMessages: "__lunora_admin__:getQueueMessages",
     getRequestLog: "__lunora_admin__:getRequestLog",
     getSecurityAudit: "__lunora_admin__:getSecurityAudit",
     getSettings: "__lunora_admin__:getSettings",
+    getTraces: "__lunora_admin__:getTraces",
     // eslint-disable-next-line no-secrets/no-secrets -- reserved admin RPC path constant, not a credential
     getWorkflowInstanceStatus: "__lunora_admin__:getWorkflowInstanceStatus",
+    ignoreIssue: "__lunora_admin__:ignoreIssue",
     importShard: "__lunora_admin__:importShard",
     listTables: "__lunora_admin__:listTables",
     maskPolicies: "__lunora_admin__:maskPolicies",
     migrationStatus: "__lunora_admin__:migrationStatus",
+    patchRows: "__lunora_admin__:patchRows",
     pitrRestore: "__lunora_admin__:pitrRestore",
     readTablePage: "__lunora_admin__:readTablePage",
+    replayQueueMessage: "__lunora_admin__:replayQueueMessage",
+    resolveIssue: "__lunora_admin__:resolveIssue",
     rlsPolicies: "__lunora_admin__:rlsPolicies",
+    schemaHistory: "__lunora_admin__:schemaHistory",
+    schemaVersion: "__lunora_admin__:schemaVersion",
     runAs: "__lunora_admin__:runAs",
     runMigration: "__lunora_admin__:runMigration",
     runSql: "__lunora_admin__:runSql",
+    sendQueueMessage: "__lunora_admin__:sendQueueMessage",
     sendTestMail: "__lunora_admin__:sendTestMail",
+    setIssueSeverity: "__lunora_admin__:setIssueSeverity",
     storageOrphans: "__lunora_admin__:storageOrphans",
     storageReferences: "__lunora_admin__:storageReferences",
     storageRules: "__lunora_admin__:storageRules",
@@ -81,21 +118,6 @@ export interface FilterClause {
     column: string;
     operator: FilterOperator;
     value?: unknown;
-}
-
-/**
- * Arguments for the `__lunora_admin__:facetColumn` admin op — the read-only,
- * Datasette-style per-column value/count summary. `filters`/`search` mirror
- * {@link TablePage}'s predicate args so the facet reflects exactly the previewed
- * rows; `column` is validated + bound server-side, never interpolated. `limit`
- * caps the distinct values returned (clamped server-side).
- */
-export interface FacetColumnArgs {
-    column: string;
-    filters?: FilterClause[];
-    limit?: number;
-    search?: string;
-    table: string;
 }
 
 /** One distinct value of a faceted column with its row count, mirroring `@lunora/do`'s `FacetValue`. */
@@ -135,38 +157,21 @@ export interface WriteRowResult {
 }
 
 /**
- * Arguments for the `__lunora_admin__:deleteRows` admin op — the writer-routed
- * bulk delete behind "delete matching". `filters`/`search` mirror
- * {@link TablePage}'s predicate args so the deleted set equals the previewed
- * one; `limit` caps the rows removed per call (clamped server-side). The server
- * removes each matched row through the schema-aware writer (keeping FTS /
- * aggregate / rank shadow tables in sync), bounded per call.
+ * Result of any writer-routed bulk row op — `__lunora_admin__:deleteRows`,
+ * `clearTable`, `patchRows`. One shape for all three: `count` is the rows this
+ * call wrote, and `hasMore` is `true` when matching rows remain beyond the
+ * server's per-call cap, so the caller loops a single bounded round-trip rather
+ * than writing an unbounded set at once.
+ *
+ * `cursor` comes back ONLY from an op that sent one — today just `patchRows`. A
+ * delete drains because its own writes shrink the match set; a patch usually
+ * leaves the row matching, so without the cursor its loop would rewrite the same
+ * first batch until it hit its bound. The server withholds the cursor when the
+ * scan was unordered, so a caller can never resume from a meaningless boundary.
  */
-export interface DeleteRowsArgs {
-    filters?: FilterClause[];
-    limit?: number;
-    search?: string;
-    table: string;
-}
-
-/**
- * Arguments for the `__lunora_admin__:clearTable` admin op — "empty this table".
- * The same writer-routed bounded delete as {@link DeleteRowsArgs} with no
- * predicate (it matches every row).
- */
-export interface ClearTableArgs {
-    limit?: number;
-    table: string;
-}
-
-/**
- * Result of a {@link DeleteRowsArgs} / {@link ClearTableArgs} op. `deleted` is
- * the rows removed in this call; `hasMore` is `true` when matching rows remain
- * beyond the server's per-call cap, so the caller loops a single bounded
- * round-trip rather than deleting an unbounded set at once.
- */
-export interface BulkDeleteResult {
-    deleted: number;
+export interface BulkRowOpResult {
+    count: number;
+    cursor?: string;
     hasMore: boolean;
 }
 
@@ -191,6 +196,22 @@ export interface CapturedMailResult {
 }
 
 /**
+ * One registered `@lunora/notify` device subscription, re-exported verbatim from
+ * `@lunora/notify` (its canonical owner) — the secret-stripped
+ * {@link PushSubscriptionDevice} the `__lunora_admin__:listPushSubscriptions` RPC
+ * returns (endpoint / kind / owner / timestamps + last-send status & error). The
+ * Web Push encryption `keys` and the FCM `token` are dropped server-side and are
+ * NOT part of this shape. Like `CapturedMail`, it shares the real source of truth,
+ * so a field added in `@lunora/notify` flows here automatically.
+ */
+export type { PushSubscriptionDevice } from "@lunora/notify";
+
+/** Payload of a `__lunora_admin__:listPushSubscriptions` call — the registered devices, newest register/send touch first. */
+export interface PushSubscriptionsResult {
+    subscriptions: PushSubscriptionDevice[];
+}
+
+/**
  * Result of `__lunora_admin__:sendTestMail` — the studio's "send a test message"
  * button. The server renders a fixed sample email through the capture transport
  * (nothing is delivered) and returns the new mailbox row's primary key, so the
@@ -211,7 +232,17 @@ export interface CacheStats {
 
 /** Health snapshot returned by `__lunora_admin__:getMetrics` for one shard. */
 export interface ShardMetrics {
-    cache: CacheStats | null;
+    /**
+     * Reactive-cache stats. `null` is the shard saying "no cache configured";
+     * **absent** is a payload that carries no `cache` key at all — an older shard,
+     * or any response shaped before the field existed.
+     *
+     * Optional on purpose: this arrives as untrusted JSON off the admin wire and
+     * `useAdminQuery` casts it straight to this type, so declaring it required
+     * made the type lie and let consumers write `cache === null` and then
+     * dereference `undefined`. Optional makes the compiler reject that.
+     */
+    cache?: CacheStats | null;
     databaseSize: null | number;
     errors: number;
     requests: number;
@@ -279,6 +310,14 @@ export interface QueryStatEntry {
 export interface MetricsSnapshot extends ShardMetrics {
     functions?: FunctionCallStat[];
     history?: MetricsHistoryBucket[];
+
+    /**
+     * True when the DO's durable bucket table held more rows than the read
+     * limit could return, so `history` is a partial (newest) window rather
+     * than the shard's full retained history. Absent on a worker predating
+     * the signal — treat a missing value the same as `false`.
+     */
+    historyTruncated?: boolean;
     /** Per-declared-index recorded reads; absent on a worker predating the dead-index feed. */
     indexHits?: MetricsIndexHit[];
 
@@ -384,15 +423,50 @@ export interface TableIndexesResult {
 }
 
 /**
+ * Payload of a `__lunora_admin__:listTablesIndexes` call, mirroring
+ * `@lunora/do`'s `TablesIndexesResult` — the batched sibling of
+ * {@link TableIndexesResult}, one RPC for every requested table instead of one
+ * per table (mirrors `TablesColumnsResult`'s relation to `TableColumnsResult`).
+ */
+export interface TablesIndexesResult {
+    indexesByTable: Record<string, TableIndexInfo[]>;
+}
+
+/**
  * One column of a user table, mirroring `@lunora/do`'s `ColumnMeta` — the
  * schema-sourced metadata behind the schema diagram. `type` is the validator IR
  * kind (`string`, `number`, `id`, `array`, …); `ref` names the FK target table
  * of a `v.id("ref")` column; `pk` marks the `_id` primary key.
  */
 export interface ColumnMeta {
+    /** The typed bucket a `v.storage(bucket)` column's key lives in, when one was named. */
+    bucket?: string;
+
+    /**
+     * The allowed values of a string-literal union column, when codegen could name
+     * them all. Absent for every other column — and for a mixed union, which has
+     * legal values outside any list the editor could offer.
+     */
+    enumValues?: string[];
     /** `v.storage(...)` column — the value is an R2 object key. */
     isStorage?: boolean;
     name: string;
+
+    /**
+     * The column accepts `null` (`.nullable()`). Distinct from `optional`, which
+     * means "may be omitted on INSERT" and is also true of a `.default(...)`
+     * column — one of those must not be offered a control that writes `null`.
+     */
+    nullable?: boolean;
+
+    /**
+     * The declared `onDelete` of the relation this foreign key belongs to —
+     * what the writer actually does to this row when the referenced parent is
+     * deleted. Absent when the column is not an FK, or when the schema declared
+     * no action for it. Paired with {@link ColumnMeta.ref}, which names the
+     * parent table.
+     */
+    onDelete?: "cascade" | "restrict" | "set null";
     /** Optional on insert (declared `v.optional(...)` or carrying a default). */
     optional: boolean;
     /** Primary key — the `_id` column. */
@@ -413,30 +487,31 @@ export interface TablesColumnsResult {
     columnsByTable: Record<string, ColumnMeta[]>;
 }
 
-/** Severity of a static schema advisory (the advisor's `Level`, lowercased to match the studio's tab levels). */
-export type AdvisoryLevel = "ERROR" | "INFO" | "WARN";
-
 /**
- * One static schema advisory, mirroring `@lunora/advisor`'s `Finding` (served by
- * `__lunora_admin__:getAdvisories`). These are codegen-time lints baked into the
- * deployed worker — they refresh on every codegen run (dev: on save; prod: on deploy).
+ * One static schema advisory served by `__lunora_admin__:getAdvisories` — the
+ * advisor's own `Finding`. These are codegen-time lints baked into the deployed
+ * worker; they refresh on every codegen run (dev: on save; prod: on deploy).
+ *
+ * Aliased rather than re-declared: studio depends on `@lunora/advisor`, so a
+ * hand-kept copy would only be one more shape to drift, and the health panel
+ * feeds these straight into `scoreAdvisor`.
  */
-export interface AdvisoryFinding {
-    cacheKey: string;
-    categories: string[];
-    description: string;
-    detail: string;
-    facing: "EXTERNAL" | "INTERNAL";
-    level: AdvisoryLevel;
-    metadata: Record<string, unknown>;
-    name: string;
-    remediation: string;
-    title: string;
-}
+export type AdvisoryFinding = Finding;
 
 /** Payload of a `__lunora_admin__:getAdvisories` call, mirroring `@lunora/do`'s `AdvisoriesResult`. */
 export interface AdvisoriesResult {
     advisories: AdvisoryFinding[];
+}
+
+/**
+ * Payload of a `__lunora_admin__:getAdvisorProcedures` call.
+ *
+ * Reuses `@lunora/advisor`'s type rather than re-declaring the 20-field shape:
+ * studio already depends on that package, so a local copy would be one more
+ * transcription to keep in lockstep for no isolation benefit.
+ */
+export interface AdvisorProceduresResult {
+    procedures: AdvisorProcedureProtection[];
 }
 
 /** The operation an RLS policy gates, mirroring `@lunora/do`'s `RlsPolicyMetadata["on"]`. `read` covers get/query/findMany. */
@@ -532,8 +607,11 @@ export interface StorageRulesResult {
  * Each flag is `true` when the app wires up that optional, package-backed feature
  * (discovered at codegen time from imports / `ctx.*` reads / schema signals / the
  * package being a declared dependency). The studio hides a nav page whose flag is
- * `false` — so an app with no `@lunora/payment` never renders the Payments page
- * (and never surfaces its "unknown table: subscriptions" error). A worker
+ * `false` — so an app that never wires `@lunora/payment`'s store tables never
+ * renders the Payments page (and never surfaces its "unknown table: subscriptions"
+ * error). `payments` alone gates on the `subscriptions`/`events` tables the panel
+ * reads being declared, not on a bare dependency — reusing the package's pure
+ * webhook helpers must not light up a page that would then error. A worker
  * predating this RPC returns nothing; the studio treats that as "show everything"
  * (back-compat).
  *
@@ -541,8 +619,20 @@ export interface StorageRulesResult {
  * fails the build if these keys ever diverge from the source contract.
  */
 export interface StudioFeaturesResult {
+    analytics: boolean;
+    auth: boolean;
+    containers: boolean;
+    flags: boolean;
+    kv: boolean;
     mail: boolean;
+    notifications: boolean;
     payments: boolean;
+
+    /** The worker's deploy target and its capability levels; absent from a worker that predates it or has no matrix. */
+    platform?: StudioPlatform;
+    /** `@lunora/privacy` is a declared dependency. It backs the Privacy requests page. */
+    privacy: boolean;
+    queues: boolean;
     scheduler: boolean;
     storage: boolean;
     vectors: boolean;
@@ -550,15 +640,32 @@ export interface StudioFeaturesResult {
 }
 
 /**
+ * The studio's view of {@link StudioFeaturesResult}: the payload, plus whether
+ * the fetch has settled yet. Client-side state, not part of the wire contract.
+ */
+export type StudioFeatures = StudioFeaturesResult & { readonly settled: boolean };
+
+/**
+ * The deploy target a worker was generated for, hand-mirroring the `platform`
+ * field of `@lunora/do`'s `StudioFeaturesResult`. `unsupported` lists the
+ * `@lunora/platform` capability keys (`vectorStore`, `pointInTimeRecovery`, …)
+ * the target's matrix rates `unsupported`.
+ */
+export interface StudioPlatform {
+    id: string;
+    name: string;
+    unsupported: string[];
+}
+
+/**
  * One declared Cloudflare Workflow, hand-mirroring `@lunora/do`'s
  * `WorkflowMetadata` (the studio can't import `@lunora/do`). Pure declaration
  * data — workflows hold no shard runtime state — discovered at codegen time from
- * `lunora/workflows.ts`. `binding` is the wrangler `Workflow` binding name,
- * `className` the generated `WorkflowEntrypoint` subclass, `exportName` the
- * `defineWorkflow` export, and `name` the stable deployed `workflows[].name`.
+ * `lunora/workflows.ts`. `className` is the generated `WorkflowEntrypoint`
+ * subclass (its `ctx.exports` key), `exportName` the `defineWorkflow` export,
+ * and `name` the stable deployed workflow name.
  */
 export interface WorkflowMetadata {
-    binding: string;
     className: string;
     exportName: string;
     name: string;
@@ -567,6 +674,135 @@ export interface WorkflowMetadata {
 /** Payload of a `__lunora_admin__:listWorkflows` call, hand-mirroring `@lunora/do`'s `WorkflowsResult`. */
 export interface WorkflowsResult {
     workflows: WorkflowMetadata[];
+}
+
+/**
+ * One declared Cloudflare Queue, hand-mirroring `@lunora/do`'s `QueueMetadata`.
+ * `binding` is the generated `QUEUE_*` producer binding, `name` the deployed
+ * `queues.producers[].queue`, `exportName` the `lunora/queues.ts` export
+ * (`ctx.queues.<exportName>`), `mode` whether the queue is consumed by a worker
+ * (`push`) or polled externally (`pull`), and `deadLetterQueue` the optional DLQ.
+ */
+export interface QueueMetadata {
+    binding: string;
+    deadLetterQueue?: string;
+    exportName: string;
+    mode: "pull" | "push";
+    name: string;
+    /** Set for a `defineSubscription` queue: the topic export it consumes. */
+    topic?: string;
+}
+
+/** Payload of a `__lunora_admin__:listQueues` call, hand-mirroring `@lunora/do`'s `QueuesResult`. */
+export interface QueuesResult {
+    queues: QueueMetadata[];
+}
+
+/**
+ * The terminal disposition a consumer left a message in for one delivery attempt,
+ * hand-mirroring `@lunora/do`'s `QueueMessageOutcome`. `ack` succeeded; `retry`
+ * asked for redelivery; `error` means the handler threw (workerd retries the batch).
+ */
+export type QueueMessageOutcome = "ack" | "error" | "retry";
+
+/**
+ * One consumed queue message as served by `__lunora_admin__:getQueueMessages`,
+ * newest first — hand-mirroring `@lunora/do`'s `QueueMessageRow`. Cloudflare Queues
+ * expose no peek API, so this is the log of what push consumers actually processed,
+ * not pending depth. `id` is a synthetic per-capture row id (a message retried N
+ * times yields N rows, showing the delivery progression); `messageId` is the stable
+ * Cloudflare message id. `capturedAt`/`timestamp` are epoch-ms. A key-exhaustiveness
+ * drift guard in this package's tests (and `@lunora/do`'s) fails the build on drift.
+ */
+export interface QueueMessageRow {
+    attempts: number;
+    body: unknown;
+    capturedAt: number;
+    deadLettered: boolean;
+    error?: string;
+    exportName?: string;
+    id: string;
+    messageId: string;
+    outcome: QueueMessageOutcome;
+    queue: string;
+    timestamp: number;
+}
+
+/** Result of `__lunora_admin__:getQueueMessages` — the dev consumed-message log, newest first. */
+export interface QueueMessagesResult {
+    entries: QueueMessageRow[];
+}
+
+/**
+ * Result of `__lunora_admin__:sendQueueMessage` — the studio's "Send test message"
+ * button. `sent` is the number of messages enqueued (1 for a single `send`, or the
+ * batch length for a `sendBatch`). Nothing is captured until a consumer processes it.
+ */
+export interface SendQueueMessageResult {
+    sent: number;
+}
+
+/**
+ * Result of `__lunora_admin__:replayQueueMessage` — the studio's one-click replay /
+ * DLQ redrive. `sent` is always 1; `target` is the `lunora/queues.ts` export the
+ * stored body was re-enqueued onto (the origin queue, or a dead-lettered message's
+ * parent queue).
+ */
+export interface ReplayQueueMessageResult {
+    sent: number;
+    target: string;
+}
+
+/**
+ * One feature flag evaluated under a targeting context, hand-mirroring
+ * `@lunora/do`'s `FlagEvaluation` (the studio can't import `@lunora/do`). `key`
+ * and `type` are statically discovered from the app's `ctx.flags.<type>("key")`
+ * reads; `value`/`reason`/`variant`/`errorCode` come from the live OpenFeature
+ * evaluation. A key-exhaustiveness drift guard in this package's tests (and
+ * `@lunora/do`'s) fails the build if these keys diverge from the source contract.
+ */
+export interface FlagEvaluation {
+    errorCode?: string;
+    key: string;
+    reason?: string;
+    type: "boolean" | "number" | "object" | "string";
+    value: unknown;
+    variant?: string;
+}
+
+/**
+ * Payload of a `__lunora_admin__:listFlags` call, hand-mirroring `@lunora/do`'s
+ * `FlagsResult`. `configured` is `false` when the app wires no `@lunora/flags`
+ * provider, so the Flags page can distinguish "no flags configured" from
+ * "configured but zero flags read".
+ */
+export interface FlagsResult {
+    configured: boolean;
+    flags: FlagEvaluation[];
+}
+
+/**
+ * One `onQueryChange` reactor, hand-mirroring `@lunora/do`'s `ReactorMetadata`.
+ *
+ * `state` is the field the panel leads with because it separates the three cases
+ * an operator actually needs to tell apart: `idle` (declared, never dispatched —
+ * usually a wiring problem), `active` (running), and `failing` (its last dispatch
+ * threw, so its baseline is frozen and it is being retried every flush).
+ */
+export interface ReactorMetadata {
+    errors: number;
+    lastError?: string;
+    lastRanAt?: number;
+    path: string;
+    runs: number;
+    state: "active" | "failing" | "idle";
+    suppressed: number;
+    tables?: ReadonlyArray<string>;
+}
+
+/** Payload of a `__lunora_admin__:listReactors` call: every declared reactor, sorted by path. */
+export interface ReactorsResult {
+    reactors: ReactorMetadata[];
 }
 
 /* eslint-disable no-secrets/no-secrets -- reserved admin RPC names are framework constants, not credentials */
@@ -592,19 +828,32 @@ export interface WorkflowInstanceStatusResult {
 }
 /* eslint-enable no-secrets/no-secrets */
 
-/** Severity of a buffered log entry, mirroring `@lunora/do`'s `LogLevel`. */
-export type LogLevel = "debug" | "error" | "info" | "warn";
+/**
+ * Severity of a buffered log entry, mirroring `@lunora/do`'s `LogLevel` — the
+ * full seven-tier `ctx.log` ramp (`trace`→`fatal`). A worker predating the
+ * un-folded buffer only ever sends the four console tiers, which are a subset.
+ */
+export type LogLevel = "debug" | "error" | "fatal" | "info" | "log" | "trace" | "warn";
 
 /**
  * One buffered log line returned by `__lunora_admin__:getLogs`. `functionPath`
- * is the RPC that produced it (when known); `timestamp` is epoch-ms. Mirrors
- * `@lunora/do`'s `LogEntry`.
+ * is the RPC that produced it (when known); `timestamp` is epoch-ms.
+ * `instance`/`exitCode` are populated for container lifecycle entries
+ * (`instance` = the per-instance Durable Object id, `exitCode` = the process
+ * exit code parsed out of a `stop` event). Mirrors `@lunora/do`'s `LogEntry`.
  */
 export interface LogEntry {
+    exitCode?: number;
+    /** Structured fields from a `ctx.log.<level>(message, fields)` / `ctx.log.with(fields)` call, when present. */
+    fields?: Record<string, unknown>;
     functionPath?: string;
+    instance?: string;
     level: LogLevel;
     message: string;
     timestamp: number;
+
+    /** Trace the line was emitted under; absent outside a dispatch (container lifecycle, hibernation-path errors) and on any worker predating the field. The key the Logs panel's Trace link and the Traces panel's correlated logs both join on. */
+    traceId?: string;
 }
 
 /** Payload of a `__lunora_admin__:getLogs` call: the buffered entries, newest first. */
@@ -635,9 +884,35 @@ export interface AuditLogResult {
 }
 
 /**
+ * One recorded auth/security event returned by `__lunora_admin__:getAuthAuditLog`,
+ * mirroring `@lunora/auth`'s `AuthAuditEntry`. Unlike the admin-op audit log
+ * (DO-backed, per shard), this trail is the authentication/security forensics
+ * surface stored in the auth D1 database: `event` is the auth event type
+ * (`sign-in`, `password-change`, `mfa-enable`, …); `outcome` whether it
+ * succeeded; `actorId`/`actorEmail` the acting user; `ip`/`userAgent` the client;
+ * `detail` carries redacted extra context; `seq` is the monotonic cursor.
+ */
+export interface AuthAuditEntry {
+    actorEmail?: string;
+    actorId?: string;
+    detail?: Record<string, unknown>;
+    event: string;
+    ip?: string;
+    outcome: "failure" | "success";
+    seq: number;
+    ts: number;
+    userAgent?: string;
+}
+
+/** Payload of a `__lunora_admin__:getAuthAuditLog` call: the recorded auth events, newest first. */
+export interface AuthAuditLogResult {
+    entries: AuthAuditEntry[];
+}
+
+/**
  * One live subscription tracked on a shard's WebSocket, returned by
  * `__lunora_admin__:listSubscriptions` and mirroring `@lunora/do`'s
- * `SubscriptionInfo`. `functionPath` is the `&lt;file>:&lt;function>` query re-run on
+ * `SubscriptionInfo`. `functionPath` is the `<file>:<function>` query re-run on
  * a matching write (absent on legacy delta-only subscriptions), `table` the
  * table the raw-delta fan-out matches, and `args` the query args.
  */
@@ -671,6 +946,84 @@ export interface SubscriptionsResult {
     totalSubscriptions: number;
 }
 
+/**
+ * One topic or shape with its current subscriber count, returned by
+ * `__lunora_admin__:getFanoutMetrics` and mirroring `@lunora/do`'s
+ * `FanoutTopicStat`. `subscribers` is the fan-out width one poke/broadcast incurs
+ * for this topic — the signal the auto-elastic relay tier (plan 075) watches.
+ */
+export interface FanoutTopicStat {
+    /** `"shape"` = a reactive-query shape; `"whisper"` = an ephemeral whisper topic. */
+    kind: "shape" | "whisper";
+    /** Connected sockets currently subscribed — the fan-out width for this topic. */
+    subscribers: number;
+    /** The shape name or the whisper topic string. */
+    topic: string;
+}
+
+/**
+ * Running fan-out counters for one delivery path since the DO instance woke,
+ * mirroring `@lunora/do`'s `FanoutPathCounters`. `socketsIterated` is the
+ * O(subscribers) loop cost; `socketsDelivered` is how many of those received a
+ * frame. `totalMs`/`maxMs` are **coarse** (a DO clock advances only on I/O) and
+ * populated only for the asynchronous shape-poke path — they stay `0` for the
+ * synchronous whisper broadcast.
+ */
+export interface FanoutPathCounters {
+    maxMs: number;
+    passes: number;
+    peakSocketsIterated: number;
+    socketsDelivered: number;
+    socketsIterated: number;
+    totalMs: number;
+}
+
+/**
+ * How much of the shape-poke path's membership work the shard's per-flush cache
+ * collapsed, mirroring `@lunora/do`'s `ShapeProbeCounters`. A probe is keyed by
+ * `(table, predicate, ids)` and names no socket, so every subscriber resolving to
+ * the same predicate asks the identical question: `served` counts the duplicate
+ * queries the per-socket loop would otherwise have issued.
+ */
+export interface ShapeProbeCounters {
+    run: number;
+    served: number;
+}
+
+/**
+ * `.global()` poll tallies, mirroring `@lunora/do`'s `GlobalPollCounters`. Two
+ * numbers like {@link ShapeProbeCounters} and deliberately not the same type:
+ * these count whole membership drains against the `(socket, shape)` pairs a tick
+ * never asked about, so the panel cannot render one under the other's caption.
+ */
+export interface GlobalPollCounters {
+    /** Membership drains issued to the global backend. */
+    drains: number;
+
+    /** `(socket, shape)` pairs a tick skipped because the changelog proved their table had not moved. */
+    pairsSkipped: number;
+}
+
+/**
+ * Payload of a `__lunora_admin__:getFanoutMetrics` call, mirroring `@lunora/do`'s
+ * `FanoutMetricsResult`: the current per-topic subscriber counts (derived live
+ * from the shard's sockets) plus the running per-path fan-out cost counters
+ * (in-memory, reset on hibernation). Feeds the Studio fan-out observability panel.
+ */
+export interface FanoutMetricsResult {
+    globalPoll: GlobalPollCounters;
+    maxRelays: number;
+    peakSubscribers: number;
+    promoted: boolean;
+    relayCount: number;
+    shapePoke: FanoutPathCounters;
+    shapeProbe: ShapeProbeCounters;
+    sinceMs: number;
+    topics: FanoutTopicStat[];
+    totalConnections: number;
+    whisper: FanoutPathCounters;
+}
+
 /** Outcome of one dispatch in the request log, mirroring `@lunora/do`'s `RequestOutcome`. */
 export type RequestOutcome = "error" | "ok";
 
@@ -678,7 +1031,7 @@ export type RequestOutcome = "error" | "ok";
  * One structured `/rpc` dispatch returned by `__lunora_admin__:getRequestLog`,
  * mirroring `@lunora/do`'s `RequestLogEntry`. Unlike the in-memory `getLogs`
  * error buffer, the request log is durable and records EVERY dispatch with the
- * app-level context Cloudflare cannot attribute: the `&lt;file>:&lt;function>` path,
+ * app-level context Cloudflare cannot attribute: the `<file>:<function>` path,
  * the shard key, the acting `userId`/identity, the (server-side redacted) args,
  * the outcome + error message, the handler duration, the tables read/written,
  * and whether the result came from the reactive cache. `seq` is a monotonic
@@ -691,7 +1044,7 @@ export interface RequestLogEntry {
     durationMs: number;
     /** Error message when `outcome === "error"`; absent on success. */
     errorMessage?: string;
-    /** The `&lt;file>:&lt;function>` identifier dispatched. */
+    /** The `<file>:<function>` identifier dispatched. */
     functionPath: string;
     /** Identity claims forwarded by the runtime; absent for anonymous requests. */
     identity?: Record<string, unknown>;
@@ -709,15 +1062,13 @@ export interface RequestLogEntry {
     tablesRead: string[];
     /** Tables the handler wrote; empty for a read-only dispatch. */
     tablesWritten: string[];
+
+    /** W3C trace id (32-hex) of the dispatch; absent on a row written before the column existed. The Trace link is best-effort — see `@lunora/observability`'s `request-log.ts` on the retention asymmetry. */
+    traceId?: string;
     /** Epoch-ms the dispatch completed. */
     ts: number;
     /** Acting userId forwarded by the runtime; absent when anonymous. */
     userId?: string;
-}
-
-/** Payload of a `__lunora_admin__:getRequestLog` call: the recorded entries, newest first. */
-export interface RequestLogResult {
-    entries: RequestLogEntry[];
 }
 
 /**
@@ -733,6 +1084,293 @@ export interface RequestLogQuery {
     tableTouched?: string;
     userId?: string;
 }
+
+/**
+ * Triage status of an Issue, mirroring `@lunora/do`'s `IssueStatus`. `open` is
+ * the default; a developer moves it to `resolved` (fixed — but a new matching
+ * error auto-reopens it server-side) or `ignored` (muted, and stays muted).
+ */
+export type IssueStatus = "ignored" | "open" | "resolved";
+
+/** Developer-tagged severity of an Issue, mirroring `@lunora/do`'s `IssueSeverity`; drives the badge palette. */
+export type IssueSeverity = "critical" | "high" | "low" | "medium";
+
+/**
+ * One grouped error **Issue** returned by `__lunora_admin__:getIssues`, mirroring
+ * `@lunora/do`'s `ErrorIssue`. Many `error`-outcome request-log rows (Worker
+ * throws and `container:<name>` crashes alike) that share a fingerprint fold into
+ * a single triage row. The `hash` is the same stable key a cloud Incident groups
+ * on, so a local Issue and a cloud Incident are the same object.
+ */
+export interface ErrorIssue {
+    /** Assignee (a userId or a name) from the persisted triage state; absent when unassigned. */
+    assignee?: string;
+    /** Number of `error` rows folded into this Issue within the scanned window. */
+    count: number;
+    /** The `<file>:<function>` (or `container:<name>`) the errors came from. */
+    culprit: string;
+    /** Epoch-ms of the oldest folded row. */
+    firstSeen: number;
+    /** Stable 16-char grouping hash over `functionPath :: bucket(message)`. */
+    hash: string;
+    /** Epoch-ms of the newest folded row. */
+    lastSeen: number;
+    /** A representative raw error message — taken from the most recent folded row. */
+    sampleMessage: string;
+    /** Developer-tagged severity from the persisted triage state; absent when untriaged. */
+    severity?: IssueSeverity;
+    /** Epoch-ms the triage state was last changed; absent when never triaged. */
+    stateUpdatedAt?: number;
+    /** Triage status folded in from the persisted state (`open` by default); a resolved Issue that erred again auto-reopens to `open`. */
+    status: IssueStatus;
+    /** Human-readable title (first line of the sample message, capped). */
+    title: string;
+}
+
+/** Payload of a `__lunora_admin__:getIssues` call: grouped error Issues, most-recently-active first. */
+export interface IssuesResult {
+    issues: ErrorIssue[];
+}
+
+/**
+ * One span of a folded trace returned by `__lunora_admin__:getTraces`, mirroring
+ * `@lunora/do`'s `TraceSpan` (produced by its pure `foldTraces`). Already
+ * flattened for rendering: `depth` is the span's nesting level under the trace
+ * root and `offsetMs` its start relative to the trace start, so a waterfall row
+ * is a pure function of the record — indent by `depth`, draw the bar from
+ * `offsetMs` to `offsetMs + durationMs` — with no client-side tree math.
+ */
+export interface TraceSpan {
+    /** Structured attributes the `ctx.trace(name, fn, attributes)` caller attached; absent when none. */
+    attributes?: Record<string, unknown>;
+    /** Nesting level under the trace root; the root span is 0. */
+    depth: number;
+    /** Wall-clock duration of the span body, in milliseconds. */
+    durationMs: number;
+    /** Populated when the span body threw: `type` is the error's constructor name (or `LunoraError` code). */
+    error?: {
+        message: string;
+        type: string;
+    };
+
+    /**
+     * Timestamped occurrences inside the span — `span.addEvent(...)` /
+     * `span.recordException(...)`. A handled retry or a swallowed exception, which
+     * only makes sense against the span it happened in. Absent when none.
+     */
+    events?: {
+        attributes?: Record<string, unknown>;
+        name: string;
+        /** Epoch-ms the event was recorded. */
+        ts: number;
+    }[];
+    /** OTel `SpanKind`. Absent means `"internal"` — the overwhelming majority of `ctx.trace` spans. */
+    kind?: "client" | "consumer" | "internal" | "producer" | "server";
+    /** Caller-supplied span name, e.g. `"stripe.charge"`. */
+    name: string;
+    /** Start of this span relative to the trace's start, in ms. Clamped at 0 server-side. */
+    offsetMs: number;
+    /** `true` when the span body returned without throwing. */
+    ok: boolean;
+    /** Span id of the enclosing span; `""` for the synthetic dispatch root. */
+    parentSpanId: string;
+    /** This span's own id (16-hex). */
+    spanId: string;
+}
+
+/**
+ * One folded `ctx.trace` waterfall returned by `__lunora_admin__:getTraces`,
+ * mirroring `@lunora/do`'s `TraceSummary`. The dispatch's synthetic root span
+ * plus every `ctx.trace` span recorded beneath it, already ordered by
+ * `(offsetMs, depth)` — a valid pre-order traversal of the span tree, so this
+ * panel renders rows in the given order and indents by `depth`.
+ *
+ * Sourced from the shard's bounded, in-memory span ring, so it resets on
+ * hibernation/restart and can be legitimately partial (an evicted parent, or a
+ * trace read mid-dispatch). It is a "recent traces on this instance" readout for
+ * local development, NOT a durable trace store.
+ */
+export interface TraceSummary {
+    /** Wall-clock span of the whole trace (root start → last span end), in ms. May be 0. */
+    durationMs: number;
+    /** The `<file>:<function>` the trace's root span was recorded under. */
+    functionPath: string;
+    /** `false` when the root or any descendant span errored. */
+    ok: boolean;
+    /** Display name of the trace — the root span's name. */
+    rootName: string;
+    /** Shard key for single-shard calls; absent for the unnamed root DO. */
+    shardKey?: string;
+
+    /**
+     * Spans ordered by `(offsetMs, depth)`, ready to render as waterfall rows.
+     * Start time alone cannot order them: spans are recorded on completion, and
+     * at millisecond resolution a parent and its child routinely tie.
+     */
+    spans: TraceSpan[];
+    /** Epoch-ms the trace's anchor span started. */
+    startTs: number;
+    /** Trace id (32-hex) — shared with the dispatch's log lines. */
+    traceId: string;
+}
+
+/** Payload of a `__lunora_admin__:getTraces` call: the folded waterfalls, newest trace first. */
+export interface TracesResult {
+    /**
+     * Distinct traces available in the span ring — the denominator for the
+     * "showing N of M" affordance. Optional: a worker predating the field omits
+     * it, and the panel then shows no truncation notice.
+     */
+    total?: number;
+    traces: TraceSummary[];
+}
+
+/** Instrument kind of a metric series, mirroring `@lunora/do`'s `MetricKind`. */
+export type MetricKind = "counter" | "gauge" | "histogram";
+
+/**
+ * One aggregated `ctx.metrics.*` series returned by
+ * `__lunora_admin__:getMetricSeries`, mirroring `@lunora/do`'s `MetricSeries`.
+ * Every measurement sharing a `(name, kind, attributes)` identity folded into a
+ * running summary — `sum` is a counter's running total and a histogram's sum,
+ * `last` a gauge's current reading, `sum / count` a histogram's mean.
+ *
+ * Sourced from the shard's in-memory metric fold, so it resets on
+ * hibernation/restart. A "recent metrics on this instance" readout for local
+ * development, NOT a durable metric store — production aggregation ships to a
+ * collector via the sink.
+ */
+export interface MetricSeries {
+    /** The series' dimensions, if any — the attributes that made it distinct. */
+    attributes?: Record<string, unknown>;
+    /** Number of measurements folded into this series. */
+    count: number;
+    /** Trace id of the most recent measurement that carried one — the series' exemplar, for linking to a trace. */
+    exemplarTraceId?: string;
+    /** Epoch-ms of the first measurement folded in. */
+    firstTs: number;
+    /** Function path that recorded the series' most recent measurement. */
+    functionPath: string;
+    /** Instrument kind; decides which projection the panel shows. */
+    kind: MetricKind;
+    /** Most recent measured value — the current reading for a `gauge`. */
+    last: number;
+    /** Epoch-ms of the most recent measurement. */
+    lastTs: number;
+    /** Largest measured value seen. */
+    max: number;
+    /** Smallest measured value seen. */
+    min: number;
+    /** Instrument name, e.g. `"orders.placed"`. */
+    name: string;
+    /** Shard key for single-shard calls; absent for the unnamed root DO. */
+    shardKey?: string;
+    /** Sum of measured values — a `counter`'s total, a `histogram`'s sum. */
+    sum: number;
+}
+
+/** Payload of a `__lunora_admin__:getMetricSeries` call: the aggregated series, most-recently-updated first. */
+export interface MetricSeriesResult {
+    series: MetricSeries[];
+}
+
+/**
+ * One time-bucket sample of a series' durable history, mirroring `@lunora/do`'s
+ * `MetricHistoryPoint`: the per-minute aggregate over `[bucketMs, bucketMs + 60s)`,
+ * persisted in the shard's SQLite so it survives hibernation. `exemplarTraceId`
+ * (when present) links the point to a trace that produced a measurement in it.
+ */
+export interface MetricHistoryPoint {
+    bucketMs: number;
+    count: number;
+    exemplarTraceId?: string;
+    last: number;
+    max: number;
+    min: number;
+    sum: number;
+}
+
+/**
+ * One series' durable history returned by `__lunora_admin__:getMetricHistory`,
+ * mirroring `@lunora/do`'s `MetricHistorySeries`: the same `(name, kind,
+ * attributes)` identity as {@link MetricSeries}, with its buckets in ascending
+ * time order — ready to chart as a trend line. The durable trend complement to
+ * getMetricSeries' live snapshot.
+ */
+export interface MetricHistorySeries {
+    attributes?: Record<string, unknown>;
+    functionPath: string;
+    kind: MetricKind;
+    name: string;
+    points: MetricHistoryPoint[];
+    shardKey?: string;
+}
+
+/** Payload of a `__lunora_admin__:getMetricHistory` call: every tracked series with its time-ordered buckets. */
+export interface MetricHistoryResult {
+    series: MetricHistorySeries[];
+}
+
+/**
+ * Arguments for the opt-in `__lunora_admin__:explainIssue` action, mirroring
+ * `@lunora/do`'s `ExplainIssueArgs`. `sampleMessage` is the representative raw
+ * error text (required); `title`/`culprit` add context from the {@link ErrorIssue}
+ * being explained; `model` overrides the default Workers AI text model. The DO
+ * re-derives the grounded solution from `sampleMessage` itself — it never trusts a
+ * client-supplied hint.
+ *
+ * This and {@link ExplainIssueResult} are hand-mirrored — `@lunora/studio` must not
+ * take a dependency edge on `@lunora/do` — so nothing type-checks the two sides
+ * against each other. Change either shape here and in `packages/do/src/shard-do.ts`
+ * (`ExplainIssueArgs` / `ExplainIssueResult` / `ExplainIssueGrounding` /
+ * `ExplainIssueDegradedReason`) together.
+ */
+export interface ExplainIssueArgs {
+    culprit?: string;
+    model?: string;
+    sampleMessage: string;
+    title?: string;
+}
+
+/**
+ * Why the explainer fell back to the grounded hint alone, mirroring `@lunora/do`'s
+ * `ExplainIssueDegradedReason`. A closed union so the `reason === "no-ai-binding"`
+ * branch in `issues-panel.tsx` stays exhaustively checkable.
+ */
+export type ExplainIssueDegradedReason = "ai-error" | "empty-response" | "no-ai-binding";
+
+/**
+ * The grounding facts both `explainIssue` outcomes carry, mirroring `@lunora/do`'s
+ * `ExplainIssueGrounding`. `groundedId` names the matched catalog solution and is
+ * absent when nothing recognized the message — the studio renders a caveat on
+ * absence. The hint body is not on the wire: the studio derives it from the same
+ * catalog offline, which is the point of the grounded layer.
+ */
+export interface ExplainIssueGrounding {
+    groundedId?: string;
+}
+
+/**
+ * Payload of a `__lunora_admin__:explainIssue` call, mirroring `@lunora/do`'s
+ * `ExplainIssueResult`. A discriminated union on `degraded`: when the app wires an
+ * `AI` binding and the model returns text, `explanation` holds the plain-language
+ * write-up and `model` echoes the model that produced it. Otherwise `reason` says why the AI path degraded — the studio
+ * then falls back to rendering the always-available grounded hint alone.
+ */
+/** The arm returned when no inference happened, or it failed, mirroring `@lunora/do`'s `ExplainIssueDegraded`. */
+export interface ExplainIssueDegraded extends ExplainIssueGrounding {
+    degraded: true;
+    reason: ExplainIssueDegradedReason;
+}
+
+/** The arm returned when the model ran and produced text, mirroring `@lunora/do`'s `ExplainIssueSuccess`. */
+export interface ExplainIssueSuccess extends ExplainIssueGrounding {
+    degraded: false;
+    explanation: string;
+    model: string;
+}
+
+export type ExplainIssueResult = ExplainIssueDegraded | ExplainIssueSuccess;
 
 /**
  * How a deployment binding/var classifies, mirroring `@lunora/do`'s `SettingKind`.
@@ -826,6 +1464,113 @@ export interface SqlConsoleResult {
 }
 
 /**
+ * Payload of an `aiGenerateSql` admin call, mirroring `@lunora/do`'s
+ * `GenerateSqlResult`. A discriminated union on `degraded` so the ok arm's `sql`
+ * is guaranteed by the type rather than by convention.
+ */
+export type GenerateSqlResult = { degraded: false; sql: string } | { degraded: true; reason: GenerateSqlDegradedReason };
+
+/** Payload of an `aiTableFilter` call — structured clauses, never SQL. */
+export type GenerateFilterResult = { clauses: FilterClause[]; degraded: false } | { degraded: true; reason: GenerateSqlDegradedReason };
+
+/** A chart the editor can render, inferred from a result set's SHAPE only. */
+export interface AssistantChartConfig {
+    kind: "area" | "bar" | "line";
+    x: string;
+    y: string[];
+}
+
+/** Whether the deployment has an `AI` binding — the gate for every assistant affordance. */
+export interface AiAvailableResult {
+    available: boolean;
+}
+
+/** Payload of an `aiChartConfig` call. */
+export type GenerateChartResult = { chart: AssistantChartConfig; degraded: false } | { degraded: true; reason: GenerateSqlDegradedReason };
+
+/** Why no statement came back. `no-ai-binding` means the app has no AI binding — hide the affordance entirely. */
+export type GenerateSqlDegradedReason = "ai-error" | "empty-response" | "no-ai-binding" | "too-long" | "unsafe-response";
+
+/** One reverse edge: `table.column` holds a foreign key pointing at the browsed table. */
+export interface BackRelation {
+    column: string;
+    table: string;
+}
+
+/** Counts for one reverse edge, keyed by parent id. An absent id has no children. */
+export interface BackRelationCounts extends BackRelation {
+    counts: Record<string, number>;
+}
+
+/** Payload of a `backRelationCounts` admin call. */
+export interface BackRelationCountsResult {
+    relations: BackRelationCounts[];
+}
+
+/** The ranges the query-insights selector offers. */
+export type QueryInsightRange = "1h" | "1m" | "5m" | "15m";
+
+/** One statement's activity within the selected range. Mirrors `@lunora/do`'s `QueryInsightEntry`. */
+export interface QueryInsightEntry {
+    avgDurationMs: number;
+    execCount: number;
+    normalizedSql: string;
+    /** Interpolated from a fixed latency histogram — accurate to its bucket's width, not exact. */
+    p50DurationMs: number;
+    p95DurationMs: number;
+    rowsRead: number;
+    rowsWritten: number;
+    totalDurationMs: number;
+}
+
+/** One point on the throughput/latency charts. */
+export interface QueryInsightBucket {
+    avgDurationMs: number;
+    bucketMs: number;
+    execCount: number;
+}
+
+/**
+ * Payload of a `getQueryInsights` admin call. `capped` reports that
+ * the tracked-statement cap was hit, so the view can say "showing N of a capped
+ * set" instead of implying it shows everything.
+ */
+export interface QueryInsightsResult {
+    buckets: QueryInsightBucket[];
+    capped: boolean;
+    entries: QueryInsightEntry[];
+    trackedStatements: number;
+}
+
+/**
+ * Payload of a `__lunora_admin__:schemaHistory` call: every schema version this
+ * shard has recorded, newest first, WITHOUT the snapshot payloads (they are tens
+ * of KB each — fetch one with `schemaVersion`).
+ */
+export interface SchemaVersionsResult {
+    versions: SchemaVersionSummary[];
+}
+
+/** One recorded schema version's identity + when the shard first ran it. */
+export interface SchemaVersionSummary {
+    /** Epoch millis the version was first seen on this shard. */
+    appliedAt: number;
+    /** Content hash of the snapshot — the version's identity. */
+    hash: string;
+    /** Monotonic apply order. */
+    seq: number;
+}
+
+/**
+ * Payload of a `__lunora_admin__:schemaVersion` call: one version's full
+ * snapshot JSON. `version` is absent for an unknown hash (a stale deep link, or
+ * a version pruned past the ledger's retention cap) — an empty state, not an error.
+ */
+export interface SchemaVersionDetail {
+    version?: SchemaVersionSummary & { snapshotJson: string };
+}
+
+/**
  * Payload of a `__lunora_admin__:getPitrBookmark` call, mirroring `@lunora/do`'s
  * `PitrBookmarkResult`. `current` names the shard's present point in history;
  * `forTime` is the bookmark nearest a queried time, present only when one was
@@ -834,17 +1579,6 @@ export interface SqlConsoleResult {
 export interface PitrBookmarkResult {
     current: string;
     forTime?: string;
-}
-
-/**
- * Arguments for the `__lunora_admin__:pitrRestore` RPC, mirroring `@lunora/do`'s
- * `PitrRestoreArgs`. Provide a `bookmark` (wins) or a `time` (epoch-ms or ISO,
- * within 30 days); `restart` also `ctx.abort()`s so recovery applies now.
- */
-export interface PitrRestoreArgs {
-    bookmark?: string;
-    restart?: boolean;
-    time?: number | string;
 }
 
 /**
@@ -870,7 +1604,26 @@ export interface TablePage {
     /** Foreign-key columns (column → target table) for `v.id("target")` fields, so the UI can link those cells. */
     refs?: Record<string, string>;
     rows: Record<string, unknown>[];
-    total: number;
+
+    /**
+     * The table's PHYSICAL column names (`id`, `_creationTime`, `__doc__` for a
+     * canonical shard table), mirroring `@lunora/do`'s `TablePage.sqlColumns`.
+     *
+     * `columns` is the DISPLAY list, with every `__doc__` field lifted to a
+     * top-level column — names no SQL statement can reference. A surface that
+     * feeds columns to something SQL-shaped wants this list, not that one.
+     *
+     * Optional on the client mirror because a shard running an older `@lunora/do`
+     * omits it; a caller must treat its absence as "unknown", never as "none".
+     */
+    sqlColumns?: string[];
+
+    /**
+     * Total rows matching the predicate. Absent when the read passed
+     * `skipCount: true` — the data browser sources the count from a separate,
+     * predicate-keyed read so paging never re-runs the COUNT.
+     */
+    total?: number;
 }
 
 /**

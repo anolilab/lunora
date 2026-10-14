@@ -61,7 +61,6 @@ To resolve the signed-in user inside Lunora procedures, pass `resolveIdentity` t
 import { getAuth } from "../../lunora/auth/index.js";
 
 createWorker({
-    d1: env.DB,
     resolveIdentity: async (request) => {
         const session = await getAuth(env).api.getSession({ headers: request.headers });
         return session?.user ? { userId: session.user.id } : null;

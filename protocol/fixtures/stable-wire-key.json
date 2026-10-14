@@ -1,0 +1,135 @@
+{
+    "$comment": "Golden fixtures for the stable subscription/dedup key (shared/wire-key.ts: stableWireKey = stableStringify(encodeWire(value))). `cases` take pure-JSON `args` and assert stable_wire_key(args) == key. `typed` cases give `wireArgs` (already wire-encoded) and assert stable_wire_key(decode(wireArgs)) == key, covering bigint/date/bytes args. Object keys are sorted at every depth in UTF-16 CODE-UNIT order (the reference impl is `Object.keys(o).sort()`, whose default comparator compares code units) - NOT code-point order; the two disagree for any key starting with a surrogate, which `key-order-surrogate-vs-pua` pins. A port whose natural string ordering is by code point (Python `sorted`, Go `sort.Strings`, Rust `str` Ord) must re-key on the UTF-16 code units first. Arrays keep order; null fields are kept, undefined object fields are dropped.",
+    "cases": [
+        { "name": "empty", "args": {}, "key": "{}" },
+        { "name": "sorted-top-level", "args": { "b": 2, "a": 1 }, "key": "{\"a\":1,\"b\":2}" },
+        { "name": "sorted-nested", "args": { "a": 1, "nested": { "z": 3, "y": 2 } }, "key": "{\"a\":1,\"nested\":{\"y\":2,\"z\":3}}" },
+        { "name": "arrays-keep-order", "args": { "list": [3, 1, 2] }, "key": "{\"list\":[3,1,2]}" },
+        { "name": "null-field-kept", "args": { "a": null, "b": 1 }, "key": "{\"a\":null,\"b\":1}" },
+        { "name": "codepoint-order", "args": { "b": "x", "A": "y" }, "key": "{\"A\":\"y\",\"b\":\"x\"}" },
+        {
+            "$comment": "The ONLY case that separates UTF-16 code-unit order from code-point order. U+1F600 is the surrogate pair D83D DE00, so its first code unit (0xD83D) sorts BEFORE U+E000; by code point (0x1F600) it would sort AFTER. A port that sorts by code point produces \"{\\\"z\\\":3,\\\"\\ue000\\\":2,\\\"\\ud83d\\ude00\\\":1}\" here and a different stableWireKey than the TS client for every args record with such a key.",
+            "name": "key-order-surrogate-vs-pua",
+            "args": { "\ud83d\ude00": 1, "\ue000": 2, "z": 3 },
+            "key": "{\"z\":3,\"\ud83d\ude00\":1,\"\ue000\":2}"
+        },
+        { "name": "nested-array-of-objects", "args": { "rows": [{ "b": 1, "a": 2 }] }, "key": "{\"rows\":[{\"a\":2,\"b\":1}]}" },
+        { "name": "string-with-quote", "args": { "s": "a\"b" }, "key": "{\"s\":\"a\\\"b\"}" },
+        { "name": "empty-string-key", "args": { "": 1, "a": 2 }, "key": "{\"\":1,\"a\":2}" },
+        {
+            "name": "escape-set-matches-json-stringify",
+            "args": { "s": "a\"b\\c\nd\te\u0000f\u001fg" },
+            "key": "{\"s\":\"a\\\"b\\\\c\\nd\\te\\u0000f\\u001fg\"}"
+        },
+        {
+            "$comment": "Negative zero keys as the bare token `-0`, distinct from `0` — `stableStringify` has an explicit `Object.is(value, -0)` branch, because `JSON.stringify` renders both as \"0\" and would collide the two args. Written `-0.0` rather than `-0` on purpose: a JSON parser that reads an integral literal as an integer (python `json`, ruby, dart) drops the sign before the codec ever sees it, so the bare form would test the fixture loader instead of the key.",
+            "name": "negative-zero",
+            "args": { "a": -0.0, "b": 0 },
+            "key": "{\"a\":-0,\"b\":0}"
+        },
+        { "name": "nested-empty-containers", "args": { "a": {}, "b": [] }, "key": "{\"a\":{},\"b\":[]}" },
+        { "name": "number-exponent-forms", "args": { "a": 1e21, "b": 1e-7, "c": 1.5, "d": -2 }, "key": "{\"a\":1e+21,\"b\":1e-7,\"c\":1.5,\"d\":-2}" },
+        {
+            "$comment": "Three ADJACENT doubles (one ulp apart). Each keys distinctly, exactly as String(v) spells it. A port that capped positional output at a fixed number of places spelled all three `-0.00000607387560669604`, so a subscription for one received the frames and optimistic overlays of another.",
+            "name": "number-adjacent-double-a",
+            "args": { "x": -0.000006073875606696037 },
+            "key": "{\"x\":-0.000006073875606696037}"
+        },
+        { "name": "number-adjacent-double-b", "args": { "x": -0.000006073875606696036 }, "key": "{\"x\":-0.000006073875606696036}" },
+        { "name": "number-adjacent-double-c", "args": { "x": -0.000006073875606696035 }, "key": "{\"x\":-0.000006073875606696035}" },
+        {
+            "$comment": "Positional spelling of values in [1e-7, 1e-4): ECMAScript keeps positional notation down to 1e-6 and prints the SHORTEST round-trip digit string, which here needs more than 20 decimal places.",
+            "name": "number-positional-shortest-digits",
+            "args": {
+                "n": [
+                    -0.000005398357037331775, -0.000004581439300991395, -0.000007479035767534118, -0.000023111215479239113, -0.0000017831576920856996,
+                    -0.000009538524804244627, 0.000008923045154390348, 0.000002882335397487146, 0.000015185973641513973, 0.0000012956900172794383, 0.000001,
+                    0.0000012345678901234567, 1e-7, 1.2e-7
+                ]
+            },
+            "key": "{\"n\":[-0.000005398357037331775,-0.000004581439300991395,-0.000007479035767534118,-0.000023111215479239113,-0.0000017831576920856996,-0.000009538524804244627,0.000008923045154390348,0.000002882335397487146,0.000015185973641513973,0.0000012956900172794383,0.000001,0.0000012345678901234567,1e-7,1.2e-7]}"
+        },
+        {
+            "$comment": "Decimal literals a parser that is not correctly rounded reads one ulp off. The key spells the DECODED double's shortest digits, so a mis-rounded parse shows up as different digits here even when the key formatter is right.",
+            "name": "number-decode-correctly-rounded",
+            "args": {
+                "n": [
+                    -1.0063725663392093e82, -0.9671460081055501, 9.241516992974401e110, 9.063806568047546e-11, -3.8017925100238707e197, -6.102589136900771e-10,
+                    -3.652336815595322e125, 973590096694571.5, -0.021733632782708345, -0.0008307574654731717, -0.00045445627916365086, -0.006160718108693786,
+                    0.0032583534326633035, -0.00046508078215070893, 0.00009951294295247749, 5e-324, 2.2250738585072014e-308, 1.7976931348623157e308,
+                    9.999999999999999e20, 123456789.12345679
+                ]
+            },
+            "key": "{\"n\":[-1.0063725663392093e+82,-0.9671460081055501,9.241516992974401e+110,9.063806568047546e-11,-3.8017925100238707e+197,-6.102589136900771e-10,-3.652336815595322e+125,973590096694571.5,-0.021733632782708345,-0.0008307574654731717,-0.00045445627916365086,-0.006160718108693786,0.0032583534326633035,-0.00046508078215070893,0.00009951294295247749,5e-324,2.2250738585072014e-308,1.7976931348623157e+308,999999999999999900000,123456789.12345679]}"
+        }
+    ],
+    "typed": [
+        { "name": "bigint-arg", "wireArgs": { "n": ["$lunora.wire$", "bigint", "7"] }, "key": "{\"n\":[\"$lunora.wire$\",\"bigint\",\"7\"]}" },
+        { "name": "date-arg", "wireArgs": { "d": ["$lunora.wire$", "date", 1700000000000] }, "key": "{\"d\":[\"$lunora.wire$\",\"date\",1700000000000]}" },
+        {
+            "$comment": "The `-0` branch of stableStringify meeting TimeClip. An epoch in (-1, 0] clips to +0, not -0: ToIntegerOrInfinity, not truncation. A port that truncates spells the key `-0` here and opens a different subscription than the TS client for the same Date, which is precisely what this fixture exists to catch. Both spellings carry a decimal point so no JSON parser can narrow them to an integer and drop the sign first.",
+            "name": "date-arg-negative-fraction-epoch",
+            "wireArgs": { "d": ["$lunora.wire$", "date", -0.5] },
+            "key": "{\"d\":[\"$lunora.wire$\",\"date\",0]}"
+        },
+        {
+            "name": "date-arg-negative-zero-epoch",
+            "wireArgs": { "d": ["$lunora.wire$", "date", -0.0] },
+            "key": "{\"d\":[\"$lunora.wire$\",\"date\",0]}"
+        },
+        { "name": "bytes-arg", "wireArgs": { "b": ["$lunora.wire$", "bytes", "AQID"] }, "key": "{\"b\":[\"$lunora.wire$\",\"bytes\",\"AQID\"]}" },
+        {
+            "name": "error-arg",
+            "wireArgs": { "e": ["$lunora.wire$", "error", "TypeError", "bad", { "code": "E" }] },
+            "key": "{\"e\":[\"$lunora.wire$\",\"error\",\"TypeError\",\"bad\",{\"code\":\"E\"}]}"
+        },
+        {
+            "name": "map-arg-keeps-insertion-order",
+            "wireArgs": {
+                "m": [
+                    "$lunora.wire$",
+                    "map",
+                    [
+                        ["b", 1],
+                        ["a", 2]
+                    ]
+                ]
+            },
+            "key": "{\"m\":[\"$lunora.wire$\",\"map\",[[\"b\",1],[\"a\",2]]]}"
+        },
+        {
+            "name": "non-finite-args",
+            "wireArgs": { "a": ["$lunora.wire$", "nan"], "b": ["$lunora.wire$", "inf"], "c": ["$lunora.wire$", "-inf"] },
+            "key": "{\"a\":[\"$lunora.wire$\",\"nan\"],\"b\":[\"$lunora.wire$\",\"inf\"],\"c\":[\"$lunora.wire$\",\"-inf\"]}"
+        },
+        { "name": "set-arg", "wireArgs": { "s": ["$lunora.wire$", "set", [3, 1]] }, "key": "{\"s\":[\"$lunora.wire$\",\"set\",[3,1]]}" },
+        {
+            "$comment": "The `-0` token of stableStringify meeting a Set/Map: both store +0 for a -0 member or key, so the key spells `0`. A port that carries the sign into the decoded collection keys `-0` and opens a different subscription than the TS client for the same args.",
+            "name": "set-and-map-negative-zero-arg",
+            "wireArgs": { "m": ["$lunora.wire$", "map", [[-0.0, 1]]], "s": ["$lunora.wire$", "set", [-0.0]] },
+            "key": "{\"m\":[\"$lunora.wire$\",\"map\",[[0,1]]],\"s\":[\"$lunora.wire$\",\"set\",[0]]}"
+        },
+        {
+            "name": "undefined-in-array-arg",
+            "wireArgs": { "a": [1, ["$lunora.wire$", "undefined"], 2] },
+            "key": "{\"a\":[1,[\"$lunora.wire$\",\"undefined\"],2]}"
+        },
+        { "name": "undefined-object-field-arg", "wireArgs": { "a": ["$lunora.wire$", "undefined"], "b": 1 }, "key": "{\"b\":1}" },
+        {
+            "name": "url-arg",
+            "wireArgs": { "u": ["$lunora.wire$", "url", "https://example.com/x"] },
+            "key": "{\"u\":[\"$lunora.wire$\",\"url\",\"https://example.com/x\"]}"
+        },
+        {
+            "$comment": "A number off the wire is a float64 whatever its spelling. JSON.stringify writes every double in [2^53, 1e21) as an INTEGER literal, and a parser that types those as native integers must still decode them as the double JSON.parse reads (9007199254740993 is 9007199254740992) and key them the reference's way, not refuse them. Constructing such an integer natively is still refused: see exact_integer_range_enforced.",
+            "name": "number-integer-literal-past-exact-range",
+            "wireArgs": {
+                "n": [
+                    1700000000000000000, 100000000000000000000, 1152921504606847000, 9007199254740993, -9007199254740993, -332443551621519100000,
+                    4497057306508656600, 356880838467014200000, -94136815007046430000
+                ]
+            },
+            "key": "{\"n\":[1700000000000000000,100000000000000000000,1152921504606847000,9007199254740992,-9007199254740992,-332443551621519100000,4497057306508656600,356880838467014200000,-94136815007046430000]}"
+        }
+    ]
+}

@@ -12,7 +12,17 @@
  * `@lunora/react`, `@lunora/solid`, `@lunora/svelte`, or `@lunora/vue` — each of
  * which ships its own `hydratePreloaded(preloaded)` for the SSR-seed → live
  * handoff. This package owns the server/composition half only.
+ *
+ * The integration is declarative-only: it does not write or modify the
+ * project's `serverEntry` file (no injection). The `withLunora` wiring at the
+ * server-entry boundary is a step the project author performs by hand; the
+ * `astro:config:done` hook below only checks that they did, and warns (mirrors
+ * `@lunora/nuxt`'s missing-`worker.ts` check) rather than failing the build.
  */
+import { existsSync, readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
+
+import { codeOnly } from "../../../shared/code-only";
 
 /**
  * Structural subset of Astro's `AstroIntegration`. Declared locally (rather than
@@ -29,12 +39,87 @@ interface AstroIntegrationLike {
     readonly name: string;
 }
 
+/**
+ * Structural subset of the `astro:config:done` hook payload this integration
+ * reads: `config.root` (to resolve `serverEntry` to an absolute path) and
+ * `logger` (Astro's per-integration scoped logger). Declared locally for the
+ * same decoupling reason as {@link AstroIntegrationLike} — real Astro always
+ * passes both, but every field is optional here so a caller invoking the hook
+ * directly (tests, or a future Astro major that reshapes the payload) degrades
+ * to a no-op check rather than throwing.
+ */
+interface ConfigDoneContext {
+    readonly config?: {
+        readonly root?: URL;
+    };
+    readonly logger?: {
+        readonly warn: (message: string) => void;
+    };
+}
+
+/** Copy/paste wiring snippet shown when `serverEntry` composes nothing. */
+const WITH_LUNORA_SNIPPET = [
+    "// src/server.ts",
+    'import { handle } from "@astrojs/cloudflare/handler";',
+    'import { withLunora } from "@lunora/astro";',
+    "",
+    "// `shardDO` lives on `env` (per request), so pass an `(env) => options` factory.",
+    "export default withLunora(",
+    "  (req, env, ctx) => handle(req, env, ctx),",
+    "  (env) => ({ shardDO: env.SHARD /* , … */ }),",
+    ");",
+].join("\n");
+
+/**
+ * Matches an actual composition CALL in the server entry — either spelling of the
+ * same seam:
+ *
+ * `withLunora(astroWorker, …)` is the standalone helper (an alias of
+ * `withFrameworkWorker`), and is what {@link WITH_LUNORA_SNIPPET} shows.
+ * `.buildFrameworkWorker(host)` is the generated `defineApp` builder's terminal,
+ * and is what the scaffolded template and every other class-B template use. It
+ * was missing here, so a fresh `astro build` warned "subscriptions will silently
+ * 404" about a worker that was correctly composed.
+ *
+ * Deliberately does NOT match `import { withLunora } from "@lunora/astro";`: that
+ * specifier is followed by `}`/whitespace/`from`, never directly by `(`, so a file
+ * that imports the helper but forgets to invoke it is correctly reported as
+ * missing the wiring instead of passing on the import alone.
+ *
+ * Run against {@link codeOnly}, never the raw file: a name inside a comment or a
+ * string is not a call, and matching one suppressed the warning for an entry
+ * that composed nothing.
+ */
+const WITH_LUNORA_CALL_PATTERN = /\b(?:withLunora|withFrameworkWorker|buildFrameworkWorker)\s*\(/u;
+
+/**
+ * Where the composition lives when the caller names nothing.
+ *
+ * Deliberately NOT `src/worker.ts`: `lunora deploy` treats that exact path as a
+ * SvelteKit-shaped composed entry and passes it to wrangler positionally, which
+ * combined with the `@astrojs/cloudflare` redirect's `no_bundle: true` uploads the
+ * raw TypeScript source as the worker.
+ */
+const DEFAULT_SERVER_ENTRY = "src/server.ts";
+
+/**
+ * The default this integration used to carry. Probed only to tell a project that
+ * predates the rename WHY its entry is suddenly "not found" — never silently
+ * accepted as the entry, because composing at that path is the deploy bug
+ * {@link DEFAULT_SERVER_ENTRY} exists to avoid.
+ */
+const PREVIOUS_SERVER_ENTRY = "src/worker.ts";
+
 /** Options for the `lunora` integration. */
 interface LunoraIntegrationOptions {
     /**
-     * Path (or specifier) of the module that calls `withLunora` and is the
-     * composed worker's `export default`. Documented for the wiring story; when
-     * omitted the integration assumes the conventional `src/worker.ts`.
+     * Path (or specifier) of the module that composes the Lunora plane with the
+     * Astro handler and is the composed worker's `export default`. Documented for
+     * the wiring story; when omitted the integration assumes the conventional
+     * `src/server.ts` — deliberately NOT `src/worker.ts`, which `lunora deploy`
+     * treats as a SvelteKit-shaped entry to pass to wrangler positionally, and
+     * which the `@astrojs/cloudflare` redirect's `no_bundle: true` then uploads
+     * untranspiled.
      */
     readonly serverEntry?: string;
 }
@@ -56,34 +141,96 @@ interface LunoraIntegrationOptions {
  *
  * What it does:
  *
- * - Marks the build so the `@astrojs/cloudflare` server entry is wrapped with
- *   `withLunora` — the composed worker reserves `/_lunora/*` for Lunora realtime
- *   and forwards everything else to Astro's SSR handler (one worker, one deploy).
- * - Documents the `serverEntry` (default `src/worker.ts`) where the
- *   `withLunora(astroWorker, { shardDO: env.SHARD, … })` composition lives.
+ * - Documents the `serverEntry` (default `src/server.ts`) where the
+ *   `withLunora(astroWorker, { shardDO: env.SHARD, … })` composition — or the
+ *   generated builder's `.buildFrameworkWorker(host)` — lives.
+ * - Checks, at `astro:config:done`, that `serverEntry` exists and contains an
+ *   actual composition CALL (not merely an import of it) — and warns
+ *   (does not fail the build) when it doesn't, so a missing wrapper is caught
+ *   at build time instead of shipping a worker where `/_lunora/*` is unrouted
+ *   and realtime silently 404s.
  *
- * The hook is intentionally minimal here: the load-bearing composition is the
- * `withLunora` wrapper at the server-entry boundary (see `withLunora` for the
- * `@astrojs/cloudflare` injection point). The integration object exists so the
- * wiring is declared in `astro.config` the idiomatic Astro way, and so future
- * build-time hooks (binding reconcile, dev middleware) have a home without
- * changing the public surface.
+ * This integration does NOT wrap the server entry itself — no file is written
+ * or modified. The load-bearing composition is the `withLunora` call the
+ * project author writes at the server-entry boundary (see `withLunora` for the
+ * `@astrojs/cloudflare` injection point); this object exists so the wiring is
+ * declared in `astro.config` the idiomatic Astro way, checked once at build
+ * time, and has a home for future build-time hooks (binding reconcile, dev
+ * middleware) without changing the public surface.
  */
 const lunora = (options: LunoraIntegrationOptions = {}): AstroIntegrationLike => {
-    const serverEntry = options.serverEntry ?? "src/worker.ts";
+    const serverEntry = (options.serverEntry ?? DEFAULT_SERVER_ENTRY).trim();
 
     return {
         hooks: {
-            "astro:config:done": () => {
-                // The composition is performed by `withLunora` at the
-                // `@astrojs/cloudflare` server-entry boundary (`serverEntry`).
-                // This hook is the declared seam for future build-time wiring
-                // (wrangler binding reconcile, dev middleware mounting
-                // `/_lunora/*`). Kept side-effect-free today (it only reads the
-                // resolved entry) so the integration is safe to add before that
-                // wiring lands.
+            "astro:config:done": (context: ConfigDoneContext = {}) => {
                 if (serverEntry.length === 0) {
-                    throw new Error("@lunora/astro: `serverEntry` must be a non-empty path.");
+                    throw new TypeError("@lunora/astro: `serverEntry` must be a non-empty path.");
+                }
+
+                const root = context.config?.root;
+
+                // Without a resolvable project root (e.g. a caller invoking this
+                // hook directly outside a real Astro build) there is nothing to
+                // check the entry file against — stay side-effect-free rather
+                // than guessing a root.
+                if (root === undefined) {
+                    return;
+                }
+
+                // Not `context.logger?.warn ?? fallback`: that extracts the method as a
+                // detached function reference, and Astro's real `Logger.warn` reads `this`
+                // internally — called detached, it throws `Cannot read properties of
+                // undefined (reading 'options')`. Wrapping in a closure keeps the call a
+                // proper `context.logger.warn(...)` method call.
+                const warn = (message: string): void => {
+                    if (context.logger?.warn) {
+                        context.logger.warn(message);
+                    } else {
+                        // eslint-disable-next-line no-console -- no `logger` was supplied on this call; fall back so the warning is never silently dropped
+                        console.warn(message);
+                    }
+                };
+                const entryPath = fileURLToPath(new URL(serverEntry, root));
+
+                if (!existsSync(entryPath)) {
+                    // The default moved off `src/worker.ts`, so a project that
+                    // predates the move and never set `serverEntry` reaches here
+                    // on EVERY build. "Not found" would be both wrong about the
+                    // cause and unactionable, and the rename is not cosmetic —
+                    // see {@link PREVIOUS_SERVER_ENTRY}.
+                    const renamed = options.serverEntry === undefined && existsSync(fileURLToPath(new URL(PREVIOUS_SERVER_ENTRY, root)));
+
+                    warn(
+                        renamed
+                            ? `@lunora/astro: the default server entry is now "${DEFAULT_SERVER_ENTRY}", and this project still composes in "${PREVIOUS_SERVER_ENTRY}". Rename it — \`lunora deploy\` passes a file at that exact path to wrangler positionally, and @astrojs/cloudflare's \`no_bundle\` redirect then uploads it untranspiled — or keep the old name with \`lunora({ serverEntry: "${PREVIOUS_SERVER_ENTRY}" })\`.`
+                            : `@lunora/astro: server entry "${serverEntry}" not found — add it (or point \`lunora({ serverEntry })\` at the right path) and wrap the Astro worker with \`withLunora\`, or \`/_lunora/*\` (Lunora realtime) will be unrouted:\n\n${WITH_LUNORA_SNIPPET}`,
+                    );
+
+                    return;
+                }
+
+                let source: string;
+
+                try {
+                    source = readFileSync(entryPath, "utf8");
+                } catch (error) {
+                    // `existsSync` passing doesn't guarantee a readable regular file
+                    // (it could be a directory, permission-denied, a broken symlink
+                    // loop, …) — this hook warns rather than fails the build, so a
+                    // read failure must degrade to a warning too, not an uncaught
+                    // throw out of `astro:config:done`.
+                    const reason = error instanceof Error ? error.message : String(error);
+
+                    warn(`@lunora/astro: could not read server entry "${serverEntry}" (${reason}) — skipping the \`withLunora\` check.`);
+
+                    return;
+                }
+
+                if (!WITH_LUNORA_CALL_PATTERN.test(codeOnly(source))) {
+                    warn(
+                        `@lunora/astro: couldn't find a \`withLunora(...)\` or \`.buildFrameworkWorker(...)\` call in the server entry "${serverEntry}" — \`/_lunora/*\` (Lunora realtime) will be unrouted and subscriptions will silently 404. Compose the Astro worker:\n\n${WITH_LUNORA_SNIPPET}`,
+                    );
                 }
             },
         },

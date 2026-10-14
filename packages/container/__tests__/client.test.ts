@@ -3,6 +3,8 @@ import { describe, expect, it, vi } from "vitest";
 import type { ContainerNamespaceLike } from "../src/index";
 import { createContainerContext, createContainerTestContext } from "../src/index";
 
+const JURISDICTION_UNSUPPORTED = /does not support jurisdiction/;
+
 /** A fake DO namespace recording which instance names were targeted. */
 const fakeNamespace = (): { names: string[]; namespace: ContainerNamespaceLike; requests: Request[] } => {
     const names: string[] = [];
@@ -59,6 +61,66 @@ describe(createContainerContext, () => {
         expect(requests[0]!.url).toBe("https://example.com/probe");
     });
 
+    it("stamps the forwarded traceparent onto outbound container requests (get / any / pool)", async () => {
+        expect.assertions(3);
+
+        const traceparent = "00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01";
+        const { namespace, requests } = fakeNamespace();
+        const containers = createContainerContext(
+            { CONTAINER_TRANSCODER: namespace },
+            [{ binding: "CONTAINER_TRANSCODER", exportName: "transcoder", maxInstances: 2 }],
+            undefined,
+            traceparent,
+        );
+
+        await containers.transcoder!.get("a").fetch("/x");
+        await containers.transcoder!.any().fetch("/x");
+        await containers.transcoder!.pool().fetch("/x");
+
+        for (const request of requests) {
+            expect(request.headers.get("traceparent")).toBe(traceparent);
+        }
+    });
+
+    // The tail-bias toggle rides beside the trace context, so the container is
+    // TOLD what the worker decided instead of falling back to its own env and
+    // agreeing only by coincidence. Same three handle shapes, and `.port()`,
+    // because a re-bound handle that dropped it would be a silent hole.
+    it("stamps the forwarded tail-bias toggle onto outbound container requests", async () => {
+        expect.assertions(4);
+
+        const { namespace, requests } = fakeNamespace();
+        const containers = createContainerContext(
+            { CONTAINER_TRANSCODER: namespace },
+            [{ binding: "CONTAINER_TRANSCODER", exportName: "transcoder", maxInstances: 2 }],
+            undefined,
+            "00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01",
+            false,
+        );
+
+        await containers.transcoder!.get("a").fetch("/x");
+        await containers.transcoder!.any().fetch("/x");
+        await containers.transcoder!.pool().fetch("/x");
+        await containers.transcoder!.get("a").port(8080).fetch("/x");
+
+        for (const request of requests) {
+            expect(request.headers.get("x-lunora-sample-errors")).toBe("0");
+        }
+    });
+
+    // Absent toggle means absent header: a container with no verdict propagated
+    // to it falls back to its own configuration rather than being told "off".
+    it("omits the toggle header when the dispatch propagated none", async () => {
+        expect.assertions(1);
+
+        const { namespace, requests } = fakeNamespace();
+        const containers = createContainerContext({ CONTAINER_TRANSCODER: namespace }, [{ binding: "CONTAINER_TRANSCODER", exportName: "transcoder" }]);
+
+        await containers.transcoder!.get("a").fetch("/x");
+
+        expect(requests[0]!.headers.get("x-lunora-sample-errors")).toBeNull();
+    });
+
     it(".any() picks a pool instance within maxInstances", async () => {
         expect.assertions(2);
 
@@ -76,6 +138,31 @@ describe(createContainerContext, () => {
         await containers.transcoder!.any(10).fetch("/probe");
 
         expect(names[1]).toBe("pool-9");
+
+        vi.restoreAllMocks();
+    });
+
+    it("keeps pool instances out of the .get(name) namespace", async () => {
+        expect.assertions(2);
+
+        const { names, namespace } = fakeNamespace();
+        const containers = createContainerContext({ CONTAINER_TRANSCODER: namespace }, [
+            { binding: "CONTAINER_TRANSCODER", exportName: "transcoder", maxInstances: 1 },
+        ]);
+
+        vi.spyOn(Math, "random").mockReturnValue(0);
+
+        // An entity called "pool-0" must not share a Durable Object (disk,
+        // lifecycle, `destroy()`) with the pool's first instance. The pool keeps
+        // its `pool-N` ids (renaming them would strand warm instances against
+        // `max_instances` on deploy), so `.get()` refuses the prefix instead.
+        expect(() => containers.transcoder!.get("pool-0")).toThrow(/"pool-" prefix is reserved/u);
+
+        await containers.transcoder!.get("pools-of-light").fetch("/probe");
+        await containers.transcoder!.any().fetch("/probe");
+        await containers.transcoder!.pool().fetch("/probe");
+
+        expect(names).toStrictEqual(["pools-of-light", "pool-0", "pool-0"]);
 
         vi.restoreAllMocks();
     });
@@ -107,6 +194,43 @@ describe(createContainerContext, () => {
         ]);
 
         expect(() => containers.transcoder!.get("a")).toThrow('no "CONTAINER_TRANSCODER" Durable Object binding found');
+    });
+
+    it("routes through a jurisdiction-pinned subnamespace when configured", async () => {
+        expect.assertions(2);
+
+        const inner = fakeNamespace();
+        const jurisdictionCalls: string[] = [];
+        const namespace: ContainerNamespaceLike = {
+            get: () => {
+                throw new Error("should resolve via the jurisdiction subnamespace, not the root namespace");
+            },
+            idFromName: () => {
+                throw new Error("should resolve via the jurisdiction subnamespace, not the root namespace");
+            },
+            jurisdiction: (j) => {
+                jurisdictionCalls.push(j);
+
+                return inner.namespace;
+            },
+        };
+
+        const containers = createContainerContext({ CONTAINER_TRANSCODER: namespace }, [{ binding: "CONTAINER_TRANSCODER", exportName: "transcoder" }], "us");
+
+        await containers.transcoder!.get("video-42").fetch("/transcode", { method: "POST" });
+
+        expect(jurisdictionCalls).toStrictEqual(["us"]);
+        expect(inner.names).toStrictEqual(["video-42"]);
+    });
+
+    it("fails closed when the binding lacks jurisdiction support", () => {
+        expect.assertions(1);
+
+        const { namespace } = fakeNamespace();
+
+        expect(() =>
+            createContainerContext({ CONTAINER_TRANSCODER: namespace }, [{ binding: "CONTAINER_TRANSCODER", exportName: "transcoder" }], "eu"),
+        ).toThrow(JURISDICTION_UNSUPPORTED);
     });
 });
 
@@ -176,6 +300,93 @@ describe("ctx.containers.<name>.get() lifecycle controls", () => {
         ]).transcoder!.get("a");
 
         await expect(handle.stop()).rejects.toThrow("does not expose stop()");
+    });
+
+    it("forwards renewActivityTimeout and the egress controls to the DO with the right args", async () => {
+        expect.assertions(2);
+
+        const calls: { arg: unknown; method: string }[] = [];
+        const recordVoid =
+            (method: string) =>
+            async (arg?: unknown): Promise<void> => {
+                calls.push({ arg, method });
+            };
+        const egressNamespace: ContainerNamespaceLike = {
+            get: () => {
+                return {
+                    allowHost: recordVoid("allowHost"),
+                    denyHost: recordVoid("denyHost"),
+                    fetch: async () => new Response("ok"),
+                    removeAllowedHost: recordVoid("removeAllowedHost"),
+                    removeDeniedHost: recordVoid("removeDeniedHost"),
+                    renewActivityTimeout: recordVoid("renewActivityTimeout"),
+                    setAllowedHosts: recordVoid("setAllowedHosts"),
+                    setDeniedHosts: recordVoid("setDeniedHosts"),
+                };
+            },
+            idFromName: (name) => name,
+        };
+
+        const handle = createContainerContext({ CONTAINER_TRANSCODER: egressNamespace }, [
+            { binding: "CONTAINER_TRANSCODER", exportName: "transcoder" },
+        ]).transcoder!.get("video-1");
+
+        await handle.renewActivityTimeout();
+        await handle.egress.allow("api.stripe.com");
+        await handle.egress.deny("evil.com");
+        await handle.egress.setAllowed(["a.com", "b.com"]);
+        await handle.egress.setDenied(["c.com"]);
+        await handle.egress.removeAllowed("a.com");
+        await handle.egress.removeDenied("c.com");
+
+        expect(calls.map((call) => call.method)).toStrictEqual([
+            "renewActivityTimeout",
+            "allowHost",
+            "denyHost",
+            "setAllowedHosts",
+            "setDeniedHosts",
+            "removeAllowedHost",
+            "removeDeniedHost",
+        ]);
+        // ReadonlyArray args are copied to a fresh mutable array before the RPC.
+        expect(calls.find((call) => call.method === "setAllowedHosts")!.arg).toStrictEqual(["a.com", "b.com"]);
+    });
+
+    it("forwards snapshot() to the DO's lunoraSnapshot RPC and returns its handle", async () => {
+        expect.assertions(2);
+
+        const lunoraSnapshot = vi.fn<(options?: { name?: string }) => Promise<{ id: string; name?: string; size: number }>>(async (options) => {
+            return { id: "snap-1", name: options?.name, size: 9 };
+        });
+        const namespace: ContainerNamespaceLike = {
+            get: () => {
+                return { fetch: async () => new Response("ok"), lunoraSnapshot };
+            },
+            idFromName: (name) => name,
+        };
+        const handle = createContainerContext({ CONTAINER_SANDBOX: namespace }, [{ binding: "CONTAINER_SANDBOX", exportName: "sandbox" }]).sandbox!.get("s1");
+
+        await expect(handle.snapshot({ name: "v1" })).resolves.toStrictEqual({ id: "snap-1", name: "v1", size: 9 });
+        expect(lunoraSnapshot).toHaveBeenCalledWith({ name: "v1" });
+    });
+
+    it("routes .port(n) requests with the cf-container-target-port header across get/any/pool", async () => {
+        expect.assertions(4);
+
+        const { namespace, requests } = fakeNamespace();
+        const containers = createContainerContext({ CONTAINER_TRANSCODER: namespace }, [
+            { binding: "CONTAINER_TRANSCODER", exportName: "transcoder", maxInstances: 3 },
+        ]);
+
+        await containers.transcoder!.get("video-1").port(9090).fetch("/admin");
+        await containers.transcoder!.any().port(7000).fetch("/admin");
+        await containers.transcoder!.pool().port(6000).fetch("/admin");
+        await containers.transcoder!.get("video-1").fetch("/no-port");
+
+        expect(requests[0]!.headers.get("cf-container-target-port")).toBe("9090");
+        expect(requests[1]!.headers.get("cf-container-target-port")).toBe("7000");
+        expect(requests[2]!.headers.get("cf-container-target-port")).toBe("6000");
+        expect(requests[3]!.headers.get("cf-container-target-port")).toBeNull();
     });
 });
 
@@ -319,6 +530,25 @@ describe("ctx.containers.<name>.pool()", () => {
         }
     });
 
+    it("sends a pre-built body-carrying Request exactly once instead of re-building it on retry", async () => {
+        expect.assertions(2);
+
+        // A Request with a body can be consumed only once; re-building it for a
+        // retry would throw "Body has already been used". The pool must clamp to
+        // a single attempt for non-string input (mirroring the cold-start path),
+        // so a 503 is returned as-is rather than masked by that TypeError.
+        const scripted = scriptedNamespace([serverError, ok]);
+        const containers = createContainerContext({ CONTAINER_TRANSCODER: scripted.namespace }, [
+            { binding: "CONTAINER_TRANSCODER", exportName: "transcoder" },
+        ]);
+
+        const request = new Request("https://container/upload", { body: "payload", method: "POST" });
+        const response = await containers.transcoder!.pool({ attempts: 3, backoffMs: 0 }).fetch(request);
+
+        expect(response.status).toBe(503);
+        expect(scripted.calls).toBe(1);
+    });
+
     it("honors a custom retryOn predicate", async () => {
         expect.assertions(2);
 
@@ -328,6 +558,148 @@ describe("ctx.containers.<name>.pool()", () => {
         ]);
 
         const response = await containers.transcoder!.pool({ attempts: 2, backoffMs: 0, retryOn: (r) => r.status === 429 }).fetch("/probe");
+
+        await expect(response.text()).resolves.toBe("ok");
+        expect(scripted.calls).toBe(2);
+    });
+});
+
+/** A namespace that records targeted instance names and plays scripted steps, for the cold-start retry. */
+const coldStartNamespace = (steps: ReadonlyArray<() => Promise<Response>>): { calls: number; names: string[]; namespace: ContainerNamespaceLike } => {
+    const state = { calls: 0 };
+    const names: string[] = [];
+
+    return {
+        get calls() {
+            return state.calls;
+        },
+        names,
+        namespace: {
+            get: () => {
+                return {
+                    fetch: async () => {
+                        const step = steps[Math.min(state.calls, steps.length - 1)]!;
+
+                        state.calls += 1;
+
+                        return step();
+                    },
+                };
+            },
+            idFromName: (name: string) => {
+                names.push(name);
+
+                return name;
+            },
+        },
+    };
+};
+
+describe("ctx.containers.<name>.get()/.any() cold-start retry", () => {
+    const ok = async (): Promise<Response> => new Response("ok");
+    // The exact transients `@cloudflare/containers` surfaces while an instance provisions.
+    const noInstance = async (): Promise<Response> =>
+        new Response("There is no Container instance available at this time.\nThis is likely because…", { status: 503 });
+    const startFailure = async (): Promise<Response> => new Response("Failed to start container: boom", { status: 500 });
+    const rateLimited = async (): Promise<Response> => new Response("rate limited", { status: 429 });
+    const notListening = (): Promise<Response> => Promise.reject(new Error("the container is not listening"));
+    const appError = async (): Promise<Response> => new Response("app exploded", { status: 503 });
+
+    const transcoder = { binding: "CONTAINER_TRANSCODER", exportName: "transcoder" };
+
+    it("retries the no-instance 503 on the same instance until it provisions", async () => {
+        expect.assertions(3);
+
+        const scripted = coldStartNamespace([noInstance, noInstance, ok]);
+        const containers = createContainerContext({ CONTAINER_TRANSCODER: scripted.namespace }, [transcoder]);
+
+        const response = await containers.transcoder!.get("video-1", { backoffMs: 0 }).fetch("/transcode");
+
+        await expect(response.text()).resolves.toBe("ok");
+        expect(scripted.calls).toBe(3);
+        // The same named instance is re-targeted every attempt (it's the one provisioning).
+        expect(new Set(scripted.names)).toStrictEqual(new Set(["video-1"]));
+    });
+
+    it("retries a thrown 'not listening' cold-start error and recovers", async () => {
+        expect.assertions(2);
+
+        const scripted = coldStartNamespace([notListening, ok]);
+        const containers = createContainerContext({ CONTAINER_TRANSCODER: scripted.namespace }, [transcoder]);
+
+        const response = await containers.transcoder!.get("video-1", { backoffMs: 0 }).fetch("/transcode");
+
+        await expect(response.text()).resolves.toBe("ok");
+        expect(scripted.calls).toBe(2);
+    });
+
+    it("retries the start-failure 500 and the rate-limited 429", async () => {
+        expect.assertions(2);
+
+        const scripted = coldStartNamespace([startFailure, rateLimited, ok]);
+        const containers = createContainerContext({ CONTAINER_TRANSCODER: scripted.namespace }, [transcoder]);
+
+        const response = await containers.transcoder!.get("video-1", { attempts: 3, backoffMs: 0 }).fetch("/transcode");
+
+        await expect(response.text()).resolves.toBe("ok");
+        expect(scripted.calls).toBe(3);
+    });
+
+    it("does NOT retry a plain app 5xx without the cold-start sentinel", async () => {
+        expect.assertions(2);
+
+        const scripted = coldStartNamespace([appError, ok]);
+        const containers = createContainerContext({ CONTAINER_TRANSCODER: scripted.namespace }, [transcoder]);
+
+        const response = await containers.transcoder!.get("video-1", { backoffMs: 0 }).fetch("/transcode");
+
+        expect(response.status).toBe(503);
+        expect(scripted.calls).toBe(1);
+    });
+
+    it("returns the last transient response when attempts are exhausted", async () => {
+        expect.assertions(2);
+
+        const scripted = coldStartNamespace([noInstance]);
+        const containers = createContainerContext({ CONTAINER_TRANSCODER: scripted.namespace }, [transcoder]);
+
+        const response = await containers.transcoder!.get("video-1", { attempts: 2, backoffMs: 0 }).fetch("/transcode");
+
+        expect(response.status).toBe(503);
+        expect(scripted.calls).toBe(2);
+    });
+
+    it("disables the retry with attempts: 1", async () => {
+        expect.assertions(2);
+
+        const scripted = coldStartNamespace([noInstance, ok]);
+        const containers = createContainerContext({ CONTAINER_TRANSCODER: scripted.namespace }, [transcoder]);
+
+        const response = await containers.transcoder!.get("video-1", { attempts: 1, backoffMs: 0 }).fetch("/transcode");
+
+        expect(response.status).toBe(503);
+        expect(scripted.calls).toBe(1);
+    });
+
+    it("sends a pre-built Request exactly once (a one-shot body is not replayable)", async () => {
+        expect.assertions(2);
+
+        const scripted = coldStartNamespace([noInstance, ok]);
+        const containers = createContainerContext({ CONTAINER_TRANSCODER: scripted.namespace }, [transcoder]);
+
+        const response = await containers.transcoder!.get("video-1", { backoffMs: 0 }).fetch(new Request("https://container/transcode", { method: "POST" }));
+
+        expect(response.status).toBe(503);
+        expect(scripted.calls).toBe(1);
+    });
+
+    it("applies the cold-start retry to .any() too", async () => {
+        expect.assertions(2);
+
+        const scripted = coldStartNamespace([noInstance, ok]);
+        const containers = createContainerContext({ CONTAINER_TRANSCODER: scripted.namespace }, [transcoder]);
+
+        const response = await containers.transcoder!.any(3, { backoffMs: 0 }).fetch("/probe");
 
         await expect(response.text()).resolves.toBe("ok");
         expect(scripted.calls).toBe(2);
@@ -348,8 +720,57 @@ describe(createContainerTestContext, () => {
         await expect(response.text()).resolves.toBe("video-1:/transcode");
         expect(handler).toHaveBeenCalledTimes(1);
 
-        const pooled = await containers.transcoder!.any().fetch("/probe");
+        const pooled = await containers.transcoder!.get("worker-0").fetch("/probe");
 
-        await expect(pooled.text()).resolves.toBe("pool-0:/probe");
+        await expect(pooled.text()).resolves.toBe("worker-0:/probe");
+    });
+
+    it(".any() spreads across the pool exactly as the real accessor does", async () => {
+        expect.assertions(1);
+
+        // The double used to pin `.any()` to `pool-0`, which is MORE permissive
+        // than production: a stateful multi-step test (write a file, then read
+        // it back) passed here and failed live, where each `.any()` re-picks a
+        // random instance with its own disk.
+        const seen = new Set<string>();
+        const containers = createContainerTestContext({
+            transcoder: (_request, instance) => new Response(instance.name),
+        });
+
+        for (let call = 0; call < 40; call += 1) {
+            // eslint-disable-next-line no-await-in-loop -- sampling the pick distribution is inherently sequential
+            const response = await containers.transcoder!.any(3).fetch("/probe");
+
+            // eslint-disable-next-line no-await-in-loop -- same
+            seen.add(await response.text());
+        }
+
+        expect(seen.size).toBeGreaterThan(1);
+    });
+
+    it("re-picks the instance inside each request on a pooled handle, as production does", async () => {
+        expect.assertions(1);
+
+        // `.any()` and `.pool()` do NOT pick the same way, and the difference is
+        // exactly what this covers: `.any()` fixes one instance for the life of
+        // the handle, while production's `.pool()` picks inside every request.
+        // Reusing ONE handle is what separates them — the `.any()` test above
+        // takes a fresh handle per call, so it passes against a double that
+        // pins per handle, which is what this one did.
+        const seen = new Set<string>();
+        const containers = createContainerTestContext({
+            transcoder: (_request, instance) => new Response(instance.name),
+        });
+        const handle = containers.transcoder!.pool({ size: 3 });
+
+        for (let call = 0; call < 40; call += 1) {
+            // eslint-disable-next-line no-await-in-loop -- sampling the pick distribution is inherently sequential
+            const response = await handle.fetch("/probe");
+
+            // eslint-disable-next-line no-await-in-loop -- same
+            seen.add(await response.text());
+        }
+
+        expect(seen.size).toBeGreaterThan(1);
     });
 });

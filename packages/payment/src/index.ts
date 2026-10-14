@@ -1,16 +1,16 @@
 export type { AdapterRegistry, PaymentAdapter, WebhookHeaders, WebhookInput } from "./adapter";
 export { createAdapterRegistry } from "./adapter";
-export type { LunoraDatabaseLike, PaymentContextLike, PaymentsFromContextOptions } from "./context";
+export type { AuthorizeContextReference, LunoraDatabaseLike, PaymentContextLike, PaymentsFromContextOptions } from "./context";
 export { lunoraDatabaseToPaymentDatabase, paymentsFromContext } from "./context";
-export type { AuthorizeReference, CreatePaymentOptions, LunoraPayment } from "./create-payment";
-export { createPayment } from "./create-payment";
-export type { PaymentDatabase, PaymentRow } from "./database-store";
+export type { AuthorizeReference, CreatePaymentOptions, LunoraPayment, WebhookOutcome } from "./create-payment";
+export { createPayment, webhookResponse } from "./create-payment";
+export type { PaymentDatabase, PaymentPage, PaymentPageArgs, PaymentRow } from "./database-store";
 export { createDatabasePaymentStore } from "./database-store";
 export type { Entitlements, EntitlementsConfig, PlanDefinition } from "./entitlements";
 export { entitlementsForReference, featureNames, hasActivePrice, resolveEntitlements, usagePeriodStart } from "./entitlements";
 export type { PaymentErrorCode } from "./errors";
 export { LunoraPaymentError } from "./errors";
-export { default as idempotencyKey } from "./idempotency";
+export { idempotencyKey } from "./idempotency";
 export type { MoneyJSON } from "./money";
 export {
     addMoney,
@@ -21,18 +21,18 @@ export {
     isZeroDecimalCurrency,
     isZeroMoney,
     money,
+    moneyFromMinor,
     subtractMoney,
     toMoneyJSON,
     zeroMoney,
 } from "./money";
 export type { PaymentEvent, PaymentObserver } from "./observability";
-export type { PolarAdapterOptions, PolarClientLike } from "./providers/polar";
-export { createPolarAdapter } from "./providers/polar";
-export type { StripeAdapterOptions, StripeClientLike } from "./providers/stripe";
-export { createStripeAdapter } from "./providers/stripe";
+// Provider adapters ship as per-provider subpaths (`@lunora/payment/stripe`, `/polar`, `/autumn`,
+// `/dodopayments`, `/creem`) so each provider's SDK stays an isolated optional peer dependency —
+// importing one adapter never loads the others (or their SDKs). They are NOT re-exported here.
 export type { ReconcileInput, ReconcileResult } from "./reconcile";
 export { reconcile } from "./reconcile";
-export { default as paymentTables } from "./schema";
+export { default as paymentExtension } from "./schema";
 export type { PaymentAction, SubscriptionAction } from "./state-machine";
 export {
     canTransitionPayment,
@@ -66,6 +66,7 @@ export type {
     ProviderId,
     RefundAmountKind,
     RefundInput,
+    RefundResult,
     ReportUsageInput,
     Subscription,
     SubscriptionPatch,
@@ -76,4 +77,10 @@ export type {
     WebhookAction,
     WebhookActionType,
 } from "./types";
-export { constantTimeEqual, hmacSha256Hex, parseStripeSignatureHeader, verifyStandardWebhook, verifyStripeSignature } from "./webhook";
+// The two input interfaces are exported alongside their verifiers so a caller can
+// name the shape it has to construct — and so the api-snapshot tracks that shape.
+// Without them the verifiers' signatures render as `(input: VerifyStandardWebhookInput)`
+// with nothing pinning the interface, so a field added or retyped inside it would
+// pass the gate silently on the webhook signature-verification path.
+export type { VerifyCreemSignatureInput, VerifyStandardWebhookInput } from "./webhook";
+export { constantTimeEqual, hmacSha256Hex, verifyCreemSignature, verifyStandardWebhook } from "./webhook";

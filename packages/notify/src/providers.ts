@@ -1,0 +1,796 @@
+import { isLunoraError, LunoraError } from "@lunora/errors";
+import type { Middleware, Notification, NotificationProviders, NotificationResult, Provider, PushPayload, Result, SendContext } from "@visulima/notification";
+import { createNotification } from "@visulima/notification";
+import { retryMiddleware } from "@visulima/notification/middleware";
+import type { FcmConfig } from "@visulima/notification/providers/fcm";
+import { createFcmProvider } from "@visulima/notification/providers/fcm";
+import type { WebPushConfig } from "@visulima/notification/providers/web-push";
+import { createWebPushProvider } from "@visulima/notification/providers/web-push";
+
+import { evictOldestEntry } from "../../../shared/evict-oldest";
+import type { SsrfResolution } from "../../../shared/ssrf-resolve";
+import { resolveHostSsrf } from "../../../shared/ssrf-resolve";
+import { isGoneError } from "./subscriptions/normalize";
+
+/**
+ * The web-push `endpoint` of a routed target, or `undefined` when the target is
+ * an opaque FCM registration token instead.
+ *
+ * This is BOTH the routing predicate and the endpoint accessor, deliberately: the
+ * two used to be separate functions that each JSON-parsed the target and each
+ * encoded its own idea of "what a web-push target looks like" — and they had
+ * already drifted (one demanded `keys` for the string form but not the object
+ * form). One parse, one shape, one place to change it.
+ */
+const webPushEndpoint = (target: unknown): string | undefined => {
+    let parsed: unknown = target;
+
+    if (typeof target === "string") {
+        // An FCM token is an opaque string, never JSON — skip the parse entirely.
+        if (!target.startsWith("{")) {
+            return undefined;
+        }
+
+        try {
+            parsed = JSON.parse(target);
+        } catch {
+            return undefined;
+        }
+    }
+
+    const endpoint = (parsed as { endpoint?: unknown } | null | undefined)?.endpoint;
+
+    return typeof endpoint === "string" ? endpoint : undefined;
+};
+
+/**
+ * Which transport a routed push target belongs to. The endpoint IS the decision —
+ * the same one {@link routingPushProvider} partitions `to` on.
+ */
+type PushTransport = "fcm" | "web-push";
+
+/** @see PushTransport */
+const pushTransportOf = (target: unknown): PushTransport => (webPushEndpoint(target) === undefined ? "fcm" : "web-push");
+
+/**
+ * The router's provider id. The engine reports it to the middleware chain as
+ * `SendContext.provider` for EVERY push send, whichever transport ends up
+ * handling it — which is why {@link breakerKeys} exists.
+ */
+const PUSH_ROUTER_ID = "lunora-push-router";
+
+/**
+ * Per-isolate memo of the send-time rebinding verdict, keyed by hostname. A
+ * `broadcast` fans out to every device, and real deployments share a handful of
+ * push-service origins across all of them — one DoH round-trip per host per
+ * isolate instead of one per device.
+ *
+ * Only a CONCLUSIVE verdict (`public` / `private`) is stored. A failed or
+ * address-less lookup refuses the send but is deliberately not cached: memoizing
+ * it would let one transient resolver blip block that host for the isolate's
+ * life.
+ *
+ * Bounded via the shared FIFO evictor — the key is a registration-time,
+ * caller-influenced hostname, so an unbounded map would grow with distinct
+ * attacker-supplied hosts.
+ *
+ * ponytail: no TTL. An isolate lives minutes, so a host that rebinds mid-isolate
+ * keeps a stale verdict for that long; add an expiry if isolates ever get long
+ * enough for that to matter.
+ */
+const rebindVerdicts = new Map<string, Promise<SsrfResolution>>();
+
+/** How many distinct push-service hosts one isolate remembers a verdict for. */
+const REBIND_VERDICT_CAPACITY = 256;
+
+/**
+ * Send-time SSRF re-check for a stored web-push endpoint — the second half of the
+ * boundary `assertPushEndpoint` opens at register time.
+ *
+ * Register-time validation is a STRING classifier: a public hostname that resolves
+ * to a private/internal IP passes it, and even a host that resolved public then can
+ * be re-pointed afterwards. Since every send `fetch`-POSTs the caller-supplied
+ * endpoint (and `broadcast` does it once per device), the resolved address has to be
+ * re-checked here, where the request actually goes out.
+ *
+ * Skipped when `allowedPushOrigins` is configured: that exact-origin allowlist is
+ * the stronger guard and may legitimately name an internal push service.
+ */
+const assertPushTargetResolvable = async (endpoint: string, allowedPushOrigins?: string[]): Promise<void> => {
+    if (allowedPushOrigins !== undefined && allowedPushOrigins.length > 0) {
+        return;
+    }
+
+    let hostname: string;
+
+    try {
+        ({ hostname } = new URL(endpoint));
+    } catch {
+        return;
+    }
+
+    const cached = rebindVerdicts.get(hostname);
+    const pending = cached ?? resolveHostSsrf(hostname);
+    const resolution = await pending;
+
+    // Cache only a settled verdict (see the memo's docblock): a SERVFAIL can be transient.
+    if (cached === undefined && (resolution.kind === "private" || resolution.kind === "public")) {
+        evictOldestEntry(rebindVerdicts, REBIND_VERDICT_CAPACITY);
+        rebindVerdicts.set(hostname, pending);
+    }
+
+    if (resolution.kind === "private") {
+        throw new LunoraError(
+            "FORBIDDEN",
+            `@lunora/notify: web-push endpoint host "${hostname}" resolves to a private/internal address (${resolution.address}); refusing to send (DNS-rebinding guard)`,
+        );
+    }
+
+    if (resolution.kind === "unresolved") {
+        throw new LunoraError(
+            "FORBIDDEN",
+            `@lunora/notify: web-push endpoint host "${hostname}" did not resolve to any address; refusing to send (DNS-rebinding guard)`,
+        );
+    }
+
+    // Fail closed: a stalled or blocked lookup is something the endpoint's own
+    // nameserver can cause, so it must not wave the send through. The verdict is
+    // not cached, so the next send after an outage re-checks.
+    if (resolution.kind === "failed") {
+        throw new LunoraError(
+            "FORBIDDEN",
+            `@lunora/notify: could not verify where web-push endpoint host "${hostname}" resolves (the DNS-over-HTTPS lookup failed); refusing to send (DNS-rebinding guard)`,
+        );
+    }
+};
+
+/**
+ * Fold two successful group sends into one `NotificationResult`.
+ *
+ * A mixed-kind push is two provider calls, but the caller gets one receipt — so
+ * every field that identifies a delivery has to carry BOTH halves or the receipt
+ * silently describes half the send. `messageId`/`provider` join, `response`
+ * keeps both bodies, `sent` is the conjunction, and `timestamp` is the later of
+ * the two (the moment the whole send finished).
+ */
+const mergeSendResults = (first: NotificationResult, second: NotificationResult): NotificationResult => {
+    const providers = [first.provider, second.provider].filter((provider) => provider !== undefined);
+    const recipients = [...(first.recipients ?? []), ...(second.recipients ?? [])];
+
+    return {
+        ...first,
+        messageId: [first.messageId, second.messageId].join(","),
+        response: [first.response, second.response],
+        sent: first.sent && second.sent,
+        timestamp: new Date(Math.max(first.timestamp.getTime(), second.timestamp.getTime())),
+        ...(providers.length > 0 ? { provider: providers.join(",") } : {}),
+        ...(recipients.length > 0 ? { recipients } : {}),
+    };
+};
+
+/**
+ * The failure text of a middleware `Result`, or `undefined` when there is none to
+ * read. Providers answer with an `Error` (the engine wraps a provider's own
+ * failure in a `NotificationError` whose message carries the provider text
+ * verbatim); a bare string is accepted for the same reason `Result.error` is typed
+ * `unknown`.
+ */
+const failureText = (error: unknown): string | undefined => {
+    if (error instanceof Error) {
+        return error.message;
+    }
+
+    return typeof error === "string" ? error : undefined;
+};
+
+/**
+ * The `code` of the error a mixed-kind push answers with when one transport
+ * group delivered and the other did not. Uncatalogued on purpose: it never
+ * reaches the wire — it lands in the `Result` the engine turns into a receipt.
+ */
+const PARTIAL_DELIVERY_CODE = "PUSH_PARTIALLY_DELIVERED";
+
+/**
+ * Whether a failure is the "one group delivered, the other did not" verdict
+ * {@link mergeGroupResults} returns — the one failure that must NOT be retried
+ * by the engine's middleware, because that retry re-sends the whole payload and
+ * the delivered group would get the notification again on every attempt.
+ *
+ * Still true now that the router retries the failed group itself: the two are
+ * the same rule from opposite ends. The router retries the group because it
+ * still holds that group's narrowed payload; the middleware must not, because it
+ * only has the whole one. A partial that reaches here has already spent its
+ * group's retry budget (see {@link GROUP_RETRIES}), so re-running the provider
+ * would buy a duplicate and nothing else.
+ */
+const isPartialDelivery = (error: unknown): boolean => isLunoraError(error) && error.code === PARTIAL_DELIVERY_CODE;
+
+/**
+ * The transport whose group failed in a partial delivery, or `undefined` when the
+ * failure is not one.
+ *
+ * {@link mergeGroupResults} records it on the error's `data` as well as in its
+ * prose because {@link perTransportCircuitBreaker} has to charge the failure to the
+ * transport that produced it, and the prose is a message, not a contract.
+ */
+const partialFailedTransport = (error: unknown): PushTransport | undefined => {
+    if (!isPartialDelivery(error)) {
+        return undefined;
+    }
+
+    const { data } = error as LunoraError;
+
+    return data === "fcm" || data === "web-push" ? data : undefined;
+};
+
+/**
+ * Fold the two group outcomes of a mixed-kind push into the single `Result` the
+ * caller gets back.
+ *
+ * Nothing may be dropped in the fold: two successes merge their delivery data
+ * (or the receipt names only half the send), two failures keep both causes, and
+ * a mixed outcome reports the failure — a partially delivered send is never
+ * reported as a success.
+ *
+ * A mixed outcome reports it as a PARTIAL failure, distinct from the
+ * both-groups-failed one, because retrying the two is not the same operation.
+ * The router is one provider to the engine, so the retry middleware re-runs
+ * `send` with the whole payload: retrying a partial there re-POSTs the group
+ * that already delivered, three extra notifications per device for a failure
+ * that was never theirs. Two failures carry no delivery to duplicate and stay
+ * retryable by the middleware.
+ *
+ * The failed group is NOT left to the caller, though: by the time a partial is
+ * folded here the router has already re-attempted that group on its own, where
+ * the narrowed payload still exists and the delivered group is out of reach (see
+ * {@link GROUP_RETRIES}). A partial therefore means "and it still failed".
+ *
+ * What is left for the caller is the shape `runRetryIds` already keeps one layer
+ * up: a run that delivered to SOME recipients resolves and names the ones still
+ * outstanding, so the caller re-sends the strictly narrower set instead of the
+ * whole message. Targets are deliberately not named in the message — a web-push
+ * target is the stringified subscription, keys included, and this text is logged.
+ */
+const mergeGroupResults = (webPush: Result<NotificationResult>, fcm: Result<NotificationResult>): Result<NotificationResult> => {
+    if (!webPush.success || !fcm.success) {
+        if (webPush.success || fcm.success) {
+            const [delivered, failed] = webPush.success ? (["web-push", "fcm"] as const) : (["fcm", "web-push"] as const);
+            const cause = webPush.success ? fcm.error : webPush.error;
+
+            return {
+                error: new LunoraError(
+                    PARTIAL_DELIVERY_CODE,
+                    `@lunora/notify: push partially delivered — the ${delivered} group was accepted, the ${failed} group failed and re-attempting it did not recover it (${failureText(cause) ?? "unknown error"}). The whole send is not retried: that would re-send to the ${delivered} targets that already received it. Re-send to the ${failed} targets only.`,
+                    // `data` carries the failed transport verbatim for the breaker
+                    // — see `partialFailedTransport`. It never reaches the wire.
+                    { cause, data: failed },
+                ),
+                success: false,
+            };
+        }
+
+        return { error: new AggregateError([webPush.error, fcm.error], "@lunora/notify: both push target groups failed"), success: false };
+    }
+
+    const data = webPush.data === undefined || fcm.data === undefined ? (webPush.data ?? fcm.data) : mergeSendResults(webPush.data, fcm.data);
+
+    return data === undefined ? { success: true } : { data, success: true };
+};
+
+/**
+ * Whether a failed send can never succeed for this recipient — the device
+ * unsubscribed or its token was revoked. The facade is about to DELETE the
+ * subscription for exactly this signal (see `isGoneError`), so it is the one
+ * failure class that is provably not worth a second attempt.
+ *
+ * Deliberately kind-less: a middleware sees a provider id, not the stored
+ * subscription, so the FCM-specific patterns are tested against a web-push failure
+ * too. That is safe HERE and not at the prune site: a false positive costs a retry
+ * that would probably have failed anyway, where at the prune site it would delete a
+ * live subscription. `deliver` still decides pruning with the row's real `kind`.
+ *
+ * Kind-less also means CHANNEL-less. {@link attachResilience} registers one
+ * retry middleware on the engine, so this predicate now decides retry for
+ * `chat`, `webhook` and `inApp` as well as for push, and it can only read the
+ * failure text. What it matches there is `HTTP 404`/`410`, an FCM
+ * `UNREGISTERED`-family code, or prose calling a *subscription* gone — an
+ * endpoint that is not there, on any channel, which a 250 ms backoff does not
+ * bring back. The cost of a false positive stays one skipped retry, never a
+ * dropped row; the cost of the alternative was every dead device spending four
+ * POSTs and ~2.2 s before the very next line deleted it.
+ */
+const isPermanentFailure = (error: unknown): boolean => isGoneError(failureText(error));
+
+/** Consecutive non-permanent failures on one transport before its circuit opens. */
+const CIRCUIT_THRESHOLD = 5;
+
+/** How long a transport's circuit stays open before a single trial send. */
+const CIRCUIT_RESET_MS = 30_000;
+
+/**
+ * The circuit keys a send counts against — one per transport it actually needs.
+ *
+ * For every provider but the push router that is the provider id, which is what a
+ * breaker is for: one key per service that can be down. The router is the
+ * exception because it is ONE provider hiding TWO: the engine reports
+ * `provider: "lunora-push-router"` to the middleware chain whether the targets are
+ * browser subscriptions or FCM tokens, so a single key charges an FCM outage to
+ * web push. Five failing FCM sends then shed every browser subscriber — the
+ * transport that had not failed once.
+ *
+ * The split is derived from `to` rather than from the result, because it has to be
+ * known BEFORE the send to decide whether to shed it, and `to` is the same input
+ * the router itself partitions on. A send naming no transport (an empty `to`,
+ * which the router rejects on its own terms) keeps the provider key so the refusal
+ * it gets is the router's, not a circuit it was never measured against.
+ */
+const breakerKeys = (context: SendContext): string[] => {
+    if (context.provider !== PUSH_ROUTER_ID) {
+        return [context.provider];
+    }
+
+    const { to } = context.payload as PushPayload;
+    const targets = Array.isArray(to) ? to : [to];
+    const transports = new Set(targets.map((target) => pushTransportOf(target)));
+
+    return transports.size === 0 ? [context.provider] : [...transports].map((transport) => `${context.provider}:${transport}`);
+};
+
+/** One circuit's consecutive-failure count and the moment it last opened. */
+interface CircuitState {
+    failures: number;
+    openedAt: number;
+}
+
+/** Whether `state`'s circuit is open and still inside its reset window at `now`. */
+const isCircuitOpen = (state: CircuitState, now: number): boolean => state.failures >= CIRCUIT_THRESHOLD && now - state.openedAt < CIRCUIT_RESET_MS;
+
+/**
+ * Apply one failed send's evidence to the circuits it is actually about.
+ *
+ * A partial names the transport whose group failed (see
+ * {@link partialFailedTransport}): charge that one, and CLEAR the other — it just
+ * delivered, which is the same evidence about ITS health that an outright success
+ * is. Charging both is how an FCM outage used to shed web push. Any other failure
+ * is charged to every transport the send needed, since nothing distinguishes them.
+ */
+const chargeFailure = (error: unknown, keys: ReadonlyArray<string>, entries: ReadonlyArray<CircuitState>): void => {
+    const failed = partialFailedTransport(error);
+    const failedKey = failed === undefined ? undefined : `${PUSH_ROUTER_ID}:${failed}`;
+    const attributable = failedKey !== undefined && keys.includes(failedKey);
+
+    for (const [index, state] of entries.entries()) {
+        if (attributable && keys[index] !== failedKey) {
+            state.failures = 0;
+        } else {
+            state.failures += 1;
+
+            if (state.failures >= CIRCUIT_THRESHOLD) {
+                state.openedAt = Date.now();
+            }
+        }
+    }
+};
+
+/**
+ * A circuit breaker keyed PER TRANSPORT that does not count a permanently-gone
+ * recipient as evidence the service is down.
+ *
+ * Both halves replace real behaviour of the engine's own `circuitBreakerMiddleware`,
+ * which cannot express either: its counter is closure state of the single instance
+ * registered on the engine, shared by every channel, and it counts any `!success`.
+ * So two dead devices in a row (whose 4th and 5th attempts are consecutive
+ * failures) opened ONE breaker and every `chat`/`webhook`/`inApp` send in that
+ * isolate answered `Circuit open` for the next 30 seconds — and the second dead
+ * device's own result became `Circuit open` too, which is not a gone signal, so it
+ * was never pruned and came back on the next broadcast to do it again. A retry job
+ * over known-failing ids reproduced it every redelivery.
+ *
+ * A breaker is for a service that is DOWN. An unsubscribed browser is not that,
+ * and neither is the sibling transport of one that is.
+ */
+const perTransportCircuitBreaker = (): Middleware => {
+    const states = new Map<string, CircuitState>();
+
+    const stateOf = (key: string): CircuitState => {
+        const existing = states.get(key);
+
+        if (existing !== undefined) {
+            return existing;
+        }
+
+        const fresh: CircuitState = { failures: 0, openedAt: 0 };
+
+        states.set(key, fresh);
+
+        return fresh;
+    };
+
+    return async (context, next) => {
+        const keys = breakerKeys(context);
+        const entries = keys.map((key) => stateOf(key));
+        const now = Date.now();
+
+        // Shed only when EVERY transport this send needs is open. A mixed send
+        // with one healthy transport still has a delivery to make, and refusing
+        // it is exactly what a router-wide key got wrong; the open transport's
+        // leg fails fast at the provider and the fold reports the partial.
+        if (entries.every((state) => isCircuitOpen(state, now))) {
+            return {
+                error: new LunoraError(
+                    "SERVICE_UNAVAILABLE",
+                    `@lunora/notify: circuit open for "${keys.join('", "')}" after ${CIRCUIT_THRESHOLD.toString()} consecutive failures`,
+                ),
+                success: false,
+            };
+        }
+
+        // Half-open: drop back under the threshold so the next send is
+        // tried. It either clears the counter or puts it straight back over.
+        // Not "exactly one": the counter only rises again once a trial
+        // SETTLES, so sends that start while one is in flight pass too — a
+        // broadcast's concurrent batch probes a recovering provider with as
+        // many sends as it has in flight. Bounded and self-correcting (the
+        // first failure to land re-opens), and a shared in-flight gate would
+        // serialise every send through this middleware to get it.
+        //
+        // Applied to every over-threshold circuit this send touches, the still-open
+        // one included: the send is going out either way, so that circuit IS being
+        // probed and pretending otherwise would only hide the trial's verdict.
+        for (const state of entries) {
+            if (state.failures >= CIRCUIT_THRESHOLD) {
+                state.failures = CIRCUIT_THRESHOLD - 1;
+            }
+        }
+
+        const result = await next(context);
+
+        if (result.success) {
+            for (const state of entries) {
+                state.failures = 0;
+            }
+        } else if (!isPermanentFailure(result.error)) {
+            chargeFailure(result.error, keys, entries);
+        }
+
+        return result;
+    };
+};
+
+/**
+ * Further attempts a partial delivery's FAILED group gets inside the router,
+ * beyond the one {@link retryMiddleware} itself makes.
+ *
+ * Two, so the group sees four attempts in total — the concurrent first one, the
+ * middleware's own, and these — which is exactly the budget the engine's retry
+ * gives a single-kind send of that same group. The point is parity, not a new
+ * policy: the failed half of a mixed send is retried like the whole send it
+ * would have been had the caller not put both kinds in one `to`.
+ *
+ * The retry is safe to run because a group result is only a FAILURE when EVERY
+ * target in it failed — both providers loop their targets and report success if
+ * any one was accepted — so re-attempting a failed group never re-POSTs a target
+ * the provider already delivered to. What it can duplicate is a target whose
+ * POST timed out after the push service accepted it; that exposure is identical
+ * on both transports (neither exposes a collapse/topic key here) and is the same
+ * one the engine's retry already accepts for every single-kind send.
+ *
+ * Total HTTP requests differ per transport and deliberately are not evened out:
+ * the FCM provider retries each POST itself (up to 3, same curve), the web-push
+ * provider does not. So four router attempts are up to sixteen POSTs on FCM and
+ * exactly four on web push — which is what an FCM-only send has always cost.
+ */
+const GROUP_RETRIES = 2;
+
+/**
+ * Send one narrowed group, reporting a thrown provider error as a failed
+ * `Result` rather than a rejection.
+ *
+ * Both callers need that. The two groups are sent concurrently, so a transport
+ * that throws SYNCHRONOUSLY (`Provider.send` returns `MaybePromise`) would
+ * otherwise take the sibling group's send down with it; and the retry below is
+ * middleware, which reads a `Result` and never sees a throw.
+ */
+const attemptGroup = async (channel: Provider<unknown, PushPayload>, group: PushPayload): Promise<Result<NotificationResult>> => {
+    try {
+        return await channel.send(group);
+    } catch (error) {
+        return { error, success: false };
+    }
+};
+
+const URGENCIES: ReadonlySet<unknown> = new Set<WebPushConfig["urgency"]>(["high", "low", "normal", "very-low"]);
+
+const isUrgency = (value: unknown): value is WebPushConfig["urgency"] => URGENCIES.has(value);
+
+/** A message's own push `ttl`, rejected with `BAD_REQUEST` unless it is a non-negative integer (seconds). */
+const checkPushTtl = (ttl: unknown): number | undefined => {
+    if (ttl !== undefined && (typeof ttl !== "number" || !Number.isInteger(ttl) || ttl < 0)) {
+        throw new LunoraError(
+            "BAD_REQUEST",
+            `@lunora/notify: push ttl must be a non-negative integer number of seconds, got ${typeof ttl === "number" ? String(ttl) : typeof ttl}`,
+        );
+    }
+
+    return ttl;
+};
+
+/**
+ * A message's own push `urgency`, rejected with `BAD_REQUEST` unless it is one
+ * of RFC 8030's four values. Checked beside {@link checkPushTtl} at the
+ * facade's entry points: `@visulima/notification` ≥ 1.2.0 honours a payload's
+ * `urgency` but does not validate it.
+ */
+const checkPushUrgency = (urgency: unknown): void => {
+    if (urgency !== undefined && !isUrgency(urgency)) {
+        throw new LunoraError("BAD_REQUEST", `@lunora/notify: push urgency must be "very-low", "low", "normal" or "high", got ${JSON.stringify(urgency)}`);
+    }
+};
+
+/** Options for {@link routingPushProvider}. */
+export interface RoutingPushOptions {
+    /**
+     * The definition's exact-origin allowlist, when configured. Its presence
+     * disables the send-time rebinding re-check (see {@link assertPushTargetResolvable}).
+     */
+    allowedPushOrigins?: string[];
+    fcm?: Provider<unknown, PushPayload>;
+
+    /**
+     * Backoff base for the in-router group retry, in ms (default 250 — the
+     * engine's own). Only a TEST double passes anything else, for the same
+     * reason {@link ResilienceOptions.retryBaseDelay} exists: a mock that fails
+     * on purpose would otherwise spend the real ~1 s of backoff per partial.
+     */
+    retryBaseDelay?: number;
+    webPush?: Provider<unknown, PushPayload>;
+}
+
+/**
+ * A composite push {@link Provider} that dispatches each send to the Web Push or
+ * FCM provider by the shape of the payload `to` target — so a single `push`
+ * channel on the {@link Notification} facade transparently handles both browser
+ * subscriptions and mobile device tokens, and the engine's middleware wraps them
+ * uniformly.
+ */
+export const routingPushProvider = (options: RoutingPushOptions): Provider<unknown, PushPayload> => {
+    // The engine's own retry, re-used one level down. Same implementation, same
+    // backoff curve, same `shouldRetry` rule about permanently-gone recipients —
+    // the only difference is WHAT it re-runs: one group's narrowed send instead
+    // of the whole payload, which is the entire reason it can run at all.
+    const groupRetry = retryMiddleware({
+        baseDelay: options.retryBaseDelay,
+        retries: GROUP_RETRIES,
+        shouldRetry: (error) => !isPermanentFailure(error),
+    });
+
+    /**
+     * Re-attempt one failed group until it delivers or its budget runs out, and
+     * answer with whatever the LAST attempt said — so a group that came back on
+     * the second try folds into the receipt as the success it now is.
+     *
+     * The permanence check is HERE and not only in `shouldRetry` because
+     * `retryMiddleware` calls `next` once before consulting the predicate at all:
+     * a group whose recipients are provably gone would still spend one more POST
+     * on its way to the same answer, which is the cost `isPermanentFailure`
+     * exists to refuse. `failed` is that first attempt's verdict, returned
+     * unchanged when there is no point asking again.
+     *
+     * The `SendContext` handed to the middleware describes the narrowed send it
+     * is actually driving, not the mixed one the caller wrote. Nothing reads it
+     * (the middleware only passes it to `next`), but a context that claimed the
+     * whole payload would be a lie waiting for the first reader.
+     */
+    const retryGroup = async (
+        channel: Provider<unknown, PushPayload>,
+        group: PushPayload,
+        failed: Result<NotificationResult>,
+    ): Promise<Result<NotificationResult>> => {
+        if (isPermanentFailure(failed.error)) {
+            return failed;
+        }
+
+        return groupRetry({ channel: "push", payload: group, provider: PUSH_ROUTER_ID }, async (context) =>
+            attemptGroup(channel, context.payload as PushPayload),
+        );
+    };
+
+    const pick = (endpoint: string | undefined): Provider<unknown, PushPayload> => {
+        const provider = endpoint === undefined ? options.fcm : options.webPush;
+
+        if (provider === undefined) {
+            throw new Error(
+                endpoint === undefined
+                    ? "@lunora/notify: received an FCM token target but no `fcm` channel is configured"
+                    : "@lunora/notify: received a web-push target but no `webPush` channel is configured",
+            );
+        }
+
+        return provider;
+    };
+
+    return {
+        channel: "push",
+        id: PUSH_ROUTER_ID,
+        initialize: async () => {
+            await options.webPush?.initialize();
+            await options.fcm?.initialize();
+        },
+        isAvailable: () => (options.webPush ?? options.fcm) !== undefined,
+        send: async (payload) => {
+            // The SSRF re-check must cover EVERY target: `notify.send()` hands a
+            // caller-shaped message straight to the engine, so a multi-recipient
+            // push `to` does reach this router, and the provider POSTs all of
+            // them. Guarding only `to[0]` would let every later entry walk past
+            // the rebinding check — the one place it is enforced.
+            const targets = Array.isArray(payload.to) ? payload.to : [payload.to];
+
+            if (targets.length === 0) {
+                // Say what is actually wrong. Routing is per target, so with none
+                // both branches below fall through to `pick(undefined)` and a
+                // webPush-only app was told it "received an FCM token target but
+                // no `fcm` channel is configured" for a send naming no recipient.
+                throw new LunoraError("BAD_REQUEST", "@lunora/notify: push send has no recipients — `to` is an empty array");
+            }
+
+            const endpoints = targets.map((entry) => webPushEndpoint(entry));
+
+            for (const endpoint of endpoints) {
+                if (endpoint !== undefined) {
+                    // eslint-disable-next-line no-await-in-loop -- verdicts are memoized per host, so a shared push origin costs one lookup for the whole array
+                    await assertPushTargetResolvable(endpoint, options.allowedPushOrigins);
+                }
+            }
+
+            // ROUTING is per target — the endpoint IS the decision, present means
+            // web push, absent means FCM. `ctx.push`'s own fan-out (`deliver`)
+            // sends exactly one target per call, but the `notify.send()` path
+            // above can carry a mixed-kind `to`, so the targets are partitioned
+            // and each group goes to its own provider — routing the whole send by
+            // one target's kind would hand FCM tokens to the Web Push transport
+            // (or the reverse). A single-kind `to` passes through unchanged.
+            const webPushTargets = targets.filter((_, index) => endpoints[index] !== undefined);
+            const fcmTargets = targets.filter((_, index) => endpoints[index] === undefined);
+            const sampleEndpoint = endpoints.find((endpoint) => endpoint !== undefined);
+
+            if (fcmTargets.length === 0 && sampleEndpoint !== undefined) {
+                return pick(sampleEndpoint).send(payload);
+            }
+
+            if (webPushTargets.length === 0) {
+                return pick(undefined).send(payload);
+            }
+
+            // Mixed kinds: narrow `to` per group, keeping the scalar-vs-array
+            // shape convention the payload type uses.
+            const narrowed = (group: typeof targets): PushPayload => {
+                return { ...payload, to: group.length === 1 && group[0] !== undefined ? group[0] : group };
+            };
+
+            // Resolve BOTH providers before sending EITHER group: `pick` throws
+            // for an unconfigured channel, and throwing that after the other
+            // group had already been POSTed would report a partial delivery as a
+            // total failure. Failing here means nothing was sent at all.
+            const webPushChannel = pick(sampleEndpoint);
+            const fcmChannel = pick(undefined);
+
+            const webPushGroup = narrowed(webPushTargets);
+            const fcmGroup = narrowed(fcmTargets);
+
+            // Concurrent, not two sequential awaits: one transport failing must
+            // not stop the other group from being attempted at all. Neither
+            // attempt rejects (see `attemptGroup`), so nothing escapes here.
+            const [webPushResult, fcmResult] = await Promise.all([attemptGroup(webPushChannel, webPushGroup), attemptGroup(fcmChannel, fcmGroup)]);
+
+            // Exactly one group failed. Retry THAT group, here, while its narrowed
+            // payload still exists — the engine cannot, because one layer up the
+            // router is a single provider and the only thing there to re-run is
+            // the whole payload, delivered half included.
+            //
+            // The delivered group's result is carried forward untouched: it is
+            // never re-sent, on this attempt or any other, which is the property
+            // the partial verdict was invented to protect.
+            //
+            // ponytail: the breaker is middleware ABOVE the router, so a group on
+            // a transport whose circuit is already open is still re-attempted —
+            // four POSTs where load-shedding wanted one. Bounded, backed off, and
+            // confined to the `notify.send()` mixed-`to` path (the broadcast
+            // fan-out sends one target per call and never gets here), so it is
+            // never multiplied by device count. Thread a breaker probe into the
+            // router if that ever shows up in the subrequest budget.
+            if (webPushResult.success && !fcmResult.success) {
+                return mergeGroupResults(webPushResult, await retryGroup(fcmChannel, fcmGroup, fcmResult));
+            }
+
+            if (fcmResult.success && !webPushResult.success) {
+                return mergeGroupResults(await retryGroup(webPushChannel, webPushGroup, webPushResult), fcmResult);
+            }
+
+            // One receipt describes two sends — see `mergeGroupResults` for what
+            // the fold must preserve.
+            return mergeGroupResults(webPushResult, fcmResult);
+        },
+    };
+};
+
+/** A resolved, ready-to-wire set of channel configs (edge-safe channels only). */
+export interface ResolvedProviders {
+    /** The definition's `allowedPushOrigins`, threaded to the push router's send-time SSRF guard. */
+    allowedPushOrigins?: string[];
+    chat?: Provider;
+    fcm?: FcmConfig;
+    inApp?: Provider;
+    webhook?: Provider;
+    webPush?: WebPushConfig;
+}
+
+/** Options for {@link attachResilience}. */
+export interface ResilienceOptions {
+    /**
+     * Retry backoff base, in ms (default 250 — the engine's own). Only a TEST
+     * double passes anything else: a mock provider that fails on purpose would
+     * otherwise spend the real ~2 s of backoff per recipient to prove which
+     * results are retried, which is the one thing the delay says nothing about.
+     */
+    retryBaseDelay?: number;
+}
+
+/**
+ * Attach the engine's resilience middleware — retry with backoff, then a circuit
+ * breaker to shed load off the transport that is down, and only that one.
+ *
+ * Exported so a TEST engine is wired by this function rather than by a copy of
+ * it. `buildEngine` is the only production caller; a double that assembles a bare
+ * `createNotification(...)` exercises none of this, which is how a broadcast could
+ * spend four POSTs and two seconds on a subscription already known to be dead and
+ * nothing noticed.
+ */
+export const attachResilience = (engine: Notification, options: ResilienceOptions = {}): Notification =>
+    engine
+        // `shouldRetry` is the difference between "the push service hiccuped" and
+        // "this device is gone". Without it every 410/404 cost the full retry
+        // budget — four POSTs and ~2.2 s of backoff each — against an endpoint the
+        // very next line of the facade deletes, and those attempts were what fed
+        // the breaker below.
+        //
+        // It also refuses a PARTIAL delivery (see `mergeGroupResults`): the retry
+        // re-runs the provider with the whole payload, so retrying a send whose
+        // other transport group already delivered notifies those devices again on
+        // every attempt. That is a refusal to re-send, not a refusal to retry —
+        // the router has already retried the group that failed, narrowed to just
+        // that group, before reporting the partial.
+        .use(retryMiddleware({ baseDelay: options.retryBaseDelay, shouldRetry: (error) => !isPermanentFailure(error) && !isPartialDelivery(error) }))
+        .use(perTransportCircuitBreaker());
+
+/**
+ * Assemble the `@visulima/notification` engine from resolved channel configs and
+ * attach the reused retry + circuit-breaker middleware. Only edge-safe channels
+ * are wired (Web Push, FCM, chat, in-app, webhook); APNs and SMS are excluded
+ * from the edge facade by construction.
+ */
+export const buildEngine = (resolved: ResolvedProviders): Notification => {
+    const webPush = resolved.webPush === undefined ? undefined : createWebPushProvider(resolved.webPush);
+    const fcm = resolved.fcm === undefined ? undefined : createFcmProvider(resolved.fcm);
+
+    const providers: NotificationProviders = {};
+
+    if (webPush !== undefined || fcm !== undefined) {
+        providers.push = routingPushProvider({ allowedPushOrigins: resolved.allowedPushOrigins, fcm, webPush });
+    }
+
+    if (resolved.chat !== undefined) {
+        providers.chat = resolved.chat;
+    }
+
+    if (resolved.inApp !== undefined) {
+        providers.inapp = resolved.inApp;
+    }
+
+    if (resolved.webhook !== undefined) {
+        providers.webhook = resolved.webhook;
+    }
+
+    return attachResilience(createNotification(providers));
+};
+
+export { checkPushTtl, checkPushUrgency };

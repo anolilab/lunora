@@ -79,7 +79,7 @@ describe("lunora info", () => {
 
             expect(result.code).toBe(0);
 
-            const lunoraNames = result.snapshot.lunoraPackages.map((p) => p.name);
+            const lunoraNames = result.snapshot?.lunoraPackages.map((p) => p.name);
 
             expect(lunoraNames).toContain("@lunora/server");
             expect(lunoraNames).toContain("@lunora/runtime");
@@ -87,15 +87,18 @@ describe("lunora info", () => {
             // Non-lunora deps are excluded.
             expect(lunoraNames).not.toContain("lodash");
 
-            expect(result.snapshot.wrangler?.name).toBe("demo-worker");
-            expect(result.snapshot.wrangler?.bindings.durableObjects).toContain("SHARD");
-            expect(result.snapshot.wrangler?.bindings.d1).toContain("DB");
+            expect(result.snapshot?.wrangler?.name).toBe("demo-worker");
+            // `type:name`, from the same derivation `lunora bindings` uses — the
+            // hand-rolled summary this replaced read three wrangler sections, so
+            // R2, KV, queues and the rest were reported as absent.
+            expect(result.snapshot?.wrangler?.bindings).toContain("durable_object:SHARD");
+            expect(result.snapshot?.wrangler?.bindings).toContain("d1:DB");
 
-            expect(result.snapshot.schema?.tables.length).toBeGreaterThan(0);
+            expect(result.snapshot?.schema?.tables.length).toBeGreaterThan(0);
         });
 
-        it("--json emits a machine-readable snapshot on stdout (jq-pipeable)", () => {
-            expect.assertions(3);
+        it("--format json keeps stdout clean and hands the snapshot back for the document", () => {
+            expect.assertions(4);
 
             const { logger } = recordingLogger();
             const written: string[] = [];
@@ -116,16 +119,15 @@ describe("lunora info", () => {
             });
 
             try {
-                const result = runInfoCommand({ cwd: workdir, json: true, logger });
+                const result = runInfoCommand({ cwd: workdir, format: "json", logger });
 
                 expect(result.code).toBe(0);
 
-                // Stdout payload is just the JSON, no Pail prefixes — downstream
-                // tools like `jq` can consume it verbatim.
-                const payload = JSON.parse(written.join(""));
-
-                expect(payload.lunoraPackages?.length).toBeGreaterThan(0);
-                expect(payload.wrangler?.name).toBe("demo-worker");
+                // Not one byte: stdout belongs to the single JSON document
+                // `defineHandler` writes, so `jq` can consume it verbatim.
+                expect(written.join("")).toBe("");
+                expect(result.snapshot?.lunoraPackages.length).toBeGreaterThan(0);
+                expect(result.snapshot?.wrangler?.name).toBe("demo-worker");
             } finally {
                 spy.mockRestore();
             }
@@ -140,7 +142,7 @@ describe("lunora info", () => {
             const result = runInfoCommand({ cwd: workdir, logger });
 
             expect(result.code).toBe(0);
-            expect(result.snapshot.wrangler).toBeUndefined();
+            expect(result.snapshot?.wrangler).toBeUndefined();
             expect(recorded.infos.join("\n")).toContain("wrangler: (not found)");
         });
     });

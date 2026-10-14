@@ -98,6 +98,251 @@ const FUNCTIONS = [
 
 const now = 1_749_300_120_000;
 
+// Folded `ctx.trace` waterfalls for the Traces panel — the shape `@lunora/do`'s
+// `foldTraces` emits: each span already flattened with a `depth` (indent) and an
+// `offsetMs` (bar start relative to the trace), newest trace first. Covers the
+// states the panel renders: deep nesting, structured attributes, a fast
+// single-child trace, and an errored child that flips the trace's status badge.
+const TRACES = [
+    {
+        durationMs: 320,
+        functionPath: "orders:checkout",
+        ok: true,
+        rootName: "orders:checkout",
+        shardKey: "tenant-acme",
+        spans: [
+            { depth: 0, durationMs: 320, name: "orders:checkout", offsetMs: 0, ok: true, parentSpanId: "", spanId: "c0" },
+            { attributes: { itemCount: 3 }, depth: 1, durationMs: 20, name: "cart.load", offsetMs: 2, ok: true, parentSpanId: "c0", spanId: "c1" },
+            {
+                attributes: { provider: "stripe" },
+                depth: 1,
+                durationMs: 210,
+                name: "payment.authorize",
+                offsetMs: 25,
+                ok: true,
+                parentSpanId: "c0",
+                spanId: "c2",
+            },
+            {
+                attributes: { method: "POST", url: "api.stripe.com/v1/charges" },
+                depth: 2,
+                durationMs: 200,
+                // A retried-then-succeeded outbound call: `kind` and the recorded
+                // events are what the span-detail block exists to show, and a
+                // handled retry is invisible anywhere else in the Studio.
+                events: [{ attributes: { "retry.attempt": 1 }, name: "http.retry", ts: now - 3900 }],
+                kind: "client",
+                name: "http.post",
+                offsetMs: 28,
+                ok: true,
+                parentSpanId: "c2",
+                spanId: "c3",
+            },
+            { depth: 1, durationMs: 50, name: "inventory.reserve", offsetMs: 240, ok: true, parentSpanId: "c0", spanId: "c4" },
+            { attributes: { table: "inventory" }, depth: 2, durationMs: 40, name: "db.update", offsetMs: 245, ok: true, parentSpanId: "c4", spanId: "c5" },
+        ],
+        startTs: now - 4000,
+        traceId: "trace-checkout",
+    },
+    {
+        durationMs: 220,
+        functionPath: "messages:send",
+        ok: true,
+        rootName: "messages:send",
+        shardKey: "room-general",
+        spans: [
+            { depth: 0, durationMs: 220, name: "messages:send", offsetMs: 0, ok: true, parentSpanId: "", spanId: "s0" },
+            { depth: 1, durationMs: 8, name: "auth.check", offsetMs: 2, ok: true, parentSpanId: "s0", spanId: "s1" },
+            { attributes: { table: "messages" }, depth: 1, durationMs: 40, name: "db.insert", offsetMs: 12, ok: true, parentSpanId: "s0", spanId: "s2" },
+            { depth: 1, durationMs: 6, name: "cache.set", offsetMs: 55, ok: true, parentSpanId: "s0", spanId: "s3" },
+            { attributes: { subscribers: 12 }, depth: 1, durationMs: 150, name: "fanout.publish", offsetMs: 64, ok: true, parentSpanId: "s0", spanId: "s4" },
+            { depth: 2, durationMs: 140, name: "ws.send", offsetMs: 66, ok: true, parentSpanId: "s4", spanId: "s5" },
+        ],
+        startTs: now - 9000,
+        traceId: "trace-send",
+    },
+    {
+        durationMs: 180,
+        functionPath: "posts:publish",
+        ok: false,
+        rootName: "posts:publish",
+        shardKey: "tenant-acme",
+        spans: [
+            { depth: 0, durationMs: 180, name: "posts:publish", offsetMs: 0, ok: true, parentSpanId: "", spanId: "e0" },
+            { depth: 1, durationMs: 5, name: "validate", offsetMs: 3, ok: true, parentSpanId: "e0", spanId: "e1" },
+            {
+                attributes: { amount: 4999, currency: "usd" },
+                depth: 1,
+                durationMs: 165,
+                error: { message: "card_declined: Your card was declined.", type: "StripeError" },
+                events: [{ attributes: { "exception.type": "StripeError" }, name: "exception", ts: now - 14_900 }],
+                kind: "client",
+                name: "stripe.charge",
+                offsetMs: 10,
+                ok: false,
+                parentSpanId: "e0",
+                spanId: "e2",
+            },
+        ],
+        startTs: now - 15_000,
+        traceId: "trace-publish",
+    },
+    {
+        durationMs: 12,
+        functionPath: "messages:list",
+        ok: true,
+        rootName: "messages:list",
+        spans: [
+            { depth: 0, durationMs: 12, name: "messages:list", offsetMs: 0, ok: true, parentSpanId: "", spanId: "l0" },
+            { attributes: { rows: 128 }, depth: 1, durationMs: 9, name: "db.query", offsetMs: 1, ok: true, parentSpanId: "l0", spanId: "l1" },
+        ],
+        startTs: now - 22_000,
+        traceId: "trace-list",
+    },
+];
+
+// Aggregated `ctx.metrics.*` series for the Metrics page's Instruments table —
+// the shape `@lunora/do`'s `MetricBuffer` fold emits: one running summary per
+// (name, kind, dimensions). Covers each instrument kind and the with/without
+// dimensions cases so the panel's counter-total / gauge-reading / histogram-mean
+// projections and the dimension column both render.
+const METRIC_SERIES = [
+    {
+        count: 642,
+        // Links to the seeded `trace-checkout` waterfall — the exemplar drill-down.
+        exemplarTraceId: "trace-checkout",
+        firstTs: now - 3_600_000,
+        functionPath: "orders:checkout",
+        kind: "counter",
+        last: 1,
+        lastTs: now - 4000,
+        max: 1,
+        min: 1,
+        name: "orders.placed",
+        sum: 642,
+    },
+    {
+        attributes: { route: "/api/messages" },
+        count: 2009,
+        exemplarTraceId: "trace-send",
+        firstTs: now - 3_600_000,
+        functionPath: "messages:list",
+        kind: "counter",
+        last: 1,
+        lastTs: now - 2000,
+        max: 1,
+        min: 1,
+        name: "http.requests",
+        sum: 2009,
+    },
+    {
+        attributes: { route: "/api/posts" },
+        count: 87,
+        firstTs: now - 3_600_000,
+        functionPath: "posts:publish",
+        kind: "counter",
+        last: 1,
+        lastTs: now - 15_000,
+        max: 1,
+        min: 1,
+        name: "http.requests",
+        sum: 87,
+    },
+    {
+        count: 340,
+        firstTs: now - 3_600_000,
+        functionPath: "orders:checkout",
+        kind: "gauge",
+        last: 3,
+        lastTs: now - 4000,
+        max: 9,
+        min: 0,
+        name: "cart.items",
+        sum: 1190,
+    },
+    {
+        count: 128,
+        firstTs: now - 3_600_000,
+        functionPath: "queue:drain",
+        kind: "gauge",
+        last: 12,
+        lastTs: now - 6000,
+        max: 45,
+        min: 0,
+        name: "queue.depth",
+        sum: 2304,
+    },
+    {
+        count: 642,
+        firstTs: now - 3_600_000,
+        functionPath: "orders:checkout",
+        kind: "histogram",
+        last: 128,
+        lastTs: now - 4000,
+        max: 812,
+        min: 41,
+        name: "checkout.ms",
+        sum: 118_400,
+    },
+    {
+        attributes: { table: "messages" },
+        count: 1280,
+        firstTs: now - 3_600_000,
+        functionPath: "messages:list",
+        kind: "histogram",
+        last: 9,
+        lastTs: now - 2000,
+        max: 88,
+        min: 3,
+        name: "db.query.ms",
+        sum: 15_360,
+    },
+];
+
+// Durable per-minute rollups for the Instruments trend sparklines — the shape
+// `@lunora/do`'s `readMetricHistory` returns: one series per identity, buckets
+// oldest-first. A deterministic sine wave gives a readable trend without any
+// runtime randomness. `exemplarTraceId` on the last bucket seeds the point→trace
+// link for the two series that carry an exemplar in the live snapshot above.
+//
+// The plotted value is the trend the panel projects per kind, so the bucket must
+// be built so that projection recovers it: a counter plots `sum`, a gauge `last`,
+// a histogram `sum / count` (the mean). Building all three with `sum === count`
+// would flatten the histogram to a constant 1, so a histogram spreads the value
+// across a fixed sample count.
+const HISTOGRAM_SAMPLES = 20;
+
+const historyPoints = (n: number, amplitude: number, base: number, kind: "counter" | "gauge" | "histogram", exemplar?: string): Record<string, unknown>[] =>
+    Array.from({ length: n }, (_, index) => {
+        const value = Math.round(base + amplitude * (1 + Math.sin(index / 3)));
+        const count = kind === "histogram" ? HISTOGRAM_SAMPLES : value;
+
+        return {
+            bucketMs: now - (n - index) * 60_000,
+            count,
+            ...(exemplar !== undefined && index === n - 1 ? { exemplarTraceId: exemplar } : {}),
+            last: value,
+            max: value + amplitude,
+            min: Math.max(0, value - amplitude),
+            // A counter plots its per-bucket total (`sum = value`); a histogram plots
+            // its mean (`sum / count = value` ⇒ `sum = value * count`).
+            sum: kind === "histogram" ? value * count : value,
+        };
+    });
+
+const METRIC_HISTORY = [
+    { functionPath: "orders:checkout", kind: "counter", name: "orders.placed", points: historyPoints(30, 6, 8, "counter", "trace-checkout") },
+    {
+        attributes: { route: "/api/messages" },
+        functionPath: "messages:list",
+        kind: "counter",
+        name: "http.requests",
+        points: historyPoints(30, 20, 40, "counter", "trace-send"),
+    },
+    { functionPath: "orders:checkout", kind: "gauge", name: "cart.items", points: historyPoints(30, 3, 3, "gauge") },
+    { functionPath: "orders:checkout", kind: "histogram", name: "checkout.ms", points: historyPoints(30, 120, 160, "histogram") },
+];
+
 const minuteBuckets = (n: number, base: number, jitter: number): { bucketMs: number; calls: number; errors: number; path: string }[] =>
     Array.from({ length: n }, (_, index) => {
         return {
@@ -141,13 +386,26 @@ const dataFor = (reference: string, args: unknown): unknown => {
         }
         case ADMIN_FUNCTIONS.getLogs: {
             return {
+                // `traceId` matches the `TRACES` fixtures above, so the Traces
+                // panel's correlated-log section and the Logs panel's Trace link
+                // both have something to resolve. The last line deliberately has
+                // none — a container-lifecycle entry, emitted outside any dispatch.
                 entries: [
-                    { functionPath: "posts:publish", level: "error", message: "Rate limited (429) from upstream", timestamp: now - 4000 },
-                    { functionPath: "messages:list", level: "info", message: "Served 128 rows in 12ms", timestamp: now - 9000 },
-                    { functionPath: "messages:send", level: "warn", message: "Slow write: 28ms", timestamp: now - 15_000 },
+                    {
+                        functionPath: "posts:publish",
+                        level: "error",
+                        message: "Rate limited (429) from upstream",
+                        timestamp: now - 4000,
+                        traceId: "trace-publish",
+                    },
+                    { functionPath: "messages:list", level: "info", message: "Served 128 rows in 12ms", timestamp: now - 9000, traceId: "trace-list" },
+                    { functionPath: "messages:send", level: "warn", message: "Slow write: 28ms", timestamp: now - 15_000, traceId: "trace-send" },
                     { level: "debug", message: "Reactive cache warm (312 entries)", timestamp: now - 22_000 },
                 ],
             };
+        }
+        case ADMIN_FUNCTIONS.getMetricHistory: {
+            return { series: METRIC_HISTORY };
         }
         case ADMIN_FUNCTIONS.getMetrics: {
             return {
@@ -161,6 +419,9 @@ const dataFor = (reference: string, args: unknown): unknown => {
                 sinceMs: now - 3_600_000,
                 uptimeMs: 5_400_000,
             };
+        }
+        case ADMIN_FUNCTIONS.getMetricSeries: {
+            return { series: METRIC_SERIES };
         }
         case ADMIN_FUNCTIONS.getPitrBookmark: {
             return { current: "0000003f-0000000a" };
@@ -176,6 +437,7 @@ const dataFor = (reference: string, args: unknown): unknown => {
                         subscriptionsReRun: 0,
                         tablesRead: ["messages"],
                         tablesWritten: [],
+                        traceId: "trace-list",
                         ts: now - 4000,
                     },
                     {
@@ -187,7 +449,21 @@ const dataFor = (reference: string, args: unknown): unknown => {
                         subscriptionsReRun: 0,
                         tablesRead: ["posts"],
                         tablesWritten: [],
+                        traceId: "trace-publish",
                         ts: now - 9000,
+                    },
+                    // No `traceId`: a row written before the column existed. The
+                    // Requests view must render it with no Trace link rather than
+                    // an empty button.
+                    {
+                        durationMs: 8,
+                        functionPath: "messages:send",
+                        outcome: "ok",
+                        seq: 8999,
+                        subscriptionsReRun: 2,
+                        tablesRead: [],
+                        tablesWritten: ["messages"],
+                        ts: now - 14_000,
                     },
                 ],
             };
@@ -211,6 +487,23 @@ const dataFor = (reference: string, args: unknown): unknown => {
                     { kind: "secret", name: "AUTH_SECRET", value: "••••••••" },
                     { bindingType: "durable-object", kind: "binding", name: "SHARD_DO", value: undefined },
                     { bindingType: "r2", kind: "binding", name: "UPLOADS", value: undefined },
+                ],
+            };
+        }
+        case ADMIN_FUNCTIONS.getTraces: {
+            // `total` exceeds the returned count so the panel's "showing N of M"
+            // truncation notice renders — the mock demonstrates the affordance even
+            // though it seeds only a handful of representative waterfalls.
+            return { total: 63, traces: TRACES };
+        }
+        case ADMIN_FUNCTIONS.listQueues: {
+            // One plain queue and a topic with two subscriptions, so the Queues
+            // page shows its topic grouping and the topic send target.
+            return {
+                queues: [
+                    { binding: "QUEUE_EMAIL", exportName: "email", mode: "push", name: "email" },
+                    { binding: "QUEUE_AUDIT_SIGNUP", exportName: "auditSignup", mode: "push", name: "audit-signup", topic: "signups" },
+                    { binding: "QUEUE_WELCOME_EMAIL", exportName: "welcomeEmail", mode: "push", name: "welcome-email", topic: "signups" },
                 ],
             };
         }
@@ -245,8 +538,8 @@ const dataFor = (reference: string, args: unknown): unknown => {
         case ADMIN_FUNCTIONS.listWorkflows: {
             return {
                 workflows: [
-                    { binding: "WORKFLOW_ORDER_PIPELINE", className: "OrderPipelineWorkflow", exportName: "orderPipeline", name: "order-pipeline" },
-                    { binding: "WORKFLOW_WELCOME_EMAIL", className: "WelcomeEmailWorkflow", exportName: "welcomeEmail", name: "welcome-email" },
+                    { className: "OrderPipelineWorkflow", exportName: "orderPipeline", name: "order-pipeline" },
+                    { className: "WelcomeEmailWorkflow", exportName: "welcomeEmail", name: "welcome-email" },
                 ],
             };
         }
@@ -389,6 +682,34 @@ const createDevMockClient = (): LunoraClient =>
                     },
                 ],
                 total: 42,
+            };
+        },
+        // Scopes the admin-query cache per client (`use-admin-query`); a fixed id is
+        // all a single mock client needs.
+        clientIdentifier: (): string => "dev-mock-client",
+        fetchArchitecture: async (): Promise<unknown> => {
+            // A two-module sample so the Architecture tab renders lanes, a
+            // cross-module call, a table write and one unresolved call site.
+            return {
+                edges: [
+                    { from: "function:chat_messages:send", kind: "call", to: "function:accounts_users:me" },
+                    { from: "function:chat_messages:send", kind: "write", to: "table:messages" },
+                    { from: "function:chat_messages:list", kind: "read", to: "table:messages" },
+                    { from: "function:accounts_users:me", kind: "read", to: "table:users" },
+                ],
+                nodes: [
+                    { detail: "query", id: "function:accounts_users:me", kind: "function", name: "accounts_users.me", module: "accounts" },
+                    { detail: "query", id: "function:chat_messages:list", kind: "function", name: "chat_messages.list", module: "chat" },
+                    { detail: "mutation", id: "function:chat_messages:send", kind: "function", name: "chat_messages.send", module: "chat" },
+                    { id: "table:messages", kind: "table", name: "messages", module: "chat" },
+                    { id: "table:users", kind: "table", name: "users", module: "accounts" },
+                ],
+                modules: [
+                    { name: "accounts", tables: ["users"] },
+                    { description: "Channels and messages", name: "chat", tables: ["messages"] },
+                ],
+                unresolved: [{ file: "chat/messages", kind: "call", line: 42, reason: "the function reference is not a static api.* / internal.* chain" }],
+                version: 1,
             };
         },
         fetchOpenApi: async (): Promise<unknown> => {
@@ -581,6 +902,10 @@ const createDevMockClient = (): LunoraClient =>
         updateAuthUser: async (input: { userId: string }): Promise<unknown> => {
             return { id: input.userId };
         },
+        // The dev mock has one fixed identity, so nothing ever retires it.
+        onIdentityChange: (): (() => void) => noop,
+        // Writes resolve in memory, so the hook never needs to hold one for the network.
+        canQueueOffline: (): boolean => true,
         subscribe: (function_: Ref, args: unknown, callback: (value: unknown) => void): (() => void) => {
             // Emit once on the next tick so the panel paints with data, the same
             // shape its `query` path would return.

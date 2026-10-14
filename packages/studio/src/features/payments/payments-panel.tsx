@@ -1,16 +1,19 @@
-import { useLunora } from "@lunora/react";
 import type { ReactElement } from "react";
-import { useEffect, useState } from "react";
 
+// Bundler-inlined shared helper (see CLAUDE.md `shared/` rules).
+import { decodeDocument } from "../../../../../shared/wire-codec";
+import ErrorAlert from "../../components/error-alert";
 import { Badge } from "../../components/ui/badge";
 import { Card, CardContent } from "../../components/ui/card";
 import { EmptyState } from "../../components/ui/empty-state";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "../../components/ui/table";
+import { useAdminQuery } from "../../hooks/use-admin-query";
 import { useAutoRefresh } from "../../hooks/use-auto-refresh";
+import useStudioFeatures from "../../hooks/use-studio-features";
 import { useT } from "../../i18n/i18n-context";
-import type { TablePage } from "../../lib/admin";
+import type { FacetResult, TableInfo, TablePage } from "../../lib/admin";
 import { ADMIN_FUNCTIONS } from "../../lib/admin";
-import { adminRef, callOptions, errorMessage, fireAndForget, formatTimestamp } from "../../lib/internal";
+import { formatTimestamp } from "../../lib/internal";
 
 interface PaymentsPanelProps {
     /** Newest-N rows to load per table (default 100). */
@@ -19,7 +22,14 @@ interface PaymentsPanelProps {
 
 type Row = Record<string, unknown>;
 
-const READ_TABLE_PAGE = adminRef(ADMIN_FUNCTIONS.readTablePage);
+// The `@lunora/payment` store tables this panel reads — used as the runtime
+// read-safety guard (a `readTablePage` on a missing table errors).
+const SUBSCRIPTIONS_TABLE = "payment_subscriptions";
+const EVENTS_TABLE = "payment_events";
+const PAYMENT_STORE_TABLES = [SUBSCRIPTIONS_TABLE, EVENTS_TABLE] as const;
+
+/** Stable empty args for the no-argument `listTables` presence probe (avoids a fresh object each render). */
+const NO_ARGS: Record<string, unknown> = {};
 
 // Subscription states that count as "active" for the summary + badge tone.
 const ACTIVE_STATES = new Set(["active", "trialing"]);
@@ -28,6 +38,11 @@ const ALERT_STATES = new Set(["past_due", "unpaid"]);
 /**
  * Read a field whether the row exposes it as a column (global/D1 tables) or
  * nested in the shard row's `__doc__` JSON blob — mirrors the data browser.
+ *
+ * Goes through the shared {@link decodeDocument}, so this reader can't disagree
+ * with the writer about what a stored value means. No visible change today —
+ * the payment schema's only `v.bigint()` columns are on `payment_sessions`, which
+ * this panel never reads — but it keeps the surface honest if it ever does.
  */
 const readField = (row: Row, key: string): unknown => {
     if (row[key] !== undefined) {
@@ -36,19 +51,7 @@ const readField = (row: Row, key: string): unknown => {
 
     const raw = row["__doc__"];
 
-    if (typeof raw === "string") {
-        try {
-            const parsed = JSON.parse(raw) as unknown;
-
-            if (parsed !== null && typeof parsed === "object" && !Array.isArray(parsed)) {
-                return (parsed as Row)[key];
-            }
-        } catch {
-            // fall through
-        }
-    }
-
-    return undefined;
+    return typeof raw === "string" ? decodeDocument(raw)?.[key] : undefined;
 };
 
 const text = (value: unknown): string => {
@@ -67,12 +70,6 @@ const badgeVariant = (state: string): "default" | "destructive" | "outline" => {
     return ALERT_STATES.has(state) ? "destructive" : "outline";
 };
 
-const readRows = async (client: ReturnType<typeof useLunora>, table: string, limit: number): Promise<Row[]> => {
-    const page = (await client.query(READ_TABLE_PAGE, { filters: [], limit, offset: 0, orderBy: [], search: "", table }, callOptions(""))) as TablePage;
-
-    return page.rows;
-};
-
 /**
  * Read-only operational view of the `@lunora/payment` sync store: webhook-synced
  * subscriptions (with state) and the recent webhook `events` log. Backed by the
@@ -80,41 +77,100 @@ const readRows = async (client: ReturnType<typeof useLunora>, table: string, lim
  * no payment-specific server endpoint is needed.
  */
 const PaymentsPanel = ({ limit = 100 }: PaymentsPanelProps): ReactElement => {
-    const client = useLunora();
     const t = useT();
 
-    const [subscriptions, setSubscriptions] = useState<Row[]>([]);
-    const [events, setEvents] = useState<Row[]>([]);
-    const [error, setError] = useState<null | string>(null);
+    // The codegen `payments` signal — the same real signal (payment store tables
+    // declared, matched by shape) the nav gates on. Defaults `true` until the
+    // `studioFeatures` RPC resolves (or for a worker predating it), so it never
+    // hides a working page.
+    const features = useStudioFeatures();
 
-    const refresh = async (): Promise<void> => {
-        setError(null);
+    // Presence probe: the payment store tables only exist when the app's schema merges
+    // `paymentExtension`, so a bare `readTablePage` on a missing table errors. Nav gating already
+    // hides this page for an app that never declares them, but a worker predating the
+    // `studioFeatures` RPC falls back to "show everything" — so gate the reads on the
+    // codegen flag AND confirm the tables are actually present, rendering a helpful
+    // empty state instead of an "unknown table" alert.
+    const { data: tables } = useAdminQuery<TableInfo[]>(ADMIN_FUNCTIONS.listTables, NO_ARGS, { live: true });
 
-        try {
-            const [subscriptionRows, eventRows] = await Promise.all([readRows(client, "subscriptions", limit), readRows(client, "events", 25)]);
+    const loadedTables = tables !== undefined;
+    const tablesPresent = Array.isArray(tables) && PAYMENT_STORE_TABLES.every((name) => tables.some((table) => table.name === name));
+    const hasPaymentTables = features.payments && tablesPresent;
 
-            setSubscriptions(subscriptionRows);
-            setEvents(eventRows);
-        } catch (error_) {
-            setSubscriptions([]);
-            setEvents([]);
-            setError(errorMessage(error_));
+    // Payment tables are ordinary app tables, read through the generic
+    // `readTablePage` RPC (no payment-specific endpoint). The structural query
+    // key dedupes the inline args, so a fresh object each render is harmless.
+    // Newest first, server-side: with no sort the page is the OLDEST `limit`
+    // rows in insertion order, which a "recent" list must never show.
+    const subscriptionsQuery = useAdminQuery<TablePage>(
+        ADMIN_FUNCTIONS.readTablePage,
+        {
+            filters: [],
+            limit,
+            offset: 0,
+            orderBy: { column: "updatedAt", direction: "desc" },
+            search: "",
+            table: SUBSCRIPTIONS_TABLE,
+        },
+        { enabled: hasPaymentTables },
+    );
+    const eventsQuery = useAdminQuery<TablePage>(
+        ADMIN_FUNCTIONS.readTablePage,
+        {
+            filters: [],
+            limit: 25,
+            offset: 0,
+            orderBy: { column: "processedAt", direction: "desc" },
+            search: "",
+            table: EVENTS_TABLE,
+        },
+        { enabled: hasPaymentTables },
+    );
+    // Per-state counts over the WHOLE table, so "N active" is not capped at the
+    // page the list shows.
+    const statesQuery = useAdminQuery<FacetResult>(ADMIN_FUNCTIONS.facetColumn, { column: "state", table: SUBSCRIPTIONS_TABLE }, { enabled: hasPaymentTables });
+
+    // The payment sync store has no client-observable write event to push on, so
+    // poll (skipped while the tab is hidden by `useAutoRefresh`). Skip the poll when
+    // the tables are absent — `refetch()` fires regardless of `enabled`, and a poll
+    // against a missing table would resurrect the "unknown table" error.
+    useAutoRefresh(() => {
+        if (!hasPaymentTables) {
+            return;
         }
-    };
 
-    useEffect(() => {
-        fireAndForget(refresh());
-    }, [refresh]);
+        subscriptionsQuery.refetch();
+        eventsQuery.refetch();
+        statesQuery.refetch();
+    }, true);
 
-    const reload = (): void => {
-        fireAndForget(refresh());
-    };
+    const subscriptions = subscriptionsQuery.data?.rows ?? [];
+    const recentEvents = eventsQuery.data?.rows ?? [];
+    const error = subscriptionsQuery.error ?? eventsQuery.error;
+    const errorSource = subscriptionsQuery.error === null ? eventsQuery.errorSource : subscriptionsQuery.errorSource;
 
-    useAutoRefresh(reload, true);
+    // Whole-table figures; the loaded page stands in only until they arrive.
+    const totalSubscriptions = subscriptionsQuery.data?.total ?? subscriptions.length;
+    const activeCount =
+        statesQuery.data?.values === undefined
+            ? subscriptions.filter((row) => ACTIVE_STATES.has(text(readField(row, "state")))).length
+            : statesQuery.data.values.reduce((sum, entry) => sum + (ACTIVE_STATES.has(text(entry.value)) ? entry.count : 0), 0);
 
-    const activeCount = subscriptions.filter((row) => ACTIVE_STATES.has(text(readField(row, "state")))).length;
-
-    const recentEvents = events.toSorted((a, b) => Number(readField(b, "processedAt") ?? 0) - Number(readField(a, "processedAt") ?? 0));
+    // The app pulls in `@lunora/payment` (or an old worker shows every page) but never
+    // declared the store tables — guide the user rather than surfacing a table error.
+    if (loadedTables && !hasPaymentTables) {
+        return (
+            <div className="flex flex-col gap-4" data-testid="payments-panel">
+                <EmptyState
+                    description={t(
+                        "No @lunora/payment tables found in this deployment. Add `.extend(paymentExtension)` to lunora/schema.ts and wire `payment` on createShardDO() to sync customers and subscriptions.",
+                    )}
+                    testId="payments-unconfigured"
+                    title={t("No payments configured")}
+                />
+            </div>
+        );
+    }
 
     return (
         <div className="flex flex-col gap-4" data-testid="payments-panel">
@@ -128,14 +184,14 @@ const PaymentsPanel = ({ limit = 100 }: PaymentsPanelProps): ReactElement => {
                         </div>
                     </div>
                     <div className="border-t border-border bg-muted/50 px-4 py-2.5 text-[11px] text-muted-foreground">
-                        {t("{total} total", { total: subscriptions.length })}
+                        {t("{total} total", { total: totalSubscriptions })}
                     </div>
                 </Card>
             </div>
 
-            {error === null ? undefined : <p className="text-sm text-destructive">{error}</p>}
+            {error === null ? undefined : <ErrorAlert error={errorSource} />}
 
-            {subscriptions.length === 0 ? (
+            {subscriptions.length === 0 && !subscriptionsQuery.isLoading ? (
                 <EmptyState testId="payments-empty" title={t("No subscriptions yet")} />
             ) : (
                 <Card className="overflow-hidden py-0">

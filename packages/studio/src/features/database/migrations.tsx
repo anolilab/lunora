@@ -1,8 +1,9 @@
 import { useLunora } from "@lunora/react";
 import type { ChangeEvent, ReactElement } from "react";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 
 import { ConfirmButton } from "../../components/confirm-button";
+import ErrorAlert from "../../components/error-alert";
 import { LiveError } from "../../components/live-status";
 import { ShardInput } from "../../components/shard-input";
 import { Badge } from "../../components/ui/badge";
@@ -12,20 +13,19 @@ import { EmptyState } from "../../components/ui/empty-state";
 import { Input } from "../../components/ui/input";
 import { Label } from "../../components/ui/label";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "../../components/ui/table";
-import useLiveAdmin from "../../hooks/use-live-admin";
+import { useAdminQuery } from "../../hooks/use-admin-query";
+import { useShardKey } from "../../hooks/use-shard-key";
 import { useT } from "../../i18n/i18n-context";
 import type { MigrationDirection, MigrationRunResult, MigrationStatusRow } from "../../lib/admin";
 import { ADMIN_FUNCTIONS } from "../../lib/admin";
 import { adminRef, callOptions, errorMessage, fireAndForget, formatTimestamp } from "../../lib/internal";
 import { recordShard } from "../../lib/shard-history";
-import useLiveShardSeed from "../data/hooks/use-live-shard-seed";
 
 interface MigrationsPanelProps {
     /** Shard key the panel targets. Defaults to the root shard. */
     readonly initialShardKey?: string;
 }
 
-const MIGRATION_STATUS = adminRef(ADMIN_FUNCTIONS.migrationStatus);
 const RUN_MIGRATION = adminRef(ADMIN_FUNCTIONS.runMigration);
 
 /**
@@ -33,7 +33,7 @@ const RUN_MIGRATION = adminRef(ADMIN_FUNCTIONS.runMigration);
  *
  * Reads the persisted run-state via the `__lunora_admin__:migrationStatus` RPC
  * and lets an operator kick off a migration by id (`__lunora_admin__:runMigration`)
- * with a direction, an optional batch cap and a dry-run toggle. Both calls
+ * with a direction and a dry-run toggle. Both calls
  * travel over the ordinary {@link useLunora} client transport and are gated by
  * the server's `LUNORA_ADMIN_TOKEN` — this component issues no credentials of
  * its own.
@@ -42,12 +42,7 @@ export const MigrationsPanel = ({ initialShardKey }: MigrationsPanelProps): Reac
     const client = useLunora();
     const t = useT();
 
-    const [shardKey, setShardKey] = useState<string>(initialShardKey ?? "");
-    const [rows, setRows] = useState<MigrationStatusRow[] | null>(null);
-    const [statusError, setStatusError] = useState<null | string>(null);
-    // Always-on live channel; this only holds a rejection message (e.g. missing
-    // admin token) so the panel can say why it stopped updating.
-    const [liveError, setLiveError] = useState<string | undefined>(undefined);
+    const { queryShardKey, setShardKey, shardKey } = useShardKey(initialShardKey);
 
     const [migrationId, setMigrationId] = useState<string>("");
     const [direction, setDirection] = useState<MigrationDirection>("up");
@@ -56,42 +51,35 @@ export const MigrationsPanel = ({ initialShardKey }: MigrationsPanelProps): Reac
     const [runResult, setRunResult] = useState<MigrationRunResult | null>(null);
     const [runError, setRunError] = useState<null | string>(null);
 
-    const refresh = async (shard: string): Promise<void> => {
-        setStatusError(null);
+    // The status query (and its post-run `refetch`) is keyed by `queryShardKey`,
+    // while a run targets the live `shardKey`. Until the debounce catches up the two
+    // can disagree, so running would hit one shard while the table refreshes another.
+    // Gate the run on the displayed shard being settled.
+    const shardSettled = shardKey.trim() === queryShardKey;
 
-        try {
-            const result = (await client.query(MIGRATION_STATUS, {}, callOptions(shard))) as { migrations: MigrationStatusRow[] };
-
-            recordShard(shard);
-            setRows(result.migrations);
-        } catch (error) {
-            setRows(null);
-            setStatusError(errorMessage(error));
-
-            // Rethrow so the shard-seed hook doesn't commit a shard that failed.
-            throw error;
-        }
-    };
-
-    // Debounced shard seed + commit-on-success; the live channel keys on the
-    // committed shard (replaces the old Refresh button).
-    const committedShard = useLiveShardSeed(shardKey, refresh);
-
-    // Live channel: always on once the seed commits a shard; each server push
-    // refreshes the run-state table so an in-progress migration's
-    // processed/changed counts update live.
-    useLiveAdmin(
+    // One-shot read + always-on live subscription for the committed shard. Each
+    // server push refreshes the run-state table so an in-progress migration's
+    // processed/changed counts update live; `liveError` holds a rejection message
+    // (e.g. missing admin token) so the panel can say why it stopped updating.
+    const statusQuery = useAdminQuery<{ migrations: MigrationStatusRow[] }>(
         ADMIN_FUNCTIONS.migrationStatus,
         {},
-        committedShard ?? "",
-        (result) => {
-            setStatusError(null);
-            setLiveError(undefined);
-            setRows((result as { migrations: MigrationStatusRow[] }).migrations);
+        {
+            live: true,
+            shardKey: queryShardKey,
         },
-        committedShard !== undefined,
-        setLiveError,
     );
+
+    const rows = statusQuery.data?.migrations ?? null;
+    const statusError = statusQuery.error;
+    const { errorSource: statusErrorSource, liveError } = statusQuery;
+
+    // Record the browsed shard into recent-shards history once its status resolves.
+    useEffect(() => {
+        if (statusQuery.data !== undefined) {
+            recordShard(queryShardKey);
+        }
+    }, [statusQuery.data, queryShardKey]);
 
     const run = async (): Promise<void> => {
         const id = migrationId.trim();
@@ -110,15 +98,16 @@ export const MigrationsPanel = ({ initialShardKey }: MigrationsPanelProps): Reac
             const result = (await client.query(RUN_MIGRATION, { direction, dryRun, id }, callOptions(shardKey))) as MigrationRunResult;
 
             setRunResult(result);
-            // A post-run status reload failure shows via `statusError`; don't let it
-            // mask the (successful) run result by falling into the catch below.
-            await refresh(shardKey).catch(() => {});
+            // Reload the run-state table so the new processed/changed counts show; a
+            // reload failure surfaces via `statusError` (the query's own error) and
+            // can't mask the (successful) run result.
+            statusQuery.refetch();
         } catch (error) {
             setRunResult(null);
             setRunError(errorMessage(error));
-        } finally {
-            setRunning(false);
         }
+
+        setRunning(false);
     };
 
     const runMigration = (): void => {
@@ -138,17 +127,13 @@ export const MigrationsPanel = ({ initialShardKey }: MigrationsPanelProps): Reac
     };
 
     return (
-        <div className="flex flex-col gap-3" data-testid="lunora-migrations">
+        <div className="flex flex-col gap-3 pt-4" data-testid="lunora-migrations">
             <div className="flex flex-wrap items-center gap-2">
                 <ShardInput onChange={setShardKey} testId="mg-shard-input" value={shardKey} />
                 <LiveError message={liveError} prefix="mg" />
             </div>
 
-            {statusError !== null && (
-                <p className="text-sm text-destructive" data-testid="mg-status-error" role="alert">
-                    {statusError}
-                </p>
-            )}
+            {statusError !== null && <ErrorAlert error={statusErrorSource} testId="mg-status-error" />}
 
             {rows !== null && rows.length === 0 && (
                 <EmptyState
@@ -219,7 +204,12 @@ export const MigrationsPanel = ({ initialShardKey }: MigrationsPanelProps): Reac
                     />
                     <select
                         aria-label={t("Direction")}
-                        className="flex h-9 rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                        // Mirrors `Input`'s tokens (h-8, px-2.5, text-xs) rather
+                        // than hand-rolling its own: this select had drifted to
+                        // h-9/text-sm, so one row held three different control
+                        // heights. There is no Select primitive to import yet —
+                        // when there is, this should use it.
+                        className="flex h-8 rounded-md border border-input bg-transparent px-2.5 py-1 text-xs transition-colors outline-none focus-visible:border-ring focus-visible:ring-1 focus-visible:ring-ring/50 dark:bg-input/30"
                         data-testid="mg-direction"
                         onChange={onDirectionChange}
                         value={direction}
@@ -239,12 +229,17 @@ export const MigrationsPanel = ({ initialShardKey }: MigrationsPanelProps): Reac
                         {t("Dry run")}
                     </Label>
                     {dryRun ? (
-                        <Button data-testid="mg-run" disabled={running} onClick={runMigration} size="sm" type="button">
+                        <Button data-testid="mg-run" disabled={running || !shardSettled} onClick={runMigration} type="button">
                             {running ? t("Running…") : t("Run")}
                         </Button>
                     ) : (
                         // A real (non-dry-run) migration mutates rows — guard it.
-                        <ConfirmButton confirmLabel={running ? t("Running…") : t("Run migration?")} disabled={running} onConfirm={runMigration} testId="mg-run">
+                        <ConfirmButton
+                            confirmLabel={running ? t("Running…") : t("Run migration?")}
+                            disabled={running || !shardSettled}
+                            onConfirm={runMigration}
+                            testId="mg-run"
+                        >
                             {t("Run")}
                         </ConfirmButton>
                     )}

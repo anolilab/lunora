@@ -1,6 +1,12 @@
 ---
 title: "@lunora/d1"
 description: D1 Sessions API client + migration runner for global tables.
+related:
+    - to: /docs/packages/cli
+      note: "the `lunora migrate generate` command"
+    - to: /docs/packages/do
+      note: "shard-local storage (no migrations needed)"
+    - to: /docs/concepts/schema
 ---
 
 `@lunora/d1` is the D1-backed storage adapter for tables marked
@@ -18,21 +24,21 @@ const { results } = await session.all("SELECT * FROM users WHERE id = ?", userId
 
 ## `D1Client`
 
-The entry point. Construct it with the bare D1 binding — `new D1Client(env.DB)`.
+The entry point. Construct it with the bare D1 binding: `new D1Client(env.DB)`.
 The constructor takes the binding only; bookmarks are passed per session, not
 at construction.
 
-- `client.withSession(bookmark?)` — open a `D1Session` pinned to a bookmark for
+- `client.withSession(bookmark?)`: open a `D1Session` pinned to a bookmark for
   read-your-writes. With no bookmark it opens an explicit `"first-unconstrained"`
   session (lowest latency, served from any replica).
-- `client.prepare(sql)` — prepared statement on the bare binding (no bookmark
+- `client.prepare(sql)`: prepared statement on the bare binding (no bookmark
   pinning); statements are LRU-cached per client.
-- `client.drizzle` / `client.drizzleSession(bookmark?)` — drizzle-orm/d1 handles
+- `client.drizzle` / `client.drizzleSession(bookmark?)`: drizzle-orm/d1 handles
   for typed queries against generated `sqliteTable` schemas. `drizzle` runs on
   the bare binding (no Sessions API); `drizzleSession` opts into a bookmark.
-- `client.batch([...])` — atomic batch over the drizzle d1 driver, mirroring
+- `client.batch([...])`: atomic batch over the drizzle d1 driver, mirroring
   `db.batch([...])`.
-- `client.raw` — the underlying binding (advanced use).
+- `client.raw`: the underlying binding (advanced use).
 
 ## `D1Session`
 
@@ -52,7 +58,9 @@ const bookmark = session.getBookmark();
 ```
 
 `session.prepare(sql)` returns the raw prepared statement when you need the
-`.bind(...).all()` / `.run()` / `.raw()` chain directly.
+`.bind(...).all()` / `.run()` / `.raw()` chain directly — unretried, like
+everything on `D1Client`. See [Transient failures and
+retries](#transient-failures-and-retries).
 
 ## `D1DatabaseLike` / `D1PreparedStatementLike` / `D1SessionLike`
 
@@ -62,24 +70,66 @@ without depending on the full Workers types package.
 ## `MigrationRunner`
 
 Applies a sequence of `Migration` records against a D1 database in version
-order. Each migration's SQL is hashed (SHA-256) and the hash is recorded in the
-`__drizzle_migrations` table, so applied migrations are skipped idempotently and
-re-running is a no-op.
+order. Each applied migration's `version` and the SHA-256 of its SQL are
+recorded in the `__drizzle_migrations` table, so an applied migration is skipped
+by its version and re-running is a no-op.
 
 ```ts
 import { MigrationRunner } from "@lunora/d1";
 
-const runner = new MigrationRunner(env.DB, [{ version: 1, name: "init", sql: readFileSync("migrations/001_init.sql", "utf8") }]);
+const runner = new MigrationRunner(env.DB, [{ version: 1, name: "drop_legacy_sessions", sql: "DROP TABLE legacy_sessions" }]);
 
 const { applied, skipped } = await runner.run();
 ```
 
-`MigrationRunnerResult.applied` is the migrations just applied (each `{ name,
-version }`); `skipped` is the ones whose SQL hash was already recorded. The
+`MigrationRunnerResult.applied` is the migrations applied this run (each `{ name,
+version }`); `skipped` is the ones whose version was already recorded. The
 constructor accepts a `D1Client` or a bare D1 binding (it wraps the binding for
 you). It rejects duplicate versions and two migrations with identical SQL at
-construction time. Use `lunora migrate generate` to **produce** the SQL —
-`MigrationRunner` is what **applies** it at deploy time.
+construction time.
+
+Each entry is **one** statement, so a `lunora migrate generate` file is not a
+`Migration`: it emits a `CREATE TABLE` plus a `CREATE INDEX` per index, and
+`MigrationRunner` throws on the second statement. Apply that file with
+`wrangler d1 execute <database> --file lunora/migrations/<file>.sql`, or split
+it into one entry per statement to get the runner's hash tracking. Most schema
+changes need neither: the worker provisions every `.global()` table on first
+use, additively and idempotently — what it never does is drop or retype, which
+is what a hand-written `Migration` is for.
+
+### When a run refuses with `MIGRATION_DRIFT`
+
+An applied migration is never run a second time. If its SQL no longer hashes to
+what was recorded, the run stops before applying anything. Line endings, a
+byte-order mark and trailing newlines are ignored, so a CRLF checkout of an LF
+file is the same migration. Anything else is treated as a change: revert it and
+put the change in a new migration.
+
+When the change is deliberate and already reflected in the database — you
+squashed several migrations into one, renamed a file, or reworded a comment —
+tell the runner what it now is, then run again:
+
+```sql
+-- The migration's text changed but what it did is already applied: record the new hash.
+UPDATE __drizzle_migrations SET hash = '<hash printed in the error>' WHERE version = <n>;
+
+-- A row written before versions were tracked matches no current migration
+-- (it was squashed away or edited): give it the version it applied, or any
+-- version no current migration uses if the migration no longer exists.
+UPDATE __drizzle_migrations SET version = <n> WHERE id = <id printed in the error>;
+```
+
+Run these once per environment, with `wrangler d1 execute <database> --command`.
+
+### Running two at once
+
+Two runners racing on the same database — parallel deploys, say — are safe for
+the migrations themselves: each migration's body and its tracking row commit in
+one batch, the tracking row is unique by version and by hash, and the loser's
+batch rolls back and reports the migration as skipped. Upgrading a tracking table
+written before `version` existed is safe to race as well. What is not covered is
+a migration that is unsafe to run while another writer is live; that is the
+migration's own concern.
 
 ## `Migration`
 
@@ -95,10 +145,176 @@ A migration must be a single SQL statement (a trailing `;` is allowed). The
 runner parses with a quote- and comment-aware lexer and throws if it finds a
 second statement; split multi-statement DDL across separate `Migration` entries.
 
+## Transient failures and retries
+
+**D1 has a documented, expected, non-zero baseline error rate.** Cloudflare's own
+team describes a handful of errors every few hours as "not unexpected" even on a
+healthy database, and their guidance is to "retry their query and unless there is
+an underlying issue with the database, it should eventually work". The failures
+are infrastructural, not query-shaped:
+
+| Error                                                                      | Cause                                       |
+| -------------------------------------------------------------------------- | ------------------------------------------- |
+| `D1 DB storage operation exceeded timeout which caused object to be reset` | Storage object recycled mid-operation       |
+| `D1_ERROR: Network connection lost`                                        | Dropped connection — the most common        |
+| `Internal error while starting up D1 DB storage caused object to be reset` | Storage object failed to come up            |
+| `D1 DB's isolate exceeded its memory limit and was reset`                  | Isolate evicted; no query rewrite avoids it |
+
+The last two are judgement calls rather than certainties: an isolate over its
+memory limit, or a storage operation past its timeout, is transient when the
+runtime recycled it under unrelated load and deterministic when the query is
+simply too big for D1 to serve. In the second case the retries are wasted work
+before the same failure surfaces — if you see them repeat on one query, the
+query is the problem.
+
+An application that does not retry has adopted that error rate as its own, so
+Lunora retries for you — with exponential backoff and full jitter, so a fleet of
+Workers that hit the same blip does not re-converge on the recovering database as
+one synchronised wave.
+
+### Where the retry actually is
+
+`.global()` tables read through an executor Lunora builds over your D1 binding,
+and that executor retries. Nothing else does automatically:
+
+| Path                                                 | Retries                   |
+| ---------------------------------------------------- | ------------------------- |
+| `ctx.db` on a `.global()` table                      | yes, read-only statements |
+| `session.all(...)` / `session.first(...)`            | yes, read-only statements |
+| `session.run(...)`                                   | no                        |
+| `client.prepare` / `client.drizzle` / `client.batch` | no                        |
+
+`D1Client`'s own methods hand back the underlying D1 surface untouched — the
+drizzle handles included. Wrap those in `withD1Retry` yourself when you want it,
+and only for an operation that is safe to run twice.
+
+### Retrying without a timeout makes a stall worse
+
+D1's reported failure mode is not only a fast error — it is a **stall**.
+Operators report the storage object hanging for 30+ seconds before resetting,
+several times a day, on databases holding tens of megabytes of data with simple
+queries.
+
+A retry loop wrapped around a stall _amplifies_ it: three attempts at 30 seconds
+each is a 90-second request instead of a 30-second one. So when you call
+`withD1Retry` yourself, bound it:
+
+```ts
+await withD1Retry(() => session.all("SELECT * FROM reports"), {
+    timeoutMs: 2000, // abandon an attempt that has clearly hung
+    deadlineMs: 5000, // and bound the whole operation
+});
+```
+
+`timeoutMs` bounds one attempt; `deadlineMs` bounds the operation — including an
+attempt still in flight when the budget runs out, and the backoff before the next
+one — so `attempts × timeoutMs` plus backoff cannot compound past what a request
+handler can afford. An abandoned attempt throws `D1TimeoutError` — its own class,
+so "D1 hung" is distinguishable from "D1 returned an error"; those have different
+remedies and collapsing them hides which one you have.
+
+Neither has a default. A legitimate analytical query and a stalled one look
+identical from outside, so the value has to come from what your workload needs.
+With neither set — which is how the automatic paths run — a failure that took
+longer than two seconds is treated as a stall and **not** retried, so the
+unconfigured case cannot compound one hang into three.
+
+<strong>A timeout abandons the wait, not the work.</strong> There is no way to cancel an in-flight D1 operation from a Worker, so the subrequest continues and
+still counts against the request's subrequest budget. What you buy is that *your* request stops waiting — the difference between a fast error and a user
+watching a spinner for half a minute.
+
+### Retries are not enough on a critical write path
+
+If a write must not surface a 500 to a user, retrying harder is the wrong lever.
+Cloudflare's own guidance is to **decouple the write from the HTTP response**:
+accept the request, enqueue the write, and let the queue consumer absorb the
+storage event.
+
+```ts
+// The user-facing handler never touches D1.
+export const captureLead = action.input({ email: v.string() }).action(async ({ ctx, args }) => {
+    await ctx.queues.leads.send(args);
+
+    return { accepted: true };
+});
+```
+
+`@lunora/queue` retries the consumer independently of the request, so a D1 stall
+costs a delayed write rather than a failed signup. Use this for anything where
+losing the request is worse than applying it late — lead capture, audit trails,
+webhook side effects.
+
+### Read-only statements retry; everything else does not
+
+Every error above is **ambiguous about whether the statement applied**. "The
+connection dropped" does not say whether it dropped before or after the write
+committed, and D1 has no interactive transactions to resolve it. Silently
+re-running `UPDATE accounts SET balance = balance - 10` because the response was
+lost is how a retry layer turns a transient blip into a corrupted balance.
+
+**The method is not the signal — the statement is.** D1 runs
+`UPDATE … RETURNING` through `.all()` exactly like `.run()`, and Lunora's own
+optimistic-concurrency check does precisely that. So the automatic paths retry
+only when the statement's leading keyword is `SELECT`, `PRAGMA` or `EXPLAIN`.
+Anything else — including a `WITH …` whose tail cannot be proven read-only —
+runs once and surfaces its error.
+
+Writes that are genuinely idempotent — an upsert keyed on a primary key, a
+delete by id, an `INSERT OR IGNORE` — can opt in per call:
+
+```ts
+import { withD1Retry } from "@lunora/d1";
+
+const session = client.withSession(bookmark);
+
+await withD1Retry(() => session.run("INSERT OR IGNORE INTO seen (id) VALUES (?)", id));
+```
+
+`withD1Retry` takes `attempts`, `timeoutMs` and `deadlineMs`. There is no
+per-client retry configuration: the automatic paths run the defaults, and a
+caller who needs different behaviour is already calling `withD1Retry` directly.
+
+`isTransientD1Error` is exported if you are classifying errors yourself. It is
+deliberately conservative: only the specific messages in the table above are
+transient, and anything else — a constraint violation, a syntax error, a missing
+table, `internal error: too many SQL variables` — is treated as **permanent** and
+surfaces immediately, because re-running one turns a single fast failure into
+three slow ones and hides the cause.
+
+## Per-query cost accounting
+
+D1 returns `rows_read` / `rows_written` / `duration` in the `meta` of every
+result, and the exec layer records them instead of discarding them.
+
+**Rows read counts rows SCANNED, not rows returned.** That is the number D1
+bills and the number a missing index inflates: a query filtering on an
+unindexed column scans the table to find its subset, so one that cost 200 rows
+against a small table costs 200k once the table grows — nothing deployed, and
+the spend went up a thousandfold. The dashboard's own `rowsRead` metric is
+per-DATABASE, so it can say the total moved but never which query moved it.
+
+Each statement is emitted to Workers Logs under a **low-cardinality** tag from
+`d1QueryTag` — `select:users`, `insert:orders`, `select:unknown` when no table
+token is recognisable. Verb + table, never the rendered SQL: grouping on the
+statement itself mints a tag per distinct parameter value and answers nothing.
+
+```jsonc
+{ "source": "lunora", "type": "d1_query", "tag": "select:users", "rowsRead": 204831, "rowsWritten": 0, "durationMs": 41 }
+```
+
+Group by `tag` in the Workers Logs Query Builder and "D1 reads spiked" resolves
+to one culprit. The emit is best-effort — instrumentation never fails the query
+it measures — and a result with no usable `meta` (a test double, a `batch()`
+leg that reports none) is skipped rather than logged as zeroes, which would read
+as "this query was free".
+
+`readD1QueryCost(meta)` projects the same numbers as a `D1QueryCost` if you want
+to route them somewhere other than Workers Logs.
+
 ## Atomicity
 
 Each migration's body and its tracking-table INSERT run together in one
-`client.batch([...])`, which D1 executes as an implicit transaction — they
+`client.batch([...])`, which D1 executes as an implicit transaction, so they
 commit or roll back as a unit. A body that committed before a failed tracking
 write would otherwise re-apply on the next run, which matters for
 non-idempotent migrations.
@@ -110,11 +326,5 @@ shaped in D1. The runtime (which auto-provisions tables) and the CLI's
 `migrate generate` SQL emitter both derive their DDL from it, so a generated
 migration matches the table the runtime creates byte for byte. Exports
 `quoteIdentifier`, `sqlAffinityForKind`, `frameworkColumnDdl`, `columnRef`,
-`physicalIndexName`, and the `SqlAffinity` type. You rarely import this directly
-— it exists so those two code paths stay in lockstep.
-
-## See also
-
-- [@lunora/cli](/docs/packages/cli) — the `lunora migrate generate` command
-- [@lunora/do](/docs/packages/do) — shard-local storage (no migrations needed)
-- [Concepts: schema](/docs/concepts/schema)
+`physicalIndexName`, and the `SqlAffinity` type. You rarely import this directly;
+it exists so those two code paths stay in lockstep.

@@ -3,6 +3,8 @@ import { evaluate } from "@lunora/ratelimit";
 import type { Readable } from "svelte/store";
 import { derived, writable } from "svelte/store";
 
+import { isBrowser } from "../../../shared/is-browser";
+
 export interface RateLimitOptions {
     /** Clock injection for tests. Defaults to `Date.now`. */
     now?: () => number;
@@ -88,8 +90,16 @@ export const rateLimit = (config: RateLimitConfig, options: RateLimitOptions = {
         }, tickMs);
     };
 
-    // Kick off the ticker if we start already throttled.
-    startIntervalIfThrottled();
+    // Kick off the ticker if we start already throttled — but only in the
+    // browser: a component's init can run server-side (this package pairs
+    // with `@lunora/nuxt`'s server rendering) with no `window`, and arming a
+    // bare `setInterval` there would strand a live timer for the life of the
+    // process (no `onDestroy` ever fires to call `teardown`). `consume()`'s
+    // own call below stays unguarded — an explicit caller invoking `consume()`
+    // is actively using the handle, and `reset()`/`teardown` remain reachable.
+    if (isBrowser()) {
+        startIntervalIfThrottled();
+    }
 
     const consume = (count = 1): RateLimitStatus => {
         const result = evaluate(config, value, { consume: true, count, now: now(), reserve: false });

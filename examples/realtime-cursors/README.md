@@ -48,6 +48,8 @@ const cursors = useQuery(api.cursors.listCursors, { roomId }, { shardKey: roomId
 the same value as the field you sharded on and Lunora opens exactly one
 DO connection per room.
 
+> Note: this demo sets `allowUnauthenticatedShardAccess: true` in `src/server/index.ts` so any caller may target any room shard (protected only by per-row RLS). A production sharded app must gate this instead by configuring `authorizeShard` on the worker.
+
 ### Throttling pointer moves to ~30fps
 
 ```tsx

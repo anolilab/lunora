@@ -81,9 +81,9 @@ import { createScheduler } from "@lunora/scheduler";
 
 import { api } from "@/lunora/_generated/api";
 
-const scheduler = createScheduler({ namespace: env.SCHEDULER, originUrl: "https://app.acme.test" });
+const scheduler = createScheduler({ namespace: env.SCHEDULER });
 
-const { id } = await scheduler.runAfter(5 * 60_000, api.email.sendReminder, { userId: "u-1" });
+const id = await scheduler.runAfter(5 * 60_000, api.email.sendReminder, { userId: "u-1" });
 await scheduler.cancel(id);
 ```
 
@@ -93,17 +93,18 @@ Declare recurring jobs in `lunora/crons.ts` — codegen lifts them into
 ```ts
 import { cronJobs } from "@lunora/scheduler";
 
-import { internal } from "@/lunora/_generated/api";
+import { internal } from "@/lunora/_generated/internal";
 
 const crons = cronJobs();
 
 crons.interval("clear presence", { minutes: 30 }, internal.presence.clear, {});
+crons.hourly("sweep sessions", { minuteUTC: 17 }, internal.presence.sweep, {});
 crons.daily("send digest", { hourUTC: 9, minuteUTC: 0 }, internal.email.digest, {});
 
 export default crons;
 ```
 
-> This README covers the basics. For the full API, options, and guides, see the **[documentation](https://lunora.sh/docs/addons/scheduler)**.
+> This README covers the basics. For the full API, options, and guides, see the **[documentation](https://lunora.sh/docs/packages/scheduler)**.
 
 ## Related
 

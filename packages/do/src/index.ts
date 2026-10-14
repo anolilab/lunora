@@ -1,195 +1,27 @@
-export type {
-    ExportRow,
-    ExportShardAdminArgs,
-    ExportShardArgs,
-    ImportError,
-    ImportShardAdminArgs,
-    ImportShardArgs,
-    ImportShardResult,
-} from "./admin-export-import";
-export {
-    exportShardRows,
-    exportShardTable,
-    importShardRows,
-    parseExportShardArgs,
-    parseImportShardArgs,
-    selectExportTables,
-    validateImportRow,
-} from "./admin-export-import";
-export { AGGREGATE_SQL_FUNCTION, aggregateSqlFunction, matchesStaticWhere, normalizeCountArgument, throwingScheduler } from "./aggregate-sql";
-export type { AggregateTally } from "./aggregate-tally";
-export { aggregateTableName, coerceAggregateNumber, encodeAggregateKey, foldAggregateTally, readAggregateValue } from "./aggregate-tally";
-export type {
-    AggregateIndexDefinitionLike,
-    AggregateOp,
-    AggregateOptions,
-    AggregateResult,
-    GroupByEntry,
-    GroupByOptions,
-    RestrictableQueryOptions,
-} from "./aggregates";
-export { CountRlsUnsupportedError, mergeWhere, planAggregateLookup, selectIndexForAggregate, selectIndexForCount, selectIndexForGroupBy } from "./aggregates";
-export type { AuthMetrics, AuthMetricsBucket, RecordAuthEventInput } from "./auth-metrics";
-export {
-    AUTH_METRICS_BUCKET_MS,
-    AUTH_METRICS_BUCKET_RETENTION,
-    AUTH_METRICS_BUCKETS_TABLE,
-    AUTH_METRICS_TABLE,
-    ensureAuthMetricsTables,
-    readAuthMetrics,
-    recordAuthEvent,
-} from "./auth-metrics";
-export type {
-    BroadcastDelta,
-    CdcChange,
-    Clock,
-    ColumnMetaLike,
-    CountArgs,
-    CtxDbOptions,
-    DatabaseWriterLike,
-    IdGenerator,
-    IndexDefinitionLike,
-    IndexRangeBuilderLike,
-    PaginationOptions,
-    ReadHook,
-    SchemaLike,
-    SearchFilterBuilderLike,
-    ServerDefaultContextLike,
-    SqlCursor,
-    SqlExec,
-    TableDefinitionLike,
-    TableReaderLike,
-    ValidatorLike,
-    WriteEvent,
-    WriteHook,
-} from "./ctx-db";
-export {
-    applyCdcChanges,
-    assertValidClientId,
-    backfillAggregateIndexes,
-    backfillRankIndexes,
-    CDC_LOG_TABLE,
-    createShardCtxDb,
-    normalizeIdStructurally,
-    NotUniqueError,
-    readCdcChanges,
-    runShardMigrations,
-    trimCdcChanges,
-} from "./ctx-db";
-export type {
-    DataMigrationDocument,
-    DataMigrationLike,
-    DataMigrationTransform,
-    MigrationDirection,
-    MigrationRunResult,
-    MigrationStatus,
-    MigrationStatusRow,
-    RunDataMigrationOptions,
-} from "./data-migration";
-export { DATA_MIGRATION_STATE_TABLE, readMigrationStatus, runDataMigration } from "./data-migration";
-export type { DependencyTracker } from "./dependency-tracker";
-export { createDependencyTracker, depKey, SCAN_DEP } from "./dependency-tracker";
-export type { RenderedSql, SqlEngine } from "./drizzle";
-export { renderSql } from "./drizzle";
-export type { FunctionMetricBucket, FunctionMetricIndexHit, RecordFunctionMetricInput } from "./function-metrics";
-export {
-    ensureFunctionMetricsTables,
-    FUNCTION_METRICS_BUCKET_MS,
-    FUNCTION_METRICS_BUCKET_RETENTION,
-    FUNCTION_METRICS_BUCKETS_TABLE,
-    FUNCTION_METRICS_INDEX_TABLE,
-    FUNCTION_METRICS_TABLE,
-    readFunctionMetricBuckets,
-    readFunctionMetricIndexHits,
-    readFunctionMetrics,
-    readFunctionMetricsTotals,
-    recordFunctionMetric,
-} from "./function-metrics";
-export type {
-    AdvisoriesResult,
-    AdvisoryFinding,
-    AuditEntry,
-    AuditLogResult,
-    ColumnMeta,
-    DeployInfo,
-    FacetColumnOptions,
-    FacetColumnResult,
-    FacetValue,
-    FunctionCallStat,
-    FunctionStatsResult,
-    MaskColumnMetadata,
-    MaskPoliciesResult,
-    ReadTablePageOptions,
-    RlsPoliciesResult,
-    RlsPolicyMetadata,
-    RlsRoleMetadata,
-    SelectMatchingIdsOptions,
-    SettingEntry,
-    SettingKind,
-    SettingsResult,
-    StorageRuleMetadata,
-    StorageRulesResult,
-    StudioFeaturesResult,
-    TableColumnsResult,
-    TableIndexesResult,
-    TableIndexInfo,
-    TableInfo,
-    TablePage,
-    TablesColumnsResult,
-    WorkflowMetadata,
-    WorkflowsResult,
-} from "./introspect";
-export { ADMIN_FUNCTION_PREFIX, ADMIN_FUNCTIONS, facetColumn, listTables, readTablePage, RELATION_FUNCTION_PREFIX, selectMatchingIds } from "./introspect";
-export type { LogEntry, LogLevel } from "./log-buffer";
-export { LogBuffer } from "./log-buffer";
-export type { CapturedMailRow, RecordMailInput } from "./mail-catcher";
-export { clearCapturedMail, ensureMailTable, MAIL_RETENTION, MAIL_TABLE, readCapturedMail, recordCapturedMail } from "./mail-catcher";
-export { default as NotFoundError } from "./not-found-error";
-export type { PitrBookmarkResult, PitrRestoreArgs, PitrRestoreResult, PitrStorage } from "./pitr";
-export { armRestore, readBookmark } from "./pitr";
-export type { OrderByInput, OrderKey, QueryArgs, QueryPage, SortDirection } from "./query-args";
-export { buildSeekWhere, decodeCursor, encodeCursor, normalizeOrderKeys } from "./query-args";
-export type {
-    RankDirection,
-    RankIndexDefinitionLike,
-    RankOptions,
-    RankPage,
-    RankPageOptions,
-    RankPageRow,
-    RankPageRowKey,
-    RankResult,
-    RankSortKeyLike,
-    ShardRankPageResult,
-} from "./rank";
-export { encodePartitionKey, matchesRankStaticWhere, RANK_TIEBREAK, rankTableName, resolveRankPartition, sortColumnName } from "./rank";
-export type { CacheEntry, ReactiveCacheOptions } from "./reactive-cache";
-export { ReactiveCache, reactiveCacheKey, stableStringify } from "./reactive-cache";
+export type { DurableObjectHandlers, MergedDurableObject, MergedRole, MergedRoles, RoleClass, RoleNamespaceTarget } from "./merge-durable-objects";
+export { MERGED_ROLES, mergeDurableObjects, roleNamespace } from "./merge-durable-objects";
+// `external-source-cursor` is an internal ingest detail (the durable watermark
+// codec + reserved-table helpers), consumed only by `external-source-pull` and its
+// own tests — not re-exported, mirroring `external-source-diff`'s module-private
+// `projectExternalSourceRow`.
 export { serveRelationFanout } from "./relation-fanout";
-export type { ResolveRelationPredicatesOptions } from "./relation-predicates";
-export {
-    assertFlatPredicate,
-    containsRelationPredicate,
-    DEFAULT_MAX_RELATION_KEYS,
-    isRelationPredicate,
-    resolveRelationPredicates,
-} from "./relation-predicates";
-export type { ApplyOnDeleteOptions, NestedWith, OnDeleteActionLike, RelationDefinitionLike, ResolveWithOptions, WithInput } from "./relations";
-export { applyOnDelete, resolveWith, runRowValidators } from "./relations";
-export type { LogEventInput } from "./request-log";
-export { guardWriter, RLS_UNWRAP_SYMBOL, RlsRequiredError } from "./rls-guard";
-export { buildFtsMatch, ftsTableName, scoreDocument, stringifySearchText, tokenizeSearch } from "./search-text";
-export type { SecurityAuditResult, SecurityFinding, SecurityFindingKind, SecurityFindingLevel } from "./security-audit";
-export { buildSecurityAudit, MIN_ADMIN_TOKEN_LENGTH, MIN_AUTH_SECRET_LENGTH } from "./security-audit";
+// The search core moved out of this package. It used to be re-exported from
+// here so `@lunora/sql-store` could reuse it, which turned two dozen internal
+// contracts into permanent public API for no reason other than cross-package
+// reach. `guardWriter` left for the same reason and now lives in
+// `@lunora/shard-engine`, which re-exports it.
 export type { SessionRecord } from "./session-do";
 export { SESSION_DO_TTL_DEFAULT, SessionDO } from "./session-do";
 export type {
+    DispatchBookmark,
     HibernatableWebSocket,
-    LogSink,
+    QueryReadScope,
     RunShardApplyCdcArgs,
     RunShardApplyCdcResult,
-    RunShardBulkDeleteArgs,
-    RunShardBulkDeleteResult,
+    RunShardBulkRowArgs,
+    RunShardBulkRowResult,
     RunShardExportArgs,
+    RunShardFindRelatedArgs,
     RunShardImportArgs,
     RunShardMigrationArgs,
     RunShardRankBeforeArgs,
@@ -199,35 +31,74 @@ export type {
     ShardDOOptions,
     ShardDOState,
     SubscriptionOutcome,
+    TelemetrySink,
+    TraceRefLike,
 } from "./shard-do";
 export { ROOT_DO_SIZE_WARN_BYTES, ROOT_SHARD_NAME, ShardDO, subscriptionListDeltas } from "./shard-do";
 export { SHARD_REGISTRY_DO_NAME, ShardRegistryDO } from "./shard-registry-do";
-export type { SqlConsoleResult } from "./sql-console";
-export { assertReadonly, MAX_SQL_ROWS, runReadonlySql } from "./sql-console";
+export { createStableIdFactory } from "./stable-id";
+// Cloudflare implementations of the `@lunora/platform` host contracts. These
+// are what `@lunora/platform-cloudflare` will re-export as the default host.
+export { createShardAlarms, createShardDirectory, createShardHost, createShardKvStore, createSocketHost } from "@lunora/platform-cloudflare";
+// The Cloudflare composition root: every `@lunora/platform` contract assembled
+// from the two lifetimes a Worker has (DO state, worker env).
+export type { ShardPlatform, WorkerPlatform, WorkerPlatformOptions } from "@lunora/platform-cloudflare";
+export { createShardPlatform, createWorkerPlatform } from "@lunora/platform-cloudflare";
+// Every re-export below must have a named consumer (the codegen emitter's
+// import builders, or an import site in this repo). Additions require one;
+// drive-by re-exports are how 230 unused names got frozen here (plan 286).
+//
+// The 237 that had no consumer were removed; everything they named is still
+// exported by `@lunora/shard-engine`, which is where to import it from.
+export type { ExportRow, ImportShardResult } from "@lunora/shard-engine";
+export type { DataMigrationLike, MigrationRunResult } from "@lunora/shard-engine";
+export type { KeyRange } from "@lunora/shard-engine";
+// Named in the emitted shard's `executeSubscription` / `executeStream` /
+// `resolveShape` / `readGlobalShapeRows` / `buildCtx` signatures, so adding a
+// member to it is a compile error in every generated app rather than six inline
+// copies that silently disagree.
+export type { SubscriptionIdentity } from "@lunora/shard-engine";
+export type { TransactionHeadroomTracker } from "@lunora/shard-engine";
+export type { DatabaseWriterLike, SchemaLike, SqlExec, ValidatorLike, WriteHook } from "@lunora/shard-engine";
 export type {
-    ScheduledFunctionDoc,
-    SystemDatabaseReader,
-    SystemDoc,
-    SystemQuery,
-    SystemReaderOptions,
-    SystemReaderSchedulerLike,
-    SystemReaderStorageLike,
-    SystemTableName,
-} from "./system-reader";
-export { createSystemReader } from "./system-reader";
-export type { TransactionSqlLike } from "./transaction";
-export { ConflictError } from "./transaction";
-export type {
-    RunTriggersOptions,
-    SchedulerLike,
-    TriggerContextLike,
-    TriggerDefinitionLike,
-    TriggerEventLike,
-    TriggerOpLike,
-    TriggerTimingLike,
-} from "./triggers";
-export { hasTrigger, runTriggers } from "./triggers";
-export type { MutationDelta, RpcRequest, SocketAttachment, SubscriptionEnvelope, SubscriptionQuery } from "./types";
-export type { WhereSqlStrategy } from "./where-sql";
-export { compileWhereSql } from "./where-sql";
-export type { FieldOperators, WhereInput } from "./where-types";
+    AdvisorProcedure,
+    AdvisoryFinding,
+    FlagsResult,
+    MaskPoliciesResult,
+    QueuesResult,
+    RlsPoliciesResult,
+    StorageRulesResult,
+    StudioFeaturesResult,
+    WorkflowsResult,
+} from "@lunora/shard-engine";
+export type { SystemReaderStorageLike } from "@lunora/shard-engine";
+export type { SchedulerLike } from "@lunora/shard-engine";
+export type { AggregateIndexDefinitionLike } from "@lunora/shard-engine";
+export type { RankIndexDefinitionLike, ShardRankPageResult } from "@lunora/shard-engine";
+export type { RelatedPage } from "@lunora/shard-engine";
+export type { MutationDelta } from "@lunora/shard-engine";
+export type { SearchBackfillProgress, VectorBackfillProgress } from "@lunora/shard-engine";
+export { createReadFootprint, markUnvouchableReads, UNVOUCHABLE_DEP } from "@lunora/shard-engine";
+export { exportShardRows, importShardRows } from "@lunora/shard-engine";
+export { runDataMigration } from "@lunora/shard-engine";
+export { buildReprojectionMigration, countLegacyRows, REPROJECTION_MIGRATION_PREFIX, reprojectionMigrationId, reprojectionTables } from "@lunora/shard-engine";
+export { isSourceDue, pullExternalSourceIncrementalTick, pullExternalSourceTick } from "@lunora/shard-engine";
+export { applyCdcChanges, backfillSearchIndexes, backfillVectorIndexes, clearMemoryTables, createShardCtxDb, runShardMigrations } from "@lunora/shard-engine";
+export { assertShapeShardable } from "@lunora/shard-engine";
+
+// Emitter-conditional: the generated shard imports `WhereInput` when the project
+// declares shapes and the two source `*Like`s when it declares `.source()` tables
+// (`packages/codegen/src/emit/shard.ts`).
+export type { ExternalSourceLike, SourceClientLike, WhereInput } from "@lunora/shard-engine";
+
+// Observability is NOT re-exported from here. It lives in `@lunora/observability`
+// and consumers import it from there directly.
+//
+// Re-exporting it would put this package back in the middle of a dependency it
+// does not own: every symbol that package adds would silently widen this one's
+// frozen surface, and a second host would reach telemetry *through* the
+// Cloudflare package — the exact coupling the extraction removed.
+// The reactive engine lives in `@lunora/shard-engine` (host-neutral: it touches
+// only SQL and the schema, never a Durable Object). Only the names codegen emits
+// against are re-exported here — plan 114 §5.2's freeze covers that emitted set,
+// not the engine's whole barrel.

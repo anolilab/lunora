@@ -1,11 +1,11 @@
-import { mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import type { Logger } from "../../src/util/logger";
-import { compareVersions, formatUpdateNotice, isCacheFresh, isNewer, maybeNotifyUpdate } from "../../src/util/update-notifier";
+import { compareVersions, distTagFor, formatUpdateNotice, isCacheFresh, isNewer, maybeNotifyUpdate } from "../../src/util/update-notifier";
 
 const recordingLogger = (): { logger: Logger; warns: string[] } => {
     const warns: string[] = [];
@@ -23,20 +23,42 @@ const okFetch = (version: string) => async () => {
 };
 
 describe("update-notifier helpers", () => {
-    it("compareVersions orders by major.minor.patch and ignores prerelease", () => {
-        expect.assertions(4);
+    it("compareVersions orders by full semver precedence", () => {
+        expect.assertions(7);
 
         expect(compareVersions("1.2.3", "1.2.4")).toBe(-1);
         expect(compareVersions("2.0.0", "1.9.9")).toBe(1);
         expect(compareVersions("1.2.3", "1.2.3")).toBe(0);
-        expect(compareVersions("1.2.3", "1.2.3-beta.1")).toBe(0);
+        // A release outranks its own prereleases, and prereleases order among
+        // themselves — the whole point, since this package lives on
+        // `1.0.0-alpha.N` and a core-only comparison would rate every alpha
+        // equal to every other and never report an update.
+        expect(compareVersions("1.2.3", "1.2.3-beta.1")).toBe(1);
+        expect(compareVersions("1.0.0-alpha.5", "1.0.0-alpha.119")).toBe(-1);
+        expect(compareVersions("1.0.0-alpha.119", "1.0.0-alpha.119")).toBe(0);
+        expect(compareVersions("1.0.0-alpha.2", "1.0.0-beta.1")).toBe(-1);
+    });
+
+    it("distTagFor keeps a prerelease user on their own channel", () => {
+        expect.assertions(5);
+
+        // Checking an alpha user against `latest` is worse than not checking:
+        // the tag may not exist, and installing it moves them off the channel.
+        expect(distTagFor("1.0.0-alpha.119")).toBe("alpha");
+        expect(distTagFor("1.0.0-beta.2")).toBe("beta");
+        expect(distTagFor("1.2.3")).toBe("latest");
+        expect(distTagFor("1.2.3-0")).toBe("latest");
+        // Lowercase-word-shaped, but this project publishes no `rc` tag — a
+        // request for it would 404 and the notifier would go quiet forever.
+        expect(distTagFor("1.0.0-rc.1")).toBe("latest");
     });
 
     it("isNewer is true only for a strictly greater release", () => {
-        expect.assertions(2);
+        expect.assertions(3);
 
         expect(isNewer("1.0.0", "1.0.1")).toBe(true);
         expect(isNewer("1.0.1", "1.0.0")).toBe(false);
+        expect(isNewer("1.0.0-alpha.118", "1.0.0-alpha.119")).toBe(true);
     });
 
     it("isCacheFresh honours the TTL window", () => {
@@ -47,9 +69,30 @@ describe("update-notifier helpers", () => {
     });
 
     it("formatUpdateNotice mentions both versions", () => {
-        expect.assertions(1);
+        expect.assertions(2);
 
         expect(formatUpdateNotice("1.0.0", "2.0.0")).toContain("1.0.0 → 2.0.0");
+        // The advice must keep the user on their own channel.
+        expect(formatUpdateNotice("1.0.0-alpha.1", "1.0.0-alpha.2", "alpha")).toContain("@lunora/cli@alpha");
+    });
+
+    it("formatUpdateNotice names the detected manager's own add-dependency command", () => {
+        expect.assertions(3);
+
+        // A yarn project must not be told to run a pnpm command it may not
+        // even have installed.
+        expect(formatUpdateNotice("1.0.0", "2.0.0", "latest", "yarn")).toContain("yarn add -D @lunora/cli@latest");
+        expect(formatUpdateNotice("1.0.0", "2.0.0", "latest", "npm")).toContain("npm install --save-dev @lunora/cli@latest");
+        expect(formatUpdateNotice("1.0.0", "2.0.0", "latest", "bun")).toContain("bun add -d @lunora/cli@latest");
+    });
+
+    it("formatUpdateNotice stays manager-neutral when detection failed", () => {
+        expect.assertions(1);
+
+        // No manager could be resolved: naming a specific command would be a
+        // guess, not a signal — the whole point of this being package-manager
+        // aware in the first place.
+        expect(formatUpdateNotice("1.0.0", "2.0.0")).not.toMatch(/\b(?:pnpm|npm|yarn|bun)\b/u);
     });
 });
 
@@ -110,5 +153,51 @@ describe("maybeNotifyUpdate", () => {
         await maybeNotifyUpdate({ cacheDir, current: "2.0.0", env: baseEnv, fetchImpl: okFetch("2.0.0"), isTTY: true, logger });
 
         expect(warns).toHaveLength(0);
+    });
+
+    it("defaults the cache under $XDG_CACHE_HOME/lunora, not the shared temp dir", async () => {
+        expect.assertions(2);
+
+        const xdgDir = mkdtempSync(join(tmpdir(), "lunora-xdg-"));
+        const sharedTmpPath = join(tmpdir(), "lunora-cli-update.json");
+        const tmpExistedBefore = existsSync(sharedTmpPath);
+
+        try {
+            const { logger } = recordingLogger();
+
+            // No explicit cacheDir — the default must resolve to the user-owned XDG dir.
+            await maybeNotifyUpdate({
+                current: "1.0.0",
+                env: { XDG_CACHE_HOME: xdgDir },
+                fetchImpl: okFetch("2.0.0"),
+                isTTY: true,
+                logger,
+                now: () => 1000,
+            });
+
+            expect(existsSync(join(xdgDir, "lunora", "lunora-cli-update.json"))).toBe(true);
+            // The notifier must not have written the predictable shared-tmp path.
+            expect(existsSync(sharedTmpPath) && !tmpExistedBefore).toBe(false);
+        } finally {
+            rmSync(xdgDir, { force: true, recursive: true });
+        }
+    });
+
+    it("refuses to write through a pre-planted symlink (no clobber of the target)", async () => {
+        expect.assertions(2);
+
+        const sentinel = join(cacheDir, "victim.txt");
+
+        writeFileSync(sentinel, "do-not-touch", "utf8");
+        // Attacker pre-creates the cache path as a symlink to the victim file.
+        symlinkSync(sentinel, join(cacheDir, "lunora-cli-update.json"));
+
+        const { logger, warns } = recordingLogger();
+
+        await maybeNotifyUpdate({ cacheDir, current: "1.0.0", env: baseEnv, fetchImpl: okFetch("2.0.0"), isTTY: true, logger, now: () => 1000 });
+
+        // The symlink target must be untouched; the notice still fires off the fetched version.
+        expect(readFileSync(sentinel, "utf8")).toBe("do-not-touch");
+        expect(warns).toHaveLength(1);
     });
 });

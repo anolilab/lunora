@@ -1,0 +1,61 @@
+{
+    "name": "@lunora-example/expo",
+    "version": "0.0.0",
+    "private": true,
+    "license": "FSL-1.1-Apache-2.0",
+    "main": "index.ts",
+    "imports": {
+        "#lunora/*": "./lunora/*"
+    },
+    "scripts": {
+        "start": "expo start --dev-client",
+        "android": "expo run:android",
+        "ios": "expo run:ios",
+        "codegen": "node node_modules/lunorash/dist/bin.mjs codegen",
+        "deploy": "wrangler deploy",
+        "dev:server": "wrangler dev",
+        "lint:types": "node node_modules/lunorash/dist/bin.mjs codegen && tsc --noEmit",
+        "lint:eslint": "eslint . --max-warnings=0",
+        "lint:eslint:fix": "eslint . --fix"
+    },
+    "dependencies": {
+        "@better-auth/expo": "catalog:auth",
+        "@lunora/auth": "workspace:*",
+        "@lunora/react": "workspace:*",
+        "@lunora/react-native": "workspace:*",
+        "@react-native-async-storage/async-storage": "catalog:expo",
+        "@tanstack/react-query": "catalog:frontend",
+        "better-auth": "catalog:auth",
+        "expo": "catalog:expo",
+        "expo-constants": "catalog:expo",
+        "expo-dev-client": "catalog:expo",
+        "expo-linking": "catalog:expo",
+        "expo-modules-core": "catalog:expo",
+        "expo-network": "catalog:expo",
+        "expo-secure-store": "catalog:expo",
+        "expo-status-bar": "catalog:expo",
+        "expo-web-browser": "catalog:expo",
+        "lunorash": "workspace:*",
+        "react": "catalog:frontend",
+        "react-native": "catalog:expo",
+        "react-native-safe-area-context": "catalog:expo"
+    },
+    "devDependencies": {
+        "@cloudflare/workers-types": "catalog:cloudflare",
+        "@types/node": "catalog:types",
+        "@types/react": "catalog:frontend",
+        "typescript": "catalog:tsc",
+        "wrangler": "catalog:cloudflare"
+    },
+    "engines": {
+        "node": "^22.15.0 || >=24.11.0"
+    },
+    "expo": {
+        "install": {
+            "exclude": [
+                "@react-native-async-storage/async-storage",
+                "react-native-safe-area-context"
+            ]
+        }
+    }
+}

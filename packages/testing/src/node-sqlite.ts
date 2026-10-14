@@ -1,7 +1,8 @@
 // eslint-disable-next-line n/no-unsupported-features/node-builtins -- `node:sqlite` is stable enough on the supported runtimes (Node ^22.15 || >=24.10) and is the deliberate in-memory engine for this Node-only harness
 import { DatabaseSync } from "node:sqlite";
 
-import type { SqlCursor, SqlExec } from "@lunora/do";
+import { LunoraError } from "@lunora/errors";
+import type { SqlCursor, SqlExec } from "@lunora/shard-engine";
 
 /**
  * Adapts Node's built-in `node:sqlite` engine to the {@link SqlExec} surface
@@ -27,7 +28,7 @@ const createSqlExec = (): { close: () => void; sql: SqlExec } => {
         return {
             one() {
                 if (rows.length !== 1) {
-                    throw new Error(`expected exactly one row, received ${String(rows.length)}`);
+                    throw new LunoraError("INTERNAL", `expected exactly one row, received ${String(rows.length)}`);
                 }
 
                 const [only] = rows;

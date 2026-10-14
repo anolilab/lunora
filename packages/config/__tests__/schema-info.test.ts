@@ -1,0 +1,225 @@
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
+
+import { discoverSchemaInfo } from "../src/schema-info";
+
+/**
+ * What the CLI and the Vite plugin read out of a project's `schema.ts` without
+ * executing it.
+ *
+ * The `vectorMetadata` half is the load-bearing one, and its failure mode is
+ * silent: Cloudflare only filters on a Vectorize metadata property that has an
+ * explicit metadata index, and a missing (or wrongly typed) index makes
+ * `filter` match *nothing* — no error, no warning, just an empty result set
+ * that looks like "no documents matched". Both consumers derive the exact index
+ * to create from what this returns, so a property missed here, or paired with
+ * the wrong column kind, produces an index that can never match.
+ */
+
+const SCHEMA_HEADER = `import { defineSchema, defineTable, v } from "@lunora/server";
+
+const embed = async (text: string): Promise<number[]> => [text.length];
+`;
+
+let workdir: string;
+
+const seedSchema = (source: string): string => {
+    mkdirSync(join(workdir, "lunora"), { recursive: true });
+    writeFileSync(join(workdir, "lunora", "schema.ts"), source, "utf8");
+
+    return workdir;
+};
+
+// One outer block so the shared temp-dir setup lives inside a describe, as the
+// suite convention requires.
+describe("schema info", () => {
+    beforeEach(() => {
+        workdir = mkdtempSync(join(tmpdir(), "lunora-schema-info-"));
+    });
+
+    afterEach(() => {
+        rmSync(workdir, { force: true, recursive: true });
+    });
+
+    describe("discoverSchemaInfo", () => {
+        it("returns nothing at all when the project has no schema", () => {
+            expect.assertions(2);
+
+            const result = discoverSchemaInfo(workdir, "lunora");
+
+            // Absent, not an error: plenty of commands run before `lunora init`.
+            expect(result.info).toBeUndefined();
+            expect(result.error).toBeUndefined();
+        });
+
+        it("pairs each declared metadata property with the column's kind", () => {
+            expect.assertions(1);
+
+            seedSchema(`${SCHEMA_HEADER}
+    export const schema = defineSchema({
+        docs: defineTable({
+            body: v.string(),
+            published: v.boolean(),
+            rank: v.number(),
+            workspaceId: v.id("workspaces"),
+        }).vectorize("body", { dimensions: 1024, embed, index: "docs-body", metadata: ["workspaceId", "published", "rank"], metric: "cosine" }),
+    });
+    `);
+
+            // The kind is what decides the metadata index's *type*, and Vectorize
+            // will not match a filter against an index created with the wrong one.
+            expect(discoverSchemaInfo(workdir, "lunora").info?.vectorMetadata).toStrictEqual([
+                { index: "docs-body", kind: "id", property: "workspaceId" },
+                { index: "docs-body", kind: "boolean", property: "published" },
+                { index: "docs-body", kind: "number", property: "rank" },
+            ]);
+        });
+
+        it("indexes an optional or nullable metadata column as its inner kind (#1033)", () => {
+            expect.assertions(1);
+
+            seedSchema(`${SCHEMA_HEADER}
+    export const schema = defineSchema({
+        docs: defineTable({
+            body: v.string(),
+            userId: v.optional(v.string()),
+            score: v.optional(v.number()),
+            tag: v.union(v.string(), v.null()),
+            status: v.optional(v.union(v.literal("draft"), v.literal("live"))),
+        }).vectorize("body", { dimensions: 1024, embed, index: "docs-body", metadata: ["userId", "score", "tag", "status"], metric: "cosine" }),
+    });
+    `);
+
+            // Metadata columns are usually optional (not every row has the value);
+            // reading the wrapper's kind dropped their index, so every filter on
+            // them silently matched nothing.
+            expect(discoverSchemaInfo(workdir, "lunora").info?.vectorMetadata).toStrictEqual([
+                { index: "docs-body", kind: "string", property: "userId" },
+                { index: "docs-body", kind: "number", property: "score" },
+                { index: "docs-body", kind: "string", property: "tag" },
+                { index: "docs-body", kind: "literal", property: "status" },
+            ]);
+        });
+
+        it("reports a metadata property that names no column, rather than dropping it", () => {
+            expect.assertions(1);
+
+            seedSchema(`${SCHEMA_HEADER}
+    export const schema = defineSchema({
+        docs: defineTable({
+            body: v.string(),
+        }).vectorize("body", { dimensions: 1024, embed, index: "docs-body", metadata: ["ghost"], metric: "cosine" }),
+    });
+    `);
+
+            // An unresolvable kind has to survive as `undefined` so the callers can
+            // say "this can never be filtered on" — silently omitting it would look
+            // identical to a schema that never declared it.
+            expect(discoverSchemaInfo(workdir, "lunora").info?.vectorMetadata).toStrictEqual([{ index: "docs-body", kind: undefined, property: "ghost" }]);
+        });
+
+        it("yields an empty list for a vector index that declares no metadata", () => {
+            expect.assertions(2);
+
+            seedSchema(`${SCHEMA_HEADER}
+    export const schema = defineSchema({
+        docs: defineTable({ body: v.string() }).vectorize("body", { dimensions: 1024, embed, index: "docs-body", metric: "cosine" }),
+    });
+    `);
+
+            const { info } = discoverSchemaInfo(workdir, "lunora");
+
+            // The index still exists (it needs a wrangler binding); it just has
+            // nothing to filter on.
+            expect(info?.vectorIndexNames).toStrictEqual(["docs-body"]);
+            expect(info?.vectorMetadata).toStrictEqual([]);
+        });
+
+        it("reports whether any table is global, which decides the D1 binding", () => {
+            expect.assertions(2);
+
+            seedSchema(`${SCHEMA_HEADER}
+    export const schema = defineSchema({
+        messages: defineTable({ channelId: v.id("channels"), text: v.string() }).shardBy("channelId"),
+    });
+    `);
+
+            expect(discoverSchemaInfo(workdir, "lunora").info?.hasD1GlobalTable).toBe(false);
+
+            seedSchema(`${SCHEMA_HEADER}
+    export const schema = defineSchema({
+        users: defineTable({ email: v.string() }).global(),
+    });
+    `);
+
+            expect(discoverSchemaInfo(workdir, "lunora").info?.hasD1GlobalTable).toBe(true);
+        });
+
+        it("separates a Hyperdrive-backed global from a D1-backed one — they need different bindings and different chains", () => {
+            expect.assertions(4);
+
+            seedSchema(`${SCHEMA_HEADER}
+    export const schema = defineSchema({
+        users: defineTable({ email: v.string() }).global({ backend: "hyperdrive" }),
+    });
+    `);
+
+            const hyperdrive = discoverSchemaInfo(workdir, "lunora").info;
+
+            // No D1 database is involved, so demanding a `DB` binding (or the
+            // app's `.global({ d1 })` chain) would block a correctly wired project.
+            expect(hyperdrive?.hasD1GlobalTable).toBe(false);
+            expect(hyperdrive?.hasHyperdriveGlobalTable).toBe(true);
+
+            seedSchema(`${SCHEMA_HEADER}
+    export const schema = defineSchema({
+        users: defineTable({ email: v.string() }).global(),
+    });
+    `);
+
+            const d1 = discoverSchemaInfo(workdir, "lunora").info;
+
+            expect(d1?.hasD1GlobalTable).toBe(true);
+            expect(d1?.hasHyperdriveGlobalTable).toBe(false);
+        });
+
+        it("reports the schema's data-residency jurisdiction, and none when it declares none", () => {
+            expect.assertions(2);
+
+            seedSchema(`${SCHEMA_HEADER}
+    export const schema = defineSchema({
+        messages: defineTable({ text: v.string() }),
+    }).jurisdiction("eu");
+    `);
+
+            expect(discoverSchemaInfo(workdir, "lunora").info?.jurisdiction).toBe("eu");
+
+            seedSchema(`${SCHEMA_HEADER}
+    export const schema = defineSchema({
+        messages: defineTable({ text: v.string() }),
+    });
+    `);
+
+            expect(discoverSchemaInfo(workdir, "lunora").info).not.toHaveProperty("jurisdiction");
+        });
+
+        it("degrades to empty information on a schema it cannot make sense of, rather than throwing", () => {
+            expect.assertions(3);
+
+            seedSchema(`export const schema = defineSchema({{{ broken`);
+
+            const result = discoverSchemaInfo(workdir, "lunora");
+
+            // Every caller is a lint/validate/scaffold path that has other findings
+            // to report, so a schema mid-edit must not take them down with it. The
+            // parser is lenient and simply finds no tables; a real syntax error is
+            // `lint:types`' and codegen's to report, not this one's.
+            expect(result.error).toBeUndefined();
+            expect(result.info?.vectorMetadata).toStrictEqual([]);
+            expect(result.info?.hasD1GlobalTable).toBe(false);
+        });
+    });
+});

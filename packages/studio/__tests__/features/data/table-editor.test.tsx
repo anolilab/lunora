@@ -90,7 +90,8 @@ describe("tableEditor", () => {
         await screen.findByTestId("lunora-global-data-browser");
 
         expect(screen.queryByTestId("lunora-data-browser")).toBeNull();
-        expect(screen.getByTestId("gdb-table-organizations")).toBeDefined();
+        // findBy: the sidebar only populates once the async `listGlobalTables` resolves.
+        await expect(screen.findByTestId("gdb-table-organizations")).resolves.toBeDefined();
         expect(schemaParam(router)).toBe("global");
     });
 

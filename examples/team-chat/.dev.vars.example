@@ -1,0 +1,5 @@
+# Copy to `.dev.vars` (gitignored) before `pnpm dev`.
+# Generate each with: openssl rand -hex 32
+AUTH_SECRET=dev-only-change-me
+# Signs the upload/download URLs the `/files/*` route verifies.
+STORAGE_SECRET=dev-only-change-me-too

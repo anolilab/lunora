@@ -6,24 +6,10 @@
  * kept in lockstep with `@cloudflare/workers-types`' `Workflow` /
  * `WorkflowInstance` / `WorkflowStep` / `WorkflowEvent` declarations.
  */
+
 import type { InferValidatorMap, Validator, ValidatorMap } from "@lunora/values";
 
-/**
- * Opaque reference to a Lunora function. Mirrors the `FunctionReference` shape
- * emitted by `@lunora/codegen` (and consumed by `@lunora/client`). We avoid a
- * direct dependency to keep this package usable from the codegen pipeline
- * itself — identical rationale to `@lunora/scheduler`'s copy.
- *
- * The runtime identifier lives in `__lunoraRef` — this MUST stay in lockstep
- * with the codegen emit + `@lunora/client`'s `FunctionReference`.
- */
-export interface FunctionReference {
-    readonly __lunoraRef: string;
-    /** Marker phantom type — discriminates queries / mutations / actions. */
-    readonly _kind?: "query" | "mutation" | "action";
-}
-
-export type ArgsOf<F extends FunctionReference> = F extends { _args?: infer A } ? A : Record<string, unknown>;
+import type { ArgsOf, FunctionReference } from "../../../shared/function-reference";
 
 // --- Structural mirror of the Cloudflare Workflows runtime ----------------
 
@@ -43,18 +29,89 @@ export interface WorkflowCreateOptions<Params = Record<string, unknown>> {
     id?: string;
     /** The event payload the instance is triggered with — surfaced as `event.payload`. */
     params?: Params;
-    /** Instance retention policy (defaults to the account maximum). */
-    retention?: { errorRetention?: string; successRetention?: string };
+    /** Instance retention policy (defaults to the workflow's `defaultRetention`, else the plan default). */
+    retention?: WorkflowRetention;
+}
+
+/**
+ * Options for `Workflow.createBatch`, in the object form Cloudflare's binding takes:
+ * explicit `instances`, or `count` instances that share one `params` and `retention`.
+ * The array form is deprecated upstream and is not accepted here: it left out any
+ * instance it failed to create, and reported nothing for it.
+ */
+export type WorkflowCreateBatchOptions<Params = Record<string, unknown>> =
+    { instances: ReadonlyArray<WorkflowCreateOptions<Params>> } | { count: number; params?: Params; retention?: WorkflowRetention };
+
+/** One instance a batch did not create. `index` is its position in the input (`count` form: its position among the `count`). */
+export interface WorkflowCreateBatchError {
+    code: number;
+    id?: string;
+    index: number;
+    message: string;
+}
+
+/** Result of `Workflow.createBatch`: the instances that were created, and an error for each one that was not. */
+export interface WorkflowCreateBatchResult {
+    created: WorkflowInstanceLike[];
+    errors: WorkflowCreateBatchError[];
+}
+
+/** Result of `Workflow.deleteBatch`. Mirrors Cloudflare's `WorkflowBatchDeleteResult`: one entry per input position. */
+export interface WorkflowBatchDeleteResult {
+    deleted: { id: string }[];
+    errors: { code: number; id: string; message: string }[];
+}
+
+/**
+ * One event a workflow instance emitted, as `WorkflowInstance.subscribe()`
+ * streams it. Mirrors Cloudflare's `WorkflowInstanceEvent` loosely: the three
+ * fields every event carries are typed, and the per-`type` payload (`stepName`,
+ * `attempt`, `output`, `error`, `durationMs`, …) is left open, because the
+ * upstream union has thirty members and grows with the engine — a closed copy
+ * here would reject the next event kind Cloudflare ships.
+ */
+export interface WorkflowInstanceEventLike {
+    [field: string]: unknown;
+    /** Monotonic per-instance id; pass one as `cursor` to resume after it. */
+    eventId: number;
+    instanceId: string;
+    timestamp: number;
+    /** `workflow_started`, `step_completed`, `attempt_errored`, `rollback_started`, … */
+    type: string;
+}
+
+/** Options for `WorkflowInstance.subscribe()`, mirroring Cloudflare's subscribe options type. */
+export interface WorkflowInstanceSubscribeOptionsLike {
+    /** Start after this `eventId` instead of replaying the whole history. */
+    cursor?: number;
+    /** Only stream events of these types. */
+    filter?: string[];
+}
+
+/**
+ * A live subscription to one instance's events, mirroring Cloudflare's
+ * subscription type: `next()` replays the history first, then
+ * waits for new events, and reports `done` once the instance completes, errors
+ * or is terminated. Cloudflare's subscription is also `Disposable`; that half is
+ * not mirrored because the ES2024 lib this package compiles against has no
+ * `Symbol.dispose`, and the native object keeps it either way.
+ */
+export interface WorkflowInstanceSubscriptionLike {
+    next: () => Promise<IteratorResult<WorkflowInstanceEventLike, void>>;
 }
 
 /** A live handle to a single workflow instance. Mirrors `WorkflowInstance`. */
 export interface WorkflowInstanceLike {
+    /** Delete the instance and its stored state, stopping it if it is running. */
+    delete: () => Promise<void>;
     readonly id: string;
     pause: () => Promise<void>;
     restart: () => Promise<void>;
     resume: () => Promise<void>;
     sendEvent: (event: { payload: unknown; type: string }) => Promise<void>;
     status: () => Promise<WorkflowStatusResult>;
+    /** Stream the instance's events — its full history first, then new ones as it runs. */
+    subscribe: (options?: WorkflowInstanceSubscribeOptionsLike) => Promise<WorkflowInstanceSubscriptionLike>;
     terminate: () => Promise<void>;
 }
 
@@ -66,11 +123,12 @@ export interface WorkflowInstanceLike {
  */
 export interface WorkflowBindingLike<Params = Record<string, unknown>> {
     create: (options?: WorkflowCreateOptions<Params>) => Promise<WorkflowInstanceLike>;
-    createBatch: (batch: ReadonlyArray<WorkflowCreateOptions<Params>>) => Promise<WorkflowInstanceLike[]>;
+    createBatch: (options: WorkflowCreateBatchOptions<Params>) => Promise<WorkflowCreateBatchResult>;
+    deleteBatch: (instanceIds: ReadonlyArray<string>) => Promise<WorkflowBatchDeleteResult>;
     get: (id: string) => Promise<WorkflowInstanceLike>;
 }
 
-/** The `event` argument a workflow `run` receives. Mirrors `WorkflowEvent&lt;T>`. */
+/** The `event` argument a workflow `run` receives. Mirrors `WorkflowEvent<T>`. */
 export interface WorkflowEventLike<Params = Record<string, unknown>> {
     readonly instanceId: string;
     readonly payload: Readonly<Params>;
@@ -78,11 +136,19 @@ export interface WorkflowEventLike<Params = Record<string, unknown>> {
     readonly workflowName: string;
 }
 
+/**
+ * A retry delay computed from the failed attempt. Mirrors `WorkflowDelayFunction`:
+ * it receives the failed attempt's step context and error, and returns the wait
+ * before the next attempt as a duration.
+ */
+export type WorkflowDelayFunctionLike = (input: { ctx: WorkflowStepContextLike; error: Error }) => number | string | Promise<number | string>;
+
 /** Per-step durability config. Mirrors the `WorkflowStepConfig.retries` shape. */
 export interface WorkflowStepConfigLike {
     retries?: {
         backoff?: "constant" | "exponential" | "linear";
-        delay?: number | string;
+        /** A fixed base delay (scaled by `backoff`), or a function that computes each wait from the failure. */
+        delay?: number | string | WorkflowDelayFunctionLike;
         limit: number;
     };
     timeout?: number | string;
@@ -130,10 +196,10 @@ export interface WorkflowStepRollbackOptionsLike<T = unknown> {
  * `do`'s two overloads mirror Cloudflare's: an optional leading `config` and an
  * optional trailing `rollback` (compensation run when a later step fails).
  *
- * Known mirror gap: Cloudflare constrains `do&lt;T extends Rpc.Serializable&lt;T>>` so
+ * Known mirror gap: Cloudflare constrains `do<T extends Rpc.Serializable<T>>` so
  * a non-serializable step result (a function, `Map`, class instance, …) is a
  * compile error there. `Rpc.Serializable` lives in `@cloudflare/workers-types`
- * and is not Node-importable, so this Node-safe mirror uses a bare `&lt;T>` and
+ * and is not Node-importable, so this Node-safe mirror uses a bare `<T>` and
  * cannot enforce that — a non-serializable result type-checks here but fails at
  * runtime on the platform. Keep step results JSON-serialisable.
  */
@@ -164,17 +230,45 @@ export interface WorkflowLogger {
 
 /** Per-call options for {@link WorkflowRunFunction}. */
 export interface RunFunctionOptions {
+    /**
+     * The replay-dedup key for THIS ONE CALL, forwarded to the shard as the
+     * `(identity, mutationId)` dedup id so a re-issued dispatch of the same
+     * call applies once instead of twice.
+     *
+     * Usually leave it unset: `ctx.run`, a `ctx.runStep` body's `context.run`
+     * and a rollback's `context.run` each pin a deterministic id already (see
+     * `src/dedup-id.ts`), and a supplied id wins over that pin. Pass one when
+     * the automatic id cannot be right — a body whose `ctx.run` ORDER varies
+     * per attempt, or a bare `ctx.run` inside a raw `ctx.step.do(...)`
+     * callback, which the pin cannot see is being retried.
+     *
+     * Must be unique per call: the dedup table carries no function path and
+     * every server-initiated dispatch shares the `"system:"` identity, so
+     * reusing one id across two calls makes the second return the first's
+     * cached result without ever executing.
+     */
+    dedupId?: string;
+
     /** Routing hint forwarded to the Worker so the call lands on the right shard. */
     shardKey?: string;
 }
 
 /**
  * Calls a Lunora query / mutation / action from inside a workflow and resolves
- * with its result. Wrap it in {@link WorkflowStepLike.do} to make the call a
- * durable, memoized, retried step:
+ * with its result. Wrap it in a durable step to make the call memoized and
+ * retried — prefer {@link WorkflowRunStepFunction}, whose `context.run` also
+ * pins a retry-stable {@link RunFunctionOptions.dedupId}:
  *
  * ```ts
- * const charge = await ctx.step.do("charge", () => ctx.run(api.payments.charge, { id }));
+ * const { receiptId } = await ctx.runStep(charge, { id });
+ * ```
+ *
+ * A raw {@link WorkflowStepLike.do} retries its callback IN PLACE, which the
+ * automatic (positional) id cannot see, so a write made that way needs an
+ * explicit id or it applies once per attempt:
+ *
+ * ```ts
+ * await ctx.step.do("charge", () => ctx.run(api.payments.charge, { id }, { dedupId: `charge:${id}` }));
  * ```
  */
 export type WorkflowRunFunction = <F extends FunctionReference>(function_: F, args?: ArgsOf<F>, options?: RunFunctionOptions) => Promise<unknown>;
@@ -274,6 +368,16 @@ export interface StepDefinition<A extends StepArgsValidator = StepArgsValidator,
 export interface RunStepOptions {
     /** Override the step's declared durability config for this call. */
     config?: WorkflowStepConfigLike;
+
+    /**
+     * Override the durable step name for this call. Cloudflare keys a durable
+     * step by name **and occurrence** (`step.count` counts the calls made under
+     * one name in a run), so reusing a name in a loop is fine and each
+     * occurrence caches independently — this is for giving a call its own
+     * addressable name, e.g. to target it with `instance.restart({ from })`.
+     * Must be deterministic across replays, like any step name.
+     */
+    name?: string;
 }
 
 /**
@@ -291,26 +395,191 @@ export type WorkflowRunStepFunction = <A extends StepArgsValidator, Result>(
     options?: RunStepOptions,
 ) => Promise<Result>;
 
+// --- Declared external events (`ctx.waitForEvent` / `instance.sendEvent`) ---
+
+/**
+ * A `defineWorkflowEvent` result — the single source of truth for one external
+ * event's wire `type` and payload shape. Both ends of the exchange import the same
+ * definition (`ctx.waitForEvent(orderApproved)` inside the workflow,
+ * `workflows.get(w).sendEvent(id, orderApproved, payload)` from the caller), so
+ * there is no string to typo and no second place to update on a rename, and the
+ * payload is parsed at both ends instead of crossing as `unknown`.
+ *
+ * It does NOT make every mismatch a compile error: two definitions with the same
+ * payload shape are mutually assignable, so sending `orderRejected` where the
+ * workflow awaits `orderApproved` still type-checks (and still hibernates until
+ * the timeout). What it removes is the hand-matched literal.
+ */
+export interface WorkflowEventDefinition<Payload = unknown> {
+    /** Runtime brand check (see `isWorkflowEventDefinition`). */
+    readonly isLunoraWorkflowEvent: true;
+    /** Validator for the event payload — parsed on send and again on receive. */
+    readonly payload: Validator<Payload>;
+    /** The wire event type Cloudflare matches `sendEvent` against `waitForEvent`. */
+    readonly type: string;
+}
+
+/** Per-call options for {@link WorkflowWaitForEventFunction}. */
+export interface WaitForEventOptions {
+    /**
+     * The durable step label, defaulting to `event:<type>`.
+     *
+     * Cloudflare identifies a memoized step by this name, so the default couples
+     * step identity to the wire type: renaming the event type also renames the
+     * step, and an instance that already recorded the wait replays into a *fresh*
+     * one that nothing will ever satisfy. Pass a stable `name` on any wait that can
+     * outlive a deploy (an approval held for days), and to tell two waits on the
+     * same event type apart in the timeline.
+     */
+    name?: string;
+    /** How long to wait before the wait rejects. Defaults to Cloudflare's 24h. */
+    timeout?: number | string;
+}
+
+/**
+ * Hibernate until a declared event is delivered to this instance, then resolve
+ * with its validated payload. The typed wrapper over
+ * {@link WorkflowStepLike.waitForEvent}: the event's `type` comes from the
+ * definition instead of a hand-written string, and the payload is parsed through
+ * the definition's validator before the workflow resumes on it.
+ *
+ * ```ts
+ * const { approvedBy } = await ctx.waitForEvent(orderApproved, { timeout: "1 hour" });
+ * ```
+ */
+export type WorkflowWaitForEventFunction = <Payload>(event: WorkflowEventDefinition<Payload>, options?: WaitForEventOptions) => Promise<Payload>;
+
+// --- Fan-out: child-workflow isolation (`ctx.parallel` / `ctx.spawn`) -------
+
+/**
+ * One branch of a {@link WorkflowParallelFunction} fan-out — a declared child
+ * workflow (referenced by its `lunora/workflows.ts` export name) plus the params
+ * it is created with. The phantom `Output` carries the child's result type into
+ * the `ctx.parallel(...)` result tuple. Build one with the `branch(...)` helper.
+ */
+export interface WorkflowBranch<Output = unknown> {
+    /** Phantom marker for the branch output type — never present at runtime. */
+    readonly __output?: Output;
+
+    /**
+     * Optional group-saga compensation (plan 075 Phase 3): the `lunora/workflows.ts`
+     * export name of a workflow to run if a **sibling** branch in the same
+     * `ctx.parallel(...)` group fails **after** this branch has already completed.
+     * It is spawned fire-and-forget (a durable, replay-safe idempotent create) with
+     * {@link BranchCompensationParams} as its `ctx.params`. Omit for no
+     * compensation — a group where no branch sets this behaves exactly as a plain
+     * fan-out (fail-fast, no rollback).
+     */
+    readonly compensateWith?: string;
+    /** Optional explicit child instance id (defaults to a deterministic parent-derived id). */
+    readonly id?: string;
+    /** The params the child instance is created with — surfaced as the child's `ctx.params`. */
+    readonly params?: Record<string, unknown>;
+    /** Optional wait timeout for this branch (the parent's `waitForEvent` timeout). */
+    readonly timeout?: number | string;
+    /** The `lunora/workflows.ts` export name of the child workflow to run. */
+    readonly workflow: string;
+}
+
+/**
+ * The `ctx.params` a group-saga compensation workflow (a branch's
+ * {@link WorkflowBranch.compensateWith}) receives when a sibling's failure rolls
+ * back the group. Everything is plain-serialisable — the compensation is an
+ * ordinary declared workflow, so it can `ctx.runStep(...)` its own undo logic.
+ */
+export interface BranchCompensationParams {
+    /** Index signature: this is a workflow `params` bag, so it is a valid `Record<string, unknown>` payload. */
+    [key: string]: unknown;
+    /** The export name of the completed branch being compensated. */
+    branch: string;
+    /** The serialised error of the sibling branch whose failure triggered the group rollback. */
+    error: { message: string; name: string };
+    /** Declaration-order index of the completed branch being compensated. */
+    index: number;
+    /** The completed branch's output value — what it returned before the group failed. */
+    output?: unknown;
+}
+
+/** Map a tuple of {@link WorkflowBranch}es to the tuple of their output types, preserving order. */
+export type WorkflowBranchOutputs<B extends ReadonlyArray<WorkflowBranch>> = {
+    -readonly [K in keyof B]: B[K] extends WorkflowBranch<infer Output> ? Output : never;
+};
+
+/**
+ * Run branches as isolated child workflow instances and resolve with their
+ * outputs in declaration order. Each branch gets its own Durable Object (own
+ * memory / CPU / retry budget); the parent hibernates while they execute. Rejects
+ * (non-retryable) on the first branch that fails.
+ *
+ * ```ts
+ * const [tags, thumb] = await ctx.parallel([
+ *     branch("imageTag", { key }),
+ *     branch("thumbnail", { key }),
+ * ]);
+ * ```
+ */
+export type WorkflowParallelFunction = <const B extends ReadonlyArray<WorkflowBranch>>(branches: B) => Promise<WorkflowBranchOutputs<B>>;
+
+/** Per-call options for {@link WorkflowSpawnFunction}. */
+export interface WorkflowSpawnOptions {
+    /** Explicit child instance id (defaults to a deterministic parent-derived id). */
+    id?: string;
+}
+
+/**
+ * Fire-and-forget start of a declared child workflow from inside a workflow body
+ * — replay-safe (idempotent create), returns a live handle to the child. Use
+ * {@link WorkflowParallelFunction} instead when you need to await results.
+ */
+export type WorkflowSpawnFunction = (workflow: string, params?: Record<string, unknown>, options?: WorkflowSpawnOptions) => Promise<WorkflowInstanceLike>;
+
 /**
  * The context object passed to a `defineWorkflow` handler. Bundles the native
  * Cloudflare durability primitives (`step`, `event`) with the Lunora runner
- * (`run`), the reusable-step runner (`runStep`), the Worker `env`, and a logger.
+ * (`run`), the reusable-step runner (`runStep`), the fan-out primitives
+ * (`parallel` / `spawn`), the Worker `env`, and a logger.
  */
 export interface WorkflowRunContext<Params = Record<string, unknown>> {
     /** The Worker environment bindings. */
     readonly env: Record<string, unknown>;
     /** The triggering event (id, payload, timestamp, workflow name). */
     readonly event: WorkflowEventLike<Params>;
+
+    /**
+     * The invoking context's `ctx.exports` — where Cloudflare exposes the
+     * workflows (and agents) declared in wrangler `exports`, keyed by class name.
+     * Absent on a host that binds them on `env` instead. A body that resolves a
+     * sibling workflow itself (as `@lunora/agent` does) reads both.
+     */
+    readonly exports?: unknown;
+
+    /**
+     * The `fetch` the host injected for this run, if it injected one — absent on
+     * a host that relies on the runtime's global.
+     *
+     * Exposed because `ctx.run` is not the only dispatcher a workflow body
+     * builds: `@lunora/agent`'s loop builds its own (to carry the run's
+     * identity), and without this it would fall back to a global `fetch` the
+     * host deliberately replaced — or, where there is none, throw before its
+     * first dispatch. A body that builds a dispatcher passes this to it.
+     */
+    readonly fetchImpl?: typeof fetch;
     /** Structured logger surfaced in `wrangler tail` / Studio logs. */
     readonly log: WorkflowLogger;
+    /** Run branches as isolated child workflow instances and await their outputs (declaration-ordered tuple). */
+    readonly parallel: WorkflowParallelFunction;
     /** Convenience alias for `event.payload`. */
     readonly params: Readonly<Params>;
     /** Invoke a Lunora function; wrap in `step.do(...)` for durability. */
     readonly run: WorkflowRunFunction;
     /** Run a reusable, schema-validated {@link StepDefinition} as a durable step. */
     readonly runStep: WorkflowRunStepFunction;
+    /** Fire-and-forget start of a declared child workflow (replay-safe; returns a live handle). */
+    readonly spawn: WorkflowSpawnFunction;
     /** The native Cloudflare Workflows durable-step API. */
     readonly step: WorkflowStepLike;
+    /** Hibernate until a declared external event arrives; resolves with its validated payload. */
+    readonly waitForEvent: WorkflowWaitForEventFunction;
 }
 
 /** The workflow body. Receives a {@link WorkflowRunContext}, returns the output. */
@@ -318,17 +587,50 @@ export type WorkflowHandler<Params = Record<string, unknown>, Output = unknown> 
 
 /** Author-supplied config for `defineWorkflow`. */
 export interface WorkflowConfig<Params = Record<string, unknown>, Output = unknown> {
+    /**
+     * How long finished instances keep their state and logs unless `create({
+     * retention })` says otherwise — written to `exports.<Class>.default_retention`.
+     * Durations are Cloudflare's (`"3 days"`, `"12 hours"`); the plan's maximum
+     * applies (30 days on Workers Paid, 3 on Free).
+     */
+    defaultRetention?: WorkflowRetention;
+
     /** The workflow body — the multi-step durable program. */
     handler: WorkflowHandler<Params, Output>;
 
     /**
-     * Optional override for the deployed workflow name — the `workflows[].name`
+     * Per-instance limits, written to `exports.<Class>.limits`. `steps` raises (or
+     * lowers) the cap on steps one instance may execute — 10,000 by default,
+     * up to 25,000.
+     */
+    limits?: { steps?: number };
+
+    /**
+     * Optional override for the deployed workflow name — the `exports.<Class>.name`
      * written to `wrangler.jsonc`. Defaults to a kebab-cased form of the
      * `lunora/workflows.ts` export name (`orderPipeline` → `order-pipeline`).
-     * This does NOT change the binding name, which is always derived from the
-     * export name (`orderPipeline` → `WORKFLOW_ORDER_PIPELINE`).
+     * This does NOT change the export key, which is always the generated class
+     * name derived from the export name (`orderPipeline` → `OrderPipelineWorkflow`).
      */
     name?: string;
+
+    /**
+     * Cron expressions that each start a new instance with no params — written
+     * to `exports.<Class>.schedules`, so no separate `scheduled()` handler is
+     * needed. Five-field Cloudflare cron syntax (`"0 * * * *"`).
+     *
+     * Deploy configuration: codegen reads these statically, so each entry must
+     * be a string literal.
+     */
+    schedules?: ReadonlyArray<string>;
+}
+
+/** Instance retention durations. Mirrors `default_retention` / `create({ retention })`. */
+export interface WorkflowRetention {
+    /** Kept this long after the instance errors. */
+    errorRetention?: string;
+    /** Kept this long after the instance completes or is terminated. */
+    successRetention?: string;
 }
 
 /**
@@ -349,15 +651,34 @@ export interface WorkflowDefinition<Params = Record<string, unknown>, Output = u
 
 /**
  * A typed handle to one declared workflow, addressable from `ctx.workflows`.
- * Thin pass-through over the Cloudflare `Workflow` binding.
+ * Thin pass-through over the Cloudflare `Workflow` binding, plus the declared-event
+ * send (which the raw binding cannot type).
  */
 export interface WorkflowHandle<Params = Record<string, unknown>> {
     /** Start a new instance (optionally with an id + params). */
     create: (options?: WorkflowCreateOptions<Params>) => Promise<WorkflowInstanceLike>;
-    /** Start many instances in one batched RPC. */
-    createBatch: (batch: ReadonlyArray<WorkflowCreateOptions<Params>>) => Promise<WorkflowInstanceLike[]>;
+
+    /**
+     * Start many instances in one batched RPC. Returns what was created and a
+     * per-instance error for each one that was not, so a failed instance is never silently dropped.
+     */
+    createBatch: (options: WorkflowCreateBatchOptions<Params>) => Promise<WorkflowCreateBatchResult>;
+    /** Delete up to 100 instances and their stored state; ids that do not exist come back as per-instance errors. */
+    deleteBatch: (instanceIds: ReadonlyArray<string>) => Promise<WorkflowBatchDeleteResult>;
     /** Get a handle to an existing instance by id. */
     get: (id: string) => Promise<WorkflowInstanceLike>;
+
+    /**
+     * Deliver a declared event to one instance of this workflow — the typed
+     * counterpart of the workflow body's `ctx.waitForEvent`. The wire type comes
+     * from the definition (never a hand-written string) and the payload is parsed
+     * through the definition's validator **before** the send, so a bad value fails
+     * the caller's request instead of waking the workflow on garbage.
+     *
+     * Mirrors `ctx.agents.<name>.sendEvent(id, …)`: the instance is addressed by
+     * id rather than by holding an instance handle, so the common case is one call.
+     */
+    sendEvent: <Payload>(instanceId: string, event: WorkflowEventDefinition<Payload>, payload: Payload) => Promise<void>;
 }
 
 /**
@@ -373,8 +694,11 @@ export interface Workflows {
 export interface LunoraWorkflowsOptions {
     /**
      * Map of `lunora/workflows.ts` export name → its Cloudflare `Workflow`
-     * binding. Codegen builds this from `env` (`{ orderPipeline:
-     * env.WORKFLOW_ORDER_PIPELINE }`); for manual wiring construct it yourself.
+     * binding. Codegen builds this from `ctx.exports` (`{ orderPipeline:
+     * ctx.exports.OrderPipelineWorkflow }`); for manual wiring construct it yourself.
      */
     bindings: Record<string, WorkflowBindingLike>;
 }
+
+// Re-exported so consumers keep naming these through this package.
+export type { ArgsOf, FunctionKind, FunctionReference } from "../../../shared/function-reference";

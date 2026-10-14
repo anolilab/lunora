@@ -2,6 +2,7 @@ import { defineSchema, defineTable, initLunora, v } from "@lunora/server";
 import { afterEach, describe, expect, it } from "vitest";
 
 import { lunoraTest } from "../src/index";
+import trackHarnesses from "./harness-tracker";
 
 const { internalMutation, mutation, query } = initLunora.dataModel().create();
 
@@ -35,21 +36,19 @@ const sendViaInternal = mutation
 
 // Track every harness so each test's in-memory SQLite handle is closed in
 // afterEach — exercising the harness `close()` API and leaking no native handles.
-const open: ReturnType<typeof lunoraTest>[] = [];
+const harnesses = trackHarnesses();
 
 const start = (): ReturnType<typeof lunoraTest> => {
     const t = lunoraTest(schema);
 
-    open.push(t);
+    harnesses.track(t);
 
     return t;
 };
 
 describe("lunoraTest", () => {
     afterEach(() => {
-        while (open.length > 0) {
-            open.pop()?.close();
-        }
+        harnesses.closeAll();
     });
 
     it("reads back a row written by a mutation", async () => {
@@ -221,6 +220,44 @@ describe("lunoraTest", () => {
 
         expect(rows).toHaveLength(1);
         expect(rows[0]).toMatchObject({ author: "grace", body: "via internal" });
+    });
+
+    it("does not let a failing mutation roll back a concurrently-issued one (serialized, single-writer)", async () => {
+        expect.assertions(2);
+
+        const t = start();
+
+        // Two top-level mutations issued concurrently. The first writes then throws
+        // (its write must roll back); the second writes and commits. Before the fix,
+        // the module-level transactionDepth flag let the second ride the first's
+        // BEGIN/COMMIT span, so the first's ROLLBACK discarded BOTH rows (0 left).
+        const results = await Promise.allSettled([
+            t.mutation(async (ctx) => {
+                await ctx.db.insert("messages", { author: "fail", body: "rolled back" });
+
+                throw new Error("boom");
+            }),
+            t.mutation(async (ctx) => ctx.db.insert("messages", { author: "ok", body: "committed" })),
+        ]);
+
+        expect(results.map((r) => r.status)).toStrictEqual(["rejected", "fulfilled"]);
+
+        // Only the committed mutation's row survives; the failed one rolled back.
+        const rows = (await t.query(list, {})) as { author: string }[];
+
+        expect(rows.map((r) => r.author)).toStrictEqual(["ok"]);
+    });
+
+    it("phrases the internal-function rejection without quoting the kind as a name", async () => {
+        expect.assertions(2);
+
+        const t = start();
+
+        await expect(async () => t.mutation(internalSend, { author: "ada", body: "leak" })).rejects.toThrow("This mutation is an internal function");
+
+        // The old wording quoted the kind (`"mutation" is an internal function`),
+        // which read as if a function literally named "mutation" existed.
+        await expect(async () => t.mutation(internalSend, { author: "ada", body: "leak" })).rejects.not.toThrow('"mutation" is an internal function');
     });
 
     it("still runs a public function on the external surface", async () => {

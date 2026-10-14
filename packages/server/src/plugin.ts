@@ -7,7 +7,7 @@
  * triggers) that the host app's schema merges in.
  * 2. **Middleware** — a builder-compatible middleware that runs on every
  * procedure that opts in via `.use(plugin.middleware)`. By convention it
- * extends `ctx.api.&lt;key>` with helpers the plugin exposes. Install several at
+ * extends `ctx.api.<key>` with helpers the plugin exposes. Install several at
  * once with `composePluginMiddleware([...])` (one `.use(...)`) and
  * `installPlugins(schema, [...])` (one schema fold).
  * 3. **Functions** — registered queries/mutations/actions bundled on a
@@ -32,7 +32,7 @@
  * export const schema = defineSchema({ todos: ... }).extend(ratelimit.extension);
  *
  * // procedure that uses the plugin:
- * const c = initLunora.dataModel&lt;DataModel>().create();
+ * const c = initLunora.dataModel<DataModel>().create();
  * export const rateLimitedQuery = c.query.use(ratelimit.middleware);
  * ```
  *
@@ -53,13 +53,18 @@
  *     name — silent shadow would let one plugin invisibly hijack another's
  *     data.
  *   - **Middleware composability.** Plugins re-export middleware as
- *     plain `Middleware&lt;...>` values; users compose them via the
+ *     plain `Middleware<...>` values; users compose them via the
  *     existing `.use(...)` chain. No "install" verb that consumes the
  *     builder — each consumer decides which plugin middlewares to attach.
  */
 
-import runMiddlewareChain from "./builder/run-middleware";
-import type { Middleware, MiddlewareNext } from "./builder/types";
+import { LunoraError } from "@lunora/errors";
+import type { Validator } from "@lunora/values";
+
+import composeMiddleware from "./builder/compose-middleware";
+import type { Middleware } from "./builder/types";
+import { validateGlobalVectors, validateIndexFields, validateTableModes } from "./schema";
+import validateThroughRelations from "./schema-through";
 import type {
     AggregateIndexDefinition,
     FunctionKind,
@@ -88,6 +93,63 @@ const rewriteReference = (target: string, key: string, bareNames: ReadonlySet<st
     bareNames.has(target) ? prefixTableName(key, target) : target;
 
 /**
+ * The slice of a runtime validator an id retarget reads: the `_meta` bag that holds the target table of an id and the
+ * children of a wrapper (`optional`/`array` → `inner`, `union` → `members`, `object` → `shape`, `record` → key and value).
+ */
+interface IdMeta {
+    readonly inner?: Validator;
+    readonly keyValidator?: Validator;
+    readonly members?: ReadonlyArray<Validator>;
+    readonly shape?: Readonly<Record<string, Validator>>;
+    readonly tableName?: string;
+    readonly valueValidator?: Validator;
+}
+
+/** A shallow copy of `validator` carrying `meta` in place of its own `_meta`. */
+const withMeta = (validator: Validator, meta: IdMeta): Validator => {
+    const copy: Validator & { _meta: IdMeta } = { ...validator, _meta: meta };
+
+    return copy;
+};
+
+/**
+ * Point every `v.id("table")` in `validator` that names an extension table at its prefixed name, through every
+ * wrapper an id can sit in. Returns the same validator when nothing changes, and a shallow copy otherwise: extension
+ * definitions are shared across apps, so they are never mutated.
+ */
+const retargetId = (validator: Validator, resolve: (name: string) => string): Validator => {
+    const meta = (validator as { _meta?: IdMeta })._meta;
+
+    if (meta === undefined) {
+        return validator;
+    }
+
+    if (validator.kind === "id" && meta.tableName !== undefined) {
+        const tableName = resolve(meta.tableName);
+
+        return tableName === meta.tableName ? validator : withMeta(validator, { ...meta, tableName });
+    }
+
+    const retarget = (child: Validator | undefined): Validator | undefined => (child === undefined ? undefined : retargetId(child, resolve));
+    const next: IdMeta = {
+        ...meta,
+        ...(meta.inner && { inner: retarget(meta.inner) }),
+        ...(meta.keyValidator && { keyValidator: retarget(meta.keyValidator) }),
+        ...(meta.valueValidator && { valueValidator: retarget(meta.valueValidator) }),
+        ...(meta.members && { members: meta.members.map((member) => retargetId(member, resolve)) }),
+        ...(meta.shape && { shape: Object.fromEntries(Object.entries(meta.shape).map(([field, child]) => [field, retargetId(child, resolve)])) }),
+    };
+    const unchanged =
+        next.inner === meta.inner &&
+        next.keyValidator === meta.keyValidator &&
+        next.valueValidator === meta.valueValidator &&
+        (next.members ?? []).every((member, index) => member === meta.members?.[index]) &&
+        Object.entries(next.shape ?? {}).every(([field, child]) => child === meta.shape?.[field]);
+
+    return unchanged ? validator : withMeta(validator, next);
+};
+
+/**
  * Produce a copy of an extension table with every intra-extension table
  * reference rewritten to its prefixed name: relation targets, aggregate /
  * rank index `on` fields. (Inline `TableVectorIndex` entries carry no table
@@ -107,7 +169,13 @@ const rewriteTableReferences = (table: TableDefinition, key: string, bareNames: 
     const relationMap: Record<string, RelationDefinition> = {};
 
     for (const [accessor, relation] of Object.entries(table.relationMap)) {
-        relationMap[accessor] = { ...relation, table: rewriteReference(relation.table, key, bareNames) };
+        const target = rewriteReference(relation.table, key, bareNames);
+
+        // Two branches rather than one spread: a conditional `through` would widen the keyed variant's `through?: never`.
+        relationMap[accessor] =
+            relation.through === undefined
+                ? { ...relation, table: target }
+                : { ...relation, table: target, through: { ...relation.through, table: rewriteReference(relation.through.table, key, bareNames) } };
     }
 
     const aggregateIndexes: AggregateIndexDefinition[] = table.aggregateIndexes.map((index) => {
@@ -118,7 +186,11 @@ const rewriteTableReferences = (table: TableDefinition, key: string, bareNames: 
         return { ...index, on: rewriteOn(index.on) };
     });
 
-    return { ...table, aggregateIndexes, rankIndexes, relationMap };
+    const shape = Object.fromEntries(
+        Object.entries(table.shape).map(([field, validator]) => [field, retargetId(validator, (name) => rewriteReference(name, key, bareNames))]),
+    );
+
+    return { ...table, aggregateIndexes, rankIndexes, relationMap, shape };
 };
 
 /* eslint-disable @typescript-eslint/no-explicit-any -- the install/compose accumulator types fold over a heterogeneous tuple of plugins; per-plugin types are recovered by the `infer`s below. */
@@ -145,7 +217,7 @@ type InstalledTables<T extends Record<string, TableDefinition>, Plugins extends 
 
 /**
  * Union every plugin's `ContextOut` in a tuple — the type-level mirror of the
- * `ctx.api.&lt;key>` additions {@link composePluginMiddleware} accumulates as each
+ * `ctx.api.<key>` additions {@link composePluginMiddleware} accumulates as each
  * plugin middleware runs. Independent of the incoming context, which the builder
  * infers at the `.use(...)` site.
  */
@@ -161,9 +233,9 @@ type ComposedOut<Plugins extends ReadonlyArray<unknown>> = Plugins extends reado
  * `defineSchema` argument so a plugin can ship vector decls alongside its
  * tables.
  */
-export interface SchemaExtension<T extends Record<string, TableDefinition> = Record<string, TableDefinition>> {
-    /** Stable key identifying the plugin that owns this extension. */
-    readonly key: string;
+export interface SchemaExtension<T extends Record<string, TableDefinition> = Record<string, TableDefinition>, Key extends string = string> {
+    /** Stable key identifying the plugin that owns this extension. Kept literal, so `.extend()` adds exactly `<key>_<table>`. */
+    readonly key: Key;
 
     /**
      * Extension tables, keyed by **bare** name (e.g. `buckets`). At merge time
@@ -184,12 +256,12 @@ export interface SchemaExtension<T extends Record<string, TableDefinition> = Rec
  * Build a {@link SchemaExtension}. The `key` is a runtime tag (used for
  * error messages on collision) and a type-level brand.
  */
-export const defineSchemaExtension = <T extends Record<string, TableDefinition>>(
-    key: string,
+export const defineSchemaExtension = <T extends Record<string, TableDefinition>, const Key extends string = string>(
+    key: Key,
     options: { tables: T; vectorIndexes?: Record<string, VectorIndexDefinition> },
-): SchemaExtension<T> => {
+): SchemaExtension<T, Key> => {
     if (!key) {
-        throw new Error("defineSchemaExtension: `key` is required and must be a non-empty string");
+        throw new LunoraError("INTERNAL", "defineSchemaExtension: `key` is required and must be a non-empty string");
     }
 
     return {
@@ -218,7 +290,7 @@ export interface Plugin<TExtension extends Record<string, TableDefinition> = Rec
     /**
      * Optional middleware. Users attach with `c.query.use(plugin.middleware)`.
      * The middleware can extend `ctx`; convention is to attach helpers under
-     * `ctx.api.&lt;key>`, e.g.
+     * `ctx.api.<key>`, e.g.
      *
      * ```ts
      * middleware: ({ ctx, next }) =>
@@ -235,19 +307,38 @@ export interface DefinePluginOptions<TExtension extends Record<string, TableDefi
 }
 
 /**
+ * Call signatures for {@link definePlugin}. When `extension` is supplied the
+ * returned plugin's `extension` is typed as PRESENT (not `?`), so the
+ * canonical install pattern `defineSchema(...).extend(plugin.extension)`
+ * typechecks without a non-null assertion — the shape every scaffold template
+ * ships. The bare-options signature keeps `extension` optional for plugins
+ * that carry only middleware.
+ */
+export interface DefinePluginFunction {
+    <TExtension extends Record<string, TableDefinition>, TContextIn = unknown, TContextOut = TContextIn, const Key extends string = string>(
+        key: Key,
+        options: DefinePluginOptions<TExtension, TContextIn, TContextOut> & { extension: SchemaExtension<TExtension, Key> },
+    ): Plugin<TExtension, TContextIn, TContextOut> & { readonly extension: SchemaExtension<TExtension, Key> };
+    <TExtension extends Record<string, TableDefinition>, TContextIn = unknown, TContextOut = TContextIn>(
+        key: string,
+        options: DefinePluginOptions<TExtension, TContextIn, TContextOut>,
+    ): Plugin<TExtension, TContextIn, TContextOut>;
+}
+
+/**
  * Package a schema extension + middleware as a reusable plugin. Either
  * field is optional — `definePlugin("foo", {})` is valid but degenerate.
  */
-export const definePlugin = <TExtension extends Record<string, TableDefinition>, TContextIn = unknown, TContextOut = TContextIn>(
+export const definePlugin = (<TExtension extends Record<string, TableDefinition>, TContextIn = unknown, TContextOut = TContextIn>(
     key: string,
     options: DefinePluginOptions<TExtension, TContextIn, TContextOut>,
 ): Plugin<TExtension, TContextIn, TContextOut> => {
     if (!key) {
-        throw new Error("definePlugin: `key` is required and must be a non-empty string");
+        throw new LunoraError("INTERNAL", "definePlugin: `key` is required and must be a non-empty string");
     }
 
     if (options.extension && options.extension.key !== key) {
-        throw new Error(`definePlugin("${key}"): extension key "${options.extension.key}" does not match plugin key`);
+        throw new LunoraError("INTERNAL", `definePlugin("${key}"): extension key "${options.extension.key}" does not match plugin key`);
     }
 
     return {
@@ -255,7 +346,7 @@ export const definePlugin = <TExtension extends Record<string, TableDefinition>,
         ...(options.extension ? { extension: options.extension } : {}),
         ...(options.middleware ? { middleware: options.middleware } : {}),
     };
-};
+}) as DefinePluginFunction;
 
 /**
  * Bundle of registered functions a {@link Component} ships. Keys are the
@@ -369,6 +460,16 @@ export type PrefixedTables<X extends Record<string, TableDefinition>, Key extend
  * collisions are impossible. The only remaining hard error is two extensions
  * sharing the same `key` and producing the same prefixed table (or vector
  * index) name — silent shadow would let one plugin hijack another's data.
+ *
+ * Re-runs {@link validateIndexFields} against the merged table set before
+ * returning: `defineSchema` only validates the tables it was called with, so
+ * without this an extension-contributed index with a typo'd/out-of-shape
+ * field (or a duplicate name within one kind) would never be checked at all.
+ * Re-validating the whole merged set (base + prefixed extension tables) is
+ * cheap and idempotent for the base tables, which already passed this same
+ * check when the base schema was built. Both callers of this function —
+ * `withExtend.extend()` (`./schema`) and `installPlugins` (below) — get the
+ * re-validation for free from this single call site (plan 258 §4/§9 Q3).
  */
 export const mergeSchemaExtension = <T extends Record<string, TableDefinition>, X extends Record<string, TableDefinition>, Key extends string = string>(
     base: Schema<T>,
@@ -382,7 +483,8 @@ export const mergeSchemaExtension = <T extends Record<string, TableDefinition>, 
         const prefixed = prefixTableName(key, bareName);
 
         if (Object.hasOwn(merged, prefixed)) {
-            throw new Error(
+            throw new LunoraError(
+                "INTERNAL",
                 `defineSchema(...).extend("${key}"): table "${prefixed}" already exists in the base schema — another extension with the same key already contributed it`,
             );
         }
@@ -397,7 +499,8 @@ export const mergeSchemaExtension = <T extends Record<string, TableDefinition>, 
             const prefixed = prefixTableName(key, bareIndexName);
 
             if (Object.hasOwn(mergedVectorIndexes, prefixed)) {
-                throw new Error(
+                throw new LunoraError(
+                    "INTERNAL",
                     `defineSchema(...).extend("${key}"): vector index "${prefixed}" already exists in the base schema — another extension with the same key already contributed it`,
                 );
             }
@@ -408,6 +511,11 @@ export const mergeSchemaExtension = <T extends Record<string, TableDefinition>, 
             mergedVectorIndexes[prefixed] = { ...index, table: rewriteReference(index.table, key, bareNames) };
         }
     }
+
+    validateIndexFields(merged);
+    validateTableModes(merged);
+    validateGlobalVectors(merged, mergedVectorIndexes);
+    validateThroughRelations(merged);
 
     return {
         // Preserve secure-by-default RLS across `.extend(...)` — a plugin's
@@ -455,7 +563,7 @@ export const installPlugins = <T extends Record<string, TableDefinition>, const 
  * Compose every plugin's middleware into a single middleware you attach with one
  * `.use(...)`. Plugins without middleware (schema-only) are skipped; the rest run
  * in array order, each seeing the context the previous one widened, so the final
- * `next({ ctx })` the builder receives carries every plugin's `ctx.api.&lt;key>`
+ * `next({ ctx })` the builder receives carries every plugin's `ctx.api.<key>`
  * additions. Equivalent to `.use(a.middleware).use(b.middleware)…` but as one
  * value, the middleware sibling of {@link installPlugins}.
  *
@@ -468,15 +576,14 @@ export const composePluginMiddleware = <ContextIn = unknown, const Plugins exten
 ): Middleware<ContextIn, ComposedOut<Plugins> & ContextIn> => {
     const middlewares = plugins.map((plugin) => plugin.middleware).filter((middleware): middleware is Middleware<unknown, unknown> => middleware !== undefined);
 
-    // Reuse the builder's own onion executor so composing N plugin middlewares is
-    // behaviourally identical to chaining N `.use()`s — same shallow-merge, same
-    // double-`next()` guard. The terminal hands the fully widened context to the
-    // surrounding builder's `next`, making the composed unit transparent.
-    return (async ({ ctx, next }) =>
-        runMiddlewareChain(middlewares, ctx, (context) => (next as MiddlewareNext<unknown>)({ ctx: context as Record<string, unknown> }))) as Middleware<
-        ContextIn,
-        ComposedOut<Plugins> & ContextIn
-    >;
+    // `composeMiddleware` reuses the builder's own onion executor — so composing N
+    // plugin middlewares is behaviourally identical to chaining N `.use()`s, same
+    // shallow-merge and same double-`next()` guard — and returns the arrow with
+    // the wrapped middlewares' RLS/mask policy tags already re-stamped on it. That
+    // last part is why the composition is not written inline here: the builder
+    // hoists policy off the DIRECT `.use(...)` elements, so a plugin shipping
+    // `rls(...)` as its middleware would otherwise register with no `fn.rls`.
+    return composeMiddleware<ContextIn, ComposedOut<Plugins> & ContextIn>(middlewares);
 };
 
 /* eslint-enable @typescript-eslint/no-explicit-any */

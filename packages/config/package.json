@@ -1,6 +1,6 @@
 {
     "name": "@lunora/config",
-    "version": "0.0.0",
+    "version": "1.0.0-alpha.346",
     "description": "Internal shared CLI + Vite config layer for Lunora: wrangler.jsonc validation, binding inference, and .dev.vars scaffolding",
     "keywords": [
         "bindings",
@@ -25,7 +25,7 @@
         "directory": "packages/config"
     },
     "files": [
-        "dist",
+        "./dist",
         "__assets__",
         "README.md",
         "LICENSE.md"
@@ -40,41 +40,60 @@
             "types": "./dist/index.d.ts",
             "import": "./dist/index.mjs"
         },
+        "./cloudflare": {
+            "types": "./dist/cloudflare/index.d.ts",
+            "import": "./dist/cloudflare/index.mjs"
+        },
         "./studio-host": {
             "types": "./dist/studio-host/index.d.ts",
             "import": "./dist/studio-host/index.mjs"
         },
         "./package.json": "./package.json"
     },
+    "publishConfig": {
+        "access": "public"
+    },
     "scripts": {
         "build": "pnpm exec packem build --development",
         "build:prod": "pnpm exec packem build --production",
-        "lint:eslint": "eslint .",
+        "lint:eslint": "eslint . --max-warnings=0",
         "lint:eslint:fix": "eslint . --fix",
-        "lint:prettier": "prettier --check .",
-        "lint:prettier:fix": "prettier --write .",
+        "lint:prettier": "prettier --check . --ignore-path ../../.prettierignore",
+        "lint:prettier:fix": "prettier --write . --ignore-path ../../.prettierignore",
         "lint:types": "tsc --noEmit",
         "test": "vitest run",
-        "test:coverage": "vitest run --coverage"
+        "test:coverage": "vitest run --coverage",
+        "fallow:audit": "fallow audit",
+        "fallow:dead-code": "fallow dead-code",
+        "fallow:health": "fallow health --score"
     },
     "dependencies": {
-        "@lunora/codegen": "workspace:*",
-        "@lunora/container": "workspace:*",
-        "@lunora/seed": "workspace:*",
+        "@lunora/codegen": "1.0.0-alpha.298",
+        "@lunora/container": "1.0.0-alpha.74",
+        "@lunora/errors": ">=1.0.0-alpha.51 <2.0.0-0",
+        "@lunora/seed": "1.0.0-alpha.215",
+        "@visulima/colorize": "catalog:cli",
+        "@visulima/find-ai-runner": "catalog:cli",
+        "@visulima/fs": "catalog:cli",
+        "@visulima/package": "catalog:cli",
+        "dockerode": "catalog:tooling",
+        "dotenv": "catalog:node",
         "es-module-lexer": "catalog:vite",
         "jsonc-parser": "catalog:vite",
         "ts-morph": "catalog:tooling"
     },
     "devDependencies": {
+        "@types/dockerode": "catalog:types",
         "@types/node": "catalog:types",
         "@visulima/packem": "catalog:build",
         "@vitest/coverage-v8": "catalog:test",
         "esbuild": "catalog:build",
+        "fallow": "catalog:lint",
         "typescript": "catalog:tsc",
         "vitest": "catalog:test"
     },
     "peerDependencies": {
-        "@lunora/studio": "workspace:*"
+        "@lunora/studio": ">=1.0.0-alpha.50 <2.0.0-0"
     },
     "peerDependenciesMeta": {
         "@lunora/studio": {

@@ -1,11 +1,27 @@
 import { LunoraProvider } from "@lunora/react";
-import { fireEvent, render, screen } from "@testing-library/react";
-import { describe, expect, it } from "vitest";
+import { act, fireEvent, render, renderHook, screen, waitFor } from "@testing-library/react";
+import type { ReactElement, ReactNode } from "react";
+import { describe, expect, it, vi } from "vitest";
 
+import { useSchemaExplorer } from "../../../src/features/schema/hooks/use-schema-explorer";
 import { SchemaViewer } from "../../../src/features/schema/schema-viewer";
 import { ADMIN_FUNCTIONS } from "../../../src/lib/admin";
 import type { MockClientHooks } from "../../mock-client";
 import { createMockClient } from "../../mock-client";
+
+// The viewer mounts the editor overlay when `schemaEditable` is set, and the
+// overlay calls `useNavigate()` for the destructive-edit handoff. Only one
+// test below sets `schemaEditable`; the mock is harmless for the rest (they
+// never reach the overlay) and keeps the synchronous `render()` + `getByTestId`
+// pattern working without a `RouterProvider`.
+vi.mock(import("@tanstack/react-router"), async (importOriginal) => {
+    const actual = await importOriginal<typeof import("@tanstack/react-router")>();
+
+    return {
+        ...actual,
+        useNavigate: (): (() => Promise<void>) => () => Promise.resolve(),
+    };
+});
 
 const TABLES = [
     { name: "messages", rowCount: 3 },
@@ -66,6 +82,7 @@ describe("schemaViewer", () => {
                 <SchemaViewer schemaEditable />
             </LunoraProvider>,
         );
+        fireEvent.click(screen.getByTestId("sc-view-list"));
 
         await screen.findByTestId("sc-table-messages");
 
@@ -81,6 +98,7 @@ describe("schemaViewer", () => {
         expect.assertions(1);
 
         render(renderViewer(createClient()));
+        fireEvent.click(screen.getByTestId("sc-view-list"));
 
         await screen.findByTestId("sc-table-messages");
 
@@ -91,6 +109,7 @@ describe("schemaViewer", () => {
         expect.assertions(1);
 
         render(renderViewer(createClient()));
+        fireEvent.click(screen.getByTestId("sc-view-list"));
 
         await screen.findByTestId("sc-table-messages");
 
@@ -103,6 +122,7 @@ describe("schemaViewer", () => {
         const mock = createClient();
 
         render(renderViewer(mock));
+        fireEvent.click(screen.getByTestId("sc-view-list"));
 
         fireEvent.click(await screen.findByTestId("sc-toggle-messages"));
 
@@ -123,6 +143,7 @@ describe("schemaViewer", () => {
         expect.assertions(3);
 
         render(renderViewer(createClient()));
+        fireEvent.click(screen.getByTestId("sc-view-list"));
 
         fireEvent.click(await screen.findByTestId("sc-toggle-messages"));
 
@@ -138,6 +159,7 @@ describe("schemaViewer", () => {
         expect.assertions(1);
 
         render(renderViewer(createClient()));
+        fireEvent.click(screen.getByTestId("sc-view-list"));
 
         fireEvent.click(await screen.findByTestId("sc-toggle-users"));
         await screen.findByTestId("sc-columns-users");
@@ -150,6 +172,7 @@ describe("schemaViewer", () => {
         expect.assertions(2);
 
         render(renderViewer(createClient()));
+        fireEvent.click(screen.getByTestId("sc-view-list"));
 
         await screen.findByTestId("sc-global-table-user");
 
@@ -164,6 +187,7 @@ describe("schemaViewer", () => {
         const mock = createClient();
 
         render(renderViewer(mock));
+        fireEvent.click(screen.getByTestId("sc-view-list"));
 
         fireEvent.click(await screen.findByTestId("sc-global-toggle-session"));
 
@@ -182,6 +206,7 @@ describe("schemaViewer", () => {
         expect.assertions(2);
 
         render(renderViewer(createClient()));
+        fireEvent.click(screen.getByTestId("sc-view-list"));
 
         await screen.findByTestId("sc-table-users");
 
@@ -197,8 +222,8 @@ describe("schemaViewer", () => {
 
         render(renderViewer(createClient()));
 
-        await screen.findByTestId("sc-table-messages");
-        fireEvent.click(screen.getByTestId("sc-view-graph"));
+        // Graph is the default view, so no switch is needed — and the node
+        // appearing below is itself the signal that the tables loaded.
 
         // A single canvas holds both a shard node (`messages`) and a global node (`user`).
         await screen.findByTestId("sd-node-messages");
@@ -217,8 +242,8 @@ describe("schemaViewer", () => {
 
         render(renderViewer(createClient()));
 
-        await screen.findByTestId("sc-table-messages");
-        fireEvent.click(screen.getByTestId("sc-view-graph"));
+        // Graph is the default view, so no switch is needed — and the node
+        // appearing below is itself the signal that the tables loaded.
 
         // `session.userId` carries a `ref` from `readGlobalTablePage`'s `refs` map
         // (no schema entry), so its node row shows the FK badge → the global→global
@@ -239,11 +264,55 @@ describe("schemaViewer", () => {
         });
 
         render(renderViewer(mock));
+        fireEvent.click(screen.getByTestId("sc-view-list"));
 
         // Shard tables render regardless of the global failure.
         await screen.findByTestId("sc-table-messages");
 
         expect(screen.getByTestId("sc-toggle-messages").textContent).toBe("messages (3)");
         expect(screen.getByTestId("sc-global-error").textContent).toContain("no D1 binding");
+    });
+});
+
+describe("useSchemaExplorer shard switch", () => {
+    it("keeps the current shard's tables when the previous shard's list lands late", async () => {
+        expect.assertions(1);
+
+        const pending = new Map<string, (tables: { name: string; rowCount: number }[]) => void>();
+        const mock = createMockClient({
+            query: (reference, _args, options): unknown => {
+                if (reference !== ADMIN_FUNCTIONS.listTables) {
+                    return {};
+                }
+
+                const shard = (options as { shardKey?: string }).shardKey ?? "";
+
+                return new Promise((resolve) => {
+                    pending.set(shard, resolve);
+                });
+            },
+        });
+        const wrapper = ({ children }: { children: ReactNode }): ReactElement => <LunoraProvider client={mock.asClient}>{children}</LunoraProvider>;
+        const { result } = renderHook(() => useSchemaExplorer({ initialShardKey: "a" }), { wrapper });
+
+        act(() => {
+            result.current.setShardKey("b");
+        });
+        await waitFor(() => {
+            if (!pending.has("b")) {
+                throw new Error("shard b not listed yet");
+            }
+        });
+
+        await act(async () => {
+            pending.get("b")?.([{ name: "b_only", rowCount: 1 }]);
+            await Promise.resolve();
+        });
+        await act(async () => {
+            pending.get("a")?.([{ name: "a_only", rowCount: 1 }]);
+            await Promise.resolve();
+        });
+
+        expect(result.current.tables?.map((table) => table.name)).toStrictEqual(["b_only"]);
     });
 });

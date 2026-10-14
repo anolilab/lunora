@@ -418,3 +418,37 @@ describe("functionRunner run-as identity", () => {
         expect(args.args).toEqual({ limit: 5 });
     });
 });
+
+describe("functionRunner — v.bigint() / v.bytes() values", () => {
+    it("renders a bigint and a bytes result instead of crashing or printing {}", async () => {
+        expect.hasAssertions();
+
+        // The client decodes the wire codec, so these arrive as a real bigint and ArrayBuffer.
+        const mock = createMockClient({
+            query: () => {
+                return { amountMinor: 1999n, receipt: new Uint8Array([1, 2, 3]).buffer };
+            },
+        });
+
+        render(renderRunner(mock));
+        fireEvent.click(screen.getByTestId("run-button"));
+
+        await waitFor(() => {
+            expect(JSON.parse(screen.getByTestId("result").textContent)).toStrictEqual({ amountMinor: "1999", receipt: "<bytes: 3 B>" });
+        });
+    });
+
+    it("sends a tagged bigint arg as a real bigint", async () => {
+        expect.hasAssertions();
+
+        const mock = createMockClient({ query: () => null });
+
+        render(renderRunner(mock));
+        fireEvent.change(screen.getByTestId("args-input"), { target: { value: '{ "amount": ["$lunora.wire$", "bigint", "9007199254740993"] }' } });
+        fireEvent.click(screen.getByTestId("run-button"));
+
+        await waitFor(() => {
+            expect(mock.query.mock.calls[0]?.[1]).toStrictEqual({ amount: 9_007_199_254_740_993n });
+        });
+    });
+});

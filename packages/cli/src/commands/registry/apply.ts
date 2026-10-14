@@ -5,22 +5,133 @@
  */
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 
-import { DEV_VARS_FILE, parseDevVariableEntries, promptYesNo } from "@lunora/config";
+import { DEV_VARS_FILE, parseDevVariableEntries, writeDevVariablesFileAtomically } from "@lunora/config";
 import { join } from "@visulima/path";
 import { applyEdits, modify, parse } from "jsonc-parser";
 
 import type { Logger } from "../../util/logger";
+import { resolveDistTag, resolveTagVersions } from "../../util/source-ref";
+import { tuiConfirm } from "../../util/tui-prompts";
 import type { AddCommandOptions, RegistryBinding, RegistryEnvVariable, RegistryManifest } from "./types";
+
+/**
+ * True when a manifest range is a bare `workspace:` alias — the forms that
+ * carry no version of their own and therefore have to be resolved against the
+ * CLI's release channel. See {@link resolveDepRange}.
+ */
+const isBareWorkspaceRange = (range: string): boolean => {
+    if (!range.startsWith("workspace:")) {
+        return false;
+    }
+
+    const rest = range.slice("workspace:".length);
+
+    return rest === "" || rest === "*" || rest === "^" || rest === "~";
+};
+
+/**
+ * Translate a pnpm `workspace:` protocol range into a publishable one.
+ *
+ * Registry manifests live inside the monorepo and pin sibling `@lunora/*`
+ * packages with `workspace:*` so development resolves to the local checkout.
+ * But `add` writes these ranges into a *consumer's* package.json, where the
+ * workspace protocol is meaningless — pnpm aborts with
+ * `ERR_PNPM_WORKSPACE_PKG_NOT_FOUND`. So when the range carries an explicit
+ * version (`workspace:^1.2.3` → `^1.2.3`) we strip the prefix.
+ *
+ * The bare alias forms (`workspace:*` / `^` / `~`) have no version to recover.
+ * `pinned` carries the CONCRETE version the CLI's release-channel dist-tag
+ * currently resolves to (looked up once per invocation by
+ * {@link resolvePinnedDepVersions}); a scaffolded package.json must pin that
+ * rather than the floating tag, because a tag lets a stale lockfile or pnpm
+ * metadata cache silently keep an older release — the specifier still
+ * "matches", so the lockfile is never re-resolved. This is the same reason
+ * `init` pins. When the lookup failed (offline, registry unreachable) the name
+ * is absent from `pinned` and we fall back to the channel tag, which still
+ * resolves to installable code — unlike `latest` on a pre-release channel.
+ * See {@link resolveDistTag} and {@link resolveTagVersions}.
+ */
+const resolveDepRange = (range: string, pinned?: ReadonlyMap<string, string>, name?: string): string => {
+    if (!range.startsWith("workspace:")) {
+        return range;
+    }
+
+    const rest = range.slice("workspace:".length);
+
+    if (rest === "" || rest === "*" || rest === "^" || rest === "~") {
+        return (name === undefined ? undefined : pinned?.get(name)) ?? resolveDistTag();
+    }
+
+    return rest;
+};
+
+/**
+ * Resolve every bare `workspace:` dependency across a whole plan to the
+ * CONCRETE version the CLI's release-channel dist-tag points at — one batched
+ * registry lookup per invocation, so the plan preview and the package.json it
+ * writes cannot disagree. Names whose lookup fails are simply absent (the
+ * offline-safe fallback lives in {@link resolveDepRange}).
+ */
+const resolvePinnedDepVersions = async (manifests: ReadonlyArray<RegistryManifest>): Promise<ReadonlyMap<string, string>> => {
+    const names = new Set<string>();
+
+    for (const manifest of manifests) {
+        for (const section of [manifest.deps, manifest.devDependencies]) {
+            for (const [name, range] of Object.entries(section ?? {})) {
+                if (isBareWorkspaceRange(range)) {
+                    names.add(name);
+                }
+            }
+        }
+    }
+
+    return names.size === 0 ? new Map() : resolveTagVersions([...names], resolveDistTag());
+};
+
+/**
+ * The base `@lunora/*` packages the unscoped `lunorash` umbrella re-exports
+ * through subpaths (`lunorash/server`, `lunorash/values`, …). A project that
+ * depends on `lunorash` already has these — so a registry item must NOT add them
+ * as separate deps (it would reintroduce a parallel `@lunora/server` next to the
+ * umbrella's, and once the floating channel tag drifts past the version
+ * `lunorash` pins, two copies → two module instances → schema/builder identity
+ * breakage). Add-ons the umbrella does not re-export (`@lunora/auth`,
+ * `@lunora/mail`, framework adapters, …) stay granular `@lunora/*` installs.
+ */
+const UMBRELLA_REEXPORTED_DEPS = new Set(["@lunora/client", "@lunora/do", "@lunora/ratelimit", "@lunora/runtime", "@lunora/server", "@lunora/values"]);
+
+/** Quoted module specifier for an umbrella-re-exported base package (with optional subpath). */
+const UMBRELLA_IMPORT_RE = /(['"])@lunora\/(client|do|ratelimit|runtime|server|values)(\/[^'"]*)?\1/gu;
+
+/**
+ * Rewrite a registry item's `@lunora/{server,values,runtime,do,client}` import
+ * specifiers to the matching `lunorash/*` umbrella subpath, preserving any
+ * subpath (`@lunora/server/types` → `lunorash/server/types`) and quote style.
+ * Add-on scopes are left untouched. Applied to a copied file only when the
+ * target project depends on the umbrella so the shipped code imports the base
+ * surface from the same package the rest of the app does (one instance).
+ */
+const rewriteUmbrellaImports = (source: string): string =>
+    source.replaceAll(UMBRELLA_IMPORT_RE, (_match, quote: string, base: string, subpath?: string) => `${quote}lunorash/${base}${subpath ?? ""}${quote}`);
 
 /**
  * Add deps to a `package.json` section (`dependencies` or `devDependencies`),
  * structurally so formatting/comments are preserved. Returns the added names.
+ * When `useUmbrella` is set, base packages the `lunorash` umbrella re-exports
+ * ({@link UMBRELLA_REEXPORTED_DEPS}) are skipped — the umbrella already provides
+ * them, and adding a parallel copy risks a second instance.
+ *
+ * `pinned` is the plan's resolved dist-tag → concrete version map
+ * ({@link resolvePinnedDepVersions}); omitting it writes the floating channel
+ * tag, which is only correct when no registry is reachable.
  */
 const applyDeps = (
     deps: Readonly<Record<string, string>>,
     projectRoot: string,
     logger: Logger,
     section: "dependencies" | "devDependencies" = "dependencies",
+    useUmbrella = false,
+    pinned?: ReadonlyMap<string, string>,
 ): ReadonlyArray<string> => {
     const entries = Object.entries(deps);
 
@@ -41,6 +152,14 @@ const applyDeps = (
     const added: string[] = [];
 
     for (const [name, range] of entries) {
+        // The umbrella already re-exports this base package via a `lunorash/*`
+        // subpath — adding it granularly would duplicate the install.
+        if (useUmbrella && UMBRELLA_REEXPORTED_DEPS.has(name)) {
+            logger.info(`dep provided by the lunorash umbrella, skipping: ${name}`);
+
+            continue;
+        }
+
         // A dep already pinned in either section is left as the project has it.
         if (parsed.dependencies?.[name] !== undefined || parsed.devDependencies?.[name] !== undefined) {
             logger.info(`dep already present: ${name}`);
@@ -48,7 +167,7 @@ const applyDeps = (
             continue;
         }
 
-        const edits = modify(text, [section, name], range, {
+        const edits = modify(text, [section, name], resolveDepRange(range, pinned, name), {
             formattingOptions: { insertSpaces: true, tabSize: 4 },
         });
 
@@ -107,7 +226,7 @@ const applyEnvVariables = (envVariables: ReadonlyArray<RegistryEnvVariable>, pro
     if (appended.length > 0) {
         const prefix = existing === "" || existing.endsWith("\n") ? existing : `${existing}\n`;
 
-        writeFileSync(devVariablesPath, `${prefix}${lines.join("\n")}\n`, "utf8");
+        writeDevVariablesFileAtomically(devVariablesPath, `${prefix}${lines.join("\n")}\n`);
         logger.success(`scaffolded ${String(appended.length)} env var(s) into .dev.vars: ${appended.join(", ")}`);
     }
 
@@ -144,6 +263,194 @@ const ALLOWED_BINDING_ROOTS = new Set([
     "workflows",
 ]);
 
+/**
+ * The `binding` name a wrangler resource entry claims, when it has one. Every
+ * array-shaped wrangler binding (`d1_databases`, `r2_buckets`, `kv_namespaces`,
+ * …) keys on this field, and two entries sharing it is always a
+ * misconfiguration.
+ */
+const BINDING_KEY_FIELDS = ["binding", "name", "queue", "pattern"] as const;
+
+const bindingNameOf = (entry: unknown): string | undefined => {
+    if (typeof entry !== "object" || entry === null) {
+        return undefined;
+    }
+
+    // Not every array-shaped wrangler binding keys on `binding`: a queue
+    // consumer keys on `queue`, a migration on `tag`-adjacent `name`, a route on
+    // `pattern`. Keying only on `binding` let those collide silently, which is
+    // the same failure this guard exists to stop.
+    for (const field of BINDING_KEY_FIELDS) {
+        const value = (entry as Record<string, unknown>)[field];
+
+        if (typeof value === "string" && value.length > 0) {
+            return `${field}:${value}`;
+        }
+    }
+
+    return undefined;
+};
+
+/**
+ * The incoming array entries that should actually be appended to `existing`.
+ *
+ * Drops structural duplicates (so a re-run is idempotent) and — the part that
+ * matters — drops any entry whose `binding` name the project already claims.
+ * Structural dedupe alone let a manifest's placeholder sit ALONGSIDE a real
+ * entry under the same name: two `DB` bindings, one pointing at
+ * `replace-me-db`. Wrangler then picks one and the app can deploy against a
+ * database that does not exist. The project's entry wins,
+ * and the skip is reported rather than silent.
+ */
+const freshArrayEntries = (existing: ReadonlyArray<unknown>, incoming: ReadonlyArray<unknown>, path: string, logger: Logger): unknown[] => {
+    const seen = new Set(existing.map((entry) => JSON.stringify(entry)));
+    const claimed = new Set(existing.map((entry) => bindingNameOf(entry)).filter((name): name is string => name !== undefined));
+    const fresh: unknown[] = [];
+
+    for (const entry of incoming) {
+        if (seen.has(JSON.stringify(entry))) {
+            continue;
+        }
+
+        const name = bindingNameOf(entry);
+
+        if (name !== undefined && claimed.has(name)) {
+            logger.warn(
+                `${name.replace(":", " ")} already exists in ${path} — keeping the project's entry and skipping the registry item's. Reconcile by hand if the item needs different settings.`,
+            );
+
+            continue;
+        }
+
+        if (name !== undefined) {
+            claimed.add(name);
+        }
+
+        fresh.push(entry);
+    }
+
+    return fresh;
+};
+
+/** Narrowing guard that yields `unknown[]` (not `any[]`) from `Array.isArray`. */
+const isUnknownArray = (value: unknown): value is unknown[] => Array.isArray(value);
+
+const isPlainObject = (value: unknown): value is Record<string, unknown> => typeof value === "object" && value !== null && !Array.isArray(value);
+
+/**
+ * The object analogue of {@link freshArrayEntries}: the incoming keys that are
+ * not already set on `existing`.
+ *
+ * A key the project already sets is KEPT and the item's value skipped, with the
+ * same warning shape an array collision produces. The project's `wrangler.jsonc`
+ * is the authority — a registry item (which can come from an arbitrary
+ * `--source`) must not silently repoint an existing `ai` / `browser` binding, and
+ * writing the incoming object wholesale would drop every sibling key the project
+ * had under that root (`vars` being the worst case).
+ */
+const freshObjectEntries = (existing: Record<string, unknown>, incoming: Record<string, unknown>, path: string, logger: Logger): Record<string, unknown> => {
+    const fresh: Record<string, unknown> = {};
+
+    for (const [key, value] of Object.entries(incoming)) {
+        if (!Object.hasOwn(existing, key)) {
+            fresh[key] = value;
+
+            continue;
+        }
+
+        if (JSON.stringify(existing[key]) === JSON.stringify(value)) {
+            continue;
+        }
+
+        logger.warn(
+            `${key} already exists in ${path} — keeping the project's value and skipping the registry item's. Reconcile by hand if the item needs different settings.`,
+        );
+    }
+
+    return fresh;
+};
+
+/** Read the current value at a jsonc key path in `text` (comments tolerated). */
+const readAt = (text: string, path: ReadonlyArray<string>): unknown => {
+    let node: unknown = parse(text);
+
+    for (const segment of path) {
+        if (typeof node !== "object" || node === null) {
+            return undefined;
+        }
+
+        node = (node as Record<string, unknown>)[segment];
+    }
+
+    return node;
+};
+
+/**
+ * Whether a binding's key path may be written.
+ *
+ * Refuses anything outside the resource-binding allowlist: a
+ * remote/attacker-influenceable manifest could otherwise set
+ * `build.command`/`main`/`node_compat` and run code on the next dev/deploy.
+ */
+const isWritableBindingPath = (path: ReadonlyArray<string>, logger: Logger): boolean => {
+    const root = path[0];
+
+    if (root !== undefined && ALLOWED_BINDING_ROOTS.has(root)) {
+        return true;
+    }
+
+    logger.warn(
+        `skipping binding "${path.join(".")}" — only resource bindings (${[...ALLOWED_BINDING_ROOTS].join(", ")}) may be written, not exec/entrypoint keys`,
+    );
+
+    return false;
+};
+
+/** Sentinel distinguishing "nothing to write" from a legitimate `undefined` binding value. */
+const SKIP_BINDING = Symbol("skip-binding");
+
+/**
+ * The value to write for one binding, or {@link SKIP_BINDING} when there is
+ * nothing new.
+ *
+ * Array bindings (e.g. `r2_buckets`) MERGE into any existing array rather than
+ * replacing it — otherwise adding `storage` then `backup` (or adding into a
+ * project that already has buckets) would silently drop the earlier entries.
+ * Object bindings (`ai`, `browser`, `vars`) merge key-wise for the same reason:
+ * writing the item's object verbatim would replace the whole root, so a `vars`
+ * binding from a custom `--source` could wipe every variable the project set.
+ */
+// Returns `unknown` because a union with the sentinel collapses to `unknown`
+// anyway (`typeof SKIP_BINDING | unknown` is just `unknown`), so the caller
+// compares against SKIP_BINDING by identity rather than narrowing.
+const mergedBindingValue = (text: string, binding: RegistryBinding, logger: Logger): unknown => {
+    const { value } = binding;
+    const path = binding.path.join(".");
+    const existing = readAt(text, binding.path);
+
+    if (isUnknownArray(value)) {
+        if (!isUnknownArray(existing)) {
+            return value;
+        }
+
+        const fresh = freshArrayEntries(existing, value, path, logger);
+
+        return fresh.length === 0 ? SKIP_BINDING : [...existing, ...fresh];
+    }
+
+    if (isPlainObject(value)) {
+        if (!isPlainObject(existing)) {
+            return value;
+        }
+
+        const fresh = freshObjectEntries(existing, value, path, logger);
+
+        return Object.keys(fresh).length === 0 ? SKIP_BINDING : { ...existing, ...fresh };
+    }
+
+    return value;
+};
+
 /** Apply wrangler.jsonc bindings (structural jsonc edits preserving comments). Returns applied paths. */
 const applyBindings = (bindings: ReadonlyArray<RegistryBinding>, projectRoot: string, logger: Logger): ReadonlyArray<string> => {
     if (bindings.length === 0) {
@@ -162,53 +469,17 @@ const applyBindings = (bindings: ReadonlyArray<RegistryBinding>, projectRoot: st
     let text = readFileSync(wranglerPath, "utf8");
     const applied: string[] = [];
 
-    /** Narrowing guard that yields `unknown[]` (not `any[]`) from `Array.isArray`. */
-    const isUnknownArray = (value: unknown): value is unknown[] => Array.isArray(value);
-
-    /** Read the current value at a jsonc key path (comments tolerated). */
-    const readAt = (path: ReadonlyArray<string>): unknown => {
-        let node: unknown = parse(text);
-
-        for (const segment of path) {
-            if (typeof node !== "object" || node === null) {
-                return undefined;
-            }
-
-            node = (node as Record<string, unknown>)[segment];
-        }
-
-        return node;
-    };
-
     for (const binding of bindings) {
-        // Refuse to write any key outside the safe resource-binding allowlist. A
-        // remote/attacker-influenceable manifest could otherwise set
-        // `build.command`/`main`/`node_compat` to run code on the next dev/deploy.
-        const root = binding.path[0];
-
-        if (root === undefined || !ALLOWED_BINDING_ROOTS.has(root)) {
-            logger.warn(
-                `skipping binding "${binding.path.join(".")}" — only resource bindings (${[...ALLOWED_BINDING_ROOTS].join(", ")}) may be written, not exec/entrypoint keys`,
-            );
-
+        if (!isWritableBindingPath(binding.path, logger)) {
             continue;
         }
 
-        // `RegistryBinding.value` is `unknown`; destructure then narrow below.
-        let { value } = binding;
+        const value = mergedBindingValue(text, binding, logger);
 
-        // Array bindings (e.g. `r2_buckets`) MERGE into any existing array rather
-        // than replacing it — otherwise adding `storage` then `backup` (or adding
-        // into a project that already has buckets) would silently drop the
-        // earlier entries. Dedupe by structural equality so re-runs are idempotent.
-        if (isUnknownArray(value)) {
-            const existing = readAt(binding.path);
-
-            if (isUnknownArray(existing)) {
-                const seen = new Set(existing.map((entry) => JSON.stringify(entry)));
-                // `value` is the narrowed incoming array; evaluated before reassignment.
-                value = [...existing, ...value.filter((entry) => !seen.has(JSON.stringify(entry)))];
-            }
+        // `undefined` means "nothing new to write" — every incoming array entry
+        // was already present, or its `binding` name is already claimed.
+        if (value === SKIP_BINDING) {
+            continue;
         }
 
         const edits = modify(text, [...binding.path], value, {
@@ -231,17 +502,27 @@ const applyBindings = (bindings: ReadonlyArray<RegistryBinding>, projectRoot: st
     return applied;
 };
 
-/** Apply one item's non-file resources (deps, devDeps, bindings, env vars). Returns the deps + bindings added. */
-const applyItemResources = (manifest: RegistryManifest, cwd: string, logger: Logger): { bindings: string[]; deps: string[] } => {
+/**
+ * Apply one item's non-file resources (deps, devDeps, bindings, env vars).
+ * Returns the deps + bindings added. `useUmbrella` routes base-package deps
+ * through the `lunorash` umbrella (skipping the granular duplicates).
+ */
+const applyItemResources = (
+    manifest: RegistryManifest,
+    cwd: string,
+    logger: Logger,
+    useUmbrella = false,
+    pinned?: ReadonlyMap<string, string>,
+): { bindings: string[]; deps: string[] } => {
     const deps: string[] = [];
     const bindings: string[] = [];
 
     if (manifest.deps) {
-        deps.push(...applyDeps(manifest.deps, cwd, logger));
+        deps.push(...applyDeps(manifest.deps, cwd, logger, "dependencies", useUmbrella, pinned));
     }
 
     if (manifest.devDependencies) {
-        deps.push(...applyDeps(manifest.devDependencies, cwd, logger, "devDependencies"));
+        deps.push(...applyDeps(manifest.devDependencies, cwd, logger, "devDependencies", useUmbrella, pinned));
     }
 
     if (manifest.bindings) {
@@ -256,21 +537,44 @@ const applyItemResources = (manifest: RegistryManifest, cwd: string, logger: Log
 };
 
 /**
+ * True when the items come from a registry the user pointed at rather than the
+ * pinned first-party one — a remote `--source` OR a local `--from` root. Both
+ * are attacker-influenceable (a checked-out repo, a downloaded directory, a
+ * hostile fetch base) and both ship the same file/dep/binding writes, so they
+ * carry one rule and one predicate. Two copies of this check had already
+ * drifted: `--source` was refused while `--from` applied silently.
+ */
+const isCustomRegistrySource = (options: { from?: string; source?: string }): boolean =>
+    (options.source !== undefined && options.source.length > 0) || (options.from !== undefined && options.from.length > 0);
+
+/**
  * Gate the privileged project mutations behind a confirmation when any item adds
  * dependencies OR wrangler.jsonc bindings, or when the items came from a
- * non-default `--source` (an attacker-influenceable origin can ship binding/file
+ * custom registry source (an attacker-influenceable origin can ship binding/file
  * writes that fire on `wrangler dev`/`deploy` without the victim importing
  * anything). Returns `true` to proceed, `false` to abort (after logging).
  */
-const confirmDepMutation = async (items: ReadonlyArray<{ manifest: RegistryManifest }>, options: AddCommandOptions): Promise<boolean> => {
+
+/**
+ * Why a confirmation did not happen — the two cases a bare `false` conflated.
+ *
+ * A non-TTY run without `--yes` is the INVOCATION being wrong (nothing could
+ * have asked), while a declined prompt is the operator deliberately saying no.
+ * They deserve different exit codes, and callers cannot tell them apart from a
+ * boolean.
+ */
+type ConfirmOutcome = { ok: true } | { ok: false; reason: "declined" | "non-interactive" };
+
+const confirmDepMutation = async (items: ReadonlyArray<{ manifest: RegistryManifest }>, options: AddCommandOptions): Promise<ConfirmOutcome> => {
     const hasDeps = items.some(({ manifest }) => Object.keys(manifest.deps ?? {}).length > 0 || Object.keys(manifest.devDependencies ?? {}).length > 0);
     const hasBindings = items.some(({ manifest }) => (manifest.bindings ?? []).length > 0);
-    // A non-default `--source` is untrusted: require a conscious confirmation even
-    // for a files-only item, so attacker-controlled source files aren't written silently.
-    const nonDefaultSource = options.source !== undefined && options.source.length > 0;
+    // A custom `--source`/`--from` registry is untrusted: require a conscious
+    // confirmation even for a files-only item, so attacker-controlled source
+    // files aren't written silently.
+    const nonDefaultSource = isCustomRegistrySource(options);
 
     if ((!hasDeps && !hasBindings && !nonDefaultSource) || options.yes) {
-        return true;
+        return { ok: true };
     }
 
     const reasons: string[] = [];
@@ -284,7 +588,10 @@ const confirmDepMutation = async (items: ReadonlyArray<{ manifest: RegistryManif
     }
 
     if (nonDefaultSource) {
-        reasons.push(`come from a non-default source (${String(options.source)})`);
+        // `from` first, matching `resolveRegistryRoot`: when both are given the
+        // resolver reads the local root and ignores `--source`, so naming
+        // `source` here asked the operator to confirm a place nothing read from.
+        reasons.push(`come from a custom registry source (${String(options.from ?? options.source)})`);
     }
 
     const reasonText = reasons.join(", ");
@@ -292,17 +599,19 @@ const confirmDepMutation = async (items: ReadonlyArray<{ manifest: RegistryManif
     if (!process.stdin.isTTY && options.confirm === undefined) {
         options.logger.error(`add: stdin is not a TTY and the requested items ${reasonText} — re-run with --yes to confirm`);
 
-        return false;
+        return { ok: false, reason: "non-interactive" };
     }
 
-    const confirmer = options.confirm ?? promptYesNo;
-    const confirmed = await confirmer(`The requested items ${reasonText}. Continue? [y/N] `);
+    const confirmer = options.confirm ?? tuiConfirm;
+    const confirmed = await confirmer(`The requested items ${reasonText}. Continue?`);
 
     if (!confirmed) {
         options.logger.info("add: aborted");
+
+        return { ok: false, reason: "declined" };
     }
 
-    return confirmed;
+    return { ok: true };
 };
 
-export { applyBindings, applyDeps, applyEnvVariables, applyItemResources, confirmDepMutation };
+export { applyDeps, applyItemResources, confirmDepMutation, isCustomRegistrySource, resolveDepRange, resolvePinnedDepVersions, rewriteUmbrellaImports };

@@ -55,6 +55,19 @@ describe("parseSchema", () => {
         expect(presence?.global).toBe(false);
     });
 
+    it("reads the columns of a table declared without a trailing chain", () => {
+        expect.assertions(1);
+
+        // `defineTable({ … })` with no `.index()`/`.global()` IS the initializer
+        // node, not a descendant of it — reading only descendants saw no columns.
+        const chainless = `import { defineSchema, defineTable, v } from "@lunora/server";\n\nexport default defineSchema({\n    posts: defineTable({\n        title: v.string(),\n        body: v.optional(v.string()),\n    }),\n});\n`;
+
+        expect(tablesOf(parseSchema(chainless))[0]?.columns).toStrictEqual([
+            { name: "title", optional: false, validator: "v.string()" },
+            { name: "body", optional: true, validator: "v.optional(v.string())" },
+        ]);
+    });
+
     it("reports no-define-schema when the file declares no schema", () => {
         expect.assertions(1);
 

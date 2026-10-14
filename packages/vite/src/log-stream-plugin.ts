@@ -1,5 +1,8 @@
-import { formatLunoraEvent, LUNORA_EVENT_SOURCE } from "@lunora/config";
+import { detectAiAgent, formatLunoraEvent, LUNORA_EVENT_SOURCE } from "@lunora/config";
 import type { Plugin } from "vite";
+
+import type { PendingCloseMap } from "./server-close";
+import { registerDevServerClose, runPendingClose } from "./server-close";
 
 /**
  * Dev-only plugin that pretty-prints the Lunora runtime's structured log events
@@ -95,45 +98,111 @@ const wrapWrite =
 /** Patch one stream's `write` in place; returns a function that restores the original. */
 const patchStream = (stream: WritableLike): (() => void) => {
     const original = stream.write.bind(stream);
+    const wrapper = wrapWrite(original, stream.isTTY === true);
 
     // eslint-disable-next-line no-param-reassign -- intentional, reversible monkey-patch of the live stream; restored on server close.
-    stream.write = wrapWrite(original, stream.isTTY === true);
+    stream.write = wrapper;
 
     return () => {
-        // eslint-disable-next-line no-param-reassign -- restore the original write captured above.
-        stream.write = original;
+        // Only unpatch if OUR wrapper is still installed. On `server.restart()`
+        // Vite configures + patches the NEW server before closing the OLD one, so
+        // a stale teardown would otherwise reinstate the true original and drop the
+        // new generation's patch — or, worse, clobber it. Guarding on identity lets
+        // the newest generation own the stream until it (and only it) tears down.
+        if (stream.write === wrapper) {
+            // eslint-disable-next-line no-param-reassign -- restore the original write captured above.
+            stream.write = original;
+        }
     };
 };
 
 /**
+ * True when the worker's structured JSON events should pass through RAW
+ * instead of being pretty-printed: an explicit `LUNORA_LOG_JSON=1|true`, or an
+ * AI agent driving the process (agents parse JSON; the decorated line only
+ * costs them tokens). `LUNORA_LOG_JSON=0` still opts out under an agent.
+ */
+const wantRawJsonLogs = (): boolean => {
+    const flag = process.env.LUNORA_LOG_JSON;
+
+    if (flag === "1" || flag === "true") {
+        return true;
+    }
+
+    if (flag === "0" || flag === "false") {
+        return false;
+    }
+
+    return detectAiAgent() !== undefined;
+};
+
+/**
+ * The restore for the patch currently installed on `process.stdout`/`stderr`, if
+ * any.
+ *
+ * MODULE-scoped, not factory-scoped, and that is the whole point: Vite 8's
+ * `restartServer` re-runs `resolveConfig`, which builds a NEW plugin instance
+ * from a NEW factory closure. A factory-scoped handle is therefore `undefined`
+ * in the new generation — it restores nothing, wraps the previous generation's
+ * wrapper, and every restart adds another layer that outlives the process's last
+ * server. One module-level handle lets a later generation undo the earlier
+ * patch, which is the only correct owner: the streams are process-global too.
+ */
+let activeRestore: (() => void) | undefined;
+
+/**
  * Vite plugin (serve-only) that formats Lunora worker logs in the terminal.
- * Patches `process.stdout`/`process.stderr` once the dev server is configured
- * and restores them when it closes.
+ * Patches `process.stdout`/`process.stderr` fresh for each dev-server generation
+ * and restores them when that server closes.
  */
 const logStreamPlugin = (): Plugin => {
-    let restore: (() => void) | undefined;
+    // Teardown callbacks pending a middleware-mode dev-server close (no httpServer
+    // to hang a "close" listener on) — see `server-close.ts`. Factory-scoped is
+    // right HERE: the map is keyed by Environment instance, so each generation's
+    // `buildEnd` consumes its own entry from its own map.
+    const pendingMiddlewareTeardowns: PendingCloseMap = new Map();
 
     return {
         apply: "serve",
+        buildEnd() {
+            // Middleware-mode close fallback: no httpServer to listen on, so the
+            // patch is restored here instead. A no-op in classic dev mode (the map
+            // is only populated in middleware mode) — see `server-close.ts`.
+            runPendingClose(pendingMiddlewareTeardowns, this.environment);
+        },
         configureServer(server) {
-            if (restore) {
+            // JSON mode: leave the streams untouched — the runtime's structured
+            // events are already single-line JSON, which is exactly what a
+            // machine consumer wants on stdout.
+            if (wantRawJsonLogs()) {
                 return;
             }
+
+            // A previous generation may still be patched (a restart configures the
+            // new server before closing the old). Restore it first so we wrap the
+            // TRUE originals, never a stale wrapper — otherwise a later teardown
+            // would leave a leftover wrapper installed past the process's last server.
+            activeRestore?.();
 
             const restoreStdout = patchStream(process.stdout as unknown as WritableLike);
             const restoreStderr = patchStream(process.stderr as unknown as WritableLike);
 
-            restore = () => {
+            const restore = (): void => {
                 restoreStdout();
                 restoreStderr();
-                restore = undefined;
+
+                if (activeRestore === restore) {
+                    activeRestore = undefined;
+                }
             };
 
-            // Unpatch on shutdown so the streams aren't left wrapped if the same
-            // process outlives the server (e.g. Vite's programmatic API).
-            server.httpServer?.once("close", () => {
-                restore?.();
-            });
+            activeRestore = restore;
+
+            // Classic mode: `httpServer.once("close")`. Middleware mode (null
+            // httpServer, e.g. Vite's programmatic API — the exact "process outlives
+            // the server" case): parked for the `buildEnd` hook. Either way the
+            // streams are unpatched on shutdown rather than left wrapped.
+            registerDevServerClose(server, pendingMiddlewareTeardowns, restore);
         },
         name: "lunora:log-stream",
     };

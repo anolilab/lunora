@@ -1,30 +1,51 @@
+/* eslint-disable no-secrets/no-secrets -- false positive: `loadAnalyticsRuntimeMetrics` is a function name in prose, not a credential */
+
 /**
- * Analytics-Engine-derived feed for the runtime lints.
+ * Analytics-Engine-derived feed for the runtime lints — QUARANTINED design note,
+ * **not exported** from `@lunora/advisor`'s package root (plan 225 / ADVISOR-01).
  *
  * The runtime lints (`hot_shard`, `index_utilization`) are pure over the
  * {@link LintContext} arrays `shardTraffic` / `tableScans` / `indexHits`. By
  * default the studio backend fills those from each shard's durable in-DO
- * counters (`__lunora_metrics*`). This module is the **alternative feeder**:
- * given a read client over the Analytics Engine SQL API (the one
- * `@lunora/analytics` exposes as `createAnalyticsSqlClient`), it produces the
- * same arrays from real, cross-shard scan-attribution data — so the advisors can
- * be backed by AE instead of (or alongside) the in-DO counters.
+ * counters (`__lunora_metrics*`). This module sketches an **alternative feeder**:
+ * given `ctx.analyticsSql` (or any `createAnalyticsSql` client from
+ * `@lunora/bindings/analytics-sql`), it would reconstruct the same arrays from
+ * cross-shard scan-attribution data in AE — so the advisors could be backed by AE
+ * instead of (or alongside) the in-DO counters.
  *
- * It is **strictly optional**: with no AE token configured the caller passes no
- * source and the runtime lints fall back to the in-DO signals. A query that
- * fails (a revoked token, a dataset that has never been written) degrades to an
- * empty array for that metric rather than throwing, so a misconfigured read path
- * never breaks an advisor run.
+ * It speaks the Analytics SQL dialect: the dataset is
+ * `events.analyticsEngine."<dataset>"`, a lower `timestamp` bound is required
+ * (`options.since`), `COUNT(*)` is already sample-weighted by the SQL API, and
+ * every value — the bound, the event name, the group — is bound as a `$name`
+ * parameter rather than spliced into the statement.
  *
- * ## Read contract
+ * It never shipped a writer: nothing in the runtime calls
+ * `ctx.analytics.track("lunora.index.hit" | "lunora.shard.request" |
+ * "lunora.table.scan", …)`, so the `{@link AE_METRIC_EVENTS}` this reader queries
+ * for are never populated, and `loadAnalyticsRuntimeMetrics` always returns
+ * `shardTraffic` and `tableScans` empty against a live AE dataset. `indexHits`
+ * is empty too UNLESS the caller passes `options.declaredIndexes` — then it's
+ * every declared index with `reads: 0` (a real "zero reads observed" fact, not
+ * a stand-in for "no data"). The one caller shaped to consume it —
+ * the studio's `deriveRuntimeAdvisories` (`analyticsMetrics` input) — never
+ * actually supplies it either. Silently wiring this as-is would disable the
+ * dead-index half of `index_utilization` (an AE array that's merely empty reads
+ * as "no dead indexes" rather than "no data"), so it stays unexported until a
+ * writer exists. The read-side logic and its test coverage stay in place as the
+ * groundwork for that follow-up; import from `./ae-metrics` directly (not the
+ * package root) if you need it for that work.
  *
- * The arrays are reconstructed from data points the runtime mirrors into AE via
- * `ctx.analytics.track(name, { dimensions })`. `track` reserves `blob1` for the
- * event name and lays dimensions out from `blob2` in key order (see
- * `@lunora/analytics`' `createAnalytics`). The event names + dimension columns
+ * ## Read contract (for when a writer exists)
+ *
+ * The arrays would be reconstructed from data points the runtime mirrors into AE
+ * via `ctx.analytics.track(name, { dimensions })`. `track` reserves `blob1` for
+ * the event name and lays dimensions out from `blob2` in key order (see
+ * `@lunora/bindings/analytics`' `createAnalytics`). The event names + dimension columns
  * this reader expects are the {@link AE_METRIC_EVENTS} constants below; the
- * un-sampled count is AE's `sum(_sample_interval)`.
+ * un-sampled count is the SQL API's sample-weighted `COUNT(*)`.
  */
+import { LunoraError } from "@lunora/errors";
+
 import type { AdvisorIndexHit, AdvisorTableScan } from "./index-usage";
 import type { AdvisorShardTraffic } from "./shard-traffic";
 import type { LintContext } from "./types";
@@ -33,13 +54,13 @@ import type { LintContext } from "./types";
 const DATASET_NAME_PATTERN = /^[\w.-]+$/u;
 
 /**
- * Minimal structural view of the `@lunora/analytics` SQL client — just its
- * `query(sql)` method. Kept structural (not an `import type` from
- * `@lunora/analytics`) so the advisor needn't depend on the analytics package;
- * the real `AnalyticsSqlClient` satisfies it, as does a plain test double.
+ * Minimal structural view of an Analytics SQL client — just its
+ * `query(sql, params)` method. Kept structural (not an `import type` from
+ * `@lunora/bindings`) so the advisor needn't depend on the bindings package;
+ * `ctx.analyticsSql` satisfies it, as does a plain test double.
  */
 interface AnalyticsMetricsSource {
-    query: (sql: string) => Promise<{ rows: ReadonlyArray<Record<string, unknown>> }>;
+    query: (sql: string, params: Readonly<Record<string, string>>) => Promise<{ rows: ReadonlyArray<Record<string, unknown>> }>;
 }
 
 /**
@@ -75,6 +96,9 @@ interface AnalyticsMetricsOptions {
      * Omit to read the whole deployment's shard set.
      */
     group?: string;
+
+    /** ISO-8601 lower `timestamp` bound for every read — required by the Analytics SQL dialect. */
+    since: string;
 }
 
 /** The runtime-lint input arrays this module reconstructs from AE. */
@@ -106,30 +130,34 @@ const toText = (value: unknown): string => {
 
 /**
  * Reject a dataset name that isn't a bare AE table identifier. The dataset comes
- * from wrangler config (not user query text), but it is interpolated into the
- * `FROM` clause, so this is a defensive guard against an unexpected value
- * smuggling SQL — only letters, digits, `_`, `.` and `-` are allowed.
+ * from wrangler config (not user query text), but it is the one value that
+ * cannot be a parameter — it names the `FROM` table — so this is a defensive
+ * guard against an unexpected value smuggling SQL: only letters, digits, `_`,
+ * `.` and `-` are allowed.
  */
 const assertDataset = (dataset: string): void => {
     if (!DATASET_NAME_PATTERN.test(dataset)) {
-        throw new Error(`@lunora/advisor: invalid Analytics Engine dataset name "${dataset}" — expected a bare table identifier.`);
+        throw new LunoraError("INTERNAL", `@lunora/advisor: invalid Analytics Engine dataset name "${dataset}" — expected a bare table identifier.`);
     }
 };
 
 /**
- * Single-quote-escape a string for an AE SQL literal.
- *
- * Escapes backslashes first (so a trailing `\` cannot consume the closing
- * quote) and then doubles any single quotes — the standard defence-in-depth
- * escape for SQL string literals regardless of whether the AE/ClickHouse
- * dialect treats backslash as an escape character.
+ * The `FROM` table and leading `WHERE` filter every read shares: the dataset as
+ * `events.analyticsEngine."<dataset>"`, the required lower `timestamp` bound,
+ * and the event — the last two bound as `$since` / `$event`.
  */
-const sqlString = (value: string): string => `'${value.replaceAll("\\", "\\\\").replaceAll("'", "''")}'`;
+const scopeOf = (options: AnalyticsMetricsOptions): { from: string; where: string } => {
+    return { from: `events.analyticsEngine."${options.dataset}"`, where: "timestamp >= $since AND blob1 = $event" };
+};
 
 /** Run one query, mapping a transport/SQL error to an empty result so one bad metric never aborts the whole feed. */
-const queryOrEmpty = async (source: AnalyticsMetricsSource, sql: string): Promise<ReadonlyArray<Record<string, unknown>>> => {
+const queryOrEmpty = async (
+    source: AnalyticsMetricsSource,
+    sql: string,
+    params: Readonly<Record<string, string>>,
+): Promise<ReadonlyArray<Record<string, unknown>>> => {
     try {
-        const result = await source.query(sql);
+        const result = await source.query(sql, params);
 
         return result.rows;
     } catch {
@@ -138,19 +166,17 @@ const queryOrEmpty = async (source: AnalyticsMetricsSource, sql: string): Promis
 };
 
 /**
- * Read per-shard request volume (`hot_shard`'s input) from AE. Sums the
- * un-sampled `_sample_interval` per `(shardKey, group)` for the `shard.request`
- * event, optionally scoped to one group.
+ * Read per-shard request volume (`hot_shard`'s input) from AE: the
+ * sample-weighted count per `(shardKey, group)` for the `shard.request` event,
+ * optionally scoped to one group (bound as `$group`).
  */
 const loadShardTraffic = async (source: AnalyticsMetricsSource, options: AnalyticsMetricsOptions): Promise<AdvisorShardTraffic[]> => {
     const { event, group, shardKey } = AE_METRIC_EVENTS.shardRequest;
-    const groupFilter = options.group === undefined ? "" : ` AND ${group} = ${sqlString(options.group)}`;
-    const sql =
-        `SELECT ${shardKey} AS shardKey, ${group} AS shardGroup, sum(_sample_interval) AS requests ` +
-        `FROM ${options.dataset} WHERE blob1 = ${sqlString(event)}${groupFilter} ` +
-        `GROUP BY shardKey, shardGroup`;
+    const { from, where } = scopeOf(options);
+    const groupFilter = options.group === undefined ? "" : ` AND ${group} = $group`;
+    const sql = `SELECT ${shardKey} AS shardKey, ${group} AS shardGroup, COUNT(*) AS requests FROM ${from} WHERE ${where}${groupFilter} GROUP BY shardKey, shardGroup`;
 
-    const rows = await queryOrEmpty(source, sql);
+    const rows = await queryOrEmpty(source, sql, { event, since: options.since, ...(options.group === undefined ? {} : { group: options.group }) });
 
     return rows.map((row) => {
         const shardGroup = toText(row.shardGroup);
@@ -169,9 +195,10 @@ const loadShardTraffic = async (source: AnalyticsMetricsSource, options: Analyti
  */
 const loadTableScans = async (source: AnalyticsMetricsSource, options: AnalyticsMetricsOptions): Promise<AdvisorTableScan[]> => {
     const { event, table } = AE_METRIC_EVENTS.tableScan;
-    const sql = `SELECT ${table} AS scanTable, sum(_sample_interval) AS scans FROM ${options.dataset} WHERE blob1 = ${sqlString(event)} GROUP BY scanTable`;
+    const { from, where } = scopeOf(options);
+    const sql = `SELECT ${table} AS scanTable, COUNT(*) AS scans FROM ${from} WHERE ${where} GROUP BY scanTable`;
 
-    const rows = await queryOrEmpty(source, sql);
+    const rows = await queryOrEmpty(source, sql, { event, since: options.since });
 
     return rows.map((row) => {
         return { scans: toCount(row.scans), table: toText(row.scanTable) };
@@ -187,12 +214,10 @@ const loadTableScans = async (source: AnalyticsMetricsSource, options: Analytics
  */
 const loadIndexHits = async (source: AnalyticsMetricsSource, options: AnalyticsMetricsOptions): Promise<AdvisorIndexHit[]> => {
     const { event, index, table } = AE_METRIC_EVENTS.indexHit;
-    const sql =
-        `SELECT ${table} AS hitTable, ${index} AS hitIndex, sum(_sample_interval) AS reads ` +
-        `FROM ${options.dataset} WHERE blob1 = ${sqlString(event)} ` +
-        `GROUP BY hitTable, hitIndex`;
+    const { from, where } = scopeOf(options);
+    const sql = `SELECT ${table} AS hitTable, ${index} AS hitIndex, COUNT(*) AS reads FROM ${from} WHERE ${where} GROUP BY hitTable, hitIndex`;
 
-    const rows = await queryOrEmpty(source, sql);
+    const rows = await queryOrEmpty(source, sql, { event, since: options.since });
     const hits = rows.map((row) => {
         return { index: toText(row.hitIndex), reads: toCount(row.reads), table: toText(row.hitTable) };
     });
@@ -201,9 +226,9 @@ const loadIndexHits = async (source: AnalyticsMetricsSource, options: AnalyticsM
         return hits;
     }
 
-    const seen = new Set(hits.map((hit) => `${hit.table} ${hit.index}`));
+    const seen = new Set(hits.map((hit) => `${hit.table}\0${hit.index}`));
     const zeros = options.declaredIndexes
-        .filter((declared) => !seen.has(`${declared.table} ${declared.index}`))
+        .filter((declared) => !seen.has(`${declared.table}\0${declared.index}`))
         .map((declared) => {
             return { index: declared.index, reads: 0, table: declared.table };
         });
@@ -213,14 +238,27 @@ const loadIndexHits = async (source: AnalyticsMetricsSource, options: AnalyticsM
 
 /**
  * Reconstruct the runtime-lint input arrays (`shardTraffic` / `tableScans` /
- * `indexHits`) from the Analytics Engine SQL API. The three reads run
+ * `indexHits`) through the Analytics SQL API. The three reads run
  * concurrently; each degrades to an empty array on a query failure, so a
  * partially-misconfigured read path still returns what it can.
+ *
+ * QUARANTINED — not exported from `@lunora/advisor`'s package root. No writer
+ * ever calls `ctx.analytics.track` with the events this reads, so `shardTraffic`
+ * and `tableScans` are always empty against a real dataset. `indexHits` is
+ * empty too unless `options.declaredIndexes` is supplied, in which case it's
+ * every declared index reported with `reads: 0` — that's real zero-read
+ * evidence, not an absence-of-data placeholder. Wiring this in as-is would
+ * silently disable `index_utilization`'s dead-index check for a caller that
+ * omits `declaredIndexes` (empty reads as "nothing dead", not "no data"). See
+ * the module doc for the full rationale;
+ * import from `./ae-metrics` directly if you're doing the follow-up work that
+ * adds the writer.
  *
  * Feed the result into a {@link LintContext} alongside the declared schema:
  *
  * ```ts
- * const metrics = await loadAnalyticsRuntimeMetrics(client, { dataset: "ANALYTICS" });
+ * const since = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
+ * const metrics = await loadAnalyticsRuntimeMetrics(ctx.analyticsSql, { dataset: "ANALYTICS", since });
  * runAdvisor({ schema, ...metrics }, { source: "runtime" });
  * ```
  */

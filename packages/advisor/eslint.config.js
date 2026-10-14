@@ -30,6 +30,7 @@ export default createConfig(
             // linting can't parse them — don't lint doc snippets as source.
             "**/*.md/**",
             "**/vitest.config.ts",
+            "**/vitest.bench.config.ts",
             "**/packem.config.ts",
             "**/vite.config.ts",
             "**/wrangler.jsonc",
@@ -120,10 +121,18 @@ export default createConfig(
         },
     },
     // Markdown code blocks: don't enforce language tags.
+    // The `n` Node-builtins rules reach into the scope manager, which a markdown
+    // document has none of — under ESLint 10 they throw "Cannot read properties
+    // of undefined (globalScope)" while LOADING the rule, so a single committed
+    // .md file crashes the whole lint run instead of reporting findings. They're
+    // meaningless on prose either way, so turn them off for markdown.
     {
         files: ["**/*.md", "**/*.md/**"],
         rules: {
             "markdown/fenced-code-language": "off",
+            "n/no-unsupported-features/es-builtins": "off",
+            "n/no-unsupported-features/es-syntax": "off",
+            "n/no-unsupported-features/node-builtins": "off",
         },
     },
     // Behavior-breaking autofixers — kept off (not style). sort-objects reorders the
@@ -135,6 +144,15 @@ export default createConfig(
         rules: {
             "perfectionist/sort-objects": "off",
             "vitest/prefer-expect-type-of": "off",
+        },
+    },
+    // `jsdoc/text-escaping` escapes `<` and `&` in doc comments into HTML entities and
+    // offers no way to exempt code spans, so its autofix turns `Doc<T>` into `Doc&lt;T>` —
+    // which is then what every reader sees on hover. Last in the list so it applies to
+    // every file, including the scoped blocks above.
+    {
+        rules: {
+            "jsdoc/text-escaping": "off",
         },
     },
 );

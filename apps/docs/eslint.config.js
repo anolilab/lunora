@@ -168,10 +168,18 @@ export default createConfig(
         },
     },
     // Markdown code blocks: don't enforce language tags.
+    // The `n` Node-builtins rules reach into the scope manager, which a markdown
+    // document has none of — under ESLint 10 they throw "Cannot read properties
+    // of undefined (globalScope)" while LOADING the rule, so a single committed
+    // .md file crashes the whole lint run instead of reporting findings. They're
+    // meaningless on prose either way, so turn them off for markdown.
     {
         files: ["**/*.md", "**/*.md/**"],
         rules: {
             "markdown/fenced-code-language": "off",
+            "n/no-unsupported-features/es-builtins": "off",
+            "n/no-unsupported-features/es-syntax": "off",
+            "n/no-unsupported-features/node-builtins": "off",
         },
     },
     // React Compiler is enabled for this app. It auto-memoizes props, context
@@ -322,15 +330,6 @@ export default createConfig(
             "e18e/ban-dependencies": "off",
         },
     },
-    // Server functions: `createServerFn().handler(async () => …)` mandates an async
-    // handler signature even when the body has no await, so require-await is a false
-    // positive at this framework boundary.
-    {
-        files: ["src/server/**/*.{ts,tsx}"],
-        rules: {
-            "@typescript-eslint/require-await": "off",
-        },
-    },
     // Static code-display components: render syntax-highlighted token spans and code
     // lines from a fixed `lines` array that is never reordered or filtered, so the list
     // index is a stable, correct key (there is no other identity to key on).
@@ -353,12 +352,30 @@ export default createConfig(
     // Tailwind v4 global stylesheet: the @lunora app entry uses Tailwind directives
     // that the css plugin's layer/property/important opinions fight. Don't rewrite the
     // whole stylesheet into @layer — turn off the three opinion rules for CSS.
+    //
+    // `@property` is the one at-rule allowed past `use-baseline`'s "widely available"
+    // threshold, and it costs nothing here: Tailwind v4 already sets this site's browser
+    // floor at Safari 16.4 / Chrome 111 / Firefox 128 and emits `@property` into the
+    // compiled output itself, so every browser that can render the site at all supports
+    // it (Baseline 2024). It is also load-bearing — registering `--strip-a`/`--strip-b`
+    // as `<color>` is what makes the `strip-hue` animation interpolate instead of step.
+    // Everything else stays at the default "widely" threshold.
     {
         files: ["**/*.css"],
         rules: {
-            "css/use-layers": "off",
-            "css/no-invalid-properties": "off",
             "css/no-important": "off",
+            "css/no-invalid-properties": "off",
+            "css/use-baseline": ["warn", { allowAtRules: ["property"] }],
+            "css/use-layers": "off",
+        },
+    },
+    // `jsdoc/text-escaping` escapes `<` and `&` in doc comments into HTML entities and
+    // offers no way to exempt code spans, so its autofix turns `Doc<T>` into `Doc&lt;T>` —
+    // which is then what every reader sees on hover. Last in the list so it applies to
+    // every file, including the scoped blocks above.
+    {
+        rules: {
+            "jsdoc/text-escaping": "off",
         },
     },
 );

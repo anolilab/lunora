@@ -24,12 +24,28 @@ const fakeStringSchema = {
 const makeMutationContext = (): MutationContext => {
     return {
         auth: { getIdentity: async () => null, userId: null },
+        newId: () => "test-id",
         db: {} as MutationContext["db"],
         log: {} as MutationContext["log"],
-        runMutation: vi.fn<MutationContext["runMutation"]>() as MutationContext["runMutation"],
-        runQuery: vi.fn<MutationContext["runQuery"]>() as MutationContext["runQuery"],
+        metrics: { count: () => undefined, gauge: () => undefined, record: () => undefined },
+        span: {
+            addEvent: () => undefined,
+            addLink: () => undefined,
+            recordEvaluation: () => undefined,
+            recordException: () => undefined,
+            setAttribute: () => undefined,
+            setAttributes: () => undefined,
+            spanContext: () => {
+                return { spanId: "0000000000000001", traceId: "00000000000000000000000000000001" };
+            },
+        },
+        now: 0,
+        runMutation: vi.fn<(...args: never[]) => unknown>() as unknown as MutationContext["runMutation"],
+        secrets: { get: async () => "secret" },
+        runQuery: vi.fn<(...args: never[]) => unknown>() as unknown as MutationContext["runQuery"],
         scheduler: {} as MutationContext["scheduler"],
         storage: {} as MutationContext["storage"],
+        trace: (async (_name: string, fn: (t: unknown) => unknown) => fn(undefined)) as MutationContext["trace"],
         vectors: {} as MutationContext["vectors"],
         workflows: {} as MutationContext["workflows"],
     };

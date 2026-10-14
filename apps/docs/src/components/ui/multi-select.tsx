@@ -177,7 +177,7 @@ export const MultiSelect = ({
                                             {IconComponent && <IconComponent className="size-4 mr-2" />}
                                             {option?.label}
                                             <span
-                                                className="ml-2 cursor-pointer hover:bg-white"
+                                                className="ml-2 cursor-pointer hover:bg-panel"
                                                 onClick={(event) => {
                                                     toggleOption(value);
                                                 }}
@@ -252,8 +252,8 @@ export const MultiSelect = ({
                             <CommandItem className="cursor-pointer" key="all" onSelect={toggleAll}>
                                 <div
                                     className={cn(
-                                        "mr-2 flex size-4 items-center justify-center border border-white/20",
-                                        selectedValues.length === options.length ? "bg-white/20 text-white" : "opacity-50 [&_svg]:invisible",
+                                        "mr-2 flex size-4 items-center justify-center border border-hairline-strong",
+                                        selectedValues.length === options.length ? "bg-hairline-strong text-ink" : "opacity-50 [&_svg]:invisible",
                                     )}
                                 >
                                     <CheckIcon className="size-4" />
@@ -273,8 +273,8 @@ export const MultiSelect = ({
                                     >
                                         <div
                                             className={cn(
-                                                "mr-2 flex size-4 items-center justify-center border border-white/20",
-                                                isSelected ? "bg-white/20 text-white" : "opacity-50 [&_svg]:invisible",
+                                                "mr-2 flex size-4 items-center justify-center border border-hairline-strong",
+                                                isSelected ? "bg-hairline-strong text-ink" : "opacity-50 [&_svg]:invisible",
                                             )}
                                         >
                                             <CheckIcon className="size-4" />

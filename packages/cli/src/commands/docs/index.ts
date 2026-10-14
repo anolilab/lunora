@@ -2,11 +2,11 @@
 import type { Command, CommandExecute, Toolbox } from "@visulima/cerebro";
 
 const docsCommand: Command = {
-    argument: { description: "Optional path under the docs site (e.g. addons/studio)", name: "section", type: String },
+    argument: { description: "Optional path under the docs site (e.g. packages/studio)", name: "section", type: String },
     description: "Open the Lunora docs in your browser (optional [section] path)",
     examples: [
         ["lunora docs", "Open the Lunora docs"],
-        ["lunora docs addons/studio", "Open a specific docs section"],
+        ["lunora docs packages/studio", "Open a specific docs section"],
     ],
     group: "Project",
     loader: () =>

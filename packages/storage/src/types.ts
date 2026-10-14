@@ -1,122 +1,4 @@
-/**
- * A single-range read against R2: an `{ offset, length }` window (at least one
- * bound required, mirroring R2's own `R2Range`) or a `{ suffix }` tail. The
- * subset of `R2Range` that {@link Storage.download} forwards so a caller can
- * stream just the bytes it needs instead of the whole object.
- */
-export type R2RangeLike = { length: number; offset?: number } | { length?: number; offset: number } | { suffix: number };
-
-/**
- * Minimal projection of `R2Bucket`. Declared structurally so unit tests can
- * pass a plain object double; the real binding satisfies the same shape.
- */
-export interface R2BucketLike {
-    /**
-     * Begin a multipart upload (R2 `createMultipartUpload`). Optional so existing
-     * test doubles still satisfy the type; {@link Storage.createMultipartUpload}
-     * throws a clear error when the binding lacks it.
-     */
-    createMultipartUpload?: (
-        key: string,
-        options?: { customMetadata?: Record<string, string>; httpMetadata?: { contentType?: string } },
-    ) => Promise<R2MultipartUploadLike>;
-    delete: (key: string) => Promise<void>;
-    get: (key: string, options?: { range?: R2RangeLike }) => Promise<R2ObjectBodyLike | null>;
-
-    /**
-     * Fetch an object's metadata without its body (R2 HEAD). Returns `null` when
-     * the object is absent. Declared optional so existing test doubles that only
-     * implement `get`/`put`/`list`/`delete` still satisfy the type; callers that
-     * need metadata fall back to a 0-length ranged `get()` when `head` is absent.
-     */
-    head?: (key: string) => Promise<R2ObjectLike | null>;
-    list: (options?: { cursor?: string; delimiter?: string; limit?: number; prefix?: string }) => Promise<{
-        cursor?: string;
-        objects: R2ObjectLike[];
-        truncated?: boolean;
-    }>;
-    put: (
-        key: string,
-        body: ReadableStream | ArrayBuffer | Blob | string | null,
-        options?: { customMetadata?: Record<string, string>; httpMetadata?: { contentType?: string } },
-    ) => Promise<R2ObjectLike>;
-    /** Resume an in-progress multipart upload by id (R2 `resumeMultipartUpload`). Optional; see {@link Storage.resumeMultipartUpload}. */
-    resumeMultipartUpload?: (key: string, uploadId: string) => R2MultipartUploadLike;
-}
-
-/** One uploaded multipart part — returned by `uploadPart`, required to `complete`. Mirrors R2's `R2UploadedPart`. */
-export interface R2UploadedPartLike {
-    etag: string;
-    partNumber: number;
-}
-
-/**
- * An in-progress multipart upload, mirroring R2's `R2MultipartUpload`. Each part
- * (except the last) must be uniform in size. The object does not guarantee the
- * underlying upload still exists — a parallel `complete`/`abort` can invalidate
- * it — so wrap each call in error handling.
- */
-export interface R2MultipartUploadLike {
-    /** Abort the upload, discarding any uploaded parts. */
-    abort: () => Promise<void>;
-    /** Finish the upload from the collected parts; resolves to the stored object. */
-    complete: (uploadedParts: R2UploadedPartLike[]) => Promise<R2ObjectLike>;
-    /** The object key being assembled. */
-    readonly key: string;
-    /** The R2 upload id (persist it to resume across requests). */
-    readonly uploadId: string;
-    /** Upload one part (1-indexed); returns the `{ partNumber, etag }` to pass to `complete`. */
-    uploadPart: (partNumber: number, value: ArrayBuffer | ArrayBufferView | Blob | ReadableStream | string) => Promise<R2UploadedPartLike>;
-}
-
-export interface R2ObjectLike {
-    /**
-     * R2-computed checksums. The real binding exposes `sha256` as an
-     * `ArrayBuffer` (present only when R2 stored a SHA-256 for the object);
-     * declared optional so fakes and non-checksummed objects type-check.
-     */
-    checksums?: { sha256?: ArrayBuffer };
-    customMetadata?: Record<string, string>;
-    etag: string;
-
-    /**
-     * The quoted form of {@link R2ObjectLike.etag} (e.g. `"abc123"`), suitable
-     * for emitting directly as an HTTP `ETag` header. The real binding always
-     * provides it; declared optional so existing doubles that only set `etag`
-     * still type-check (callers fall back to quoting `etag`).
-     */
-    httpEtag?: string;
-    httpMetadata?: { contentType?: string };
-    key: string;
-
-    /**
-     * Hex-encoded SHA-256 of the object body, surfaced by `download()`/`list()`
-     * when R2 carries a checksum (derived from {@link R2ObjectLike.checksums}).
-     */
-    sha256?: string;
-
-    /**
-     * Base64-encoded SHA-256 of the object body, surfaced alongside
-     * {@link R2ObjectLike.sha256} from the same checksum. Base64 is the encoding
-     * RFC 9530 digest headers (`Repr-Digest`/`Content-Digest`) require, so HTTP
-     * layers can emit a spec-compliant digest without re-deriving it.
-     */
-    sha256Base64?: string;
-    size: number;
-
-    /**
-     * When the object was written. The real binding exposes this as a `Date`;
-     * declared optional so fakes that omit it still type-check.
-     * {@link Storage.getMetadata} normalises it to epoch ms.
-     */
-    uploaded?: Date;
-}
-
-export interface R2ObjectBodyLike extends R2ObjectLike {
-    arrayBuffer: () => Promise<ArrayBuffer>;
-    body: ReadableStream | null;
-    text: () => Promise<string>;
-}
+import type { R2BucketLike, R2MultipartUploadLike, R2ObjectBodyLike, R2ObjectLike, R2RangeLike } from "@lunora/platform";
 
 /**
  * R2 S3-API credentials for {@link Storage.getPresignedUrl}. These are an R2 API
@@ -139,7 +21,7 @@ export interface R2S3Credentials {
 
 /** Options for {@link Storage.getPresignedUrl}. */
 export interface PresignedUrlOptions {
-    /** Seconds the URL stays valid; clamped to [1, 604800]. Default 900. */
+    /** Seconds the URL stays valid: 1 to 604800 (7 days); an out-of-range value throws. Default 900. */
     expiresInSeconds?: number;
     /** HTTP method the URL authorizes. Default `GET`. */
     method?: "GET" | "PUT";
@@ -147,6 +29,21 @@ export interface PresignedUrlOptions {
 
 export interface LunoraStorageOptions {
     bucket: R2BucketLike;
+
+    /**
+     * The name this bucket is registered under — the same string a
+     * `defineStorageRule({ bucket })` rule and the generated `StorageBucketName`
+     * union use. Bound into every signed URL's HMAC and mirrored on it as
+     * `&bucket=`, so a URL minted for one bucket can't be replayed against
+     * another sharing the signing secret, and the serving route can resolve
+     * which bucket to read.
+     *
+     * Required, and deliberately without a default: a defaulted name is how
+     * every bucket ended up signing as `"default"` and cross-verifying against
+     * each other. Pass `"default"` for a single-bucket app's `ctx.storage`, and
+     * the registered name for any bucket reached through `createBucketStorage`.
+     */
+    bucketName: string;
     /** Public base URL used by `getSignedUrl()`. Required for signed URLs. */
     publicBaseUrl?: string;
 
@@ -168,20 +65,46 @@ export interface UploadOptions {
 
     /**
      * Maximum body size in bytes. For `ArrayBuffer`/`Blob` sources the length is
-     * known up front and rejected before the upload starts. For a
-     * `ReadableStream` the length isn't known synchronously, so the stream is
-     * piped through a byte counter that aborts the upload once the limit is
-     * exceeded — this also guards against R2 silently accepting/truncating an
-     * unbounded stream.
+     * known up front and rejected before the upload starts.
+     *
+     * A `ReadableStream` has no length to check, and R2 refuses any stream whose
+     * length it cannot read — so a capped stream is READ INTO MEMORY under the
+     * cap and uploaded as a sized body. Nothing reaches the bucket if the body
+     * crosses the limit.
+     *
+     * `maxSize` is therefore also the memory ceiling for a streamed upload, and
+     * the isolate's ~128 MB is shared by every concurrent request — so on the
+     * stream path `maxSize` is itself capped at 16 MiB and rejected above it.
+     * For objects larger than that use `createMultipartUpload` /
+     * `createUploadHandler`, which upload without ever holding the whole object.
+     * Must be a finite, non-negative number; anything else (`Number(undefined)`
+     * is the usual source) is rejected as a `VALIDATION_ERROR`.
      */
     maxSize?: number;
+
+    /**
+     * SHA-256 of the body (hex or a 32-byte buffer), recorded with the object.
+     *
+     * R2 only reports a checksum it was given: without this, `list()`/`head()`
+     * return no `sha256` and any later integrity check degrades to comparing
+     * sizes. R2 also verifies the digest itself on write, so supplying it turns
+     * the upload into a checked one.
+     */
+    sha256?: ArrayBuffer | string;
 }
 
 export interface ListOptions {
     cursor?: string;
     /** R2 list delimiter — when set, common prefixes group instead of listing. */
     delimiter?: string;
-    /** Defaults to 100, capped at 1000 (R2 limit). */
+
+    /**
+     * Defaults to 100, capped at 1000 (R2 limit). A ceiling, not a promise: R2
+     * may return fewer per page to fit the entry metadata.
+     *
+     * Must be a positive integer when given — `0`, `12.5` and `NaN` throw rather
+     * than being coerced into a page size the caller never asked for.
+     */
     limit?: number;
 }
 
@@ -189,7 +112,7 @@ export interface SignedUrlOptions {
     /**
      * Pin the `Content-Type` an uploader must send on a `method: "PUT"` URL.
      * Baked into the HMAC canonical so the signature only authorizes a PUT with
-     * exactly this content-type; mirrored on the URL as `&amp;ct=...`. Ignored for
+     * exactly this content-type; mirrored on the URL as `&ct=...`. Ignored for
      * `GET` URLs (a download has no request body content-type to pin).
      */
     contentType?: string;
@@ -219,6 +142,18 @@ export interface ObjectMetadata {
 
 export interface Storage {
     /**
+     * The bucket name this accessor operates under — the same value
+     * {@link Storage.getSignedUrl} puts into the HMAC canonical.
+     *
+     * Exposed so everything downstream agrees on one name: `asBucketStorage`
+     * tags a single-bucket storage with it, and `storageRules(...)` matches
+     * `(bucket, operation)` rules against that tag. Without it a
+     * `createStorage({ bucketName: "avatars" })` signed URLs as `avatars` while
+     * the rules engine only ever saw `"default"`.
+     */
+    readonly bucketName: string;
+
+    /**
      * Begin a native R2 **multipart upload** for very large objects — upload
      * parts (each uniform in size except the last), then `complete` with the
      * returned parts (or `abort`). Wraps R2's `createMultipartUpload`; throws if
@@ -244,10 +179,10 @@ export interface Storage {
 
     /**
      * Read a stored object's metadata (size, content-type, sha256, upload time,
-     * custom metadata) without fetching its body. Returns `null` when the object
-     * is absent. Backed by an R2 HEAD (`bucket.head`) when available, falling
-     * back to a 0-length ranged `get()` otherwise. Mirrors Convex's
-     * `ctx.storage.getMetadata`.
+     * custom metadata) without fetching its body, as a flat serializable shape.
+     * Returns `null` when the object is absent. A projection of
+     * {@link Storage.head}, so it makes the same single body-free read. Mirrors
+     * Convex's `ctx.storage.getMetadata`.
      */
     getMetadata: (key: string) => Promise<ObjectMetadata | null>;
 
@@ -261,7 +196,32 @@ export interface Storage {
     getPresignedUrl: (key: string, options?: PresignedUrlOptions) => Promise<string>;
     getSignedUrl: (key: string, options?: SignedUrlOptions) => Promise<string>;
     getUrl: (key: string) => string;
-    list: (prefix?: string, options?: ListOptions) => Promise<{ cursor?: string; objects: R2ObjectLike[]; truncated?: boolean }>;
+
+    /**
+     * Read an object's R2 metadata WITHOUT its body — `size` (the full object
+     * size), `etag`, `httpMetadata`, `checksums`, plus the `sha256`/`sha256Base64`
+     * projection `download()` adds. Returns `null` when the object is absent.
+     *
+     * Backed by an R2 HEAD when the binding exposes one, falling back to a
+     * 0-length ranged `get()` otherwise. Prefer this over `download()` whenever
+     * only the metadata is wanted — notably to resolve a `Range` header, where a
+     * plain `download()` starts a full-object body transfer that is then thrown
+     * away. {@link Storage.getMetadata} is the flat, serializable projection of
+     * the same read.
+     */
+    head: (key: string) => Promise<R2ObjectLike | null>;
+
+    /**
+     * List objects under `prefix`. With `options.delimiter` set, keys sharing a
+     * segment are rolled up into `delimitedPrefixes` (the "folders") and are NOT
+     * in `objects` — a folder browser needs both, so a listing whose `objects` is
+     * empty is not an empty directory.
+     *
+     * A page may hold FEWER objects than `options.limit`: R2 shrinks a page to
+     * fit the per-entry metadata this call asks for. Paginate on `truncated` /
+     * `cursor`, never on `objects.length === limit`.
+     */
+    list: (prefix?: string, options?: ListOptions) => Promise<{ cursor?: string; delimitedPrefixes?: string[]; objects: R2ObjectLike[]; truncated?: boolean }>;
 
     /**
      * Resume an in-progress multipart upload by its `uploadId` (e.g. across
@@ -275,6 +235,32 @@ export interface Storage {
      * alias for {@link Storage.upload} — it accepts the same {@link UploadOptions}
      * so the `maxSize` / `allowedContentTypes` guards aren't lost behind the alias.
      */
-    store: (key: string, body: ReadableStream | ArrayBuffer | Blob, options?: UploadOptions) => Promise<{ etag: string; httpEtag: string; key: string }>;
-    upload: (key: string, body: ReadableStream | ArrayBuffer | Blob, options?: UploadOptions) => Promise<{ etag: string; httpEtag: string; key: string }>;
+    store: (
+        key: string,
+        body: ReadableStream | ArrayBuffer | ArrayBufferView | Blob | string,
+        options?: UploadOptions,
+    ) => Promise<{ etag: string; httpEtag: string; key: string }>;
+
+    /**
+     * Upload `body` to `key`, returning the stored key + etag.
+     *
+     * The accepted shapes mirror what R2's `put` stores bytes from — a view
+     * (`Uint8Array`) and a `string` included. They are listed here because
+     * `maxSize` measures every one of them; a shape the cap cannot measure is
+     * refused rather than uploaded uncapped.
+     */
+    upload: (
+        key: string,
+        body: ReadableStream | ArrayBuffer | ArrayBufferView | Blob | string,
+        options?: UploadOptions,
+    ) => Promise<{ etag: string; httpEtag: string; key: string }>;
 }
+
+export {
+    type R2BucketLike,
+    type R2MultipartUploadLike,
+    type R2ObjectBodyLike,
+    type R2ObjectLike,
+    type R2RangeLike,
+    type R2UploadedPartLike,
+} from "@lunora/platform";

@@ -25,6 +25,17 @@ describe("describeValue", () => {
         expect(describeValue("hi")).toBe('string "hi"');
     });
 
+    it("suppresses the primitive literal to a bare type tag when literal:false", () => {
+        expect.assertions(4);
+
+        // The refinement-failure redaction path: only the type tag survives so a
+        // secret-bearing field never surfaces its value. Default is unchanged.
+        expect(describeValue("secret", { literal: false })).toBe("string");
+        expect(describeValue("secret")).toBe('string "secret"');
+        expect(describeValue(7, { literal: false })).toBe("number");
+        expect(describeValue(42n, { literal: false })).toBe("bigint");
+    });
+
     it("truncates an over-long string literal with an ellipsis", () => {
         expect.assertions(2);
 
@@ -66,6 +77,18 @@ describe("describeValue", () => {
         expect(describeValue(Object.create(null))).toBe("object");
     });
 
+    it("caps a genuine constructor name like every primitive branch", () => {
+        expect.assertions(1);
+
+        class Long {
+            public readonly id = 0;
+        }
+
+        Object.defineProperty(Long, "name", { value: "X".repeat(200) });
+
+        expect(describeValue(new Long()).length).toBeLessThan(100);
+    });
+
     it("does not throw on a hostile object whose constructor getter throws", () => {
         expect.assertions(2);
 
@@ -82,6 +105,19 @@ describe("describeValue", () => {
 
         expect(() => describeValue(hostile)).not.toThrow();
         expect(describeValue(hostile)).toBe("object");
+    });
+
+    it("truncates a client-supplied constructor name", () => {
+        expect.assertions(2);
+
+        // A JSON body carrying its OWN `constructor` property is a plain object
+        // whose `constructor.name` is whatever was sent — so this branch is
+        // client-sized, and `received` goes back on the wire and into logs.
+        // Every other branch truncates; this one did not.
+        const described = describeValue(structuredClone({ constructor: { name: "A".repeat(100_000) } }));
+
+        expect(described.endsWith("…")).toBe(true);
+        expect(described.length).toBeLessThan(100);
     });
 
     it("falls through to typeof for other values (undefined, symbol, function)", () => {

@@ -19,7 +19,7 @@ import { insertCronJob } from "./_helpers/insert-cron.js";
 
 const freshCrons = (jobName: string): string => `import { cronJobs } from "@lunora/scheduler";
 
-import { internal } from "./_generated/api.js";
+import { internal } from "./_generated/internal.js";
 
 /**
  * Code-first cron registry. Each registration runs the referenced internal
@@ -28,7 +28,8 @@ import { internal } from "./_generated/api.js";
  * edit wrangler.jsonc by hand.
  *
  * Schedule forms:
- *   crons.interval(name, { minutes: 30 }, fn, args)            // every N seconds/minutes/hours
+ *   crons.interval(name, { minutes: 30 }, fn, args)            // every N seconds/minutes/hours (hours: 1-23)
+ *   crons.hourly(name, { minuteUTC: 17 }, fn, args)            // hourly, at a chosen minute past the hour
  *   crons.daily(name, { hourUTC: 9, minuteUTC: 0 }, fn, args)  // daily at a UTC time
  *   crons.weekly(name, { dayOfWeek: "monday", hourUTC: 9, minuteUTC: 0 }, fn, args)
  *   crons.monthly(name, { day: 1, hourUTC: 9, minuteUTC: 0 }, fn, args)

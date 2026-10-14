@@ -1,0 +1,613 @@
+{
+    "$comment": "Golden fixtures for the WebSocket subscription protocol (GET /_lunora/ws). `clientFrames` are frames a client MUST emit; a conforming client's builders produce these (compared as parsed JSON, key order irrelevant). `serverFrames` are frames a client MUST consume; each `expect` describes the observable effect (`valueWire` is the wire form of the value delivered to the callback, so encode(received) == valueWire). `shape` covers the poke-based partial-replication path. `pageDeltaFrames` is a SEPARATE set only an SDK that announced the `pageDelta` capability should run: each case applies its `frame` ON TOP of `baseWire` (merging, not replacing) and asserts the merged `valueWire`. It is deliberately not in `serverFrames`, which SDKs iterate wholesale and apply by replacement. `connect-with-caps` is the OPTIONAL capability-announcing form of the connect frame (protocol README 5.1.1) \u2014 an SDK that implements no capability tokens emits plain `connect` and is fully conforming, so only an SDK that has actually implemented a token should assert against it. Today no non-JS port announces a capability token, so `connect-with-caps` and `pageDeltaFrames` are asserted by `@lunora/client` alone — they are the reference's forward contract, not dead data.",
+    "clientFrames": {
+        "connect": {
+            "clientId": "client-test",
+            "id": "connect",
+            "type": "connect"
+        },
+        "connect-with-caps": {
+            "caps": ["pageDelta"],
+            "clientId": "client-test",
+            "id": "connect",
+            "type": "connect"
+        },
+        "connect-with-context": {
+            "clientId": "client-test",
+            "id": "connect",
+            "type": "connect",
+            "context": {
+                "roomId": "general"
+            }
+        },
+        "subscribe-cold": {
+            "id": "sub_1",
+            "query": {
+                "args": {
+                    "channel": "general"
+                },
+                "functionPath": "messages:list",
+                "table": "messages:list"
+            },
+            "type": "subscribe"
+        },
+        "subscribe-resume": {
+            "id": "sub_1",
+            "query": {
+                "args": {
+                    "channel": "general"
+                },
+                "functionPath": "messages:list",
+                "table": "messages:list",
+                "sinceSeq": 12,
+                "sinceEpoch": "e1"
+            },
+            "type": "subscribe"
+        },
+        "unsubscribe": {
+            "id": "sub_1",
+            "type": "unsubscribe"
+        }
+    },
+    "stream": {
+        "$comment": "A live query consumed as the language's own PULL type — an async generator, a channel, an Enumerator, an Iterator, an AsyncStream — yields exactly the values the callback form delivers, in frame order, and stops delivering once the consumer stops. Same subscription, same decode: the values arrive wire-encoded on the frames and are decoded on the way out, so a port that hands the raw frame payload to its stream fails here rather than in a consumer. `sub_1` is the id every port mints for a first subscription.",
+        "subscriptionId": "sub_1",
+        "frames": [
+            { "id": "sub_1", "type": "data", "data": { "n": 1 }, "cursor": 1 },
+            { "id": "sub_1", "type": "data", "data": { "n": 2 }, "cursor": 2 },
+            { "id": "sub_1", "type": "data", "data": { "n": 3 }, "cursor": 3 }
+        ],
+        "yielded": [{ "n": 1 }, { "n": 2 }, { "n": 3 }]
+    },
+    "serverFrames": [
+        {
+            "name": "ack",
+            "frame": {
+                "id": "sub_1",
+                "type": "ack"
+            },
+            "expect": {
+                "kind": "ack",
+                "id": "sub_1"
+            }
+        },
+        {
+            "name": "data-plain",
+            "frame": {
+                "id": "sub_1",
+                "type": "data",
+                "data": {
+                    "messages": ["hi", "there"]
+                },
+                "cursor": 5,
+                "epoch": "e1"
+            },
+            "expect": {
+                "kind": "data",
+                "id": "sub_1",
+                "valueWire": {
+                    "messages": ["hi", "there"]
+                },
+                "cursor": 5,
+                "epoch": "e1"
+            }
+        },
+        {
+            "name": "data-typed",
+            "frame": {
+                "id": "sub_1",
+                "type": "data",
+                "data": ["$lunora.wire$", "bigint", "9"]
+            },
+            "expect": {
+                "kind": "data",
+                "id": "sub_1",
+                "valueWire": ["$lunora.wire$", "bigint", "9"]
+            }
+        },
+        {
+            "name": "error",
+            "frame": {
+                "id": "sub_1",
+                "type": "error",
+                "error": {
+                    "code": "FORBIDDEN_SHARD",
+                    "message": "nope"
+                }
+            },
+            "expect": {
+                "kind": "error",
+                "id": "sub_1",
+                "code": "FORBIDDEN_SHARD",
+                "message": "nope"
+            }
+        },
+        {
+            "name": "resume",
+            "frame": {
+                "id": "sub_1",
+                "type": "resume",
+                "cursor": 20,
+                "epoch": "e1"
+            },
+            "expect": {
+                "kind": "resume",
+                "id": "sub_1",
+                "cursor": 20
+            }
+        },
+        {
+            "name": "settled",
+            "frame": {
+                "id": "sub_1",
+                "type": "settled",
+                "cursor": 21,
+                "lastMutationId": 3
+            },
+            "expect": {
+                "kind": "settled",
+                "id": "sub_1",
+                "cursor": 21,
+                "lastMutationId": 3
+            }
+        },
+        {
+            "name": "complete",
+            "$comment": "A `complete` addressed to a live SUBSCRIPTION cancels it WITHOUT dropping the registration. Removing it takes the state out of the set the reconnect resubscribe loop walks, which froze the query for the life of the process across every future reconnect — silently, because nothing was reported either. So the observable effect is two things at once: a coded error on the subscription's own error callback, and a registration still there for `resendSubscriptions` to put back. A port whose live query is a stream terminates it through that error, not by hanging.",
+            "frame": {
+                "id": "sub_1",
+                "type": "complete"
+            },
+            "expect": {
+                "kind": "complete",
+                "id": "sub_1",
+                "code": "SUBSCRIPTION_CANCELLED",
+                "message": "subscription was cancelled by the server",
+                "resendsAfterReconnect": true
+            }
+        }
+    ],
+    "pageDeltaFrames": [
+        {
+            "name": "delta-page-update",
+            "$comment": "pageDelta only. Merge the RowOp into `page` by `_id`; every field outside `page` is unchanged. A client that did NOT announce `pageDelta` never receives this frame \u2014 it gets a full `data` snapshot instead.",
+            "baseWire": {
+                "continueCursor": "c_2",
+                "isDone": false,
+                "page": [
+                    {
+                        "_creationTime": 1001,
+                        "_id": "m1",
+                        "text": "one"
+                    },
+                    {
+                        "_creationTime": 1002,
+                        "_id": "m2",
+                        "text": "two"
+                    }
+                ]
+            },
+            "frame": {
+                "id": "sub_1",
+                "type": "delta",
+                "delta": {
+                    "key": "m2",
+                    "op": "update",
+                    "row": {
+                        "_creationTime": 1002,
+                        "_id": "m2",
+                        "text": "TWO"
+                    },
+                    "table": "messages"
+                },
+                "cursor": 9,
+                "epoch": "e1"
+            },
+            "expect": {
+                "kind": "delta",
+                "id": "sub_1",
+                "valueWire": {
+                    "continueCursor": "c_2",
+                    "isDone": false,
+                    "page": [
+                        {
+                            "_creationTime": 1001,
+                            "_id": "m1",
+                            "text": "one"
+                        },
+                        {
+                            "_creationTime": 1002,
+                            "_id": "m2",
+                            "text": "TWO"
+                        }
+                    ]
+                },
+                "cursor": 9,
+                "epoch": "e1"
+            }
+        },
+        {
+            "name": "delta-page-insert-descending",
+            "$comment": "Insert placement (protocol README 5.1.1): the delta carries no index. This list runs newest-first, and the new row is the newest, so a conforming client splices it at the FRONT. Implementing a different rule desyncs silently \u2014 the server replays this exact placement before it sends the delta.",
+            "baseWire": {
+                "continueCursor": "c_2",
+                "isDone": false,
+                "page": [
+                    {
+                        "_creationTime": 1003,
+                        "_id": "m3",
+                        "text": "three"
+                    },
+                    {
+                        "_creationTime": 1002,
+                        "_id": "m2",
+                        "text": "two"
+                    }
+                ]
+            },
+            "frame": {
+                "id": "sub_1",
+                "type": "delta",
+                "delta": {
+                    "key": "m4",
+                    "op": "insert",
+                    "row": {
+                        "_creationTime": 1004,
+                        "_id": "m4",
+                        "text": "four"
+                    },
+                    "table": "messages"
+                }
+            },
+            "expect": {
+                "kind": "delta",
+                "id": "sub_1",
+                "valueWire": {
+                    "continueCursor": "c_2",
+                    "isDone": false,
+                    "page": [
+                        {
+                            "_creationTime": 1004,
+                            "_id": "m4",
+                            "text": "four"
+                        },
+                        {
+                            "_creationTime": 1003,
+                            "_id": "m3",
+                            "text": "three"
+                        },
+                        {
+                            "_creationTime": 1002,
+                            "_id": "m2",
+                            "text": "two"
+                        }
+                    ]
+                }
+            }
+        }
+    ],
+    "shape": {
+        "shape-subscribe-cold": {
+            "id": "shape_1",
+            "shape": {
+                "name": "roomMessages",
+                "args": {
+                    "room": "general"
+                }
+            },
+            "type": "shape_subscribe"
+        },
+        "pokeSequence": [
+            {
+                "type": "pokeStart",
+                "pokeId": "p1",
+                "baseCheckpoint": 0,
+                "epoch": "e1"
+            },
+            {
+                "type": "pokePart",
+                "pokeId": "p1",
+                "shapeId": "shape_1",
+                "rowsPatch": [
+                    {
+                        "op": "insert",
+                        "key": "m1",
+                        "table": "messages",
+                        "value": {
+                            "_id": "m1",
+                            "text": "hi"
+                        }
+                    },
+                    {
+                        "op": "insert",
+                        "key": "m2",
+                        "table": "messages",
+                        "value": {
+                            "_id": "m2",
+                            "text": "yo"
+                        }
+                    }
+                ]
+            },
+            {
+                "type": "pokeEnd",
+                "pokeId": "p1",
+                "checkpoint": 5,
+                "epoch": "e1"
+            }
+        ],
+        "expectedRows": [
+            {
+                "_id": "m1",
+                "text": "hi"
+            },
+            {
+                "_id": "m2",
+                "text": "yo"
+            }
+        ],
+        "$comment-reset": "A full (re)seed carries the shape's COMPLETE membership and is inserts-only, so a client that splices it onto its existing view keeps every row that left the shape while it was disconnected. `pokePart.reset: true` marks it on the wire. Starting from `expectedRows` above, applying `resetPokeSequence` must yield `resetExpectedRows` — m1 is gone even though no delete op was sent. `reset` is independent of `baseCheckpoint`: most live poke paths carry no base, so an absent base must never be read as 'this is a seed'.",
+        "resetPokeSequence": [
+            {
+                "type": "pokeStart",
+                "pokeId": "p2",
+                "epoch": "e1"
+            },
+            {
+                "type": "pokePart",
+                "pokeId": "p2",
+                "shapeId": "shape_1",
+                "reset": true,
+                "rowsPatch": [
+                    {
+                        "op": "insert",
+                        "key": "m2",
+                        "table": "messages",
+                        "value": {
+                            "_id": "m2",
+                            "text": "yo"
+                        }
+                    },
+                    {
+                        "op": "insert",
+                        "key": "m3",
+                        "table": "messages",
+                        "value": {
+                            "_id": "m3",
+                            "text": "new"
+                        }
+                    }
+                ]
+            },
+            {
+                "type": "pokeEnd",
+                "pokeId": "p2",
+                "checkpoint": 9,
+                "epoch": "e1"
+            }
+        ],
+        "resetExpectedRows": [
+            {
+                "_id": "m2",
+                "text": "yo"
+            },
+            {
+                "_id": "m3",
+                "text": "new"
+            }
+        ],
+        "$comment-undecodableRow": "A poke is applied WHOLE or not at all, per shape: every row it carries is decoded before the view is touched. Starting from `expectedRows` (checkpoint 5, epoch e1), `undecodableRowPokeSequence` resets the shape and carries one row `decodeWire` refuses. A client that cleared the view for the reset and then threw on the bad row left it half-applied — or empty — with nothing reported, and one that skipped the row and applied the rest advanced the checkpoint past a row it never held, so no resume would ever send it again. The view must stay exactly `expectedRows`, the shape's resume checkpoint must stay 5 (`undecodableRowResendCheckpoint`), and the shape's error callback receives `undecodableRowErrorCode` once — the code the reference raises for a frame it cannot decode.",
+        "undecodableRowPokeSequence": [
+            {
+                "type": "pokeStart",
+                "pokeId": "p3",
+                "epoch": "e1"
+            },
+            {
+                "type": "pokePart",
+                "pokeId": "p3",
+                "shapeId": "shape_1",
+                "reset": true,
+                "rowsPatch": [
+                    {
+                        "op": "insert",
+                        "key": "m3",
+                        "table": "messages",
+                        "value": {
+                            "_id": "m3",
+                            "text": "fine"
+                        }
+                    },
+                    {
+                        "op": "insert",
+                        "key": "m4",
+                        "table": "messages",
+                        "value": {
+                            "_id": "m4",
+                            "text": "bad",
+                            "n": ["$lunora.wire$", "bigint", "not-a-number"]
+                        }
+                    }
+                ]
+            },
+            {
+                "type": "pokeEnd",
+                "pokeId": "p3",
+                "checkpoint": 12,
+                "epoch": "e1"
+            }
+        ],
+        "undecodableRowResendCheckpoint": 5,
+        "undecodableRowErrorCode": "WIRE_DECODE_FAILED",
+        "$comment-gap": "The refused poke's rows are not lost for good: the server believes it delivered them, and stamps the NEXT part's `baseCheckpoint` (or its `pokeStart`'s) with the checkpoint it thinks this view is at. A client MUST compare it with the checkpoint the view is actually at, as the reference's `applyPokePart` does: on a mismatch (or an epoch mismatch) that is not a `reset`, it drops the view, clears the checkpoint and epoch, tells the shape's callbacks `[]`, SKIPS the ops, and re-sends a COLD `shape_subscribe` (no `sinceCheckpoint`, no `sinceEpoch`) so the server re-seeds the membership. Without the check `gapPokeSequence`, applied right after `undecodableRowPokeSequence`, spliced m5 onto the stale view at checkpoint 13 — m3 lost for good, m1 kept though the refused reseed had removed it. `contiguousPokeSequence` is its counterweight: applied to `expectedRows` (checkpoint 5) with a matching base it applies normally, so a port cannot pass by re-seeding on every based poke.",
+        "gapPokeSequence": [
+            { "type": "pokeStart", "pokeId": "p4", "epoch": "e1" },
+            {
+                "type": "pokePart",
+                "pokeId": "p4",
+                "shapeId": "shape_1",
+                "baseCheckpoint": 12,
+                "rowsPatch": [{ "op": "insert", "key": "m5", "table": "messages", "value": { "_id": "m5", "text": "after" } }]
+            },
+            { "type": "pokeEnd", "pokeId": "p4", "checkpoint": 13, "epoch": "e1" }
+        ],
+        "gapExpectedRows": [],
+        "contiguousPokeSequence": [
+            { "type": "pokeStart", "pokeId": "p5", "epoch": "e1" },
+            {
+                "type": "pokePart",
+                "pokeId": "p5",
+                "shapeId": "shape_1",
+                "baseCheckpoint": 5,
+                "rowsPatch": [{ "op": "insert", "key": "m6", "table": "messages", "value": { "_id": "m6", "text": "next" } }]
+            },
+            { "type": "pokeEnd", "pokeId": "p5", "checkpoint": 6, "epoch": "e1" }
+        ],
+        "contiguousExpectedRows": [
+            { "_id": "m1", "text": "hi" },
+            { "_id": "m2", "text": "yo" },
+            { "_id": "m6", "text": "next" }
+        ]
+    },
+    "malformedFrames": {
+        "$comment": "Frames that parse as JSON but are not shaped like any server frame. Each is delivered, one at a time, through the entry point the port's socket read loop uses (raw text where the port takes text), after `setup` has subscribed `sub_1` (functionPath `messages:list`, args {}) and delivered `setupFrame`. None may raise, throw or panic — an exception out of the frame handler ends the read loop and with it every subscription on the client — and none may touch `sub_1`: its callback is not invoked, and the resubscribe `resend_subscriptions` builds afterwards still carries `sinceSeq` 5 and `sinceEpoch` \"e1\". A port whose handler returns a descriptor or an error value may report the frame there; that is not pinned. Note the two frames carrying a STRING cursor for a live subscription: a cursor that is not an integer is not a cursor, and resending it verbatim asked the server to resume from `\"9\"`.",
+        "setupFrame": {
+            "id": "sub_1",
+            "type": "data",
+            "data": {
+                "n": 1
+            },
+            "cursor": 5,
+            "epoch": "e1"
+        },
+        "frames": [
+            null,
+            [],
+            "lunora",
+            42,
+            true,
+            {},
+            {
+                "type": 5
+            },
+            {
+                "type": "ack",
+                "id": 5
+            },
+            {
+                "type": "ack",
+                "id": ["sub_1"]
+            },
+            {
+                "type": "data",
+                "id": 5,
+                "data": 1
+            },
+            {
+                "type": "data",
+                "id": ["sub_1"],
+                "data": 1
+            },
+            {
+                "type": "delta",
+                "id": {
+                    "sub": 1
+                },
+                "delta": 1
+            },
+            {
+                "type": "resume",
+                "id": "sub_1",
+                "cursor": "9"
+            },
+            {
+                "type": "settled",
+                "id": "sub_1",
+                "cursor": "9"
+            },
+            {
+                "type": "error",
+                "id": 5,
+                "error": {
+                    "code": "X",
+                    "message": "y"
+                }
+            },
+            {
+                "type": "complete",
+                "id": {}
+            },
+            {
+                "type": "pokeStart"
+            },
+            {
+                "type": "pokeStart",
+                "pokeId": 7
+            },
+            {
+                "type": "pokePart"
+            },
+            {
+                "type": "pokePart",
+                "pokeId": "nope",
+                "shapeId": 3,
+                "rowsPatch": "x"
+            },
+            {
+                "type": "pokeEnd"
+            },
+            {
+                "type": "pokeEnd",
+                "pokeId": {
+                    "x": 1
+                }
+            }
+        ],
+        "resendSinceSeq": 5,
+        "resendSinceEpoch": "e1"
+    },
+    "identityChange": {
+        "$comment": "What a previous identity left live is evicted when the identity changes to a DIFFERENT one after having been set — a sign-out, or another user signing in. The resume cursors of every query and shape subscription were that identity's position in the changelog, and the shape rows were the rows THAT identity could see: resuming from them under the new identity asks the server for a diff against a view this identity never held and splices it onto someone else's rows. So on such a change every subscription drops its cursor and epoch (the next resubscribe is a cold one), and every shape view is emptied and its callbacks told so (`[]`). A first sign-in (from unset) and a re-assertion of the same identity evict nothing. Setup: `sub_1` (functionPath `messages:list`, args {}) has received `queryFrame`; shape `shape_1` has applied `shape.pokeSequence` (checkpoint 5, epoch e1, two rows). Each transition starts from that state with the identity set to `from` (null = unset) and then sets it to `to`; `evicts` says what the resend frames and the shape view must show afterwards. Dart, which derives its identity from `setAuthToken`, sets it there (a subject of `to`).",
+        "queryFrame": {
+            "id": "sub_1",
+            "type": "data",
+            "data": {
+                "n": 1
+            },
+            "cursor": 5,
+            "epoch": "e1"
+        },
+        "transitions": [
+            {
+                "from": null,
+                "to": "user-a",
+                "evicts": false
+            },
+            {
+                "from": "user-a",
+                "to": "user-a",
+                "evicts": false
+            },
+            {
+                "from": "user-a",
+                "to": "user-b",
+                "evicts": true
+            },
+            {
+                "from": "user-a",
+                "to": null,
+                "evicts": true
+            }
+        ],
+        "retained": {
+            "sinceSeq": 5,
+            "sinceEpoch": "e1",
+            "sinceCheckpoint": 5,
+            "shapeRowCount": 2
+        },
+        "evicted": {
+            "shapeRows": [],
+            "shapeCallbackRows": []
+        }
+    }
+}

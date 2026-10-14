@@ -106,4 +106,28 @@ describe("serveJsonHandler CSRF defense", () => {
 
         expect(result.status).toBe(200);
     });
+
+    it("forwards projectRoot and the host's schemaDirectory + apiSpec to the handler", async () => {
+        expect.assertions(3);
+
+        let seen: { apiSpec?: string; projectRoot: string; schemaDirectory?: string } | undefined;
+        const capturingHandler: LocalEndpointHandler = (request) => {
+            seen = { apiSpec: request.apiSpec, projectRoot: request.projectRoot, schemaDirectory: request.schemaDirectory };
+
+            return { body: { ok: true }, status: 200 };
+        };
+
+        const { done, response } = makeResponse();
+
+        serveJsonHandler(makeRequest("GET", { "sec-fetch-site": "same-origin" }), response, capturingHandler, "/project", {
+            apiSpec: "openrpc",
+            schemaDirectory: "custom-schema-dir",
+        });
+
+        await done;
+
+        expect(seen?.projectRoot).toBe("/project");
+        expect(seen?.schemaDirectory).toBe("custom-schema-dir");
+        expect(seen?.apiSpec).toBe("openrpc");
+    });
 });

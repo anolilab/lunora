@@ -45,6 +45,7 @@ export const useRateLimit = (config: RateLimitConfig, options: UseRateLimitOptio
     const valueRef = useRef<RateLimitValue | undefined>(undefined);
     const [, forceRender] = useReducer((count: number): number => count + 1, 0);
 
+    // react-doctor-disable-next-line react-doctor/react-compiler-no-manual-memoization -- load-bearing: this hook reads `valueRef.current` during render (line ~78) as a mutable local store, which bails React Compiler for the whole hook — so the manual `useCallback` is the only thing keeping `consume`'s identity stable for the documented "steady identity" contract. Keep it.
     const consume = useCallback(
         (count = 1): RateLimitStatus => {
             const { status, value } = evaluate(config, valueRef.current, { consume: true, count, now: now(), reserve: false });
@@ -60,16 +61,19 @@ export const useRateLimit = (config: RateLimitConfig, options: UseRateLimitOptio
         [config, now],
     );
 
+    // react-doctor-disable-next-line react-doctor/react-compiler-no-manual-memoization -- load-bearing: the render-phase `valueRef.current` read below bails React Compiler for this hook, so the manual `useCallback` is what preserves `check`'s documented steady identity. Keep it.
     const check = useCallback(
         (count = 1): boolean => evaluate(config, valueRef.current, { consume: false, count, now: now(), reserve: false }).status.ok,
         [config, now],
     );
 
+    // react-doctor-disable-next-line react-doctor/react-compiler-no-manual-memoization -- load-bearing: the render-phase `valueRef.current` read below bails React Compiler for this hook, so the manual `useCallback` is what preserves `reset`'s documented steady identity. Keep it.
     const reset = useCallback((): void => {
         valueRef.current = undefined;
         forceRender();
     }, []);
 
+    // react-doctor-disable-next-line react-hooks-js/refs -- intentional: `valueRef` is a mutable local store for the token-bucket accounting; reading it during render (then re-rendering via `forceRender` after each `consume`/`reset`) is how this hook mirrors the rate limit without external subscription plumbing.
     const { status } = evaluate(config, valueRef.current, { consume: false, count: 1, now: now(), reserve: false });
 
     useEffect(() => {

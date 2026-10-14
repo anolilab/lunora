@@ -3,24 +3,29 @@
     "version": "0.0.0",
     "private": true,
     "type": "module",
+    "imports": {
+        "#lunora/*": "./lunora/*"
+    },
     "scripts": {
-        "dev": "lunora dev",
+        "dev": "nuxt dev",
         "build": "nuxt build",
         "preview": "nuxt preview",
         "codegen": "lunora codegen",
-        "deploy:lunora": "wrangler deploy --config wrangler.lunora.jsonc",
-        "deploy:nuxt": "nuxt build && wrangler deploy --config wrangler.jsonc",
-        "deploy": "pnpm run deploy:lunora && pnpm run deploy:nuxt"
+        "deploy": "nuxt build && wrangler deploy"
     },
     "dependencies": {
+        "@lunora/nuxt": "^0.0.0",
+        "@lunora/ratelimit": "^0.0.0",
         "@lunora/vue": "^0.0.0",
         "lunorash": "^0.0.0",
-        "nuxt": "^4.4.8",
+        "nuxt": "^4.5.2",
         "vue": "^3.5.38"
     },
     "devDependencies": {
+        "@cloudflare/workers-types": "^5.20261004.1",
+        "@lunora/studio": "^0.0.0",
         "@lunora/vite": "^0.0.0",
         "typescript": "^6.0.3",
-        "wrangler": "^4.100.0"
+        "wrangler": "^4.147.0"
     }
 }

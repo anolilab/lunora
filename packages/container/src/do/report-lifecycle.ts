@@ -16,6 +16,8 @@
  * `emitContainerLifecycle` remains the source of truth, so a failed push must
  * never break a lifecycle hook.
  */
+import type { DurableObjectJurisdiction } from "../jurisdiction";
+import { applyJurisdiction } from "../jurisdiction";
 import type { ContainerLifecycleEvent } from "../lifecycle-event";
 
 /** Reserved admin op the root ShardDO serves to append a container event to its log buffer. */
@@ -39,6 +41,7 @@ interface ShardNamespaceLike {
     get: (id: unknown) => ShardStubLike;
     getByName?: (name: string) => ShardStubLike;
     idFromName: (name: string) => unknown;
+    jurisdiction?: (jurisdiction: DurableObjectJurisdiction) => ShardNamespaceLike;
 }
 
 /** Whether `value` looks like a usable ShardDO namespace binding. */
@@ -52,13 +55,15 @@ const isShardNamespace = (value: unknown): value is ShardNamespaceLike => {
     return typeof candidate.get === "function" && typeof candidate.idFromName === "function";
 };
 
-/** Resolve the root-shard stub, preferring `getByName` when present. */
-const resolveRootShard = (namespace: ShardNamespaceLike): ShardStubLike => {
-    if (typeof namespace.getByName === "function") {
-        return namespace.getByName(ROOT_SHARD_NAME);
+/** Resolve the root-shard stub, preferring `getByName` when present. Pins to `jurisdiction` when set. */
+const resolveRootShard = (namespace: ShardNamespaceLike, jurisdiction?: DurableObjectJurisdiction): ShardStubLike => {
+    const pinned = applyJurisdiction(namespace, jurisdiction);
+
+    if (typeof pinned.getByName === "function") {
+        return pinned.getByName(ROOT_SHARD_NAME);
     }
 
-    return namespace.get(namespace.idFromName(ROOT_SHARD_NAME));
+    return pinned.get(pinned.idFromName(ROOT_SHARD_NAME));
 };
 
 /**
@@ -69,7 +74,7 @@ const resolveRootShard = (namespace: ShardNamespaceLike): ShardStubLike => {
  * failure path (missing binding, missing token, fetch error) resolves to
  * `undefined` — so the caller can `void` it from a lifecycle hook safely.
  */
-const reportContainerLifecycle = async (env: unknown, envelope: ContainerLifecycleEvent): Promise<void> => {
+const reportContainerLifecycle = async (env: unknown, envelope: ContainerLifecycleEvent, jurisdiction?: DurableObjectJurisdiction): Promise<void> => {
     try {
         const envRecord = (env ?? {}) as Record<string, unknown>;
         const namespace = envRecord["SHARD"];
@@ -93,12 +98,14 @@ const reportContainerLifecycle = async (env: unknown, envelope: ContainerLifecyc
             method: "POST",
         });
 
-        await resolveRootShard(namespace).fetch(request);
+        await resolveRootShard(namespace, jurisdiction).fetch(request);
     } catch {
         // Best-effort: the console path (emitContainerLifecycle) is the source of
         // truth. A push failure must never break a container lifecycle hook.
     }
 };
 
-export type { ShardNamespaceLike, ShardStubLike };
+export type { ShardNamespaceLike };
 export { RECORD_CONTAINER_EVENT_OP, reportContainerLifecycle, ROOT_SHARD_NAME };
+
+export { type DurableObjectJurisdiction } from "../jurisdiction";

@@ -19,10 +19,13 @@
  * (`createStaticShardRegistry`) here and leave the DO/KV-backed registry
  * for a follow-up once codegen opts schemas into cross-shard call sites.
  */
-import type { RankDirection as RankPageDirection, RankPageRow, RankPageRowKey as RankPageKey, ShardRankPageResult } from "@lunora/do";
+import { toErrorBody } from "@lunora/errors";
+import type { RankDirection as RankPageDirection, RankPageRow, RankPageRowKey as RankPageKey, ShardRankPageResult } from "@lunora/shard-engine";
 
+import { fromBase64, toBase64 } from "../../../shared/base64";
+import type { AdminTableResolver } from "./create-worker";
 import { LunoraError } from "./errors";
-import type { ShardNamespaceLike } from "./resolve-shard";
+import type { ShardNamespaceInput } from "./resolve-shard";
 import { resolveShard } from "./resolve-shard";
 
 /**
@@ -31,6 +34,8 @@ import { resolveShard } from "./resolve-shard";
  * strategy's identity (empty array for `concat`, `0` for `sum`, etc.).
  */
 interface ShardRegistry {
+    /** Drop any cached listing for `table` (every table when omitted) — a registry that caches implements it, so a prune shows up at once in this isolate. */
+    invalidate?: (table?: string) => void;
     listShardKeys: (table: string) => Promise<ReadonlyArray<string>> | ReadonlyArray<string>;
 }
 
@@ -42,6 +47,44 @@ const createStaticShardRegistry = (table_to_keys: Readonly<Record<string, Readon
     return {
         listShardKeys(table) {
             return table_to_keys[table] ?? [];
+        },
+    };
+};
+
+/**
+ * The registry a worker gets when it configures none: it answers for every
+ * table that lives on the default shard and refuses the rest.
+ *
+ * A root table (or one the schema does not declare) lives on the default shard,
+ * so that one key is the whole answer — named outright rather than left empty,
+ * because only export, CDC sync and migrations fall back to the default shard
+ * on an empty list; fan-out, rank and shard traffic would reach nothing. A
+ * `.global()` table lives in D1, on no shard. A `.shardBy(...)` table's keys are
+ * known only to a real registry, and anything less would cover the default
+ * shard alone and report success — so it throws instead. Without
+ * `resolveSharding` no table can be told apart, so every one is refused for the
+ * same reason.
+ */
+const createDefaultShardRegistry = (resolveSharding: AdminTableResolver | undefined, defaultShardKey: string): ShardRegistry => {
+    return {
+        listShardKeys(table) {
+            if (resolveSharding === undefined) {
+                throw new LunoraError(
+                    `cannot discover the shards of "${table}": the worker has no \`resolveTableSharding\` to tell a sharded table from a root one, and no shard registry is configured`,
+                    { code: "BAD_REQUEST", status: 400 },
+                );
+            }
+
+            const kind = resolveSharding(table)?.mode.kind;
+
+            if (kind === "shardBy") {
+                throw new LunoraError(
+                    `cannot discover the shards of "${table}": it is \`.shardBy()\` and the worker has no shard registry — declare \`.shardRegistry((env) => env.SHARD_REGISTRY)\` on the app builder and bind \`SHARD_REGISTRY\` to \`ShardRegistryDO\` (or pass \`queryCoordinator\` to \`createWorker\`)`,
+                    { code: "BAD_REQUEST", status: 400 },
+                );
+            }
+
+            return kind === "global" ? [] : [defaultShardKey];
         },
     };
 };
@@ -81,68 +124,6 @@ type MergeStrategy =
     | { kind: "sum" }
     | { kind: "groupBy"; op?: "max" | "min" | "sum" };
 
-/**
- * Convenience: build the right wire-serializable {@link MergeStrategy} for a
- * given aggregate read. The reader doesn't know which op the caller chose, so
- * a fan-out wrapper passes the user's op + by-keys through this to derive the
- * merge.
- *
- * - `count` → `sum`.
- * - `aggregate({ op })` → `sum`/`max`/`min` (or throws for `avg`).
- * - `groupBy({ by, agg })` → `groupBy({ op })` (defaults to `sum` since
- * `groupBy`'s default reducer is `count`).
- * @returns the derived {@link MergeStrategy}.
- */
-const mergeStrategyForAggregate = (
-    input:
-        | { agg?: { op?: "avg" | "count" | "max" | "min" | "sum" }; kind: "groupBy" }
-        | { kind: "count" }
-        | { kind: "scalar"; op: "avg" | "count" | "max" | "min" | "sum" },
-): MergeStrategy => {
-    if (input.kind === "count") {
-        return { kind: "sum" };
-    }
-
-    if (input.kind === "scalar") {
-        if (input.op === "count" || input.op === "sum") {
-            return { kind: "sum" };
-        }
-
-        if (input.op === "max") {
-            return { kind: "max" };
-        }
-
-        if (input.op === "min") {
-            return { kind: "min" };
-        }
-
-        // avg requires (sum, count) — see jsdoc on MergeStrategy.
-        throw new LunoraError('aggregate({ op: "avg" }) is not supported across shards in v1 — fan out sum + count separately', {
-            code: "BAD_REQUEST",
-            status: 400,
-        });
-    }
-
-    const op = input.agg?.op ?? "count";
-
-    if (op === "count" || op === "sum") {
-        return { kind: "groupBy", op: "sum" };
-    }
-
-    if (op === "max") {
-        return { kind: "groupBy", op: "max" };
-    }
-
-    if (op === "min") {
-        return { kind: "groupBy", op: "min" };
-    }
-
-    throw new LunoraError('groupBy({ agg: { op: "avg" } }) is not supported across shards in v1 — fan out sum + count separately', {
-        code: "BAD_REQUEST",
-        status: 400,
-    });
-};
-
 interface FanOutSpec {
     merge: MergeStrategy;
     /** Table whose shard keys drive the fan-out. */
@@ -156,7 +137,22 @@ interface FanOutSpec {
  * UI.
  */
 interface ShardError {
-    /** Human-readable; tests assert on `.includes("timeout")` and similar. */
+    /**
+     * Machine-readable failure code, from the same `toErrorBody` shaping every
+     * other error leaving this runtime goes through: a shard's own
+     * `LunoraError` code when it had one, `SHARD_TIMEOUT` / `SHARD_HTTP_ERROR`
+     * for the transport failures this coordinator detects itself, and `INTERNAL`
+     * for anything else. Callers branch on this rather than on `message`.
+     */
+    code: string;
+
+    /**
+     * Human-readable; tests assert on `.includes("timeout")` and similar. Shaped
+     * by `toErrorBody`, so an internal-coded or non-`LunoraError` throw is
+     * redacted here exactly as it would be on the single-shard path — the
+     * fan-out envelope is `Response.json`-ed straight to the caller, and a raw
+     * `error.message` from a shard is platform detail that must not ride out.
+     */
     message: string;
     shardKey: string;
     /** Set when the per-shard timeout fired. */
@@ -190,6 +186,22 @@ interface QueryCoordinatorOptions {
     registry: ShardRegistry;
 }
 
+/**
+ * Shard a fan-out falls back to when registry discovery finds nothing — normally
+ * the worker's `"__root__"` — or `null` to deliberately keep an empty discovery
+ * as an empty fan-out.
+ *
+ * Required on every request that has it, with no default, on purpose. Discovery
+ * is registry-driven and a registry only knows the keys an app registers for its
+ * `.shardBy(...)` tables, so on a plain root-DO app it comes back empty and a
+ * fan-out that reads that as "nothing to do" reports success having touched
+ * nothing: an export streamed an empty NDJSON backup, a migration reported
+ * `completed` with `processed: 0`. Fan-outs inherited that bug by simply not
+ * passing the field, so omission is no longer expressible — say `null` when you
+ * mean it. See {@link withDefaultShard}.
+ */
+type DefaultShardKey = string | null;
+
 interface FanOutRequest {
     args?: Record<string, unknown>;
     fanOut: FanOutSpec;
@@ -214,6 +226,9 @@ type ShardRpcRequest = Pick<FanOutRequest, "args" | "functionPath" | "headers">;
  */
 interface MigrationFanOutRequest {
     args?: Record<string, unknown>;
+
+    /** {@link DefaultShardKey} — the shard fallback, or `null` for none. */
+    defaultShardKey: DefaultShardKey;
     functionPath: string;
     headers?: Record<string, string>;
     /** Table whose live shard keys the migration runs across. */
@@ -362,14 +377,14 @@ interface RankPageFanOutResult {
 }
 
 interface QueryCoordinator {
-    fanOut: <T = unknown>(namespace: ShardNamespaceLike, request: FanOutRequest) => Promise<FanOutResult<T>>;
+    fanOut: <T = unknown>(namespace: ShardNamespaceInput, request: FanOutRequest) => Promise<FanOutResult<T>>;
 
     /**
      * Fan the `__lunora_admin__:applyCdc` admin RPC out by forwarding each
      * pre-bucketed per-shard batch of CDC changes, rolling up the applied/failed
      * counts. The replay half of point-in-time recovery.
      */
-    orchestrateApplyCdc: (namespace: ShardNamespaceLike, request: ApplyCdcFanOutRequest) => Promise<ApplyCdcFanOutResult>;
+    orchestrateApplyCdc: (namespace: ShardNamespaceInput, request: ApplyCdcFanOutRequest) => Promise<ApplyCdcFanOutResult>;
 
     /**
      * Fan the `__lunora_admin__:cdcSync` admin RPC out to every live shard,
@@ -377,7 +392,7 @@ interface QueryCoordinator {
      * Returns the per-shard change pages plus their new cursors so the caller
      * can checkpoint each shard independently — the streaming-export feed.
      */
-    orchestrateCdcSync: (namespace: ShardNamespaceLike, request: CdcSyncFanOutRequest) => Promise<CdcSyncFanOutResult>;
+    orchestrateCdcSync: (namespace: ShardNamespaceInput, request: CdcSyncFanOutRequest) => Promise<CdcSyncFanOutResult>;
 
     /**
      * Fan an export admin RPC out to every live shard, returning the
@@ -385,7 +400,7 @@ interface QueryCoordinator {
      * returns a JSON envelope (not a streaming body) so this method is the
      * collector — the worker assembles the NDJSON stream.
      */
-    orchestrateExport: (namespace: ShardNamespaceLike, request: ExportFanOutRequest) => Promise<ExportFanOutResult>;
+    orchestrateExport: (namespace: ShardNamespaceInput, request: ExportFanOutRequest) => Promise<ExportFanOutResult>;
 
     /**
      * Fan an import admin RPC out by routing each row to its owning shard. The
@@ -393,9 +408,9 @@ interface QueryCoordinator {
      * `shardBy(field)` are bucketed using that field's value as the shard key,
      * other tables fall back to the runtime's default `__root__` shard.
      */
-    orchestrateImport: (namespace: ShardNamespaceLike, request: ImportFanOutRequest) => Promise<ImportFanOutResult>;
+    orchestrateImport: (namespace: ShardNamespaceInput, request: ImportFanOutRequest) => Promise<ImportFanOutResult>;
     /** Fan a migration admin RPC out to every live shard of a table and roll up the per-shard outcomes. */
-    orchestrateMigration: (namespace: ShardNamespaceLike, request: MigrationFanOutRequest) => Promise<MigrationFanOutResult>;
+    orchestrateMigration: (namespace: ShardNamespaceInput, request: MigrationFanOutRequest) => Promise<MigrationFanOutResult>;
 
     /**
      * Fan the `__lunora_admin__:rankBefore` admin RPC out to every live shard of
@@ -403,7 +418,7 @@ interface QueryCoordinator {
      * global rank (`{position: Σbefore + 1, total: Σtotal}`). The cross-shard
      * `rank()` path for a partition that spans shards.
      */
-    orchestrateRank: (namespace: ShardNamespaceLike, request: RankFanOutRequest) => Promise<RankFanOutResult>;
+    orchestrateRank: (namespace: ShardNamespaceInput, request: RankFanOutRequest) => Promise<RankFanOutResult>;
 
     /**
      * Page a ranked query across every live shard of a `.shardBy(...)` table.
@@ -415,7 +430,7 @@ interface QueryCoordinator {
      * consumed from it — pages never drop or duplicate a row at a shard
      * boundary. The cross-shard `rankPage()` path (PLAN5 §7.1 / PLAN2 #3).
      */
-    orchestrateRankPage: (namespace: ShardNamespaceLike, request: RankPageFanOutRequest) => Promise<RankPageFanOutResult>;
+    orchestrateRankPage: (namespace: ShardNamespaceInput, request: RankPageFanOutRequest) => Promise<RankPageFanOutResult>;
 
     /**
      * Fan the `__lunora_admin__:getMetrics` admin RPC out to every live shard of
@@ -425,7 +440,7 @@ interface QueryCoordinator {
      * skew, so this fans the cheap metrics read out and returns the whole shard
      * set's request volumes (a failed shard surfaces as `requests: 0`).
      */
-    orchestrateShardTraffic: (namespace: ShardNamespaceLike, request: ShardTrafficFanOutRequest) => Promise<ShardTrafficFanOutResult>;
+    orchestrateShardTraffic: (namespace: ShardNamespaceInput, request: ShardTrafficFanOutRequest) => Promise<ShardTrafficFanOutResult>;
     readonly registry: ShardRegistry;
 }
 
@@ -437,6 +452,9 @@ interface QueryCoordinator {
  */
 interface ExportFanOutRequest {
     args?: Record<string, unknown>;
+
+    /** {@link DefaultShardKey} — the shard fallback, or `null` for none. */
+    defaultShardKey: DefaultShardKey;
     headers?: Record<string, string>;
 
     /**
@@ -470,6 +488,19 @@ interface ExportFanOutResult {
  */
 interface CdcSyncFanOutRequest {
     cursors?: Record<string, number>;
+
+    /** {@link DefaultShardKey} — the shard fallback, or `null` for none. */
+    defaultShardKey: DefaultShardKey;
+
+    /**
+     * Per-shard CDC epoch the caller last saw, keyed the same way as `cursors`.
+     * Entirely optional, per shard: a shard with no entry is read with the
+     * high-watermark proof alone, which is what every caller got before the
+     * field existed. A shard whose entry no longer matches its current epoch
+     * refuses the page with `CDC_TIMELINE_FORKED`, surfacing as that shard's
+     * `error` with its prior cursor echoed.
+     */
+    epochs?: Record<string, string>;
     headers?: Record<string, string>;
     limit?: number;
     tables: ReadonlyArray<string>;
@@ -480,7 +511,26 @@ interface ShardCdcOutcome {
     changes?: ReadonlyArray<Record<string, unknown>>;
     /** New per-shard cursor; on error it echoes the shard's prior cursor so a retry resumes cleanly. */
     cursor: number;
-    error?: { message: string; timedOut: boolean };
+
+    /**
+     * The CDC epoch this shard's `cursor` belongs to, to store beside it and
+     * echo back on the next call. Absent when the shard has no changelog at all
+     * (pre-CDC), and on error it echoes the caller's prior epoch so a retry
+     * resumes from the same pair rather than dropping the timeline half.
+     */
+    epoch?: string;
+
+    /**
+     * Why this shard served no page. `code` is the shard's own verdict — see
+     * {@link ShardError.code} — and it is the half a consumer has to branch on:
+     * `CDC_TIMELINE_FORKED` means re-seed from a snapshot on the new timeline,
+     * `CDC_LOG_TRIMMED` / `CDC_PAYLOAD_COMPACTED` mean re-seed from a snapshot,
+     * and a transport code (`SHARD_TIMEOUT`, `SHARD_HTTP_ERROR`, `INTERNAL`)
+     * means retry the same cursor. Reported through `message` alone they are one
+     * indistinguishable failure, and the epoch guard's whole value is the
+     * verdict it reaches the caller with.
+     */
+    error?: { code: string; message: string; timedOut: boolean };
     shardKey: string;
 }
 
@@ -705,7 +755,7 @@ const rollUpRank = (results: ReadonlyArray<ShardRpcOutcome>): RankFanOutResult =
  * SQLite storage-class ordering for a single serialized rank-key value.
  * `serializeSqlValue` only ever produces `null | number | string`, and SQLite's
  * `ORDER BY` ranks NULL < numbers < text, then by value within a class. The
- * shard's companion btree (`ORDER BY __partition__, __sort_k&lt;i>__, __id__`) uses
+ * shard's companion btree (`ORDER BY __partition__, __sort_k<i>__, __id__`) uses
  * exactly this order, so to merge shard slices without gaps or dupes at a
  * boundary the coordinator must compare the same way — a naive `a < b` would
  * mis-order `null` vs numbers and number-vs-string mixes.
@@ -713,6 +763,15 @@ const rollUpRank = (results: ReadonlyArray<ShardRpcOutcome>): RankFanOutResult =
 const RANK_CLASS_NULL = 0;
 const RANK_CLASS_NUMBER = 1;
 const RANK_CLASS_TEXT = 2;
+
+/** Three-way `<` comparison. Code-unit order for strings (NOT locale-aware — must match SQLite's BINARY collation), and NaN/±Infinity-safe for numbers where subtraction is not. */
+const compareAsc = (a: number | string, b: number | string): number => {
+    if (a < b) {
+        return -1;
+    }
+
+    return a > b ? 1 : 0;
+};
 
 const rankValueClass = (value: unknown): number => {
     if (value === null || value === undefined) {
@@ -742,30 +801,16 @@ const compareRankValueAsc = (a: unknown, b: unknown): number => {
     }
 
     if (classA === RANK_CLASS_NUMBER) {
-        const numberA = a as number;
-        const numberB = b as number;
-
-        if (numberA < numberB) {
-            return -1;
-        }
-
-        return numberA > numberB ? 1 : 0;
+        return compareAsc(a as number, b as number);
     }
 
     // Text: code-unit comparison, matching the shard's BINARY collation default.
-    const textA = String(a);
-    const textB = String(b);
-
-    if (textA < textB) {
-        return -1;
-    }
-
-    return textA > textB ? 1 : 0;
+    return compareAsc(String(a), String(b));
 };
 
 /**
  * Total order over two rank keys, byte-identical to the shard companion's
- * `ORDER BY __partition__ ASC, __sort_k&lt;i>__ &lt;dir>, __id__ ASC`. Partition and
+ * `ORDER BY __partition__ ASC, __sort_k<i>__ <dir>, __id__ ASC`. Partition and
  * the `__id__` tiebreak are always ascending; each sort column honors its
  * declared direction (`directions[i]`, default `asc`).
  */
@@ -806,32 +851,11 @@ interface RankPageCursorState {
 }
 
 /** Encode the composite cursor as base64-of-JSON — opaque to callers, same envelope style as the shard-local rank cursor. */
-const encodeRankPageCursor = (state: RankPageCursorState): string => {
-    const json = JSON.stringify(state);
-    const bytes = new TextEncoder().encode(json);
-    let binary = "";
-
-    for (const byte of bytes) {
-        binary += String.fromCodePoint(byte);
-    }
-
-    return btoa(binary);
-};
+const encodeRankPageCursor = (state: RankPageCursorState): string => toBase64(new TextEncoder().encode(JSON.stringify(state)));
 
 const decodeRankPageCursor = (cursor: string): RankPageCursorState => {
-    let json: string;
-
     try {
-        const binary = atob(cursor);
-        const bytes = Uint8Array.from(binary, (character) => character.codePointAt(0) ?? 0);
-
-        json = new TextDecoder().decode(bytes);
-    } catch {
-        return { perShard: {} };
-    }
-
-    try {
-        const parsed = JSON.parse(json) as unknown;
+        const parsed = JSON.parse(new TextDecoder().decode(fromBase64(cursor))) as unknown;
 
         if (parsed !== null && typeof parsed === "object" && "perShard" in parsed) {
             const { perShard } = parsed as { perShard?: unknown };
@@ -880,20 +904,18 @@ const readRankPageResult = (payload: unknown): ShardRankPageResult => {
  * {@link compareRankKeys}, or `undefined` when every slice is drained. The
  * single step of the k-way merge.
  */
-const pickSmallestHead = (slices: ShardSlice[], directions: ReadonlyArray<RankPageDirection>): ShardSlice | undefined => {
-    let best: ShardSlice | undefined;
-    let bestKey: RankPageKey | undefined;
+const pickSmallestHead = (slices: ShardSlice[], directions: ReadonlyArray<RankPageDirection>): { row: RankPageRow; slice: ShardSlice } | undefined => {
+    let best: { row: RankPageRow; slice: ShardSlice } | undefined;
 
     for (const slice of slices) {
-        const candidate = slice.rows[slice.head];
+        const row = slice.rows[slice.head];
 
-        if (candidate === undefined) {
+        if (row === undefined) {
             continue;
         }
 
-        if (bestKey === undefined || compareRankKeys(candidate.key, bestKey, directions) < 0) {
-            best = slice;
-            bestKey = candidate.key;
+        if (best === undefined || compareRankKeys(row.key, best.row.key, directions) < 0) {
+            best = { row, slice };
         }
     }
 
@@ -971,14 +993,9 @@ const kWayMergeRankPages = (
             break;
         }
 
-        const row = best.rows[best.head];
-
-        if (row !== undefined) {
-            page.push(row.doc);
-            lastConsumedKey[best.shardKey] = row.key;
-        }
-
-        best.head += 1;
+        page.push(best.row.doc);
+        lastConsumedKey[best.slice.shardKey] = best.row.key;
+        best.slice.head += 1;
     }
 
     const nextCursor = buildNextRankPageCursor(slices, lastConsumedKey);
@@ -1016,17 +1033,25 @@ const rollUpExport = (results: ReadonlyArray<ShardRpcOutcome>): ExportFanOutResu
     return { failed, ok, shards };
 };
 
-/** Roll up per-shard `cdcSync` outcomes, preserving each shard's prior cursor on error. */
-const rollUpCdcSync = (results: ReadonlyArray<{ outcome: ShardRpcOutcome; sinceSeq: number }>): CdcSyncFanOutResult => {
+/** Roll up per-shard `cdcSync` outcomes, preserving each shard's prior cursor (and epoch) on error. */
+const rollUpCdcSync = (results: ReadonlyArray<{ outcome: ShardRpcOutcome; sinceEpoch?: string; sinceSeq: number }>): CdcSyncFanOutResult => {
     const shards: ShardCdcOutcome[] = [];
     let ok = 0;
     let failed = 0;
 
-    for (const { outcome, sinceSeq } of results) {
+    for (const { outcome, sinceEpoch, sinceSeq } of results) {
         if (outcome.kind === "err") {
             failed += 1;
-            // Echo the prior cursor so a retry re-reads from the same point.
-            shards.push({ cursor: sinceSeq, error: { message: outcome.message, timedOut: outcome.timedOut }, shardKey: outcome.shardKey });
+            // Echo the prior cursor — and the epoch it belongs to — so a retry
+            // re-reads from the same point, on the same timeline. Dropping the
+            // epoch half here would silently downgrade the caller to the
+            // watermark-only guarantee on its next poll.
+            shards.push({
+                cursor: sinceSeq,
+                error: { code: outcome.code, message: outcome.message, timedOut: outcome.timedOut },
+                shardKey: outcome.shardKey,
+                ...(sinceEpoch === undefined ? {} : { epoch: sinceEpoch }),
+            });
             continue;
         }
 
@@ -1035,11 +1060,15 @@ const rollUpCdcSync = (results: ReadonlyArray<{ outcome: ShardRpcOutcome; sinceS
         // payload is an untrusted unwrapped RPC value cast to a shape; the cast
         // claims non-nullish but a malformed shard could return anything, so
         // guard both fields (the disable silences the cast-driven false alarm).
-        const payload = unwrapResult(outcome.value) as undefined | { changes?: ReadonlyArray<Record<string, unknown>>; cursor?: number };
+        const payload = unwrapResult(outcome.value) as undefined | { changes?: ReadonlyArray<Record<string, unknown>>; cursor?: number; epoch?: unknown };
         const changes = Array.isArray(payload?.changes) ? payload.changes : [];
         const cursor = typeof payload?.cursor === "number" ? payload.cursor : sinceSeq;
+        // A pre-CDC shard reports no epoch, and so does one whose response
+        // predates the field — both leave the caller on its prior pair rather
+        // than clearing it.
+        const epoch = typeof payload?.epoch === "string" && payload.epoch.length > 0 ? payload.epoch : sinceEpoch;
 
-        shards.push({ changes, cursor, shardKey: outcome.shardKey });
+        shards.push({ changes, cursor, shardKey: outcome.shardKey, ...(epoch === undefined ? {} : { epoch }) });
     }
 
     return { failed, ok, shards };
@@ -1159,6 +1188,8 @@ interface ShardRpcOk {
 }
 
 interface ShardRpcError {
+    /** See {@link ShardError.code}. */
+    code: string;
     kind: "err";
     message: string;
     shardKey: string;
@@ -1187,7 +1218,32 @@ const prepareShardRpc = (request: ShardRpcRequest): PreparedShardRpc => {
     };
 };
 
-const callOneShard = async (namespace: ShardNamespaceLike, shardKey: string, prepared: PreparedShardRpc, timeoutMs: number): Promise<ShardRpcOutcome> => {
+/**
+ * The `{ error: { code, message } }` envelope a shard puts on a non-2xx, or
+ * `undefined` when the response carries none.
+ *
+ * `undefined` is the honest answer for everything that is not a shard verdict:
+ * the DO router's bare-text 404 for an unrouted path, a platform 5xx with no
+ * body, a truncated read. Those stay `SHARD_HTTP_ERROR`, because reporting a
+ * transport failure under a shard's own error code would send a consumer
+ * re-seeding a warehouse table over a blip.
+ */
+const readShardErrorEnvelope = async (response: Response): Promise<undefined | { code: string; message: string }> => {
+    try {
+        const body: unknown = await response.json();
+        const error = (body as undefined | { error?: { code?: unknown; message?: unknown } })?.error;
+
+        if (typeof error?.code !== "string" || error.code.length === 0) {
+            return undefined;
+        }
+
+        return { code: error.code, message: typeof error.message === "string" ? error.message : "" };
+    } catch {
+        return undefined;
+    }
+};
+
+const callOneShard = async (namespace: ShardNamespaceInput, shardKey: string, prepared: PreparedShardRpc, timeoutMs: number): Promise<ShardRpcOutcome> => {
     const stub = resolveShard(namespace, shardKey);
 
     // AbortController lets the timeout branch tear the in-flight fetch down
@@ -1214,7 +1270,7 @@ const callOneShard = async (namespace: ShardNamespaceLike, shardKey: string, pre
                 // needs to propagate.
             }
 
-            resolve({ kind: "err", message: `shard "${shardKey}" timed out after ${String(timeoutMs)}ms`, shardKey, timedOut: true });
+            resolve({ code: "SHARD_TIMEOUT", kind: "err", message: `shard "${shardKey}" timed out after ${String(timeoutMs)}ms`, shardKey, timedOut: true });
         }, timeoutMs);
     });
 
@@ -1223,16 +1279,42 @@ const callOneShard = async (namespace: ShardNamespaceLike, shardKey: string, pre
             const response = await stub.fetch(forwarded);
 
             if (!response.ok) {
-                return { kind: "err", message: `shard "${shardKey}" returned ${String(response.status)}`, shardKey, timedOut: false };
+                // A shard's refusal is a VERDICT, and the status alone does not
+                // carry it: `CDC_TIMELINE_FORKED`, `CDC_LOG_TRIMMED` and
+                // `CDC_PAYLOAD_COMPACTED` are all 409 and demand three different
+                // things of the caller. The shard already shaped the envelope
+                // with the same `toErrorBody` this function's catch below uses
+                // (`ShardDO.errorToResponse`), so the code is catalogued and the
+                // message is redacted before it ever reaches this hop — echoing
+                // both is the documented contract of {@link ShardError.code},
+                // which read off the status alone was true on the throw path and
+                // false on this one.
+                const envelope = await readShardErrorEnvelope(response);
+                const status = `shard "${shardKey}" returned ${String(response.status)}`;
+
+                return {
+                    code: envelope?.code ?? "SHARD_HTTP_ERROR",
+                    kind: "err",
+                    // The status prefix stays ahead of the shard's own reason so a
+                    // caller matching on it still matches.
+                    message: envelope === undefined || envelope.message.length === 0 ? status : `${status}: ${envelope.message}`,
+                    shardKey,
+                    timedOut: false,
+                };
             }
 
             const value = await response.json();
 
             return { kind: "ok", shardKey, value };
         } catch (error: unknown) {
-            const message = error instanceof Error ? error.message : String(error);
+            // Shape it the way every other error leaving this runtime is shaped.
+            // `fanOut` reports failures as DATA — the envelope is `Response.json`-ed
+            // to the caller — so a raw `error.message` here would echo whatever the
+            // shard (or the platform beneath it) put in a throw. `toErrorBody`
+            // echoes a catalogued `LunoraError` and redacts everything else.
+            const { body } = toErrorBody(error, { fallbackCode: "INTERNAL", redactedMessage: "shard call failed" });
 
-            return { kind: "err", message: `shard "${shardKey}" threw: ${message}`, shardKey, timedOut: false };
+            return { code: body.code, kind: "err", message: `shard "${shardKey}" failed: ${body.message}`, shardKey, timedOut: false };
         }
     })();
 
@@ -1245,19 +1327,28 @@ const callOneShard = async (namespace: ShardNamespaceLike, shardKey: string, pre
     }
 };
 
-const runBoundedFanOut = async (
-    namespace: ShardNamespaceLike,
-    keys: ReadonlyArray<string>,
-    request: ShardRpcRequest,
-    maxConcurrency: number,
-    timeoutMs: number,
-): Promise<ReadonlyArray<ShardRpcOutcome>> => {
-    if (keys.length === 0) {
+/**
+ * Run `jobs` through `run`, with at most `concurrency` of them in flight at
+ * once. A shared cursor lets each of the (at most `concurrency`) workers pull
+ * the next unclaimed job, so a fast job doesn't sit idle waiting for a slow
+ * sibling started in the same "batch" — the bounded-fan-out shape every
+ * multi-shard orchestrator in this file needs, whether every job shares the
+ * same request (`runBoundedFanOut`) or each carries its own args/cursor
+ * (`orchestrateCdcSync`, `orchestrateImport`, `orchestrateApplyCdc`,
+ * `orchestrateRankPage`). Results land at the same index as their job,
+ * regardless of completion order.
+ *
+ * `jobs` must not contain `undefined` — every caller here passes shard keys or
+ * pre-bucketed batch objects, never a sparse/optional array, and a literal
+ * `undefined` element would be indistinguishable from "past the end" and end
+ * the worker early.
+ */
+const runBoundedJobs = async <T, R>(jobs: ReadonlyArray<T>, concurrency: number, run: (job: T, index: number) => Promise<R>): Promise<R[]> => {
+    if (jobs.length === 0) {
         return [];
     }
 
-    const prepared = prepareShardRpc(request);
-    const outcomes: ShardRpcOutcome[] = Array.from({ length: keys.length });
+    const results: R[] = Array.from({ length: jobs.length });
     let cursor = 0;
 
     const worker = async (): Promise<void> => {
@@ -1267,22 +1358,75 @@ const runBoundedFanOut = async (
 
             cursor += 1;
 
-            const shardKey = keys[index];
+            const job = jobs[index];
 
-            if (index >= keys.length || shardKey === undefined) {
+            if (index >= jobs.length || job === undefined) {
                 return;
             }
 
-            // eslint-disable-next-line no-await-in-loop -- intentional: each worker processes shards sequentially while `concurrency` workers run in parallel
-            outcomes[index] = await callOneShard(namespace, shardKey, prepared, timeoutMs);
+            // eslint-disable-next-line no-await-in-loop -- intentional: each worker processes jobs sequentially while `concurrency` workers run in parallel
+            results[index] = await run(job, index);
         }
     };
 
-    const concurrency = Math.min(maxConcurrency, keys.length);
+    const workerCount = Math.min(concurrency, jobs.length);
 
-    await Promise.all(Array.from({ length: concurrency }, () => worker()));
+    await Promise.all(Array.from({ length: workerCount }, () => worker()));
 
-    return outcomes;
+    return results;
+};
+
+/**
+ * Resolve the shards a fan-out should reach, falling back to the default shard
+ * when discovery finds nothing.
+ *
+ * Discovery is registry-driven, and a registry only knows the keys an app
+ * registers for its `.shardBy(...)` tables. A plain root-DO table has no entry
+ * and never will, so an empty result means "the registry cannot answer", NOT
+ * "there is nothing to do" — and the two are indistinguishable to the caller.
+ * Every fan-out that treats them as the same thing reports success having
+ * touched nothing: export streamed an empty file, and a data migration reported
+ * `status: "completed"` with `processed: 0`.
+ *
+ * `orchestrateImport` has always resolved this case to the default shard. This
+ * is that answer, made shareable.
+ *
+ * Callers that legitimately mean "no shards, no answer" pass `null` and keep the
+ * empty list — see `orchestrateRank`.
+ */
+const withDefaultShard = (discovered: ReadonlyArray<string>, defaultShardKey: DefaultShardKey): ReadonlyArray<string> =>
+    discovered.length > 0 || defaultShardKey === null ? discovered : [defaultShardKey];
+
+/**
+ * Union of the live shard keys across every requested table, so a multi-table
+ * fan-out reaches each shard once.
+ *
+ * {@link withDefaultShard} is applied PER TABLE, before the union: an empty key
+ * list is that table's "the registry cannot answer", and a root-DO table's list
+ * is always empty. Unioning first and falling back only on an empty union
+ * answered the question once for the whole request, so a single registered
+ * `.shardBy(...)` key was enough to drop the default shard — and with it every
+ * root-table row — from a whole-deployment export.
+ *
+ * The caller still wraps the result: with no tables at all there is nothing to
+ * ask per table, and the fallback is the whole answer.
+ */
+const unionShardKeys = async (registry: ShardRegistry, tables: ReadonlyArray<string>, defaultShardKey: DefaultShardKey): Promise<string[]> => {
+    const perTableKeys = await Promise.all(tables.map(async (table) => withDefaultShard(await registry.listShardKeys(table), defaultShardKey)));
+
+    return [...new Set(perTableKeys.flat())];
+};
+
+const runBoundedFanOut = async (
+    namespace: ShardNamespaceInput,
+    keys: ReadonlyArray<string>,
+    request: ShardRpcRequest,
+    maxConcurrency: number,
+    timeoutMs: number,
+): Promise<ReadonlyArray<ShardRpcOutcome>> => {
+    const prepared = prepareShardRpc(request);
+
+    return runBoundedJobs(keys, maxConcurrency, async (shardKey) => callOneShard(namespace, shardKey, prepared, timeoutMs));
 };
 
 /**
@@ -1290,21 +1434,13 @@ const runBoundedFanOut = async (
  * uses to stay stable across runs. Lets two shards file the same `{ a, b }`
  * group under the same merged bucket regardless of property order.
  */
-// Code-unit ordering (NOT locale-aware) is load-bearing: it must match the
-// aggregate counter's canonical key order across shards, so a localeCompare
-// comparator would risk bucketing the same key tuple differently per shard.
-const compareCodeUnits = (a: string, b: string): number => {
-    if (a < b) {
-        return -1;
-    }
-
-    return a > b ? 1 : 0;
-};
-
 const canonicalJson = (record: Record<string, unknown>): string => {
     const ordered: Record<string, unknown> = {};
 
-    for (const key of Object.keys(record).toSorted(compareCodeUnits)) {
+    // Code-unit order (NOT locale-aware) is load-bearing: it must match the
+    // aggregate counter's canonical key order across shards, so a localeCompare
+    // comparator would risk bucketing the same key tuple differently per shard.
+    for (const key of Object.keys(record).toSorted(compareAsc)) {
         // eslint-disable-next-line unicorn/no-null -- the JSON canonical key encoding must serialize missing fields as `null` to stay byte-stable with the aggregate counter across shards
         ordered[key] = record[key] ?? null;
     }
@@ -1312,17 +1448,7 @@ const canonicalJson = (record: Record<string, unknown>): string => {
     return JSON.stringify(ordered);
 };
 
-const mergeConcat = (values: ReadonlyArray<unknown>): unknown[] => {
-    const out: unknown[] = [];
-
-    for (const v of values) {
-        if (Array.isArray(v)) {
-            out.push(...(v as ReadonlyArray<unknown>));
-        }
-    }
-
-    return out;
-};
+const mergeConcat = (values: ReadonlyArray<unknown>): unknown[] => values.flatMap((v) => (Array.isArray(v) ? (v as ReadonlyArray<unknown>) : []));
 
 type GroupByMergeOp = "max" | "min" | "sum";
 
@@ -1343,7 +1469,9 @@ const combineGroupByValue = (current: number, incoming: number, op: GroupByMerge
         }
 
         default: {
-            // Compile-time exhaustiveness guard (no runtime effect).
+            // Compile-time exhaustiveness guard; an op outside the union can
+            // only arrive via untyped input, which the fan-out envelope
+            // validation rejects upstream — never evaluate `Math[op]` on it.
             op satisfies never;
 
             return current;
@@ -1489,7 +1617,7 @@ const mergeTopK = (values: ReadonlyArray<unknown>, strategy: { by: string; direc
 
     const direction = strategy.direction ?? "desc";
 
-    collected.sort((a, b) => (direction === "asc" ? a.score - b.score : b.score - a.score));
+    collected.sort((a, b) => (direction === "asc" ? compareAsc(a.score, b.score) : compareAsc(b.score, a.score)));
 
     return collected.slice(0, strategy.k).map((entry) => entry.row);
 };
@@ -1509,11 +1637,11 @@ const mergeShardResults = (values: ReadonlyArray<unknown>, strategy: MergeStrate
         }
 
         case "max": {
-            return mergeNumeric(values, (best, candidate) => Math.max(best, candidate));
+            return mergeNumeric(values, Math.max);
         }
 
         case "min": {
-            return mergeNumeric(values, (best, candidate) => Math.min(best, candidate));
+            return mergeNumeric(values, Math.min);
         }
 
         case "rank": {
@@ -1539,6 +1667,108 @@ const mergeShardResults = (values: ReadonlyArray<unknown>, strategy: MergeStrate
     }
 };
 
+/** A shard-registry prune: release the named `.shardBy()` tables' shards that hold none of their rows. */
+interface ShardRegistryPruneRequest {
+    /** Report what would be released without touching the registry. */
+    dryRun?: boolean;
+    /** Must carry the admin bearer each shard's admin gate requires. */
+    headers?: Record<string, string>;
+    tables: ReadonlyArray<string>;
+}
+
+/** One `(shard, table)` registration the prune reports on. */
+interface ShardRegistration {
+    shardKey: string;
+    table: string;
+}
+
+interface ShardRegistryPruneResult {
+    /** Shards the release could not reach. Their registrations are KEPT: a key nobody checked is never dropped. */
+    failed: ReadonlyArray<{ message: string; shardKey: string; tables: ReadonlyArray<string> }>;
+    /** Registrations whose shard still holds rows of the table. */
+    kept: ReadonlyArray<ShardRegistration>;
+    /** Registrations removed (or, on a dry run, that would be). */
+    released: ReadonlyArray<ShardRegistration>;
+}
+
+/** A shard's `kept` / `released` table list as registrations, dropping anything that is not a table name. */
+const registrationsOf = (shardKey: string, tables: unknown): ShardRegistration[] =>
+    (Array.isArray(tables) ? tables : [])
+        .filter((table): table is string => typeof table === "string")
+        .map((table) => {
+            return { shardKey, table };
+        });
+
+/**
+ * Prune the shard registry: ask every shard it lists for `request.tables` to
+ * release the tables it no longer holds rows of.
+ *
+ * Each shard decides for itself (`__lunora_admin__:releaseShardRegistration`),
+ * because only the shard can order the emptiness check against its own
+ * writes; a check made here and an unregister sent later could drop a shard
+ * written in between. A shard listed for several tables gets one call naming
+ * all of them.
+ */
+const pruneShardRegistry = async (
+    registry: ShardRegistry,
+    namespace: ShardNamespaceInput,
+    request: ShardRegistryPruneRequest,
+): Promise<ShardRegistryPruneResult> => {
+    const tablesByShard = new Map<string, string[]>();
+    const listed = await Promise.all(
+        request.tables.map(async (table) => {
+            return { keys: await registry.listShardKeys(table), table };
+        }),
+    );
+
+    for (const { keys, table } of listed) {
+        for (const shardKey of keys) {
+            tablesByShard.set(shardKey, [...(tablesByShard.get(shardKey) ?? []), table]);
+        }
+    }
+
+    const outcomes = await runBoundedJobs([...tablesByShard], DEFAULT_CONCURRENCY, async ([shardKey, tables]) => {
+        const outcome = await callOneShard(
+            namespace,
+            shardKey,
+            prepareShardRpc({
+                args: { dryRun: request.dryRun === true, tables },
+                functionPath: "__lunora_admin__:releaseShardRegistration",
+                headers: request.headers,
+            }),
+            DEFAULT_TIMEOUT_MS,
+        );
+
+        return { outcome, tables };
+    });
+
+    const failed: { message: string; shardKey: string; tables: ReadonlyArray<string> }[] = [];
+    const kept: ShardRegistration[] = [];
+    const released: ShardRegistration[] = [];
+
+    for (const { outcome, tables } of outcomes) {
+        if (outcome.kind === "err") {
+            failed.push({ message: outcome.message, shardKey: outcome.shardKey, tables });
+            continue;
+        }
+
+        const payload = (unwrapResult(outcome.value) ?? {}) as { kept?: unknown; released?: unknown };
+
+        kept.push(...registrationsOf(outcome.shardKey, payload.kept));
+        released.push(...registrationsOf(outcome.shardKey, payload.released));
+    }
+
+    // The shards unregistered themselves, so a caching registry here still lists
+    // them. Other isolates catch up within their own cache TTL.
+    if (request.dryRun !== true) {
+        for (const table of new Set(released.map((registration) => registration.table))) {
+            registry.invalidate?.(table);
+        }
+    }
+
+    return { failed, kept, released };
+};
+
 const createQueryCoordinator = (options: QueryCoordinatorOptions): QueryCoordinator => {
     const maxConcurrency = options.maxConcurrency ?? DEFAULT_CONCURRENCY;
     const perShardTimeoutMs = options.perShardTimeoutMs ?? DEFAULT_TIMEOUT_MS;
@@ -1548,47 +1778,36 @@ const createQueryCoordinator = (options: QueryCoordinatorOptions): QueryCoordina
     }
 
     return {
-        async fanOut<T>(namespace: ShardNamespaceLike, request: FanOutRequest): Promise<FanOutResult<T>> {
+        async fanOut<T>(namespace: ShardNamespaceInput, request: FanOutRequest): Promise<FanOutResult<T>> {
             const keys = await options.registry.listShardKeys(request.fanOut.table);
 
             const results = await runBoundedFanOut(namespace, keys, request, maxConcurrency, perShardTimeoutMs);
 
             const okValues: unknown[] = [];
-            const okShards: string[] = [];
             const errors: ShardError[] = [];
 
             for (const result of results) {
                 if (result.kind === "ok") {
                     okValues.push(result.value);
-                    okShards.push(result.shardKey);
                 } else {
-                    errors.push({ message: result.message, shardKey: result.shardKey, timedOut: result.timedOut });
+                    errors.push({ code: result.code, message: result.message, shardKey: result.shardKey, timedOut: result.timedOut });
                 }
             }
 
-            const merged = mergeShardResults(okValues, request.fanOut.merge);
-
             return {
-                data: merged as T,
+                data: mergeShardResults(okValues, request.fanOut.merge) as T,
                 errors,
                 failed: errors.length,
-                ok: okShards.length,
+                ok: okValues.length,
             };
         },
-        async orchestrateExport(namespace: ShardNamespaceLike, request: ExportFanOutRequest): Promise<ExportFanOutResult> {
+        async orchestrateExport(namespace: ShardNamespaceInput, request: ExportFanOutRequest): Promise<ExportFanOutResult> {
             // Union the shard keys across all requested shard-local tables so
             // an export of `["users","messages"]` reaches every shard that
             // holds either table. Skip globals — they live in D1, not a DO.
-            const union = new Set<string>();
-            const perTableKeys = await Promise.all(request.tables.map(async (table) => options.registry.listShardKeys(table)));
+            const discovered = await unionShardKeys(options.registry, request.tables, request.defaultShardKey);
 
-            for (const keys of perTableKeys) {
-                for (const key of keys) {
-                    union.add(key);
-                }
-            }
-
-            const shardKeys = [...union];
+            const shardKeys = withDefaultShard(discovered, request.defaultShardKey);
 
             const exportRequest: ShardRpcRequest = {
                 // Spread the caller's `args` (`batchSize`, future export knobs)
@@ -1603,159 +1822,98 @@ const createQueryCoordinator = (options: QueryCoordinatorOptions): QueryCoordina
 
             return rollUpExport(results);
         },
-        async orchestrateCdcSync(namespace: ShardNamespaceLike, request: CdcSyncFanOutRequest): Promise<CdcSyncFanOutResult> {
+        async orchestrateCdcSync(namespace: ShardNamespaceInput, request: CdcSyncFanOutRequest): Promise<CdcSyncFanOutResult> {
             // Discover shards like export — the union of every requested table's
             // live shard keys. Unlike export, each shard resumes from its own
             // cursor, so (like import) we can't reuse `runBoundedFanOut`'s
             // same-args-to-all model; we drive a per-shard-args worker loop.
-            const union = new Set<string>();
-            const perTableKeys = await Promise.all(request.tables.map(async (table) => options.registry.listShardKeys(table)));
-
-            for (const keys of perTableKeys) {
-                for (const key of keys) {
-                    union.add(key);
-                }
-            }
-
-            const shardKeys = [...union];
+            const shardKeys = withDefaultShard(await unionShardKeys(options.registry, request.tables, request.defaultShardKey), request.defaultShardKey);
             const cursors = request.cursors ?? {};
-            const results: { outcome: ShardRpcOutcome; sinceSeq: number }[] = Array.from({ length: shardKeys.length });
-            let cursor = 0;
+            const epochs = request.epochs ?? {};
 
-            const concurrency = Math.min(maxConcurrency, shardKeys.length);
+            const results = await runBoundedJobs(shardKeys, maxConcurrency, async (shardKey) => {
+                const sinceSeq = cursors[shardKey] ?? 0;
+                // Absent for a caller that holds no epoch for this shard, which
+                // is every caller that has not been updated — the shard then
+                // reads exactly as it did before the field existed.
+                const sinceEpoch = epochs[shardKey];
 
-            const worker = async (): Promise<void> => {
-                // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- bounded-concurrency worker loops until the shared cursor is exhausted (guarded below)
-                while (true) {
-                    const index = cursor;
+                const outcome = await callOneShard(
+                    namespace,
+                    shardKey,
+                    prepareShardRpc({
+                        args: { limit: request.limit, sinceEpoch, sinceSeq },
+                        functionPath: "__lunora_admin__:cdcSync",
+                        headers: request.headers,
+                    }),
+                    perShardTimeoutMs,
+                );
 
-                    cursor += 1;
-
-                    const shardKey = shardKeys[index];
-
-                    if (index >= shardKeys.length || shardKey === undefined) {
-                        return;
-                    }
-
-                    const sinceSeq = cursors[shardKey] ?? 0;
-
-                    // eslint-disable-next-line no-await-in-loop -- intentional: each worker processes shards sequentially while `concurrency` workers run in parallel
-                    const outcome = await callOneShard(
-                        namespace,
-                        shardKey,
-                        prepareShardRpc({
-                            args: { limit: request.limit, sinceSeq },
-                            functionPath: "__lunora_admin__:cdcSync",
-                            headers: request.headers,
-                        }),
-                        perShardTimeoutMs,
-                    );
-
-                    results[index] = { outcome, sinceSeq };
-                }
-            };
-
-            if (concurrency > 0) {
-                await Promise.all(Array.from({ length: concurrency }, () => worker()));
-            }
+                return { outcome, sinceEpoch, sinceSeq };
+            });
 
             return rollUpCdcSync(results);
         },
-        async orchestrateImport(namespace: ShardNamespaceLike, request: ImportFanOutRequest): Promise<ImportFanOutResult> {
+        async orchestrateImport(namespace: ShardNamespaceInput, request: ImportFanOutRequest): Promise<ImportFanOutResult> {
             // Each shard gets its own pre-bucketed batch — we can't reuse
             // `runBoundedFanOut` because that helper sends the same args to
             // every shard. The structure mirrors it: bounded `Promise.all`
             // workers pulling jobs off a shared cursor.
             const { batches } = request;
-            const outcomes: ShardRpcOutcome[] = Array.from({ length: batches.length });
-            let cursor = 0;
 
-            const concurrency = Math.min(maxConcurrency, batches.length);
-
-            const worker = async (): Promise<void> => {
-                // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- bounded-concurrency worker loops until the shared cursor is exhausted (guarded below)
-                while (true) {
-                    const index = cursor;
-
-                    cursor += 1;
-
-                    const batch = batches[index];
-
-                    if (index >= batches.length || batch === undefined) {
-                        return;
-                    }
-
-                    // eslint-disable-next-line no-await-in-loop -- intentional: each worker processes batches sequentially while `concurrency` workers run in parallel
-                    outcomes[index] = await callOneShard(
-                        namespace,
-                        batch.shardKey,
-                        prepareShardRpc({
-                            args: { rows: [...batch.rows], startLine: batch.startLine ?? 1 },
-                            functionPath: "__lunora_admin__:importShard",
-                            headers: request.headers,
-                        }),
-                        perShardTimeoutMs,
-                    );
-                }
-            };
-
-            if (concurrency > 0) {
-                await Promise.all(Array.from({ length: concurrency }, () => worker()));
-            }
+            const outcomes = await runBoundedJobs(batches, maxConcurrency, async (batch) =>
+                callOneShard(
+                    namespace,
+                    batch.shardKey,
+                    prepareShardRpc({
+                        args: { rows: [...batch.rows], startLine: batch.startLine ?? 1 },
+                        functionPath: "__lunora_admin__:importShard",
+                        headers: request.headers,
+                    }),
+                    perShardTimeoutMs,
+                ),
+            );
 
             return rollUpImport(outcomes);
         },
-        async orchestrateApplyCdc(namespace: ShardNamespaceLike, request: ApplyCdcFanOutRequest): Promise<ApplyCdcFanOutResult> {
+        async orchestrateApplyCdc(namespace: ShardNamespaceInput, request: ApplyCdcFanOutRequest): Promise<ApplyCdcFanOutResult> {
             // Per-shard pre-bucketed batches — same worker-loop shape as
             // orchestrateImport (each shard gets distinct args, so we can't use
             // runBoundedFanOut's same-args-to-all model).
             const { batches } = request;
-            const outcomes: ShardRpcOutcome[] = Array.from({ length: batches.length });
-            let cursor = 0;
 
-            const concurrency = Math.min(maxConcurrency, batches.length);
-
-            const worker = async (): Promise<void> => {
-                // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- bounded-concurrency worker loops until the shared cursor is exhausted (guarded below)
-                while (true) {
-                    const index = cursor;
-
-                    cursor += 1;
-
-                    const batch = batches[index];
-
-                    if (index >= batches.length || batch === undefined) {
-                        return;
-                    }
-
-                    // eslint-disable-next-line no-await-in-loop -- intentional: each worker processes batches sequentially while `concurrency` workers run in parallel
-                    outcomes[index] = await callOneShard(
-                        namespace,
-                        batch.shardKey,
-                        prepareShardRpc({
-                            args: { changes: [...batch.changes] },
-                            functionPath: "__lunora_admin__:applyCdc",
-                            headers: request.headers,
-                        }),
-                        perShardTimeoutMs,
-                    );
-                }
-            };
-
-            if (concurrency > 0) {
-                await Promise.all(Array.from({ length: concurrency }, () => worker()));
-            }
+            const outcomes = await runBoundedJobs(batches, maxConcurrency, async (batch) =>
+                callOneShard(
+                    namespace,
+                    batch.shardKey,
+                    prepareShardRpc({
+                        args: { changes: [...batch.changes] },
+                        functionPath: "__lunora_admin__:applyCdc",
+                        headers: request.headers,
+                    }),
+                    perShardTimeoutMs,
+                ),
+            );
 
             return rollUpApplyCdc(outcomes);
         },
-        async orchestrateMigration(namespace: ShardNamespaceLike, request: MigrationFanOutRequest): Promise<MigrationFanOutResult> {
-            const keys = await options.registry.listShardKeys(request.table);
+        async orchestrateMigration(namespace: ShardNamespaceInput, request: MigrationFanOutRequest): Promise<MigrationFanOutResult> {
+            // Without the fallback a migration on a root table fans out to nothing
+            // and rolls up as `completed` with `processed: 0` — a backfill the
+            // operator is told succeeded and that never ran.
+            const keys = withDefaultShard(await options.registry.listShardKeys(request.table), request.defaultShardKey);
 
             const results = await runBoundedFanOut(namespace, keys, request, maxConcurrency, perShardTimeoutMs);
 
             return rollUpMigration(results);
         },
-        async orchestrateRank(namespace: ShardNamespaceLike, request: RankFanOutRequest): Promise<RankFanOutResult> {
+        // No `withDefaultShard` on the rank/rankPage/shardTraffic paths below —
+        // they are the `defaultShardKey: null` case in permanent form, and that
+        // is deliberate: they answer questions ABOUT the shard set, so an empty
+        // registry genuinely means "no shards to rank across" rather than "ask the
+        // default one". A root-table read never reaches them — codegen routes it
+        // straight to the default shard instead of through the coordinator.
+        async orchestrateRank(namespace: ShardNamespaceInput, request: RankFanOutRequest): Promise<RankFanOutResult> {
             const keys = await options.registry.listShardKeys(request.table);
 
             // Every shard receives the same explicit key tuple — the row's
@@ -1779,7 +1937,7 @@ const createQueryCoordinator = (options: QueryCoordinatorOptions): QueryCoordina
 
             return rollUpRank(results);
         },
-        async orchestrateRankPage(namespace: ShardNamespaceLike, request: RankPageFanOutRequest): Promise<RankPageFanOutResult> {
+        async orchestrateRankPage(namespace: ShardNamespaceInput, request: RankPageFanOutRequest): Promise<RankPageFanOutResult> {
             const keys = await options.registry.listShardKeys(request.table);
             const take = Math.max(1, Math.min(1000, Math.floor(request.take ?? 100)));
             const requestedDirections = request.directions ?? [];
@@ -1791,64 +1949,39 @@ const createQueryCoordinator = (options: QueryCoordinatorOptions): QueryCoordina
             // `take`; the shard-local reader internally `LIMIT take + 1`s so its
             // `hasMore` is observable even when the returned slice is exactly
             // `take` long, but the merge only ever emits up to the GLOBAL `take`.
-            const outcomes: ShardRankPageOutcome[] = Array.from({ length: keys.length });
-            let cursor = 0;
+            const outcomes = await runBoundedJobs(keys, maxConcurrency, async (shardKey): Promise<ShardRankPageOutcome> => {
+                const shardCursorKey = cursorState.perShard[shardKey];
+                const args: Record<string, unknown> = {
+                    index: request.index,
+                    table: request.table,
+                    take,
+                };
 
-            const concurrency = Math.min(maxConcurrency, keys.length);
-
-            const worker = async (): Promise<void> => {
-                // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- bounded-concurrency worker loops until the shared cursor is exhausted (guarded below)
-                while (true) {
-                    const index = cursor;
-
-                    cursor += 1;
-
-                    const shardKey = keys[index];
-
-                    if (index >= keys.length || shardKey === undefined) {
-                        return;
-                    }
-
-                    const shardCursorKey = cursorState.perShard[shardKey];
-                    const args: Record<string, unknown> = {
-                        index: request.index,
-                        table: request.table,
-                        take,
-                    };
-
-                    if (request.partitionKey !== undefined) {
-                        args["partitionKey"] = request.partitionKey;
-                    }
-
-                    if (shardCursorKey !== undefined) {
-                        // Forward the prior page's resume key for THIS shard so
-                        // it pages strictly-after the last globally-consumed row.
-                        args["after"] = shardCursorKey;
-                    }
-
-                    // eslint-disable-next-line no-await-in-loop -- intentional: each worker processes shards sequentially while `concurrency` workers run in parallel
-                    const outcome = await callOneShard(
-                        namespace,
-                        shardKey,
-                        prepareShardRpc({ args, functionPath: "__lunora_admin__:rankPage", headers: request.headers }),
-                        perShardTimeoutMs,
-                    );
-
-                    if (outcome.kind === "err") {
-                        outcomes[index] = { error: { message: outcome.message, timedOut: outcome.timedOut }, shardKey };
-
-                        continue;
-                    }
-
-                    const payload = readRankPageResult(unwrapResult(outcome.value));
-
-                    outcomes[index] = { directions: payload.directions, hasMore: payload.hasMore, rows: payload.rows, shardKey };
+                if (request.partitionKey !== undefined) {
+                    args["partitionKey"] = request.partitionKey;
                 }
-            };
 
-            if (concurrency > 0) {
-                await Promise.all(Array.from({ length: concurrency }, () => worker()));
-            }
+                if (shardCursorKey !== undefined) {
+                    // Forward the prior page's resume key for THIS shard so
+                    // it pages strictly-after the last globally-consumed row.
+                    args["after"] = shardCursorKey;
+                }
+
+                const outcome = await callOneShard(
+                    namespace,
+                    shardKey,
+                    prepareShardRpc({ args, functionPath: "__lunora_admin__:rankPage", headers: request.headers }),
+                    perShardTimeoutMs,
+                );
+
+                if (outcome.kind === "err") {
+                    return { error: { message: outcome.message, timedOut: outcome.timedOut }, shardKey };
+                }
+
+                const payload = readRankPageResult(unwrapResult(outcome.value));
+
+                return { directions: payload.directions, hasMore: payload.hasMore, rows: payload.rows, shardKey };
+            });
 
             const slices: ShardSlice[] = [];
             let ok = 0;
@@ -1889,7 +2022,7 @@ const createQueryCoordinator = (options: QueryCoordinatorOptions): QueryCoordina
                 shards: outcomes,
             };
         },
-        async orchestrateShardTraffic(namespace: ShardNamespaceLike, request: ShardTrafficFanOutRequest): Promise<ShardTrafficFanOutResult> {
+        async orchestrateShardTraffic(namespace: ShardNamespaceInput, request: ShardTrafficFanOutRequest): Promise<ShardTrafficFanOutResult> {
             const keys = await options.registry.listShardKeys(request.table);
 
             // Every shard receives the same (empty-args) `getMetrics` admin RPC;
@@ -1910,7 +2043,7 @@ const createQueryCoordinator = (options: QueryCoordinatorOptions): QueryCoordina
     };
 };
 
-export { createQueryCoordinator, createStaticShardRegistry, mergeStrategyForAggregate };
+export { createDefaultShardRegistry, createQueryCoordinator, createStaticShardRegistry, pruneShardRegistry };
 export type {
     ExportFanOutRequest,
     ExportFanOutResult,
@@ -1935,6 +2068,8 @@ export type {
     ShardRankOutcome,
     ShardRankPageOutcome,
     ShardRegistry,
+    ShardRegistryPruneRequest,
+    ShardRegistryPruneResult,
     ShardTrafficEntry,
     ShardTrafficFanOutRequest,
     ShardTrafficFanOutResult,

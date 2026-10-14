@@ -1,0 +1,44 @@
+{
+    "name": "{{name}}",
+    "version": "0.0.0",
+    "private": true,
+    "type": "module",
+    "imports": {
+        "#lunora/*": "./lunora/*"
+    },
+    "scripts": {
+        "dev": "vite",
+        "build": "vite build",
+        "preview": "vite preview",
+        "codegen": "lunora codegen",
+        "deploy": "vite build && wrangler deploy"
+    },
+    "dependencies": {
+        "@analogjs/content": "^2.7.5",
+        "@analogjs/router": "^2.7.5",
+        "@angular/common": "^22.1.1",
+        "@angular/compiler": "^22.1.1",
+        "@angular/core": "^22.1.1",
+        "@angular/forms": "^22.1.1",
+        "@angular/platform-browser": "^22.1.1",
+        "@angular/platform-server": "^22.1.1",
+        "@angular/router": "^22.1.1",
+        "@lunora/angular": "^0.0.0",
+        "@lunora/ratelimit": "^0.0.0",
+        "lunorash": "^0.0.0",
+        "rxjs": "^7.8.2",
+        "zone.js": "^0.16.2"
+    },
+    "devDependencies": {
+        "@analogjs/platform": "^2.7.5",
+        "@angular/build": "^22.1.1",
+        "@angular/compiler-cli": "^22.1.1",
+        "@cloudflare/workers-types": "^5.20261004.1",
+        "@lunora/studio": "^0.0.0",
+        "@lunora/vite": "^0.0.0",
+        "h3": "^1.15.11",
+        "typescript": "^6.0.3",
+        "vite": "^8.1.5",
+        "wrangler": "^4.147.0"
+    }
+}

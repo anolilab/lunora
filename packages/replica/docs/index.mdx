@@ -1,0 +1,266 @@
+---
+title: "@lunora/replica"
+description: Local-first replica runtime for Lunora — EventEmitter, subscriptions, snapshot DO, and replay.
+related:
+    - to: /docs/packages/server
+      note: "server primitives and action context"
+    - to: /docs/concepts/offline-first
+      note: "event sourcing for offline resilience"
+---
+
+`@lunora/replica` provides a local-first replica runtime and local SQLite mirror for
+Lunora. It combines an append-only event log, a type-safe reducer-based state
+derivation engine (`EventSource`), a typed `EventEmitter`, a `Durable
+Object`-backed event log for persistence in the Cloudflare environment, and a
+local SQLite mirror (`LocalMirror`) that applies typed row-level diffs in
+browser/Node.js.
+
+```ts
+import { EventSource } from "@lunora/replica";
+
+interface TodoState {
+    items: Array<{ id: string; title: string; done: boolean }>;
+}
+
+const reducer = (state: TodoState, entry): TodoState => {
+    switch (entry.type) {
+        case "todo-added":
+            return { items: [...state.items, { ...entry.payload, done: false }] };
+        case "todo-toggled":
+            return {
+                items: state.items.map((t) => (t.id === entry.payload.id ? { ...t, done: !t.done } : t)),
+            };
+        default:
+            return state;
+    }
+};
+
+const source = new EventSource<TodoState>({ items: [] }, reducer);
+
+// Apply an event — updates state and records it in the log:
+source.applyEvent("todo-added", { id: "1", title: "Write docs" });
+console.log(source.state.items.length); // 1
+
+// Replay from an existing log to restore state:
+source.replayFromLog(existingLog);
+console.log("replayed:", source.replayed); // true
+```
+
+## Install
+
+```bash
+pnpm add @lunora/replica
+# @lunora/server is an optional peer — only needed when using EventLogDO:
+pnpm add @lunora/server
+# sql.js is an optional peer — only needed when using LocalMirror in the browser:
+pnpm add sql.js
+```
+
+## Key exports
+
+| Export                                       | Description                                                                    |
+| -------------------------------------------- | ------------------------------------------------------------------------------ |
+| `EventSource`                                | Reducer-based state machine that derives state from an append-only `EventLog`. |
+| `EventEmitter`                               | Typed event emitter with `on`/`off`/`emit` and wildcard listeners.             |
+| `defineEvents`                               | Type-safe event factory: declare event types and their payload shapes.         |
+| `defineMaterializer` / `MaterializerRuntime` | Subscribe an `EventSource` to a Durable Object's event feed.                   |
+| `EventLogDO`                                 | Durable Object that persists an event log to DO storage with SQLite.           |
+| `EventLogDOClient`                           | Client for appending / querying events on an `EventLogDO`.                     |
+| `SubscriptionManager`                        | Manage event-type and state-change subscriptions with typed callbacks.         |
+| `InMemorySnapshotStore`                      | In-memory store for persisting event-sourced state snapshots.                  |
+| `eventsContext`                              | Integrates the event source into a Lunora action context.                      |
+
+## EventSource
+
+The core event-sourcing runtime. Construct it with an initial state and a
+reducer function; events are appended to an in-memory `EventLog` and the
+reducer derives the next state.
+
+```ts
+const source = new EventSource(initialState, reducer);
+
+// Listen for state changes:
+source.emitter.on("state-changed", ({ entry, state }) => {
+    console.log(`After ${entry.type}:`, state);
+});
+
+// Apply a new event:
+const entry = source.applyEvent("item-created", { id: "abc", name: "foo" });
+
+// Replay from a persisted log on startup:
+await source.replayFromLog(persistedLog);
+
+// Reset and re-replay from a snapshot:
+source.reset(snapshotState);
+source.replayFromLog(afterSnapshotLog);
+```
+
+**Events emitted by EventSource:**
+
+| Event           | Payload                                                    | When                              |
+| --------------- | ---------------------------------------------------------- | --------------------------------- |
+| `ready`         | `{ entryCount: number }`                                   | After initial replay completes.   |
+| `replay-error`  | `{ entry: EventLogEntry, error: Error }`                   | On a reducer error during replay. |
+| `state-changed` | `{ entry: EventLogEntry, state: Record<string, unknown> }` | After every applied entry.        |
+
+## EventEmitter
+
+A typed, framework-agnostic event emitter. Replaces the Node.js `EventEmitter`
+in environments where it isn't available (browsers, service workers, workerd).
+
+```ts
+import { EventEmitter } from "@lunora/replica";
+
+interface MyEvents {
+    data: { id: string; value: number };
+    error: { message: string };
+}
+
+const emitter = new EventEmitter<MyEvents>();
+
+// `on` is keyed to the map, so an unknown event name is a compile error.
+// It returns an unsubscribe function; `off(event, handler)` is the same thing.
+const unsubscribe = emitter.on("data", (payload) => console.log(payload.id));
+
+emitter.emit("data", { id: "abc", value: 42 });
+
+// Wildcard listener — `onAny` (there is no `"*"` event name), also returning
+// an unsubscribe function; `offAny(handler)` is the explicit form.
+emitter.onAny((event, payload) => console.log(event, payload));
+
+unsubscribe();
+```
+
+There is no `once`: unsubscribe from inside the handler with the function `on`
+returned.
+
+## defineEvents
+
+Declare a family of typed events and their payloads. The definition is
+**nested**: the outer keys are namespaces, the inner keys are event names, and
+each event's value is its payload schema (a `@lunora/values` validator, or a
+plain descriptor). Every event's `type` is the namespace-qualified
+`"<namespace>.<name>"`.
+
+```ts
+import { defineEvents } from "@lunora/replica";
+import { v } from "@lunora/server";
+
+const events = defineEvents({
+    todo: {
+        created: v.object({ id: v.string(), title: v.string() }),
+        deleted: v.object({ id: v.string() }),
+        toggled: v.object({ id: v.string() }),
+    },
+});
+
+// Each leaf is a factory returning an InputEvent.
+const entry = events.todo.created({ id: "1", title: "Write docs" });
+//    ^ { type: "todo.created", payload: { id, title }, timestamp: number }
+
+// Type-only introspection — a map of qualified type → payload shape.
+type TodoEvents = typeof events._types;
+//   ^ { "todo.created": { id: string; title: string }; "todo.deleted": …; … }
+```
+
+## EventLogDO (Durable Object)
+
+A Durable Object that persists events to DO SQLite storage.
+
+Re-export the class from your **worker entry** so Wrangler can find it:
+
+```ts
+// src/worker.ts
+export { EventLogDO } from "@lunora/replica";
+```
+
+Then declare the binding in `wrangler.jsonc`. The DO uses `state.storage.sql`,
+so its migration **must** use `new_sqlite_classes` — with `new_classes` the
+instance gets a key-value store with no `.sql` and every request fails at the
+first statement:
+
+```jsonc
+{
+    "durable_objects": {
+        "bindings": [{ "name": "EVENT_LOG_DO", "class_name": "EventLogDO" }],
+    },
+    "migrations": [{ "tag": "v1", "new_sqlite_classes": ["EventLogDO"] }],
+}
+```
+
+`EventLogDOClient` wraps the DO's `fetch()` RPC surface. Its only option is
+`fetch` — the function that dispatches a request to the instance you want, which
+is where the namespace and instance id are chosen:
+
+```ts
+const client = new EventLogDOClient({
+    fetch: (request) => env.EVENT_LOG_DO.get(env.EVENT_LOG_DO.idFromName("my-app")).fetch(request),
+});
+
+// `append` takes an ARRAY and returns the entries with their assigned `seq`s.
+// Pass `{ batchId }` to make a retry idempotent.
+const [entry] = await client.append([{ type: "order.placed", payload: { orderId: "123" } }], { batchId: "order-123" });
+
+// The log is append-only and ordered, so reads are by sequence number — there
+// is no filter-by-type query. `getSince` returns ONE bounded page (500 entries
+// by default, 1000 max); keep passing the returned `cursor` back while
+// `truncated` is true to walk the whole log.
+const { entries, truncated, cursor } = await client.getSince(entry.seq);
+const page = await client.getSince(0, 50);
+const size = await client.getSize();
+```
+
+## SubscriptionManager
+
+Manage typed subscriptions to event types and state changes:
+
+```ts
+import { SubscriptionManager } from "@lunora/replica";
+
+const subs = new SubscriptionManager();
+
+// Subscribe to a specific event type:
+const unsub = subs.onEvent("order-placed", (entry) => {
+    console.log("Order placed:", entry.payload);
+});
+
+// Subscribe to any state change:
+subs.onStateChange((entry) => {
+    // Called after every applied event
+});
+
+// Clean up:
+unsub();
+```
+
+## eventsContext
+
+Wires the event log into a Lunora procedure context, so appends are available to
+your handlers.
+
+`eventsContext(client)` takes a configured `EventLogDOClient` and returns a
+**middleware**, so it goes on `.use(...)`, not around the handler. It attaches
+one member, `ctx.events`, which is the client itself — so `append` takes the
+same **array** of input events as `client.append`.
+
+```ts
+import { EventLogDOClient, eventsContext } from "@lunora/replica";
+
+import { action, v } from "@/lunora/_generated/server";
+
+const client = new EventLogDOClient({
+    fetch: (request) => env.EVENT_LOG_DO.get(env.EVENT_LOG_DO.idFromName("my-app")).fetch(request),
+});
+
+export const myAction = action
+    .input({ type: v.string() })
+    .use(eventsContext(client))
+    .action(async ({ ctx, args }) => {
+        const [entry] = await ctx.events.append([{ type: "user.action", payload: { action: args.type } }]);
+
+        return entry;
+    });
+```
+
+The middleware is unopinionated about the context it extends, so the same
+`.use(eventsContext(client))` works on a `query`, `mutation`, or `action`.

@@ -1,6 +1,6 @@
 import type { Column, Table } from "@tanstack/react-table";
 import type { ReactElement } from "react";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 
 import { ConfirmButton } from "../../components/confirm-button";
 import {
@@ -15,25 +15,30 @@ import {
 } from "../../components/ui/dropdown-menu";
 import { ModalShell } from "../../components/ui/modal-shell";
 import { useT } from "../../i18n/i18n-context";
-import { fireAndForget, formatCell } from "../../lib/internal";
+import { copyToClipboard, fireAndForget, formatCell, jsonRowReplacer, sqlIdentifier } from "../../lib/internal";
+import { CONTROL_BTN } from "./control-button";
+import type { GridTableFeatures } from "./grid-table-features";
 
 /** A loaded grid row keyed by column name. */
 type GridRow = Record<string, unknown>;
 
-/** Shared Supabase-style control-button class (mirrors the data-browser toolbar). */
-const CONTROL_BTN =
-    "inline-flex items-center gap-1 rounded-md border border-border px-2.5 py-1 text-xs font-medium text-foreground outline-none transition-colors hover:bg-accent focus-visible:bg-accent disabled:pointer-events-none disabled:opacity-50";
-
 // ── Export ───────────────────────────────────────────────────────────────────
 
-/** Characters that force a CSV field to be quoted (comma, quote, newline), per RFC 4180. */
-const CSV_QUOTE_RE = /["\n,]/u;
+/** Characters that force a CSV field to be quoted (comma, quote, CR or LF — a bare CR is a line break to most readers), per RFC 4180. */
+const CSV_QUOTE_RE = /["\n\r,]/u;
+
+/** Leading characters a spreadsheet treats as a formula trigger (OWASP CSV-injection / CWE-1236). */
+const CSV_FORMULA_RE = /^[=+\-@\t\r]/u;
 
 /**
  * Render one value for a CSV cell: empty for null/undefined, the raw text for
- * strings/numbers/booleans, JSON for anything structured. The field is quoted
- * (and embedded quotes doubled) only when it contains a comma, quote, or newline —
- * so simple values stay unquoted and diff-friendly.
+ * strings/numbers/booleans, and `formatCell` for anything structured. The field
+ * is quoted (and embedded quotes doubled) only when it contains a comma, quote,
+ * or newline — so simple values stay unquoted and diff-friendly.
+ *
+ * `formatCell` rather than a bare `JSON.stringify`, so a `v.bytes()` cell reads
+ * `<bytes: 8 B>` the way the grid renders it instead of the `{}` an
+ * `ArrayBuffer` flattens to, and a nested bigint does not throw mid-export.
  */
 const csvCell = (value: unknown): string => {
     if (value === null || value === undefined) {
@@ -43,11 +48,14 @@ const csvCell = (value: unknown): string => {
     let text: string;
 
     if (typeof value === "string") {
-        text = value;
+        // Neutralize spreadsheet formula injection (OWASP CSV-injection / CWE-1236):
+        // a field starting with = + - @ TAB or CR is prefixed with a tab so
+        // Excel/Sheets/LibreOffice treat it as text, not a formula.
+        text = CSV_FORMULA_RE.test(value) ? `\t${value}` : value;
     } else if (typeof value === "number" || typeof value === "boolean" || typeof value === "bigint") {
         text = String(value);
     } else {
-        text = JSON.stringify(value);
+        text = formatCell(value);
     }
 
     return CSV_QUOTE_RE.test(text) ? `"${text.replaceAll('"', '""')}"` : text;
@@ -62,7 +70,110 @@ const toCsv = (columns: ReadonlyArray<string>, rows: ReadonlyArray<GridRow>): st
 };
 
 /** Serialize the given rows to a pretty-printed JSON array string. */
-const toJson = (rows: ReadonlyArray<GridRow>): string => JSON.stringify(rows, null, 2);
+const toJson = (rows: ReadonlyArray<GridRow>): string => JSON.stringify(rows, jsonRowReplacer, 2);
+
+/** Rows per generated `INSERT` statement — chunked so a large export stays valid under statement-size limits and stays diff-friendly. */
+const SQL_INSERT_BATCH = 500;
+
+/**
+ * Render one value as a SQL literal for an `INSERT`: `NULL` for null/undefined,
+ * a bare numeral for finite numbers/bigints, `1`/`0` for booleans (SQLite has no
+ * boolean type), a single-quoted string (embedded quotes doubled) for text, and
+ * the single-quoted `formatCell` rendering for anything structured. A non-finite
+ * number (`NaN`/`±∞`, which SQLite can't represent) degrades to `NULL`.
+ *
+ * Structured values go through `formatCell` for the same reason the CSV cell
+ * does: a `v.bytes()` column is an `ArrayBuffer` here, and `JSON.stringify`
+ * emitted `'{}'` for it — a dump that silently loses the column.
+ */
+const sqlLiteral = (value: unknown): string => {
+    if (value === null || value === undefined) {
+        return "NULL";
+    }
+
+    if (typeof value === "number") {
+        return Number.isFinite(value) ? String(value) : "NULL";
+    }
+
+    if (typeof value === "bigint") {
+        return String(value);
+    }
+
+    if (typeof value === "boolean") {
+        return value ? "1" : "0";
+    }
+
+    const text = typeof value === "string" ? value : formatCell(value);
+
+    return `'${text.replaceAll("'", "''")}'`;
+};
+
+/** The JSON blob column a canonical shard table keeps every user field in. */
+const DOC_COLUMN = "__doc__";
+
+/**
+ * Serialize the given columns + rows to a SQL dump: one or more multi-row
+ * `INSERT INTO "…" (...) VALUES ...;` statements, batched at
+ * {@link SQL_INSERT_BATCH} rows each. `name` is the target table (the selected
+ * table, or the SQL console's `query-result` placeholder). Mirrors the CSV/JSON
+ * exports — the loaded page only.
+ *
+ * ## Why `sqlColumns` is not optional for a shard table
+ *
+ * A shard table physically has `id`, `_creationTime` and a `__doc__` JSON blob;
+ * the page's `columns` is the DISPLAY list, with every `__doc__` field lifted to
+ * a top-level column so the browser shows fields instead of one opaque cell.
+ * Targeting those lifted names produced a statement that reads perfectly
+ * plausibly and cannot be replayed — SQLite answers `table … has no column named
+ * body` — and, if it had been accepted, would have written rows with no
+ * `__doc__` at all, which every read path then fails on. So when `sqlColumns`
+ * says the table carries a `__doc__`, the dump targets the PHYSICAL columns and
+ * re-assembles the blob from the lifted fields.
+ *
+ * `sqlColumns` is optional because one caller has no physical table behind its
+ * grid at all: the SQL console exports an arbitrary query's result set, whose
+ * columns are whatever the query projected. That dump stays a literal
+ * column-for-column rendering, as before.
+ *
+ * Known lossy, exactly as the CSV and JSON exports are: a `bigint` field is
+ * re-assembled as its decimal string and a `v.bytes()` field as the
+ * `<bytes: n B>` placeholder (see `jsonRowReplacer`), because the grid holds the
+ * decoded value and not the sort-key projection the writer stores alongside it.
+ */
+const toSql = (name: string, columns: ReadonlyArray<string>, rows: ReadonlyArray<GridRow>, sqlColumns?: ReadonlyArray<string>): string => {
+    if (columns.length === 0 || rows.length === 0) {
+        return "";
+    }
+
+    // Only when the page was actually expanded: a table whose `__doc__` did not
+    // parse (or a non-doc table) is reported with `__doc__` still in `columns`,
+    // and there the display list already IS the physical list.
+    const documentFields =
+        sqlColumns?.includes(DOC_COLUMN) === true && !columns.includes(DOC_COLUMN) ? columns.filter((column) => !sqlColumns.includes(column)) : undefined;
+    const targets = documentFields === undefined ? columns : (sqlColumns as ReadonlyArray<string>);
+
+    const cell = (row: GridRow, column: string): string => {
+        if (documentFields === undefined || column !== DOC_COLUMN) {
+            return sqlLiteral(row[column]);
+        }
+
+        return sqlLiteral(JSON.stringify(Object.fromEntries(documentFields.map((field) => [field, row[field]])), jsonRowReplacer));
+    };
+
+    const columnList = targets.map((column) => sqlIdentifier(column)).join(", ");
+    const statements: string[] = [];
+
+    for (let start = 0; start < rows.length; start += SQL_INSERT_BATCH) {
+        const values = rows
+            .slice(start, start + SQL_INSERT_BATCH)
+            .map((row) => `  (${targets.map((column) => cell(row, column)).join(", ")})`)
+            .join(",\n");
+
+        statements.push(`INSERT INTO ${sqlIdentifier(name)} (${columnList}) VALUES\n${values};`);
+    }
+
+    return statements.join("\n\n");
+};
 
 /**
  * Trigger a client-side file download of `content`. No-op outside the browser
@@ -90,18 +201,21 @@ const downloadFile = (filename: string, content: string, mime: string): void => 
 };
 
 /**
- * Export menu: downloads the loaded rows as CSV or JSON. Exports exactly what's
- * loaded (the current page passed in by the parent), named after the table,
- * mirroring Supabase's "Export" affordance.
+ * Export menu: downloads the loaded rows as CSV, JSON, or SQL. Exports exactly
+ * what's loaded (the current page passed in by the parent), named after the
+ * table, mirroring Supabase's "Export" affordance.
  */
 const ExportMenu = ({
     columns,
     name,
     rows,
+    sqlColumns,
 }: {
     readonly columns: ReadonlyArray<string>;
     readonly name: string;
     readonly rows: ReadonlyArray<GridRow>;
+    /** The table's physical columns, so the SQL dump can be replayed — see {@link toSql}. Absent for a query result. */
+    readonly sqlColumns?: ReadonlyArray<string>;
 }): ReactElement => {
     const t = useT();
 
@@ -111,6 +225,10 @@ const ExportMenu = ({
 
     const onJson = (): void => {
         downloadFile(`${name}.json`, toJson(rows), "application/json");
+    };
+
+    const onSql = (): void => {
+        downloadFile(`${name}.sql`, toSql(name, columns, rows, sqlColumns), "application/sql;charset=utf-8");
     };
 
     return (
@@ -133,6 +251,9 @@ const ExportMenu = ({
                 <DropdownMenuItem data-testid="grid-export-json" onClick={onJson}>
                     {t("JSON")}
                 </DropdownMenuItem>
+                <DropdownMenuItem data-testid="grid-export-sql" onClick={onSql}>
+                    {t("SQL")}
+                </DropdownMenuItem>
             </DropdownMenuContent>
         </DropdownMenu>
     );
@@ -144,7 +265,7 @@ const ExportMenu = ({
  * One column row in the Columns menu. Extracted so each binds its toggle through
  * a stable `useCallback` closing over its column rather than a fresh inline arrow.
  */
-const ColumnToggle = ({ column }: { readonly column: Column<GridRow> }): ReactElement => {
+const ColumnToggle = ({ column }: { readonly column: Column<GridTableFeatures, GridRow> }): ReactElement => {
     const onCheckedChange = (): void => {
         column.toggleVisibility();
     };
@@ -166,7 +287,21 @@ const ColumnToggle = ({ column }: { readonly column: Column<GridRow> }): ReactEl
  * the TanStack `columnVisibility` state, so toggling a column hides its header and
  * cells everywhere the grid reads `getVisibleCells()`.
  */
-const ColumnsMenu = ({ table }: { readonly table: Table<GridRow> }): ReactElement => {
+/** Hoisted empty list so the default prop is a stable reference across renders. */
+const NO_BACK_RELATIONS: ReadonlyArray<{ column: string; table: string }> = [];
+
+const ColumnsMenu = ({
+    backRelations = NO_BACK_RELATIONS,
+    enabledBackRelations,
+    onToggleBackRelation,
+    table,
+}: {
+    /** Reverse edges available for the open table — offered as opt-in extra columns. */
+    readonly backRelations?: ReadonlyArray<{ column: string; table: string }>;
+    readonly enabledBackRelations?: ReadonlySet<string>;
+    readonly onToggleBackRelation?: (key: string) => void;
+    readonly table: Table<GridTableFeatures, GridRow>;
+}): ReactElement => {
     const t = useT();
     const allVisible = table.getIsAllColumnsVisible();
     const onToggleAll = (): void => {
@@ -186,10 +321,40 @@ const ColumnsMenu = ({ table }: { readonly table: Table<GridRow> }): ReactElemen
                         {allVisible ? t("Hide all") : t("Show all")}
                     </DropdownMenuCheckboxItem>
                     <DropdownMenuSeparator />
-                    {table.getAllLeafColumns().map((column) => (
-                        <ColumnToggle column={column} key={column.id} />
-                    ))}
+                    {/* react-doctor-disable-next-line react-doctor/js-combine-iterations -- two passes over one table's leaf columns, walked when the menu opens; the flatMap-of-arrays form reads worse for no measurable gain at this size */}
+                    {table
+                        .getAllLeafColumns()
+                        // Reverse-relation columns are toggled below in their own
+                        // group — listing them here too would offer two switches for
+                        // one column.
+                        .filter((column) => !column.id.startsWith("__back__:"))
+                        .map((column) => (
+                            <ColumnToggle column={column} key={column.id} />
+                        ))}
                 </DropdownMenuGroup>
+                {backRelations.length > 0 && onToggleBackRelation !== undefined && (
+                    <DropdownMenuGroup>
+                        <DropdownMenuSeparator />
+                        <DropdownMenuLabel>{t("Related")}</DropdownMenuLabel>
+                        {backRelations.map((relation) => {
+                            const key = `${relation.table}.${relation.column}`;
+
+                            return (
+                                <DropdownMenuCheckboxItem
+                                    checked={enabledBackRelations?.has(key) === true}
+                                    closeOnClick={false}
+                                    data-testid={`grid-back-relation-${key}`}
+                                    key={key}
+                                    onCheckedChange={() => {
+                                        onToggleBackRelation(key);
+                                    }}
+                                >
+                                    {`← ${relation.table}.${relation.column}`}
+                                </DropdownMenuCheckboxItem>
+                            );
+                        })}
+                    </DropdownMenuGroup>
+                )}
             </DropdownMenuContent>
         </DropdownMenu>
     );
@@ -223,8 +388,17 @@ const SelectionBar = ({
             <button className={CONTROL_BTN} data-testid="grid-selection-clear" onClick={onClear} type="button">
                 {t("Clear")}
             </button>
+            {/*
+             * `count` is measured (the checked rows), but the delete also removes
+             * whatever cascades off them — and this path never opens the per-row
+             * cascade preview, so the confirm is where that has to be said.
+             */}
             {editable && (
-                <ConfirmButton confirmLabel={t("Delete {count} rows?", { count })} onConfirm={onDelete} testId="grid-selection-delete">
+                <ConfirmButton
+                    confirmLabel={t("Delete {count} rows and everything that cascades?", { count })}
+                    onConfirm={onDelete}
+                    testId="grid-selection-delete"
+                >
                     {t("Delete {count}", { count })}
                 </ConfirmButton>
             )}
@@ -234,27 +408,106 @@ const SelectionBar = ({
 
 // ── Cell detail (expand + copy) ─────────────────────────────────────────────────
 
+/** Keys the studio will try to render inline. Mirrors the file gallery's test, minus the content-type half a cell has no access to. */
+const IMAGE_KEY_RE = /\.(?:avif|bmp|gif|ico|jpe?g|png|svg|webp)$/iu;
+
+/**
+ * The image half of {@link CellDetailDialog}, for a `v.storage(...)` column whose
+ * value is an object key.
+ *
+ * The signed URL is resolved lazily on mount and cancelled on unmount, the same
+ * shape the storage gallery's `Thumbnail` uses — a cell is opened and closed far
+ * more often than an object is fetched, so nothing is resolved until the operator
+ * actually expands one. A resolve failure or a broken image renders nothing at
+ * all rather than a placeholder: the raw key is directly below, which is the more
+ * useful answer when the object cannot be shown.
+ */
+const StoragePreview = ({
+    bucket,
+    objectKey,
+    resolveUrl,
+}: {
+    /** The bucket `v.storage(bucket)` named, or undefined for the default one. */
+    readonly bucket?: string;
+    readonly objectKey: string;
+    readonly resolveUrl: (key: string, bucket?: string) => Promise<string>;
+}): ReactElement | null => {
+    const [url, setUrl] = useState<null | string>(null);
+    const [failed, setFailed] = useState<boolean>(false);
+
+    useEffect(() => {
+        // Object flag (not a `let`) so the cancel check isn't narrowed away.
+        const token = { cancelled: false };
+
+        fireAndForget(
+            (async (): Promise<void> => {
+                try {
+                    const resolved = await resolveUrl(objectKey, bucket);
+
+                    if (!token.cancelled) {
+                        setUrl(resolved);
+                    }
+                } catch {
+                    if (!token.cancelled) {
+                        setFailed(true);
+                    }
+                }
+            })(),
+        );
+
+        return () => {
+            token.cancelled = true;
+        };
+    }, [bucket, objectKey, resolveUrl]);
+
+    const onError = (): void => {
+        setFailed(true);
+    };
+
+    if (url === null || failed) {
+        return null;
+    }
+
+    return (
+        <div className="flex max-h-64 shrink-0 items-center justify-center overflow-hidden rounded-md border border-border bg-muted/30">
+            <img alt={objectKey} className="max-h-64 object-contain" data-testid="grid-cell-image" onError={onError} src={url} />
+        </div>
+    );
+};
+
 /**
  * A modal panel showing a single cell's full value (the column name as title, the
  * value in a scrollable code block) with a Copy button — the "expand cell" action
  * a dense grid needs so a truncated value is fully readable and copyable. The
  * backdrop/Escape dismiss is owned by {@link ModalShell}.
+ *
+ * `resolveUrl` is supplied only for a `v.storage(...)` column, so its presence is
+ * what says "this value is an object key, not text" — one prop rather than a
+ * boolean plus a resolver that could disagree with it.
  */
-const CellDetailDialog = ({ column, onClose, value }: { readonly column: string; readonly onClose: () => void; readonly value: unknown }): ReactElement => {
+const CellDetailDialog = ({
+    bucket,
+    column,
+    onClose,
+    resolveUrl,
+    value,
+}: {
+    /** The bucket this column's keys live in, when `v.storage(bucket)` named one. */
+    readonly bucket?: string;
+    readonly column: string;
+    readonly onClose: () => void;
+    /** Resolve a viewable URL for a storage key. Absent for every ordinary column. */
+    readonly resolveUrl?: (key: string, bucket?: string) => Promise<string>;
+    readonly value: unknown;
+}): ReactElement => {
     const t = useT();
     const [copied, setCopied] = useState<boolean>(false);
     const text = formatCell(value);
 
     const onCopy = (): void => {
-        // eslint-disable-next-line n/no-unsupported-features/node-builtins -- browser-only clipboard; guarded by the "navigator" in globalThis check
-        const clipboard: Clipboard | undefined = "navigator" in globalThis ? globalThis.navigator.clipboard : undefined;
-
-        if (clipboard === undefined) {
-            return;
+        if (copyToClipboard(text)) {
+            setCopied(true);
         }
-
-        fireAndForget(clipboard.writeText(text));
-        setCopied(true);
     };
 
     return (
@@ -277,6 +530,9 @@ const CellDetailDialog = ({ column, onClose, value }: { readonly column: string;
                     </button>
                 </div>
             </div>
+            {resolveUrl !== undefined && typeof value === "string" && IMAGE_KEY_RE.test(value) && (
+                <StoragePreview bucket={bucket} objectKey={value} resolveUrl={resolveUrl} />
+            )}
             <pre
                 className="min-h-0 flex-1 overflow-auto rounded-md border border-border bg-muted/30 p-3 font-mono text-xs whitespace-pre-wrap"
                 data-testid="grid-cell-value"
@@ -297,22 +553,32 @@ const CellDetailDialog = ({ column, onClose, value }: { readonly column: string;
  * one-liner.
  */
 const GridActionsBar = ({
+    backRelations,
+    enabledBackRelations,
+    onToggleBackRelation,
     columns,
     editable,
     name,
     onBulkDelete,
     onToggleTranspose,
     rows,
+    sqlColumns,
     table,
     transposed,
 }: {
+    /** Reverse edges available for the open table — offered as opt-in extra columns. */
+    readonly backRelations?: ReadonlyArray<{ column: string; table: string }>;
     readonly columns: ReadonlyArray<string>;
     readonly editable: boolean;
+    readonly enabledBackRelations?: ReadonlySet<string>;
     readonly name: string;
     readonly onBulkDelete: (ids: ReadonlyArray<string>) => void;
+    readonly onToggleBackRelation?: (key: string) => void;
     readonly onToggleTranspose: () => void;
     readonly rows: ReadonlyArray<GridRow>;
-    readonly table: Table<GridRow>;
+    /** The table's physical columns, threaded to the SQL export so its dump can be replayed. */
+    readonly sqlColumns?: ReadonlyArray<string>;
+    readonly table: Table<GridTableFeatures, GridRow>;
     readonly transposed: boolean;
 }): ReactElement => {
     const t = useT();
@@ -329,8 +595,8 @@ const GridActionsBar = ({
 
     return (
         <div className="flex flex-wrap items-center gap-1.5" data-testid="grid-actions">
-            <ExportMenu columns={columns} name={name} rows={rows} />
-            <ColumnsMenu table={table} />
+            <ExportMenu columns={columns} name={name} rows={rows} sqlColumns={sqlColumns} />
+            <ColumnsMenu backRelations={backRelations} enabledBackRelations={enabledBackRelations} onToggleBackRelation={onToggleBackRelation} table={table} />
             <button
                 aria-pressed={transposed}
                 className={CONTROL_BTN}
@@ -346,5 +612,5 @@ const GridActionsBar = ({
     );
 };
 
-export { CellDetailDialog, ColumnsMenu, ExportMenu, GridActionsBar, SelectionBar, toCsv, toJson };
+export { CellDetailDialog, ColumnsMenu, ExportMenu, GridActionsBar, SelectionBar, toCsv, toJson, toSql };
 export type { GridRow };

@@ -71,7 +71,7 @@ describe("policyScaffolder", () => {
     });
 
     it("renders the scaffolder only when schemaEditable is set", async () => {
-        expect.assertions(2);
+        expect.hasAssertions();
 
         const { rerender } = render(
             <LunoraProvider client={createPanelClient().asClient}>

@@ -2,7 +2,7 @@
     "$schema": "node_modules/wrangler/config-schema.json",
     "name": "lunora-example-blog",
     "main": "src/server/index.ts",
-    "compatibility_date": "2026-04-07",
+    "compatibility_date": "2026-10-01",
     "compatibility_flags": ["nodejs_compat"],
     "durable_objects": {
         "bindings": [
@@ -34,14 +34,30 @@
             "index_name": "posts_search",
         },
     ],
+    // Kept in sync with `LUNORA_CRON_TRIGGERS` in `lunora/_generated/crons.ts`,
+    // which codegen derives from `lunora/crons.ts`. Declare schedules there, not
+    // here — the dev server's vite plugin reconciles this list on every schema
+    // save, and `lunora deploy` / `lunora prepare` reconcile it before shipping.
+    // The bare `lunora codegen` command does NOT: it writes `_generated/` and
+    // leaves this file alone, so a schedule added while the dev server is down
+    // reaches wrangler only on the next deploy.
     "triggers": {
-        "crons": [],
+        "crons": ["0 3 * * *"],
     },
     "vars": {
-        "PUBLIC_STORAGE_BASE_URL": "https://files.example.com",
-        // REPLACE before deploying to production — the SchedulerDO uses
-        // this to dispatch HTTP callbacks back into the Worker. Pointing at
-        // localhost in production silently breaks scheduled jobs.
-        "LUNORA_WORKER_ORIGIN": "http://localhost:8787",
+        // SET to the deployed worker's public URL before deploying — this is the
+        // origin the Worker is called back on. `vars` is deployed config, so it
+        // ships empty rather than as a localhost or placeholder value that would
+        // silently point production elsewhere; in dev, `.dev.vars` supplies the
+        // local origin (see `.dev.vars.example`).
+        //
+        // There is no storage base URL: the featured-image upload URL is signed
+        // against the origin the request reached the worker on.
+        //
+        // The SchedulerDO takes its dispatch target from its OWN env and from
+        // nowhere else — a caller-supplied one would be an SSRF vector — so
+        // without this every `ctx.scheduler.runAfter` is refused with
+        // `ORIGIN_NOT_CONFIGURED`.
+        "LUNORA_ORIGIN_URL": "",
     },
 }

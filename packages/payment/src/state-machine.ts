@@ -8,22 +8,42 @@
  */
 import type { PaymentState, SubscriptionState } from "./types";
 
-/** Action that may advance a payment session. */
+/**
+ * Action that may advance a payment session.
+ */
 type PaymentAction = "authorize" | "cancel" | "capture" | "fail" | "partial_refund" | "refund";
 
-/** Action that may advance a subscription. */
+/**
+ * Action that may advance a subscription.
+ */
 type SubscriptionAction = "activate" | "cancel" | "mark_past_due" | "pause" | "renew" | "resume";
 
 const PAYMENT_TRANSITIONS: Record<PaymentState, Partial<Record<PaymentAction, PaymentState>>> = {
     authorized: { cancel: "canceled", capture: "captured", fail: "failed" },
     canceled: {},
     captured: { partial_refund: "partially_refunded", refund: "refunded" },
-    failed: {},
+    // NOT terminal. A failed payment is terminal in our ledger only if the provider also treats it
+    // that way, and Stripe does not: a declined PaymentIntent returns to `requires_payment_method`,
+    // so the SAME `pi_` can be confirmed again and reach `succeeded` — or `requires_capture` on a
+    // manual-capture intent, which arrives as `payment_intent.amount_capturable_updated`. Both are
+    // forward transitions at the provider, not out-of-order delivery, so `capture` and `authorize`
+    // are legal exits; rejecting them dropped the confirming webhook with a 200 and left the row
+    // `failed` with `capturedAmount = 0` while the money was actually taken. `fail` self-loops for a
+    // second decline on the same intent (a real event, previously misreported as an illegal
+    // transition). Refunds stay illegal: nothing was captured here, so there is nothing to reverse —
+    // a refund landing on `failed` is the genuine out-of-order case the FSM should reject.
+    failed: { authorize: "authorized", capture: "captured", fail: "failed" },
     // A webhook can land before our local record exists, so "initiated" accepts the same
     // outcomes a fresh intent could reach directly.
     initiated: { authorize: "authorized", cancel: "canceled", capture: "captured", fail: "failed" },
     partially_refunded: { partial_refund: "partially_refunded", refund: "refunded" },
-    refunded: {},
+    // Self-loop, not an exit: `refundPayment` records the refund it issued on the row before the
+    // provider's confirming `payment.refunded` webhook arrives, so that webhook lands on a row that
+    // is ALREADY "refunded". Rejecting it there would strand the refunded total at whatever the
+    // facade wrote and drop a provider-side refund entirely. The money stays idempotent because
+    // `sync.ts` resolves the amount first: an absolute total resolves to `max(recorded, reported)`,
+    // and a delta is rejected as an over-refund once the total already equals the captured amount.
+    refunded: { refund: "refunded" },
 };
 
 const SUBSCRIPTION_TRANSITIONS: Record<SubscriptionState, Partial<Record<SubscriptionAction, SubscriptionState>>> = {
@@ -31,19 +51,29 @@ const SUBSCRIPTION_TRANSITIONS: Record<SubscriptionState, Partial<Record<Subscri
     canceled: {},
     past_due: { activate: "active", cancel: "canceled", pause: "paused", renew: "active" },
     paused: { cancel: "canceled", resume: "active" },
-    trialing: { activate: "active", cancel: "canceled", mark_past_due: "past_due" },
+    // `pause` is NOT optional here, even though no adapter's webhook mapping ever writes `trialing`
+    // (`subscription-event.ts` routes it to `subscription.active`): the reconcile sweep does, straight
+    // from `getSubscriptionStatus`, and Stripe's `pause_collection` at trial end then arrives as
+    // `subscription.paused` on a `trialing` row. Rejecting it as illegal 200-acks the event and leaves
+    // the row `trialing` — which is in `ACTIVE_STATES`, so the customer keeps every entitlement without
+    // paying. `renew` mirrors `past_due`: a trial that bills and rolls into a paid period is `active`.
+    trialing: { activate: "active", cancel: "canceled", mark_past_due: "past_due", pause: "paused", renew: "active" },
 };
 
-const PAYMENT_TERMINAL_STATES: ReadonlySet<PaymentState> = new Set<PaymentState>(["canceled", "failed", "refunded"]);
+const PAYMENT_TERMINAL_STATES: ReadonlySet<PaymentState> = new Set<PaymentState>(["canceled", "refunded"]);
 
 const SUBSCRIPTION_TERMINAL_STATES: ReadonlySet<SubscriptionState> = new Set<SubscriptionState>(["canceled"]);
 
-/** Next payment state for an action, or `undefined` if the transition is illegal from `from`. */
+/**
+ * Next payment state for an action, or `undefined` if the transition is illegal from `from`.
+ */
 const nextPaymentState = (from: PaymentState, action: PaymentAction): PaymentState | undefined => PAYMENT_TRANSITIONS[from][action];
 
 const canTransitionPayment = (from: PaymentState, action: PaymentAction): boolean => nextPaymentState(from, action) !== undefined;
 
-/** Next subscription state for an action, or `undefined` if the transition is illegal from `from`. */
+/**
+ * Next subscription state for an action, or `undefined` if the transition is illegal from `from`.
+ */
 const nextSubscriptionState = (from: SubscriptionState, action: SubscriptionAction): SubscriptionState | undefined => SUBSCRIPTION_TRANSITIONS[from][action];
 
 const canTransitionSubscription = (from: SubscriptionState, action: SubscriptionAction): boolean => nextSubscriptionState(from, action) !== undefined;

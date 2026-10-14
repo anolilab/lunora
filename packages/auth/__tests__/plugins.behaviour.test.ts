@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it } from "vitest";
 
 import { createAuth } from "../src/create-auth";
 import { admin, organization } from "../src/plugins";
+import signInAndCookie from "./_helpers/auth-session";
 
 /**
  * Round-trip behaviour for the two highest-value better-auth plugins Lunora
@@ -32,29 +33,6 @@ const seedMemoryDatabase = (): Record<string, unknown[]> => {
         user: [],
         verification: [],
     };
-};
-
-/**
- * Sign in as `email`/`password` and pull the `cookie` header from the
- * response so subsequent endpoint calls can be made "as that user".
- */
-const signInAndCookie = async (auth: any, email: string, password: string): Promise<Headers> => {
-    const response = await auth.api.signInEmail({
-        body: { email, password },
-        returnHeaders: true,
-    });
-
-    const setCookie = response.headers.get("set-cookie");
-
-    if (!setCookie) {
-        throw new Error("sign-in did not return a set-cookie header");
-    }
-
-    const headers = new Headers();
-
-    headers.set("cookie", setCookie);
-
-    return headers;
 };
 
 describe("admin plugin behaviour", () => {

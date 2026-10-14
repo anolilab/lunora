@@ -2,21 +2,28 @@
     "$schema": "node_modules/wrangler/config-schema.json",
     "name": "lunora-playground",
     "main": "src/server/index.ts",
-    "compatibility_date": "2026-04-07",
+    "compatibility_date": "2026-10-01",
     "compatibility_flags": ["nodejs_compat"],
     "durable_objects": {
         "bindings": [
             { "name": "SHARD", "class_name": "ShardDO" },
             { "name": "SCHEDULER", "class_name": "SchedulerDO" },
+            { "name": "SHARD_REGISTRY", "class_name": "ShardRegistryDO" },
         ],
     },
-    "migrations": [{ "tag": "v1", "new_sqlite_classes": ["ShardDO", "SchedulerDO"] }],
+    "migrations": [
+        { "tag": "v1", "new_sqlite_classes": ["ShardDO", "SchedulerDO"] },
+        { "tag": "v2", "new_sqlite_classes": ["ShardRegistryDO"] },
+    ],
     "observability": { "enabled": true, "head_sampling_rate": 1 },
-    // Cloudflare Workflows are NOT Durable Objects — they live in their own
-    // `workflows[]` array with no migration entry. `class_name` must be exported
-    // by the worker entry (see `ChannelWelcomeWorkflow` in src/server/index.ts).
-    // `lunora dev` auto-reconciles this from `lunora/workflows.ts`.
-    "workflows": [{ "binding": "WORKFLOW_CHANNEL_WELCOME", "class_name": "ChannelWelcomeWorkflow", "name": "channel-welcome" }],
+    // Cloudflare Workflows are NOT Durable Objects — they are declared in
+    // `exports` (keyed by class, no migration entry) and reached through
+    // `ctx.exports`. The class must be exported by the worker entry (see
+    // `ChannelWelcomeWorkflow` in src/server/index.ts). `lunora dev`
+    // auto-reconciles this from `lunora/workflows.ts`.
+    "exports": {
+        "ChannelWelcomeWorkflow": { "type": "workflow", "name": "channel-welcome" },
+    },
     "d1_databases": [
         {
             "binding": "DB",
@@ -36,14 +43,50 @@
             "bucket_name": "lunora-playground-avatars",
         },
     ],
+    // Workers KV backing `ctx.kv` (see lunora/kv.ts) and the Studio's KV browser.
+    // In local dev the @cloudflare/vite-plugin provisions this namespace in
+    // Miniflare automatically — no Cloudflare account needed. Replace the `id`
+    // with a real one (`wrangler kv namespace create KV`) before deploying.
+    "kv_namespaces": [
+        {
+            "binding": "KV",
+            "id": "<replace-with-kv-create-id>",
+        },
+    ],
     "vars": {
-        "PUBLIC_STORAGE_BASE_URL": "https://files.example.com",
-        // REPLACE before deploying to production — both point at the Worker's
-        // own origin so the SchedulerDO can dispatch HTTP callbacks back into it.
-        // `LUNORA_ORIGIN_URL` is the binding the SchedulerDO reads (SSRF-safe);
-        // `LUNORA_WORKER_ORIGIN` is the origin the app passes to `createScheduler`.
-        // Pointing at localhost in production silently breaks scheduled jobs.
-        "LUNORA_WORKER_ORIGIN": "http://localhost:8787",
-        "LUNORA_ORIGIN_URL": "http://localhost:8787",
+        // SET to the deployed worker's public URL before deploying. `vars` is
+        // deployed config, so it ships empty rather than as a localhost or
+        // placeholder value that would silently point production elsewhere;
+        // unset, scheduling is refused with `ORIGIN_NOT_CONFIGURED`. In dev,
+        // `.dev.vars` (see `.dev.vars.example`) supplies the local origin. The
+        // SchedulerDO dispatches from this binding (read off its own env, so a
+        // schedule request cannot steer it), and `.global({ origin })` fans
+        // reverse cross-shard relations across it.
+        //
+        // There is no storage base URL here: signed object URLs follow the
+        // origin the request reached the worker on.
+        "LUNORA_ORIGIN_URL": "",
+    },
+    "queues": {
+        "consumers": [
+            {
+                "queue": "notifications",
+                "max_retries": 3,
+                "dead_letter_queue": "notifications-dlq",
+            },
+            {
+                "queue": "notifications-dlq",
+            },
+        ],
+        "producers": [
+            {
+                "binding": "QUEUE_NOTIFICATIONS",
+                "queue": "notifications",
+            },
+            {
+                "binding": "QUEUE_NOTIFICATIONS_DLQ",
+                "queue": "notifications-dlq",
+            },
+        ],
     },
 }

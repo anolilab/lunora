@@ -215,6 +215,24 @@ describe("defineEnv", () => {
             expect(error.message).toContain("DATABASE_PASSWORD");
             expect(error.message).toContain("[redacted]");
         });
+
+        it("redacts under a PLURAL secret-named key exactly as under its singular", () => {
+            expect.assertions(4);
+
+            // The classifier's word list is written in the singular and matched
+            // against the singular of each word, so a key an app spells in the
+            // plural is not a hole in it. It was: only `CREDENTIALS` had been
+            // hand-added, so `AUTH_TOKENS` classified as ordinary config and its
+            // value reached the thrown message — and the logs — verbatim.
+            const weakSecret = ["p@ss", "w0rd!"].join(" ");
+            const config = defineEnv({ AUTH_TOKENS: v.number() });
+
+            const error = captureEnvError(() => config({ AUTH_TOKENS: weakSecret }).AUTH_TOKENS);
+
+            expect(error.message).not.toContain(weakSecret);
+            expect(error.message).toContain("AUTH_TOKENS");
+            expect(error.message).toContain("[redacted]");
+        });
     });
 });
 
@@ -228,11 +246,71 @@ describe("redactSecrets", () => {
         expect(redactSecrets(`value "${fakeSlackToken}"`)).toContain("[redacted]");
     });
 
+    it("masks a quoted secret that contains escaped quotes, and one closed only by an escaped quote", () => {
+        expect.assertions(2);
+
+        expect(redactSecrets(String.raw`value "${fakeStripeKey}\"x"`)).toBe("value [redacted]");
+        // No unescaped closing quote: the value closes at the last escaped one.
+        expect(redactSecrets(String.raw`value "${fakeStripeKey}\" and more`)).toBe("value [redacted] and more");
+    });
+
+    // The quoted-value pattern could read each backslash as an escape or as a character, so an
+    // unclosed quote followed by backslashes backtracked exponentially (CodeQL js/polynomial-redos).
+    it("scans an unclosed quote followed by a long run of backslashes in linear time", () => {
+        expect.assertions(1);
+
+        const started = performance.now();
+
+        redactSecrets(`value "${"\\".repeat(200_000)}x`);
+
+        expect(performance.now() - started).toBeLessThan(1000);
+    });
+
     it("masks the value following a secret-named key", () => {
         expect.assertions(2);
 
         expect(redactSecrets(`AUTH_SECRET=${secretValue} was rejected`)).toBe("AUTH_SECRET=[redacted] was rejected");
         expect(redactSecrets("DB_PASSWORD: short")).toContain("DB_PASSWORD=[redacted]");
+    });
+
+    it("masks secret-named keys in every convention keys arrive in", () => {
+        expect.assertions(8);
+
+        // camelCase / lowercase — the spellings request bodies and thrown
+        // errors actually use.
+        expect(redactSecrets("password: hunter2")).toBe("password=[redacted]");
+        expect(redactSecrets("apiToken=abc123")).toBe("apiToken=[redacted]");
+        expect(redactSecrets("authSecret: x")).toBe("authSecret=[redacted]");
+        // No-separator compounds: the suffix is not preceded by `_`, so a
+        // boundary-only rule silently misses these.
+        expect(redactSecrets("OPENAI_APIKEY=abc")).toBe("OPENAI_APIKEY=[redacted]");
+        expect(redactSecrets("APITOKEN=abc")).toBe("APITOKEN=[redacted]");
+        expect(redactSecrets("MYPASSWORD=abc")).toBe("MYPASSWORD=[redacted]"); // gitleaks:allow -- redaction test fixture, not a secret
+        expect(redactSecrets("AUTHSECRET=abc")).toBe("AUTHSECRET=[redacted]");
+        expect(redactSecrets("TOKEN=abc")).toBe("TOKEN=[redacted]");
+    });
+
+    it("masks Title-case and kebab separated secret keys", () => {
+        expect.assertions(1);
+
+        // `KEYED_VALUE` captures `[A-Za-z_]\w*`, so a kebab key is only ever
+        // seen from its last `-` segment (`Token` here) — which still redacts.
+        expect(redactSecrets("Api_Key=abc")).toBe("Api_Key=[redacted]");
+    });
+
+    it("leaves an ordinary word merely ending in `key` alone, while still masking the run-together secret forms", () => {
+        expect.assertions(5);
+
+        // Bare `key` is NOT a secret word: the classifier splits on `_`/`-`/camelCase
+        // and matches whole words, so `MONKEY`, `sortKey` and `PARTITION_KEY` are
+        // ordinary config. The forms an earlier bare-`key$` rule existed to catch
+        // are covered by name instead (`apikey`, `password`, `token`, …), so
+        // nothing that is actually a credential is lost. See shared/secret-key.ts.
+        expect(redactSecrets("MONKEY=banana")).toBe("MONKEY=banana");
+        expect(redactSecrets("sortKey=created_at")).toBe("sortKey=created_at");
+        expect(redactSecrets("PARTITION_KEY=tenant-1")).toBe("PARTITION_KEY=tenant-1");
+        expect(redactSecrets("APIKEY=abc")).toBe("APIKEY=[redacted]");
+        expect(redactSecrets("apiToken=abc")).toBe("apiToken=[redacted]");
     });
 
     it("masks bare high-entropy >=24-char tokens", () => {
@@ -259,6 +337,80 @@ describe("redactSecrets", () => {
 
         expect(out).not.toContain("s3cr3t");
         expect(out).toContain("postgres://appuser");
+    });
+
+    it("stays linear on a boundary-rich payload — redaction runs on request bodies and thrown errors", () => {
+        expect.assertions(2);
+
+        // The URL-credential pattern led with an unbounded scheme run. `\b` limits
+        // which offsets are tried, but `.a.a.a…` opens a boundary at every other
+        // position, and at each one the run scanned to end-of-input before failing
+        // to find `://` — quadratic. This function is documented as safe to call on
+        // request bodies and thrown errors, so that input is attacker-controlled:
+        // a 128KB body cost 4.8 SECONDS of CPU inside the Worker.
+        const payload = ".a".repeat(64 * 1024);
+        const started = Date.now();
+
+        const out = redactSecrets(payload);
+        const elapsedMs = Date.now() - started;
+
+        // The payload is one long token run, so the entropy rule masks it — that is
+        // incidental. What this pins is the COST of getting there.
+        expect(out).toContain("[redacted]");
+        expect(elapsedMs).toBeLessThan(1000);
+    });
+
+    it("still redacts a password longer than any bound the scheme run uses", () => {
+        expect.assertions(2);
+
+        // The scheme is length-bounded; the password deliberately is NOT. A bound
+        // there that a real credential exceeded would silently stop redacting it —
+        // failing open on the one thing this function exists to prevent.
+        const password = "p".repeat(4096);
+        const out = redactSecrets(`postgres://appuser:${password}@db.internal/app`); // secret-scanner:allow -- the "credential" is 4096 literal "p" chars from the line above; this URL is the fixture being redacted.
+
+        expect(out).not.toContain(password);
+        expect(out).toContain("postgres://appuser");
+    });
+
+    it("redacts a credential whose scheme is longer than any bound a scheme match would use", () => {
+        expect.assertions(2);
+
+        // The scheme is not matched at all — the pattern anchors on the literal
+        // `://` — so its length cannot decide whether a credential is redacted.
+        // A length-bounded scheme match failed OPEN here: past the bound it
+        // stopped matching, and the password went out verbatim.
+        const scheme = "s".repeat(40);
+        const out = redactSecrets(`${scheme}://appuser:hunter2@db.internal/app`); // secret-scanner:allow -- "hunter2" is the fixture being redacted, not a credential.
+
+        expect(out).not.toContain("hunter2");
+        // The username and the shape survive; the password does not. The scheme
+        // itself is NOT asserted here — at this length the standalone-token rule
+        // (>=24 chars) redacts it too, so it never reaches the output either way.
+        expect(out).toContain("://appuser:[redacted]@");
+    });
+
+    it("redacts a usernameless credential URL", () => {
+        expect.assertions(3);
+
+        // `redis://:password@host` and `amqps://:pw@broker` are ordinary URLs —
+        // both schemes routinely carry a password with no username. Requiring a
+        // username left those passwords in the clear.
+        const redis = redactSecrets("redis://:onlypass@cache.internal:6379"); // secret-scanner:allow -- "onlypass" is the fixture being redacted.
+        const amqp = redactSecrets("amqps://:brokerpw@broker.internal/vhost"); // secret-scanner:allow -- "brokerpw" is the fixture being redacted.
+
+        expect(redis).not.toContain("onlypass");
+        expect(amqp).not.toContain("brokerpw");
+        expect(redis).toContain("redis://:");
+    });
+
+    it("leaves a scheme-only URL and an SSH remote untouched", () => {
+        expect.assertions(2);
+
+        // Neither carries a password, so neither should be rewritten. `git@` in
+        // particular is a username before the host, not a credential pair.
+        expect(redactSecrets("https://example.com/path")).toBe("https://example.com/path");
+        expect(redactSecrets("git+ssh://git@github.com/o/r.git")).toBe("git+ssh://git@github.com/o/r.git");
     });
 
     it("redacts a known-prefix token embedded in free-form text (no entropy floor)", () => {

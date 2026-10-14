@@ -1,0 +1,28 @@
+{
+    "name": "@lunora/solid-v2-tests",
+    "version": "0.0.0",
+    "private": true,
+    "description": "Runs the published @lunora/solid bundle against Solid 2.0 — the guard for its dual-major (1.x + 2.x) peer range.",
+    "type": "module",
+    "sideEffects": false,
+    "scripts": {
+        "lint:types": "tsc --noEmit",
+        "test": "vitest run"
+    },
+    "devDependencies": {
+        "@lunora/client": "workspace:*",
+        "@lunora/solid": "workspace:*",
+        "@solidjs/testing-library": "catalog:solid2",
+        "@solidjs/web": "catalog:solid2",
+        "@testing-library/jest-dom": "catalog:frontend",
+        "@types/node": "catalog:types",
+        "jsdom": "catalog:frontend",
+        "solid-js": "catalog:solid2",
+        "typescript": "catalog:tsc",
+        "vite-plugin-solid": "catalog:solid2",
+        "vitest": "catalog:test"
+    },
+    "engines": {
+        "node": "^22.15.0 || >=24.11.0"
+    }
+}

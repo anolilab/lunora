@@ -1,11 +1,11 @@
 "use client";
 
-import type { FunctionReference, Preloaded } from "@lunora/client";
+import type { FunctionReference, Preloaded, SubscriptionErrorCallback } from "@lunora/client";
 import { useQuery as useTanStackQuery, useQueryClient } from "@tanstack/react-query";
-import { useEffect, useMemo } from "react";
+import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from "react";
 
 import { getSubscriptionRegistry, lunoraQueryKey, serializeQueryKey } from "./cache";
-import { useLunora } from "./lunora-provider";
+import { useLunora, useLunoraClientSwapped } from "./lunora-provider";
 
 /**
  * Hydrate a query from a {@link Preloaded} token produced by `preloadQuery`
@@ -21,18 +21,66 @@ import { useLunora } from "./lunora-provider";
  * value directly. Apps that want to share a pre-populated QueryClient across
  * many preloaded queries can pass their own `queryClient` to `LunoraProvider`
  * and hydrate it themselves via TanStack's `hydrate(qc, dehydratedState)`.
+ *
+ * Pass `onError` to surface a subscription-scoped error the server pushes (a
+ * session expiry, an RLS denial). Without it such an error is dropped and the
+ * hook keeps rendering the SSR snapshot as if it were live.
+ *
+ * The preloaded value was read for whoever was signed in when the page loaded.
+ * After a sign-out or user switch retires an identity (`client.identityEpoch()`
+ * above `0`), every `usePreloadedQuery` on the client (mounted then or later)
+ * stops using it and returns `undefined` until the live value arrives. So does
+ * every one under a `LunoraProvider` whose `client` was swapped, mounted before
+ * or after the swap — hence the `T | undefined` return type. A token
+ * preloaded after the switch (a client-side navigation that preloads again) is
+ * ignored too and costs a loading flash: the hook cannot tell which identity a
+ * token was read under.
  */
-const usePreloadedQuery = function <T>(preloaded: Preloaded<T>): T {
+const usePreloadedQuery = function <T>(preloaded: Preloaded<T>, options: { onError?: SubscriptionErrorCallback } = {}): T | undefined {
     const client = useLunora();
     const queryClient = useQueryClient();
 
-    const { args, functionPath, shardKey, value } = preloaded;
-    const functionRef = useMemo<FunctionReference>(() => {
-        return { __lunoraRef: functionPath };
-    }, [functionPath]);
-    const queryKey = useMemo(() => lunoraQueryKey(functionRef, args, shardKey), [functionRef.__lunoraRef, JSON.stringify(args), shardKey]);
+    // The attach effect keys on the serialized query key, so an inline `onError`
+    // must not change its identity — register a stable wrapper and read the
+    // latest handler through a ref (the same shape `useQuery` uses).
+    const onErrorRef = useRef(options.onError);
 
-    // eslint-disable-next-line @tanstack/query/exhaustive-deps -- client is provider-stable (it comes from LunoraContext; swapping it remounts the provider subtree) and is intentionally excluded from the cache key: a non-serializable client object would break cache identity and thrash the cache.
+    useEffect(() => {
+        onErrorRef.current = options.onError;
+    });
+
+    const stableOnError = useCallback<SubscriptionErrorCallback>((error) => {
+        onErrorRef.current?.(error);
+    }, []);
+
+    // Read from the client itself, not counted per instance or per registry: a
+    // component that mounts (or remounts) after a user switch must see the
+    // switch too, including one made before any provider listened. The preloaded
+    // value was rendered for the identity the page loaded under, so it is used
+    // only while the client has retired no identity since.
+    const registry = getSubscriptionRegistry(client);
+    const identityEpoch = useSyncExternalStore(
+        registry.subscribeIdentityEpoch,
+        () => client.identityEpoch(),
+        () => 0,
+    );
+
+    // Likewise bound to the client the page loaded with: after a provider
+    // `client` swap the value belongs to the previous client, whether this hook
+    // mounted before the swap (`mountClient`) or after it (the provider's flag).
+    const [mountClient] = useState(client);
+    const clientSwapped = useLunoraClientSwapped();
+
+    const { args, functionPath, shardKey } = preloaded;
+    const value = identityEpoch === 0 && !clientSwapped && client === mountClient ? preloaded.value : undefined;
+    // Both values are consumed structurally (TanStack hashes `queryKey`; the
+    // effect keys off `serializeQueryKey(queryKey)`, a content hash), so a fresh
+    // reference each render is fine — React Compiler auto-memoizes these
+    // derivations, so no manual `useMemo` is needed.
+    const functionRef: FunctionReference = { __lunoraRef: functionPath };
+    const queryKey = lunoraQueryKey(functionRef, args, shardKey);
+
+    // The client is intentionally excluded from the cache key: a non-serializable client object would break cache identity and thrash the cache. Swapping the provider's `client` does not remount this subtree; `LunoraProvider` clears the `["lunora", …]` entries on a swap instead.
     const { data } = useTanStackQuery<T>({
         // Seed the cache with the server value so the first paint doesn't
         // re-fetch. TanStack treats `initialData` as fresh — the WS push from
@@ -43,18 +91,21 @@ const usePreloadedQuery = function <T>(preloaded: Preloaded<T>): T {
         staleTime: Number.POSITIVE_INFINITY,
     });
 
-    useEffect(() => {
-        const registry = getSubscriptionRegistry(client);
-
-        return registry.attach(queryClient, queryKey, functionRef, args, shardKey);
-    }, [client, queryClient, serializeQueryKey(queryKey)]);
+    useEffect(
+        () => registry.attach(queryClient, queryKey, functionRef, args, shardKey, { onError: stableOnError }),
+        // react-doctor-disable-next-line react-doctor/exhaustive-deps -- intentional: the WS subscription re-attaches only when the serialized query key (a stable content hash) or the client changes — not on every fresh `functionRef`/`args`/`shardKey` identity. `stableOnError` is ref-backed and never changes. `client` is a dependency, so a provider `client` swap re-attaches to the new client.
+        [client, queryClient, serializeQueryKey(queryKey), stableOnError],
+    );
 
     // TanStack types `data` as `T | undefined` even with `initialData` because
-    // the option could be a falsy value. We always pass the preloaded `value`
-    // so the only way to land here with `undefined` is the consumer preloading
-    // an explicit `undefined` — preserve that semantic via `??` instead of
-    // forcing a cast that lies about possible runtime states.
-    return data ?? value;
+    // the option could be a falsy value. We always pass the preloaded `value`,
+    // so the only way `data` is genuinely absent from the cache is the consumer
+    // preloading an explicit `undefined` — fall back to `value` in exactly that
+    // case. A `??` here would also coalesce `null`, but `null` is a normal
+    // Lunora query result (document deleted, access revoked): a live push of
+    // `null` must pass through, not resurrect the stale preloaded value.
+    // eslint-disable-next-line @typescript-eslint/prefer-nullish-coalescing -- intentional: a live null push must pass through, not fall back to the stale preloaded value
+    return data === undefined ? value : data;
 };
 
 /**
@@ -68,8 +119,9 @@ const usePreloadedQuery = function <T>(preloaded: Preloaded<T>): T {
  * It carries React's Rules-of-Hooks contract (it calls hooks internally), so
  * call it like a hook — at the top level of a component, unconditionally.
  */
-const hydratePreloaded = function <T>(preloaded: Preloaded<T>): T {
-    return usePreloadedQuery(preloaded);
+const hydratePreloaded = function <T>(preloaded: Preloaded<T>, options: { onError?: SubscriptionErrorCallback } = {}): T | undefined {
+    // react-doctor-disable-next-line react-doctor/rules-of-hooks -- `hydratePreloaded` is a deliberate hook alias (documented above): it carries React's Rules-of-Hooks contract and must be called like a hook. The lowercase name is the framework-neutral public primitive every adapter exposes; renaming it to `use*` would break the cross-adapter API.
+    return usePreloadedQuery(preloaded, options);
 };
 
 export { hydratePreloaded };

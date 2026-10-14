@@ -1,8 +1,15 @@
+import { isLunoraError } from "@lunora/errors";
 import type { EmbeddingModel, LanguageModel } from "ai";
 import { describe, expect, it } from "vitest";
 
 import createAi from "../src/create-ai";
+import { AI_GATEWAY_ACCOUNT_ID_ENV, AI_GATEWAY_ID_ENV } from "../src/gateway";
 import type { AiBindingLike, WorkersAiProviderLike } from "../src/types";
+
+/** A configured-gateway env (account + gateway id, no auth token). */
+const gatewayEnv = (): Record<string, unknown> => {
+    return { [AI_GATEWAY_ACCOUNT_ID_ENV]: "acct-123", [AI_GATEWAY_ID_ENV]: "my-gateway" };
+};
 
 /**
  * A fake Workers AI provider. Calling it records the requested model id and
@@ -45,12 +52,21 @@ const fakeBinding = (): AiBindingLike & { runCalls: [string, Record<string, unkn
 };
 
 describe("createAi", () => {
-    it("throws when neither a binding nor a provider is supplied", () => {
-        expect(() => createAi({})).toThrow(/requires a `binding`/);
+    it("builds a facade whose calls throw a directed error when nothing backs it", async () => {
+        expect.assertions(4);
+
+        const ai = createAi({});
+
+        expect(() => ai.model("@cf/meta/llama-3.3-70b-instruct-fp8-fast")).toThrow(/needs the `AI` binding/);
+        expect(() => ai.model("@cf/meta/llama-3.3-70b-instruct-fp8-fast")).toThrow(/wrangler login/);
+        expect(() => ai.embeddingModel("@cf/baai/bge-base-en-v1.5")).toThrow(/needs the `AI` binding/);
+        await expect(ai.run("@cf/meta/m2m100-1.2b", {})).rejects.toThrow(/ai\.run needs the `AI` binding/);
     });
 
     describe("model resolution (provider-agnostic seam)", () => {
         it("resolves a string model id against the Workers AI provider", () => {
+            expect.assertions(2);
+
             const provider = fakeProvider();
             const ai = createAi({ provider });
 
@@ -60,7 +76,27 @@ describe("createAi", () => {
             expect(model).toStrictEqual({ __model: "@cf/meta/llama-3.3-70b-instruct-fp8-fast" });
         });
 
+        it("forwards rejectIfBusy as a provider setting for a Workers AI id only", () => {
+            expect.assertions(1);
+
+            const settingsCalls: unknown[] = [];
+            const provider = ((modelId: string, settings?: Record<string, unknown>) => {
+                settingsCalls.push(settings);
+
+                return { __model: modelId } as unknown as LanguageModel;
+            }) as WorkersAiProviderLike;
+            const ai = createAi({ provider });
+
+            ai.model("@cf/meta/llama-3.1-8b-instruct", { rejectIfBusy: true });
+            ai.model("@cf/meta/llama-3.1-8b-instruct");
+            ai.model("openai/gpt-5", { rejectIfBusy: true });
+
+            expect(settingsCalls).toStrictEqual([{ rejectIfBusy: true }, undefined, undefined]);
+        });
+
         it("passes a bring-your-own AI SDK model straight through (no provider call)", () => {
+            expect.assertions(2);
+
             const provider = fakeProvider();
             const ai = createAi({ provider });
             const external = { __external: "openai:gpt-5" } as unknown as LanguageModel;
@@ -72,6 +108,8 @@ describe("createAi", () => {
         });
 
         it("falls back to defaultModel when no model is passed", () => {
+            expect.assertions(1);
+
             const provider = fakeProvider();
             const ai = createAi({ defaultModel: "@cf/meta/llama-3.1-8b-instruct", provider });
 
@@ -80,15 +118,46 @@ describe("createAi", () => {
             expect(provider.modelCalls).toStrictEqual(["@cf/meta/llama-3.1-8b-instruct"]);
         });
 
+        // Regression: `defaultModel` sat on `LunoraAiOptions`, and the only
+        // production constructor is codegen's fixed `createAi({ binding, env,
+        // metadata })` — so no Lunora app could set it and `ctx.ai.model()` with
+        // no argument ALWAYS threw. `env` is the seam codegen already threads, so
+        // the default is read from it, exactly as the gateway vars are.
+        it("falls back to LUNORA_AI_DEFAULT_MODEL from env when no model is passed", () => {
+            expect.assertions(1);
+
+            const provider = fakeProvider();
+            const ai = createAi({ env: { LUNORA_AI_DEFAULT_MODEL: "@cf/meta/llama-3.1-8b-instruct" }, provider });
+
+            ai.model();
+
+            expect(provider.modelCalls).toStrictEqual(["@cf/meta/llama-3.1-8b-instruct"]);
+        });
+
+        it("prefers an explicit defaultModel over the env var", () => {
+            expect.assertions(1);
+
+            const provider = fakeProvider();
+            const ai = createAi({ defaultModel: "@cf/explicit", env: { LUNORA_AI_DEFAULT_MODEL: "@cf/from-env" }, provider });
+
+            ai.model();
+
+            expect(provider.modelCalls).toStrictEqual(["@cf/explicit"]);
+        });
+
         it("throws when no model and no defaultModel are available", () => {
+            expect.assertions(1);
+
             const ai = createAi({ provider: fakeProvider() });
 
-            expect(() => ai.model()).toThrow(/no model supplied and no `defaultModel`/);
+            expect(() => ai.model()).toThrow(/no model supplied and no default configured/);
         });
     });
 
     describe("embedding model resolution", () => {
         it("resolves a string id against the provider's textEmbeddingModel", () => {
+            expect.assertions(2);
+
             const provider = fakeProvider();
             const ai = createAi({ provider });
 
@@ -99,6 +168,8 @@ describe("createAi", () => {
         });
 
         it("passes a bring-your-own EmbeddingModel through unchanged", () => {
+            expect.assertions(2);
+
             const provider = fakeProvider();
             const ai = createAi({ provider });
             const external = { __external: "openai-embed" } as unknown as EmbeddingModel;
@@ -107,31 +178,84 @@ describe("createAi", () => {
             expect(provider.embedCalls).toStrictEqual([]);
         });
 
-        it("throws a clear error when the provider has no textEmbeddingModel", () => {
+        it("throws a clear LunoraError when the provider has no textEmbeddingModel", () => {
+            expect.assertions(2);
+
             const provider = ((modelId: string) => ({ __model: modelId }) as unknown as LanguageModel) as WorkersAiProviderLike;
             const ai = createAi({ provider });
 
+            // A LunoraError (not a raw TypeError) so the runtime's toErrorBody and the
+            // CLI's renderLunoraError surface the curated catalog title/hint.
             expect(() => ai.embeddingModel("@cf/baai/bge-base-en-v1.5")).toThrow(/does not expose `textEmbeddingModel`/);
+
+            let caught: unknown;
+
+            try {
+                ai.embeddingModel("@cf/baai/bge-base-en-v1.5");
+            } catch (error) {
+                caught = error;
+            }
+
+            expect(isLunoraError(caught)).toBe(true);
         });
 
-        it("falls back to defaultModel when no embedding model is passed", () => {
+        it("falls back to defaultEmbeddingModel when no embedding model is passed", () => {
+            expect.assertions(1);
+
             const provider = fakeProvider();
-            const ai = createAi({ defaultModel: "@cf/baai/bge-base-en-v1.5", provider });
+            const ai = createAi({ defaultEmbeddingModel: "@cf/baai/bge-base-en-v1.5", provider });
 
             ai.embeddingModel();
 
             expect(provider.embedCalls).toStrictEqual(["@cf/baai/bge-base-en-v1.5"]);
         });
 
-        it("throws when no embedding model and no defaultModel are available", () => {
+        // Same seam as the language model above — and the one `defineRag` needs:
+        // `RagConfig.embeddingModel` is documented as optional and resolves through
+        // `ai.embeddingModel(undefined)`, so without a reachable default every
+        // doc example that omits it threw on first index/retrieve.
+        it("falls back to LUNORA_AI_DEFAULT_EMBEDDING_MODEL from env", () => {
+            expect.assertions(2);
+
+            const provider = fakeProvider();
+            const ai = createAi({
+                env: { LUNORA_AI_DEFAULT_EMBEDDING_MODEL: "@cf/baai/bge-base-en-v1.5", LUNORA_AI_DEFAULT_MODEL: "@cf/meta/llama-3.1-8b-instruct" },
+                provider,
+            });
+
+            ai.embeddingModel();
+
+            expect(provider.embedCalls).toStrictEqual(["@cf/baai/bge-base-en-v1.5"]);
+            // The language-model env default must not leak across families either.
+            expect(provider.modelCalls).toStrictEqual([]);
+        });
+
+        it("does not reuse the language-model defaultModel as an embedding fallback", () => {
+            expect.assertions(2);
+
+            // A language-model default must never leak into embeddingModel(): the ids
+            // belong to different Workers AI families, so reusing it would defer a
+            // wrong-family error to inference time instead of failing locally.
+            const provider = fakeProvider();
+            const ai = createAi({ defaultModel: "@cf/meta/llama-3.3-70b-instruct-fp8-fast", provider });
+
+            expect(() => ai.embeddingModel()).toThrow(/no embedding model supplied and no default configured/);
+            expect(provider.embedCalls).toStrictEqual([]);
+        });
+
+        it("throws when no embedding model and no defaultEmbeddingModel are available", () => {
+            expect.assertions(1);
+
             const ai = createAi({ provider: fakeProvider() });
 
-            expect(() => ai.embeddingModel()).toThrow(/no embedding model supplied and no `defaultModel`/);
+            expect(() => ai.embeddingModel()).toThrow(/no embedding model supplied and no default configured/);
         });
     });
 
     describe("run (raw binding passthrough)", () => {
         it("forwards model, inputs, and options to the binding", async () => {
+            expect.assertions(2);
+
             const binding = fakeBinding();
             const ai = createAi({ binding, provider: fakeProvider() });
 
@@ -142,14 +266,219 @@ describe("createAi", () => {
         });
 
         it("throws when only a custom provider (no binding) was supplied", async () => {
+            expect.assertions(1);
+
             const ai = createAi({ provider: fakeProvider() });
 
-            await expect(ai.run("@cf/meta/m2m100-1.2b", {})).rejects.toThrow(/ai\.run requires the `binding`/);
+            await expect(ai.run("@cf/meta/m2m100-1.2b", {})).rejects.toThrow(/ai\.run needs the `AI` binding/);
+        });
+
+        it("routes raw ai.run() through the env-resolved gateway when the caller sets none", async () => {
+            expect.assertions(1);
+
+            const binding = fakeBinding();
+            const ai = createAi({ binding, env: gatewayEnv() });
+
+            await ai.run("@cf/meta/m2m100-1.2b", { text: "hi" });
+
+            expect(binding.runCalls).toStrictEqual([["@cf/meta/m2m100-1.2b", { text: "hi" }, { gateway: { id: "my-gateway" } }]]);
+        });
+
+        it("carries the correlation metadata on the env-resolved gateway", async () => {
+            expect.assertions(1);
+
+            const binding = fakeBinding();
+            // eslint-disable-next-line no-secrets/no-secrets -- fake test trace id, not a real secret
+            const traceId = "0123456789abcdef0123456789abcdef";
+            const ai = createAi({ binding, env: gatewayEnv(), metadata: { functionPath: "messages:send", traceId } });
+
+            await ai.run("@cf/meta/m2m100-1.2b", { text: "hi" });
+
+            expect(binding.runCalls).toStrictEqual([
+                ["@cf/meta/m2m100-1.2b", { text: "hi" }, { gateway: { id: "my-gateway", metadata: { functionPath: "messages:send", traceId } } }],
+            ]);
+        });
+
+        it("preserves a caller-supplied gateway over the env-resolved one", async () => {
+            expect.assertions(1);
+
+            const binding = fakeBinding();
+            const ai = createAi({ binding, env: gatewayEnv() });
+
+            await ai.run("@cf/meta/m2m100-1.2b", { text: "hi" }, { gateway: { id: "explicit" } });
+
+            expect(binding.runCalls).toStrictEqual([["@cf/meta/m2m100-1.2b", { text: "hi" }, { gateway: { id: "explicit" } }]]);
+        });
+
+        it("rethrows a rejectIfBusy capacity rejection (3040) as RATE_LIMITED", async () => {
+            expect.assertions(3);
+
+            const busy = new Error("InferenceUpstreamError: 3040: Capacity temporarily exceeded, please try again.");
+            const runCalls: (Record<string, unknown> | undefined)[] = [];
+            const ai = createAi({
+                binding: {
+                    run: async (_model, _inputs, options) => {
+                        runCalls.push(options);
+
+                        throw busy;
+                    },
+                },
+            });
+
+            const error: unknown = await ai.run("@cf/meta/llama-3.1-8b-instruct", { prompt: "hi" }, { rejectIfBusy: true }).catch((error_: unknown) => error_);
+
+            expect(runCalls).toStrictEqual([{ rejectIfBusy: true }]);
+            expect(isLunoraError(error) && error.code === "RATE_LIMITED").toBe(true);
+            expect((error as Error).cause).toBe(busy);
+        });
+
+        it("rethrows any other binding error unchanged", async () => {
+            expect.assertions(1);
+
+            const failure = new Error("5007: No such model");
+            const ai = createAi({
+                binding: {
+                    run: async () => {
+                        throw failure;
+                    },
+                },
+            });
+
+            await expect(ai.run("@cf/nope", {}, { rejectIfBusy: true })).rejects.toBe(failure);
+        });
+
+        it("does not mistake a 3040 elsewhere in a message for the capacity code", async () => {
+            expect.assertions(1);
+
+            const failure = new Error("5006: input invalid at line 3040: unexpected token");
+            const ai = createAi({
+                binding: {
+                    run: async () => {
+                        throw failure;
+                    },
+                },
+            });
+
+            await expect(ai.run("@cf/nope", {})).rejects.toBe(failure);
+        });
+
+        it("leaves run options untouched when no gateway is configured", async () => {
+            expect.assertions(1);
+
+            const binding = fakeBinding();
+            const ai = createAi({ binding });
+
+            await ai.run("@cf/meta/m2m100-1.2b", { text: "hi" });
+
+            expect(binding.runCalls).toStrictEqual([["@cf/meta/m2m100-1.2b", { text: "hi" }, undefined]]);
+        });
+    });
+
+    describe("websearch (Web Search API)", () => {
+        const searchBody = {
+            items: [{ description: "A framework", title: "Lunora", url: "https://lunora.sh" }],
+            metadata: { latencyMs: 12, query: "lunora", requestId: "req-1" },
+        };
+
+        const searchBinding = (
+            response: Response = Response.json(searchBody),
+        ): AiBindingLike & { searchCalls: Parameters<NonNullable<AiBindingLike["websearch"]>>[0][] } => {
+            const searchCalls: Parameters<NonNullable<AiBindingLike["websearch"]>>[0][] = [];
+
+            return {
+                run: async () => undefined,
+                searchCalls,
+                websearch: async (input) => {
+                    searchCalls.push(input);
+
+                    return response;
+                },
+            };
+        };
+
+        it("forwards the query and options and returns the parsed results", async () => {
+            expect.assertions(2);
+
+            const binding = searchBinding();
+            const result = await createAi({ binding }).websearch("lunora", { byokAlias: "mine", gatewayId: "g", limit: 3, provider: "exa" });
+
+            expect(binding.searchCalls).toStrictEqual([{ byokAlias: "mine", gatewayId: "g", limit: 3, provider: "exa", query: "lunora" }]);
+            expect(result).toStrictEqual(searchBody);
+        });
+
+        it("bills the gateway inference routes through, else the account's default gateway", async () => {
+            expect.assertions(2);
+
+            const configured = searchBinding();
+            const unconfigured = searchBinding();
+
+            await createAi({ binding: configured, env: gatewayEnv() }).websearch("lunora");
+            await createAi({ binding: unconfigured }).websearch("lunora");
+
+            expect(configured.searchCalls).toStrictEqual([{ gatewayId: "my-gateway", query: "lunora" }]);
+            expect(unconfigured.searchCalls).toStrictEqual([{ gatewayId: "default", query: "lunora" }]);
+        });
+
+        it("maps HTTP failures onto LunoraError codes", async () => {
+            expect.assertions(7);
+
+            const codeFor = async (status: number): Promise<string | undefined> => {
+                const error: unknown = await createAi({ binding: searchBinding(new Response("nope", { status })) })
+                    .websearch("lunora")
+                    .catch((error_: unknown) => error_);
+
+                return isLunoraError(error) ? error.code : undefined;
+            };
+
+            await expect(codeFor(400)).resolves.toBe("BAD_REQUEST");
+            await expect(codeFor(401)).resolves.toBe("UNAUTHORIZED");
+            await expect(codeFor(403)).resolves.toBe("FORBIDDEN");
+            await expect(codeFor(404)).resolves.toBe("NOT_FOUND");
+            await expect(codeFor(408)).resolves.toBe("SERVICE_UNAVAILABLE");
+            await expect(codeFor(429)).resolves.toBe("RATE_LIMITED");
+            await expect(codeFor(502)).resolves.toBe("SERVICE_UNAVAILABLE");
+        });
+
+        it("caps the upstream error body it puts in the message", async () => {
+            expect.assertions(1);
+
+            const error: unknown = await createAi({ binding: searchBinding(new Response("x".repeat(5000), { status: 502 })) })
+                .websearch("lunora")
+                .catch((error_: unknown) => error_);
+
+            expect((error as Error).message.length).toBeLessThan(400);
+        });
+
+        it.each([
+            ["a body without an items array", () => Response.json({ result: searchBody })],
+            ["a body that is not JSON", () => new Response("<html>oops</html>")],
+        ])("refuses %s as INTERNAL", async (_label, response) => {
+            expect.assertions(1);
+
+            const error: unknown = await createAi({ binding: searchBinding(response()) })
+                .websearch("lunora")
+                .catch((error_: unknown) => error_);
+
+            expect(isLunoraError(error) && error.code === "INTERNAL").toBe(true);
+        });
+
+        it("throws a directed error without a binding, or with one that predates websearch()", async () => {
+            expect.assertions(2);
+
+            await expect(createAi({}).websearch("lunora")).rejects.toThrow(/ai\.websearch needs the `AI` binding/);
+
+            const error: unknown = await createAi({ binding: fakeBinding() })
+                .websearch("lunora")
+                .catch((error_: unknown) => error_);
+
+            expect(isLunoraError(error) && error.code === "NOT_IMPLEMENTED").toBe(true);
         });
     });
 
     describe("provider construction from a binding", () => {
         it("builds the Workers AI provider from env.AI when no provider is given", () => {
+            expect.assertions(2);
+
             const binding = fakeBinding();
             // No `provider` → createAi must construct one via createWorkersAI and
             // expose it. We only assert it produced a callable provider; the real
@@ -162,6 +491,8 @@ describe("createAi", () => {
     });
 
     it("exposes the underlying provider for raw model access", () => {
+        expect.assertions(1);
+
         const provider = fakeProvider();
         const ai = createAi({ provider });
 

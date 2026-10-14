@@ -1,3 +1,10 @@
+/// <reference types="@cloudflare/workers-types" />
+// This file drives a REAL worker in workerd, so it needs Cloudflare's ambient
+// globals. The reference lives here rather than in the package's tsconfig
+// `types` array because `src/` is platform-neutral (plan 114 §5.1 rates this
+// package none/light) — making the whole package ambient-Cloudflare would let a
+// `DurableObjectNamespace` reference slip into shipped code and still compile.
+
 /**
  * Test entry-point Worker for `@lunora/runtime` integration tests.
  *

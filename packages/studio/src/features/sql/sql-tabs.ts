@@ -1,7 +1,7 @@
 import type { Dispatch, SetStateAction } from "react";
-import { useEffect, useRef } from "react";
+import { useEffect, useState } from "react";
 
-import { newId, usePersistedList } from "../../lib/browser-storage";
+import { newId, usePersistedList, usePersistedValue } from "../../lib/browser-storage";
 
 /**
  * One open editor tab. Only the durable parts — the draft `sql`, the `name`
@@ -35,20 +35,7 @@ const makeTab = (sql = "", name = ""): SqlTab => {
 };
 
 /** A single persisted string (the active tab id) on top of the array storage helper. */
-const usePersistedActive = (): [string, Dispatch<SetStateAction<string>>] => {
-    const [list, setList] = usePersistedList<string>(ACTIVE_KEY);
-
-    const setActive = (action: SetStateAction<string>): void => {
-        setList((current) => {
-            const previous = current[0] ?? "";
-            const next = typeof action === "function" ? action(previous) : action;
-
-            return [next];
-        });
-    };
-
-    return [list[0] ?? "", setActive];
-};
+const usePersistedActive = (): [string, Dispatch<SetStateAction<string>>] => usePersistedValue<string>(ACTIVE_KEY, "");
 
 /**
  * Persisted open-tab list + the active tab id, restored from `localStorage` on
@@ -71,23 +58,24 @@ const usePersistedTabs = (
 
     // Seed exactly one tab the first time storage is empty, and persist it so the
     // panel's edits (which write through `setTabs`) land on a tab that's actually
-    // in the list. A ref keeps the seed stable across the seeding re-render.
-    const seedTab = useRef<null | SqlTab>(null);
-
-    if (stored.length === 0 && seedTab.current === null) {
-        seedTab.current = seed();
-    }
+    // in the list.
+    //
+    // A lazy `useState` initialiser, not a ref written during render: the seed has
+    // to survive the render that persists it AND be readable while building
+    // `tabs` below, and a ref that is both written and read mid-render is exactly
+    // the impure-render shape React makes no ordering guarantees about. The
+    // initialiser runs once per mount; when storage already has tabs the seed is
+    // simply never used.
+    const [seedTab] = useState<SqlTab>(seed);
 
     useEffect(() => {
-        if (stored.length === 0 && seedTab.current !== null) {
-            const initial = seedTab.current;
-
-            setTabs([initial]);
+        if (stored.length === 0) {
+            setTabs([seedTab]);
         }
-    }, [setTabs, stored.length]);
+    }, [seedTab, setTabs, stored.length]);
 
     // Never hand the panel an empty list while the seed is being persisted.
-    const tabs = stored.length === 0 && seedTab.current !== null ? [seedTab.current] : stored;
+    const tabs = stored.length === 0 ? [seedTab] : stored;
     const activeId = tabs.some((tab) => tab.id === activeRaw) ? activeRaw : (tabs[0]?.id ?? "");
 
     return { activeId, setActiveId, setTabs, tabs };
@@ -172,5 +160,11 @@ const tabsClosedBy = (op: "all" | "others" | "right", tabs: ReadonlyArray<SqlTab
     return [...tabs];
 };
 
+/**
+ * Which results sub-pane a tab is showing. Declared with the tab model it belongs to,
+ * so the pane and the hook cannot drift into two compatible-by-accident unions.
+ */
+type ResultTab = "chart" | "explain" | "results";
+
 export { addTab, closeAllTabs, closeOtherTabs, closeTab, closeTabsToRight, isDirty, makeTab, MAX_TABS, tabsClosedBy, usePersistedTabs };
-export type { SqlTab };
+export type { ResultTab, SqlTab };

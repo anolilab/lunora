@@ -1,42 +1,38 @@
 import type { FunctionReference } from "@lunora/client";
 import type { QueryKey } from "@tanstack/react-query";
 
+import { stableWireKey } from "../../../shared/wire-key";
+
 /**
  * Pure, transport-free query-key helpers shared by the client hooks
- * (`./cache.js`) and the server entry (`./server.js`). Kept in their own module
- * — with only type-level imports — so importing them server-side never pulls in
- * the browser-oriented subscription registry or a `LunoraClient` instance.
+ * (`./cache.js`) and the server entry (`./server.js`). The only runtime import
+ * is `stableWireKey` — a pure, dependency-free string encoder the bundler
+ * inlines — so importing this module server-side still never pulls in the
+ * browser-oriented subscription registry or a `LunoraClient` instance.
  */
 
-/** Stringified queryKey used as a stable index/dep-list key. */
-const keyHash = (queryKey: QueryKey): string => JSON.stringify(queryKey);
+/**
+ * Stringified queryKey used as a stable index/dep-list key. Encoded with
+ * `stableWireKey` (not raw `JSON.stringify`) so the `args` object nested in
+ * the key hashes identically regardless of property insertion order — matching
+ * how TanStack itself hashes query keys — and so a wire-typed arg (`bigint`,
+ * `Date`, bytes, …) hashes to a distinct stable token instead of throwing.
+ * Byte-identical to the previous `stableStringify` hash for pure-JSON keys.
+ */
+const keyHash = (queryKey: QueryKey): string => stableWireKey(queryKey);
 
 /**
- * `JSON.stringify` with deterministic key ordering for plain objects. Keeps a
- * subscription/stream cache key stable across rerenders where the consumer
- * happens to construct `args` with a different key order (`{a,b}` vs `{b,a}`).
+ * Project a Lunora `(fn, args, shardKey)` triple into the query key TanStack
+ * hashes for dedup. The `"lunora"` literal namespaces our entries so an app's
+ * own queries can't collide with ours.
  *
- * Shared by `useSubscription` and `useStream` so a key-order edge case fixed in
- * one never silently drifts from the other.
- */
-const stableStringify = (value: unknown): string => {
-    if (value === null || typeof value !== "object") {
-        return JSON.stringify(value);
-    }
-
-    if (Array.isArray(value)) {
-        return `[${value.map((entry) => stableStringify(entry)).join(",")}]`;
-    }
-
-    const entries = Object.entries(value as Record<string, unknown>).toSorted(([a], [b]) => a.localeCompare(b));
-
-    return `{${entries.map(([key, value_]) => `${JSON.stringify(key)}:${stableStringify(value_)}`).join(",")}}`;
-};
-
-/**
- * Project a Lunora `(fn, args, shardKey)` triple into the structural query key
- * TanStack hashes for dedup. The `"lunora"` literal namespaces our entries so
- * an app's own queries can't collide with ours.
+ * `args` sits in the key already encoded by `stableWireKey`, not as the raw
+ * object. TanStack hashes keys with `JSON.stringify`, which maps `NaN` to
+ * `null`, `-0` to `0` and a `Date` to its ISO string (so distinct args shared
+ * one cache entry and served each other's rows) and throws on a `bigint`. A
+ * string slot hashes the same under any hash function, so every QueryClient
+ * agrees on it without configuration: a caller's own, a server-side one
+ * `prefetchQuery` seeds, and one driven through `lunoraQueryOptions`.
  *
  * This is the single source of truth for the key shape: `useQuery`,
  * `usePreloadedQuery`, and the server-side `prefetchQuery` all route through it
@@ -46,7 +42,7 @@ const stableStringify = (value: unknown): string => {
 const lunoraQueryKey = (function_: FunctionReference, args: Record<string, unknown>, shardKey: string | undefined): QueryKey => [
     "lunora",
     function_.__lunoraRef,
-    args,
+    stableWireKey(args),
     // eslint-disable-next-line unicorn/no-null -- this literal is part of the JSON-serialized query key TanStack hashes for dedup; `null` keeps a stable, distinct slot from an absent shardKey across renders.
     shardKey ?? null,
 ];
@@ -59,4 +55,7 @@ const lunoraQueryKey = (function_: FunctionReference, args: Record<string, unkno
  */
 const serializeQueryKey = (queryKey: QueryKey): string => keyHash(queryKey);
 
-export { keyHash, lunoraQueryKey, serializeQueryKey, stableStringify };
+export { keyHash, lunoraQueryKey, serializeQueryKey };
+
+export { stableStringify } from "../../../shared/stable-key";
+export { stableWireKey } from "../../../shared/wire-key";

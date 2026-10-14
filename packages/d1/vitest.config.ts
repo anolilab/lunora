@@ -1,9 +1,9 @@
 import { defineConfig, coverageConfigDefaults } from "vitest/config";
-import { cloudflareTest } from "@cloudflare/vitest-pool-workers";
+import { cloudflareTest } from "@cloudflare/vitest-plugin";
 
 // Mirror of the shared `tools/get-vitest-config` coverage block. The workers
 // pool relies on `defineConfig` (not the shared helper, which would break the
-// `@cloudflare/vitest-pool-workers` projects), so coverage is wired inline here.
+// `@cloudflare/vitest-plugin` projects), so coverage is wired inline here.
 const coverage = {
     ...coverageConfigDefaults,
     provider: "v8" as const,

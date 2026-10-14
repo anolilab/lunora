@@ -2,11 +2,14 @@
 
 "on":
     "pull_request":
-        "branches": ["main"]
+        "paths": ["**/*.tsx"]
 
 "permissions":
     "contents": "read"
     "pull-requests": "write"
+    # react-doctor publishes a commit status for the scan result; without this
+    # it warns "Resource not accessible by integration" and skips the status.
+    "statuses": "write"
 
 "jobs":
     "react-doctor":
@@ -18,18 +21,29 @@
                   "egress-policy": "audit"
 
             - "name": "Git checkout"
-              "uses": "actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd" # v6.0.2
+              # react-doctor's PR scan compares against the base branch, which needs
+              # full history — a shallow clone (default depth 1) makes the diff fail.
+              "uses": "anolilab/workflows/step/checkout-with-retry@6c16895f4c3b5273b373656988505d1a8264e78b" # main
               "with":
-                  # diff mode (below) compares against the base branch, which needs
-                  # full history — a shallow clone (default depth 1) makes the diff fail.
-                  "fetch-depth": 0
-                  "persist-credentials": false
-            # NOTE(security): SHA-pinned to the commit behind the react-doctor@0.5.6
-            # tagged release (resolved via `gh api repos/millionco/react-doctor/git/refs/tags/...`).
-            # Bump deliberately by re-resolving the tag's commit SHA.
-            # Also note: pinning this action SHA does not fully pin the tool if the action
-            # internally runs `npx -y react-doctor@latest`; verify and pin that version too.
-            - "uses": "millionco/react-doctor@15238de7019167e740c9fc08b800d9732c2ab477" # react-doctor@0.5.6
+                  "fetch-depth": "0"
+            # SHA-pinned to the commit behind the action's v2.2.7 tag; bump by
+            # re-resolving a newer tag to its commit.
+            #
+            # `version` pins the react-doctor npm tool too — the action otherwise runs
+            # `@latest`, which intermittently exited 0 without producing a report.
+            #
+            # It MUST match `react-doctor` in `catalog:lint` (pnpm-workspace.yaml),
+            # which is the version the repo installs and every contributor runs
+            # locally. Nothing enforces the pair, and they had drifted two minors
+            # apart: CI reported 12 `react-compiler-no-manual-memoization` and 4
+            # `exhaustive-deps` findings that do not exist on the installed
+            # version — on hand-written memos carrying an in-file rationale — and
+            # regenerated them on every `.tsx` pull request. Bump both together.
+            #
+            # No `github-token` input: the action reads the ambient GITHUB_TOKEN and
+            # warns about unexpected inputs if given one. `scope: changed` (the default)
+            # derives its base SHA from the PR event, which is what fetch-depth:0 above
+            # is for.
+            - "uses": "millionco/react-doctor@938008119a288f2fb47c66a69cd9279a21f31784" # react-doctor@v2.2.7
               "with":
-                  "github-token": "${{ secrets.GITHUB_TOKEN }}"
-                  "diff": "main"
+                  "version": "0.9.14"

@@ -1,0 +1,920 @@
+/**
+ * `createNodeWorkflowHost` — the Node implementation of the `@lunora/workflow`
+ * binding surface (`WorkflowBindingLike`, bound on the derived env under each
+ * workflow's export key — its generated class name), backed
+ * by the `@visulima/workflow` engine (`createRuntime`).
+ *
+ * # How the seam maps
+ *
+ * A Lunora `defineWorkflow` result (branded `isLunoraWorkflow`) is compiled into
+ * a visulima `WorkflowConfig`: the handler runs through the exact same
+ * `createWorkflowRunContext` assembly the Cloudflare host uses, but with the
+ * native `cloudflare:workers` `WorkflowStep` replaced by an adapter over the
+ * visulima `RunContext`:
+ *
+ * - `step.do(name, cb)` / `step.do(name, config, cb)` → `ctx.step(name, cb)` —
+ * memoized + replay-safe in the visulima engine. The engine has neither
+ * per-step retries nor compensation, so both are emulated inside the one
+ * `ctx.step` call the adapter makes (see {@link createStepAdapter}):
+ * `config.retries` becomes an in-callback attempt loop, and `rollback` handlers
+ * are collected per activation and run in reverse declaration order when a step
+ * finally fails. `config.timeout` is NOT emulated — see the same place for why.
+ * - `step.sleep(name, duration)` / `step.sleepUntil(name, ts)` → `ctx.sleep(...)`
+ * with a millisecond `Duration`. Cloudflare-style duration strings
+ * ("1 minute", "2 hours", …) are parsed; `sleepUntil` in the past resolves
+ * immediately.
+ * - `step.waitForEvent(name, { type, timeout })` → `ctx.waitForEvent(name, type,
+ * { timeout })`, resolving `{ payload, type }`.
+ *
+ * The runtime executes a `trigger` synchronously to completion or suspension, so
+ * `create` resolves with the run already advanced as far as it can go (any
+ * `sleep`/`waitForEvent` leaves it `suspended`/`waiting`). Instance status maps
+ * visulima `RunStatus` → `WorkflowInstanceStatus` (`completed` → `complete`,
+ * `failed` → `errored`, `suspended`/`waiting` → `waiting`); `sendEvent` maps to
+ * `signal` and rejects unless the run is waiting for exactly that event name.
+ *
+ * # Known gaps (documented in `plans/234-node-host-findings.md`)
+ *
+ * - `pause`, `restart` throw `NOT_IMPLEMENTED` — the visulima engine has no
+ * equivalent. `terminate` drops the run and writes a tombstone in its place, so
+ * a later `status()` reports `terminated` instead of collapsing into the
+ * `unknown` an invalid instance id also returns.
+ * - **`terminate` is a barrier only within this process.** The engine has no
+ * cancellation hook, so an activation already in flight still runs to
+ * completion; what stops it re-animating the run is that the store handed to
+ * the runtime drops writes for terminated ids. A `terminate` in another
+ * process cannot do that — cross-process, the lease is the only mechanism.
+ * - `create({ id })` is honoured through an alias row rather than passed to the
+ * engine, which mints its own run ids: the same id twice resolves to one run
+ * and `get(id)` finds it. The id is not the run id, so `instance.id` is the
+ * engine's.
+ * - `ctx.run` still dispatches to `/_lunora/scheduler/dispatch`, which has no
+ * Node HTTP server — a workflow body that calls `ctx.run` fails at runtime.
+ * - `ctx.parallel`'s join cannot interleave inside one synchronous `trigger`
+ * activation (the child's signal arrives before the parent's `waitForEvent` is
+ * persisted); `spawn` + direct create/get/signal flows are sound.
+ *
+ * `store` is required rather than defaulted, because the only default available
+ * is the engine's in-process `MemoryStore` and a host that silently loses every
+ * run on restart should not be the thing a caller gets for saying nothing.
+ * `createNodeWorkflowStore` (`./node-workflow-store`) is the durable choice;
+ * `new MemoryStore()` stays available for tests, as an explicit one.
+ */
+
+import { LunoraError } from "@lunora/errors";
+import type {
+    WorkflowBatchDeleteResult,
+    WorkflowBindingLike,
+    WorkflowCreateBatchError,
+    WorkflowCreateBatchOptions,
+    WorkflowCreateOptions,
+    WorkflowInstanceLike,
+    WorkflowInstanceStatus,
+    WorkflowRollbackHandlerLike,
+    WorkflowStatusResult,
+    WorkflowStepConfigLike,
+    WorkflowStepContextLike,
+    WorkflowStepLike,
+    WorkflowStepRollbackOptionsLike,
+} from "@lunora/workflow";
+import { createWorkflowRunContext, isWorkflowDefinition, workflowClassName, workflowDefaultName } from "@lunora/workflow";
+import type { RunContext, RunStatus, WorkflowRuntime, WorkflowStore } from "@visulima/workflow";
+import { createRuntime, defineWorkflow as defineVisulimaWorkflow } from "@visulima/workflow";
+
+/**
+ * `definitionId` of the row `terminate` leaves behind. No workflow can carry it
+ * (`defineWorkflow` ids come from export names). It is written `status: "failed"`,
+ * and `due` selects only `suspended`/`waiting`, so `sweep` never tries to resume
+ * it — that status, not the absent `wakeAt`, is what keeps it out.
+ */
+const TERMINATED_DEFINITION_ID = "@lunora/platform-node:terminated";
+
+/** Cloudflare's per-call cap on `Workflow.deleteBatch`, enforced here so a batch that works locally does not fail on deploy. */
+const MAX_DELETE_BATCH = 100;
+
+/** The most instances one `createBatch` call takes, as Cloudflare's binding does. */
+const MAX_CREATE_BATCH = 100;
+
+/**
+ * The entries one `createBatch` call creates, after checking the 1–100 size
+ * Cloudflare takes per call. `count` shares one params object across them all.
+ */
+const batchEntriesOf = (batchOptions: WorkflowCreateBatchOptions): ReadonlyArray<WorkflowCreateOptions> => {
+    const size = "instances" in batchOptions ? batchOptions.instances.length : batchOptions.count;
+
+    if (!Number.isInteger(size) || size < 1 || size > MAX_CREATE_BATCH) {
+        throw new LunoraError("VALIDATION_ERROR", `@lunora/platform-node: createBatch takes 1 to ${String(MAX_CREATE_BATCH)} instances, got ${String(size)}`);
+    }
+
+    return "instances" in batchOptions
+        ? batchOptions.instances
+        : Array.from({ length: batchOptions.count }, () => {
+              return { params: batchOptions.params };
+          });
+};
+
+/** Millisecond multipliers for every duration unit the parser recognises. */
+const DURATION_MS: Record<string, number> = {
+    d: 86_400_000,
+    day: 86_400_000,
+    days: 86_400_000,
+    h: 3_600_000,
+    hour: 3_600_000,
+    hours: 3_600_000,
+    m: 60_000,
+    millisecond: 1,
+    milliseconds: 1,
+    minute: 60_000,
+    minutes: 60_000,
+    ms: 1,
+    s: 1000,
+    second: 1000,
+    seconds: 1000,
+    w: 604_800_000,
+    week: 604_800_000,
+    weeks: 604_800_000,
+    month: 2_592_000_000,
+    months: 2_592_000_000,
+};
+
+/** Matches a numeric amount followed by a duration unit. */
+const DURATION_PATTERN = /^(\d+(?:\.\d+)?)\s*([a-z]+)$/i;
+
+/** Parse a Cloudflare-style `number | string` duration into milliseconds. */
+const toMs = (duration: number | string): number => {
+    if (typeof duration === "number") {
+        // `NaN` and `Infinity` are rejected rather than clamped: both would reach
+        // `context.sleep` as a wake-at the engine can never satisfy, so a run
+        // sleeps forever with no error to explain it.
+        if (!Number.isFinite(duration)) {
+            throw new LunoraError("VALIDATION_ERROR", `@lunora/platform-node: workflow duration must be finite, got ${String(duration)}`);
+        }
+
+        return Math.max(0, duration);
+    }
+
+    const match = DURATION_PATTERN.exec(duration.trim());
+
+    if (match === null) {
+        throw new LunoraError("VALIDATION_ERROR", `@lunora/platform-node: unsupported workflow duration "${duration}"`);
+    }
+
+    const amount = Number(match[1]);
+    const unit = (match[2] ?? "").toLowerCase();
+    const perUnit = DURATION_MS[unit];
+
+    if (perUnit === undefined) {
+        throw new LunoraError("VALIDATION_ERROR", `@lunora/platform-node: unsupported workflow duration "${duration}"`);
+    }
+
+    const ms = amount * perUnit;
+
+    // A literal so large it overflows to `Infinity` ("1e400 ms") parses fine and
+    // is just as unsatisfiable as an explicit `Infinity`.
+    if (!Number.isFinite(ms)) {
+        throw new LunoraError("VALIDATION_ERROR", `@lunora/platform-node: workflow duration "${duration}" overflows`);
+    }
+
+    return Math.max(0, ms);
+};
+
+/**
+ * `definitionId` of an alias row: a caller-supplied instance id pointing at the
+ * run id the engine actually minted, with the real id in `snapshot`.
+ *
+ * `runtime.trigger` assigns run ids and accepts no override, so a caller id
+ * cannot *be* the run id. It can still be honoured, which is what the binding
+ * contract actually requires: `create({ id })` twice with one id yields one run,
+ * and `get(id)` finds it. `ctx.spawn` depends on exactly that pair — it mints a
+ * child id, calls `create({ id })`, then `get(id)` (`@lunora/workflow`'s
+ * `fan-out.ts`) — so refusing the option instead of resolving it takes fan-out
+ * out entirely.
+ *
+ * The alias lives in the store rather than a `Map` so a spawn survives the
+ * restart the rest of this host is built to survive.
+ */
+const ALIAS_DEFINITION_ID = "@lunora/platform-node:alias";
+
+/** The store key of the reverse alias pointer a run carries back to its caller-supplied id. */
+const aliasOfKey = (runId: string): string => `@lunora/platform-node:alias-of:${runId}`;
+
+/** The per-attempt info a `step.do` callback receives. `count` is 1 because the adapter makes exactly one `ctx.step` call per name. */
+const stepContext = (name: string, attempt: number, config: WorkflowStepConfigLike): WorkflowStepContextLike => {
+    return {
+        attempt,
+        config,
+        step: { count: 1, name },
+    };
+};
+
+/** Config a `step.do` with no `config` argument runs under — one attempt, no retry. */
+const DEFAULT_STEP_CONFIG: WorkflowStepConfigLike = { retries: { limit: 1 } };
+
+/**
+ * The longest delay Node's timers honour. Anything above it is silently taken
+ * as 1 ms, so an unclamped oversized backoff fires on the next tick — turning
+ * the pause that was meant to spare a failing dependency into back-to-back
+ * retries. A `delay` of "1 month" alone is already past this, so the finite
+ * `retries.limit` guard does not put it out of reach.
+ */
+const MAX_TIMER_MS = 2_147_483_647;
+
+/**
+ * Wait `ms` before the next attempt, capped at {@link MAX_TIMER_MS}. The cap is
+ * a ceiling, not a fix for the underlying limit: the backoff is an in-process
+ * `setTimeout`, so a wait anywhere near it outlives the activation's lease
+ * regardless. Clamping only keeps an oversized backoff from becoming no backoff.
+ */
+const delay = async (ms: number): Promise<void> =>
+    new Promise((resolve) => {
+        setTimeout(resolve, Math.min(ms, MAX_TIMER_MS));
+    });
+
+/**
+ * The pause before attempt `attempt + 1`, from the step's `backoff` and base
+ * `delay`. `constant` is the default, matching Cloudflare's `WorkflowBackoff`.
+ */
+const backoffMs = (base: number, backoff: "constant" | "exponential" | "linear" | undefined, attempt: number): number => {
+    switch (backoff) {
+        case "exponential": {
+            return base * 2 ** (attempt - 1);
+        }
+        case "linear": {
+            return base * attempt;
+        }
+        default: {
+            return base;
+        }
+    }
+};
+
+/**
+ * The pause before attempt `attempt + 1`. A `retries.delay` function computes
+ * the whole wait from the failure, so `backoff` does not scale it — matching
+ * Cloudflare, which hands it the failed attempt's context and error.
+ */
+const retryWaitMs = async (
+    config: WorkflowStepConfigLike,
+    baseDelay: number,
+    attempt: number,
+    context: WorkflowStepContextLike,
+    error: unknown,
+): Promise<number> => {
+    const configuredDelay = config.retries?.delay;
+
+    if (typeof configuredDelay === "function") {
+        return toMs(await configuredDelay({ ctx: context, error: error instanceof Error ? error : new Error(String(error)) }));
+    }
+
+    return backoffMs(baseDelay, config.retries?.backoff, attempt);
+};
+
+/** One registered `rollback`, captured when its step settled. */
+interface Compensation {
+    context: WorkflowStepContextLike;
+    handler: WorkflowRollbackHandlerLike;
+    name: string;
+
+    /**
+     * The step's DECLARATION position — the order its `step.do` was called in,
+     * assigned before that call awaits anything. Steps that run concurrently
+     * (`ctx.parallel`, or a hand-rolled `Promise.all` of `ctx.runStep`) settle
+     * in an order their declaration order does not predict, so recording the
+     * position is the only way to unwind by it.
+     */
+    order: number;
+    output: unknown;
+}
+
+/**
+ * Run every registered compensation in reverse declaration order — the saga
+ * unwind Cloudflare performs natively when a step fails.
+ *
+ * Entries arrive in the order their steps SETTLED, which for concurrent steps
+ * is not the order they were declared in, so the list is sorted by the recorded
+ * declaration position before it is reversed. Sequential bodies are unaffected:
+ * there the two orders coincide, and the failing step — declared last — still
+ * compensates first.
+ *
+ * The list is emptied first, so a second failure (two `step.do`s raced with
+ * `Promise.all`, say) cannot compensate the same steps twice.
+ *
+ * A handler that throws is swallowed deliberately: the step error is what the
+ * run reports and what the caller acts on, and one failed compensation must not
+ * mask it nor strand the compensations still queued behind it.
+ */
+const compensate = async (entries: Compensation[], cause: unknown): Promise<void> => {
+    const error = cause instanceof Error ? cause : new Error(String(cause));
+
+    for (const entry of entries.splice(0).toSorted((a, b) => b.order - a.order)) {
+        try {
+            // eslint-disable-next-line no-await-in-loop -- compensations must unwind in order, not concurrently
+            await entry.handler({ ctx: entry.context, error, output: entry.output, stepName: entry.name });
+        } catch {
+            /* see above */
+        }
+    }
+};
+
+/** Map a visulima `RunStatus` onto the Lunora `WorkflowInstanceStatus` vocabulary. */
+const mapStatus = (status: RunStatus): WorkflowInstanceStatus => {
+    switch (status) {
+        case "completed": {
+            return "complete";
+        }
+        case "failed": {
+            return "errored";
+        }
+        default: {
+            return "waiting";
+        }
+    }
+};
+
+/**
+ * Adapt a visulima `RunContext` into the native `WorkflowStepLike` surface.
+ *
+ * # Retries and rollbacks are emulated here
+ *
+ * The engine offers one durable primitive — `ctx.step(id, fn)`, memoized by id —
+ * and neither a per-step retry config nor compensation. Both are emulated
+ * inside the single `ctx.step` call each `step.do` makes:
+ *
+ * - Retries: `config.retries` drives an attempt loop around the callback, so
+ * only the attempt that finally succeeds is memoized and `ctx.attempt` counts
+ * up the way Cloudflare's does. `limit` is read as the total number of
+ * attempts, which is what this host's previous `{ retries: { limit: 1 } }`
+ * default already meant by it. A non-finite `limit` is rejected outright —
+ * `attempt >= limit` could never end the loop. The backoff wait is an
+ * in-process `setTimeout` rather than a durable sleep, so a crash mid-backoff
+ * restarts the step at attempt 1 instead of resuming the countdown
+ * — at-least-once either way — and it is capped at {@link MAX_TIMER_MS}.
+ * - Rollbacks: each settled step with a `rollback` handler is pushed onto a
+ * per-activation list along with its declaration position, and a step that
+ * fails after its last attempt unwinds that list in reverse declaration order
+ * (its own handler carrying `output: undefined`, since it never produced one).
+ * The position is recorded because concurrent steps — `ctx.parallel`, or a
+ * `Promise.all` of `ctx.runStep` — settle in an order their declaration order
+ * does not predict. Replay is what makes this whole across a suspension:
+ * the engine re-executes the workflow body from the top on every activation,
+ * so a `step.do` whose result is memoized still re-registers its rollback
+ * before a later step can fail. Compensations are plain calls, not durable
+ * steps — a crash *during* the unwind leaves it half-done, and `rollbackConfig`
+ * is ignored.
+ *
+ * `config.timeout` is deliberately NOT emulated. The contract hands the callback
+ * no `AbortSignal`, so the best this seam could do is reject while the work it
+ * was supposed to cancel keeps running — a step that reports failure and then
+ * completes its side effect is worse than one that takes too long. Rated
+ * `unsupported` in `NODE_CAPABILITIES`'s `workflows` note for that reason.
+ */
+const createStepAdapter = (context: RunContext): WorkflowStepLike => {
+    /**
+     * Rollbacks registered by steps that completed in THIS activation. Rebuilt
+     * on every replay, which is exactly what makes it complete — see above.
+     */
+    const compensations: Compensation[] = [];
+
+    /**
+     * Counts `step.do` CALLS, so a compensation records where its step was
+     * declared rather than when it happened to settle. Rebuilt on every replay
+     * alongside `compensations`, and read before the call awaits anything, so
+     * concurrent steps still take their positions in source order.
+     */
+    let declared = 0;
+
+    return {
+        do: async (
+            name: string,
+            configOrCallback: WorkflowStepConfigLike | ((context: WorkflowStepContextLike) => Promise<unknown>),
+            callbackOrRollback?: ((context: WorkflowStepContextLike) => Promise<unknown>) | WorkflowStepRollbackOptionsLike,
+            maybeRollback?: WorkflowStepRollbackOptionsLike,
+        ) => {
+            const order = declared;
+
+            declared += 1;
+
+            const hasConfig = typeof configOrCallback !== "function";
+            const callback = hasConfig ? (callbackOrRollback as (context: WorkflowStepContextLike) => Promise<unknown>) : configOrCallback;
+            const rollback = hasConfig ? maybeRollback : (callbackOrRollback as WorkflowStepRollbackOptionsLike);
+
+            if (typeof callback !== "function") {
+                throw new LunoraError("VALIDATION_ERROR", `@lunora/platform-node: step.do("${name}") requires a callback`);
+            }
+
+            const config = hasConfig ? configOrCallback : DEFAULT_STEP_CONFIG;
+            const declaredLimit = config.retries?.limit ?? 1;
+
+            // `Math.trunc` and `Math.max` both propagate `NaN` and `Infinity`,
+            // so an unvalidated limit leaves `attempt >= limit` forever false
+            // and the attempt loop never ends. Rejected here rather than in
+            // `defineStep` because this is where every path converges: a direct
+            // `step.do(name, config, cb)` never sees `defineStep`, and
+            // `ctx.runStep(step, args, { config })` can override whatever it
+            // declared.
+            if (!Number.isFinite(declaredLimit)) {
+                throw new LunoraError(
+                    "VALIDATION_ERROR",
+                    `@lunora/platform-node: step.do("${name}") retries.limit must be a finite number, got ${String(declaredLimit)}`,
+                );
+            }
+
+            const limit = Math.max(1, Math.trunc(declaredLimit));
+            const configuredDelay = config.retries?.delay;
+            const baseDelay = configuredDelay === undefined || typeof configuredDelay === "function" ? 0 : toMs(configuredDelay);
+
+            // The last attempt's context, so a rollback reports the attempt the
+            // step actually ran on rather than a freshly minted 1.
+            let lastContext = stepContext(name, 1, config);
+
+            try {
+                const output = await context.step(name, async () => {
+                    for (let attempt = 1; ; attempt += 1) {
+                        lastContext = stepContext(name, attempt, config);
+
+                        try {
+                            // eslint-disable-next-line no-await-in-loop -- attempts are sequential by definition
+                            return await callback(lastContext);
+                        } catch (error) {
+                            if (attempt >= limit) {
+                                throw error;
+                            }
+
+                            // eslint-disable-next-line no-await-in-loop -- see above
+                            const wait = await retryWaitMs(config, baseDelay, attempt, lastContext, error);
+
+                            if (wait > 0) {
+                                // eslint-disable-next-line no-await-in-loop -- see above
+                                await delay(wait);
+                            }
+                        }
+                    }
+                });
+
+                if (rollback?.rollback !== undefined) {
+                    compensations.push({ context: lastContext, handler: rollback.rollback, name, order, output });
+                }
+
+                return output;
+            } catch (error) {
+                if (rollback?.rollback !== undefined) {
+                    compensations.push({
+                        context: lastContext,
+                        handler: rollback.rollback,
+                        name,
+                        order,
+                        output: undefined,
+                    });
+                }
+
+                await compensate(compensations, error);
+
+                throw error;
+            }
+        },
+        sleep: async (name, duration) => {
+            const ms = toMs(duration);
+
+            if (ms === 0) {
+                return;
+            }
+
+            await context.sleep(name, ms);
+        },
+        sleepUntil: async (name, timestamp) => {
+            const target = typeof timestamp === "number" ? timestamp : timestamp.getTime();
+
+            // An invalid `Date` yields `NaN`, which `Math.max` propagates straight
+            // through to `context.sleep`.
+            if (!Number.isFinite(target)) {
+                throw new LunoraError("VALIDATION_ERROR", `@lunora/platform-node: step.sleepUntil("${name}") needs a valid timestamp`);
+            }
+
+            const ms = Math.max(0, target - Date.now());
+
+            if (ms === 0) {
+                return;
+            }
+
+            await context.sleep(name, ms);
+        },
+        waitForEvent: (async (name, options) => {
+            const payload = await context.waitForEvent(name, options.type, {
+                timeout: options.timeout === undefined ? undefined : toMs(options.timeout),
+            });
+
+            return { payload, type: options.type };
+        }) as WorkflowStepLike["waitForEvent"],
+    };
+};
+
+/** Options for {@link createNodeWorkflowHost}. */
+interface NodeWorkflowHostOptions<Workflows extends Record<string, { isLunoraWorkflow: true }>> {
+    /** Base env merged under the derived workflow bindings — surfaced to workflow bodies as `ctx.env` and used to resolve spawned children. */
+    env?: Record<string, unknown>;
+    /** How long (ms) the engine holds a cross-process lease while an activation runs, for stores that implement `acquire`. Defaults to 30000. */
+    leaseTtlMs?: number;
+    /** Where runs are persisted. Required — see the header for why there is no default. `createNodeWorkflowStore(database)` is the durable one. */
+    store: WorkflowStore;
+    /** The declared workflows keyed by their `lunora/workflows.ts` export name (e.g. `{ orderPipeline: orderPipeline }`). Values must be `defineWorkflow` results. */
+    workflows: Workflows;
+}
+
+/** A fully-wired Node workflow host. */
+interface NodeWorkflowHost<Workflows extends Record<string, { isLunoraWorkflow: true }>> {
+    /** Per-export-name `WorkflowBindingLike` — the map `ctx.workflows` consumes. */
+    readonly bindings: { [K in keyof Workflows]: WorkflowBindingLike };
+
+    /**
+     * The caller's `env` plus one binding per workflow under its class name
+     * (`OrderPipelineWorkflow`), the key `ctx.exports` would carry on Cloudflare —
+     * merge this into a worker env so `ctx.spawn`/`ctx.parallel` resolve
+     * children through the same runtime.
+     */
+    readonly env: Record<string, unknown>;
+    /** The underlying visulima runtime — `sweep`/`signal` for a dev loop or tests. */
+    readonly runtime: WorkflowRuntime;
+}
+
+/**
+ * Create a Node workflow host: compile every declared Lunora workflow onto the
+ * visulima engine, derive the workflow env, and expose the per-workflow
+ * `WorkflowBindingLike` handles.
+ */
+const createNodeWorkflowHost = <Workflows extends Record<string, { isLunoraWorkflow: true }>>(
+    options: NodeWorkflowHostOptions<Workflows>,
+): NodeWorkflowHost<Workflows> => {
+    // One pass, so `id` is a `string` by construction downstream — the earlier
+    // shape (validate into a Map, re-index, re-validate to recover the
+    // narrowing, then two `as string`) asserted three times what this proves once.
+    const compiled = Object.entries(options.workflows).map(([exportName, value]) => {
+        if (!isWorkflowDefinition(value)) {
+            throw new LunoraError("VALIDATION_ERROR", `@lunora/platform-node: "${exportName}" is not a defineWorkflow result`);
+        }
+
+        return { definition: value, exportName, id: value.name ?? workflowDefaultName(exportName) };
+    });
+
+    const { store } = options;
+    const env: Record<string, unknown> = { ...options.env };
+
+    const visulimaWorkflows = compiled.map(({ definition, exportName, id }) =>
+        defineVisulimaWorkflow({
+            id,
+            tags: [exportName],
+            run: async (runContext: RunContext) => {
+                const step = createStepAdapter(runContext);
+                const context = createWorkflowRunContext({
+                    env,
+                    event: {
+                        instanceId: runContext.runId,
+                        payload: runContext.payload as Record<string, unknown>,
+                        timestamp: new Date(),
+                        workflowName: id,
+                    },
+                    exportName,
+                    step,
+                });
+
+                return await definition.handler(context);
+            },
+        }),
+    );
+
+    /**
+     * Ids terminated by this host.
+     *
+     * `terminate` writes its tombstone through `store` directly, which is
+     * outside the engine's per-run activation queue. An activation already in
+     * flight therefore runs to completion and its own `save` lands *after* the
+     * tombstone — the run reports `terminated`, then reports its output. The
+     * engine exposes no cancellation hook, but it does route every write through
+     * the store it was handed, so the barrier goes there: writes for a
+     * terminated run are dropped.
+     *
+     * In-process only, and deliberately: an activation racing a `terminate` is
+     * by definition in this process. A `terminate` in one process cannot stop an
+     * activation in another — that needs the lease, not a set.
+     */
+    const terminated = new Set<string>();
+
+    // Rebuilt member by member rather than spread: `MemoryStore` is a class, so
+    // its methods live on the prototype and `{ ...store }` would copy none of them.
+    const guardedStore: WorkflowStore = {
+        acquire: store.acquire === undefined ? undefined : async (runId, token, ttlMs) => store.acquire?.(runId, token, ttlMs) ?? false,
+        delete: async (runId) => store.delete(runId),
+        due: async (now, limit) => store.due(now, limit),
+        // Tombstones and aliases are this host's bookkeeping, not runs. They
+        // share the store because it is the only durable thing here, but handing
+        // one to the engine makes it look up a `definitionId` no workflow is
+        // registered under — which is how an in-flight activation that reloaded
+        // a terminated run used to surface as "No workflow registered with id
+        // @lunora/platform-node:terminated" instead of "this run is gone".
+        load: async (runId) => {
+            const row = await store.load(runId);
+
+            return row === undefined || row.definitionId === TERMINATED_DEFINITION_ID || row.definitionId === ALIAS_DEFINITION_ID ? undefined : row;
+        },
+        release: store.release === undefined ? undefined : async (runId, token) => store.release?.(runId, token),
+        save: async (run) => {
+            if (terminated.has(run.runId)) {
+                return;
+            }
+
+            await store.save(run);
+        },
+    };
+
+    const runtime = createRuntime({ leaseTtlMs: options.leaseTtlMs, store: guardedStore, workflows: visulimaWorkflows });
+
+    /**
+     * Drop a run and its stored state. Returns `false` when `id` names no run.
+     * Marked terminated first, like `terminate`, so an activation in flight
+     * cannot write the run back; unlike `terminate` it leaves no tombstone, so
+     * a deleted run reads back as `unknown`.
+     */
+    const deleteRun = async (id: string): Promise<boolean> => {
+        const current = await store.load(id);
+
+        if (current === undefined || current.definitionId === ALIAS_DEFINITION_ID) {
+            return false;
+        }
+
+        terminated.add(id);
+        await store.delete(id);
+
+        // The caller-supplied id is freed with the run, however the run was
+        // reached: a surviving alias would turn a later `create({ id })` into a
+        // "retried create" of the deleted run.
+        const reverse = await store.load(aliasOfKey(id));
+
+        if (reverse !== undefined) {
+            await store.delete(reverse.snapshot as string);
+            await store.delete(aliasOfKey(id));
+        }
+
+        return true;
+    };
+
+    const instanceFor = (id: string): WorkflowInstanceLike => {
+        return {
+            delete: async () => {
+                await deleteRun(id);
+            },
+            id,
+            pause: () =>
+                Promise.reject(
+                    new LunoraError(
+                        "NOT_IMPLEMENTED",
+                        `@lunora/platform-node: workflow instance "${id}" cannot be paused — the visulima engine has no pause equivalent`,
+                    ),
+                ),
+            restart: () =>
+                Promise.reject(
+                    new LunoraError(
+                        "NOT_IMPLEMENTED",
+                        `@lunora/platform-node: workflow instance "${id}" cannot be restarted — the visulima engine has no restart equivalent`,
+                    ),
+                ),
+            resume: async () => {
+                // The tombstone carries a `definitionId` no workflow is registered
+                // under, so handing it to the engine surfaces its "no workflow
+                // registered with id …" error instead of the state the caller asked
+                // about. `sendEvent` and `sweep` already screen it out.
+                const current = await store.load(id);
+
+                if (current?.definitionId === TERMINATED_DEFINITION_ID) {
+                    throw new LunoraError("BAD_REQUEST", `@lunora/platform-node: workflow instance "${id}" was terminated and cannot be resumed`);
+                }
+
+                await runtime.resume(id);
+            },
+            sendEvent: async (event) => {
+                const run = await runtime.getRun(id);
+
+                if (run?.status !== "waiting" || run.pending?.kind !== "event" || run.pending.eventName !== event.type) {
+                    throw new LunoraError("BAD_REQUEST", `@lunora/platform-node: workflow instance "${id}" is not waiting for event "${event.type}"`);
+                }
+
+                await runtime.signal(id, event.type, event.payload);
+            },
+            subscribe: () =>
+                Promise.reject(
+                    new LunoraError(
+                        "NOT_IMPLEMENTED",
+                        `@lunora/platform-node: workflow instance "${id}" cannot be subscribed to — the visulima engine keeps no per-instance event log to replay`,
+                    ),
+                ),
+            status: async (): Promise<WorkflowStatusResult> => {
+                // The store read comes first and answers two of the three cases
+                // outright, so the miss path costs one load rather than the two
+                // it would take to ask the runtime and then check for a tombstone.
+                const stored = await store.load(id);
+
+                if (stored === undefined) {
+                    return { status: "unknown" };
+                }
+
+                if (stored.definitionId === TERMINATED_DEFINITION_ID) {
+                    return { status: "terminated" };
+                }
+
+                const run = await runtime.getRun(id);
+
+                if (run === undefined) {
+                    return { status: "unknown" };
+                }
+
+                return {
+                    error: run.error === undefined ? undefined : { message: run.error.message, name: run.error.name },
+                    output: run.output,
+                    status: mapStatus(run.status),
+                };
+            },
+            terminate: async () => {
+                // Only a run that exists can be terminated. Writing the tombstone
+                // unconditionally would mint a row for any string a caller passed
+                // to `get()`, so `status()` would report `terminated` for an id
+                // that was never a run — and the store would grow one row per
+                // such call, forever.
+                if ((await store.load(id)) === undefined) {
+                    return;
+                }
+
+                // Marked before the writes, so an activation that lands between
+                // the delete and the tombstone is dropped too.
+                terminated.add(id);
+
+                // Delete before writing the tombstone: `save` is an upsert of the
+                // run row alone, so on its own it would leave the run's lease held
+                // until expiry. `delete` drops both.
+                await store.delete(id);
+
+                // Then a tombstone rather than nothing: a deleted run reads back
+                // as `unknown`, which is also what an invalid instance id returns,
+                // so the caller loses the ability to tell the two apart.
+                await store.save({
+                    definitionId: TERMINATED_DEFINITION_ID,
+                    runId: id,
+                    snapshot: undefined,
+                    status: "failed",
+                    updatedAt: Date.now(),
+                });
+            },
+        };
+    };
+
+    /** Resolve a caller-supplied id to the run it names, or return it unchanged. */
+    const resolveAlias = async (instanceId: string): Promise<string> => {
+        const row = await store.load(instanceId);
+
+        return row?.definitionId === ALIAS_DEFINITION_ID ? (row.snapshot as string) : instanceId;
+    };
+
+    /** Start a run, honouring a caller-supplied id by aliasing it to the minted one. */
+    const startRun = async (definitionId: string, createOptions?: { id?: string; params?: unknown }): Promise<WorkflowInstanceLike> => {
+        if (createOptions?.id === undefined) {
+            const result = await runtime.trigger(definitionId, createOptions?.params);
+
+            return instanceFor(result.runId);
+        }
+
+        const existing = await store.load(createOptions.id);
+
+        // A retried create with the same id is the same run, not a second one.
+        if (existing?.definitionId === ALIAS_DEFINITION_ID) {
+            return instanceFor(existing.snapshot as string);
+        }
+
+        // An id that already names a real run is refused rather than aliased
+        // over. The alias write is an upsert, so proceeding would replace that
+        // run's row with a pointer to a new one — the completed run then reads
+        // back as `unknown` and its output is gone, which is what the natural
+        // "retry the create with the id I was given" pattern would do.
+        if (existing !== undefined) {
+            throw new LunoraError(
+                "BAD_REQUEST",
+                `@lunora/platform-node: workflow create({ id: "${createOptions.id}" }) names an existing run — pass the id a previous create returned, or a fresh one`,
+            );
+        }
+
+        const result = await runtime.trigger(definitionId, createOptions.params);
+
+        try {
+            await store.save({
+                definitionId: ALIAS_DEFINITION_ID,
+                runId: createOptions.id,
+                snapshot: result.runId,
+                status: "failed",
+                updatedAt: Date.now(),
+            });
+            // The reverse pointer, so deleting the run by either id frees the alias.
+            await store.save({
+                definitionId: ALIAS_DEFINITION_ID,
+                runId: aliasOfKey(result.runId),
+                snapshot: createOptions.id,
+                status: "failed",
+                updatedAt: Date.now(),
+            });
+        } catch (error) {
+            // The run exists but no alias names it, so the caller's retry with this id would start a second run.
+            // Remove the run before reporting the failure, so a failed create leaves nothing behind.
+            await deleteRun(result.runId);
+
+            throw error;
+        }
+
+        return instanceFor(result.runId);
+    };
+
+    const bindings: Record<string, WorkflowBindingLike> = {};
+
+    for (const { exportName, id } of compiled) {
+        const binding: WorkflowBindingLike = {
+            create: async (createOptions) => startRun(id, createOptions),
+            // Sequential, not `Promise.all`: two entries sharing a caller id must
+            // collapse onto one run, and concurrent alias reads would both miss.
+            // Object form, as Cloudflare's binding: an entry that fails is reported
+            // in `errors` at its input index and the rest still run.
+            createBatch: async (batchOptions) => {
+                const entries = batchEntriesOf(batchOptions);
+                const created: WorkflowInstanceLike[] = [];
+                const errors: WorkflowCreateBatchError[] = [];
+                const claimed = new Set<string>();
+
+                for (const [index, createOptions] of entries.entries()) {
+                    const instanceId = createOptions.id;
+
+                    // Cloudflare refuses a repeated id and an id that already names an instance, and reports each one at its
+                    // index. A single create's "same id is the same run" retry does not apply inside a batch.
+                    // eslint-disable-next-line no-await-in-loop -- the alias write of one entry must be visible to the next entry's check
+                    const taken = instanceId !== undefined && (claimed.has(instanceId) || (await store.load(instanceId)) !== undefined);
+
+                    if (instanceId !== undefined && taken) {
+                        errors.push({ code: 409, id: instanceId, index, message: `workflow instance "${instanceId}" already exists in this batch or store` });
+
+                        continue;
+                    }
+
+                    if (instanceId !== undefined) {
+                        claimed.add(instanceId);
+                    }
+
+                    try {
+                        // eslint-disable-next-line no-await-in-loop -- see above; the alias read must observe the previous entry's write
+                        created.push(await startRun(id, createOptions));
+                    } catch (error) {
+                        // A refused create (a bad request) is a 400, anything else a 500.
+                        errors.push({
+                            code: error instanceof LunoraError ? 400 : 500,
+                            id: instanceId,
+                            index,
+                            message: error instanceof Error ? error.message : String(error),
+                        });
+                    }
+                }
+
+                return { created, errors };
+            },
+            // Sequential for the same reason as `createBatch`: a duplicate id must
+            // find the first entry's delete, so it is reported deleted, not missing.
+            deleteBatch: async (instanceIds) => {
+                if (instanceIds.length > MAX_DELETE_BATCH) {
+                    throw new LunoraError(
+                        "VALIDATION_ERROR",
+                        `@lunora/platform-node: deleteBatch takes at most ${String(MAX_DELETE_BATCH)} instance ids, got ${String(instanceIds.length)}`,
+                    );
+                }
+
+                const result: WorkflowBatchDeleteResult = { deleted: [], errors: [] };
+                // Per input id: a duplicate repeats its first outcome, as Cloudflare does —
+                // re-resolving it would miss, since the first delete freed its alias.
+                const outcomes = new Map<string, boolean>();
+
+                for (const instanceId of instanceIds) {
+                    // eslint-disable-next-line no-await-in-loop -- see above
+                    const deleted = outcomes.get(instanceId) ?? (await deleteRun(await resolveAlias(instanceId)));
+
+                    outcomes.set(instanceId, deleted);
+
+                    if (deleted) {
+                        result.deleted.push({ id: instanceId });
+                    } else {
+                        result.errors.push({ code: 404, id: instanceId, message: `workflow instance "${instanceId}" not found` });
+                    }
+                }
+
+                return result;
+            },
+            get: async (instanceId) => instanceFor(await resolveAlias(instanceId)),
+        };
+
+        bindings[exportName] = binding;
+        env[workflowClassName(exportName)] = binding;
+    }
+
+    return { bindings: bindings as NodeWorkflowHost<Workflows>["bindings"], env, runtime };
+};
+
+export { createNodeWorkflowHost };
+export type { NodeWorkflowHost, NodeWorkflowHostOptions };

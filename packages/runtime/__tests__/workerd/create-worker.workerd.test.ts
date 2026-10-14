@@ -25,6 +25,10 @@ describe("createWorker (workerd)", () => {
                 authorization: "Bearer test-token",
                 "content-type": "application/json",
                 cookie: "session=abc",
+                // Same-origin `Origin` — the runtime's CSRF guard rejects a
+                // cookie-bearing request without one (that's the point of the
+                // guard); a real same-origin browser fetch always sends it.
+                origin: "https://app.test",
                 "x-d1-bookmark": "bookmark-v1",
             },
             method: "POST",

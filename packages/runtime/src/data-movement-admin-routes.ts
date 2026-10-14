@@ -8,16 +8,20 @@
  *
  * Each handler reaches the admin gate, the coordinator, the shard namespace, and
  * the export/import primitives through the injected {@link DataMovementAdminRouteDeps}.
- * The export/import row producers (`streamExportRows` / `streamingImport`) are
+ * The export/import row producers (`prepareExportRows` / `streamingImport`) are
  * injected rather than imported because they close over the worker options and
  * are shared with the scheduled R2 backup — so this module imports no runtime
  * values from `create-worker`, only the shared `./body-readers` + `./connector-cdc`
  * and the coordinator / connector-format types.
  */
-import { readBodyTextWithLimit, readJsonBodyWithLimit } from "./body-readers";
-import { decodeConnectorCursor, encodeConnectorCursor, foldCdcPage } from "./connector-cdc";
+import { readJsonBodyWithLimit, readLooseJsonBody } from "./body-readers";
+import { decodeConnectorCursor, encodeConnectorCursor, foldCdcPage, shardCdcPageSize } from "./connector-cdc";
 import type { ConnectorChange, ConnectorSyncPage } from "./connector-format";
 import { LunoraError } from "./errors";
+import type { ExportRow } from "./export-stream";
+import type { ExportCursorStore, ExportSink } from "./export-tap";
+import { runExportTap } from "./export-tap";
+import { methodGuard } from "./method-guard";
 import type { QueryCoordinator } from "./query-coordinator";
 import type { ShardNamespaceLike } from "./resolve-shard";
 
@@ -26,12 +30,14 @@ const IMPORT_PATH = "/_lunora/admin/import";
 const SYNC_PATH = "/_lunora/admin/sync";
 const CONNECTOR_SYNC_PATH = "/_lunora/admin/connector/sync";
 const APPLY_PATH = "/_lunora/admin/apply";
-
-/** One exported row — a table name plus its document. Mirrors the export primitive's row shape. */
-type ExportRow = { doc: Record<string, unknown>; table: string };
+/** Server-owned continuous CDC export tap drain (plan 170). Distinct from the STATELESS `/sync` + `/connector/sync` pulls. */
+const EXPORT_TAP_RUN_PATH = "/_lunora/admin/export-tap/run";
 
 /** Per-row import failure surfaced back to the caller. */
 type ImportRowError = { code: string; line: number; message: string; table: string };
+
+/** A shard the import fan-out never reached — no row of it is at fault, and an unknown slice of the batch is unwritten. */
+type ImportShardFailure = { message: string; shardKey: string; timedOut: boolean };
 
 /** NDJSON line encoder for the streaming export response. */
 const NDJSON_ENCODER = new TextEncoder();
@@ -41,19 +47,7 @@ interface ExportBody {
 }
 
 const parseExportBody = async (request: Request): Promise<ExportBody> => {
-    let body: unknown;
-
-    try {
-        const text = await readBodyTextWithLimit(request);
-
-        body = text === "" ? {} : JSON.parse(text);
-    } catch (error) {
-        if (error instanceof LunoraError) {
-            throw error;
-        }
-
-        throw new LunoraError("Export body must be valid JSON", { code: "BAD_REQUEST", status: 400 });
-    }
+    const body = await readLooseJsonBody(request, "Export");
 
     const candidate = (body ?? {}) as { tables?: unknown };
 
@@ -78,77 +72,101 @@ const parseExportBody = async (request: Request): Promise<ExportBody> => {
     return { tables };
 };
 
+/** Narrow an untrusted `tables` value to its string entries, or `undefined` when it isn't an array. */
+const stringTables = (raw: unknown): string[] | undefined =>
+    Array.isArray(raw) ? raw.filter((table): table is string => typeof table === "string") : undefined;
+
 /** The worker internals the data-movement routes reach through injection rather than closure. */
 interface DataMovementAdminRouteDeps {
     /** Apply `.global()` (D1) CDC changes; absent when no global plane is configured. */
     applyGlobals?: (request: { changes: ReadonlyArray<Record<string, unknown>> }) => Promise<number>;
-    /** Admin-token gate predicate (header bearer check). */
-    isAdmin: (request: Request) => boolean;
+    /** Enforce the admin bearer for an endpoint that needs no optional dependency. */
+    assertAdmin: (request: Request) => void;
+    /** The worker's default shard, so an empty discovery still reaches the root DO. */
+    defaultShardKey: string;
+    /** Durable per-shard cursor store backing the continuous export tap; absent → the tap route reports not-configured. */
+    exportCursorStore?: ExportCursorStore;
+    /** Named export sinks (webhook / R2 / custom) the tap can drain to; absent / empty → the tap route reports not-configured. */
+    exportSinks?: Record<string, ExportSink>;
     /** Best-effort enumeration of known tables for the auto-discovery path (bound to the worker's table resolver). */
     knownTables: () => string[];
-    /** The cross-shard query coordinator; absent on a single-DO deployment. */
-    queryCoordinator?: QueryCoordinator;
-    /** Resolve the headers forwarded to each shard (incl. the inbound admin bearer + identity). */
-    resolveForwardContext: (request: Request, env: unknown) => Promise<{ headers: Record<string, string> }>;
-    /** The shard DO namespace fanned across. */
-    shardDO: ShardNamespaceLike;
 
     /**
-     * Produce export rows (shard-local then global), invoking `writeRow` per row.
-     * Injected because it closes over the worker options and is shared with the
-     * scheduled R2 backup.
+     * Settle the shard-local export fan-out and return every row (shard-local
+     * then global). Injected because it closes over the worker options and is
+     * shared with the scheduled R2 backup.
      */
-    streamExportRows: (
-        coordinator: QueryCoordinator,
-        headers: Record<string, string>,
-        tables: ReadonlyArray<string> | undefined,
-        writeRow: (row: ExportRow) => void,
-    ) => Promise<void>;
+    prepareExportRows: (headers: Record<string, string>, tables: ReadonlyArray<string> | undefined) => Promise<AsyncIterable<ExportRow>>;
+    /** The cross-shard query coordinator (the worker's own, or its default). */
+    queryCoordinator: QueryCoordinator;
+    /** Resolve the headers forwarded to each shard (incl. the inbound admin bearer + identity). */
+    resolveForwardContext: (request: Request, env: unknown) => Promise<{ headers: Record<string, string> }>;
+
+    /** The shard DO namespace fanned across. */
+    shardDO: ShardNamespaceLike;
     /** Stream-parse + fan-out an NDJSON import body (bound to the worker options). */
     streamingImport: (
         request: Request,
         headers: Record<string, string>,
-    ) => Promise<{ conflicts: number; errors: ReadonlyArray<ImportRowError>; inserted: Record<string, number> }>;
+    ) => Promise<{
+        conflicts: number;
+        errors: ReadonlyArray<ImportRowError>;
+        /** Shards the fan-out could not write to at all — a non-empty array means the import was PARTIAL. */
+        failed: ReadonlyArray<ImportShardFailure>;
+        inserted: Record<string, number>;
+        received: number;
+        warnings?: ReadonlyArray<string>;
+    }>;
     /** Read a page of `.global()` (D1) CDC changes; absent when no global plane is configured. */
     syncGlobals?: (request: { limit?: number; sinceSeq: number }) => Promise<{ changes: ReadonlyArray<Record<string, unknown>>; cursor: number }>;
 }
 
 /** Build the data-movement route map merged into the worker's internal route table. */
 const buildDataMovementAdminRoutes = (deps: DataMovementAdminRouteDeps): Record<string, (request: Request, env: unknown) => Promise<Response>> => {
-    const { applyGlobals, isAdmin, knownTables, queryCoordinator, resolveForwardContext, shardDO, streamExportRows, streamingImport, syncGlobals } = deps;
+    const {
+        applyGlobals,
+        defaultShardKey,
+        exportCursorStore,
+        exportSinks,
+        knownTables,
+        queryCoordinator: coordinator,
+        assertAdmin,
+        resolveForwardContext,
+        shardDO,
+        prepareExportRows,
+        streamingImport,
+        syncGlobals,
+    } = deps;
 
     const handleExport = async (request: Request, env: unknown): Promise<Response> => {
-        if (request.method !== "POST") {
-            throw new LunoraError("Export endpoint requires POST", { code: "METHOD_NOT_ALLOWED", status: 405 });
+        const wrongMethod = methodGuard(request, ["POST"]);
+
+        if (wrongMethod) {
+            return wrongMethod;
         }
 
-        if (!isAdmin(request)) {
-            throw new LunoraError("admin export endpoint requires a valid admin bearer", { code: "ADMIN_FORBIDDEN", status: 403 });
-        }
-
-        const coordinator = queryCoordinator;
-
-        if (!coordinator) {
-            throw new LunoraError("Export endpoint requires a `queryCoordinator` on the worker", { code: "BAD_REQUEST", status: 400 });
-        }
+        assertAdmin(request);
 
         const body = await parseExportBody(request);
 
         const { headers: forwardedHeaders } = await resolveForwardContext(request, env);
 
-        // Stream NDJSON: shard-local rows first, then global rows. Caveat: each
-        // shard returns a single materialised envelope, and the whole fan-out is
-        // collected before the stream drains, so peak worker memory still scales
-        // with the total shard-local row count — the streaming only keeps the
-        // *response* from being buffered, it does not bound the source data.
+        // The shard-local fan-out settles HERE, before any status is committed, so
+        // a failed shard (502) or a `.shardBy()` table the registry cannot list
+        // (400) answers with a real status. Past this point only the `.global()`
+        // rows can still fail, and those end the body as an errored stream.
+        // Caveat: each shard returns a single materialised envelope, so peak
+        // worker memory scales with the total shard-local row count — the
+        // streaming only keeps the *response* from being buffered.
+        const rows = await prepareExportRows(forwardedHeaders, body.tables);
+
         const stream = new ReadableStream<Uint8Array>({
             async pull(controller) {
-                const writeRow = (row: ExportRow): void => {
-                    controller.enqueue(NDJSON_ENCODER.encode(`${JSON.stringify(row)}\n`));
-                };
-
                 try {
-                    await streamExportRows(coordinator, forwardedHeaders, body.tables, writeRow);
+                    for await (const row of rows) {
+                        controller.enqueue(NDJSON_ENCODER.encode(`${JSON.stringify(row)}\n`));
+                    }
+
                     controller.close();
                 } catch (error: unknown) {
                     controller.error(error);
@@ -165,27 +183,36 @@ const buildDataMovementAdminRoutes = (deps: DataMovementAdminRouteDeps): Record<
      * gets back each shard's change page plus its new cursor, and the global
      * (D1) page when `syncGlobals` is configured. Stateless: the consumer owns
      * the cursors and re-posts them to resume, so the worker holds no offsets.
+     *
+     * Each shard's page also carries the CDC `epoch` its cursor belongs to, and
+     * the caller may post those back in a parallel `epochs` map. Both halves are
+     * optional and additive: a caller that ignores `epoch` and never sends
+     * `epochs` gets byte-for-byte the behaviour it had. One that stores the pair
+     * and echoes it is refused (that shard's `error`, its prior cursor echoed)
+     * when the shard's timeline forked after the page it last read — which the
+     * cursor alone stops being able to prove as soon as post-restore writes
+     * carry the high-watermark back over it.
+     *
+     * The global (D1) half deliberately has no counterpart. An epoch is the
+     * fan-out of a detection, and that plane has no detector to fan out — no
+     * `.global()` changelog archive, so nothing seals a fork with no consumer
+     * present. `globalCursor` stays a bare integer.
      */
     const handleCdcSync = async (request: Request, env: unknown): Promise<Response> => {
-        if (request.method !== "POST") {
-            throw new LunoraError("Sync endpoint requires POST", { code: "METHOD_NOT_ALLOWED", status: 405 });
+        const wrongMethod = methodGuard(request, ["POST"]);
+
+        if (wrongMethod) {
+            return wrongMethod;
         }
 
-        if (!isAdmin(request)) {
-            throw new LunoraError("admin sync endpoint requires a valid admin bearer", { code: "ADMIN_FORBIDDEN", status: 403 });
-        }
-
-        const coordinator = queryCoordinator;
-
-        if (!coordinator) {
-            throw new LunoraError("Sync endpoint requires a `queryCoordinator` on the worker", { code: "BAD_REQUEST", status: 400 });
-        }
+        assertAdmin(request);
 
         const raw = await readJsonBodyWithLimit(request);
         const cursors = typeof raw["cursors"] === "object" && raw["cursors"] !== null ? (raw["cursors"] as Record<string, number>) : {};
+        const epochs = typeof raw["epochs"] === "object" && raw["epochs"] !== null ? (raw["epochs"] as Record<string, string>) : {};
         const limit = typeof raw["limit"] === "number" ? raw["limit"] : undefined;
         const globalCursor = typeof raw["globalCursor"] === "number" ? raw["globalCursor"] : 0;
-        const requestedTables = Array.isArray(raw["tables"]) ? raw["tables"].filter((table): table is string => typeof table === "string") : undefined;
+        const requestedTables = stringTables(raw["tables"]);
 
         const { headers: forwardedHeaders } = await resolveForwardContext(request, env);
 
@@ -194,6 +221,8 @@ const buildDataMovementAdminRoutes = (deps: DataMovementAdminRouteDeps): Record<
 
         const shardResult = await coordinator.orchestrateCdcSync(shardDO, {
             cursors,
+            defaultShardKey,
+            epochs,
             headers: forwardedHeaders,
             limit,
             tables: probeTables,
@@ -223,26 +252,34 @@ const buildDataMovementAdminRoutes = (deps: DataMovementAdminRouteDeps): Record<
      * delete with a monotonic per-source `seq`, so deletes ARE captured (a delete
      * surfaces as `{ op: "delete", doc: { _id } }`). A consumer maps the response
      * onto Fivetran/Airbyte via `toFivetranResponse` / `toAirbyteMessages`.
+     *
+     * **Why the cursor carries no per-shard CDC epoch, where {@link handleCdcSync}
+     * does.** Storing one would be free — the token is opaque, version-tagged,
+     * fail-soft-decoded, and already per-shard. What is not free is the refusal
+     * it would arm. `ConnectorSyncPage` is `{ changes, nextCursor, hasMore }`:
+     * it has no error channel, and this handler deliberately tolerates a failed
+     * shard by folding its (absent) changes and echoing its prior cursor. So a
+     * shard refusing a stale epoch would reach the consumer as an empty page
+     * with `hasMore: false` — "caught up" — which is strictly worse than the
+     * unguarded read it replaced, and exactly the silent degradation the epoch
+     * exists to prevent. Making it audible means giving this response an error
+     * channel, or failing the whole page on any one shard's error (which would
+     * also fail it on a single transient timeout it tolerates today). Either is
+     * a change to the published connector contract, and neither belongs here.
      */
     const handleConnectorSync = async (request: Request, env: unknown): Promise<Response> => {
-        if (request.method !== "POST") {
-            throw new LunoraError("Connector sync endpoint requires POST", { code: "METHOD_NOT_ALLOWED", status: 405 });
+        const wrongMethod = methodGuard(request, ["POST"]);
+
+        if (wrongMethod) {
+            return wrongMethod;
         }
 
-        if (!isAdmin(request)) {
-            throw new LunoraError("admin connector sync endpoint requires a valid admin bearer", { code: "ADMIN_FORBIDDEN", status: 403 });
-        }
-
-        const coordinator = queryCoordinator;
-
-        if (!coordinator) {
-            throw new LunoraError("Connector sync endpoint requires a `queryCoordinator` on the worker", { code: "BAD_REQUEST", status: 400 });
-        }
+        assertAdmin(request);
 
         const raw = await readJsonBodyWithLimit(request);
         const state = decodeConnectorCursor(raw["cursor"]);
         const limit = typeof raw["limit"] === "number" && raw["limit"] > 0 ? raw["limit"] : undefined;
-        const requestedTables = Array.isArray(raw["tables"]) ? raw["tables"].filter((table): table is string => typeof table === "string") : undefined;
+        const requestedTables = stringTables(raw["tables"]);
 
         const { headers: forwardedHeaders } = await resolveForwardContext(request, env);
 
@@ -251,6 +288,7 @@ const buildDataMovementAdminRoutes = (deps: DataMovementAdminRouteDeps): Record<
 
         const shardResult = await coordinator.orchestrateCdcSync(shardDO, {
             cursors: state.s,
+            defaultShardKey,
             headers: forwardedHeaders,
             limit,
             tables: probeTables,
@@ -262,7 +300,11 @@ const buildDataMovementAdminRoutes = (deps: DataMovementAdminRouteDeps): Record<
 
         for (const shard of shardResult.shards) {
             // A full page signals more rows likely remain past this cursor.
-            hasMore = foldCdcPage(changes, shard.changes ?? [], limit) || hasMore;
+            // Against the page size the SHARD applied, not the caller's `limit`:
+            // `limit` is optional here and the shard defaults an absent one to
+            // 1000, so comparing to `undefined` reported "caught up" on every
+            // full page of an unlimited sync.
+            hasMore = foldCdcPage(changes, shard.changes ?? [], shardCdcPageSize(limit)) || hasMore;
             nextShardCursors[shard.shardKey] = shard.cursor;
         }
 
@@ -272,6 +314,9 @@ const buildDataMovementAdminRoutes = (deps: DataMovementAdminRouteDeps): Record<
         if (syncGlobals) {
             const global = await syncGlobals({ limit, sinceSeq: state.g });
 
+            // The global plane's page cap belongs to the host's `syncGlobals`, so
+            // an absent `limit` leaves it genuinely unknown — unlike a shard's,
+            // it cannot be inferred here.
             hasMore = foldCdcPage(changes, global.changes, limit) || hasMore;
             nextGlobalCursor = global.cursor;
         }
@@ -283,7 +328,8 @@ const buildDataMovementAdminRoutes = (deps: DataMovementAdminRouteDeps): Record<
     };
 
     /**
-     * Replay endpoint behind `lunora backup restore --to &lt;time>`. Accepts
+     * Replay endpoint (`POST /_lunora/admin/apply`) for a connector replaying a
+     * `/sync` page; no `lunora` subcommand drives it today. Accepts
      * per-shard pre-bucketed batches (the shape `/sync` emits, so the caller
      * just forwards each shard's changes back to the same shard — no
      * re-bucketing, which also sidesteps deletes carrying no shard-key field)
@@ -291,19 +337,13 @@ const buildDataMovementAdminRoutes = (deps: DataMovementAdminRouteDeps): Record<
      * returns the counts.
      */
     const handleApplyCdc = async (request: Request, env: unknown): Promise<Response> => {
-        if (request.method !== "POST") {
-            throw new LunoraError("Apply endpoint requires POST", { code: "METHOD_NOT_ALLOWED", status: 405 });
+        const wrongMethod = methodGuard(request, ["POST"]);
+
+        if (wrongMethod) {
+            return wrongMethod;
         }
 
-        if (!isAdmin(request)) {
-            throw new LunoraError("admin apply endpoint requires a valid admin bearer", { code: "ADMIN_FORBIDDEN", status: 403 });
-        }
-
-        const coordinator = queryCoordinator;
-
-        if (!coordinator) {
-            throw new LunoraError("Apply endpoint requires a `queryCoordinator` on the worker", { code: "BAD_REQUEST", status: 400 });
-        }
+        assertAdmin(request);
 
         const raw = await readJsonBodyWithLimit(request);
         const rawBatches = Array.isArray(raw["batches"]) ? raw["batches"] : [];
@@ -328,36 +368,97 @@ const buildDataMovementAdminRoutes = (deps: DataMovementAdminRouteDeps): Record<
     };
 
     const handleImport = async (request: Request, env: unknown): Promise<Response> => {
-        if (request.method !== "POST") {
-            throw new LunoraError("Import endpoint requires POST", { code: "METHOD_NOT_ALLOWED", status: 405 });
+        const wrongMethod = methodGuard(request, ["POST"]);
+
+        if (wrongMethod) {
+            return wrongMethod;
         }
 
-        if (!isAdmin(request)) {
-            throw new LunoraError("admin import endpoint requires a valid admin bearer", { code: "ADMIN_FORBIDDEN", status: 403 });
-        }
-
-        if (!queryCoordinator) {
-            throw new LunoraError("Import endpoint requires a `queryCoordinator` on the worker", { code: "BAD_REQUEST", status: 400 });
-        }
+        assertAdmin(request);
 
         const { headers: forwardedHeaders } = await resolveForwardContext(request, env);
 
         const result = await streamingImport(request, forwardedHeaders);
 
+        // A shard the fan-out never reached leaves an unknown slice of the batch
+        // unwritten, and its rows contribute to neither `inserted` nor `errors`.
+        // Answering 200 there makes a partial write indistinguishable from a clean
+        // one to every client that checks the status code and nothing else — 207
+        // Multi-Status says "read the body", which is exactly the situation.
         return Response.json(result, {
             headers: { "content-type": "application/json" },
-            status: 200,
+            status: result.failed.length > 0 ? 207 : 200,
         });
+    };
+
+    /**
+     * Drive one drain pass of the continuous CDC export tap (plan 170) for a named
+     * sink. Server-owned + stateful (the OPPOSITE of `/sync` + `/connector/sync`,
+     * where the consumer owns the cursor): the tap reads the durable per-shard
+     * cursor, pulls the op-log change feed, delivers each shard's ordered batch to
+     * the sink with retry/backoff, and persists the advanced cursor — at-least-once.
+     *
+     * Request: `{ sink: string, limit?: number }`. Response: the {@link runExportTap}
+     * result (`delivered`, `cursors`, `failures`, `hasMore`, `shards`). Intended to
+     * be poked by a cron or an external scheduler; safe to call repeatedly.
+     */
+    const handleExportTapRun = async (request: Request, env: unknown): Promise<Response> => {
+        const wrongMethod = methodGuard(request, ["POST"]);
+
+        if (wrongMethod) {
+            return wrongMethod;
+        }
+
+        assertAdmin(request);
+
+        if (exportSinks === undefined || Object.keys(exportSinks).length === 0 || exportCursorStore === undefined) {
+            throw new LunoraError("Export-tap endpoint requires `exportSinks` + `exportCursorStore` on the worker", {
+                code: "EXPORT_TAP_NOT_CONFIGURED",
+                status: 400,
+            });
+        }
+
+        const raw = await readJsonBodyWithLimit(request);
+        const sinkName = typeof raw["sink"] === "string" ? raw["sink"] : undefined;
+        const limit = typeof raw["limit"] === "number" && raw["limit"] > 0 ? raw["limit"] : undefined;
+        const requestedTables = stringTables(raw["tables"]);
+
+        if (sinkName === undefined) {
+            throw new LunoraError("Export-tap `sink` must name a configured sink", { code: "BAD_REQUEST", status: 400 });
+        }
+
+        const sink = exportSinks[sinkName];
+
+        if (sink === undefined) {
+            throw new LunoraError(`Export-tap sink "${sinkName}" is not configured`, { code: "NOT_FOUND", status: 404 });
+        }
+
+        const { headers: forwardedHeaders } = await resolveForwardContext(request, env);
+        const probeTables = requestedTables ?? knownTables();
+
+        const result = await runExportTap({
+            coordinator,
+            cursorStore: exportCursorStore,
+            defaultShardKey,
+            headers: forwardedHeaders,
+            limit,
+            shardDO,
+            sink,
+            tables: probeTables,
+        });
+
+        return Response.json(result, { headers: { "content-type": "application/json" }, status: 200 });
     };
 
     return {
         [APPLY_PATH]: handleApplyCdc,
         [CONNECTOR_SYNC_PATH]: handleConnectorSync,
         [EXPORT_PATH]: handleExport,
+        [EXPORT_TAP_RUN_PATH]: handleExportTapRun,
         [IMPORT_PATH]: handleImport,
         [SYNC_PATH]: handleCdcSync,
     };
 };
 
-export type { DataMovementAdminRouteDeps, ExportRow };
-export { APPLY_PATH, buildDataMovementAdminRoutes, CONNECTOR_SYNC_PATH, EXPORT_PATH, IMPORT_PATH, SYNC_PATH };
+export type { DataMovementAdminRouteDeps };
+export { APPLY_PATH, buildDataMovementAdminRoutes, CONNECTOR_SYNC_PATH, EXPORT_PATH, EXPORT_TAP_RUN_PATH, IMPORT_PATH, SYNC_PATH };

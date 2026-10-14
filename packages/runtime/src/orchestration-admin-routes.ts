@@ -13,15 +13,18 @@
  * from `create-worker` — only the shared `./body-readers` and the coordinator /
  * resolve-shard types.
  */
-import { readBodyTextWithLimit, readJsonBodyWithLimit } from "./body-readers";
+import { readJsonBodyWithLimit, readLooseJsonBody } from "./body-readers";
 import { LunoraError } from "./errors";
+import { assertMethod } from "./method-guard";
 import type { QueryCoordinator, RankPageFanOutRequest } from "./query-coordinator";
+import { pruneShardRegistry } from "./query-coordinator";
 import type { ShardNamespaceLike } from "./resolve-shard";
 
 const MIGRATE_PATH = "/_lunora/migrate";
 const PITR_PATH = "/_lunora/admin/pitr";
 const RANK_PATH = "/_lunora/admin/rank";
 const RANKPAGE_PATH = "/_lunora/admin/rankpage";
+const SHARD_REGISTRY_PRUNE_PATH = "/_lunora/admin/shard-registry/prune";
 const SHARD_TRAFFIC_PATH = "/_lunora/admin/shard-traffic";
 
 /**
@@ -49,19 +52,7 @@ interface MigrateRequest {
  * fan arbitrary RPCs across every shard.
  */
 const parseMigrateRequest = async (request: Request): Promise<MigrateRequest> => {
-    let body: unknown;
-
-    try {
-        const text = await readBodyTextWithLimit(request);
-
-        body = text === "" ? {} : JSON.parse(text);
-    } catch (error) {
-        if (error instanceof LunoraError) {
-            throw error;
-        }
-
-        throw new LunoraError("Migration body must be valid JSON", { code: "BAD_REQUEST", status: 400 });
-    }
+    const body = await readLooseJsonBody(request, "Migration");
 
     const candidate = (body ?? {}) as { args?: unknown; functionPath?: unknown; table?: unknown };
 
@@ -97,19 +88,7 @@ interface RankRequestBody {
  * so only its type is enforced. Mirrors the shard's own `parseRankBeforeArgs`.
  */
 const parseRankRequest = async (request: Request): Promise<RankRequestBody> => {
-    let body: unknown;
-
-    try {
-        const text = await readBodyTextWithLimit(request);
-
-        body = text === "" ? {} : JSON.parse(text);
-    } catch (error) {
-        if (error instanceof LunoraError) {
-            throw error;
-        }
-
-        throw new LunoraError("Rank body must be valid JSON", { code: "BAD_REQUEST", status: 400 });
-    }
+    const body = await readLooseJsonBody(request, "Rank");
 
     const candidate = (body ?? {}) as { index?: unknown; partitionKey?: unknown; rowId?: unknown; sortValues?: unknown; table?: unknown };
 
@@ -204,19 +183,7 @@ const validateRankPageScalars = (candidate: RankPageCandidate): void => {
  * in-process request type for the route→coordinator hand-off to drift against.
  */
 const parseRankPageRequest = async (request: Request): Promise<Omit<RankPageFanOutRequest, "headers">> => {
-    let body: unknown;
-
-    try {
-        const text = await readBodyTextWithLimit(request);
-
-        body = text === "" ? {} : JSON.parse(text);
-    } catch (error) {
-        if (error instanceof LunoraError) {
-            throw error;
-        }
-
-        throw new LunoraError("Rank page body must be valid JSON", { code: "BAD_REQUEST", status: 400 });
-    }
+    const body = await readLooseJsonBody(request, "Rank page");
 
     const candidate = (body ?? {}) as RankPageCandidate;
 
@@ -246,19 +213,7 @@ interface ShardTrafficRequestBody {
  * fanned `getMetrics` op is fixed, so nothing else is accepted.
  */
 const parseShardTrafficRequest = async (request: Request): Promise<ShardTrafficRequestBody> => {
-    let body: unknown;
-
-    try {
-        const text = await readBodyTextWithLimit(request);
-
-        body = text === "" ? {} : JSON.parse(text);
-    } catch (error) {
-        if (error instanceof LunoraError) {
-            throw error;
-        }
-
-        throw new LunoraError("Shard-traffic body must be valid JSON", { code: "BAD_REQUEST", status: 400 });
-    }
+    const body = await readLooseJsonBody(request, "Shard-traffic");
 
     const candidate = (body ?? {}) as { table?: unknown };
 
@@ -267,6 +222,21 @@ const parseShardTrafficRequest = async (request: Request): Promise<ShardTrafficR
     }
 
     return { table: candidate.table };
+};
+
+/**
+ * Parse a `POST /_lunora/admin/shard-registry/prune` body — `{ tables?, dryRun? }`,
+ * where omitted `tables` means every `.shardBy()` table.
+ */
+const parseShardRegistryPruneRequest = async (request: Request): Promise<{ dryRun: boolean; tables?: string[] }> => {
+    const body = await readLooseJsonBody(request, "Shard-registry prune");
+    const candidate = (body ?? {}) as { dryRun?: unknown; tables?: unknown };
+
+    if (candidate.tables !== undefined && !(Array.isArray(candidate.tables) && candidate.tables.every((table) => typeof table === "string"))) {
+        throw new LunoraError("Shard-registry prune `tables` must be an array of table names", { code: "BAD_REQUEST", status: 400 });
+    }
+
+    return { dryRun: candidate.dryRun === true, tables: candidate.tables };
 };
 
 interface PitrRequest {
@@ -308,39 +278,42 @@ interface OrchestrationAdminRouteDeps {
     forwardToShard: (namespace: ShardNamespaceLike, shardKey: string, request: Request) => Promise<Response>;
     /** Admin-token gate predicate (header bearer check). */
     isAdmin: (request: Request) => boolean;
-    /** The cross-shard query coordinator; absent on a single-DO deployment. */
-    queryCoordinator?: QueryCoordinator;
+    /** The cross-shard query coordinator (the worker's own, or its default). */
+    queryCoordinator: QueryCoordinator;
     /** Resolve the headers forwarded to each shard (incl. the inbound admin bearer + identity). */
     resolveForwardContext: (request: Request, env: unknown) => Promise<{ headers: Record<string, string> }>;
     /** The shard DO namespace fanned across / forwarded to. */
     shardDO: ShardNamespaceLike;
+    /** The schema's `.shardBy()` tables — the ones the shard registry lists shards for. */
+    shardedTables: () => string[];
 }
 
 /** Build the cross-shard orchestration + PITR route map merged into the worker's internal route table. */
 const buildOrchestrationAdminRoutes = (deps: OrchestrationAdminRouteDeps): Record<string, (request: Request, env: unknown) => Promise<Response>> => {
-    const { defaultShard, forwardToShard, isAdmin, queryCoordinator, resolveForwardContext, shardDO } = deps;
+    const { defaultShard, forwardToShard, isAdmin, queryCoordinator: coordinator, resolveForwardContext, shardDO, shardedTables } = deps;
 
-    const handleMigrate = async (request: Request, env: unknown): Promise<Response> => {
+    /** The guard pair every coordinator-backed handler runs: POST-only and admin-gated. `label` names the endpoint in each error. */
+    const assertAdminPost = (request: Request, label: string): void => {
         if (request.method !== "POST") {
-            throw new LunoraError("Migration endpoint requires POST", { code: "METHOD_NOT_ALLOWED", status: 405 });
+            throw new LunoraError(`${label} endpoint requires POST`, { code: "METHOD_NOT_ALLOWED", status: 405 });
         }
 
         if (!isAdmin(request)) {
             throw new LunoraError("Admin auth required", { code: "FORBIDDEN", status: 403 });
         }
+    };
 
-        if (!queryCoordinator) {
-            throw new LunoraError("Migration endpoint requires a `queryCoordinator` on the worker", { code: "BAD_REQUEST", status: 400 });
-        }
-
+    const handleMigrate = async (request: Request, env: unknown): Promise<Response> => {
+        assertAdminPost(request, "Migration");
         const migrate = await parseMigrateRequest(request);
 
         // Forward the inbound `Authorization` bearer so each shard's admin gate
         // accepts the fanned-out RPC.
         const { headers: forwardedHeaders } = await resolveForwardContext(request, env);
 
-        const result = await queryCoordinator.orchestrateMigration(shardDO, {
+        const result = await coordinator.orchestrateMigration(shardDO, {
             args: migrate.args,
+            defaultShardKey: defaultShard,
             functionPath: migrate.functionPath,
             headers: forwardedHeaders,
             table: migrate.table,
@@ -366,23 +339,12 @@ const buildOrchestrationAdminRoutes = (deps: OrchestrationAdminRouteDeps): Recor
      * caller passes the EXPLICIT key tuple (built off the row via `rankKeyFromDoc`).
      */
     const handleRank = async (request: Request, env: unknown): Promise<Response> => {
-        if (request.method !== "POST") {
-            throw new LunoraError("Rank endpoint requires POST", { code: "METHOD_NOT_ALLOWED", status: 405 });
-        }
-
-        if (!isAdmin(request)) {
-            throw new LunoraError("Admin auth required", { code: "FORBIDDEN", status: 403 });
-        }
-
-        if (!queryCoordinator) {
-            throw new LunoraError("Rank endpoint requires a `queryCoordinator` on the worker", { code: "BAD_REQUEST", status: 400 });
-        }
-
+        assertAdminPost(request, "Rank");
         const rank = await parseRankRequest(request);
 
         const { headers: forwardedHeaders } = await resolveForwardContext(request, env);
 
-        const result = await queryCoordinator.orchestrateRank(shardDO, {
+        const result = await coordinator.orchestrateRank(shardDO, {
             headers: forwardedHeaders,
             index: rank.index,
             partitionKey: rank.partitionKey,
@@ -410,23 +372,12 @@ const buildOrchestrationAdminRoutes = (deps: OrchestrationAdminRouteDeps): Recor
      * is forwarded so each shard's admin gate accepts the fanned-out call.
      */
     const handleRankPage = async (request: Request, env: unknown): Promise<Response> => {
-        if (request.method !== "POST") {
-            throw new LunoraError("Rank page endpoint requires POST", { code: "METHOD_NOT_ALLOWED", status: 405 });
-        }
-
-        if (!isAdmin(request)) {
-            throw new LunoraError("Admin auth required", { code: "FORBIDDEN", status: 403 });
-        }
-
-        if (!queryCoordinator) {
-            throw new LunoraError("Rank page endpoint requires a `queryCoordinator` on the worker", { code: "BAD_REQUEST", status: 400 });
-        }
-
+        assertAdminPost(request, "Rank page");
         const rankPage = await parseRankPageRequest(request);
 
         const { headers: forwardedHeaders } = await resolveForwardContext(request, env);
 
-        const result = await queryCoordinator.orchestrateRankPage(shardDO, {
+        const result = await coordinator.orchestrateRankPage(shardDO, {
             ...rankPage,
             headers: forwardedHeaders,
         });
@@ -450,23 +401,12 @@ const buildOrchestrationAdminRoutes = (deps: OrchestrationAdminRouteDeps): Recor
      * is forwarded so each shard's admin gate accepts the fanned-out call.
      */
     const handleShardTraffic = async (request: Request, env: unknown): Promise<Response> => {
-        if (request.method !== "POST") {
-            throw new LunoraError("Shard-traffic endpoint requires POST", { code: "METHOD_NOT_ALLOWED", status: 405 });
-        }
-
-        if (!isAdmin(request)) {
-            throw new LunoraError("Admin auth required", { code: "FORBIDDEN", status: 403 });
-        }
-
-        if (!queryCoordinator) {
-            throw new LunoraError("Shard-traffic endpoint requires a `queryCoordinator` on the worker", { code: "BAD_REQUEST", status: 400 });
-        }
-
+        assertAdminPost(request, "Shard-traffic");
         const trafficRequest = await parseShardTrafficRequest(request);
 
         const { headers: forwardedHeaders } = await resolveForwardContext(request, env);
 
-        const result = await queryCoordinator.orchestrateShardTraffic(shardDO, {
+        const result = await coordinator.orchestrateShardTraffic(shardDO, {
             headers: forwardedHeaders,
             table: trafficRequest.table,
         });
@@ -478,18 +418,48 @@ const buildOrchestrationAdminRoutes = (deps: OrchestrationAdminRouteDeps): Recor
     };
 
     /**
+     * `POST /_lunora/admin/shard-registry/prune` — drop the registry entries of
+     * shards that no longer hold rows of their `.shardBy()` table, so fan-outs
+     * stop visiting them. Each shard makes the call itself (see
+     * `pruneShardRegistry`). Answers 207 when a shard could not be reached: its
+     * entries are kept, and a re-run retries them.
+     */
+    const handleShardRegistryPrune = async (request: Request, env: unknown): Promise<Response> => {
+        assertAdminPost(request, "Shard-registry prune");
+
+        const prune = await parseShardRegistryPruneRequest(request);
+        const sharded = shardedTables();
+        const unsharded = (prune.tables ?? []).filter((table) => !sharded.includes(table));
+
+        if (unsharded.length > 0) {
+            throw new LunoraError(`Shard-registry prune names tables that are not \`.shardBy()\`: ${unsharded.join(", ")}`, {
+                code: "BAD_REQUEST",
+                status: 400,
+            });
+        }
+
+        const { headers: forwardedHeaders } = await resolveForwardContext(request, env);
+
+        const result = await pruneShardRegistry(coordinator.registry, shardDO, {
+            dryRun: prune.dryRun,
+            headers: forwardedHeaders,
+            tables: prune.tables ?? sharded,
+        });
+
+        return Response.json(result, { status: result.failed.length > 0 ? 207 : 200 });
+    };
+
+    /**
      * `POST /_lunora/admin/pitr` — drive native Durable-Object point-in-time
      * recovery on a single shard. Admin-gated (its own bearer check), so it is
-     * NOT subject to the user-facing `authorizeShard`/`authorizeFunction`
+     * NOT subject to the user-facing `authorizeShard`/`authorizeFanOut`
      * callbacks the public RPC path enforces; the forwarded `Authorization`
      * header then satisfies the shard's own admin gate in `handleAdminRpc`.
      * Forwards `getPitrBookmark` (read the current / for-a-time bookmark) or
      * `pitrRestore` (`{ time | bookmark, restart? }`) to the chosen shard.
      */
     const handlePitr = async (request: Request, env: unknown): Promise<Response> => {
-        if (request.method !== "POST") {
-            throw new LunoraError("PITR endpoint requires POST", { code: "METHOD_NOT_ALLOWED", status: 405 });
-        }
+        assertMethod(request, "POST", "PITR");
 
         if (!isAdmin(request)) {
             throw new LunoraError("admin PITR endpoint requires a valid admin bearer", { code: "ADMIN_FORBIDDEN", status: 403 });
@@ -515,9 +485,10 @@ const buildOrchestrationAdminRoutes = (deps: OrchestrationAdminRouteDeps): Recor
         [PITR_PATH]: handlePitr,
         [RANK_PATH]: handleRank,
         [RANKPAGE_PATH]: handleRankPage,
+        [SHARD_REGISTRY_PRUNE_PATH]: handleShardRegistryPrune,
         [SHARD_TRAFFIC_PATH]: handleShardTraffic,
     };
 };
 
 export type { OrchestrationAdminRouteDeps };
-export { buildOrchestrationAdminRoutes, MIGRATE_PATH, PITR_PATH, RANK_PATH, RANKPAGE_PATH, SHARD_TRAFFIC_PATH };
+export { buildOrchestrationAdminRoutes, MIGRATE_PATH, PITR_PATH, RANK_PATH, RANKPAGE_PATH, SHARD_REGISTRY_PRUNE_PATH, SHARD_TRAFFIC_PATH };

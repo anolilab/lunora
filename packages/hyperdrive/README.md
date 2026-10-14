@@ -42,7 +42,7 @@ Part of the [Lunora](https://github.com/anolilab/lunora) framework — a type-sa
 >
 > Hyperdrive talks to a database **Lunora does not own**. That breaks two invariants the rest of Lunora relies on:
 >
-> 1. **Non-deterministic (action-only).** A SQL query over Hyperdrive is a network call with an external, mutable result — exactly like `fetch`. It is **forbidden in `query`/`mutation`** (which must be deterministic so the coordinator can re-run them on OCC retry / subscription re-evaluation) and allowed **only in `action`s**. The `hyperdrive_outside_action` advisor lint flags `ctx.sql` used in a query/mutation.
+> 1. **Non-deterministic (action-only).** A SQL query over Hyperdrive is a network call with an external, mutable result — exactly like `fetch`. It is **forbidden in `query`/`mutation`** (which must be deterministic so the coordinator can re-run them on subscription re-evaluation; an OCC conflict surfaces as a `409` to the caller, not an internal retry) and allowed **only in `action`s**. The `hyperdrive_outside_action` advisor lint flags `ctx.sql` used in a query/mutation.
 > 2. **Non-reactive.** External writes do **not** flow through the Durable-Object / SQLite change-feed, so **Lunora live queries and subscriptions will NOT re-run** when an external Postgres/MySQL row changes. There is no honest way to make external writes reactive here.
 >
 > Use Hyperdrive to _read/write your existing DB from an action_. It is the **wrong** tool for "make my Postgres reactive". If you want external data to be reactive, write a **projection** of it into a `defineSchema` DO/D1 table from the action — that write _is_ tracked.
@@ -83,19 +83,33 @@ pnpm add mysql2     # mysql2        → fromMysql2
 
 ## Usage
 
-`ctx.sql` is wired by codegen onto `ActionCtx` only — never `QueryCtx`/`MutationCtx`. The procedure builders (`action`, `v`) and `api` come from your app-local generated modules:
+`ctx.sql` is wired by codegen onto `ActionCtx` only — never `QueryCtx`/`MutationCtx`, and it is `readonly`, so it is built once at the app level rather than assigned in a handler. Codegen emits a `sql` config thunk for it (`createHyperdrive` returns connection info; only you know which driver wraps it):
 
 ```ts
+// src/server/index.ts
+import type { HyperdriveLike } from "@lunora/hyperdrive";
 import { createHyperdrive, fromPostgresJs } from "@lunora/hyperdrive";
 import postgres from "postgres";
 
+import { defineApp } from "../../lunora/_generated/app";
+
+const app = defineApp<Env>()
+    .shard((env) => env.SHARD)
+    .hyperdrive((env) => fromPostgresJs(postgres(createHyperdrive(env.HYPERDRIVE as HyperdriveLike).connectionString)))
+    .build();
+
+export const ShardDO = app.ShardDO;
+```
+
+Hand-composing the worker instead? The same thunk is `createShardDO({ sql: (env) => … })`. Without it, every `ctx.sql` method throws a message pointing back at this wiring.
+
+Handlers then just read it. The procedure builders (`action`, `v`) and `api` come from your app-local generated modules:
+
+```ts
 import { api } from "@/lunora/_generated/api";
 import { action, v } from "@/lunora/_generated/server";
 
 export const syncCustomer = action.input({ orgId: v.string() }).action(async ({ args: { orgId }, ctx }) => {
-    const { connectionString } = createHyperdrive(ctx.env.HYPERDRIVE);
-    ctx.sql = fromPostgresJs(postgres(connectionString));
-
     const rows = await ctx.sql.query<{ id: string; name: string }>("select id, name from customers where org = $1", [orgId]);
 
     // Want it reactive? Project it into a Lunora table — THIS write is tracked.
@@ -113,6 +127,44 @@ export const syncCustomer = action.input({ orgId: v.string() }).action(async ({ 
 | `pg` (node-postgres)     | `fromNodePg`     | `$1, $2, …`  |
 | `mysql2/promise`         | `fromMysql2`     | `?`          |
 
+## Reactive reads over your schema: the `.source()` modifier
+
+The projection above is the escape hatch. For the common case — an existing Postgres you are not going to move, and a read path that should feel live — declare the source on the table and Lunora runs the whole loop on the shard's alarm: pull, diff, materialize, poke subscribers. No action, no mutation, no cron to write:
+
+```ts
+// lunora/schema.ts
+export default defineSchema({
+    messages: defineTable({ body: v.string(), channelId: v.string() })
+        .shardBy("channelId")
+        .source({
+            binding: "HYPERDRIVE_MESSAGES",
+            query: 'select id, body, channel_id as "channelId" from messages where channel_id = $1',
+            tenantBy: (shardKey) => [shardKey], // mandatory under .shardBy() — the tenant boundary
+        }),
+});
+
+export const channelMessages = defineShape({ table: "messages", where: () => ({}) });
+```
+
+Supply the driver once, on the app builder — required, or every tick records `no sourceClient resolved for binding "…"` and the table stays empty. Lunora memoizes it per binding:
+
+```ts
+export default defineApp<Env>()
+    .shard((env) => env.SHARD)
+    .sourceClient((env, binding) => fromPostgresJs(postgres((env[binding] as { connectionString: string }).connectionString)))
+    .build();
+```
+
+Clients subscribe with the shape they would use over any table — external data stops being external once it is materialized.
+
+Three things to know before you build on it:
+
+- **It polls; it is not logical replication.** Freshness is the refresh cadence: every alarm tick by default, `refresh: { everyMs }` to throttle, `refresh: "manual"` to drive it yourself. Writes from other systems land on the next pull.
+- **`tenantBy` is the isolation boundary.** `defineSchema` throws at load if a sourced `.shardBy()` table omits it, and the `external_source_unscoped` advisor lint catches it at build time. Without it, one tenant's DO pulls every tenant's rows.
+- **`mode: "full-pull"` (the default) diffs the whole slice each tick**, so upstream deletes are detected for free, at a bench ceiling around 10k rows. Past that, `mode: "incremental"` pulls only rows past a durable watermark via a cursor column. An incremental slice cannot see a delete on its own — an absent row means "unchanged", not "deleted" — so it **requires** a delete-visibility path: either `reconcileEveryMs` (a periodic full-pull sweep) or `softDeleteColumn` (an upstream tombstone column the cursor query returns, so do not filter it out). `defineSchema` throws and the `external_source_incremental_no_delete_path` lint fails the build if an incremental source declares neither.
+
+`.source()` cannot be combined with `.global()` — they are contradictory tiers, and `defineSchema` rejects it.
+
 ## Reactive `.global()` over Hyperdrive
 
 The `@lunora/hyperdrive/global` subpath is the opposite trade-off: Lunora **owns** the schema and a `.global()` table gets a real column-per-field layout on your Postgres/MySQL, with every write routed through the shared store core. Live queries stay reactive — identical to D1 — because the writer drives the same broadcast hook. Build the writer inside the Durable Object that hosts the `.global()` store and inject it as `globalDb`:
@@ -127,7 +179,7 @@ const globalDb = createPostgresGlobalCtxDb({ query: (text, params) => sql.unsafe
 
 For MySQL use `createMysqlGlobalCtxDb` with a `mysql2/promise` pool created with `flags: ["FOUND_ROWS"]` — without `CLIENT_FOUND_ROWS` the affected-rows OCC guard sees changed (not matched) rows and raises spurious conflicts. Lower-level building blocks (`buildPgExec`, `buildMysqlExec`, `postgresDialect`, `mysqlDialect`, `createHyperdriveGlobalCtxDb`) are exported for custom wiring.
 
-> This README covers the basics. For the full API and the determinism/realtime rationale, see the **[documentation](https://lunora.sh/docs/addons/hyperdrive)**.
+> This README covers the basics. For the full API and the determinism/realtime rationale, see the **[documentation](https://lunora.sh/docs/packages/hyperdrive)**.
 
 ## Non-goals
 

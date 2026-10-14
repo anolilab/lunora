@@ -46,13 +46,13 @@ is the through-line of both; if you unify them, unify toward the token ramp.
 
 ### Assets
 
-| File                                                           | Purpose                                                                                                |
-| -------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------ |
-| [`../.github/assets/lunora.svg`](../.github/assets/lunora.svg) | Canonical mark — ink, `viewBox 543×446`. Source of truth for geometry.                                 |
-| `apps/docs/src/assets/lunora_logo.svg`                         | Docs mark — same path, `currentColor` fill (used by the navbar/footer React components).               |
-| `apps/docs/public/favicon.svg`                                 | Favicon — moon filled with the animated aurora gradient.                                               |
-| `apps/docs/public/og-default.jpg`                              | Default Open Graph card. Per-page OG is generated at `apps/docs/src/routes/api/og.ts`.                 |
-| `marketing/videos/public/brand/lunora.svg`                     | Mark mirrored for the Remotion video project (+ `cloudflare.svg` for the "Built for Cloudflare" beat). |
+| File                                                                                                              | Purpose                                                                                                |
+| ----------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------ |
+| [`../.github/assets/lunora.svg`](../.github/assets/lunora.svg)                                                    | Canonical mark — ink, `viewBox 543×446`. Source of truth for geometry.                                 |
+| `apps/docs/src/assets/lunora_logo.svg`                                                                            | Docs mark — same path, `currentColor` fill (used by the navbar/footer React components).               |
+| `apps/docs/public/favicon.svg`                                                                                    | Favicon — moon filled with the animated aurora gradient.                                               |
+| `apps/docs/public/og-default.jpg`                                                                                 | Default Open Graph card. Per-page OG is generated at `apps/docs/src/routes/api/og.ts`.                 |
+| `videos/public/brand/lunora.svg` (in the [`lunora-marketing`](https://github.com/anolilab/lunora-marketing) repo) | Mark mirrored for the Remotion video project (+ `cloudflare.svg` for the "Built for Cloudflare" beat). |
 
 There is **no separate wordmark/lockup SVG today** — the wordmark is set in live
 text next to the mark (see Typography). Generate a static lockup only if a context
@@ -106,7 +106,7 @@ account."** From the marketing video (`videos/src/shared/theme.ts`):
 - **Tagline:** _Real-time. End-to-end typed. On your own Cloudflare._
 - **Outro:** _Real-time, typed, and entirely yours._
 - **Eyebrow:** _Built for Cloudflare._
-- **First step / CTA:** `pnpm dlx lunorash init`
+- **First step / CTA:** `pnpm dlx lunorash@alpha init`
 - **Kinetic beats:** REAL-TIME · TYPE-SAFE · EDGE-NATIVE · NO LOCK-IN · YOUR CLOUDFLARE.
 
 ## Lunora Cloud (planned)
@@ -123,14 +123,15 @@ product on top of it (the business — see the marketing plan). Brand stance:
     - **Ink mark** → the open-source framework (README, CLI, docs).
     - **Aurora-gradient mark** → Lunora Cloud — the hosted, "luminous" tier. The
       aurora is Cloud's signature; the OSS stays monochrome.
-- **Brand promise that protects the wedge.** Lunora's whole pitch is _"your own
-  Cloudflare account, no SaaS bill."_ A cloud must not read as the lock-in the pitch
-  rejects. So Cloud sells **convenience + team/ops on infrastructure you still own**
-  (managed Studio, observability, point-in-time restore, team/RBAC, one-click deploy
-    - CI, backups, a human on support) — ideally deploying _to the customer's own
-      Cloudflare account_. "Your data, your account" survives the paid tier. Never frame
-      Cloud as "we host your data instead of Cloudflare." _(Open decision: the exact
-      Cloud boundary — resolve before any Cloud-facing copy ships.)_
+- **Brand promise: no lock-in, not "no SaaS".** The wedge isn't "never a managed
+  service" — it's _choice_. The same code runs two ways: self-host it on your own
+  Cloudflare account (free, open source, your data), or let **Lunora Cloud** run it for
+  you (managed). You're never forced onto our cloud the way Convex forces you onto
+  theirs — you can always take the OSS and self-host. That freedom is the promise. Sell
+  Cloud on **convenience** (managed Studio, observability, point-in-time restore,
+  team/RBAC, one-click deploy + CI, backups, a human on support), never on lock-in.
+  _(Open decision #6: whether Cloud runs on Lunora's infra or deploys into the
+  customer's own Cloudflare account — resolve before Cloud-facing copy ships.)_
 - **Investment is deliberately deferred.** The product doesn't exist yet. What we do
   now: reserve the name (here), use the aurora-mark variant + a one-field waitlist
   CTA on the docs site, and nothing more. No pricing brand, dashboard identity, or
@@ -173,7 +174,8 @@ product on top of it (the business — see the marketing plan). Brand stance:
 ## Where the brand is applied
 
 `design-tokens/tokens.css` is the single source for color/type/radius; it's
-`@import`ed by the docs site (`apps/docs`), the Studio (`packages/studio`, mirrored
-under its own namespace), and referenced by the video project (`marketing/videos`,
-which renders a pure-monochrome white-on-black treatment with one aurora-violet glow
-behind the mark). Marketing copy lives in [`social/`](./social/).
+`@import`ed by the docs site (`apps/docs`) and the Studio (`packages/studio`,
+mirrored under its own namespace). The Remotion video project — now in the separate
+[`lunora-marketing`](https://github.com/anolilab/lunora-marketing) repo — renders a
+pure-monochrome white-on-black treatment with one aurora-violet glow behind the
+mark. Marketing copy lives in [`social/`](./social/).

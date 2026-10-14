@@ -65,7 +65,7 @@ export const createCollections = (client: LunoraClient) =>
     defineCollections(client, {
         messages: {
             list: api.messages.list,
-            scopeBy: "channelId", // sharded — re-point with db.scope.messages({ channelId })
+            scopeBy: "channelId", // the .shardBy column — db.scope.messages({ channelId }) syncs that channel's shard
             insert: {
                 mutation: api.messages.send,
                 optimistic: (input: Omit<Doc<"messages">, "_id" | "_creationTime">, id) => ({
@@ -85,7 +85,55 @@ export const createCollections = (client: LunoraClient) =>
 
 > `vis generate lunora-collections` scaffolds this from your `schema.ts` + functions.
 
-> This README covers the basics. For the full API, options, and guides, see the **[documentation](https://lunora.sh/docs/addons/db)**.
+Keep a **single `db` instance**, and treat its collections as the one source of
+truth per table — don't mirror rows into your own store. A derived index (a tree,
+a search index, an undo capture) built from a copy of the rows can silently read
+stale data while the UI renders through `useLiveQuery`. See [One source of truth
+per table](https://lunora.sh/docs/packages/db#one-source-of-truth-per-table).
+
+### Local-first sync engine
+
+Beyond whole-table collections, the `@lunora/db/collections` and
+`@lunora/db/mutators` subpaths expose the local-first sync engine:
+`lunoraCollectionOptions({ shape })` syncs a **partial replication shape** (only
+the rows a client needs, scoped by a server-resolved predicate) over the poke
+diff protocol, and `defineMutator` + `bindMutators` run **optimistic custom
+mutators** (a local body first, a server-authoritative impl second, rebased on
+every sync tick). The framework adapters add a `useMutator` / `createMutator` /
+`mutator` hook over a bound handle. See the
+**[local-first guide](https://lunora.sh/docs/concepts/local-first)**.
+
+On a `scopeBy` shape collection, give `bindMutators` the same `scopeBy` so each
+push reaches the shard its args name — the shard the collection syncs:
+
+```ts
+const { checkpoints, config, scope } = lunoraCollectionOptions({ client, shape: { name: "messagesByChannel" }, scopeBy: "channelId" });
+const send = bindMutators(client, { checkpoints, collections, scopeBy: "channelId" }, mutators);
+```
+
+## Upgrading: scoped collections now use their shard
+
+Earlier alphas sent every subscription and insert of a `scopeBy` collection with
+no `shardKey` to the default shard (`__root__`); they now go to the shard the
+scoped value names.
+
+- **Authorize shard access.** Configure `authorizeShard` on the worker (or
+  `allowUnauthenticatedShardAccess: true` when every table has row-level
+  security); otherwise scoped subscriptions and writes fail with `403`
+  `FORBIDDEN_SHARD`.
+- **Move existing rows.** Rows written before the upgrade are still in the
+  default shard, and scoped reads do not look there. Before the upgraded client
+  writes to any channel shard, run `lunora export --tables <table>` (it reaches
+  the default shard while the table has no registered shard keys) and then
+  `lunora import` the file: import re-buckets each row by the table's `.shardBy`
+  field and keeps its `_id`, skipping any `_id` the target shard already holds.
+  Import deletes nothing, so then remove the default shard's copies with a
+  one-off mutation run via `lunora run <fn> --shard __root__`.
+
+See [Upgrading](https://lunora.sh/docs/packages/db#upgrading-scoped-collections-now-use-their-shard)
+for the full recipe.
+
+> This README covers the basics. For the full API, options, and guides, see the **[documentation](https://lunora.sh/docs/packages/db)**.
 
 ## Related
 

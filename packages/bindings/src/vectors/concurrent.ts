@@ -1,0 +1,82 @@
+/**
+ * Cap on parallel embedder/Vectorize fan-out within a single write or batch.
+ * Shared by `upsertMany` (the batch path) and the per-mutation sync hook so
+ * both bound their fan-out identically rather than letting one path spawn an
+ * unbounded number of concurrent subrequests.
+ */
+export const UPSERT_EMBED_CONCURRENCY = 8;
+
+/**
+ * Map `items` through `fn` with bounded parallelism — at most `limit` calls in
+ * flight at once. Preserves input order in the output. Written inline to avoid
+ * a `p-limit` dependency.
+ *
+ * Failure semantics — IMPORTANT: on the first rejection this does NOT reject
+ * eagerly like `Promise.all`. It records the first error, stops every worker
+ * from pulling any NEW item, then waits for all already-in-flight calls to
+ * settle before re-throwing that first error. Eager rejection would leave
+ * sibling calls running past the caller's `catch` — and for the vector sync
+ * hook that is a correctness bug, not just untidiness: the hook is one link in
+ * the shard's commit-ordered chain of post-commit work, so an upsert still in
+ * flight when the hook "failed" can land after the NEXT commit's hook for the
+ * same row and leave the stale vector behind. Quiescence is what makes
+ * "this hook is done" true.
+ */
+export const concurrentMap = async <T, U>(items: ReadonlyArray<T>, limit: number, function_: (item: T, index: number) => Promise<U>): Promise<U[]> => {
+    if (items.length === 0) {
+        return [];
+    }
+
+    const effectiveLimit = Math.max(1, Math.min(limit, items.length));
+    const results: U[] = Array.from({ length: items.length });
+    let cursor = 0;
+    let failed: boolean = false;
+    let firstError: unknown;
+
+    const workers = Array.from({ length: effectiveLimit }, async () => {
+        for (;;) {
+            // Once any worker has recorded a failure, stop pulling new items so
+            // no NEW call starts after the caller has been told this hook is
+            // over. Calls already awaited below still settle (they are not
+            // cancelled), which is what guarantees quiescence by the time this
+            // function throws.
+            if (failed) {
+                return;
+            }
+
+            const index = cursor;
+
+            cursor += 1;
+
+            if (index >= items.length) {
+                return;
+            }
+
+            try {
+                // `index < items.length` is guaranteed above, so the indexed read
+                // yields a real element. Awaiting in-loop is the point: each worker
+                // pulls the next item only after its current task settles, which is
+                // what bounds the fan-out to `effectiveLimit` in flight.
+                // eslint-disable-next-line no-await-in-loop -- sequential by design: bounds concurrency
+                results[index] = await function_(items[index] as T, index);
+            } catch (error) {
+                // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- `failed` is set by other concurrent workers; not statically const
+                if (!failed) {
+                    failed = true;
+                    firstError = error;
+                }
+
+                return;
+            }
+        }
+    });
+
+    await Promise.all(workers);
+
+    // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- `failed` is set inside the worker callbacks; not statically const
+    if (failed) {
+        throw firstError;
+    }
+
+    return results;
+};

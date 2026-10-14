@@ -1,3 +1,6 @@
+import { LunoraError } from "@lunora/errors";
+
+import { STATUS_BY_REASON } from "./middleware";
 import type { RateLimitReason, RateLimitStatus } from "./types";
 
 const describe = (status: RateLimitStatus): string => {
@@ -9,19 +12,23 @@ const describe = (status: RateLimitStatus): string => {
 };
 
 /**
- * Thrown by `RateLimiter.limit` when called with `{ throws: true }`. The
- * `@lunora/ratelimit` middleware does not use this — it throws a structural
- * `LunoraError` instead — so this is for direct callers that prefer exceptions.
+ * Thrown by `RateLimiter.limit` when called with `{ throws: true }`. A
+ * `LunoraError` subclass whose code/status track `status.reason`: a rate
+ * rejection is `TOO_MANY_REQUESTS`/429, a deny-list hit is `FORBIDDEN`/403 —
+ * the same mapping the middleware applies, so both entry points surface the
+ * identical wire code (a permanent deny is never a retryable 429). The
+ * middleware itself throws a bare structural `LunoraError`, so this is for
+ * direct callers that prefer exceptions. Keeps `reason`/`retryAfter`.
  */
-export default class RateLimitError extends Error {
-    public override readonly name = "RateLimitError";
-
+export default class RateLimitError extends LunoraError {
     public readonly reason: RateLimitReason | undefined;
 
     public readonly retryAfter: number;
 
     public constructor(status: RateLimitStatus, message?: string) {
-        super(message ?? describe(status));
+        const { code, status: httpStatus } = STATUS_BY_REASON[status.reason ?? "rate"];
+
+        super(code, message ?? describe(status), { name: "RateLimitError", status: httpStatus });
         this.reason = status.reason;
         this.retryAfter = status.retryAfter;
     }

@@ -1,0 +1,1603 @@
+## @lunora/react-native [1.0.0-alpha.183](https://github.com/anolilab/lunora/compare/@lunora/react-native@1.0.0-alpha.182...@lunora/react-native@1.0.0-alpha.183) (2026-10-14)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.203
+* **@lunora/react:** upgraded to 1.0.0-alpha.216
+
+## @lunora/react-native [1.0.0-alpha.182](https://github.com/anolilab/lunora/compare/@lunora/react-native@1.0.0-alpha.181...@lunora/react-native@1.0.0-alpha.182) (2026-10-14)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.202
+* **@lunora/react:** upgraded to 1.0.0-alpha.215
+
+## @lunora/react-native [1.0.0-alpha.181](https://github.com/anolilab/lunora/compare/@lunora/react-native@1.0.0-alpha.180...@lunora/react-native@1.0.0-alpha.181) (2026-10-14)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.201
+* **@lunora/react:** upgraded to 1.0.0-alpha.214
+
+## @lunora/react-native [1.0.0-alpha.180](https://github.com/anolilab/lunora/compare/@lunora/react-native@1.0.0-alpha.179...@lunora/react-native@1.0.0-alpha.180) (2026-10-13)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.200
+* **@lunora/react:** upgraded to 1.0.0-alpha.213
+
+## @lunora/react-native [1.0.0-alpha.179](https://github.com/anolilab/lunora/compare/@lunora/react-native@1.0.0-alpha.178...@lunora/react-native@1.0.0-alpha.179) (2026-10-12)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.199
+* **@lunora/react:** upgraded to 1.0.0-alpha.212
+
+## @lunora/react-native [1.0.0-alpha.178](https://github.com/anolilab/lunora/compare/@lunora/react-native@1.0.0-alpha.177...@lunora/react-native@1.0.0-alpha.178) (2026-10-12)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.198
+* **@lunora/react:** upgraded to 1.0.0-alpha.211
+
+## @lunora/react-native [1.0.0-alpha.177](https://github.com/anolilab/lunora/compare/@lunora/react-native@1.0.0-alpha.176...@lunora/react-native@1.0.0-alpha.177) (2026-10-12)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.197
+* **@lunora/react:** upgraded to 1.0.0-alpha.210
+
+## @lunora/react-native [1.0.0-alpha.176](https://github.com/anolilab/lunora/compare/@lunora/react-native@1.0.0-alpha.175...@lunora/react-native@1.0.0-alpha.176) (2026-10-11)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.196
+* **@lunora/react:** upgraded to 1.0.0-alpha.209
+
+## @lunora/react-native [1.0.0-alpha.175](https://github.com/anolilab/lunora/compare/@lunora/react-native@1.0.0-alpha.174...@lunora/react-native@1.0.0-alpha.175) (2026-10-10)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.195
+* **@lunora/react:** upgraded to 1.0.0-alpha.208
+
+## @lunora/react-native [1.0.0-alpha.174](https://github.com/anolilab/lunora/compare/@lunora/react-native@1.0.0-alpha.173...@lunora/react-native@1.0.0-alpha.174) (2026-10-10)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.194
+* **@lunora/react:** upgraded to 1.0.0-alpha.207
+
+## @lunora/react-native [1.0.0-alpha.173](https://github.com/anolilab/lunora/compare/@lunora/react-native@1.0.0-alpha.172...@lunora/react-native@1.0.0-alpha.173) (2026-10-09)
+
+### Bug Fixes
+
+* **packages:** align stale @lunora/client pins to 1.0.0-alpha.193 ([#1089](https://github.com/anolilab/lunora/issues/1089)) ([46da632](https://github.com/anolilab/lunora/commit/46da632bc18dfd87f7dceb4522d1d35b6e9f2066))
+
+## @lunora/react-native [1.0.0-alpha.172](https://github.com/anolilab/lunora/compare/@lunora/react-native@1.0.0-alpha.171...@lunora/react-native@1.0.0-alpha.172) (2026-10-08)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.191
+* **@lunora/react:** upgraded to 1.0.0-alpha.204
+
+## @lunora/react-native [1.0.0-alpha.171](https://github.com/anolilab/lunora/compare/@lunora/react-native@1.0.0-alpha.170...@lunora/react-native@1.0.0-alpha.171) (2026-10-08)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.190
+* **@lunora/react:** upgraded to 1.0.0-alpha.203
+
+## @lunora/react-native [1.0.0-alpha.170](https://github.com/anolilab/lunora/compare/@lunora/react-native@1.0.0-alpha.169...@lunora/react-native@1.0.0-alpha.170) (2026-10-07)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.189
+* **@lunora/react:** upgraded to 1.0.0-alpha.202
+
+## @lunora/react-native [1.0.0-alpha.169](https://github.com/anolilab/lunora/compare/@lunora/react-native@1.0.0-alpha.168...@lunora/react-native@1.0.0-alpha.169) (2026-10-07)
+
+
+### Dependencies
+
+* **@lunora/react:** upgraded to 1.0.0-alpha.201
+
+## @lunora/react-native [1.0.0-alpha.168](https://github.com/anolilab/lunora/compare/@lunora/react-native@1.0.0-alpha.167...@lunora/react-native@1.0.0-alpha.168) (2026-10-07)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.188
+* **@lunora/react:** upgraded to 1.0.0-alpha.200
+
+## @lunora/react-native [1.0.0-alpha.167](https://github.com/anolilab/lunora/compare/@lunora/react-native@1.0.0-alpha.166...@lunora/react-native@1.0.0-alpha.167) (2026-10-06)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.187
+* **@lunora/react:** upgraded to 1.0.0-alpha.199
+
+## @lunora/react-native [1.0.0-alpha.166](https://github.com/anolilab/lunora/compare/@lunora/react-native@1.0.0-alpha.165...@lunora/react-native@1.0.0-alpha.166) (2026-10-06)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.186
+* **@lunora/react:** upgraded to 1.0.0-alpha.198
+
+## @lunora/react-native [1.0.0-alpha.165](https://github.com/anolilab/lunora/compare/@lunora/react-native@1.0.0-alpha.164...@lunora/react-native@1.0.0-alpha.165) (2026-10-06)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.185
+* **@lunora/react:** upgraded to 1.0.0-alpha.197
+
+## @lunora/react-native [1.0.0-alpha.164](https://github.com/anolilab/lunora/compare/@lunora/react-native@1.0.0-alpha.163...@lunora/react-native@1.0.0-alpha.164) (2026-10-06)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.184
+* **@lunora/react:** upgraded to 1.0.0-alpha.196
+
+## @lunora/react-native [1.0.0-alpha.163](https://github.com/anolilab/lunora/compare/@lunora/react-native@1.0.0-alpha.162...@lunora/react-native@1.0.0-alpha.163) (2026-10-06)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.183
+* **@lunora/react:** upgraded to 1.0.0-alpha.195
+
+## @lunora/react-native [1.0.0-alpha.162](https://github.com/anolilab/lunora/compare/@lunora/react-native@1.0.0-alpha.161...@lunora/react-native@1.0.0-alpha.162) (2026-10-05)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.181
+* **@lunora/react:** upgraded to 1.0.0-alpha.193
+
+## @lunora/react-native [1.0.0-alpha.161](https://github.com/anolilab/lunora/compare/@lunora/react-native@1.0.0-alpha.160...@lunora/react-native@1.0.0-alpha.161) (2026-10-05)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.180
+* **@lunora/react:** upgraded to 1.0.0-alpha.192
+
+## @lunora/react-native [1.0.0-alpha.160](https://github.com/anolilab/lunora/compare/@lunora/react-native@1.0.0-alpha.159...@lunora/react-native@1.0.0-alpha.160) (2026-10-05)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.179
+* **@lunora/react:** upgraded to 1.0.0-alpha.191
+
+## @lunora/react-native [1.0.0-alpha.159](https://github.com/anolilab/lunora/compare/@lunora/react-native@1.0.0-alpha.158...@lunora/react-native@1.0.0-alpha.159) (2026-10-04)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.178
+* **@lunora/react:** upgraded to 1.0.0-alpha.190
+
+## @lunora/react-native [1.0.0-alpha.158](https://github.com/anolilab/lunora/compare/@lunora/react-native@1.0.0-alpha.157...@lunora/react-native@1.0.0-alpha.158) (2026-10-04)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.177
+* **@lunora/react:** upgraded to 1.0.0-alpha.189
+
+## @lunora/react-native [1.0.0-alpha.157](https://github.com/anolilab/lunora/compare/@lunora/react-native@1.0.0-alpha.156...@lunora/react-native@1.0.0-alpha.157) (2026-10-04)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.176
+* **@lunora/react:** upgraded to 1.0.0-alpha.188
+
+## @lunora/react-native [1.0.0-alpha.156](https://github.com/anolilab/lunora/compare/@lunora/react-native@1.0.0-alpha.155...@lunora/react-native@1.0.0-alpha.156) (2026-10-03)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.175
+* **@lunora/react:** upgraded to 1.0.0-alpha.187
+
+## @lunora/react-native [1.0.0-alpha.155](https://github.com/anolilab/lunora/compare/@lunora/react-native@1.0.0-alpha.154...@lunora/react-native@1.0.0-alpha.155) (2026-10-03)
+
+
+### Dependencies
+
+* **@lunora/react:** upgraded to 1.0.0-alpha.186
+
+## @lunora/react-native [1.0.0-alpha.154](https://github.com/anolilab/lunora/compare/@lunora/react-native@1.0.0-alpha.153...@lunora/react-native@1.0.0-alpha.154) (2026-10-03)
+
+
+### Dependencies
+
+* **@lunora/react:** upgraded to 1.0.0-alpha.185
+
+## @lunora/react-native [1.0.0-alpha.153](https://github.com/anolilab/lunora/compare/@lunora/react-native@1.0.0-alpha.152...@lunora/react-native@1.0.0-alpha.153) (2026-10-03)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.174
+* **@lunora/react:** upgraded to 1.0.0-alpha.184
+
+## @lunora/react-native [1.0.0-alpha.152](https://github.com/anolilab/lunora/compare/@lunora/react-native@1.0.0-alpha.151...@lunora/react-native@1.0.0-alpha.152) (2026-10-03)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.173
+* **@lunora/react:** upgraded to 1.0.0-alpha.183
+
+## @lunora/react-native [1.0.0-alpha.151](https://github.com/anolilab/lunora/compare/@lunora/react-native@1.0.0-alpha.150...@lunora/react-native@1.0.0-alpha.151) (2026-10-03)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.172
+* **@lunora/react:** upgraded to 1.0.0-alpha.182
+
+## @lunora/react-native [1.0.0-alpha.150](https://github.com/anolilab/lunora/compare/@lunora/react-native@1.0.0-alpha.149...@lunora/react-native@1.0.0-alpha.150) (2026-10-03)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.171
+* **@lunora/react:** upgraded to 1.0.0-alpha.181
+
+## @lunora/react-native [1.0.0-alpha.149](https://github.com/anolilab/lunora/compare/@lunora/react-native@1.0.0-alpha.148...@lunora/react-native@1.0.0-alpha.149) (2026-10-03)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.170
+* **@lunora/react:** upgraded to 1.0.0-alpha.180
+
+## @lunora/react-native [1.0.0-alpha.148](https://github.com/anolilab/lunora/compare/@lunora/react-native@1.0.0-alpha.147...@lunora/react-native@1.0.0-alpha.148) (2026-10-02)
+
+
+### Dependencies
+
+* **@lunora/react:** upgraded to 1.0.0-alpha.178
+
+## @lunora/react-native [1.0.0-alpha.147](https://github.com/anolilab/lunora/compare/@lunora/react-native@1.0.0-alpha.146...@lunora/react-native@1.0.0-alpha.147) (2026-10-02)
+
+
+### Dependencies
+
+* **@lunora/react:** upgraded to 1.0.0-alpha.177
+
+## @lunora/react-native [1.0.0-alpha.146](https://github.com/anolilab/lunora/compare/@lunora/react-native@1.0.0-alpha.145...@lunora/react-native@1.0.0-alpha.146) (2026-10-02)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.168
+* **@lunora/react:** upgraded to 1.0.0-alpha.176
+
+## @lunora/react-native [1.0.0-alpha.145](https://github.com/anolilab/lunora/compare/@lunora/react-native@1.0.0-alpha.144...@lunora/react-native@1.0.0-alpha.145) (2026-10-02)
+
+
+### Dependencies
+
+* **@lunora/react:** upgraded to 1.0.0-alpha.175
+
+## @lunora/react-native [1.0.0-alpha.144](https://github.com/anolilab/lunora/compare/@lunora/react-native@1.0.0-alpha.143...@lunora/react-native@1.0.0-alpha.144) (2026-10-02)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.167
+* **@lunora/react:** upgraded to 1.0.0-alpha.174
+
+## @lunora/react-native [1.0.0-alpha.143](https://github.com/anolilab/lunora/compare/@lunora/react-native@1.0.0-alpha.142...@lunora/react-native@1.0.0-alpha.143) (2026-10-01)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.166
+* **@lunora/react:** upgraded to 1.0.0-alpha.173
+
+## @lunora/react-native [1.0.0-alpha.142](https://github.com/anolilab/lunora/compare/@lunora/react-native@1.0.0-alpha.141...@lunora/react-native@1.0.0-alpha.142) (2026-10-01)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.165
+* **@lunora/react:** upgraded to 1.0.0-alpha.172
+
+## @lunora/react-native [1.0.0-alpha.141](https://github.com/anolilab/lunora/compare/@lunora/react-native@1.0.0-alpha.140...@lunora/react-native@1.0.0-alpha.141) (2026-09-30)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.164
+* **@lunora/react:** upgraded to 1.0.0-alpha.171
+
+## @lunora/react-native [1.0.0-alpha.140](https://github.com/anolilab/lunora/compare/@lunora/react-native@1.0.0-alpha.139...@lunora/react-native@1.0.0-alpha.140) (2026-09-30)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.163
+* **@lunora/react:** upgraded to 1.0.0-alpha.170
+
+## @lunora/react-native [1.0.0-alpha.139](https://github.com/anolilab/lunora/compare/@lunora/react-native@1.0.0-alpha.138...@lunora/react-native@1.0.0-alpha.139) (2026-09-30)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.162
+* **@lunora/react:** upgraded to 1.0.0-alpha.169
+
+## @lunora/react-native [1.0.0-alpha.138](https://github.com/anolilab/lunora/compare/@lunora/react-native@1.0.0-alpha.137...@lunora/react-native@1.0.0-alpha.138) (2026-09-29)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.161
+* **@lunora/react:** upgraded to 1.0.0-alpha.168
+
+## @lunora/react-native [1.0.0-alpha.137](https://github.com/anolilab/lunora/compare/@lunora/react-native@1.0.0-alpha.136...@lunora/react-native@1.0.0-alpha.137) (2026-09-29)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.160
+* **@lunora/react:** upgraded to 1.0.0-alpha.167
+
+## @lunora/react-native [1.0.0-alpha.136](https://github.com/anolilab/lunora/compare/@lunora/react-native@1.0.0-alpha.135...@lunora/react-native@1.0.0-alpha.136) (2026-09-28)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.159
+* **@lunora/react:** upgraded to 1.0.0-alpha.166
+
+## @lunora/react-native [1.0.0-alpha.135](https://github.com/anolilab/lunora/compare/@lunora/react-native@1.0.0-alpha.134...@lunora/react-native@1.0.0-alpha.135) (2026-09-28)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.158
+* **@lunora/react:** upgraded to 1.0.0-alpha.165
+
+## @lunora/react-native [1.0.0-alpha.134](https://github.com/anolilab/lunora/compare/@lunora/react-native@1.0.0-alpha.133...@lunora/react-native@1.0.0-alpha.134) (2026-09-27)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.157
+* **@lunora/react:** upgraded to 1.0.0-alpha.164
+
+## @lunora/react-native [1.0.0-alpha.133](https://github.com/anolilab/lunora/compare/@lunora/react-native@1.0.0-alpha.132...@lunora/react-native@1.0.0-alpha.133) (2026-09-27)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.156
+* **@lunora/react:** upgraded to 1.0.0-alpha.163
+
+## @lunora/react-native [1.0.0-alpha.132](https://github.com/anolilab/lunora/compare/@lunora/react-native@1.0.0-alpha.131...@lunora/react-native@1.0.0-alpha.132) (2026-09-27)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.155
+* **@lunora/react:** upgraded to 1.0.0-alpha.162
+
+## @lunora/react-native [1.0.0-alpha.131](https://github.com/anolilab/lunora/compare/@lunora/react-native@1.0.0-alpha.130...@lunora/react-native@1.0.0-alpha.131) (2026-09-27)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.154
+* **@lunora/react:** upgraded to 1.0.0-alpha.161
+
+## @lunora/react-native [1.0.0-alpha.130](https://github.com/anolilab/lunora/compare/@lunora/react-native@1.0.0-alpha.129...@lunora/react-native@1.0.0-alpha.130) (2026-09-27)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.153
+* **@lunora/react:** upgraded to 1.0.0-alpha.160
+
+## @lunora/react-native [1.0.0-alpha.129](https://github.com/anolilab/lunora/compare/@lunora/react-native@1.0.0-alpha.128...@lunora/react-native@1.0.0-alpha.129) (2026-09-27)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.152
+* **@lunora/react:** upgraded to 1.0.0-alpha.159
+
+## @lunora/react-native [1.0.0-alpha.128](https://github.com/anolilab/lunora/compare/@lunora/react-native@1.0.0-alpha.127...@lunora/react-native@1.0.0-alpha.128) (2026-09-27)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.151
+* **@lunora/react:** upgraded to 1.0.0-alpha.158
+
+## @lunora/react-native [1.0.0-alpha.127](https://github.com/anolilab/lunora/compare/@lunora/react-native@1.0.0-alpha.126...@lunora/react-native@1.0.0-alpha.127) (2026-09-27)
+
+
+### Dependencies
+
+* **@lunora/react:** upgraded to 1.0.0-alpha.157
+
+## @lunora/react-native [1.0.0-alpha.126](https://github.com/anolilab/lunora/compare/@lunora/react-native@1.0.0-alpha.125...@lunora/react-native@1.0.0-alpha.126) (2026-09-27)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.150
+* **@lunora/react:** upgraded to 1.0.0-alpha.156
+
+## @lunora/react-native [1.0.0-alpha.125](https://github.com/anolilab/lunora/compare/@lunora/react-native@1.0.0-alpha.124...@lunora/react-native@1.0.0-alpha.125) (2026-09-27)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.149
+* **@lunora/react:** upgraded to 1.0.0-alpha.155
+
+## @lunora/react-native [1.0.0-alpha.124](https://github.com/anolilab/lunora/compare/@lunora/react-native@1.0.0-alpha.123...@lunora/react-native@1.0.0-alpha.124) (2026-09-27)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.148
+* **@lunora/react:** upgraded to 1.0.0-alpha.154
+
+## @lunora/react-native [1.0.0-alpha.123](https://github.com/anolilab/lunora/compare/@lunora/react-native@1.0.0-alpha.122...@lunora/react-native@1.0.0-alpha.123) (2026-09-26)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.147
+* **@lunora/react:** upgraded to 1.0.0-alpha.153
+
+## @lunora/react-native [1.0.0-alpha.122](https://github.com/anolilab/lunora/compare/@lunora/react-native@1.0.0-alpha.121...@lunora/react-native@1.0.0-alpha.122) (2026-09-26)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.146
+* **@lunora/react:** upgraded to 1.0.0-alpha.152
+
+## @lunora/react-native [1.0.0-alpha.121](https://github.com/anolilab/lunora/compare/@lunora/react-native@1.0.0-alpha.120...@lunora/react-native@1.0.0-alpha.121) (2026-09-26)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.145
+* **@lunora/react:** upgraded to 1.0.0-alpha.151
+
+## @lunora/react-native [1.0.0-alpha.120](https://github.com/anolilab/lunora/compare/@lunora/react-native@1.0.0-alpha.119...@lunora/react-native@1.0.0-alpha.120) (2026-09-26)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.144
+* **@lunora/react:** upgraded to 1.0.0-alpha.150
+
+## @lunora/react-native [1.0.0-alpha.119](https://github.com/anolilab/lunora/compare/@lunora/react-native@1.0.0-alpha.118...@lunora/react-native@1.0.0-alpha.119) (2026-09-26)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.143
+* **@lunora/react:** upgraded to 1.0.0-alpha.149
+
+## @lunora/react-native [1.0.0-alpha.118](https://github.com/anolilab/lunora/compare/@lunora/react-native@1.0.0-alpha.117...@lunora/react-native@1.0.0-alpha.118) (2026-09-26)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.142
+* **@lunora/react:** upgraded to 1.0.0-alpha.148
+
+## @lunora/react-native [1.0.0-alpha.117](https://github.com/anolilab/lunora/compare/@lunora/react-native@1.0.0-alpha.116...@lunora/react-native@1.0.0-alpha.117) (2026-09-26)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.141
+* **@lunora/react:** upgraded to 1.0.0-alpha.147
+
+## @lunora/react-native [1.0.0-alpha.116](https://github.com/anolilab/lunora/compare/@lunora/react-native@1.0.0-alpha.115...@lunora/react-native@1.0.0-alpha.116) (2026-09-26)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.139
+* **@lunora/react:** upgraded to 1.0.0-alpha.146
+
+## @lunora/react-native [1.0.0-alpha.115](https://github.com/anolilab/lunora/compare/@lunora/react-native@1.0.0-alpha.114...@lunora/react-native@1.0.0-alpha.115) (2026-09-26)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.138
+* **@lunora/react:** upgraded to 1.0.0-alpha.145
+
+## @lunora/react-native [1.0.0-alpha.114](https://github.com/anolilab/lunora/compare/@lunora/react-native@1.0.0-alpha.113...@lunora/react-native@1.0.0-alpha.114) (2026-09-26)
+
+
+### Dependencies
+
+* **@lunora/react:** upgraded to 1.0.0-alpha.144
+
+## @lunora/react-native [1.0.0-alpha.113](https://github.com/anolilab/lunora/compare/@lunora/react-native@1.0.0-alpha.112...@lunora/react-native@1.0.0-alpha.113) (2026-09-26)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.137
+* **@lunora/react:** upgraded to 1.0.0-alpha.143
+
+## @lunora/react-native [1.0.0-alpha.112](https://github.com/anolilab/lunora/compare/@lunora/react-native@1.0.0-alpha.111...@lunora/react-native@1.0.0-alpha.112) (2026-09-25)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.135
+* **@lunora/react:** upgraded to 1.0.0-alpha.141
+
+## @lunora/react-native [1.0.0-alpha.111](https://github.com/anolilab/lunora/compare/@lunora/react-native@1.0.0-alpha.110...@lunora/react-native@1.0.0-alpha.111) (2026-09-25)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.134
+* **@lunora/react:** upgraded to 1.0.0-alpha.140
+
+## @lunora/react-native [1.0.0-alpha.110](https://github.com/anolilab/lunora/compare/@lunora/react-native@1.0.0-alpha.109...@lunora/react-native@1.0.0-alpha.110) (2026-09-25)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.133
+* **@lunora/react:** upgraded to 1.0.0-alpha.139
+
+## @lunora/react-native [1.0.0-alpha.109](https://github.com/anolilab/lunora/compare/@lunora/react-native@1.0.0-alpha.108...@lunora/react-native@1.0.0-alpha.109) (2026-09-25)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.132
+* **@lunora/react:** upgraded to 1.0.0-alpha.138
+
+## @lunora/react-native [1.0.0-alpha.108](https://github.com/anolilab/lunora/compare/@lunora/react-native@1.0.0-alpha.107...@lunora/react-native@1.0.0-alpha.108) (2026-09-25)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.131
+* **@lunora/react:** upgraded to 1.0.0-alpha.137
+
+## @lunora/react-native [1.0.0-alpha.107](https://github.com/anolilab/lunora/compare/@lunora/react-native@1.0.0-alpha.106...@lunora/react-native@1.0.0-alpha.107) (2026-09-25)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.130
+* **@lunora/react:** upgraded to 1.0.0-alpha.136
+
+## @lunora/react-native [1.0.0-alpha.106](https://github.com/anolilab/lunora/compare/@lunora/react-native@1.0.0-alpha.105...@lunora/react-native@1.0.0-alpha.106) (2026-09-25)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.129
+* **@lunora/react:** upgraded to 1.0.0-alpha.135
+
+## @lunora/react-native [1.0.0-alpha.105](https://github.com/anolilab/lunora/compare/@lunora/react-native@1.0.0-alpha.104...@lunora/react-native@1.0.0-alpha.105) (2026-09-24)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.128
+* **@lunora/react:** upgraded to 1.0.0-alpha.134
+
+## @lunora/react-native [1.0.0-alpha.104](https://github.com/anolilab/lunora/compare/@lunora/react-native@1.0.0-alpha.103...@lunora/react-native@1.0.0-alpha.104) (2026-09-24)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.127
+* **@lunora/react:** upgraded to 1.0.0-alpha.133
+
+## @lunora/react-native [1.0.0-alpha.103](https://github.com/anolilab/lunora/compare/@lunora/react-native@1.0.0-alpha.102...@lunora/react-native@1.0.0-alpha.103) (2026-09-24)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.126
+* **@lunora/react:** upgraded to 1.0.0-alpha.132
+
+## @lunora/react-native [1.0.0-alpha.102](https://github.com/anolilab/lunora/compare/@lunora/react-native@1.0.0-alpha.101...@lunora/react-native@1.0.0-alpha.102) (2026-09-23)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.125
+* **@lunora/react:** upgraded to 1.0.0-alpha.131
+
+## @lunora/react-native [1.0.0-alpha.101](https://github.com/anolilab/lunora/compare/@lunora/react-native@1.0.0-alpha.100...@lunora/react-native@1.0.0-alpha.101) (2026-09-23)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.124
+* **@lunora/react:** upgraded to 1.0.0-alpha.130
+
+## @lunora/react-native [1.0.0-alpha.100](https://github.com/anolilab/lunora/compare/@lunora/react-native@1.0.0-alpha.99...@lunora/react-native@1.0.0-alpha.100) (2026-09-23)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.123
+* **@lunora/react:** upgraded to 1.0.0-alpha.129
+
+## @lunora/react-native [1.0.0-alpha.99](https://github.com/anolilab/lunora/compare/@lunora/react-native@1.0.0-alpha.98...@lunora/react-native@1.0.0-alpha.99) (2026-09-23)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.122
+* **@lunora/react:** upgraded to 1.0.0-alpha.128
+
+## @lunora/react-native [1.0.0-alpha.98](https://github.com/anolilab/lunora/compare/@lunora/react-native@1.0.0-alpha.97...@lunora/react-native@1.0.0-alpha.98) (2026-09-23)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.121
+* **@lunora/react:** upgraded to 1.0.0-alpha.127
+
+## @lunora/react-native [1.0.0-alpha.97](https://github.com/anolilab/lunora/compare/@lunora/react-native@1.0.0-alpha.96...@lunora/react-native@1.0.0-alpha.97) (2026-09-23)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.120
+* **@lunora/react:** upgraded to 1.0.0-alpha.126
+
+## @lunora/react-native [1.0.0-alpha.96](https://github.com/anolilab/lunora/compare/@lunora/react-native@1.0.0-alpha.95...@lunora/react-native@1.0.0-alpha.96) (2026-09-23)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.119
+* **@lunora/react:** upgraded to 1.0.0-alpha.125
+
+## @lunora/react-native [1.0.0-alpha.95](https://github.com/anolilab/lunora/compare/@lunora/react-native@1.0.0-alpha.94...@lunora/react-native@1.0.0-alpha.95) (2026-09-22)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.117
+* **@lunora/react:** upgraded to 1.0.0-alpha.123
+
+## @lunora/react-native [1.0.0-alpha.94](https://github.com/anolilab/lunora/compare/@lunora/react-native@1.0.0-alpha.93...@lunora/react-native@1.0.0-alpha.94) (2026-09-22)
+
+
+### Dependencies
+
+* **@lunora/react:** upgraded to 1.0.0-alpha.122
+
+## @lunora/react-native [1.0.0-alpha.93](https://github.com/anolilab/lunora/compare/@lunora/react-native@1.0.0-alpha.92...@lunora/react-native@1.0.0-alpha.93) (2026-09-22)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.116
+* **@lunora/react:** upgraded to 1.0.0-alpha.121
+
+## @lunora/react-native [1.0.0-alpha.92](https://github.com/anolilab/lunora/compare/@lunora/react-native@1.0.0-alpha.91...@lunora/react-native@1.0.0-alpha.92) (2026-09-22)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.115
+* **@lunora/react:** upgraded to 1.0.0-alpha.120
+
+## @lunora/react-native [1.0.0-alpha.91](https://github.com/anolilab/lunora/compare/@lunora/react-native@1.0.0-alpha.90...@lunora/react-native@1.0.0-alpha.91) (2026-09-21)
+
+### Bug Fixes
+
+* **react-native:** omit the ambient cookie, and four local-first tier fixes ([#765](https://github.com/anolilab/lunora/issues/765)) ([dbf584c](https://github.com/anolilab/lunora/commit/dbf584cac3692d8649b5bda3689f46b0f0c36cf5))
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.114
+* **@lunora/react:** upgraded to 1.0.0-alpha.119
+
+## @lunora/react-native [1.0.0-alpha.90](https://github.com/anolilab/lunora/compare/@lunora/react-native@1.0.0-alpha.89...@lunora/react-native@1.0.0-alpha.90) (2026-09-21)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.113
+* **@lunora/react:** upgraded to 1.0.0-alpha.118
+
+## @lunora/react-native [1.0.0-alpha.89](https://github.com/anolilab/lunora/compare/@lunora/react-native@1.0.0-alpha.88...@lunora/react-native@1.0.0-alpha.89) (2026-09-19)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.112
+* **@lunora/react:** upgraded to 1.0.0-alpha.117
+
+## @lunora/react-native [1.0.0-alpha.88](https://github.com/anolilab/lunora/compare/@lunora/react-native@1.0.0-alpha.87...@lunora/react-native@1.0.0-alpha.88) (2026-09-19)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.111
+* **@lunora/react:** upgraded to 1.0.0-alpha.116
+
+## @lunora/react-native [1.0.0-alpha.87](https://github.com/anolilab/lunora/compare/@lunora/react-native@1.0.0-alpha.86...@lunora/react-native@1.0.0-alpha.87) (2026-09-13)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.110
+* **@lunora/react:** upgraded to 1.0.0-alpha.115
+
+## @lunora/react-native [1.0.0-alpha.86](https://github.com/anolilab/lunora/compare/@lunora/react-native@1.0.0-alpha.85...@lunora/react-native@1.0.0-alpha.86) (2026-09-13)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.109
+* **@lunora/react:** upgraded to 1.0.0-alpha.114
+
+## @lunora/react-native [1.0.0-alpha.85](https://github.com/anolilab/lunora/compare/@lunora/react-native@1.0.0-alpha.84...@lunora/react-native@1.0.0-alpha.85) (2026-09-13)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.108
+* **@lunora/react:** upgraded to 1.0.0-alpha.113
+
+## @lunora/react-native [1.0.0-alpha.84](https://github.com/anolilab/lunora/compare/@lunora/react-native@1.0.0-alpha.83...@lunora/react-native@1.0.0-alpha.84) (2026-09-13)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.107
+* **@lunora/react:** upgraded to 1.0.0-alpha.112
+
+## @lunora/react-native [1.0.0-alpha.83](https://github.com/anolilab/lunora/compare/@lunora/react-native@1.0.0-alpha.82...@lunora/react-native@1.0.0-alpha.83) (2026-09-12)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.105
+* **@lunora/react:** upgraded to 1.0.0-alpha.110
+
+## @lunora/react-native [1.0.0-alpha.82](https://github.com/anolilab/lunora/compare/@lunora/react-native@1.0.0-alpha.81...@lunora/react-native@1.0.0-alpha.82) (2026-09-12)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.104
+* **@lunora/react:** upgraded to 1.0.0-alpha.109
+
+## @lunora/react-native [1.0.0-alpha.81](https://github.com/anolilab/lunora/compare/@lunora/react-native@1.0.0-alpha.80...@lunora/react-native@1.0.0-alpha.81) (2026-09-12)
+
+### Documentation
+
+* align package docs with the shipped api ([#706](https://github.com/anolilab/lunora/issues/706)) ([40c24b7](https://github.com/anolilab/lunora/commit/40c24b7218d1326ced4d73c8961c6e339d89f562))
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.102
+* **@lunora/react:** upgraded to 1.0.0-alpha.107
+
+## @lunora/react-native [1.0.0-alpha.80](https://github.com/anolilab/lunora/compare/@lunora/react-native@1.0.0-alpha.79...@lunora/react-native@1.0.0-alpha.80) (2026-09-12)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.101
+* **@lunora/react:** upgraded to 1.0.0-alpha.106
+
+## @lunora/react-native [1.0.0-alpha.79](https://github.com/anolilab/lunora/compare/@lunora/react-native@1.0.0-alpha.78...@lunora/react-native@1.0.0-alpha.79) (2026-09-12)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.100
+* **@lunora/react:** upgraded to 1.0.0-alpha.105
+
+## @lunora/react-native [1.0.0-alpha.78](https://github.com/anolilab/lunora/compare/@lunora/react-native@1.0.0-alpha.77...@lunora/react-native@1.0.0-alpha.78) (2026-09-11)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.99
+* **@lunora/react:** upgraded to 1.0.0-alpha.104
+
+## @lunora/react-native [1.0.0-alpha.77](https://github.com/anolilab/lunora/compare/@lunora/react-native@1.0.0-alpha.76...@lunora/react-native@1.0.0-alpha.77) (2026-09-11)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.98
+* **@lunora/react:** upgraded to 1.0.0-alpha.103
+
+## @lunora/react-native [1.0.0-alpha.76](https://github.com/anolilab/lunora/compare/@lunora/react-native@1.0.0-alpha.75...@lunora/react-native@1.0.0-alpha.76) (2026-09-10)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.97
+* **@lunora/react:** upgraded to 1.0.0-alpha.102
+
+## @lunora/react-native [1.0.0-alpha.75](https://github.com/anolilab/lunora/compare/@lunora/react-native@1.0.0-alpha.74...@lunora/react-native@1.0.0-alpha.75) (2026-09-10)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.96
+* **@lunora/react:** upgraded to 1.0.0-alpha.101
+
+## @lunora/react-native [1.0.0-alpha.74](https://github.com/anolilab/lunora/compare/@lunora/react-native@1.0.0-alpha.73...@lunora/react-native@1.0.0-alpha.74) (2026-09-08)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.95
+* **@lunora/react:** upgraded to 1.0.0-alpha.100
+
+## @lunora/react-native [1.0.0-alpha.73](https://github.com/anolilab/lunora/compare/@lunora/react-native@1.0.0-alpha.72...@lunora/react-native@1.0.0-alpha.73) (2026-09-08)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.94
+* **@lunora/react:** upgraded to 1.0.0-alpha.99
+
+## @lunora/react-native [1.0.0-alpha.72](https://github.com/anolilab/lunora/compare/@lunora/react-native@1.0.0-alpha.71...@lunora/react-native@1.0.0-alpha.72) (2026-09-08)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.93
+* **@lunora/react:** upgraded to 1.0.0-alpha.98
+
+## @lunora/react-native [1.0.0-alpha.71](https://github.com/anolilab/lunora/compare/@lunora/react-native@1.0.0-alpha.70...@lunora/react-native@1.0.0-alpha.71) (2026-09-08)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.92
+* **@lunora/react:** upgraded to 1.0.0-alpha.97
+
+## @lunora/react-native [1.0.0-alpha.70](https://github.com/anolilab/lunora/compare/@lunora/react-native@1.0.0-alpha.69...@lunora/react-native@1.0.0-alpha.70) (2026-09-08)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.91
+* **@lunora/react:** upgraded to 1.0.0-alpha.96
+
+## @lunora/react-native [1.0.0-alpha.69](https://github.com/anolilab/lunora/compare/@lunora/react-native@1.0.0-alpha.68...@lunora/react-native@1.0.0-alpha.69) (2026-09-08)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.90
+* **@lunora/react:** upgraded to 1.0.0-alpha.95
+
+## @lunora/react-native [1.0.0-alpha.68](https://github.com/anolilab/lunora/compare/@lunora/react-native@1.0.0-alpha.67...@lunora/react-native@1.0.0-alpha.68) (2026-09-07)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.89
+* **@lunora/react:** upgraded to 1.0.0-alpha.94
+
+## @lunora/react-native [1.0.0-alpha.67](https://github.com/anolilab/lunora/compare/@lunora/react-native@1.0.0-alpha.66...@lunora/react-native@1.0.0-alpha.67) (2026-09-07)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.88
+* **@lunora/react:** upgraded to 1.0.0-alpha.93
+
+## @lunora/react-native [1.0.0-alpha.66](https://github.com/anolilab/lunora/compare/@lunora/react-native@1.0.0-alpha.65...@lunora/react-native@1.0.0-alpha.66) (2026-09-07)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.87
+* **@lunora/react:** upgraded to 1.0.0-alpha.92
+
+## @lunora/react-native [1.0.0-alpha.65](https://github.com/anolilab/lunora/compare/@lunora/react-native@1.0.0-alpha.64...@lunora/react-native@1.0.0-alpha.65) (2026-09-07)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.86
+* **@lunora/react:** upgraded to 1.0.0-alpha.91
+
+## @lunora/react-native [1.0.0-alpha.64](https://github.com/anolilab/lunora/compare/@lunora/react-native@1.0.0-alpha.63...@lunora/react-native@1.0.0-alpha.64) (2026-09-06)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.85
+* **@lunora/react:** upgraded to 1.0.0-alpha.90
+
+## @lunora/react-native [1.0.0-alpha.63](https://github.com/anolilab/lunora/compare/@lunora/react-native@1.0.0-alpha.62...@lunora/react-native@1.0.0-alpha.63) (2026-09-06)
+
+
+### Dependencies
+
+* **@lunora/react:** upgraded to 1.0.0-alpha.89
+
+## @lunora/react-native [1.0.0-alpha.62](https://github.com/anolilab/lunora/compare/@lunora/react-native@1.0.0-alpha.61...@lunora/react-native@1.0.0-alpha.62) (2026-09-06)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.83
+* **@lunora/react:** upgraded to 1.0.0-alpha.88
+
+## @lunora/react-native [1.0.0-alpha.61](https://github.com/anolilab/lunora/compare/@lunora/react-native@1.0.0-alpha.60...@lunora/react-native@1.0.0-alpha.61) (2026-09-06)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.82
+* **@lunora/react:** upgraded to 1.0.0-alpha.87
+
+## @lunora/react-native [1.0.0-alpha.60](https://github.com/anolilab/lunora/compare/@lunora/react-native@1.0.0-alpha.59...@lunora/react-native@1.0.0-alpha.60) (2026-09-05)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.81
+* **@lunora/react:** upgraded to 1.0.0-alpha.86
+
+## @lunora/react-native [1.0.0-alpha.59](https://github.com/anolilab/lunora/compare/@lunora/react-native@1.0.0-alpha.58...@lunora/react-native@1.0.0-alpha.59) (2026-09-05)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.80
+* **@lunora/react:** upgraded to 1.0.0-alpha.85
+
+## @lunora/react-native [1.0.0-alpha.58](https://github.com/anolilab/lunora/compare/@lunora/react-native@1.0.0-alpha.57...@lunora/react-native@1.0.0-alpha.58) (2026-09-05)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.79
+* **@lunora/react:** upgraded to 1.0.0-alpha.84
+
+## @lunora/react-native [1.0.0-alpha.57](https://github.com/anolilab/lunora/compare/@lunora/react-native@1.0.0-alpha.56...@lunora/react-native@1.0.0-alpha.57) (2026-09-05)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.78
+* **@lunora/react:** upgraded to 1.0.0-alpha.83
+
+## @lunora/react-native [1.0.0-alpha.56](https://github.com/anolilab/lunora/compare/@lunora/react-native@1.0.0-alpha.55...@lunora/react-native@1.0.0-alpha.56) (2026-09-04)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.76
+* **@lunora/react:** upgraded to 1.0.0-alpha.82
+
+## @lunora/react-native [1.0.0-alpha.55](https://github.com/anolilab/lunora/compare/@lunora/react-native@1.0.0-alpha.54...@lunora/react-native@1.0.0-alpha.55) (2026-09-04)
+
+
+### Dependencies
+
+* **@lunora/react:** upgraded to 1.0.0-alpha.81
+
+## @lunora/react-native [1.0.0-alpha.54](https://github.com/anolilab/lunora/compare/@lunora/react-native@1.0.0-alpha.53...@lunora/react-native@1.0.0-alpha.54) (2026-09-03)
+
+### ⚠ BREAKING CHANGES
+
+* writes already sitting in a durable outbox carry no identity stamp and are
+dropped on the next drain instead of replayed.
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01VUuYamsU1YLmAQhtut9PLZ
+
+* fix(db): report the reserved outbox handler's drop instead of swallowing it
+
+The per-collection replay handler wraps its NonRetriableError and reports it on
+`onWriteRejected`; the reserved `__lunora_outbox__` handler threw bare. A write
+dropped there rolled the optimistic row back with no UI signal — the exact
+failure that option was added to prevent, on the one path that already had the
+identity guard. Reports the identity drop and a server-coded replay rejection
+alike, because reporting only the first would leave the handler with the same
+half-guarded shape it is being fixed for.
+
+Also validates `rollout.gracePeriodSeconds` in `defineContainer`, which reached
+wrangler's `rollout_active_grace_period` unchecked while its sibling
+`stepPercentage` was validated; a fractional or negative value became a
+deploy-time failure far from the line that caused it. Only the shape is
+asserted — 0 is meaningful and no upper bound is sourced.
+
+And corrects a `collection-options.ts` docblock that stated the inverse of the
+code: it justified lazy resolution by an identity switch "retiring" the derived
+registry, but a switch rewinds each registry in place precisely so captures stay
+valid. The real replacement case is a client teardown.
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01VUuYamsU1YLmAQhtut9PLZ
+
+* docs(container): cite the platform ceiling the readiness budget sits on
+
+`READINESS_TIMEOUT_MS` is 30s, which is exactly Cloudflare's documented timeout
+for a `blockConcurrencyWhile` callback — "if this timeout is exceeded, the
+Durable Object will be reset" — and `armHardTimeout`'s three storage round-trips
+run ahead of it. While that wait sat inside the gate the reset won the race, so
+the `LunoraError` naming the failing check, port and budget was unreachable on
+the one path it exists for. The same page calls blocking that gate on I/O an
+anti-pattern, which a `readyOn` probe is.
+
+Records the source at the constant so the number is not re-derived by assumption
+and the wait is not moved back inside the gate.
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01VUuYamsU1YLmAQhtut9PLZ
+
+* fix(db): hold a replayed write when no identity is established yet
+
+The identity gate compared the stamped identity against `currentIdentity()` with
+a bare `!==`. That destroys the queuing user's own offline writes on every
+reload: `startOfflineExecutor` replays from its own constructor, before the app
+has resolved its session and called `setAuthToken`, so `currentIdentity()` is
+still null while the replay runs. A `NonRetriableError` there is terminal — the
+executor removes the entry from durable storage — so an offline write made
+before a reload was deleted rather than sent.
+
+The property being protected is "never replay as a DIFFERENT user". A null
+current identity is no user at all, so there is nobody to impersonate and the
+write must be held. The verdict now belongs to the client
+(`replayIdentityVerdict`): a mismatch is terminal, an unknown identity throws a
+retriable error and the write waits. It also routes through the existing
+token-hash check, so a subject that resolves after the token no longer looks
+like a different user. Both replay handlers share it, which closes the same bare
+comparison in the reserved `__lunora_outbox__` handler.
+
+Also gates request proxying on the `readyOn` probes. The base commits the
+healthy state inside its start gate, before the probes run, so `containerFetch`
+skipped startup entirely and proxied to a container that never reported ready;
+`afterContainerStart` is now single-flight and `containerFetch` awaits it.
+
+Reads the last-login cookie after mount in all six auth-ui ports, so the first
+client render matches the server instead of producing markup the server could
+not have produced, and gates the email and magic-link badges on
+`plugins.lastLoginMethod` the way the social buttons already were. Hardens the
+cookie read against a malformed percent-escape, which threw `URIError` during
+render.
+* `db.actions.*` transactions persist `{ identity, shardKey }`
+metadata. A write queued by an older build carries no stamp and is held rather
+than replayed under an unverified identity.
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01VUuYamsU1YLmAQhtut9PLZ
+
+* fix(container): clear the readiness gate when a run stops
+
+The single-flight gate added for concurrent starts outlived the run it belonged
+to. After `onStop` — including the `onActivityExpired` path, which stops the
+container — a restart found the settled promise and returned early, so the new
+run skipped both `armHardTimeout` and the `readyOn` probes: the restarted app
+was proxied to before it reported ready, and its hard timeout was never re-armed.
+
+Cleared when the run ends rather than at the top of a start, so single-flight
+still holds within a run. Resetting per start would let two concurrent starters
+each build a gate and each arm a schedule stamped with the same generation,
+which is the race the single-flight was added to close.
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01VUuYamsU1YLmAQhtut9PLZ
+
+### Bug Fixes
+
+* close 15 audit findings across the db outbox, container DO and adapters ([#589](https://github.com/anolilab/lunora/issues/589)) ([57080c6](https://github.com/anolilab/lunora/commit/57080c65698170d60403f1ca7731a9009661f1fc))
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.74
+* **@lunora/react:** upgraded to 1.0.0-alpha.79
+
+## @lunora/react-native [1.0.0-alpha.53](https://github.com/anolilab/lunora/compare/@lunora/react-native@1.0.0-alpha.52...@lunora/react-native@1.0.0-alpha.53) (2026-09-03)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.73
+* **@lunora/react:** upgraded to 1.0.0-alpha.78
+
+## @lunora/react-native [1.0.0-alpha.52](https://github.com/anolilab/lunora/compare/@lunora/react-native@1.0.0-alpha.51...@lunora/react-native@1.0.0-alpha.52) (2026-09-03)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.72
+* **@lunora/react:** upgraded to 1.0.0-alpha.77
+
+## @lunora/react-native [1.0.0-alpha.51](https://github.com/anolilab/lunora/compare/@lunora/react-native@1.0.0-alpha.50...@lunora/react-native@1.0.0-alpha.51) (2026-09-02)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.71
+* **@lunora/react:** upgraded to 1.0.0-alpha.76
+
+## @lunora/react-native [1.0.0-alpha.50](https://github.com/anolilab/lunora/compare/@lunora/react-native@1.0.0-alpha.49...@lunora/react-native@1.0.0-alpha.50) (2026-09-01)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.70
+* **@lunora/react:** upgraded to 1.0.0-alpha.75
+
+## @lunora/react-native [1.0.0-alpha.49](https://github.com/anolilab/lunora/compare/@lunora/react-native@1.0.0-alpha.48...@lunora/react-native@1.0.0-alpha.49) (2026-09-01)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.69
+* **@lunora/react:** upgraded to 1.0.0-alpha.74
+
+## @lunora/react-native [1.0.0-alpha.48](https://github.com/anolilab/lunora/compare/@lunora/react-native@1.0.0-alpha.47...@lunora/react-native@1.0.0-alpha.48) (2026-09-01)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.68
+* **@lunora/react:** upgraded to 1.0.0-alpha.73
+
+## @lunora/react-native [1.0.0-alpha.47](https://github.com/anolilab/lunora/compare/@lunora/react-native@1.0.0-alpha.46...@lunora/react-native@1.0.0-alpha.47) (2026-08-31)
+
+### Bug Fixes
+
+* close the silent-success class across all 55 packages ([#536](https://github.com/anolilab/lunora/issues/536)) ([dad6b74](https://github.com/anolilab/lunora/commit/dad6b74b79dd336b13f0b922a6ab32d3345c9657))
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.67
+* **@lunora/react:** upgraded to 1.0.0-alpha.72
+
+## @lunora/react-native [1.0.0-alpha.46](https://github.com/anolilab/lunora/compare/@lunora/react-native@1.0.0-alpha.45...@lunora/react-native@1.0.0-alpha.46) (2026-08-30)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.66
+* **@lunora/react:** upgraded to 1.0.0-alpha.71
+
+## @lunora/react-native [1.0.0-alpha.45](https://github.com/anolilab/lunora/compare/@lunora/react-native@1.0.0-alpha.44...@lunora/react-native@1.0.0-alpha.45) (2026-08-30)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.65
+* **@lunora/react:** upgraded to 1.0.0-alpha.70
+
+## @lunora/react-native [1.0.0-alpha.44](https://github.com/anolilab/lunora/compare/@lunora/react-native@1.0.0-alpha.43...@lunora/react-native@1.0.0-alpha.44) (2026-08-29)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.64
+* **@lunora/react:** upgraded to 1.0.0-alpha.69
+
+## @lunora/react-native [1.0.0-alpha.43](https://github.com/anolilab/lunora/compare/@lunora/react-native@1.0.0-alpha.42...@lunora/react-native@1.0.0-alpha.43) (2026-08-29)
+
+### ⚠ BREAKING CHANGES
+
+* eleven packages now declare peerDependencies. Consumers that
+relied on those packages resolving through hoisting must install them; the
+alternative was shipping types that fail to resolve off this repo's node_modules.
+
+`@lunora/workflow` is an optional peer of `@lunora/runtime`, so packem inlines
+its types rather than importing them — the published `@lunora/runtime` carries no
+`@lunora/workflow` dependency, as its source comments already promised.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01AWDgSnuBJaeQHfEitB2zeL
+
+* fix: satisfy eslint and the template matrix after the packem gate
+
+Two CI failures from making packem warnings fatal, each a gate that the local
+packem sweep does not cover.
+
+`@lunora/advisor` back to a real dependency on `@lunora/errors`. `ae-metrics.ts`
+imports `LunoraError` as a VALUE, and import/no-extraneous-dependencies requires
+that for anything under `src/` regardless of whether the module reaches the
+bundle. packem cannot see it because that module's value exports are
+quarantined — `src/index.ts` re-exports only its types — so the throwing code is
+tree-shaken out. The two rules disagree by construction; the packem side is now a
+commented `unused` exclusion that says which condition would end it.
+
+`@lunora/workflow` becomes a REQUIRED peer of `@lunora/runtime`. As an optional
+peer it was auto-installed anyway, and every one of the twelve templates then
+resolved `@lunora/workflow` from the npm REGISTRY instead of this checkout — the
+scaffold matrix builds its local-tarball map from required peers only, on the
+assumption that optional ones are never pulled in. Forcing the type to inline
+instead (`resolveExternals.exclude`) does not work: that option governs the JS
+bundle, and the declaration build has its own resolver, so the import survived.
+A required peer matches the other seven packages here and keeps the type
+resolvable for consumers.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01AWDgSnuBJaeQHfEitB2zeL
+
+### Build System
+
+* ship .mjs everywhere and make packem warnings fatal ([#526](https://github.com/anolilab/lunora/issues/526)) ([b3eaacc](https://github.com/anolilab/lunora/commit/b3eaacc5a31fe4634a5f4a6c59fda6fbbc8315e1))
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.63
+* **@lunora/react:** upgraded to 1.0.0-alpha.68
+
+## @lunora/react-native [1.0.0-alpha.42](https://github.com/anolilab/lunora/compare/@lunora/react-native@1.0.0-alpha.41...@lunora/react-native@1.0.0-alpha.42) (2026-08-28)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.62
+* **@lunora/react:** upgraded to 1.0.0-alpha.67
+
+## @lunora/react-native [1.0.0-alpha.41](https://github.com/anolilab/lunora/compare/@lunora/react-native@1.0.0-alpha.40...@lunora/react-native@1.0.0-alpha.41) (2026-08-28)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.61
+* **@lunora/react:** upgraded to 1.0.0-alpha.66
+
+## @lunora/react-native [1.0.0-alpha.40](https://github.com/anolilab/lunora/compare/@lunora/react-native@1.0.0-alpha.39...@lunora/react-native@1.0.0-alpha.40) (2026-08-26)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.60
+* **@lunora/react:** upgraded to 1.0.0-alpha.65
+
+## @lunora/react-native [1.0.0-alpha.39](https://github.com/anolilab/lunora/compare/@lunora/react-native@1.0.0-alpha.38...@lunora/react-native@1.0.0-alpha.39) (2026-08-26)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.59
+* **@lunora/react:** upgraded to 1.0.0-alpha.64
+
+## @lunora/react-native [1.0.0-alpha.38](https://github.com/anolilab/lunora/compare/@lunora/react-native@1.0.0-alpha.37...@lunora/react-native@1.0.0-alpha.38) (2026-08-26)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.58
+* **@lunora/react:** upgraded to 1.0.0-alpha.63
+
+## @lunora/react-native [1.0.0-alpha.37](https://github.com/anolilab/lunora/compare/@lunora/react-native@1.0.0-alpha.36...@lunora/react-native@1.0.0-alpha.37) (2026-08-24)
+
+### Features
+
+* **auth:** upgrade better-auth to 1.7.1 and gate MCP on its OAuth ([#472](https://github.com/anolilab/lunora/issues/472)) ([7f17a35](https://github.com/anolilab/lunora/commit/7f17a35ba36d85163dd099e464a560b874190049))
+
+## @lunora/react-native [1.0.0-alpha.36](https://github.com/anolilab/lunora/compare/@lunora/react-native@1.0.0-alpha.35...@lunora/react-native@1.0.0-alpha.36) (2026-08-23)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.56
+* **@lunora/react:** upgraded to 1.0.0-alpha.61
+
+## @lunora/react-native [1.0.0-alpha.35](https://github.com/anolilab/lunora/compare/@lunora/react-native@1.0.0-alpha.34...@lunora/react-native@1.0.0-alpha.35) (2026-08-23)
+
+### Bug Fixes
+
+* **client:** keep durable caches lossless ([#440](https://github.com/anolilab/lunora/issues/440)) ([ba18c62](https://github.com/anolilab/lunora/commit/ba18c62c0f00333e0ae7384c18c4dcbff2caba20))
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.55
+* **@lunora/react:** upgraded to 1.0.0-alpha.60
+
+## @lunora/react-native [1.0.0-alpha.34](https://github.com/anolilab/lunora/compare/@lunora/react-native@1.0.0-alpha.33...@lunora/react-native@1.0.0-alpha.34) (2026-08-22)
+
+
+### Dependencies
+
+* **@lunora/react:** upgraded to 1.0.0-alpha.59
+
+## @lunora/react-native [1.0.0-alpha.33](https://github.com/anolilab/lunora/compare/%40lunora%2Freact-native%401.0.0-alpha.32...%40lunora%2Freact-native%401.0.0-alpha.33) (2026-08-18)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.54
+* **@lunora/react:** upgraded to 1.0.0-alpha.58
+
+## @lunora/react-native [1.0.0-alpha.32](https://github.com/anolilab/lunora/compare/%40lunora%2Freact-native%401.0.0-alpha.31...%40lunora%2Freact-native%401.0.0-alpha.32) (2026-08-18)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.53
+* **@lunora/react:** upgraded to 1.0.0-alpha.57
+
+## @lunora/react-native [1.0.0-alpha.31](https://github.com/anolilab/lunora/compare/%40lunora%2Freact-native%401.0.0-alpha.30...%40lunora%2Freact-native%401.0.0-alpha.31) (2026-08-18)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.52
+* **@lunora/react:** upgraded to 1.0.0-alpha.56
+
+## @lunora/react-native [1.0.0-alpha.30](https://github.com/anolilab/lunora/compare/%40lunora%2Freact-native%401.0.0-alpha.29...%40lunora%2Freact-native%401.0.0-alpha.30) (2026-08-14)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.51
+* **@lunora/react:** upgraded to 1.0.0-alpha.55
+
+## @lunora/react-native [1.0.0-alpha.29](https://github.com/anolilab/lunora/compare/%40lunora%2Freact-native%401.0.0-alpha.28...%40lunora%2Freact-native%401.0.0-alpha.29) (2026-08-12)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.50
+* **@lunora/react:** upgraded to 1.0.0-alpha.54
+
+## @lunora/react-native [1.0.0-alpha.28](https://github.com/anolilab/lunora/compare/%40lunora%2Freact-native%401.0.0-alpha.27...%40lunora%2Freact-native%401.0.0-alpha.28) (2026-08-11)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.49
+* **@lunora/react:** upgraded to 1.0.0-alpha.53
+
+## @lunora/react-native [1.0.0-alpha.27](https://github.com/anolilab/lunora/compare/%40lunora%2Freact-native%401.0.0-alpha.26...%40lunora%2Freact-native%401.0.0-alpha.27) (2026-08-11)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.48
+* **@lunora/react:** upgraded to 1.0.0-alpha.52
+
+## @lunora/react-native [1.0.0-alpha.26](https://github.com/anolilab/lunora/compare/%40lunora%2Freact-native%401.0.0-alpha.25...%40lunora%2Freact-native%401.0.0-alpha.26) (2026-08-11)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.47
+* **@lunora/react:** upgraded to 1.0.0-alpha.51
+
+## @lunora/react-native [1.0.0-alpha.25](https://github.com/anolilab/lunora/compare/%40lunora%2Freact-native%401.0.0-alpha.24...%40lunora%2Freact-native%401.0.0-alpha.25) (2026-08-10)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.46
+* **@lunora/react:** upgraded to 1.0.0-alpha.50
+
+## @lunora/react-native [1.0.0-alpha.24](https://github.com/anolilab/lunora/compare/%40lunora%2Freact-native%401.0.0-alpha.23...%40lunora%2Freact-native%401.0.0-alpha.24) (2026-08-09)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.45
+* **@lunora/react:** upgraded to 1.0.0-alpha.49
+
+## @lunora/react-native [1.0.0-alpha.23](https://github.com/anolilab/lunora/compare/%40lunora%2Freact-native%401.0.0-alpha.22...%40lunora%2Freact-native%401.0.0-alpha.23) (2026-08-09)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.44
+* **@lunora/react:** upgraded to 1.0.0-alpha.48
+
+## @lunora/react-native [1.0.0-alpha.22](https://github.com/anolilab/lunora/compare/%40lunora%2Freact-native%401.0.0-alpha.21...%40lunora%2Freact-native%401.0.0-alpha.22) (2026-08-07)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.43
+* **@lunora/react:** upgraded to 1.0.0-alpha.47
+
+## @lunora/react-native [1.0.0-alpha.21](https://github.com/anolilab/lunora/compare/%40lunora%2Freact-native%401.0.0-alpha.20...%40lunora%2Freact-native%401.0.0-alpha.21) (2026-08-07)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.42
+* **@lunora/react:** upgraded to 1.0.0-alpha.46
+
+## @lunora/react-native [1.0.0-alpha.20](https://github.com/anolilab/lunora/compare/%40lunora%2Freact-native%401.0.0-alpha.19...%40lunora%2Freact-native%401.0.0-alpha.20) (2026-08-07)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.41
+* **@lunora/react:** upgraded to 1.0.0-alpha.45
+
+## @lunora/react-native [1.0.0-alpha.19](https://github.com/anolilab/lunora/compare/%40lunora%2Freact-native%401.0.0-alpha.18...%40lunora%2Freact-native%401.0.0-alpha.19) (2026-08-04)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.40
+* **@lunora/react:** upgraded to 1.0.0-alpha.44
+
+## @lunora/react-native [1.0.0-alpha.18](https://github.com/anolilab/lunora/compare/%40lunora%2Freact-native%401.0.0-alpha.17...%40lunora%2Freact-native%401.0.0-alpha.18) (2026-08-04)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.38
+* **@lunora/react:** upgraded to 1.0.0-alpha.42
+
+## @lunora/react-native [1.0.0-alpha.17](https://github.com/anolilab/lunora/compare/%40lunora%2Freact-native%401.0.0-alpha.16...%40lunora%2Freact-native%401.0.0-alpha.17) (2026-08-03)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.37
+* **@lunora/react:** upgraded to 1.0.0-alpha.41
+
+## @lunora/react-native [1.0.0-alpha.16](https://github.com/anolilab/lunora/compare/%40lunora%2Freact-native%401.0.0-alpha.15...%40lunora%2Freact-native%401.0.0-alpha.16) (2026-08-02)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.36
+* **@lunora/react:** upgraded to 1.0.0-alpha.40
+
+## @lunora/react-native [1.0.0-alpha.15](https://github.com/anolilab/lunora/compare/%40lunora%2Freact-native%401.0.0-alpha.14...%40lunora%2Freact-native%401.0.0-alpha.15) (2026-07-31)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.35
+* **@lunora/react:** upgraded to 1.0.0-alpha.39
+
+## @lunora/react-native [1.0.0-alpha.14](https://github.com/anolilab/lunora/compare/%40lunora%2Freact-native%401.0.0-alpha.13...%40lunora%2Freact-native%401.0.0-alpha.14) (2026-07-31)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.34
+* **@lunora/react:** upgraded to 1.0.0-alpha.38
+
+## @lunora/react-native [1.0.0-alpha.13](https://github.com/anolilab/lunora/compare/%40lunora%2Freact-native%401.0.0-alpha.12...%40lunora%2Freact-native%401.0.0-alpha.13) (2026-07-28)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.32
+* **@lunora/react:** upgraded to 1.0.0-alpha.36
+
+## @lunora/react-native [1.0.0-alpha.12](https://github.com/anolilab/lunora/compare/%40lunora%2Freact-native%401.0.0-alpha.11...%40lunora%2Freact-native%401.0.0-alpha.12) (2026-07-27)
+
+## @lunora/react-native [1.0.0-alpha.11](https://github.com/anolilab/lunora/compare/%40lunora%2Freact-native%401.0.0-alpha.10...%40lunora%2Freact-native%401.0.0-alpha.11) (2026-07-26)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.31
+* **@lunora/react:** upgraded to 1.0.0-alpha.35
+
+## @lunora/react-native [1.0.0-alpha.10](https://github.com/anolilab/lunora/compare/%40lunora%2Freact-native%401.0.0-alpha.9...%40lunora%2Freact-native%401.0.0-alpha.10) (2026-07-25)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.30
+* **@lunora/react:** upgraded to 1.0.0-alpha.34
+
+## @lunora/react-native [1.0.0-alpha.9](https://github.com/anolilab/lunora/compare/%40lunora%2Freact-native%401.0.0-alpha.8...%40lunora%2Freact-native%401.0.0-alpha.9) (2026-07-25)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.29
+* **@lunora/react:** upgraded to 1.0.0-alpha.33
+
+## @lunora/react-native [1.0.0-alpha.8](https://github.com/anolilab/lunora/compare/%40lunora%2Freact-native%401.0.0-alpha.7...%40lunora%2Freact-native%401.0.0-alpha.8) (2026-07-25)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.28
+* **@lunora/react:** upgraded to 1.0.0-alpha.32
+
+## @lunora/react-native [1.0.0-alpha.7](https://github.com/anolilab/lunora/compare/%40lunora%2Freact-native%401.0.0-alpha.6...%40lunora%2Freact-native%401.0.0-alpha.7) (2026-07-23)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.27
+* **@lunora/react:** upgraded to 1.0.0-alpha.31
+
+## @lunora/react-native [1.0.0-alpha.6](https://github.com/anolilab/lunora/compare/%40lunora%2Freact-native%401.0.0-alpha.5...%40lunora%2Freact-native%401.0.0-alpha.6) (2026-07-21)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.26
+* **@lunora/react:** upgraded to 1.0.0-alpha.30
+
+## @lunora/react-native [1.0.0-alpha.5](https://github.com/anolilab/lunora/compare/%40lunora%2Freact-native%401.0.0-alpha.4...%40lunora%2Freact-native%401.0.0-alpha.5) (2026-07-20)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.25
+* **@lunora/react:** upgraded to 1.0.0-alpha.29
+
+## @lunora/react-native [1.0.0-alpha.4](https://github.com/anolilab/lunora/compare/%40lunora%2Freact-native%401.0.0-alpha.3...%40lunora%2Freact-native%401.0.0-alpha.4) (2026-07-19)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.24
+* **@lunora/react:** upgraded to 1.0.0-alpha.28
+
+## @lunora/react-native [1.0.0-alpha.3](https://github.com/anolilab/lunora/compare/%40lunora%2Freact-native%401.0.0-alpha.2...%40lunora%2Freact-native%401.0.0-alpha.3) (2026-07-17)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.23
+* **@lunora/react:** upgraded to 1.0.0-alpha.27
+
+## @lunora/react-native [1.0.0-alpha.2](https://github.com/anolilab/lunora/compare/%40lunora%2Freact-native%401.0.0-alpha.1...%40lunora%2Freact-native%401.0.0-alpha.2) (2026-07-13)
+
+
+### Dependencies
+
+* **@lunora/react:** upgraded to 1.0.0-alpha.25
+
+## @lunora/react-native 1.0.0-alpha.1 (2026-07-12)
+
+
+### Dependencies
+
+* **@lunora/react:** upgraded to 1.0.0-alpha.24

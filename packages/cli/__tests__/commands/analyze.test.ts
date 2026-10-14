@@ -63,8 +63,10 @@ describe("lunora analyze", () => {
             expect(result.report?.generatedFiles.map((f) => f.path)).toEqual([join("lunora", "_generated", "api.ts")]);
         });
 
-        it("--json emits a machine-readable report on stdout (jq-pipeable)", async () => {
-            expect.assertions(3);
+        // The document itself is `defineHandler`'s (see `__tests__/util/command.test.ts`);
+        // what this command owes it is the report, and a stdout it has not written to.
+        it("--format json keeps stdout clean and hands the report back for the document", async () => {
+            expect.assertions(4);
 
             const { logger } = recordingLogger();
             const written: string[] = [];
@@ -85,16 +87,13 @@ describe("lunora analyze", () => {
             });
 
             try {
-                const result = await runAnalyzeCommand({ cwd: workdir, inspectOnly: buildOut, json: true, logger });
+                const result = await runAnalyzeCommand({ cwd: workdir, format: "json", inspectOnly: buildOut, logger });
 
                 expect(result.code).toBe(0);
-
-                // Stdout payload should be just the JSON (no Pail prefixes) so a
-                // downstream `jq` can consume it verbatim.
-                const payload = JSON.parse(written.join(""));
-
-                expect(payload.totalFiles).toBe(3);
-                expect(payload.topModules[0].path).toBe("worker.js");
+                // Not one byte: stdout belongs to the single JSON document.
+                expect(written.join("")).toBe("");
+                expect(result.report?.totalFiles).toBe(3);
+                expect(result.report?.topModules[0]?.path).toBe("worker.js");
             } finally {
                 spy.mockRestore();
             }
@@ -118,6 +117,21 @@ describe("lunora analyze", () => {
             expect(argv).toContain("deploy");
             expect(argv).toContain("--dry-run");
             expect(argv).toContain("--outdir");
+        });
+
+        it("launches wrangler through npx when the project declares npm", async () => {
+            expect.assertions(2);
+
+            // `detectPackageManager` reads the nearest package.json's `packageManager`.
+            writeFileSync(join(workdir, "package.json"), `{ "packageManager": "npm@10.9.0" }\n`, "utf8");
+            const { logger } = recordingLogger();
+            // exit 1 short-circuits before we walk the (never-created) outdir.
+            const { calls, spawner } = createRecordingSpawner(1);
+
+            await runAnalyzeCommand({ cwd: workdir, logger, spawner });
+
+            expect(calls[0]?.descriptor.command).toBe("npx");
+            expect(calls[0]?.descriptor.args.slice(0, 3)).toStrictEqual(["--", "wrangler", "deploy"]);
         });
     });
 });

@@ -2,9 +2,10 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
+import { LUNORA_SKILL_NAMES } from "@lunora/config";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import { resolveBundledSkillsDirectory, runRulesCheck, runRulesInstall } from "../../src/commands/rules/handler";
+import { listBundledSkills, resolveBundledSkillsDirectory, runRulesCheck, runRulesInstall } from "../../src/commands/rules/handler";
 import type { Logger } from "../../src/util/logger";
 
 const captureLogger = (): { logger: Logger; messages: string[] } => {
@@ -28,6 +29,20 @@ describe("lunora rules", () => {
 
     afterEach(() => {
         rmSync(workdir, { force: true, recursive: true });
+    });
+
+    it("names every bundled skill in LUNORA_SKILL_NAMES", () => {
+        expect.assertions(1);
+
+        // `install` enumerates the directory while `check` counts this list, so
+        // drift between them makes `check` print "9/9 skills" with an empty
+        // "Missing" line for a project that has 14 — the one surface where the
+        // list is load-bearing, and the one that lies when it falls behind.
+        const skillsDirectory = resolveBundledSkillsDirectory();
+
+        expect(listBundledSkills(skillsDirectory ?? "").toSorted((a, b) => a.localeCompare(b))).toStrictEqual(
+            [...LUNORA_SKILL_NAMES].toSorted((a, b) => a.localeCompare(b)),
+        );
     });
 
     it("install copies the bundled skills into .agents/skills/", () => {
@@ -103,5 +118,47 @@ describe("lunora rules", () => {
         expect(resolveBundledSkillsDirectory(start)).toBe(join(pkgRoot, "skills"));
         // No @lunora/cli package.json above an unrelated dir → undefined.
         expect(resolveBundledSkillsDirectory(mkdtempSync(join(tmpdir(), "lunora-no-pkg-")))).toBeUndefined();
+    });
+
+    it("installs at the workspace root, not the package subdirectory it was run from", () => {
+        expect.assertions(4);
+
+        // Skills belong to the repo, not to whichever package
+        // you happened to `cd` into. Running from a subdirectory dropped them in
+        // `<pkg>/.agents/skills`, where the coding agent never looks.
+        writeFileSync(join(workdir, "pnpm-workspace.yaml"), "packages:\n  - packages/*\n");
+
+        const nested = join(workdir, "packages", "app");
+
+        mkdirSync(nested, { recursive: true });
+        writeFileSync(join(nested, "package.json"), JSON.stringify({ name: "app" }));
+
+        const { logger } = captureLogger();
+        const result = runRulesInstall({ cwd: nested, logger });
+
+        expect(result.code).toBe(0);
+        expect(existsSync(join(workdir, ".agents", "skills", "lunora"))).toBe(true);
+        expect(existsSync(join(nested, ".agents"))).toBe(false);
+
+        // `check` must resolve the root the same way, or it reports "missing"
+        // for skills `install` just wrote one directory up.
+        expect(runRulesCheck({ cwd: nested, logger }).code).toBe(0);
+    });
+
+    it("honours an explicit --dir over workspace-root detection", () => {
+        expect.assertions(2);
+
+        writeFileSync(join(workdir, "pnpm-workspace.yaml"), "packages:\n  - packages/*\n");
+
+        const nested = join(workdir, "packages", "app");
+
+        mkdirSync(nested, { recursive: true });
+
+        const { logger } = captureLogger();
+
+        runRulesInstall({ cwd: nested, dir: ".", logger });
+
+        expect(existsSync(join(nested, ".agents", "skills", "lunora"))).toBe(true);
+        expect(existsSync(join(workdir, ".agents"))).toBe(false);
     });
 });

@@ -1,18 +1,15 @@
-import { useLunora } from "@lunora/react";
 import type { ReactElement } from "react";
-import { useEffect, useState } from "react";
 
+import ErrorAlert from "../../components/error-alert";
 import { Badge } from "../../components/ui/badge";
 import { Card, CardContent } from "../../components/ui/card";
 import { EmptyState } from "../../components/ui/empty-state";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "../../components/ui/table";
+import { useAdminQuery } from "../../hooks/use-admin-query";
 import type { TFunction } from "../../i18n/i18n-context";
 import { useT } from "../../i18n/i18n-context";
 import type { RlsOperation, RlsPoliciesResult, RlsPolicyMetadata } from "../../lib/admin";
 import { ADMIN_FUNCTIONS } from "../../lib/admin";
-import { adminRef, callOptions, errorMessage, fireAndForget } from "../../lib/internal";
-
-const RLS_POLICIES = adminRef(ADMIN_FUNCTIONS.rlsPolicies);
 
 /** The four CRUD operations a policy can guard, in read→write order for the per-table columns. */
 const OPERATIONS: ReadonlyArray<RlsOperation> = ["read", "insert", "update", "delete"];
@@ -25,8 +22,8 @@ const operationLabel = (t: TFunction, operation: RlsOperation): string =>
 interface TableCoverage {
     /** The set of operations a policy guards on this table. */
     operations: Set<RlsOperation>;
-    /** Procedures whose `.use(rls(...))` chain declared a policy on this table, deduped. */
-    procedures: string[];
+    /** Procedures whose `.use(rls(...))` chain declared a policy on this table. A Set, like `operations` — dedup is the point. */
+    procedures: Set<string>;
     table: string;
 }
 
@@ -35,13 +32,11 @@ const groupByTable = (policies: RlsPolicyMetadata[]): TableCoverage[] => {
     const byTable = new Map<string, TableCoverage>();
 
     for (const policy of policies) {
-        const coverage = byTable.get(policy.table) ?? { operations: new Set<RlsOperation>(), procedures: [], table: policy.table };
+        const coverage = byTable.get(policy.table) ?? { operations: new Set<RlsOperation>(), procedures: new Set<string>(), table: policy.table };
 
         coverage.operations.add(policy.on);
 
-        if (!coverage.procedures.includes(policy.procedure)) {
-            coverage.procedures.push(policy.procedure);
-        }
+        coverage.procedures.add(policy.procedure);
 
         byTable.set(policy.table, coverage);
     }
@@ -62,50 +57,29 @@ const groupByTable = (policies: RlsPolicyMetadata[]): TableCoverage[] => {
  * so it refreshes on every codegen run (dev: on save; prod: on deploy).
  */
 const RlsPanel = (): ReactElement => {
-    const client = useLunora();
     const t = useT();
 
-    const [data, setData] = useState<RlsPoliciesResult | null>(null);
-    const [error, setError] = useState<null | string>(null);
+    // Deployment-wide metadata (root shard), so no shard selector is needed.
+    const { data, error, errorSource } = useAdminQuery<RlsPoliciesResult>(ADMIN_FUNCTIONS.rlsPolicies, {});
 
-    const refresh = async (): Promise<void> => {
-        try {
-            // Deployment-wide metadata (root shard), so no shard selector is needed.
-            const result = (await client.query(RLS_POLICIES, {}, callOptions(""))) as RlsPoliciesResult;
-
-            // Defensive: an older worker (or a stand-in) may omit either array —
-            // treat anything but an array as empty rather than throw.
-            setData({
-                policies: Array.isArray(result.policies) ? result.policies : [],
-                roles: Array.isArray(result.roles) ? result.roles : [],
-            });
-            setError(null);
-        } catch (error_: unknown) {
-            setError(errorMessage(error_));
-        }
-    };
-
-    useEffect(() => {
-        fireAndForget(refresh());
-    }, [refresh]);
-
-    const tables = data === null ? [] : groupByTable(data.policies);
-    const roles = data?.roles ?? [];
+    // `undefined` while the first read is in flight — `loaded` distinguishes that
+    // from a resolved-but-empty deployment so the empty states only show once the
+    // read lands. A non-array policies/roles (older worker / stand-in) is treated
+    // as empty rather than throwing.
+    const loaded = data !== undefined;
+    const tables = groupByTable(Array.isArray(data?.policies) ? data.policies : []);
+    const roles = Array.isArray(data?.roles) ? data.roles : [];
 
     return (
         <div className="flex flex-col gap-6" data-testid="lunora-rls-panel">
-            {error !== null && (
-                <p className="px-4 py-8 text-center text-sm text-destructive" data-testid="rls-error" role="alert">
-                    {error}
-                </p>
-            )}
+            {error !== null && <ErrorAlert error={errorSource} testId="rls-error" />}
 
             <section className="flex flex-col gap-2">
                 <Card className="overflow-hidden py-0">
                     <header className="border-b border-border px-4 py-3">
                         <span className="font-mono text-[11px] tracking-wide text-muted-foreground uppercase">{t("Policies")}</span>
                     </header>
-                    {data !== null && tables.length === 0 ? (
+                    {loaded && tables.length === 0 ? (
                         <EmptyState
                             description={t("No `definePolicy` is wired through `.use(rls(...))` in this deployment. Add one to guard a table's rows.")}
                             testId="rls-policies-empty"
@@ -138,7 +112,7 @@ const RlsPanel = (): ReactElement => {
                                                     )}
                                                 </TableCell>
                                             ))}
-                                            <TableCell className="font-mono text-xs text-muted-foreground">{coverage.procedures.join(", ")}</TableCell>
+                                            <TableCell className="font-mono text-xs text-muted-foreground">{[...coverage.procedures].join(", ")}</TableCell>
                                         </TableRow>
                                     ))}
                                 </TableBody>
@@ -153,7 +127,7 @@ const RlsPanel = (): ReactElement => {
                     <header className="border-b border-border px-4 py-3">
                         <span className="font-mono text-[11px] tracking-wide text-muted-foreground uppercase">{t("Roles")}</span>
                     </header>
-                    {data !== null && roles.length === 0 ? (
+                    {loaded && roles.length === 0 ? (
                         <EmptyState
                             description={t("No `defineRole` is registered via `rls(policies, { roles })`. Roles back `ctx.auth.can(...)` permission checks.")}
                             testId="rls-roles-empty"

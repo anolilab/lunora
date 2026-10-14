@@ -1,7 +1,7 @@
-import type { CachedQuery, QueryCacheAdapter } from "./types";
+import { LunoraError } from "@lunora/errors";
 
-/** A stored read-cache row: the {@link CachedQuery} plus its primary key. */
-type StoredQuery = CachedQuery & { key: string };
+import { createDatabaseOpener, createWithStore, promisifyRequest } from "./idb-utility";
+import type { QueryCacheAdapter, StoredQuery } from "./types";
 
 /**
  * Compose the read-cache key for a subscription. Mirrors how
@@ -15,6 +15,29 @@ const queryCacheKey = (functionPath: string, argsKey: string, shardKey?: string)
 const DEFAULT_MAX_ENTRIES = 500;
 
 /**
+ * Validate an LRU cap at construction, shared by every {@link QueryCacheAdapter}
+ * so the three can't diverge on what they accept.
+ *
+ * Every adapter's eviction is a `size <= maxEntries` comparison, and a `NaN` or
+ * negative cap makes that comparison false at every step: each `put` then drops
+ * the WHOLE cache, so the adapter constructs fine, throws nothing, and silently
+ * caches nothing forever. `Infinity` fails the other way — it disables eviction
+ * entirely, which is what bounds the store. A fractional cap silently floors.
+ * All of them are misconfigurations that only show up as "the cache doesn't
+ * work", so they fail loudly here instead.
+ *
+ * `0` is rejected too: an always-empty cache is not a mode worth supporting when
+ * `queryCache: false` already turns the cache off explicitly.
+ */
+const assertMaxEntries = (maxEntries: number, factory: string): number => {
+    if (!Number.isInteger(maxEntries) || maxEntries < 1) {
+        throw new LunoraError("INTERNAL", `${factory}: maxEntries must be a positive integer, got ${String(maxEntries)}`);
+    }
+
+    return maxEntries;
+};
+
+/**
  * In-memory {@link QueryCacheAdapter}. Doesn't survive a reload — it exists so
  * the read-cache wiring can be exercised without IndexedDB (tests, SSR, or as a
  * deliberate "no durable store" choice that still satisfies the interface).
@@ -22,7 +45,7 @@ const DEFAULT_MAX_ENTRIES = 500;
  * from mutating stored values.
  */
 const createInMemoryQueryCache = (options: { maxEntries?: number } = {}): QueryCacheAdapter => {
-    const maxEntries = options.maxEntries ?? DEFAULT_MAX_ENTRIES;
+    const maxEntries = assertMaxEntries(options.maxEntries ?? DEFAULT_MAX_ENTRIES, "createInMemoryQueryCache");
     const entries = new Map<string, StoredQuery>();
     const clone = (entry: StoredQuery): StoredQuery => {
         return { ...entry, value: structuredClone(entry.value) };
@@ -69,37 +92,32 @@ const createInMemoryQueryCache = (options: { maxEntries?: number } = {}): QueryC
 
 // eslint-disable-next-line unicorn/prevent-abbreviations -- public exported type name; renaming breaks @lunora/client consumers
 interface IndexedDbQueryCacheOptions {
-    /** Database name; defaults to `"lunora"` (shared with the offline-mutation store). */
+    /** Database name; defaults to `"lunora-query-cache"` (its own DB, separate from the offline outbox). */
     databaseName?: string;
     /** Injectable `IDBFactory` (e.g. `fake-indexeddb` in tests); defaults to the global `indexedDB`. */
     indexedDB?: IDBFactory;
-    /** LRU row cap; defaults to 500. The oldest rows by `ts` are pruned on `put` once exceeded. */
+    /** LRU row cap; defaults to 500. Must be a positive integer. The oldest rows by `ts` are pruned on `put` once exceeded. */
     maxEntries?: number;
     /** Object-store name; defaults to `"query-cache"`. */
     storeName?: string;
 }
 
-const DEFAULT_DATABASE = "lunora";
+const DEFAULT_DATABASE = "lunora-query-cache";
 const DEFAULT_STORE = "query-cache";
 /** Secondary index on `ts` so LRU eviction can walk oldest-first without loading every row. */
 const TS_INDEX = "by_ts";
 
 /**
- * Schema version. v2 adds the `query-cache` store alongside the v1
- * `offline-mutations` store, so both adapters can share one `lunora` database.
+ * Schema version for the read-cache database. The query cache owns its own
+ * database ({@link DEFAULT_DATABASE}) so its schema evolves independently of the
+ * offline-mutation outbox — the two adapters are toggled independently and never
+ * share a version namespace. (They previously shared one `lunora` database at
+ * mismatched versions — 1 for the outbox, 2 here — which threw
+ * `VersionError: The requested version (1) is less than the existing version (2)`
+ * once both were enabled: IndexedDB's version is a property of the database, not
+ * the store, so every opener must request the same version.)
  */
-const DATABASE_VERSION = 2;
-
-/** Promisify an `IDBRequest`. */
-const promisifyRequest = <T>(request: IDBRequest<T>): Promise<T> =>
-    new Promise<T>((resolve, reject) => {
-        request.addEventListener("success", () => {
-            resolve(request.result);
-        });
-        request.addEventListener("error", () => {
-            reject(request.error ?? new Error("IndexedDB request failed"));
-        });
-    });
+const DATABASE_VERSION = 1;
 
 /**
  * IndexedDB-backed {@link QueryCacheAdapter}. Each query is stored under its
@@ -107,72 +125,33 @@ const promisifyRequest = <T>(request: IDBRequest<T>): Promise<T> =>
  * LRU eviction. The store handle is opened lazily and cached, so repeated ops
  * reuse one connection.
  *
- * The store lives in the same `lunora` database as the offline-mutation queue
- * (bumped to schema v2). Opening it upgrades a v1 database in place, adding the
- * `query-cache` store without touching `offline-mutations`. Throws eagerly if no
- * `IDBFactory` is available — callers in non-browser environments should use
- * {@link createInMemoryQueryCache}.
+ * The store lives in its own `lunora-query-cache` database — deliberately
+ * separate from the offline-mutation outbox's `lunora-outbox` database so the two
+ * independently-toggleable adapters never share (and drift on) a schema version.
+ * Throws eagerly if no `IDBFactory` is available — callers in non-browser
+ * environments should use {@link createInMemoryQueryCache}.
  */
 // eslint-disable-next-line unicorn/prevent-abbreviations -- public exported function name; renaming breaks @lunora/client consumers
 const createIndexedDbQueryCache = (options: IndexedDbQueryCacheOptions = {}): QueryCacheAdapter => {
     const factory = options.indexedDB ?? (typeof indexedDB === "undefined" ? undefined : indexedDB);
 
     if (!factory) {
-        throw new Error("createIndexedDbQueryCache: no IndexedDB available — pass `indexedDB` or use createInMemoryQueryCache()");
+        throw new LunoraError("INTERNAL", "createIndexedDbQueryCache: no IndexedDB available — pass `indexedDB` or use createInMemoryQueryCache()");
     }
 
     const databaseName = options.databaseName ?? DEFAULT_DATABASE;
     const storeName = options.storeName ?? DEFAULT_STORE;
-    const maxEntries = options.maxEntries ?? DEFAULT_MAX_ENTRIES;
-    let databasePromise: Promise<IDBDatabase> | undefined;
+    const maxEntries = assertMaxEntries(options.maxEntries ?? DEFAULT_MAX_ENTRIES, "createIndexedDbQueryCache");
 
-    const openDatabase = (): Promise<IDBDatabase> => {
-        if (databasePromise) {
-            return databasePromise;
+    const openDatabase = createDatabaseOpener(factory, databaseName, DATABASE_VERSION, (database) => {
+        if (!database.objectStoreNames.contains(storeName)) {
+            const store = database.createObjectStore(storeName, { keyPath: "key" });
+
+            store.createIndex(TS_INDEX, "ts", { unique: false });
         }
+    });
 
-        databasePromise = new Promise<IDBDatabase>((resolve, reject) => {
-            const request = factory.open(databaseName, DATABASE_VERSION);
-
-            request.addEventListener("upgradeneeded", () => {
-                const database = request.result;
-
-                if (!database.objectStoreNames.contains(storeName)) {
-                    const store = database.createObjectStore(storeName, { keyPath: "key" });
-
-                    store.createIndex(TS_INDEX, "ts", { unique: false });
-                }
-            });
-            request.addEventListener("success", () => {
-                resolve(request.result);
-            });
-            request.addEventListener("error", () => {
-                reject(request.error ?? new Error("IndexedDB open failed"));
-            });
-        });
-
-        return databasePromise;
-    };
-
-    const withStore = async <T>(mode: IDBTransactionMode, run: (store: IDBObjectStore) => Promise<T> | T): Promise<T> => {
-        const database = await openDatabase();
-        const transaction = database.transaction(storeName, mode);
-        const result = await run(transaction.objectStore(storeName));
-
-        await new Promise<void>((resolve, reject) => {
-            transaction.addEventListener("complete", () => {
-                resolve();
-            });
-            transaction.addEventListener("error", () => {
-                reject(transaction.error ?? new Error("IndexedDB transaction failed"));
-            });
-            transaction.addEventListener("abort", () => {
-                reject(transaction.error ?? new Error("IndexedDB transaction aborted"));
-            });
-        });
-
-        return result;
-    };
+    const withStore = createWithStore(openDatabase, storeName);
 
     /** Drop oldest rows by `ts` until the store is back under the cap. */
     const evict = async (store: IDBObjectStore): Promise<void> => {
@@ -222,5 +201,30 @@ const createIndexedDbQueryCache = (options: IndexedDbQueryCacheOptions = {}): Qu
     };
 };
 
-export { createIndexedDbQueryCache, createInMemoryQueryCache, queryCacheKey };
+/**
+ * Resolve the effective read-cache from the user option, defaulting to a durable
+ * IndexedDB store when the environment supports one. Same tri-state semantics as
+ * `resolvePersistenceAdapter` in `./persistence`:
+ *
+ * - an explicit adapter is used as-is;
+ * - `false` opts out — reads stay in memory only;
+ * - `undefined` (the default) auto-probes IndexedDB (browsers), else `undefined`.
+ */
+const resolveQueryCacheAdapter = (option: false | QueryCacheAdapter | undefined): QueryCacheAdapter | undefined => {
+    if (option === false) {
+        return undefined;
+    }
+
+    if (option) {
+        return option;
+    }
+
+    if (typeof indexedDB === "undefined") {
+        return undefined;
+    }
+
+    return createIndexedDbQueryCache();
+};
+
+export { assertMaxEntries, createIndexedDbQueryCache, createInMemoryQueryCache, queryCacheKey, resolveQueryCacheAdapter };
 export type { IndexedDbQueryCacheOptions };

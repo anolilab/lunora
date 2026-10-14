@@ -8,11 +8,11 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
     injectRemoteFlags,
     isRemoteEnvEnabled,
-    materializeRemoteWranglerConfig,
+    materializeDevWranglerConfig,
     planRemoteBindings,
     REMOTE_ELIGIBLE_KEYS,
     resolveRemoteEnabled,
-} from "../src/remote-bindings";
+} from "../src/cloudflare/remote-bindings";
 
 // A config covering every eligible kind (D1/KV/R2 arrays, Vectorize/Services
 // arrays, a queue *producer*, and the single AI object) plus the shapes that
@@ -76,6 +76,36 @@ describe("planRemoteBindings", () => {
 
         expect(plans[0]).toMatchObject({ binding: "AI", kind: "AI", section: "ai" });
         expect(plans[0]?.path).toEqual([]);
+    });
+
+    it("remotes the single Analytics SQL binding with a section-level path", () => {
+        expect.assertions(2);
+
+        const plans = planRemoteBindings({ analytics: { binding: "ANALYTICS_SQL" } });
+
+        expect(plans).toStrictEqual([{ binding: "ANALYTICS_SQL", kind: "Analytics SQL", path: [], section: "analytics" }]);
+        expect(readJsonc(injectRemoteFlags(`{ "analytics": { "binding": "ANALYTICS_SQL" } }`, plans)).analytics).toStrictEqual({
+            binding: "ANALYTICS_SQL",
+            remote: true,
+        });
+    });
+
+    it("remotes both AI Search sections by array index", () => {
+        expect.assertions(2);
+
+        const plans = planRemoteBindings({
+            ai_search: [{ binding: "BLOG_SEARCH" }],
+            ai_search_namespaces: [{ binding: "AI_SEARCH" }],
+        });
+
+        expect(plans).toStrictEqual([
+            { binding: "BLOG_SEARCH", kind: "AI Search", path: [0], section: "ai_search" },
+            { binding: "AI_SEARCH", kind: "AI Search namespace", path: [0], section: "ai_search_namespaces" },
+        ]);
+        expect(
+            readJsonc(injectRemoteFlags(`{ "ai_search_namespaces": [{ "binding": "AI_SEARCH", "namespace": "default" }] }`, plans.slice(1)))
+                .ai_search_namespaces,
+        ).toStrictEqual([{ binding: "AI_SEARCH", namespace: "default", remote: true }]);
     });
 
     it("never lists durable_objects, queue consumers, or other remote-ineligible kinds", () => {
@@ -166,7 +196,72 @@ describe("isRemoteEnvEnabled", () => {
     });
 });
 
-describe("materializeRemoteWranglerConfig", () => {
+describe("materializeDevWranglerConfig with remote off", () => {
+    let root: string;
+
+    beforeEach(() => {
+        root = mkdtempSync(join(tmpdir(), "lunora-local-test-"));
+    });
+
+    afterEach(() => {
+        rmSync(root, { force: true, recursive: true });
+    });
+
+    it("writes a copy without the AI binding when there is no Cloudflare login", () => {
+        expect.assertions(6);
+
+        writeFileSync(join(root, "wrangler.jsonc"), FULL_WRANGLER, "utf8");
+
+        const result = materializeDevWranglerConfig({ remote: false, hasCredentials: () => false, projectRoot: root });
+
+        expect(result.withheld).toStrictEqual(["AI"]);
+        expect(result.configPath).toBeDefined();
+
+        const text = readFileSync(result.configPath!, "utf8");
+
+        expect(readJsonc(text).ai).toBeUndefined();
+        // Everything else survives, comments included.
+        expect(readJsonc(text).d1_databases).toStrictEqual([{ binding: "DB", database_id: "abc", database_name: "app" }]);
+        expect(text).toContain("a hand-written comment");
+
+        result.cleanup();
+
+        expect(existsSync(result.configPath!)).toBe(false);
+    });
+
+    it("leaves the user's config alone when wrangler is logged in", () => {
+        expect.assertions(2);
+
+        writeFileSync(join(root, "wrangler.jsonc"), FULL_WRANGLER, "utf8");
+
+        const result = materializeDevWranglerConfig({ remote: false, hasCredentials: () => true, projectRoot: root });
+
+        expect(result.configPath).toBeUndefined();
+        expect(result.withheld).toStrictEqual([]);
+    });
+
+    it("never probes credentials for a config without an AI binding", () => {
+        expect.assertions(2);
+
+        writeFileSync(join(root, "wrangler.jsonc"), `{ "name": "app", "main": "src/index.ts" }`, "utf8");
+
+        let probed = false;
+        const result = materializeDevWranglerConfig({
+            remote: false,
+            hasCredentials: () => {
+                probed = true;
+
+                return false;
+            },
+            projectRoot: root,
+        });
+
+        expect(result.configPath).toBeUndefined();
+        expect(probed).toBe(false);
+    });
+});
+
+describe("materializeDevWranglerConfig with remote on", () => {
     let root: string;
     let generated: string | undefined;
 
@@ -183,12 +278,13 @@ describe("materializeRemoteWranglerConfig", () => {
         }
     });
 
-    it("is a no-op when disabled, with a safe cleanup", () => {
-        expect.assertions(4);
+    it("is a no-op when remote is off and nothing needs withholding, with a safe cleanup", () => {
+        expect.assertions(3);
 
-        const result = materializeRemoteWranglerConfig({ enabled: false, projectRoot: root });
+        writeFileSync(join(root, "wrangler.jsonc"), FULL_WRANGLER, "utf8");
 
-        expect(result.enabled).toBe(false);
+        const result = materializeDevWranglerConfig({ hasCredentials: () => true, projectRoot: root, remote: false });
+
         expect(result.configPath).toBeUndefined();
         expect(result.remoteBindings).toEqual([]);
         // A disposer is always present and a harmless no-op when nothing was written.
@@ -197,16 +293,15 @@ describe("materializeRemoteWranglerConfig", () => {
         }).not.toThrow();
     });
 
-    it("writes a temp config with remote flags for every kind when enabled", () => {
-        expect.assertions(5);
+    it("writes a temp config with remote flags for every kind when remote is on", () => {
+        expect.assertions(4);
 
         writeFileSync(join(root, "wrangler.jsonc"), FULL_WRANGLER, "utf8");
 
-        const result = materializeRemoteWranglerConfig({ enabled: true, projectRoot: root });
+        const result = materializeDevWranglerConfig({ hasCredentials: () => true, projectRoot: root, remote: true });
 
         generated = result.configPath;
 
-        expect(result.enabled).toBe(true);
         expect(result.configPath).toBeDefined();
         expect(result.remoteBindings.map((binding) => binding.binding).toSorted((a, b) => a.localeCompare(b))).toEqual([
             "AI",
@@ -225,6 +320,23 @@ describe("materializeRemoteWranglerConfig", () => {
         expect(readFileSync(join(root, "wrangler.jsonc"), "utf8")).toBe(FULL_WRANGLER);
     });
 
+    it("keeps a Lunora-owned service binding local and remotes a hand-written one", () => {
+        expect.assertions(1);
+
+        writeFileSync(
+            join(root, "wrangler.jsonc"),
+            `{ "services": [{ "binding": "SERVICE_PARSER", "service": "parser" }, { "binding": "LEGACY", "service": "legacy" }] }`,
+            "utf8",
+        );
+        writeFileSync(join(root, "package.json"), `{ "lunora": { "services": { "services": ["SERVICE_PARSER"] } } }`, "utf8");
+
+        const result = materializeDevWranglerConfig({ hasCredentials: () => true, projectRoot: root, remote: true });
+
+        generated = result.configPath;
+
+        expect(result.remoteBindings.map((binding) => binding.binding)).toStrictEqual(["LEGACY"]);
+    });
+
     it("writes the temp config as a SIBLING of wrangler.jsonc (not an OS temp dir)", () => {
         // Regression: wrangler resolves a config's relative `main`/`assets` paths
         // against the CONFIG FILE's own directory. A temp config in `/tmp` would
@@ -234,7 +346,7 @@ describe("materializeRemoteWranglerConfig", () => {
 
         writeFileSync(join(root, "wrangler.jsonc"), FULL_WRANGLER, "utf8");
 
-        const result = materializeRemoteWranglerConfig({ enabled: true, projectRoot: root });
+        const result = materializeDevWranglerConfig({ hasCredentials: () => true, projectRoot: root, remote: true });
 
         generated = result.configPath;
 
@@ -249,7 +361,7 @@ describe("materializeRemoteWranglerConfig", () => {
 
         writeFileSync(join(root, "wrangler.jsonc"), FULL_WRANGLER, "utf8");
 
-        const result = materializeRemoteWranglerConfig({ enabled: true, projectRoot: root });
+        const result = materializeDevWranglerConfig({ hasCredentials: () => true, projectRoot: root, remote: true });
 
         expect(existsSync(result.configPath as string)).toBe(true);
 
@@ -262,10 +374,33 @@ describe("materializeRemoteWranglerConfig", () => {
         }).not.toThrow();
     });
 
+    it("gives each materialization its own path, so an older disposer cannot delete the newer config", () => {
+        expect.assertions(3);
+
+        // Regression: the temp path was constant within a dev process, and Vite's
+        // `restartServer` resolves the NEW config (materializing a fresh file)
+        // BEFORE closing the old server — so the old generation's disposer ran
+        // last and deleted the file the new generation had just written, leaving
+        // the worker on empty local D1/KV/R2.
+        writeFileSync(join(root, "wrangler.jsonc"), FULL_WRANGLER, "utf8");
+
+        const first = materializeDevWranglerConfig({ hasCredentials: () => true, projectRoot: root, remote: true });
+        const second = materializeDevWranglerConfig({ hasCredentials: () => true, projectRoot: root, remote: true });
+
+        generated = second.configPath;
+
+        expect(first.configPath).not.toBe(second.configPath);
+
+        first.cleanup();
+
+        expect(existsSync(first.configPath as string)).toBe(false);
+        expect(existsSync(second.configPath as string)).toBe(true);
+    });
+
     it("reports a reason and no config path when no wrangler file exists", () => {
         expect.assertions(2);
 
-        const result = materializeRemoteWranglerConfig({ enabled: true, projectRoot: root });
+        const result = materializeDevWranglerConfig({ hasCredentials: () => true, projectRoot: root, remote: true });
 
         expect(result.configPath).toBeUndefined();
         expect(result.reason).toContain("not found");
@@ -280,7 +415,7 @@ describe("materializeRemoteWranglerConfig", () => {
             "utf8",
         );
 
-        const result = materializeRemoteWranglerConfig({ enabled: true, projectRoot: root });
+        const result = materializeDevWranglerConfig({ hasCredentials: () => true, projectRoot: root, remote: true });
 
         expect(result.configPath).toBeUndefined();
         expect(result.reason).toContain("no remote-eligible bindings");
@@ -291,7 +426,7 @@ describe("materializeRemoteWranglerConfig", () => {
 
         writeFileSync(join(root, "wrangler.jsonc"), `{ this is : not json `, "utf8");
 
-        const result = materializeRemoteWranglerConfig({ enabled: true, projectRoot: root });
+        const result = materializeDevWranglerConfig({ hasCredentials: () => true, projectRoot: root, remote: true });
 
         expect(result.configPath).toBeUndefined();
         expect(result.reason).toContain("parse");
@@ -311,7 +446,7 @@ describe("resolveRemoteEnabled", () => {
         expect(resolveRemoteEnabled({ configPreference: false, envValue: "1" })).toBe(true);
     });
 
-    it("falls back to the lunora.json preference when neither flag nor env is set", () => {
+    it("falls back to the lunora.config.* preference when neither flag nor env is set", () => {
         expect.assertions(2);
 
         expect(resolveRemoteEnabled({ configPreference: true })).toBe(true);
@@ -324,10 +459,68 @@ describe("resolveRemoteEnabled", () => {
         expect(resolveRemoteEnabled({})).toBe(false);
     });
 
-    it("lets --remote and LUNORA_REMOTE override a lunora.json `remote: false`", () => {
+    it("lets --remote and LUNORA_REMOTE override a lunora.config.* `remote: false`", () => {
         expect.assertions(2);
 
         expect(resolveRemoteEnabled({ configPreference: false, flag: true })).toBe(true);
         expect(resolveRemoteEnabled({ configPreference: false, envValue: "true" })).toBe(true);
+    });
+});
+
+describe("remote mode without Cloudflare credentials", () => {
+    let root: string;
+
+    beforeEach(() => {
+        root = mkdtempSync(join(tmpdir(), "lunora-remote-logout-test-"));
+    });
+
+    afterEach(() => {
+        rmSync(root, { force: true, recursive: true });
+    });
+
+    it("keeps the other remote bindings and withholds only the ai binding", () => {
+        expect.assertions(5);
+
+        writeFileSync(join(root, "wrangler.jsonc"), FULL_WRANGLER, "utf8");
+
+        const result = materializeDevWranglerConfig({ remote: true, hasCredentials: () => false, projectRoot: root });
+
+        expect(result.withheld).toStrictEqual(["AI"]);
+        expect(result.remoteBindings.map((plan) => plan.binding)).not.toContain("AI");
+        expect(result.configPath).toBeDefined();
+
+        const text = readFileSync(result.configPath!, "utf8");
+
+        expect(readJsonc(text).ai).toBeUndefined();
+        expect(readJsonc(text).d1_databases).toStrictEqual([{ binding: "DB", database_name: "app", database_id: "abc", remote: true }]);
+
+        result.cleanup();
+    });
+
+    it("writes a config without ai even when ai is the only remote binding", () => {
+        expect.assertions(3);
+
+        writeFileSync(join(root, "wrangler.jsonc"), `{ "name": "app", "main": "src/index.ts", "ai": { "binding": "AI" } }`, "utf8");
+
+        const result = materializeDevWranglerConfig({ remote: true, hasCredentials: () => false, projectRoot: root });
+
+        expect(result.remoteBindings).toStrictEqual([]);
+        expect(result.configPath).toBeDefined();
+        expect(readJsonc(readFileSync(result.configPath!, "utf8")).ai).toBeUndefined();
+
+        result.cleanup();
+    });
+
+    it("keeps the ai binding remote when logged in", () => {
+        expect.assertions(2);
+
+        writeFileSync(join(root, "wrangler.jsonc"), FULL_WRANGLER, "utf8");
+
+        const result = materializeDevWranglerConfig({ remote: true, hasCredentials: () => true, projectRoot: root });
+
+        expect(result.withheld).toStrictEqual([]);
+        expect(result.remoteBindings.map((plan) => plan.binding)).toContain("AI");
+
+        result.cleanup();
     });
 });

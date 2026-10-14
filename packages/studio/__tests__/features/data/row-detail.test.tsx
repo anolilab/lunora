@@ -19,6 +19,7 @@ const renderDrawer = (overrides: Partial<Parameters<typeof RowDetailDrawer>[0]> 
     render(
         <RowDetailDrawer
             columns={COLUMNS}
+            mask={overrides.mask ?? { columns: new Map(), enabled: false }}
             onClose={overrides.onClose ?? vi.fn<() => void>()}
             onNavigate={overrides.onNavigate ?? vi.fn<(target: string, id: string) => void>()}
             refs={overrides.refs ?? DEFAULT_REFS}
@@ -34,6 +35,25 @@ describe("rowDetailDrawer", () => {
 
         expect(screen.getByTestId("rd-field-title").textContent).toContain("Hello");
         expect(screen.getAllByTestId(/^rd-field-/u)).toHaveLength(COLUMNS.length);
+    });
+
+    it("renders a bytes field as its size, not the `{}` an ArrayBuffer pretty-prints to", () => {
+        expect.assertions(1);
+
+        // The grid cell shows `<bytes: n>`; the drawer expands that same row, so
+        // it may not disagree — and `{}` tells the operator nothing.
+        render(
+            <RowDetailDrawer
+                columns={[...COLUMNS, "blob"]}
+                mask={{ columns: new Map(), enabled: false }}
+                onClose={vi.fn<() => void>()}
+                onNavigate={vi.fn<(target: string, id: string) => void>()}
+                refs={DEFAULT_REFS}
+                row={{ ...ROW, blob: Uint8Array.from([1, 2, 3, 4]).buffer }}
+            />,
+        );
+
+        expect(screen.getByTestId("rd-bytes-blob").textContent).toBe("<bytes: 4 B>");
     });
 
     it("renders a null field with the muted null marker, not an empty cell", () => {

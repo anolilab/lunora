@@ -106,10 +106,10 @@ const ShardExplorer = ({ onFetchTables, onSelect }: ShardExplorerProps): ReactEl
             if (requestIdRef.current === myRequestId) {
                 setError((error_ as Error).message);
             }
-        } finally {
-            if (requestIdRef.current === myRequestId) {
-                setLoading(false);
-            }
+        }
+
+        if (requestIdRef.current === myRequestId) {
+            setLoading(false);
         }
     };
 

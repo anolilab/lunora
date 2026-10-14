@@ -1,6 +1,11 @@
 ---
 title: Reactive loaders
 description: Your loaders are live — SSR data that hydrates into a real-time subscription with no flash.
+related:
+    - to: /docs/frameworks/bring-your-framework
+    - to: /docs/concepts/realtime
+    - to: /docs/concepts/sharding
+    - to: /docs/packages/react
 ---
 
 Every meta-framework has a route loader: Next.js Server Components, TanStack
@@ -26,8 +31,8 @@ after that re-renders the component automatically.
   after hydration.
 
 Lunora's loader and its real-time subscription are the **same query**. The server
-runs it once for SSR; the client resumes it as a subscription. No second data
-path, no polling, no hand-rolled socket.
+runs it once for SSR; the client resumes it as a subscription. There is no second
+data path, no polling, and no hand-rolled socket.
 
 ## The handoff
 
@@ -90,11 +95,11 @@ import { useMutation, usePreloadedQuery } from "@lunora/react";
 function ChannelView() {
     const { preloaded } = Route.useLoaderData();
     const messages = usePreloadedQuery(preloaded); // SSR value first, then live
-    const send = useMutation(api.messages.send);
+    const { mutate: send } = useMutation(api.messages.send);
 
     return (
         <ul>
-            {messages.map((m) => (
+            {messages?.map((m) => (
                 <li key={m._id}>{m.text}</li>
             ))}
         </ul>
@@ -102,26 +107,29 @@ function ChannelView() {
 }
 ```
 
-The component never renders a loading state. `messages` is the real list on the
-very first paint, and it updates on every write from any client, with no extra
-wiring.
+There is no loading state on the first paint: `messages` is the real list, and
+it updates on every write from any client, with no extra wiring. It is typed
+`T | undefined` all the same (and so is every adapter's `hydratePreloaded`):
+after a sign-out or user switch the preloaded value, read for the previous
+identity, is dropped until the new identity's subscription answers, hence the
+`?.`.
 
 ## Why there's no flash
 
 The no-flash behaviour is two TanStack Query options working together:
 
-- **`initialData: preloaded.value`** — the first render returns the SSR value
+- **`initialData: preloaded.value`**. The first render returns the SSR value
   synchronously. There is no intermediate `undefined`/loading state, so the
   server markup and the first client markup match (no hydration mismatch).
-- **`staleTime: Infinity`** — Lunora is push-driven, so the seeded value is never
+- **`staleTime: Infinity`**. Lunora is push-driven, so the seeded value is never
   considered stale and is never refetched. The WebSocket subscription that
   attaches in `useEffect` after mount is the _only_ freshness signal; when a
   mutation broadcasts a delta, `usePreloadedQuery` updates via
   `queryClient.setQueryData` and React re-renders.
 
-The result: the first paint already contains live data, and the transition from
-server-rendered to live-subscribed is invisible. No refetch, no spinner, no
-content shift.
+The first paint already contains live data, so the transition from
+server-rendered to live-subscribed is invisible: nothing refetches, no spinner
+appears, and the content does not shift.
 
 ## Identity continuity (SSR → client)
 
@@ -158,18 +166,11 @@ const preloaded = await preloadQuery(client, api.messages.list, { roomId }, { sh
 
 The reactive-loader contract is shipped for React today via `@lunora/react`
 (`createServerClient`, `preloadQuery`, `usePreloadedQuery`) and proven end-to-end
-on the TanStack Start template (`lunora init -t tanstack-start`).
+on the TanStack Start template (`lunora init -t tanstack-start-react`).
 
 A framework-neutral server entrypoint, `@lunora/client/ssr` (promoting
 `createServerClient` / `preloadQuery` plus a `getServerSession` cookie helper),
-backs each adapter's `/server` entry, with Solid, Svelte, and Vue adapters that
-expose the same hydrate-then-subscribe handoff idiomatically. See
+backs each adapter's `/server` entry, with Solid, Svelte, Vue, and Angular
+adapters that expose the same hydrate-then-subscribe handoff idiomatically. See
 [Bring your framework](/docs/frameworks/bring-your-framework) for the
 per-framework status.
-
-## See also
-
-- [Bring your framework](/docs/frameworks/bring-your-framework)
-- [Real-time](/docs/concepts/realtime)
-- [Sharding](/docs/concepts/sharding)
-- [@lunora/react](/docs/packages/react)

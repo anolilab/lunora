@@ -55,9 +55,36 @@ interface AuthImpersonation {
 interface AuthCapabilities {
     accounts: boolean;
     admin: boolean;
+    inviteOnly: boolean;
     organization: boolean;
     passkey: boolean;
     twoFactor: boolean;
+}
+
+/** One user-settable extra field for the create-user form, derived from the merged `user` table. */
+interface AuthUserFieldSpec {
+    name: string;
+    plugin?: string;
+    required: boolean;
+    type: "boolean" | "date" | "number" | "string";
+    unique: boolean;
+}
+
+/**
+ * Rich, read-only description of the deployment's auth configuration — enabled
+ * plugins, sign-in methods, user-settable fields, organization sub-features, and
+ * session / rate-limit policy — for the studio's config panel and dynamic
+ * create-user form. Never carries a secret.
+ */
+interface AuthConfigInfo {
+    capabilities: AuthCapabilities;
+    emailAndPassword: boolean;
+    organization: { enabled: boolean; roles: boolean; teams: boolean };
+    plugins: string[];
+    rateLimit: { enabled: boolean; max?: number; window?: number };
+    session: { cookieCache?: boolean; expiresIn?: number; freshAge?: number; updateAge?: number };
+    socialProviders: string[];
+    userFields: AuthUserFieldSpec[];
 }
 
 /** Filtering / paging options forwarded to {@link AuthAdmin.listUsers} from the users endpoint's query string. */
@@ -85,48 +112,72 @@ interface ListAuthUsersOptions {
  * implementation is a trusted server-side operator, not an end-user API.
  */
 interface AuthAdmin {
+    addMember?: (input: { organizationId: string; role?: string; userId: string }) => Promise<Record<string, unknown>>;
+    addTeamMember?: (input: { teamId: string; userId: string }) => Promise<Record<string, unknown>>;
     banUser?: (input: { expiresInSeconds?: number; reason?: string; userId: string }) => Promise<AuthUser>;
     cancelInvitation?: (input: { invitationId: string }) => Promise<void>;
     capabilities?: () => Promise<AuthCapabilities>;
+    config?: () => Promise<AuthConfigInfo>;
+    createOrganization?: (input: {
+        logo?: string;
+        metadata?: Record<string, unknown>;
+        name: string;
+        ownerId?: string;
+        slug?: string;
+    }) => Promise<Record<string, unknown>>;
+    createOrgRole?: (input: { organizationId: string; permission: Record<string, string[]>; role: string }) => Promise<Record<string, unknown>>;
+    createSignUpInvitation?: (input: { email: string; expiresInSeconds?: number; invitedBy?: string }) => Promise<Record<string, unknown>>;
+    createTeam?: (input: { name: string; organizationId: string }) => Promise<Record<string, unknown>>;
     createUser?: (input: { data?: Record<string, unknown>; email: string; name: string; password?: string; role?: string | string[] }) => Promise<AuthUser>;
+    deleteOrganization?: (input: { organizationId: string }) => Promise<void>;
+    deleteOrgRole?: (input: { roleId: string }) => Promise<void>;
     deletePasskey?: (input: { passkeyId: string }) => Promise<void>;
     disableTwoFactor?: (input: { userId: string }) => Promise<void>;
     impersonateUser?: (input: { userId: string }) => Promise<AuthImpersonation>;
+    inviteMember?: (input: { email: string; inviterId?: string; organizationId: string; role?: string }) => Promise<Record<string, unknown>>;
     listAccounts?: (input: { userId: string }) => Promise<Record<string, unknown>[]>;
     listInvitations?: (options: { limit?: number; offset?: number; organizationId: string }) => Promise<AuthPage<Record<string, unknown>>>;
     listMembers?: (options: { limit?: number; offset?: number; organizationId: string }) => Promise<AuthPage<Record<string, unknown>>>;
     listOrganizations?: (options: { limit?: number; offset?: number }) => Promise<AuthPage<Record<string, unknown>>>;
+    listOrgRoles?: (options: { limit?: number; offset?: number; organizationId: string }) => Promise<AuthPage<Record<string, unknown>>>;
     listPasskeys?: (input: { userId: string }) => Promise<Record<string, unknown>[]>;
     // `listUsers`/`listSessions` are the only required members: they're the
-    // read-only browse surface that even a deprecated `authIntrospector`
-    // (`Pick<AuthAdmin, "listUsers" | "listSessions">`) must provide. Every other
+    // read-only browse surface every implementation must provide. Every other
     // op is optional and guarded at dispatch (`AUTH_OP_NOT_SUPPORTED`).
     listSessions: (options: { limit?: number; offset?: number; userId?: string }) => Promise<AuthPage<AuthSession>>;
+    listSignUpInvitations?: (options: { limit?: number; offset?: number }) => Promise<AuthPage<Record<string, unknown>>>;
+    listTeamMembers?: (options: { limit?: number; offset?: number; teamId: string }) => Promise<AuthPage<Record<string, unknown>>>;
+    listTeams?: (options: { limit?: number; offset?: number; organizationId: string }) => Promise<AuthPage<Record<string, unknown>>>;
     listUsers: (options: ListAuthUsersOptions) => Promise<AuthPage<AuthUser>>;
     removeMember?: (input: { memberId: string }) => Promise<void>;
+    removeTeam?: (input: { teamId: string }) => Promise<void>;
+    removeTeamMember?: (input: { teamMemberId: string }) => Promise<void>;
     removeUser?: (input: { userId: string }) => Promise<void>;
+    revokeSignUpInvitation?: (input: { email: string }) => Promise<void>;
     revokeUserSession?: (input: { sessionId: string }) => Promise<void>;
     revokeUserSessions?: (input: { userId: string }) => Promise<void>;
     setRole?: (input: { role: string | string[]; userId: string }) => Promise<AuthUser>;
     setUserPassword?: (input: { newPassword: string; userId: string }) => Promise<void>;
     unbanUser?: (input: { userId: string }) => Promise<AuthUser>;
     unlinkAccount?: (input: { accountId: string; userId: string }) => Promise<void>;
+    updateMemberRole?: (input: { memberId: string; role: string | string[] }) => Promise<Record<string, unknown>>;
+    updateOrganization?: (input: {
+        logo?: string;
+        metadata?: Record<string, unknown>;
+        name?: string;
+        organizationId: string;
+        slug?: string;
+    }) => Promise<Record<string, unknown>>;
+    updateOrgRole?: (input: { permission: Record<string, string[]>; roleId: string }) => Promise<Record<string, unknown>>;
+    updateTeam?: (input: { name: string; teamId: string }) => Promise<Record<string, unknown>>;
     updateUser?: (input: { data: Record<string, unknown>; userId: string }) => Promise<AuthUser>;
 }
-
-/**
- * Read-only subset of {@link AuthAdmin}, kept as an alias for the former
- * `authIntrospector` option (which the worker still honours as a browse-only
- * fallback). Prefer wiring `authAdmin` with `@lunora/auth`'s `createAuthAdmin`
- * so the mutation endpoints light up too.
- */
-type AuthIntrospector = Pick<AuthAdmin, "listSessions" | "listUsers">;
 
 /** Closure-scoped worker helpers the auth routes borrow (so this module stays out of the worker's god-closure). */
 interface AuthAdminRouteDeps {
     /** Throw 403 unless the request carries a valid admin bearer. */
     assertAdmin: (request: Request) => void;
-    /** The configured auth plane (new `authAdmin`, else the deprecated `authIntrospector`), or undefined. */
+    /** The configured auth plane (`authAdmin`), or undefined. */
     getAuthAdmin: () => AuthAdmin | undefined;
     /** Parse the shared `limit`/`offset` paging params off a GET request. */
     parsePaging: (request: Request) => { limit?: number; offset?: number };
@@ -155,8 +206,11 @@ interface AuthRouteDescriptor {
 
 const AUTH_BASE = "/_lunora/admin/auth";
 
-/** HTTP status for an `authAdmin` error code; everything else falls back to 400. */
+/** HTTP status for a known client-input `authAdmin` error code; an unmapped code is a backend failure and reads 500. */
 const AUTH_ADMIN_ERROR_STATUS: Record<string, number> = {
+    INVITER_REQUIRED: 400,
+    ORG_SLUG_INVALID: 400,
+    ORG_SLUG_TAKEN: 409,
     PASSWORD_TOO_LONG: 400,
     PASSWORD_TOO_SHORT: 400,
     USER_ALREADY_EXISTS: 409,
@@ -200,6 +254,51 @@ const parseRoleInput = (value: unknown): string | string[] | undefined => {
 };
 
 const optionalBodyString = (body: Record<string, unknown>, field: string): string | undefined => (typeof body[field] === "string" ? body[field] : undefined);
+
+/** Read an optional plain-object body field (rejects arrays/null), else `undefined`. */
+const optionalBodyObject = (body: Record<string, unknown>, field: string): Record<string, unknown> | undefined => {
+    const value = body[field];
+
+    return typeof value === "object" && value !== null && !Array.isArray(value) ? (value as Record<string, unknown>) : undefined;
+};
+
+/**
+ * Read + validate a required `role` off a body. Rejects a missing role AND an
+ * empty/whitespace one — `setRole("")` would otherwise clear the user's role
+ * rather than being a no-op.
+ */
+const requireRole = (body: Record<string, unknown>): string | string[] => {
+    const role = parseRoleInput(body["role"]);
+
+    if (role === undefined || (typeof role === "string" && role.trim() === "")) {
+        throw new LunoraError("`role` is required", { code: "BAD_REQUEST", status: 400 });
+    }
+
+    return role;
+};
+
+/**
+ * Read + validate a required `permission` grant off a body: a plain object whose
+ * values are string arrays (a `resource → actions[]` map). Non-conforming entries
+ * are dropped; a non-object throws 400.
+ */
+const requirePermission = (body: Record<string, unknown>): Record<string, string[]> => {
+    const value = body["permission"];
+
+    if (typeof value !== "object" || value === null || Array.isArray(value)) {
+        throw new LunoraError("`permission` object is required", { code: "BAD_REQUEST", status: 400 });
+    }
+
+    const out: Record<string, string[]> = {};
+
+    for (const [resource, actions] of Object.entries(value as Record<string, unknown>)) {
+        if (Array.isArray(actions) && actions.every((action): action is string => typeof action === "string")) {
+            out[resource] = actions;
+        }
+    }
+
+    return out;
+};
 
 /**
  * The full auth-admin route table. Each entry is data, not a hand-wired handler —
@@ -273,15 +372,66 @@ const AUTH_ROUTES: Record<string, AuthRouteDescriptor> = {
         http: "GET",
         method: "listInvitations",
     },
+    [`${AUTH_BASE}/sign-up-invitations`]: {
+        build: ({ paging }) => {
+            return { ...paging };
+        },
+        http: "GET",
+        method: "listSignUpInvitations",
+    },
+    [`${AUTH_BASE}/sign-up-invitations/create`]: {
+        build: ({ body }) => {
+            return {
+                email: requireBodyString(body, "email"),
+                expiresInSeconds: typeof body["expiresInSeconds"] === "number" ? body["expiresInSeconds"] : undefined,
+                invitedBy: optionalBodyString(body, "invitedBy"),
+            };
+        },
+        http: "POST",
+        method: "createSignUpInvitation",
+    },
+    [`${AUTH_BASE}/sign-up-invitations/revoke`]: {
+        build: ({ body }) => {
+            return { email: requireBodyString(body, "email") };
+        },
+        http: "POST",
+        method: "revokeSignUpInvitation",
+        returns: "void",
+    },
+    [`${AUTH_BASE}/config`]: {
+        build: () => {
+            return {};
+        },
+        http: "GET",
+        method: "config",
+    },
+    [`${AUTH_BASE}/organizations/teams`]: {
+        build: ({ paging, query }) => {
+            return { ...paging, organizationId: requireQuery(query, "organizationId") };
+        },
+        http: "GET",
+        method: "listTeams",
+    },
+    [`${AUTH_BASE}/organizations/teams/members`]: {
+        build: ({ paging, query }) => {
+            return { ...paging, teamId: requireQuery(query, "teamId") };
+        },
+        http: "GET",
+        method: "listTeamMembers",
+    },
+    [`${AUTH_BASE}/organizations/roles`]: {
+        build: ({ paging, query }) => {
+            return { ...paging, organizationId: requireQuery(query, "organizationId") };
+        },
+        http: "GET",
+        method: "listOrgRoles",
+    },
 
     // --- mutations (POST) -------------------------------------------------------
     [`${AUTH_BASE}/users/create`]: {
         build: ({ body }) => {
             return {
-                data:
-                    typeof body["data"] === "object" && body["data"] !== null && !Array.isArray(body["data"])
-                        ? (body["data"] as Record<string, unknown>)
-                        : undefined,
+                data: optionalBodyObject(body, "data"),
                 email: requireBodyString(body, "email"),
                 name: requireBodyString(body, "name"),
                 password: optionalBodyString(body, "password"),
@@ -306,15 +456,7 @@ const AUTH_ROUTES: Record<string, AuthRouteDescriptor> = {
     },
     [`${AUTH_BASE}/users/role`]: {
         build: ({ body }) => {
-            const role = parseRoleInput(body["role"]);
-
-            // Reject a missing role AND an empty/whitespace one — `setRole("")` would
-            // otherwise clear the user's role rather than being a no-op.
-            if (role === undefined || (typeof role === "string" && role.trim() === "")) {
-                throw new LunoraError("`role` is required", { code: "BAD_REQUEST", status: 400 });
-            }
-
-            return { role, userId: requireBodyString(body, "userId") };
+            return { role: requireRole(body), userId: requireBodyString(body, "userId") };
         },
         http: "POST",
         method: "setRole",
@@ -416,14 +558,142 @@ const AUTH_ROUTES: Record<string, AuthRouteDescriptor> = {
         method: "cancelInvitation",
         returns: "void",
     },
+    [`${AUTH_BASE}/organizations/create`]: {
+        build: ({ body }) => {
+            return {
+                logo: optionalBodyString(body, "logo"),
+                metadata: optionalBodyObject(body, "metadata"),
+                name: requireBodyString(body, "name"),
+                ownerId: optionalBodyString(body, "ownerId"),
+                slug: optionalBodyString(body, "slug"),
+            };
+        },
+        http: "POST",
+        method: "createOrganization",
+    },
+    [`${AUTH_BASE}/organizations/update`]: {
+        build: ({ body }) => {
+            return {
+                logo: optionalBodyString(body, "logo"),
+                metadata: optionalBodyObject(body, "metadata"),
+                name: optionalBodyString(body, "name"),
+                organizationId: requireBodyString(body, "organizationId"),
+                slug: optionalBodyString(body, "slug"),
+            };
+        },
+        http: "POST",
+        method: "updateOrganization",
+    },
+    [`${AUTH_BASE}/organizations/remove`]: {
+        build: ({ body }) => {
+            return { organizationId: requireBodyString(body, "organizationId") };
+        },
+        http: "POST",
+        method: "deleteOrganization",
+        returns: "void",
+    },
+    [`${AUTH_BASE}/organizations/members/add`]: {
+        build: ({ body }) => {
+            return {
+                organizationId: requireBodyString(body, "organizationId"),
+                role: optionalBodyString(body, "role"),
+                userId: requireBodyString(body, "userId"),
+            };
+        },
+        http: "POST",
+        method: "addMember",
+    },
+    [`${AUTH_BASE}/organizations/members/invite`]: {
+        build: ({ body }) => {
+            return {
+                email: requireBodyString(body, "email"),
+                inviterId: optionalBodyString(body, "inviterId"),
+                organizationId: requireBodyString(body, "organizationId"),
+                role: optionalBodyString(body, "role"),
+            };
+        },
+        http: "POST",
+        method: "inviteMember",
+    },
+    [`${AUTH_BASE}/organizations/members/role`]: {
+        build: ({ body }) => {
+            return { memberId: requireBodyString(body, "memberId"), role: requireRole(body) };
+        },
+        http: "POST",
+        method: "updateMemberRole",
+    },
+    [`${AUTH_BASE}/organizations/teams/create`]: {
+        build: ({ body }) => {
+            return { name: requireBodyString(body, "name"), organizationId: requireBodyString(body, "organizationId") };
+        },
+        http: "POST",
+        method: "createTeam",
+    },
+    [`${AUTH_BASE}/organizations/teams/update`]: {
+        build: ({ body }) => {
+            return { name: requireBodyString(body, "name"), teamId: requireBodyString(body, "teamId") };
+        },
+        http: "POST",
+        method: "updateTeam",
+    },
+    [`${AUTH_BASE}/organizations/teams/remove`]: {
+        build: ({ body }) => {
+            return { teamId: requireBodyString(body, "teamId") };
+        },
+        http: "POST",
+        method: "removeTeam",
+        returns: "void",
+    },
+    [`${AUTH_BASE}/organizations/teams/members/add`]: {
+        build: ({ body }) => {
+            return { teamId: requireBodyString(body, "teamId"), userId: requireBodyString(body, "userId") };
+        },
+        http: "POST",
+        method: "addTeamMember",
+    },
+    [`${AUTH_BASE}/organizations/teams/members/remove`]: {
+        build: ({ body }) => {
+            return { teamMemberId: requireBodyString(body, "teamMemberId") };
+        },
+        http: "POST",
+        method: "removeTeamMember",
+        returns: "void",
+    },
+    [`${AUTH_BASE}/organizations/roles/create`]: {
+        build: ({ body }) => {
+            return {
+                organizationId: requireBodyString(body, "organizationId"),
+                permission: requirePermission(body),
+                role: requireBodyString(body, "role"),
+            };
+        },
+        http: "POST",
+        method: "createOrgRole",
+    },
+    [`${AUTH_BASE}/organizations/roles/update`]: {
+        build: ({ body }) => {
+            return { permission: requirePermission(body), roleId: requireBodyString(body, "roleId") };
+        },
+        http: "POST",
+        method: "updateOrgRole",
+    },
+    [`${AUTH_BASE}/organizations/roles/remove`]: {
+        build: ({ body }) => {
+            return { roleId: requireBodyString(body, "roleId") };
+        },
+        http: "POST",
+        method: "deleteOrgRole",
+        returns: "void",
+    },
 };
 
 /**
  * Build the `/_lunora/admin/auth/*` route map merged into the worker's internal
- * route table. Every route shares one driver: admin-token gate → resolve the
- * auth plane → assert the method exists (`AUTH_OP_NOT_SUPPORTED` if the host
- * didn't wire it) → method guard → build input → run, mapping a thrown
- * `authAdmin` error onto a coded `LunoraError`.
+ * route table. Every route shares one driver: admin-token gate (FIRST, so an
+ * unauthenticated probe can't fingerprint routes) → HTTP method guard → resolve
+ * the auth plane → assert the method exists (`AUTH_OP_NOT_SUPPORTED` if the host
+ * didn't wire it) → build input → run, mapping a thrown `authAdmin` error onto a
+ * coded `LunoraError` with a generic (non-leaking) message.
  */
 const buildAuthAdminRoutes = (deps: AuthAdminRouteDeps): Record<string, (request: Request) => Promise<Response>> => {
     const runAuthOp = async <R>(op: () => Promise<R>): Promise<R> => {
@@ -436,18 +706,31 @@ const buildAuthAdminRoutes = (deps: AuthAdminRouteDeps): Record<string, (request
 
             const candidate = error as { code?: unknown; message?: unknown };
             const code = typeof candidate.code === "string" ? candidate.code : "AUTH_ADMIN_ERROR";
-            const message = typeof candidate.message === "string" ? candidate.message : "auth admin operation failed";
 
-            throw new LunoraError(message, { code, status: AUTH_ADMIN_ERROR_STATUS[code] ?? 400 });
+            // Do NOT surface the backend/DB error message to the client (even an
+            // authenticated admin) — it can leak schema/driver internals. Log the
+            // detail server-side and return a generic, code-tagged message, matching
+            // the core `toErrorResponse` posture for unknown errors.
+            // eslint-disable-next-line no-console -- server-side diagnostic for a swallowed backend error
+            console.error("[lunora] auth admin operation failed:", error);
+
+            // An unmapped code is an unexpected backend/DB failure, not client
+            // input — reporting it as 400 would hide operational incidents from
+            // admin tooling. Extend AUTH_ADMIN_ERROR_STATUS for new 4xx codes.
+            throw new LunoraError("auth admin operation failed", { code, status: AUTH_ADMIN_ERROR_STATUS[code] ?? 500 });
         }
     };
 
     const handle = async (request: Request, descriptor: AuthRouteDescriptor): Promise<Response> => {
+        // Assert admin BEFORE any method/existence check so an unauthenticated
+        // caller can't distinguish real admin routes (would-be 405) from
+        // non-existent paths — every admin path answers 403 without a token,
+        // leaking no route topology.
+        deps.assertAdmin(request);
+
         if (request.method !== descriptor.http) {
             throw new LunoraError(`Auth admin endpoint requires ${descriptor.http}`, { code: "METHOD_NOT_ALLOWED", status: 405 });
         }
-
-        deps.assertAdmin(request);
 
         const admin = deps.getAuthAdmin();
 
@@ -470,7 +753,15 @@ const buildAuthAdminRoutes = (deps: AuthAdminRouteDeps): Record<string, (request
         const input = descriptor.build(context);
         const result = await runAuthOp(() => (method as (argument: unknown) => Promise<unknown>)(input));
 
-        return Response.json(descriptor.returns === "void" ? { ok: true } : result, { headers: { "content-type": "application/json" }, status: 200 });
+        // `no-store`, not just `content-type`: `users/impersonate` answers with a live
+        // session bearer token for an arbitrary user and `users` with PII. Under an
+        // `adminGate` the request carries a cookie/JWT and no `Authorization` header,
+        // so RFC 9111's shared-cache suppression does not apply — nothing else would
+        // stop an intermediary storing it. Mirrors the inline admin routes.
+        return Response.json(descriptor.returns === "void" ? { ok: true } : result, {
+            headers: { "cache-control": "no-store", "content-type": "application/json" },
+            status: 200,
+        });
     };
 
     const routes: Record<string, (request: Request) => Promise<Response>> = {};
@@ -482,5 +773,16 @@ const buildAuthAdminRoutes = (deps: AuthAdminRouteDeps): Record<string, (request
     return routes;
 };
 
-export type { AuthAdmin, AuthCapabilities, AuthImpersonation, AuthIntrospector, AuthPage, AuthSession, AuthTimestamp, AuthUser, ListAuthUsersOptions };
+export type {
+    AuthAdmin,
+    AuthCapabilities,
+    AuthConfigInfo,
+    AuthImpersonation,
+    AuthPage,
+    AuthSession,
+    AuthTimestamp,
+    AuthUser,
+    AuthUserFieldSpec,
+    ListAuthUsersOptions,
+};
 export { buildAuthAdminRoutes };

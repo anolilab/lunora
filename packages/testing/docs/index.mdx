@@ -1,14 +1,24 @@
 ---
 title: "@lunora/testing"
 description: In-memory harness for queries, mutations, and actions, plus E2E mail-catcher helpers.
+related:
+    - to: /docs/concepts/queries-mutations
+      note: "the `query` / `mutation` / `action` functions the harness runs"
+    - to: /docs/concepts/rls
+      note: "drive procedures with `withIdentity` to test authorization"
+    - to: /docs/packages/mail
+      note: "captures the outbound email the helpers read"
+    - to: /docs/packages/auth
+      note: "the verification / reset / magic-link flows you test end-to-end"
 ---
 
 `@lunora/testing` is the toolkit for testing a Lunora app. It ships two
 surfaces: an **in-memory function harness** (`lunoraTest`) that runs your
 `query` / `mutation` / `action` functions against a fresh `node:sqlite`
-database — no Durable Object, no `wrangler`, no network — and the **mail-catcher
-helpers** re-exported from [`@lunora/mail/testing`](/docs/packages/mail) for
-driving end-to-end email flows.
+database, with no Durable Object, no `wrangler`, and no network; and the
+**mail-catcher helpers** re-exported from
+[`@lunora/mail/testing`](/docs/packages/mail) for driving end-to-end email
+flows.
 
 <Tabs items={["pnpm","npm","yarn","bun"]}>
 
@@ -36,7 +46,7 @@ bun add -D @lunora/testing
 database, builds the same `ctx.db` writer the real Durable Object builds, and
 returns a harness whose methods execute a registered function's `handler`
 directly. It mirrors the first five methods of Convex's `convexTest`, and all
-of them share one database — so a write from a mutation is visible to a later
+of them share one database, so a write from a mutation is visible to a later
 query.
 
 ```ts
@@ -70,7 +80,7 @@ test("sends and lists a message", async () => {
 
 Each `lunoraTest(...)` opens one in-memory database backed by a native handle.
 Call `t.close()` (typically in an `afterEach`) to release it when a test
-finishes — it is idempotent, so closing any view of the harness is safe.
+finishes. It is idempotent, so closing any view of the harness is safe.
 
 ```ts
 const open: ReturnType<typeof lunoraTest>[] = [];
@@ -86,19 +96,22 @@ afterEach(() => {
 
 `lunoraTest(schema)` returns a `TestHarness`:
 
-| Method                       | Description                                                                            |
-| ---------------------------- | -------------------------------------------------------------------------------------- |
-| `query(reference, args)`     | Run a registered `query`. Internal queries are rejected on this external surface.      |
-| `mutation(reference, args)`  | Run a registered `mutation`. Internal mutations are rejected on this external surface. |
-| `action(reference, args)`    | Run a registered `action`. Internal actions are rejected on this external surface.     |
-| `query(inline)`              | Run an inline `(ctx) => …` with a read-only `QueryCtx`.                                |
-| `mutation(inline)`           | Run an inline `(ctx) => …` with a read-write `MutationCtx`.                            |
-| `action(inline)`             | Run an inline `(ctx) => …` with an `ActionCtx`.                                        |
-| `run(fn)`                    | Direct db access at mutation level (read + write), mirroring `convexTest`'s `run`.     |
-| `subscribe(reference, args)` | Async iterable yielding the query result now, then re-emitting after each mutation.    |
-| `scheduler`                  | Controls for the in-memory scheduler (`list` / `advance` / `runPending`).              |
-| `withIdentity(identity)`     | Return a harness view sharing this db but reporting the given identity on `ctx.auth`.  |
-| `close()`                    | Close the underlying in-memory SQLite database. Idempotent.                            |
+| Method                       | Description                                                                                                                                                                                                       |
+| ---------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `query(reference, args)`     | Run a registered `query`. Internal queries are rejected on this external surface.                                                                                                                                 |
+| `mutation(reference, args)`  | Run a registered `mutation`. Internal mutations are rejected on this external surface.                                                                                                                            |
+| `action(reference, args)`    | Run a registered `action`. Internal actions are rejected on this external surface.                                                                                                                                |
+| `query(inline)`              | Run an inline `(ctx) => …` with a `QueryCtx`. Read-only in the type only — at runtime it holds the same writer `mutation` gets, so a cast can write (outside any transaction, and without notifying `subscribe`). |
+| `mutation(inline)`           | Run an inline `(ctx) => …` with a read-write `MutationCtx`.                                                                                                                                                       |
+| `action(inline)`             | Run an inline `(ctx) => …` with an `ActionCtx`.                                                                                                                                                                   |
+| `run(fn)`                    | Direct db access at mutation level (read + write), mirroring `convexTest`'s `run`.                                                                                                                                |
+| `subscribe(reference, args)` | Async iterable yielding the query result now, then re-emitting after each mutation.                                                                                                                               |
+| `scheduler`                  | Controls for the in-memory scheduler (`list` / `advance` / `runPending`).                                                                                                                                         |
+| `queues`                     | What handlers enqueued through `ctx.queues` (`sent(name?)` / `clear()`).                                                                                                                                          |
+| `topics`                     | What handlers published through `ctx.topics` (`published(name?)` / `clear()`).                                                                                                                                    |
+| `notify`                     | What handlers delivered through `ctx.notify` / `ctx.push` (`sent(channel?)` / `clear()`).                                                                                                                         |
+| `withIdentity(identity)`     | Return a harness view sharing this db but reporting the given identity on `ctx.auth`.                                                                                                                             |
+| `close()`                    | Close the underlying in-memory SQLite database. Idempotent.                                                                                                                                                       |
 
 Each `query` / `mutation` / `action` accepts **either** a registered function
 reference plus its args, **or** a bare inline handler:
@@ -158,7 +171,7 @@ Internal functions (`internalQuery` / `internalMutation` / `internalAction`)
 are unreachable from the external RPC boundary in production. The harness
 enforces that contract: calling one through `t.query` / `t.mutation` /
 `t.action` throws, while calling it through `ctx.runQuery` / `ctx.runMutation` /
-`ctx.runAction` from another function succeeds — mirroring prod's trusted
+`ctx.runAction` from another function succeeds. That mirrors prod's trusted
 system dispatch.
 
 ```ts
@@ -193,7 +206,7 @@ the throwing stub with your own implementation:
 ```ts
 import { vi } from "vitest";
 
-const fakeFetch = vi.fn<typeof globalThis.fetch>().mockResolvedValue(Response.json({ ok: true }));
+const fakeFetch = vi.fn<typeof globalThis.fetch>(async () => Response.json({ ok: true }));
 
 const t = lunoraTest(schema, { fetch: fakeFetch });
 // `ctx.fetch` inside any action now calls `fakeFetch`.
@@ -201,6 +214,94 @@ const t = lunoraTest(schema, { fetch: fakeFetch });
 
 Without the option, `ctx.fetch` throws the v1 error the first time an action
 reaches for it.
+
+### Injectable `ctx.services`
+
+Pass a `services` option with a fake per `lunora.config` service an action
+calls. Like at runtime, only actions get `ctx.services`; a service with no fake
+throws on use, naming the option:
+
+```ts
+const t = lunoraTest(schema, {
+    services: { documentParser: { fetch: vi.fn(async () => Response.json({ text: "…" })) } },
+});
+```
+
+### Queues
+
+List the export names of your `lunora/queues.ts` queues in the `queues` option
+and mutations and actions get a recording `ctx.queues`. Sends go through
+`@lunora/queue`'s own validation, so a batch over 100 messages, a delay past
+12 hours, or a queue name you did not list rejects as it would in production.
+Each body is recorded as the consumer decodes it: encoded with its content type
+(Cloudflare's default `json`, unless the send names one) and decoded back, so a
+`Date` arrives as its ISO string and a `BigInt` rejects. Encoded sizes are checked
+against the 128 KB message and 256 KB batch limits. The harness cannot read a
+queue's content type from wrangler config, so name `contentType` on the send when
+the queue is not `json`. Nothing is consumed — assert on what was enqueued:
+
+```ts
+const t = lunoraTest(schema, { queues: ["jobs"] });
+
+const orderId = await t.mutation(placeOrder, { item: "lamp" });
+
+expect(t.queues.sent("jobs")).toEqual([{ body: { kind: "fulfil", orderId }, queue: "jobs" }]);
+```
+
+As in production a send is not transactional: one made by a mutation that then
+throws stays recorded even though the mutation's writes roll back.
+
+### Topics
+
+List the export names of your `lunora/queues.ts` topics in the `topics` option
+and mutations and actions get a recording `ctx.topics`, built by
+`@lunora/queue`'s own `createTopicContext` — so the batch cap, the delay
+ceiling, the reserved key and a topic name you did not list reject as they do in
+production. Bodies are encoded, decoded and size-checked exactly as for
+`queues`. Each published message is recorded once, however many subscriptions
+the app declares, and no subscription handler runs — assert on what was
+published:
+
+```ts
+const t = lunoraTest(schema, { topics: ["signups"] });
+
+const id = await t.mutation(signUp, { email: "ada@example.test" });
+
+expect(t.topics.published("signups")).toEqual([{ body: { email: "ada@example.test", id }, topic: "signups" }]);
+```
+
+### Notifications and push
+
+Pass your `lunora/notify.ts` default export as the `notify` option and every
+context gets `ctx.notify` and its `ctx.push` alias. They are built by
+`@lunora/notify`'s own `createNotify`, so `register` / `list` / `unregister` /
+`broadcast` behave as in production. Channels are wired exactly when production
+wires them: each factory is called with the `env` option, and a channel whose
+factory returns `undefined` is refused; a push to a device whose transport
+(`webPush` / `fcm`) resolved to nothing fails, as it does in production.
+
+The differences: deliveries are recorded and report accepted instead of
+reaching a push service — so there is no send-time DNS re-check, retry or
+circuit breaker — and subscriptions live in an in-memory store owned by the
+harness, so the definition's `store` is never called. For Web Push,
+`payload.to` is the JSON-stringified subscription, keys included.
+
+```ts
+import notify from "../lunora/notify";
+
+const t = lunoraTest(schema, { notify });
+const alice = t.withIdentity({ userId: "alice" });
+
+await alice.mutation(registerDevice, { token: "alice-phone" });
+await alice.action(notifyShipped, { title: "Shipped" });
+
+expect(t.notify.sent("push")).toEqual([{ channel: "push", payload: expect.objectContaining({ title: "Shipped", to: "alice-phone" }) }]);
+```
+
+Without the option, touching `ctx.notify` or `ctx.push` throws naming it, and
+so does `t.notify.sent()` — a handler that swallows the error cannot make "no
+notification was sent" pass by accident. `queues` and `topics` behave the same
+way.
 
 ### Scheduler
 
@@ -231,16 +332,34 @@ test("scheduled mutation runs after advance", async () => {
 });
 ```
 
-| Control                    | Description                                                                                                    |
-| -------------------------- | -------------------------------------------------------------------------------------------------------------- |
-| `t.scheduler.list()`       | Snapshot of pending jobs in enqueue order.                                                                     |
-| `t.scheduler.advance(ms)`  | Advance the virtual clock by `ms`, running every job due at or before the new now. Returns the count executed. |
-| `t.scheduler.runPending()` | Run all pending jobs regardless of `scheduledFor`. Returns the count executed.                                 |
+| Control                             | Description                                                                                                    |
+| ----------------------------------- | -------------------------------------------------------------------------------------------------------------- |
+| `t.scheduler.list()`                | Snapshot of pending jobs in enqueue order.                                                                     |
+| `t.scheduler.advance(ms, options?)` | Advance the virtual clock by `ms`, running every job due at or before the new now. Returns the count executed. |
+| `t.scheduler.runPending(options?)`  | Run all pending jobs regardless of `scheduledFor`. Returns the count executed.                                 |
 
 The virtual clock is per-harness, so parallel tests are isolated. A path not in
-the `functions` map (or pointing at a query) produces a `console.warn` and is
-dropped — matching production behaviour for unknown paths. Jobs run through the
-same dispatch as `ctx.runMutation`, so they share the harness database.
+the `functions` map (or pointing at a query) fails the job with
+`FUNCTION_NOT_FOUND`; it is then retried and finally recorded on
+`t.scheduler.failures()`, matching production's dead-letter park.
+
+Two things that catch tests out. A failure with retries left is **silently
+re-enqueued** with exponential backoff on the virtual clock, so `failures()`
+stays empty until the whole schedule has elapsed — 30s + 60s + 120s + 240s +
+480s = 930s of virtual clock at today's defaults, not one tick. And once it does
+land, `advance()` / `runPending()` **reject**: a terminal failure is re-thrown
+verbatim (several become an `AggregateError`). Pass
+`{ throwOnError: false }` to suppress the re-throw and inspect `failures()`
+instead:
+
+```ts
+await t.scheduler.advance(1_000_000, { throwOnError: false });
+expect(t.scheduler.failures()).toHaveLength(1);
+```
+
+Jobs run through
+the same dispatch as `ctx.runMutation`, so they share the harness database, and
+`ctx.now` inside a job is the virtual clock at fire time.
 
 ### Subscriptions
 
@@ -263,7 +382,7 @@ test("subscription re-emits after a mutation", async () => {
 });
 ```
 
-Subscriptions are table-agnostic — any mutation triggers a re-evaluation. The
+Subscriptions are table-agnostic: any mutation triggers a re-evaluation. The
 iterable buffers at most one pending result, so if several mutations fire
 between two `next()` calls the next read reflects the most recent state.
 
@@ -286,7 +405,7 @@ test("stubbed surfaces throw a clear error", async () => {
 ```
 
 <Callout type="warn">
-    The stub only throws when a handler actually touches it — functions that never reach for `ctx.storage` / `ctx.vectors` / `ctx.workflows` still run. Real R2
+    The stub only throws when a handler actually touches it: functions that never reach for `ctx.storage` / `ctx.vectors` / `ctx.workflows` still run. Real R2
     storage, Vectorize, and Cloudflare Workflows are deferred to a follow-up.
 </Callout>
 
@@ -304,13 +423,13 @@ deterministically. They are re-exported from `@lunora/testing`:
 | `listCapturedMail`   | Read the captured-mail inbox, newest first.                                         |
 | `waitForMail`        | Poll the inbox until a message matching `to` (and optional `subjectMatch`) appears. |
 | `extractLink`        | Pull the first link out of a captured message (html first, then text).              |
-| `InboxOptions`       | Type — options for `listCapturedMail`.                                              |
-| `WaitForMailOptions` | Type — options for `waitForMail`.                                                   |
+| `InboxOptions`       | Type: options for `listCapturedMail`.                                               |
+| `WaitForMailOptions` | Type: options for `waitForMail`.                                                    |
 
 `waitForMail` takes the worker `baseUrl`, the admin bearer token (the worker
 gates introspection behind `LUNORA_ADMIN_TOKEN`), the recipient `to`, and an
 optional `subjectMatch`. It polls (default every 250ms, timing out after 10s)
-and returns the matching `CapturedMail` — or throws on timeout. `extractLink`
+and returns the matching `CapturedMail`, or throws on timeout. `extractLink`
 takes an optional `match` substring to disambiguate the action link from a logo
 or footer URL.
 
@@ -358,9 +477,65 @@ test("password reset email carries a working link", async () => {
 | `timeoutMs`    | `10000`      | Give up after this many ms.                         |
 | `fetch`        | `globalThis` | Inject a `fetch` implementation (e.g. a stub).      |
 
-## See also
+## Evals — scoring model output
 
-- [Concepts: queries & mutations](/docs/concepts/queries-mutations) — the `query` / `mutation` / `action` functions the harness runs
-- [Concepts: row-level security](/docs/concepts/rls) — drive procedures with `withIdentity` to test authorization
-- [@lunora/mail](/docs/packages/mail) — captures the outbound email the helpers read
-- [@lunora/auth](/docs/packages/auth) — the verification / reset / magic-link flows you test end-to-end
+`evaluate` runs a dataset through a producer and scores each output. The
+built-in scorers are heuristic (`containsScorer`, `regexScorer`,
+`exactMatchScorer`, `keywordScorer`) plus `llmScorer`, an LLM-as-judge whose
+`judge` is **injected** — a `(prompt) => Promise<string>` you wire to your own
+model — so this package stays model-agnostic and the judge is mockable.
+
+```ts
+import { evaluate, keywordScorer } from "@lunora/testing";
+
+const result = await evaluate(
+    [{ expected: "shipped", input: "where is my order?" }],
+    async (input) => (await harness.run({ input, threadKey: input })).text ?? "",
+    [keywordScorer(["shipped"])],
+);
+
+expect(result.average).toBeGreaterThan(0.5);
+```
+
+### Retrieval scorers
+
+Scoring only the final answer tells you it was wrong, not which half broke:
+whether retrieval never surfaced the right passage, or surfaced it and the
+model ignored it. Those have opposite fixes — chunking and hybrid search versus
+the prompt — so an answer-only eval sends you to the wrong one half the time.
+
+The retrieval scorers judge the ranked ids instead. The producer returns
+`{ output, metadata }` so it can report what it actually retrieved; that
+metadata is merged over the case's own, which declares the gold set:
+
+```ts
+import { evaluate, groundednessScorer, mrrScorer, ndcgAtK, recallAtK } from "@lunora/testing";
+
+const result = await evaluate(
+    [{ input: "how do I rotate keys?", metadata: { relevant: ["security#3"] } }],
+    async (input) => {
+        const { chunks, context } = await docs(ctx).retrieve(input);
+
+        return { metadata: { context, retrieved: chunks.map((chunk) => chunk.id) }, output: context };
+    },
+    [recallAtK(5), ndcgAtK(5), mrrScorer()],
+);
+```
+
+| Scorer                        | Measures                                                                                           |
+| ----------------------------- | -------------------------------------------------------------------------------------------------- |
+| `recallAtK(k?)`               | Fraction of gold passages inside the top `k`. The ceiling on everything downstream.                |
+| `precisionAtK(k?)`            | Fraction of the top `k` that is gold. The counterweight — padding `topK` buys recall with noise.   |
+| `mrrScorer()`                 | `1 / rank` of the first gold passage. The metric that notices **ordering**, which recall cannot.   |
+| `ndcgAtK(k?)`                 | Rank-discounted gain over the ideal arrangement. Gate on this when comparing retrieval strategies. |
+| `groundednessScorer({judge})` | Whether the answer asserts only what the retrieved context supports.                               |
+
+All of them **fail closed**: a case with no gold ids scores 0 with a reason,
+never 1. A mis-wired eval that reads as a perfect score is the most dangerous
+failure a quality gate has.
+
+`recallAtK` and `ndcgAtK` answer different questions and you generally want
+both. Recall@10 cannot distinguish a gold passage at rank 1 from one at rank 10,
+but only the first survives a context-window trim — that difference is exactly
+what nDCG and MRR measure, and it is how you tell whether a reranker or a
+hybrid leg actually helped rather than just moved results around.

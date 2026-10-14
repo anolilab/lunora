@@ -1,6 +1,6 @@
 {
     "name": "@lunora/solid",
-    "version": "0.0.0",
+    "version": "1.0.0-alpha.212",
     "description": "SolidJS adapter for Lunora — live queries, optimistic mutations, and reactive loaders",
     "keywords": [
         "cloudflare",
@@ -25,7 +25,7 @@
         "directory": "packages/solid"
     },
     "files": [
-        "dist",
+        "./dist",
         "README.md",
         "LICENSE.md",
         "__assets__"
@@ -44,22 +44,34 @@
             "types": "./dist/server.d.ts",
             "import": "./dist/server.mjs"
         },
+        "./upload": {
+            "types": "./dist/upload.d.ts",
+            "import": "./dist/upload.mjs"
+        },
         "./package.json": "./package.json"
+    },
+    "publishConfig": {
+        "access": "public"
     },
     "scripts": {
         "build": "pnpm exec packem build --development",
         "build:prod": "pnpm exec packem build --production",
-        "lint:eslint": "eslint .",
+        "lint:eslint": "eslint . --max-warnings=0",
         "lint:eslint:fix": "eslint . --fix",
-        "lint:prettier": "prettier --check .",
-        "lint:prettier:fix": "prettier --write .",
+        "lint:prettier": "prettier --check . --ignore-path ../../.prettierignore",
+        "lint:prettier:fix": "prettier --write . --ignore-path ../../.prettierignore",
         "lint:types": "tsc --noEmit",
         "test": "vitest run",
-        "test:coverage": "vitest run --coverage"
+        "test:coverage": "vitest run --coverage",
+        "fallow:audit": "fallow audit",
+        "fallow:dead-code": "fallow dead-code",
+        "fallow:health": "fallow health --score"
     },
     "dependencies": {
-        "@lunora/client": "workspace:*",
-        "@lunora/ratelimit": "workspace:*"
+        "@lunora/client": "1.0.0-alpha.203",
+        "@lunora/errors": ">=1.0.0-alpha.51 <2.0.0-0",
+        "@lunora/ratelimit": "1.0.0-alpha.129",
+        "@visulima/storage-client": "catalog:storage"
     },
     "devDependencies": {
         "@babel/core": "catalog:build",
@@ -70,6 +82,7 @@
         "@vitest/coverage-v8": "catalog:test",
         "babel-preset-solid": "catalog:build",
         "esbuild": "catalog:build",
+        "fallow": "catalog:lint",
         "jsdom": "catalog:frontend",
         "solid-js": "catalog:frontend",
         "typescript": "catalog:tsc",
@@ -77,7 +90,7 @@
         "vitest": "catalog:test"
     },
     "peerDependencies": {
-        "solid-js": "^1.9.0"
+        "solid-js": "^1.9.0 || ^2.0.0-rc.0"
     },
     "peerDependenciesMeta": {
         "solid-js": {

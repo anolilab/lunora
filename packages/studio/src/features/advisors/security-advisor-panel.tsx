@@ -1,15 +1,11 @@
-import { useLunora } from "@lunora/react";
 import type { ReactElement } from "react";
-import { useEffect, useState } from "react";
 
+import { useAdminQuery } from "../../hooks/use-admin-query";
 import type { TFunction } from "../../i18n/i18n-context";
 import { useT } from "../../i18n/i18n-context";
 import type { SecurityAuditResult, SecurityFinding } from "../../lib/admin";
 import { ADMIN_FUNCTIONS } from "../../lib/admin";
-import { adminRef, callOptions, errorMessage, fireAndForget } from "../../lib/internal";
 import { AdvisorView } from "./advisor-view";
-
-const GET_SECURITY_AUDIT = adminRef(ADMIN_FUNCTIONS.getSecurityAudit);
 
 /** Localized headline per finding kind, shown in the Issue type column. */
 const findingTitle = (t: TFunction, finding: SecurityFinding): string =>
@@ -21,8 +17,11 @@ const findingTitle = (t: TFunction, finding: SecurityFinding): string =>
         "csrf-disabled": t("CSRF/origin guard is off"),
         "dev-args-unredacted": t("Request log keeps un-redacted args"),
         "security-headers-disabled": t("Security headers are off"),
-        "ws-gate-open": t("Live admin subscriptions are ungated"),
+        "ws-gate-open": t("User subscriptions are ungated"),
     })[finding.kind];
+
+/** Defensive: an older worker (or a stand-in) may not return a findings array — treat anything but an array as "no findings". */
+const toFindings = (result: SecurityAuditResult): SecurityFinding[] => (Array.isArray(result.findings) ? result.findings : []);
 
 /** The env binding each finding concerns, shown in the Entity column. */
 const findingEntity = (finding: SecurityFinding): string =>
@@ -64,7 +63,7 @@ const findingDetail = (t: TFunction, finding: SecurityFinding): string =>
             "LUNORA_SECURITY_HEADERS is off, so HSTS, CSP, nosniff, and frame-options are not applied. Re-enable the baseline headers in production.",
         ),
         "ws-gate-open": t(
-            "LUNORA_WS_BEARER is unset, so the WebSocket upgrade gate is open: live admin subscriptions need no credential. Set it to gate them like the HTTP admin RPCs.",
+            "LUNORA_WS_BEARER is unset, so the WebSocket upgrade gate is open: anyone who can reach the worker can open a socket and run ordinary user subscriptions. Admin subscriptions are unaffected — they need the admin token. Set it if subscribers should present a shared credential.",
         ),
     })[finding.kind];
 
@@ -73,33 +72,18 @@ const findingDetail = (t: TFunction, finding: SecurityFinding): string =>
  * (Errors / Warnings / Info) over a findings table. It pulls `getSecurityAudit`
  * (deployment-wide, so it targets the root shard and needs no shard selector) and
  * maps each finding the server derived from the Worker `env` — weak admin token,
- * an open WebSocket gate, a dev-mode request log keeping un-redacted args — into a
- * row. These are signals only lunora can surface: Cloudflare's dashboard can't
+ * an open WebSocket gate for user subscriptions, a dev-mode request log keeping
+ * un-redacted args — into a row. These are signals only lunora can surface: Cloudflare's dashboard can't
  * reason about lunora's admin/WS gates or its log-redaction policy.
  */
 const SecurityAdvisorPanel = (): ReactElement => {
-    const client = useLunora();
     const t = useT();
 
-    const [findings, setFindings] = useState<SecurityFinding[] | null>(null);
-    const [error, setError] = useState<null | string>(null);
+    const { data, error, errorSource } = useAdminQuery<SecurityAuditResult>(ADMIN_FUNCTIONS.getSecurityAudit, {});
 
-    const refresh = async (): Promise<void> => {
-        try {
-            const result = (await client.query(GET_SECURITY_AUDIT, {}, callOptions(""))) as SecurityAuditResult;
-
-            // Defensive: an older worker (or a stand-in) may not return a findings
-            // array — treat anything but an array as "no findings" rather than throw.
-            setFindings(Array.isArray(result.findings) ? result.findings : []);
-            setError(null);
-        } catch (error_: unknown) {
-            setError(errorMessage(error_));
-        }
-    };
-
-    useEffect(() => {
-        fireAndForget(refresh());
-    }, [refresh]);
+    // `undefined` while the first read is in flight (renders the loading state);
+    // once it resolves, `toFindings` normalises a non-array payload to empty.
+    const findings: SecurityFinding[] | null = data === undefined ? null : toFindings(data);
 
     const rows =
         findings === null
@@ -114,7 +98,7 @@ const SecurityAdvisorPanel = (): ReactElement => {
                   };
               });
 
-    return <AdvisorView error={error} rows={rows} testId="lunora-security-advisor" />;
+    return <AdvisorView error={error} errorSource={errorSource} rows={rows} testId="lunora-security-advisor" />;
 };
 
 export default SecurityAdvisorPanel;

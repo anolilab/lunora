@@ -1,25 +1,20 @@
+import { storageOf } from "./browser-storage";
+
 /**
  * Persist the admin token in `sessionStorage` so a page reload doesn't force the
  * operator to re-paste it. `sessionStorage` (not `localStorage`) keeps it to the
  * tab's lifetime — a deliberate tradeoff: convenience without leaving a
- * long-lived admin credential on disk. All access is guarded so a missing or
- * throwing storage (SSR, privacy mode) degrades to in-memory-only.
+ * long-lived admin credential on disk. Access goes through {@link ./browser-storage}'s
+ * shared guard so a missing or throwing storage (SSR, privacy mode) degrades to
+ * in-memory-only. Not JSON (it's a raw string with a remove-on-empty semantic), so
+ * it uses the guarded `storageOf` accessor rather than `loadJsonArray`/`saveJson`.
  */
 const STORAGE_KEY = "lunora-studio-admin-token";
-
-const store = (): Storage | undefined => {
-    try {
-        return (globalThis as { sessionStorage?: Storage }).sessionStorage;
-    } catch {
-        // Accessing sessionStorage can throw in sandboxed iframes / privacy mode.
-        return undefined;
-    }
-};
 
 /** Read the persisted admin token, or `""` when none is stored / storage is unavailable. */
 export const loadToken = (): string => {
     try {
-        return store()?.getItem(STORAGE_KEY) ?? "";
+        return storageOf("session")?.getItem(STORAGE_KEY) ?? "";
     } catch {
         return "";
     }
@@ -27,7 +22,7 @@ export const loadToken = (): string => {
 
 /** Persist (non-empty) or clear (empty) the admin token; silently no-ops without storage. */
 export const saveToken = (token: string): void => {
-    const storage = store();
+    const storage = storageOf("session");
 
     if (storage === undefined) {
         return;

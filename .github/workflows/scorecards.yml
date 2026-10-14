@@ -4,7 +4,7 @@
     "schedule":
         - "cron": "37 14 * * 6"
     "push":
-        "branches": ["main"]
+        "branches": ["main", "master", "alpha", "beta"]
 "permissions": {}
 "jobs":
     "scorecards":
@@ -13,7 +13,7 @@
             "id-token": "write"
             "actions": "read"
             "contents": "read"
-        "uses": "anolilab/workflows/.github/workflows/scorecards.yml@045a2d464dad0661a570c8a3c19f4b32bf9efad9" # v15.3.0+
+        "uses": "anolilab/workflows/.github/workflows/scorecards.yml@1d2834fe34a15bd35bf49a1b1071a8b71e8d6319" # main
         "with":
-            "branch": "main"
+            "branch": "alpha"
             "publish_results": true

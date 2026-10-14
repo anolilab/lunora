@@ -1,0 +1,549 @@
+/* eslint-disable import/exports-last -- a types-heavy module: public types are declared next to the helpers they build on */
+import type { LunoraClient } from "@lunora/client";
+import { isAuthReplayFailure } from "@lunora/client";
+import { LunoraError } from "@lunora/errors";
+import type { Collection, Transaction } from "@tanstack/db";
+import { createTransaction } from "@tanstack/db";
+
+import type { CheckpointRegistry } from "./collection-options";
+import { getShardCheckpoints, hasCheckpointsAttached, isScopeFollowingCheckpoints, scopedShardKey, syncShardCheckpointIdentity } from "./collection-options";
+import { assertSecureRandom, runOutboxMutation, toNonRetriable } from "./internals";
+
+/**
+ * TanStack DB's "direct transaction" marker.
+ *
+ * A completed transaction's optimistic rows are discarded as **stale** unless
+ * either a synced transaction for the same key is already queued, or the
+ * transaction carried this flag (`CollectionStateManager.recomputeOptimisticState`
+ * → `pendingOptimisticDirectUpserts`). Marked rows instead survive until a sync
+ * operation for that key actually lands, which is precisely the semantics a Lunora
+ * custom mutator needs: the server is the linearization point, so the prediction
+ * must stay visible until the authoritative row arrives. Without it, a text edit
+ * visibly reverts to the last synced value the moment the push is acked.
+ *
+ * The literal is pinned here because `@tanstack/db` does not re-export the constant
+ * from its package root (it lives in the unexported
+ * `collection/transaction-metadata` module). `__tests__/define-mutators.test.ts`
+ * reads that module off disk and fails if the upstream value ever changes.
+ */
+export const DIRECT_TRANSACTION_METADATA_KEY = "__tanstack_db_direct";
+
+/**
+ * A map of wired collections, keyed by the name the optimistic bodies address them
+ * by.
+ *
+ * The row type is `any` on purpose. `Collection<T, string>` is **invariant** in
+ * `T` (its methods both consume and produce rows), so a concrete
+ * `Collection<Doc<"nodes"> & Row>` is NOT assignable to `Collection<Row>` — which
+ * is why the previous `Record<string, Collection<Row, string>>` forced an
+ * `as never` cast on every entry, and left `context.collections.<name>` too
+ * untyped to be worth using. Projects recover the concrete types by binding them
+ * once through {@link initMutators}.
+ */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any -- see comment above: `Collection` is invariant in its row type, so a narrower bound rejects every real collection
+export type CollectionMap = Record<string, Collection<any, string>>;
+
+/** The local store a client mutator's optimistic body writes against. */
+export interface ClientMutatorContext<TCollections extends CollectionMap = CollectionMap> {
+    /** The wired collections, keyed by name — apply optimistic inserts/updates/deletes here. */
+    collections: TCollections;
+}
+
+/**
+ * A generated mutator reference (`api.mutators.sendMessage`), accepted by
+ * {@link defineMutator} in place of a hand-written path string.
+ *
+ * Declared structurally rather than imported from `@lunora/client` so this module
+ * keeps its narrow dependency surface; the shape matches `FunctionReference`, and
+ * the phantom marker carries the server mutator's arg type so the client body's
+ * args are **inferred** instead of restated.
+ */
+export interface MutatorReference<TArgs = unknown> {
+    readonly __lunoraPhantom?: { args: TArgs; kind: unknown; returns: unknown };
+    readonly __lunoraRef: string;
+}
+
+/**
+ * A generated reference with its arg type erased — the widest shape the runtime
+ * actually reads. Used on the implementation side (and by {@link mutatorPath}),
+ * where narrowing to a concrete `MutatorReference<TArgs>` would make the typed
+ * overload's parameter fail the contravariant assignability check against the
+ * implementation signature.
+ */
+type AnyMutatorReference = Pick<MutatorReference, "__lunoraRef">;
+
+/** A client-side custom mutator: an optimistic body plus the path of its authoritative server impl. */
+// eslint-disable-next-line unicorn/prevent-abbreviations -- "Def" mirrors `CollectionDef`; "Definition" is noise
+export interface ClientMutatorDef<TArgs, TCollections extends CollectionMap = CollectionMap> {
+    /** Brand so codegen / `bindMutators` can recognize a mutator definition. */
+    __lunoraClientMutator: true;
+    /** The optimistic update applied to the local collections before the server confirms. */
+    apply: (context: ClientMutatorContext<TCollections>, args: TArgs) => void;
+    /** The Lunora function path of the server-authoritative mutator (`defineMutator` on the server). */
+    serverRef: string;
+}
+
+/** Resolve a mutator reference (or a raw path string) to the dispatch path. */
+const MUTATOR_REF_ERROR = "defineMutator: `serverRef` must be a generated mutator reference (api.mutators.*) or a 'namespace:fn' string";
+
+const mutatorPath = (serverRef: AnyMutatorReference | string): string => {
+    // The string branch is validated too: `""` would otherwise dispatch to an empty
+    // function path at push time instead of failing at declaration.
+    //
+    // `?.` is load-bearing despite the non-nullable parameter type: the whole point of
+    // this function is to turn a bad `serverRef` into the LunoraError below, and an
+    // untyped caller (plain JS, `any`, a stale generated file) passing null/undefined
+    // would otherwise get a bare `TypeError` about `__lunoraRef` instead.
+    // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- guards untyped JS callers despite the non-nullable type
+    const path = typeof serverRef === "string" ? serverRef : serverRef?.__lunoraRef;
+
+    if (typeof path !== "string" || path.length === 0) {
+        throw new LunoraError("INTERNAL", MUTATOR_REF_ERROR);
+    }
+
+    return path;
+};
+
+/**
+ * Declare a client-side custom mutator. `apply` runs optimistically against the
+ * local TanStack collections; `serverRef` names the authoritative server mutator
+ * the write is pushed to over the watermark protocol. The server impl is the
+ * linearization point — this body is a prediction the server can override.
+ *
+ * **Pass a generated reference, not a string.** `serverRef: api.mutators.sendMessage`
+ * both binds the path at compile time — a rename, a typo, or a moved file becomes a
+ * type error instead of a mutation that silently fails at runtime — and **infers
+ * `TArgs` from the server mutator's own validators**, so the arg type is declared
+ * once on the server rather than restated in every client body:
+ *
+ * ```ts
+ * // Typed + checked: args inferred from the server mutator.
+ * defineMutator({
+ *     apply: ({ collections }, args) => { … },   // args: { channelId: Id<"channels">; text: string }
+ *     serverRef: api.mutators.sendMessage,
+ * });
+ *
+ * // Escape hatch: a path string still works, but nothing checks it and you must
+ * // restate the args yourself.
+ * defineMutator<{ text: string }>({ apply, serverRef: "mutators:sendMessage" });
+ * ```
+ *
+ * `context.collections` is typed by whatever map it is bound to — which for this
+ * standalone form is the widest one. Bind the concrete collections once with
+ * {@link initMutators} to get `collections.<name>` typed inside `apply`.
+ */
+export const defineMutator: {
+    <TArgs = Record<string, unknown>>(definition: { apply: (context: ClientMutatorContext, args: TArgs) => void; serverRef: string }): ClientMutatorDef<TArgs>;
+    // eslint-disable-next-line @typescript-eslint/unified-signatures -- deliberately separate: only the reference overload INFERS `TArgs` (from the phantom). Merging them into a `string | MutatorReference<TArgs>` union leaves `TArgs` uninferable on the string branch, which then silently falls back to its default and erases the args type for every reference call site.
+    <TArgs>(definition: { apply: (context: ClientMutatorContext, args: TArgs) => void; serverRef: MutatorReference<TArgs> }): ClientMutatorDef<TArgs>;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any -- the overloads above are the checked surface; the implementation signature must accept both
+} = (definition: { apply: (context: ClientMutatorContext, args: any) => void; serverRef: AnyMutatorReference | string }): ClientMutatorDef<any> => {
+    return {
+        __lunoraClientMutator: true,
+        apply: definition.apply,
+        serverRef: mutatorPath(definition.serverRef),
+    };
+};
+
+/**
+ * A mutator map whose defs are bound to `TCollections`, arg types erased — the
+ * `TCollections`-pinned counterpart of {@link AnyMutatorMap}, and `any` for the
+ * same variance reason.
+ */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any -- see `AnyMutatorMap`: a narrower bound rejects concrete defs (the `apply` arg is contravariant)
+type MutatorMapFor<TCollections extends CollectionMap> = Record<string, ClientMutatorDef<any, TCollections>>;
+
+// A mutator map with arg types erased to `any` — pinning the constraint to
+// `ClientMutatorDef<unknown>` rejects concrete defs (the `apply` arg is
+// contravariant), exactly as `AnyDef` does in `define-collections`.
+// eslint-disable-next-line @typescript-eslint/no-explicit-any -- see comment above
+type AnyMutatorMap = Record<string, ClientMutatorDef<any, any>>;
+
+/** Args type of a mutator definition, whatever collections map it was bound to. */
+type ArgsOf<M> = M extends ClientMutatorDef<infer A, infer _C> ? A : never;
+
+/** A mutator write that was permanently rejected, passed to {@link BindMutatorsContext.onWriteRejected}. */
+export interface MutatorRejectedEvent {
+    /** The args the rejected call was made with. */
+    args: unknown;
+
+    /**
+     * The machine-readable reason when the server supplied one (e.g. `CONFLICT`,
+     * `FORBIDDEN`). Mirrors {@link import("./define-collections").WriteRejectedEvent.code}.
+     */
+    code?: string;
+    /** The error that rejected the write. */
+    error: Error;
+    /** The bound mutator's key in the map passed to `bindMutators`. */
+    mutator: string;
+    /** The `namespace:fn` path the push targeted. */
+    serverRef: string;
+}
+
+export interface BindMutatorsContext<TCollections extends CollectionMap = CollectionMap> {
+    /**
+     * Resolves the optimistic-overlay drop against confirmed server watermarks: a
+     * mutation's overlay is held until the sync stream echoes
+     * `lastMutationId >= clientSeq` (via {@link CheckpointRegistry.resolve}), so the
+     * row never flashes out and back.
+     *
+     * Defaults to the shared per-shard registry for `client` + {@link BindMutatorsContext.shardKey}
+     * ({@link getShardCheckpoints}) — the same one
+     * {@link import("./collection-options").lunoraCollectionOptions} defaults to, so
+     * a shard's collections and its mutators gate on one watermark line without the
+     * caller wiring them together. Pass `false` to drop the overlay as soon as the
+     * server accepts the write (the by-value sync diff then converges the synced row
+     * in place).
+     */
+    checkpoints?: CheckpointRegistry | false;
+    /** The wired collections the optimistic bodies write against. */
+    collections: TCollections;
+
+    /**
+     * Called when a mutator's server push is permanently rejected — the aggregate
+     * failure channel for writes, symmetric with
+     * {@link import("./define-collections").DefineCollectionsOptions.onWriteRejected}
+     * on the outbox path.
+     *
+     * Supplying it also makes a **fire-and-forget** call safe: a bound handle
+     * returns a `Transaction` whose `isPersisted` promise rejects on failure, so a
+     * caller that neither awaits it nor attaches a `.catch` leaves an unhandled
+     * rejection. With this hook set, `bindMutators` consumes that rejection itself
+     * after reporting it — a caller that DOES await still sees the rejection, so
+     * per-call handling is unaffected.
+     *
+     * A throwing listener is swallowed: reporting a failure must not manufacture a
+     * second one.
+     */
+    onWriteRejected?: (event: MutatorRejectedEvent) => void;
+
+    /**
+     * Route each call to the shard its own args name: the value of this field
+     * (the table's `.shardBy(...)` column) is the shard key, exactly as for a
+     * `scopeBy` collection's inserts — so `sendMessage({ channelId, … })` lands
+     * on that channel's shard. Required when `checkpoints` comes from a
+     * `scopeBy` collection, unless `shardKey` pins one shard; a call whose args
+     * lack the field throws.
+     * {@link BindMutatorsContext.shardKey} takes precedence.
+     */
+    scopeBy?: string;
+
+    /** Pins every push to one shard. Takes precedence over {@link BindMutatorsContext.scopeBy}. */
+    shardKey?: string;
+}
+
+/** Calling a bound mutator runs the optimistic body + pushes the server write; returns the TanStack transaction. */
+export type BoundMutators<M extends AnyMutatorMap> = {
+    [K in keyof M]: (args: ArgsOf<M[K]>) => Transaction;
+};
+
+/**
+ * Bind a set of client mutators to a client + local store. Each returned handle,
+ * when called, opens a TanStack optimistic transaction: the mutator's `apply`
+ * body writes the predicted rows into the collections, and the transaction's
+ * `mutationFn` pushes the authoritative write through
+ * {@link LunoraClient.callMutator} under a monotonic per-client `clientSeq`.
+ *
+ * Rebase-on-poke is free — TanStack DB re-derives every pending optimistic overlay
+ * over the latest synced base on each sync tick. The overlay is dropped when the
+ * server confirms the write (and, if `checkpoints` is supplied, once it echoes the
+ * matching watermark so the synced row has landed).
+ *
+ * The `clientSeq` generator is seeded from the server's echoed watermark
+ * ({@link LunoraClient.confirmedMutationWatermark}) on every issue, so a reload —
+ * which resets this in-memory counter while the server keeps a durable per-client
+ * watermark — never reissues a sequence the DO has already applied. As a backstop
+ * for the very first push of a fresh session (before any ack has taught the client
+ * the watermark), a push the DO swallows as a replay (`applied === false`) is
+ * reissued above the now-known watermark instead of being mistaken for a confirmed
+ * write — closing the silent-drop window without risking a double-apply (a fresh
+ * session's first stale push provably cannot be an honest replay).
+ *
+ * Pushes are **serialized per binding** (a FIFO chain): the DO rejects any push
+ * with `clientSeq > watermark + 1` as `OUT_OF_ORDER` and drops the write, so two
+ * mutators fired concurrently must not race the network into a gap. Each push
+ * waits for the previous one's ack and assigns its `clientSeq` *inside* the
+ * critical section — from the live watermark — so the sequence is always exactly
+ * `watermark + 1`. Because a failed mutation never advances the server watermark,
+ * a permanently-rejected predecessor can't wedge the chain: the next push simply
+ * reclaims the same `watermark + 1` instead of leaving a hole the DO waits on.
+ */
+export const bindMutators = <M extends AnyMutatorMap, TCollections extends CollectionMap = CollectionMap>(
+    client: LunoraClient,
+    context: BindMutatorsContext<TCollections>,
+    mutators: M,
+): BoundMutators<M> => {
+    assertSecureRandom("bindMutators");
+
+    // Backstop bound on the reissue loop: the watermark is finite and each retry
+    // strictly raises the sequence toward it, so this only trips on a pathological
+    // server (or a same-clientId tab racing the watermark forever) — surfaced as a
+    // hard error rather than an infinite loop.
+    const maxReissues = 32;
+
+    if (context.checkpoints && isScopeFollowingCheckpoints(context.checkpoints) && context.scopeBy === undefined && context.shardKey === undefined) {
+        // Those checkpoints follow the collection's scope, and nothing here names
+        // a shard: every push would go to the default shard, which the scoped
+        // collection never syncs, so each optimistic row would hang until the
+        // fallback window, then vanish. A pinned `shardKey` is fine — each push
+        // is then gated on that shard's own registry (see `resolveCheckpoints`).
+        throw new LunoraError(
+            "BAD_REQUEST",
+            "bindMutators: `checkpoints` from a `scopeBy` collection needs the same `scopeBy` (or a pinned `shardKey`) here, so each push reaches the shard it gates on",
+        );
+    }
+
+    // The shard a call's push goes to: pinned by `shardKey`, else named by the
+    // call's own `scopeBy` value, else the default shard.
+    const shardOf = (args: Record<string, unknown>): string | undefined =>
+        context.shardKey ?? (context.scopeBy === undefined ? undefined : scopedShardKey(context.scopeBy, args, "the mutator args"));
+
+    // One sequence line per shard: each shard's DO keeps its own per-client
+    // watermark, so a sequence claimed on one must never advance another's.
+    const counters = new Map<string, number>();
+    let counterIdentity = client.currentIdentity();
+
+    // The server's watermark is keyed per identity, so a signed-in-user switch
+    // resets the sequence space on the server too; carrying this closure's
+    // `counter` forward across that switch would claim a gap the shard rejects
+    // as OUT_OF_ORDER, permanently (see plan 316). Reset both together whenever
+    // the client's identity has moved since the counter was last derived.
+    const resetCounterForIdentity = (): void => {
+        // Rewind the shard's checkpoint watermarks on the same signal, BEFORE the
+        // new sequence is claimed. A registry still holding the previous identity's
+        // mark answers the fresh `clientSeq` (which restarts at 1) immediately, so
+        // the overlay drops before the new identity's row syncs — the flicker the
+        // registry exists to prevent. This is the only hook that fires for the
+        // documented wiring, where `checkpoints` is captured once and passed in
+        // explicitly, so `resolveCheckpoints` below never re-derives it.
+        syncShardCheckpointIdentity(client);
+
+        const identity = client.currentIdentity();
+
+        if (identity !== counterIdentity) {
+            counters.clear();
+            counterIdentity = identity;
+        }
+    };
+
+    // Seed the shard's counter from the highest watermark the server has confirmed
+    // for it, then claim the next sequence — keeping issuance monotonic across reloads.
+    const nextClientSeq = (shardKey: string | undefined): number => {
+        resetCounterForIdentity();
+
+        const next = Math.max(counters.get(shardKey ?? "") ?? 0, client.confirmedMutationWatermark(shardKey)) + 1;
+
+        counters.set(shardKey ?? "", next);
+
+        return next;
+    };
+
+    // Per-binding FIFO push chain: every server push for this shard runs behind
+    // the previous one so the DO receives them in strict watermark order (an
+    // out-of-order arrival would be rejected as `OUT_OF_ORDER` and lost).
+    let pushChain: Promise<unknown> = Promise.resolve();
+
+    // Serialize one push behind the chain, assigning + reissuing the sequence
+    // inside the critical section so it tracks the live watermark. Resolves with
+    // the applied `clientSeq` so the caller can await the matching checkpoint.
+    const pushSerialized = (serverRef: string, args: Record<string, unknown>, shardKey: string | undefined): Promise<number> => {
+        const run = pushChain.then(async () => {
+            for (let attempt = 0; ; attempt += 1) {
+                const clientSeq = nextClientSeq(shardKey);
+
+                try {
+                    // eslint-disable-next-line no-await-in-loop -- sequential by design: each reissue must observe the prior ack's watermark before claiming a fresh sequence
+                    const { applied } = await client.callMutator(serverRef, args, { clientSeq, shardKey });
+
+                    if (applied) {
+                        return clientSeq;
+                    }
+                } catch (error) {
+                    // The claim was never applied — a rejection (unlike a replay) never
+                    // advances the server watermark, so the counter must not stay ahead
+                    // of it either. Pushes are serialized per binding (the FIFO chain
+                    // above), so exactly one claim is outstanding at a time; surrendering
+                    // it back to the watermark here — not to `clientSeq - 1` — is what lets
+                    // the NEXT push's `Math.max(counter, watermark) + 1` re-derive the same
+                    // `watermark + 1` instead of leaving a permanent gap the DO would
+                    // reject as OUT_OF_ORDER. Re-check identity first (same reset the
+                    // claim side applies) so a rejection that raced an identity switch
+                    // doesn't re-pin the counter to the previous user's watermark.
+                    resetCounterForIdentity();
+                    counters.set(shardKey ?? "", client.confirmedMutationWatermark(shardKey));
+
+                    throw error;
+                }
+
+                if (attempt >= maxReissues) {
+                    throw new LunoraError(
+                        "INTERNAL",
+                        `lunora: custom mutator "${serverRef}" could not claim a fresh client sequence after ${String(maxReissues)} attempts`,
+                    );
+                }
+
+                // The DO swallowed this push as a replay (a stale `clientSeq` after
+                // a reload). Reissue above the watermark it just echoed.
+            }
+        });
+
+        // Keep the chain alive even when this push throws, so a failed (or
+        // permanently-rejected) push never wedges the queue for later mutators.
+        pushChain = run.then(
+            () => undefined,
+            () => undefined,
+        );
+
+        return run;
+    };
+
+    // The shard's shared registry unless the caller supplied one (or opted out with
+    // `false`). Deriving it here is what makes a multi-collection shard work: the
+    // collections and the mutators end up on the same watermark line.
+    //
+    // A DERIVED registry is only gated on when a `lunoraCollectionOptions` call has
+    // attached a sync source to it. Without one nothing would ever advance the
+    // watermark, so every write would stall for the full fallback window — worse
+    // than the pre-derivation behavior of not waiting at all. An EXPLICIT registry is
+    // always honored: the caller is asserting they drive it — except one that
+    // follows a collection's scope, which is derived per push instead: the write
+    // is gated on the shard it went to, which is not always the scoped one.
+    const resolveCheckpoints = (shardKey: string | undefined): CheckpointRegistry | undefined => {
+        if (context.checkpoints === false) {
+            return undefined;
+        }
+
+        if (context.checkpoints && !isScopeFollowingCheckpoints(context.checkpoints)) {
+            return context.checkpoints;
+        }
+
+        const derived = getShardCheckpoints(client, shardKey);
+
+        return hasCheckpointsAttached(derived) ? derived : undefined;
+    };
+
+    /**
+     * Route a rejected push to `onWriteRejected`, consuming the rejection so a
+     * fire-and-forget call is safe. No hook ⇒ no handler is attached at all: adding
+     * a silent `.catch` would swallow failures for callers who never opted in.
+     */
+    const reportRejection = (transaction: Transaction, mutatorName: string, serverRef: string, args: unknown): void => {
+        const { onWriteRejected } = context;
+
+        if (!onWriteRejected) {
+            return;
+        }
+
+        // eslint-disable-next-line no-void -- the handler IS the terminal consumer of this rejection; there is nothing left to await
+        void transaction.isPersisted.promise.catch((error: unknown) => {
+            const rejection = error instanceof Error ? error : new Error(String(error));
+
+            try {
+                onWriteRejected({ args, code: (rejection as Error & { code?: string }).code, error: rejection, mutator: mutatorName, serverRef });
+            } catch {
+                // A throwing listener must not escape this `.catch` — that would
+                // manufacture the very unhandled rejection the hook exists to consume.
+            }
+        });
+    };
+
+    const bound: Record<string, (args: unknown) => Transaction> = {};
+
+    for (const [name, mutator] of Object.entries(mutators)) {
+        bound[name] = (args) => {
+            // Derived before the transaction exists: args without the `scopeBy`
+            // field are a caller error, thrown here like any other bad argument.
+            const shardKey = shardOf(args as Record<string, unknown>);
+            const transaction = createTransaction({
+                autoCommit: true,
+                metadata: {
+                    // Keep the predicted rows visible until the authoritative row
+                    // syncs in, instead of TanStack discarding them as stale on
+                    // completion. See DIRECT_TRANSACTION_METADATA_KEY.
+                    [DIRECT_TRANSACTION_METADATA_KEY]: true,
+                    serverRef: mutator.serverRef,
+                },
+                mutationFn: async () => {
+                    let appliedSeq = 0;
+
+                    try {
+                        await runOutboxMutation(async () => {
+                            appliedSeq = await pushSerialized(mutator.serverRef, args as Record<string, unknown>, shardKey);
+                        });
+                    } catch (error) {
+                        // A direct write is never retried, so a refused credential is
+                        // as final as any other coded verdict: report it as one.
+                        throw isAuthReplayFailure(error) ? toNonRetriable(error) : error;
+                    }
+
+                    // Hold the overlay until the synced row lands (the poke echoes
+                    // this client's `lastMutationId`). Skipped when the caller opted
+                    // out — the by-value diff converges in place. Resolved here, not
+                    // at bind time, so collections created after `bindMutators` still
+                    // gate this write.
+                    const checkpoints = resolveCheckpoints(shardKey);
+
+                    if (checkpoints) {
+                        // Register the accepted watermark first: the write IS durable
+                        // now, so if the confirming poke/`settled` frame is dropped
+                        // the registry releases the overlay after its fallback window
+                        // (and reports it) rather than leaving this promise — and the
+                        // transaction's `isPersisted` — pending forever.
+                        checkpoints.acknowledge({ mutationId: appliedSeq });
+
+                        await checkpoints.awaitMutationId(appliedSeq);
+                    }
+                },
+            });
+
+            transaction.mutate(() => {
+                mutator.apply({ collections: context.collections }, args);
+            });
+
+            reportRejection(transaction, name, mutator.serverRef, args);
+
+            return transaction;
+        };
+    }
+
+    return bound as BoundMutators<M>;
+};
+
+/** `defineMutator` + `bindMutators`, both bound to one project's collections map. */
+export interface BoundMutatorApi<TCollections extends CollectionMap> {
+    /** {@link bindMutators}, with `collections` pinned to `TCollections`. */
+    bindMutators: <M extends MutatorMapFor<TCollections>>(client: LunoraClient, context: BindMutatorsContext<TCollections>, mutators: M) => BoundMutators<M>;
+
+    /** {@link defineMutator}, with `context.collections` typed as `TCollections`. */
+    defineMutator: {
+        <TArgs = Record<string, unknown>>(definition: {
+            apply: (context: ClientMutatorContext<TCollections>, args: TArgs) => void;
+            serverRef: string;
+        }): ClientMutatorDef<TArgs, TCollections>;
+        // eslint-disable-next-line @typescript-eslint/unified-signatures -- see `defineMutator`: only the reference overload infers `TArgs`, so merging the two erases it
+        <TArgs>(definition: {
+            apply: (context: ClientMutatorContext<TCollections>, args: TArgs) => void;
+            serverRef: MutatorReference<TArgs>;
+        }): ClientMutatorDef<TArgs, TCollections>;
+    };
+}
+
+/**
+ * Bind the mutator surface to **this project's** collections map, once.
+ *
+ * `Collection` is invariant in its row type, so a shared
+ * `Record<string, Collection<Row, string>>` could neither accept a generated
+ * collection without an `as never` cast nor hand a usable type back to `apply` —
+ * which is why optimistic bodies tended to ignore `context.collections` and close
+ * over module-scope collection variables instead. Declaring the map once here
+ * fixes both ends: `bindMutators` takes the concrete collections cast-free, and
+ * `apply` reads `collections.<name>` at its real row type.
+ *
+ * Runtime-identical to the standalone {@link defineMutator} / {@link bindMutators}
+ * (this returns those very functions); only the types narrow.
+ * @example
+ * const { bindMutators, defineMutator } = initMutators<{ nodes: typeof wholeOutlineCollection }>();
+ * const setText = defineMutator({ apply: ({ collections }, args) => collections.nodes.update(args.id, setter), serverRef: api.mutators.setText });
+ */
+export const initMutators = <TCollections extends CollectionMap>(): BoundMutatorApi<TCollections> =>
+    ({ bindMutators, defineMutator }) as unknown as BoundMutatorApi<TCollections>;

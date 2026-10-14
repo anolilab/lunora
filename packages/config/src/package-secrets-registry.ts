@@ -1,16 +1,23 @@
 /**
- * Per-package secret-requirements registry for `.dev.vars` scaffolding.
+ * Secret-requirements registry for `.dev.vars` scaffolding, keyed by SECRET SOURCE.
  *
- * Each entry maps a `@lunora/*` package name → the secrets it requires at
- * runtime, expressed as `{ key, description, docsUrl }` records. The scaffolder
- * in {@link ./scaffold-dev-variables} reads this registry to emit package-aware
- * `.dev.vars.example` entries (placeholders + inline doc-pointer comments).
+ * Each entry maps a secret source → the secrets it requires at runtime,
+ * expressed as `{ key, description, docsUrl }` records. A source is usually a
+ * `@lunora/*` import specifier — a package name (`@lunora/mail`) or, when the
+ * subpath decides which secrets apply, a subpath (`@lunora/payment/stripe`). A
+ * secret need that no import can tell apart is keyed `<package>:<detail>`
+ * (`@lunora/notify:webPush`, the channel `defineNotify` configures); `:` keeps
+ * it from reading as an import specifier or a Node `#imports` alias.
+ * `secretSourcesFromBindings` (in `infer-bindings.ts`) reports the sources a
+ * project uses, and the scaffolder in {@link ./scaffold-dev-variables} reads this
+ * registry to emit the matching `.dev.vars.example` entries (placeholders +
+ * inline doc-pointer comments).
  *
  * ## Adding a new add-on
  *
  * When a new `@lunora/*` package requires runtime secrets, add one entry to
- * {@link PACKAGE_SECRETS_REGISTRY} keyed by its exact npm package name. Each
- * `SecretEntry` in the array needs:
+ * {@link PACKAGE_SECRETS_REGISTRY} keyed by the source that reports it (see
+ * above). Each `SecretEntry` in the array needs:
  *
  * - `key`         — the env-var name the package reads from `env` (e.g. `RESEND_API_KEY`).
  * - `description` — one line describing the secret and how to obtain it.
@@ -25,6 +32,8 @@
  * are the only allowed values (they must pass `isPlaceholderValue` from
  * scaffold-dev-variables).
  */
+
+import { isSecretKeyName } from "../../../shared/secret-key";
 
 /** A single secret variable required by a package. */
 interface SecretEntry {
@@ -44,6 +53,39 @@ interface SecretEntry {
      */
     placeholderValue: string;
 }
+
+/**
+ * Secrets every Lunora project needs regardless of which capability packages are
+ * installed — scaffolded into `.dev.vars` always. `LUNORA_ADMIN_TOKEN` is the
+ * bearer the local Studio uses to call the worker's admin endpoints (the data
+ * browser, schema edits) in dev; the worker reads the SAME `.dev.vars` value via
+ * its admin gate, so both agree and the Studio authenticates without a prompt.
+ * Without it, every `/_lunora/admin/*` call is `ADMIN_FORBIDDEN` (403).
+ */
+const CORE_SECRETS: ReadonlyArray<SecretEntry> = [
+    {
+        description:
+            "Bearer token the local Lunora Studio uses to call the worker's admin endpoints (data browser, schema edits) in dev. Generate with: openssl rand -hex 32",
+        docsUrl: "https://lunora.sh/docs/packages/studio",
+        key: "LUNORA_ADMIN_TOKEN",
+        placeholderValue: "replace-with-openssl-rand-hex-32",
+    },
+];
+
+/**
+ * Secret keys Lunora mints locally that no PACKAGE declares, so
+ * {@link MINTABLE_SECRET_KEYS} cannot derive them from the map below: they
+ * arrive with a copy-in registry item (`lunora registry add storage`) or under a
+ * dependency's own env-var name. Keep this list next to the map — a key Lunora
+ * scaffolds but never lists here is one nothing will ever fill in.
+ */
+const EXTRA_MINTABLE_SECRET_KEYS: ReadonlyArray<string> = [
+    // better-auth reads its signing secret under its own name in projects that
+    // configure it directly rather than through `AUTH_SECRET`.
+    "BETTER_AUTH_SECRET",
+    // `registry/storage` — the HMAC secret for signed R2 URLs.
+    "STORAGE_SIGNING_SECRET",
+];
 
 /**
  * The canonical registry of per-package secret requirements.
@@ -71,6 +113,32 @@ const PACKAGE_SECRETS_REGISTRY: Readonly<Record<string, ReadonlyArray<SecretEntr
             placeholderValue: "http://localhost:8787",
         },
     ],
+    // Keyed by the SUBPATH, because that is what `FLAG_PACKAGES` reports for
+    // `ctx.r2sql` (the surface is codegen-wired onto ActionCtx; nothing imports
+    // the package). Without these three the emitted ctx-builder fell through to
+    // `r2sqlStub` and every `ctx.r2sql` call threw on the deployed worker, with
+    // nothing in `.dev.vars.example` or the pre-flight to say why.
+    "@lunora/bindings/r2sql": [
+        {
+            description:
+                "Cloudflare API token with R2 SQL read access, for `ctx.r2sql`. Create at https://dash.cloudflare.com/profile/api-tokens with the R2 SQL permission.",
+            docsUrl: "https://lunora.sh/docs/packages/bindings#r2-sql",
+            key: "R2_SQL_TOKEN",
+            placeholderValue: "<your-r2-sql-api-token>",
+        },
+        {
+            description: "Cloudflare account id the R2 SQL queries run against. Falls back to CLOUDFLARE_ACCOUNT_ID when unset.",
+            docsUrl: "https://lunora.sh/docs/packages/bindings#r2-sql",
+            key: "R2_SQL_ACCOUNT_ID",
+            placeholderValue: "<your-cloudflare-account-id>",
+        },
+        {
+            description: "Name of the R2 bucket holding the Iceberg tables `ctx.r2sql` queries.",
+            docsUrl: "https://lunora.sh/docs/packages/bindings#r2-sql",
+            key: "R2_SQL_BUCKET",
+            placeholderValue: "<your-r2-sql-bucket>",
+        },
+    ],
     "@lunora/mail": [
         {
             description: "Resend API key for sending transactional email via @lunora/mail. Obtain at https://resend.com/api-keys",
@@ -79,19 +147,92 @@ const PACKAGE_SECRETS_REGISTRY: Readonly<Record<string, ReadonlyArray<SecretEntr
             placeholderValue: "<your-resend-api-key>",
         },
     ],
-    "@lunora/payment": [
+    // `@lunora/notify` itself needs no secret: each push channel's are keyed by the
+    // channel `defineNotify` configures, so a webPush-only app is not told to set
+    // FCM_* (#1039) — the same reason the payment adapters are keyed by subpath.
+    "@lunora/notify:fcm": [
         {
-            description: "Stripe secret key (sk_test_…). Required when using the Stripe adapter. Obtain at https://dashboard.stripe.com/apikeys",
-            docsUrl: "https://lunora.sh/docs/packages/payment#stripe",
-            key: "STRIPE_SECRET_KEY",
-            placeholderValue: "<your-stripe-secret-key>",
+            description: "Firebase project id for FCM (HTTP v1) push. Found in the Firebase console project settings.",
+            docsUrl: "https://lunora.sh/docs/packages/notify#fcm",
+            key: "FCM_PROJECT_ID",
+            placeholderValue: "<your-firebase-project-id>",
         },
         {
-            description: "Stripe webhook signing secret (whsec_…) for verifying event payloads. Obtain at https://dashboard.stripe.com/webhooks",
-            docsUrl: "https://lunora.sh/docs/packages/payment#stripe",
-            key: "STRIPE_WEBHOOK_SECRET",
-            placeholderValue: "<your-stripe-webhook-secret>",
+            description:
+                "OAuth2 access token for FCM (HTTP v1). Convenient for dev but expires — in production supply a getAccessToken() in defineNotify instead. Obtain via the Google Cloud SDK / a service account.",
+            docsUrl: "https://lunora.sh/docs/packages/notify#fcm",
+            key: "FCM_ACCESS_TOKEN",
+            placeholderValue: "<your-fcm-access-token>",
         },
+    ],
+    "@lunora/notify:webPush": [
+        {
+            description:
+                "Public VAPID key (base64url) for Web Push. Generate a keypair once with: npx web-push generate-vapid-keys — the public key is also shipped to the browser to subscribe.",
+            docsUrl: "https://lunora.sh/docs/packages/notify#web-push",
+            key: "VAPID_PUBLIC_KEY",
+            placeholderValue: "<your-vapid-public-key>",
+        },
+        {
+            description: "Private VAPID key (base64url) for Web Push — the application-server signing key. Generate with: npx web-push generate-vapid-keys",
+            docsUrl: "https://lunora.sh/docs/packages/notify#web-push",
+            key: "VAPID_PRIVATE_KEY",
+            placeholderValue: "<your-vapid-private-key>",
+        },
+        {
+            description: "VAPID `sub` contact — a mailto: or https: URL identifying the application server (e.g. mailto:you@example.com).",
+            docsUrl: "https://lunora.sh/docs/packages/notify#web-push",
+            key: "VAPID_SUBJECT",
+            placeholderValue: "mailto:you@example.com",
+        },
+    ],
+    // `@lunora/payment` itself needs no secret: each provider's pair is keyed by
+    // the adapter SUBPATH an app imports, so `.dev.vars.example` lists only the
+    // provider in use (#1022), not all five.
+    "@lunora/payment/autumn": [
+        {
+            description: "Autumn secret key (am_sk_…) for the Autumn payment adapter. Obtain at https://app.useautumn.com/dev",
+            docsUrl: "https://lunora.sh/docs/packages/payment#autumn",
+            key: "AUTUMN_SECRET_KEY",
+            placeholderValue: "<your-autumn-secret-key>",
+        },
+        {
+            description: "Autumn webhook signing secret for verifying Standard Webhooks event payloads. Obtain from your Autumn dashboard webhook settings.",
+            docsUrl: "https://lunora.sh/docs/packages/payment#autumn",
+            key: "AUTUMN_WEBHOOK_SECRET",
+            placeholderValue: "<your-autumn-webhook-secret>",
+        },
+    ],
+    "@lunora/payment/creem": [
+        {
+            description: "Creem API key for the Creem payment adapter. Obtain at https://www.creem.io/dashboard/developers",
+            docsUrl: "https://lunora.sh/docs/packages/payment#creem",
+            key: "CREEM_API_KEY",
+            placeholderValue: "<your-creem-api-key>",
+        },
+        {
+            description: "Creem webhook signing secret for verifying the creem-signature header. Obtain from your Creem dashboard webhook settings.",
+            docsUrl: "https://lunora.sh/docs/packages/payment#creem",
+            key: "CREEM_WEBHOOK_SECRET",
+            placeholderValue: "<your-creem-webhook-secret>",
+        },
+    ],
+    "@lunora/payment/dodopayments": [
+        {
+            description: "Dodo Payments API key (bearer token) for the Dodo Payments adapter. Obtain at https://app.dodopayments.com/developer/api-keys",
+            docsUrl: "https://lunora.sh/docs/packages/payment#dodo-payments",
+            key: "DODO_PAYMENTS_API_KEY",
+            placeholderValue: "<your-dodo-payments-api-key>",
+        },
+        {
+            description:
+                "Dodo Payments webhook signing secret (whsec_…) for verifying event payloads. Obtain at https://app.dodopayments.com/developer/webhooks",
+            docsUrl: "https://lunora.sh/docs/packages/payment#dodo-payments",
+            key: "DODO_PAYMENTS_WEBHOOK_KEY",
+            placeholderValue: "<your-dodo-payments-webhook-secret>",
+        },
+    ],
+    "@lunora/payment/polar": [
         {
             description: "Polar access token for the Polar payment adapter. Obtain at https://polar.sh/settings/tokens",
             docsUrl: "https://lunora.sh/docs/packages/payment#polar",
@@ -105,6 +246,20 @@ const PACKAGE_SECRETS_REGISTRY: Readonly<Record<string, ReadonlyArray<SecretEntr
             placeholderValue: "<your-polar-webhook-secret>",
         },
     ],
+    "@lunora/payment/stripe": [
+        {
+            description: "Stripe secret key (sk_test_…). Required when using the Stripe adapter. Obtain at https://dashboard.stripe.com/apikeys",
+            docsUrl: "https://lunora.sh/docs/packages/payment#stripe",
+            key: "STRIPE_SECRET_KEY",
+            placeholderValue: "<your-stripe-secret-key>",
+        },
+        {
+            description: "Stripe webhook signing secret (whsec_…) for verifying event payloads. Obtain at https://dashboard.stripe.com/webhooks",
+            docsUrl: "https://lunora.sh/docs/packages/payment#stripe",
+            key: "STRIPE_WEBHOOK_SECRET",
+            placeholderValue: "<your-stripe-webhook-secret>",
+        },
+    ],
 };
 
 /**
@@ -116,6 +271,26 @@ const PACKAGE_SECRETS_REGISTRY: Readonly<Record<string, ReadonlyArray<SecretEntr
  * unknown package names are silently ignored — this makes the call site resilient
  * to future capability flags whose packages have no secrets.
  */
+
+/**
+ * Every secret key Lunora can mint a value for locally (a random 32-byte hex,
+ * like `openssl rand -hex 32`) — the registry entries whose placeholder is that
+ * marker rather than an angle-bracket `<your-…>` one (which means the value comes
+ * from a provider's dashboard), plus {@link EXTRA_MINTABLE_SECRET_KEYS}.
+ *
+ * This set, not a key's NAME, is what makes a value safe to generate. A
+ * secret-LOOKING key nothing here declares (`OPENAI_API_KEY`, a project's own
+ * `*_CLIENT_SECRET`) is provider-issued as far as Lunora knows: minting for it
+ * writes a value the provider rejects at runtime and hides the gap from
+ * `lunora env doctor`, whose job is to report it as unfilled.
+ */
+const MINTABLE_SECRET_KEYS: ReadonlySet<string> = new Set([
+    ...EXTRA_MINTABLE_SECRET_KEYS,
+    ...[...CORE_SECRETS, ...Object.values(PACKAGE_SECRETS_REGISTRY).flat()]
+        .filter((entry) => isSecretKeyName(entry.key) && !entry.placeholderValue.startsWith("<"))
+        .map((entry) => entry.key),
+]);
+
 const secretsForPackages = (packageNames: ReadonlyArray<string>): SecretEntry[] => {
     const result: SecretEntry[] = [];
 
@@ -131,4 +306,4 @@ const secretsForPackages = (packageNames: ReadonlyArray<string>): SecretEntry[] 
 };
 
 export type { SecretEntry };
-export { PACKAGE_SECRETS_REGISTRY, secretsForPackages };
+export { CORE_SECRETS, MINTABLE_SECRET_KEYS, PACKAGE_SECRETS_REGISTRY, secretsForPackages };

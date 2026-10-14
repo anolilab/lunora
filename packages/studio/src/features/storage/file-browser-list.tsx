@@ -8,7 +8,7 @@ import type { TFunction } from "../../i18n/i18n-context";
 import type { StorageReference } from "../../lib/admin";
 import { formatBytes } from "../../lib/internal";
 import type { FileItemHandlers } from "./file-item";
-import { FileActions, FileReferences, FileSelect, useFileItem } from "./file-item";
+import { FileActions, fileItemBindings, FileReferences, FileSelect } from "./file-item";
 
 interface FolderRowProps {
     /** Total table columns to span — varies with the optional "used by" column. */
@@ -67,14 +67,14 @@ interface FileRowProps {
 }
 
 /**
- * One object row. Per-item callbacks come from {@link useFileItem} (one stable
+ * One object row. Per-item callbacks come from {@link fileItemBindings} (one stable
  * binding per render, shared with the gallery tile); the copy/delete actions +
  * select checkbox are the shared {@link FileActions} / {@link FileSelect}, so
  * the testids stay identical between list and grid. The name shows relative to
  * the current folder; the full key still scopes everything.
  */
 const FileRow = ({ busy, copiedKey, handlers, object, prefix, references, selected, showReferences, t }: FileRowProps): ReactElement => {
-    const { copy, download, name, remove, toggle } = useFileItem(object, prefix, handlers);
+    const { copy, download, name, remove, toggle } = fileItemBindings(object, prefix, handlers);
 
     return (
         <TableRow data-testid="fb-row">

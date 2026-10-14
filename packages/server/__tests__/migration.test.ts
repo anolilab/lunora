@@ -1,6 +1,14 @@
 import { describe, expect, it } from "vitest";
 
+import type { MigrationCtx } from "../src/migration";
 import { defineMigration } from "../src/migration";
+
+/**
+ * A transform receives a shard-scoped reader alongside the row. These tests
+ * exercise the declaration shape, not a cross-table read, so the reader is never
+ * touched — but the runner always supplies one, so the call sites do too.
+ */
+const NO_READS = { db: {} } as unknown as MigrationCtx;
 
 /**
  * `defineMigration` is a thin shape constructor: it brands the declaration with
@@ -23,7 +31,7 @@ describe("defineMigration", () => {
         expect(migration.id).toBe("add-migrated-flag");
         expect(migration.table).toBe("documents");
         expect(migration.batchSize).toBe(100);
-        expect(migration.up({ _id: "d1" })).toStrictEqual({ _id: "d1", migrated: true });
+        expect(migration.up({ _id: "d1" }, NO_READS)).toStrictEqual({ _id: "d1", migrated: true });
     });
 
     it("keeps optional fields absent when not supplied", () => {

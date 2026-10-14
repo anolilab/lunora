@@ -1,12 +1,14 @@
-import type { FunctionReference, Unsubscribe } from "@lunora/client";
+import type { FunctionReference, SubscriptionError, SubscriptionErrorCallback, Unsubscribe } from "@lunora/client";
 import type { Page, PaginationResult, PaginationStatus } from "@lunora/client/pagination";
 import { applyLoadMore, derivePaginationStatus, initialPages, rebalance } from "@lunora/client/pagination";
 import type { MaybeRefOrGetter, ShallowRef } from "vue";
 import { onScopeDispose, shallowRef, toValue, watch } from "vue";
 
+import { isBrowser } from "../../../shared/is-browser";
+import { stableWireKey } from "../../../shared/wire-key";
 import { useLunora } from "./lunora-provider";
 
-const buildPageKey = (functionPath: string, pageArgs: Record<string, unknown>): string => `${functionPath}::${JSON.stringify(pageArgs)}`;
+const buildPageKey = (functionPath: string, pageArgs: Record<string, unknown>): string => `${functionPath}::${stableWireKey(pageArgs)}`;
 
 const buildPageArgs = (page: Page, baseArgs: Record<string, unknown>): Record<string, unknown> => {
     return {
@@ -16,6 +18,8 @@ const buildPageArgs = (page: Page, baseArgs: Record<string, unknown>): Record<st
 };
 
 interface PaginatedCoreVueResult<T> {
+    /** The last page subscription error; cleared by the next successful frame, `loadMore`, or an args change. */
+    error: ShallowRef<SubscriptionError | undefined>;
     /** Request another page off the open-ended tail. A no-op unless `status === "CanLoadMore"`. */
     loadMore: (numberItems: number) => void;
     /** Per-page resolved results in order; entries are `undefined` until a page resolves. */
@@ -36,28 +40,30 @@ interface PaginatedCoreVueResult<T> {
 const usePaginatedCore = <T>(
     function_: FunctionReference,
     args: MaybeRefOrGetter<"skip" | Record<string, unknown>>,
-    options: { initialNumItems: number; shardKey?: string },
+    options: { initialNumItems: number; onError?: SubscriptionErrorCallback; shardKey?: string },
 ): PaginatedCoreVueResult<T> => {
     const client = useLunora();
-    const { initialNumItems, shardKey } = options;
+    const { initialNumItems, onError, shardKey } = options;
 
     const pages = shallowRef<Page[]>(initialPages(initialNumItems));
     const pageResults = shallowRef<(PaginationResult<T> | undefined)[]>([]);
+    const error = shallowRef<SubscriptionError | undefined>(undefined);
 
     /**
-     * Each active subscription entry. `currentKey` is mutable so that when
-     * `loadMore` re-keys a pinned page, the callback still stores its result
-     * under the correct key without needing a closure rebind.
+     * The cursor the most recent `loadMore` applied. `pageResults` is only
+     * rebuilt in a pre-flush watcher after `pages` changes, so two synchronous
+     * `loadMore` calls (a double-click before the next flush) would both read the
+     * same stale tail and re-apply the same `nextCursor` — pinning the just-added
+     * open tail into a degenerate empty range and appending a duplicate tail.
+     * Track the last-applied cursor and no-op a repeat within the same flush; the
+     * `pages` watcher clears it once that flush has run.
      */
-    interface SubEntry {
-        currentKey: string;
-        unsub: Unsubscribe;
-    }
+    let lastLoadMoreCursor: null | string | undefined;
 
-    /** Active subscriptions keyed by their ORIGINAL page key (stable across re-keys). */
-    const activeSubs = new Map<string, SubEntry>();
+    /** Active subscriptions keyed by page key; `loadMore` closes and reopens a re-keyed page. */
+    const activeSubs = new Map<string, Unsubscribe>();
 
-    /** Results keyed by `currentKey`, kept in sync when `loadMore` re-keys pages. */
+    /** Results keyed by page key. */
     const resultsByKey = new Map<string, PaginationResult<T>>();
 
     /**
@@ -117,30 +123,28 @@ const usePaginatedCore = <T>(
             wantedKeys.add(buildPageKey(function_["__lunoraRef"], buildPageArgs(page, baseArgs)));
         }
 
-        // Close stale subscriptions (those whose currentKey is no longer wanted).
-        for (const [originalKey, entry] of activeSubs) {
-            if (!wantedKeys.has(entry.currentKey)) {
-                entry.unsub();
-                activeSubs.delete(originalKey);
-                resultsByKey.delete(entry.currentKey);
+        // Close stale subscriptions (those whose key is no longer wanted).
+        for (const [key, unsub] of activeSubs) {
+            if (!wantedKeys.has(key)) {
+                unsub();
+                activeSubs.delete(key);
+                resultsByKey.delete(key);
+                // Drop any pending marker for this key too — a page closed before
+                // its first result would otherwise orphan its key in
+                // `pendingPageKeys` forever, permanently disabling the
+                // `pendingPageKeys.size === 0` split/join rebalance gate below.
+                pendingPageKeys.delete(key);
             }
         }
 
         // Open new subscriptions for pages that have no active sub.
-        const coveredKeys = new Set<string>([...activeSubs.values()].map((subEntry) => subEntry.currentKey));
-
         for (const page of currentPages) {
             const pageArgs = buildPageArgs(page, baseArgs);
             const key = buildPageKey(function_["__lunoraRef"], pageArgs);
 
-            if (coveredKeys.has(key)) {
+            if (activeSubs.has(key)) {
                 continue;
             }
-
-            const entry: SubEntry = {
-                currentKey: key,
-                unsub: undefined as unknown as Unsubscribe,
-            };
 
             // Mark this page as pending until its first result arrives.
             pendingPageKeys.add(key);
@@ -149,12 +153,11 @@ const usePaginatedCore = <T>(
                 function_,
                 pageArgs,
                 (value) => {
-                    // Write to entry.currentKey — this may have been updated by
-                    // `loadMore` re-keying without closing the subscription.
-                    resultsByKey.set(entry.currentKey, value as PaginationResult<T>);
+                    resultsByKey.set(key, value as PaginationResult<T>);
 
                     // This page has resolved; remove from the pending set.
-                    pendingPageKeys.delete(entry.currentKey);
+                    pendingPageKeys.delete(key);
+                    error.value = undefined;
 
                     // Rebuild the indexed array from the key map.
                     const currentBaseArgs = toValue(args) as Record<string, unknown>;
@@ -175,31 +178,73 @@ const usePaginatedCore = <T>(
                         }
                     }
                 },
-                { shardKey },
+                {
+                    onError: (subscriptionError) => {
+                        pendingPageKeys.delete(key);
+                        error.value = subscriptionError;
+
+                        // A tail that fails before its first frame is dropped so
+                        // the feed leaves `LoadingMore` (status falls back to the
+                        // previous page's cursor) and `loadMore` can retry it. The
+                        // first page has nothing to fall back to and stays.
+                        const current = pages.value;
+                        const tail = current.at(-1);
+
+                        if (
+                            current.length > 1 &&
+                            tail &&
+                            !resultsByKey.has(key) &&
+                            buildPageKey(function_["__lunoraRef"], buildPageArgs(tail, baseArgs)) === key
+                        ) {
+                            pages.value = current.slice(0, -1);
+                        }
+
+                        onError?.(subscriptionError);
+                    },
+                    shardKey,
+                },
             );
 
-            entry.unsub = unsub;
-            activeSubs.set(key, entry);
-            coveredKeys.add(key);
+            activeSubs.set(key, unsub);
         }
     };
 
     const teardownAll = (): void => {
-        for (const entry of activeSubs.values()) {
-            entry.unsub();
+        for (const unsub of activeSubs.values()) {
+            unsub();
         }
 
         activeSubs.clear();
         resultsByKey.clear();
+        // Clear pending markers so a fresh args cycle isn't wedged by keys left
+        // behind from subscriptions torn down before their first result.
+        pendingPageKeys.clear();
     };
 
-    // Re-subscribe whenever the base args (or skip) change.
+    // Re-subscribe whenever the base args (or skip) change. Key the watch on a
+    // stable string (not object identity) so an equal-but-new args object — e.g.
+    // a `computed(() => ({ ids: [...store.selected] }))` recomputed with equal
+    // content — never tears down and collapses a multi-page loaded feed back to
+    // page one. The live args are re-read inside the callback (matching use-flag).
     watch(
-        () => toValue(args),
-        (current) => {
+        () => stableWireKey(toValue(args)),
+        () => {
+            // Client-only: an `immediate: true` watcher fires once during
+            // `renderToString` with no unmount to run `onScopeDispose(teardownAll)`
+            // (see `use-presence.ts`'s guard rationale) — skip opening page
+            // subscriptions server-side and leave `pages`/`pageResults` at their
+            // inert initial values.
+            if (!isBrowser()) {
+                return;
+            }
+
+            const current = toValue(args);
+
             teardownAll();
             pages.value = initialPages(initialNumItems);
             pageResults.value = [];
+            error.value = undefined;
+            lastLoadMoreCursor = undefined;
 
             if (current !== "skip") {
                 syncSubscriptions(pages.value, current);
@@ -214,6 +259,10 @@ const usePaginatedCore = <T>(
         () => pages.value,
         (currentPages) => {
             const current = toValue(args);
+
+            // The flush `lastLoadMoreCursor` guards against has run: `pageResults`
+            // is rebuilt below, so the next `loadMore` reads a fresh tail.
+            lastLoadMoreCursor = undefined;
 
             if (current !== "skip") {
                 syncSubscriptions(currentPages, current);
@@ -247,44 +296,55 @@ const usePaginatedCore = <T>(
             return;
         }
 
+        // Re-entrancy guard: a second synchronous call sees the same not-yet-
+        // rebuilt tail result and the same `nextCursor` — skip it so we don't
+        // pin an empty range and append a duplicate tail.
+        if (nextCursor === lastLoadMoreCursor) {
+            return;
+        }
+
         const next = applyLoadMore(pages.value, nextCursor, numberItems);
 
         if (!next) {
             return;
         }
 
+        lastLoadMoreCursor = nextCursor;
+        error.value = undefined;
+
         // `applyLoadMore` pins the open-ended tail: the last page's args shift
-        // from `endCursor: null` to `endCursor: cursor`. Re-key the existing
-        // subscription entry (by updating its `currentKey`) and the result map
-        // so both survive without closing/reopening the socket subscription.
+        // from `endCursor: null` to `endCursor: cursor`. Close the old open-ended
+        // subscription, carry its result to the pinned key, and let the `pages`
+        // watcher's `syncSubscriptions` open a fresh bounded subscription for the
+        // pinned page — an open-ended subscription keeps serving `LIMIT n` rows
+        // and no `splitCursor`, so keeping it alive under the pinned key would
+        // duplicate/drop rows at the page boundary and never SPLIT.
         const oldTail = pages.value.at(-1);
         const newPinnedPage = next.at(-2); // `applyLoadMore` inserts the new tail last
 
         if (oldTail && newPinnedPage) {
             const oldKey = buildPageKey(function_["__lunoraRef"], buildPageArgs(oldTail, currentArgs));
             const newKey = buildPageKey(function_["__lunoraRef"], buildPageArgs(newPinnedPage, currentArgs));
-            const entry = activeSubs.get(oldKey);
+            const unsub = activeSubs.get(oldKey);
 
-            if (entry && oldKey !== newKey) {
-                // Update the entry's key so its callback writes to the right slot.
-                entry.currentKey = newKey;
-                // Re-register under the new key in activeSubs.
-                activeSubs.set(newKey, entry);
-                activeSubs.delete(oldKey);
-                // Migrate the stored result.
+            if (unsub && oldKey !== newKey) {
                 const carried = resultsByKey.get(oldKey);
 
                 if (carried) {
                     resultsByKey.set(newKey, carried);
-                    resultsByKey.delete(oldKey);
                 }
+
+                unsub();
+                activeSubs.delete(oldKey);
+                resultsByKey.delete(oldKey);
+                pendingPageKeys.delete(oldKey);
             }
         }
 
         pages.value = next;
     };
 
-    return { loadMore, pageResults, status };
+    return { error, loadMore, pageResults, status };
 };
 
 export type { PaginatedCoreVueResult };

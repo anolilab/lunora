@@ -1,18 +1,15 @@
-import { useLunora } from "@lunora/react";
 import type { ReactElement } from "react";
-import { useEffect, useState } from "react";
 
+import ErrorAlert from "../../components/error-alert";
 import { Badge } from "../../components/ui/badge";
 import { Card, CardContent } from "../../components/ui/card";
 import { EmptyState } from "../../components/ui/empty-state";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "../../components/ui/table";
+import { useAdminQuery } from "../../hooks/use-admin-query";
 import type { TFunction } from "../../i18n/i18n-context";
 import { useT } from "../../i18n/i18n-context";
 import type { StorageOperation, StorageRuleMetadata, StorageRulesResult } from "../../lib/admin";
 import { ADMIN_FUNCTIONS } from "../../lib/admin";
-import { adminRef, callOptions, errorMessage, fireAndForget } from "../../lib/internal";
-
-const STORAGE_RULES = adminRef(ADMIN_FUNCTIONS.storageRules);
 
 /** Localized label per storage operation. */
 const operationLabel = (t: TFunction, operation: StorageOperation): string =>
@@ -39,43 +36,25 @@ const sortRules = (rules: StorageRuleMetadata[]): StorageRuleMetadata[] =>
  * served by `__lunora_admin__:storageRules`, refreshing on every codegen run.
  */
 
-export const StorageRulesPanel = (): ReactElement => {
-    const client = useLunora();
+const StorageRulesPanel = (): ReactElement => {
     const t = useT();
 
-    const [data, setData] = useState<StorageRulesResult | null>(null);
-    const [error, setError] = useState<null | string>(null);
+    const { data, error, errorSource } = useAdminQuery<StorageRulesResult>(ADMIN_FUNCTIONS.storageRules, {});
 
-    const refresh = async (): Promise<void> => {
-        try {
-            const result = (await client.query(STORAGE_RULES, {}, callOptions(""))) as StorageRulesResult;
-
-            setData({ rules: Array.isArray(result.rules) ? result.rules : [] });
-            setError(null);
-        } catch (error_: unknown) {
-            setError(errorMessage(error_));
-        }
-    };
-
-    useEffect(() => {
-        fireAndForget(refresh());
-    }, [refresh]);
-
-    const rules = data === null ? [] : sortRules(data.rules);
+    // `undefined` until the first read lands; `loaded` gates the empty state so it
+    // only shows after a resolved-but-empty read, not during the initial load.
+    const loaded = data !== undefined;
+    const rules = sortRules(Array.isArray(data?.rules) ? data.rules : []);
 
     return (
         <div className="flex flex-col gap-4" data-testid="lunora-storage-rules-panel">
-            {error !== null && (
-                <p className="text-sm text-destructive" data-testid="storage-rules-error" role="alert">
-                    {error}
-                </p>
-            )}
+            {error !== null && <ErrorAlert error={errorSource} testId="storage-rules-error" />}
 
             <p className="text-sm text-muted-foreground" data-testid="storage-rules-note">
                 {t("Storage rules are declared in code with defineStorageRule and gate ctx.storage access per bucket. This view is read-only.")}
             </p>
 
-            {data !== null && rules.length === 0 ? (
+            {loaded && rules.length === 0 ? (
                 <EmptyState
                     description={t(
                         "No defineStorageRule is wired through .use(storageRules(...)) in this deployment. Add one to gate object access by key prefix.",
@@ -119,3 +98,4 @@ export const StorageRulesPanel = (): ReactElement => {
         </div>
     );
 };
+export default StorageRulesPanel;

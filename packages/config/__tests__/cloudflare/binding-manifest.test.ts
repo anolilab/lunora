@@ -1,0 +1,254 @@
+import { describe, expect, it } from "vitest";
+
+import type { ManifestConfigShape } from "../../src/cloudflare/binding-manifest";
+import { BINDING_MANIFEST_VERSION, buildBindingManifest } from "../../src/cloudflare/binding-manifest";
+
+describe("buildBindingManifest", () => {
+    it("carries every binding section, including the ones lunora cannot provision", () => {
+        expect.assertions(2);
+
+        // KV / Hyperdrive / Vectorize ids are exactly what Lunora warns about and
+        // never writes, because it cannot mint them — so they are exactly what an
+        // external deployer needs listed. Dropping them would leave out the half
+        // the consumer of this manifest most needs.
+        const manifest = buildBindingManifest({
+            d1_databases: [{ binding: "DB", database_id: "d1-id", database_name: "app" }],
+            hyperdrive: [{ binding: "SQL", id: "hd-id" }],
+            kv_namespaces: [{ binding: "CACHE", id: "kv-id" }],
+            r2_buckets: [{ binding: "FILES", bucket_name: "app-files" }],
+            vectorize: [{ binding: "VECTORS", index_name: "app-index" }],
+        });
+
+        expect(manifest.bindings).toStrictEqual([
+            { binding: "DB", resource: "app", resourceId: "d1-id", type: "d1" },
+            { binding: "SQL", resourceId: "hd-id", type: "hyperdrive" },
+            { binding: "CACHE", resourceId: "kv-id", type: "kv" },
+            { binding: "FILES", resource: "app-files", type: "r2" },
+            { binding: "VECTORS", resource: "app-index", type: "vectorize" },
+        ]);
+        expect(manifest.version).toBe(BINDING_MANIFEST_VERSION);
+    });
+
+    it("models workflows declared in exports as class-keyed requirements, and reports other export types", () => {
+        expect.assertions(2);
+
+        const manifest = buildBindingManifest({
+            exports: {
+                OrderPipelineWorkflow: { name: "order-pipeline", type: "workflow" },
+                SomeObject: { type: "durable-object" },
+            },
+        });
+
+        expect(manifest.bindings).toStrictEqual([
+            { binding: "OrderPipelineWorkflow", className: "OrderPipelineWorkflow", resource: "order-pipeline", type: "workflow" },
+        ]);
+        expect(manifest.unknown).toContain("exports.SomeObject");
+    });
+
+    it("models the media, stream, VPC, and artifacts bindings and both pipeline spellings", () => {
+        expect.assertions(2);
+
+        const manifest = buildBindingManifest({
+            artifacts: [{ binding: "ARTIFACTS", namespace: "default" }],
+            media: { binding: "MEDIA" },
+            pipelines: [
+                { binding: "EVENTS", stream: "events-stream" },
+                { binding: "LEGACY", pipeline: "legacy-stream" },
+            ],
+            secrets: { required: ["API_KEY"] },
+            stream: { binding: "STREAM" },
+            vpc_networks: [
+                { binding: "MESH", network_id: "cf1:network" },
+                { binding: "TUNNEL", tunnel_id: "tunnel-uuid" },
+            ],
+            vpc_services: [{ binding: "PRIVATE_API", service_id: "svc-id" }],
+        } as ManifestConfigShape);
+
+        expect(manifest.bindings).toStrictEqual([
+            { binding: "ARTIFACTS", resource: "default", type: "artifacts" },
+            { binding: "MEDIA", type: "media" },
+            { binding: "EVENTS", resource: "events-stream", type: "pipeline" },
+            { binding: "LEGACY", resource: "legacy-stream", type: "pipeline" },
+            { binding: "STREAM", type: "stream" },
+            { binding: "MESH", resourceId: "cf1:network", type: "vpc_network" },
+            { binding: "TUNNEL", resourceId: "tunnel-uuid", type: "vpc_network" },
+            { binding: "PRIVATE_API", resourceId: "svc-id", type: "vpc_service" },
+        ]);
+        expect(manifest.unknown).toStrictEqual([]);
+    });
+
+    it("models a service binding by the Worker it calls, instead of reporting services as unknown", () => {
+        expect.assertions(2);
+
+        const manifest = buildBindingManifest({
+            services: [
+                { binding: "SERVICE_PARSER", service: "document-parser" },
+                { binding: "SERVICE_GATEWAY", entrypoint: "Gateway", service: "llm-gateway" },
+            ],
+        });
+
+        expect(manifest.bindings).toStrictEqual([
+            { binding: "SERVICE_GATEWAY", resource: "llm-gateway", type: "service" },
+            { binding: "SERVICE_PARSER", resource: "document-parser", type: "service" },
+        ]);
+        expect(manifest.unknown).toStrictEqual([]);
+    });
+
+    it("models the Analytics SQL binding apart from Analytics Engine datasets", () => {
+        expect.assertions(2);
+
+        const manifest = buildBindingManifest({
+            analytics: { binding: "ANALYTICS_SQL" },
+            analytics_engine_datasets: [{ binding: "ANALYTICS", dataset: "ANALYTICS" }],
+        });
+
+        expect(manifest.bindings).toStrictEqual([
+            { binding: "ANALYTICS", resource: "ANALYTICS", type: "analytics_engine" },
+            { binding: "ANALYTICS_SQL", type: "analytics_sql" },
+        ]);
+        expect(manifest.unknown).toStrictEqual([]);
+    });
+
+    it("models both AI Search sections instead of reporting them as unknown", () => {
+        expect.assertions(2);
+
+        const manifest = buildBindingManifest({
+            ai_search: [{ binding: "BLOG_SEARCH", instance_name: "blog" }],
+            ai_search_namespaces: [{ binding: "AI_SEARCH", namespace: "default" }],
+        });
+
+        expect(manifest.bindings).toStrictEqual([
+            { binding: "BLOG_SEARCH", resource: "blog", type: "ai_search" },
+            { binding: "AI_SEARCH", resource: "default", type: "ai_search_namespace" },
+        ]);
+        expect(manifest.unknown).toStrictEqual([]);
+    });
+
+    it("marks a durable object sqlite only when this worker declares the class", () => {
+        expect.assertions(1);
+
+        // A `script_name` binding points at ANOTHER worker's class, whose storage
+        // mode is that worker's business — claiming it here would have a deployer
+        // create a namespace with the wrong storage backend.
+        const manifest = buildBindingManifest({
+            durable_objects: {
+                bindings: [
+                    { class_name: "ShardDO", name: "SHARD" },
+                    { class_name: "SessionDO", name: "SESSION" },
+                    { class_name: "OtherDO", name: "REMOTE", script_name: "other-worker" },
+                ],
+            },
+            migrations: [{ new_sqlite_classes: ["ShardDO"] }],
+        });
+
+        expect(manifest.bindings).toStrictEqual([
+            { binding: "REMOTE", className: "OtherDO", type: "durable_object" },
+            { binding: "SESSION", className: "SessionDO", sqlite: false, type: "durable_object" },
+            { binding: "SHARD", className: "ShardDO", sqlite: true, type: "durable_object" },
+        ]);
+    });
+
+    // `k2` (K2 producer bindings, wrangler >= 4.145.0) is tracked, not supported:
+    // no runtime type or local simulator, so it is surfaced by name only.
+    it.each(["mtls_certificates", "k2"])("reports an unmodelled wrangler section (%s) instead of dropping it", (section) => {
+        expect.assertions(2);
+
+        // Silence here is the dangerous outcome: a consumer would under-provision
+        // and find out at runtime. A binding type added to wrangler before it is
+        // added here must degrade to a name, not vanish.
+        const config = { [section]: [{ binding: "BINDING" }], name: "app" } as unknown as ManifestConfigShape;
+        const manifest = buildBindingManifest(config);
+
+        expect(manifest.unknown).toStrictEqual([section]);
+        expect(manifest.bindings).toStrictEqual([]);
+    });
+
+    it("says nothing about the settings every real wrangler config carries", () => {
+        expect.assertions(1);
+
+        // `$schema` heads every scaffolded `wrangler.jsonc` in this repo. Reporting
+        // it as unmodelled on every single run trains the user to ignore the one
+        // signal the design depends on.
+        const config = {
+            $schema: "node_modules/wrangler/config-schema.json",
+            compatibility_date: "2026-04-07",
+            main: "src/index.ts",
+            name: "app",
+            observability: { enabled: true },
+        } as unknown as ManifestConfigShape;
+
+        expect(buildBindingManifest(config).unknown).toStrictEqual([]);
+    });
+
+    it("models the assets binding, and reports per-environment overrides it does not", () => {
+        expect.assertions(2);
+
+        // `assets` carries a real `env` binding and used to be dropped as a
+        // non-binding setting. `env.<name>` genuinely is not modelled — so it has
+        // to be reported, not silently ignored, or a config that declares all its
+        // real bindings under `env.production` yields a manifest describing none.
+        const config = {
+            assets: { binding: "ASSETS", directory: "./public" },
+            env: { production: { d1_databases: [{ binding: "DB" }] } },
+        } as unknown as ManifestConfigShape;
+        const manifest = buildBindingManifest(config);
+
+        expect(manifest.bindings).toStrictEqual([{ binding: "ASSETS", type: "assets" }]);
+        expect(manifest.unknown).toStrictEqual(["env"]);
+    });
+
+    it("reports an entry with no binding name rather than inventing one", () => {
+        expect.assertions(2);
+
+        // `{"binding": ""}` in a document whose whole purpose is being consumed by
+        // an IaC program is the same failure as dropping it, wearing a different
+        // hat — the program gets a resource it cannot wire to anything.
+        const manifest = buildBindingManifest({ r2_buckets: [{ bucket_name: "orphan" }, { binding: "FILES", bucket_name: "files" }] });
+
+        expect(manifest.bindings).toStrictEqual([{ binding: "FILES", resource: "files", type: "r2" }]);
+        expect(manifest.unknown).toStrictEqual(["r2_buckets (entry with no binding name)"]);
+    });
+
+    it("lists var NAMES but never their values", () => {
+        expect.assertions(1);
+
+        // The manifest is written to a path a project commits and CI reads. A
+        // `vars` entry can hold something the project would rather not publish,
+        // and a deployer only needs to know the key exists.
+        const manifest = buildBindingManifest({ vars: { API_BASE: "https://api.example.com", TENANT: "acme" } });
+
+        expect(manifest.vars).toStrictEqual(["API_BASE", "TENANT"]);
+    });
+
+    it("keeps output diff-stable regardless of declaration order", () => {
+        expect.assertions(1);
+
+        const forward = buildBindingManifest({
+            d1_databases: [{ binding: "DB" }],
+            r2_buckets: [{ binding: "Z" }, { binding: "A" }],
+            triggers: { crons: ["*/5 * * * *"] },
+        });
+        const reversed = buildBindingManifest({
+            r2_buckets: [{ binding: "A" }, { binding: "Z" }],
+            triggers: { crons: ["*/5 * * * *"] },
+            d1_databases: [{ binding: "DB" }],
+        });
+
+        expect(forward).toStrictEqual(reversed);
+    });
+
+    it("records queue producers and consumers separately", () => {
+        expect.assertions(1);
+
+        // A consumer is a subscription, not an `env` binding — it still has to
+        // reach the manifest or a deployer creates the queue and nothing drains it.
+        const manifest = buildBindingManifest({
+            queues: { consumers: [{ queue: "emails" }], producers: [{ binding: "EMAIL_QUEUE", queue: "emails" }] },
+        });
+
+        expect(manifest.bindings).toStrictEqual([
+            { binding: "emails", resource: "emails", type: "queue_consumer" },
+            { binding: "EMAIL_QUEUE", resource: "emails", type: "queue_producer" },
+        ]);
+    });
+});

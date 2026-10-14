@@ -1,8 +1,11 @@
 import type { ArgsOf, FunctionReference, ReturnOf } from "@lunora/client";
 import { createQuerySubscription } from "@lunora/client/query";
+import { LunoraError } from "@lunora/errors";
 import type { MaybeRefOrGetter, Ref } from "vue";
 import { onScopeDispose, ref, toValue, watch } from "vue";
 
+import { isBrowser } from "../../../shared/is-browser";
+import { stableWireKey } from "../../../shared/wire-key";
 import { useLunora } from "./lunora-provider";
 import type { UseQueryOptions } from "./types";
 
@@ -30,12 +33,28 @@ const useSubscription = <F extends FunctionReference>(
     const data = ref<ReturnOf<F> | undefined>(undefined) as Ref<ReturnOf<F> | undefined>;
     const error = ref<Error | undefined>(undefined);
 
+    // Keyed on the args' CONTENT (`stableWireKey`), not object identity — a
+    // getter that re-runs and produces equal args must not tear the live
+    // subscription down and re-snapshot. See `use-query`.
     watch(
-        () => toValue(args),
-        (currentArgs, _previous, onCleanup) => {
+        () => stableWireKey(toValue(args)),
+        (_key, _previousKey, onCleanup) => {
+            const currentArgs = toValue(args);
+
+            // Each args generation starts clean: the previous args' value must not
+            // render under the new args until the new subscription's first frame.
+            data.value = undefined;
+            error.value = undefined;
+
             if (currentArgs === "skip") {
-                data.value = undefined;
-                error.value = undefined;
+                return;
+            }
+
+            // Client-only: an `immediate: true` watcher fires once during
+            // `renderToString` with no unmount to run `onCleanup` (see
+            // `use-presence.ts`'s guard rationale) — skip the subscription
+            // server-side and leave `data`/`error` at their inert initial values.
+            if (!isBrowser()) {
                 return;
             }
 
@@ -49,8 +68,18 @@ const useSubscription = <F extends FunctionReference>(
                         error.value = undefined;
                     },
                     onError: (subscriptionError) => {
-                        error.value = new Error(subscriptionError.message);
+                        // Preserve the server-supplied `code` so consumers of the
+                        // `error` ref can branch on the error kind (UNAUTHORIZED
+                        // vs NOT_FOUND, …) instead of only seeing a flat message.
+                        error.value =
+                            subscriptionError.code === undefined
+                                ? new Error(subscriptionError.message)
+                                : new LunoraError(subscriptionError.code, subscriptionError.message);
                         data.value = undefined;
+                        // `UseQueryOptions.onError` is part of this composable's
+                        // surface; forward the raw wire error (code included) so a
+                        // caller that only passes a handler still sees the failure.
+                        options.onError?.(subscriptionError);
                     },
                     onReset: () => {
                         data.value = undefined;

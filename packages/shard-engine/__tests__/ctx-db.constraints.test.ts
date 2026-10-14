@@ -1,0 +1,616 @@
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+import type { ColumnMetaLike, DatabaseWriterLike, SchemaLike, ValidatorLike } from "../src/ctx-db";
+import { createShardCtxDb as createShardContextDatabase, runShardMigrations } from "../src/ctx-db";
+import { ConflictError } from "../src/transaction";
+import createSqliteExec from "./_helpers/node-sqlite";
+
+/**
+ * Exercises the write-layer constraint enforcement (column defaults,
+ * `$onUpdateFn`, and `.unique()` → ConflictError) against a real SQLite engine
+ * — per AGENTS.md these never run against the SQL-string fake, so the UNIQUE
+ * breach and `json_extract` default round-trips behave like a Durable Object.
+ */
+const FIXED_CLOCK = 1_700_000_000_000;
+
+const col = (kind: string, column: Partial<ColumnMetaLike> = {}): ValidatorLike => {
+    return {
+        _meta: { column: { notNull: true, ...column } },
+        kind,
+    };
+};
+
+let harness: ReturnType<typeof createSqliteExec>;
+
+/**
+ * Fresh writer + a `revCalls()` probe over the `$onUpdateFn` counter, so each
+ * test can assert whether the factory fired.
+ */
+const setup = () => {
+    let revs = 0;
+
+    const schema: SchemaLike = {
+        tables: {
+            items: {
+                indexes: [],
+                shape: {
+                    rev: col("number", {
+                        onUpdateFn: () => {
+                            revs += 1;
+
+                            return revs;
+                        },
+                    }),
+                    seq: col("number", { defaultFn: () => 7 }),
+                    slug: col("string", { unique: true }),
+                    status: col("string", { defaultValue: "todo" }),
+                    title: col("string"),
+                },
+            },
+        },
+    };
+
+    runShardMigrations(harness.sql, schema);
+
+    return {
+        revCalls: () => revs,
+        writer: createShardContextDatabase({ clock: () => FIXED_CLOCK, schema, sql: harness.sql }),
+    };
+};
+
+describe("ctx-db constraints", () => {
+    beforeEach(() => {
+        harness = createSqliteExec();
+    });
+
+    afterEach(() => {
+        harness.close();
+    });
+
+    describe("insert defaults", () => {
+        it("fills a `.default()` literal and a `.$defaultFn()` factory when absent", async () => {
+            expect.assertions(2);
+
+            const { writer } = setup();
+
+            const id = await writer.insert("items", { _id: "i1", slug: "a", title: "first" }, { allowExplicitId: true });
+            const doc = await writer.get(id);
+
+            expect(doc?.["status"]).toBe("todo");
+            expect(doc?.["seq"]).toBe(7);
+        });
+
+        it("a provided value overrides the default", async () => {
+            expect.assertions(2);
+
+            const { writer } = setup();
+
+            const id = await writer.insert("items", { _id: "i1", seq: 99, slug: "a", status: "done", title: "first" }, { allowExplicitId: true });
+            const doc = await writer.get(id);
+
+            expect(doc?.["status"]).toBe("done");
+            expect(doc?.["seq"]).toBe(99);
+        });
+
+        it("does not run `$onUpdateFn` on insert", async () => {
+            expect.assertions(2);
+
+            const { revCalls, writer } = setup();
+
+            const id = await writer.insert("items", { _id: "i1", slug: "a", title: "first" }, { allowExplicitId: true });
+            const doc = await writer.get(id);
+
+            expect(doc?.["rev"]).toBeUndefined();
+            expect(revCalls()).toBe(0);
+        });
+    });
+
+    describe("atomic field operators", () => {
+        const operatorSetup = () => {
+            const schema: SchemaLike = {
+                tables: {
+                    counters: {
+                        indexes: [],
+                        shape: {
+                            flag: col("boolean", { defaultValue: false }),
+                            meta: col("any", { notNull: false }),
+                            n: col("number", { defaultValue: 0 }),
+                        },
+                    },
+                },
+            };
+
+            runShardMigrations(harness.sql, schema);
+
+            return createShardContextDatabase({ clock: () => FIXED_CLOCK, schema, sql: harness.sql });
+        };
+
+        it("resolves operators against the stored row on patch, patchIf and patchMany", async () => {
+            expect.assertions(4);
+
+            const writer = operatorSetup();
+
+            await writer.insert("counters", { _id: "c1", n: 10 }, { allowExplicitId: true });
+
+            await writer.patch("c1", { flag: { toggle: true }, n: { increment: 5 } });
+
+            const afterPatch = await writer.get("c1");
+
+            expect(afterPatch).toMatchObject({ flag: true, n: 15 });
+
+            await writer.patchIf?.("counters", "c1", { patch: { n: { multiply: 2 } }, where: { n: 15 } });
+
+            const afterPatchIf = await writer.get("c1");
+
+            expect(afterPatchIf?.["n"]).toBe(30);
+
+            await writer.patchMany?.([{ id: "c1", patch: { n: { decrement: 10 } } }]);
+
+            const afterPatchMany = await writer.get("c1");
+
+            expect(afterPatchMany?.["n"]).toBe(20);
+
+            await writer.patch("c1", { n: { divide: 4 } });
+
+            const afterDivide = await writer.get("c1");
+
+            expect(afterDivide?.["n"]).toBe(5);
+        });
+
+        it("stores an operator-shaped value on an `any` column verbatim", async () => {
+            expect.assertions(1);
+
+            const writer = operatorSetup();
+
+            await writer.insert("counters", { _id: "c1" }, { allowExplicitId: true });
+            await writer.patch("c1", { meta: { increment: 1 } });
+
+            const row = await writer.get("c1");
+
+            expect(row?.["meta"]).toStrictEqual({ increment: 1 });
+        });
+
+        it("takes the caller's post-image verdict on the row it actually writes", async () => {
+            expect.assertions(4);
+
+            const writer = operatorSetup();
+            const seen: [number, number][] = [];
+            const nonNegative = (previous: Record<string, unknown>, next: Record<string, unknown>): boolean => {
+                seen.push([previous["n"] as number, next["n"] as number]);
+
+                return (next["n"] as number) >= 0;
+            };
+
+            await writer.insert("counters", { _id: "c1", n: 3 }, { allowExplicitId: true });
+
+            await writer.patch("c1", { n: { decrement: 1 } }, undefined, { verify: nonNegative });
+
+            await expect(writer.patch("c1", { n: { decrement: 5 } }, undefined, { verify: nonNegative })).rejects.toMatchObject({ code: "FORBIDDEN" });
+
+            const row = await writer.get("c1");
+
+            // The verdict saw the stored value and the RESOLVED result, never the operator.
+            expect(seen).toStrictEqual([
+                [3, 2],
+                [2, -3],
+            ]);
+            expect(row?.["n"]).toBe(2);
+
+            // patchIf threads the same verdict.
+            await expect(writer.patchIf?.("counters", "c1", { patch: { n: { decrement: 9 } }, verify: nonNegative, where: {} })).rejects.toMatchObject({
+                code: "FORBIDDEN",
+            });
+        });
+
+        it("hands the post-image verdict to the .global() writer, which is where the row actually lives", async () => {
+            expect.assertions(2);
+
+            const globalSchema: SchemaLike = {
+                tables: { counters: { indexes: [], shape: { n: col("number") }, shardMode: { kind: "global" } } },
+            };
+            const globalPatch = vi.fn<NonNullable<DatabaseWriterLike["patch"]>>(async () => undefined);
+            const writer = createShardContextDatabase({
+                clock: () => FIXED_CLOCK,
+                globalDb: { patch: globalPatch } as unknown as DatabaseWriterLike,
+                schema: globalSchema,
+                sql: harness.sql,
+            });
+            const options = { verify: () => true };
+
+            await writer.patch("g1", { n: { increment: 1 } }, "counters", options);
+
+            expect(globalPatch).toHaveBeenCalledTimes(1);
+            expect(globalPatch.mock.calls[0]?.[3]).toBe(options);
+        });
+
+        it("rejects an unusable operator and leaves the row alone", async () => {
+            expect.assertions(2);
+
+            const writer = operatorSetup();
+
+            await writer.insert("counters", { _id: "c1", n: 1 }, { allowExplicitId: true });
+
+            await expect(writer.patch("c1", { n: { divide: 0 } })).rejects.toMatchObject({ code: "VALIDATION_ERROR" });
+
+            const row = await writer.get("c1");
+
+            expect(row?.["n"]).toBe(1);
+        });
+    });
+
+    describe("$onUpdateFn", () => {
+        it("restamps the column when delete flips the marker", async () => {
+            expect.assertions(2);
+
+            let revs = 0;
+            const schema: SchemaLike = {
+                tables: {
+                    items: {
+                        indexes: [],
+                        shape: {
+                            deletedAt: col("number", { notNull: false }),
+                            rev: col("number", {
+                                onUpdateFn: () => {
+                                    revs += 1;
+
+                                    return revs;
+                                },
+                            }),
+                            title: col("string"),
+                        },
+                        softDeleteMode: { field: "deletedAt" },
+                    },
+                },
+            };
+
+            runShardMigrations(harness.sql, schema);
+
+            const writer = createShardContextDatabase({ clock: () => FIXED_CLOCK, schema, sql: harness.sql });
+
+            await writer.insert("items", { _id: "i1", title: "first" }, { allowExplicitId: true });
+            await writer.delete("i1");
+
+            const doc = await writer.get("i1");
+
+            expect(doc?.["deletedAt"]).toBe(FIXED_CLOCK);
+            expect(doc?.["rev"]).toBe(1);
+        });
+
+        it("recomputes on each patch that omits the field", async () => {
+            expect.assertions(3);
+
+            const { revCalls, writer } = setup();
+
+            await writer.insert("items", { _id: "i1", slug: "a", title: "first" }, { allowExplicitId: true });
+
+            await writer.patch("i1", { title: "second" });
+
+            const afterFirstPatch = await writer.get("i1");
+
+            expect(afterFirstPatch?.["rev"]).toBe(1);
+
+            await writer.patch("i1", { title: "third" });
+
+            const afterSecondPatch = await writer.get("i1");
+
+            expect(afterSecondPatch?.["rev"]).toBe(2);
+            expect(revCalls()).toBe(2);
+        });
+
+        it("recomputes through patchIf and patchWhere as well", async () => {
+            expect.assertions(3);
+
+            const { writer } = setup();
+
+            await writer.insert("items", { _id: "i1", slug: "a", title: "first" }, { allowExplicitId: true });
+
+            await writer.patchIf?.("items", "i1", { patch: { title: "second" }, where: { title: "first" } });
+
+            const afterPatchIf = await writer.get("i1");
+
+            expect(afterPatchIf?.["rev"]).toBe(1);
+
+            await writer.patchWhere?.("items", { patch: { title: "third" }, where: { slug: "a" } });
+
+            const afterPatchWhere = await writer.get("i1");
+
+            expect(afterPatchWhere?.["rev"]).toBe(2);
+            expect(afterPatchWhere?.["title"]).toBe("third");
+        });
+
+        it("is skipped when the patch sets the field explicitly", async () => {
+            expect.assertions(2);
+
+            const { revCalls, writer } = setup();
+
+            await writer.insert("items", { _id: "i1", slug: "a", title: "first" }, { allowExplicitId: true });
+
+            await writer.patch("i1", { rev: 99 });
+
+            const afterExplicitPatch = await writer.get("i1");
+
+            expect(afterExplicitPatch?.["rev"]).toBe(99);
+            expect(revCalls()).toBe(0);
+        });
+
+        it("recomputes on replace that omits the field, but honors an explicit value", async () => {
+            expect.assertions(2);
+
+            const { writer } = setup();
+
+            await writer.insert("items", { _id: "i1", slug: "a", title: "first" }, { allowExplicitId: true });
+
+            await writer.replace("i1", { slug: "a", title: "auto" });
+
+            const afterAutoReplace = await writer.get("i1");
+
+            expect(afterAutoReplace?.["rev"]).toBe(1);
+
+            await writer.replace("i1", { rev: 42, slug: "a", title: "manual" });
+
+            const afterManualReplace = await writer.get("i1");
+
+            expect(afterManualReplace?.["rev"]).toBe(42);
+        });
+    });
+
+    describe(".unique() constraint", () => {
+        it("a duplicate insert throws a ConflictError (code CONFLICT, status 409)", async () => {
+            expect.assertions(2);
+
+            const { writer } = setup();
+
+            await writer.insert("items", { _id: "i1", slug: "dup", title: "first" }, { allowExplicitId: true });
+
+            const conflict = writer.insert("items", { _id: "i2", slug: "dup", title: "second" }, { allowExplicitId: true });
+
+            await expect(conflict).rejects.toBeInstanceOf(ConflictError);
+            await expect(conflict).rejects.toMatchObject({ code: "CONFLICT", status: 409 });
+        });
+
+        it("a patch that collides with another row's unique value conflicts", async () => {
+            expect.assertions(1);
+
+            const { writer } = setup();
+
+            await writer.insert("items", { _id: "i1", slug: "one", title: "first" }, { allowExplicitId: true });
+            await writer.insert("items", { _id: "i2", slug: "two", title: "second" }, { allowExplicitId: true });
+
+            await expect(writer.patch("i2", { slug: "one" })).rejects.toBeInstanceOf(ConflictError);
+        });
+
+        it("distinct unique values insert cleanly", async () => {
+            expect.assertions(1);
+
+            const { writer } = setup();
+
+            await writer.insert("items", { _id: "i1", slug: "one", title: "first" }, { allowExplicitId: true });
+            await writer.insert("items", { _id: "i2", slug: "two", title: "second" }, { allowExplicitId: true });
+
+            await expect(writer.count("items")).resolves.toBe(2);
+        });
+    });
+
+    describe("composite UNIQUE indexes", () => {
+        /**
+         * `.index(name, fields, {unique: true})` already supports multiple fields —
+         * `runShardMigrations` writes `CREATE UNIQUE INDEX ... ON tbl (a, b)`. This
+         * test pins that end-to-end so a regression in the index emitter or the
+         * write-layer ConflictError mapping surfaces immediately.
+         */
+        const setupTenantSlug = () => {
+            const schema: SchemaLike = {
+                tables: {
+                    pages: {
+                        indexes: [{ fields: ["tenantId", "slug"] as const, name: "by_tenant_slug", unique: true }],
+                        shape: {
+                            slug: col("string"),
+                            tenantId: col("string"),
+                            title: col("string"),
+                        },
+                    },
+                },
+            };
+
+            runShardMigrations(harness.sql, schema);
+
+            return createShardContextDatabase({ clock: () => FIXED_CLOCK, schema, sql: harness.sql });
+        };
+
+        it("(tenantId, slug) duplicate inserts conflict; differing in either column is allowed", async () => {
+            expect.assertions(2);
+
+            const writer = setupTenantSlug();
+
+            await writer.insert("pages", { _id: "p1", slug: "home", tenantId: "t1", title: "Acme home" }, { allowExplicitId: true });
+
+            const collide = writer.insert("pages", { _id: "p2", slug: "home", tenantId: "t1", title: "duplicate" }, { allowExplicitId: true });
+
+            await expect(collide).rejects.toBeInstanceOf(ConflictError);
+
+            // Same slug under a different tenant is allowed.
+            await writer.insert("pages", { _id: "p3", slug: "home", tenantId: "t2", title: "Other home" }, { allowExplicitId: true });
+            // Same tenant with a different slug is allowed.
+            await writer.insert("pages", { _id: "p4", slug: "pricing", tenantId: "t1", title: "Pricing" }, { allowExplicitId: true });
+
+            await expect(writer.count("pages")).resolves.toBe(3);
+        });
+
+        it("a patch that creates a (tenantId, slug) collision is rejected", async () => {
+            expect.assertions(1);
+
+            const writer = setupTenantSlug();
+
+            await writer.insert("pages", { _id: "p1", slug: "a", tenantId: "t1", title: "A" }, { allowExplicitId: true });
+            await writer.insert("pages", { _id: "p2", slug: "b", tenantId: "t1", title: "B" }, { allowExplicitId: true });
+
+            await expect(writer.patch("p2", { slug: "a" })).rejects.toBeInstanceOf(ConflictError);
+        });
+    });
+
+    describe("write-time refinements (`.check()` on column validators)", () => {
+        /**
+         * Build a validator whose `parse()` runs the user predicate, mirroring
+         * what `@lunora/values`' `.check()` returns. The DO ctx-db package has no
+         * runtime dep on `@lunora/values` (kept light on purpose), so unit tests
+         * pass a structural fake — same shape, hand-rolled `parse`.
+         */
+        const checked = (kind: string, predicate: (value: unknown) => boolean, message: string, column: Partial<ColumnMetaLike> = {}): ValidatorLike => {
+            return {
+                _meta: { column: { notNull: true, ...column } },
+                kind,
+                parse(value) {
+                    if (!predicate(value)) {
+                        const error: Error & { code?: string } = new Error(message);
+
+                        error.code = "VALIDATION";
+
+                        throw error;
+                    }
+
+                    return value;
+                },
+            };
+        };
+
+        const setupCheck = () => {
+            const schema: SchemaLike = {
+                tables: {
+                    orders: {
+                        indexes: [],
+                        shape: {
+                            amount: checked("number", (n) => typeof n === "number" && n >= 0, "amount must be non-negative"),
+                            sku: col("string"),
+                            status: col("string", { defaultValue: "pending" }),
+                        },
+                    },
+                },
+            };
+
+            runShardMigrations(harness.sql, schema);
+
+            return createShardContextDatabase({ clock: () => FIXED_CLOCK, schema, sql: harness.sql });
+        };
+
+        it("insert rejects a row that fails the refinement", async () => {
+            expect.assertions(1);
+
+            const writer = setupCheck();
+
+            await expect(writer.insert("orders", { amount: -1, sku: "X" })).rejects.toThrow(/non-negative/u);
+        });
+
+        it("insert accepts a row that passes the refinement", async () => {
+            expect.assertions(2);
+
+            const writer = setupCheck();
+
+            const id = await writer.insert("orders", { _id: "o1", amount: 42, sku: "OK" }, { allowExplicitId: true });
+
+            expect(id).toBe("o1");
+            await expect(writer.count("orders")).resolves.toBe(1);
+        });
+
+        it("patch that flips a field to an invalid value is rejected", async () => {
+            expect.assertions(2);
+
+            const writer = setupCheck();
+
+            await writer.insert("orders", { _id: "o1", amount: 10, sku: "X" }, { allowExplicitId: true });
+
+            await expect(writer.patch("o1", { amount: -5 })).rejects.toThrow(/non-negative/u);
+            // Prior row must remain unchanged after the rejection.
+            await expect(writer.get("o1")).resolves.toMatchObject({ amount: 10 });
+        });
+
+        it("replace runs refinements after applyOnUpdate so defaulted fields are checked", async () => {
+            expect.assertions(1);
+
+            const writer = setupCheck();
+
+            await writer.insert("orders", { _id: "o1", amount: 10, sku: "X" }, { allowExplicitId: true });
+
+            await expect(writer.replace("o1", { amount: -1, sku: "X" })).rejects.toThrow(/non-negative/u);
+        });
+
+        /**
+         * A `null` on an OPTIONAL column means "no value" and must not be validated.
+         * Both backends produce one without the caller asking: `onDelete: "set null"`
+         * patches the FK to null by design, and a `.global()` read returns SQL NULL for
+         * every never-set column, which then rides along in the merged document on the
+         * next patch. A real `v.optional(x)` parser rejects null, so validating it made
+         * a patch of one field fail because of a different column nobody touched.
+         */
+        const setupNullable = () => {
+            const schema: SchemaLike = {
+                tables: {
+                    notes: {
+                        indexes: [],
+                        shape: {
+                            // Mirrors `v.optional(v.string())`: kind "optional", and a parser
+                            // that admits `undefined` but rejects `null`.
+                            note: {
+                                _meta: { column: { notNull: false } },
+                                kind: "optional",
+                                parse(value) {
+                                    if (value !== undefined && typeof value !== "string") {
+                                        throw new Error("Expected string, received null");
+                                    }
+
+                                    return value;
+                                },
+                            },
+                            title: checked("string", (v) => typeof v === "string", "title must be a string"),
+                        },
+                    },
+                },
+            };
+
+            runShardMigrations(harness.sql, schema);
+
+            return createShardContextDatabase({ clock: () => FIXED_CLOCK, schema, sql: harness.sql });
+        };
+
+        it("patch tolerates a null on an optional column it did not touch", async () => {
+            expect.assertions(2);
+
+            const writer = setupNullable();
+
+            await writer.insert("notes", { _id: "n1", title: "first" }, { allowExplicitId: true });
+            // Put the column into the state `onDelete: "set null"` and a D1 read produce.
+            await writer.patch("n1", { note: null });
+
+            // The patch below touches only `title`; before the fix the untouched `note`
+            // rode along in the merged document and failed validation.
+            await writer.patch("n1", { title: "second" });
+
+            await expect(writer.get("n1")).resolves.toMatchObject({ title: "second" });
+            await expect(writer.count("notes")).resolves.toBe(1);
+        });
+
+        it("still rejects a caller-supplied null on insert", async () => {
+            expect.assertions(1);
+
+            const writer = setupNullable();
+
+            // The patch path tolerates a null because it may be one the store itself
+            // produced (`onDelete: "set null"`, or a `.global()` read of an unset
+            // column). Insert has no such excuse — the whole document comes from the
+            // caller — so a null must not be persistable into a column the generated
+            // types promise is `string | undefined`.
+            await expect(writer.insert("notes", { note: null, title: "t" })).rejects.toThrow(/Expected string, received null/u);
+        });
+
+        it("still rejects a null on a required column", async () => {
+            expect.assertions(1);
+
+            const writer = setupNullable();
+
+            await writer.insert("notes", { _id: "n2", title: "ok" }, { allowExplicitId: true });
+
+            // `title` is required, so a null there is a genuine violation and must throw
+            // — the skip above is scoped to optional columns only.
+            await expect(writer.patch("n2", { title: null })).rejects.toThrow(/title must be a string/u);
+        });
+    });
+});

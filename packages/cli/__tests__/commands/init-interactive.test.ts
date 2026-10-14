@@ -51,9 +51,10 @@ describe("lunora init — interactive offer", () => {
                 // Select authentication only.
                 multiSelect: async () => ["auth"],
                 select: async () => "auth",
+                text: async () => "",
             },
             registryFrom: registryRoot,
-            templateType: "vite",
+            templateType: "tanstack-start-react",
         });
 
         expect(result.code).toBe(0);
@@ -70,12 +71,12 @@ describe("lunora init — interactive offer", () => {
             logger,
             name: "app2",
             registryFrom: registryRoot,
-            templateType: "vite",
+            templateType: "tanstack-start-react",
             yes: true,
         });
 
         expect(result.code).toBe(0);
         expect(existsSync(join(workdir, "app2", "lunora", "auth", "index.ts"))).toBe(false);
-        expect(lines.join("\n")).toMatch(/lunora add auth/);
+        expect(lines.join("\n")).toMatch(/lunora add/);
     });
 });

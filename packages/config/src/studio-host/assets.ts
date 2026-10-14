@@ -1,5 +1,6 @@
 import { readFileSync, statSync } from "node:fs";
 import { createRequire } from "node:module";
+import { dirname, isAbsolute, join, normalize, relative } from "node:path";
 
 import type { StudioAssets, WarnLogger } from "./types";
 
@@ -14,7 +15,7 @@ import type { StudioAssets, WarnLogger } from "./types";
  * a host package (`@lunora/vite` / `@lunora/cli`) that has `@lunora/studio`
  * installed — node walks up from the host's `dist` to find it.
  */
-const loadStudioAssets = (logger?: WarnLogger, resolveFrom: string = import.meta.url): StudioAssets | undefined => {
+export const loadStudioAssets = (logger?: WarnLogger, resolveFrom: string = import.meta.url): StudioAssets | undefined => {
     try {
         const require = createRequire(resolveFrom);
 
@@ -50,4 +51,100 @@ export const studioAssetsStamp = (resolveFrom: string = import.meta.url): number
     }
 };
 
-export default loadStudioAssets;
+/**
+ * Absolute path of the built standalone directory — `@lunora/studio`'s
+ * `dist/standalone`, where the `studio.js` entry and its code-split `chunk-*.js`
+ * siblings live — or `undefined` when the studio isn't installed/built. The
+ * standalone bundle is emitted with esbuild `splitting`, so the hosts must serve
+ * the whole directory (not two fixed paths); this resolves its root.
+ */
+export const resolveStandaloneDirectory = (resolveFrom: string = import.meta.url): string | undefined => {
+    try {
+        return dirname(createRequire(resolveFrom).resolve("@lunora/studio/standalone/studio.js"));
+    } catch {
+        return undefined;
+    }
+};
+
+/**
+ * Resolve a plain filename to an absolute path that is a **direct child** of
+ * `directory`, or `undefined` when the name would escape it. Pure path math (no
+ * I/O): the path-traversal guard behind {@link readStandaloneAsset}, extracted so
+ * it can be unit-tested directly. Rejects empty names, `.`/`..`, path separators,
+ * NUL, and any resolved path that isn't a lone segment inside `directory` (a
+ * parent escape, an absolute path, or a nested subdirectory).
+ */
+export const resolveContainedFile = (directory: string, fileName: string): string | undefined => {
+    // A servable asset is a lone filename: reject separators, NUL, and the `.`/`..`
+    // segments up front (a bare `..` has no separator, so guard it explicitly).
+    if (fileName === "" || fileName === "." || fileName === ".." || fileName.includes("/") || fileName.includes("\\") || fileName.includes("\0")) {
+        return undefined;
+    }
+
+    const resolved = normalize(join(directory, fileName));
+    const relativePath = relative(directory, resolved);
+
+    // Belt-and-suspenders after resolving: the result must be a non-empty lone
+    // segment directly under `directory` — no parent escape, no absolute path, no
+    // nested separator.
+    if (relativePath === "" || relativePath.startsWith("..") || isAbsolute(relativePath) || relativePath.includes("/") || relativePath.includes("\\")) {
+        return undefined;
+    }
+
+    return resolved;
+};
+
+/**
+ * Read a single file from the standalone directory by its plain filename (the
+ * `studio.js` entry, a `chunk-*.js`, or a `.map`). **Path-traversal-safe** via
+ * {@link resolveContainedFile}: only a lone filename resolving to a direct child
+ * of the standalone directory is served — any separator, `..`, NUL, or absolute
+ * path is rejected — so a request like `../../etc/passwd` can never escape it.
+ * Returns the bytes, or `undefined` when the studio isn't built or the name
+ * doesn't resolve to a file inside the directory (the host answers that 404).
+ */
+export const readStandaloneAsset = (fileName: string, resolveFrom: string = import.meta.url): Buffer | undefined => {
+    const directory = resolveStandaloneDirectory(resolveFrom);
+
+    if (directory === undefined) {
+        return undefined;
+    }
+
+    const resolved = resolveContainedFile(directory, fileName);
+
+    if (resolved === undefined) {
+        return undefined;
+    }
+
+    try {
+        return readFileSync(resolved);
+    } catch {
+        return undefined;
+    }
+};
+
+/**
+ * True when `pathname` addresses a standalone JS module — the `studio.js` entry
+ * or one of its code-split `chunk-*.js` siblings (and their `.map`s). Shared by
+ * the CLI and Vite hosts so both route the same request shapes to the directory
+ * server; the stylesheet is matched separately at each host's own style path.
+ */
+export const isStandaloneModulePath = (pathname: string): boolean => pathname.endsWith(".js") || pathname.endsWith(".js.map");
+
+/**
+ * Content-Type for a served standalone asset, by extension: `.css` → CSS,
+ * `.map` → JSON (a source map), everything else (the `.js` entry + chunks) →
+ * JavaScript. Shared by the CLI and Vite hosts so the MIME decision lives in one
+ * place.
+ */
+export const assetContentType = (fileName: string): string => {
+    if (fileName.endsWith(".css")) {
+        return "text/css; charset=utf-8";
+    }
+
+    if (fileName.endsWith(".map")) {
+        return "application/json; charset=utf-8";
+    }
+
+    return "text/javascript; charset=utf-8";
+};

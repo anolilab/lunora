@@ -103,10 +103,14 @@ describe("detectFramework", () => {
 });
 
 describe("formatFrameworkDetection", () => {
-    it("formats the class-A composition line", () => {
+    it("formats the class-A composition line without exposing the internal class label", () => {
         expect.hasAssertions();
 
-        expect(formatFrameworkDetection({ class: "A", framework: "react-router" })).toContain("React Router (class A)");
+        const line = formatFrameworkDetection({ class: "A", framework: "react-router" });
+
+        expect(line).toContain("React Router");
+        expect(line).toContain("Cloudflare Worker");
+        expect(line).not.toContain("class A");
     });
 
     it("formats a class-B note that composition is handled separately", () => {
@@ -114,14 +118,18 @@ describe("formatFrameworkDetection", () => {
 
         const line = formatFrameworkDetection({ class: "B", framework: "sveltekit" });
 
-        expect(line).toContain("SvelteKit (class B)");
-        expect(line).toContain("not yet wired here");
+        expect(line).toContain("SvelteKit");
+        expect(line).toContain("framework adapter");
+        expect(line).not.toContain("class B");
     });
 
-    it("formats the standalone (class C) line", () => {
+    it("formats the standalone line without the internal class label", () => {
         expect.hasAssertions();
 
-        expect(formatFrameworkDetection({ class: "C", framework: "none" })).toContain("standalone");
+        const line = formatFrameworkDetection({ class: "C", framework: "none" });
+
+        expect(line).toContain("standalone");
+        expect(line).not.toContain("class C");
     });
 });
 

@@ -1,8 +1,8 @@
-import type { ColumnMetaLike, DatabaseWriterLike, SchemaLike, ValidatorLike } from "@lunora/do";
+import type { ColumnMetaLike, DatabaseWriterLike, SchemaLike, ValidatorLike } from "@lunora/shard-engine";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { createD1CtxDb as createD1ContextDatabase } from "../src/d1-ctx-db";
-import createD1Exec from "./_helpers/node-sqlite-d1";
+import { createD1Exec } from "./_helpers/node-sqlite-d1";
 
 /**
  * Relation-crossing `where` predicates on the D1 (column) dialect. The
@@ -41,8 +41,8 @@ const schema: SchemaLike = {
 let harness: ReturnType<typeof createD1Exec>;
 
 const setup = (): DatabaseWriterLike => {
-    harness.ddl(`CREATE TABLE "users" ("id" TEXT PRIMARY KEY, "_creationTime" INTEGER NOT NULL, "name" TEXT)`);
-    harness.ddl(`CREATE TABLE "messages" ("id" TEXT PRIMARY KEY, "_creationTime" INTEGER NOT NULL, "authorId" TEXT, "body" TEXT)`);
+    harness.ddl(`CREATE TABLE "users" ("id" TEXT PRIMARY KEY, "_creationTime" INTEGER NOT NULL, "_version" INTEGER, "name" TEXT)`);
+    harness.ddl(`CREATE TABLE "messages" ("id" TEXT PRIMARY KEY, "_creationTime" INTEGER NOT NULL, "_version" INTEGER, "authorId" TEXT, "body" TEXT)`);
 
     return createD1ContextDatabase({ clock: () => FIXED_CLOCK, exec: harness.exec, schema });
 };

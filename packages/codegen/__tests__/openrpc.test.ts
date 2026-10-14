@@ -127,6 +127,35 @@ describe("emitOpenRpc", () => {
         expect(method["x-tags"]).toStrictEqual([{ name: "rooms" }]);
     });
 
+    it("types the result from `.output()` when the chain declares one", () => {
+        expect.assertions(2);
+
+        const document = JSON.parse(
+            emitOpenRpc({
+                functions: [
+                    makeFunction({
+                        output: { kind: "object", shape: { count: { kind: "number" } } },
+                    }),
+                ],
+            }),
+        ) as OpenRpcDocument;
+        const { schema } = document.methods[0]!.result;
+
+        expect(schema).toMatchObject({ properties: { count: { type: "number" } }, type: "object" });
+        // The placeholder must be gone, or a generated SDK renders an untyped return.
+        expect(schema["description"]).toBeUndefined();
+    });
+
+    it("falls back to the placeholder result when no `.output()` is declared", () => {
+        expect.assertions(2);
+
+        const document = JSON.parse(emitOpenRpc({ functions: [makeFunction()] })) as OpenRpcDocument;
+        const { schema } = document.methods[0]!.result;
+
+        expect(schema["type"]).toBeUndefined();
+        expect(schema["description"]).toContain("no `.output()` declared");
+    });
+
     it("sorts methods by name and ends with a trailing newline", () => {
         expect.assertions(2);
 

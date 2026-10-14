@@ -1,0 +1,4 @@
+
+# Bearer token the local Lunora Studio uses to call the worker's admin endpoints (data browser, schema edits) in dev. Generate with: openssl rand -hex 32
+# Docs: https://lunora.sh/docs/packages/studio
+LUNORA_ADMIN_TOKEN="replace-with-openssl-rand-hex-32"

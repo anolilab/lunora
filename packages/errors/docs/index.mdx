@@ -1,0 +1,80 @@
+---
+title: "@lunora/errors"
+description: The unified error layer — LunoraError, the error catalog, isLunoraError, invariant/unreachable, and the CLI renderer.
+---
+
+`@lunora/errors` is the single source of truth for how Lunora throws and surfaces
+errors. It provides one `LunoraError` base — shaped to mirror `@visulima/error`'s
+error model, but deliberately not extending it (see
+[Rendering](#rendering)) — plus a
+central catalog mapping each machine `code` to its transport `status`, a human
+`title`, and, where useful, a Markdown `hint` and `docsUrl`. Those
+hints render consistently in the CLI, the Vite error overlay, the Studio UI, and
+the client SDK.
+
+```ts
+import { LunoraError, isLunoraError } from "@lunora/errors";
+
+throw new LunoraError("NOT_FOUND", `no message with id ${id}`);
+
+if (isLunoraError(error)) {
+    // error.code, error.status, error.hint, error.data are all typed
+}
+```
+
+## The catalog
+
+`ERROR_CATALOG` keys the well-known codes (`BAD_REQUEST`, `FORBIDDEN`,
+`NOT_FOUND`, `CONFLICT`, `NOT_UNIQUE`, `VALIDATION_ERROR`, `TOO_MANY_REQUESTS`,
+`RLS_REQUIRED`, `INTERNAL`, …) to `{ status, title, hint?, docsUrl? }`. Passing a
+`code` to `new LunoraError(code)` fills those defaults in; explicit options
+override them.
+
+## Structural matching
+
+`isLunoraError(error)` recognizes an error carrying the Lunora transport shape —
+a string `code`, a numeric `status`, **and** the `type: "VisulimaError"` brand —
+including errors rebuilt from the wire, where `instanceof` can't be trusted. The
+runtime and Durable Object mappers use it to choose the response status.
+
+The brand is deliberate: a foreign error that merely happens to carry
+`code`/`status` (a third-party client, a hand-built object) is **not** matched,
+so it is redacted to `INTERNAL`/500 rather than having its status echoed. Throw a
+`LunoraError` when you want a status honoured.
+
+## Invariants
+
+`invariant(condition, message)` and `unreachable(message)` throw an `INTERNAL`
+`LunoraError`, so even "should never happen" assertions participate in the layer
+(redacted to a generic message on the wire, detailed in logs).
+
+## Throwing in expression position
+
+`throw` is a statement, so it can't sit on the right of `??` or in a ternary arm.
+`raise(code, message?, options?)` can, and — because its declaration is annotated
+`=> never` — it also ends the control-flow path, so the value flowing through it
+narrows:
+
+```ts
+import { raise } from "@lunora/errors";
+
+const thread = (await ctx.db.threads.get(id)) ?? raise("NOT_FOUND", `thread ${id}`);
+//    ^ non-nullable, no assertion needed
+```
+
+Unlike `invariant`/`unreachable`, which are pinned to `INTERNAL`, `raise` takes
+the code — use it for failures the caller can act on.
+
+## Rendering
+
+`LunoraError` mirrors `@visulima/error`'s error model (`type: "VisulimaError"`
+plus `hint`/`title`/`loc`), so `@visulima/error`'s `renderError` renders it
+directly, hint and all. The CLI does this in `@lunora/cli`'s `renderLunoraError` util.
+
+It **does not `extend`** `VisulimaError`: that class's module statically pulls
+the Node-only `renderError` (which imports `node:module`), and bundlers inline
+the whole barrel rather than tree-shaking it — so extending it would drag
+`node:module` into the browser client and workerd bundles. Reimplementing the
+(tiny) shape here is what keeps `@lunora/errors` **zero-dependency**, so its
+class/catalog tree-shakes cleanly into every runtime while staying fully
+renderer-compatible.

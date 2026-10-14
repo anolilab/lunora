@@ -45,6 +45,8 @@ interface FieldSpec {
     nullable: boolean;
     /** True when the column is wrapped in `v.optional(...)`. */
     optional: boolean;
+    /** True when the column carries `.unique()` — generated values must not collide across rows. */
+    unique: boolean;
     /** The validator to generate a value from (the inner one when optional). */
     validator: Validator;
 }
@@ -85,6 +87,7 @@ const describeField = (name: string, validator: Validator): FieldSpec => {
         // mirrors codegen's own `isNullable` (`column?.notNull === false`).
         nullable: meta.column?.notNull === false,
         optional: validator.kind === "optional",
+        unique: meta.column?.unique === true,
         validator: inner,
     };
 };
@@ -155,8 +158,13 @@ const orderTables = (specs: ReadonlyArray<TableSpec>, selected: ReadonlySet<stri
  * exists in `specs`. Self-references add no new table, and edges into tables not
  * present in `specs` are ignored. Used so seeding a child (`only`/`--table`)
  * automatically seeds the parents its `v.id(...)` columns point at.
+ *
+ * `stopAt` names tables the traversal must not descend through — a parent already
+ * covered by `existingIds` (and not requested) won't be seeded, so pulling in its
+ * own parents would seed unrelated grandparent tables. Such a table may still be
+ * added as a parent of a requested table, but its FK edges are not followed.
  */
-const fkParentClosure = (specs: ReadonlyArray<TableSpec>, roots: Iterable<string>): Set<string> => {
+const fkParentClosure = (specs: ReadonlyArray<TableSpec>, roots: Iterable<string>, stopAt: ReadonlySet<string> = new Set()): Set<string> => {
     const byName = new Map(specs.map((spec) => [spec.name, spec]));
     const result = new Set(roots);
     const stack = [...result];
@@ -174,6 +182,12 @@ const fkParentClosure = (specs: ReadonlyArray<TableSpec>, roots: Iterable<string
             continue;
         }
 
+        // A covered parent is a leaf for closure purposes: it is added to the
+        // result (as some requested table's parent) but its own parents are not.
+        if (stopAt.has(name)) {
+            continue;
+        }
+
         for (const field of spec.fields) {
             if (field.fkTable !== undefined && field.fkTable !== name && byName.has(field.fkTable) && !result.has(field.fkTable)) {
                 result.add(field.fkTable);
@@ -185,5 +199,5 @@ const fkParentClosure = (specs: ReadonlyArray<TableSpec>, roots: Iterable<string
     return result;
 };
 
-export { describeField, fkParentClosure, introspectSchema, metaOf, orderTables, unwrapOptional };
-export type { FieldSpec, TableSpec, ValidatorMeta };
+export { fkParentClosure, introspectSchema, metaOf, orderTables, unwrapOptional };
+export type { FieldSpec };

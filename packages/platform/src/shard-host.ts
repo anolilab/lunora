@@ -1,0 +1,182 @@
+/**
+ * `ShardHost` — the provider-neutral contract for a single-writer, durable
+ * shard execution slot. On Cloudflare this is backed by one Durable Object
+ * instance (`state.storage` + `state.blockConcurrencyWhile`); on another
+ * provider it may be an actor, a container, or a single-node process.
+ *
+ * The contract encodes the guarantees the Lunora reactive engine relies on:
+ * 1. **Single-writer serialization** — mutations for one shard key never
+ * interleave; they are serialized through {@link ShardHost.runSerialized}.
+ * 2. **Transactional durability** — a mutation either commits fully or rolls
+ * back; no partial writes are observable.
+ * 3. **Local SQL execution** — the shard can run synchronous-ish SQL against
+ * co-located storage (SQLite on Cloudflare; another embedded or local DB
+ * elsewhere). Reads must observe the current transaction's writes.
+ * 4. **Alarms / scheduled wakeup** — the shard can schedule a future wakeup
+ * for background work (timers, retries, TTL cleanup).
+ * 5. **Background continuation** — `waitUntil` lets work outlive the request
+ * without blocking the response.
+ *
+ * This is an internal contract. User code never sees it; only the runtime,
+ * the shard engine, and host adapters consume it.
+ */
+
+/**
+ * Minimal SQL cursor/row shape returned by the local SQL executor. Kept
+ * generic so a host can wrap SQLite, libSQL, or another embedded store.
+ */
+export type SqlRow = Record<string, unknown>;
+
+/**
+ * The result of one statement: a cursor over its rows.
+ *
+ * The three members the ENGINE uses are required, because a host that omits one
+ * fails at runtime rather than at compile time. That is not hypothetical — an
+ * earlier revision of this contract made `toArray` optional and offered a
+ * `rowsAffected` nothing reads, which meant a host could satisfy the type and
+ * still be unusable.
+ *
+ * Iteration is part of the contract because read paths stream cursors directly
+ * rather than buffering; `toArray` is the buffered form, and `one` is the
+ * exactly-one-row form used by lookups and aggregates.
+ *
+ * `columnNames` / `raw` are the exception and are deliberately optional: no
+ * engine path needs them, one admin read-back reports a better result when they
+ * are there, and that surface degrades explicitly when they are not. Requiring
+ * them would make a host unusable over a detail it can live without.
+ */
+export interface ShardSqlCursor<Row = SqlRow> extends Iterable<Row> {
+    /**
+     * The result columns in SELECT order, as the statement declares them, before
+     * a row object collapses them into keys. Mirrors Cloudflare
+     * `SqlStorageCursor`'s field of the same name.
+     *
+     * Optional, and absent is a supported answer rather than a bug: a host
+     * supplies it when its driver has one (Cloudflare's cursor, better-sqlite3's
+     * `Statement#columns`, `node:sqlite`'s `columns()` from Node 22.14 on) and
+     * omits it otherwise. A reader with it can report a result faithfully;
+     * without it, a zero-row result has no column list at all and two same-named
+     * result columns (`SELECT u.id, o.id`) collapse to one.
+     */
+    readonly columnNames?: string[];
+
+    /**
+     * The single row this statement produced.
+     * @throws when the result does not hold exactly one row.
+     */
+    one: () => Row;
+
+    /**
+     * The rows as positional value arrays aligned with `columnNames` rather
+     * than as objects — the only shape that survives two result columns sharing
+     * a name. Optional alongside `columnNames` (a host offers both or neither),
+     * and consuming it consumes the cursor: call it *or* `toArray`, never both.
+     */
+    raw?: () => IterableIterator<unknown[]>;
+    /** Buffer every row. */
+    toArray: () => Row[];
+}
+
+/**
+ * The local, synchronous-ish SQL executor available inside a shard — the
+ * engine's hot path. Mirrors the shape the DO's `state.storage.sql` exposes.
+ *
+ * Implementations may be sync (Cloudflare `SqlStorage`) or async-backed with
+ * a sync facade; the engine treats it as fire-and-forget within a
+ * {@link ShardHost.transaction} closure.
+ */
+export interface ShardSqlExec {
+    /**
+     * Size of the shard's local database in bytes, when the host can report it
+     * cheaply. Optional: it is used for storage telemetry and quota warnings,
+     * never for correctness, so a host without the number simply omits it.
+     *
+     * Read as a live getter where the host provides one — do not cache it.
+     */
+    readonly databaseSize?: number;
+
+    /** Execute a SQL statement with optional bound parameters. */
+    exec: <Row = SqlRow>(query: string, ...bindings: ReadonlyArray<unknown>) => ShardSqlCursor<Row>;
+}
+
+/**
+ * Alarm scheduling for a shard. Alarms are durable: they survive host
+ * recycling and fire at the requested timestamp.
+ */
+export interface ShardAlarms {
+    /** Delete any pending alarm. */
+    delete: () => Promise<void> | void;
+    /** Read the currently scheduled alarm timestamp, if any. */
+    get: () => Promise<number | null> | number | null;
+
+    /**
+     * Schedule the next alarm. Call {@link ShardAlarms.delete} to clear a
+     * pending alarm — `set` always schedules and never clears.
+     */
+    set: (timestamp: number | Date) => Promise<void> | void;
+}
+
+/**
+ * The core shard host contract. One instance per shard key.
+ *
+ * **At most one LIVE instance per shard key, at any moment — a requirement,
+ * not a convention.** `ShardDO` keeps correctness-bearing state in memory on
+ * that basis: its in-flight dispatch claim (`@lunora/do`'s `InFlightClaims`)
+ * declines a second concurrent delivery of the same idempotency id only because
+ * every delivery for the shard reaches the same instance, and treats a missing
+ * claim as "the holder is gone" only because a replaced instance takes its
+ * running handlers with it. A host that could run two instances of one shard
+ * side by side (a second Node process, a celld failover that overlaps the old
+ * cell) would let an action run twice concurrently. Cloudflare Durable Objects
+ * provide this natively; every other host must enforce it.
+ */
+export interface ShardHost {
+    /** Durable alarm scheduling for the shard. */
+    alarms: ShardAlarms;
+
+    /**
+     * Run `fn` with exclusive ownership of the shard. Concurrent calls are
+     * queued; no two closures run at once for the same shard key. On
+     * Cloudflare this maps to `state.blockConcurrencyWhile`.
+     *
+     * A closure that throws must reject with **the value it threw**, and must
+     * leave the host usable for the next call. Engine errors carry a `code` and
+     * `status` the RPC edge renders from, so a host that lets its platform
+     * substitute a copy silently downgrades every coded error to an internal
+     * fault — and a host that tears itself down on a throw makes an ordinary
+     * application error cost every other caller on that shard.
+     */
+    runSerialized: <T>(function_: () => Promise<T>) => Promise<T>;
+
+    /**
+     * The shard key this host serves — the name the directory resolved to reach
+     * it. Used for telemetry attribution and log correlation ("which shard
+     * emitted this?"), never for routing: the host is already the shard.
+     *
+     * Optional because a host may address a shard by an opaque id with no
+     * human-readable name (Cloudflare's `newUniqueId()` objects have none).
+     * Callers must tolerate `undefined` rather than assume a key exists.
+     */
+    readonly shardKey?: string;
+
+    /**
+     * The shard's local SQL executor. Reads and writes inside a `transaction`
+     * closure observe the transaction's isolation.
+     */
+    sql: ShardSqlExec;
+
+    /**
+     * Run `fn` inside a durable transaction. If `fn` throws, all writes roll
+     * back and the call rejects with **the value `fn` threw** — see
+     * {@link ShardHost.runSerialized} for why the identity matters. Raw
+     * `BEGIN`/`COMMIT`/`ROLLBACK` are forbidden inside the closure; the host
+     * manages the transaction boundary.
+     */
+    transaction: <T>(function_: () => Promise<T>) => Promise<T>;
+
+    /**
+     * Extend the lifetime of background work past the response. Optional on
+     * hosts that don't distinguish request/background lifetimes.
+     */
+    waitUntil?: (promise: Promise<unknown>) => void;
+}

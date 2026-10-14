@@ -47,12 +47,13 @@ interface SchemaTable {
 
 /** Result of parsing a schema source string. */
 type ParseSchemaResult =
-    | { ok: false; reason: "aliased-define-schema" | "no-define-schema" | "non-object-argument" }
-    | { ok: true; tables: ReadonlyArray<SchemaTable> };
+    { ok: false; reason: "aliased-define-schema" | "no-define-schema" | "non-object-argument" } | { ok: true; tables: ReadonlyArray<SchemaTable> };
 
 const OPTIONAL_VALIDATOR_PATTERN = /^v\s*\.\s*optional\s*\(/u;
 const SHARD_BY_PATTERN = /\.shardBy\(\s*["']([^"']+)["']\s*\)/u;
-const GLOBAL_PATTERN = /\.global\(\s*\)/u;
+// Matches both `.global()` and `.global({ backend: "hyperdrive" })` — the latter
+// is what `lunora introspect` emits for a table whose rows live in an external database.
+const GLOBAL_PATTERN = /\.global\(\s*(?:\{[^{}]*\}\s*)?\)/u;
 const QUOTE_PATTERN = /["']/gu;
 
 /**
@@ -142,10 +143,9 @@ const parseIndexes = (initializer: PropertyAssignment): SchemaIndex[] => {
 /** Read the columns of a `defineTable({ ... })` shape, validator text included. */
 const parseColumns = (initializer: PropertyAssignment): SchemaColumn[] => {
     const columns: SchemaColumn[] = [];
-    const defineTableCall = initializer
-        .getInitializer()
-        ?.getDescendantsOfKind(SyntaxKind.CallExpression)
-        .find((call) => call.getExpression().getText() === "defineTable");
+    const initializerNode = initializer.getInitializer();
+    const defineTableCall =
+        initializerNode === undefined ? undefined : collectCalls(initializerNode).find((call) => call.getExpression().getText() === "defineTable");
     const tableShape = defineTableCall?.getArguments()[0];
 
     if (tableShape?.getKind() !== SyntaxKind.ObjectLiteralExpression) {

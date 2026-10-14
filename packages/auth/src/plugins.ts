@@ -29,7 +29,7 @@
  *
  * # Lunora integration with `@lunora/server` plugins
  *
- * To surface a better-auth plugin's API under `ctx.auth.&lt;key>` in
+ * To surface a better-auth plugin's API under `ctx.auth.<key>` in
  * Lunora procedures, wrap it as a `definePlugin` middleware:
  *
  * ```ts
@@ -48,15 +48,94 @@
  * the plugin factories with a Lunora-namespaced import path.
  */
 
+/**
+ * SCIM 2.0 server — directory-driven user provisioning, so an enterprise IdP can
+ * create/update/deactivate users without anyone signing in. Users only (no
+ * `/Groups`), and deactivation needs the `admin` plugin. See the package docs for
+ * the setup and its security-relevant defaults.
+ */
+
+/**
+ * Close self-serve sign-up to invited addresses only: an account is created only
+ * for an email an administrator has invited with `createSignUpInvitation`.
+ * Declares the `signUpInvitation` table it reads. Lunora's own, not a better-auth
+ * re-export.
+ */
+export type { InviteOnlyOptions, IssuedSignUpInvitation, SignUpInvitation } from "./invite-only";
+export { inviteOnly } from "./invite-only";
+
+// OAuth-protected Model Context Protocol servers — pairs with `@lunora/mcp`,
+// whose `createAuthedMcpFetchHandler` mounts a Lunora MCP server behind
+// `requireMcpAuth`. better-auth 1.7 moved these out of its core barrel into
+// `@better-auth/mcp` and renamed `withMcpAuth` to `requireMcpAuth`.
+//
+// `mcp` is better-auth's, recording its `resource` so the Lunora worker can serve
+// the protected-resource and authorization-server metadata outside the auth base
+// path. `requireMcpAuth(auth, handler, opts)` protects a route on the SAME
+// deployment as the authorization server: it reads issuer/JWKS defaults off the
+// auth instance. It is Lunora's wrapper, which makes `resource` required —
+// better-auth's `baseURL` default is an audience no `mcp()` token carries.
+// `mcpDiscoveryPaths` names the two `.well-known` paths, for routing them by hand.
+// `createMcpProtectedRequestHandler(options, handler)` is the split-deployment
+// form — a resource server that only holds verification config, no auth
+// instance. It replaced 1.7.0-rc's `mcpHandler`, which the GA release dropped.
+export type { LunoraRequireMcpAuthOptions } from "./mcp-auth";
+export { mcp, mcpDiscoveryPaths, requireMcpAuth } from "./mcp-auth";
+
+/**
+ * Publish which plugins and social providers this deployment enabled, at
+ * `GET {basePath}/ui-config`, so an auth UI configures itself instead of making
+ * you restate the list client-side. Lunora's own, not a better-auth re-export.
+ */
+export type { UiConfigOptions, UiConfigOrganization, UiConfigPayload } from "./ui-config";
+export { uiConfig } from "./ui-config";
+
+// Programmatic API keys: non-session credentials a user or service mints for
+// scripts, CI, and machine clients, with their own expiry, rate limits, and
+// permissions. Its own package rather than a `better-auth/plugins` subpath.
+export { apiKey } from "@better-auth/api-key";
+
+// Client ID Metadata Documents: a client uses an HTTPS URL as its `client_id`, and
+// the authorization server fetches the client's metadata from it instead of
+// requiring registration. This is the client-registration path MCP 2026-07-28 pins
+// (`metadataProfile: "mcp-2026-07-28"`), and how MCP hosts connect to an
+// `mcp()` server unassisted. Opt-in: nothing fetches until you add the plugin.
+// It needs a fetch transport that keeps those fetches on the public internet —
+// `workersCimdFetch()` from `@lunora/auth/cimd/workers` on Cloudflare Workers,
+// the default export of `@lunora/auth/cimd/node` on Node.
+export { cimd } from "@better-auth/cimd";
+export { createMcpProtectedRequestHandler } from "@better-auth/mcp";
+
+// Turn your app into an OAuth/OpenID Connect provider other apps sign in with.
+// Replaces the `oidcProvider` plugin, which better-auth deprecated in 1.6 and
+// removed in 1.7; the factory is named `oauthProvider` in its new home.
+export { oauthProvider } from "@better-auth/oauth-provider";
+// The OAuth device authorization grant (RFC 8628) as an extension to the
+// provider above, for clients with no browser or no keyboard. 1.7 split it out
+// of `oauthProvider` into its own opt-in plugin, so a provider that does not
+// want the device endpoints no longer serves them. Distinct from the
+// `deviceAuthorization` re-export below, which is the device grant for THIS
+// app's own sign-in rather than for third-party OAuth clients.
+export { oauthDeviceAuthorization } from "@better-auth/oauth-provider";
 export { passkey } from "@better-auth/passkey";
-// `captcha` (Cloudflare Turnstile, reCAPTCHA, hCaptcha, captchafox) has no
-// dedicated `better-auth/plugins/<name>` subpath in better-auth's exports map —
-// it ships only via the `better-auth/plugins` barrel, so it is re-exported from
-// there rather than a per-plugin subpath like the others.
-export { captcha } from "better-auth/plugins";
-// `mcp` + `withMcpAuth` (OAuth-protected Model Context Protocol servers — pairs
-// with `@lunora/mcp`) have no dedicated subpath; both ship via the barrel.
-export { mcp, withMcpAuth } from "better-auth/plugins";
+export { scim } from "@better-auth/scim";
+
+// RFC 6750 step-up: the insufficient-scope failure a protected MCP handler throws
+// so `requireMcpAuth` answers 403 with a `WWW-Authenticate` challenge naming the
+// missing scopes. `createAuthedMcpFetchHandler`'s `challenge` option takes it.
+// better-auth recognises only errors this factory created, so it is re-exported
+// rather than reproduced.
+export { createInsufficientScopeError } from "better-auth/oauth2";
+// `captcha` (Cloudflare Turnstile, reCAPTCHA, hCaptcha, captchafox), `lastLoginMethod`
+// and `oneTap` have no dedicated `better-auth/plugins/<name>` subpath in better-auth's
+// exports map — they ship only via the `better-auth/plugins` barrel, so they are
+// re-exported from there rather than a per-plugin subpath like the others.
+//
+// `lastLoginMethod` records which method a user last signed in with, so an auth UI can
+// highlight it on the next visit; `oneTap` is Google One Tap. Both had their client
+// halves in `./plugins-client` already, and a client plugin without its server half is
+// inert — these close that gap.
+export { captcha, lastLoginMethod, oneTap } from "better-auth/plugins";
 // Access-control builder (`createAccessControl`) — the companion to the `admin`
 // and `organization` plugins for defining custom roles/permissions.
 export { createAccessControl } from "better-auth/plugins/access";
@@ -72,7 +151,6 @@ export { jwt } from "better-auth/plugins/jwt";
 export { magicLink } from "better-auth/plugins/magic-link";
 export { multiSession } from "better-auth/plugins/multi-session";
 export { oAuthProxy } from "better-auth/plugins/oauth-proxy";
-export { oidcProvider } from "better-auth/plugins/oidc-provider";
 export { oneTimeToken } from "better-auth/plugins/one-time-token";
 export { organization } from "better-auth/plugins/organization";
 export { phoneNumber } from "better-auth/plugins/phone-number";

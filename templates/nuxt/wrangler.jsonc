@@ -1,14 +1,41 @@
 {
-    // Nuxt SSR worker — produced by `nuxt build` (Nitro cloudflare_module preset).
-    // This worker handles all page/SSR requests. Lunora realtime (`/_lunora/*` and
-    // ShardDO) lives in a SEPARATE worker; see `wrangler.lunora.jsonc`.
+    // Single Cloudflare Worker for the whole app — Nuxt SSR (via Nitro's
+    // `cloudflare_module` preset) AND the Lunora realtime plane (`/_lunora/*`
+    // + ShardDO, mounted inside Nitro by `@lunora/nuxt`) in one deploy.
     //
-    // In production set NUXT_PUBLIC_LUNORA_URL to the Lunora worker URL so the SSR
-    // loader and the browser client know where to reach `/_lunora/*`.
+    // `main` points at `worker.ts`, a thin wrapper that re-exports Nitro's SSR
+    // handler (`.output/server/index.mjs`, built by `nuxt build`) as `default`
+    // AND the `ShardDO` Durable Object class. Nitro's own output exports only the
+    // SSR handler, so pointing `main` straight at it makes `wrangler deploy` fail
+    // ("Durable Objects … not exported"); the wrapper supplies the missing export
+    // so the `SHARD` binding below resolves.
     "$schema": "node_modules/wrangler/config-schema.json",
     "name": "{{name}}",
-    "main": ".output/server/index.mjs",
-    "compatibility_date": "2026-06-10",
+    "main": "worker.ts",
+    "compatibility_date": "2026-10-01",
     "compatibility_flags": ["nodejs_compat"],
-    "observability": { "enabled": true, "head_sampling_rate": 1 },
+    // Nitro's Cloudflare runtime serves client assets ONLY through `env.ASSETS`
+    // (`if (env.ASSETS && isPublicAssetURL(url.pathname)) return env.ASSETS.fetch(request)`).
+    // Without this binding the SSR HTML renders and every `/_nuxt/*` request
+    // 404s — no hydration, no Lunora client. `.output/public` is the
+    // `cloudflare_module` preset's `output.publicDir`, the same directory Nitro's
+    // own `wrangler deploy … --assets` hint points at.
+    "assets": { "binding": "ASSETS", "directory": ".output/public" },
+    "durable_objects": {
+        "bindings": [
+            { "name": "SHARD", "class_name": "ShardDO" },
+            { "name": "SHARD_REGISTRY", "class_name": "ShardRegistryDO" },
+        ],
+    },
+    "migrations": [{ "tag": "v1", "new_sqlite_classes": ["ShardDO", "ShardRegistryDO"] }],
+    // Blast-radius cap. Alerting is lagging by definition — by the time a
+    // threshold trips, the runaway handler has already run — so a CPU ceiling is
+    // one of the few controls that bounds the damage rather than reporting it.
+    // Raise it if a legitimate handler needs longer.
+    "limits": { "cpu_ms": 30000 },
+    "observability": { "enabled": true, "head_sampling_rate": 1, "logs": { "invocation_logs": true } },
+    // Deploy attribution: the runtime reads this binding and stamps
+    // `deploymentId` / `versionTag` onto every request-log row and Workers-Logs
+    // event, so a spike resolves to a deploy by group-by, not by eyeballing graphs.
+    "version_metadata": { "binding": "CF_VERSION_METADATA" },
 }

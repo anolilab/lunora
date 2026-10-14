@@ -1,6 +1,6 @@
 {
     "name": "@lunora/auth",
-    "version": "0.0.0",
+    "version": "1.0.0-alpha.209",
     "description": "Auth for Lunora — a thin better-auth wrapper: email/password, OAuth, plugins, D1-backed",
     "keywords": [
         "auth",
@@ -25,7 +25,7 @@
         "directory": "packages/auth"
     },
     "files": [
-        "dist",
+        "./dist",
         "__assets__",
         "README.md",
         "LICENSE.md"
@@ -48,9 +48,33 @@
             "types": "./dist/plugins-client.d.ts",
             "import": "./dist/plugins-client.mjs"
         },
+        "./plugins/enterprise": {
+            "types": "./dist/plugins-enterprise.d.ts",
+            "import": "./dist/plugins-enterprise.mjs"
+        },
+        "./plugins/enterprise/client": {
+            "types": "./dist/plugins-enterprise-client.d.ts",
+            "import": "./dist/plugins-enterprise-client.mjs"
+        },
+        "./cimd/node": {
+            "types": "./dist/cimd-node.d.ts",
+            "import": "./dist/cimd-node.mjs"
+        },
+        "./cimd/workers": {
+            "types": "./dist/cimd-workers.d.ts",
+            "import": "./dist/cimd-workers.mjs"
+        },
         "./middleware": {
             "types": "./dist/middleware.d.ts",
             "import": "./dist/middleware.mjs"
+        },
+        "./audit": {
+            "types": "./dist/audit.d.ts",
+            "import": "./dist/audit.mjs"
+        },
+        "./email-guard": {
+            "types": "./dist/email-guard.d.ts",
+            "import": "./dist/email-guard.mjs"
         },
         "./turnstile": {
             "types": "./dist/turnstile.d.ts",
@@ -78,31 +102,68 @@
         },
         "./package.json": "./package.json"
     },
+    "publishConfig": {
+        "access": "public"
+    },
     "scripts": {
         "build": "pnpm exec packem build --development",
         "build:prod": "pnpm exec packem build --production",
-        "lint:eslint": "eslint .",
+        "lint:eslint": "eslint . --max-warnings=0",
         "lint:eslint:fix": "eslint . --fix",
-        "lint:prettier": "prettier --check .",
-        "lint:prettier:fix": "prettier --write .",
+        "lint:prettier": "prettier --check . --ignore-path ../../.prettierignore",
+        "lint:prettier:fix": "prettier --write . --ignore-path ../../.prettierignore",
         "lint:types": "tsc --noEmit",
         "test": "vitest run",
-        "test:coverage": "vitest run --coverage"
+        "test:coverage": "vitest run --coverage",
+        "fallow:audit": "fallow audit",
+        "fallow:dead-code": "fallow dead-code",
+        "fallow:health": "fallow health --score"
     },
     "dependencies": {
+        "@better-auth/api-key": "catalog:auth",
+        "@better-auth/cimd": "catalog:auth",
+        "@better-auth/mcp": "catalog:auth",
+        "@better-auth/oauth-provider": "catalog:auth",
         "@better-auth/passkey": "catalog:auth",
-        "@lunora/server": "workspace:*",
-        "@lunora/values": "workspace:*",
-        "better-auth": "catalog:auth"
+        "@better-auth/scim": "catalog:auth",
+        "@lunora/errors": ">=1.0.0-alpha.51 <2.0.0-0",
+        "@lunora/values": "1.0.0-alpha.64",
+        "@visulima/disposable-email-domains": "catalog:email",
+        "@visulima/email-verifier": "catalog:email",
+        "@visulima/free-email-domains": "catalog:email",
+        "@visulima/redact": "catalog:redact"
     },
     "devDependencies": {
+        "@better-auth/core": "catalog:auth",
+        "@better-auth/sso": "catalog:auth",
+        "@cloudflare/vitest-plugin": "catalog:cloudflare",
         "@cloudflare/workers-types": "catalog:cloudflare",
+        "@lunora/config": "1.0.0-alpha.346",
+        "@lunora/runtime": "1.0.0-alpha.196",
+        "@lunora/server": "1.0.0-alpha.196",
+        "@types/better-sqlite3": "catalog:tooling",
         "@types/node": "catalog:types",
         "@visulima/packem": "catalog:build",
         "@vitest/coverage-v8": "catalog:test",
+        "better-auth": "catalog:auth",
+        "better-sqlite3": "catalog:tooling",
         "esbuild": "catalog:build",
+        "fallow": "catalog:lint",
+        "kysely": "catalog:sql",
         "typescript": "catalog:tsc",
-        "vitest": "catalog:test"
+        "vitest": "catalog:test",
+        "wrangler": "catalog:cloudflare"
+    },
+    "peerDependencies": {
+        "@better-auth/core": ">=1.7.3 <2.0.0-0",
+        "@better-auth/sso": ">=1.7.3 <2.0.0-0",
+        "@lunora/server": ">=1.0.0-alpha.24 <2.0.0-0",
+        "better-auth": ">=1.7.3 <2.0.0-0"
+    },
+    "peerDependenciesMeta": {
+        "@better-auth/sso": {
+            "optional": true
+        }
     },
     "engines": {
         "node": "^22.15.0 || >=24.11.0"

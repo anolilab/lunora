@@ -1,6 +1,9 @@
 ---
 title: Sharding
 description: Default __root__ DO, opt-in .shardBy(), and .global() escape hatch.
+related:
+    - to: /docs/concepts/schema
+    - to: /docs/architecture
 ---
 
 Lunora scales out, but starts on a single shard. New apps get one Durable
@@ -23,12 +26,15 @@ before you hit the wall. See https://lunora.sh/docs/concepts/sharding for
 guidance.
 ```
 
-The warning fires from `ShardDO` after every RPC that touches storage and
-deduplicates itself with a static flag, so it shows up at most once per DO
-instance. Non-`__root__` DOs are never affected, even when they exceed
+The warning fires from `ShardDO` after an RPC write, and deduplicates itself
+with a flag that is **static on the class** — so it shows up at most once per
+isolate, not once per DO instance, and several shards sharing an isolate see one
+warning between them. It is also only on the RPC write path: admin, WebSocket,
+and alarm writes never trigger the check. Treat it as a nudge to go look, not as
+a per-shard alert. Non-`__root__` DOs are never affected, even when they exceed
 1 GB on their own.
 
-Sharding is a single edit:
+On an empty table, sharding is a single edit:
 
 ```ts
 messages: defineTable({ channelId: v.id("channels"), text: v.string() }).shardBy("channelId");
@@ -37,6 +43,87 @@ messages: defineTable({ channelId: v.id("channels"), text: v.string() }).shardBy
 After codegen, every call to `ctx.db.messages.*` routes by `channelId`. A
 chat with 5 000 active channels now spreads across 5 000 DOs, each with its
 own SQLite, CPU budget, and hibernation timer.
+
+## Migrating a populated table
+
+The edit above only moves _future_ rows. Rows written before it stay physically
+in `__root__`'s SQLite, and once the table routes by `channelId` your app never
+reads them again — they are invisible to `ctx.db` and still occupying the bytes
+you sharded to reclaim. Since the 1 GB warning fires precisely when the table is
+already full, that is the case you will actually be in.
+
+Move them with an **export/import round trip**. `lunora import` resolves each
+row's shard key from the deployed schema and fans the batches out per shard, so
+a dump taken before the edit lands on the right DOs after it.
+
+<Callout type="warn">
+    This is not an online migration. The table is unavailable from step 1 until writes resume at step 5, and the dump is inside that window rather than before
+    it. Take the window deliberately: a maintenance flag, or a quiet hour. Snapshot first: [Backups](/docs/concepts/backups) covers point-in-time recovery, and
+    a sharding migration is exactly the change you want it for.
+</Callout>
+
+1. **Stop writes to the table.** Do this _before_ the dump, not after. Export
+   walks the table with successive live reads rather than one snapshot, and step 6
+   deletes the root DO's copies — so anything written during the procedure and
+   missed by the dump is gone. The widest window is between the dump finishing and
+   the deploy taking effect: those writes still land in `__root__` and are deleted
+   later. (A multi-table export widens it further — tables are walked one after
+   another, so a write to an already-finished table is missed too.)
+
+2. **Dump the table while it still lives in the root DO.** `_id` and
+   `_creationTime` survive the round trip, so relations and
+   `_creationTime`-ordered pagination are preserved.
+
+    ```bash
+    lunora export --tables messages --out messages.ndjson --prod --url <url>
+    ```
+
+3. **Add `.shardBy()` and deploy.** The schema-drift gate blocks this deploy on purpose — a shard-mode change is
+   breaking — so pass `--allow-schema-drift` once you are running these steps
+   deliberately.
+
+    ```bash
+    lunora codegen && lunora deploy --allow-schema-drift
+    ```
+
+4. **Load the dump back.** `--verify` checks row parity and fails non-zero on a
+   mismatch, so a partial import is loud.
+
+    ```bash
+    lunora import messages.ndjson --prod --url <url> --yes --verify
+    ```
+
+5. **Resume writes.** Confirm placement in the Studio's **Data** page — its
+   shard picker shows what actually landed where.
+
+6. **Reclaim the root DO's copies.** They are still there, and they are what you
+   sharded to get rid of. In the Studio's **Data** page set the shard key to
+   `__root__`, open the table, and use **Clear table**; it deletes through the
+   schema-aware writer in bounded batches, so search/aggregate/rank companions
+   stay consistent. This step is off the critical path — do it after writes
+   resume, not during the window.
+
+    <Callout type="warn">
+        **Clear table and Delete matching remove rows permanently**, including on a [`.softDelete()`](/docs/concepts/schema) table — reclaiming the storage is
+        the point of this step, and a tombstone reclaims none. The Studio's other two delete affordances, the row editor's **Delete** and the checkbox
+        selection's, keep the table's declared soft-delete behaviour.
+    </Callout>
+
+    Only for `.shardBy()`. A `.global()` migration has to clear the root DO
+    **before** the schema edit, because afterwards the writer refuses the table
+    outright — see
+    [Migrating a populated table to D1](#migrating-a-populated-table-to-d1).
+
+<Callout type="info">
+    Admin reads and writes are addressed to a **shard**, not routed by the schema, which is why step 6 still reaches rows your application can no longer see.
+    `lunora migrate` is the exception and cannot help here: a `defineMigration` transform runs inside one shard's Durable Object and can only `replace` the row
+    it was handed, so it can neither write to another shard nor delete a row. It is the right tool for a backfill within a shard, and the wrong one for moving
+    rows between shards.
+</Callout>
+
+Deleting rows returns their pages to that DO's SQLite freelist for reuse rather
+than shrinking the file, so the size the runtime reports may not fall right
+away. The headroom is real either way.
 
 ## What stays in the root DO
 
@@ -55,6 +142,81 @@ bookmark via the `x-d1-bookmark` header for read-your-writes consistency.
 users: defineTable({ email: v.string(), name: v.string() }).global().index("by_email", ["email"], { unique: true });
 ```
 
+### Migrating a populated table to D1
+
+Adding `.global()` to a table that already has rows moves it to D1, and — like
+adopting `.shardBy()` — the edit only changes where _future_ rows go. The
+export/import round trip moves the existing ones, because `lunora import` routes
+each row by the deployed schema: a table the schema now declares `.global()` goes
+to D1 instead of a shard.
+
+**The order differs from the `.shardBy()` procedure, and the difference matters.**
+There, the root DO's leftover copies are cleared last, from the Studio. Here they
+cannot be cleared at all once the edit lands: the shard's writer refuses to touch
+a table the schema calls global (`GLOBAL_TABLE_NOT_EDITABLE`). The orphaned rows
+are still listed under `__root__` — the table list reads SQLite directly — so the
+Studio will let you try, and the clear is what surfaces the refusal. So the root copies have to go
+**before** the schema edit, while the table is still shard-local and the writer
+still owns it.
+
+<Callout type="warn">
+    Writes are unavailable from step 1 until they resume at step 6. Export is keyset pagination over live reads, not a snapshot, and step 3 deletes the source
+    rows — so a write that lands mid-procedure is lost. Snapshot first: [Backups](/docs/concepts/backups) covers point-in-time recovery.
+</Callout>
+
+1.  **Stop writes to the table.**
+
+2.  **Dump it while it still lives in the root DO.**
+
+    ```bash
+    lunora export --tables users --out users.ndjson --prod --url <url>
+    ```
+
+3.  **Delete the root DO's rows now**, before the schema edit — this is the only
+    window in which anything can. In the Studio's **Data** page set the shard key
+    to `__root__`, open the table, and use **Clear table**.
+
+        <Callout type="warn">
+        **Check inbound relations first.** Clear table deletes through the
+        schema-aware writer, so `onDelete` fires. Any table declaring
+        `r.one("users", { onDelete: "cascade" })` loses its rows too — and those are
+        not in a `--tables users` dump, so they are gone for good. With
+        `onDelete: "restrict"` the clear aborts part-way instead, leaving the table
+        half-emptied. Either dump the dependent tables in the same export and
+        re-import them, or drop the `onDelete` on inbound relations for the
+        migration. Confirm the dump's row count before you clear: between this step
+        and step 5 the export file is the only copy.
+
+    </Callout>
+
+4.  **Add `.global()` to `lunora/schema.ts`**, then generate and deploy. The
+    schema-drift gate blocks a shard-mode change on purpose, so pass
+    `--allow-schema-drift` once you are running these steps deliberately.
+
+    ```bash
+    lunora migrate generate add_users_global   # keeps the committed D1 migration history in step
+    lunora codegen && lunora deploy --allow-schema-drift
+    ```
+
+5.  **Load the dump back.** Rows now route to D1.
+
+    ```bash
+    lunora import users.ndjson --prod --url <url> --yes --verify
+    ```
+
+6.  **Resume writes.**
+
+<Callout type="info">
+    `migrate generate` is bookkeeping here, not a prerequisite: `ensureMigrated` provisions a `.global()` table **and its declared indexes** — including the
+    UNIQUE ones — before the first read or write, so the import would succeed without it. Run it anyway to keep `lunora/migrations/` and its snapshot in step
+    with the schema, which is what the next `generate` diffs against.
+</Callout>
+
+<Callout type="warn">
+    Going global is a one-way trip for atomicity, not just a storage move: a mutation that writes both a sharded table and a `.global()` one is **not** writing
+    both atomically. Make that call before the migration, not after — reversing it is the same round trip again.
+</Callout>
+
 ## Cross-shard reads
 
 `ctx.db.query("messages").collect()` against a `.shardBy()` table that
@@ -62,7 +224,104 @@ doesn't pin a shard is a **fan-out**: codegen routes it through the Query
 Coordinator Worker, which dispatches to every shard and merges the results.
 Avoid this in hot paths.
 
-## See also
+## The shard registry
 
-- [Schema](/docs/concepts/schema)
-- [Architecture](/docs/architecture)
+A Durable Object namespace can't list the objects in it, so a fan-out needs a
+record of which shards exist. That record is `ShardRegistryDO`: each shard
+registers its key the first time it writes a `.shardBy()` table, and cross-shard
+export, `lunora backup`, CDC sync and data migrations fan out to the keys it
+lists.
+
+Vite-first apps (`wrangler.main` set to `virtual:lunora/worker`) are wired
+automatically once the schema has a `.shardBy()` table. With a hand-written
+worker entry, declare the registry on the builder, export the class, and bind it:
+
+```ts
+const app = defineApp<Env>()
+    .shard((env) => env.SHARD)
+    .shardRegistry((env) => env.SHARD_REGISTRY)
+    .build();
+
+export const ShardDO = app.ShardDO;
+export { ShardRegistryDO } from "./lunora/_generated/shardRegistry.js";
+```
+
+```jsonc
+"durable_objects": {
+    "bindings": [
+        { "name": "SHARD", "class_name": "ShardDO" },
+        { "name": "SHARD_REGISTRY", "class_name": "ShardRegistryDO" },
+    ],
+},
+"migrations": [
+    { "tag": "v1", "new_sqlite_classes": ["ShardDO"] },
+    { "tag": "v2", "new_sqlite_classes": ["ShardRegistryDO"] },
+],
+```
+
+`lunora dev` adds the binding and migration for you once the class is exported.
+
+Without a registry, those fan-outs refuse a `.shardBy()` table with a `400`
+naming it rather than quietly covering the default shard alone. Root and
+`.global()` tables don't need a registry.
+
+A key stays registered after its shard empties, so fan-outs keep visiting it
+until you prune:
+
+```bash
+lunora shards prune --dry-run   # list the registered shards that hold no rows
+lunora shards prune             # remove them from the registry
+```
+
+Each listed shard checks its own rows and removes its entry only if it holds
+none of that table. A shard that is written again later registers again on
+that write. A shard the prune can't reach keeps its entry, and the command
+exits non-zero so you can re-run it. Soft-deleted rows still count as rows.
+
+Gate who can write to which shard with `authorizeShard` (see below). A client
+that can invent shard keys can otherwise grow the registry faster than you
+prune it.
+
+<Callout type="warn">
+    Shards register when they write, so a shard whose rows were written **before** the registry was bound is not listed until it is written again. Bind the
+    registry before you shard a populated table. A newly registered shard can take up to 30 seconds to appear in a worker's fan-out, including the worker that
+    served the write.
+</Callout>
+
+## Securing shard access
+
+Once you shard, the shard key is a client-supplied address, so one tenant could
+ask for another tenant's DO. Lunora **default-denies** cross-shard access: a
+request that names a shard other than the default (`shardKey !== defaultShard`,
+default `__root__`), or a fan-out, is rejected with `403`
+(`FORBIDDEN_SHARD` / `FORBIDDEN_FANOUT`) unless the worker opts in. A
+single-DO app never names a non-default shard, so it is unaffected.
+
+Configure `authorizeShard({ identity, shardKey })` on `createWorker` to gate it:
+return `true` to allow, `false` to reject. Derive the decision from the
+verified `identity`, so a caller can only reach shards it owns:
+
+```ts
+createWorker({
+    shardDO: env.SHARD,
+    // Once configured, this runs for EVERY shard the caller names — including the
+    // default one (`__root__`, or your `defaultShardKey`), which is what an
+    // unsharded table resolves to. So let the default through explicitly:
+    // `identity?.userId === shardKey` alone would reject every unsharded RPC in
+    // the app, because no user id equals `"__root__"`.
+    authorizeShard: ({ identity, shardKey }) => shardKey === "__root__" || identity?.userId === shardKey,
+    // Fan-out is a separate, more privileged grant when `authorizeShard` is set.
+    authorizeFanOut: (identity) => identity?.role === "admin",
+});
+```
+
+The simpler gate, when every shard is per-user and you only need "is this caller
+signed in", is `({ identity }) => identity?.userId !== undefined` — it admits the
+default shard without a special case because it never looks at the key.
+
+The alternative is `allowUnauthenticatedShardAccess: true`, which opts into
+open shard/fan-out access. Only reach for it when **every** table is protected
+by per-row [RLS](/docs/concepts/rls). The DO address is then no longer a
+security boundary; each row authorizes itself. The runtime logs a one-time
+security warning while it is on and no `authorizeShard`/`authorizeFanOut` is
+configured.

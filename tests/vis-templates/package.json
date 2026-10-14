@@ -11,10 +11,12 @@
     },
     "devDependencies": {
         "@lunora/codegen": "workspace:*",
+        "@lunora/config": "workspace:*",
         "@lunora/container": "workspace:*",
         "@lunora/db": "workspace:*",
         "@lunora/react": "workspace:*",
         "@lunora/scheduler": "workspace:*",
+        "@lunora/server": "workspace:*",
         "@lunora/values": "workspace:*",
         "@lunora/workflow": "workspace:*",
         "@types/node": "catalog:types",

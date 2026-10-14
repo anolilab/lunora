@@ -1,8 +1,12 @@
+import { serialize } from "node:v8";
+
+import type { IndexKeyEntry, KeyRange, MutationDelta, SocketAttachment, SubscriptionEnvelope, TransactionHeadroomTracker } from "@lunora/shard-engine";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-import type { ShardDOState, SubscriptionOutcome } from "../src/shard-do";
+import { encodeIdentityHeader, encodeUserIdHeader } from "../../../shared/identity-header";
+import { encodeWire } from "../../../shared/wire-codec";
+import type { DispatchBookmark, QueryReadScope, ShardDOState, SubscriptionOutcome } from "../src/shard-do";
 import { ROOT_DO_SIZE_WARN_BYTES, ROOT_SHARD_NAME, ShardDO, subscriptionListDeltas } from "../src/shard-do";
-import type { MutationDelta, SocketAttachment, SubscriptionEnvelope } from "../src/types";
 
 /**
  * The Workers runtime exposes `serializeAttachment` / `deserializeAttachment`
@@ -21,6 +25,13 @@ interface FakeWebSocket {
     serializeAttachment: (value: unknown) => void;
 }
 
+/**
+ * workerd's real `serializeAttachment` ceiling, measured rather than read off a
+ * doc page — 16385 bytes throws, 8192 does not. Pinned against the live runtime
+ * in `__tests__/workerd/shard-do.workerd.test.ts`.
+ */
+const ATTACHMENT_LIMIT_BYTES = 16_384;
+
 const createFakeWebSocket = (): FakeWebSocket => {
     const ws: FakeWebSocket = {
         attachment: undefined,
@@ -36,6 +47,15 @@ const createFakeWebSocket = (): FakeWebSocket => {
         },
         sent: [],
         serializeAttachment(value: unknown) {
+            // The runtime structured-clones the attachment and refuses anything
+            // over its ceiling. Enforced here because the per-socket
+            // subscription cap is only honest if the attachment it produces
+            // actually fits — a fake that accepts any size lets the cap drift
+            // above the budget with every test still green.
+            if (serialize(value).byteLength > ATTACHMENT_LIMIT_BYTES) {
+                throw new RangeError(`A WebSocket 'attachment' cannot be larger than ${String(ATTACHMENT_LIMIT_BYTES)} bytes.`);
+            }
+
             this.attachment = value as SocketAttachment | undefined;
         },
     };
@@ -72,7 +92,7 @@ class TestShard extends ShardDO {
     /** Bookmark observed by `handleRpc` on the most recent request. */
     public observedInboundBookmark: string | undefined;
 
-    /** When set, `handleRpc` echoes this value via `setOutboundBookmark`. */
+    /** When set, `handleRpc` echoes this value through the dispatch's bookmark sink. */
     public bookmarkToEmit: string | undefined;
 
     /** UserId observed by `handleRpc` on the most recent request. */
@@ -81,14 +101,23 @@ class TestShard extends ShardDO {
     /** Identity envelope observed by `handleRpc` on the most recent request. */
     public observedIdentity: Record<string, unknown> | undefined;
 
-    public override async handleRpc(functionPath: string, args: Record<string, unknown>): Promise<unknown> {
+    public override async handleRpc(
+        functionPath: string,
+        args: Record<string, unknown>,
+        _headroom?: TransactionHeadroomTracker,
+        _scope?: QueryReadScope,
+        bookmarks?: DispatchBookmark,
+    ): Promise<unknown> {
         this.rpcCalls.push({ args, functionPath });
         this.observedInboundBookmark = this.getInboundBookmark();
         this.observedUserId = this.getCurrentUserId();
         this.observedIdentity = this.getCurrentIdentity();
 
-        if (this.bookmarkToEmit !== undefined) {
-            this.setOutboundBookmark(this.bookmarkToEmit);
+        if (this.bookmarkToEmit !== undefined && bookmarks !== undefined) {
+            // Through `Object.assign` rather than `bookmarks.value = …`: the sink
+            // arrives as a parameter, and `no-param-reassign` forbids writing a
+            // parameter's properties directly.
+            Object.assign(bookmarks, { value: this.bookmarkToEmit });
         }
 
         return this.rpcResult;
@@ -115,6 +144,9 @@ class TestShard extends ShardDO {
  * having `handleRpc` record a changed table, which `fetch` flushes.
  */
 class ReexecShard extends ShardDO {
+    /** The protected per-socket cap, surfaced so the suite asserts against the real number. */
+    public static readonly cap = ShardDO.MAX_SUBSCRIPTIONS_PER_SOCKET;
+
     /** functionPath -> the outcome `executeSubscription` should return next. */
     public readonly outcomes = new Map<string, SubscriptionOutcome>();
 
@@ -127,14 +159,20 @@ class ReexecShard extends ShardDO {
     /** userId visible inside the most recent `executeSubscription` call. */
     public userIdDuringExec: string | undefined;
 
+    /** args visible inside the most recent `executeSubscription` call. */
+    public argsDuringExec: Record<string, unknown> | undefined;
+
     /** When set, `handleRpc` records this table as changed (simulates a write). */
     public changedTableOnRpc: string | undefined;
+
+    /** When set alongside `changedTableOnRpc`, threaded through as the write's index position. */
+    public changedIndexKeysOnRpc: ReadonlyArray<IndexKeyEntry> | undefined;
 
     public override async handleRpc(): Promise<unknown> {
         this.userIdDuringRpc = this.getCurrentUserId();
 
         if (this.changedTableOnRpc !== undefined) {
-            this.recordChangedTable(this.changedTableOnRpc);
+            this.recordChangedTable(this.changedTableOnRpc, this.changedIndexKeysOnRpc);
         }
 
         return { ok: true };
@@ -161,10 +199,11 @@ class ReexecShard extends ShardDO {
 
     protected override executeSubscription(
         functionPath: string,
-        _args: Record<string, unknown>,
+        args: Record<string, unknown>,
         identity?: { identity?: Record<string, unknown>; userId?: string },
     ): Promise<SubscriptionOutcome | null> {
         this.execCount += 1;
+        this.argsDuringExec = args;
         // Identity is now threaded EXPLICITLY by the caller (mirrors the codegen
         // `buildCtx`, which reads `options.identity` for subscriptions instead of
         // the shared per-request field). The subscription bridge always passes an
@@ -174,10 +213,17 @@ class ReexecShard extends ShardDO {
 
         const outcome = this.outcomes.get(functionPath);
 
-        // Clone the table set so the production code can't mutate the fixture.
-        return Promise.resolve(outcome ? { result: outcome.result, tables: new Set(outcome.tables) } : null);
+        // Clone the table set (and ranges, when the fixture supplies them) so
+        // the production code can't mutate the fixture.
+        return Promise.resolve(
+            outcome
+                ? { ranges: outcome.ranges === undefined ? undefined : new Map(outcome.ranges), result: outcome.result, tables: new Set(outcome.tables) }
+                : null,
+        );
     }
 }
+
+const SUBSCRIPTION_CAP = ReexecShard.cap;
 
 describe("shardDO", () => {
     let state: ReturnType<typeof createFakeState>;
@@ -218,15 +264,20 @@ describe("shardDO", () => {
         expect(response.status).toBe(400);
     });
 
-    it("returns 500 with mapped error when handleRpc throws", async () => {
-        expect.assertions(2);
+    it("returns 500 with a redacted message when handleRpc throws", async () => {
+        expect.assertions(4);
 
         shard.rpcResult = undefined;
         const failing = new TestShard(state, {});
+        const sensitive = "table users column secret_token does not exist";
 
         failing.handleRpc = async () => {
-            throw new Error("boom");
+            throw new Error(sensitive);
         };
+
+        // The unhandled throw is logged server-side; the client must only see a
+        // generic message. Silence + capture the diagnostic.
+        const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
 
         const request = new Request("https://shard.internal/rpc", {
             body: JSON.stringify({ args: {}, functionPath: "fail" }),
@@ -236,7 +287,42 @@ describe("shardDO", () => {
         const response = await failing.fetch(request);
 
         expect(response.status).toBe(500);
-        await expect(response.json()).resolves.toMatchObject({ error: { code: "RPC_FAILED", message: "boom" } });
+
+        const text = await response.text();
+
+        // The raw thrown message must never reach the client.
+        expect(text).not.toContain(sensitive);
+        expect(JSON.parse(text)).toMatchObject({ error: { code: "RPC_FAILED", message: "internal error" } });
+        // ...but it is logged server-side for diagnosis.
+        expect(errorSpy).toHaveBeenCalledWith("[@lunora/do] internal error:", expect.anything());
+
+        errorSpy.mockRestore();
+    });
+
+    it("hands the real error to a worker that asks for it, and to no one else", async () => {
+        expect.assertions(3);
+
+        const failing = new TestShard(state, {});
+
+        failing.handleRpc = async () => {
+            throw new TypeError("db down");
+        };
+
+        const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+        const rpc = (headers: Record<string, string>) =>
+            failing.fetch(new Request("https://shard.internal/rpc", { body: JSON.stringify({ args: {}, functionPath: "fail" }), headers, method: "POST" }));
+
+        const unasked = await rpc({});
+
+        expect(unasked.headers.get("x-lunora-error-detail")).toBeNull();
+
+        const asked = await rpc({ "x-lunora-want-error-detail": "1" });
+        const detail = JSON.parse(decodeURIComponent(asked.headers.get("x-lunora-error-detail")!)) as Record<string, string>;
+
+        expect(detail).toMatchObject({ message: "db down", name: "TypeError" });
+        expect(detail.stack).toContain("TypeError: db down");
+
+        errorSpy.mockRestore();
     });
 
     it("subscribe updates attachment registry and acks", async () => {
@@ -311,6 +397,64 @@ describe("shardDO", () => {
         expect(other.sent).toHaveLength(1);
         expect(unrelated.sent).toHaveLength(0);
         expect(JSON.parse(matching.sent[0]!)).toMatchObject({ delta: { op: "insert", table: "messages" }, id: "a", type: "delta" });
+    });
+
+    it("broadcastDelta does not deliver to a socket whose credential expired", () => {
+        expect.assertions(2);
+
+        const live = createFakeWebSocket();
+        const lapsed = createFakeWebSocket();
+
+        shard.registerSocket(live, { subs: { a: { table: "messages" } } });
+        shard.registerSocket(lapsed, { expiresAt: 1000, subs: { b: { table: "messages" } } });
+
+        shard.emit({ key: "m1", op: "insert", row: { id: "m1" }, table: "messages" });
+
+        expect(live.sent).toHaveLength(1);
+        // The expired socket gets the TOKEN_EXPIRED drop, never the row.
+        expect(lapsed.sent.map((raw) => (JSON.parse(raw) as { code?: string; type: string }).code)).toStrictEqual(["TOKEN_EXPIRED"]);
+    });
+
+    it("broadcastDelta visits own subscriptions only, never inherited ones", () => {
+        expect.assertions(2);
+
+        // Pins the iteration choice. The per-socket loop walks `Object.keys`,
+        // which is own-only — the same set `Object.entries` gave before it. A
+        // bare `for...in` measures marginally faster and would pass every other
+        // test in this file, but it also walks the prototype chain, so a polluted
+        // `Object.prototype` would turn into phantom subscriptions delivered to
+        // every socket. Cheap to state, invisible otherwise.
+        const socket = createFakeWebSocket();
+        const subs = Object.create({ inherited: { table: "messages" } }) as Record<string, { table: string }>;
+
+        subs["own"] = { table: "messages" };
+
+        shard.registerSocket(socket, { subs });
+        shard.emit({ key: "m1", op: "insert", row: { id: "m1" }, table: "messages" });
+
+        expect(socket.sent).toHaveLength(1);
+        expect(JSON.parse(socket.sent[0]!)).toMatchObject({ id: "own" });
+    });
+
+    it("broadcastDelta wire-encodes the row, so a bigint column does not throw", () => {
+        expect.assertions(2);
+
+        const ws = createFakeWebSocket();
+
+        shard.registerSocket(ws, { subs: { a: { table: "messages" } } });
+
+        // A raw `JSON.stringify` throws on a bare `bigint` — this must not throw,
+        // and the delivered frame must carry the `encodeWire`-tagged form (the
+        // same shape `pushSubscriptionData` sends) rather than dropping/mangling it.
+        expect(() => {
+            shard.emit({ key: "m1", op: "insert", row: { count: 9_007_199_254_740_993n, id: "m1" }, table: "messages" });
+        }).not.toThrow();
+
+        expect(JSON.parse(ws.sent[0]!)).toMatchObject({
+            delta: { op: "insert", row: { count: encodeWire(9_007_199_254_740_993n), id: "m1" }, table: "messages" },
+            id: "a",
+            type: "delta",
+        });
     });
 
     it("broadcastDelta filters by query.args — same key matches, different value skips", () => {
@@ -411,7 +555,7 @@ describe("shardDO", () => {
         expect(shard.observedInboundBookmark).toBe("bm-123");
     });
 
-    it("echoes setOutboundBookmark on the response x-d1-bookmark header", async () => {
+    it("echoes the dispatch bookmark sink on the response x-d1-bookmark header", async () => {
         expect.assertions(1);
 
         shard.bookmarkToEmit = "bm-after-write";
@@ -426,7 +570,7 @@ describe("shardDO", () => {
         expect(response.headers.get("x-d1-bookmark")).toBe("bm-after-write");
     });
 
-    it("omits x-d1-bookmark when the handler does not call setOutboundBookmark", async () => {
+    it("omits x-d1-bookmark when the handler writes no bookmark", async () => {
         expect.assertions(1);
 
         const request = new Request("https://shard.internal/rpc", {
@@ -599,6 +743,22 @@ describe("shardDO identity capture", () => {
         expect(shard.observedUserId).toBe("user_42");
     });
 
+    it("decodes a base64url-encoded x-lunora-userid (non-Latin-1) back to the original id via getCurrentUserId()", async () => {
+        expect.assertions(1);
+
+        const userId = "田中太郎";
+
+        await shard.fetch(
+            new Request("https://shard.internal/rpc", {
+                body: JSON.stringify({ args: {}, functionPath: "messages:list" }),
+                headers: { "content-type": "application/json", "x-lunora-userid": encodeUserIdHeader(userId) },
+                method: "POST",
+            }),
+        );
+
+        expect(shard.observedUserId).toBe(userId);
+    });
+
     it("parses x-lunora-identity JSON envelope into a plain object", async () => {
         expect.assertions(1);
 
@@ -630,6 +790,47 @@ describe("shardDO identity capture", () => {
 
         expect(response.status).toBe(200);
         expect(shard.observedIdentity).toBeUndefined();
+    });
+
+    it("parses a base64url-encoded x-lunora-identity to the SAME object the legacy raw-JSON header produces (rollout order-independence)", async () => {
+        expect.assertions(2);
+
+        // Latin-1-only claims deliberately: a raw (unencoded) legacy header can
+        // only ever carry Latin-1-safe content in the first place — that's the
+        // bug this plan fixes — so the equivalence is only meaningful for content
+        // both forms can actually transport.
+        const claims = { email: "user@example.com", roles: ["admin"] };
+
+        const legacyResponse = shard.fetch(
+            new Request("https://shard.internal/rpc", {
+                body: JSON.stringify({ args: {}, functionPath: "messages:list" }),
+                headers: {
+                    "content-type": "application/json",
+                    "x-lunora-identity": JSON.stringify(claims),
+                    "x-lunora-userid": "user_42",
+                },
+                method: "POST",
+            }),
+        );
+
+        await legacyResponse;
+
+        const legacyObserved = shard.observedIdentity;
+
+        const encodedResponse = await shard.fetch(
+            new Request("https://shard.internal/rpc", {
+                body: JSON.stringify({ args: {}, functionPath: "messages:list" }),
+                headers: {
+                    "content-type": "application/json",
+                    "x-lunora-identity": encodeIdentityHeader(claims),
+                    "x-lunora-userid": encodeUserIdHeader("user_42"),
+                },
+                method: "POST",
+            }),
+        );
+
+        expect(encodedResponse.status).toBe(200);
+        expect(shard.observedIdentity).toEqual(legacyObserved);
     });
 
     it("clears identity headers between requests so they don't leak across clients", async () => {
@@ -700,6 +901,29 @@ describe("shardDO upgrade gating", () => {
 
         const shard = new TestShard(createFakeState(), { LUNORA_ALLOWED_ORIGINS: "https://app.example" });
         const response = await shard.fetch(upgradeRequest("https://shard.internal/", { headers: { Origin: "https://evil.example" } }));
+
+        expect(response.status).toBe(403);
+    });
+
+    it("passes the gate for any origin when the allowlist is a wildcard", async () => {
+        expect.hasAssertions();
+
+        // `@lunora/runtime`'s CORS layer documents `*` as "permits any origin"
+        // and honours it. Reading the same variable more strictly here meant a
+        // project configured that way had every WebSocket upgrade rejected with
+        // a bare 403 — a browser sends its real `Origin`, never `*`, so the
+        // exact-match list never matched. Live queries, subscriptions and
+        // presence all died with nothing naming the cause.
+        const shard = new TestShard(createFakeState(), { LUNORA_ALLOWED_ORIGINS: "*" });
+
+        await expectPassedGate(shard, upgradeRequest("https://shard.internal/", { headers: { Origin: "https://anything.example" } }));
+    });
+
+    it("still requires an origin header when the allowlist is a wildcard", async () => {
+        expect.assertions(1);
+
+        const shard = new TestShard(createFakeState(), { LUNORA_ALLOWED_ORIGINS: "*" });
+        const response = await shard.fetch(upgradeRequest("https://shard.internal/"));
 
         expect(response.status).toBe(403);
     });
@@ -785,6 +1009,205 @@ describe("shardDO subscription re-execution", () => {
         expect(JSON.parse(ws.sent.at(-1)!)).toEqual({ data: [{ sessionId: "a", x: 50, y: 80 }], id: "sub-1", type: "data" });
     });
 
+    it("refuses to subscribe a paid (.x402) query instead of seeding it free", async () => {
+        expect.assertions(4);
+
+        // Stands in for the codegen override that consults `LUNORA_FUNCTIONS[path].x402`.
+        class PaidShard extends ReexecShard {
+            // eslint-disable-next-line class-methods-use-this -- override hook; the registry lookup needs no instance state
+            protected override isPaidFunction(functionPath: string): boolean {
+                return functionPath === "cursors:listCursors";
+            }
+        }
+
+        const shard = new PaidShard(state, {});
+        const ws = createFakeWebSocket();
+
+        shard.registerSocket(ws);
+        shard.outcomes.set("cursors:listCursors", { result: [{ sessionId: "a", x: 0, y: 0 }], tables: new Set(["cursors"]) });
+
+        await subscribe(shard, ws);
+
+        // The paywall lives at the origin worker, which a WebSocket never
+        // crosses: the shard must answer with the batch gate's refusal, seed
+        // nothing, and register nothing — so no later poke can leak it either.
+        expect(JSON.parse(ws.sent[0]!)).toEqual({
+            code: "BAD_REQUEST",
+            error: {
+                code: "BAD_REQUEST",
+                message: 'paid (`.x402`) function "cursors:listCursors" cannot be subscribed; call it individually over /_lunora/rpc',
+            },
+            id: "sub-1",
+            type: "error",
+        });
+        expect(ws.sent).toHaveLength(1);
+        expect(shard.execCount).toBe(0);
+        expect(ws.attachment).toEqual({ subs: {} });
+    });
+
+    it("drops a subscription registered before the paywall on the next refresh", async () => {
+        expect.assertions(4);
+
+        // A socket that subscribed while the query was free, then the query was
+        // paywalled by a later deploy. The registration gate in `subscribe` has
+        // already run; only the refresh sweep can still see this one.
+        class LatePaywallShard extends ReexecShard {
+            public paywalled = false;
+
+            protected override isPaidFunction(functionPath: string): boolean {
+                return this.paywalled && functionPath === "cursors:listCursors";
+            }
+        }
+
+        const shard = new LatePaywallShard(state, {});
+        const ws = createFakeWebSocket();
+
+        shard.registerSocket(ws);
+        shard.outcomes.set("cursors:listCursors", { result: [{ sessionId: "a", x: 0, y: 0 }], tables: new Set(["cursors"]) });
+        await subscribe(shard, ws);
+
+        expect(Object.keys(ws.attachment?.subs ?? {})).toEqual(["sub-1"]);
+
+        shard.paywalled = true;
+        shard.changedTableOnRpc = "cursors";
+
+        const execBefore = shard.execCount;
+
+        await shard.writeRpc();
+
+        // Never re-run, so no paid result is pushed...
+        expect(shard.execCount).toBe(execBefore);
+        // ...the client is told why...
+        expect(JSON.parse(ws.sent.at(-1)!)).toEqual({
+            code: "BAD_REQUEST",
+            error: {
+                code: "BAD_REQUEST",
+                message: 'paid (`.x402`) function "cursors:listCursors" cannot be subscribed; call it individually over /_lunora/rpc',
+            },
+            id: "sub-1",
+            type: "error",
+        });
+        // ...and the registration is gone, so the next flush skips it too.
+        expect(ws.attachment?.subs).toEqual({});
+    });
+
+    it("shares the per-socket cap between subscriptions and shapes", async () => {
+        expect.assertions(1);
+
+        const shard = new ReexecShard(state, {});
+        const ws = createFakeWebSocket();
+
+        // The cap bounds what ONE attachment holds, and both registries live in
+        // it — a socket that registered its shapes first must not then get a
+        // second full allowance of subscriptions.
+        shard.registerSocket(ws, {
+            shapes: Object.fromEntries(Array.from({ length: SUBSCRIPTION_CAP }, (_, index) => [`shape-${String(index)}`, { args: {}, name: "board" }])),
+            subs: {},
+        });
+
+        await subscribe(shard, ws);
+
+        expect(JSON.parse(ws.sent[0]!)).toEqual({
+            code: "TOO_MANY_SUBSCRIPTIONS",
+            error: {
+                code: "TOO_MANY_SUBSCRIPTIONS",
+                message: `subscription cap of ${String(SUBSCRIPTION_CAP)} reached on this socket (live queries and shapes share it); unsubscribe an idle one, or open a second socket`,
+            },
+            id: "sub-1",
+            type: "error",
+        });
+    });
+
+    it("keeps a socket filled to the cap inside the runtime's attachment budget", async () => {
+        expect.assertions(3);
+
+        const shard = new ReexecShard(state, {});
+        const ws = createFakeWebSocket();
+
+        // A realistic signed-in socket: every fixed field the upgrade stamps.
+        shard.registerSocket(ws, {
+            clientId: "9f8c0e1a-3b7d-4f52-9a11-6c2d8e4b0f37",
+            connectionId: "1b3d5f70-2a4c-4e68-8d90-ab12cd34ef56",
+            expiresAt: 1_900_000_000_000,
+            identity: { roles: ["member"] },
+            subs: {},
+            userId: "user".padEnd(32, "0"),
+        });
+
+        // ...and realistic subscriptions: a namespaced path, one id argument, a
+        // page size, and the resume cursor + epoch the client sends back.
+        const register = (index: number): Promise<void> =>
+            shard.driveMessage(ws, {
+                id: `sub-${String(index)}`,
+                query: {
+                    args: { channelId: "channel".padEnd(32, "0"), limit: 50 },
+                    functionPath: "messages:listByChannel",
+                    sinceEpoch: "6f1c2d38-9b40-4a7e-8c15-2d3e4f506172",
+                    sinceSeq: 12_345 + index,
+                    table: "messages",
+                },
+                type: "subscribe",
+            });
+
+        for (let index = 0; index < SUBSCRIPTION_CAP; index += 1) {
+            // eslint-disable-next-line no-await-in-loop -- registrations must land one at a time; each re-serializes the attachment
+            await register(index);
+        }
+
+        // Every registration up to the cap persisted — none of them was refused
+        // by the fake's serialize gate.
+        expect(Object.keys(ws.attachment?.subs ?? {})).toHaveLength(SUBSCRIPTION_CAP);
+        expect(serialize(ws.attachment).byteLength).toBeLessThanOrEqual(ATTACHMENT_LIMIT_BYTES);
+
+        // Past the cap the answer is the CAP, not a persist failure — which is
+        // what a ceiling above the byte budget produced instead.
+        await register(SUBSCRIPTION_CAP);
+
+        expect(JSON.parse(ws.sent.at(-1)!)).toEqual({
+            code: "TOO_MANY_SUBSCRIPTIONS",
+            error: {
+                code: "TOO_MANY_SUBSCRIPTIONS",
+                message: `subscription cap of ${String(SUBSCRIPTION_CAP)} reached on this socket (live queries and shapes share it); unsubscribe an idle one, or open a second socket`,
+            },
+            id: `sub-${String(SUBSCRIPTION_CAP)}`,
+            type: "error",
+        });
+    });
+
+    it("refuses an attachment over the byte budget with the limit and a way out", async () => {
+        expect.assertions(2);
+
+        const shard = new ReexecShard(state, {});
+        const ws = createFakeWebSocket();
+
+        shard.registerSocket(ws, { subs: {} });
+
+        // One registration, well under the count cap, whose args alone blow the
+        // attachment budget. The count cap cannot see this — args are the
+        // client's to choose — so the byte budget is the only thing between it
+        // and a socket that can never be persisted again.
+        await shard.driveMessage(ws, {
+            id: "sub-huge",
+            query: { args: { blob: "x".repeat(ATTACHMENT_LIMIT_BYTES * 2) }, functionPath: "messages:listByChannel", table: "messages" },
+            type: "subscribe",
+        });
+
+        expect(JSON.parse(ws.sent.at(-1)!)).toEqual({
+            code: "SUBSCRIPTION_PERSIST_FAILED",
+            error: {
+                code: "SUBSCRIPTION_PERSIST_FAILED",
+                message:
+                    `failed to persist the socket attachment, which must stay under the ${String(ATTACHMENT_LIMIT_BYTES)}-byte hibernation limit ` +
+                    `(live queries and shapes share it); shrink the subscription's arguments, unsubscribe an idle one, or open a second socket`,
+            },
+            id: "sub-huge",
+            type: "error",
+        });
+
+        // Rolled back, not half-registered: the socket is still usable.
+        expect(ws.attachment?.subs).toEqual({});
+    });
+
     it("re-executes but does not re-send when the result is byte-identical", async () => {
         expect.assertions(2);
 
@@ -804,7 +1227,13 @@ describe("shardDO subscription re-execution", () => {
         await shard.writeRpc();
 
         expect(shard.execCount).toBe(execBefore + 1); // re-ran the query
-        expect(ws.sent).toHaveLength(sentBefore); // identical → deduped, no push
+
+        // Byte-identical result → no `data`/`delta` re-push; the only new frame is a
+        // lightweight `settled` (carrying the cursor) so a pending optimistic overlay
+        // can drop without a visible change.
+        const pushed = ws.sent.slice(sentBefore).map((raw) => JSON.parse(raw));
+
+        expect(pushed.filter((frame) => frame.type === "data" || frame.type === "delta")).toHaveLength(0);
     });
 
     it("skips re-execution entirely when the write touches a table the subscription never read", async () => {
@@ -885,6 +1314,251 @@ describe("shardDO subscription re-execution", () => {
 
         expect(JSON.parse(ws.sent.at(-1)!)).toEqual({ data: [{ sessionId: "a", x: 0, y: 0 }], id: "sub-1", type: "data" });
         expect(ws.sent.length).toBeGreaterThan(sentBefore);
+    });
+
+    it("refreshes a suppressed (byte-identical) memo's `ranges`, not just its `tables`", async () => {
+        expect.assertions(3);
+
+        // Two disjoint half-open slices of the same index: a write landing in
+        // `rangeB` never touches `rangeA` and vice versa.
+        const rangeA: KeyRange = { hi: "m", index: "byRoom", lo: "a", table: "cursors" };
+        const rangeB: KeyRange = { hi: "z", index: "byRoom", lo: "n", table: "cursors" };
+
+        const shard = new ReexecShard(state, {});
+        const ws = createFakeWebSocket();
+
+        shard.registerSocket(ws);
+        shard.outcomes.set("cursors:listCursors", {
+            ranges: new Map([["cursors", [rangeA]]]),
+            result: [{ sessionId: "a", x: 0, y: 0 }],
+            tables: new Set(["cursors"]),
+        });
+
+        await subscribe(shard, ws);
+
+        expect(shard.execCount).toBe(1);
+
+        // Write #1: key "c" falls inside `rangeA` (the memo's CURRENT ranges, as
+        // of subscribe), so the range gate re-runs the query regardless of the
+        // bug under test. The outcome swapped in for this re-run is
+        // byte-identical on `result` but carries a DIFFERENT range (`rangeB`) —
+        // the shape a recency-windowed query legitimately produces run-to-run.
+        // Suppressed: no new data frame, but (with the fix) the memo's `ranges`
+        // advance to `rangeB`.
+        shard.outcomes.set("cursors:listCursors", {
+            ranges: new Map([["cursors", [rangeB]]]),
+            result: [{ sessionId: "a", x: 0, y: 0 }],
+            tables: new Set(["cursors"]),
+        });
+        shard.changedIndexKeysOnRpc = [{ index: "byRoom", key: "c" }];
+        shard.changedTableOnRpc = "cursors";
+        await shard.writeRpc();
+
+        expect(shard.execCount).toBe(2); // re-ran (rangeA gated it in), but suppressed on the wire
+
+        // Write #2: key "p" falls inside `rangeB` but OUTSIDE `rangeA`. If the
+        // suppressed refresh left the memo's `ranges` stale at `rangeA` (the
+        // bug), the range gate wrongly concludes this write can't have changed
+        // the result and skips the re-run entirely — `execCount` stays at 2 and
+        // no frame goes out, even though the query result actually changes below.
+        shard.outcomes.set("cursors:listCursors", {
+            ranges: new Map([["cursors", [rangeB]]]),
+            result: [{ sessionId: "a", x: 99, y: 99 }],
+            tables: new Set(["cursors"]),
+        });
+        shard.changedIndexKeysOnRpc = [{ index: "byRoom", key: "p" }];
+        await shard.writeRpc();
+
+        expect(shard.execCount).toBe(3); // the refreshed `rangeB` gated write #2 in
+    });
+});
+
+describe("shardDO connect: serializeAttachment failure retry", () => {
+    let state: ReturnType<typeof createFakeState>;
+
+    beforeEach(() => {
+        state = createFakeState();
+    });
+
+    /**
+     * Counts `onConnect` dispatches directly via the protected `dispatchLifecycle`
+     * seam, rather than wiring `lifecycleHookPaths` + a recording `handleRpc` —
+     * the connect-persistence retry under test doesn't touch hook resolution.
+     */
+    class ConnectShard extends ShardDO {
+        public connectDispatches = 0;
+
+        // eslint-disable-next-line class-methods-use-this -- override stub; connect-persistence retry never dispatches through it
+        public override async handleRpc(): Promise<unknown> {
+            return { ok: true };
+        }
+
+        public driveMessage(ws: FakeWebSocket, envelope: SubscriptionEnvelope): Promise<void> {
+            return this.webSocketMessage(ws as unknown as WebSocket, JSON.stringify(envelope));
+        }
+
+        public registerSocket(ws: FakeWebSocket, attachment?: SocketAttachment): void {
+            this.state.acceptWebSocket(ws as unknown as WebSocket);
+            ws.serializeAttachment(attachment ?? { subs: {} });
+        }
+
+        protected override async dispatchLifecycle(event: "connect" | "disconnect"): Promise<void> {
+            if (event === "connect") {
+                this.connectDispatches += 1;
+            }
+        }
+    }
+
+    const bigConnectEnvelope: SubscriptionEnvelope = { context: { blob: "x".repeat(64) }, id: "connect", type: "connect" };
+
+    /** `serializeAttachment` double that throws only when the value still carries `context`. */
+    const throwsOnContext =
+        (ws: FakeWebSocket) =>
+        (value: unknown): void => {
+            if ((value as SocketAttachment).context !== undefined) {
+                throw new Error("attachment too large to persist");
+            }
+
+            // eslint-disable-next-line no-param-reassign -- the double's purpose is to install the persisted value on the caller's fake socket
+            ws.attachment = value as SocketAttachment | undefined;
+        };
+
+    it("retries without context on a serializeAttachment failure, so onConnect still fires and connected persists", async () => {
+        expect.assertions(4);
+
+        const shard = new ConnectShard(state, {});
+        const ws = createFakeWebSocket();
+
+        shard.registerSocket(ws);
+        ws.serializeAttachment = throwsOnContext(ws);
+
+        await shard.driveMessage(ws, bigConnectEnvelope);
+
+        // The hook still fired this turn (the in-memory attachment passed to it
+        // still carries context — only the PERSISTED copy dropped it).
+        expect(shard.connectDispatches).toBe(1);
+        // The retry (without `context`) is what actually reached the socket.
+        expect(ws.attachment).toMatchObject({ connected: true });
+        expect(ws.attachment?.context).toBeUndefined();
+
+        // A second connect frame: `readAttachment` deserializes the PERSISTED
+        // copy, sees `connected: true` (the retry survived), and treats this as
+        // a duplicate — `onConnect` must not fire again.
+        await shard.driveMessage(ws, bigConnectEnvelope);
+
+        expect(shard.connectDispatches).toBe(1);
+    });
+
+    it("fires no onConnect when even the context-less retry fails to persist", async () => {
+        expect.assertions(2);
+
+        const shard = new ConnectShard(state, {});
+        const ws = createFakeWebSocket();
+
+        shard.registerSocket(ws);
+        // Every call throws — not even the retry can persist.
+        ws.serializeAttachment = () => {
+            throw new Error("attachment too large to persist");
+        };
+
+        await shard.driveMessage(ws, bigConnectEnvelope);
+
+        // Nothing persisted, so `connected` never became `true` — the hook must
+        // not fire, or a client that legitimately retries the (unacked, no-ack
+        // frame exists for `connect`) frame would never get another chance to
+        // announce itself once persistence starts working again.
+        expect(shard.connectDispatches).toBe(0);
+        expect(ws.attachment?.connected).not.toBe(true);
+    });
+});
+
+describe("shardDO wire-typed subscription args (decode-at-entry)", () => {
+    let state: ReturnType<typeof createFakeState>;
+
+    beforeEach(() => {
+        state = createFakeState();
+    });
+
+    it("decodes wire-encoded args ONCE at the subscribe entry point: attachment, seed, and re-execution all see real values", async () => {
+        expect.assertions(5);
+
+        const shard = new ReexecShard(state, {});
+        const ws = createFakeWebSocket();
+
+        shard.registerSocket(ws);
+        shard.outcomes.set("messages:since", { result: [], tables: new Set(["messages"]) });
+
+        // The frame carries the client's `encodeWire` form of `{ at: Date(5000), since: 123n }`.
+        await shard.driveMessage(ws, {
+            id: "sub-1",
+            query: {
+                args: encodeWire({ at: new Date(5000), since: 123n }) as Record<string, unknown>,
+                functionPath: "messages:since",
+                table: "messages",
+            },
+            type: "subscribe",
+        });
+
+        expect(JSON.parse(ws.sent[0]!)).toEqual({ id: "sub-1", type: "ack" });
+        // The seed executed with the DECODED args, not the tagged arrays.
+        expect(shard.argsDuringExec).toStrictEqual({ at: new Date(5000), since: 123n });
+        // The attachment stores decoded args, so hibernation (structured clone)
+        // and every later consumer (re-execution, reactiveCacheKey, RLS) see them.
+        expect(ws.attachment?.subs["sub-1"]?.args).toStrictEqual({ at: new Date(5000), since: 123n });
+
+        // A write to a read table re-executes from the ATTACHMENT's stored args.
+        shard.argsDuringExec = undefined;
+        shard.changedTableOnRpc = "messages";
+        await shard.writeRpc();
+
+        expect(shard.execCount).toBe(2);
+        expect(shard.argsDuringExec).toStrictEqual({ at: new Date(5000), since: 123n });
+    });
+
+    it("keeps pure-JSON subscribe envelopes byte-compatible (identity decode)", async () => {
+        expect.assertions(2);
+
+        const shard = new ReexecShard(state, {});
+        const ws = createFakeWebSocket();
+
+        shard.registerSocket(ws);
+        shard.outcomes.set("messages:list", { result: [], tables: new Set(["messages"]) });
+
+        await shard.driveMessage(ws, {
+            id: "sub-1",
+            query: { args: { channel: "general", limit: 10 }, functionPath: "messages:list", table: "messages" },
+            type: "subscribe",
+        });
+
+        expect(shard.argsDuringExec).toStrictEqual({ channel: "general", limit: 10 });
+        expect(ws.attachment?.subs["sub-1"]?.args).toStrictEqual({ channel: "general", limit: 10 });
+    });
+
+    it("answers a malformed tagged payload with a structured error frame instead of throwing out of webSocketMessage", async () => {
+        expect.assertions(3);
+
+        const shard = new ReexecShard(state, {});
+        const ws = createFakeWebSocket();
+
+        shard.registerSocket(ws);
+
+        // An over-long bigint digit string fails `decodeWire`'s DoS bound.
+        await expect(
+            shard.driveMessage(ws, {
+                id: "sub-1",
+                query: { args: { since: ["$lunora.wire$", "bigint", "9".repeat(2000)] }, functionPath: "messages:since", table: "messages" },
+                type: "subscribe",
+            }),
+        ).resolves.toBeUndefined();
+
+        expect(JSON.parse(ws.sent[0]!)).toEqual({
+            code: "BAD_SUBSCRIPTION_ARGS",
+            error: { code: "BAD_SUBSCRIPTION_ARGS", message: "subscription args failed wire decoding" },
+            id: "sub-1",
+            type: "error",
+        });
+        // Nothing was registered on the socket.
+        expect(ws.attachment?.subs["sub-1"]).toBeUndefined();
     });
 });
 
@@ -972,14 +1646,18 @@ describe("subscriptionListDeltas", () => {
         expect(subscriptionListDeltas(prev, next, "messages")).toBeUndefined();
     });
 
-    it("returns the snapshot sentinel on a near-total change where deltas would exceed the new length", () => {
+    it("still decomposes a near-total change — cost is not this function's call", () => {
         expect.assertions(1);
 
-        // 2 deletes + 1 insert = 3 deltas for a new array of length 1 → snapshot.
+        // 2 deletes + 1 insert against a new array of length 1. This used to
+        // return the snapshot sentinel via a row-count cap, which was a cost
+        // heuristic living in a function that cannot see the wire. The diff is
+        // expressible, so it is returned; `subscriptionFrames` decides whether
+        // sending it is cheaper than the snapshot, by measuring the real frames.
         const prev = JSON.stringify([row("a"), row("b")]);
         const next = [row("c")];
 
-        expect(subscriptionListDeltas(prev, next, "messages")).toBeUndefined();
+        expect(subscriptionListDeltas(prev, next, "messages")).toHaveLength(3);
     });
 
     it("falls back to a non-empty table name when the read-table set is empty", () => {
@@ -1002,8 +1680,7 @@ describe("subscriptionListDeltas", () => {
     it("the frames sink yields bodies byte-identical to JSON.stringify(delta) across insert/update/delete", () => {
         expect.assertions(2);
 
-        // One delete (c), one update (a), one insert (d) — exercises all three
-        // branches while staying at/under the chattiness cap (3 deltas, length-3 next).
+        // One delete (c), one update (a), one insert (d) — exercises all three branches.
         const prev = JSON.stringify([row("a", { text: "old" }), row("b"), row("c")]);
         const next = [row("a", { text: "new" }), row("b"), row("d", { text: "fresh" })];
 
@@ -1061,8 +1738,82 @@ describe("shardDO subscription delta push", () => {
         return { _creationTime: 1, _id: id, ...rest };
     };
 
+    /**
+     * `count` rows that never change, prepended to a fixture so the list is long
+     * enough for a handful of deltas to be the cheaper encoding.
+     *
+     * These cases assert WHICH frame type goes out, and `subscriptionFrames`
+     * decides that by measuring the rendered frames — a few deltas against a
+     * two-row list genuinely cost more than re-sending it, so without a
+     * list-sized baseline the snapshot branch wins and the delta assertions have
+     * nothing to look at. Length is the only lever used (never row width), so
+     * these stay in the delta regime by a wide margin under any change to the
+     * frame envelope. The threshold itself is pinned directly, without a DO or a
+     * socket, by the `subscriptionFrames` unit tests in `@lunora/shard-engine`.
+     */
+    const filler = (count: number): Record<string, unknown>[] => Array.from({ length: count }, (_, index) => idRow(`fill-${String(index)}`));
+
     const subscribeMessages = (shard: ReexecShard, ws: FakeWebSocket): Promise<void> =>
         shard.driveMessage(ws, { id: "sub-1", query: { args: {}, functionPath: "messages:list" }, type: "subscribe" });
+
+    /** A `.paginate()` result: the shape every `usePaginatedQuery` page subscribes to. */
+    const paginated = (rows: Record<string, unknown>[]): Record<string, unknown> => {
+        return { continueCursor: "cursor-16", isDone: false, page: rows };
+    };
+
+    /** Drive the one-shot `connect` frame, optionally announcing capabilities. */
+    const connect = (shard: ReexecShard, ws: FakeWebSocket, caps?: string[]): Promise<void> =>
+        shard.driveMessage(ws, { id: "connect", type: "connect", ...(caps === undefined ? {} : { caps }) });
+
+    it("re-sends a whole page to a socket that announced no capabilities", async () => {
+        expect.assertions(2);
+
+        // The behaviour every client had before `pageDelta`, and the one all
+        // eight non-JS SDKs still get — they send `connect` with no `caps`.
+        const shard = new ReexecShard(state, {});
+        const ws = createFakeWebSocket();
+
+        shard.registerSocket(ws);
+        await connect(shard, ws);
+        shard.outcomes.set("messages:list", { result: paginated(filler(16)), tables: new Set(["messages"]) });
+        await subscribeMessages(shard, ws);
+
+        const sentBefore = ws.sent.length;
+        const next = paginated([...filler(16), idRow("new")]);
+
+        shard.outcomes.set("messages:list", { result: next, tables: new Set(["messages"]) });
+        shard.changedTableOnRpc = "messages";
+        await shard.writeRpc();
+
+        const frames = ws.sent.slice(sentBefore).map((line) => JSON.parse(line) as { data?: unknown; type: string });
+
+        expect(frames.filter((frame) => frame.type === "delta")).toHaveLength(0);
+        expect(frames.find((frame) => frame.type === "data")?.data).toStrictEqual(next);
+    });
+
+    it("sends one page delta to a socket that announced pageDelta", async () => {
+        expect.assertions(3);
+
+        const shard = new ReexecShard(state, {});
+        const ws = createFakeWebSocket();
+
+        shard.registerSocket(ws);
+        await connect(shard, ws, ["pageDelta"]);
+        shard.outcomes.set("messages:list", { result: paginated(filler(16)), tables: new Set(["messages"]) });
+        await subscribeMessages(shard, ws);
+
+        const sentBefore = ws.sent.length;
+
+        shard.outcomes.set("messages:list", { result: paginated([...filler(16), idRow("new")]), tables: new Set(["messages"]) });
+        shard.changedTableOnRpc = "messages";
+        await shard.writeRpc();
+
+        const frames = ws.sent.slice(sentBefore).map((line) => JSON.parse(line) as { delta?: unknown; type: string });
+
+        expect(frames.filter((frame) => frame.type === "data")).toHaveLength(0);
+        expect(frames.filter((frame) => frame.type === "delta")).toHaveLength(1);
+        expect(frames[0]?.delta).toStrictEqual({ key: "new", op: "insert", row: idRow("new"), table: "messages" });
+    });
 
     it("first push is a data snapshot; an additive change pushes a delta frame", async () => {
         expect.assertions(3);
@@ -1071,13 +1822,13 @@ describe("shardDO subscription delta push", () => {
         const ws = createFakeWebSocket();
 
         shard.registerSocket(ws);
-        shard.outcomes.set("messages:list", { result: [idRow("a")], tables: new Set(["messages"]) });
+        shard.outcomes.set("messages:list", { result: [...filler(16), idRow("a")], tables: new Set(["messages"]) });
 
         await subscribeMessages(shard, ws);
 
-        expect(JSON.parse(ws.sent.at(-1)!)).toEqual({ data: [idRow("a")], id: "sub-1", type: "data" });
+        expect(JSON.parse(ws.sent.at(-1)!)).toEqual({ data: [...filler(16), idRow("a")], id: "sub-1", type: "data" });
 
-        shard.outcomes.set("messages:list", { result: [idRow("a"), idRow("b", { text: "hi" })], tables: new Set(["messages"]) });
+        shard.outcomes.set("messages:list", { result: [...filler(16), idRow("a"), idRow("b", { text: "hi" })], tables: new Set(["messages"]) });
         shard.changedTableOnRpc = "messages";
         await shard.writeRpc();
 
@@ -1107,6 +1858,42 @@ describe("shardDO subscription delta push", () => {
         expect(JSON.parse(ws.sent.at(-1)!)).toEqual({ data: { count: 2 }, id: "sub-1", type: "data" });
     });
 
+    it("takes the snapshot when the delta frames would out-weigh it on the wire", async () => {
+        expect.assertions(3);
+
+        const shard = new ReexecShard(state, {});
+        const ws = createFakeWebSocket();
+
+        shard.registerSocket(ws);
+
+        const before = filler(20);
+
+        shard.outcomes.set("messages:list", { result: before, tables: new Set(["messages"]) });
+        await subscribeMessages(shard, ws);
+
+        const sentBefore = ws.sent.length;
+
+        // Every row changes. `subscriptionListDeltas` accepts this — 20 deltas
+        // for a 20-row result is within its own row-count cap — but each frame
+        // re-pays the `{"type":"delta","id":…,"table":…}` envelope that one
+        // snapshot pays once, so 20 frames carry MORE bytes than the single
+        // `{type:"data"}` frame holding the same rows. Row count cannot see
+        // that; the byte comparison in `pushSubscriptionData` can.
+        const after = before.map((row) => {
+            return { ...row, text: "edited" };
+        });
+
+        shard.outcomes.set("messages:list", { result: after, tables: new Set(["messages"]) });
+        shard.changedTableOnRpc = "messages";
+        await shard.writeRpc();
+
+        const frames = ws.sent.slice(sentBefore).map((line) => JSON.parse(line) as { data?: unknown; type: string });
+
+        expect(frames.filter((frame) => frame.type === "delta")).toHaveLength(0);
+        expect(frames.filter((frame) => frame.type === "data")).toHaveLength(1);
+        expect(frames.find((frame) => frame.type === "data")?.data).toEqual(after);
+    });
+
     it("applying the pushed delta frames to the prior snapshot yields the new result", async () => {
         expect.assertions(1);
 
@@ -1114,15 +1901,16 @@ describe("shardDO subscription delta push", () => {
         const ws = createFakeWebSocket();
 
         shard.registerSocket(ws);
-        shard.outcomes.set("messages:list", { result: [idRow("a"), idRow("b"), idRow("c")], tables: new Set(["messages"]) });
+        shard.outcomes.set("messages:list", { result: [...filler(16), idRow("a"), idRow("b"), idRow("c")], tables: new Set(["messages"]) });
 
         await subscribeMessages(shard, ws);
 
         const baseline = (JSON.parse(ws.sent.at(-1)!) as { data: Record<string, unknown>[] }).data;
         const sentBefore = ws.sent.length;
 
-        // Delete c, update a, insert d — 3 deltas for a length-3 result (under the cap).
-        const nextResult = [idRow("a", { text: "edited" }), idRow("b"), idRow("d")];
+        // Delete c, update a, insert d — 3 deltas against a 19-row list, so the
+        // three frames stay well under the snapshot they are weighed against.
+        const nextResult = [...filler(16), idRow("a", { text: "edited" }), idRow("b"), idRow("d")];
 
         shard.outcomes.set("messages:list", { result: nextResult, tables: new Set(["messages"]) });
         shard.changedTableOnRpc = "messages";
@@ -1165,7 +1953,7 @@ describe("shardDO subscription delta push", () => {
 
         shard.registerSocket(ws);
 
-        const prevResult = [idRow("a", { text: "old" }), idRow("b"), idRow("c")];
+        const prevResult = [...filler(16), idRow("a", { text: "old" }), idRow("b"), idRow("c")];
 
         shard.outcomes.set("messages:list", { result: prevResult, tables: new Set(["messages"]) });
         await subscribeMessages(shard, ws);
@@ -1173,8 +1961,8 @@ describe("shardDO subscription delta push", () => {
         const sentBefore = ws.sent.length;
 
         // delete c, update a, insert d — all three delta branches in one refresh,
-        // 3 deltas for a length-3 next result (under the chattiness cap).
-        const nextResult = [idRow("a", { text: "new" }), idRow("b"), idRow("d", { text: "hi" })];
+        // 3 deltas against a 19-row list, so the delta path stays cheaper.
+        const nextResult = [...filler(16), idRow("a", { text: "new" }), idRow("b"), idRow("d", { text: "hi" })];
 
         shard.outcomes.set("messages:list", { result: nextResult, tables: new Set(["messages"]) });
         shard.changedTableOnRpc = "messages";

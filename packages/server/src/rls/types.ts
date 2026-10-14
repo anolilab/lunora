@@ -53,7 +53,7 @@ export type PolicyDecision = WhereInput | boolean | undefined;
  * generated `DataModel` (`DM`) + `Relations` (`REL`) maps and a table `T`. A
  * read policy may now return a Prisma-style relation predicate (the
  * `@lunora/do` pre-resolver resolves it via a semijoin), so the typed
- * authoring surface accepts `WhereOf&lt;DM, REL, T>` — column predicates **and**
+ * authoring surface accepts `WhereOf<DM, REL, T>` — column predicates **and**
  * `is`/`isNot`/`some`/`none`/`every` over `T`'s declared relations — in
  * addition to the `boolean`/`undefined` decisions. Used by the project-bound
  * `definePolicy` from `createPolicyDsl`.
@@ -67,22 +67,26 @@ export type PolicyDecisionOf<DM, REL extends Record<keyof DM, object>, T extends
  * unknown table, a stray column, or a relation predicate naming a relation the
  * table does not declare is a compile error rather than a silent runtime deny.
  */
-export interface TypedDefinePolicyInput<DM, REL extends Record<keyof DM, object>, T extends keyof DM, Context = unknown> {
+export interface TypedDefinePolicyInput<DM, REL extends Record<keyof DM, object>, T extends keyof DM, Context = unknown, Identity = Record<string, unknown>> {
     on: PolicyOperation;
     table: T;
-    when: (context: PolicyContext<Context>) => PolicyDecisionOf<DM, REL, T>;
+    when: (context: PolicyContext<Context, Identity>) => PolicyDecisionOf<DM, REL, T>;
 }
 
 /**
- * Context handed to a policy. `auth.roles` is the per-request role list,
- * sourced from the identity resolver (better-auth claims today). `auth.can`
+ * Context handed to a policy. `auth.roles` is the per-request role list, read
+ * from the `roles` CLAIM on the resolved identity — a `string[]` or a
+ * comma-separated string returned by `WorkerOptions.resolveIdentity` (and
+ * validated by `defineIdentity(...)` at the worker's trust boundary). A
+ * resolver that forwards no `roles` claim yields no roles, so every
+ * role-branched policy is evaluated against `[]`. `auth.can`
  * answers whether any of those roles grants a permission (see
  * {@link Permission} / {@link RlsOptions}). `row` is present only on write
  * policies (`insert`/`update`/`delete`) — for `update` and `delete` it is the
  * pre-write row; for `insert` it is the candidate document. `ctx` is the full
  * procedure context the middleware closed over.
  */
-export interface PolicyContext<Context = unknown> {
+export interface PolicyContext<Context = unknown, Identity = Record<string, unknown>> {
     readonly auth: {
         /**
          * `true` when any of the request's `roles` grants `permission` (passed
@@ -91,7 +95,14 @@ export interface PolicyContext<Context = unknown> {
          * when none of the request's roles lists the permission.
          */
         readonly can: (permission: Permission | string) => boolean;
-        readonly identity?: Record<string, unknown> | null;
+
+        /**
+         * The resolved identity, typed to the `Identity` type parameter bound on
+         * `createPolicyDsl` — e.g. the app's `defineIdentity(...)` claim type via
+         * the `InferIdentity` helper; otherwise the untyped claim bag.
+         * `undefined`/`null` when the request is anonymous.
+         */
+        readonly identity?: Identity | null;
         readonly roles: ReadonlyArray<string>;
         readonly userId: null | string;
     };
@@ -142,10 +153,13 @@ export interface Permission {
 }
 
 /**
- * A role declaration. Roles are string labels attached to the request's
- * identity (via better-auth claims today). `permissions` lists the
- * capabilities the role grants — at request time the middleware unions the
- * permissions of every role in `ctx.auth.roles` so a policy can ask
+ * A role declaration. Roles are string labels the request carries in the
+ * `roles` claim of its resolved identity — `WorkerOptions.resolveIdentity`
+ * forwards every non-`userId` key verbatim, so a resolver returning
+ * `{ userId, roles: ["admin"] }` (or the comma-joined `"user,admin"` that
+ * better-auth's `admin()` plugin stores) is what puts them there. `permissions`
+ * lists the capabilities the role grants — at request time the middleware
+ * unions the permissions of every role in `ctx.auth.roles` so a policy can ask
  * `ctx.auth.can(permission)` rather than enumerate roles.
  */
 export interface Role {

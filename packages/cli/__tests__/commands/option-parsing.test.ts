@@ -2,7 +2,12 @@ import type { OptionDefinition } from "@visulima/cerebro";
 import { Cerebro } from "@visulima/cerebro";
 import { describe, expect, it } from "vitest";
 
+import { advisorCommand } from "../../src/commands/advisor";
+import { buildCommand } from "../../src/commands/build";
+import { codegenCommand } from "../../src/commands/codegen";
+import { deployCommand } from "../../src/commands/deploy";
 import { devCommand } from "../../src/commands/dev";
+import { prepareCommand } from "../../src/commands/prepare";
 import { verifyCommand } from "../../src/commands/verify";
 
 /**
@@ -64,6 +69,15 @@ describe("command option parsing → handler key mapping", () => {
         expect(parsed.workerPort).toBe(9000);
     });
 
+    it("`dev --inspector-port 9235` camelCases to `inspectorPort`", async () => {
+        expect.assertions(1);
+
+        const parsed = await parseOptions("dev", devCommand.options ?? [], ["dev", "--inspector-port", "9235"]);
+
+        // dev/handler.ts reads `options.inspectorPort`; dev/lifecycle.ts forwards it.
+        expect(parsed.inspectorPort).toBe(9235);
+    });
+
     it("`verify --no-typecheck` parses to the negated `typecheck` key the handler reads", async () => {
         expect.assertions(1);
 
@@ -71,5 +85,82 @@ describe("command option parsing → handler key mapping", () => {
 
         // verify/handler.ts reads `options.typecheck === false`.
         expect(parsed.typecheck).toBe(false);
+    });
+
+    // Issue #285 (1+2): `lunora codegen --help` documents the gate as "defaults to
+    // on in CI, off locally". That is only true when `options.strictAdvisories` is
+    // `undefined` with no flag passed, so `resolveStrictAdvisories`'s CI-vs-local
+    // `??` fallback ever runs. Declaring only `no-strict-advisories` and letting
+    // cerebro synthesize `--strict-advisories` gives the synthesized option an
+    // unconditional `defaultValue: true`, so `strictAdvisories` was NEVER
+    // `undefined` — the gate was strict locally regardless of `--help`'s claim.
+    it.each([
+        ["build", buildCommand],
+        ["codegen", codegenCommand],
+        ["deploy", deployCommand],
+        ["prepare", prepareCommand],
+        ["verify", verifyCommand],
+    ])("`%s` (no flags) leaves strictAdvisories undefined so the CI-vs-local default can apply", async (name, command) => {
+        expect.assertions(1);
+
+        const parsed = await parseOptions(name, command.options ?? [], [name]);
+
+        expect(parsed.strictAdvisories).toBeUndefined();
+    });
+
+    it.each([
+        ["build", buildCommand],
+        ["codegen", codegenCommand],
+        ["deploy", deployCommand],
+        ["prepare", prepareCommand],
+        ["verify", verifyCommand],
+    ])("`%s --strict-advisories` parses to strictAdvisories: true", async (name, command) => {
+        expect.assertions(1);
+
+        const parsed = await parseOptions(name, command.options ?? [], [name, "--strict-advisories"]);
+
+        expect(parsed.strictAdvisories).toBe(true);
+    });
+
+    it.each([
+        ["build", buildCommand],
+        ["codegen", codegenCommand],
+        ["deploy", deployCommand],
+        ["prepare", prepareCommand],
+        ["verify", verifyCommand],
+    ])("`%s --no-strict-advisories` parses to strictAdvisories: false", async (name, command) => {
+        expect.assertions(1);
+
+        const parsed = await parseOptions(name, command.options ?? [], [name, "--no-strict-advisories"]);
+
+        expect(parsed.strictAdvisories).toBe(false);
+    });
+
+    // Issue #285 (3): `lunora advisor --help` documents `--no-write`, but the
+    // option was declared as the POSITIVE `write` flag — cerebro only synthesizes
+    // a `no-*` counterpart for an option it declared, so `--no-write` was rejected
+    // as an unknown option.
+    it("`advisor --no-write` parses instead of throwing an unknown-option error", async () => {
+        expect.assertions(1);
+
+        const parsed = await parseOptions("advisor", advisorCommand.options ?? [], ["advisor", "--no-write"]);
+
+        expect(parsed.write).toBe(false);
+    });
+
+    it("`advisor` (no flags) leaves write enabled (default true)", async () => {
+        expect.assertions(1);
+
+        const parsed = await parseOptions("advisor", advisorCommand.options ?? [], ["advisor"]);
+
+        expect(parsed.write).not.toBe(false);
+    });
+
+    it("`advisor --write` still parses to write: true", async () => {
+        expect.assertions(1);
+
+        const parsed = await parseOptions("advisor", advisorCommand.options ?? [], ["advisor", "--write"]);
+
+        expect(parsed.write).toBe(true);
     });
 });

@@ -1,0 +1,217 @@
+import type { FC, ReactNode } from "react";
+
+import LunoraLogomark from "@/assets/lunora_logo.svg?react";
+import LunoraWordmark from "@/assets/lunora_text.svg?react";
+import HatchSpacer from "@/components/sections/hatch-spacer";
+import { Shell } from "@/kit/layout";
+import { ArticleHeader } from "@/kit/page-header";
+import SupportSection from "@/pages/home/sections/support";
+
+/**
+ * Press & brand page — the public home for Lunora's logo, wordmark, color
+ * palette, and boilerplate copy. Every band sits in a `Shell`, so this page and
+ * the trailing `SupportSection` meet the same guide lines as the rest of the
+ * site.
+ */
+
+interface Swatch {
+    css: string;
+    name: string;
+    note: string;
+    swatchClass: string;
+}
+
+// The aurora palette — values mirror marketing/design-tokens/tokens.css.
+const swatches: Swatch[] = [
+    { css: "#0E0E11", name: "Eclipse", note: "Page & body base", swatchClass: "bg-canvas border border-hairline-strong" },
+    { css: "hsl(186 84% 56%)", name: "Aurora Cyan", note: "Info · active", swatchClass: "bg-aurora-cyan" },
+    { css: "hsl(256 72% 68%)", name: "Aurora Violet", note: "Primary · brand", swatchClass: "bg-aurora-violet" },
+    { css: "hsl(330 80% 64%)", name: "Aurora Rose", note: "Emphasis", swatchClass: "bg-aurora-rose" },
+];
+
+interface Download {
+    href: string;
+    label: string;
+}
+
+interface LogoBlock {
+    dark?: boolean;
+    downloads: Download[];
+    logo: ReactNode;
+    title: string;
+}
+
+const logoBlocks: LogoBlock[] = [
+    {
+        downloads: [
+            { href: "/brand/lunora-logomark-light.svg", label: "SVG · light" },
+            { href: "/brand/lunora-logomark-dark.svg", label: "SVG · dark" },
+            { href: "/brand/lunora-logomark-violet.svg", label: "SVG · violet" },
+        ],
+        logo: <LunoraLogomark className="h-16 w-auto text-ink" />,
+        title: "Logomark",
+    },
+    {
+        downloads: [
+            { href: "/brand/lunora-wordmark-light.svg", label: "SVG · light" },
+            { href: "/brand/lunora-wordmark-dark.svg", label: "SVG · dark" },
+        ],
+        logo: <LunoraWordmark className="h-9 w-auto text-ink" />,
+        title: "Wordmark",
+    },
+];
+
+const dos = [
+    "Keep clear space around the mark — at least the height of the moon's crescent.",
+    "Use the violet or light mark on dark surfaces; the dark mark on light ones.",
+    'Refer to the project as "Lunora" — capital L, one word.',
+];
+
+const donts = [
+    "Don't recolor the mark outside the aurora palette or add effects/shadows.",
+    "Don't stretch, rotate, or rebuild the logo, or set it on low-contrast backgrounds.",
+    'Don\'t write "lunora", "LunoRa", or "Lunora.sh" in running text.',
+];
+
+const BOILERPLATE =
+    "Lunora is a type-safe, real-time backend framework for Cloudflare Workers and Durable Objects with a Vite-first developer experience. Define your schema, queries, and mutations in TypeScript; Lunora keeps server and client types in lockstep, streams live updates over WebSockets, and runs your data at the edge — sharded or globally replicated.";
+
+const Tile: FC<{ children: ReactNode; dark?: boolean }> = ({ children, dark }) => (
+    <div className={`flex h-40 items-center justify-center ${dark ? "bg-canvas" : "bg-panel"}`}>{children}</div>
+);
+
+const Press: FC = () => (
+    <div className="relative overflow-x-clip bg-canvas" data-theme="dark">
+        <ArticleHeader
+            breadcrumb={[{ label: "Lunora", to: "/" }, { label: "Press" }]}
+            lead="Logos, colors, and copy for writing about Lunora. Please keep the marks intact and use the names as shown."
+            meta="Press & Brand"
+            title="Brand assets"
+        />
+
+        <HatchSpacer />
+
+        {/* logos */}
+        <section data-nav-theme="dark">
+            <Shell>
+                {/* The cells are the grid's direct children and paint an opaque
+                    ground, so the `gap-px` hairline shows only between them —
+                    wrapping a cell in a fading `Reveal` made it translucent and
+                    ruled the hairline straight across its face. */}
+                <div className="grid grid-cols-1 gap-px bg-hairline md:grid-cols-2">
+                    {logoBlocks.map((block) => (
+                        <div className="bg-canvas p-8" key={block.title}>
+                            <h2 className="text-lg font-medium tracking-tight text-ink">{block.title}</h2>
+                            <div className="mt-6 grid grid-cols-2 gap-px overflow-hidden border border-hairline">
+                                <Tile dark>{block.logo}</Tile>
+                                <Tile>
+                                    {block.title === "Logomark" ? (
+                                        <LunoraLogomark className="h-16 w-auto text-canvas" />
+                                    ) : (
+                                        <LunoraWordmark className="h-9 w-auto text-canvas" />
+                                    )}
+                                </Tile>
+                            </div>
+                            <div className="mt-5 flex flex-wrap gap-2">
+                                {block.downloads.map((download) => (
+                                    <a
+                                        className="border border-hairline-strong px-3 py-1.5 text-xs font-medium text-ink-muted transition-colors hover:border-hairline-strong hover:text-ink"
+                                        download
+                                        href={download.href}
+                                        key={download.href}
+                                    >
+                                        {download.label}
+                                    </a>
+                                ))}
+                            </div>
+                        </div>
+                    ))}
+                </div>
+            </Shell>
+        </section>
+
+        <HatchSpacer />
+
+        {/* colors */}
+        <section data-nav-theme="dark">
+            <Shell className="py-16">
+                <h2 className="text-lg font-medium tracking-tight text-ink">Colors</h2>
+                <p className="mt-1.5 max-w-xl text-sm leading-relaxed text-ink-muted">
+                    Eclipse anchors every surface; the aurora ramp (cyan → violet → rose) is an accent — light, not paint.
+                </p>
+                <div className="mt-8 grid grid-cols-2 gap-6 sm:grid-cols-4">
+                    {swatches.map((swatch) => (
+                        <div key={swatch.name}>
+                            <div className={`h-24 w-full ${swatch.swatchClass}`} />
+                            <p className="mt-3 text-sm font-medium text-ink">{swatch.name}</p>
+                            <p className="font-mono text-xs text-ink-muted">{swatch.css}</p>
+                            <p className="mt-0.5 text-xs text-ink-faint">{swatch.note}</p>
+                        </div>
+                    ))}
+                </div>
+            </Shell>
+        </section>
+
+        <HatchSpacer />
+
+        {/* boilerplate */}
+        <section data-nav-theme="dark">
+            <Shell className="py-16">
+                <h2 className="text-lg font-medium tracking-tight text-ink">Boilerplate</h2>
+                <p className="mt-5 max-w-3xl text-base leading-relaxed text-ink-muted">{BOILERPLATE}</p>
+            </Shell>
+        </section>
+
+        <HatchSpacer />
+
+        {/* usage */}
+        <section data-nav-theme="dark">
+            <Shell>
+                <div className="grid grid-cols-1 gap-px bg-hairline md:grid-cols-2">
+                    <div className="bg-canvas p-8">
+                        <h3 className="text-sm font-semibold tracking-[0.12em] text-aurora-cyan uppercase">Do</h3>
+                        <ul className="mt-4 space-y-3">
+                            {dos.map((item) => (
+                                <li className="text-sm leading-relaxed text-ink-muted" key={item}>
+                                    {item}
+                                </li>
+                            ))}
+                        </ul>
+                    </div>
+                    <div className="bg-canvas p-8">
+                        <h3 className="text-sm font-semibold tracking-[0.12em] text-aurora-rose uppercase">Don&apos;t</h3>
+                        <ul className="mt-4 space-y-3">
+                            {donts.map((item) => (
+                                <li className="text-sm leading-relaxed text-ink-muted" key={item}>
+                                    {item}
+                                </li>
+                            ))}
+                        </ul>
+                    </div>
+                </div>
+            </Shell>
+        </section>
+
+        <HatchSpacer />
+
+        {/* contact */}
+        <section data-nav-theme="dark">
+            <Shell className="py-16">
+                <h2 className="text-lg font-medium tracking-tight text-ink">Press inquiries</h2>
+                <p className="mt-3 text-sm text-ink-muted">
+                    Questions, interviews, or anything not covered here —{" "}
+                    <a className="text-aurora-violet underline-offset-4 hover:underline" href="mailto:press@lunora.sh">
+                        press@lunora.sh
+                    </a>
+                    .
+                </p>
+            </Shell>
+        </section>
+
+        <HatchSpacer />
+
+        <SupportSection />
+    </div>
+);
+
+export default Press;

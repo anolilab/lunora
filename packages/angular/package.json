@@ -1,0 +1,95 @@
+{
+    "name": "@lunora/angular",
+    "version": "1.0.0-alpha.189",
+    "description": "Angular reactive adapter for Lunora — signal-based live queries and mutations",
+    "keywords": [
+        "angular",
+        "cloudflare",
+        "durable-objects",
+        "lunora",
+        "realtime",
+        "signals",
+        "workers"
+    ],
+    "homepage": "https://lunora.sh",
+    "bugs": "https://github.com/anolilab/lunora/issues",
+    "license": "FSL-1.1-Apache-2.0",
+    "author": {
+        "name": "Daniel Bannert",
+        "email": "d.bannert@anolilab.de"
+    },
+    "repository": {
+        "type": "git",
+        "url": "git+https://github.com/anolilab/lunora.git",
+        "directory": "packages/angular"
+    },
+    "files": [
+        "./dist",
+        "README.md",
+        "LICENSE.md",
+        "__assets__"
+    ],
+    "type": "module",
+    "sideEffects": false,
+    "main": "./dist/index.mjs",
+    "module": "./dist/index.mjs",
+    "types": "./dist/index.d.ts",
+    "exports": {
+        ".": {
+            "types": "./dist/index.d.ts",
+            "import": "./dist/index.mjs"
+        },
+        "./server": {
+            "types": "./dist/server.d.ts",
+            "import": "./dist/server.mjs"
+        },
+        "./upload": {
+            "types": "./dist/upload.d.ts",
+            "import": "./dist/upload.mjs"
+        },
+        "./package.json": "./package.json"
+    },
+    "publishConfig": {
+        "access": "public"
+    },
+    "scripts": {
+        "build": "pnpm exec packem build --development",
+        "build:prod": "pnpm exec packem build --production",
+        "lint:eslint": "eslint . --max-warnings=0",
+        "lint:eslint:fix": "eslint . --fix",
+        "lint:prettier": "prettier --check . --ignore-path ../../.prettierignore",
+        "lint:prettier:fix": "prettier --write . --ignore-path ../../.prettierignore",
+        "lint:types": "tsc --noEmit",
+        "test": "vitest run",
+        "test:coverage": "vitest run --coverage"
+    },
+    "dependencies": {
+        "@lunora/client": "1.0.0-alpha.203",
+        "@lunora/ratelimit": "1.0.0-alpha.129",
+        "@visulima/storage-client": "catalog:storage"
+    },
+    "devDependencies": {
+        "@angular/core": "catalog:angular",
+        "@angular/platform-browser": "catalog:angular",
+        "@types/node": "catalog:types",
+        "@visulima/packem": "catalog:build",
+        "@vitest/coverage-v8": "catalog:test",
+        "esbuild": "catalog:build",
+        "jsdom": "catalog:frontend",
+        "rxjs": "catalog:angular",
+        "typescript": "catalog:tsc",
+        "vitest": "catalog:test",
+        "zone.js": "catalog:angular"
+    },
+    "peerDependencies": {
+        "@angular/core": "^19.2.0 || ^20.0.0 || ^21.0.0 || ^22.0.0"
+    },
+    "peerDependenciesMeta": {
+        "@angular/core": {
+            "optional": false
+        }
+    },
+    "engines": {
+        "node": "^22.15.0 || >=24.11.0"
+    }
+}

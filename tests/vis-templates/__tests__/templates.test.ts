@@ -1,7 +1,8 @@
-import { readdirSync, readFileSync, statSync } from "node:fs";
-import { dirname, join, resolve } from "node:path";
+import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
+import { dirname, extname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
+import { CLOUDFLARE_TOOLCHAIN_VERSIONS } from "@lunora/config/cloudflare";
 import { describe, expect, test } from "vitest";
 
 /**
@@ -49,10 +50,22 @@ const listDirectories = (parent: string): string[] =>
 /** A Lunora-owned dependency: the unscoped `lunorash` umbrella or any `@lunora/*` package. */
 const isLunoraDep = (name: string): boolean => name === "lunorash" || name.startsWith("@lunora/");
 
-/** Real Lunora package names (the `lunorash` umbrella + every `@lunora/*`) discovered from `packages/<dir>/package.json`. */
+/**
+ * Real Lunora package names (the `lunorash` umbrella + every `@lunora/*`)
+ * discovered from `packages/<dir>/package.json`.
+ *
+ * Directories without a `package.json` are skipped rather than read: `packages/`
+ * routinely holds non-package residue in a working tree — a half-scaffolded
+ * package, a stale `node_modules`-only leftover from an aborted install — and a
+ * throw there takes down the whole suite for something that is not a package at
+ * all. Skipping cannot mask a real regression either: a *renamed or deleted*
+ * package still disappears from this set and still trips assertion (2).
+ */
 const realLunoraPackages = new Set(
     listDirectories(PACKAGES_DIR)
-        .map((dir) => readJson(join(PACKAGES_DIR, dir, "package.json")).name)
+        .map((dir) => join(PACKAGES_DIR, dir, "package.json"))
+        .filter((manifest) => existsSync(manifest))
+        .map((manifest) => readJson(manifest).name)
         .filter((name): name is string => typeof name === "string" && isLunoraDep(name)),
 );
 
@@ -94,10 +107,20 @@ const leadingMajor = (range: string): number | null => {
  * compatibility signal worth gating in CI.
  */
 const LATEST_MAJORS: Record<string, number> = {
-    "@astrojs/cloudflare": 13,
+    // 14 is not cosmetic: 13 depends on `vite: ^7.3.2` while `astro@7` depends on
+    // `vite: ^8.0.13`, so `@cloudflare/vite-plugin` resolved against a second,
+    // older Vite and the build died inside workerd with `Missing field
+    // \`moduleType\``. 14 moved to `vite: ^8.0.13` and peers on `astro: ^7.0.0`.
+    "@astrojs/cloudflare": 14,
     "@astrojs/react": 5,
-    "@cloudflare/workers-types": 4,
+    // 5: the v4 line ended at 4.20260702.1, so a `^4` template never got AI Search,
+    // Artifacts, Analytics SQL or tracing `setStatus` types; v5's default entrypoint
+    // is the latest runtime (v4's was the pre-2021-11-03 compatibility date).
+    "@cloudflare/workers-types": 5,
+    "@opennextjs/cloudflare": 1,
     "@react-router/dev": 7,
+    "@rsbuild/core": 2,
+    "@rsbuild/plugin-react": 2,
     "@solidjs/start": 1,
     "@sveltejs/adapter-cloudflare": 7,
     "@sveltejs/kit": 2,
@@ -109,8 +132,9 @@ const LATEST_MAJORS: Record<string, number> = {
     "@tanstack/solid-router": 1,
     "@tanstack/solid-start": 1,
     "@vitejs/plugin-react": 6,
-    astro: 6,
+    astro: 7,
     isbot: 5,
+    next: 16,
     nuxt: 4,
     react: 19,
     "react-dom": 19,
@@ -125,18 +149,97 @@ const LATEST_MAJORS: Record<string, number> = {
 };
 
 /**
+ * Per-template major overrides — keyed by template → dep → the major it must
+ * stay on. Covers a template that intentionally pins a dep *below*
+ * {@link LATEST_MAJORS}, and the reverse: one that deliberately runs ahead.
+ *
+ * `solid-v2` is the ahead case. It exists to track the Solid 2.0 line while
+ * Solid 2 is still an RC, so {@link LATEST_MAJORS} keeps `solid-js` on the
+ * stable major 1 for every other template (`tanstack-start-solid` is pinned
+ * there by TanStack's own peer range anyway) and this template opts forward.
+ * When Solid 2 ships stable, move these into `LATEST_MAJORS` and drop the
+ * override.
+ */
+const MAJOR_OVERRIDES: Record<string, Record<string, number>> = {
+    "solid-v2": { "solid-js": 2, "vite-plugin-solid": 3 },
+};
+
+/**
  * The Lunora client adapter each template's UI must depend on. `standalone` has
- * no UI (server-only), so it's exempt.
+ * no UI (server-only), and `analog` has no `@lunora/angular` adapter yet (it
+ * wires the vanilla `lunorash/client` through a hand-written service) — both
+ * are exempt with an explicit `null`.
  */
 const REQUIRED_ADAPTER: Record<string, string | null> = {
+    analog: null,
     astro: "@lunora/react",
+    expo: "@lunora/react-native",
+    next: "@lunora/react",
     nuxt: "@lunora/vue",
+    "react-router": "@lunora/react",
+    "rspack-react": "@lunora/react",
+    "solid-v2": "@lunora/solid",
     standalone: null,
     sveltekit: "@lunora/svelte",
     "tanstack-start-react": "@lunora/react",
+    "tanstack-start-react-rspack": "@lunora/react",
     "tanstack-start-solid": "@lunora/solid",
-    vite: "@lunora/react",
+    vinext: "@lunora/react",
+    "vinext-pages": "@lunora/react",
 };
+
+/** Source files a template ships, minus generated output and installed deps. */
+const SOURCE_EXTENSIONS = new Set([".astro", ".svelte", ".ts", ".tsx", ".vue"]);
+const SKIPPED_DIRECTORIES = new Set(["_generated", ".next", ".nuxt", ".output", ".svelte-kit", "dist", "node_modules"]);
+
+const listSourceFiles = (directory: string): string[] =>
+    readdirSync(directory, { withFileTypes: true }).flatMap((entry) => {
+        if (entry.isDirectory()) {
+            return SKIPPED_DIRECTORIES.has(entry.name) ? [] : listSourceFiles(join(directory, entry.name));
+        }
+
+        return SOURCE_EXTENSIONS.has(extname(entry.name)) ? [join(directory, entry.name)] : [];
+    });
+
+/** Drop `//` line comments so a commented-out example never reads as real code. */
+const stripLineComments = (source: string): string => source.replaceAll(/^[\t ]*\/\/.*$/gm, "");
+
+/**
+ * A call site that ROUTES to a non-default shard — `{ shardKey: channelId }` —
+ * as opposed to a type position (`shardKey?: string`) or a destructured
+ * parameter. The negative lookahead keeps `shardKey: string` out.
+ */
+const SENDS_SHARD_KEY = /\bshardKey:\s*(?!(?:null|string|undefined)\b)/;
+
+/**
+ * A SCHEMA that opts the demo backend into sharding. This is the wider trigger:
+ * a template can ship `.shardBy(...)` while none of its own call sites pass a
+ * `shardKey` yet (a static welcome page, an SSR loader added later). The 403 is
+ * the same either way — the first line of app code the user writes against the
+ * sharded table hits it — so the gate is required from the schema onward, not
+ * from the first call site.
+ */
+const DECLARES_SHARD_BY = /\.shardBy\(/;
+
+/** The worker-side gate that makes a non-default `shardKey` reachable at all. */
+const DECLARES_SHARD_GATE = /\ballowUnauthenticatedShardAccess\b|\bauthorizeShard\b/;
+
+/**
+ * The embedded Studio is served at `/__lunora` (`packages/vite/src/studio-plugin.ts`).
+ * `/_lunora` is the reserved RPC/WebSocket/admin plane — a link to it is not a
+ * near-miss that redirects, it falls through to the app's SSR handler and 404s.
+ */
+const SINGLE_UNDERSCORE_STUDIO_HREF = /href=["']\/_lunora["']/;
+
+/**
+ * Local-secret files every template must keep out of version control.
+ *
+ * `.dev.vars` is where `lunora dev` and `lunora env generate --set` write real
+ * generated secrets (including `LUNORA_ADMIN_TOKEN`); `.env` is what a Vite user
+ * creates for `VITE_LUNORA_URL` and friends. An ignore file listing only
+ * `.env*.local` does NOT match a plain `.env`.
+ */
+const IGNORED_SECRET_FILES = [".dev.vars", ".env"];
 
 describe("templates/* package.json validation", () => {
     test("there is at least one template", () => {
@@ -186,13 +289,80 @@ describe("templates/* package.json validation", () => {
             }
         });
 
+        /**
+         * A template that shards its demo backend — by declaring `.shardBy(...)` or
+         * by routing a call to a non-default shard — must also open or gate shard
+         * access on its worker. Without `allowUnauthenticatedShardAccess` or an
+         * `authorizeShard`, `createWorker` default-denies every
+         * `shardKey !== "__root__"` with a 403 `FORBIDDEN_SHARD` — so the scaffold's
+         * own first page load throws before a user has written a line of code.
+         */
+        test("a template that shards its backend declares a shard gate", () => {
+            const sources = listSourceFiles(join(TEMPLATES_DIR, templateName)).map((file) => stripLineComments(readFileSync(file, "utf8")));
+
+            if (!sources.some((source) => SENDS_SHARD_KEY.test(source) || DECLARES_SHARD_BY.test(source))) {
+                return;
+            }
+
+            expect(
+                sources.some((source) => DECLARES_SHARD_GATE.test(source)),
+                `${templateName} shards its backend but declares neither allowUnauthenticatedShardAccess nor authorizeShard`,
+            ).toBe(true);
+        });
+
+        /**
+         * The welcome page's Studio card must point at the Studio, not at the
+         * reserved RPC plane. A one-underscore `/_lunora` href is a dead link on a
+         * freshly scaffolded project's very first screen.
+         */
+        test("links to the Studio at /__lunora, never the reserved /_lunora plane", () => {
+            const offenders = listSourceFiles(join(TEMPLATES_DIR, templateName)).filter((file) =>
+                SINGLE_UNDERSCORE_STUDIO_HREF.test(stripLineComments(readFileSync(file, "utf8"))),
+            );
+
+            expect(offenders, `${templateName} links href="/_lunora" (the RPC plane); the Studio is at /__lunora`).toStrictEqual([]);
+        });
+
+        /**
+         * A scaffold that does not ignore the files the CLI writes secrets into
+         * hands the user a `git add .` away from committing them.
+         */
+        test("ignores the local secret files the CLI writes", () => {
+            const ignorePath = join(TEMPLATES_DIR, templateName, ".gitignore");
+
+            expect(existsSync(ignorePath), `${templateName} ships no .gitignore`).toBe(true);
+
+            const patterns = new Set(
+                readFileSync(ignorePath, "utf8")
+                    .split("\n")
+                    .map((line) => line.trim()),
+            );
+
+            for (const secretFile of IGNORED_SECRET_FILES) {
+                expect(patterns, `${templateName}/.gitignore does not ignore ${secretFile}`).toContain(secretFile);
+            }
+        });
+
+        /**
+         * Templates are fetched at runtime and cannot import the toolchain ranges,
+         * so they are held to them here: a template on a stale range is how every
+         * scaffold stayed on the dead workers-types v4 line.
+         */
+        test("declares the Cloudflare toolchain at exactly CLOUDFLARE_TOOLCHAIN_VERSIONS", () => {
+            for (const [name, range] of Object.entries(CLOUDFLARE_TOOLCHAIN_VERSIONS)) {
+                if (deps[name] !== undefined) {
+                    expect(deps[name], `${templateName} → ${name}`).toBe(range);
+                }
+            }
+        });
+
         test("external framework deps are on the latest supported major", () => {
             for (const [name, range] of Object.entries(deps)) {
                 if (isLunoraDep(name)) {
                     continue;
                 }
 
-                const expectedMajor = LATEST_MAJORS[name];
+                const expectedMajor = MAJOR_OVERRIDES[templateName]?.[name] ?? LATEST_MAJORS[name];
 
                 if (expectedMajor === undefined) {
                     continue;

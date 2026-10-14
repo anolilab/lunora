@@ -1,6 +1,9 @@
 ---
 title: Limits
 description: Cloudflare ceilings you should keep in your head.
+related:
+    - to: /docs/concepts/sharding
+    - to: /docs/deployment
 ---
 
 Lunora's design choices are driven by Cloudflare's per-primitive limits.
@@ -9,14 +12,50 @@ or `.global()`.
 
 ## Durable Objects
 
-| Limit                | Value           | Implication                                          |
-| -------------------- | --------------- | ---------------------------------------------------- |
-| SQLite size / DO     | **10 GB**       | Plan to shard before you cross 1 GB                  |
-| Sustained req/s / DO | **~1 000**      | Hot DO = sharding signal                             |
-| CPU per request      | **30 s**        | Long tasks → action + scheduler, not mutation        |
-| WebSockets / DO      | **~32 000**     | Hibernated, this is generous; pre-hibernate, less so |
-| DOs / account        | **Unlimited**   | Sharding is free of administrative overhead          |
-| Storage tx           | **128 KB / op** | Batch large writes via `ctx.db.insertMany`           |
+| Limit                | Value         | Implication                                          |
+| -------------------- | ------------- | ---------------------------------------------------- |
+| SQLite size / DO     | **10 GB**     | Plan to shard before you cross 1 GB                  |
+| Sustained req/s / DO | **~1 000**    | Hot DO = sharding signal                             |
+| CPU per request      | **30 s**      | Long tasks → action + scheduler, not mutation        |
+| Alarm handler        | **15 min**    | Wall-clock, per invocation                           |
+| WebSockets / DO      | **~32 000**   | Hibernated, this is generous; pre-hibernate, less so |
+| WS message size      | **32 MiB**    | Received messages                                    |
+| Outgoing connections | **6**         | Simultaneous, per request                            |
+| DOs / account        | **Unlimited** | Sharding is free of administrative overhead          |
+
+## Statement limits (Durable Objects **and** D1)
+
+These are the ones that surprise people, because they are set by the Workers
+runtime rather than by SQLite, and they are **far** below SQLite's own defaults.
+D1 runs the same build, so both engines share them. Cross one and the statement
+fails at runtime with `SQLITE_ERROR`; it does not merely run slower.
+
+| Limit                        | Value        | Stock SQLite | What it bounds                                        |
+| ---------------------------- | ------------ | ------------ | ----------------------------------------------------- |
+| Terms in a compound `SELECT` | **5**        | 500          | `UNION` / `UNION ALL` / `INTERSECT` branches          |
+| Bound parameters             | **100**      | 500 000      | `?` placeholders in one statement                     |
+| `LIKE` pattern               | **50 bytes** | 50 000       | The pattern, not the column                           |
+| Columns per table            | **100**      | 2 000        | `.global()` tables take one column per declared field |
+| Row / string / BLOB          | **2 MB**     | 1 GB         | One document, as stored                               |
+| SQL statement text           | **100 KB**   | 1 GB         | The query text itself                                 |
+| Expression depth             | **100**      | 1 000        | Nested `AND`/`OR` chains, long `+` chains             |
+| Attached databases           | **0**        | 10           | `ATTACH` is unavailable                               |
+
+**Lunora handles most of these for you.** Its generated SQL nests compound
+`SELECT`s five at a time, binds a long `in` list as a single JSON parameter,
+chunks multi-row `INSERT`s, and compiles `contains` to a position function
+rather than a `LIKE` pattern, so an id probe, a wide `where … in`, or a
+50-character search term does not hit a wall as your schema grows.
+
+Two are yours to respect, because no rewrite can absorb them:
+
+- **A document over 2 MB cannot be stored.** Keep large payloads in R2
+  (`@lunora/storage`) and put a reference on the row. Note the limit is on the
+  _stored_ bytes, which are UTF-8: multi-byte text (CJK, emoji) costs up to 3×
+  its character count, and `v.bigint()` / `v.bytes()` columns are stored twice
+  on a shard-local table.
+- **A `.global()` table over 100 columns cannot be created.** Split it, or move
+  the extra fields into one object field.
 
 ## D1
 
@@ -29,32 +68,112 @@ or `.global()`.
 
 ## R2
 
-| Limit       | Value    | Implication                               |
-| ----------- | -------- | ----------------------------------------- |
-| Object size | **5 TB** | Practically unlimited                     |
-| Egress      | **Free** | Critical — design around direct downloads |
-| Class A ops | metered  | Bulk-list judiciously                     |
+| Limit       | Value    | Implication                              |
+| ----------- | -------- | ---------------------------------------- |
+| Object size | **5 TB** | Practically unlimited                    |
+| Egress      | **Free** | Critical: design around direct downloads |
+| Class A ops | metered  | Bulk-list judiciously                    |
 
 ## Workers
 
-| Limit           | Value                           | Implication                                         |
-| --------------- | ------------------------------- | --------------------------------------------------- |
-| Bundle size     | **10 MB**                       | Lazy-load big deps; avoid bundling unused providers |
-| CPU per request | **30 s**                        | Same envelope as DO                                 |
-| Subrequests     | **50** (Free) / **1000** (Paid) | Fan-out reads are a Paid-plan optimisation          |
-| Env var size    | **5 KB** total                  | Use D1 or KV for config above that                  |
+| Limit                 | Value                                                    | Implication                                                          |
+| --------------------- | -------------------------------------------------------- | -------------------------------------------------------------------- |
+| Bundle size           | **64 MiB** uncompressed (no compressed limit)            | Lazy-load big deps; avoid bundling unused providers                  |
+| CPU per request       | **30 s**                                                 | Same envelope as DO                                                  |
+| Subrequests, external | **50** (Free) / **10 000** (Paid, configurable to 10 M)  | `fetch()` to the internet                                            |
+| Subrequests, internal | **1 000** (Free) / configured limit (default **10 000**) | Durable Objects, KV, R2, D1; a cross-shard read spends one per shard |
+| Env var size          | **5 KB** total                                           | Use D1 or KV for config above that                                   |
+
+## Queues
+
+| Limit               | Value                 | Implication                                             |
+| ------------------- | --------------------- | ------------------------------------------------------- |
+| Message size        | **128 KB**            | ~100 bytes of that is internal metadata                 |
+| `sendBatch`         | **100 msgs / 256 KB** | Whichever comes first; `ctx.queues` enforces the count  |
+| Consumer batch      | **100 messages**      | Per consumer invocation                                 |
+| Consumer wall-clock | **15 min**            | CPU configurable up to 5 min                            |
+| Retries             | **100**               | Then the message goes to the DLQ                        |
+| Throughput / queue  | **5 000 msgs/s**      | Past it, sends get `Too Many Requests`                  |
+| Backlog / queue     | **25 GB**             | Then `Storage Limit Exceeded`                           |
+| `delaySeconds`      | **12 h**              | `ctx.queues` refuses more; longer → `@lunora/scheduler` |
+
+## Pipelines
+
+| Limit                 | Value      | Implication                                                       |
+| --------------------- | ---------- | ----------------------------------------------------------------- |
+| Payload / ingest call | **5 MB**   | `ctx.pipelines.send(records)` sends one call; chunk a large batch |
+| Ingest rate / stream  | **5 MB/s** | Sustained; past it the stream throttles                           |
+| Streams / account     | **20**     | Open-beta ceiling, raisable by request                            |
+| Pipelines / account   | **20**     | Open-beta ceiling, raisable by request                            |
+| Sinks / account       | **20**     | Open-beta ceiling, raisable by request                            |
+
+`send` accepts one record or an array and forwards the array as a single
+ingestion call, so the 5 MB ceiling is a property of what you pass it. Nothing
+measures it locally (the byte count would mean serializing every record twice
+on an egress path), so a batch past the limit is rejected by Cloudflare rather
+than by Lunora. Split large batches across calls.
+
+## Workers AI + Vectorize
+
+| Limit                     | Value      | Implication                                                |
+| ------------------------- | ---------- | ---------------------------------------------------------- |
+| Vector metadata           | **10 KiB** | The whole object per vector, not just the chunk text       |
+| `topK` with full metadata | **50**     | Cloudflare V2's ceiling, and what `defineRag` clamps to    |
+| `topK` otherwise          | **100**    | What a `textStore` unlocks by keeping text out of metadata |
+
+Legacy Vectorize **V1** indexes cap `topK` at 20 and reject a larger value
+remotely. A binding handle does not expose its index version, so `defineRag`
+cannot branch on it and does not clamp to 20 — on a V1 index, keep `topK` at or
+below 20 yourself.
+
+The ceiling covers the **whole** metadata object (chunk text, Lunora's
+bookkeeping keys, and any `metadata` you attach), so `defineRag` checks it in
+two places.
+
+At index time it measures the serialized metadata of each chunk and refuses one
+that would not fit, naming what pushed it over. This is the check that holds:
+`chunkSize` counts characters while the ceiling counts bytes, so multibyte text
+costs up to three bytes each, and your own `metadata` is not known until a
+document is indexed.
+
+When the RAG is defined it also rejects a `chunkSize` that could not fit
+whatever the ceiling allows, so an unworkable config fails at startup rather
+than on every upsert. That earlier check applies only where Lunora stores chunk
+text in the vector's metadata: a `textStore` keeps the text out entirely, and a
+custom `chunk` splitter makes `chunkSize` inert, so neither is checked.
+
+## Workers KV
+
+| Limit            | Value            | Implication                                |
+| ---------------- | ---------------- | ------------------------------------------ |
+| Key size         | **512 bytes**    | Measured in UTF-8 bytes, not characters    |
+| Value size       | **25 MiB**       | Large blobs belong in R2                   |
+| Key metadata     | **1 024 bytes**  | Serialized JSON                            |
+| Writes / key     | **1 per second** | KV is eventually consistent; not a counter |
+| Ops / invocation | **1 000**        | A bulk request counts as one               |
+
+## Workflows
+
+| Limit                | Value             | Implication                              |
+| -------------------- | ----------------- | ---------------------------------------- |
+| Steps per workflow   | **10 000** (Paid) | 1 024 on Free; raisable to 25 000        |
+| Step output          | **1 MiB**         | Stream large results to R2               |
+| Event payload        | **1 MiB**         | Pass a reference, not the payload        |
+| Persisted state      | **1 GB** (Paid)   | 100 MB on Free                           |
+| Concurrent instances | **50 000** (Paid) | Instances that are `waiting` don't count |
+| Step sleep           | **365 days**      | Long waits are free                      |
 
 ## Containers
 
 Requires the **Workers Paid** plan. Images must be `linux/amd64`.
 
-| Limit                | Value                                   | Implication                                             |
-| -------------------- | --------------------------------------- | ------------------------------------------------------- |
-| Instance types       | `lite` → `standard-4`                   | Or custom up to **4 vCPU / 12 GiB / 20 GB disk**        |
-| Disk                 | **ephemeral**                           | Persist to R2 (`@lunora/storage`), not local disk       |
-| Concurrent / account | **1 500 vCPU / 6 TiB mem / 30 TB disk** | Raisable via support                                    |
-| Registry storage     | **50 GB / account**                     | Prune old images with `lunora containers images delete` |
-| Autoscaling          | **none yet**                            | Fixed pools; `.any()` picks uniformly                   |
+| Limit                | Value                                   | Implication                                                        |
+| -------------------- | --------------------------------------- | ------------------------------------------------------------------ |
+| Instance types       | `lite` → `standard-4`                   | Or custom up to **4 vCPU / 12 GiB / 20 GB disk**                   |
+| Disk                 | **ephemeral**                           | Persist to R2 (`@lunora/storage`), not local disk                  |
+| Concurrent / account | **1 500 vCPU / 6 TiB mem / 30 TB disk** | Raisable via support                                               |
+| Registry storage     | **50 GB / account**                     | Prune old images with `lunora cloudflare containers images delete` |
+| Autoscaling          | **none yet**                            | Fixed pools; `.any()` picks uniformly                              |
 
 Billing is **active-CPU** based: instances scale to zero on `sleepAfter` and
 cost nothing idle. **Egress is billed** (~$0.025/GB NA+EU, more elsewhere),
@@ -63,15 +182,23 @@ unlike R2, which is free. See the
 
 ## When Lunora warns you
 
-The runtime emits warnings (and the dev overlay shows a banner) when:
+The Studio's **Advisors** pages carry the limit warnings, alongside the rest of
+the schema and performance lints:
 
-- the `__root__` DO crosses **1 GB** of SQLite
-- a single DO is sustaining **>700 req/s**
-- a fan-out query touches more than **100 shards** in one invocation
+| Lint                             | Fires when                                                                                                                            |
+| -------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------- |
+| `global_table_near_column_limit` | A `.global()` table reaches **90** columns, against D1's 100                                                                          |
+| `fan_out_breadth`                | A shard group reaches **500** active shards, wide enough that a cross-shard read over it would strain the internal-subrequest ceiling |
+| `hot_shard`                      | One shard takes a dominant share of its group's traffic (a distribution, not a ceiling)                                               |
 
-These warnings fire well below the hard ceiling, so you have time to react.
+Each fires with runway, because the remediation is a design change (split a
+table, narrow a read, re-key a shard) and that is not something you can act on
+in the request that fails.
 
-## See also
-
-- [Sharding](/docs/concepts/sharding)
-- [Deployment](/docs/deployment)
+The statement limits above are different in kind: there is no warning band,
+because there is no gradual degradation to warn about. A statement either fits
+or it raises `SQLITE_ERROR`. Where Lunora can keep you under one it does so
+silently; where it cannot it raises an error naming the limit and what to do
+instead — a `PAYLOAD_TOO_LARGE` (413) for an oversized document on a
+shard-local table, and a create-time error for the 100-column global table.
+Nothing pre-measures a document, so the check happens on the write.

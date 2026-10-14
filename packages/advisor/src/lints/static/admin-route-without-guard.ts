@@ -30,23 +30,15 @@ const adminRouteWithoutGuard: Lint = {
             return [];
         }
 
-        const findings = [];
-
-        for (const route of context.adminRoutes) {
-            if (route.usesGuard) {
-                continue;
-            }
-
-            findings.push(
+        return context.adminRoutes
+            .filter((route) => !route.usesGuard)
+            .map((route) =>
                 emit(adminRouteWithoutGuard, {
                     cacheKey: `admin_route_without_guard:${route.file}:${route.method}:${route.path}`,
                     detail: `Route \`${route.method} ${route.path}\` (\`${route.exportName}\` in ${route.file}) is on an admin/privileged path but its handler shows no auth/admin guard. Assert an authorized caller before doing privileged work.`,
                     metadata: { exportName: route.exportName, file: route.file, method: route.method, path: route.path },
                 }),
             );
-        }
-
-        return findings;
     },
     source: "static",
     title: "Admin route without an auth guard",

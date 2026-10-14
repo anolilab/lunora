@@ -1,0 +1,4 @@
+# `max_width` matches the repo's Prettier `printWidth` (160) rather than
+# rustfmt's default 100, so the Rust transport wraps like every other language in
+# `sdks/` and a reviewer reading two ports side by side sees the same shape.
+max_width = 160

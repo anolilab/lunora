@@ -1,23 +1,32 @@
-import { useLunora } from "@lunora/react";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import type { ChangeEvent, CSSProperties, ReactElement } from "react";
-import { useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
-import { LiveError } from "../../components/live-status";
-import { ShardInput } from "../../components/shard-input";
+import { LOG_LEVEL_ORDER } from "../../../../../shared/log-event";
+// Bundler-inlined, zero-dep `key=value` field renderer and severity ordering
+// shared with the runtime sinks and the dev-terminal formatter (see CLAUDE.md
+// `shared/` rules).
+import { formatLogFields } from "../../../../../shared/log-fields";
+import ErrorAlert from "../../components/error-alert";
 import { Badge } from "../../components/ui/badge";
 import { EmptyState } from "../../components/ui/empty-state";
-import { Input } from "../../components/ui/input";
-import useLiveAdmin from "../../hooks/use-live-admin";
+import { useAdminQuery } from "../../hooks/use-admin-query";
+import useOpenTrace from "../../hooks/use-open-trace";
+import { useShardKey } from "../../hooks/use-shard-key";
 import { useT } from "../../i18n/i18n-context";
 import type { LogEntry, LogLevel, RequestLogEntry, RequestLogQuery, RequestOutcome } from "../../lib/admin";
 import { ADMIN_FUNCTIONS } from "../../lib/admin";
-import { CLOUDFLARE_OBSERVABILITY_URL } from "../../lib/cf-links";
-import { adminRef, callOptions, errorMessage } from "../../lib/internal";
 import { recordShard } from "../../lib/shard-history";
-import { cn } from "../../lib/utils";
 import flooredRectObserver from "../../lib/virtual-rect";
-import useLiveShardSeed from "../data/hooks/use-live-shard-seed";
+import { ArchiveFeed } from "./archive-feed";
+import type { BadgeVariant } from "./log-level-variant";
+import LogLine from "./log-line";
+import LogsErrorFilters from "./logs-error-filters";
+import LogsRequestFilters from "./logs-request-filters";
+import type { LogSummary, SummaryBucket } from "./logs-summary";
+import { LogsSummary } from "./logs-summary";
+import type { LogsView } from "./logs-view-bar";
+import { LogsViewBar } from "./logs-view-bar";
 
 /** Fixed height of the scroll viewport; bounds how many rows can be live at once. */
 const SCROLL_HEIGHT = 400;
@@ -36,20 +45,46 @@ const ROW_BASE_STYLE: CSSProperties = {
     width: "100%",
 };
 
-type BadgeVariant = "default" | "destructive" | "outline" | "secondary";
-
-/** Maps a log level to a shadcn Badge variant for Supabase-style severity chips. */
-const LEVEL_VARIANT: Record<LogLevel, BadgeVariant> = {
-    debug: "secondary",
-    error: "destructive",
-    info: "outline",
-    warn: "secondary",
-};
-
 /** Tone per request outcome — an `error` reads as the most alarming. */
 const OUTCOME_VARIANT: Record<RequestOutcome, BadgeVariant> = {
     error: "destructive",
     ok: "secondary",
+};
+
+interface TraceLinkCellProps {
+    /** Open the Traces panel filtered to this row's trace. */
+    readonly onOpenTrace: (traceId: string) => void;
+    /** Absent for a row with no ambient trace, or one predating the field. */
+    readonly traceId?: string;
+}
+
+/**
+ * The trailing "Trace" cell shared by both log views — the drill-down from a
+ * line to the waterfall it came from, instead of matching timestamps by eye.
+ *
+ * Renders an empty cell rather than nothing when there is no trace, so the
+ * column width stays constant down the virtualized list. The two views are
+ * mutually exclusive, so both use one test id.
+ */
+const TraceLinkCell = ({ onOpenTrace, traceId }: TraceLinkCellProps): ReactElement => {
+    const t = useT();
+
+    return (
+        <span className="w-16 shrink-0 text-right" role="gridcell">
+            {traceId === undefined ? null : (
+                <button
+                    className="text-primary underline-offset-2 hover:underline"
+                    data-testid="lg-trace-link"
+                    onClick={() => {
+                        onOpenTrace(traceId);
+                    }}
+                    type="button"
+                >
+                    {t("Trace")}
+                </button>
+            )}
+        </span>
+    );
 };
 
 interface LogRowProps {
@@ -57,6 +92,8 @@ interface LogRowProps {
     readonly index: number;
     /** react-virtual's ref-callback that measures the rendered row. */
     readonly measureRef: (node: HTMLDivElement | null) => void;
+    /** Open the Traces panel filtered to this line's trace. */
+    readonly onOpenTrace: (traceId: string) => void;
     /** Pixel offset of this row from the top of the virtualized list. */
     readonly start: number;
 }
@@ -67,7 +104,7 @@ interface LogRowProps {
  * offset) is a `useMemo`-stable reference — keeping the hot map body free of
  * fresh inline objects.
  */
-const LogRow = ({ entry, index, measureRef, start }: LogRowProps): ReactElement => {
+const LogRow = ({ entry, index, measureRef, onOpenTrace, start }: LogRowProps): ReactElement => {
     const style = { ...ROW_BASE_STYLE, transform: `translateY(${String(start)}px)` };
 
     return (
@@ -79,18 +116,8 @@ const LogRow = ({ entry, index, measureRef, start }: LogRowProps): ReactElement 
             role="row"
             style={style}
         >
-            <span className="w-44 shrink-0 tabular-nums text-muted-foreground" role="gridcell">
-                {new Date(entry.timestamp).toLocaleString()}
-            </span>
-            <span className="w-20 shrink-0" role="gridcell">
-                <Badge variant={LEVEL_VARIANT[entry.level]}>{entry.level}</Badge>
-            </span>
-            <span className="w-48 shrink-0 truncate text-muted-foreground" role="gridcell">
-                {entry.functionPath ?? "—"}
-            </span>
-            <span className="flex-1 truncate" role="gridcell">
-                {entry.message}
-            </span>
+            <LogLine entry={entry} />
+            <TraceLinkCell onOpenTrace={onOpenTrace} traceId={entry.traceId} />
         </div>
     );
 };
@@ -99,6 +126,8 @@ interface RequestRowProps {
     readonly entry: RequestLogEntry;
     readonly index: number;
     readonly measureRef: (node: HTMLDivElement | null) => void;
+    /** Open the Traces panel filtered to this dispatch's trace. */
+    readonly onOpenTrace: (traceId: string) => void;
     readonly start: number;
 }
 
@@ -110,7 +139,7 @@ const tablesLabel = (tables: string[]): string => (tables.length === 0 ? "—" :
  * log adds over the in-memory error buffer: function path, shard, acting user,
  * outcome, duration, and the read/written table sets.
  */
-const RequestRow = ({ entry, index, measureRef, start }: RequestRowProps): ReactElement => {
+const RequestRow = ({ entry, index, measureRef, onOpenTrace, start }: RequestRowProps): ReactElement => {
     const style = { ...ROW_BASE_STYLE, transform: `translateY(${String(start)}px)` };
 
     return (
@@ -145,6 +174,7 @@ const RequestRow = ({ entry, index, measureRef, start }: RequestRowProps): React
                     ? entry.errorMessage
                     : `r:${tablesLabel(entry.tablesRead)} · w:${tablesLabel(entry.tablesWritten)}`}
             </span>
+            <TraceLinkCell onOpenTrace={onOpenTrace} traceId={entry.traceId} />
         </div>
     );
 };
@@ -153,9 +183,6 @@ interface LogsPanelProps {
     /** Shard key the panel reports on. Defaults to the root shard. */
     readonly initialShardKey?: string;
 }
-
-const GET_LOGS = adminRef(ADMIN_FUNCTIONS.getLogs);
-const GET_REQUEST_LOG = adminRef(ADMIN_FUNCTIONS.getRequestLog);
 
 /**
  * Coerce a (possibly partial or malformed) admin result into its `entries`
@@ -170,7 +197,6 @@ const entriesOf = <T,>(result: unknown): T[] => {
 };
 
 /** Which feed the panel shows: the durable per-request log, or the in-memory error buffer. */
-type LogsView = "errors" | "requests";
 
 /**
  * Build the server-side `getRequestLog` filter args, dropping empty fields so an
@@ -202,9 +228,6 @@ const buildRequestQuery = (filters: {
 
     return query;
 };
-
-/** The four log severities, in ascending order, for the multi-select control. */
-const LOG_LEVELS = ["debug", "info", "warn", "error"] as const;
 
 /** A relative time-range window over the Errors buffer, or `all` (no bound). */
 type TimeRange = "15m" | "1h" | "5m" | "all";
@@ -257,23 +280,11 @@ const filterLogs = (entries: ReadonlyArray<LogEntry>, criteria: LogFilterCriteri
             return false;
         }
 
-        return needle === "" || entry.message.toLowerCase().includes(needle);
+        // The message search also matches structured field values, so filtering
+        // on e.g. an `orderId` a handler logged just works.
+        return needle === "" || entry.message.toLowerCase().includes(needle) || formatLogFields(entry.fields).toLowerCase().includes(needle);
     });
 };
-
-/** One `{ key, count }` bucket of a grouped summary, used for level and path rollups. */
-interface SummaryBucket {
-    readonly count: number;
-    readonly key: string;
-}
-
-/** Grouped counts over a set of entries: by level (severity order) and by function path. */
-interface LogSummary {
-    readonly byLevel: SummaryBucket[];
-    readonly byPath: SummaryBucket[];
-    readonly total: number;
-}
-
 /** Em-dash stand-in for entries without a `functionPath`, so they still group. */
 const NO_PATH_KEY = "—";
 
@@ -295,7 +306,8 @@ const summarizeLogs = (entries: ReadonlyArray<LogEntry>): LogSummary => {
         pathCounts.set(pathKey, (pathCounts.get(pathKey) ?? 0) + 1);
     }
 
-    const byLevel: SummaryBucket[] = LOG_LEVELS.filter((level) => levelCounts.has(level)).map((level) => {
+    // react-doctor-disable-next-line react-doctor/js-combine-iterations -- two passes over LOG_LEVEL_ORDER, a five-element constant
+    const byLevel: SummaryBucket[] = LOG_LEVEL_ORDER.filter((level) => levelCounts.has(level)).map((level) => {
         return { count: levelCounts.get(level) ?? 0, key: level };
     });
 
@@ -307,51 +319,6 @@ const summarizeLogs = (entries: ReadonlyArray<LogEntry>): LogSummary => {
 
     return { byLevel, byPath, total: entries.length };
 };
-
-interface LevelToggleProps {
-    readonly level: LogLevel;
-    /** Lifts the per-item click out of the map so the row carries no inline closure. */
-    readonly onToggle: (level: LogLevel) => void;
-    readonly selected: boolean;
-}
-
-/**
- * One level chip in the multi-select. Extracted so each chip owns a stable,
- * `useCallback`-bound click handler (no fresh closure per render of the map).
- */
-const LevelToggle = ({ level, onToggle, selected }: LevelToggleProps): ReactElement => {
-    const onClick = (): void => {
-        onToggle(level);
-    };
-
-    return (
-        <button
-            aria-pressed={selected}
-            className={cn("rounded-md border px-2 py-1 text-xs", selected ? "border-border bg-muted font-medium" : "border-input text-muted-foreground")}
-            data-testid={`logs-level-${level}`}
-            onClick={onClick}
-            type="button"
-        >
-            {level}
-        </button>
-    );
-};
-
-interface SummaryBucketRowProps {
-    readonly bucket: SummaryBucket;
-}
-
-/** One `key → count` row in a summary group. */
-const SummaryBucketRow = ({ bucket }: SummaryBucketRowProps): ReactElement => (
-    <div className="flex items-center justify-between gap-4 px-3 py-1 font-mono text-xs" data-testid="logs-summary-row" role="row">
-        <span className="truncate text-muted-foreground" role="gridcell">
-            {bucket.key}
-        </span>
-        <span className="shrink-0 tabular-nums" role="gridcell">
-            {bucket.count}
-        </span>
-    </div>
-);
 
 /**
  * The shard's log feed, newest first, over the gated `__lunora_admin__:*` RPC
@@ -373,14 +340,10 @@ const SummaryBucketRow = ({ bucket }: SummaryBucketRowProps): ReactElement => (
  * NOT re-stream), a deep-link to Cloudflare Workers Observability is provided.
  */
 export const LogsPanel = ({ initialShardKey }: LogsPanelProps): ReactElement => {
-    const client = useLunora();
     const t = useT();
 
     const [view, setView] = useState<LogsView>("requests");
-    const [shardKey, setShardKey] = useState<string>(initialShardKey ?? "");
-    const [entries, setEntries] = useState<LogEntry[]>([]);
-    const [requests, setRequests] = useState<RequestLogEntry[]>([]);
-    const [error, setError] = useState<null | string>(null);
+    const { queryShardKey, setShardKey, shardKey } = useShardKey(initialShardKey);
     const [search, setSearch] = useState<string>("");
     // Errors-view client-side filters: a level allow-set (empty = all levels), a
     // function-path substring, and a relative time window. AND-composed.
@@ -395,72 +358,52 @@ export const LogsPanel = ({ initialShardKey }: LogsPanelProps): ReactElement => 
     const [userIdFilter, setUserIdFilter] = useState<string>("");
     const [tableFilter, setTableFilter] = useState<string>("");
     const [outcomeFilter, setOutcomeFilter] = useState<string>("all");
-    // Always-on live channel; this only holds a rejection message (e.g. missing
-    // admin token) so the panel can say why it stopped updating.
-    const [liveError, setLiveError] = useState<string | undefined>(undefined);
 
-    // Typed as a plain record too, so it satisfies the `query`/`useLiveAdmin`
-    // args surface (`Record<string, unknown>`) without a per-call-site cast.
+    // Typed as a plain record too, so it satisfies the `useAdminQuery` args
+    // surface (`Record<string, unknown>`) without a per-call-site cast. Folding it
+    // into the query args means changing a correlation filter re-fetches the
+    // durable Requests log server-side (rather than filtering client-side).
     const requestQuery = buildRequestQuery({ functionPathPrefix: pathPrefix, outcome: outcomeFilter, tableTouched: tableFilter, userId: userIdFilter });
 
-    const refresh = async (shard: string): Promise<void> => {
-        setError(null);
+    // One-shot read + always-on live subscription per view, gated to the active
+    // one so only the shown feed is fetched/subscribed. Each server push replaces
+    // that view's buffer so new entries appear without a manual refresh; the
+    // Requests channel carries the same correlation filters as the one-shot read.
+    const requestsQuery = useAdminQuery<{ entries?: unknown }>(ADMIN_FUNCTIONS.getRequestLog, requestQuery, {
+        enabled: view === "requests",
+        live: true,
+        shardKey: queryShardKey,
+    });
 
-        try {
-            if (view === "requests") {
-                const result = await client.query(GET_REQUEST_LOG, requestQuery, callOptions(shard));
-
-                recordShard(shard);
-                setRequests(entriesOf<RequestLogEntry>(result));
-            } else {
-                const result = await client.query(GET_LOGS, {}, callOptions(shard));
-
-                recordShard(shard);
-                setEntries(entriesOf<LogEntry>(result));
-            }
-        } catch (error_) {
-            setEntries([]);
-            setRequests([]);
-            setError(errorMessage(error_));
-
-            // Rethrow so the shard-seed hook doesn't commit a shard that failed.
-            throw error_;
-        }
-    };
-
-    // Debounced shard seed + commit-on-success; also re-seeds when the view or the
-    // server-side request filters change (so the Requests view re-queries the
-    // durable log rather than filtering client-side). Replaces the old Refresh button.
-    const committedShard = useLiveShardSeed(shardKey, refresh, [view, requestQuery]);
-
-    // Live channel: always on for the active view; each server push replaces that
-    // view's buffer so new entries appear without a manual refresh. The Requests
-    // channel carries the same correlation filters as the one-shot read.
-    useLiveAdmin(
-        ADMIN_FUNCTIONS.getRequestLog,
-        requestQuery,
-        committedShard ?? "",
-        (result) => {
-            setError(null);
-            setLiveError(undefined);
-            setRequests(entriesOf<RequestLogEntry>(result));
-        },
-        view === "requests" && committedShard !== undefined,
-        setLiveError,
-    );
-
-    useLiveAdmin(
+    const errorsQuery = useAdminQuery<{ entries?: unknown }>(
         ADMIN_FUNCTIONS.getLogs,
         {},
-        committedShard ?? "",
-        (result) => {
-            setError(null);
-            setLiveError(undefined);
-            setEntries(entriesOf<LogEntry>(result));
+        {
+            enabled: view === "errors",
+            live: true,
+            shardKey: queryShardKey,
         },
-        view === "errors" && committedShard !== undefined,
-        setLiveError,
     );
+
+    const activeQuery = view === "requests" ? requestsQuery : errorsQuery;
+    const { error, errorSource, isLoading: activeLoading, liveError } = activeQuery;
+
+    const openTrace = useOpenTrace(queryShardKey);
+
+    // Coerce each view's resolved payload into its entries array (a one-shot read
+    // or live push without an `entries` array yields `[]`); an unloaded gated
+    // query's `undefined` data also yields `[]`.
+    const entries = entriesOf<LogEntry>(errorsQuery.data);
+    const requests = entriesOf<RequestLogEntry>(requestsQuery.data);
+
+    // Record the browsed shard into recent-shards history once the active view's
+    // read resolves.
+    useEffect(() => {
+        // eslint-disable-next-line react-you-might-not-need-an-effect/no-event-handler -- recording the browsed shard is derived from the resolved read (a value, not a discrete event); writing it when the data lands is the correct pattern.
+        if (activeQuery.data !== undefined) {
+            recordShard(queryShardKey);
+        }
+    }, [activeQuery.data, queryShardKey]);
 
     // AND-composed client-side filter for the Errors view (level allow-set,
     // function-path substring, message substring, relative time window), derived
@@ -486,17 +429,26 @@ export const LogsPanel = ({ initialShardKey }: LogsPanelProps): ReactElement => 
         }
 
         if (activeCount === 0) {
+            // A count of 0 while the active view's first read is still in flight
+            // means the buffer hasn't loaded yet — not that the server returned an
+            // empty page. Don't flash the empty state; fall through to the (empty)
+            // list/summary container until data lands.
+            if (activeLoading) {
+                return summaryVisible ? "summary" : "list";
+            }
+
             return "empty";
         }
 
         return summaryVisible ? "summary" : "list";
-    }, [activeCount, error, summaryVisible]);
+    }, [activeCount, activeLoading, error, summaryVisible]);
 
     // Row virtualization over the active list: only the rows intersecting the
     // 400px viewport (+ overscan) are mounted, so a full buffer never renders
     // hundreds of <div>s. See the jsdom note on `flooredRectObserver`.
     const scrollRef = useRef<HTMLDivElement>(null);
 
+    // react-doctor-disable-next-line react-hooks-js/incompatible-library -- TanStack Virtual returns functions the compiler refuses to memoize; the alternative is not using the library
     const virtualizer = useVirtualizer({
         count: activeCount,
         estimateSize: () => ROW_HEIGHT,
@@ -569,213 +521,115 @@ export const LogsPanel = ({ initialShardKey }: LogsPanelProps): ReactElement => 
         setShowSummary(false);
     };
 
+    const showArchive = (): void => {
+        setView("archive");
+        setShowSummary(false);
+    };
+
     return (
         <div className="flex flex-col gap-4" data-testid="lunora-logs">
-            <div className="flex flex-wrap items-center gap-2">
-                <div className="inline-flex overflow-hidden rounded-lg border border-border" role="tablist">
-                    <button
-                        aria-selected={view === "requests"}
-                        className={cn("px-3 py-1 text-sm", view === "requests" ? "bg-muted font-medium" : "text-muted-foreground")}
-                        data-testid="lg-view-requests"
-                        onClick={showRequests}
-                        role="tab"
-                        type="button"
-                    >
-                        {t("Requests")}
-                    </button>
-                    <button
-                        aria-selected={view === "errors"}
-                        className={cn("px-3 py-1 text-sm", view === "errors" ? "bg-muted font-medium" : "text-muted-foreground")}
-                        data-testid="lg-view-errors"
-                        onClick={showErrors}
-                        role="tab"
-                        type="button"
-                    >
-                        {t("Errors")}
-                    </button>
-                </div>
-                <ShardInput onChange={setShardKey} testId="lg-shard-input" value={shardKey} />
-                <LiveError message={liveError} prefix="lg" />
-                <a
-                    className="text-sm text-primary underline-offset-4 hover:underline"
-                    data-testid="lg-cf-link"
-                    href={CLOUDFLARE_OBSERVABILITY_URL}
-                    rel="noreferrer"
-                    target="_blank"
-                >
-                    {t("Open in Cloudflare")}
-                </a>
-            </div>
+            <LogsViewBar
+                liveError={liveError}
+                onShardKeyChange={setShardKey}
+                onShowArchive={showArchive}
+                onShowErrors={showErrors}
+                onShowRequests={showRequests}
+                shardKey={shardKey}
+                view={view}
+            />
 
             {view === "errors" && (
-                <div className="flex flex-wrap items-center gap-2">
-                    <Input
-                        aria-label={t("Search messages")}
-                        className="h-8 w-48"
-                        data-testid="lg-search"
-                        onChange={onSearchChange}
-                        placeholder={t("search message")}
-                        value={search}
-                    />
-                    <Input
-                        aria-label={t("Function path")}
-                        className="h-8 w-40"
-                        data-testid="logs-path-filter"
-                        onChange={onLogPathChange}
-                        placeholder={t("filter path")}
-                        value={pathFilter}
-                    />
-                    <div aria-label={t("Level filter")} className="inline-flex items-center gap-1" data-testid="logs-level-filter" role="group">
-                        {LOG_LEVELS.map((level) => (
-                            <LevelToggle key={level} level={level} onToggle={toggleLevel} selected={levelFilter.has(level)} />
-                        ))}
-                    </div>
-                    <select
-                        aria-label={t("Time range")}
-                        className="h-8 rounded-md border border-input bg-transparent px-2 text-sm shadow-xs focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:outline-none"
-                        data-testid="logs-time-range"
-                        onChange={onTimeRangeChange}
-                        value={timeRange}
-                    >
-                        <option value="all">{t("All time")}</option>
-                        <option value="5m">{t("Last 5m")}</option>
-                        <option value="15m">{t("Last 15m")}</option>
-                        <option value="1h">{t("Last hour")}</option>
-                    </select>
-                    <button
-                        aria-pressed={showSummary}
-                        className={cn(
-                            "h-8 rounded-md border px-3 text-sm",
-                            showSummary ? "border-border bg-muted font-medium" : "border-input text-muted-foreground",
-                        )}
-                        data-testid="logs-summary-toggle"
-                        onClick={toggleSummary}
-                        type="button"
-                    >
-                        {showSummary ? t("List") : t("Summary")}
-                    </button>
-                </div>
-            )}
-
-            {view === "requests" && (
-                <div className="flex flex-wrap items-center gap-2">
-                    <Input
-                        aria-label={t("Function path")}
-                        className="h-8 w-44"
-                        data-testid="lg-req-path"
-                        onChange={onPathChange}
-                        placeholder={t("file:function")}
-                        value={pathPrefix}
-                    />
-                    <Input
-                        aria-label={t("User id")}
-                        className="h-8 w-32"
-                        data-testid="lg-req-user"
-                        onChange={onUserChange}
-                        placeholder={t("userId")}
-                        value={userIdFilter}
-                    />
-                    <Input
-                        aria-label={t("Table touched")}
-                        className="h-8 w-32"
-                        data-testid="lg-req-table"
-                        onChange={onTableChange}
-                        placeholder={t("table")}
-                        value={tableFilter}
-                    />
-                    <select
-                        aria-label={t("Outcome filter")}
-                        className="h-8 rounded-md border border-input bg-transparent px-2 text-sm shadow-xs focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:outline-none"
-                        data-testid="lg-req-outcome"
-                        onChange={onOutcomeChange}
-                        value={outcomeFilter}
-                    >
-                        <option value="all">{t("all")}</option>
-                        <option value="ok">{t("ok")}</option>
-                        <option value="error">{t("error")}</option>
-                    </select>
-                </div>
-            )}
-
-            {readout === "error" && (
-                <p className="text-sm text-destructive" data-testid="lg-error" role="alert">
-                    {error}
-                </p>
-            )}
-
-            {readout === "empty" && (
-                <EmptyState
-                    description={t("Function and request logs for this shard show up here as your app handles traffic.")}
-                    icon={
-                        <svg
-                            aria-hidden="true"
-                            fill="none"
-                            stroke="currentColor"
-                            strokeLinecap="round"
-                            strokeLinejoin="round"
-                            strokeWidth={1.6}
-                            viewBox="0 0 24 24"
-                        >
-                            <path d="M4 5h16M4 12h16M4 19h10" />
-                        </svg>
-                    }
-                    testId="lg-empty"
-                    title={t("No logs.")}
+                <LogsErrorFilters
+                    levelFilter={levelFilter}
+                    onLogPathChange={onLogPathChange}
+                    onSearchChange={onSearchChange}
+                    onTimeRangeChange={onTimeRangeChange}
+                    onToggleLevel={toggleLevel}
+                    onToggleSummary={toggleSummary}
+                    pathFilter={pathFilter}
+                    search={search}
+                    showSummary={showSummary}
+                    timeRange={timeRange}
                 />
             )}
 
-            {readout === "summary" && (
-                <div className="flex flex-col gap-4 rounded-xl border border-border bg-card p-4 shadow-xs" data-testid="logs-summary">
-                    <p className="text-xs text-muted-foreground" data-testid="logs-summary-total">
-                        {t("{count} entries", { count: summary.total })}
-                    </p>
-                    <div>
-                        <h4 className="mb-1 font-mono text-[11px] tracking-wide text-muted-foreground uppercase">{t("By level")}</h4>
-                        <div className="overflow-hidden rounded-lg border border-border" data-testid="logs-summary-levels" role="grid">
-                            {summary.byLevel.map((bucket) => (
-                                <SummaryBucketRow bucket={bucket} key={bucket.key} />
-                            ))}
-                        </div>
-                    </div>
-                    <div>
-                        <h4 className="mb-1 font-mono text-[11px] tracking-wide text-muted-foreground uppercase">{t("By function")}</h4>
-                        <div className="overflow-hidden rounded-lg border border-border" data-testid="logs-summary-paths" role="grid">
-                            {summary.byPath.map((bucket) => (
-                                <SummaryBucketRow bucket={bucket} key={bucket.key} />
-                            ))}
-                        </div>
-                    </div>
-                </div>
+            {view === "requests" && (
+                <LogsRequestFilters
+                    onOutcomeChange={onOutcomeChange}
+                    onPathChange={onPathChange}
+                    onTableChange={onTableChange}
+                    onUserChange={onUserChange}
+                    outcomeFilter={outcomeFilter}
+                    pathPrefix={pathPrefix}
+                    tableFilter={tableFilter}
+                    userIdFilter={userIdFilter}
+                />
             )}
 
-            {readout === "list" && (
-                <div className="rounded-xl border border-border shadow-xs" data-testid="lg-scroll" ref={scrollRef} style={SCROLL_STYLE}>
-                    <div aria-label={t("Recent logs")} data-testid="lg-table" role="grid" style={gridStyle}>
-                        {virtualRows.map((virtualRow) =>
-                            view === "requests" ? (
-                                <RequestRow
-                                    entry={requests[virtualRow.index] as RequestLogEntry}
-                                    index={virtualRow.index}
-                                    key={virtualRow.key}
-                                    measureRef={virtualizer.measureElement}
-                                    start={virtualRow.start}
-                                />
-                            ) : (
-                                <LogRow
-                                    entry={filtered[virtualRow.index] as LogEntry}
-                                    index={virtualRow.index}
-                                    key={virtualRow.key}
-                                    measureRef={virtualizer.measureElement}
-                                    start={virtualRow.start}
-                                />
-                            ),
-                        )}
-                    </div>
-                </div>
+            {/* Archive is a wholly separate view (its own HTTP feed), mutually exclusive
+                with the readout state machine — so it's gated once, not negated on every
+                `readout` branch. */}
+            {view === "archive" ? (
+                <ArchiveFeed shardKey={queryShardKey} />
+            ) : (
+                <>
+                    {readout === "error" && <ErrorAlert error={errorSource} testId="lg-error" />}
+
+                    {readout === "empty" && (
+                        <EmptyState
+                            description={t("Function and request logs for this shard show up here as your app handles traffic.")}
+                            icon={
+                                <svg
+                                    aria-hidden="true"
+                                    fill="none"
+                                    stroke="currentColor"
+                                    strokeLinecap="round"
+                                    strokeLinejoin="round"
+                                    strokeWidth={1.6}
+                                    viewBox="0 0 24 24"
+                                >
+                                    <path d="M4 5h16M4 12h16M4 19h10" />
+                                </svg>
+                            }
+                            testId="lg-empty"
+                            title={t("No logs.")}
+                        />
+                    )}
+
+                    {readout === "summary" && <LogsSummary summary={summary} />}
+
+                    {readout === "list" && (
+                        <div className="rounded-xl border border-border shadow-xs" data-testid="lg-scroll" ref={scrollRef} style={SCROLL_STYLE}>
+                            <div aria-label={t("Recent logs")} data-testid="lg-table" role="grid" style={gridStyle}>
+                                {virtualRows.map((virtualRow) =>
+                                    view === "requests" ? (
+                                        <RequestRow
+                                            entry={requests[virtualRow.index] as RequestLogEntry}
+                                            index={virtualRow.index}
+                                            key={virtualRow.key}
+                                            measureRef={virtualizer.measureElement}
+                                            onOpenTrace={openTrace}
+                                            start={virtualRow.start}
+                                        />
+                                    ) : (
+                                        <LogRow
+                                            entry={filtered[virtualRow.index] as LogEntry}
+                                            index={virtualRow.index}
+                                            key={virtualRow.key}
+                                            measureRef={virtualizer.measureElement}
+                                            onOpenTrace={openTrace}
+                                            start={virtualRow.start}
+                                        />
+                                    ),
+                                )}
+                            </div>
+                        </div>
+                    )}
+                </>
             )}
         </div>
     );
 };
 
 export { filterLogs, summarizeLogs };
-export type { LogFilterCriteria, LogsPanelProps, LogSummary, SummaryBucket, TimeRange };
+export type { LogFilterCriteria, LogsPanelProps, TimeRange };

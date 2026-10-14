@@ -1,13 +1,12 @@
 import { DatabaseSync } from "node:sqlite";
 
-import { getAuthTables } from "better-auth/db";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { lunoraAuthAdapter } from "../src/adapter";
 import type { LunoraAuth } from "../src/create-auth";
 import { createAuth } from "../src/create-auth";
-import type { SqlExecutor } from "../src/sql-store";
 import { createSqlAuthStore } from "../src/sql-store";
+import { executorFor, materialiseAuthSchema } from "./helpers/sqlite-auth-db";
 
 /**
  * Integration coverage (audit finding #9). The other suites in this package
@@ -33,45 +32,6 @@ const EMAIL = "ada@example.com";
 const PASSWORD = "correct-horse-battery-staple"; // secret-scanner:allow
 
 let database: DatabaseSync;
-
-const executorFor = (db: DatabaseSync): SqlExecutor => {
-    return {
-        all: (sql, parameters) => Promise.resolve(db.prepare(sql).all(...(parameters as never[])) as Record<string, unknown>[]),
-        run: (sql, parameters) => {
-            db.prepare(sql).run(...(parameters as never[]));
-
-            return Promise.resolve();
-        },
-    };
-};
-
-/** SQLite column affinity for a better-auth field type. */
-const affinity = (type: ReadonlyArray<string> | string): string => {
-    if (type === "number") {
-        return "REAL";
-    }
-
-    if (type === "boolean") {
-        return "INTEGER";
-    }
-
-    return "TEXT";
-};
-
-/**
- * Materialise the better-auth schema for `options` into the SQLite database so
- * the store reads and writes real tables (no implicit-table fakery).
- */
-const materialiseSchema = (db: DatabaseSync, options: Parameters<typeof getAuthTables>[0]): void => {
-    for (const table of Object.values(getAuthTables(options))) {
-        const columns = [
-            `"id" TEXT PRIMARY KEY`,
-            ...Object.entries(table.fields).map(([field, attribute]) => `"${attribute.fieldName ?? field}" ${affinity(attribute.type)}`),
-        ];
-
-        db.exec(`CREATE TABLE "${table.modelName}" (${columns.join(", ")})`);
-    }
-};
 
 /**
  * A signed-in session: the unsigned token (the value stored in the `session`
@@ -121,7 +81,7 @@ describe("auth integration — real better-auth over in-memory SQLite", () => {
 
     beforeEach(() => {
         database = new DatabaseSync(":memory:");
-        materialiseSchema(database, baseOptions);
+        materialiseAuthSchema(database, baseOptions);
     });
 
     afterEach(() => {

@@ -34,28 +34,20 @@ type SchemaEditResult =
     | { kind: "needs-migration"; message: string }
     | { diagnostics: ReadonlyArray<string>; kind: "ok"; tables: ReadonlyArray<SchemaEditTable> };
 
-/** Fetch + parse the current schema tables from the dev host. */
-const fetchSchema = async (): Promise<{ kind: "error"; message: string } | { kind: "ok"; tables: ReadonlyArray<SchemaEditTable> }> => {
-    const response = await fetch(SCHEMA_EDIT_ENDPOINT, { method: "GET" });
-    const body = (await response.json()) as { error?: string; ok?: boolean; tables?: ReadonlyArray<SchemaEditTable> };
-
-    if (response.ok && body.tables !== undefined) {
-        return { kind: "ok", tables: body.tables };
-    }
-
-    return { kind: "error", message: body.error ?? `schema fetch failed (${String(response.status)})` };
-};
-
 /** Apply an additive edit through the dev host, normalising every outcome. */
 const applyEdit = async (edit: AdditiveEdit): Promise<SchemaEditResult> => {
     const response = await fetch(SCHEMA_EDIT_ENDPOINT, {
         body: JSON.stringify(edit),
-        // `Content-Type: application/json` is non-simple and forces a CORS preflight
-        // for cross-origin fetches, preventing CSRF via the browser's same-origin
-        // policy. `X-Lunora-Studio` is an additional custom header that also triggers
-        // a preflight and lets the server-side guard identify studio traffic; both
-        // headers are checked by the `@lunora/config` `csrfRejectionReason` guard.
-        headers: { "Content-Type": "application/json", "X-Lunora-Studio": "1" },
+        // `Content-Type: application/json` is the one header the host's
+        // `csrfRejectionReason` guard actually requires on a state-changing
+        // request. That makes this `fetch` a non-simple request, so cross-origin
+        // it is preflighted (and the preflight gets a 403 with no CORS headers).
+        // The forms of cross-origin POST that are NOT preflighted — an HTML form
+        // submission, or a `text/plain` fetch — cannot set `application/json` at
+        // all, so they never satisfy the guard. Its other layer is the request's
+        // own `Sec-Fetch-Site` / `Origin`; no custom header is checked, and the
+        // sibling seed client sends none.
+        headers: { "Content-Type": "application/json" },
         method: "POST",
     });
     const body = (await response.json()) as {
@@ -78,4 +70,4 @@ const applyEdit = async (edit: AdditiveEdit): Promise<SchemaEditResult> => {
 };
 
 export type { AdditiveEdit, SchemaEditResult, SchemaEditTable };
-export { applyEdit, fetchSchema, SCHEMA_EDIT_ENDPOINT };
+export { applyEdit, SCHEMA_EDIT_ENDPOINT };

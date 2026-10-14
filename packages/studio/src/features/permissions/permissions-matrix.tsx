@@ -1,22 +1,16 @@
-import { useLunora } from "@lunora/react";
 import type { ReactElement } from "react";
-import { useEffect, useState } from "react";
 
+import ErrorAlert from "../../components/error-alert";
 import { LiveError } from "../../components/live-status";
 import { Badge } from "../../components/ui/badge";
 import { Button } from "../../components/ui/button";
 import { EmptyState } from "../../components/ui/empty-state";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "../../components/ui/table";
-import useLiveAdmin from "../../hooks/use-live-admin";
+import { useAdminQuery } from "../../hooks/use-admin-query";
 import type { TFunction } from "../../i18n/i18n-context";
 import { useT } from "../../i18n/i18n-context";
 import type { AdvisoriesResult, MaskColumnMetadata, MaskPoliciesResult, RlsOperation, RlsPoliciesResult, RlsPolicyMetadata } from "../../lib/admin";
 import { ADMIN_FUNCTIONS } from "../../lib/admin";
-import { adminRef, callOptions, errorMessage, fireAndForget } from "../../lib/internal";
-
-const RLS_POLICIES = adminRef(ADMIN_FUNCTIONS.rlsPolicies);
-const MASK_POLICIES = adminRef(ADMIN_FUNCTIONS.maskPolicies);
-const GET_ADVISORIES = adminRef(ADMIN_FUNCTIONS.getAdvisories);
 
 /** The four CRUD operations, in read→write order for the matrix columns. */
 const OPERATIONS: ReadonlyArray<RlsOperation> = ["read", "insert", "update", "delete"];
@@ -27,16 +21,28 @@ const operationLabel = (t: TFunction, operation: RlsOperation): string =>
 
 /** One table × operation cell: the procedure covering it, if any. */
 interface CellState {
+    /** Registry key of the covering procedure — what the probe must dispatch; `undefined` ⇒ no policy. */
+    path?: string;
     /** Procedure whose `.use(rls(...))` chain declared the covering policy; `undefined` ⇒ no policy. */
     procedure?: string;
 }
+
+/**
+ * The key the function registry is actually dispatched on: `<file>:<function>`
+ * (e.g. `documents:list`). Policy metadata reports the two halves separately, and
+ * the bare export name is NOT a path — sending it resolves to no function at all.
+ * A policy with no `file` falls back to the bare name rather than emitting a
+ * leading colon.
+ */
+const functionPathOf = (policy: RlsPolicyMetadata): string => (policy.file === "" ? policy.procedure : `${policy.file}:${policy.procedure}`);
 
 /** Per-table coverage: the four operation cells, masked columns, and an "uncovered" advisory flag. */
 interface TableRowState {
     /** `read|insert|update|delete` → covering procedure (or no policy). */
     cells: Record<RlsOperation, CellState>;
     /** Columns this table masks (from `maskPolicies`). */
-    maskedColumns: string[];
+    /** Columns this table masks. A Set, so the fold dedups without a parallel map. */
+    maskedColumns: Set<string>;
     table: string;
     /** True when an `rls_uncovered_table` advisory names this table — reachable without a policy. */
     uncovered: boolean;
@@ -76,7 +82,7 @@ const buildRows = (policies: RlsPolicyMetadata[], maskColumns: MaskColumnMetadat
 
         const row: TableRowState = {
             cells: { delete: {}, insert: {}, read: {}, update: {} },
-            maskedColumns: [],
+            maskedColumns: new Set<string>(),
             table,
             uncovered: uncovered.has(table),
         };
@@ -87,15 +93,13 @@ const buildRows = (policies: RlsPolicyMetadata[], maskColumns: MaskColumnMetadat
     };
 
     for (const policy of policies) {
-        ensure(policy.table).cells[policy.on] = { procedure: policy.procedure };
+        ensure(policy.table).cells[policy.on] = { path: functionPathOf(policy), procedure: policy.procedure };
     }
 
+    // Deduped through the row's own Set rather than a parallel map keyed by the
+    // same table — one structure, and dedup comes free.
     for (const column of maskColumns) {
-        const row = ensure(column.table);
-
-        if (!row.maskedColumns.includes(column.column)) {
-            row.maskedColumns.push(column.column);
-        }
+        ensure(column.table).maskedColumns.add(column.column);
     }
 
     for (const table of uncovered) {
@@ -108,12 +112,12 @@ const buildRows = (policies: RlsPolicyMetadata[], maskColumns: MaskColumnMetadat
 interface PermissionsMatrixProps {
     /**
      * Invoked when an operator clicks a covered cell's "Probe this" affordance,
-     * prefilled with the cell's table + operation + the covering procedure so the
-     * playground can seed the right function. Only covered cells render the link
-     * (an uncovered cell has no procedure to probe). Omitted ⇒ no probe links
-     * (the matrix is read-only).
+     * prefilled with the cell's table + operation + the covering procedure's
+     * REGISTRY PATH (`<file>:<function>`) so the playground can seed the right
+     * function. Only covered cells render the link (an uncovered cell has no
+     * procedure to probe). Omitted ⇒ no probe links (the matrix is read-only).
      */
-    readonly onProbe?: (table: string, operation: RlsOperation, procedure: string) => void;
+    readonly onProbe?: (table: string, operation: RlsOperation, functionPath: string) => void;
 }
 
 /**
@@ -129,62 +133,34 @@ interface PermissionsMatrixProps {
  * configuration for auditing.
  */
 export const PermissionsMatrix = ({ onProbe }: PermissionsMatrixProps = {}): ReactElement => {
-    const client = useLunora();
     const t = useT();
 
-    const [policies, setPolicies] = useState<RlsPolicyMetadata[] | null>(null);
-    const [maskColumns, setMaskColumns] = useState<MaskColumnMetadata[]>([]);
-    const [advisories, setAdvisories] = useState<AdvisoriesResult | null>(null);
-    const [error, setError] = useState<null | string>(null);
-    const [liveError, setLiveError] = useState<string | undefined>(undefined);
-
-    // One-shot load for the supporting metadata (masks + advisories). The policy
-    // list is the live channel below; masks and advisories only change on codegen,
-    // and a stale read here merely under-/over-flags a cell until the next mount.
-    const refresh = async (): Promise<void> => {
-        const queryRls = client.query(RLS_POLICIES, {}, callOptions("")) as Promise<RlsPoliciesResult>;
-        const queryMasks = client.query(MASK_POLICIES, {}, callOptions("")) as Promise<MaskPoliciesResult>;
-        const queryAdvisories = client.query(GET_ADVISORIES, {}, callOptions("")) as Promise<AdvisoriesResult>;
-
-        try {
-            const [rls, masks, advisory] = await Promise.all([
-                queryRls,
-                queryMasks.catch((): MaskPoliciesResult => {
-                    return { columns: [] };
-                }),
-                queryAdvisories.catch((): AdvisoriesResult => {
-                    return { advisories: [] };
-                }),
-            ]);
-
-            setPolicies(Array.isArray(rls.policies) ? rls.policies : []);
-            setMaskColumns(Array.isArray(masks.columns) ? masks.columns : []);
-            setAdvisories(advisory);
-            setError(null);
-        } catch (error_: unknown) {
-            setError(errorMessage(error_));
-        }
-    };
-
-    useEffect(() => {
-        fireAndForget(refresh());
-    }, [refresh]);
-
     // Live policy channel: each codegen-triggered push refreshes the grid's
-    // coverage without a remount. Masks/advisories stay on the one-shot load.
-    useLiveAdmin(
-        ADMIN_FUNCTIONS.rlsPolicies,
-        {},
-        "",
-        (value) => {
-            const result = value as RlsPoliciesResult;
+    // coverage without a remount. `liveError` holds a rejected-subscription
+    // message so the panel can say why it stopped updating; the policies read is
+    // the only one that surfaces a hard `error` (masks/advisories are additive).
+    const policiesQuery = useAdminQuery<RlsPoliciesResult>(ADMIN_FUNCTIONS.rlsPolicies, {}, { live: true });
 
-            setPolicies(Array.isArray(result.policies) ? result.policies : []);
-            setLiveError(undefined);
-        },
-        true,
-        setLiveError,
-    );
+    // One-shot reads for the supporting metadata (masks + advisories). These only
+    // change on codegen, and a stale read here merely under-/over-flags a cell
+    // until the next refetch; their errors are tolerated (treated as empty).
+    const masksQuery = useAdminQuery<MaskPoliciesResult>(ADMIN_FUNCTIONS.maskPolicies, {});
+    const advisoriesQuery = useAdminQuery<AdvisoriesResult>(ADMIN_FUNCTIONS.getAdvisories, {});
+
+    // `null` while the policies read is in flight; an array once it resolves
+    // (coerced to `[]` for a malformed payload), so the matrix knows "not loaded
+    // yet" vs "loaded, empty".
+    let policies: RlsPolicyMetadata[] | null = null;
+
+    if (policiesQuery.data !== undefined) {
+        policies = Array.isArray(policiesQuery.data.policies) ? policiesQuery.data.policies : [];
+    }
+
+    const maskColumns: MaskColumnMetadata[] = Array.isArray(masksQuery.data?.columns) ? masksQuery.data.columns : [];
+    const advisories: AdvisoriesResult | null = advisoriesQuery.data ?? null;
+
+    // Only a failed policies read blanks the matrix; masks/advisories degrade silently.
+    const { error, errorSource, liveError } = policiesQuery;
 
     const rows = policies === null ? [] : buildRows(policies, maskColumns, uncoveredTables(advisories));
 
@@ -194,11 +170,7 @@ export const PermissionsMatrix = ({ onProbe }: PermissionsMatrixProps = {}): Rea
                 <LiveError message={liveError} prefix="pm" />
             </div>
 
-            {error !== null && (
-                <p className="text-sm text-destructive" data-testid="pm-error" role="alert">
-                    {error}
-                </p>
-            )}
+            {error !== null && <ErrorAlert error={errorSource} testId="pm-error" />}
 
             {policies !== null && rows.length === 0 ? (
                 <EmptyState
@@ -249,7 +221,7 @@ export const PermissionsMatrix = ({ onProbe }: PermissionsMatrixProps = {}): Rea
                                                             className="h-auto justify-start p-0 text-[11px]"
                                                             data-testid={`pm-probe-${row.table}-${operation}`}
                                                             onClick={() => {
-                                                                onProbe(row.table, operation, cell.procedure ?? "");
+                                                                onProbe(row.table, operation, cell.path ?? "");
                                                             }}
                                                             size="xs"
                                                             type="button"
@@ -264,13 +236,13 @@ export const PermissionsMatrix = ({ onProbe }: PermissionsMatrixProps = {}): Rea
                                     );
                                 })}
                                 <TableCell>
-                                    {row.maskedColumns.length === 0 ? (
+                                    {row.maskedColumns.size === 0 ? (
                                         <span aria-hidden="true" className="text-muted-foreground">
                                             —
                                         </span>
                                     ) : (
                                         <span className="flex flex-wrap gap-1">
-                                            {row.maskedColumns.map((column) => (
+                                            {[...row.maskedColumns].map((column) => (
                                                 <Badge key={column} variant="outline">
                                                     {column}
                                                 </Badge>

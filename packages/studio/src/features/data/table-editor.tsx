@@ -1,11 +1,13 @@
 import { useLunora } from "@lunora/react";
 import { useNavigate, useRouter, useSearch } from "@tanstack/react-router";
 import type { ReactElement } from "react";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 
 import type { StorageTier } from "../../components/storage-tier";
 import { TIER_META } from "../../components/storage-tier";
+import useMirroredRef from "../../hooks/use-mirrored-ref";
 import { useT } from "../../i18n/i18n-context";
+import type { DataViewSearch } from "../../lib/data-view-params";
 import { dataViewToSearch, searchToDataView } from "../../lib/data-view-params";
 import { fireAndForget } from "../../lib/internal";
 import type { DataView, SavedQuery } from "../../lib/saved-queries";
@@ -14,6 +16,9 @@ import { DataBrowser } from "./data-browser";
 import { GlobalDataBrowser } from "./global-data-browser";
 
 interface TableEditorProps {
+    /** Offer "Generate rows" — only where the host serves the seed endpoint. Forwarded to the shard {@link DataBrowser}. */
+    readonly canGenerateRows?: boolean;
+
     /**
      * Allow editing the shard-local tables (insert/edit/delete). Forwarded to the
      * shard {@link DataBrowser}; the global D1 browser is always read-only. Off by
@@ -56,6 +61,16 @@ const SchemaSwitch = ({ onChange, tier }: { readonly onChange: (tier: StorageTie
     );
 };
 
+/** Copy the current deep link. A no-op where the clipboard API is unavailable (insecure context). */
+const onCopyLink = (): void => {
+    try {
+        // eslint-disable-next-line n/no-unsupported-features/node-builtins -- this is browser-only studio UI; `navigator.clipboard` is the Web Clipboard API, not the Node global, and never runs server-side.
+        fireAndForget(globalThis.navigator.clipboard.writeText(globalThis.location.href));
+    } catch {
+        /* clipboard unavailable (insecure context) — nothing to copy to */
+    }
+};
+
 /**
  * The Table editor: browses your application's tables across both storage tiers
  * from one section. A schema switch in the sidebar header (Supabase's
@@ -69,16 +84,19 @@ const SchemaSwitch = ({ onChange, tier }: { readonly onChange: (tier: StorageTie
  * URL and browser back/forward moves between tables and tiers. The browsers push on
  * selection and re-open whatever the URL names.
  */
-export const TableEditor = ({ editable = false, initialShardKey }: TableEditorProps): ReactElement => {
+export const TableEditor = ({ canGenerateRows = false, editable = false, initialShardKey }: TableEditorProps): ReactElement => {
     const client = useLunora();
     const navigate = useNavigate();
     const router = useRouter();
 
     // The whole data-browser view comes from the URL: tier + open table plus the
     // shard / filters / search / sort that make every view a real, shareable link.
-    // `strict: false` because the generic tab routes declare no typed search schema;
-    // values are coerced or dropped by `searchToDataView`.
-    const search: Record<string, unknown> = useSearch({ strict: false });
+    // `strict: false` because the tab routes are built dynamically (no module-level
+    // Route to type against); the `/data` route's `validateSearch`
+    // (`validateDataViewSearch`) has already normalised these params on navigation,
+    // so the cast to the typed {@link DataViewSearch} is sound and the downstream
+    // `searchToDataView` receives a trustworthy, garbage-free shape.
+    const search: DataViewSearch = useSearch({ strict: false });
     const view = searchToDataView(search);
 
     // Live mirror of the URL search params for `onViewChange`'s redundancy check,
@@ -86,8 +104,7 @@ export const TableEditor = ({ editable = false, initialShardKey }: TableEditorPr
     // `navigate`). Without this, mirroring the loaded view back to the URL on a
     // deep-link load (`/data?table=…`) fires a `navigate({ to: "/data" })` that
     // clobbers an in-flight tab switch — you couldn't leave the data tab.
-    const searchRef = useRef(search);
-    searchRef.current = search;
+    const searchRef = useMirroredRef(search);
 
     // True while the data route is the active one. The URL-mirroring callbacks below
     // all `navigate({ to: "/data" })`; some fire from deferred effects/microtasks that
@@ -143,6 +160,7 @@ export const TableEditor = ({ editable = false, initialShardKey }: TableEditorPr
                 }),
             );
         }
+        // react-doctor-disable-next-line react-doctor/exhaustive-deps -- `tier` and `tableParameter` ARE `view.tier` / `view.table`, destructured above and listed in the deps
     }, [globalTableNames, navigate, tableParameter, tier]);
 
     // Switch tier via the schema dropdown: write `?schema=…` and clear `?table` (the
@@ -159,13 +177,15 @@ export const TableEditor = ({ editable = false, initialShardKey }: TableEditorPr
         );
     };
 
-    // Mirror a table selection to the URL (`?table=…`) so it's shareable and recorded
-    // in history for back/forward. Guarded by {@link onDataRoute}: the data browser
-    // reconciles the URL's table into its selection through a deferred microtask, which
-    // can fire just *after* a tab switch has moved the route away — without the guard
-    // that stale mirror would `navigate({ to: "/data" })` straight back, trapping the
-    // user on the data tab whenever the URL carried a `?table=`.
-    const onSelectTable = (table: string): void => {
+    // Navigate the URL to a table (`?table=…`) so it's shareable and recorded in
+    // history for back/forward. A switch opens the table CLEAN — the previous
+    // table's `filters`/`order`/`search` are dropped (the shard + tier are kept) —
+    // so the new table never inherits a stale view; `options.search` pre-fills the
+    // search for an FK-cell traversal. Building the next search explicitly (rather
+    // than spreading `previous`) also drops any unknown/stale params. Guarded by
+    // {@link onDataRoute} so a mirror that lands just after a tab switch can't yank
+    // the route back to the data tab.
+    const onSelectTable = (table: string, options?: { search?: string }): void => {
         if (!onDataRoute()) {
             return;
         }
@@ -173,7 +193,7 @@ export const TableEditor = ({ editable = false, initialShardKey }: TableEditorPr
         fireAndForget(
             navigate({
                 search: (previous: Record<string, unknown>) => {
-                    return { ...previous, table };
+                    return { schema: previous["schema"], search: options?.search, shard: previous["shard"], table };
                 },
                 to: "/data",
             }),
@@ -234,15 +254,6 @@ export const TableEditor = ({ editable = false, initialShardKey }: TableEditorPr
 
     // Copy the current view's full URL to the clipboard. Best-effort: a missing/
     // throwing clipboard (insecure context) is swallowed — the URL is still in the bar.
-    const onCopyLink = (): void => {
-        try {
-            // eslint-disable-next-line n/no-unsupported-features/node-builtins -- this is browser-only studio UI; `navigator.clipboard` is the Web Clipboard API, not the Node global, and never runs server-side.
-            fireAndForget(globalThis.navigator.clipboard.writeText(globalThis.location.href));
-        } catch {
-            /* clipboard unavailable (insecure context) — nothing to copy to */
-        }
-    };
-
     // Persist the current view under a name, then refresh the toolbar's list.
     const onSaveQuery = (name: string, snapshot: DataView): void => {
         setSavedQueries(saveQuery(name, snapshot));
@@ -282,10 +293,12 @@ export const TableEditor = ({ editable = false, initialShardKey }: TableEditorPr
         <GlobalDataBrowser initialTable={tableParameter} onSelectTable={onSelectTable} schemaSwitch={schemaSwitch} />
     ) : (
         <DataBrowser
+            canGenerateRows={canGenerateRows}
             editable={editable}
             globalTableNames={globalTableNames}
             initialFilters={view.filters}
             initialOrderBy={view.orderBy}
+            initialPins={search.pins}
             initialSearch={view.search}
             initialShardKey={view.shard ?? initialShardKey}
             onNavigateToGlobal={onNavigateToGlobal}

@@ -1,7 +1,9 @@
 import type { Command, CommandExecute, CreateOptions, Toolbox } from "@visulima/cerebro";
 
+import { OUTPUT_FORMAT_OPTION } from "../../util/output-format";
+
 /**
- * `lunora registry &lt;add|list|view|build>` — the component-registry command.
+ * `lunora registry <add|list|view|build>` — the component-registry command.
  * Metadata only; `./handler` dispatches the subcommand. (The sibling `./index`
  * barrel stays the library entry that exports the `run*` orchestrators + types.)
  */
@@ -11,7 +13,7 @@ const registryCommand: Command = {
     examples: [
         ["lunora registry list", "List available registry items"],
         ["lunora registry add presence", "Scaffold a registry item into lunora/"],
-        ["lunora registry build --check", "Verify the committed catalog is current"],
+        ["lunora registry build --from ./registry --check", "Verify the committed catalog is current"],
     ],
     group: "Project",
     loader: () =>
@@ -26,8 +28,13 @@ const registryCommand: Command = {
         { description: "add: skip the package.json mutation confirmation prompt", name: "yes", type: Boolean },
         { description: "Local registry root (offline; expects <name>/ subdirs)", name: "from", type: String },
         { description: "Override the remote registry source base (e.g. gh:owner/repo/registry)", name: "source", type: String },
+        {
+            description: "Fetch items from a git ref (branch, tag, or commit), e.g. --ref alpha. Overrides the version-derived default",
+            name: "ref",
+            type: String,
+        },
         { description: "Permit --source values outside gh:/github:/https://", name: "allow-unsafe-source", type: Boolean },
-        { description: "Emit JSON output (add plan / list)", name: "json", type: Boolean },
+        { ...OUTPUT_FORMAT_OPTION, description: "Output format: pretty (default) or json (add plan / list)" },
         { description: "build: output path for the catalog (default <root>/index.json)", name: "out", type: String },
         { description: "build: verify the index is current instead of rewriting it", name: "check", type: Boolean },
     ],
@@ -40,10 +47,11 @@ export type RegistryOptions = CreateOptions<{
     check: boolean | undefined;
     diff: boolean | undefined;
     "dry-run": boolean | undefined;
+    format: string | undefined;
     from: string | undefined;
-    json: boolean | undefined;
     out: string | undefined;
     overwrite: boolean | undefined;
+    ref: string | undefined;
     source: string | undefined;
     yes: boolean | undefined;
 }>;

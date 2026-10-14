@@ -10,9 +10,32 @@
  * consuming app pins their versions and supplies React bindings
  * (`@tanstack/react-db`) itself.
  */
-export type { CollectionDef, InsertBinding, LunoraDb } from "./define-collections";
+export type { ChangePlan, PlanDelete, PlanInsert, PlanPatch, PlanWriter } from "./apply-plan";
+export { applyPlanToCollections, applyPlanToDb } from "./apply-plan";
+export type {
+    CheckpointFallbackEvent,
+    CheckpointRegistry,
+    CheckpointRegistryOptions,
+    CheckpointRegistryStats,
+    CheckpointWatermark,
+    LunoraCollectionConfig,
+    LunoraCollectionOptions,
+} from "./collection-options";
+export { CHECKPOINT_FALLBACK_MS, createCheckpointRegistry, getShardCheckpoints, lunoraCollectionOptions, releaseShardCheckpoints } from "./collection-options";
+export type { CollectionDef, DefineCollectionsOptions, InsertBinding, LunoraDb, WriteRejectedEvent } from "./define-collections";
 export { defineCollections } from "./define-collections";
-export type { Row, SyncWriter } from "./internals";
-export { createOptimisticOnlineDetector, makeDiffEmit, runOutboxMutation, toMap } from "./internals";
+export type {
+    BindMutatorsContext,
+    BoundMutatorApi,
+    BoundMutators,
+    ClientMutatorContext,
+    ClientMutatorDef,
+    CollectionMap,
+    MutatorReference,
+    MutatorRejectedEvent,
+} from "./define-mutators";
+export { bindMutators, defineMutator, DIRECT_TRANSACTION_METADATA_KEY, initMutators } from "./define-mutators";
+export type { ExecutorOutboxSinkOptions, OutboxExecutor, OutboxMutationMetadata, Row, SyncWriter } from "./internals";
+export { createExecutorOutboxSink, createOptimisticOnlineDetector, makeDiffEmit, OUTBOX_MUTATION_FN_NAME, runOutboxMutation, toMap } from "./internals";
 
 export const VERSION = "0.0.0";

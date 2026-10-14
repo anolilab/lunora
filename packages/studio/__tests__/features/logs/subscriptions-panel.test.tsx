@@ -79,6 +79,29 @@ describe("subscriptionsPanel", () => {
         expect(adminRow?.textContent).toContain("admin");
     });
 
+    it("renders a live query whose args hold a bigint instead of crashing the panel", async () => {
+        expect.assertions(2);
+
+        // Subscription args are wire-decoded when the socket attaches and handed
+        // back verbatim, so a live query on a `v.bigint()` column carries a real
+        // bigint here — `JSON.stringify` throws on it, taking the panel down on
+        // every poll.
+        const withBigint: SubscriptionsResult = {
+            connections: [{ admin: false, id: 0, subscriptions: [{ args: { minAmount: 42n }, functionPath: "ledger:since", table: "ledger" }] }],
+            totalConnections: 1,
+            totalSubscriptions: 1,
+        };
+
+        render(renderPanel(createClient(withBigint)));
+
+        await screen.findByTestId("subs-table");
+
+        const cells = within(screen.getAllByTestId("subs-row")[0] as HTMLElement).getAllByRole("cell");
+
+        expect(cells[1]?.textContent).toBe("ledger:since");
+        expect(cells[3]?.textContent).toContain("42");
+    });
+
     it("shows the empty state when there are no subscriptions", async () => {
         expect.assertions(1);
 

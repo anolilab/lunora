@@ -6,12 +6,12 @@ description: Org, admin, and other better-auth plugins surfaced as first-class L
 `@lunora/auth` is a thin wrapper around [better-auth](https://better-auth.com).
 The Lunora-specific surface is small on purpose:
 
-- `createAuth(options)` — `betterAuth(options)` with a clearer error when
+- `createAuth(options)`: `betterAuth(options)` with a clearer error when
   `secret` is missing.
-- `handleAuthRequest(auth, request)` — prefix routing for `/api/auth/*`.
-- `ensureMigrated(auth)` / `compileMigrationsSql(options)` — schema sync for
+- `handleAuthRequest(auth, request)`: prefix routing for `/api/auth/*`.
+- `ensureMigrated(auth)` / `compileMigrationsSql(options)`: schema sync for
   the configured plugins.
-- `withAuthPlugins(auth)` — middleware that mounts the plugin endpoint API
+- `withAuthPlugins(auth)`: middleware that mounts the plugin endpoint API
   onto `ctx.authApi`.
 
 The actual plugin behaviour (organizations, admin, OAuth, MFA, …) is
@@ -34,20 +34,25 @@ import {
     emailOTP,
     genericOAuth,
     haveIBeenPwned,
+    inviteOnly,
     jwt,
+    lastLoginMethod,
     magicLink,
     mcp,
     multiSession,
+    oauthDeviceAuthorization,
+    oauthProvider,
     oAuthProxy,
-    oidcProvider,
+    oneTap,
     oneTimeToken,
     organization,
     passkey,
     phoneNumber,
+    requireMcpAuth,
+    scim,
     siwe,
     twoFactor,
     username,
-    withMcpAuth,
 } from "@lunora/auth/plugins";
 ```
 
@@ -57,16 +62,18 @@ behaviour and the full option reference are better-auth's, linked per row.
 
 ### Sign-in methods
 
-| Export        | What it adds                                                                                    | Reference                                                                          |
-| ------------- | ----------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------- |
-| `passkey`     | WebAuthn passkeys (Face ID, fingerprint, security keys) for passwordless login or a 2nd factor. | [better-auth: passkey](https://www.better-auth.com/docs/plugins/passkey)           |
-| `twoFactor`   | TOTP authenticator apps plus backup codes for two-factor auth.                                  | [better-auth: 2FA](https://www.better-auth.com/docs/plugins/2fa)                   |
-| `magicLink`   | Passwordless sign-in by emailing a one-time login link.                                         | [better-auth: magic link](https://www.better-auth.com/docs/plugins/magic-link)     |
-| `emailOTP`    | Email a one-time numeric code to verify an address or sign in.                                  | [better-auth: email OTP](https://www.better-auth.com/docs/plugins/email-otp)       |
-| `phoneNumber` | Phone-number sign-in and verification over SMS OTP.                                             | [better-auth: phone number](https://www.better-auth.com/docs/plugins/phone-number) |
-| `username`    | A unique username as a login identifier alongside email.                                        | [better-auth: username](https://www.better-auth.com/docs/plugins/username)         |
-| `anonymous`   | Throwaway guest sessions you can upgrade to a real account later.                               | [better-auth: anonymous](https://www.better-auth.com/docs/plugins/anonymous)       |
-| `siwe`        | Sign-In with Ethereum (wallet-based auth).                                                      | [better-auth: SIWE](https://www.better-auth.com/docs/plugins/siwe)                 |
+| Export            | What it adds                                                                                    | Reference                                                                                    |
+| ----------------- | ----------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------- |
+| `passkey`         | WebAuthn passkeys (Face ID, fingerprint, security keys) for passwordless login or a 2nd factor. | [better-auth: passkey](https://www.better-auth.com/docs/plugins/passkey)                     |
+| `twoFactor`       | TOTP authenticator apps plus backup codes for two-factor auth.                                  | [better-auth: 2FA](https://www.better-auth.com/docs/plugins/2fa)                             |
+| `magicLink`       | Passwordless sign-in by emailing a one-time login link. See the 1.7 cleanup note below.         | [better-auth: magic link](https://www.better-auth.com/docs/plugins/magic-link)               |
+| `emailOTP`        | Email a one-time numeric code to verify an address or sign in. See the 1.7 cleanup note below.  | [better-auth: email OTP](https://www.better-auth.com/docs/plugins/email-otp)                 |
+| `phoneNumber`     | Phone-number sign-in and verification over SMS OTP.                                             | [better-auth: phone number](https://www.better-auth.com/docs/plugins/phone-number)           |
+| `username`        | A unique username as a login identifier alongside email.                                        | [better-auth: username](https://www.better-auth.com/docs/plugins/username)                   |
+| `anonymous`       | Throwaway guest sessions you can upgrade to a real account later.                               | [better-auth: anonymous](https://www.better-auth.com/docs/plugins/anonymous)                 |
+| `siwe`            | Sign-In with Ethereum (wallet-based auth).                                                      | [better-auth: SIWE](https://www.better-auth.com/docs/plugins/siwe)                           |
+| `oneTap`          | Google One Tap — the in-page account chooser, no redirect.                                      | [better-auth: One Tap](https://www.better-auth.com/docs/plugins/one-tap)                     |
+| `lastLoginMethod` | Record which method a user last signed in with, so the UI can highlight it next visit.          | [better-auth: last login method](https://www.better-auth.com/docs/plugins/last-login-method) |
 
 ### Accounts, orgs, and access
 
@@ -80,16 +87,17 @@ behaviour and the full option reference are better-auth's, linked per row.
 
 ### Tokens and machine clients
 
-| Export                | What it adds                                                                                              | Reference                                                                                          |
-| --------------------- | --------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------- |
-| `bearer`              | Accept the session token as an `Authorization: Bearer` header instead of a cookie (native / CLI clients). | [better-auth: bearer](https://www.better-auth.com/docs/plugins/bearer)                             |
-| `jwt`                 | Issue verifiable JWTs with a JWKS endpoint for services that expect a token.                              | [better-auth: JWT](https://www.better-auth.com/docs/plugins/jwt)                                   |
-| `oidcProvider`        | Turn your app into an OpenID Connect identity provider other apps log in with.                            | [better-auth: OIDC provider](https://www.better-auth.com/docs/plugins/oidc-provider)               |
-| `genericOAuth`        | Add any OAuth2 / OIDC provider beyond the built-in social ones.                                           | [better-auth: generic OAuth](https://www.better-auth.com/docs/plugins/generic-oauth)               |
-| `oAuthProxy`          | Route OAuth callbacks through one stable URL (useful for preview / branch deploys).                       | [better-auth: OAuth proxy](https://www.better-auth.com/docs/plugins/oauth-proxy)                   |
-| `oneTimeToken`        | Issue and verify single-use tokens (short-lived hand-off links).                                          | [better-auth: one-time token](https://www.better-auth.com/docs/plugins/one-time-token)             |
-| `deviceAuthorization` | OAuth 2.0 device grant for CLIs, TVs, and other input-constrained clients.                                | [better-auth: device authorization](https://www.better-auth.com/docs/plugins/device-authorization) |
-| `mcp` / `withMcpAuth` | OAuth-protect a Model Context Protocol server. Pairs with [`@lunora/mcp`](/docs/packages/mcp).            | [better-auth: MCP](https://www.better-auth.com/docs/plugins/mcp)                                   |
+| Export                                                        | What it adds                                                                                                                                                                                                                                                                                                                                                                                                      | Reference                                                                                          |
+| ------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------- |
+| `bearer`                                                      | Accept the session token as an `Authorization: Bearer` header instead of a cookie (native / CLI clients).                                                                                                                                                                                                                                                                                                         | [better-auth: bearer](https://www.better-auth.com/docs/plugins/bearer)                             |
+| `jwt`                                                         | Issue verifiable JWTs with a JWKS endpoint for services that expect a token.                                                                                                                                                                                                                                                                                                                                      | [better-auth: JWT](https://www.better-auth.com/docs/plugins/jwt)                                   |
+| `oauthProvider`                                               | Turn your app into an OAuth/OpenID Connect provider other apps sign in with. Replaces `oidcProvider`, removed in better-auth 1.7.                                                                                                                                                                                                                                                                                 | [better-auth: OAuth provider](https://www.better-auth.com/docs/plugins/oauth-provider)             |
+| `genericOAuth`                                                | Add any OAuth2 / OIDC provider beyond the built-in social ones.                                                                                                                                                                                                                                                                                                                                                   | [better-auth: generic OAuth](https://www.better-auth.com/docs/plugins/generic-oauth)               |
+| `oAuthProxy`                                                  | Route OAuth callbacks through one stable URL (useful for preview / branch deploys).                                                                                                                                                                                                                                                                                                                               | [better-auth: OAuth proxy](https://www.better-auth.com/docs/plugins/oauth-proxy)                   |
+| `oneTimeToken`                                                | Issue and verify single-use tokens (short-lived hand-off links).                                                                                                                                                                                                                                                                                                                                                  | [better-auth: one-time token](https://www.better-auth.com/docs/plugins/one-time-token)             |
+| `deviceAuthorization`                                         | OAuth 2.0 device grant for CLIs, TVs, and other input-constrained clients.                                                                                                                                                                                                                                                                                                                                        | [better-auth: device authorization](https://www.better-auth.com/docs/plugins/device-authorization) |
+| `oauthDeviceAuthorization`                                    | The device grant (RFC 8628) for third-party clients of the `oauthProvider` above. Split out of `oauthProvider` in better-auth 1.7, so a provider that does not want the device endpoints no longer serves them.                                                                                                                                                                                                   | [better-auth: OAuth provider](https://www.better-auth.com/docs/plugins/oauth-provider)             |
+| `mcp` / `requireMcpAuth` / `createMcpProtectedRequestHandler` | OAuth-protect a Model Context Protocol server. Pairs with [`@lunora/mcp`](/docs/packages/mcp), whose `createAuthedMcpFetchHandler` mounts a Lunora MCP server behind `requireMcpAuth`. `withMcpAuth` was renamed `requireMcpAuth` in better-auth 1.7; `createMcpProtectedRequestHandler` is the split-deployment form (a resource server with no auth instance) and replaced 1.7.0-rc's short-lived `mcpHandler`. | [better-auth: MCP](https://www.better-auth.com/docs/plugins/mcp)                                   |
 
 #### `iss` and `aud` of a `jwt` token
 
@@ -126,11 +134,19 @@ deployed. When verifying with a library such as `jose`, log the error's `code`
 | ---------------- | --------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------- |
 | `captcha`        | Gate sensitive auth endpoints with Turnstile, reCAPTCHA, hCaptcha, or captchafox. See [CAPTCHA / Turnstile](#captcha--turnstile). | [better-auth: captcha](https://www.better-auth.com/docs/plugins/captcha)        |
 | `haveIBeenPwned` | Reject passwords found in the Have I Been Pwned breach corpus (k-anonymity check).                                                | [better-auth: HIBP](https://www.better-auth.com/docs/plugins/have-i-been-pwned) |
+| `inviteOnly`     | Create an account only for an address an administrator invited. Lunora's own. See [Invite-only sign-up](#invite-only-sign-up).    | —                                                                               |
+
+<Callout type="warn">
+    **Passwordless recovery changed in better-auth 1.7.** Once a magic link or an email OTP proves the user controls the mailbox, better-auth can delete
+    credentials that were never proven and revoke that user's older sessions. That closes a real takeover path — an attacker who registered a password against
+    someone else's address before it was verified — but it also means a legitimate user who signs in by magic link can find an earlier unverified password gone
+    and other devices signed out. Neither plugin is affected until you enable the behaviour; check its options before turning it on for an existing user base.
+</Callout>
 
 <Callout type="info">
-`captcha`, `mcp`, and `withMcpAuth` have no dedicated `better-auth/plugins/<name>`
-subpath. They ship via the `better-auth/plugins` barrel, and `@lunora/auth/plugins`
-re-exports them from there.
+`captcha`, `lastLoginMethod`, and `oneTap` have no dedicated
+`better-auth/plugins/<name>` subpath. They ship via the `better-auth/plugins`
+barrel, and `@lunora/auth/plugins` re-exports them from there.
 </Callout>
 
 Anything else better-auth ships, or a community plugin like Polar, keeps
@@ -153,14 +169,205 @@ export const buildAuth = (env: { AUTH_SECRET: string; DB: D1Database }) =>
     });
 ```
 
-That's the whole change — the new tables (`organization`, `member`,
+That's the whole change: the new tables (`organization`, `member`,
 `invitation`, …) are discovered by `ensureMigrated` next time the worker
 boots.
 
 To define **custom roles + permissions** beyond the built-in `user` / `admin`,
 use `createAccessControl` (re-exported from `@lunora/auth/plugins`) and pass the
-resulting roles into `admin({ ac, roles })` / `organization({ ac, roles })` —
-it's better-auth's standard access-control builder, unchanged.
+resulting roles into `admin({ ac, roles })` / `organization({ ac, roles })`.
+It's better-auth's standard access-control builder, unchanged.
+
+## Invite-only sign-up
+
+`inviteOnly()` closes self-serve registration: an account is created only for an
+email address an administrator has invited. It gates **every** path that mints a
+user — `/sign-up/email`, an OAuth callback creating a new account, magic link,
+`admin.createUser`, and Lunora's own `AuthAdmin.createUser` — because it hooks
+`user.create.before` rather than one route.
+
+```ts
+import { createAuth, createSignUpInvitation } from "@lunora/auth";
+import { inviteOnly } from "@lunora/auth/plugins";
+
+export const auth = createAuth({
+    database: env.DB,
+    emailAndPassword: { enabled: true, requireEmailVerification: true },
+    plugins: [inviteOnly()],
+    secret: env.AUTH_SECRET,
+});
+```
+
+Nobody signs up before the first invitation exists, including you — seed it with
+`createSignUpInvitation` from a one-off call at worker init or an internal
+mutation you run once. `inviteOnly({ allowFirstUser: true })` instead admits the
+first account uninvited, at the cost described under
+[bootstrapping](#bootstrapping) below.
+
+Leave `emailAndPassword.disableSignUp` **off**. The invitee still uses the
+ordinary sign-up form; closing it would leave them nothing to submit. The sign-up
+cards in [`@lunora/auth-ui`](/docs/packages/auth-ui) prefill the address from
+`?email=`, so an invitation link can be
+`https://app.example/sign-up?email=ada%40example.com`.
+
+An uninvited attempt is refused with `SIGN_UP_INVITE_REQUIRED` and HTTP **400**.
+That status is deliberate and not a typo: better-auth's sign-up route treats a
+`403` from a create hook as a duplicate-account signal and answers it with a
+fabricated success — a user object it never persisted — whenever
+`requireEmailVerification` or `autoSignIn: false` is set.
+
+### Issuing invitations
+
+Three server-side helpers, exported from `@lunora/auth`:
+
+| Function                                        | What it does                                                                                  |
+| ----------------------------------------------- | --------------------------------------------------------------------------------------------- |
+| `createSignUpInvitation(auth, { email, … })`    | Invite an address, or refresh an existing invitation for it. Returns the stored row.          |
+| `listSignUpInvitations(auth, { pendingOnly? })` | The 500 most recent invitations, newest first; `pendingOnly` drops the spent and the expired. |
+| `revokeSignUpInvitation(auth, { email })`       | Withdraw it.                                                                                  |
+| `pruneSignUpInvitations(auth)`                  | Delete invitations that expired unused, and report how many. Nothing calls it for you.        |
+
+```ts
+const invite = await createSignUpInvitation(auth, {
+    email: "ada@example.com",
+    expiresInSeconds: 3 * 24 * 60 * 60, // default 7 days, maximum 1 year
+    invitedBy: ctx.auth.userId,
+});
+
+const link = `https://app.example/sign-up?email=${encodeURIComponent(invite.email)}&invite=${invite.token}`;
+
+await sendInviteEmail(invite.email, link);
+```
+
+`invite.token` is the **only** time that value exists in the clear — the database
+keeps a SHA-256 of it. A link that was never delivered is reissued (call
+`createSignUpInvitation` again), not looked up, and reissuing invalidates the
+previous one. `@lunora/auth-ui` reads both parameters off the URL and submits the
+token with the form, so an invitee just follows the link.
+
+These are trusted server-side calls with **no authorization of their own** — the
+same trust model as [`createAuthAdmin`](#studio-user-dashboard).
+Who counts as an administrator is your application's question, so call them from
+a mutation you already gate. Delivering the invitation is yours too: nothing here
+sends mail, so the returned row is the whole handoff.
+
+The invitations live in a `signUpInvitation` table the plugin declares, so
+`authTables()`, `compileMigrationsSql`, and the Durable-Object DDL all pick it up
+with nothing further to write. Nothing prunes it either — a spent or expired row
+stays until you revoke it, which is also what keeps it a record of who was let in.
+`listSignUpInvitations` is capped rather than paged; past 500 rows, query the
+table directly.
+
+### From the studio
+
+With the plugin installed, the studio's **Users** page grows a **Sign-up
+invitations** section: invite an address, see who is pending / accepted /
+expired and who invited them, and revoke. It is gated on the same
+`capabilities.inviteOnly` flag the rest of the auth panels use, so a deployment
+without the plugin never shows it.
+
+The same three operations sit on the trusted admin plane
+(`AuthAdmin.createSignUpInvitation` / `listSignUpInvitations` /
+`revokeSignUpInvitation`) behind the worker's admin-token gate, and on the client
+as `listAuthSignUpInvitations` / `createAuthSignUpInvitation` /
+`revokeAuthSignUpInvitation`. `@lunora/react` exposes `useSignUpInvitations()`
+for the read. Those hand back timestamps as epoch-ms, like every other admin row;
+the module-level helpers above hand back `Date`s.
+
+Inviting from the studio still sends nothing — delivery is the app's, wherever
+the invitation is issued from.
+
+### Housekeeping
+
+Nothing prunes the table on its own. `pruneSignUpInvitations(auth)` deletes the
+invitations that expired without being used and returns the count. Spent ones
+stay, since they are the record of who was let in, and live ones obviously stay.
+It is bounded per call, so a large backlog takes several passes — put it on a
+cron if you invite at any volume.
+
+### Two checks, because the paths differ
+
+<Callout type="info">
+    An invitation carries a **secret token** — 256 CSPRNG bits, stored only as a SHA-256 — and the sign-up link carries it back as `?invite=`.
+
+    The token is checked on `/sign-up/email` and nowhere else, which is the design rather than an oversight. Every other path that mints an account has already
+    proved the person controls the address before the row is written: an OAuth callback carries a provider-verified email, and magic-link and email-OTP only
+    fire for whoever is holding the mailbox. Password sign-up is the one place where anyone may claim any address.
+
+    So there are two layers. `databaseHooks.user.create.before` is the universal backstop — an unspent, unexpired invitation must exist for the address,
+    whatever created the row. The route hook on `/sign-up/email` additionally requires the token.
+
+</Callout>
+
+Without the token this would be guessable in bulk, and that is not theoretical:
+the common case is inviting a team, where addresses are `first.last@company`. The
+rejection is deliberately uniform for the same reason — a missing token, a wrong
+token, an expired invitation and a never-invited address all answer
+`SIGN_UP_INVITE_INVALID` with one message, so the form cannot be used to sift a
+directory for who is on the list.
+
+What the token does **not** do is make an invitation single-use against a
+simultaneous request, or survive being forwarded. Whoever holds the link can spend
+the seat, so treat it as a bearer credential: send it to the invitee, not to a
+shared inbox. Keep `requireEmailVerification` on — better-auth writes the user row
+before it mails the verification token, so verification is what stops a spent
+invitation from becoming a usable session.
+
+A row with no `tokenHash` — one an OAuth-only deployment never needed, or a
+leftover from before tokens — cannot satisfy password sign-up at all. There is
+nothing to present that matches; re-invite to mint one.
+
+### What an invitation is, and what it is not
+
+<Callout type="warn">
+    **The invitation link is a bearer credential.** Anyone holding it can take that seat, so deliver it to the invitee rather than to a shared or forwarded
+    inbox, and reissue rather than resend if you are unsure where a link went.
+
+    `requireEmailVerification` still matters. better-auth writes the user row before it mails the verification token, so whoever spends an invitation creates a
+    real account immediately; verification is what stops that account from holding a session until someone clicks a link delivered to the address itself.
+    Recovery from a mis-sent link is `AuthAdmin.removeUser` plus a fresh invitation.
+
+</Callout>
+
+The plugin warns on startup when password sign-up runs without
+`requireEmailVerification`, because that is the difference between an attacker
+who guesses an address holding a session immediately and holding none.
+
+### What it refuses that you may not expect
+
+Plugins that mint an account from something other than a real mailbox still
+synthesize an address — `siwe` writes `<wallet>@<domain>`, and `phoneNumber`'s
+sign-up-on-verification writes a temp address of its own. Neither can match an
+invitation, so the gate **rejects** those flows — but only once a user exists.
+Under `allowFirstUser: true` the bootstrap runs before the address is ever
+compared, so the first wallet sign-in is what claims it. Do not combine those
+plugins with this one.
+
+`anonymous` is the one carve-out, because anonymous sign-in is not registration.
+Its throwaway identity is admitted, and converting it into a real account is
+gated like any other sign-up — better-auth creates a second, non-anonymous row
+for that, and the gate sees it. Installing both gives you "browse anonymously,
+invitation required to keep an account".
+
+Lunora's `AuthAdmin.createUser` — the studio's create-user action — mints through
+the same internal adapter, so it is gated too. Issue an invitation first, or call
+`createSignUpInvitation` from the same operator flow.
+
+Revoking is not retroactive, and not atomic against a sign-up already in flight:
+better-auth does not wrap the `before` hook and the user insert in one
+transaction, and the adapter contract offers no conditional consume, so a revoke
+landing between the two lets that one account through. Read
+`revokeSignUpInvitation` as "no further sign-ups", and reach for
+`AuthAdmin.removeUser` to undo one that already happened.
+
+### Bootstrapping
+
+`allowFirstUser` is **off** by default. Turning it on admits the first account
+uninvited so a fresh deployment can be bootstrapped without seeding a row, but
+the check is "the `user` table is empty" — two concurrent sign-ups can both
+observe that, and the window it opens is the gap between deploying and the owner
+signing up. On a deployment whose whole point is that strangers do not get
+accounts, seeding the first invitation is the better trade.
 
 ## CAPTCHA / Turnstile
 
@@ -190,7 +397,7 @@ export const buildAuth = (env: { AUTH_SECRET: string; DB: D1Database; TURNSTILE_
 ```
 
 Pass `endpoints: [...]` to override which routes are gated. The secret lives in
-a plain env var / `.dev.vars` (conventionally `TURNSTILE_SECRET_KEY`) — Turnstile
+a plain env var / `.dev.vars` (conventionally `TURNSTILE_SECRET_KEY`). Turnstile
 has no Cloudflare binding.
 
 ### Standalone helpers — for non-auth procedures
@@ -199,46 +406,50 @@ For **non-auth** procedures and mutations (where there's no better-auth
 pipeline to hook), `@lunora/auth` ships standalone Turnstile helpers from the
 package root:
 
-- `verifyTurnstile({ secret, token, remoteip?, fetch? })` — a pure server-side
+- `verifyTurnstile({ secret, token, remoteip?, fetch? })`: a pure server-side
   `siteverify` helper, usable from any mutation/action. A `success: false`
   (bot / invalid / expired) verdict is **returned**, not thrown; it only throws
   a structural `LunoraError` on transport failure (network error / non-2xx).
-- `verifyTurnstileMiddleware({ secret, token, ... })` — Lunora procedure
-  middleware (`.use()`) that gates any procedure on a Turnstile check. It reads
-  the token from `ctx` via the `token` selector (the token travels in the
-  function `args`, since the procedure context carries no raw `Headers`). Fails
-  **closed** by default; pass `failOpen: true` to admit on a siteverify outage.
+- `verifyTurnstileMiddleware({ secret, token, ... })`: Lunora procedure
+  middleware (`.use()`) that gates any procedure on a Turnstile check. Its
+  `token` selector reads from **`ctx`** — see the caveat below before reaching
+  for it. Fails **closed** by default; pass `failOpen: true` to admit on a
+  siteverify outage.
+
+A Turnstile token arrives in the request body, so it lands in the function
+`args`. Call `verifyTurnstile` directly in the handler, where `args` is in
+scope:
 
 ```ts
 // lunora/contactForm.ts — gate a plain mutation, no auth involved
-import { mutation } from "@/lunora/_generated/server";
-import { verifyTurnstileMiddleware } from "@lunora/auth";
+import { verifyTurnstile } from "@lunora/auth";
+import { LunoraError } from "@lunora/errors";
 
+import { mutation } from "@/lunora/_generated/server";
 import { v } from "lunorash/values";
 
-export const submit = mutation
-    .input({ message: v.string(), turnstileToken: v.string() })
-    // The procedure context carries no raw Headers, so the token rides in args
-    // and the selector reads it back off ctx once it's been surfaced there.
-    .use(
-        verifyTurnstileMiddleware({
-            secret: env.TURNSTILE_SECRET_KEY,
-            token: (ctx) => ctx.turnstileToken,
-        }),
-    )
-    .mutation(async ({ args }) => {
-        /* args.message has passed the Turnstile check */
-    });
+export const submit = mutation.input({ message: v.string(), turnstileToken: v.string() }).mutation(async ({ ctx, args }) => {
+    // `ctx.env` is `Record<string, unknown> | undefined`, so narrow the secret.
+    const secret = String(ctx.env?.TURNSTILE_SECRET_KEY ?? "");
+    // A bot / invalid / expired verdict is RETURNED, not thrown — check it.
+    const verdict = await verifyTurnstile({ secret, token: args.turnstileToken });
+
+    if (!verdict.success) {
+        throw new LunoraError("FORBIDDEN", "turnstile verification failed");
+    }
+
+    /* args.message has passed the Turnstile check */
+});
 ```
 
 <Callout type="warn">
     **Use the `captcha` plugin for the auth flow.** It hooks better-auth's pipeline and reads the token from the `x-captcha-response` header. The standalone
-    helpers above are for **non-auth** procedures, where you hand them the token explicitly — so reach for them only outside the sign-in/sign-up flow.
+    helpers above are for **non-auth** procedures, where you hand them the token explicitly, so reach for them only outside the sign-in/sign-up flow.
 </Callout>
 
 ## Studio user dashboard
 
-The [studio](/docs/packages/studio) ships a full user-management dashboard —
+The [studio](/docs/packages/studio) ships a full user-management dashboard:
 browse/search users, set roles, ban, revoke sessions, impersonate, create and
 delete, plus an Organizations section and per-user linked-accounts / 2FA /
 passkey panels. Wiring it is **one line**: hand `createWorker` an `authAdmin`
@@ -257,23 +468,23 @@ createWorker({
 
 ### The dashboard follows your plugins
 
-There is **no studio-side switch** — the plugins you enable in `createAuth(...)`
+There is **no studio-side switch**: the plugins you enable in `createAuth(...)`
 are the switch. `createAuthAdmin` reads the enabled plugin set from
 `auth.$context`, the worker exposes a `GET /_lunora/admin/auth/capabilities`
 endpoint, and the studio renders only the surfaces that apply:
 
-| Enable in `createAuth(...)`       | Dashboard surface that appears                                           |
-| --------------------------------- | ------------------------------------------------------------------------ |
-| `admin()`                         | User actions: role, ban/unban, set password, impersonate, create, delete |
-| `organization()`                  | The **Organizations** section (orgs → members → invitations)             |
-| `twoFactor()`                     | "Disable two-factor" in the user detail drawer                           |
-| `passkey()`                       | The user's passkeys (list + revoke) in the detail drawer                 |
-| _(always — core `account` table)_ | Linked accounts (providers + unlink)                                     |
+| Enable in `createAuth(...)`      | Dashboard surface that appears                                           |
+| -------------------------------- | ------------------------------------------------------------------------ |
+| `admin()`                        | User actions: role, ban/unban, set password, impersonate, create, delete |
+| `organization()`                 | The **Organizations** section (orgs → members → invitations)             |
+| `twoFactor()`                    | "Disable two-factor" in the user detail drawer                           |
+| `passkey()`                      | The user's passkeys (list + revoke) in the detail drawer                 |
+| _(always, core `account` table)_ | Linked accounts (providers + unlink)                                     |
 
 Turn a plugin off and its surface disappears (the Organizations tab shows an
 "Organizations are not enabled" empty state instead of erroring). Auth-method
-plugins that have no admin entity — `magicLink`, `emailOTP`, `username`,
-`phoneNumber`, … — need no dedicated panel; they show up through the user's
+plugins that have no admin entity (`magicLink`, `emailOTP`, `username`,
+`phoneNumber`, …) need no dedicated panel; they show up through the user's
 fields and linked accounts.
 
 ### Force a surface off
@@ -287,38 +498,63 @@ authAdmin: createAuthAdmin(auth, { features: { organization: false } }),
 ### Safe by construction
 
 Every `/_lunora/admin/auth/*` endpoint is gated by `LUNORA_ADMIN_TOKEN`, and
-`createAuthAdmin` is a trusted server-side operator — it talks to better-auth's
+`createAuthAdmin` is a trusted server-side operator: it talks to better-auth's
 adapter directly, so it is **not** an end-user API. Password hashes, session
 tokens, and OAuth access/refresh tokens are stripped from every response; the
 only token ever returned is the one from an explicit **Impersonate**.
 
-<Callout type="warn">The older read-only `authIntrospector` option still works (browse-only) but is deprecated — prefer `authAdmin`.</Callout>
+<Callout type="warn">The older read-only `authIntrospector` option has been removed. Wire `authAdmin` (e.g. `createAuthAdmin(auth)`) instead.</Callout>
 
 ## The `withAuthPlugins` middleware
 
 `@lunora/auth/middleware` exports a Lunora-style middleware factory that
 surfaces every plugin endpoint on `ctx.authApi`:
 
+It is a **procedure** middleware, so it goes on a `query`/`mutation`/`action`
+builder — `httpAction` is not a builder and has no `.use()`, and its
+`HttpActionCtx` carries no `authApi`:
+
 ```ts
-import { httpAction } from "lunorash/server";
+// lunora/orgs.ts
 import { withAuthPlugins } from "@lunora/auth/middleware";
 
-import { auth } from "./auth.js";
+import { internalAction, v } from "./_generated/server";
+import { auth } from "./auth";
 
 // Compose once with .use(...) and every handler downstream sees authApi.
-export const createOrg = httpAction(async (ctx, request) => {
-    const { name } = await request.json();
-
-    const org = await ctx.authApi.createOrganization({
-        body: { name, slug: name.toLowerCase().replace(/\s+/g, "-") },
-        headers: request.headers,
-    });
-
-    return Response.json(org);
-});
+export const createOrg = internalAction
+    .input({ cookie: v.string(), name: v.string() })
+    .use(withAuthPlugins(auth))
+    .action(async ({ ctx, args }) =>
+        ctx.authApi.createOrganization({
+            body: { name: args.name, slug: args.name.toLowerCase().replaceAll(/\s+/gu, "-") },
+            // Rebuilt from the transport — the middleware cannot pre-bind them.
+            headers: new Headers({ cookie: args.cookie }),
+        }),
+    );
 ```
 
-`ctx.authApi` is typed against the plugin set loaded on the auth instance —
+The transport that has the real headers forwards what the endpoint needs:
+
+```ts
+// lunora/http.ts
+import { httpAction, httpRouter } from "lunorash/server";
+
+import { internal } from "./_generated/internal";
+
+export const app = httpRouter();
+
+app.post(
+    "/orgs",
+    httpAction(async (ctx, request) => {
+        const { name } = (await request.json()) as { name: string };
+
+        return Response.json(await ctx.runAction(internal.orgs.createOrg, { cookie: request.headers.get("cookie") ?? "", name }));
+    }),
+);
+```
+
+`ctx.authApi` is typed against the plugin set loaded on the auth instance:
 `createOrganization`, `inviteMember`, `listMembers`, `banUser`,
 `impersonateUser`, etc. all show up automatically.
 
@@ -327,30 +563,49 @@ export const createOrg = httpAction(async (ctx, request) => {
 Lunora's procedure context carries the resolved identity (`ctx.auth.userId`,
 `ctx.auth.getIdentity()`) but not the raw inbound `Headers`. Better-auth
 endpoints need the headers to read the caller's session cookie, so the
-middleware does **not** pre-bind them — pass them through from the transport
-that has them:
+middleware does **not** pre-bind them, and a header-less call is an
+authorization bypass rather than a missing convenience. Route them in from the
+transport that has them:
 
-- **HTTP action** — `request.headers` (as shown above).
-- **WebSocket subscription** — propagated from the upgrade request.
-- **Server-to-server** (cron job, queue consumer) — pass `new Headers()` and
-  authenticate via a bearer token or service-key plugin instead.
+- **HTTP action**: `request.headers` — forward what the endpoint needs through
+  the procedure's `args` and rebuild a `Headers` on the far side, as above.
+  A `Headers` object cannot itself cross the RPC boundary.
+- **WebSocket subscription**: propagated from the upgrade request the same way.
+- **Server-to-server** (cron job, queue consumer): there is no caller session,
+  so use the explicit escape hatch — `ctx.authApi.withoutHeaders().<method>(…)`
+  — and authenticate via a bearer token or service-key plugin instead. The
+  runtime guard throws `LunoraAuthHeadersError` on a header-less call otherwise.
 
 ## Migrations
 
-`ensureMigrated(auth)` does a schema diff and applies missing DDL on the
-configured database — fine for dev and small deployments:
+`ensureMigrated` does a schema diff and applies missing DDL, which is fine for
+dev and small deployments. It drives better-auth's own migrator, which speaks
+**only** Kysely — so it takes the raw D1 binding as `database` and throws
+(`AUTH_MIGRATOR_UNSUPPORTED`) on `lunoraD1Adapter`. Build a second,
+migration-only instance for it; the adapter stays on the one serving requests:
 
 ```ts
 // src/server/index.ts
-import { ensureMigrated, handleAuthRequest } from "@lunora/auth";
+import { createAuth, ensureMigrated, handleAuthRequest } from "@lunora/auth";
 
 import { buildAuth } from "../../lunora/auth.js";
+
+// Per isolate, not per request: better-auth's migrator emits a bare
+// `CREATE TABLE`, so two concurrent runs against a fresh database leave the
+// loser with `table user already exists`. Holding the PROMISE (not a boolean)
+// is what makes concurrent cold requests share one run; clearing it on failure
+// is what lets a transient error retry.
+let migrated: Promise<void> | null = null;
 
 export default {
     async fetch(request, env, ctx) {
         const auth = buildAuth(env);
 
-        await ensureMigrated(auth); // idempotent, cached per options
+        migrated ??= ensureMigrated(createAuth({ ...authOptions, database: env.DB, secret: env.AUTH_SECRET })).catch((error) => {
+            migrated = null;
+            throw error;
+        });
+        await migrated;
 
         const authResponse = await handleAuthRequest(auth, request);
         if (authResponse) return authResponse;
@@ -362,11 +617,16 @@ export default {
 
 For production, prefer pre-applying the schema at deploy time:
 
+`compileMigrationsSql` still needs a database to diff against — better-auth
+introspects it to decide what is missing. Point it at an empty local SQLite and
+you get the full schema, with no Cloudflare binding involved:
+
 ```bash
 node -e "
-import('@lunora/auth').then(async ({ compileMigrationsSql }) => {
+import('node:sqlite').then(async ({ DatabaseSync }) => {
+    const { compileMigrationsSql } = await import('@lunora/auth');
     const sql = await compileMigrationsSql({
-        database: undefined, // schema-only, no live DB
+        database: new DatabaseSync(':memory:'), // empty ⇒ emits the whole schema
         secret: 'placeholder',
         plugins: [/* same list as runtime */],
     });

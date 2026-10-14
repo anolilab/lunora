@@ -1,0 +1,564 @@
+import type { ContextTracer } from "@lunora/observability";
+import { readRequestLog } from "@lunora/observability";
+import { describe, expect, it } from "vitest";
+
+import type { SpanEvent } from "../../../shared/span-event";
+import type { ShardDOState } from "../src/shard-do";
+import { ShardDO } from "../src/shard-do";
+import createSqliteExec from "./_helpers/node-sqlite";
+
+// A fixed W3C trace id + parent span id used to build the inbound `traceparent`.
+const TRACE_ID = "0af7651916cd43dd8448eb211c80319c";
+// A second, distinct trace id for the interleaved-dispatch race test.
+const TRACE_ID_B = "1bb7652917de54ee9559fc322d91420d";
+const PARENT_SPAN_ID = "b7ad6b7169203331";
+
+/**
+ * A shard whose real `handleRpc` runs a caller-supplied trace `plan` against a
+ * `ctx.trace` factory wired to a span-collecting sink, so the full base-class
+ * dispatch machinery — inbound `traceparent` sampled flag, `recordSpan` gating,
+ * and the `finally` error-keep flush — decides what reaches `onSpan`.
+ */
+class SamplingShard extends ShardDO {
+    public readonly exportedSpans: SpanEvent[] = [];
+
+    // Assigned by each test before `fetch`; a definite-assignment field rather than
+    // an arrow default (which trips `class-methods-use-this`). `functionPath` lets a
+    // plan branch per dispatch (used by the interleaved-dispatch race test).
+    public plan!: (trace: ContextTracer, functionPath: string) => Promise<void>;
+
+    public override async handleRpc(functionPath: string): Promise<unknown> {
+        const trace = this.makeTracer(
+            functionPath,
+            {
+                onSpan: (span: SpanEvent) => {
+                    this.exportedSpans.push(span);
+                },
+            },
+            this.getCurrentTrace(),
+        );
+
+        await this.plan(trace, functionPath);
+
+        return { ok: true };
+    }
+}
+
+/**
+ * A shard that records what `buildCtx` would hand `createContainerContext` for
+ * the tail-bias toggle — the value read off the inbound request by the base
+ * class, captured inside the dispatch rather than after it.
+ */
+class ScopeProbeShard extends SamplingShard {
+    public seenSampleErrors: boolean | undefined;
+
+    public override async handleRpc(functionPath: string): Promise<unknown> {
+        this.seenSampleErrors = this.getCurrentSampleErrors();
+
+        return super.handleRpc(functionPath);
+    }
+}
+
+/** A shard recording the `traceparent` `buildCtx` would hand `createContainerContext`, next to the dispatch's own anchor. */
+class TraceparentProbeShard extends SamplingShard {
+    public seen: { anchor: { rootSpanId: string; traceId: string } | undefined; traceparent: string | undefined }[] = [];
+
+    public override async handleRpc(functionPath: string): Promise<unknown> {
+        this.seen.push({ anchor: this.getCurrentTrace(), traceparent: this.getCurrentTraceparent() });
+
+        return super.handleRpc(functionPath);
+    }
+}
+
+const makeState = (database: ReturnType<typeof createSqliteExec>): ShardDOState => {
+    return {
+        acceptWebSocket() {},
+        getWebSockets() {
+            return [];
+        },
+        storage: { sql: database.sql as unknown as ShardDOState["storage"]["sql"] },
+    };
+};
+
+/**
+ * A `/rpc` request carrying the runtime's sampling signals: the `traceparent`
+ * sampled flag (`01` in / `00` out) and the `x-lunora-sample-errors` tail-bias
+ * header. Omitting `keepErrors` leaves the header off (defaulting to keep).
+ */
+const request = (functionPath: string, options: { keepErrors?: boolean; sampled: boolean; traceId?: string }): Request => {
+    const headers: Record<string, string> = {
+        "content-type": "application/json",
+        traceparent: `00-${options.traceId ?? TRACE_ID}-${PARENT_SPAN_ID}-${options.sampled ? "01" : "00"}`,
+    };
+
+    if (options.keepErrors !== undefined) {
+        headers["x-lunora-sample-errors"] = options.keepErrors ? "1" : "0";
+    }
+
+    return new Request("https://shard.internal/rpc", {
+        body: JSON.stringify({ args: {}, functionPath }),
+        headers,
+        method: "POST",
+    });
+};
+
+describe("shardDO trace sampling", () => {
+    it("streams spans live when the trace is head-sampled", async () => {
+        expect.assertions(2);
+
+        const database = createSqliteExec();
+
+        try {
+            const shard = new SamplingShard(makeState(database), {});
+
+            shard.plan = async (trace) => {
+                await trace("work", () => undefined);
+            };
+
+            await shard.fetch(request("a:b", { sampled: true }));
+
+            expect(shard.exportedSpans).toHaveLength(1);
+            expect(shard.exportedSpans[0]?.name).toBe("work");
+        } finally {
+            database.close();
+        }
+    });
+
+    it("drops a sampled-out trace that produced no error span", async () => {
+        expect.assertions(1);
+
+        const database = createSqliteExec();
+
+        try {
+            const shard = new SamplingShard(makeState(database), {});
+
+            shard.plan = async (trace) => {
+                await trace("first", () => undefined);
+                await trace("second", () => undefined);
+            };
+
+            await shard.fetch(request("a:b", { keepErrors: true, sampled: false }));
+
+            // Head-sampled out, no error → nothing exported (still buffered locally
+            // for the Studio panel, but never handed to the sink).
+            expect(shard.exportedSpans).toHaveLength(0);
+        } finally {
+            database.close();
+        }
+    });
+
+    it("keeps a sampled-out trace whole when a child span errored (tail bias)", async () => {
+        expect.assertions(3);
+
+        const database = createSqliteExec();
+
+        try {
+            const shard = new SamplingShard(makeState(database), {});
+
+            shard.plan = async (trace) => {
+                await trace("ok-child", () => undefined);
+                // The handler catches so it returns ok, but the child span settled
+                // `ok: false` — enough to keep the whole trace on export.
+                await trace("bad-child", () => {
+                    throw new Error("kaboom");
+                }).catch(() => undefined);
+            };
+
+            await shard.fetch(request("a:b", { keepErrors: true, sampled: false }));
+
+            const names = shard.exportedSpans.map((span) => span.name);
+
+            expect(shard.exportedSpans).toHaveLength(2);
+            // The whole trace is kept, including the sibling that settled BEFORE the error.
+            expect(names).toContain("ok-child");
+            expect(names).toContain("bad-child");
+        } finally {
+            database.close();
+        }
+    });
+
+    // The verdict has to reach the sink ON the span: the OTLP encoder writes it
+    // into the span's `flags`, and a span shipped without one reads as UNSAMPLED
+    // at the collector — on every span, including the kept ones.
+    it("stamps each exported span with the trace's settled sampled verdict", async () => {
+        expect.assertions(2);
+
+        const database = createSqliteExec();
+
+        try {
+            const kept = new SamplingShard(makeState(database), {});
+
+            kept.plan = async (trace) => {
+                await trace("work", () => undefined);
+            };
+
+            await kept.fetch(request("a:b", { sampled: true }));
+
+            expect(kept.exportedSpans.map((span) => span.sampled)).toStrictEqual([true]);
+
+            // Head-sampled out, rescued by the tail bias: exported with the bit
+            // CLEAR, because that is the verdict the trace actually got.
+            const rescued = new SamplingShard(makeState(database), {});
+
+            rescued.plan = async (trace) => {
+                await trace("bad-child", () => {
+                    throw new Error("kaboom");
+                }).catch(() => undefined);
+            };
+
+            await rescued.fetch(request("a:c", { keepErrors: true, sampled: false }));
+
+            expect(rescued.exportedSpans.map((span) => span.sampled)).toStrictEqual([false]);
+        } finally {
+            database.close();
+        }
+    });
+
+    // `buildCtx` hands this to `createContainerContext`, which stamps it onto
+    // every outbound container fetch — the hop that lets the container export on
+    // the verdict THIS dispatch settled instead of its own environment. Absent
+    // and "0" have to stay distinguishable: absent leaves the container on its
+    // own configuration, "0" overrides it.
+    it("exposes the propagated tail-bias toggle for outbound container fetches", async () => {
+        expect.assertions(3);
+
+        const database = createSqliteExec();
+
+        try {
+            const shard = new ScopeProbeShard(makeState(database), {});
+
+            shard.plan = async () => undefined;
+
+            await shard.fetch(request("a:b", { keepErrors: false, sampled: true }));
+
+            expect(shard.seenSampleErrors).toBe(false);
+
+            await shard.fetch(request("a:b", { keepErrors: true, sampled: true }));
+
+            expect(shard.seenSampleErrors).toBe(true);
+
+            // No header at all — an alarm, a subscription re-run, a non-Lunora
+            // caller. Nothing to propagate, so nothing is forwarded.
+            await shard.fetch(
+                new Request("https://shard.internal/rpc", {
+                    body: JSON.stringify({ args: {}, functionPath: "a:b" }),
+                    headers: { "content-type": "application/json" },
+                    method: "POST",
+                }),
+            );
+
+            expect(shard.seenSampleErrors).toBeUndefined();
+        } finally {
+            database.close();
+        }
+    });
+
+    it("forwards its own trace anchor to containers when the dispatch carried no traceparent", async () => {
+        expect.assertions(3);
+
+        const database = createSqliteExec();
+
+        try {
+            const shard = new TraceparentProbeShard(makeState(database), {});
+
+            shard.plan = async () => undefined;
+
+            await shard.fetch(request("a:b", { sampled: true }));
+            await shard.fetch(
+                new Request("https://shard.internal/rpc", {
+                    body: JSON.stringify({ args: {}, functionPath: "a:b" }),
+                    headers: { "content-type": "application/json" },
+                    method: "POST",
+                }),
+            );
+
+            // An inbound traceparent is forwarded as-is.
+            expect(shard.seen[0]?.traceparent).toBe(`00-${TRACE_ID}-${PARENT_SPAN_ID}-01`);
+
+            // None inbound: the container joins the trace the shard minted, under
+            // the shard's root span, instead of starting a disconnected one.
+            const { anchor, traceparent } = shard.seen[1]!;
+
+            expect(anchor).toBeDefined();
+            expect(traceparent).toBe(`00-${anchor!.traceId}-${anchor!.rootSpanId}-01`);
+        } finally {
+            database.close();
+        }
+    });
+
+    it("drops a sampled-out error trace when alwaysSampleErrors is off", async () => {
+        expect.assertions(1);
+
+        const database = createSqliteExec();
+
+        try {
+            const shard = new SamplingShard(makeState(database), {});
+
+            shard.plan = async (trace) => {
+                await trace("bad-child", () => {
+                    throw new Error("kaboom");
+                }).catch(() => undefined);
+            };
+
+            await shard.fetch(request("a:b", { keepErrors: false, sampled: false }));
+
+            expect(shard.exportedSpans).toHaveLength(0);
+        } finally {
+            database.close();
+        }
+    });
+
+    it("keeps a slow sampled-out error trace even when a sibling dispatch's finally interleaves", async () => {
+        expect.assertions(2);
+
+        const database = createSqliteExec();
+
+        try {
+            const shard = new SamplingShard(makeState(database), {});
+
+            let markRecorded!: () => void;
+            const slowRecorded = new Promise<void>((resolve) => {
+                markRecorded = resolve;
+            });
+            let releaseSlow!: () => void;
+            const slowGate = new Promise<void>((resolve) => {
+                releaseSlow = resolve;
+            });
+
+            shard.plan = async (trace, functionPath) => {
+                if (functionPath === "slow:out") {
+                    // Sampled out + errors: the span is held and the sink captured.
+                    await trace("slow-error", () => {
+                        throw new Error("boom");
+                    }).catch(() => undefined);
+                    markRecorded();
+                    // Park before returning, so this dispatch's `finally` (which
+                    // flushes the held error span) runs AFTER the sibling below.
+                    await slowGate;
+
+                    return;
+                }
+
+                await trace("fast-ok", () => undefined);
+            };
+
+            // Start the slow sampled-out+error dispatch (its own traceId) and let it
+            // hold its error span, then park on the gate.
+            const slow = shard.fetch(request("slow:out", { keepErrors: true, sampled: false, traceId: TRACE_ID }));
+
+            await slowRecorded;
+
+            // Run a sibling sampled-in dispatch (a DIFFERENT traceId) to completion.
+            // Its `finally` must not wipe the slow trace's held sink/verdict — the
+            // race the per-instance fields used to lose. It streams its own span live.
+            await shard.fetch(request("fast:in", { sampled: true, traceId: TRACE_ID_B }));
+
+            // Now let the slow dispatch finish; its `finally` must still flush its
+            // own held error span (keyed by its traceId), not silently drop it.
+            releaseSlow();
+            await slow;
+
+            expect(shard.exportedSpans.filter((span) => span.traceId === TRACE_ID).map((span) => span.name)).toContain("slow-error");
+            expect(shard.exportedSpans.filter((span) => span.traceId === TRACE_ID_B).map((span) => span.name)).toContain("fast-ok");
+        } finally {
+            database.close();
+        }
+    });
+
+    it("stamps the durable request-log row with its OWN trace when a sibling dispatch interleaves", async () => {
+        expect.assertions(2);
+
+        const database = createSqliteExec();
+
+        try {
+            const shard = new SamplingShard(makeState(database), {});
+
+            let markStarted!: () => void;
+            const slowStarted = new Promise<void>((resolve) => {
+                markStarted = resolve;
+            });
+            let releaseSlow!: () => void;
+            const slowGate = new Promise<void>((resolve) => {
+                releaseSlow = resolve;
+            });
+
+            shard.plan = async (_trace, functionPath) => {
+                if (functionPath === "slow:ok") {
+                    markStarted();
+                    // Park inside the handler, so the sibling below runs its whole
+                    // dispatch — including the `finally` that CLEARS the shared
+                    // `currentRequestTrace` — before this one records its row.
+                    await slowGate;
+                }
+            };
+
+            const slow = shard.fetch(request("slow:ok", { sampled: true, traceId: TRACE_ID }));
+
+            await slowStarted;
+            await shard.fetch(request("fast:ok", { sampled: true, traceId: TRACE_ID_B }));
+
+            releaseSlow();
+            await slow;
+
+            const rows = readRequestLog(database.sql);
+            const byPath = new Map(rows.map((row) => [row.functionPath, row.traceId]));
+
+            // The regression: `recordRequestLog` runs after the handler's awaits, so
+            // reading the shared anchor there stamped the sibling's trace — or
+            // `undefined`, once the sibling's `finally` had cleared it. The anchor is
+            // threaded by value precisely so each row carries its own dispatch's id.
+            expect(byPath.get("slow:ok")).toBe(TRACE_ID);
+            expect(byPath.get("fast:ok")).toBe(TRACE_ID_B);
+        } finally {
+            database.close();
+        }
+    });
+
+    it("flushes a sampled-out trace's held error span even after the ring evicted it (eviction race closed)", async () => {
+        expect.assertions(1);
+
+        const database = createSqliteExec();
+
+        try {
+            const shard = new SamplingShard(makeState(database), {});
+
+            let markRecorded!: () => void;
+            const slowRecorded = new Promise<void>((resolve) => {
+                markRecorded = resolve;
+            });
+            let releaseSlow!: () => void;
+            const slowGate = new Promise<void>((resolve) => {
+                releaseSlow = resolve;
+            });
+
+            shard.plan = async (trace, functionPath) => {
+                if (functionPath === "slow:out") {
+                    // Sampled out + errors: the span is held on the per-trace entry.
+                    await trace("slow-error", () => {
+                        throw new Error("boom");
+                    }).catch(() => undefined);
+                    markRecorded();
+                    // Park so this dispatch's `finally` (which flushes the held error
+                    // span) runs AFTER the flood below has evicted it from the ring.
+                    await slowGate;
+
+                    return;
+                }
+
+                // Flood a DIFFERENT (sampled-in) trace with more spans than the span
+                // ring can hold, so the slow trace's held error span is evicted FROM
+                // THE RING while its dispatch is parked. The held spans now live on the
+                // per-trace entry, not the ring, so the flush must still find it — the
+                // ring-copy implementation would silently drop it here.
+                for (let index = 0; index < 550; index += 1) {
+                    // eslint-disable-next-line no-await-in-loop -- ordering is the point: fill the ring sequentially so the oldest (slow-error) is evicted.
+                    await trace(`filler-${index.toString()}`, () => undefined);
+                }
+            };
+
+            const slow = shard.fetch(request("slow:out", { keepErrors: true, sampled: false, traceId: TRACE_ID }));
+
+            await slowRecorded;
+
+            // Sampled-in flood on its own trace: streams live AND fills the ring past
+            // capacity, evicting the slow trace's held error span from the ring.
+            await shard.fetch(request("flood:in", { sampled: true, traceId: TRACE_ID_B }));
+
+            releaseSlow();
+            await slow;
+
+            expect(shard.exportedSpans.filter((span) => span.traceId === TRACE_ID).map((span) => span.name)).toContain("slow-error");
+        } finally {
+            database.close();
+        }
+    });
+
+    it("does not export a span that ends after its sampled-out dispatch tore down (late-span verdict snapshot)", async () => {
+        expect.assertions(2);
+
+        const database = createSqliteExec();
+
+        try {
+            const shard = new SamplingShard(makeState(database), {});
+
+            let markStarted!: () => void;
+            const started = new Promise<void>((resolve) => {
+                markStarted = resolve;
+            });
+            let releaseLate!: () => void;
+            const lateGate = new Promise<void>((resolve) => {
+                releaseLate = resolve;
+            });
+            let latePromise!: Promise<void>;
+
+            shard.plan = async (trace) => {
+                // Detached: the body parks on the gate, so the dispatch returns — and
+                // its `finally` deletes the traceSampling entry — while the span is
+                // still open. This is the streaming-AI-SDK / detached-hook shape.
+                latePromise = trace("late", async () => {
+                    markStarted();
+                    await lateGate;
+                });
+                await started;
+            };
+
+            await shard.fetch(request("a:b", { keepErrors: true, sampled: false }));
+
+            // Dispatch settled, entry gone; the span has not recorded yet.
+            expect(shard.exportedSpans).toHaveLength(0);
+
+            releaseLate();
+            await latePromise;
+
+            // The late span records now, with NO live traceSampling entry. The verdict
+            // snapshotted when it opened (sampled out) is honoured — it is dropped, not
+            // exported. Before the fix a missing entry fell through to an unconditional
+            // export, leaking an orphan child of a sampled-out trace.
+            expect(shard.exportedSpans).toHaveLength(0);
+        } finally {
+            database.close();
+        }
+    });
+
+    it("still exports a span that ends after a sampled-in dispatch tore down", async () => {
+        expect.assertions(2);
+
+        const database = createSqliteExec();
+
+        try {
+            const shard = new SamplingShard(makeState(database), {});
+
+            let markStarted!: () => void;
+            const started = new Promise<void>((resolve) => {
+                markStarted = resolve;
+            });
+            let releaseLate!: () => void;
+            const lateGate = new Promise<void>((resolve) => {
+                releaseLate = resolve;
+            });
+            let latePromise!: Promise<void>;
+
+            shard.plan = async (trace) => {
+                latePromise = trace("late", async () => {
+                    markStarted();
+                    await lateGate;
+                });
+                await started;
+            };
+
+            await shard.fetch(request("a:b", { sampled: true }));
+
+            // Parked span hasn't recorded yet.
+            expect(shard.exportedSpans).toHaveLength(0);
+
+            releaseLate();
+            await latePromise;
+
+            // No live entry now, but the open-time snapshot (sampled in) keeps it — a
+            // kept trace's late span still exports.
+            expect(shard.exportedSpans.map((span) => span.name)).toContain("late");
+        } finally {
+            database.close();
+        }
+    });
+});

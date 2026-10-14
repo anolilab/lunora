@@ -1,3 +1,4 @@
+import { LunoraError } from "@lunora/errors";
 import { beforeEach, describe, expect, it } from "vitest";
 
 import type { ExecutionContextLike } from "../src/create-worker";
@@ -180,7 +181,7 @@ describe("observabilitySink", () => {
             expect.assertions(1);
 
             const { events, sink } = collectEvents();
-            const worker = createWorker({ observability: sink, shardDO: shard.namespace });
+            const worker = createWorker({ allowUnauthenticatedShardAccess: true, observability: sink, shardDO: shard.namespace });
 
             await worker.fetch(
                 new Request("https://app.example/_lunora/rpc", {
@@ -214,6 +215,52 @@ describe("observabilitySink", () => {
             expect(events[0]!.ok).toBe(false);
             expect(events[0]!.error?.status).toBe(500);
             expect(events[0]!.error?.code).toBe("SHARD_ERROR");
+        });
+
+        it("reports the shard's own error detail (stack included) and keeps it from the client", async () => {
+            expect.assertions(4);
+
+            const { events, sink } = collectEvents();
+            const detail = {
+                code: "INTERNAL_SERVER_ERROR",
+                message: "db down",
+                name: "TypeError",
+                stack: "TypeError: db down\n    at handler (messages.ts:3:9)",
+            };
+            let asked: null | string = null;
+
+            const namespace: ShardNamespaceLike = {
+                get: () => {
+                    return {
+                        fetch: async (request: Request) => {
+                            asked = request.headers.get("x-lunora-want-error-detail");
+
+                            return Response.json(
+                                { error: { code: "INTERNAL_SERVER_ERROR", message: "internal error" } },
+                                { headers: { "x-lunora-error-detail": encodeURIComponent(JSON.stringify(detail)) }, status: 500 },
+                            );
+                        },
+                    };
+                },
+                idFromName: (name) => {
+                    return { __name: name };
+                },
+            };
+            const worker = createWorker({ observability: sink, shardDO: namespace });
+
+            const response = await worker.fetch(
+                new Request("https://app.example/_lunora/rpc", {
+                    body: JSON.stringify({ args: {}, functionPath: "messages:list" }),
+                    method: "POST",
+                }),
+                {},
+                fakeContext,
+            );
+
+            expect(asked).toBe("1");
+            expect(events[0]!.error).toStrictEqual({ ...detail, status: 500 });
+            expect(response.headers.get("x-lunora-error-detail")).toBeNull();
+            await expect(response.text()).resolves.not.toContain("stack");
         });
 
         it("reports ok=false with the thrown error when the fetch throws", async () => {
@@ -251,7 +298,7 @@ describe("observabilitySink", () => {
 
             // Structural ConflictError shape (name/code/status) — mirrors what
             // `@lunora/do` throws without taking a runtime dependency on it.
-            const conflict = Object.assign(new Error("write conflict"), { code: "CONFLICT", name: "ConflictError", status: 409 });
+            const conflict = new LunoraError("CONFLICT", "write conflict", { name: "ConflictError", status: 409 });
 
             shard.throwOnFetch = conflict;
             const worker = createWorker({ observability: sink, shardDO: shard.namespace });
@@ -280,7 +327,12 @@ describe("observabilitySink", () => {
                     return { data: 42, errors: [], failed: 0, ok: 3 };
                 },
             } as unknown as QueryCoordinator;
-            const worker = createWorker({ observability: sink, queryCoordinator: coordinator, shardDO: shard.namespace });
+            const worker = createWorker({
+                allowUnauthenticatedShardAccess: true,
+                observability: sink,
+                queryCoordinator: coordinator,
+                shardDO: shard.namespace,
+            });
 
             const response = await worker.fetch(
                 new Request("https://app.example/_lunora/rpc", {

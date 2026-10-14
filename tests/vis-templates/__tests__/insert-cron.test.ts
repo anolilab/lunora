@@ -4,7 +4,7 @@ import { insertCronJob } from "../../../.vis/templates/_helpers/insert-cron.js";
 
 const baseCrons = `import { cronJobs } from "@lunora/scheduler";
 
-import { internal } from "./_generated/api.js";
+import { internal } from "./_generated/internal.js";
 
 const crons = cronJobs();
 
@@ -47,7 +47,7 @@ describe("insertCronJob", () => {
     test("inserts after the registry when there are no jobs yet", () => {
         const source = `import { cronJobs } from "@lunora/scheduler";
 
-import { internal } from "./_generated/api.js";
+import { internal } from "./_generated/internal.js";
 
 const crons = cronJobs();
 

@@ -1,0 +1,3 @@
+# Copy to `.dev.vars` (gitignored) before `pnpm dev`.
+# Any random string works locally: `openssl rand -base64 32`
+AUTH_SECRET=dev-only-change-me

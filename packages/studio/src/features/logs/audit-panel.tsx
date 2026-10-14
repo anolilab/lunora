@@ -1,9 +1,9 @@
-import { useLunora } from "@lunora/react";
 import type { Rect, Virtualizer } from "@tanstack/react-virtual";
 import { observeElementRect, useVirtualizer } from "@tanstack/react-virtual";
 import type { ChangeEvent, ReactElement } from "react";
 import { useMemo, useRef, useState } from "react";
 
+import ErrorAlert from "../../components/error-alert";
 import { LiveError } from "../../components/live-status";
 import { ShardInput } from "../../components/shard-input";
 import { Badge } from "../../components/ui/badge";
@@ -11,33 +11,25 @@ import { Card, CardContent } from "../../components/ui/card";
 import { EmptyState } from "../../components/ui/empty-state";
 import { Input } from "../../components/ui/input";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "../../components/ui/table";
-import useLiveAdmin from "../../hooks/use-live-admin";
+import { useAdminQuery } from "../../hooks/use-admin-query";
+import { useShardKey } from "../../hooks/use-shard-key";
 import { useT } from "../../i18n/i18n-context";
 import type { AuditEntry, AuditLogResult } from "../../lib/admin";
 import { ADMIN_FUNCTIONS } from "../../lib/admin";
-import { adminRef, callOptions, errorMessage, formatTimestamp } from "../../lib/internal";
-import useLiveShardSeed from "../data/hooks/use-live-shard-seed";
+import { formatTimestamp, jsonRowReplacer } from "../../lib/internal";
 
 interface AuditPanelProps {
     /** Shard key the panel reports on. Defaults to the root shard. */
     readonly initialShardKey?: string;
 }
 
-const GET_AUDIT_LOG = adminRef(ADMIN_FUNCTIONS.getAuditLog);
-
-/** Longest `detail` JSON rendered inline before it's truncated; the full value stays in the cell `title`. */
-const DETAIL_MAX = 80;
-
-/** Serialise an entry's `detail` to a compact, length-bounded string for the table cell. */
-const formatDetail = (detail: Record<string, unknown> | undefined): string => {
-    if (detail === undefined) {
-        return "";
-    }
-
-    const json = JSON.stringify(detail);
-
-    return json.length > DETAIL_MAX ? `${json.slice(0, DETAIL_MAX)}…` : json;
-};
+/**
+ * Serialise an entry's `detail` IN FULL. The cell truncates it visually (CSS),
+ * so the whole value stays in the DOM, the `title` and a copy of the cell — a
+ * PITR restore's `undoBookmark` lives only here, and an 80-character cut made it
+ * unrecoverable.
+ */
+const formatDetail = (detail: Record<string, unknown> | undefined): string => (detail === undefined ? "" : JSON.stringify(detail, jsonRowReplacer));
 
 /** Estimated height of one virtualized audit row, and the bounded height of the scroll viewport. */
 const ROW_HEIGHT = 41;
@@ -62,61 +54,32 @@ const observeViewportRect = (instance: Virtualizer<HTMLDivElement, Element>, cal
  * Durable audit log for one shard: the admin state-changing operations
  * (`writeRow`, `runMigration`, `importShard`, `applyCdc`) recorded to the
  * reserved `__lunora_audit__` table, newest first. Reads via the
- * `__lunora_admin__:getAuditLog` RPC over the {@link useLunora} client; gated by
- * the server's `LUNORA_ADMIN_TOKEN`.
+ * `__lunora_admin__:getAuditLog` RPC through `useAdminQuery`; gated by the
+ * server's `LUNORA_ADMIN_TOKEN`.
  *
  * Unlike the logs panel (an in-memory ring that resets on hibernation), the
  * audit log is durable and bounded only by a retention cap. The panel is always
- * live: a subscription opens once the first seed commits a shard and re-pushes on
- * every server write-flush so new entries appear without a manual refresh. The op
- * filter is client-side over the already-fetched buffer — it never triggers a refetch.
+ * live: `useAdminQuery`'s `live` subscription re-pushes on every server
+ * write-flush so new entries appear without a manual refresh. The op filter is
+ * client-side over the already-fetched buffer — it never triggers a refetch.
  */
 const AuditPanel = ({ initialShardKey }: AuditPanelProps): ReactElement => {
-    const client = useLunora();
     const t = useT();
 
-    const [shardKey, setShardKey] = useState<string>(initialShardKey ?? "");
-    const [entries, setEntries] = useState<AuditEntry[]>([]);
-    const [error, setError] = useState<null | string>(null);
+    const { queryShardKey, setShardKey, shardKey } = useShardKey(initialShardKey);
     const [search, setSearch] = useState<string>("");
-    // Always-on live channel; this only holds a rejection message (e.g. missing
-    // admin token) so the panel can say why it stopped updating.
-    const [liveError, setLiveError] = useState<string | undefined>(undefined);
 
-    const refresh = async (shard: string): Promise<void> => {
-        setError(null);
-
-        try {
-            const result = (await client.query(GET_AUDIT_LOG, {}, callOptions(shard))) as AuditLogResult;
-
-            setEntries(result.entries);
-        } catch (error_) {
-            setEntries([]);
-            setError(errorMessage(error_));
-
-            // Rethrow so the shard-seed hook doesn't commit a shard that failed.
-            throw error_;
-        }
-    };
-
-    // Debounced shard seed + commit-on-success; the live channel keys on the
-    // committed shard (replaces the old Refresh button).
-    const committedShard = useLiveShardSeed(shardKey, refresh);
-
-    // Live channel: always on once the seed commits a shard; each server push
-    // replaces the buffer so new entries appear without a manual refresh.
-    useLiveAdmin(
+    // One-shot read + always-on live subscription for the committed shard. `live`
+    // streams each server write-flush into the cache so new entries appear without
+    // a manual refresh; `liveError` holds a rejection message (e.g. missing admin
+    // token) so the panel can say why it stopped updating.
+    const { data, error, errorSource, isLoading, liveError } = useAdminQuery<AuditLogResult>(
         ADMIN_FUNCTIONS.getAuditLog,
         {},
-        committedShard ?? "",
-        (result) => {
-            setError(null);
-            setLiveError(undefined);
-            setEntries((result as AuditLogResult).entries);
-        },
-        committedShard !== undefined,
-        setLiveError,
+        { live: true, shardKey: queryShardKey },
     );
+
+    const entries = useMemo<AuditEntry[]>(() => data?.entries ?? [], [data]);
 
     // Client-side op-substring filter (case-insensitive) over the already-fetched
     // entries, also matching the table/id columns — never triggers a refetch.
@@ -141,6 +104,7 @@ const AuditPanel = ({ initialShardKey }: AuditPanelProps): ReactElement => {
     // cells) so the semantics, styling, and tests stay intact. See `observeViewportRect`.
     const scrollRef = useRef<HTMLDivElement>(null);
 
+    // react-doctor-disable-next-line react-hooks-js/incompatible-library -- TanStack Virtual returns functions the compiler refuses to memoize; the alternative is not using the library
     const virtualizer = useVirtualizer({
         count: filtered.length,
         estimateSize: () => ROW_HEIGHT,
@@ -177,13 +141,9 @@ const AuditPanel = ({ initialShardKey }: AuditPanelProps): ReactElement => {
                 />
             </div>
 
-            {error !== null && (
-                <p className="text-sm text-destructive" data-testid="au-error" role="alert">
-                    {error}
-                </p>
-            )}
+            {error !== null && <ErrorAlert error={errorSource} testId="au-error" />}
 
-            {error === null && filtered.length === 0 && (
+            {error === null && !isLoading && filtered.length === 0 && (
                 <EmptyState
                     description={t("State-changing admin operations are recorded here.")}
                     icon={

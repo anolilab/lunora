@@ -1,32 +1,56 @@
-import type { Validator } from "@lunora/values";
-import { isOrWrapsFromValidator } from "@lunora/values";
+import { LunoraError } from "@lunora/errors";
+// eslint-disable-next-line import/no-extraneous-dependencies -- @lunora/search-core is a devDependency on purpose: packem inlines it into this bundle, so it is not a published runtime dep
+import { isSearchLanguage, isSearchStrategy, SEARCH_LANGUAGES, SEARCH_STRATEGIES } from "@lunora/search-core";
+import type { ColumnValidator, Validator } from "@lunora/values";
+import { v } from "@lunora/values";
 
+import { effectiveKind } from "../../../shared/effective-kind";
+import { globalTtlMessage } from "../../../shared/global-ttl";
+import { globalVectorIndexMessage } from "../../../shared/global-vector-index";
 import type { PrefixedTables, SchemaExtension } from "./plugin";
 import { mergeSchemaExtension } from "./plugin";
+import validateThroughRelations from "./schema-through";
 import type {
     AggregateIndexDefinition,
     AggregateOp,
+    DurableObjectJurisdiction,
+    ExternalSourceDefinition,
+    GeoIndexDefinition,
     GlobalBackend,
     IndexDefinition,
+    KeyedRelationDefinition,
     OnDeleteAction,
     RankIndexDefinition,
     RankSortKey,
     RelationDefinition,
+    RelationThrough,
     Schema,
     SearchIndexDefinition,
+    SearchLanguage,
+    SearchStrategy,
     ShardMode,
     TableDefinition,
     TableVectorIndex,
+    ThroughRelationDefinition,
     TriggerBuilder,
     TriggerDefinition,
     TriggerEvent,
     TriggerHandler,
     TriggerOp,
     TriggerTiming,
+    TtlDefinition,
     VectorEmbedder,
     VectorIndexDefinition,
     VectorMetric,
 } from "./types";
+
+/**
+ * Most `filterFields` one `.searchIndex()` may declare. Mirrors Convex. Lives
+ * here because this is where it is enforceable — the engines read the declared
+ * list, they never re-validate its length — so there is one home rather than a
+ * copy on each side of a package boundary.
+ */
+const MAX_SEARCH_FILTER_FIELDS = 16;
 
 /** Options for `.vectorize(field, opts)` (DSL Shape A). */
 interface VectorizeOptions<Shape extends Record<string, Validator> = Record<string, Validator>> {
@@ -37,24 +61,45 @@ interface VectorizeOptions<Shape extends Record<string, Validator> = Record<stri
     /** Fields mirrored into Vectorize metadata for filtering. */
     metadata?: ReadonlyArray<keyof Shape & string>;
     metric: VectorMetric;
+
+    /**
+     * Identifier of the model `embed` calls, e.g. `"@cf/baai/bge-base-en-v1.5"`.
+     * `embed` is a function Lunora cannot inspect, so this string is how a model
+     * swap becomes visible: the `backfillVectors` admin op records it and
+     * re-embeds the table when it changes. Omit it and a model change goes
+     * unnoticed until the backfill is run with `restart: true`.
+     */
+    model?: string;
 }
 
 /** A `one` (many-to-one) relation descriptor; phantom `Target` carries the target table name. */
-interface OneRelation<Target extends string = string> extends RelationDefinition {
+interface OneRelation<Target extends string = string> extends KeyedRelationDefinition {
     readonly __target?: Target;
     readonly kind: "one";
 }
 
 /** A `many` (one-to-many) relation descriptor; phantom `Target` carries the target table name. */
-interface ManyRelation<Target extends string = string> extends RelationDefinition {
+interface ManyRelation<Target extends string = string> extends KeyedRelationDefinition {
     readonly __target?: Target;
     readonly kind: "many";
 }
 
+/** A `many` relation through a join table (many-to-many); phantom `Target` carries the target table name. */
+interface ThroughManyRelation<Target extends string = string> extends ThroughRelationDefinition {
+    readonly __target?: Target;
+}
+
 /** The `r` argument passed to `.relations((r) => …)`. */
 interface RelationBuilder {
-    /** One-to-many: the FK `field` lives on the target table, matching this table's `references` (default `_id`). */
-    many: <Target extends string>(table: Target, options: { field: string; references?: string }) => ManyRelation<Target>;
+    /**
+     * One-to-many (`field`): the FK `field` lives on the target table, matching this table's `references` (default `_id`).
+     * Many-to-many (`through`): `through.table` holds one row per linked pair, `through.from` pointing at this table's
+     * `_id` and `through.to` at the target's `_id`.
+     */
+    many: {
+        <Target extends string>(table: Target, options: { field: string; references?: string }): ManyRelation<Target>;
+        <Target extends string>(table: Target, options: { through: RelationThrough }): ThroughManyRelation<Target>;
+    };
     /** Many-to-one: the FK `field` lives on this table, pointing at `table`.`references` (default `_id`). */
     one: <Target extends string>(table: Target, options: { field: string; onDelete?: OnDeleteAction; references?: string }) => OneRelation<Target>;
 }
@@ -95,6 +140,82 @@ interface TableBuilder<Shape extends Record<string, Validator> = Record<string, 
     aggregateIndex: (name: string, options?: InlineAggregateIndexOptions<Shape>) => TableBuilder<Shape>;
 
     /**
+     * Stamp every row with `_commitSeq` — a per-shard integer, allocated once
+     * per mutation and strictly increasing in **commit order**, refreshed on
+     * every write to the row (insert, patch, replace, and the marker flip a
+     * `.softDelete()` performs).
+     *
+     * `_creationTime` is wall-clock and therefore cannot order commits: the
+     * clock is read when the handler runs, the write lands when the transaction
+     * commits, and nothing ties those instants together. A changefeed paging on
+     * `_creationTime` can skip a row permanently. Paging on `_commitSeq`
+     * (`where: { _commitSeq: { gt: cursor } }, orderBy: ["_commitSeq"]`) cannot.
+     *
+     * It orders COMMITS, not rows: one mutation's rows share a value. A bounded
+     * page can therefore end mid-group, so a consumer must checkpoint at a
+     * sequence it has seen the whole of, never at the last row of a full page.
+     * An action's writes are the exception to the grouping — they commit
+     * independently, so each gets its own sequence.
+     *
+     * Ordered, not contiguous — read a gap as "nothing to see", never as loss.
+     * Per-shard, not global: two shards allocate independently, so a cursor is
+     * only meaningful against the shard it came from. Rejected on `.global()`
+     * tables, which have no shard-local transaction to allocate inside.
+     *
+     * **A hard delete is invisible to the feed.** The sequence lives on the row,
+     * so a physically removed row takes it along: the row stops appearing, but
+     * no event says it went away. Pair `.commitOrdered()` with `.softDelete()`
+     * when the feed must observe deletes — the tombstone flip is an UPDATE, so
+     * it advances the sequence and pages through like any other change.
+     */
+    commitOrdered: () => TableBuilder<Shape>;
+
+    /**
+     * Drop a `patch` whose fields have MOVED since the caller last saw the row,
+     * instead of letting it clobber the newer value.
+     *
+     * The case this exists for is the one every offline-capable app hits. Two
+     * clients edit the same row; one is offline, so its write replays later and
+     * wins on arrival order rather than on authorship. The newer edit is gone with
+     * nothing to show it existed.
+     *
+     * With this flag the shard compares the fields a patch writes against the row
+     * as the caller last saw it — its CDC baseline, stamped by the client at call
+     * time and replayed verbatim from its offline queue. If any of those fields
+     * changed in between, the whole patch is dropped.
+     *
+     * ```ts
+     * documents: defineTable({ title: v.string(), body: v.string() }).dropStalePatches(),
+     * ```
+     *
+     * Two clients editing DIFFERENT fields of one row both win, which is the point.
+     * Two editing the SAME field means the later-composed write survives and the
+     * stale one is discarded.
+     *
+     * **The whole patch is dropped, never part of it.** Applying the fresh half and
+     * discarding the stale half would produce a row no mutation ever wrote —
+     * `status: "shipped"` landing while `shippedAt` is thrown away — and a
+     * handler's invariants live across the fields of one `patch` call.
+     *
+     * **A drop is silent to the caller.** No row change, no CDC entry, no
+     * broadcast, no triggers: indistinguishable from a patch that was never
+     * issued. The shard logs each one (table, row, fields) so it is traceable, but
+     * the mutation still resolves successfully. Do not use this where the caller
+     * must be told its write did not land — throw from the handler after comparing
+     * yourself instead.
+     *
+     * **Requires CDC** (the changelog is where the baseline comes from) and it
+     * fails OPEN: no baseline, no changelog entry at or below it (retention
+     * trimmed it, or the row is newer than the caller's cursor), or CDC off, and
+     * the write applies exactly as it would without this flag. Discarding writes
+     * because retention ran would trade a rare lost edit for a common one.
+     *
+     * Shard-local only — a `.global()` table has no per-shard changelog to
+     * establish a baseline from.
+     */
+    dropStalePatches: () => TableBuilder<Shape>;
+
+    /**
      * Mark this table as written outside Lunora's discoverable insert path —
      * by an adapter, a migration, or framework middleware (e.g. `@lunora/auth`'s
      * better-auth tables, `@lunora/ratelimit`'s store). Advisor insert-path lints
@@ -104,14 +225,77 @@ interface TableBuilder<Shape extends Record<string, Validator> = Record<string, 
     externallyManaged: () => TableBuilder<Shape>;
 
     /**
+     * Declare a geospatial index over a `v.geoPoint()` column. The runtime keeps
+     * a geohash companion so `withGeoIndex(name, q => q.near(point, radius))` and
+     * `.within(bbox)` resolve as a geohash-prefix range scan + Haversine
+     * refine/sort. `options.precision` tunes the geohash length (default 9).
+     */
+    geoIndex: (name: string, options: { field: keyof Shape & string; precision?: number }) => TableBuilder<Shape>;
+
+    /**
      * Mark this table as global (cross-shard). Backed by **D1** by default;
      * pass `{ backend: "hyperdrive" }` to store it in a Postgres/MySQL database
      * via Cloudflare Hyperdrive (PlanetScale, Neon, …) instead. Either way the
      * table stays reactive — live queries re-run on write.
      */
     global: (options?: { backend?: GlobalBackend }) => TableBuilder<Shape>;
-    /** Add a secondary index. */
-    index: (name: string, fields: ReadonlyArray<string>, options?: { unique?: boolean }) => TableBuilder<Shape>;
+
+    /**
+     * Add a secondary index. `fields` are top-level columns (plus the system
+     * fields) — a dotted path into a `v.object()` column is not accepted;
+     * denormalise the field you query. See `concepts/indexes` for why.
+     */
+    index: (
+        name: string,
+        fields: ReadonlyArray<(keyof Shape & string) | (typeof SYSTEM_INDEX_FIELDS)[number]>,
+        options?: { unique?: boolean },
+    ) => TableBuilder<Shape>;
+
+    /**
+     * Declare this table EPHEMERAL — state the shard rebuilds rather than
+     * remembers.
+     *
+     * A memory table is a full `ctx.db` table: indexes, `where`, `orderBy`,
+     * pagination, relations, live queries. What it is not is durable. Its rows
+     * are wiped the moment the Durable Object is reconstructed — which happens
+     * on every eviction, and a WebSocket-hibernating shard is evicted often — so
+     * a memory table holds only what can be derived again: presence and cursors,
+     * a live participant list, a rate-limit window, an actor's scratch state.
+     *
+     * Pair it with `onShardInit` to rebuild whatever the app needs present.
+     * The framework guarantees the ordering: every memory table is cleared, and
+     * every init hook has run, before any handler can read one. Without a hook a
+     * memory table simply comes back empty, which is a correct state for
+     * presence and a wrong one for a cache someone is treating as authoritative.
+     *
+     * **On Cloudflare the rows still transit the DO's SQLite.** workerd exposes
+     * exactly one SQL handle and no memory-backed database, so `.memory()` buys
+     * the LIFETIME (and skips the CDC changelog, so an append-heavy presence
+     * table does not grow the op-log), not the write. Treat it as "state I am
+     * happy to lose", not as "state that is free to write" — see
+     * `PlatformCapabilities.memoryTables`, rated `emulated` for exactly this
+     * reason.
+     *
+     * Rejected alongside `.global()` (a D1 table is not this shard's to clear),
+     * `.commitOrdered()` (a sequence that resets is not a sequence), and
+     * `.source()` (an externally-materialized table is not ours to wipe).
+     */
+    memory: () => TableBuilder<Shape>;
+
+    /**
+     * Name the column holding the owning user's id, so "only the owner sees these
+     * rows" is declared once here rather than restated in every shape.
+     *
+     * A `defineShape({ table, owner: true })` over this table derives its predicate
+     * from the field: the subscriber's verified `ctx.auth.userId` must match, and an
+     * anonymous subscriber is denied. Pairs naturally with `.shardBy(field)` on the
+     * same column — the shard key routes the storage, `ownedBy` states who the rows
+     * belong to — but the two are independent and either can be used alone.
+     *
+     * This is a *shape* declaration, not an RLS policy: it narrows what a shape
+     * replicates. Guarding procedure reads/writes is still `rls(...)`'s job.
+     */
+    ownedBy: (field: keyof Shape & string) => TableBuilder<Shape>;
 
     /**
      * Opt this table OUT of secure-by-default RLS. Under a schema marked
@@ -129,21 +313,108 @@ interface TableBuilder<Shape extends Record<string, Validator> = Record<string, 
     rankIndex: (name: string, options: InlineRankIndexOptions<Shape>) => TableBuilder<Shape>;
     /** Declare relations to other tables, loaded via `findMany({ with })`. */
     relations: (build: (r: RelationBuilder) => Record<string, RelationDefinition>) => TableBuilder<Shape>;
-    /** Add a search index over a field with optional filter fields. */
-    searchIndex: (name: string, options: { field: string; filterFields?: ReadonlyArray<string> }) => TableBuilder<Shape>;
+
+    /**
+     * Add a full-text search index over `field`, queried with
+     * `.withSearchIndex(name, q => q.search(field, term))`. `field` may be a
+     * dot-separated path into a nested object (`"properties.name"`).
+     * `filterFields` (at most 16) lists the columns `.eq()` may narrow by inside
+     * the search. `language` selects the text analysis (accent folding always,
+     * plus that language's stopwords). `staged: true` skips the migration-time
+     * backfill on a large existing table — pre-existing rows stay unsearchable
+     * until `__lunora_admin__:backfillSearch` is run against the deployment. `strategy: "native"` uses the engine's
+     * own full-text index where it has one (Postgres) — faster on large corpora,
+     * at the cost of the engine ranking rather than the shared scorer.
+     */
+    searchIndex: (
+        name: string,
+        options: { field: string; filterFields?: ReadonlyArray<string>; language?: SearchLanguage; staged?: boolean; strategy?: SearchStrategy },
+    ) => TableBuilder<Shape>;
     /** Route storage by the named field — one DO per distinct value. */
     shardBy: (field: keyof Shape & string) => TableBuilder<Shape>;
+
+    /**
+     * Turn on soft delete. Adds a nullable timestamp column (`options.field`,
+     * default `deletedAt`) and changes `ctx.db.<table>.delete()` to **set** it
+     * instead of removing the row; `onDelete: "cascade"` children are recursively
+     * soft-deleted too. **List reads** (`findMany`/`findFirst`/`query()`/`count`/
+     * `aggregate`/relation loads) then hide soft-deleted rows unless they pass
+     * `includeDeleted: true`; by-id `get`/`patch`/`replace` and the new
+     * `restore()` still address the row directly. `hardDelete()` physically
+     * removes it (cascading as a real delete). Note: `includeDeleted` is a read
+     * scope, not access control — anyone who can run the read can set it; a unique
+     * index still rejects a new row that collides with a soft-deleted one (the row
+     * physically persists).
+     */
+    softDelete: (options?: { field?: string }) => TableBuilder<Shape>;
+
+    /**
+     * Materialize this table from an external Postgres/MySQL behind Cloudflare
+     * Hyperdrive (plan 077). A system-driven poll loop reads the tenant slice
+     * (`query`, with params bound from `tenantBy`) and lands it in the DO's SQLite,
+     * after which `defineShape` carries it to clients unchanged. Implies
+     * `.externallyManaged()` (rows come from the ingest loop, not user mutations).
+     *
+     * Orthogonal to `.shardBy()` — combine them for per-tenant DOs. **Under
+     * `.shardBy()` `tenantBy` is mandatory** (the tenant-isolation boundary); the
+     * `external_source_unscoped` advisor lint fails the build when it is absent, and
+     * `external_source_on_global` rejects combining `.source()` with `.global()`.
+     */
+    source: (definition: ExternalSourceDefinition) => TableBuilder<Shape>;
+
+    /**
+     * Track when a row last changed. Adds an epoch-millisecond column
+     * (`options.field`, default `updatedAt`) that is stamped on insert and
+     * restamped on every update (any `patch` or `replace`, including a soft delete
+     * and `restore()`) unless the write sets it explicitly. Shorthand for
+     * `v.timestamp().defaultNow().$onUpdateFn(() => Date.now())`. Creation time is
+     * already on every row as `_creationTime`.
+     *
+     * A column of the same name that you declare yourself is kept only if it already
+     * recomputes on update (`$onUpdateFn`); otherwise this throws, since a plain
+     * column of that name would make the call do nothing. It also throws when called
+     * twice, or on the field `.softDelete()` uses.
+     *
+     * Call it **before** `.index()` / `.ttl()` to reference the column there
+     * (`.timestamps().index("by_updated", ["updatedAt"])`): the chain's types only
+     * know the columns added so far. Rows written before the column existed read back
+     * without it until their next write.
+     */
+    timestamps: <Field extends string = "updatedAt">(options?: {
+        field?: Field;
+    }) => TableBuilder<string extends Field ? Shape : Field extends keyof Shape ? Shape : Record<Field, ColumnValidator<number, number | undefined>> & Shape>;
+
     /** Declare named lifecycle triggers fired inline within the write path. */
     triggers: (build: (t: TriggerBuilder<Shape>) => Record<string, TriggerDefinition>) => TableBuilder<Shape>;
+
+    /**
+     * Declare a table-level TTL: a DO alarm-driven sweep auto-deletes rows whose
+     * expiry has passed (or soft-deletes them when the table also
+     * `.softDelete()`s). `field` is an epoch-millisecond column; without
+     * `options.after` its value is the absolute expiry instant, with `after` the
+     * row expires `after` ms past `field` (`field + after`). Coarse, cheap,
+     * table-level — for per-row schedules use `@lunora/scheduler`. Rejected on a
+     * `.global()` table, whose rows live outside every shard's alarm.
+     */
+    ttl: (field: keyof Shape & string, options?: { after?: number }) => TableBuilder<Shape>;
     /** Declare a vector index over a single text field on this table. */
     vectorize: (field: keyof Shape & string, options: VectorizeOptions<Shape>) => TableBuilder<Shape>;
 }
 
-/** Shared relation builder — `one`/`many` produce {@link RelationDefinition}s, defaulting `references` to `_id`. */
+/** `r.many`: one-to-many by `field`, or many-to-many by `through`. */
+function manyRelation<Target extends string>(table: Target, options: { field: string; references?: string }): ManyRelation<Target>;
+function manyRelation<Target extends string>(table: Target, options: { through: RelationThrough }): ThroughManyRelation<Target>;
+function manyRelation(table: string, options: { field: string; references?: string } | { through: RelationThrough }): RelationDefinition {
+    if ("through" in options) {
+        return { kind: "many", table, through: { ...options.through } };
+    }
+
+    return { field: options.field, kind: "many", references: options.references ?? "_id", table };
+}
+
+/** The `r` passed to `.relations((r) => …)`: `one`/`many` produce {@link RelationDefinition}s, defaulting `references` to `_id`. */
 const relationBuilder: RelationBuilder = {
-    many: (table, options) => {
-        return { field: options.field, kind: "many", references: options.references ?? "_id", table };
-    },
+    many: manyRelation,
     one: (table, options) => {
         return { field: options.field, kind: "one", onDelete: options.onDelete, references: options.references ?? "_id", table };
     },
@@ -171,6 +442,22 @@ const createTriggerBuilder = <Shape extends Record<string, Validator>>(): Trigge
     };
 };
 
+/**
+ * Normalize + validate a rank index's `sortBy` (direction defaults to `"asc"`).
+ * Shared by the inline `.rankIndex(...)` builder and `defineRankIndex` so the
+ * two DSL shapes validate identically. `sortBy` is typed required, but untyped
+ * JS callers can omit it — hence the runtime guard.
+ */
+const normalizeRankSortBy = (name: string, sortBy: ReadonlyArray<{ direction?: "asc" | "desc"; field: string }> | undefined): RankSortKey[] => {
+    if (!sortBy || sortBy.length === 0) {
+        throw new LunoraError("INTERNAL", `rankIndex "${name}": "sortBy" is required and must list at least one key`);
+    }
+
+    return sortBy.map((key) => {
+        return { direction: key.direction ?? "asc", field: key.field };
+    });
+};
+
 /** Options for `defineVectorIndex(...)` (DSL Shape B). */
 interface VectorIndexOptions {
     dimensions: number;
@@ -178,6 +465,16 @@ interface VectorIndexOptions {
     /** Optional projection of the source row into Vectorize metadata. */
     metadata?: (row: Record<string, unknown>) => Record<string, unknown>;
     metric: VectorMetric;
+
+    /**
+     * Identifier of the model `embed` calls, e.g. `"@cf/baai/bge-base-en-v1.5"`.
+     * `embed` is a function Lunora cannot inspect, so this string is how a model
+     * swap becomes visible: the `backfillVectors` admin op records it and
+     * re-embeds the table when it changes. Omit it and a model change goes
+     * unnoticed, as does a change to `select` or `metadata`, until the backfill
+     * is run with `restart: true`.
+     */
+    model?: string;
     /** The vector source: which table, and how to derive the embedded text. */
     source: { select: (row: Record<string, unknown>) => string; table: string };
 }
@@ -186,17 +483,13 @@ interface VectorIndexOptions {
  * Build a table definition. Returned object is both the table definition (for
  * `defineSchema`) and a fluent builder for indexes + sharding metadata.
  */
-const defineTable = <Shape extends Record<string, Validator>>(shape: Shape): TableBuilder<Shape> => {
-    // v.from() validators are args-only — they delegate to an external Standard
-    // Schema library and do not map to a concrete SQL column type. Reject them
-    // anywhere in a column, including nested under v.optional/array/object/etc.
-    for (const [columnName, validator] of Object.entries(shape)) {
-        if (isOrWrapsFromValidator(validator)) {
-            throw new Error(`defineTable: column "${columnName}" uses v.from() which is args-only — table columns need a concrete v.* type`);
-        }
-    }
+const defineTable = <Shape extends Record<string, Validator>>(inputShape: Shape): TableBuilder<Shape> => {
+    // Work on a shallow copy so `.softDelete()` and `.timestamps()` can inject their
+    // columns without mutating the caller's object literal.
+    const shape = { ...inputShape };
 
     const aggregateIndexes: AggregateIndexDefinition[] = [];
+    const geoIndexes: GeoIndexDefinition[] = [];
     const indexes: IndexDefinition[] = [];
     const rankIndexes: RankIndexDefinition[] = [];
     const relations: Record<string, RelationDefinition> = {};
@@ -205,15 +498,56 @@ const defineTable = <Shape extends Record<string, Validator>>(shape: Shape): Tab
     const triggerBuilder = createTriggerBuilder<Shape>();
     const vectorIndexes: TableVectorIndex[] = [];
     let shardMode: ShardMode = { kind: "root" };
+    let isCommitOrdered = false;
+    let dropsStalePatches = false;
     let isExternallyManaged = false;
+    let isMemory = false;
     let isPublic = false;
+    let ownerField: string | undefined;
+    let softDelete: { field: string } | undefined;
+    let timestampsField: string | undefined;
+
+    /** Add a column the author did not write. A column of the same name that the author declared wins. */
+    const injectColumn = (field: string, validator: Validator): void => {
+        if (!(field in shape)) {
+            (shape as Record<string, Validator>)[field] = validator;
+        }
+    };
+    let ttl: TtlDefinition | undefined;
+    let externalSource: ExternalSourceDefinition | undefined;
+
+    /**
+     * Write the table's shard tier, refusing a second, contradicting one.
+     * `.shardBy()` and `.global()` both own `shardMode`, so chaining them let
+     * the later call silently discard the earlier — the table landed on a tier
+     * the author never chose, losing either per-shard isolation or replicated
+     * edge reads, with nothing visible at build time or runtime.
+     *
+     * Unlike the `.source()` contradictions below, this one cannot be deferred
+     * to `defineSchema`: the whole-table validators see only the survivor, so
+     * by then the collision has left no trace. The chain is the only place it
+     * is still observable.
+     */
+    const setShardMode = (next: ShardMode): void => {
+        // Two non-root kinds exist, so "already set and different" is exactly
+        // the `.shardBy()`/`.global()` collision. Re-stating the same tier is
+        // redundant, not contradictory, and stays allowed.
+        if (shardMode.kind !== "root" && shardMode.kind !== next.kind) {
+            throw new LunoraError(
+                "INTERNAL",
+                "shardBy/global: a table cannot be both .shardBy(key) and .global() — pick one. .shardBy(key) puts the rows in one Durable Object per key (isolation, poke-live reactivity); .global() puts them in a single replicated backend read from the edge.",
+            );
+        }
+
+        shardMode = next;
+    };
 
     const builder: TableBuilder<Shape> = {
         aggregateIndex(name, options) {
             const op: AggregateOp = options?.op ?? "count";
 
             if (op !== "count" && !options?.field) {
-                throw new Error(`aggregateIndex "${name}": op "${op}" requires a "field"`);
+                throw new LunoraError("INTERNAL", `aggregateIndex "${name}": op "${op}" requires a "field"`);
             }
 
             aggregateIndexes.push({
@@ -233,13 +567,40 @@ const defineTable = <Shape extends Record<string, Validator>>(shape: Shape): Tab
         get aggregateIndexes() {
             return aggregateIndexes;
         },
+        get externalSource() {
+            return externalSource;
+        },
+        commitOrdered() {
+            isCommitOrdered = true;
+
+            return builder;
+        },
+        get commitOrderedMode() {
+            return isCommitOrdered;
+        },
+        dropStalePatches() {
+            dropsStalePatches = true;
+
+            return builder;
+        },
+        get dropStalePatchesMode() {
+            return dropsStalePatches;
+        },
         externallyManaged() {
             isExternallyManaged = true;
 
             return builder;
         },
+        geoIndex(name, options) {
+            geoIndexes.push({ field: options.field, name, precision: options.precision });
+
+            return builder;
+        },
+        get geoIndexes() {
+            return geoIndexes;
+        },
         global(options?: { backend?: GlobalBackend }) {
-            shardMode = { backend: options?.backend ?? "d1", kind: "global" };
+            setShardMode({ backend: options?.backend ?? "d1", kind: "global" });
 
             return builder;
         },
@@ -257,31 +618,35 @@ const defineTable = <Shape extends Record<string, Validator>>(shape: Shape): Tab
         get indexes() {
             return indexes;
         },
+        memory() {
+            isMemory = true;
+
+            return builder;
+        },
+        get memoryMode() {
+            return isMemory;
+        },
+        ownedBy(field) {
+            ownerField = field;
+
+            return builder;
+        },
+        get ownerField() {
+            return ownerField;
+        },
         public() {
             isPublic = true;
 
             return builder;
         },
         rankIndex(name, options) {
-            // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- defensive: `sortBy` is typed required but untyped JS callers can omit it
-            if (!options.sortBy || options.sortBy.length === 0) {
-                throw new Error(`rankIndex "${name}": "sortBy" is required and must list at least one key`);
-            }
-
-            const sortBy: RankSortKey[] = options.sortBy.map((key) => {
-                return {
-                    direction: key.direction ?? "asc",
-                    field: key.field,
-                };
-            });
-
             rankIndexes.push({
                 name,
                 // `on` is filled in by `defineSchema` once the table is keyed —
                 // same pattern as `aggregateIndex`.
                 on: "",
                 partitionBy: options.partitionBy,
-                sortBy,
+                sortBy: normalizeRankSortBy(name, options.sortBy),
                 where: options.where,
             });
 
@@ -299,7 +664,44 @@ const defineTable = <Shape extends Record<string, Validator>>(shape: Shape): Tab
             return builder;
         },
         searchIndex(name, options) {
-            searchIndexes.push({ field: options.field, filterFields: options.filterFields, name });
+            if (options.filterFields && options.filterFields.length > MAX_SEARCH_FILTER_FIELDS) {
+                throw new LunoraError(
+                    "INTERNAL",
+                    `searchIndex "${name}": at most ${String(MAX_SEARCH_FILTER_FIELDS)} filterFields are supported (got ${String(options.filterFields.length)})`,
+                );
+            }
+
+            // A typo'd language silently falling back to folding-only is
+            // exactly the kind of quiet wrong answer a schema-time check should
+            // catch, so it is rejected here rather than shrugged off at read
+            // time by the analyzer.
+            // Widened to `string` deliberately: the option is typed, so TS
+            // narrows the failing branch to `never` — but the check exists for
+            // the callers TS can't reach (JS, or a schema built from config).
+            const { language }: { language?: string } = options;
+
+            if (language !== undefined && !isSearchLanguage(language)) {
+                throw new LunoraError("INTERNAL", `searchIndex "${name}": unknown language "${language}" (supported: ${SEARCH_LANGUAGES.join(", ")})`);
+            }
+
+            // Same reasoning, bigger blast radius: `strategy` selects the
+            // *physical* companion layout, so a typo does not degrade the search
+            // — it silently gives you a different storage engine than you asked
+            // for, with no error at any point.
+            const { strategy }: { strategy?: string } = options;
+
+            if (strategy !== undefined && !isSearchStrategy(strategy)) {
+                throw new LunoraError("INTERNAL", `searchIndex "${name}": unknown strategy "${strategy}" (supported: ${SEARCH_STRATEGIES.join(", ")})`);
+            }
+
+            searchIndexes.push({
+                field: options.field,
+                filterFields: options.filterFields,
+                language: options.language,
+                name,
+                staged: options.staged,
+                strategy: options.strategy,
+            });
 
             return builder;
         },
@@ -308,12 +710,99 @@ const defineTable = <Shape extends Record<string, Validator>>(shape: Shape): Tab
         },
         shape,
         shardBy(field) {
-            shardMode = { field, kind: "shardBy" };
+            setShardMode({ field, kind: "shardBy" });
 
             return builder;
         },
         get shardMode() {
             return shardMode;
+        },
+        get softDeleteMode() {
+            return softDelete;
+        },
+        source(definition) {
+            // Order-independent guards only — `binding`/`query` are always required.
+            // The tenant-scope (`tenantBy` under `.shardBy()`) and the
+            // sourced-vs-`.global()` contradiction depend on the FINAL table state
+            // (the chain order is arbitrary), so they are enforced by the
+            // `external_source_unscoped` / `external_source_on_global` advisor lints
+            // over the discovered IR rather than here.
+            if (!definition.binding) {
+                throw new LunoraError("INTERNAL", "source: `binding` is required (the wrangler Hyperdrive binding name)");
+            }
+
+            if (!definition.query) {
+                throw new LunoraError("INTERNAL", "source: `query` is required (the tenant-membership SQL)");
+            }
+
+            externalSource = definition;
+            // A sourced table is written by the ingest loop, never a user mutation —
+            // exactly what `.externallyManaged()` marks, so imply it.
+            isExternallyManaged = true;
+
+            return builder;
+        },
+        softDelete(options) {
+            const field = options?.field ?? "deletedAt";
+
+            softDelete = { field };
+
+            // Auto-add the marker column so the generated `Doc` carries it and the
+            // write path validates it. Optional on insert (absent on a live row)
+            // and nullable so `restore()` can clear it with `patch({ [field]: null })`;
+            // set to `Date.now()` on soft delete. Idempotent — if the user already
+            // declared the column, their validator wins.
+            if (field === timestampsField) {
+                throw new LunoraError("INTERNAL", `defineTable: .softDelete() and .timestamps() both use "${field}"; give one of them another field`);
+            }
+
+            injectColumn(field, v.optional(v.number().nullable()));
+
+            return builder;
+        },
+        timestamps(options) {
+            const field = options?.field ?? "updatedAt";
+
+            if (timestampsField !== undefined) {
+                throw new LunoraError(
+                    "INTERNAL",
+                    `defineTable: .timestamps() was called twice ("${timestampsField}" and "${field}"); one table tracks one last-change column`,
+                );
+            }
+
+            if (field === softDelete?.field) {
+                throw new LunoraError("INTERNAL", `defineTable: .softDelete() and .timestamps() both use "${field}"; give one of them another field`);
+            }
+
+            // A column the author declared is kept, but only if it already honours the contract `.timestamps()`
+            // promises: epoch milliseconds, stamped on insert and restamped on every update. Anything less would make
+            // this call silently do nothing, or stamp a column of the wrong type.
+            const declared = (
+                shape as Record<string, { _meta?: { column?: { defaultFn?: unknown; defaultValue?: unknown; onUpdateFn?: unknown } }; kind?: string }>
+            )[field];
+            const column = declared?._meta?.column;
+
+            if (
+                declared !== undefined &&
+                (declared.kind !== "timestamp" || column?.onUpdateFn === undefined || (column.defaultFn === undefined && column.defaultValue === undefined))
+            ) {
+                throw new LunoraError(
+                    "INTERNAL",
+                    `defineTable: .timestamps() would add "${field}", but the table already declares it as something other than v.timestamp().defaultNow().$onUpdateFn(() => Date.now()); remove the column or declare it that way`,
+                );
+            }
+
+            timestampsField = field;
+            injectColumn(
+                field,
+                v
+                    .timestamp()
+                    .defaultNow()
+                    .$onUpdateFn(() => Date.now()),
+            );
+
+            // The widened return type adds the column to `Shape`; the runtime object is the same builder.
+            return builder as never;
         },
         get triggerMap() {
             return triggers;
@@ -322,6 +811,14 @@ const defineTable = <Shape extends Record<string, Validator>>(shape: Shape): Tab
             Object.assign(triggers, build(triggerBuilder));
 
             return builder;
+        },
+        ttl(field, options) {
+            ttl = { after: options?.after, field };
+
+            return builder;
+        },
+        get ttlPolicy() {
+            return ttl;
         },
         get vectorIndexes() {
             return vectorIndexes;
@@ -333,6 +830,7 @@ const defineTable = <Shape extends Record<string, Validator>>(shape: Shape): Tab
                 field,
                 metadata: options.metadata,
                 metric: options.metric,
+                model: options.model,
                 name: options.index,
             });
 
@@ -355,6 +853,7 @@ const defineVectorIndex = (options: VectorIndexOptions): VectorIndexDefinition =
         kind: "vectorIndex",
         metadata: options.metadata,
         metric: options.metric,
+        model: options.model,
         select: options.source.select,
         table: options.source.table,
     };
@@ -384,7 +883,7 @@ const defineAggregateIndex = (name: string, options: AggregateIndexOptions): Agg
     const op: AggregateOp = options.op ?? "count";
 
     if (op !== "count" && !options.field) {
-        throw new Error(`aggregateIndex "${name}": op "${op}" requires a "field"`);
+        throw new LunoraError("INTERNAL", `aggregateIndex "${name}": op "${op}" requires a "field"`);
     }
 
     return { by: options.by, field: options.field, name, on: options.on, op, where: options.where };
@@ -408,19 +907,7 @@ interface RankIndexOptions {
  * by index name — the schema attaches it to `tables[on].rankIndexes`.
  */
 const defineRankIndex = (name: string, options: RankIndexOptions): RankIndexDefinition => {
-    // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- defensive: `sortBy` is typed required but untyped JS callers can omit it
-    if (!options.sortBy || options.sortBy.length === 0) {
-        throw new Error(`rankIndex "${name}": "sortBy" is required and must list at least one key`);
-    }
-
-    const sortBy: RankSortKey[] = options.sortBy.map((key) => {
-        return {
-            direction: key.direction ?? "asc",
-            field: key.field,
-        };
-    });
-
-    return { name, on: options.table, partitionBy: options.partitionBy, sortBy, where: options.where };
+    return { name, on: options.table, partitionBy: options.partitionBy, sortBy: normalizeRankSortBy(name, options.sortBy), where: options.where };
 };
 
 /**
@@ -450,6 +937,37 @@ type ExtendableSchema<T extends Record<string, TableDefinition>> = {
     ) => ExtendableSchema<PrefixedTables<X, Key> & T>;
 
     /**
+     * Pin every Durable Object the app reaches — shards, fan-out, subscriptions,
+     * the scheduler, and `ctx.containers` — to a Cloudflare data-residency
+     * jurisdiction (`"eu"`, `"us"`, `"fedramp"`). Codegen reads this off the
+     * schema and emits it into the generated worker's `createWorker({ jurisdiction })`
+     * (and `ctx.scheduler` / `ctx.containers`). Non-mutating: returns a fresh
+     * `ExtendableSchema`, so it composes with `.rls(...)` / `.extend(...)` in any order.
+     *
+     * ⚠️ **Set this once, before your first deploy — changing or removing it
+     * strands data.** A Durable Object name maps to a *different* ID in each
+     * jurisdiction, so toggling this on an existing app makes every shard, scheduler
+     * job, and session DO resolve to a NEW, empty DO; the previous data stays in the
+     * old jurisdiction's DOs and is no longer reachable. There is no in-place
+     * migration — you would have to export from the old jurisdiction and import
+     * into the new one.
+     *
+     * Note: this pins **DO-backed** state only. D1-backed state — `.global()`
+     * tables and D1-mode `@lunora/auth` — is governed by D1's own location
+     * settings, not this option.
+     *
+     * DO-backed auth (`.auth({ namespace })`) is pinned only with
+     * `{ pinAuth: true }`, and codegen refuses a project that has it without
+     * the option. It was unpinned before, so pinning it resolves every user,
+     * account and session to a new, empty object: the option is the explicit
+     * "I will copy that data across, or have none" acknowledgement. See the
+     * data-residency docs for the copy. Voice sessions are pinned without it:
+     * they store nothing, and their transcripts are shard rows, pinned already.
+     * @see https://developers.cloudflare.com/durable-objects/reference/data-location/
+     */
+    jurisdiction: (jurisdiction: DurableObjectJurisdiction, options?: { pinAuth?: boolean }) => ExtendableSchema<T>;
+
+    /**
      * Turn on secure-by-default RLS for the whole schema. Every table is then
      * protected — the DO/D1 write path denies raw, non-RLS `ctx.db` access, so a
      * procedure that forgets `.use(rls(...))` fails closed. Opt a table out with
@@ -467,6 +985,14 @@ const withExtend = <T extends Record<string, TableDefinition>>(schema: Schema<T>
         ): ExtendableSchema<PrefixedTables<X, Key> & T> {
             return withExtend(mergeSchemaExtension(schema, extension));
         },
+        jurisdiction(_jurisdiction: DurableObjectJurisdiction, _options?: { pinAuth?: boolean }): ExtendableSchema<T> {
+            // Authoring-time, type-checked declaration only. The jurisdiction is
+            // a worker-side residency concern: codegen reads the literal off the
+            // schema AST and emits it into the generated `createWorker({ jurisdiction })`
+            // (and `ctx.scheduler`). Nothing reads it off the schema object at
+            // runtime, so this returns the schema unchanged.
+            return withExtend(schema);
+        },
         rls(mode: "required"): ExtendableSchema<T> {
             return withExtend({ ...schema, rlsMode: mode });
         },
@@ -480,13 +1006,7 @@ const withExtend = <T extends Record<string, TableDefinition>>(schema: Schema<T>
  */
 const fillIndexTableNames = (tables: Record<string, TableDefinition>): void => {
     for (const [tableName, table] of Object.entries(tables)) {
-        for (const index of table.aggregateIndexes) {
-            if (index.on === "") {
-                (index as { on: string }).on = tableName;
-            }
-        }
-
-        for (const index of table.rankIndexes) {
+        for (const index of [...table.aggregateIndexes, ...table.rankIndexes]) {
             if (index.on === "") {
                 (index as { on: string }).on = tableName;
             }
@@ -507,7 +1027,7 @@ const attachStandaloneIndexes = (
         const table = tables[index.on];
 
         if (!table) {
-            throw new Error(`defineAggregateIndex "${index.name}": unknown table "${index.on}"`);
+            throw new LunoraError("INTERNAL", `defineAggregateIndex "${index.name}": unknown table "${index.on}"`);
         }
 
         (table.aggregateIndexes as AggregateIndexDefinition[]).push(index);
@@ -517,11 +1037,583 @@ const attachStandaloneIndexes = (
         const table = tables[index.on];
 
         if (!table) {
-            throw new Error(`defineRankIndex "${index.name}": unknown table "${index.on}"`);
+            throw new LunoraError("INTERNAL", `defineRankIndex "${index.name}": unknown table "${index.on}"`);
         }
 
         (table.rankIndexes as RankIndexDefinition[]).push(index);
     }
+};
+
+/** The first incremental-only knob set on a `.source()` config, or `undefined` when none are (used to reject them on a full-pull source). */
+const strayIncrementalKnob = (source: ExternalSourceDefinition): string | undefined => {
+    if (source.cursor) {
+        return "cursor";
+    }
+
+    if (source.reconcileEveryMs !== undefined) {
+        return "reconcileEveryMs";
+    }
+
+    if (source.softDeleteColumn !== undefined) {
+        return "softDeleteColumn";
+    }
+
+    return undefined;
+};
+
+/**
+ * Validate the `mode` + incremental knobs of one `.source()` (plan 077 / 136):
+ * reject an unknown mode; require `cursor` + a delete-visibility path
+ * (`reconcileEveryMs`/`softDeleteColumn`) for incremental; reject those knobs on a
+ * full-pull source. Throws so a misconfigured source never loads.
+ */
+const validateExternalSourceMode = (name: string, source: ExternalSourceDefinition): void => {
+    const isIncremental = source.mode === "incremental";
+
+    // Reject an unknown mode from untyped JS callers (the typed union is
+    // `"full-pull" | "incremental" | undefined`, a compile-time error otherwise).
+    if (source.mode !== undefined && source.mode !== "full-pull" && !isIncremental) {
+        throw new LunoraError(
+            "INTERNAL",
+            `defineSchema: table "${name}" uses \`mode: ${JSON.stringify(source.mode)}\` — supported modes are "full-pull" (default) and "incremental".`,
+        );
+    }
+
+    if (!isIncremental) {
+        // The incremental-only knobs are meaningless (and misleading) on a full-pull
+        // source — reject them so a mislaid `mode` fails loudly rather than silently
+        // ignoring a cursor/reconcile/soft-delete config.
+        const strayKnob = strayIncrementalKnob(source);
+
+        if (strayKnob) {
+            throw new LunoraError(
+                "INTERNAL",
+                `defineSchema: table "${name}" sets \`${strayKnob}\` but is not \`mode: "incremental"\` — that knob only applies to incremental ingest. Set \`mode: "incremental"\` or remove \`${strayKnob}\`.`,
+            );
+        }
+
+        return;
+    }
+
+    // Incremental needs a durable watermark: the cursor column + the
+    // watermark-parameterized pull query. Without it there is nothing to page from
+    // (plan 136 §"No cursor declaration").
+    if (!source.cursor?.column || !source.cursor.query) {
+        throw new LunoraError(
+            "INTERNAL",
+            `defineSchema: table "${name}" is \`mode: "incremental"\` but has no \`cursor\` — add \`cursor: { column: "updated_at", query: "… WHERE … > $N" }\` binding the watermark as the trailing parameter.`,
+        );
+    }
+
+    // Delete visibility: an incremental slice can't observe upstream deletes (absent
+    // ≠ deleted), so it MUST declare either a reconcile sweep or a soft-delete
+    // tombstone column, else it silently accumulates phantom rows (the
+    // `external_source_incremental_no_delete_path` STOP lint mirrors this).
+    if (source.reconcileEveryMs === undefined && source.softDeleteColumn === undefined) {
+        throw new LunoraError(
+            "INTERNAL",
+            `defineSchema: table "${name}" is \`mode: "incremental"\` with no delete-visibility path — an incremental pull never sees upstream deletes, so it would accumulate phantom rows. Add \`reconcileEveryMs\` (a periodic full-pull sweep) or \`softDeleteColumn\` (an upstream tombstone column).`,
+        );
+    }
+};
+
+/**
+ * Hard-enforce the `.source(...)` invariants at schema-definition time (plan 077).
+ * Chain order is arbitrary, so the builder can't see the final `shardMode` when
+ * `.source()` runs — the checks live here, where every table is fully assembled.
+ * These **throw** (the schema won't load), so the tenant-isolation boundary is a
+ * runtime guarantee, not merely the advisor lint's build-time warning.
+ */
+const validateExternalSources = (tables: Record<string, TableDefinition>): void => {
+    for (const [name, table] of Object.entries(tables)) {
+        const source = table.externalSource;
+
+        if (!source) {
+            continue;
+        }
+
+        if (table.shardMode.kind === "global") {
+            throw new LunoraError(
+                "INTERNAL",
+                `defineSchema: table "${name}" cannot be both .source() and .global() — a sourced table materializes into a shard DO's SQLite, a global table lives in the external tier`,
+            );
+        }
+
+        if (table.shardMode.kind === "shardBy" && !source.tenantBy) {
+            throw new LunoraError(
+                "INTERNAL",
+                `defineSchema: sourced + .shardBy() table "${name}" needs a \`tenantBy\` mapper — without it every tenant's DO would run the same unscoped query and replicate the whole multitenant table (a cross-tenant leak). Add \`tenantBy: (shardKey) => [shardKey]\` binding the shard key into the query's parameters.`,
+            );
+        }
+
+        validateExternalSourceMode(name, source);
+    }
+};
+
+/**
+ * Columns every row carries implicitly (never part of a table's declared
+ * `shape`), so `.index()` may legitimately name them. The single source for
+ * both the compile-time allow-list (`TableBuilder["index"]`'s `fields` type,
+ * via `(typeof SYSTEM_INDEX_FIELDS)[number]`) and the runtime cross-check
+ * below (via `SYSTEM_INDEX_FIELDS_SET`) — declared once so the two can't
+ * drift apart.
+ */
+const SYSTEM_INDEX_FIELDS = ["_commitSeq", "_creationTime", "_id"] as const;
+
+/**
+ * The `.commitOrdered()` system field. Typed off {@link SYSTEM_INDEX_FIELDS}
+ * rather than spelled independently, so the index guard below and the
+ * allow-list cannot drift apart — renaming the column in one place stops
+ * compiling in the other. (The annotation is explicit, not inferred, because
+ * `isolatedDeclarations` cannot resolve a cross-declaration reference.)
+ */
+const COMMIT_SEQ_FIELD: (typeof SYSTEM_INDEX_FIELDS)[0] = "_commitSeq";
+
+/**
+ * Runtime lookup form of {@link SYSTEM_INDEX_FIELDS}. Typed `Set<string>`
+ * (rather than inferring the literal-union element type) because it is
+ * probed with an arbitrary user-declared `IndexDefinition["fields"]` entry,
+ * not one already narrowed to the system-field union.
+ */
+const SYSTEM_INDEX_FIELDS_SET = new Set<string>(SYSTEM_INDEX_FIELDS);
+
+/**
+ * Cross-check a single field name against the table's ASSEMBLED shape (plus
+ * the implicit system columns), throwing the standard message shape used for
+ * every index kind. Shared by `.index()`, `.rankIndex()` (`sortBy` /
+ * `partitionBy`), and `.geoIndex()` (`field`) — all publish these exact
+ * strings to `indexFieldsFromSchema`'s map as authoritative "declared fields"
+ * for the mask guard, so all three need the same shape check.
+ */
+const assertFieldInShape = (tableName: string, indexName: string, field: string, table: TableDefinition): void => {
+    if (SYSTEM_INDEX_FIELDS_SET.has(field) || field in table.shape) {
+        return;
+    }
+
+    throw new LunoraError("INTERNAL", `defineSchema: table "${tableName}" index "${indexName}" names column "${field}" which is not in the table's shape`);
+};
+
+/**
+ * Validate one index KIND's entries on a table: reject a name reused WITHIN
+ * this kind (`seenNames` is local to this call, so it never sees another
+ * kind's names — the same name across kinds is a separate, legal namespace),
+ * then shape-check each entry's fields via `checkFields`. Factored out so
+ * {@link validateIndexFields} stays a flat dispatch (one call per kind)
+ * instead of three near-identical inline loops.
+ */
+const validateIndexKind = <Entry extends { name: string }>(
+    tableName: string,
+    kindLabel: string,
+    entries: ReadonlyArray<Entry>,
+    checkFields: (entry: Entry) => void,
+): void => {
+    const seenNames = new Set<string>();
+
+    for (const entry of entries) {
+        if (seenNames.has(entry.name)) {
+            throw new LunoraError("INTERNAL", `defineSchema: table "${tableName}" declares ${kindLabel} "${entry.name}" more than once`);
+        }
+
+        seenNames.add(entry.name);
+        checkFields(entry);
+    }
+};
+
+/**
+ * Cross-check every `.index(name, fields)` / `.rankIndex(name, ...)` /
+ * `.geoIndex(name, ...)` declaration against the table's ASSEMBLED shape (run
+ * late — after `.softDelete()` has injected its marker column onto `shape`,
+ * so a soft-delete field indexed by name isn't a false positive). `.index()`
+ * is the one table-builder method whose `fields` were historically typed
+ * `ReadonlyArray` of plain strings with no cross-check against `table.shape`
+ * — a typo'd column type-checked, passed `defineSchema`, and only failed at
+ * migration time as a SQLite "no such column" error. Rank (`sortBy[].field` /
+ * `partitionBy[]`) and geo (`field`) declarations get the same shape check,
+ * because `indexFieldsFromSchema` hands exactly those strings to the mask
+ * guard as authoritative declared fields — an unchecked typo there would be a
+ * silent gap in the guard, not just a late SQLite error.
+ *
+ * Duplicate-name detection is per KIND, not global — see
+ * {@link validateIndexKind}'s docblock. The SAME name reused ACROSS kinds is
+ * legal: the engine resolves `withIndex`/`withGeoIndex`/rank reads in three
+ * separate namespaces (see `@lunora/shard-engine`'s `ctx-db.ts`), and
+ * `indexFieldsFromSchema`'s per-kind map (below) is exactly what lets the
+ * mask guard tell those namespaces apart instead of one shadowing another.
+ *
+ * `searchIndex`'s `filterFields` is deliberately excluded — its dot-separated
+ * paths reach into nested JSON, so there is no flat column list to check it
+ * against.
+ */
+const validateIndexFields = (tables: Record<string, TableDefinition>): void => {
+    for (const [tableName, table] of Object.entries(tables)) {
+        validateIndexKind(tableName, "index", table.indexes, (index) => {
+            for (const field of index.fields) {
+                assertFieldInShape(tableName, index.name, field, table);
+            }
+        });
+
+        validateIndexKind(tableName, "rank index", table.rankIndexes, (rankIndex) => {
+            for (const sortKey of rankIndex.sortBy) {
+                assertFieldInShape(tableName, rankIndex.name, sortKey.field, table);
+            }
+
+            for (const field of rankIndex.partitionBy ?? []) {
+                assertFieldInShape(tableName, rankIndex.name, field, table);
+            }
+        });
+
+        validateIndexKind(tableName, "geo index", table.geoIndexes, (geoIndex) => {
+            assertFieldInShape(tableName, geoIndex.name, geoIndex.field, table);
+        });
+    }
+};
+
+/**
+ * Per-table, per-KIND index→declared-fields map: for each table, each index
+ * KIND (`index` | `rank` | `geo`) that has at least one declared index maps
+ * to a name→fields record for that kind only. Distilled by
+ * {@link indexFieldsFromSchema}; this is the shape `mask()`'s
+ * `MaskOptions.indexFields` expects (see `./mask/types`), so a table not
+ * present here (no declared indexes of any kind) is simply absent from the
+ * map rather than mapped to `{}`, and a kind with no declared indexes on a
+ * table that HAS other kinds is simply absent from that table's entry.
+ *
+ * Kept per kind (rather than one flat name→fields record) because the engine
+ * resolves `withIndex`/`withGeoIndex`/rank reads in THREE separate
+ * namespaces (`tableDefinition.indexes` / `.geoIndexes` / `.rankIndexes` —
+ * see `@lunora/shard-engine`'s `ctx-db.ts`), so the same name can legally and
+ * unambiguously denote a different index per kind. A flat map would let one
+ * kind's fields silently shadow another's for a colliding name, producing a
+ * wrong-namespace answer from the mask guard (checking the wrong index's
+ * fields) instead of the documented fail-open (missing lookup) — see plan 258.
+ */
+type IndexFieldsByTable = Readonly<
+    Record<
+        string,
+        {
+            readonly geo?: Readonly<Record<string, ReadonlyArray<string>>>;
+            readonly index?: Readonly<Record<string, ReadonlyArray<string>>>;
+            readonly rank?: Readonly<Record<string, ReadonlyArray<string>>>;
+        }
+    >
+>;
+
+/**
+ * Distill a schema's declared index fields into an {@link IndexFieldsByTable}
+ * map, keyed per table and then per KIND — regular index `fields` under
+ * `index`; rank index `sortBy[].field` ∪ `partitionBy` under `rank`; geo index
+ * `field` (its single geospatial column) under `geo`. Built to close the
+ * `mask()` bare-index-scan / rank / geo position oracle: pass the result as
+ * `mask(policies, { indexFields: indexFieldsFromSchema(schema) })` so the
+ * middleware can reject a bare `withIndex`/`rank`/`withGeoIndex` read over an
+ * index whose DECLARED fields include a masked column — a range/search
+ * CALLBACK referencing a masked field is already caught by
+ * `assertIndexFieldsAllowed`, but a bare `withIndex(name)` (no callback), a
+ * `rank`/`rankPage`/`rankBefore` read, and every `withGeoIndex` read (its
+ * `near`/`within` callback carries no column name at all) give the recorder
+ * nothing to observe, so the guard needs the index's *declaration* instead
+ * (see `./mask/middleware`).
+ *
+ * Kinds are kept separate — never merged into one flat name→fields map — so a
+ * name reused across kinds (legal at the engine level; each entry point
+ * resolves its own namespace) can't have one kind's fields silently shadow
+ * another's. The guard looks up its own kind explicitly instead.
+ *
+ * Deliberately does NOT emit `vectorIndexes` or `aggregateIndexes`: vector
+ * search isn't reachable through `TableReaderLike` (the masked reader), and
+ * aggregate reads are already guarded column-by-column by
+ * `assertReductionAllowed`, so neither is an ordinal oracle this map needs to
+ * cover.
+ *
+ * Pure and side-effect free; takes anything carrying `tables` (a `Schema`, an
+ * `ExtendableSchema`, or a plugin-merged schema), so it works whether called
+ * before or after `.extend(...)`.
+ */
+
+/**
+ * Fold one index kind's entries into a name→fields record, or `undefined`
+ * when the table declares none of this kind (so the caller can omit the key
+ * entirely rather than publish an empty `{}`). Factored out so
+ * {@link indexFieldsFromSchema} stays a flat per-kind dispatch instead of
+ * three near-identical inline loops.
+ */
+const buildKindFieldMap = <Entry>(
+    entries: ReadonlyArray<Entry>,
+    nameOf: (entry: Entry) => string,
+    fieldsOf: (entry: Entry) => ReadonlyArray<string>,
+): Record<string, ReadonlyArray<string>> | undefined => {
+    if (entries.length === 0) {
+        return undefined;
+    }
+
+    const byName: Record<string, ReadonlyArray<string>> = {};
+
+    for (const entry of entries) {
+        byName[nameOf(entry)] = fieldsOf(entry);
+    }
+
+    return byName;
+};
+
+/** `rankIndex.sortBy[].field` ∪ `partitionBy` as a deduplicated array — the declared-fields set for one rank index. */
+const rankIndexFields = (rankIndex: RankIndexDefinition): ReadonlyArray<string> => {
+    const fields = new Set<string>(rankIndex.sortBy.map((key) => key.field));
+
+    for (const field of rankIndex.partitionBy ?? []) {
+        fields.add(field);
+    }
+
+    return [...fields];
+};
+
+const indexFieldsFromSchema = (schema: Schema): IndexFieldsByTable => {
+    const result: Record<
+        string,
+        {
+            geo?: Record<string, ReadonlyArray<string>>;
+            index?: Record<string, ReadonlyArray<string>>;
+            rank?: Record<string, ReadonlyArray<string>>;
+        }
+    > = {};
+
+    for (const [tableName, table] of Object.entries(schema.tables)) {
+        const geo = buildKindFieldMap(
+            table.geoIndexes,
+            (geoIndex) => geoIndex.name,
+            (geoIndex) => [geoIndex.field],
+        );
+        const index = buildKindFieldMap(
+            table.indexes,
+            (regularIndex) => regularIndex.name,
+            (regularIndex) => regularIndex.fields,
+        );
+        const rank = buildKindFieldMap(table.rankIndexes, (rankIndex) => rankIndex.name, rankIndexFields);
+
+        if (geo || index || rank) {
+            result[tableName] = {
+                ...(geo ? { geo } : {}),
+                ...(index ? { index } : {}),
+                ...(rank ? { rank } : {}),
+            };
+        }
+    }
+
+    return result;
+};
+
+/**
+ * Reject `.memory()` alongside anything the per-restart `DELETE FROM` cannot
+ * keep consistent — another storage mode whose rows this shard does not own,
+ * or a companion that lives outside the base table and would be left
+ * describing rows that no longer exist.
+ *
+ * Enforced at `defineSchema` rather than in the builder because the chain
+ * order is arbitrary — `.memory().global()` and `.global().memory()` must
+ * both be caught, and only the assembled table knows both facts.
+ */
+const validateMemoryTables = (tables: Record<string, TableDefinition>): void => {
+    for (const [tableName, table] of Object.entries(tables)) {
+        if (!table.memoryMode) {
+            continue;
+        }
+
+        // Each of these is a promise `.memory()` cannot keep, not a style rule.
+        // The first three are semantic; the companion kinds after them are
+        // mechanical — clearing a memory table is a `DELETE FROM` on the base
+        // table, which leaves a search/geo/aggregate/rank companion (a separate
+        // table) and a vector index (an external store) still describing rows
+        // that no longer exist.
+        const conflicts: ReadonlyArray<readonly [boolean, string]> = [
+            [table.shardMode.kind === "global", ".global() — those rows live in D1, which this shard does not own and cannot clear"],
+            [
+                table.commitOrderedMode === true,
+                ".commitOrdered() — the counter resets with the table, so the sequence would restart and a consumer's cursor would silently skip everything after it",
+            ],
+            [
+                table.externalSource !== undefined,
+                ".source() — the table is materialized by the ingest loop, so wiping it on every eviction would fight the puller",
+            ],
+            [table.searchIndexes.length > 0, ".searchIndex() — the FTS shadow is a separate table that clearing the rows would leave stale"],
+            [table.geoIndexes.length > 0, ".geoIndex() — the geohash companion is a separate table that clearing the rows would leave stale"],
+            [table.aggregateIndexes.length > 0, ".aggregateIndex() — the counter companion is a separate table that clearing the rows would leave stale"],
+            [table.rankIndexes.length > 0, ".rankIndex() — the rank companion is a separate table that clearing the rows would leave stale"],
+            [table.vectorIndexes.length > 0, ".vectorize() — vectors live in an external index that a shard restart cannot clear"],
+        ];
+
+        const conflict = conflicts.find(([hit]) => hit)?.[1];
+
+        if (conflict !== undefined) {
+            throw new LunoraError(
+                "INTERNAL",
+                `defineSchema: table "${tableName}" is both .memory() and ${conflict}. Plain .index() is supported; SQLite maintains it through the DELETE.`,
+            );
+        }
+    }
+};
+
+/**
+ * Reject `.commitOrdered()` on a `.global()` table.
+ *
+ * `_commitSeq` is allocated from the shard's `__commit_seq` counter inside the
+ * same `state.storage.transaction(...)` that writes the row — that shared
+ * boundary is the whole reason the value orders commits. A `.global()` table
+ * lives in D1 (or Hyperdrive), written through a different connection with no
+ * shard-local transaction to allocate inside, so the stamp would be a number
+ * with no ordering guarantee behind it. Failing here beats shipping a field
+ * whose contract silently does not hold.
+ *
+ * Also rejects an index over `_commitSeq` on a table that never opted in — see
+ * the guard for why that index would be dead rather than merely useless.
+ *
+ * Enforced at `defineSchema` rather than in the builder because the chain order
+ * is arbitrary — `.global().commitOrdered()` and `.commitOrdered().global()`
+ * must both be caught, and only the assembled table knows both facts.
+ */
+
+/**
+ * Reject `v.bigint()` on a `.global()` table.
+ *
+ * A shard table stores a bigint as an order-preserving, zero-padded sort key
+ * (`@lunora/shard-engine`'s `bigintSqlKey`), so `ORDER BY`, ranges and the
+ * aggregate companion all compare it correctly. A `.global()` table lives in D1
+ * (or Hyperdrive) and stores it as a bare decimal string in a TEXT column, where
+ * SQL compares it LEXICOGRAPHICALLY: `"100" < "25" < "9"`. `orderBy` returns the
+ * reverse of the intended order, a range like `> 50n` matches the wrong rows,
+ * and `aggregate` reports `9` as the maximum of `{9, 25, 100}` — every one of
+ * them silently, with no error and no diagnostic.
+ *
+ * Refusing at `defineSchema` is the same call `.commitOrdered()` makes above,
+ * for the same reason: a field whose contract does not hold on the backend it
+ * lands on is worse than a field that will not compile. Store the value as
+ * `v.number()` when it fits in a double, or as `v.string()` when it does not and
+ * you only need equality.
+ *
+ * Enforced on the assembled table because `.global()` may be chained either side
+ * of the column declarations.
+ */
+const validateGlobalBigint = (tables: Record<string, TableDefinition>): void => {
+    for (const [tableName, table] of Object.entries(tables)) {
+        if (table.shardMode.kind !== "global") {
+            continue;
+        }
+
+        for (const [columnName, validator] of Object.entries(table.shape)) {
+            if (effectiveKind(validator) === "bigint") {
+                throw new LunoraError(
+                    "INTERNAL",
+                    `defineSchema: table "${tableName}" is .global() and column "${columnName}" is v.bigint(). A global (D1/Hyperdrive) table stores a bigint as decimal TEXT, which SQL compares lexicographically — "100" sorts before "25" — so \`orderBy\`, range filters and \`aggregate\` on this column would silently return wrong results. Use v.number() if the value fits a double, or v.string() if you only need equality.`,
+                );
+            }
+        }
+    }
+};
+
+/**
+ * `.dropStalePatches()` needs a per-shard changelog to read the caller's baseline
+ * out of, and a `.global()` table has none — its rows live in D1, outside any
+ * shard's `__cdc_log`. The flag would be silently inert there, which is exactly
+ * the failure this rejects: a table that looks protected and is not.
+ */
+const validateDropStalePatches = (tables: Record<string, TableDefinition>): void => {
+    for (const [tableName, table] of Object.entries(tables)) {
+        if (table.dropStalePatchesMode === true && table.shardMode.kind === "global") {
+            throw new LunoraError(
+                "INTERNAL",
+                `defineSchema: table "${tableName}" is both .global() and .dropStalePatches(). The stale check reads the caller's baseline out of the shard's \`__cdc_log\`, which a global (D1/Hyperdrive) table has no entries in — so every patch would read as "no baseline" and apply unchanged. Drop one of the two.`,
+            );
+        }
+    }
+};
+
+/**
+ * Reject `.ttl()` on a `.global()` table.
+ *
+ * The sweep is a shard's alarm deleting rows from its own SQLite. A `.global()`
+ * table's rows live in D1 (or Hyperdrive), which no shard owns, so no alarm ever
+ * visited them: the table accepted `.ttl()`, documented expiry, and kept every
+ * expired row forever. Refusing is the same call `.dropStalePatches()` makes —
+ * a policy that looks enforced and is not is worse than one that will not build.
+ */
+const validateGlobalTtl = (tables: Record<string, TableDefinition>): void => {
+    for (const [tableName, table] of Object.entries(tables)) {
+        if (table.ttlPolicy !== undefined && table.shardMode.kind === "global") {
+            throw new LunoraError("INTERNAL", `defineSchema: ${globalTtlMessage(tableName)}`);
+        }
+    }
+};
+
+/**
+ * Reject a vector index on a `.global()` table — inline `.vectorize()` or a
+ * standalone `defineVectorIndex()` whose `source.table` is one.
+ *
+ * Vector sync is the shard write path's post-commit hook, and a `.global()`
+ * table's writes go to the SQL tier (D1/Hyperdrive), which has no such hook: the
+ * combination deployed, took writes, and indexed none of them. Nothing orders
+ * those writes either — two shards writing one global row would race their
+ * embeds — so wiring a hook there would trade "never indexed" for "sometimes
+ * stale". Keep the vectorized table shard-local, or maintain the index yourself
+ * with `ctx.vectors.upsert` / `deleteByIds` next to the write.
+ *
+ * Exported package-internally so `./plugin`'s merge re-runs it over the tables
+ * and indexes an extension contributes.
+ */
+const validateGlobalVectors = (tables: Record<string, TableDefinition>, vectorIndexes: Record<string, VectorIndexDefinition>): void => {
+    const sources: [string, string][] = [
+        ...Object.entries(tables).flatMap(([tableName, table]) => table.vectorIndexes.map((index): [string, string] => [tableName, index.name])),
+        ...Object.entries(vectorIndexes).map(([indexName, index]): [string, string] => [index.table, indexName]),
+    ];
+
+    for (const [tableName, indexName] of sources) {
+        if (tables[tableName]?.shardMode.kind === "global") {
+            throw new LunoraError("INTERNAL", `defineSchema: ${globalVectorIndexMessage(tableName, indexName)}`);
+        }
+    }
+};
+
+const validateCommitOrdered = (tables: Record<string, TableDefinition>): void => {
+    for (const [tableName, table] of Object.entries(tables)) {
+        if (table.commitOrderedMode) {
+            if (table.shardMode.kind === "global") {
+                throw new LunoraError(
+                    "INTERNAL",
+                    `defineSchema: table "${tableName}" is both .global() and .commitOrdered(). \`_commitSeq\` is allocated inside the shard's write transaction, which a global (D1/Hyperdrive) table does not share — so the stamp would carry no commit-ordering guarantee. Drop one of the two.`,
+                );
+            }
+
+            continue;
+        }
+
+        // `_commitSeq` is in `SYSTEM_INDEX_FIELDS`, so `assertFieldInShape` accepts
+        // it on any table — but unlike `_id` and `_creationTime`, which every row
+        // carries, it is only stamped by the write path on a `.commitOrdered()`
+        // table. An index over it here would cover a field no row has: it builds,
+        // it validates, and it matches nothing. A dead index that reads as a
+        // working one is worse than a rejected schema.
+        for (const index of table.indexes) {
+            if (index.fields.includes(COMMIT_SEQ_FIELD)) {
+                throw new LunoraError(
+                    "INTERNAL",
+                    `defineSchema: table "${tableName}" index "${index.name}" names "${COMMIT_SEQ_FIELD}", but the table is not .commitOrdered() — no row carries that field, so the index would never match. Add .commitOrdered(), or drop the column from the index.`,
+                );
+            }
+        }
+    }
+};
+
+/**
+ * The per-table mode conflicts: each rejects a combination (`.global()` with
+ * `.ttl()`, `.commitOrdered()`, `.dropStalePatches()`, a `v.bigint()` column;
+ * `.memory()` with a companion it cannot clear) whose promise the backend it
+ * lands on cannot keep. Run by `defineSchema` and again by
+ * `mergeSchemaExtension` over the merged set, so a table an `.extend()` or a
+ * plugin contributes is held to the same rules as one the app declared.
+ */
+const validateTableModes = (tables: Record<string, TableDefinition>): void => {
+    validateCommitOrdered(tables);
+    validateDropStalePatches(tables);
+    validateGlobalBigint(tables);
+    validateGlobalTtl(tables);
+    validateMemoryTables(tables);
 };
 
 const defineSchema = <T extends Record<string, TableDefinition>>(
@@ -532,15 +1624,38 @@ const defineSchema = <T extends Record<string, TableDefinition>>(
 ): ExtendableSchema<T> => {
     fillIndexTableNames(tables);
     attachStandaloneIndexes(tables, aggregateIndexes, rankIndexes);
+    validateExternalSources(tables);
+    validateTableModes(tables);
+    validateGlobalVectors(tables, vectorIndexes);
+    validateIndexFields(tables);
+    validateThroughRelations(tables);
 
     return withExtend({ tables, vectorIndexes });
 };
 
-export { defineAggregateIndex, defineRankIndex, defineSchema, defineTable, defineVectorIndex };
+// `validateIndexFields` (and `validateTableModes`, for the same reason) is
+// exported package-internally (not re-exported from
+// `./index`, so it stays outside the public API surface) so `./plugin`'s
+// `mergeSchemaExtension` can re-run it against the merged table set — the
+// seam that closes the "extension-contributed bad index never validated" gap
+// (plan 258 §1). Both `mergeSchemaExtension` callers (`withExtend.extend()`
+// here and `installPlugins` in `./plugin`) get the re-validation for free.
+export {
+    defineAggregateIndex,
+    defineRankIndex,
+    defineSchema,
+    defineTable,
+    defineVectorIndex,
+    indexFieldsFromSchema,
+    validateGlobalVectors,
+    validateIndexFields,
+    validateTableModes,
+};
 
 export type {
     AggregateIndexOptions,
     ExtendableSchema,
+    IndexFieldsByTable,
     InlineAggregateIndexOptions,
     InlineRankIndexOptions,
     ManyRelation,
@@ -548,6 +1663,7 @@ export type {
     RankIndexOptions,
     RelationBuilder,
     TableBuilder,
+    ThroughManyRelation,
     VectorIndexOptions,
     VectorizeOptions,
 };

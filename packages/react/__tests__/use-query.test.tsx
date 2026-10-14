@@ -1,8 +1,10 @@
-import type { FunctionReference } from "@lunora/client";
+import type { FunctionReference, SubscriptionError } from "@lunora/client";
+import { QueryClient } from "@tanstack/react-query";
 import { act, render, screen, waitFor } from "@testing-library/react";
 import type { ReactElement } from "react";
 import { describe, expect, it } from "vitest";
 
+import { lunoraQueryKey } from "../src/cache";
 import { LunoraProvider } from "../src/lunora-provider";
 import useQuery from "../src/use-query";
 import { createMockClient } from "./mock-client";
@@ -13,9 +15,22 @@ const makeRef = (ref: string): FunctionReference => {
 
 const DEFAULT_ARGS: Record<string, unknown> = {};
 const SHARED_ARGS: Record<string, unknown> = { a: 1 };
+// Two DISTINCT objects with identical content — what a re-render produces when
+// the args are rebuilt from dependencies that changed without changing the args
+// (`Math.min(15, 10)` and `Math.min(20, 10)` are both 10).
+const EQUAL_ARGS_FIRST: Record<string, unknown> = { a: 1, limit: 10 };
+const EQUAL_ARGS_SECOND: Record<string, unknown> = { a: 1, limit: 10 };
 
 const Display = ({ args = DEFAULT_ARGS }: { args?: Record<string, unknown> | "skip" }): ReactElement => {
     const data = useQuery(makeRef("posts:list"), args);
+
+    return <div data-testid="display">{data === undefined ? "loading" : JSON.stringify(data)}</div>;
+};
+
+const ErrorDisplay = ({ onError }: { onError: (error: SubscriptionError) => void }): ReactElement => {
+    // A fresh options object every render — exactly what the ref-backed `onError`
+    // wrapper has to tolerate without re-attaching the subscription.
+    const data = useQuery(makeRef("posts:list"), DEFAULT_ARGS, { onError });
 
     return <div data-testid="display">{data === undefined ? "loading" : JSON.stringify(data)}</div>;
 };
@@ -61,6 +76,31 @@ describe("useQuery", () => {
         expect(mock.subscribe).not.toHaveBeenCalled();
     });
 
+    it('"skip" returns undefined even when a sibling filled the shared cache key', async () => {
+        expect.hasAssertions();
+
+        const mock = createMockClient(() => {
+            return { count: 7 };
+        });
+
+        // Both consumers resolve to the SAME queryKey `["lunora", ref, {}, null]`
+        // (a skipped read sets its args to `{}`). The non-skipped sibling fills
+        // that cache entry; the skipped one shares the key but must NOT surface
+        // the sibling's data — it stays `undefined` ("no network call, no data").
+        render(
+            <LunoraProvider client={mock.asClient}>
+                <Display args={DEFAULT_ARGS} />
+                <Display args="skip" />
+            </LunoraProvider>,
+        );
+
+        await waitFor(() => {
+            expect(screen.getAllByTestId("display")[0]?.textContent).toBe(JSON.stringify({ count: 7 }));
+        });
+
+        expect(screen.getAllByTestId("display")[1]?.textContent).toBe("loading");
+    });
+
     it("two components sharing args share a single network call", async () => {
         expect.hasAssertions();
 
@@ -89,6 +129,69 @@ describe("useQuery", () => {
         expect(mock.subscribe).toHaveBeenCalledTimes(1);
     });
 
+    it("does not re-subscribe when a re-render produces an equal-but-new args object", async () => {
+        expect.hasAssertions();
+
+        // The contract every adapter in this repo shares: the live subscription
+        // is keyed on the args' CONTENT, not on object identity. A re-render
+        // that rebuilds the args object without changing what it contains must
+        // not tear the subscription down and re-snapshot from the server.
+        const mock = createMockClient(() => {
+            return { count: 3 };
+        });
+
+        const { rerender } = render(
+            <LunoraProvider client={mock.asClient}>
+                <Display args={EQUAL_ARGS_FIRST} />
+            </LunoraProvider>,
+        );
+
+        await waitFor(() => {
+            expect(screen.getByTestId("display").textContent).toBe(JSON.stringify({ count: 3 }));
+        });
+
+        expect(mock.subscribe).toHaveBeenCalledTimes(1);
+
+        rerender(
+            <LunoraProvider client={mock.asClient}>
+                <Display args={EQUAL_ARGS_SECOND} />
+            </LunoraProvider>,
+        );
+
+        expect(mock.subscribe).toHaveBeenCalledTimes(1);
+        expect(screen.getByTestId("display").textContent).toBe(JSON.stringify({ count: 3 }));
+    });
+
+    it("surfaces a server-pushed subscription error through onError", async () => {
+        expect.hasAssertions();
+
+        // Regression: `client.subscribe` accepts `onError`, but `useQuery` never
+        // forwarded one — a subscription-scoped error the server pushes (an RLS
+        // denial, a query that starts failing server-side) had nowhere to go, so
+        // the value silently froze at its last good result.
+        const mock = createMockClient(() => 0);
+        const errors: SubscriptionError[] = [];
+
+        render(
+            <LunoraProvider client={mock.asClient}>
+                <ErrorDisplay
+                    // eslint-disable-next-line react-perf/jsx-no-new-function-as-prop -- test harness: an inline handler is exactly the identity-churning case the hook must tolerate.
+                    onError={(error) => errors.push(error)}
+                />
+            </LunoraProvider>,
+        );
+
+        await waitFor(() => {
+            expect(screen.getByTestId("display").textContent).toBe("0");
+        });
+
+        await act(async () => {
+            mock.emitError("posts:list", { code: "FORBIDDEN", message: "row-level security denied the read" });
+        });
+
+        expect(errors).toStrictEqual([{ code: "FORBIDDEN", message: "row-level security denied the read" }]);
+    });
+
     it("wS deltas update the displayed value", async () => {
         expect.hasAssertions();
 
@@ -112,6 +215,193 @@ describe("useQuery", () => {
         // post-emit update lands on a later commit — waitFor lets it flush.
         await waitFor(() => {
             expect(screen.getByTestId("display").textContent).toBe("42");
+        });
+    });
+
+    it("keeps a WS push that landed while the initial HTTP snapshot was still in flight", async () => {
+        expect.hasAssertions();
+
+        let releaseSnapshot: () => void = () => {};
+        // The one-shot HTTP snapshot the hook fires on mount, held open so a
+        // subscription frame can overtake it — the shape a mutation produces:
+        // the socket pushes the post-write rows while the pre-write snapshot is
+        // still on the wire.
+        const mock = createMockClient(
+            async () =>
+                new Promise((resolve) => {
+                    releaseSnapshot = () => {
+                        resolve("pre-mutation snapshot");
+                    };
+                }),
+        );
+
+        render(
+            <LunoraProvider client={mock.asClient}>
+                <Display />
+            </LunoraProvider>,
+        );
+
+        await waitFor(() => {
+            expect(mock.subscribe).toHaveBeenCalledTimes(1);
+        });
+
+        await act(async () => {
+            mock.emit("posts:list", "post-mutation push");
+        });
+
+        await waitFor(() => {
+            expect(screen.getByTestId("display").textContent).toBe(JSON.stringify("post-mutation push"));
+        });
+
+        // TanStack applies a resolved fetch unconditionally, so the older
+        // snapshot must not be allowed to land on top of the newer push — with
+        // `staleTime: Infinity` and push-driven freshness it would stay wrong
+        // until the next write. Drain several macrotasks so the write this
+        // asserts the ABSENCE of has had every chance to land.
+        await act(async () => {
+            releaseSnapshot();
+
+            for (let tick = 0; tick < 5; tick += 1) {
+                // eslint-disable-next-line no-await-in-loop -- intentional sequential drain of task ticks
+                await new Promise((resolve) => {
+                    setTimeout(resolve, 0);
+                });
+            }
+        });
+
+        expect(screen.getByTestId("display").textContent).toBe(JSON.stringify("post-mutation push"));
+    });
+
+    it("keeps the pushed value when the last consumer detaches before the snapshot resolves", async () => {
+        expect.hasAssertions();
+
+        let releaseSnapshot: () => void = () => {};
+        const mock = createMockClient(
+            async () =>
+                new Promise((resolve) => {
+                    releaseSnapshot = () => {
+                        resolve("pre-mutation snapshot");
+                    };
+                }),
+        );
+        const queryClient = new QueryClient({
+            defaultOptions: { queries: { gcTime: 5 * 60_000, retry: 0, staleTime: Number.POSITIVE_INFINITY } },
+        });
+
+        const view = render(
+            <LunoraProvider client={mock.asClient} queryClient={queryClient}>
+                <Display />
+            </LunoraProvider>,
+        );
+
+        await waitFor(() => {
+            expect(mock.subscribe).toHaveBeenCalledTimes(1);
+        });
+
+        await act(async () => {
+            mock.emit("posts:list", "post-mutation push");
+        });
+
+        await waitFor(() => {
+            expect(screen.getByTestId("display").textContent).toBe(JSON.stringify("post-mutation push"));
+        });
+
+        // The last consumer goes away while the snapshot is still on the wire.
+        // Nothing aborts that fetch (the `queryFn` takes no signal), so it still
+        // resolves — and its "has anything been pushed since?" reading must not
+        // be reset by the detach that tore the registry entry down.
+        view.unmount();
+
+        await act(async () => {
+            releaseSnapshot();
+
+            for (let tick = 0; tick < 5; tick += 1) {
+                // eslint-disable-next-line no-await-in-loop -- intentional sequential drain of task ticks
+                await new Promise((resolve) => {
+                    setTimeout(resolve, 0);
+                });
+            }
+        });
+
+        // The cache entry outlives the unmount (`gcTime`), and a remount reads it
+        // synchronously — so a stale snapshot written here is what the user sees
+        // on the way back.
+        expect(queryClient.getQueryData(lunoraQueryKey(makeRef("posts:list"), DEFAULT_ARGS, undefined))).toBe("post-mutation push");
+    });
+
+    // The hydration gate (`client.isReady` / `client.whenReady()`), which every
+    // other test in this file runs past because the mock reports ready. Both
+    // branches are asserted here so removing the gate from `use-query.ts` fails
+    // the suite rather than passing it.
+    describe("hydration gate", () => {
+        it("holds the fetch until whenReady() resolves when the client is not ready yet", async () => {
+            expect.hasAssertions();
+
+            const mock = createMockClient(() => {
+                return { count: 1 };
+            });
+
+            let releaseHydration = (): void => undefined;
+            const hydration = new Promise<void>((resolve) => {
+                releaseHydration = resolve;
+            });
+
+            // `hydrateOnStart`: the durable read cache is still loading, so
+            // `isReady` is false until `whenReady()` settles.
+            // Spread through a record view: `asClient` is a plain object literal
+            // cast to `LunoraClient`, so spreading it loses no prototype — but
+            // the cast makes it read as a class instance to the linter.
+            const pending = {
+                ...(mock.asClient as unknown as Record<string, unknown>),
+                isReady: false,
+                whenReady: async () => hydration,
+            } as unknown as typeof mock.asClient;
+
+            render(
+                <LunoraProvider client={pending}>
+                    <Display />
+                </LunoraProvider>,
+            );
+
+            // Nothing may hit the wire while hydration is outstanding — a fetch
+            // here is exactly the undefined-flash-then-cached-value the gate exists
+            // to prevent.
+            await act(async () => undefined);
+
+            expect(mock.query).not.toHaveBeenCalled();
+
+            await act(async () => {
+                releaseHydration();
+                await hydration;
+            });
+
+            await waitFor(() => {
+                expect(mock.query).toHaveBeenCalledTimes(1);
+            });
+        });
+
+        it("seeds the first render from the durable read cache once the client reports ready", () => {
+            expect.hasAssertions();
+
+            const mock = createMockClient(() => {
+                return { count: 1 };
+            });
+            const seeded = {
+                ...(mock.asClient as unknown as Record<string, unknown>),
+                peekHydratedQuery: () => {
+                    return { count: 99 };
+                },
+            } as unknown as typeof mock.asClient;
+
+            render(
+                <LunoraProvider client={seeded}>
+                    <Display />
+                </LunoraProvider>,
+            );
+
+            // `initialData: cachedData` — no "loading" frame before the socket
+            // round-trip. Unreachable while `isReady` reads `undefined`.
+            expect(screen.getByTestId("display").textContent).toBe(JSON.stringify({ count: 99 }));
         });
     });
 });

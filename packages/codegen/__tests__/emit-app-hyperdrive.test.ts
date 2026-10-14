@@ -2,28 +2,7 @@
 import { describe, expect, it } from "vitest";
 
 import { emitApp } from "../src/emit-app";
-
-/** Minimal `EmitAppOptions` with every capability off; tests flip one flag at a time. */
-const baseOptions = {
-    hasAi: false,
-    hasAnalytics: false,
-    hasAuth: false,
-    hasBrowser: false,
-    hasFramework: false,
-    hasGlobal: false,
-    hasHyperdrive: false,
-    hasImages: false,
-    hasKv: false,
-    hasPayments: false,
-    hasHyperdriveGlobal: false,
-    hasScheduler: false,
-    hasStorage: false,
-    hasVectors: false,
-    hasWorkflow: false,
-    useUmbrella: false,
-    wantsOpenApi: false,
-    wantsOpenRpc: false,
-};
+import baseOptions from "./emit-app-options";
 
 describe("emitApp — Hyperdrive global backend", () => {
     it("emits the .hyperdriveGlobal() builder method, declaration and config wiring", () => {

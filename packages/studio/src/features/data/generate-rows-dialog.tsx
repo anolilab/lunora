@@ -5,7 +5,8 @@ import { ModalShell } from "../../components/ui/modal-shell";
 import { useT } from "../../i18n/i18n-context";
 import type { ColumnMeta } from "../../lib/admin";
 import { fireAndForget } from "../../lib/internal";
-import { collectSkippedFkColumns, MAX_GENERATE_ROWS, requestSeedRows } from "../../lib/seed-data";
+import { collectUnresolvableFkColumns, MAX_GENERATE_ROWS, requestSeedRows } from "../../lib/seed-data";
+import type { InsertBatchOutcome } from "./hooks/use-generate-rows";
 
 /** Shared control-button class for dialog actions. */
 const BTN =
@@ -26,10 +27,12 @@ interface GenerateRowsDialogProps {
 
     /**
      * Called with the generated row documents. The caller (data browser) routes
-     * them through the schema-aware `writeRow` insert path one by one. Returns
-     * `undefined` on success or an error message string on failure.
+     * them through the bulk `importShard` admin RPC in one call. The returned
+     * {@link InsertBatchOutcome} carries the REAL inserted/conflict counts —
+     * `error === undefined` does not mean every requested row landed (a
+     * conflict-only batch also has no `error`).
      */
-    readonly onInsertRows: (rows: ReadonlyArray<Record<string, unknown>>) => Promise<string | undefined>;
+    readonly onInsertRows: (rows: ReadonlyArray<Record<string, unknown>>) => Promise<InsertBatchOutcome>;
     /** The name of the table being seeded — for display only. */
     readonly table: string;
 }
@@ -41,8 +44,12 @@ interface GenerateRowsDialogProps {
  * browser bundle; the dialog fetches the rows from the local seed endpoint and
  * then sends them to the worker in batch.
  *
- * Columns with empty FK pools are skipped and listed in the dialog so the
- * operator knows which relations were not populated.
+ * A column whose parent table has no rows BLOCKS generation: there is no id to
+ * point it at, and the endpoint refuses rather than fabricate a parent row it
+ * would then drop — which is how children carrying foreign keys to rows that do
+ * not exist used to get inserted while the dialog reported the column "skipped".
+ * Those columns are listed and the generate button is disabled until their
+ * parents are seeded.
  */
 const GenerateRowsDialog = ({ columns, fkPools, onClose, onInsertRows, table }: GenerateRowsDialogProps): ReactElement => {
     const t = useT();
@@ -51,6 +58,8 @@ const GenerateRowsDialog = ({ columns, fkPools, onClose, onInsertRows, table }: 
     const [inserting, setInserting] = useState<boolean>(false);
     const [error, setError] = useState<string | undefined>(undefined);
     const [inserted, setInserted] = useState<number | undefined>(undefined);
+    /** Rows skipped as id conflicts on the last successful (`error === undefined`) insert — surfaced alongside `inserted` so "0 inserted, 200 conflicts" never reads as "200 inserted". */
+    const [conflicts, setConflicts] = useState<number>(0);
 
     const onCountChange = (event: React.ChangeEvent<HTMLInputElement>): void => {
         const next = Number(event.target.value);
@@ -63,8 +72,10 @@ const GenerateRowsDialog = ({ columns, fkPools, onClose, onInsertRows, table }: 
     const handleGenerate = async (): Promise<void> => {
         setError(undefined);
         setInserted(undefined);
+        setConflicts(0);
         setInserting(true);
 
+        // react-doctor-disable-next-line react-hooks-js/todo -- React Compiler cannot lower `try` without `catch`; the `finally` must still clear the busy flag on the throw path, and adding a catch just to satisfy the compiler would swallow the error
         try {
             // Vary the seed per click so repeated generations don't collide on
             // the deterministic `_id` the planner derives from (seed, index).
@@ -84,21 +95,20 @@ const GenerateRowsDialog = ({ columns, fkPools, onClose, onInsertRows, table }: 
                 return;
             }
 
-            const result = await onInsertRows(rows);
+            const outcome = await onInsertRows(rows);
 
-            if (result !== undefined) {
-                setError(result);
+            if (outcome.error !== undefined) {
+                setError(outcome.error);
 
                 return;
             }
 
-            setInserted(rows.length);
-
-            const skippedFkColumns = collectSkippedFkColumns(columns, fkPools);
-
-            if (skippedFkColumns.length > 0) {
-                setError(t("Inserted {count} rows. Skipped FK columns: {cols}", { cols: skippedFkColumns.join(", "), count: rows.length.toString() }));
-            }
+            // `outcome.inserted` is the count that ACTUALLY landed — never
+            // `rows.length` (the requested count), which a conflict-only batch
+            // (every planned `_id` already existed) would overstate as if
+            // nothing had been skipped.
+            setInserted(outcome.inserted);
+            setConflicts(outcome.conflicts);
         } finally {
             setInserting(false);
         }
@@ -110,6 +120,9 @@ const GenerateRowsDialog = ({ columns, fkPools, onClose, onInsertRows, table }: 
 
     // Editable columns excluding the PK for the preview list.
     const editableColumns = columns.filter((column) => column.pk !== true);
+    // FK columns with nothing to link to. The endpoint refuses the request, so
+    // the button is disabled rather than left to fail after a round trip.
+    const blockedFkColumns = collectUnresolvableFkColumns(columns, fkPools);
 
     return (
         <ModalShell label={t("Generate dummy rows")} onClose={onClose} panelTestId="gen-rows-panel" testId="gen-rows-overlay" variant="dialog">
@@ -154,7 +167,7 @@ const GenerateRowsDialog = ({ columns, fkPools, onClose, onInsertRows, table }: 
                             const fkBadgeClass = fkEmpty ? "rounded bg-destructive/10 px-1 text-destructive" : "rounded bg-muted px-1 text-muted-foreground";
                             const fkBadgeTestId = fkEmpty ? `gen-rows-fk-empty-${column.name}` : `gen-rows-fk-ok-${column.name}`;
                             const fkBadgeText = fkEmpty
-                                ? t("FK: no rows in {ref} — will skip", { ref: column.ref ?? "" })
+                                ? t("FK: no rows in {ref} — seed it first", { ref: column.ref ?? "" })
                                 : t("→ {ref}", { ref: column.ref ?? "" });
 
                             return (
@@ -174,6 +187,14 @@ const GenerateRowsDialog = ({ columns, fkPools, onClose, onInsertRows, table }: 
                 </div>
             )}
 
+            {blockedFkColumns.length > 0 && (
+                <p className="text-xs text-destructive" data-testid="gen-rows-blocked" role="alert">
+                    {t("Cannot generate rows: these columns reference tables with no rows: {cols}. Seed those tables first.", {
+                        cols: blockedFkColumns.join(", "),
+                    })}
+                </p>
+            )}
+
             {error !== undefined && (
                 <p className="text-xs text-destructive" data-testid="gen-rows-error" role="alert">
                     {error}
@@ -182,7 +203,13 @@ const GenerateRowsDialog = ({ columns, fkPools, onClose, onInsertRows, table }: 
 
             {inserted !== undefined && error === undefined && (
                 <p className="text-xs text-success" data-testid="gen-rows-success">
-                    {t("Inserted {count} rows successfully.", { count: inserted.toString() })}
+                    {conflicts > 0
+                        ? t("Inserted {inserted} of {total} rows — {conflicts} skipped as id conflicts.", {
+                              conflicts: conflicts.toString(),
+                              inserted: inserted.toString(),
+                              total: (inserted + conflicts).toString(),
+                          })
+                        : t("Inserted {count} rows successfully.", { count: inserted.toString() })}
                 </p>
             )}
 
@@ -190,7 +217,13 @@ const GenerateRowsDialog = ({ columns, fkPools, onClose, onInsertRows, table }: 
                 <button className={BTN} data-testid="gen-rows-cancel" onClick={onClose} type="button">
                     {t("Cancel")}
                 </button>
-                <button className={BTN_DESTRUCTIVE} data-testid="gen-rows-generate" disabled={inserting} onClick={onGenerate} type="button">
+                <button
+                    className={BTN_DESTRUCTIVE}
+                    data-testid="gen-rows-generate"
+                    disabled={inserting || blockedFkColumns.length > 0}
+                    onClick={onGenerate}
+                    type="button"
+                >
                     {inserting ? t("Inserting…") : t("Generate & insert")}
                 </button>
             </div>

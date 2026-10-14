@@ -38,7 +38,7 @@ const PaginationLink = ({ className, isActive, size = "icon", ...properties }: P
                 variant: isActive ? "outline" : "ghost",
             }),
             {
-                "text-white": isActive,
+                "text-ink": isActive,
             },
             className,
         )}
