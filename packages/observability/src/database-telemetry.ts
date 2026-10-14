@@ -377,7 +377,8 @@ type AnyMethod = (...arguments_: unknown[]) => unknown;
  *
  * The prototype, `in`, and own-key enumeration are forwarded, so `instanceof`,
  * spread and `Object.keys` still see the real object. Wrapped methods are
- * memoized, so repeated access returns a stable function identity.
+ * memoized per underlying method, so repeated access returns a stable function identity
+ * until that method is replaced.
  *
  * Writes are forwarded too. Every read comes from `source`, so a write that fell
  * through to the throwaway target would vanish: the generated ShardDO attaches a
@@ -386,7 +387,7 @@ type AnyMethod = (...arguments_: unknown[]) => unknown;
  * dev server with none (no wrapper at all) worked.
  */
 const instrumentMethods = <T extends object>(source: T, shouldWrap: (name: string) => boolean, wrap: (name: string, original: AnyMethod) => AnyMethod): T => {
-    const wrapped = new Map<string, AnyMethod>();
+    const wrapped = new Map<string, { instrumented: AnyMethod; original: AnyMethod }>();
 
     return new Proxy({} as T, {
         get(_target, property) {
@@ -396,12 +397,18 @@ const instrumentMethods = <T extends object>(source: T, shouldWrap: (name: strin
                 return value;
             }
 
-            let instrumented = wrapped.get(property);
+            // Keyed on the method it wraps, so a method replaced after it was first read (a write through this
+            // proxy, or straight onto `source`) gets a fresh wrapper instead of the stale one around the old method.
+            const method = value as AnyMethod;
+            const cached = wrapped.get(property);
 
-            if (instrumented === undefined) {
-                instrumented = wrap(property, (value as AnyMethod).bind(source));
-                wrapped.set(property, instrumented);
+            if (cached?.original === method) {
+                return cached.instrumented;
             }
+
+            const instrumented = wrap(property, method.bind(source));
+
+            wrapped.set(property, { instrumented, original: method });
 
             return instrumented;
         },

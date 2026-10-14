@@ -207,6 +207,31 @@ describe("instrumentDatabase", () => {
         expect(instrumented["tag"]).toBeUndefined();
     });
 
+    // The wrapper for a method is cached so repeated reads share one function identity. A write that replaces the
+    // method must not keep serving the wrapper around the old one.
+    it("wraps a method that was replaced after it was first read, not the one it replaced", async () => {
+        expect.assertions(3);
+
+        const database: Record<string, unknown> & ReturnType<typeof fakeDatabase> = fakeDatabase();
+        const tally = createDatabaseTally();
+        const instrumented = instrumentDatabase(
+            database,
+            deps("summary", tally, () => undefined),
+        );
+        const original = database.insert;
+
+        await instrumented.insert("notes", { a: 1 });
+
+        const replacement = vi.fn<(table: string, document: Record<string, unknown>) => Promise<string>>(async () => "id-2");
+
+        instrumented["insert"] = replacement;
+
+        await expect(instrumented.insert("notes", { a: 2 })).resolves.toBe("id-2");
+
+        expect(original).toHaveBeenCalledTimes(1);
+        expect(replacement).toHaveBeenCalledTimes(1);
+    });
+
     it("does not break a wrapped storage method when members are assigned around it", async () => {
         expect.assertions(2);
 
