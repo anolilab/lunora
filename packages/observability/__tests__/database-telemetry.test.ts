@@ -166,6 +166,65 @@ describe("instrumentDatabase", () => {
         expect(instrumented.normalizeId("orders", "x")).toBe("x");
     });
 
+    // The generated ShardDO builds `ctx.db` through this wrapper whenever a telemetry sink is configured, then attaches one
+    // facade per table onto it (`db["notes"] = bindTableFacade(...)`) and hands that same object to the handler. A wrapper
+    // that swallowed the assignment left every `ctx.db.<table>` undefined in a deployed Worker while `lunora dev`, which
+    // has no sink and so no wrapper, kept working.
+    it("keeps a member assigned onto the instrumented database, readable through it and on the original", () => {
+        expect.assertions(4);
+
+        const database: Record<string, unknown> & ReturnType<typeof fakeDatabase> = fakeDatabase();
+        const instrumented = instrumentDatabase(
+            database,
+            deps("summary", createDatabaseTally(), () => undefined),
+        ) as Record<string, unknown>;
+        const facade = { findFirst: () => "row" };
+
+        instrumented["notes"] = facade;
+
+        expect(instrumented["notes"]).toBe(facade);
+        expect(database["notes"]).toBe(facade);
+        expect(Object.keys(instrumented)).toContain("notes");
+        expect("notes" in instrumented).toBe(true);
+    });
+
+    it("forwards a delete and a defineProperty to the original database", () => {
+        expect.assertions(3);
+
+        const database: Record<string, unknown> & ReturnType<typeof fakeDatabase> = fakeDatabase();
+        const instrumented = instrumentDatabase(
+            database,
+            deps("summary", createDatabaseTally(), () => undefined),
+        ) as Record<string, unknown>;
+
+        Object.defineProperty(instrumented, "tag", { configurable: true, enumerable: true, value: "x", writable: true });
+
+        expect(database["tag"]).toBe("x");
+
+        delete instrumented["tag"];
+
+        expect(database["tag"]).toBeUndefined();
+        expect(instrumented["tag"]).toBeUndefined();
+    });
+
+    it("does not break a wrapped storage method when members are assigned around it", async () => {
+        expect.assertions(2);
+
+        const database: Record<string, unknown> & ReturnType<typeof fakeDatabase> = fakeDatabase();
+        const tally = createDatabaseTally();
+        const instrumented = instrumentDatabase(
+            database,
+            deps("summary", tally, () => undefined),
+        );
+
+        instrumented["notes"] = { findFirst: () => "row" };
+
+        await instrumented.insert("notes", { a: 1 });
+
+        expect(database.insert).toHaveBeenCalledTimes(1);
+        expect(tally.calls).toBe(1);
+    });
+
     it("returns a stable function identity for a wrapped method", () => {
         expect.assertions(1);
 
