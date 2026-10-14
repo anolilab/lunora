@@ -196,6 +196,10 @@ const CELLD_CAPABILITIES: PlatformCapabilities = {
             level: "emulated",
             note: "Reactors ride the existing post-write refresh drain, exactly as on Cloudflare. celld supplies the two properties that make that correct — one event at a time per cell, and `waitUntil` to keep the drain alive past the response — and has no notion of a server-side subscription of its own",
         },
+        alarmRearmBreaker: {
+            level: "emulated",
+            note: "Lunora's own counter, not a platform primitive: the poll alarm's self re-arms are counted in one row of the shard's SQL (ShardHost.sql) over a sliding window, and a re-arm past the budget is refused, leaves one recovery wake a window out, and is logged once per trip. The arm it gates is ShardHost.alarms, so it runs wherever the shard has durable SQL and alarms",
+        },
         shardAlarms: {
             level: "native",
             note: "`storage.setAlarm`/`getAlarm`/`deleteAlarm` and the `alarm()` handler, durable across a cell moving between nodes",
