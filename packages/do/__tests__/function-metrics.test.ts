@@ -448,6 +448,61 @@ describe("shardDO persisted metrics", () => {
         }
     });
 
+    it("skips the durable upserts for successful dispatches when LUNORA_METRICS_SAMPLE=0 but keeps the in-memory count", async () => {
+        expect.assertions(2);
+
+        const database = createSqliteExec();
+
+        try {
+            const shard = new CountingShard(makeState(database), { LUNORA_ADMIN_TOKEN: ADMIN_TOKEN, LUNORA_METRICS_SAMPLE: "0" });
+
+            for (let index = 0; index < 20; index += 1) {
+                // eslint-disable-next-line no-await-in-loop -- sequential dispatches
+                await shard.fetch(userRequest("messages:list"));
+            }
+
+            expect(readFunctionMetrics(database.sql)).toEqual([]);
+
+            const { functionStats } = shard as unknown as { functionStats: Map<string, FunctionCallStat> };
+
+            expect(functionStats.get("messages:list")?.calls).toBe(20);
+        } finally {
+            database.close();
+        }
+    });
+
+    it("always records an errored dispatch even when LUNORA_METRICS_SAMPLE=0", async () => {
+        expect.assertions(1);
+
+        const database = createSqliteExec();
+
+        try {
+            const shard = new CountingShard(makeState(database), { LUNORA_ADMIN_TOKEN: ADMIN_TOKEN, LUNORA_METRICS_SAMPLE: "0" });
+
+            await shard.fetch(userRequest("boom:explode"));
+
+            expect(readFunctionMetrics(database.sql)).toMatchObject([{ calls: 1, errors: 1, path: "boom:explode" }]);
+        } finally {
+            database.close();
+        }
+    });
+
+    it("treats an unparseable LUNORA_METRICS_SAMPLE as 1 and records", async () => {
+        expect.assertions(1);
+
+        const database = createSqliteExec();
+
+        try {
+            const shard = new CountingShard(makeState(database), { LUNORA_ADMIN_TOKEN: ADMIN_TOKEN, LUNORA_METRICS_SAMPLE: "abc" });
+
+            await shard.fetch(userRequest("messages:list"));
+
+            expect(readFunctionMetrics(database.sql)).toMatchObject([{ calls: 1, path: "messages:list" }]);
+        } finally {
+            database.close();
+        }
+    });
+
     it("counts only OCC conflicts through fetch — a unique-violation 409 is an error but not a conflict", async () => {
         expect.assertions(2);
 

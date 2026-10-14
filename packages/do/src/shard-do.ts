@@ -4880,7 +4880,15 @@ abstract class ShardDO {
             return undefined;
         }
 
-        this.recordFunctionCall(functionPath, Date.now() - dispatchStartedAt, undefined, this.currentScannedTables, this.currentIndexHits);
+        this.recordFunctionCall(
+            functionPath,
+            Date.now() - dispatchStartedAt,
+            undefined,
+            this.currentScannedTables,
+            this.currentIndexHits,
+            false,
+            sampleHit(this.metricsSampleRate()),
+        );
 
         if (mutatorClass.kind === "already") {
             // Replay of a confirmed (or now-resent) mutation — ack without
@@ -4920,7 +4928,15 @@ abstract class ShardDO {
         mutatorClass: ClientMutationClass | undefined,
         cachedValue: unknown,
     ): Response {
-        this.recordFunctionCall(functionPath, Date.now() - dispatchStartedAt, undefined, this.currentScannedTables, this.currentIndexHits);
+        this.recordFunctionCall(
+            functionPath,
+            Date.now() - dispatchStartedAt,
+            undefined,
+            this.currentScannedTables,
+            this.currentIndexHits,
+            false,
+            sampleHit(this.metricsSampleRate()),
+        );
 
         if (mutatorClass?.kind === "next") {
             this.advanceClientMutationWatermark();
@@ -7457,13 +7473,15 @@ abstract class ShardDO {
             // Record the handler's own latency (before the subscription
             // write-flush below) against the per-function counters, along
             // with any tables it full-scanned (causal attribution).
-            this.recordFunctionCall(payload.functionPath, durationMs, undefined, this.currentScannedTables, this.currentIndexHits);
+            const durable = sampleHit(this.metricsSampleRate());
+
+            this.recordFunctionCall(payload.functionPath, durationMs, undefined, this.currentScannedTables, this.currentIndexHits, false, durable);
 
             // Flush per-statement SQL samples accumulated during dispatch to
             // the durable `__lunora_metrics_queries` table. Best-effort:
             // a flush failure (e.g. no sql handle in tests) must never fail
             // the response.
-            this.flushStmtSamples();
+            this.flushStmtSamples(durable);
 
             // Snapshot the written-table set BEFORE `flushChangedTables`
             // drains it — afterwards `pendingChangedTables` is `undefined`,
@@ -7540,11 +7558,19 @@ abstract class ShardDO {
                 // `this.logs` dev buffer, unaffected by this local redaction.
                 const redactedErrorMessage = redactArgs(message, isDevEnvironment(this.env)) as string;
 
-                this.recordFunctionCall(payload.functionPath, durationMs, redactedErrorMessage, this.currentScannedTables, this.currentIndexHits, conflicted);
+                this.recordFunctionCall(
+                    payload.functionPath,
+                    durationMs,
+                    redactedErrorMessage,
+                    this.currentScannedTables,
+                    this.currentIndexHits,
+                    conflicted,
+                    true,
+                );
             }
             // Flush statement samples even on error paths — partial sampling
-            // is better than losing the timing signal entirely.
-            this.flushStmtSamples();
+            // is better than losing the timing signal entirely. Errors are never sampled out.
+            this.flushStmtSamples(true);
             this.recordRequestLog(
                 payload.functionPath,
                 payload.args ?? {},
@@ -8468,6 +8494,7 @@ abstract class ShardDO {
         scannedTables?: ReadonlySet<string>,
         indexHits?: ReadonlySet<string>,
         conflicted: boolean = false,
+        durable: boolean = true,
     ): void {
         const now = Date.now();
         const scanned = scannedTables ? [...scannedTables] : [];
@@ -8479,19 +8506,23 @@ abstract class ShardDO {
         // Durable upsert on the hot path: two PK-keyed INSERT…ON CONFLICT
         // statements plus a bounded bucket trim, plus one upsert per scanned
         // table and one per exercised index. Survives restart/hibernation.
-        try {
-            recordFunctionMetric(this.shardHost.sql, {
-                conflicted,
-                durationMs,
-                errored: errorMessage !== undefined,
-                errorMessage,
-                indexHits: hits,
-                path: functionPath,
-                scannedTables: scanned,
-                ts: now,
-            });
-        } catch {
-            // Best-effort: never let metrics persistence fail the request.
+        // Skipped when the dispatch was sampled out (LUNORA_METRICS_SAMPLE);
+        // the in-memory `functionStats` below still counts every call.
+        if (durable) {
+            try {
+                recordFunctionMetric(this.shardHost.sql, {
+                    conflicted,
+                    durationMs,
+                    errored: errorMessage !== undefined,
+                    errorMessage,
+                    indexHits: hits,
+                    path: functionPath,
+                    scannedTables: scanned,
+                    ts: now,
+                });
+            } catch {
+                // Best-effort: never let metrics persistence fail the request.
+            }
         }
 
         const existing = this.functionStats.get(functionPath);
@@ -8569,10 +8600,10 @@ abstract class ShardDO {
      * dispatch path, not here, so a partial flush (partial error) still
      * drains the correct slice.
      */
-    private flushStmtSamples(): void {
+    private flushStmtSamples(durable: boolean): void {
         const samples = this.currentStmtSamples;
 
-        if (!samples || samples.size === 0) {
+        if (!durable || !samples || samples.size === 0) {
             return;
         }
 
@@ -8590,6 +8621,13 @@ abstract class ShardDO {
         } catch {
             // Best-effort: never let metrics persistence fail the request.
         }
+    }
+
+    /** Fraction of successful dispatches whose metric upserts are persisted (`LUNORA_METRICS_SAMPLE`, 0..1, default 1). */
+    private metricsSampleRate(): number {
+        const env = (this.env ?? {}) as { LUNORA_METRICS_SAMPLE?: string };
+
+        return parseSampleRate(env.LUNORA_METRICS_SAMPLE);
     }
 
     /**
