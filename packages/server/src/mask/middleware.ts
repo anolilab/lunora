@@ -99,7 +99,7 @@ import { isRelationPredicate } from "../../../../shared/relation-operators";
 import type { Middleware } from "../builder/types";
 import type { QueryPlan } from "../data-model";
 import type { FacadeEntry } from "../facade";
-import { bindOrm, bindTableFacade } from "../facade";
+import { bindOrm, defineLazyFacade } from "../facade";
 import { optionalWriterOverride } from "../optional-writer-override";
 import type { ShardRankPageResultLike } from "../rank-page-rows-shape";
 import type { RelationWriteInfosLike } from "../relation-writes";
@@ -1175,12 +1175,10 @@ const wrapDatabase = <Context>(
     // every guard uses: any mask at all ⇒ re-bind everything. Codegen binds all
     // facade entries — `.global()` D1 tables included — through the one shard
     // ctx-db, so re-binding cannot send a read to the wrong backend.
-    const writableFacade = wrapped as unknown as Record<string, unknown>;
-
     if (maskedAnywhere.size > 0) {
         for (const [tableName, entry] of Object.entries(base as unknown as Record<string, unknown>)) {
             if (isFacadeEntry(entry)) {
-                writableFacade[tableName] = bindTableFacade(wrapped, tableName);
+                defineLazyFacade(wrapped, tableName);
             }
         }
     }

@@ -74,7 +74,7 @@ import { previewPatch } from "../../../../shared/field-operators";
 import type { Middleware } from "../builder/types";
 import type { QueryPlan } from "../data-model";
 import type { FacadeEntry } from "../facade";
-import { bindOrm, bindTableFacade } from "../facade";
+import { bindOrm, defineLazyFacade } from "../facade";
 import { optionalWriterOverride } from "../optional-writer-override";
 import type { ShardRankPageResultLike } from "../rank-page-rows-shape";
 import { tagRlsMiddleware } from "./policy-tag";
@@ -1966,12 +1966,10 @@ const wrapDatabase = (base: RlsDatabase, raw: RlsDatabase, steps: ReadonlyArray<
     //
     // Gated on there being any policy at all, so an `rls([])` chain still leaves
     // the runtime's own bindings untouched.
-    const writableFacade = wrapped as unknown as Record<string, unknown>;
-
     if (policyTables.size > 0) {
         for (const [tableName, entry] of Object.entries(base as unknown as Record<string, unknown>)) {
             if (isFacadeEntry(entry)) {
-                writableFacade[tableName] = bindTableFacade(wrapped, tableName);
+                defineLazyFacade(wrapped, tableName);
             }
         }
     }

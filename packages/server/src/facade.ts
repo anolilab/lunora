@@ -416,6 +416,26 @@ export interface OrmLike {
     update: (table: string, id: string) => { set: (values: Record<string, unknown>) => Promise<void> };
 }
 
+/**
+ * Re-point `target[tableName]` at a facade bound over `target` itself, but only
+ * build it on first read. The key stays an enumerable own property (spreads and
+ * `Object.keys` see it; a spread binds every table, as eager binding did), and
+ * the first read swaps the getter for the bound value so identity is stable.
+ */
+export const defineLazyFacade = (target: FacadeWriterLike, tableName: string): void => {
+    Object.defineProperty(target, tableName, {
+        configurable: true,
+        enumerable: true,
+        get() {
+            const bound = bindTableFacade(target, tableName);
+
+            Object.defineProperty(target, tableName, { configurable: true, enumerable: true, value: bound, writable: false });
+
+            return bound;
+        },
+    });
+};
+
 /** Build `ctx.orm` over a per-table facade map (table name → FacadeEntry). */
 export const bindOrm = (facade: Record<string, FacadeEntry>): OrmLike => {
     const resolve = (table: string): FacadeEntry => {
