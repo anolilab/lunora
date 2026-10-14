@@ -1,3 +1,17 @@
+## @lunora/server [1.0.0-alpha.196](https://github.com/anolilab/lunora/compare/@lunora/server@1.0.0-alpha.195...@lunora/server@1.0.0-alpha.196) (2026-10-14)
+
+### Features
+
+* **server:** answer If-None-Match with 304 and document storage cache headers ([#1153](https://github.com/anolilab/lunora/issues/1153)) ([0116518](https://github.com/anolilab/lunora/commit/011651878083c89305b94e6f8799d1c4265651aa)), closes [#1154](https://github.com/anolilab/lunora/issues/1154)
+
+
+### Dependencies
+
+* **@lunora/scheduler:** upgraded to 1.0.0-alpha.122
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.125
+* **@lunora/observability:** upgraded to 1.0.0-alpha.135
+* **@lunora/storage:** upgraded to 1.0.0-alpha.130
+
 ## @lunora/server [1.0.0-alpha.195](https://github.com/anolilab/lunora/compare/@lunora/server@1.0.0-alpha.194...@lunora/server@1.0.0-alpha.195) (2026-10-14)
 
 ### ⚠ BREAKING CHANGES

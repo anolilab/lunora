@@ -1,3 +1,18 @@
+## @lunora/do [1.0.0-alpha.209](https://github.com/anolilab/lunora/compare/@lunora/do@1.0.0-alpha.208...@lunora/do@1.0.0-alpha.209) (2026-10-14)
+
+### Features
+
+* **do:** cap a shard's self-re-arming poll alarm ([#1151](https://github.com/anolilab/lunora/issues/1151)) ([183f13d](https://github.com/anolilab/lunora/commit/183f13d533c041823842ea860c80174aaa0c4a34))
+
+
+### Dependencies
+
+* **@lunora/observability:** upgraded to 1.0.0-alpha.135
+* **@lunora/platform:** upgraded to 1.0.0-alpha.62
+* **@lunora/platform-cloudflare:** upgraded to 1.0.0-alpha.85
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.125
+* **@lunora/bindings:** upgraded to 1.0.0-alpha.109
+
 ## @lunora/do [1.0.0-alpha.208](https://github.com/anolilab/lunora/compare/@lunora/do@1.0.0-alpha.207...@lunora/do@1.0.0-alpha.208) (2026-10-14)
 
 ### Bug Fixes

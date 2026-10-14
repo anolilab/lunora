@@ -170,6 +170,45 @@ disable it. An unset or malformed value keeps the default. A bulk backfill that 
 large TTL backlog can legitimately exceed the default, so raise the limit for that
 deployment.
 
+## Schedule rate budget
+
+A job that reschedules itself through `ctx.scheduler.runAfter` never touches the poll
+alarm, so the alarm budget above does not see it. Each run schedules the next, and
+nothing else bounds how often that happens. The schedule-rate budget covers that path.
+
+It counts **invocations per target per shard**, over a 60-second sliding window. A target
+is the function a schedule runs. An invocation is one mutation or action dispatch. A fan-out
+of many jobs to one target from one invocation counts once, so a legitimate import that
+schedules one job per row is not throttled. A self-loop counts once per iteration.
+
+The default is **600 invocations per minute**, or 10 per second. A self-loop runs at most
+one iteration per round trip (the scheduler's alarm pass, the dispatch, the run). At an
+assumed 100 ms round trip, a loop reaches the budget at 10 iterations per second, and its
+daily ceiling is 864,000 per target per shard.
+
+When the budget is spent, the schedule is **deferred one minute**, not refused and not
+dropped. Its due time moves to one window out. A job already due later than that keeps its
+time. Each trip logs one `error` record, whose message begins
+`schedule rate breaker tripped` and names the target, and counts
+`shard.schedule_rate.deferred`. The error record is written at most once per window per
+target and instance, however many refusals follow, so steady load at the limit does not
+flood the log.
+
+Known false positive: a steady workload above 10 invocations per second per shard and
+target, such as one email job per request, is delayed by a window. It still runs. Raise the
+limit for that deployment.
+
+Ordering: a job admitted after a deferral can run before an earlier deferred job for the
+same target. Deferred jobs keep their own due times, and the window re-admits in the
+meantime. A self-loop has one job in flight, so this matters only for fan-in workloads.
+Do not rely on the order of same-target schedules across a throttle.
+
+Set `LUNORA_SCHEDULE_RATE_LIMIT` to a positive integer to change the budget, or to `0` to
+disable it. An unset or malformed value keeps the default.
+
+The window is one row per target in the shard's SQLite. It is written inside the
+invocation's transaction, so a rolled-back invocation does not count.
+
 ## `ShardDOState` / `MutationDelta`
 
 Internal serialization shapes. Stable across patch releases so add-ons can

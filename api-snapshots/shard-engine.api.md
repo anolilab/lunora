@@ -2574,6 +2574,7 @@ interface SchedulableWorkflowReferenceLike {
 
 ```ts
 interface ScheduleOutbox {
+    admit: (target: string) => number | undefined;
     forget: (id: string) => void;
     record: (id: string, envelope: ScheduleOutboxEnvelope) => void;
     wake: () => void;

@@ -9,7 +9,7 @@
  * suite pins the ordering itself, which a row count cannot see.
  */
 import { createScheduler, SchedulerDO } from "@lunora/scheduler";
-import { describe, expect, expectTypeOf, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, expectTypeOf, it, vi } from "vitest";
 
 import { beginDeferredSchedules, withDeferredSchedules } from "../src/index";
 
@@ -448,5 +448,122 @@ describe("withDeferredSchedules", () => {
         // A query ctx (or an admin dispatch) gets the bare scheduler; the settle a
         // caller holds must be a no-op rather than a crash.
         expect(calls).toHaveLength(1);
+    });
+});
+
+/**
+ * The shard's schedule-rate budget as the facade sees it (see schedule-rate-breaker.ts in
+ * `@lunora/do`): `admit` answers `undefined` for the first `limit` targets it is asked
+ * about, then `deferTo`. The shard's real window is covered by its own suite; this pins
+ * what the facade does with the answer.
+ */
+const budgetOutbox = (limit: number, deferTo: number) => {
+    let admitted = 0;
+
+    return {
+        admit: vi.fn<() => number | undefined>(() => {
+            if (admitted < limit) {
+                admitted += 1;
+
+                return undefined;
+            }
+
+            return deferTo;
+        }),
+        forget: vi.fn<(id: string) => void>(),
+        record: vi.fn<(id: string, envelope: { when: number }) => void>(),
+        wake: vi.fn<() => void>(),
+    };
+};
+
+describe("withDeferredSchedules — schedule-rate budget", () => {
+    const NOW = 1_700_000_000_000;
+    const WINDOW = 60_000;
+    const DEFER_TO = NOW + WINDOW + 1;
+
+    beforeEach(() => {
+        vi.useFakeTimers({ now: NOW, toFake: ["Date"] });
+    });
+
+    afterEach(() => {
+        vi.useRealTimers();
+    });
+
+    it("asks the budget once per target per dispatch, so one fan-out is one decision", async () => {
+        expect.assertions(3);
+
+        const { calls, scheduler } = recordingScheduler([]);
+        const outbox = budgetOutbox(3, DEFER_TO);
+        const facade = withDeferredSchedules(scheduler, outbox);
+
+        // A fan-out of ten jobs to one target from one invocation, past a budget of three.
+        for (let index = 0; index < 10; index += 1) {
+            // eslint-disable-next-line no-await-in-loop -- the fan-out is one invocation's calls in declaration order
+            await facade.runAfter(0, "import:row");
+        }
+
+        expect(outbox.admit).toHaveBeenCalledTimes(1);
+        expect(calls).toHaveLength(10);
+        // Every job in the fan-out keeps its own due time: none of them is deferred piecemeal.
+        expect(calls.every((call) => call.when === 0)).toBe(true);
+    });
+
+    it("defers a self-rescheduling loop's live call to the instant the budget gives, one dispatch at a time", async () => {
+        expect.assertions(4);
+
+        const { calls, scheduler } = recordingScheduler([]);
+        const outbox = budgetOutbox(3, DEFER_TO);
+
+        // Each run is its own dispatch, so each builds its own facade and asks once.
+        for (let run = 0; run < 5; run += 1) {
+            // eslint-disable-next-line no-await-in-loop -- each run schedules the next one, the chain being modelled
+            await withDeferredSchedules(scheduler, outbox).runAfter(0, "loop:self");
+        }
+
+        expect(calls.slice(0, 3).map((call) => call.when)).toEqual([0, 0, 0]);
+        // Past the budget the live call is a delay that lands on the deferred instant.
+        expect(calls[3]?.when).toBe(DEFER_TO - NOW);
+        expect(calls[4]?.when).toBe(DEFER_TO - NOW);
+        expect(outbox.admit).toHaveBeenCalledTimes(5);
+    });
+
+    it("writes the deferred instant into custody and into the replayed call, for a mutation", async () => {
+        expect.assertions(3);
+
+        const { calls, scheduler } = recordingScheduler([]);
+        const outbox = budgetOutbox(0, DEFER_TO);
+        const context = { scheduler: withDeferredSchedules(scheduler, outbox) };
+
+        const settle = beginDeferredSchedules(context);
+
+        await context.scheduler.runAfter(0, "loop:self");
+        await settle(true);
+
+        expect(outbox.record).toHaveBeenCalledWith(expect.any(String), expect.objectContaining({ when: DEFER_TO }));
+        expect(calls).toHaveLength(1);
+        expect(calls[0]?.when).toBe(DEFER_TO - NOW);
+    });
+
+    it("never brings a job forward: a far-future instant keeps its time past the deferral", async () => {
+        expect.assertions(1);
+
+        const { calls, scheduler } = recordingScheduler([]);
+        const facade = withDeferredSchedules(scheduler, budgetOutbox(0, DEFER_TO));
+        const later = NOW + 10 * WINDOW;
+
+        await facade.runAt(later, "reminder:send");
+
+        expect(calls[0]?.when).toBe(later);
+    });
+
+    it("leaves every call alone when the outbox answers within budget", async () => {
+        expect.assertions(1);
+
+        const { calls, scheduler } = recordingScheduler([]);
+        const facade = withDeferredSchedules(scheduler, budgetOutbox(Number.POSITIVE_INFINITY, DEFER_TO));
+
+        await facade.runAfter(5000, "mail:send");
+
+        expect(calls[0]?.when).toBe(5000);
     });
 });

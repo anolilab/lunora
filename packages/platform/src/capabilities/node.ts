@@ -92,6 +92,10 @@ const NODE_CAPABILITIES: PlatformCapabilities = {
             level: "emulated",
             note: "Lunora's own counter, not a platform primitive: the poll alarm's self re-arms are counted in one row of the shard's SQL (ShardHost.sql) over a sliding window, and a re-arm past the budget is refused, leaves one recovery wake a window out, and is logged once per trip. The arm it gates is ShardHost.alarms, so it runs wherever the shard has durable SQL and alarms",
         },
+        scheduleRateBreaker: {
+            level: "emulated",
+            note: "Lunora's own counter, not a platform primitive: each ctx.scheduler target's schedules are counted per shard in one row of the shard's SQL (ShardHost.sql) over a sliding window, once per invocation, and a schedule past the budget is deferred one window instead of being refused or dropped. The schedules it defers are stored through SchedulerDO, so it runs wherever the shard has durable SQL and a scheduler",
+        },
         shardAlarms: {
             level: "emulated",
             note: "setTimeout over a durable row, dispatched to onAlarm and re-armed on construction, so an alarm survives a restart and one whose time elapsed while the process was down fires late rather than never. Delivery is at-least-once as it is on workerd: a handler that throws is re-delivered with exponential backoff (6 attempts, from 100ms) and then abandoned, and an alarm set or deleted inside a transaction is armed only if that transaction commits",

@@ -1,3 +1,14 @@
+## @lunora/advisor [1.0.0-alpha.212](https://github.com/anolilab/lunora/compare/@lunora/advisor@1.0.0-alpha.211...@lunora/advisor@1.0.0-alpha.212) (2026-10-14)
+
+### Features
+
+* **advisor:** lint queue cycles, unindexed count, short polls, idle containers ([#1150](https://github.com/anolilab/lunora/issues/1150)) ([062c895](https://github.com/anolilab/lunora/commit/062c89562bd6de4825e744f9d01f88b49fa711f0))
+
+
+### Dependencies
+
+* **@lunora/server:** upgraded to 1.0.0-alpha.196
+
 ## @lunora/advisor [1.0.0-alpha.211](https://github.com/anolilab/lunora/compare/@lunora/advisor@1.0.0-alpha.210...@lunora/advisor@1.0.0-alpha.211) (2026-10-14)
 
 ### ⚠ BREAKING CHANGES

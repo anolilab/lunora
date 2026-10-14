@@ -82,6 +82,14 @@ interface ScheduleOutboxEnvelope {
  * and not enqueued.
  */
 interface ScheduleOutbox {
+    /**
+     * The schedule-rate budget for `target` (schedule-rate-breaker.ts), asked once per target
+     * per dispatch. Returns the instant a schedule to `target` may not fire before, or
+     * `undefined` when the call is within budget. Never throws and never refuses: a
+     * deferral only ever moves a job later.
+     */
+    admit: (target: string) => number | undefined;
+
     /** Release custody — the scheduler has the job, or the window that owned it was dropped. */
     forget: (id: string) => void;
 

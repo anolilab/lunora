@@ -114,6 +114,13 @@ interface PendingSchedule {
  * store) keeps the previous best-effort behaviour rather than failing to build.
  */
 interface ScheduleOutbox {
+    /**
+     * The schedule-rate budget for `target`, asked once per target per dispatch. Returns the
+     * instant a schedule to `target` may not fire before, or `undefined` when within budget.
+     * Never throws: a deferral only ever moves a job later.
+     */
+    admit: (target: string) => number | undefined;
+
     /** Release custody — the scheduler has the job, or the window that owned it was dropped. */
     forget: (id: string) => void;
 
@@ -141,6 +148,12 @@ interface ScheduleWindow {
 }
 
 interface ScheduleQueue {
+    /**
+     * The schedule-rate decision per target, taken on the first call to that target in
+     * this facade (one dispatch). `undefined` as a value means admitted.
+     */
+    decisions: Map<string, number | undefined>;
+
     /**
      * The innermost window still open, or `undefined` when calls go straight
      * through — an action schedules immediately, as documented.
@@ -217,6 +230,13 @@ interface SchedulerLike {
 }
 
 /**
+ * A call's due time once the schedule-rate budget has deferred it. Never earlier than
+ * asked: `runAfter` is a delay, so it is compared against the window's end as a delay too.
+ */
+const deferredWhen = (method: "runAfter" | "runAt", when: number, deferredTo: number): number =>
+    method === "runAfter" ? Math.max(when, deferredTo - Date.now()) : Math.max(when, deferredTo);
+
+/**
  * Wrap a scheduler so `runAfter`/`runAt` can be held for a transaction.
  *
  * Call once per dispatch, OUTSIDE the read-stamping wrapper: the spread reads
@@ -230,7 +250,7 @@ interface SchedulerLike {
  */
 export const withDeferredSchedules = <S extends SchedulerLike>(scheduler: S, outbox?: ScheduleOutbox): S => {
     const inner = scheduler as unknown as Record<string, unknown>;
-    const queue: ScheduleQueue = { innermost: undefined, outbox };
+    const queue: ScheduleQueue = { decisions: new Map(), innermost: undefined, outbox };
 
     const call = (method: "runAfter" | "runAt", when: number, target: unknown, args: unknown, options: unknown): Promise<string> =>
         (inner[method] as (when: number, target: unknown, args: unknown, options: unknown) => Promise<string>).call(inner, when, target, args, options);
@@ -242,10 +262,23 @@ export const withDeferredSchedules = <S extends SchedulerLike>(scheduler: S, out
         args: unknown,
         options: Record<string, unknown> | undefined,
     ): Promise<string> => {
+        // The schedule-rate budget, decided once per target per dispatch. A fan-out of many
+        // jobs to one target from one invocation is one decision, so it is never deferred
+        // piecemeal. A deferral only moves the job later: a job already due after the
+        // deferral keeps its time. See schedule-rate-breaker.ts in `@lunora/do`.
+        const label = scheduleTargetLabel(target);
+
+        if (!queue.decisions.has(label)) {
+            queue.decisions.set(label, queue.outbox?.admit(label));
+        }
+
+        const deferredTo = queue.decisions.get(label);
+        const due = deferredTo === undefined ? when : deferredWhen(method, when, deferredTo);
+
         const open = queue.innermost;
 
         if (open === undefined) {
-            return call(method, when, target, args, options);
+            return call(method, due, target, args, options);
         }
 
         // Decided here so the handler gets the real id synchronously; the
@@ -272,13 +305,14 @@ export const withDeferredSchedules = <S extends SchedulerLike>(scheduler: S, out
             options,
             target,
             // Whole milliseconds, rounded up — the instant `@lunora/scheduler`'s
-            // `runAt` stores, so the replay and the live call agree.
-            when: Math.ceil(method === "runAfter" ? Date.now() + when : when),
+            // `runAt` stores, so the replay and the live call agree. `due` already
+            // carries any schedule-rate deferral, so custody and the call agree on it.
+            when: Math.ceil(method === "runAfter" ? Date.now() + due : due),
         });
 
         // Buffered against the window that is innermost RIGHT NOW, so it is
         // dropped only if THAT transaction rolls back.
-        open.pending.push({ id, run: async () => call(method, when, target, args, { ...options, id }) });
+        open.pending.push({ id, run: async () => call(method, due, target, args, { ...options, id }) });
 
         return Promise.resolve(id);
     };

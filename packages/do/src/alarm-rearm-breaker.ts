@@ -124,8 +124,12 @@ const admitRearm = (window: RearmWindow | undefined, now: number, limit: number)
  */
 const WHOLE_NUMBER_PATTERN = /^\d+$/u;
 
-const alarmRearmLimitFrom = (env: unknown): number | undefined => {
-    const raw: unknown = (env as Record<string, unknown> | undefined)?.[ALARM_REARM_LIMIT_KEY];
+/**
+ * A breaker's limit read off the worker `env` under `key`, with the same strictness for
+ * every breaker: `0` disables, a malformed or unset value keeps `fallback`.
+ */
+const breakerLimitFrom = (env: unknown, key: string, fallback: number): number | undefined => {
+    const raw: unknown = (env as Record<string, unknown> | undefined)?.[key];
     let value = Number.NaN;
 
     if (typeof raw === "number") {
@@ -135,11 +139,13 @@ const alarmRearmLimitFrom = (env: unknown): number | undefined => {
     }
 
     if (!Number.isSafeInteger(value) || value < 0) {
-        return DEFAULT_ALARM_REARM_LIMIT;
+        return fallback;
     }
 
     return value === 0 ? undefined : value;
 };
+
+const alarmRearmLimitFrom = (env: unknown): number | undefined => breakerLimitFrom(env, ALARM_REARM_LIMIT_KEY, DEFAULT_ALARM_REARM_LIMIT);
 
 /** Create the window table if it is missing. Idempotent, so it runs on every tick that consults the breaker. */
 const ensureRearmWindowTable = (sql: ShardSqlExec): void => {
@@ -190,6 +196,7 @@ export {
     ALARM_REARM_WINDOW_MS,
     ALARM_REARM_WINDOW_TABLE,
     alarmRearmLimitFrom,
+    breakerLimitFrom,
     DEFAULT_ALARM_REARM_LIMIT,
     ensureRearmWindowTable,
     estimateRearms,
