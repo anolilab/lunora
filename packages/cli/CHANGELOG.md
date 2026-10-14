@@ -1,3 +1,22 @@
+## @lunora/cli [1.0.0-alpha.394](https://github.com/anolilab/lunora/compare/@lunora/cli@1.0.0-alpha.393...@lunora/cli@1.0.0-alpha.394) (2026-10-14)
+
+### Bug Fixes
+
+* **cli:** report bound paid products as info, not a warning nobody can clear ([#1162](https://github.com/anolilab/lunora/issues/1162)) ([d4bd390](https://github.com/anolilab/lunora/commit/d4bd3902fc2657ff4ad4eb4e91ffe71bfd8b227e))
+
+
+### Dependencies
+
+* **@lunora/advisor:** upgraded to 1.0.0-alpha.214
+* **@lunora/bindings:** upgraded to 1.0.0-alpha.111
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.300
+* **@lunora/config:** upgraded to 1.0.0-alpha.348
+* **@lunora/d1:** upgraded to 1.0.0-alpha.178
+* **@lunora/mcp:** upgraded to 1.0.0-alpha.238
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.198
+* **@lunora/seed:** upgraded to 1.0.0-alpha.217
+* **@lunora/testing:** upgraded to 1.0.0-alpha.262
+
 ## @lunora/cli [1.0.0-alpha.393](https://github.com/anolilab/lunora/compare/@lunora/cli@1.0.0-alpha.392...@lunora/cli@1.0.0-alpha.393) (2026-10-14)
 
 ### Features
