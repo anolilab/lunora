@@ -34,7 +34,7 @@ interface PaymentRow extends Record<string, unknown> {
 
 /**
  * Bounded-read arguments for {@link PaymentDatabase.findMany}, mirroring what
- * Lunora's `ctx.db.findMany` already accepts. `where` stays equality-only — these
+ * Lunora's `ctx.db.findMany` already accepts. `where` is equality plus the `ctx.db` range operators (e.g. `{ gte }`) — these
  * are the knobs that let a caller bound the number of rows FETCHED rather than
  * fetching everything and slicing afterwards.
  */
@@ -64,7 +64,7 @@ interface PaymentDatabase {
     findFirst: (table: string, where: Record<string, unknown>) => Promise<PaymentRow | null>;
 
     /**
-     * Equality-only `where`, with optional order/limit/cursor pushed DOWN to the
+     * `where` (equality or range operators), with optional order/limit/cursor pushed DOWN to the
      * store (see {@link PaymentPageArgs}). Omitting `page` reads every match — do
      * that only where the match set is inherently small (one reference's rows).
      */
@@ -78,6 +78,18 @@ const readString = (row: PaymentRow, key: string): string => (typeof row[key] ==
 const readOptionalString = (row: PaymentRow, key: string): string | undefined => (typeof row[key] === "string" ? row[key] : undefined);
 
 const readNumber = (row: PaymentRow, key: string): number => (typeof row[key] === "number" ? row[key] : 0);
+
+/** Above this many features, one reference-wide period read beats one indexed read per feature. */
+const PER_FEATURE_READ_LIMIT = 8;
+
+const toFoldEvent = (row: PaymentRow): { createdAt: number; idempotencyKey: string; mode: "add" | "set"; quantity: number } => {
+    return {
+        createdAt: readNumber(row, "createdAt"),
+        idempotencyKey: typeof row["idempotencyKey"] === "string" ? row["idempotencyKey"] : "",
+        mode: row["mode"] === "set" ? "set" : "add",
+        quantity: readNumber(row, "quantity"),
+    };
+};
 
 const readOptionalNumber = (row: PaymentRow, key: string): number | undefined => (typeof row[key] === "number" ? row[key] : undefined);
 
@@ -283,6 +295,16 @@ export const createDatabasePaymentStore = (database: PaymentDatabase): PaymentSt
         await database.insert(table, row);
     };
 
+    // Range read through `by_reference_feature_created`: only the current period's events are
+    // fetched. Events before `since` cannot matter (a "set" marker before the period start is
+    // outside the window), so the fold sees exactly what it always did. Shared with `MemoryPaymentStore`
+    // via `foldUsage` so a "set" marker resets the total identically in both.
+    const sumUsage: PaymentStore["sumUsage"] = async (referenceId, featureId, since) => {
+        const { rows } = await database.findMany(PAYMENT_TABLES.usageEvents, { createdAt: { gte: since }, featureId, referenceId });
+
+        return foldUsage(rows.map((row) => toFoldEvent(row)));
+    };
+
     return {
         getCustomerByReference: async (provider, referenceId) => {
             const row = await database.findFirst(PAYMENT_TABLES.customers, { provider, referenceId });
@@ -413,48 +435,20 @@ export const createDatabasePaymentStore = (database: PaymentDatabase): PaymentSt
             return true;
         },
 
-        sumUsage: async (referenceId, featureId, since) => {
-            // NOTE: this reads the full lifetime ledger for the pair and filters in memory — O(events)
-            // per call. Fine for typical volumes; for hot metered features, add a per-period rollup row
-            // (or a createdAt-range query) so old periods aren't re-scanned on every check/track.
-            const { rows } = await database.findMany(PAYMENT_TABLES.usageEvents, { featureId, referenceId });
-            const window = rows
-                .filter((row) => readNumber(row, "createdAt") >= since)
-                .map((row) => {
-                    return {
-                        createdAt: readNumber(row, "createdAt"),
-                        idempotencyKey: typeof row["idempotencyKey"] === "string" ? row["idempotencyKey"] : "",
-                        mode: row["mode"] === "set" ? ("set" as const) : ("add" as const),
-                        quantity: readNumber(row, "quantity"),
-                    };
-                });
-
-            // Shared with `MemoryPaymentStore` so a "set" marker resets the period
-            // total identically in both — see `foldUsage`.
-            return foldUsage(window);
-        },
+        sumUsage,
 
         sumUsageByFeature: async (referenceId, featureIds, since) => {
-            // NOTE: one read of the reference's full lifetime ledger, filtered and bucketed in
-            // memory — O(events) total instead of O(events) per feature. For hot metered features,
-            // add a per-period rollup row (or a createdAt-range query) so old periods aren't
-            // re-scanned on every read.
-            const { rows } = await database.findMany(PAYMENT_TABLES.usageEvents, { referenceId });
-            const buckets = new Map<string, { createdAt: number; idempotencyKey: string; mode: "add" | "set"; quantity: number }[]>(
-                featureIds.map((featureId) => [featureId, []]),
-            );
+            // Few features: one indexed range read each (`by_reference_feature_created`). Many: one
+            // range read of the reference's period (`by_reference_created`), bucketed in memory.
+            if (featureIds.length <= PER_FEATURE_READ_LIMIT) {
+                return new Map(await Promise.all(featureIds.map(async (featureId) => [featureId, await sumUsage(referenceId, featureId, since)] as const)));
+            }
+
+            const { rows } = await database.findMany(PAYMENT_TABLES.usageEvents, { createdAt: { gte: since }, referenceId });
+            const buckets = new Map<string, ReturnType<typeof toFoldEvent>[]>(featureIds.map((featureId) => [featureId, []]));
 
             for (const row of rows) {
-                if (readNumber(row, "createdAt") < since) {
-                    continue;
-                }
-
-                buckets.get(typeof row["featureId"] === "string" ? row["featureId"] : "")?.push({
-                    createdAt: readNumber(row, "createdAt"),
-                    idempotencyKey: typeof row["idempotencyKey"] === "string" ? row["idempotencyKey"] : "",
-                    mode: row["mode"] === "set" ? ("set" as const) : ("add" as const),
-                    quantity: readNumber(row, "quantity"),
-                });
+                buckets.get(typeof row["featureId"] === "string" ? row["featureId"] : "")?.push(toFoldEvent(row));
             }
 
             return new Map([...buckets].map(([featureId, window]) => [featureId, foldUsage(window)]));
