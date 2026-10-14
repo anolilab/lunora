@@ -1,10 +1,11 @@
 import { getAuthTablesWithResolvedIndexes, invalidateSchemaChecks } from "@better-auth/core/db/internal";
 import { LunoraError } from "@lunora/errors";
+import { betterAuth } from "better-auth";
 import { getMigrations } from "better-auth/db/migration";
 
 import { quoteIdentifier } from "../../../shared/quote-identifier";
 import type { LunoraAuth, LunoraAuthOptions } from "./create-auth";
-import { resolveAuthOptions } from "./create-auth";
+import { prepareAuthOptions, resolveAuthOptions } from "./create-auth";
 import { isD1Database, withD1IndexIntrospection } from "./d1-index-introspection";
 import { indexesReferencingIssuer, legacyIssuerCleanupStatements, schemaDeclaresIssuer } from "./legacy-issuer";
 
@@ -280,3 +281,11 @@ export const compileMigrationsSql = async (options: LunoraAuthOptions): Promise<
 
     return compileMigrations();
 };
+
+/**
+ * The migration-only auth instance: the same validated, hardened options as `createAuth`, but
+ * through the full `better-auth` entry so `database` may be the raw D1 binding the Kysely
+ * migrator drives. Hand it to {@link ensureMigrated}; never serve requests from it. Lives here
+ * so the migrator's Kysely edge stays out of the runtime bundle.
+ */
+export const createMigrationAuth = (options: LunoraAuthOptions): LunoraAuth => betterAuth(prepareAuthOptions(options));

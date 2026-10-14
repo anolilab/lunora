@@ -2,7 +2,8 @@
 // Run `lunora codegen` to regenerate.
 
 import type { AuthNamespaceLike, LunoraAuth, LunoraAuthOptions } from "@lunora/auth";
-import { authDiscoveryPathsFor, createAuth, createAuthAdmin, createAuthAuditReader, createDoAuthWiring, d1Executor, ensureMigrated, handleAuthDiscoveryRequest, handleAuthRequest, lunoraD1Adapter } from "@lunora/auth";
+import { authDiscoveryPathsFor, createAuth, createAuthAdmin, createAuthAuditReader, createDoAuthWiring, d1Executor, handleAuthDiscoveryRequest, handleAuthRequest, lunoraD1Adapter } from "@lunora/auth";
+import { createMigrationAuth, ensureMigrated } from "@lunora/auth/migrate";
 import { createKvIntrospectorFromEnv } from "@lunora/bindings/kv";
 import { createVectorAdminIntrospector } from "@lunora/bindings/vectors";
 import type { DurableObjectNamespaceLike } from "@lunora/scheduler";
@@ -286,7 +287,7 @@ class AppBuilder<Env extends object> {
             // "the auth tables do not match…" line on a cold start is expected.
             const requestAuth = createAuth({ ...this.authDeclaration.options(env), database: lunoraD1Adapter(d1(env) as never) });
 
-            await ensureMigrated(createAuth({ ...this.authDeclaration.options(env), database: d1(env) as never }));
+            await ensureMigrated(createMigrationAuth({ ...this.authDeclaration.options(env), database: d1(env) as never }));
 
             auth = requestAuth;
         };

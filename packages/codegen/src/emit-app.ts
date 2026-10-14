@@ -109,7 +109,7 @@ const emitApp = (rawOptions: EmitAppOptions): string => {
             // "the auth tables do not match…" line on a cold start is expected.
             const requestAuth = createAuth({ ...this.authDeclaration.options(env), database: lunoraD1Adapter(d1(env) as never) });
 
-            await ensureMigrated(createAuth({ ...this.authDeclaration.options(env), database: d1(env) as never }));
+            await ensureMigrated(createMigrationAuth({ ...this.authDeclaration.options(env), database: d1(env) as never }));
 
             auth = requestAuth;
         };
