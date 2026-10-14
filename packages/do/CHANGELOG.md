@@ -1,3 +1,19 @@
+## @lunora/do [1.0.0-alpha.211](https://github.com/anolilab/lunora/compare/@lunora/do@1.0.0-alpha.210...@lunora/do@1.0.0-alpha.211) (2026-10-14)
+
+### Bug Fixes
+
+* **do:** count only sub-floor alarm re-arms and test the schedule budget end to end ([#1163](https://github.com/anolilab/lunora/issues/1163)) ([b311984](https://github.com/anolilab/lunora/commit/b3119847198238f39f7492fa121bd22bfa60dea6))
+* **shard-engine:** bound many-to-many predicates by distinct keys, not join rows ([#1161](https://github.com/anolilab/lunora/issues/1161)) ([bf94391](https://github.com/anolilab/lunora/commit/bf94391a103a6c9fce463f6e5fc4a29a2f919048))
+
+
+### Dependencies
+
+* **@lunora/observability:** upgraded to 1.0.0-alpha.137
+* **@lunora/platform:** upgraded to 1.0.0-alpha.64
+* **@lunora/platform-cloudflare:** upgraded to 1.0.0-alpha.87
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.127
+* **@lunora/bindings:** upgraded to 1.0.0-alpha.111
+
 ## @lunora/do [1.0.0-alpha.210](https://github.com/anolilab/lunora/compare/@lunora/do@1.0.0-alpha.209...@lunora/do@1.0.0-alpha.210) (2026-10-14)
 
 ### Features
