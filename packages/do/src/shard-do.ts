@@ -12700,8 +12700,20 @@ abstract class ShardDO {
      * arm here would re-arm a tripped loop at the global floor forever. It counts
      * against the same budget. A refusal arms the recovery wake instead, so an
      * idle tripped shard still polls and sweeps once the window drains.
+     *
+     * A call that would arm nothing is not a re-arm and is not counted:
+     * {@link ShardDO.scheduleGlobalPoll} leaves an alarm that is already due at or
+     * before the default target alone, and the generated callers invoke this after every
+     * sourced write, so counting those would spend the budget with no alarm armed.
+     * `globalPollArmedAt` lives in memory, so an eviction-driven cold start still counts.
      */
     private scheduleBootstrapPoll(): Promise<void> {
+        const pendingAt = this.globalPollArmedAt;
+
+        if (pendingAt !== undefined && pendingAt <= Date.now() + ShardDO.GLOBAL_SHAPE_POLL_INTERVAL_MS) {
+            return this.scheduleGlobalPoll();
+        }
+
         if (!this.admitAlarmRearm(false)) {
             return this.armRecoveryWake();
         }

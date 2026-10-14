@@ -321,6 +321,30 @@ describe("alarm re-arm breaker", () => {
             expect(armed).toStrictEqual([]);
         });
 
+        it("does not spend the budget on a bootstrap call that would arm nothing", async () => {
+            expect.assertions(3);
+
+            const error = vi.spyOn(console, "error").mockImplementation(() => undefined);
+            vi.setSystemTime(NOW);
+
+            // One long-lived instance, as after a sourced write: the alarm is armed once and every
+            // later call finds it pending. None of those calls re-arms anything.
+            const shard = new ColdLoopShard(makeState(), {});
+
+            await shard.bootstrap;
+
+            for (let call = 0; call < DEFAULT_ALARM_REARM_LIMIT * 3; call += 1) {
+                // eslint-disable-next-line no-await-in-loop -- each call settles before the next, as a request handler does
+                await (shard as unknown as { scheduleSourcePoll: () => Promise<void> }).scheduleSourcePoll();
+            }
+
+            expect(armed).toHaveLength(1);
+
+            // Only the first, real arm was counted; the budget is untouched.
+            expect(readRearmWindow(asShardSql(harness.sql))?.currentCount).toBe(1);
+            expect(error).not.toHaveBeenCalled();
+        });
+
         it("arms the recovery even when the slot still reports the alarm that just fired", async () => {
             expect.assertions(2);
 
