@@ -50,7 +50,7 @@ const declaredMetered = (parsed: WranglerWithEnvironments): Map<string, string[]
 };
 
 /**
- * WARN (`paid-product-unguarded`) for each metered product whose binding is
+ * INFO (`paid-product-bound`) for each metered product whose binding is
  * declared; INFO (`paid-product-unknown`) naming the paid products lunora cannot
  * read. A project with no wrangler config, or on a non-Cloudflare target, is
  * skipped.
@@ -68,10 +68,10 @@ const checkPaidProducts = (cwd: string, findings: Finding[]): void => {
             const product = METERED_BINDINGS[type] ?? type;
 
             findings.push({
-                code: "paid-product-unguarded",
+                code: "paid-product-bound",
                 fix: "Create an account budget alert in the dashboard: Manage Account > Billing > Billable Usage > Create budget alert. Lunora cannot create or read one.",
-                level: "warn",
-                message: `${product} is bound (${scopes.join(", ")}). No documented usage-alert product covers it, and lunora cannot read budget alerts, so nothing it can see caps this spend.`,
+                level: "info",
+                message: `${product} is bound (${scopes.join(", ")}) and billed per use. No documented usage-alert product covers it, and lunora cannot read budget alerts, so an account budget alert is the only cap.`,
             });
         }
     }

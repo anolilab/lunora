@@ -1,3 +1,9 @@
+## @lunora/cli [1.0.0-alpha.393](https://github.com/anolilab/lunora/compare/@lunora/cli@1.0.0-alpha.392...@lunora/cli@1.0.0-alpha.393) (2026-10-14)
+
+### Features
+
+* **registry:** pause the app on a usage alert; warn on unguarded paid products ([#1152](https://github.com/anolilab/lunora/issues/1152)) ([df4acf4](https://github.com/anolilab/lunora/commit/df4acf4617f448d9c51b2bf27540f4ed78af8b6e))
+
 ## @lunora/cli [1.0.0-alpha.392](https://github.com/anolilab/lunora/compare/@lunora/cli@1.0.0-alpha.391...@lunora/cli@1.0.0-alpha.392) (2026-10-14)
 
 

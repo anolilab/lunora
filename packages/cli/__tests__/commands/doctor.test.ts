@@ -253,14 +253,14 @@ describe("runDoctor", () => {
             );
 
             const result = await runDoctor({ cwd: workdir, fetch: noNetwork, logger: makeLogger().logger });
-            const unguarded = result.findings.filter((finding) => finding.code === "paid-product-unguarded");
+            const unguarded = result.findings.filter((finding) => finding.code === "paid-product-bound");
 
             expect(unguarded.map((finding) => finding.message)).toStrictEqual([
                 expect.stringContaining("Workers AI is bound (top level)"),
                 expect.stringContaining("Browser Rendering is bound (env.prod)"),
                 expect.stringContaining("Cloudflare Images (Image Transformations) is bound (env.prod)"),
             ]);
-            expect(unguarded.every((finding) => finding.level === "warn")).toBe(true);
+            expect(unguarded.every((finding) => finding.level === "info")).toBe(true);
             expect(unguarded[0]?.fix).toContain("budget alert");
         });
 
@@ -271,7 +271,7 @@ describe("runDoctor", () => {
 
             const result = await runDoctor({ cwd: workdir, fetch: noNetwork, logger: makeLogger().logger });
 
-            expect(result.findings.some((finding) => finding.code === "paid-product-unguarded")).toBe(false);
+            expect(result.findings.some((finding) => finding.code === "paid-product-bound")).toBe(false);
 
             const unknown = result.findings.find((finding) => finding.code === "paid-product-unknown");
 

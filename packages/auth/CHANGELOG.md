@@ -1,3 +1,16 @@
+## @lunora/auth [1.0.0-alpha.211](https://github.com/anolilab/lunora/compare/@lunora/auth@1.0.0-alpha.210...@lunora/auth@1.0.0-alpha.211) (2026-10-14)
+
+### Bug Fixes
+
+* **auth:** bump email lists, harden email guard ([#1159](https://github.com/anolilab/lunora/issues/1159)) ([3e8806f](https://github.com/anolilab/lunora/commit/3e8806fd39d8bae3e98f3982235c04009f8a193c))
+
+
+### Dependencies
+
+* **@visulima/disposable-email-domains:** 1.1.19 → 1.1.25
+* **@visulima/free-email-domains:** 1.0.1 → 1.0.2
+* **@visulima/email-verifier:** 1.0.36 → 1.0.42
+
 ## @lunora/auth [1.0.0-alpha.210](https://github.com/anolilab/lunora/compare/@lunora/auth@1.0.0-alpha.209...@lunora/auth@1.0.0-alpha.210) (2026-10-14)
 
 ### Documentation
