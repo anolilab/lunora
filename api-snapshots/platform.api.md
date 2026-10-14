@@ -323,6 +323,7 @@ interface PlatformCapabilities {
         relationGraph?: Capability;
         requestOrigin?: Capability;
         scheduler?: Capability;
+        scheduleRateBreaker?: Capability;
         secrets?: Capability;
         serverReactors?: Capability;
         services?: Capability;

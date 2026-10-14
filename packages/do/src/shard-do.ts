@@ -362,6 +362,7 @@ import { buildBatchEntryRequest } from "./batch";
 import { CdcRetentionRunner } from "./cdc-retention";
 import type { InFlightClaim } from "./in-flight-claims";
 import { InFlightClaims } from "./in-flight-claims";
+import { ensureScheduleRateTable, readScheduleRateWindow, scheduleRateLimitFrom, writeScheduleRateWindow } from "./schedule-rate-breaker";
 import { resolveSchemaHistoryRead } from "./schema-history-reads";
 import { registerShardKey, SHARD_REGISTRY_DO_NAME, unregisterShardKey } from "./shard-registry-do";
 import { generateChart, generateFilter, generateSql } from "./sql-assistant";
@@ -2307,6 +2308,13 @@ abstract class ShardDO {
      * which is the right amount of noise for a trip that outlives an eviction.
      */
     private alarmRearmTripLogged = false;
+
+    /**
+     * The schedule-rate targets whose trip is already logged on this instance (see
+     * schedule-rate-breaker.ts). A target leaves the set when it is admitted again, so the
+     * next trip logs once more. Same in-memory reasoning as the alarm breaker's trip flag.
+     */
+    private readonly scheduleRateTripLogged = new Set<string>();
 
     /** Monotonic per-DO poke id source; correlates a poke's `pokeStart`/`pokePart`/`pokeEnd` frames. */
     private pokeSequence = 0;
@@ -5635,6 +5643,7 @@ abstract class ShardDO {
                     /* the host could not arm; the next cold start probes again */
                 });
             },
+            admit: (target: string): number | undefined => this.admitScheduleRate(target),
         };
     }
 
@@ -12807,6 +12816,78 @@ abstract class ShardDO {
             );
         } catch {
             // Best-effort, like every other telemetry call on the alarm path.
+        }
+    }
+
+    /**
+     * The schedule-rate budget for `target` (schedule-rate-breaker.ts). The facade asks once
+     * per target per dispatch, so this counts invocations, not schedules. Returns the instant
+     * a schedule to `target` may not fire before, or `undefined` when it is within budget.
+     *
+     * Fails open on any storage fault: a breaker that cannot read its window admits the
+     * schedule rather than failing the invocation that made it.
+     */
+    private admitScheduleRate(target: string): number | undefined {
+        const limit = scheduleRateLimitFrom(this.env);
+
+        if (limit === undefined) {
+            return undefined;
+        }
+
+        const { sql } = this.shardHost;
+        let admission: RearmAdmission;
+
+        try {
+            ensureScheduleRateTable(sql);
+            admission = admitRearm(readScheduleRateWindow(sql, target), Date.now(), limit);
+            writeScheduleRateWindow(sql, target, admission.window);
+        } catch {
+            return undefined;
+        }
+
+        if (admission.admitted) {
+            this.scheduleRateTripLogged.delete(target);
+
+            return undefined;
+        }
+
+        const now = Date.now();
+
+        this.recordScheduleRateDeferral(target, limit, estimateRearms(admission.window, now));
+
+        return recoveryWakeAt(now);
+    }
+
+    /**
+     * Count one deferred schedule and, once per trip per instance, log the trip. The deferral
+     * itself is the caller's job: this only reports it.
+     */
+    private recordScheduleRateDeferral(target: string, limit: number, invocations: number): void {
+        try {
+            this.recordMetric(
+                { functionPath: "schedule:rate", kind: "counter", name: "shard.schedule_rate.deferred", ts: Date.now(), value: 1 },
+                this.lastTelemetrySink,
+            );
+
+            if (this.scheduleRateTripLogged.has(target)) {
+                return;
+            }
+
+            this.scheduleRateTripLogged.add(target);
+
+            const message = `schedule rate breaker tripped: ${target} was scheduled by ${String(invocations)} invocations in the last ${String(ALARM_REARM_WINDOW_MS)} ms (limit ${String(limit)}). Its schedules are deferred one window, not dropped. Tune with LUNORA_SCHEDULE_RATE_LIMIT, or set it to 0 to disable.`;
+
+            this.recordUserLog(
+                "schedule:rate",
+                "error",
+                [message],
+                message,
+                { invocations, limit, target, windowMs: ALARM_REARM_WINDOW_MS },
+                this.lastTelemetrySink,
+                "scheduleRateBreakerTripped",
+            );
+        } catch {
+            // Best-effort, like every other telemetry call on the schedule path.
         }
     }
 

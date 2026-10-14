@@ -42,7 +42,7 @@
  * `objectColumnPaths`, `objectStorageBackups`, `objectStorageCdcArchive`, `pointInTimeRecovery`, `queryExplain`,
  * `serverReactors`,
  * `shardAlarms`, `shardedState`, `shardPlacement`, `shardReadReplicas`,
- * `websocketHibernation`, `alarmRearmBreaker` — is
+ * `websocketHibernation`, `alarmRearmBreaker`, `scheduleRateBreaker` — is
  * **advisory**: rating one `unsupported` omits no surface and warns nobody. It
  * still records parity honestly, which is its job; it is not a gate.
  *
@@ -179,6 +179,7 @@ export interface PlatformCapabilities {
          * is `ShardHost.alarms`, so a host rates it by its SQL and alarm contracts.
          */
         alarmRearmBreaker?: Capability;
+
         /** Analytics / observability sinks. */
         analytics?: Capability;
 
@@ -195,6 +196,7 @@ export interface PlatformCapabilities {
          * Gate-bearing through `CAPABILITY_TO_FEATURE`.
          */
         analyticsSql?: Capability;
+
         /** Git-backed versioned repos via an Artifacts binding (`ctx.artifacts`). */
         artifacts?: Capability;
 
@@ -207,6 +209,7 @@ export interface PlatformCapabilities {
          * jurisdictions cannot run.
          */
         authJurisdictionMove?: Capability;
+
         /** Browser rendering / headless browser. */
         browser?: Capability;
 
@@ -314,6 +317,7 @@ export interface PlatformCapabilities {
          * fires. One rating covering both is how that shipped as green.
          */
         cronTriggers?: Capability;
+
         /** Cross-shard fan-out queries. */
         crossShardFanout?: Capability;
 
@@ -410,6 +414,7 @@ export interface PlatformCapabilities {
          * host either populates or does not.
          */
         identityProxy?: Capability;
+
         /** Image transforms (resize/format/optimize) via an Images binding. */
         images?: Capability;
         /** Key-value storage (KV / Redis / DynamoDB). */
@@ -534,6 +539,7 @@ export interface PlatformCapabilities {
          * module header).
          */
         queryExplain?: Capability;
+
         /** Queue-backed workpools. */
         queues?: Capability;
 
@@ -575,8 +581,20 @@ export interface PlatformCapabilities {
          * `STORAGE_PUBLIC_BASE_URL`), which always wins over the origin.
          */
         requestOrigin?: Capability;
+
         /** Cron triggers / scheduled functions. */
         scheduler?: Capability;
+
+        /**
+         * The runaway guard on `ctx.scheduler` creations (`schedule-rate-breaker.ts` in
+         * `@lunora/do`): a job that reschedules itself through `runAfter` is counted per
+         * target per shard over a sliding window. Past the budget its schedules are
+         * deferred one window, never refused or dropped, and a trip logs once at `error`
+         * and counts `shard.schedule_rate.deferred`. A fan-out from one invocation counts
+         * once. The window is one row per target in the shard's own SQL (`ShardHost.sql`),
+         * so a host rates it by its SQL contract. Engine-internal and advisory.
+         */
+        scheduleRateBreaker?: Capability;
         /** Secrets management. */
         secrets?: Capability;
 
