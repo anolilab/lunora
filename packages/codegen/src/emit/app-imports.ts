@@ -95,6 +95,7 @@ const buildRuntimeImports = (options: ResolvedAppOptions): string[] => {
         "createWorker",
         ...(options.jurisdiction ? ["declareAppJurisdiction"] : []),
         "resolveLogArchiveFromEnv",
+        ...(options.hasAuth ? ["memoizeIdentity"] : []),
         ...(hasFramework ? ["withFrameworkWorker"] : []),
     ].join(", ");
 

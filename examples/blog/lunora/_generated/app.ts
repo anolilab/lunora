@@ -10,7 +10,7 @@ import { createScheduler } from "@lunora/scheduler";
 import type { R2BucketLike, R2S3Credentials, Storage } from "@lunora/storage";
 import { createBucketStorage, createStorage } from "@lunora/storage";
 import type { ExecutionContextLike, HttpRouterLike, LunoraWorker, Route, ScheduledControllerLike, ShardingInfo, ShardNamespaceLike, WorkerOptions } from "lunorash/runtime";
-import { createWorker, resolveLogArchiveFromEnv } from "lunorash/runtime";
+import { createWorker, resolveLogArchiveFromEnv, memoizeIdentity } from "lunorash/runtime";
 
 import { LUNORA_CRONS } from "./crons.js";
 import { LUNORA_FUNCTIONS } from "./functions.js";
@@ -597,6 +597,20 @@ class AppBuilder<Env extends object> {
 
             options.authAdmin = authInstance ? createAuthAdmin(authInstance) : undefined;
             options.authAuditReader = createAuthAuditReader(d1Executor(authD1(env) as never));
+        }
+
+        // Both modes pay a session lookup per request (the auth object hop, or a D1
+        // read), and the runtime resolves identity once per RPC and per fan-out leg.
+        // Memoise per credential for the window better-auth's own cookie cache already
+        // tolerates (60s); `LUNORA_IDENTITY_CACHE_MS` overrides it, `0` disables the
+        // cross-request cache. A revoked session can therefore resolve for up to that long.
+        if (options.resolveIdentity) {
+            const identityCacheMs = Number((env as { LUNORA_IDENTITY_CACHE_MS?: string }).LUNORA_IDENTITY_CACHE_MS);
+
+            options.resolveIdentity = memoizeIdentity(options.resolveIdentity, {
+                maxEntries: 10_000,
+                ttlMs: Number.isFinite(identityCacheMs) && identityCacheMs >= 0 ? identityCacheMs : 60_000,
+            });
         }
 
         for (const fn of this.extendFns) {
