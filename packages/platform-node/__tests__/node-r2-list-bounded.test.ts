@@ -1,0 +1,154 @@
+import { mkdtempSync, rmSync } from "node:fs";
+import { readdir } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+
+import { createNodeR2Bucket } from "../src/node-r2-bucket";
+
+// Count directory reads: the bounded walk must not read the whole bucket.
+vi.mock(import("node:fs/promises"), async (importOriginal) => {
+    const actual = await importOriginal();
+    const spy = vi.fn<(...args: unknown[]) => unknown>((...args) => (actual.readdir as (...parameters: unknown[]) => unknown)(...args));
+
+    return { ...actual, readdir: spy } as unknown as typeof actual;
+});
+
+interface ListOptions {
+    cursor?: string;
+    delimiter?: string;
+    limit?: number;
+    prefix?: string;
+    startAfter?: string;
+}
+
+const byCodepoint = (a: string, b: string): number => (a < b ? -1 : Number(a > b));
+
+/** The previous implementation, over the full sorted key list: filter, then slice. */
+const reference = (sorted: string[], options: ListOptions) => {
+    const limit = Math.max(1, options.limit ?? 1000);
+    const prefix = options.prefix ?? "";
+    const { delimiter } = options;
+    const underPrefix = sorted.filter((key) => key.startsWith(prefix));
+    const filtered = delimiter === undefined ? underPrefix : underPrefix.filter((key) => !key.slice(prefix.length).includes(delimiter));
+    const delimitedPrefixes =
+        delimiter === undefined
+            ? undefined
+            : [
+                  ...new Set(
+                      underPrefix
+                          .map((key) => {
+                              const at = key.slice(prefix.length).indexOf(delimiter);
+
+                              return at === -1 ? undefined : key.slice(0, prefix.length + at + delimiter.length);
+                          })
+                          .filter((value): value is string => value !== undefined),
+                  ),
+              ].toSorted(byCodepoint);
+    let after = options.cursor;
+
+    if (options.startAfter !== undefined && (after === undefined || options.startAfter > after)) {
+        after = options.startAfter;
+    }
+
+    const rest = after === undefined ? filtered : filtered.filter((key) => key > after);
+    const page = rest.slice(0, limit);
+    const truncated = rest.length > limit;
+
+    return { cursor: truncated ? page.at(-1) : undefined, delimitedPrefixes, keys: page, truncated };
+};
+
+describe("createNodeR2Bucket list walk", () => {
+    let dir: string;
+    let bucket: ReturnType<typeof createNodeR2Bucket>;
+    let sorted: string[];
+    const tops = Array.from({ length: 50 }, (_, index) => (index % 5 === 0 ? `Top${String(index)}` : `top${String(index)}`));
+    const subs = ["a", "B", "a.b", "a-b", "c:d"];
+
+    beforeAll(async () => {
+        dir = mkdtempSync(join(tmpdir(), "lunora-platform-node-r2-list-"));
+        bucket = createNodeR2Bucket({ directory: dir });
+
+        const keys: string[] = [];
+
+        for (let index = 0; index < 2000; index += 1) {
+            const top = tops[index % tops.length] as string;
+            const sub = subs[index % subs.length] as string;
+
+            keys.push(index % 7 === 0 ? `${top}/f${String(index)}` : `${top}/${sub}/f${String(index)}`);
+        }
+
+        for (let start = 0; start < keys.length; start += 100) {
+            // eslint-disable-next-line no-await-in-loop -- batches of 100 keep open file handles bounded
+            await Promise.all(keys.slice(start, start + 100).map((key) => bucket.put(key, "x")));
+        }
+
+        sorted = keys.toSorted(byCodepoint);
+    }, 60_000);
+
+    afterAll(() => {
+        rmSync(dir, { force: true, recursive: true });
+    });
+
+    it("matches the full-walk implementation for 200 random option combinations", async () => {
+        expect.hasAssertions();
+
+        // Deterministic LCG so a failure reproduces.
+        let seed = 522;
+        const random = (bound: number): number => {
+            seed = (seed * 1_664_525 + 1_013_904_223) % 4_294_967_296;
+
+            return seed % bound;
+        };
+        const pick = <T>(values: T[]): T => values[random(values.length)] as T;
+
+        const runs = Array.from({ length: 200 }, () => {
+            const sample = pick(sorted);
+            const slash = sample.indexOf("/");
+            const options: ListOptions = {
+                cursor: pick([undefined, sample, pick(sorted).slice(0, 5), "zzz"]),
+                delimiter: pick([undefined, "/", "-", "a", "/a"]),
+                limit: pick([1, 3, 10, 50, 1000]),
+                prefix: pick([
+                    "",
+                    sample.slice(0, slash + 1),
+                    sample.slice(0, 2),
+                    sample.slice(0, slash + 3),
+                    "nope/",
+                    "../",
+                    `${sample.slice(0, slash)}/a/`,
+                    sample,
+                ]),
+                startAfter: pick([undefined, undefined, pick(sorted)]),
+            };
+
+            return options;
+        });
+        const actuals = await Promise.all(runs.map((options) => bucket.list(options)));
+
+        for (const [run, options] of runs.entries()) {
+            const actual = actuals[run] as Awaited<ReturnType<typeof bucket.list>>;
+
+            expect({
+                options,
+                cursor: actual.cursor,
+                delimitedPrefixes: actual.delimitedPrefixes,
+                keys: actual.objects.map((object) => object.key),
+                truncated: actual.truncated,
+            }).toStrictEqual({ options, ...reference(sorted, options) });
+        }
+    }, 60_000);
+
+    it("reads O(depth + page) directories for a deep prefix, not the whole bucket", async () => {
+        expect.hasAssertions();
+
+        vi.mocked(readdir).mockClear();
+
+        const page = await bucket.list({ limit: 5, prefix: "top1/B/" });
+
+        expect(page.objects).toHaveLength(5);
+        // Whole-bucket walk reads ~50 tops * ~6 dirs; the bounded walk reads the one directory.
+        expect(vi.mocked(readdir).mock.calls.length).toBeLessThanOrEqual(3);
+    });
+});
