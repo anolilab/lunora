@@ -174,6 +174,7 @@ const createMockClient = (queryImpl?: (ref: string, args: unknown) => unknown): 
         // reading `undefined` and the hydrated branch permanently untaken.
         isReady: true,
         peekHydratedQuery: () => undefined,
+        peekHydratedQueryByKey: () => undefined,
         query: queryFunction,
         setAuthToken: setAuthTokenFunction,
         setConnectionContext: setConnectionContextFunction,

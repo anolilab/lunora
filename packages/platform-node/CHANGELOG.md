@@ -1,3 +1,22 @@
+## @lunora/platform-node [1.0.0-alpha.138](https://github.com/anolilab/lunora/compare/@lunora/platform-node@1.0.0-alpha.137...@lunora/platform-node@1.0.0-alpha.138) (2026-10-14)
+
+### Bug Fixes
+
+* **do:** count only sub-floor alarm re-arms and test the schedule budget end to end ([#1163](https://github.com/anolilab/lunora/issues/1163)) ([b311984](https://github.com/anolilab/lunora/commit/b3119847198238f39f7492fa121bd22bfa60dea6))
+
+
+### Dependencies
+
+* **@lunora/d1:** upgraded to 1.0.0-alpha.178
+* **@lunora/platform:** upgraded to 1.0.0-alpha.64
+* **@lunora/queue:** upgraded to 1.0.0-alpha.105
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.198
+* **@lunora/sql-store:** upgraded to 1.0.0-alpha.179
+* **@lunora/do:** upgraded to 1.0.0-alpha.211
+* **@lunora/platform-cloudflare:** upgraded to 1.0.0-alpha.87
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.127
+* **@lunora/storage:** upgraded to 1.0.0-alpha.132
+
 ## @lunora/platform-node [1.0.0-alpha.137](https://github.com/anolilab/lunora/compare/@lunora/platform-node@1.0.0-alpha.136...@lunora/platform-node@1.0.0-alpha.137) (2026-10-14)
 
 ### Features
