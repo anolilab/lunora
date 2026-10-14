@@ -157,13 +157,25 @@ class IoHealthyShard extends LoopShard {
 }
 
 /**
- * One eviction-driven healthy wake: a new instance runs the cold-start arm, then its alarm tick.
- * The arm is the call the codegen constructor makes, issued straight after construction, so
- * nothing runs between the two.
+ * The generated source tier as it is written: the alarm reached the shard 5 ms late, the poll did
+ * 300 ms of I/O, and the next-due is taken after the poll (`polledAt + everyMs`), not before it.
  */
-const coldHealthyWake = async (): Promise<void> => {
-    const shard = new IoHealthyShard(makeState(), {});
+class LatePollShard extends LoopShard {
+    // eslint-disable-next-line class-methods-use-this -- a fixed 2 s cadence, with a late alarm and I/O before the next-due
+    protected override pollExternalSources(): Promise<number | undefined> {
+        vi.setSystemTime(Date.now() + 5 + 300);
 
+        const polledAt = Date.now();
+
+        return Promise.resolve(polledAt + 2000);
+    }
+}
+
+/**
+ * One eviction-driven wake: a new instance runs the cold-start arm, then its alarm tick. The arm is
+ * the call the codegen constructor makes, issued straight after construction, so nothing runs between.
+ */
+const coldWakeOf = async (shard: LoopShard): Promise<void> => {
     await (shard as unknown as { scheduleSourcePoll: () => Promise<void> }).scheduleSourcePoll();
     await shard.alarm();
 };
@@ -532,7 +544,10 @@ describe("alarm re-arm breaker", () => {
     });
 
     describe("what a healthy re-arm costs in window writes", () => {
-        it("writes no window row for a 2 s poll, even when every wake is a fresh instance", async () => {
+        it.each([
+            ["the next-due is computed before the I/O", () => coldWakeOf(new IoHealthyShard(makeState(), {}))],
+            ["the alarm is late and the next-due is computed after the poll", () => coldWakeOf(new LatePollShard(makeState(), {}))],
+        ])("writes no window row for a 2 s poll, where %s, even when every wake is a fresh instance", async (_case, wake) => {
             expect.assertions(4);
 
             // Count the window's statements on the same handle the shard drives.
@@ -552,10 +567,9 @@ describe("alarm re-arm breaker", () => {
                 return original(query, ...bindings);
             };
 
-            // The source computes its next due, then does 300 ms of I/O before returning, so the target
-            // is measured from before the clock moved. The pacing has to hold on that clock. Each wake is
-            // a new instance: an eviction between 2 s polls, the case that would otherwise write per wake.
-            const wakes = [await deliver(() => coldHealthyWake(), NOW), ...(await runChain(NOW + 60_000, 30, () => coldHealthyWake()))];
+            // Each wake is a new instance: an eviction between 2 s polls, the case that would otherwise write
+            // per wake. The clock moves during each poll, so the pacing has to hold on that clock.
+            const wakes = [await deliver(() => wake(), NOW), ...(await runChain(NOW + 60_000, 30, () => wake()))];
 
             expect(wakes.length).toBeGreaterThan(20);
             // A healthy poll and its cold starts read the window and write nothing to it.

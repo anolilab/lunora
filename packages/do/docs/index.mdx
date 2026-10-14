@@ -135,9 +135,9 @@ apply to it.)
 A shard's poll alarm re-arms itself on each tick while a global shape, a source or a
 TTL backlog still has work. Left unchecked, an always-due source turns that into a loop
 that wakes the DO as fast as the runtime allows. Each shard therefore gets a budget of
-**300 self re-arms per 60 seconds**, a sliding-window count kept in the shard's own
-SQLite. The default is ten times the 2 s global-shape floor (30 re-arms a minute), so
-steady workloads never reach it.
+**300 re-arms due sooner than the 2 s floor per 60 seconds**, a sliding-window count kept in
+the shard's own SQLite. Re-arms at or beyond the floor are not counted: they are at most one
+per 2 s, so 30 a minute, and the default is ten times that. Steady workloads never reach it.
 
 When the budget is spent, the re-arm is refused and the shard arms **one recovery wake
 one minute later**, one millisecond past the window so the previous window has begun to
@@ -160,7 +160,9 @@ is at least 2 s after its tick began is floor-paced. Those are checked against t
 with a `SELECT` and recorded nowhere, so a healthy 2 s poll writes no window row. A
 healthy shard still reads the window row once per poll. A re-arm due sooner than 2 s, such
 as a source that is due now, is counted and written when admitted. Those are the re-arms
-that can loop, and they are the only ones the budget spends. The window is one row, so an
+that can loop, and they are the only ones the budget spends. A source with
+`refresh.everyMs` under 2 s is due sooner than the floor on every poll, so each of its
+polls is counted and written. A source at 2 s or slower is not. The window is one row, so an
 eviction does not reset it.
 
 Cold starts are floor-paced too. A shard whose schema has a sourced or TTL tier arms that
