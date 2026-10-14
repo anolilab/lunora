@@ -42,7 +42,7 @@
  * `objectColumnPaths`, `objectStorageBackups`, `objectStorageCdcArchive`, `pointInTimeRecovery`, `queryExplain`,
  * `serverReactors`,
  * `shardAlarms`, `shardedState`, `shardPlacement`, `shardReadReplicas`,
- * `websocketHibernation` — is
+ * `websocketHibernation`, `alarmRearmBreaker` — is
  * **advisory**: rating one `unsupported` omits no surface and warns nobody. It
  * still records parity honestly, which is its job; it is not a gate.
  *
@@ -167,6 +167,18 @@ export interface PlatformCapabilities {
          * Gate-bearing through `CAPABILITY_TO_FEATURE`.
          */
         aiSearch?: Capability;
+
+        /**
+         * The runaway guard on a shard's own alarm re-arms (`alarm-rearm-breaker.ts`
+         * in `@lunora/do`): a poll alarm that re-arms itself more than the window's
+         * budget is refused, leaves one recovery wake a window out so polling resumes
+         * once the window drains, logs once per trip at `error`, and counts a refusal.
+         * It never refuses a write or a pending schedule-outbox job. Engine-internal
+         * and advisory: no app declares it and codegen gates on nothing. The window
+         * is one row in the shard's own SQL (`ShardHost.sql`), and the arm it limits
+         * is `ShardHost.alarms`, so a host rates it by its SQL and alarm contracts.
+         */
+        alarmRearmBreaker?: Capability;
         /** Analytics / observability sinks. */
         analytics?: Capability;
 
