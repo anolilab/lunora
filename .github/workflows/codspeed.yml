@@ -49,7 +49,11 @@
         "if": "!cancelled() && (github.event_name != 'pull_request' || needs.files-changed.outputs.benchmarks == 'true')"
         "needs": "files-changed"
         "runs-on": "ubuntu-latest"
-        "timeout-minutes": 30
+        # A low-level package change (scheduler, do, codegen) makes nearly every
+        # package `affected`, and the full suite under CodSpeed instrumentation
+        # already took 25-29 minutes on alpha; 30 cancelled runs that touched
+        # nothing slow. 60 is budget for the suite to grow, not a target.
+        "timeout-minutes": 60
         # Scope the CodSpeed OIDC token to an environment so secrets and
         # reviewer rules (configured in repo settings) can apply to uploads.
         "environment": "benchmarks"
