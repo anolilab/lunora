@@ -1,3 +1,14 @@
+## @lunora/react [1.0.0-alpha.219](https://github.com/anolilab/lunora/compare/@lunora/react@1.0.0-alpha.218...@lunora/react@1.0.0-alpha.219) (2026-10-14)
+
+### Performance Improvements
+
+* **react:** hash useQuery args once per render ([#1171](https://github.com/anolilab/lunora/issues/1171)) ([9e37807](https://github.com/anolilab/lunora/commit/9e37807dfe8d72471ab11b9ec6e197d491027571))
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.206
+
 ## @lunora/react [1.0.0-alpha.218](https://github.com/anolilab/lunora/compare/@lunora/react@1.0.0-alpha.217...@lunora/react@1.0.0-alpha.218) (2026-10-14)
 
 
