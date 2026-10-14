@@ -285,6 +285,7 @@ interface PlatformCapabilities {
         agents?: Capability;
         ai?: Capability;
         aiSearch?: Capability;
+        alarmRearmBreaker?: Capability;
         analytics?: Capability;
         analyticsSql?: Capability;
         artifacts?: Capability;
