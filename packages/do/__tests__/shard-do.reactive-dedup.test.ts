@@ -92,6 +92,9 @@ class DedupShard extends ShardDO {
     /** `functionPaths` forced identity-independent on top of the admin default. */
     public forcedIndependent = new Set<string>();
 
+    /** Bumped each time a result's `probe` property is read — once per wire-encode of that result. */
+    public probeReads = 0;
+
     private counter = 0;
 
     public override handleRpc(): Promise<unknown> {
@@ -127,7 +130,18 @@ class DedupShard extends ShardDO {
         this.runs.push({ functionPath, userId });
         this.counter += 1;
 
-        return Promise.resolve({ result: { n: this.counter, owner: userId }, tables: new Set(["messages"]) });
+        const result = { n: this.counter, owner: userId };
+
+        Object.defineProperty(result, "probe", {
+            enumerable: true,
+            get: () => {
+                this.probeReads += 1;
+
+                return 0;
+            },
+        });
+
+        return Promise.resolve({ result, tables: new Set(["messages"]) });
     }
 
     protected override isIdentityIndependent(functionPath: string): boolean {
@@ -241,5 +255,93 @@ describe("shardDO reactive dedup (identity-independent runs)", () => {
 
         expect(ownerA).toBe(ownerB);
         expect(ownerB).toBe("user-A");
+    });
+
+    describe("identity-keyed sharing (equal full identity shares one run)", () => {
+        const subscribeAll = async (shard: DedupShard, attachments: SocketAttachment[]): Promise<FakeWebSocket[]> => {
+            const sockets: FakeWebSocket[] = [];
+
+            for (const [index, attachment] of attachments.entries()) {
+                const ws = createFakeWebSocket();
+
+                shard.registerSocket(ws, attachment);
+                // eslint-disable-next-line no-await-in-loop -- sequential seed keeps run ordering deterministic
+                await shard.driveSubscribe(ws, `sub-${String(index)}`, "messages:list");
+                sockets.push(ws);
+            }
+
+            return sockets;
+        };
+
+        const refreshRunCount = async (shard: DedupShard): Promise<number> => {
+            const runsAfterSeed = shard.runs.length;
+
+            await shard.writeRpc();
+
+            return shard.runs.length - runsAfterSeed;
+        };
+
+        it("same userId and claims: one run, every socket still receives a frame", async () => {
+            expect.assertions(2);
+
+            const shard = new DedupShard(createFakeState(), {});
+            const sockets = await subscribeAll(shard, [attachmentFor("user-A"), attachmentFor("user-A")]);
+
+            await expect(refreshRunCount(shard)).resolves.toBe(1);
+            expect(sockets.every((ws, index) => lastOwner(ws, `sub-${String(index)}`) === "user-A")).toBe(true);
+        });
+
+        it("same userId, different claim: one run per socket", async () => {
+            expect.assertions(1);
+
+            const shard = new DedupShard(createFakeState(), {});
+
+            await subscribeAll(shard, [
+                { identity: { activeOrg: "org-1", userId: "user-A" }, subs: {}, userId: "user-A" },
+                { identity: { activeOrg: "org-2", userId: "user-A" }, subs: {}, userId: "user-A" },
+            ]);
+
+            await expect(refreshRunCount(shard)).resolves.toBe(2);
+        });
+
+        it("same userId, different ip: one run per socket", async () => {
+            expect.assertions(1);
+
+            const shard = new DedupShard(createFakeState(), {});
+
+            await subscribeAll(shard, [
+                { ...attachmentFor("user-A"), ip: "203.0.113.1" },
+                { ...attachmentFor("user-A"), ip: "203.0.113.2" },
+            ]);
+
+            await expect(refreshRunCount(shard)).resolves.toBe(2);
+        });
+
+        it("ten concurrent sockets with the same identity: one run", async () => {
+            expect.assertions(1);
+
+            const shard = new DedupShard(createFakeState(), {});
+
+            await subscribeAll(
+                shard,
+                Array.from({ length: 10 }, () => attachmentFor("user-A")),
+            );
+
+            await expect(refreshRunCount(shard)).resolves.toBe(1);
+        });
+
+        it("sockets sharing a run share its wire encode", async () => {
+            expect.assertions(2);
+
+            const shard = new DedupShard(createFakeState(), {});
+
+            await subscribeAll(shard, [attachmentFor("user-A"), attachmentFor("user-A"), attachmentFor("user-A")]);
+
+            const readsAfterSeed = shard.probeReads;
+
+            await expect(refreshRunCount(shard)).resolves.toBe(1);
+            // Three sockets, one shared outcome: the result is encoded once, not three times.
+            expect(shard.probeReads - readsAfterSeed).toBe(1);
+        });
     });
 });

@@ -688,7 +688,7 @@ describe("shardDO: mutation → subscription-refresh pipeline", () => {
     // is what we assert. If a safe dedup lands later, this assertion is the one
     // that must flip to `toBe(1)` and gains a fan-out-frame check.
     // -------------------------------------------------------------------------
-    it("profile: N sockets on the same query+args ⇒ N executeSubscription runs per change (no cross-socket dedup today)", async () => {
+    it("profile: N sockets on the same query+args with an identical identity ⇒ ONE executeSubscription run per change (shared across sockets)", async () => {
         expect.assertions(3);
 
         const shard = new SubscriptionRefreshShard(state, {});
@@ -724,12 +724,11 @@ describe("shardDO: mutation → subscription-refresh pipeline", () => {
         shard.changedTableOnRpc = "messages";
         await shard.writeRpc();
 
-        // The single write re-ran the IDENTICAL query once PER SOCKET — the
-        // characterized N-runs fan-out (would be 1 under cross-socket dedup).
-        expect(shard.execCounts.get("messages:list")).toBe(socketCount * 2);
+        // The single write re-ran the query ONCE for all sockets: they share the
+        // same (anonymous) identity, so the flush shares one run.
+        expect(shard.execCounts.get("messages:list")).toBe(socketCount + 1);
 
-        // Every socket still received its own refresh frame (correctness is
-        // unaffected by the fan-out; the cost is the duplicate query runs).
+        // Every socket still received its own refresh frame.
         const refreshed = sockets.every((ws, index) => subFrames(ws, `sub-${String(index)}`).length > 1);
 
         expect(refreshed).toBe(true);
