@@ -1,10 +1,12 @@
 /**
  * `lunora doctor`'s paid-product check. A metered Cloudflare product declared in
- * wrangler config is billed per use, and Cloudflare documents no usage alert for
- * it, so the account budget alert is the only cap. Lunora cannot read budget
- * alerts (the API has no endpoint for them), so the check says what it can see
- * and no more. It makes no network call: the enablement signal is the binding
- * itself, and the product is not named by any usage-alert product list.
+ * wrangler config is billed per use. None of the usage-alert products Cloudflare
+ * documents (the Terraform provider's list) is one of these, so an account budget
+ * alert is the only cap that can be set. Lunora cannot read budget alerts (the API
+ * has no endpoint for them), so the check says what it can see and no more. It
+ * makes no network call: the enablement signal is the binding itself. An account
+ * may offer usage-alert products beyond the documented list, which this check does
+ * not read.
  */
 import { DEFAULT_TARGET, readProjectTarget } from "@lunora/codegen";
 import type { ManifestConfigShape } from "@lunora/config/cloudflare";
@@ -69,7 +71,7 @@ const checkPaidProducts = (cwd: string, findings: Finding[]): void => {
                 code: "paid-product-unguarded",
                 fix: "Create an account budget alert in the dashboard: Manage Account > Billing > Billable Usage > Create budget alert. Lunora cannot create or read one.",
                 level: "warn",
-                message: `${product} is bound (${scopes.join(", ")}). Cloudflare documents no usage alert for it, and lunora cannot read budget alerts, so nothing it can see caps this spend.`,
+                message: `${product} is bound (${scopes.join(", ")}). No documented usage-alert product covers it, and lunora cannot read budget alerts, so nothing it can see caps this spend.`,
             });
         }
     }
