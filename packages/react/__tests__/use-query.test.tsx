@@ -23,8 +23,8 @@ const SHARED_ARGS: Record<string, unknown> = { a: 1 };
 const EQUAL_ARGS_FIRST: Record<string, unknown> = { a: 1, limit: 10 };
 const EQUAL_ARGS_SECOND: Record<string, unknown> = { a: 1, limit: 10 };
 
-const Display = ({ args = DEFAULT_ARGS }: { args?: Record<string, unknown> | "skip" }): ReactElement => {
-    const data = useQuery(makeRef("posts:list"), args);
+const Display = ({ args = DEFAULT_ARGS, shardKey }: { args?: Record<string, unknown> | "skip"; shardKey?: string }): ReactElement => {
+    const data = useQuery(makeRef("posts:list"), args, { shardKey });
 
     return <div data-testid="display">{data === undefined ? "loading" : JSON.stringify(data)}</div>;
 };
@@ -178,6 +178,57 @@ describe("useQuery", () => {
 
         expect(mock.subscribe).toHaveBeenCalledTimes(1);
         expect(screen.getByTestId("display").textContent).toBe(JSON.stringify({ count: 3 }));
+    });
+
+    it("keeps a skipped hook on the same query key as empty args and renders undefined", () => {
+        expect.hasAssertions();
+
+        const mock = createMockClient(() => {
+            return { count: 1 };
+        });
+        const queryClient = new QueryClient();
+
+        render(
+            <LunoraProvider client={mock.asClient} queryClient={queryClient}>
+                <Display args="skip" />
+            </LunoraProvider>,
+        );
+
+        expect(
+            queryClient
+                .getQueryCache()
+                .findAll()
+                .map((query) => query.queryKey),
+        ).toStrictEqual([lunoraQueryKey(makeRef("posts:list"), {}, undefined)]);
+        expect(screen.getByTestId("display").textContent).toBe("loading");
+    });
+
+    it("re-subscribes when shardKey changes between absent and an empty string", async () => {
+        expect.hasAssertions();
+
+        const mock = createMockClient(() => {
+            return { count: 1 };
+        });
+
+        const { rerender } = render(
+            <LunoraProvider client={mock.asClient}>
+                <Display />
+            </LunoraProvider>,
+        );
+
+        await waitFor(() => {
+            expect(mock.subscribe).toHaveBeenCalledTimes(1);
+        });
+
+        rerender(
+            <LunoraProvider client={mock.asClient}>
+                <Display shardKey="" />
+            </LunoraProvider>,
+        );
+
+        await waitFor(() => {
+            expect(mock.subscribe).toHaveBeenCalledTimes(2);
+        });
     });
 
     it("surfaces a server-pushed subscription error through onError", async () => {

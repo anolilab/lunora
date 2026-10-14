@@ -57,15 +57,17 @@ const useQuery = <F extends FunctionReference>(function_: F, args: ArgsOf<F> | "
     const argsRecord = skipped ? {} : (args as Record<string, unknown>);
 
     // Canonicalise the args once per render: the queryKey, the hydrated-cache
-    // peek and the effect dependency below all reuse this string.
-    const argsKey = skipped ? "" : stableWireKey(argsRecord);
+    // peek and the effect dependency below all reuse this string. A skipped hook
+    // encodes `{}`, so it keeps sharing the key of `useQuery(fn, {})`.
+    const argsKey = stableWireKey(argsRecord);
 
     // The queryKey is consumed structurally everywhere: TanStack hashes it and
     // the subscription effect keys off `subscriptionKey` (a content hash), so a
     // fresh array reference each render is fine. React Compiler auto-memoizes
     // this derivation; no manual `useMemo` is needed.
     const queryKey = lunoraQueryKeyFromArgsKey(function_.__lunoraRef, argsKey, shardKey);
-    const subscriptionKey = `${function_.__lunoraRef}\u0000${argsKey}\u0000${shardKey ?? ""}`;
+    // `\u0001` marks an absent shardKey so it stays distinct from `""`, as in the queryKey.
+    const subscriptionKey = `${function_.__lunoraRef}\u0000${argsKey}\u0000${shardKey ?? "\u0001"}`;
 
     // Hydration gate — when `hydrateOnStart` is active the durable read cache
     // loads asynchronously on construction. Block the live query until it
