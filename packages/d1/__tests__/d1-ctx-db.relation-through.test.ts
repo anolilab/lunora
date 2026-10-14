@@ -1,7 +1,7 @@
 import type { SchemaLike } from "@lunora/shard-engine";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import { seedThrough, seedWide, THROUGH_CASES, THROUGH_SCHEMA, WIDE_CASES } from "../../shard-engine/__tests__/_helpers/through-cases";
+import { seedThrough, seedWide, THROUGH_CASES, THROUGH_SCHEMA, WIDE_CASES } from "../../../shared/through-cases";
 import { createD1CtxDb as createD1ContextDatabase } from "../src/d1-ctx-db";
 import { createD1Exec } from "./_helpers/node-sqlite-d1";
 

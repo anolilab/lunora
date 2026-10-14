@@ -11,7 +11,7 @@ import { createShardCtxDb, runShardMigrations } from "@lunora/shard-engine";
 import { env, runInDurableObject } from "cloudflare:test";
 import { describe, expect, it } from "vitest";
 
-import { seedThrough, seedWide, THROUGH_CASES, THROUGH_SCHEMA, WIDE_CASES } from "../../../shard-engine/__tests__/_helpers/through-cases";
+import { seedThrough, seedWide, THROUGH_CASES, THROUGH_SCHEMA, WIDE_CASES } from "../../../../shared/through-cases";
 
 const schema = THROUGH_SCHEMA as unknown as SchemaLike;
 

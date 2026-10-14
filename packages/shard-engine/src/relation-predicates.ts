@@ -275,23 +275,25 @@ const readChildKeys = async (
     childWhere: WhereInput,
     projectField: string,
     context: ResolveContext,
-): Promise<unknown[]> => {
+    rowLimit?: number,
+): Promise<{ keys: unknown[]; rows: number }> => {
     // eslint-disable-next-line @typescript-eslint/no-use-before-define -- mutual recursion: a child predicate may itself cross relations (multi-hop)
     const resolvedChildWhere = await resolveForTable(childWhere, relation.table, context);
     const { page } = await context.fetcher(relation.table, {
         baseWhere: context.relationBaseWhere?.(relation.table),
+        limit: rowLimit,
         relationBaseWhere: context.relationBaseWhere,
         where: resolvedChildWhere,
     });
 
-    return distinctValues(page, projectField);
+    return { keys: distinctValues(page, projectField), rows: page.length };
 };
 
 /** Fail closed rather than truncate the `IN (...)` and silently mis-match. */
-const failOverKeyCap = (relation: Pick<RelationDefinitionLike, "table">, count: number, context: ResolveContext): never => {
+const failOverKeyCap = (relation: Pick<RelationDefinitionLike, "table">, count: number, context: ResolveContext, truncated = false): never => {
     throw new LunoraError(
         "INTERNAL",
-        `relation predicate on "${relation.table}" matched ${String(count)} rows, exceeding the ${String(context.maxRelationKeys)}-key limit; narrow the predicate (a same-shard EXISTS push-down lifts this cap)`,
+        `relation predicate on "${relation.table}" matched ${truncated ? "at least " : ""}${String(count)} rows, exceeding the ${String(context.maxRelationKeys)}-key limit; narrow the predicate (a same-shard EXISTS push-down lifts this cap)`,
     );
 };
 
@@ -302,7 +304,7 @@ const projectChildKeys = async (
     context: ResolveContext,
     escalatable: boolean,
 ): Promise<typeof KEY_OVERFLOW | unknown[]> => {
-    const keys = await readChildKeys(relation, childWhere, projectField, context);
+    const { keys } = await readChildKeys(relation, childWhere, projectField, context);
 
     if (keys.length <= context.maxRelationKeys) {
         return keys;
@@ -314,16 +316,20 @@ const projectChildKeys = async (
     return escalatable ? KEY_OVERFLOW : failOverKeyCap(relation, keys.length, context);
 };
 
-/** Read the keys of a hop that never escalates to EXISTS, as both hops of a many-to-many predicate: over the cap it fails closed. */
+/**
+ * Read the keys of a hop that never escalates to EXISTS, as both hops of a many-to-many predicate: over the cap it
+ * fails closed. The read itself is bounded to one row past the cap, not just the distinct keys: a join table can hold
+ * many rows per key, and a broad predicate would otherwise materialise all of them before the cap was checked.
+ */
 const projectBoundedKeys = async (
     relation: Pick<RelationDefinitionLike, "table">,
     childWhere: WhereInput,
     projectField: string,
     context: ResolveContext,
 ): Promise<unknown[]> => {
-    const keys = await readChildKeys(relation, childWhere, projectField, context);
+    const { keys, rows } = await readChildKeys(relation, childWhere, projectField, context, context.maxRelationKeys + 1);
 
-    return keys.length > context.maxRelationKeys ? failOverKeyCap(relation, keys.length, context) : keys;
+    return rows > context.maxRelationKeys ? failOverKeyCap(relation, rows, context, true) : keys;
 };
 
 /**

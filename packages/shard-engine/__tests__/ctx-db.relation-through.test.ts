@@ -1,10 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
+import { seedThrough, seedWide, THROUGH_CASES, THROUGH_SCHEMA, WIDE_CASES } from "../../../shared/through-cases";
 import type { SchemaLike, SqlExec } from "../src/ctx-db";
 import { createShardCtxDb as createShardContextDatabase, runShardMigrations } from "../src/ctx-db";
 import { assertShapeShardable } from "../src/relation-predicates";
 import createSqliteExec from "./_helpers/node-sqlite";
-import { seedThrough, seedWide, THROUGH_CASES, THROUGH_SCHEMA, WIDE_CASES } from "./_helpers/through-cases";
 
 /**
  * Many-to-many reads (`with`, `_count`, `some`/`every`/`none`) on a Durable Object's SQLite via `node:sqlite`. The

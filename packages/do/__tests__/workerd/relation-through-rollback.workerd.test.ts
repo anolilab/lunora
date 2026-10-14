@@ -14,8 +14,8 @@ import { createShardCtxDb, runShardMigrations } from "@lunora/shard-engine";
 import { env, runInDurableObject } from "cloudflare:test";
 import { describe, expect, it } from "vitest";
 
+import { THROUGH_SCHEMA } from "../../../../shared/through-cases";
 import { patchWithRelations } from "../../../server/src/relation-writes";
-import { THROUGH_SCHEMA } from "../../../shard-engine/__tests__/_helpers/through-cases";
 
 const schema = {
     tables: {

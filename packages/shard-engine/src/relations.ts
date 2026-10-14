@@ -135,6 +135,16 @@ const fanOutScalarCounts = async (
 const MAX_FANOUT_READS = 32;
 
 /**
+ * The most join rows one many-to-many `with` (or `_count`) hop may read for a whole page of parents.
+ *
+ * A one-hop `many` pushes a `limit` into the child read, so its cost follows the cap the caller asked for. Here the
+ * order and the cap belong to the TARGET read, so the first hop cannot be capped per parent: it has to see every
+ * link. Instead of letting that grow with the data, it is bounded, and a page that links more than this fails
+ * closed rather than silently dropping links (which would return a wrong, partly empty relation).
+ */
+const MAX_LINK_ROWS = 10_000;
+
+/**
  * Bucket every child row from a set of pages by the foreign-key value it carries,
  * preserving the order the pages were read in.
  *
@@ -254,6 +264,13 @@ const resolveWith = async (options: ResolveWithOptions): Promise<void> => {
     }
 
     const relationMap = parentDefinition.relationMap ?? {};
+
+    /** Do both tables live in one store, so a grouped count over the target is one query? A `.global()` table and a sharded one each live elsewhere. */
+    const sameStore = (left: string, right: string): boolean => {
+        const kindOf = (table: string): string => schema.tables[table]?.shardMode?.kind ?? "root";
+
+        return kindOf(left) === kindOf(right) && kindOf(left) !== "shardBy";
+    };
 
     const requireRelation = (name: string): RelationDefinitionLike => {
         const relation = relationMap[name];
@@ -428,12 +445,8 @@ const resolveWith = async (options: ResolveWithOptions): Promise<void> => {
 
     /**
      * The join rows of every parent as `parent id → linked target ids`, read under the join table's own read
-     * policy so a link the caller may not see is not a link. The first hop of a many-to-many load.
-     *
-     * ponytail: this hop reads EVERY link of the page's parents even when the caller passes `limit`. A one-hop `many`
-     * pushes `limit` into the child read, but here the order and the cap belong to the TARGET read, so the cap can only
-     * bound the second hop. Bounding the first would need a window function over the join table, which the injected
-     * `fetcher` cannot express; revisit if a parent routinely links thousands of rows.
+     * policy so a link the caller may not see is not a link. The first hop of a many-to-many load, bounded by
+     * {@link MAX_LINK_ROWS}.
      */
     const loadLinks = async (relation: ThroughRelationDefinitionLike): Promise<Map<unknown, Set<unknown>>> => {
         const { from, table, to } = relation.through;
@@ -444,7 +457,16 @@ const resolveWith = async (options: ResolveWithOptions): Promise<void> => {
             return links;
         }
 
-        for (const row of masked(table, await fetchChildren(table, {}, { [from]: { in: ownerIds } }, undefined))) {
+        const rows = await fetchChildren(table, {}, { [from]: { in: ownerIds } }, MAX_LINK_ROWS + 1);
+
+        if (rows.length > MAX_LINK_ROWS) {
+            throw new LunoraError(
+                "INTERNAL",
+                `loading "${tableName}" relations through "${table}" read more than ${String(MAX_LINK_ROWS)} join rows for one page; load fewer ${tableName} rows at a time`,
+            );
+        }
+
+        for (const row of masked(table, rows)) {
             const owner = row[from];
             const target = row[to];
 
@@ -495,21 +517,36 @@ const resolveWith = async (options: ResolveWithOptions): Promise<void> => {
     };
 
     /**
+     * The number of `linked` ids that name a target row the caller can read. One grouped count when the target lives
+     * in the same store as the parent, which hydrates no rows; a cross-backend target falls back to reading the rows,
+     * because its grouped counter degrades to one read PER id, which a page of links would multiply.
+     */
+    const countReadable = async (target: string, linked: Set<unknown>): Promise<Set<unknown>> => {
+        const ids = [...linked];
+
+        if (ids.length === 0) {
+            return new Set();
+        }
+
+        if (sameStore(tableName, target)) {
+            const counts = await groupedCounter(target, "_id", ids, relationBaseWhere?.(target));
+
+            return new Set(ids.filter((id) => (counts.get(id) ?? 0) > 0));
+        }
+
+        const rows = await fetchChildren(target, {}, { _id: { in: ids } }, undefined);
+
+        return new Set(rows.map((row) => row["_id"]));
+    };
+
+    /**
      * `_count` over a many-to-many relation counts the target rows the caller can read, not the join rows: a link to
      * a row the target's read policy hides (or one that no longer exists) is not counted. That takes both hops,
      * where a one-to-many count is a single grouped query.
      */
     const countThrough = async (name: string, relation: ThroughRelationDefinitionLike): Promise<void> => {
         const links = await loadLinks(relation);
-        const visible = new Set<unknown>();
-
-        if (links.size > 0) {
-            const ids = new Set([...links.values()].flatMap((linked) => [...linked]));
-
-            for (const target of await fetchChildren(relation.table, {}, { _id: { in: [...ids] } }, undefined)) {
-                visible.add(target["_id"]);
-            }
-        }
+        const visible = await countReadable(relation.table, new Set([...links.values()].flatMap((linked) => [...linked])));
 
         for (const parent of parents) {
             const counts = (parent["_count"] as Record<string, number> | undefined) ?? {};
@@ -752,5 +789,5 @@ const runRowValidators = (definition: TableDefinitionLike, document: Record<stri
     }
 };
 
-export { applyOnDelete, distinctValues, fanOutScalarCounts, relationHooks, resolveWith, runRowValidators };
+export { applyOnDelete, distinctValues, fanOutScalarCounts, MAX_LINK_ROWS, relationHooks, resolveWith, runRowValidators };
 export type { ApplyOnDeleteOptions };

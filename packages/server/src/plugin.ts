@@ -416,6 +416,7 @@ export const mergeSchemaExtension = <T extends Record<string, TableDefinition>, 
     const { key } = extension;
     const bareNames = new Set(Object.keys(extension.tables));
     const merged: Record<string, TableDefinition> = { ...base.tables };
+    const owned = new Set<string>();
 
     for (const [bareName, table] of Object.entries(extension.tables)) {
         const prefixed = prefixTableName(key, bareName);
@@ -428,6 +429,7 @@ export const mergeSchemaExtension = <T extends Record<string, TableDefinition>, 
         }
 
         merged[prefixed] = rewriteTableReferences(table, key, bareNames, bareName);
+        owned.add(prefixed);
     }
 
     const mergedVectorIndexes: Record<string, VectorIndexDefinition> = { ...base.vectorIndexes };
@@ -453,7 +455,7 @@ export const mergeSchemaExtension = <T extends Record<string, TableDefinition>, 
     validateIndexFields(merged);
     validateTableModes(merged);
     validateGlobalVectors(merged, mergedVectorIndexes);
-    validateThroughRelations(merged);
+    validateThroughRelations(merged, { owned, resolve: (bareName) => rewriteReference(bareName, key, bareNames) });
 
     return {
         // Preserve secure-by-default RLS across `.extend(...)` — a plugin's

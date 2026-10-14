@@ -11,7 +11,7 @@ import type { SchemaLike } from "@lunora/shard-engine";
 import { env } from "cloudflare:test";
 import { describe, expect, it } from "vitest";
 
-import { seedThrough, seedWide, THROUGH_CASES, THROUGH_SCHEMA, WIDE_CASES } from "../../../shard-engine/__tests__/_helpers/through-cases";
+import { seedThrough, seedWide, THROUGH_CASES, THROUGH_SCHEMA, WIDE_CASES } from "../../../../shared/through-cases";
 import type { D1Exec } from "../../src/d1-ctx-db";
 import { createD1CtxDb } from "../../src/d1-ctx-db";
 
