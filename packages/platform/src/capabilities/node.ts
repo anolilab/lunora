@@ -90,7 +90,7 @@ const NODE_CAPABILITIES: PlatformCapabilities = {
         },
         alarmRearmBreaker: {
             level: "emulated",
-            note: "Lunora's own counter, not a platform primitive: the poll alarm's self re-arms are counted in one row of the shard's SQL (ShardHost.sql) over a sliding window, and a re-arm past the budget is refused, leaves one recovery wake a window out, and is logged once per trip. The arm it gates is ShardHost.alarms, so it runs wherever the shard has durable SQL and alarms",
+            note: "Lunora's own counter, not a platform primitive: the poll alarm's re-arms that are due sooner than the 2 s floor are counted in one row of the shard's SQL (ShardHost.sql) over a sliding window, and a re-arm past the budget is refused, leaves one recovery wake a window out, and is logged once per trip. Floor-paced re-arms are checked against that row and never written to it, so a healthy poll costs no SQL write. The arm it gates is ShardHost.alarms, so it runs wherever the shard has durable SQL and alarms",
         },
         scheduleRateBreaker: {
             level: "emulated",
