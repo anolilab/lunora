@@ -79,7 +79,7 @@ const DOCTOR_CODES = [
     "do-class-budget-unchecked",
     "email-destination-placeholder",
     "observability-full-sampling",
-    "paid-product-unguarded",
+    "paid-product-bound",
     "paid-product-unknown",
     "r2-lifecycle-unset",
     "scheduler-origin-missing",
