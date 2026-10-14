@@ -1,5 +1,5 @@
+import { asSchema, jsonSchema } from "@ai-sdk/provider-utils";
 import { LunoraError } from "@lunora/errors";
-import { asSchema, jsonSchema } from "ai";
 
 import isPositiveInteger from "./positive-integer";
 import { capToolOutputText, MAX_TOOL_OUTPUT_CHARS } from "./tool-output";
