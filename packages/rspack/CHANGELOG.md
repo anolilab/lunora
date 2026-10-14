@@ -1,3 +1,11 @@
+## @lunora/rspack [1.0.0-alpha.70](https://github.com/anolilab/lunora/compare/@lunora/rspack@1.0.0-alpha.69...@lunora/rspack@1.0.0-alpha.70) (2026-10-14)
+
+
+### Dependencies
+
+* **@lunora/config:** upgraded to 1.0.0-alpha.349
+* **@lunora/studio:** upgraded to 1.0.0-alpha.296
+
 ## @lunora/rspack [1.0.0-alpha.69](https://github.com/anolilab/lunora/compare/@lunora/rspack@1.0.0-alpha.68...@lunora/rspack@1.0.0-alpha.69) (2026-10-14)
 
 
