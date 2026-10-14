@@ -58,6 +58,8 @@ class StmtSampleShard extends ShardDO {
 
     public repeatsOfFirst = 0;
 
+    public throwAfterQueries = false;
+
     public override async handleRpc(): Promise<unknown> {
         if (this.attachSpan) {
             const anchor = this.getCurrentTrace();
@@ -75,6 +77,10 @@ class StmtSampleShard extends ShardDO {
 
         for (let index = 0; index < this.repeatsOfFirst; index += 1) {
             sql.exec(`SELECT 0 AS x`).toArray();
+        }
+
+        if (this.throwAfterQueries) {
+            throw new Error("boom");
         }
 
         this.handlesSeen.push(sql, this.sql, this.sql);
@@ -98,6 +104,45 @@ const adminRequest = (functionPath: string): Request =>
     });
 
 describe("statement sample buffer (OBS-04)", () => {
+    it("writes no statement rows for a successful dispatch when LUNORA_METRICS_SAMPLE=0", async () => {
+        expect.assertions(1);
+
+        const database = createSqliteExec();
+
+        try {
+            const shard = new StmtSampleShard(sqliteStateDouble(database), { LUNORA_ADMIN_TOKEN: ADMIN_TOKEN, LUNORA_METRICS_SAMPLE: "0" });
+
+            shard.attachSpan = false;
+            shard.distinctQueries = 3;
+
+            await shard.fetch(userRequest("probe:query"));
+
+            expect(readQueryMetrics(database.sql)).toEqual([]);
+        } finally {
+            database.close();
+        }
+    });
+
+    it("still records statement rows for an erroring dispatch when LUNORA_METRICS_SAMPLE=0", async () => {
+        expect.assertions(1);
+
+        const database = createSqliteExec();
+
+        try {
+            const shard = new StmtSampleShard(sqliteStateDouble(database), { LUNORA_ADMIN_TOKEN: ADMIN_TOKEN, LUNORA_METRICS_SAMPLE: "0" });
+
+            shard.attachSpan = false;
+            shard.distinctQueries = 3;
+            shard.throwAfterQueries = true;
+
+            await shard.fetch(userRequest("probe:query"));
+
+            expect(readQueryMetrics(database.sql).length).toBeGreaterThan(0);
+        } finally {
+            database.close();
+        }
+    });
+
     it("folds many repeats of the same statement into one durable row with the real exec_count", async () => {
         expect.assertions(3);
 
