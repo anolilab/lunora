@@ -1,3 +1,14 @@
+## @lunora/advisor [1.0.0-alpha.214](https://github.com/anolilab/lunora/compare/@lunora/advisor@1.0.0-alpha.213...@lunora/advisor@1.0.0-alpha.214) (2026-10-14)
+
+### Bug Fixes
+
+* **advisor:** clear count_without_index for index-backed counts and cover queue_dispatch_cycle end to end ([#1164](https://github.com/anolilab/lunora/issues/1164)) ([d53ae71](https://github.com/anolilab/lunora/commit/d53ae711ee9eedd9d93585a27dfadc5b470bc51e))
+
+
+### Dependencies
+
+* **@lunora/server:** upgraded to 1.0.0-alpha.198
+
 ## @lunora/advisor [1.0.0-alpha.213](https://github.com/anolilab/lunora/compare/@lunora/advisor@1.0.0-alpha.212...@lunora/advisor@1.0.0-alpha.213) (2026-10-14)
 
 

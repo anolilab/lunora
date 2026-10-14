@@ -1,3 +1,9 @@
+## @lunora/platform [1.0.0-alpha.64](https://github.com/anolilab/lunora/compare/@lunora/platform@1.0.0-alpha.63...@lunora/platform@1.0.0-alpha.64) (2026-10-14)
+
+### Bug Fixes
+
+* **do:** count only sub-floor alarm re-arms and test the schedule budget end to end ([#1163](https://github.com/anolilab/lunora/issues/1163)) ([b311984](https://github.com/anolilab/lunora/commit/b3119847198238f39f7492fa121bd22bfa60dea6))
+
 ## @lunora/platform [1.0.0-alpha.63](https://github.com/anolilab/lunora/compare/@lunora/platform@1.0.0-alpha.62...@lunora/platform@1.0.0-alpha.63) (2026-10-14)
 
 ### Features
