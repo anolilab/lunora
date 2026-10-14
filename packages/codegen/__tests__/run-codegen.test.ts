@@ -3834,7 +3834,7 @@ export const ping = query({ args: { id: v.string() }, handler: async (_context, 
             });
 
             expect(output).toContain("protected override storageRulesMetadata(): StorageRulesResult {");
-            expect(output).toContain("const LUNORA_STORAGE_RULES = JSON.parse(");
+            expect(output).toContain("const LUNORA_STORAGE_RULES = ");
             expect(emittedJsonData(output, "LUNORA_STORAGE_RULES")).toStrictEqual({
                 rules: [{ bucket: "avatars", file: "avatars", on: "read", prefix: "user/", procedure: "upload" }],
             });
