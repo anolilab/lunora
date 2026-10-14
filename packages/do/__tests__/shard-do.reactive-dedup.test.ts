@@ -1,19 +1,21 @@
 /**
- * Cross-socket dedup of identity-INDEPENDENT reactive query runs
- * (`resolveReactiveOutcomeDeduped`).
+ * Cross-socket dedup of reactive query runs (`resolveReactiveOutcomeDeduped`).
  *
- * Within a single `refreshSubscriptions` flush, N sockets subscribed to the
- * SAME `(functionPath, args)` re-run the query N times (the Case-6 fan-out
- * characterization in the integration suite). When the read is
- * identity-INDEPENDENT — admin/reserved introspection, whose result cannot vary
- * by the caller — the run is shared across sockets, collapsing N runs to ONE.
+ * Within a single `refreshSubscriptions` flush, sockets subscribed to the SAME
+ * `(functionPath, args)` share ONE run when their FULL identity (claims, ip,
+ * userId) is equal. Admin/reserved introspection reads cannot vary by caller, so
+ * they share across ALL sockets. A difference in ANY identity field never shares
+ * a run or a result: an RLS / `ctx.auth` / flag read evaluates under the
+ * socket's own verified identity, or one identity's rows leak to another.
  *
- * The SECURITY boundary is `isIdentityIndependent`: an RLS / `ctx.auth` / flag
- * read evaluates under the socket's own verified identity and MUST NOT be
- * shared, or one identity's rows leak to another. These tests lock in:
- * 1. POSITIVE — an identity-independent query runs once for N sockets.
- * 2. NEGATIVE — an identity-dependent query runs once PER socket, each under its own identity (no cross-identity leak).
+ * The first three cases lock in the boundary:
+ * 1. POSITIVE — an identity-independent (admin) query runs once for N sockets.
+ * 2. NEGATIVE — sockets with different identities each run under their own identity (no cross-identity leak).
  * 3. SANITY — forcing the predicate true on an identity-dependent query reintroduces the leak (1 run, the second socket served the first's identity), proving the predicate is load-bearing.
+ *
+ * The identity-keyed cases then cover the sharing itself: equal identity shares
+ * one run (and one wire encode), a different claim or ip does not, and ten
+ * concurrent sockets still collapse to one run.
  */
 import type { SocketAttachment, SubscriptionEnvelope } from "@lunora/shard-engine";
 import { describe, expect, it } from "vitest";
@@ -92,6 +94,9 @@ class DedupShard extends ShardDO {
     /** `functionPaths` forced identity-independent on top of the admin default. */
     public forcedIndependent = new Set<string>();
 
+    /** Bumped each time a result's `probe` property is read — once per wire-encode of that result. */
+    public probeReads = 0;
+
     private counter = 0;
 
     public override handleRpc(): Promise<unknown> {
@@ -127,7 +132,18 @@ class DedupShard extends ShardDO {
         this.runs.push({ functionPath, userId });
         this.counter += 1;
 
-        return Promise.resolve({ result: { n: this.counter, owner: userId }, tables: new Set(["messages"]) });
+        const result = { n: this.counter, owner: userId };
+
+        Object.defineProperty(result, "probe", {
+            enumerable: true,
+            get: () => {
+                this.probeReads += 1;
+
+                return 0;
+            },
+        });
+
+        return Promise.resolve({ result, tables: new Set(["messages"]) });
     }
 
     protected override isIdentityIndependent(functionPath: string): boolean {
@@ -181,6 +197,38 @@ describe("shardDO reactive dedup (identity-independent runs)", () => {
         expect(sockets.every((ws, index) => lastOwner(ws, `sub-${String(index)}`) !== undefined)).toBe(true);
     });
 
+    it("reads each socket's attachment twice per flush (expiry+fan-out share one read, plus the deliberate post-await fresh read)", async () => {
+        expect.assertions(1);
+
+        const shard = new DedupShard(createFakeState(), {});
+        const reads: { count: number }[] = [];
+
+        for (let index = 0; index < 3; index += 1) {
+            const ws = createFakeWebSocket();
+            const original = ws.deserializeAttachment.bind(ws);
+
+            const counter = { count: 0 };
+
+            reads.push(counter);
+            ws.deserializeAttachment = () => {
+                counter.count += 1;
+
+                return original();
+            };
+            shard.registerSocket(ws, attachmentFor(`user-${String(index)}`));
+            // eslint-disable-next-line no-await-in-loop -- sequential seed keeps run ordering deterministic
+            await shard.driveSubscribe(ws, `sub-${String(index)}`, "messages:list");
+        }
+
+        for (const counter of reads) {
+            counter.count = 0;
+        }
+
+        await shard.writeRpc();
+
+        expect(reads.map((counter) => counter.count)).toStrictEqual([2, 2, 2]);
+    });
+
     it("negative: an identity-dependent query runs once PER socket under its own identity (no leak)", async () => {
         expect.assertions(4);
 
@@ -201,7 +249,7 @@ describe("shardDO reactive dedup (identity-independent runs)", () => {
 
         const refreshRuns = shard.runs.slice(runsAfterSeed);
 
-        // No dedup: the query ran once per socket…
+        // The two sockets have different identities, so nothing is shared: the query ran once per socket…
         expect(refreshRuns).toHaveLength(2);
         // …each under its OWN identity…
         expect(new Set(refreshRuns.map((r) => r.userId))).toStrictEqual(new Set(["user-A", "user-B"]));
@@ -241,5 +289,93 @@ describe("shardDO reactive dedup (identity-independent runs)", () => {
 
         expect(ownerA).toBe(ownerB);
         expect(ownerB).toBe("user-A");
+    });
+
+    describe("identity-keyed sharing (equal full identity shares one run)", () => {
+        const subscribeAll = async (shard: DedupShard, attachments: SocketAttachment[]): Promise<FakeWebSocket[]> => {
+            const sockets: FakeWebSocket[] = [];
+
+            for (const [index, attachment] of attachments.entries()) {
+                const ws = createFakeWebSocket();
+
+                shard.registerSocket(ws, attachment);
+                // eslint-disable-next-line no-await-in-loop -- sequential seed keeps run ordering deterministic
+                await shard.driveSubscribe(ws, `sub-${String(index)}`, "messages:list");
+                sockets.push(ws);
+            }
+
+            return sockets;
+        };
+
+        const refreshRunCount = async (shard: DedupShard): Promise<number> => {
+            const runsAfterSeed = shard.runs.length;
+
+            await shard.writeRpc();
+
+            return shard.runs.length - runsAfterSeed;
+        };
+
+        it("same userId and claims: one run, every socket still receives a frame", async () => {
+            expect.assertions(2);
+
+            const shard = new DedupShard(createFakeState(), {});
+            const sockets = await subscribeAll(shard, [attachmentFor("user-A"), attachmentFor("user-A")]);
+
+            await expect(refreshRunCount(shard)).resolves.toBe(1);
+            expect(sockets.every((ws, index) => lastOwner(ws, `sub-${String(index)}`) === "user-A")).toBe(true);
+        });
+
+        it("same userId, different claim: one run per socket", async () => {
+            expect.assertions(1);
+
+            const shard = new DedupShard(createFakeState(), {});
+
+            await subscribeAll(shard, [
+                { identity: { activeOrg: "org-1", userId: "user-A" }, subs: {}, userId: "user-A" },
+                { identity: { activeOrg: "org-2", userId: "user-A" }, subs: {}, userId: "user-A" },
+            ]);
+
+            await expect(refreshRunCount(shard)).resolves.toBe(2);
+        });
+
+        it("same userId, different ip: one run per socket", async () => {
+            expect.assertions(1);
+
+            const shard = new DedupShard(createFakeState(), {});
+
+            await subscribeAll(shard, [
+                { ...attachmentFor("user-A"), ip: "203.0.113.1" },
+                { ...attachmentFor("user-A"), ip: "203.0.113.2" },
+            ]);
+
+            await expect(refreshRunCount(shard)).resolves.toBe(2);
+        });
+
+        it("ten concurrent sockets with the same identity: one run", async () => {
+            expect.assertions(1);
+
+            const shard = new DedupShard(createFakeState(), {});
+
+            await subscribeAll(
+                shard,
+                Array.from({ length: 10 }, () => attachmentFor("user-A")),
+            );
+
+            await expect(refreshRunCount(shard)).resolves.toBe(1);
+        });
+
+        it("sockets sharing a run share its wire encode", async () => {
+            expect.assertions(2);
+
+            const shard = new DedupShard(createFakeState(), {});
+
+            await subscribeAll(shard, [attachmentFor("user-A"), attachmentFor("user-A"), attachmentFor("user-A")]);
+
+            const readsAfterSeed = shard.probeReads;
+
+            await expect(refreshRunCount(shard)).resolves.toBe(1);
+            // Three sockets, one shared outcome: the result is encoded once, not three times.
+            expect(shard.probeReads - readsAfterSeed).toBe(1);
+        });
     });
 });

@@ -2147,11 +2147,18 @@ class LunoraClient {
      * later by {@link subscribe} consumes it normally.
      */
     public peekHydratedQuery(functionPath: string, args: Record<string, unknown>, shardKey?: string): unknown {
+        return this.peekHydratedQueryByKey(functionPath, stableWireKey(args), shardKey);
+    }
+
+    /**
+     * Same lookup as {@link peekHydratedQuery} for a caller that already holds the
+     * `stableWireKey`-encoded args string, so the args are not canonicalised again.
+     */
+    public peekHydratedQueryByKey(functionPath: string, argsKey: string, shardKey?: string): unknown {
         if (!this.readyResolved) {
             return undefined;
         }
 
-        const argsKey = stableWireKey(args);
         const key = queryCacheKey(functionPath, argsKey, shardKey);
         const entry = this.hydratedQueryCache.get(key);
 

@@ -1448,6 +1448,12 @@ const socketIdentity = (attachment: SocketAttachment): SubscriptionIdentity => {
     return { identity: attachment.identity, ip: attachment.ip, userId: attachment.userId };
 };
 
+/** Canonical string of EVERY {@link SubscriptionIdentity} field: sockets share a live-query run only when it is equal. */
+/* eslint-disable unicorn/no-null -- stableStringify folds absent fields to an explicit null */
+const subscriptionIdentityKey = (identity: SubscriptionIdentity): string =>
+    stableStringify({ claims: identity.identity ?? null, ip: identity.ip ?? null, system: false, userId: identity.userId ?? null });
+/* eslint-enable unicorn/no-null */
+
 /**
  * Hard server-side ceiling on rows written per bulk admin call — `deleteRows`,
  * `clearTable`, `patchRows`. The op never touches more than this in one
@@ -2061,6 +2067,13 @@ abstract class ShardDO {
      * map is FIFO-capped rather than trusted to drain.
      */
     private dispatchSpans = new Map<string, DispatchSpanEntry>();
+
+    /**
+     * Wire-encoded JSON of a subscription outcome's result, memoised per outcome
+     * object: sockets that shared one run (see {@link ShardDO.resolveReactiveOutcomeDeduped})
+     * encode it once. Weak, so it dies with the flush that produced the outcome.
+     */
+    private encodedOutcomes = new WeakMap<SubscriptionOutcome, string>();
 
     /**
      * The most recent telemetry sink seen while building a ctx — the flush handle
@@ -10832,15 +10845,13 @@ abstract class ShardDO {
      * identity-INDEPENDENT only when its result cannot vary by the caller's
      * verified identity — i.e. the admin/reserved introspection reads, which
      * route to {@link executeAdminSubscription} and ignore the
-     * {@link SubscriptionIdentity} entirely.
+     * {@link SubscriptionIdentity} entirely. Those share one result across ALL
+     * sockets (the null-identity bucket of {@link resolveReactiveOutcomeDeduped}).
      *
-     * Everything else is identity-DEPENDENT and must NEVER be shared across
-     * sockets: a user query may be `rls()` / `ctx.auth`-scoped (different rows
-     * per identity), and a flag read ({@link FLAGS_FUNCTION_PREFIX}) evaluates
-     * the provider with the subscriber's identity (per-user targeting). Sharing
-     * one socket's result with another would leak one identity's rows/flags to a
-     * different identity, so this predicate gates {@link ShardDO.resolveReactiveOutcomeDeduped}
-     * shut for them.
+     * Everything else is identity-DEPENDENT: a user query may be `rls()` /
+     * `ctx.auth`-scoped and a flag read ({@link FLAGS_FUNCTION_PREFIX}) evaluates
+     * with the subscriber's identity. Those only share between sockets whose FULL
+     * identity (claims, ip, userId) is equal — see {@link subscriptionIdentityKey}.
      */
     // eslint-disable-next-line class-methods-use-this, @typescript-eslint/member-ordering -- pure predicate over the function path; a protected method so the security boundary lives in one named place (and tests can probe it), co-located with the reactive dedup it gates rather than hoisted away from its only caller
     protected isIdentityIndependent(functionPath: string): boolean {
@@ -10849,19 +10860,15 @@ abstract class ShardDO {
 
     /**
      * Memoizing wrapper over {@link resolveReactiveOutcome}: flush-local sharing across sockets.
-     * Within a single {@link refreshSubscriptions} pass, N sockets subscribed to
-     * the SAME identity-independent `(functionPath, args)` re-run the query N
-     * times today (see the Case-6 fan-out characterization). When the read is
-     * identity-independent (admin/reserved — see {@link isIdentityIndependent})
-     * its result is the same for every socket, so the first run is cached (by its
-     * in-flight Promise, since the bounded worker pool runs sockets in parallel)
-     * and shared with the rest — collapsing N runs to ONE.
-     *
-     * Identity-DEPENDENT reads are passed straight through, UNCACHED: each socket
-     * must evaluate under its own by-value identity (RLS / `ctx.auth` / per-user
-     * flags), so they never share a result. The `cache` is created fresh per
-     * flush by the caller, so a result is never reused across passes (it would go
-     * stale after the next write).
+     * Within a single {@link refreshSubscriptions} pass, sockets subscribed to the
+     * SAME `(functionPath, args)` under the SAME identity run the query once: the
+     * first run is cached (by its in-flight Promise, since the bounded worker pool
+     * runs sockets in parallel) and shared with the rest. Identity-independent
+     * reads (admin/reserved — see {@link isIdentityIndependent}) share across every
+     * socket; all others key on the socket's full identity, so sockets that differ
+     * in ANY identity field never share a result (RLS / `ctx.auth` / per-user flags).
+     * The `cache` is created fresh per flush by the caller, so a result is never
+     * reused across passes (it would go stale after the next write).
      */
     private resolveReactiveOutcomeDeduped(
         functionPath: string,
@@ -10870,14 +10877,10 @@ abstract class ShardDO {
         identity: SubscriptionIdentity,
         cache: Map<string, Promise<SubscriptionOutcome | null>>,
     ): Promise<SubscriptionOutcome | null> {
-        if (!this.isIdentityIndependent(functionPath)) {
-            return this.resolveReactiveOutcome(functionPath, args, isAdmin, identity);
-        }
-
-        // Identity is irrelevant for these reads, so the null-identity key is
-        // identical across every sharing socket.
-        // eslint-disable-next-line unicorn/no-null -- reactiveCacheKey's identity arg is `null | string`; null = the identity-independent bucket
-        const key = reactiveCacheKey(functionPath, args, null);
+        const key = this.isIdentityIndependent(functionPath)
+            ? // eslint-disable-next-line unicorn/no-null -- reactiveCacheKey's identity arg is `null | string`; null = the identity-independent bucket
+              reactiveCacheKey(functionPath, args, null)
+            : reactiveCacheKey(functionPath, args, subscriptionIdentityKey(identity));
         const cached = cache.get(key);
 
         if (cached !== undefined) {
@@ -11568,11 +11571,11 @@ abstract class ShardDO {
         const frameEpoch = this.currentCdcEpoch();
         const generation = this.writeGeneration;
 
-        // Flush-local dedup of identity-INDEPENDENT reactive runs: N sockets on
-        // the same admin/reserved `(functionPath, args)` share ONE query run this
-        // pass instead of re-running it per socket. Created fresh per flush so a
-        // result is never reused across writes; identity-dependent reads bypass it
-        // entirely (see resolveReactiveOutcomeDeduped).
+        // Flush-local dedup of reactive runs: sockets on the same
+        // `(functionPath, args)` share ONE query run this pass when their FULL
+        // identity is equal (see `subscriptionIdentityKey`); admin/reserved reads
+        // share across all sockets. Created fresh per flush so a result is never
+        // reused across writes (see resolveReactiveOutcomeDeduped).
         const reactiveRunCache = new Map<string, Promise<SubscriptionOutcome | null>>();
 
         const refreshOne = async (ws: ShardSocketLike): Promise<void> => {
@@ -11581,13 +11584,13 @@ abstract class ShardDO {
             // the load-bearing check — a passive subscriber never sends an inbound
             // frame, so `webSocketMessage`'s check would never fire for it. Drop
             // the socket and skip its push.
-            if (this.isSocketExpired(ws)) {
+            const attachment = this.readAttachment(ws);
+
+            if (isIdentityExpired(attachment.expiresAt)) {
                 this.dropExpiredSocket(ws);
 
                 return;
             }
-
-            const attachment = this.readAttachment(ws);
 
             // Resolved once per socket per flush, not once per affected
             // subscription below — both depend only on this socket, and are
@@ -12101,13 +12104,13 @@ abstract class ShardDO {
         const pendingCursors: ShapePokeCursorRow[] = [];
 
         const pokeOne = async (ws: ShardSocketLike): Promise<void> => {
-            if (this.isSocketExpired(ws)) {
+            const attachment = this.readAttachment(ws);
+
+            if (isIdentityExpired(attachment.expiresAt)) {
                 this.dropExpiredSocket(ws);
 
                 return;
             }
-
-            const attachment = this.readAttachment(ws);
             const { shapes } = attachment;
 
             if (!shapes) {
@@ -13480,13 +13483,13 @@ abstract class ShardDO {
         const pending: { attachment: SocketAttachment; ws: ShardSocketLike }[] = [];
 
         for (const ws of sockets) {
-            if (this.isSocketExpired(ws)) {
+            const attachment = this.readAttachment(ws);
+
+            if (isIdentityExpired(attachment.expiresAt)) {
                 this.dropExpiredSocket(ws);
 
                 continue;
             }
-
-            const attachment = this.readAttachment(ws);
 
             if (attachment.shapes) {
                 pending.push({ attachment, ws });
@@ -13841,8 +13844,13 @@ abstract class ShardDO {
         // pure-JSON result encodes byte-identically, so this baseline + `data`
         // frame stay unchanged for the common case, and the delta path (which
         // encodes its next rows too) diffs against a consistently-encoded baseline.
-        // eslint-disable-next-line unicorn/no-null -- WS frame payload: an undefined result serializes to JSON null so the delta frame carries an explicit value
-        const json = JSON.stringify(encodeWire(outcome.result ?? null));
+        let json = this.encodedOutcomes.get(outcome);
+
+        if (json === undefined) {
+            // eslint-disable-next-line unicorn/no-null -- WS frame payload: an undefined result serializes to JSON null so the delta frame carries an explicit value
+            json = JSON.stringify(encodeWire(outcome.result ?? null));
+            this.encodedOutcomes.set(outcome, json);
+        }
 
         if (existing?.lastJson === json) {
             existing.generation = generation;
