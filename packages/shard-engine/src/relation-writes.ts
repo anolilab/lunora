@@ -1,24 +1,26 @@
 import { validatorAcceptsNull } from "../../../shared/accepts-null";
 import type { SchemaLike, TableDefinitionLike } from "./schema-types";
 
-/**
- * What the table facade needs to know to turn `{ author: { connect: id } }` into column writes, per declared
- * relation. The facade holds no schema, so the engine publishes this on the writer — the same way it publishes
- * `relationEdges` — and it travels through the RLS and mask wrappers with the rest of the writer.
- */
-interface RelationWriteInfo {
+/** What every relation write needs to know, whichever kind of relation it is. */
+interface RelationWriteBase {
     /**
      * Do both tables live on this shard's Durable Object, so its transaction covers a write to either? A
      * `.global()` table is a separate store whose commits the transaction cannot roll back (even when both
      * sides are global, each write is its own commit), and a row on another shard cannot be addressed from
-     * this one at all. The facade refuses those up front rather than half-apply them.
+     * this one at all. The facade refuses those up front rather than half-apply them. A many-to-many relation is
+     * colocated only when the owner, the join table and the target all are.
      */
     readonly colocated: boolean;
 
-    /**
-     * The foreign-key column: on THIS table for a `one` relation, on the TARGET table for a `many` one, on the JOIN
-     * table (its `through.from`) for a many-to-many one.
-     */
+    /** Set when the relation cannot be written from the facts here (a join table with another required column), with the reason the caller is told. */
+    readonly refusal?: string;
+
+    readonly table: string;
+}
+
+/** A `one` or `many` relation backed by one foreign-key column. */
+interface KeyedRelationWriteInfo extends RelationWriteBase {
+    /** The foreign-key column: on THIS table for a `one` relation, on the TARGET table for a `many` one. */
     readonly field: string;
 
     readonly kind: "many" | "one";
@@ -27,25 +29,34 @@ interface RelationWriteInfo {
     readonly nullable: boolean;
     /** The column the foreign key points at: on the target for `one`, on this table for `many`. Usually `_id`. */
     readonly references: string;
-
-    /**
-     * Set by the engine when the join table cannot be written from the two keys alone (a required column besides
-     * `from`/`to`), with the reason the caller is told. Absent when the relation can be written.
-     */
-    readonly refusal?: string;
-
-    /**
-     * Asked at write time, for a many-to-many relation: the reason the write cannot run right now, or `undefined`.
-     * A many-to-many write is several row writes that only the mutation's transaction makes atomic, so it is
-     * refused outside one (an action).
-     */
-    readonly refusalNow?: () => string | undefined;
-
-    readonly table: string;
-
-    /** Set for a many-to-many relation: the join table and its two keys. `field` is `through.from`, `references` is `_id`. */
-    readonly through?: { readonly from: string; readonly table: string; readonly to: string };
+    readonly refusalNow?: never;
+    readonly through?: never;
 }
+
+/**
+ * A many-to-many relation: a link is a row of the join table, so nothing is nullable and the owner side is always
+ * its `_id`.
+ */
+interface ThroughRelationWriteInfo extends RelationWriteBase {
+    readonly kind: "many";
+
+    /**
+     * Asked at write time: the reason the write cannot run right now, or `undefined`. A many-to-many write is
+     * several row writes that only a mutation's transaction makes atomic, so it is refused outside one (an action).
+     * Fails closed: a writer that does not report that it is inside a transaction is not trusted to be in one.
+     */
+    readonly refusalNow: () => string | undefined;
+
+    /** The join table and its two keys: `from` points at this table's `_id`, `to` at the target's. */
+    readonly through: { readonly from: string; readonly table: string; readonly to: string };
+}
+
+/**
+ * What the table facade needs to know to turn `{ author: { connect: id } }` into column writes, per declared
+ * relation. The facade holds no schema, so the engine publishes this on the writer — the same way it publishes
+ * `relationEdges` — and it travels through the RLS and mask wrappers with the rest of the writer.
+ */
+type RelationWriteInfo = KeyedRelationWriteInfo | ThroughRelationWriteInfo;
 
 /** `{ table: { relationName: info } }` — only tables that declare a relation appear. */
 type RelationWriteMap = Readonly<Record<string, Readonly<Record<string, RelationWriteInfo>>>>;
@@ -64,11 +75,23 @@ const fieldAcceptsNull = (definition: TableDefinitionLike | undefined, field: st
     return validator !== undefined && validatorAcceptsNull(validator);
 };
 
-/** The required columns of a join table that `connect` has no value for: everything but `from`, `to` and the system fields. */
+/**
+ * The required columns of a join table that `connect` has no value for: everything but `from`, `to`, the system
+ * fields and a column the server stamps itself (`.serverDefault(...)`).
+ */
 const unwritableJoinColumns = (join: TableDefinitionLike | undefined, from: string, to: string): string[] =>
     Object.entries(join?.shape ?? {})
-        .filter(([column, validator]) => column !== from && column !== to && !column.startsWith("_") && validator.kind !== "optional")
+        .filter(
+            ([column, validator]) =>
+                column !== from &&
+                column !== to &&
+                !column.startsWith("_") &&
+                validator.kind !== "optional" &&
+                validator._meta?.column?.serverDefault === undefined,
+        )
         .map(([column]) => column);
+
+const NOT_IN_TRANSACTION = "a many-to-many write is several row writes and only a mutation's transaction makes them atomic; run it in a mutation";
 
 /** Derive {@link RelationWriteMap} from the schema's `.relations(...)` declarations. */
 const describeRelationWrites = (schema: SchemaLike, inTransaction?: () => boolean): RelationWriteMap => {
@@ -88,15 +111,8 @@ const describeRelationWrites = (schema: SchemaLike, inTransaction?: () => boolea
 
                 forTable[name] = {
                     colocated: target !== undefined && join !== undefined && sameTier(definition, target) && sameTier(definition, join),
-                    field: from,
                     kind: "many",
-                    nullable: false,
-                    references: "_id",
-                    // An engine that does not report its transaction state (`inTransaction` absent) is not asked to refuse.
-                    refusalNow: () =>
-                        inTransaction !== undefined && !inTransaction()
-                            ? "a many-to-many write is several row writes and only a mutation's transaction makes them atomic; run it in a mutation"
-                            : undefined,
+                    refusalNow: () => (inTransaction?.() === true ? undefined : NOT_IN_TRANSACTION),
                     table: relation.table,
                     through: { from, table: joinName, to },
                     ...(required.length === 0
@@ -123,5 +139,5 @@ const describeRelationWrites = (schema: SchemaLike, inTransaction?: () => boolea
     return described;
 };
 
-export type { RelationWriteInfo, RelationWriteMap };
+export type { KeyedRelationWriteInfo, RelationWriteInfo, RelationWriteMap, ThroughRelationWriteInfo };
 export { describeRelationWrites };

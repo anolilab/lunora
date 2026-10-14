@@ -143,6 +143,8 @@ export default defineSchema({
     post_tags: defineTable({ postId: v.id("posts"), tagId: v.id("tags") })
         // one row per pair: a repeated connect must not store the link twice
         .index("by_pair", ["postId", "tagId"], { unique: true })
+        // the unique index leads with postId; this one serves the other direction
+        .index("by_tag", ["tagId"])
         .relations((r) => ({
             post: r.one("posts", { field: "postId", onDelete: "cascade" }),
             tag: r.one("tags", { field: "tagId", onDelete: "cascade" }),
@@ -151,8 +153,8 @@ export default defineSchema({
 ```
 
 - **The schema is checked when it loads.** The join table has to exist, `from` and `to` have to be required
-  `v.id` columns pointing at the declaring table and the target, and a **unique index over exactly those two
-  columns** is required. The `through_relation_missing_unique_index` advisor lint reports the missing index at
+  `v.id` columns on two different columns pointing at the declaring table and the target, and a **unique index over
+  exactly those two columns** is required. The `through_relation_missing_unique_index` advisor lint reports the missing index at
   codegen time.
 - **Reads work like any other `many`.** `with: { tags: true }` loads the linked tags (two batched reads: the join
   rows, then the tags), `where: { tags: { some | every | none: … } }` filters posts through the join, and
@@ -172,16 +174,20 @@ export default defineSchema({
     await ctx.db.posts.patch(postId, { tags: { set: [green, blue] } }); // adds blue, removes red
     ```
 
-    `connect` is idempotent (a link that already exists is left alone), `disconnect` of a link that is not there
-    does nothing, and `set` is a diff against the links already present. Each target must exist and be readable
-    (`NOT_FOUND` otherwise), checked before the first join row changes. A join table with a **required column
-    besides `from` and `to`** (a role, an `addedAt`) cannot be written this way and is refused with
-    `UNPROCESSABLE`: write its rows directly. Every join row goes through its own write, so the join table's write
-    policy, triggers and validators run for each one.
+    `connect` is idempotent (a link that already exists is left alone, even one the join table's read policy hides
+    from the caller), and `set` is a diff against the links already present. As for a one-to-many, the caller can
+    only release a tag it can read: `disconnect` of one it cannot read (or that does not exist) is `NOT_FOUND`, and
+    `set` leaves such a link in place. Naming the same id in `connect` and `disconnect` is a `VALIDATION_ERROR`.
+    Each tag to connect must exist and be readable (`NOT_FOUND` otherwise), checked before the first join row
+    changes. A join table with a **required column besides `from` and `to`** (a role, an `addedAt`) cannot be
+    written this way and is refused with `UNPROCESSABLE`: write its rows directly. A column the server stamps
+    itself (`.serverDefault(...)`) does not count. Every join row goes through its own write, so the join table's
+    write policy, triggers and validators run for each one.
 
 - **It needs a mutation.** The links are several row writes that only a mutation's transaction makes atomic: if
   the third insert fails, the earlier deletes and inserts roll back. An action has no transaction, so a many-to-many
-  write there is refused with `UNPROCESSABLE`. The owner, the join table and the target all have to live in the
+  write there is refused with `UNPROCESSABLE`; so is a write from any writer that does not report that it is inside
+  a transaction (a many-to-many write is never attempted on trust). The owner, the join table and the target all have to live in the
   same shard's Durable Object, as for any [nested write](#writing-through-a-relation).
 
 ## Index your foreign keys

@@ -57,7 +57,8 @@ describe("a failed many-to-many set on workerd", () => {
 
             runShardMigrations(sql, schema);
 
-            const db = createShardCtxDb({ schema, sql });
+            // The engine's gate only asks whether a transaction is open; here the transaction is the closure below, or the lack of one.
+            const db = createShardCtxDb({ inTransaction: () => true, schema, sql });
             const infos = db.relationWrites?.["posts"];
 
             await db.insert("posts", { _id: "p1", title: "alpha" }, { allowExplicitId: true });

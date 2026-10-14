@@ -28,7 +28,7 @@ export const schema = defineSchema({
 export default schema;
 `;
 
-const UNIQUE_PAIR = `.index("byPair", ["postId", "tagId"], { unique: true })`;
+const UNIQUE_PAIR = `.index("byPair", ["postId", "tagId"], { unique: true }).index("byTag", ["tagId"])`;
 
 let workdir: string;
 
@@ -73,7 +73,7 @@ describe("many-to-many relation codegen", () => {
 
         const names = generate(UNIQUE_PAIR)
             .advisories.map((finding) => finding.name)
-            .filter((name) => name.startsWith("relation_") || name.startsWith("through_") || name === "unindexed_relation_target");
+            .filter((name) => name.startsWith("relation_") || name.startsWith("through_") || name.startsWith("unindexed_"));
 
         expect(names).toStrictEqual([]);
     });

@@ -340,6 +340,27 @@ const resolveWith = async (options: ResolveWithOptions): Promise<void> => {
         return page;
     };
 
+    /**
+     * Set each parent's `name` to its group of loaded children, keyed by the parent's `keyField`.
+     *
+     * Still sliced to `cap`: a fan-out read is already bounded, but the batched branch is not, and a cross-shard
+     * fetcher concatenates per-shard pages (see this module's ordering caveat) so its `limit` is a per-shard bound
+     * rather than a global one.
+     */
+    const attachGroups = (
+        name: string,
+        nested: NestedWith,
+        cap: number | undefined,
+        keyField: string,
+        groups: Map<unknown, Record<string, unknown>[]>,
+    ): void => {
+        for (const parent of parents) {
+            const group = groups.get(parent[keyField]) ?? [];
+
+            parent[name] = projectChildren(cap === undefined ? group : group.slice(0, cap), nested);
+        }
+    };
+
     const loadMany = async (name: string, relation: KeyedRelationDefinitionLike, nested: NestedWith): Promise<void> => {
         const referenceValues = distinctValues(parents, relation.references);
 
@@ -402,20 +423,17 @@ const resolveWith = async (options: ResolveWithOptions): Promise<void> => {
 
         const groups = groupByForeignKey(pages, relation.field, (page) => masked(relation.table, page));
 
-        for (const parent of parents) {
-            const group = groups.get(parent[relation.references]) ?? [];
-
-            // Still sliced: a fan-out read is already bounded, but the batched
-            // branch is not, and a cross-shard fetcher concatenates per-shard
-            // pages (see this module's ordering caveat) so its `limit` is a
-            // per-shard bound rather than a global one.
-            parent[name] = projectChildren(cap === undefined ? group : group.slice(0, cap), nested);
-        }
+        attachGroups(name, nested, cap, relation.references, groups);
     };
 
     /**
      * The join rows of every parent as `parent id → linked target ids`, read under the join table's own read
      * policy so a link the caller may not see is not a link. The first hop of a many-to-many load.
+     *
+     * ponytail: this hop reads EVERY link of the page's parents even when the caller passes `limit`. A one-hop `many`
+     * pushes `limit` into the child read, but here the order and the cap belong to the TARGET read, so the cap can only
+     * bound the second hop. Bounding the first would need a window function over the join table, which the injected
+     * `fetcher` cannot express; revisit if a parent routinely links thousands of rows.
      */
     const loadLinks = async (relation: ThroughRelationDefinitionLike): Promise<Map<unknown, Set<unknown>>> => {
         const { from, table, to } = relation.through;
@@ -473,11 +491,7 @@ const resolveWith = async (options: ResolveWithOptions): Promise<void> => {
             byOwner = groupByLinkedOwner(links, masked(relation.table, await fetchTargets(linkedIds, undefined)));
         }
 
-        for (const parent of parents) {
-            const group = byOwner.get(parent["_id"]) ?? [];
-
-            parent[name] = projectChildren(cap === undefined ? group : group.slice(0, cap), nested);
-        }
+        attachGroups(name, nested, cap, "_id", byOwner);
     };
 
     /**

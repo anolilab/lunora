@@ -15,6 +15,7 @@ import {
     relationReferencesUnknownTable,
     runAdvisor,
     throughRelationMissingUniqueIndex,
+    unindexedRelationTarget,
 } from "../src";
 
 /** Build a LintContext from query reads only (an empty schema), for the query-shaped lints. */
@@ -440,5 +441,16 @@ describe("through relations (many-to-many)", () => {
         const dropped = { ...schema, tables: schema.tables.map((table) => (table.name === "post_tags" ? { ...table, fields: ["postId"] } : table)) };
 
         expect(relationReferencesUnknownField.run({ schema: dropped })[0]?.metadata).toMatchObject({ column: "tagId", owner: "post_tags" });
+    });
+
+    it("unindexed_relation_target flags the join table's `to` column when no index leads with it", () => {
+        expect.assertions(2);
+
+        const schema = fromServerSchema(schemaWith(defineTable(joinShape).index("byPair", ["postId", "tagId"], { unique: true })));
+        const findings = unindexedRelationTarget.run({ schema });
+
+        // `postId` leads the unique index, so only the reverse lookup through `tagId` scans the join table.
+        expect(findings).toHaveLength(1);
+        expect(findings[0]?.metadata).toMatchObject({ fkColumn: "tagId", table: "post_tags" });
     });
 });

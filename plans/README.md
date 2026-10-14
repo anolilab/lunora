@@ -26,7 +26,6 @@ When a plan ships: delete its file and remove its row here in the same change.
 | [166](./166-enterprise-auth-saml-scim.md)  | Enterprise auth: SAML SSO + SCIM                                | Phase 1a (OIDC SSO + SCIM Users) shipped; Phase 1b SAML gated                                        |
 | [464](./464-replay-conflict-resolution.md) | Replayed offline writes that conflict                           | Phase A shipped (docs + test); Phase B waits on a real app needing a merge the handler can't express |
 | [468](./468-gdpr-package.md)               | `@lunora/privacy`: data-subject rights (export, erasure, holds) | Phase 0: codegen spike; legal and tax review open (§10)                                              |
-| [489](./489-many-to-many-through.md)       | Many-to-many relations through a join table                     | Implemented on `feat/many-to-many-through`; merge pending                                            |
 
 ## Open (TODO)
 
@@ -57,6 +56,7 @@ landed the plan; a follow-up commit that completed it is listed after the first.
 
 | Plan | Title                                                                       | Commit               |
 | ---- | --------------------------------------------------------------------------- | -------------------- |
+| 489  | Many-to-many relations through a join table                                 | #1146                |
 | 479  | Make `createPayment`'s `authorize` required (default-deny)                  | 360c4f27c            |
 | 483  | Make the `.dev.vars` create exclusive on the final path                     | 58e11f997, 88b7c1997 |
 | 484  | Flag `v.any()` public args reached through an alias, destructure, or helper | e942bdb5f, 88b7c1997 |

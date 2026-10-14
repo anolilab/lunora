@@ -331,7 +331,7 @@ export {
     isRelationPredicate,
     resolveRelationPredicates,
 } from "./relation-predicates";
-export type { RelationWriteInfo, RelationWriteMap } from "./relation-writes";
+export type { KeyedRelationWriteInfo, RelationWriteInfo, RelationWriteMap, ThroughRelationWriteInfo } from "./relation-writes";
 export { describeRelationWrites } from "./relation-writes";
 export type { ApplyOnDeleteOptions } from "./relations";
 export { applyOnDelete, distinctValues, fanOutScalarCounts, relationHooks, resolveWith, runRowValidators } from "./relations";

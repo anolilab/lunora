@@ -750,19 +750,24 @@ interface QueueIR {
 }
 ```
 
-### `RelationSnapshot` (interface)
+### `RelationSnapshot` (type)
 
 ```ts
-interface RelationSnapshot {
+type RelationSnapshot = {
     field: string;
     kind: "many" | "one";
     table: string;
-    through?: {
+    through?: never;
+} | {
+    field?: never;
+    kind: "many";
+    table: string;
+    through: {
         from: string;
         table: string;
         to: string;
     };
-}
+};
 ```
 
 ### `RlsMetadataIR` (interface)

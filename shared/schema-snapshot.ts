@@ -77,15 +77,10 @@ interface IndexSnapshot {
     unique: boolean;
 }
 
-/** A single relation's structural shape. */
-interface RelationSnapshot {
-    /** The foreign-key column; for a many-to-many relation, the join table's key to the declaring table. */
-    field: string;
-    kind: "many" | "one";
-    table: string;
-    /** Present only on a many-to-many relation: the join table and its two keys. */
-    through?: { from: string; table: string; to: string };
-}
+/** A single relation's structural shape: a foreign-key relation, or a many-to-many one through a join table. */
+type RelationSnapshot =
+    | { field: string; kind: "many" | "one"; table: string; through?: never }
+    | { field?: never; kind: "many"; table: string; through: { from: string; table: string; to: string } };
 
 /** A table's declarative `.ttl(field, { after })` auto-expiry policy. */
 interface TtlSnapshot {

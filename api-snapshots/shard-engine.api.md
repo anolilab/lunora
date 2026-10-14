@@ -1292,6 +1292,19 @@ interface KeyRange {
 }
 ```
 
+### `KeyedRelationWriteInfo` (interface)
+
+```ts
+interface KeyedRelationWriteInfo extends RelationWriteBase {
+    readonly field: string;
+    readonly kind: "many" | "one";
+    readonly nullable: boolean;
+    readonly references: string;
+    readonly refusalNow?: never;
+    readonly through?: never;
+}
+```
+
 ### `LifecycleDispatchInfo` (interface)
 
 ```ts
@@ -2164,24 +2177,10 @@ interface RelationExistsMarker {
 type RelationGraphReader = Pick<DatabaseWriterLike, "findMany"> & Pick<Partial<DatabaseWriterLike>, "lookupById">;
 ```
 
-### `RelationWriteInfo` (interface)
+### `RelationWriteInfo` (type)
 
 ```ts
-interface RelationWriteInfo {
-    readonly colocated: boolean;
-    readonly field: string;
-    readonly kind: "many" | "one";
-    readonly nullable: boolean;
-    readonly references: string;
-    readonly refusal?: string;
-    readonly refusalNow?: () => string | undefined;
-    readonly table: string;
-    readonly through?: {
-        readonly from: string;
-        readonly table: string;
-        readonly to: string;
-    };
-}
+type RelationWriteInfo = KeyedRelationWriteInfo | ThroughRelationWriteInfo;
 ```
 
 ### `RelationWriteMap` (type)
@@ -3296,6 +3295,20 @@ interface TablesColumnsResult {
 ```ts
 interface TablesIndexesResult {
     indexesByTable: Record<string, TableIndexInfo[]>;
+}
+```
+
+### `ThroughRelationWriteInfo` (interface)
+
+```ts
+interface ThroughRelationWriteInfo extends RelationWriteBase {
+    readonly kind: "many";
+    readonly refusalNow: () => string | undefined;
+    readonly through: {
+        readonly from: string;
+        readonly table: string;
+        readonly to: string;
+    };
 }
 ```
 
@@ -5634,6 +5647,16 @@ interface RelationThroughLike {
     readonly from: string;
     readonly table: string;
     readonly to: string;
+}
+```
+
+### `RelationWriteBase` (interface)
+
+```ts
+interface RelationWriteBase {
+    readonly colocated: boolean;
+    readonly refusal?: string;
+    readonly table: string;
 }
 ```
 

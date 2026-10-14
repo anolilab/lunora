@@ -173,11 +173,16 @@ const createInProcessRuntime = (schema: Schema, options: InProcessRuntimeOptions
         return writer;
     };
 
+    // True between BEGIN and COMMIT/ROLLBACK, so the engine can tell a mutation (atomic) from a bare write, as the
+    // generated shard's `isInTransaction` does.
+    let transactionOpen = false;
+
     const createWriters = (identity: ResolvedIdentity): { database: DatabaseWriter; rawDatabase: DatabaseWriter } => {
         const database = createShardCtxDb({
             auth: { identity: identity.claims, userId: identity.userId },
             enforceRls: options.enforceRls ?? true,
             headroom,
+            inTransaction: () => transactionOpen,
             schema: ddlSchema,
             sql,
         }) as unknown as DatabaseWriter;
@@ -213,16 +218,20 @@ const createInProcessRuntime = (schema: Schema, options: InProcessRuntimeOptions
 
             headroom.reset();
             execStatement("BEGIN");
+            transactionOpen = true;
 
             try {
                 const result = await body();
 
                 execStatement("COMMIT");
+                transactionOpen = false;
 
                 await settleSchedules(true);
 
                 return result;
             } catch (error) {
+                transactionOpen = false;
+
                 try {
                     execStatement("ROLLBACK");
                 } catch {

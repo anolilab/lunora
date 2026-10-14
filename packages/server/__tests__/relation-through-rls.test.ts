@@ -48,6 +48,7 @@ const nodeSqlExec = (): SqlExec => {
     };
 };
 
+let runtime: ReturnType<typeof createInProcessRuntime>;
 let raw: FacadeWriterLike;
 let tags: { hidden: string; visible: string };
 let post: string;
@@ -74,10 +75,12 @@ const asQuery = async <Result>(policies: Policy<TestContext>[], body: (db: Recor
         .handler(contextFor(), {});
 
 const asMutation = async <Result>(policies: Policy<TestContext>[], body: (db: Record<string, FacadeEntry>) => Promise<Result>): Promise<Result> =>
-    lunora.mutation
-        .use(rlsForTest(policies))
-        .mutation(async ({ ctx }) => body(ctx.db as unknown as Record<string, FacadeEntry>))
-        .handler(contextFor(), {});
+    runtime.runInTransaction(async () =>
+        lunora.mutation
+            .use(rlsForTest(policies))
+            .mutation(async ({ ctx }) => body(ctx.db as unknown as Record<string, FacadeEntry>))
+            .handler(contextFor(), {}),
+    );
 
 const linkedIds = async (): Promise<string[]> => {
     const { page } = (await rawTable("post_tags").findMany({ where: { postId: post } })) as { page: Record<string, unknown>[] };
@@ -87,7 +90,7 @@ const linkedIds = async (): Promise<string[]> => {
 
 describe("r.many through under rls()", () => {
     beforeEach(async () => {
-        const runtime = createInProcessRuntime(schema, { sql: nodeSqlExec() });
+        runtime = createInProcessRuntime(schema, { sql: nodeSqlExec() });
 
         raw = runtime.createWriters(resolveInProcessIdentity(null)).rawDatabase as unknown as FacadeWriterLike;
         tags = {
@@ -96,7 +99,7 @@ describe("r.many through under rls()", () => {
         };
         post = (await rawTable("posts").insert({ title: "hello" })) as string;
 
-        await rawTable("posts").patch(post, { tags: { connect: [tags.visible, tags.hidden] } });
+        await runtime.runInTransaction(async () => rawTable("posts").patch(post, { tags: { connect: [tags.visible, tags.hidden] } }));
     });
 
     describe.each([
@@ -181,5 +184,55 @@ describe("r.many through under rls()", () => {
 
         await expect(asMutation([], async (db) => db["posts"]!.patch(post, { tags: { disconnect: [tags.hidden] } }))).resolves.toBeUndefined();
         await expect(linkedIds()).resolves.toStrictEqual([tags.visible]);
+    });
+
+    it("a caller who cannot read a tag cannot disconnect it, and set leaves a link to it alone", async () => {
+        expect.assertions(5);
+
+        const hideTag = definePolicy<TestContext>({
+            on: "read",
+            table: "tags",
+            when: () => {
+                return { _id: tags.visible };
+            },
+        });
+
+        await expect(asMutation([hideTag], async (db) => db["posts"]!.patch(post, { tags: { disconnect: [tags.hidden] } }))).rejects.toMatchObject({
+            code: "NOT_FOUND",
+        });
+        await expect(linkedIds()).resolves.toHaveLength(2);
+
+        // `set` only sees what the caller can read, so the link to the hidden tag stays and the visible one goes.
+        await asMutation([hideTag], async (db) => db["posts"]!.patch(post, { tags: { set: [] } }));
+
+        await expect(linkedIds()).resolves.toStrictEqual([tags.hidden]);
+
+        // Without the policy the same `set` removes both, so the policy is what kept the link.
+        await asMutation([], async (db) => db["posts"]!.patch(post, { tags: { set: [] } }));
+
+        await expect(linkedIds()).resolves.toStrictEqual([]);
+        await expect(asMutation([], async (db) => db["posts"]!.patch(post, { tags: { disconnect: [tags.hidden] } }))).resolves.toBeUndefined();
+    });
+
+    it("connecting to a tag whose existing link the join policy hides succeeds and writes nothing", async () => {
+        expect.assertions(2);
+
+        const hideLink = definePolicy<TestContext>({
+            on: "read",
+            table: "post_tags",
+            when: () => {
+                return { tagId: tags.visible };
+            },
+        });
+
+        // The caller cannot see the link to `hidden`, so the pair looks free; the unique index still holds it. The
+        // write must neither fail (which would confirm the hidden link exists) nor store a second row.
+        // A table with any policy denies the writes no policy allows, so the insert is allowed explicitly.
+        const allowInsert = definePolicy<TestContext>({ on: "insert", table: "post_tags", when: () => true });
+
+        await expect(
+            asMutation([hideLink, allowInsert], async (db) => db["posts"]!.patch(post, { tags: { connect: [tags.hidden] } })),
+        ).resolves.toBeUndefined();
+        await expect(linkedIds()).resolves.toHaveLength(2);
     });
 });

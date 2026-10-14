@@ -1,3 +1,4 @@
+import { hasUniquePairIndex } from "../../../../../shared/unique-pair-index";
 import emit from "../../finding";
 import type { Lint } from "../../types";
 
@@ -36,16 +37,13 @@ const throughRelationMissingUniqueIndex: Lint = {
                     return [];
                 }
 
-                const unique = join.indexes.some(
-                    (index) =>
-                        index.kind === "index" &&
-                        index.unique === true &&
-                        index.fields.length === 2 &&
-                        index.fields.includes(from) &&
-                        index.fields.includes(to),
-                );
-
-                if (unique) {
+                if (
+                    hasUniquePairIndex(
+                        join.indexes.filter((index) => index.kind === "index"),
+                        from,
+                        to,
+                    )
+                ) {
                     return [];
                 }
 

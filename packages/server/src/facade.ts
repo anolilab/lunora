@@ -16,17 +16,7 @@
 import { LunoraError } from "@lunora/errors";
 
 import type { RelationWriteInfosLike } from "./relation-writes";
-import { assertNoRelationWrites, insertWithRelations, patchWithRelations } from "./relation-writes";
-
-/**
- * Structural detector for `@lunora/do`'s `ConflictError(kind: "unique")`. The
- * facade must not take a runtime dependency on `@lunora/do`, so it recognises a
- * UNIQUE-constraint breach by the error's own `code`/`kind` properties (declared
- * own-properties precisely so cross-package callers can match the shape without
- * an `instanceof`). Used by the `skipDuplicates` insert path.
- */
-const isUniqueConflict = (error: unknown): boolean =>
-    typeof error === "object" && error !== null && (error as { code?: unknown }).code === "CONFLICT" && (error as { kind?: unknown }).kind === "unique";
+import { assertNoRelationWrites, insertWithRelations, isUniqueConflict, patchWithRelations } from "./relation-writes";
 
 /**
  * Build the `where` tree that locates an existing row for `upsert`: one equality

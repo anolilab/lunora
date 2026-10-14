@@ -167,6 +167,10 @@ const throughRelation = (throughProperty: Node, name: string, table: string): Re
         throw diagnosticAt(literal, "relation `through` needs string-literal `table`, `from` and `to` — codegen resolves them statically.");
     }
 
+    if (from === to) {
+        throw diagnosticAt(literal, `relation \`through\` has \`from\` and \`to\` both set to "${from}"; a link needs two different columns.`);
+    }
+
     return { kind: "many", name, table, through: { from, table: joinTable, to } };
 };
 

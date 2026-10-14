@@ -62,7 +62,8 @@ import { LunoraError } from "@lunora/errors";
 
 import composeMiddleware from "./builder/compose-middleware";
 import type { Middleware } from "./builder/types";
-import { validateGlobalVectors, validateIndexFields, validateTableModes, validateThroughRelations } from "./schema";
+import { validateGlobalVectors, validateIndexFields, validateTableModes } from "./schema";
+import validateThroughRelations from "./schema-through";
 import type {
     AggregateIndexDefinition,
     FunctionKind,
@@ -112,6 +113,7 @@ const rewriteTableReferences = (table: TableDefinition, key: string, bareNames: 
     for (const [accessor, relation] of Object.entries(table.relationMap)) {
         const target = rewriteReference(relation.table, key, bareNames);
 
+        // Two branches rather than one spread: a conditional `through` would widen the keyed variant's `through?: never`.
         relationMap[accessor] =
             relation.through === undefined
                 ? { ...relation, table: target }

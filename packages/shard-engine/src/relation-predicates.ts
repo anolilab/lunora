@@ -270,13 +270,12 @@ const assertFlatPredicate = (where: WhereInput | undefined, schema: ResolveConte
  * child's RLS read filter rides `baseWhere`, so an unreadable child row never
  * contributes a key — relation predicates are fail-closed by construction.
  */
-const projectChildKeys = async (
+const readChildKeys = async (
     relation: Pick<RelationDefinitionLike, "table">,
     childWhere: WhereInput,
     projectField: string,
     context: ResolveContext,
-    escalatable: boolean,
-): Promise<typeof KEY_OVERFLOW | unknown[]> => {
+): Promise<unknown[]> => {
     // eslint-disable-next-line @typescript-eslint/no-use-before-define -- mutual recursion: a child predicate may itself cross relations (multi-hop)
     const resolvedChildWhere = await resolveForTable(childWhere, relation.table, context);
     const { page } = await context.fetcher(relation.table, {
@@ -284,24 +283,47 @@ const projectChildKeys = async (
         relationBaseWhere: context.relationBaseWhere,
         where: resolvedChildWhere,
     });
-    const keys = distinctValues(page, projectField);
 
-    if (keys.length > context.maxRelationKeys) {
-        // A co-located relation can escape the cap via the (unbounded) EXISTS
-        // push-down — signal the overflow so the caller escalates. Otherwise
-        // (cross-backend/cross-shard) there is no subquery to fall back to, so
-        // fail closed rather than truncate the `IN (...)` and silently mis-match.
-        if (escalatable) {
-            return KEY_OVERFLOW;
-        }
+    return distinctValues(page, projectField);
+};
 
-        throw new LunoraError(
-            "INTERNAL",
-            `relation predicate on "${relation.table}" matched ${String(keys.length)} rows, exceeding the ${String(context.maxRelationKeys)}-key limit; narrow the predicate (a same-shard EXISTS push-down lifts this cap)`,
-        );
+/** Fail closed rather than truncate the `IN (...)` and silently mis-match. */
+const failOverKeyCap = (relation: Pick<RelationDefinitionLike, "table">, count: number, context: ResolveContext): never => {
+    throw new LunoraError(
+        "INTERNAL",
+        `relation predicate on "${relation.table}" matched ${String(count)} rows, exceeding the ${String(context.maxRelationKeys)}-key limit; narrow the predicate (a same-shard EXISTS push-down lifts this cap)`,
+    );
+};
+
+const projectChildKeys = async (
+    relation: Pick<RelationDefinitionLike, "table">,
+    childWhere: WhereInput,
+    projectField: string,
+    context: ResolveContext,
+    escalatable: boolean,
+): Promise<typeof KEY_OVERFLOW | unknown[]> => {
+    const keys = await readChildKeys(relation, childWhere, projectField, context);
+
+    if (keys.length <= context.maxRelationKeys) {
+        return keys;
     }
 
-    return keys;
+    // A co-located relation can escape the cap via the (unbounded) EXISTS
+    // push-down — signal the overflow so the caller escalates. Otherwise
+    // (cross-backend/cross-shard) there is no subquery to fall back to.
+    return escalatable ? KEY_OVERFLOW : failOverKeyCap(relation, keys.length, context);
+};
+
+/** Read the keys of a hop that never escalates to EXISTS, as both hops of a many-to-many predicate: over the cap it fails closed. */
+const projectBoundedKeys = async (
+    relation: Pick<RelationDefinitionLike, "table">,
+    childWhere: WhereInput,
+    projectField: string,
+    context: ResolveContext,
+): Promise<unknown[]> => {
+    const keys = await readChildKeys(relation, childWhere, projectField, context);
+
+    return keys.length > context.maxRelationKeys ? failOverKeyCap(relation, keys.length, context) : keys;
 };
 
 /**
@@ -365,9 +387,9 @@ const compileThroughOperator = async (
 ): Promise<WhereInput> => {
     const meta = requireOperatorMeta(operator);
     const { from, table, to } = relation.through;
-    const targetKeys = (await projectChildKeys(relation, meta.negateChild ? { NOT: childWhere } : childWhere, "_id", context, false)) as unknown[];
+    const targetKeys = await projectBoundedKeys(relation, meta.negateChild ? { NOT: childWhere } : childWhere, "_id", context);
     // Nothing matched on the target side, so no join row can: skip the second read.
-    const ownerKeys = targetKeys.length === 0 ? [] : ((await projectChildKeys({ table }, { [to]: { in: targetKeys } }, from, context, false)) as unknown[]);
+    const ownerKeys = targetKeys.length === 0 ? [] : await projectBoundedKeys({ table }, { [to]: { in: targetKeys } }, from, context);
 
     return { _id: meta.negated ? { notIn: ownerKeys } : { in: ownerKeys } };
 };

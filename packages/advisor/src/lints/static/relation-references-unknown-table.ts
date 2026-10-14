@@ -24,11 +24,11 @@ const relationReferencesUnknownTable: Lint = {
         // A many-to-many relation names two tables: its target and the join table it goes through.
         return context.schema.tables.flatMap((table) =>
             table.relations.flatMap((relation) =>
-                [relation.table, ...(relation.through === undefined ? [] : [relation.through.table])]
-                    .filter((name) => !tableNames.has(name))
-                    .map((name) =>
+                [{ name: relation.table, role: "" }, ...(relation.through === undefined ? [] : [{ name: relation.through.table, role: ":through" }])]
+                    .filter(({ name }) => !tableNames.has(name))
+                    .map(({ name, role }) =>
                         emit(relationReferencesUnknownTable, {
-                            cacheKey: `relation_references_unknown_table:${table.name}:${relation.name}${name === relation.table ? "" : ":through"}`,
+                            cacheKey: `relation_references_unknown_table:${table.name}:${relation.name}${role}`,
                             detail: `Relation "${relation.name}" on table "${table.name}" targets table "${name}", which does not exist in the schema.`,
                             metadata: { relation: relation.name, table: table.name, target: name },
                         }),

@@ -9,6 +9,7 @@ import { globalTtlMessage } from "../../../shared/global-ttl";
 import { globalVectorIndexMessage } from "../../../shared/global-vector-index";
 import type { PrefixedTables, SchemaExtension } from "./plugin";
 import { mergeSchemaExtension } from "./plugin";
+import validateThroughRelations from "./schema-through";
 import type {
     AggregateIndexDefinition,
     AggregateOp,
@@ -400,7 +401,7 @@ interface TableBuilder<Shape extends Record<string, Validator> = Record<string, 
     vectorize: (field: keyof Shape & string, options: VectorizeOptions<Shape>) => TableBuilder<Shape>;
 }
 
-/** Shared relation builder — `one`/`many` produce {@link RelationDefinition}s, defaulting `references` to `_id`. */
+/** `r.many`: one-to-many by `field`, or many-to-many by `through`. */
 function manyRelation<Target extends string>(table: Target, options: { field: string; references?: string }): ManyRelation<Target>;
 function manyRelation<Target extends string>(table: Target, options: { through: RelationThrough }): ThroughManyRelation<Target>;
 function manyRelation(table: string, options: { field: string; references?: string } | { through: RelationThrough }): RelationDefinition {
@@ -411,6 +412,7 @@ function manyRelation(table: string, options: { field: string; references?: stri
     return { field: options.field, kind: "many", references: options.references ?? "_id", table };
 }
 
+/** The `r` passed to `.relations((r) => …)`: `one`/`many` produce {@link RelationDefinition}s, defaulting `references` to `_id`. */
 const relationBuilder: RelationBuilder = {
     many: manyRelation,
     one: (table, options) => {
@@ -1614,61 +1616,6 @@ const validateTableModes = (tables: Record<string, TableDefinition>): void => {
     validateMemoryTables(tables);
 };
 
-/** The table a bare, required `v.id("t")` column points at, or `undefined` for any other validator (optional, nullable, a union, …). */
-const requiredIdTarget = (validator: Validator | undefined): string | undefined => {
-    const tableName = validator?.kind === "id" ? (validator as { _meta?: { tableName?: unknown } })._meta?.tableName : undefined;
-
-    return typeof tableName === "string" ? tableName : undefined;
-};
-
-/** Check one through relation against its join table; see {@link validateThroughRelations}. */
-const validateThroughRelation = (tables: Record<string, TableDefinition>, tableName: string, name: string, relation: ThroughRelationDefinition): void => {
-    const { from, table: joinName, to } = relation.through;
-    const label = `defineSchema: relation "${name}" on table "${tableName}" (through "${joinName}")`;
-    const join = tables[joinName];
-
-    if (join === undefined) {
-        throw new LunoraError("INTERNAL", `${label} names a join table that is not declared`);
-    }
-
-    if (tables[relation.table] === undefined) {
-        throw new LunoraError("INTERNAL", `${label} targets "${relation.table}", which is not declared`);
-    }
-
-    for (const [column, expected] of [
-        [from, tableName],
-        [to, relation.table],
-    ] as const) {
-        if (requiredIdTarget(join.shape[column]) !== expected) {
-            throw new LunoraError("INTERNAL", `${label}: "${joinName}.${column}" must be a required v.id("${expected}") column`);
-        }
-    }
-
-    if (!join.indexes.some((index) => index.unique === true && index.fields.length === 2 && index.fields.includes(from) && index.fields.includes(to))) {
-        throw new LunoraError(
-            "INTERNAL",
-            `${label} needs a unique index over ("${from}", "${to}") on "${joinName}": ${JSON.stringify(`.index("by_${from}_${to}", ["${from}", "${to}"], { unique: true })`)}. Without it a repeated connect stores the same link twice.`,
-        );
-    }
-};
-
-/**
- * A through relation (`r.many(target, { through })`) is only as sound as its join table: the join table must
- * exist, `from` and `to` must be required `v.id` columns pointing at the owner and the target, and a unique index
- * over exactly that pair must make a link a single row. Without the index a double `connect` is two rows and
- * every read through the relation returns the target twice. Run by `defineSchema` and again by
- * `mergeSchemaExtension` over the merged set.
- */
-const validateThroughRelations = (tables: Record<string, TableDefinition>): void => {
-    for (const [tableName, table] of Object.entries(tables)) {
-        for (const [name, relation] of Object.entries(table.relationMap)) {
-            if (relation.through !== undefined) {
-                validateThroughRelation(tables, tableName, name, relation);
-            }
-        }
-    }
-};
-
 const defineSchema = <T extends Record<string, TableDefinition>>(
     tables: T,
     vectorIndexes: Record<string, VectorIndexDefinition> = {},
@@ -1703,7 +1650,6 @@ export {
     validateGlobalVectors,
     validateIndexFields,
     validateTableModes,
-    validateThroughRelations,
 };
 
 export type {

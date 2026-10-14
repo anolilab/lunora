@@ -152,6 +152,7 @@ const namespaceExtensionTable = (table: TableIR, key: string, bareNames: Readonl
         relations: table.relations.map((relation) => {
             const target = rewriteReference(relation.table, key, bareNames);
 
+            // Two branches rather than one spread: a conditional `through` would widen the keyed variant's `through?: never`.
             return relation.through === undefined
                 ? { ...relation, table: target }
                 : { ...relation, table: target, through: { ...relation.through, table: rewriteReference(relation.through.table, key, bareNames) } };

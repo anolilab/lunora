@@ -6116,6 +6116,19 @@ type InstalledTables<T extends Record<string, TableDefinition>, Plugins extends 
 type IsPlainObject<V> = V extends string | number | boolean | bigint | symbol ? false : V extends ReadonlyArray<unknown> ? false : V extends Date | Uint8Array | ArrayBuffer | bigint | ((...arguments_: never[]) => unknown) ? false : V extends object ? true : false;
 ```
 
+### `KeyedRelationWriteInfoLike` (interface)
+
+```ts
+interface KeyedRelationWriteInfoLike extends RelationWriteBaseLike {
+    readonly field: string;
+    readonly kind: "many" | "one";
+    readonly nullable: boolean;
+    readonly references: string;
+    readonly refusalNow?: never;
+    readonly through?: never;
+}
+```
+
 ### `Link` (interface)
 
 ```ts
@@ -6560,24 +6573,20 @@ type RelationWhere<DM, REL extends Record<keyof DM, object>, T extends keyof DM>
 };
 ```
 
-### `RelationWriteInfoLike` (interface)
+### `RelationWriteBaseLike` (interface)
 
 ```ts
-interface RelationWriteInfoLike {
+interface RelationWriteBaseLike {
     readonly colocated: boolean;
-    readonly field: string;
-    readonly kind: "many" | "one";
-    readonly nullable: boolean;
-    readonly references: string;
     readonly refusal?: string;
-    readonly refusalNow?: () => string | undefined;
     readonly table: string;
-    readonly through?: {
-        readonly from: string;
-        readonly table: string;
-        readonly to: string;
-    };
 }
+```
+
+### `RelationWriteInfoLike` (type)
+
+```ts
+type RelationWriteInfoLike = KeyedRelationWriteInfoLike | ThroughRelationWriteInfoLike;
 ```
 
 ### `RelationWriteInfosLike` (type)
@@ -6989,6 +6998,20 @@ interface TableReaderLike$1 {
 ```ts
 interface ThroughManyRelation<Target extends string = string> extends ThroughRelationDefinition {
     readonly __target?: Target;
+}
+```
+
+### `ThroughRelationWriteInfoLike` (interface)
+
+```ts
+interface ThroughRelationWriteInfoLike extends RelationWriteBaseLike {
+    readonly kind: "many";
+    readonly refusalNow: () => string | undefined;
+    readonly through: {
+        readonly from: string;
+        readonly table: string;
+        readonly to: string;
+    };
 }
 ```
 

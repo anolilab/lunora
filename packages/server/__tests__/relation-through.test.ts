@@ -30,6 +30,13 @@ const buildSchema = () =>
         audit_links: defineTable({ postId: v.id("posts"), tagId: v.id("tags") })
             .global()
             .index("byPair", ["postId", "tagId"], { unique: true }),
+        stamped_tags: defineTable({ addedBy: v.string().serverDefault(() => "system"), postId: v.id("posts"), tagId: v.id("tags") }).index(
+            "byPair",
+            ["postId", "tagId"],
+            {
+                unique: true,
+            },
+        ),
         bad_votes: defineTable({ postId: v.id("posts"), role: v.string(), tagId: v.id("tags") }).index("byPair", ["postId", "tagId"], { unique: true }),
         post_tags: defineTable(joinShape)
             .index("byPair", ["postId", "tagId"], { unique: true })
@@ -51,6 +58,7 @@ const buildSchema = () =>
         posts: defineTable({ title: v.string() }).relations((r) => {
             return {
                 audited: r.many("tags", { through: { from: "postId", table: "audit_links", to: "tagId" } }),
+                stamped: r.many("tags", { through: { from: "postId", table: "stamped_tags", to: "tagId" } }),
                 tags: r.many("tags", { through: { from: "postId", table: "post_tags", to: "tagId" } }),
                 voted: r.many("tags", { through: { from: "postId", table: "bad_votes", to: "tagId" } }),
             };
@@ -73,7 +81,20 @@ const nodeSqlExec = (): SqlExec => {
 let runtime: ReturnType<typeof createInProcessRuntime>;
 let writer: ReturnType<ReturnType<typeof createInProcessRuntime>["createWriters"]>["database"];
 
-const table = (name: string): FacadeEntry => bindTableFacade(writer as unknown as FacadeWriterLike, name);
+/** The facade with no transaction around it, for use inside one (`runtime.runInTransaction` does not nest). */
+const bare = (name: string): FacadeEntry => bindTableFacade(writer as unknown as FacadeWriterLike, name);
+
+/** The facade whose writes each run as their own mutation, as a mutation handler's would. */
+const table = (name: string): FacadeEntry => {
+    const entry = bare(name);
+
+    return {
+        ...entry,
+        delete: async (id) => runtime.runInTransaction(async () => entry.delete(id)),
+        insert: async (document, options) => runtime.runInTransaction(async () => entry.insert(document, options)),
+        patch: async (id, values) => runtime.runInTransaction(async () => entry.patch(id, values)),
+    };
+};
 
 const newPost = async (title = "hello"): Promise<string> => (await table("posts").insert({ title })) as string;
 const newTag = async (label: string): Promise<string> => (await table("tags").insert({ label })) as string;
@@ -109,6 +130,19 @@ describe("r.many through: schema rules", () => {
                 tags: defineTable({ label: v.string() }),
             }),
         ).toThrow(/join table that is not declared/u);
+    });
+
+    it("refuses from and to naming the same column", () => {
+        expect.assertions(1);
+
+        expect(() =>
+            defineSchema({
+                join: defineTable({ postId: v.id("posts") }).index("byPair", ["postId", "postId"], { unique: true }),
+                posts: defineTable({ title: v.string() }).relations((r) => {
+                    return { posts: r.many("posts", { through: { from: "postId", table: "join", to: "postId" } }) };
+                }),
+            }),
+        ).toThrow(/both name "postId"/u);
     });
 
     it("requires both keys to be required v.id columns on the right tables", () => {
@@ -179,9 +213,10 @@ describe("r.many through: nested writes", () => {
 
         const [a, b] = [await newTag("a"), await newTag("b")] as [string, string];
         const post = await newPost();
+        const unlinked = await newTag("unlinked");
 
         await table("posts").patch(post, { tags: { connect: [a, b] } });
-        await table("posts").patch(post, { tags: { disconnect: [a, "never-linked"] } });
+        await table("posts").patch(post, { tags: { disconnect: [a, unlinked] } });
 
         await expect(linked(post)).resolves.toStrictEqual([b]);
         await expect(table("tags").get(a as never)).resolves.toMatchObject({ label: "a" });
@@ -227,6 +262,17 @@ describe("r.many through: nested writes", () => {
         await expect(linked(post)).resolves.toStrictEqual([]);
     });
 
+    it("writes a join table whose extra required column the server stamps itself", async () => {
+        expect.assertions(1);
+
+        const tag = await newTag("a");
+        const post = await newPost();
+
+        await table("posts").patch(post, { stamped: { connect: [tag] } });
+
+        await expect(bare("stamped_tags").findMany({ where: { postId: post } })).resolves.toMatchObject({ page: [{ addedBy: "system", tagId: tag }] });
+    });
+
     it("refuses a join table with a required column it cannot fill in", async () => {
         expect.assertions(1);
 
@@ -249,22 +295,50 @@ describe("r.many through: nested writes", () => {
     });
 
     it("rolls a failed set back to the join rows it started with", async () => {
-        expect.assertions(4);
+        expect.assertions(2);
 
         const [a, b, bad] = [await newTag("a"), await newTag("b"), await newTag("bad")] as [string, string, string];
         const post = await newPost();
 
-        await runtime.runInTransaction(async () => table("posts").patch(post, { tags: { connect: [a, b] } }));
+        await table("posts").patch(post, { tags: { connect: [a, b] } });
         blockedTag = bad;
 
         // `set` releases `a`, then inserts `bad`, whose join row the trigger rejects: the delete has already happened.
-        await expect(runtime.runInTransaction(async () => table("posts").patch(post, { tags: { set: [b, bad] } }))).rejects.toThrow(/blocked/u);
+        await expect(runtime.runInTransaction(async () => bare("posts").patch(post, { tags: { set: [b, bad] } }))).rejects.toThrow(/blocked/u);
 
         await expect(linked(post)).resolves.toStrictEqual(sorted([a, b]));
+    });
 
-        // Outside a transaction the same failure leaves the delete in place: the rollback is the transaction's doing.
-        await expect(table("posts").patch(post, { tags: { set: [b, bad] } })).rejects.toThrow(/blocked/u);
-        await expect(linked(post)).resolves.toStrictEqual([b]);
+    it("refuses naming the same id in connect and disconnect", async () => {
+        expect.assertions(1);
+
+        const tag = await newTag("a");
+        const post = await newPost();
+
+        await expect(table("posts").patch(post, { tags: { connect: [tag], disconnect: [tag] } })).rejects.toMatchObject({ code: "VALIDATION_ERROR" });
+    });
+
+    it("disconnecting a tag that does not exist is NOT_FOUND, as for a one-to-many", async () => {
+        expect.assertions(1);
+
+        const post = await newPost();
+
+        await expect(table("posts").patch(post, { tags: { disconnect: ["missing"] } })).rejects.toMatchObject({ code: "NOT_FOUND" });
+    });
+
+    it("refuses a write on a writer that does not say it is in a transaction", async () => {
+        expect.assertions(1);
+
+        const sql = nodeSqlExec();
+        const schema = buildSchema() as unknown as SchemaLike;
+
+        runShardMigrations(sql, schema);
+
+        // No `inTransaction` option at all: the writer is not trusted to be inside one.
+        const unknown = createShardCtxDb({ schema, sql }) as unknown as FacadeWriterLike;
+        const post = (await bindTableFacade(unknown, "posts").insert({ title: "hello" })) as string;
+
+        await expect(bindTableFacade(unknown, "posts").patch(post, { tags: { connect: [] } })).rejects.toMatchObject({ code: "UNPROCESSABLE" });
     });
 
     it("deleting either side cascades through the join table's own onDelete", async () => {
