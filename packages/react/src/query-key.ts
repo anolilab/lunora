@@ -39,13 +39,16 @@ const keyHash = (queryKey: QueryKey): string => stableWireKey(queryKey);
  * so a value prefetched on the server lands under the exact key the client hook
  * reads back — no loading flash, no duplicate fetch.
  */
-const lunoraQueryKey = (function_: FunctionReference, args: Record<string, unknown>, shardKey: string | undefined): QueryKey => [
+const lunoraQueryKeyFromArgsKey = (ref: string, argsKey: string, shardKey: string | undefined): QueryKey => [
     "lunora",
-    function_.__lunoraRef,
-    stableWireKey(args),
+    ref,
+    argsKey,
     // eslint-disable-next-line unicorn/no-null -- this literal is part of the JSON-serialized query key TanStack hashes for dedup; `null` keeps a stable, distinct slot from an absent shardKey across renders.
     shardKey ?? null,
 ];
+
+const lunoraQueryKey = (function_: FunctionReference, args: Record<string, unknown>, shardKey: string | undefined): QueryKey =>
+    lunoraQueryKeyFromArgsKey(function_.__lunoraRef, stableWireKey(args), shardKey);
 
 /**
  * Stringify a queryKey for use in a React effect's dep list. TanStack hashes
@@ -55,7 +58,7 @@ const lunoraQueryKey = (function_: FunctionReference, args: Record<string, unkno
  */
 const serializeQueryKey = (queryKey: QueryKey): string => keyHash(queryKey);
 
-export { keyHash, lunoraQueryKey, serializeQueryKey };
+export { keyHash, lunoraQueryKey, lunoraQueryKeyFromArgsKey, serializeQueryKey };
 
 export { stableStringify } from "../../../shared/stable-key";
 export { stableWireKey } from "../../../shared/wire-key";

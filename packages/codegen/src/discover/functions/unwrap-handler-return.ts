@@ -1,15 +1,19 @@
-import type { Diagnostic, Node, SourceFile, Type } from "ts-morph";
+import type { Diagnostic, Node, SourceFile, ts, Type } from "ts-morph";
 import { DiagnosticCategory, SyntaxKind } from "ts-morph";
 
 import { recordErasedReturn } from "../erased-returns";
 import isAnyDegraded from "./internal/any-token";
 import { containsUnencodableMember, expandUnreachableType, referencesUnreachableLocalType } from "./internal/type-expansion";
 
-/** The error diagnostics of each source file, computed once: a whole-file type-check is the expensive part. */
-const errorsByFile = new WeakMap<SourceFile, Diagnostic[]>();
+/**
+ * The error diagnostics of each source file, computed once: a whole-file type-check is the expensive part.
+ * Keyed on the compiler node, which a re-parse replaces — the ts-morph wrapper survives a refresh and would
+ * serve the previous content's diagnostics.
+ */
+const errorsByFile = new WeakMap<ts.SourceFile, Diagnostic[]>();
 
 const errorsOf = (file: SourceFile): Diagnostic[] => {
-    const cached = errorsByFile.get(file);
+    const cached = errorsByFile.get(file.compilerNode);
 
     if (cached) {
         return cached;
@@ -17,7 +21,7 @@ const errorsOf = (file: SourceFile): Diagnostic[] => {
 
     const errors = file.getPreEmitDiagnostics().filter((diagnostic) => diagnostic.getCategory() === DiagnosticCategory.Error);
 
-    errorsByFile.set(file, errors);
+    errorsByFile.set(file.compilerNode, errors);
 
     return errors;
 };

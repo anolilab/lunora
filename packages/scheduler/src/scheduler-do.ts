@@ -589,35 +589,47 @@ class SchedulerDO {
             prefix: "t:",
         });
 
-        /* eslint-disable no-await-in-loop -- sequential by design: reading the due slice's headers is local Durable Object storage, and a dangling-index delete must land before the next read. */
+        const candidates: { indexKey: string; recordId: string }[] = [];
+
         for (const [indexKey, recordId] of indexEntries.entries()) {
             const dueAt = Number.parseInt(indexKey.slice(2, indexKey.indexOf(":", 2)), 10);
 
             if (Number.isFinite(dueAt) && dueAt <= now) {
-                const record = await this.state.storage.get<ScheduleRecord>(`${HEADER_PREFIX}${recordId}`);
+                candidates.push({ indexKey, recordId });
+            }
+        }
 
-                if (record && selected.has(recordId)) {
-                    // A record carrying TWO due index entries. One record is one
-                    // job: draining both would hand two lanes the same record and
-                    // dispatch it twice, which is the very thing the lease exists
-                    // to prevent. Nothing should produce this — but a swallowed
-                    // post-settle delete can (see `drainRecordGuarded`'s tail), so
-                    // the extra row is reconciled away here rather than dispatched.
-                    await this.state.storage.delete(indexKey);
-                } else if (record) {
-                    selected.add(recordId);
-                    due.push({ claimKey: indexKey, record });
-                } else {
-                    // Dangling index entry: this `t:` row points at an `id:`
-                    // header that no longer exists (e.g. a partial-failure path
-                    // left the index at a stale time while the header moved on,
-                    // then the job later dispatched and cleared its header).
-                    // Delete the orphan now — otherwise rescheduleAlarm() keeps
-                    // arming the alarm to this past time, which fires, finds no
-                    // record, re-arms to the same past time, and busy-loops
-                    // forever, burning DO duty cycles.
-                    await this.state.storage.delete(indexKey);
-                }
+        // Read every due header concurrently instead of one awaited round trip
+        // per entry. Not `storage.get(keys[])`: the host storage contract
+        // (`SchedulerDOState.storage.get`) is single-key so the node host and
+        // celld stay supported; the runtime pipelines concurrent single gets.
+        const records = await Promise.all(candidates.map((candidate) => this.state.storage.get<ScheduleRecord>(`${HEADER_PREFIX}${candidate.recordId}`)));
+
+        /* eslint-disable no-await-in-loop -- sequential by design: a dangling-index delete must land before the next one, and the deletes are local Durable Object storage. */
+        for (const [position, { indexKey, recordId }] of candidates.entries()) {
+            const record = records[position];
+
+            if (record && selected.has(recordId)) {
+                // A record carrying TWO due index entries. One record is one
+                // job: draining both would hand two lanes the same record and
+                // dispatch it twice, which is the very thing the lease exists
+                // to prevent. Nothing should produce this — but a swallowed
+                // post-settle delete can (see `drainRecordGuarded`'s tail), so
+                // the extra row is reconciled away here rather than dispatched.
+                await this.state.storage.delete(indexKey);
+            } else if (record) {
+                selected.add(recordId);
+                due.push({ claimKey: indexKey, record });
+            } else {
+                // Dangling index entry: this `t:` row points at an `id:`
+                // header that no longer exists (e.g. a partial-failure path
+                // left the index at a stale time while the header moved on,
+                // then the job later dispatched and cleared its header).
+                // Delete the orphan now — otherwise rescheduleAlarm() keeps
+                // arming the alarm to this past time, which fires, finds no
+                // record, re-arms to the same past time, and busy-loops
+                // forever, burning DO duty cycles.
+                await this.state.storage.delete(indexKey);
             }
         }
         /* eslint-enable no-await-in-loop */
