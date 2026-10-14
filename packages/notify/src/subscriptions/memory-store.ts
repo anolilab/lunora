@@ -1,4 +1,4 @@
-import type { StoredSubscription, SubscriptionFilter, SubscriptionStatus, SubscriptionStore } from "../types";
+import type { StoredSubscription, SubscriptionFilter, SubscriptionOutcomes, SubscriptionStatus, SubscriptionStore } from "../types";
 import { claimRefusal, legacyIdFor } from "./normalize";
 
 /** Ascending `id` comparator — pairs with the D1 store's `ORDER BY id ASC`. */
@@ -78,6 +78,31 @@ const memorySubscriptionStore = (): SubscriptionStore => {
             const capped = filter?.limit !== undefined && filter.limit > 0 ? paged.slice(0, Math.trunc(filter.limit)) : paged;
 
             return Promise.resolve(capped);
+        },
+        applyOutcomes: ({ failed, gone, ok }: SubscriptionOutcomes): Promise<void> => {
+            const lastSeenAt = Date.now();
+
+            for (const id of ok) {
+                const existing = map.get(id);
+
+                if (existing !== undefined) {
+                    map.set(id, { ...existing, lastError: undefined, lastSeenAt, lastStatus: "ok" });
+                }
+            }
+
+            for (const { error, id } of failed) {
+                const existing = map.get(id);
+
+                if (existing !== undefined) {
+                    map.set(id, { ...existing, lastError: error, lastSeenAt, lastStatus: "failed" });
+                }
+            }
+
+            for (const id of gone) {
+                map.delete(id);
+            }
+
+            return Promise.resolve();
         },
         markStatus: (id: string, status: SubscriptionStatus, error?: string): Promise<void> => {
             const existing = map.get(id);
