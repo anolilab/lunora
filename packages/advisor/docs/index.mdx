@@ -165,6 +165,7 @@ Storage, AI, containers & payments:
 | `unindexed_relation_target`        | `INFO`  | The `many`-side foreign key of a relation is unindexed                                                                          |
 | `duplicate_index`                  | `INFO`  | A redundant index already covered by another                                                                                    |
 | `container_oversized_instance`     | `INFO`  | A container instance larger than its workload needs                                                                             |
+| `container_long_sleep_after`       | `WARN`  | A container's idle window (`sleepAfter`, capped by `hardTimeout`) is over an hour, so each idle instance bills for that long    |
 | `ai_run_without_logging`           | `INFO`  | An AI generation with no structured event; spend can't be attributed and a bad answer can't be traced                           |
 | `topic_too_many_subscriptions`     | `INFO`  | A topic with more than 10 subscriptions; every publish sends to each, at most six at a time                                     |
 

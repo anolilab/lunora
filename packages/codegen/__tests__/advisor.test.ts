@@ -173,6 +173,24 @@ describe("runCodegen lint integration", () => {
         expect(names).toContain("unindexed_foreign_key");
     });
 
+    it("flags a container whose sleepAfter outlasts an hour, read from the declaration", () => {
+        expect.assertions(2);
+
+        writeFileSync(
+            join(workdir, "lunora", "containers.ts"),
+            `import { defineContainer } from "@lunora/container";\nexport const transcoder = defineContainer({ image: { registry: "docker.io/acme/transcoder:1" }, sleepAfter: "2h" });\nexport const resizer = defineContainer({ image: { registry: "docker.io/acme/resizer:1" }, sleepAfter: "2h", hardTimeout: "30m" });\n`,
+            "utf8",
+        );
+
+        const findings = runCodegen({ projectRoot: workdir, wranglerQueueProducers: [] }).advisories.filter(
+            (advisory) => advisory.name === "container_long_sleep_after",
+        );
+
+        // `resizer` is capped by its 30 minute hardTimeout, so only `transcoder` is flagged.
+        expect(findings.map((finding) => finding.cacheKey)).toStrictEqual(["container_long_sleep_after:transcoder"]);
+        expect(findings[0]?.level).toBe("WARN");
+    });
+
     it("emits the advisories into the generated shard for the getAdvisories RPC", () => {
         expect.assertions(3);
 

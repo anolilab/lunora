@@ -31,6 +31,7 @@ import browserUserUrlWithoutAllowlist from "./lints/static/browser-user-url-with
 import circularFk from "./lints/static/circular-fk";
 import commitOrderedHardDelete from "./lints/static/commit-ordered-hard-delete";
 import containerInstanceKeyFromUserInput from "./lints/static/container-instance-key-from-user-input";
+import containerLongSleepAfter from "./lints/static/container-long-sleep-after";
 import containerOversizedInstance from "./lints/static/container-oversized-instance";
 import containerPublicInternet from "./lints/static/container-public-internet";
 import containerRuntimeEgressRelaxation from "./lints/static/container-runtime-egress-relaxation";
@@ -183,6 +184,7 @@ export { default as browserUserUrlWithoutAllowlist } from "./lints/static/browse
 export { default as circularFk } from "./lints/static/circular-fk";
 export { default as commitOrderedHardDelete } from "./lints/static/commit-ordered-hard-delete";
 export { default as containerInstanceKeyFromUserInput } from "./lints/static/container-instance-key-from-user-input";
+export { default as containerLongSleepAfter } from "./lints/static/container-long-sleep-after";
 export { default as containerOversizedInstance } from "./lints/static/container-oversized-instance";
 export { default as containerPublicInternet } from "./lints/static/container-public-internet";
 export { default as containerRuntimeEgressRelaxation } from "./lints/static/container-runtime-egress-relaxation";
@@ -370,6 +372,7 @@ export const STATIC_LINTS: ReadonlyArray<Lint> = [
     rlsUncoveredTable,
     maskUncoveredPiiColumn,
     maskWeakHashStrategyOnPii,
+    containerLongSleepAfter,
     containerOversizedInstance,
     containerPublicInternet,
     publicMutationWithoutRatelimit,

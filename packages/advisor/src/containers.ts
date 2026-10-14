@@ -16,6 +16,8 @@ export interface AdvisorContainer {
     enableInternet?: boolean;
     /** The `lunora/containers.ts` export name, e.g. `transcoder`. */
     exportName: string;
+    /** Declared `hardTimeout` value, when a static literal. Caps total lifetime, idle or not. */
+    hardTimeout?: number | string;
     /** Declared `instanceType`: a named size, or a custom `{ vcpu, memoryMib, diskMb }`. */
     instanceType?: string | { diskMb?: number; memoryMib?: number; vcpu?: number };
     /** Declared `maxInstances` cap, when present. */

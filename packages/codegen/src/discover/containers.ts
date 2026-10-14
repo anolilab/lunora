@@ -391,8 +391,8 @@ const booleanLiteral = (expression: Expression): boolean | undefined => {
     return undefined;
 };
 
-/** Read a string-or-number literal, or `undefined` when it isn't one. Lifts `sleepAfter` for the advisor. */
-// eslint-disable-next-line sonarjs/function-return-type -- sleepAfter IS a string-or-number union, mirroring the platform field
+/** Read a string-or-number literal, or `undefined` when it isn't one. Lifts `sleepAfter` and `hardTimeout` for the advisor. */
+// eslint-disable-next-line sonarjs/function-return-type -- sleepAfter and hardTimeout ARE string-or-number unions, mirroring the platform field
 const stringOrNumberLiteral = (expression: Expression): number | string | undefined => {
     if (Node.isStringLiteral(expression) || Node.isNoSubstitutionTemplateLiteral(expression)) {
         return expression.getLiteralValue();
@@ -523,6 +523,10 @@ const liftContainerEntry = (
             // Lifted (when literal) for the advisor; the generated class still
             // reads the live value off the imported definition.
             base.enableInternet = booleanLiteral(initializer);
+            break;
+        }
+        case "hardTimeout": {
+            base.hardTimeout = stringOrNumberLiteral(initializer);
             break;
         }
         case "image": {

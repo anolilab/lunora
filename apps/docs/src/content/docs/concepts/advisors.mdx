@@ -85,13 +85,14 @@ studio.
 
 ### Operational
 
-| Lint                           | Level | Detects                                                                                                |
-| ------------------------------ | ----- | ------------------------------------------------------------------------------------------------------ |
-| `table_without_insert`         | info  | No function inserts into the table: dead schema, or seeded out-of-band.                                |
-| `workflow_unused`              | info  | A declared workflow is never started: dead code (still billed), or external.                           |
-| `queue_without_dlq`            | warn  | A `defineQueue` with no `deadLetterQueue`: exhausted messages are dropped, not captured or replayable. |
-| `container_oversized_instance` | info  | A container on a large instance type: provisioned memory/disk billed while running.                    |
-| `topic_too_many_subscriptions` | info  | A topic with more than 10 subscriptions: each publish sends to every queue, six at a time.             |
+| Lint                           | Level | Detects                                                                                                                           |
+| ------------------------------ | ----- | --------------------------------------------------------------------------------------------------------------------------------- |
+| `table_without_insert`         | info  | No function inserts into the table: dead schema, or seeded out-of-band.                                                           |
+| `workflow_unused`              | info  | A declared workflow is never started: dead code (still billed), or external.                                                      |
+| `queue_without_dlq`            | warn  | A `defineQueue` with no `deadLetterQueue`: exhausted messages are dropped, not captured or replayable.                            |
+| `container_oversized_instance` | info  | A container on a large instance type: provisioned memory/disk billed while running.                                               |
+| `container_long_sleep_after`   | warn  | A container's idle window (`sleepAfter`, capped by `hardTimeout`) is over an hour: each idle instance runs, and bills, that long. |
+| `topic_too_many_subscriptions` | info  | A topic with more than 10 subscriptions: each publish sends to every queue, six at a time.                                        |
 
 ## Runtime lints
 
