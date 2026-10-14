@@ -122,6 +122,11 @@
             "title": "Rate limit"
         },
         {
+            "description": "Pauses the Worker when a Cloudflare usage alert fires. A verified billing usage alert posted to /_lunora/spend-alert sets a flag in an R2 bucket; while it is set, user traffic gets 503 and cron jobs are skipped. Nothing resumes the app automatically.",
+            "name": "spend-guard",
+            "title": "Spend guard"
+        },
+        {
             "description": "R2-backed file storage for Lunora — direct-upload + worker-signed-URL helpers built on @lunora/storage over an R2 bucket binding, exposed as actions/queries so codegen surfaces them as api.storage.*.",
             "name": "storage",
             "title": "Storage"
