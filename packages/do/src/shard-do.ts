@@ -11571,11 +11571,11 @@ abstract class ShardDO {
         const frameEpoch = this.currentCdcEpoch();
         const generation = this.writeGeneration;
 
-        // Flush-local dedup of identity-INDEPENDENT reactive runs: N sockets on
-        // the same admin/reserved `(functionPath, args)` share ONE query run this
-        // pass instead of re-running it per socket. Created fresh per flush so a
-        // result is never reused across writes; identity-dependent reads bypass it
-        // entirely (see resolveReactiveOutcomeDeduped).
+        // Flush-local dedup of reactive runs: sockets on the same
+        // `(functionPath, args)` share ONE query run this pass when their FULL
+        // identity is equal (see `subscriptionIdentityKey`); admin/reserved reads
+        // share across all sockets. Created fresh per flush so a result is never
+        // reused across writes (see resolveReactiveOutcomeDeduped).
         const reactiveRunCache = new Map<string, Promise<SubscriptionOutcome | null>>();
 
         const refreshOne = async (ws: ShardSocketLike): Promise<void> => {
