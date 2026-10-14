@@ -2546,6 +2546,49 @@ export const internalReport = internalMutation.mutation(async ({ ctx }) => {
             expect(findings.map((finding) => finding.name)).not.toContain("dispatch_cycle");
         });
 
+        it("reports a five-second poll that rewrites a row, at INFO, and not one that drains the rows it reads", () => {
+            expect.assertions(2);
+
+            writeFileSync(
+                join(workdir, "lunora", "schema.ts"),
+                `import { defineSchema, defineTable, v } from "@lunora/server";
+
+export default defineSchema({
+    jobs: defineTable({ state: v.string() }),
+});
+`,
+            );
+            writeFileSync(
+                join(workdir, "lunora", "poll.ts"),
+                `import { internal } from "./_generated/api.js";
+import { internalMutation } from "./_generated/server.js";
+
+export const rewrite = internalMutation.mutation(async ({ ctx }) => {
+    const job = await ctx.db.query("jobs").first();
+    if (job === null) return;
+    await ctx.db.jobs.patch(job._id, { state: "seen" });
+    await ctx.scheduler.runAfter(5000, internal.poll.rewrite, {});
+});
+
+export const drain = internalMutation.mutation(async ({ ctx }) => {
+    const job = await ctx.db.query("jobs").first();
+    if (job === null) return;
+    await ctx.db.jobs.delete(job._id);
+    await ctx.scheduler.runAfter(5000, internal.poll.drain, {});
+});
+`,
+            );
+
+            const findings = runCodegen({ projectRoot: workdir, wranglerQueueProducers: [] }).advisories.filter(
+                (advisory) => advisory.name === "self_reschedule_without_progress",
+            );
+
+            // `rewrite` re-reads `jobs` and only rewrites it, so every tick costs a read and a write.
+            // `drain` removes the row it reads, which is progress, so it stays silent.
+            expect(findings.map((finding) => finding.cacheKey)).toStrictEqual(["self_reschedule_without_progress:poll:8:rewrite"]);
+            expect(findings[0]?.level).toBe("INFO");
+        });
+
         it("resolves a hoisted .output() validator to the same type as the inline form (#59)", () => {
             expect.assertions(2);
 

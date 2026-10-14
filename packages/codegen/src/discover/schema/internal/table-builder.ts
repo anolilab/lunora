@@ -479,6 +479,7 @@ const parseGlobalBackend = (args: ReadonlyArray<Node>): TableIR["globalBackend"]
 
 /** Accumulator the builder-chain walk mutates as it unwinds a `defineTable(...)` chain. */
 interface TableBuilderAccumulator {
+    aggregateIndexed: boolean;
     commitOrdered: boolean;
     externallyManaged: boolean;
     externalSource?: ExternalSourceIR;
@@ -569,6 +570,13 @@ const parseSourceCall = (args: ReadonlyArray<Node>): ExternalSourceIR => {
 /** Apply one chained method call (`.index`, `.shardBy`, …) to the accumulator. */
 const applyTableMethod = (accumulator: TableBuilderAccumulator, method: string, args: ReadonlyArray<Node>, name: string): void => {
     switch (method) {
+        case "aggregateIndex": {
+            // The index's options are read by the runtime; codegen needs only that one exists.
+            accumulator.aggregateIndexed = true;
+
+            break;
+        }
+
         case "commitOrdered": {
             // `.commitOrdered()` takes no arguments — its presence is the whole
             // declaration. The `_commitSeq` field it adds is NOT injected into
@@ -812,6 +820,7 @@ const withInjectedColumns = (expression: Expression, shape: Record<string, Valid
 
 const parseTableBuilder = (expression: Expression, name: string): TableIR => {
     const accumulator: TableBuilderAccumulator = {
+        aggregateIndexed: false,
         commitOrdered: false,
         externallyManaged: false,
         geoIndexes: [],
@@ -869,6 +878,7 @@ const parseTableBuilder = (expression: Expression, name: string): TableIR => {
     assertNoGlobalTtl(expression, name, accumulator);
 
     return {
+        ...(accumulator.aggregateIndexed ? { aggregateIndexed: true as const } : {}),
         commitOrdered: accumulator.commitOrdered,
         externallyManaged: accumulator.externallyManaged,
         externalSource: accumulator.externalSource,

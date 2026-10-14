@@ -48,6 +48,10 @@ const CLOUDFLARE_CAPABILITIES: PlatformCapabilities = {
             level: "emulated",
             note: "The lifetime is real — an eviction drops the DO's heap and the framework clears every `.memory()` table on reconstruction, so the rows behave exactly like heap state, and their writes stay out of the CDC changelog. The STORAGE is not: workerd exposes one SQL handle and no memory-backed database, so a memory row is still written to the DO's SQLite and then deleted. `.memory()` buys the semantics, not the write",
         },
+        alarmRearmBreaker: {
+            level: "emulated",
+            note: "Lunora's own counter, not a platform primitive: the poll alarm's self re-arms are counted in one row of the shard's SQL (ShardHost.sql) over a sliding window, and a re-arm past the budget is refused, leaves one recovery wake a window out, and is logged once per trip. The arm it gates is ShardHost.alarms, so it runs wherever the shard has durable SQL and alarms",
+        },
         shardAlarms: { level: "native", note: "state.storage.setAlarm" },
         shardPlacement: {
             level: "native",

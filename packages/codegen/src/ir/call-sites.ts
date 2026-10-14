@@ -40,16 +40,26 @@ export type CallSiteScope = AdvisorCallSiteScope;
 export interface CallEdgeIR {
     /**
      * `true` when the hop may not take effect on every pass of its function —
-     * see `isConditionalSite` in `discover/call-edges.ts` for the rules. Set
+     * see `conditionOf` in `discover/call-edges.ts` for the rules. Set
      * only, never `false`. The `dispatch_cycle` lint's false-positive gate.
      */
     conditional?: true;
 
     /** Source file relative to `<projectRoot>/lunora/`, without extension. */
     file: string;
+
     kind: "call" | "enqueue" | "invoke" | "publish" | "schedule";
     /** 1-based line of the call. */
     line: number;
+
+    /**
+     * `true` alongside `conditional` when a loop's body or update clause is the
+     * ONLY thing that may stop the hop — the loop may run zero times, but a
+     * queue consumer's `for (const message of batch.messages)` always has a
+     * message. Set only, never `false`. The queue cycle lint reads it; the
+     * scheduler lints still treat the hop as conditional.
+     */
+    loopOnly?: true;
     reason?: string;
 
     /**
@@ -102,6 +112,26 @@ export interface WorkflowCallIR {
     scope: CallSiteScope;
     /** The referenced workflow export name, or `""` when the argument is not a string literal. */
     workflow: string;
+}
+
+/**
+ * A `ctx.db.count("table", …)` or `ctx.db.<table>.count(…)` call discovered in a
+ * function body. `count()` is answered from a counter only when the table declares an
+ * aggregate index (`TableIR.aggregateIndexed`); otherwise it runs `COUNT(*)` over the
+ * table. `indexed` is `false` exactly for that scan, so the `count_without_index` lint
+ * reports only those; an unknown table or a dynamic name reads as `indexed: true`.
+ */
+export interface CountReadIR {
+    /** Source file relative to `<projectRoot>/lunora/`, without extension. */
+    file: string;
+    /** `false` only when the table is known and declares no aggregate index. */
+    indexed: boolean;
+    /** 1-based line of the `count(...)` call. */
+    line: number;
+    /** Who the call runs on behalf of. */
+    scope: CallSiteScope;
+    /** Counted table name, or `""` when the table argument is not a string literal. */
+    table: string;
 }
 
 /**

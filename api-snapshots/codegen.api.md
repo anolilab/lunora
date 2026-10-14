@@ -440,6 +440,7 @@ interface LintSchemaOptions {
     containerKeyAccesses?: ReadonlyArray<ContainerKeyAccessIR>;
     containerOverrides?: ReadonlyArray<ContainerOverrideIR>;
     containers?: ReadonlyArray<ContainerIR>;
+    countReads?: ReadonlyArray<CountReadIR>;
     cronTargets?: ReadonlyArray<string>;
     exportSinks?: ReadonlyArray<AdvisorExportSink>;
     failOpenGuards?: ReadonlyArray<FailOpenGuardIR>;
@@ -1049,6 +1050,7 @@ interface StorageRulesMetadataIR {
 
 ```ts
 interface TableIR {
+    aggregateIndexed?: true;
     commitOrdered?: boolean;
     extensionFromPackage?: true;
     extensionKey?: string;
@@ -2307,6 +2309,7 @@ interface CallEdgeIR {
     file: string;
     kind: "call" | "enqueue" | "invoke" | "publish" | "schedule";
     line: number;
+    loopOnly?: true;
     reason?: string;
     schedule?: {
         argKeys?: string[];
@@ -2356,6 +2359,7 @@ interface ContainerIRBase {
     className: string;
     enableInternet?: boolean;
     exportName: string;
+    hardTimeout?: number | string;
     instanceType?: string | {
         diskMb?: number;
         memoryMib?: number;
@@ -2387,6 +2391,18 @@ interface ContainerOverrideIR {
     kind: "egress_relaxation" | "enable_internet";
     line: number;
     scope: CallSiteScope;
+}
+```
+
+### `CountReadIR` (interface)
+
+```ts
+interface CountReadIR {
+    file: string;
+    indexed: boolean;
+    line: number;
+    scope: CallSiteScope;
+    table: string;
 }
 ```
 

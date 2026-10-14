@@ -31,10 +31,12 @@ import browserUserUrlWithoutAllowlist from "./lints/static/browser-user-url-with
 import circularFk from "./lints/static/circular-fk";
 import commitOrderedHardDelete from "./lints/static/commit-ordered-hard-delete";
 import containerInstanceKeyFromUserInput from "./lints/static/container-instance-key-from-user-input";
+import containerLongSleepAfter from "./lints/static/container-long-sleep-after";
 import containerOversizedInstance from "./lints/static/container-oversized-instance";
 import containerPublicInternet from "./lints/static/container-public-internet";
 import containerRuntimeEgressRelaxation from "./lints/static/container-runtime-egress-relaxation";
 import containerStartEnableInternetOverride from "./lints/static/container-start-enable-internet-override";
+import countWithoutIndex from "./lints/static/count-without-index";
 import crossModuleTableWrite from "./lints/static/cross-module-table-write";
 import dispatchCycle from "./lints/static/dispatch-cycle";
 import duplicateIndex from "./lints/static/duplicate-index";
@@ -85,6 +87,7 @@ import procedureWithoutStructuredEvent from "./lints/static/procedure-without-st
 import publicArgumentUsesAny from "./lints/static/public-argument-uses-any";
 import publicMutationWithoutRatelimit from "./lints/static/public-mutation-without-ratelimit";
 import publicTableRlsOptoutConfusion from "./lints/static/public-table-rls-optout-confusion";
+import queueDispatchCycle from "./lints/static/queue-dispatch-cycle";
 import queueWithoutDlq from "./lints/static/queue-without-dlq";
 import r2sqlOutsideAction from "./lints/static/r2sql-outside-action";
 import ratelimitDefaultMemoryStore from "./lints/static/ratelimit-default-memory-store";
@@ -146,6 +149,7 @@ export type { AdvisorConfigCall } from "./config-calls";
 export type { AdvisorContainerKeyAccess } from "./container-key-accesses";
 export type { AdvisorContainerOverride } from "./container-overrides";
 export type { AdvisorContainer } from "./containers";
+export type { AdvisorCountRead } from "./counts";
 export { dedupeCacheKeys } from "./dedupe-cache-keys";
 export type { AdvisorExportSink } from "./export-sinks";
 export type { AdvisorFailOpenGuard } from "./fail-open-guards";
@@ -183,10 +187,12 @@ export { default as browserUserUrlWithoutAllowlist } from "./lints/static/browse
 export { default as circularFk } from "./lints/static/circular-fk";
 export { default as commitOrderedHardDelete } from "./lints/static/commit-ordered-hard-delete";
 export { default as containerInstanceKeyFromUserInput } from "./lints/static/container-instance-key-from-user-input";
+export { default as containerLongSleepAfter } from "./lints/static/container-long-sleep-after";
 export { default as containerOversizedInstance } from "./lints/static/container-oversized-instance";
 export { default as containerPublicInternet } from "./lints/static/container-public-internet";
 export { default as containerRuntimeEgressRelaxation } from "./lints/static/container-runtime-egress-relaxation";
 export { default as containerStartEnableInternetOverride } from "./lints/static/container-start-enable-internet-override";
+export { default as countWithoutIndex } from "./lints/static/count-without-index";
 export { default as crossModuleTableWrite } from "./lints/static/cross-module-table-write";
 export { default as dispatchCycle } from "./lints/static/dispatch-cycle";
 export { default as duplicateIndex } from "./lints/static/duplicate-index";
@@ -236,6 +242,7 @@ export { default as procedureWithoutStructuredEvent } from "./lints/static/proce
 export { default as publicArgumentUsesAny } from "./lints/static/public-argument-uses-any";
 export { default as publicMutationWithoutRatelimit } from "./lints/static/public-mutation-without-ratelimit";
 export { default as publicTableRlsOptoutConfusion } from "./lints/static/public-table-rls-optout-confusion";
+export { default as queueDispatchCycle } from "./lints/static/queue-dispatch-cycle";
 export { default as queueWithoutDlq } from "./lints/static/queue-without-dlq";
 export { default as r2sqlOutsideAction } from "./lints/static/r2sql-outside-action";
 export { default as ratelimitDefaultMemoryStore } from "./lints/static/ratelimit-default-memory-store";
@@ -342,6 +349,7 @@ export const STATIC_LINTS: ReadonlyArray<Lint> = [
     ttlFieldNotTimestamp,
     commitOrderedHardDelete,
     circularFk,
+    countWithoutIndex,
     crossModuleTableWrite,
     unindexedForeignKey,
     unindexedRelationTarget,
@@ -349,6 +357,7 @@ export const STATIC_LINTS: ReadonlyArray<Lint> = [
     duplicateIndex,
     tableWithoutInsert,
     workflowUnused,
+    queueDispatchCycle,
     queueWithoutDlq,
     topicTooManySubscriptions,
     filterOnPrimaryKey,
@@ -370,6 +379,7 @@ export const STATIC_LINTS: ReadonlyArray<Lint> = [
     rlsUncoveredTable,
     maskUncoveredPiiColumn,
     maskWeakHashStrategyOnPii,
+    containerLongSleepAfter,
     containerOversizedInstance,
     containerPublicInternet,
     publicMutationWithoutRatelimit,

@@ -347,6 +347,17 @@ import {
     toWorkflowInstanceError,
     toWorkflowInstanceState,
 } from "./admin-rpc-args";
+import type { RearmAdmission } from "./alarm-rearm-breaker";
+import {
+    admitRearm,
+    ALARM_REARM_WINDOW_MS,
+    alarmRearmLimitFrom,
+    ensureRearmWindowTable,
+    estimateRearms,
+    readRearmWindow,
+    recoveryWakeAt,
+    writeRearmWindow,
+} from "./alarm-rearm-breaker";
 import { buildBatchEntryRequest } from "./batch";
 import { CdcRetentionRunner } from "./cdc-retention";
 import type { InFlightClaim } from "./in-flight-claims";
@@ -2289,6 +2300,13 @@ abstract class ShardDO {
      * `setAlarm` replaces it.
      */
     private globalPollArmedAt: number | undefined;
+
+    /**
+     * Whether this instance has already logged the current breaker trip. Reset when
+     * a re-arm is admitted again. In-memory on purpose: a new instance logs once more,
+     * which is the right amount of noise for a trip that outlives an eviction.
+     */
+    private alarmRearmTripLogged = false;
 
     /** Monotonic per-DO poke id source; correlates a poke's `pokeStart`/`pokePart`/`pokeEnd` frames. */
     private pokeSequence = 0;
@@ -5488,7 +5506,7 @@ abstract class ShardDO {
      * no-op when the runtime exposes no `setAlarm` (unit harness).
      */
     protected scheduleSourcePoll(): Promise<void> {
-        return this.scheduleGlobalPoll();
+        return this.scheduleBootstrapPoll();
     }
 
     /**
@@ -5569,7 +5587,7 @@ abstract class ShardDO {
      * re-arms itself. Idempotent; a no-op when the runtime exposes no `setAlarm`.
      */
     protected scheduleTtlSweep(): Promise<void> {
-        return this.scheduleGlobalPoll();
+        return this.scheduleBootstrapPoll();
     }
 
     /**
@@ -7680,8 +7698,11 @@ abstract class ShardDO {
 
         const nextAlarmAt = ShardDO.nextPollAlarmTarget(globalShapesRemaining, nextSourceDueAt, nextTtlDueAt, nextOutboxDueAt, Date.now());
 
+        // The runaway breaker (see alarm-rearm-breaker.ts). A pending outbox entry is
+        // exempt: it is a user job the scheduler has not accepted, and refusing its
+        // re-arm would strand that job until some unrelated trigger.
         if (nextAlarmAt !== undefined) {
-            await this.scheduleGlobalPoll(nextAlarmAt);
+            await (this.admitAlarmRearm(nextOutboxDueAt !== undefined) ? this.scheduleGlobalPoll(nextAlarmAt) : this.armRecoveryWake());
         }
     }
 
@@ -12669,6 +12690,123 @@ abstract class ShardDO {
             if (this.globalPollArmedAt === target) {
                 this.globalPollArmedAt = pendingAt;
             }
+        }
+    }
+
+    /**
+     * The cold-start arm behind {@link ShardDO.scheduleSourcePoll} and
+     * {@link ShardDO.scheduleTtlSweep}. The codegen constructor calls those on every
+     * instance, including the one an alarm wakes after an eviction, so an ungated
+     * arm here would re-arm a tripped loop at the global floor forever. It counts
+     * against the same budget. A refusal arms the recovery wake instead, so an
+     * idle tripped shard still polls and sweeps once the window drains.
+     *
+     * A call that would arm nothing is not a re-arm and is not counted:
+     * {@link ShardDO.scheduleGlobalPoll} leaves an alarm that is already due at or
+     * before the default target alone, and the generated callers invoke this after every
+     * sourced write, so counting those would spend the budget with no alarm armed.
+     * `globalPollArmedAt` lives in memory, so an eviction-driven cold start still counts.
+     */
+    private scheduleBootstrapPoll(): Promise<void> {
+        const pendingAt = this.globalPollArmedAt;
+
+        if (pendingAt !== undefined && pendingAt <= Date.now() + ShardDO.GLOBAL_SHAPE_POLL_INTERVAL_MS) {
+            return this.scheduleGlobalPoll();
+        }
+
+        if (!this.admitAlarmRearm(false)) {
+            return this.armRecoveryWake();
+        }
+
+        return this.scheduleGlobalPoll();
+    }
+
+    /**
+     * Arm the one recovery wake a refused re-arm owes: a single alarm one window out
+     * (see {@link recoveryWakeAt}). It is not counted against the budget, because it
+     * arms a wake rather than a re-arm; the tick it wakes is counted when that tick
+     * re-arms.
+     *
+     * It reads the host's own alarm slot first and does nothing when an earlier alarm
+     * is still ahead. A fresh instance has no memo of the platform's alarm, so
+     * without this a burst of refused cold starts would push the recovery later on
+     * every request, and a steady trickle of traffic could postpone it indefinitely.
+     * A slot time that is already past is the alarm that just fired, not a pending
+     * one, so it does not count: skipping on it would leave the shard idle.
+     */
+    private async armRecoveryWake(): Promise<void> {
+        const now = Date.now();
+        const target = recoveryWakeAt(now);
+        const pending = await Promise.resolve(this.shardHost.alarms.get()).catch((): undefined => undefined);
+
+        if (typeof pending === "number" && pending > now && pending <= target) {
+            return;
+        }
+
+        await this.scheduleGlobalPoll(target);
+    }
+
+    /**
+     * Whether the poll alarm may re-arm itself on this tick — the runaway breaker
+     * (see alarm-rearm-breaker.ts). `exempt` admits regardless but is still counted.
+     *
+     * Fails open on any storage fault: a breaker that cannot read its window must
+     * not stall a shard, and the worst case is one unthrottled tick.
+     */
+    private admitAlarmRearm(exempt: boolean): boolean {
+        const limit = alarmRearmLimitFrom(this.env);
+
+        if (limit === undefined) {
+            return true;
+        }
+
+        const { sql } = this.shardHost;
+        let admission: RearmAdmission;
+
+        try {
+            ensureRearmWindowTable(sql);
+            admission = admitRearm(readRearmWindow(sql), Date.now(), exempt ? Number.POSITIVE_INFINITY : limit);
+            writeRearmWindow(sql, admission.window);
+        } catch {
+            return true;
+        }
+
+        if (admission.admitted) {
+            this.alarmRearmTripLogged = false;
+        } else if (!this.alarmRearmTripLogged) {
+            this.alarmRearmTripLogged = true;
+            this.recordAlarmRearmTrip(limit, estimateRearms(admission.window, Date.now()));
+        }
+
+        return admission.admitted;
+    }
+
+    /**
+     * Surface one breaker trip: a single `error` log through the same path as
+     * `ctx.log` (buffer, structured console event, `sink.onLog`) and one counter.
+     * Logged once per instance per trip, so a burst of refusals does not flood the
+     * log. The first refusal of a trip arms the recovery wake, which is what keeps
+     * the shard polling after the window drains.
+     */
+    private recordAlarmRearmTrip(limit: number, rearms: number): void {
+        const message = `alarm re-arm breaker tripped: ${String(rearms)} re-arms in the last ${String(ALARM_REARM_WINDOW_MS)} ms (limit ${String(limit)}). Re-arms are refused until the window drains, and a recovery wake is armed one window out. Tune with LUNORA_ALARM_REARM_LIMIT, or set it to 0 to disable.`;
+
+        try {
+            this.recordUserLog(
+                "alarm:rearm",
+                "error",
+                [message],
+                message,
+                { limit, rearms, windowMs: ALARM_REARM_WINDOW_MS },
+                this.lastTelemetrySink,
+                "alarmRearmBreakerTripped",
+            );
+            this.recordMetric(
+                { functionPath: "alarm:rearm", kind: "counter", name: "shard.alarm_rearm.refused", ts: Date.now(), value: 1 },
+                this.lastTelemetrySink,
+            );
+        } catch {
+            // Best-effort, like every other telemetry call on the alarm path.
         }
     }
 

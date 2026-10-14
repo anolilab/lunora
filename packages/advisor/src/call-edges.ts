@@ -22,13 +22,20 @@ import type { AdvisorCallSiteScope } from "./call-site-scope";
 export interface AdvisorCallEdge {
     /** `true` when the hop may not take effect on every pass. */
     conditional?: true;
+
     /** Source file relative to the lunora dir, no extension. */
     file: string;
-
     /** What the edge draws: a function call, a scheduled dispatch, an enqueue, a publish, or a service use. */
     kind: "call" | "enqueue" | "invoke" | "publish" | "schedule";
+
     /** 1-based line of the call, or `0` when unknown. */
     line: number;
+
+    /**
+     * `true` alongside `conditional` when only a loop's body stands in front of the hop.
+     * A queue consumer's batch loop sets it: the hop runs once per message it receives.
+     */
+    loopOnly?: true;
     /** Why the target could not be read statically — set exactly when `target` is absent. */
     reason?: string;
 

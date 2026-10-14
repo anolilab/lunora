@@ -28,6 +28,7 @@ import type {
     ContainerKeyAccessIR,
     ContainerOverrideIR,
     ContextPropertyCallIR,
+    CountReadIR,
     FailOpenGuardIR,
     FlagReadIR,
     FlagSecurityDefaultIR,
@@ -212,6 +213,7 @@ interface LintSchemaOptions {
     containerKeyAccesses?: ReadonlyArray<ContainerKeyAccessIR>;
     containerOverrides?: ReadonlyArray<ContainerOverrideIR>;
     containers?: ReadonlyArray<ContainerIR>;
+    countReads?: ReadonlyArray<CountReadIR>;
     cronTargets?: ReadonlyArray<string>;
     exportSinks?: ReadonlyArray<AdvisorExportSink>;
     failOpenGuards?: ReadonlyArray<FailOpenGuardIR>;

@@ -52,11 +52,38 @@ describe("self_reschedule_without_progress", () => {
         expect(findings[0]?.detail).toContain("100 ms");
     });
 
-    it("says nothing at or above one second, or without a literal delay", () => {
-        expect.assertions(2);
+    it("says nothing at or above a minute, or without a literal delay", () => {
+        expect.assertions(3);
 
-        expect(selfRescheduleWithoutProgress.run(context({ callEdges: [selfEdge({ schedule: { argKeys: [], delayMs: 1000 } })] }))).toHaveLength(0);
+        expect(selfRescheduleWithoutProgress.run(context({ callEdges: [selfEdge({ schedule: { argKeys: [], delayMs: 60_000 } })] }))).toHaveLength(0);
+        expect(selfRescheduleWithoutProgress.run(context({ callEdges: [selfEdge({ schedule: { argKeys: [], delayMs: 3_600_000 } })] }))).toHaveLength(0);
         expect(selfRescheduleWithoutProgress.run(context({ callEdges: [selfEdge({ schedule: { argKeys: [] } })] }))).toHaveLength(0);
+    });
+
+    it("reports a poll between one second and a minute at INFO, where a spin is WARN", () => {
+        expect.assertions(3);
+
+        const findings = selfRescheduleWithoutProgress.run(context({ callEdges: [selfEdge({ schedule: { argKeys: [], delayMs: 5000 } })] }));
+
+        expect(findings).toStrictEqual([expect.objectContaining({ level: "INFO", metadata: expect.objectContaining({ delayMs: 5000, tier: "poll" }) })]);
+        expect(findings[0]?.detail).toContain("polls itself every 5000 ms");
+        expect(selfRescheduleWithoutProgress.run(context({ callEdges: [selfEdge()] }))[0]).toMatchObject({ level: "WARN", metadata: { tier: "spin" } });
+    });
+
+    it("counts a rewrite of a read row as progress for a spin, but not for a poll", () => {
+        expect.assertions(4);
+
+        const rewrites: AdvisorTableWrite = { file: "jobs/sweep", line: 14, method: "patch", scope: { kind: "export", name: "tick" }, table: "jobs" };
+        const removes: AdvisorTableWrite = { file: "jobs/sweep", line: 14, method: "delete", scope: { kind: "export", name: "tick" }, table: "jobs" };
+        const poll = selfEdge({ schedule: { argKeys: [], delayMs: 5000 } });
+
+        // A spin keeps the old rule: a patch is progress, so it stays quiet.
+        expect(selfRescheduleWithoutProgress.run(context({ callEdges: [selfEdge()], tableWrites: [rewrites] }))).toHaveLength(0);
+        // A poll rewrites every tick, which is the cost, so the same patch does not clear it.
+        expect(selfRescheduleWithoutProgress.run(context({ callEdges: [poll], tableWrites: [rewrites] }))).toHaveLength(1);
+        // A removal clears a poll, as it does a spin.
+        expect(selfRescheduleWithoutProgress.run(context({ callEdges: [poll], tableWrites: [removes] }))).toHaveLength(0);
+        expect(selfRescheduleWithoutProgress.run(context({ callEdges: [poll], tableWrites: [rewrites, removes] }))).toHaveLength(0);
     });
 
     it("says nothing when the args carry a cursor key, under any of the usual names", () => {

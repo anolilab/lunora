@@ -115,6 +115,33 @@ describe("call edge `conditional`", () => {
         expect(conditionalOf(`(await ctx.scheduler.runAfter(1000, internal.tick.tick, {})) && args.more;`)).toStrictEqual([undefined]);
     });
 
+    /** The `loopOnly` flag of every schedule edge in `body`: set only when a loop is the sole guard. */
+    const loopOnlyOf = (body: string): (true | undefined)[] => {
+        conditionalOf(body);
+
+        return discoverCallEdges(new Project({ skipAddingFilesFromTsConfig: true }), join(workdir, "lunora"))
+            .filter((edge) => edge.kind === "schedule")
+            .map((edge) => edge.loopOnly);
+    };
+
+    it.each([
+        ["a for-of loop body", `for (const id of args.ids) { ${RESCHEDULE} }`],
+        ["a while loop body", `while (args.more) { ${RESCHEDULE} }`],
+    ])("marks a call in %s as loop-only, where the loop is its only guard", (_label, body) => {
+        expect.assertions(2);
+
+        expect(conditionalOf(body)).toStrictEqual([true]);
+        expect(loopOnlyOf(body)).toStrictEqual([true]);
+    });
+
+    it("does not mark a loop-only call when an if also guards it, or when nothing does", () => {
+        expect.assertions(3);
+
+        expect(loopOnlyOf(`for (const id of args.ids) { if (id) { ${RESCHEDULE} } }`)).toStrictEqual([undefined]);
+        expect(loopOnlyOf(`if (args.more) { ${RESCHEDULE} }`)).toStrictEqual([undefined]);
+        expect(loopOnlyOf(RESCHEDULE)).toStrictEqual([undefined]);
+    });
+
     it("does not flag a call preceded only by plain statements", () => {
         expect.assertions(1);
 

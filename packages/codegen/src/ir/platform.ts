@@ -56,8 +56,15 @@ export interface ContainerIRBase {
     enableInternet?: boolean;
     /** The `lunora/containers.ts` export name, e.g. `transcoder`. */
     exportName: string;
+
+    /**
+     * The static `hardTimeout` value, when it was a literal. It caps total lifetime,
+     * so it also bounds how long an idle instance can run. Lifted for the advisor.
+     */
+    hardTimeout?: number | string;
     /** Static `instanceType`, when declared (the default size, under `durable_object`). */
     instanceType?: string | { diskMb?: number; memoryMib?: number; vcpu?: number };
+
     /** Static wrangler `containers[].name` override, when declared. */
     name?: string;
 

@@ -246,43 +246,66 @@ const isRevocableSchedule = (site: TsNode): boolean => {
 };
 
 /**
- * `true` when the edge may not take effect on every pass of its function: any
- * position {@link conditionalPosition} calls guarded between the site and the
- * file, the site's own optional chain (`ctx.scheduler?.runAfter(…)`), or — for
- * a schedule — a dispatch that can be undone ({@link isRevocableSchedule}).
+ * `true` when `child`, sitting directly in `parent`, is a loop's body or its
+ * update clause: code that runs once per iteration, and may run zero times.
+ * {@link conditionalPosition} also calls these positions conditional. A caller
+ * that cares whether the only guard is a loop can tell the two apart with this.
+ */
+const loopPosition = (child: TsNode, parent: TsNode): boolean =>
+    ((Node.isWhileStatement(parent) || Node.isForInStatement(parent) || Node.isForOfStatement(parent)) && isSameNode(child, parent.getStatement())) ||
+    (Node.isForStatement(parent) && (isSameNode(child, parent.getStatement()) || isSameNode(parent.getIncrementor(), child)));
+
+/**
+ * What, if anything, makes the edge not take effect on every pass of its function:
+ * `"guard"` for any position {@link conditionalPosition} calls guarded between the
+ * site and the file, the site's own optional chain (`ctx.scheduler?.runAfter(…)`),
+ * or — for a schedule — a dispatch that can be undone ({@link isRevocableSchedule});
+ * `"loop"` when a loop's body or update clause is the only such position; and
+ * `undefined` when the site runs on every pass.
  * Walked to the `SourceFile` rather than the nearest function, so a guard ABOVE
  * the callback holding the site (`if (enabled) { const work = () => … }`) is
  * seen as well as one inside it.
  */
-const isConditionalSite = (site: TsNode, kind: CallEdgeIR["kind"]): boolean => {
+const conditionOf = (site: TsNode, kind: CallEdgeIR["kind"]): "guard" | "loop" | undefined => {
     if (inOptionalChain(site) || (kind === "schedule" && isRevocableSchedule(site))) {
-        return true;
+        return "guard";
     }
 
     let child: TsNode = site;
+    let inLoop = false;
 
     for (let parent = child.getParent(); parent !== undefined && !Node.isSourceFile(parent); parent = parent.getParent()) {
         if (conditionalPosition(child, parent)) {
-            return true;
+            if (!loopPosition(child, parent)) {
+                return "guard";
+            }
+
+            inLoop = true;
         }
 
         child = parent;
     }
 
-    return false;
+    return inLoop ? "loop" : undefined;
 };
 
 /** The {@link CallEdgeIR} of a site, or `undefined` when it carries no edge. */
-const edgeRecord = (site: TsNode, file: string, edge: CallSiteEdge | undefined): CallEdgeIR | undefined =>
-    edge === undefined
-        ? undefined
-        : {
-              ...edge,
-              ...(isConditionalSite(site, edge.kind) ? { conditional: true as const } : {}),
-              file,
-              line: site.getStartLineNumber(),
-              scope: callSiteScopeOf(site),
-          };
+const edgeRecord = (site: TsNode, file: string, edge: CallSiteEdge | undefined): CallEdgeIR | undefined => {
+    if (edge === undefined) {
+        return undefined;
+    }
+
+    const condition = conditionOf(site, edge.kind);
+
+    return {
+        ...edge,
+        ...(condition === undefined ? {} : { conditional: true as const }),
+        ...(condition === "loop" ? { loopOnly: true as const } : {}),
+        file,
+        line: site.getStartLineNumber(),
+        scope: callSiteScopeOf(site),
+    };
+};
 
 /**
  * Discover the call-site edges of the architecture graph: every function →

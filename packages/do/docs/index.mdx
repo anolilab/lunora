@@ -130,6 +130,46 @@ until a message arrives. Exposed via the `HibernatableWebSocket` type for unit t
 (`SessionDO` has no WebSocket surface at all: it is HTTP-only, so hibernation does not
 apply to it.)
 
+## Alarm re-arm budget
+
+A shard's poll alarm re-arms itself on each tick while a global shape, a source or a
+TTL backlog still has work. Left unchecked, an always-due source turns that into a loop
+that wakes the DO as fast as the runtime allows. Each shard therefore gets a budget of
+**300 self re-arms per 60 seconds**, a sliding-window count kept in the shard's own
+SQLite. The default is ten times the 2 s global-shape floor (30 re-arms a minute), so
+steady workloads never reach it.
+
+When the budget is spent, the re-arm is refused and the shard arms **one recovery wake
+one minute later**, one millisecond past the window so the previous window has begun to
+decay. That wake runs the poll and sweep tiers, so an idle shard resumes polling and
+sweeping (global-shape refresh, source pulls, TTL deletes) once the window drains. A
+shard whose workload never drains is throttled, never stopped. It re-arms in bursts of
+about the limit, with quieter windows between them. Measured on a loop that is always due,
+it averaged about 60% of the limit per window, with no window empty. Each trip logs one `error` record, whose message begins
+`alarm re-arm breaker tripped` and carries the `limit` and `rearms` fields, and counts
+`shard.alarm_rearm.refused`. That is about one record per window, not one per refused
+re-arm.
+
+Writes are never refused. A pending schedule-outbox retry is exempt, so a job the
+scheduler has not yet accepted still gets its retry. TTL rows and source updates are
+delayed by about one window, never discarded. The codegen constructor's cold-start arms
+count against the same budget.
+
+**The window costs a write on every re-arm attempt.** Each attempt, healthy or not, runs
+one `SELECT` of the window row and one upsert of it. On Cloudflare's SQLite engine that
+upsert counts as one row written, the first insert included, and the `SELECT` reads one
+row. A shard polling every 2 s therefore writes one extra row per poll: 30 rows a minute,
+about 43,200 a day, about 1.3 million a month. Check these against your plan.
+
+Cold starts count too. A shard whose schema has a sourced or TTL tier arms that tier from
+its constructor on every instance, so each cold start is one or two more attempts, each
+with the same write. A shard that never attempts a re-arm writes nothing.
+
+Set `LUNORA_ALARM_REARM_LIMIT` to a positive integer to change the budget, or to `0` to
+disable it. An unset or malformed value keeps the default. A bulk backfill that drains a
+large TTL backlog can legitimately exceed the default, so raise the limit for that
+deployment.
+
 ## `ShardDOState` / `MutationDelta`
 
 Internal serialization shapes. Stable across patch releases so add-ons can

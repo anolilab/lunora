@@ -187,6 +187,54 @@ do {
 } while (cursor);
 ```
 
+## Cache headers and read cost
+
+Each R2 read is a billed operation, so a cache that answers a request before it
+reaches the bucket saves money. Which cache can do that depends on how the object
+is served.
+
+- **Through the Worker** (`serveStorageObject` from `@lunora/server`). The
+  `Cache-Control` header comes from its `cacheControl` argument, which defaults to
+  `no-store`. That default is deliberate: the `authorize` gate decides per request
+  who may read the bytes, and a shared cache would replay one caller's object to
+  the next caller without running the gate again. A browser or CDN that stores the
+  response can answer repeat requests without an R2 read. Whether Cloudflare's
+  edge stores a Worker's response depends on zone cache rules, so the header alone
+  does not cut R2 reads across many clients. For that, cache the response in the
+  route with the Cache API, or serve the bucket from a custom domain.
+- **Direct from R2** (presigned URLs, or a public or custom-domain bucket). R2
+  returns the `cacheControl` stored in the object's `httpMetadata`, and zone cache
+  rules can add an edge TTL. `@lunora/storage` does not write that field, so set
+  it with the raw binding or manage it in zone rules.
+
+Pass a `public` value only when every caller that can reach the URL may read the
+object, because a cache hit skips `authorize`:
+
+```ts
+// Content-addressed key (the name changes whenever the bytes do): cache for a year.
+serveStorageObject(ctx, key, request, authorize, "public, max-age=31536000, immutable");
+
+// Mutable key: a short shared TTL.
+serveStorageObject(ctx, key, request, authorize, "public, max-age=300");
+```
+
+When `max-age` expires, a cache revalidates with `If-None-Match`.
+`serveStorageObject` answers `304 Not Modified` with no body when the ETag still
+matches, after the `authorize` gate, so a refused caller gets the same 403 as
+before. The check is a `head()`. A 304 costs one R2 HEAD and no body transfer. A
+changed object costs that HEAD plus the full read, which is one extra R2 operation
+compared with a request that sent no validator. R2 bills HeadObject and GetObject
+in the same class. Pick the longest TTL the content can tolerate, since each
+expiry costs one R2 HEAD, plus a full read when the object changed.
+
+R2 also has an Infrequent Access storage class, set per object with
+`storageClass` on the binding's put options. `@lunora/storage` does not expose
+it: its upload options carry no storage class, so the objects it writes are
+Standard. Do not move a frequently read bucket to Infrequent Access to cut
+storage cost. It has no free tier, its operations are billed on top of storage,
+and operations are charged per million, rounded up. Compare the R2 pricing page
+against your read rate before choosing it.
+
 ## Signed URLs
 
 A worker-signed URL resolves back through your Worker, so the request still
