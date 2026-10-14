@@ -1546,6 +1546,77 @@ describe("rls — batch write path", () => {
         expect(database.calls.filter((call) => call.method === "get" || call.method === "findFirst")).toHaveLength(0);
     });
 
+    /** Seed a parent P and its child C, and make deleting P null C's `parentId` the way an `onDelete: "set null"` self-relation does. */
+    const seedSelfReferential = (edges: ReadonlyArray<{ sourceTable: string; targetTable: string }>) => {
+        const rows = [
+            { _id: "P", parentId: "root", table: "documents" },
+            { _id: "C", parentId: "P", table: "documents" },
+        ];
+        const database = createFakeDatabase(rows);
+        const { findMany } = database.writer;
+        const alive = new Set(["C", "P"]);
+
+        Object.assign(database.writer, {
+            relationEdges: edges.map((edge) => {
+                return { ...edge, array: false, column: "parentId", name: `${edge.sourceTable}.parentId` };
+            }),
+        });
+        database.writer.delete = async (id) => {
+            database.calls.push({ args: undefined, method: "delete", tableOrId: id });
+            alive.delete(id);
+
+            for (const row of rows) {
+                if (row.parentId === id) {
+                    row.parentId = null as unknown as string;
+                }
+            }
+        };
+        // Page images are snapshots: a later delete in the page must not reach back into them.
+        database.writer.findMany = async (tableName, args) => {
+            const all = await findMany(tableName, args);
+
+            return {
+                ...all,
+                page: all.page
+                    .filter((row) => alive.has(String(row["_id"])))
+                    .map((row) => {
+                        return { ...row };
+                    }),
+            };
+        };
+
+        return database;
+    };
+
+    const parentIdPolicy = definePolicy<TestContext>({ on: "delete", table: "documents", when: ({ row }) => row?.["parentId"] != null });
+
+    it("deleteAll re-reads a later row of a self-referential table, so a set-null cascade cannot leave it deletable", async () => {
+        expect.assertions(2);
+
+        const database = seedSelfReferential([{ sourceTable: "documents", targetTable: "documents" }]);
+        const handler = lunora.mutation.use(rlsForTest<TestContext>([parentIdPolicy])).mutation(async ({ ctx }) => ctx.db.deleteAll("documents"));
+
+        // P is deleted first and nulls C's `parentId`; C's current image is denied.
+        await expect(handler.handler(makeContext(database, "u1"), {})).rejects.toMatchObject({ code: "FORBIDDEN", name: "LunoraError" });
+        expect(database.calls.filter((call) => call.method === "delete").map((call) => call.tableOrId)).toStrictEqual(["P"]);
+    });
+
+    it("deleteAll keeps the no-relocate fast path when the table is not self-referential", async () => {
+        expect.assertions(3);
+
+        // An edge from ANOTHER table into `documents` must not cost the fast path.
+        const database = seedSelfReferential([{ sourceTable: "comments", targetTable: "documents" }]);
+
+        enableGetWithTable(database, []);
+
+        const handler = lunora.mutation.use(rlsForTest<TestContext>([parentIdPolicy])).mutation(async ({ ctx }) => ctx.db.deleteAll("documents"));
+
+        // Without a re-read, C's stale image (parentId "P") passes the policy.
+        await expect(handler.handler(makeContext(database, "u1"), {})).resolves.toStrictEqual({ deleted: 2 });
+        expect(database.calls.filter((call) => call.method === "delete")).toHaveLength(2);
+        expect(database.calls.filter((call) => ["findFirst", "get", "lookupById"].includes(call.method))).toHaveLength(0);
+    });
+
     it("deleteAll denies (FORBIDDEN) when a row fails its policy, before deleting it", async () => {
         expect.assertions(2);
 

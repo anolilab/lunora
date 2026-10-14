@@ -1143,6 +1143,23 @@ const wrapDatabase = (base: RlsDatabase, raw: RlsDatabase, steps: ReadonlyArray<
     };
 
     /**
+     * Can a delete of one `tableName` row change another row of the same table? True when a foreign key on the
+     * table points back at it. Conservative: `restrict` and `cascade` self-relations lose the fast path too, because
+     * the writer publishes only the edge set (`relationEdges`), not each relation's `onDelete`. Memoised per table.
+     */
+    const selfReferentialMemo = new Map<string, boolean>();
+    const selfReferential = (tableName: string): boolean => {
+        let answer = selfReferentialMemo.get(tableName);
+
+        if (answer === undefined) {
+            answer = base.relationEdges?.some((edge) => edge.sourceTable === tableName && edge.targetTable === tableName) ?? false;
+            selfReferentialMemo.set(tableName, answer);
+        }
+
+        return answer;
+    };
+
+    /**
      * Delete the rows of `tableName` a policy-scoped read just returned. `gateById` would `locateRow` each id
      * again (one `lookupById`, or a `get` plus a `findFirst` probe on a miss) to learn the row and its table; a
      * chunked erase already holds both, so the delete verdict is taken on that row image instead. The verdict is
@@ -1154,17 +1171,28 @@ const wrapDatabase = (base: RlsDatabase, raw: RlsDatabase, steps: ReadonlyArray<
     const deleteReadRows = async (tableName: string, rows: ReadonlyArray<Record<string, unknown>>, hard?: boolean): Promise<void> => {
         const gated = policyTables.has(tableName);
         const writer = gated ? raw : base;
+        const deleteOptions = hard === undefined ? undefined : { hard };
+        const reread = gated && selfReferential(tableName);
 
-        for (const row of rows) {
+        for (const [index, row] of rows.entries()) {
+            const id = String(row["_id"]);
+
+            // Deleting an earlier row of this page can rewrite a later one (a self-relation's `onDelete` nulls its
+            // holders), so the image read before the page began may be stale: locate the row again, as `gateById` does.
+            if (reread && index > 0) {
+                // eslint-disable-next-line no-await-in-loop -- sequential, mirrors looped single deletes
+                await gateById(id, "delete", (target) => target.delete(id, tableName, deleteOptions), undefined, tableName);
+
+                continue;
+            }
+
             if (gated && !allowsWrite(tableName, "delete", row)) {
                 // Same table-agnostic message as `gateById`.
                 throw new LunoraError("FORBIDDEN", "delete denied by policy");
             }
 
-            const id = String(row["_id"]);
-
             // eslint-disable-next-line no-await-in-loop -- sequential, mirrors looped single deletes
-            await writer.delete(id, tableName, hard === undefined ? undefined : { hard });
+            await writer.delete(id, tableName, deleteOptions);
         }
     };
 
