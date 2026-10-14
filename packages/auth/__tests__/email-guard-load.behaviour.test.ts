@@ -88,3 +88,26 @@ describe("loadEmailDomainLists — module loading", () => {
         vi.resetModules();
     });
 });
+
+describe("classifyEmail — unloaded lists", () => {
+    it("throws instead of classifying everything as business when the lists cannot be read", async () => {
+        expect.assertions(1);
+
+        vi.resetModules();
+        vi.doMock(import("@visulima/disposable-email-domains"), async (importOriginal) => {
+            return {
+                ...(await importOriginal()),
+                assertListLoaded: () => {
+                    throw new Error("The built-in list is not loaded");
+                },
+            };
+        });
+
+        const { classifyEmail } = await import("../src/email-guard");
+
+        expect(() => classifyEmail("user@mailinator.com")).toThrow("loadEmailDomainLists");
+
+        vi.doUnmock("@visulima/disposable-email-domains");
+        vi.resetModules();
+    });
+});

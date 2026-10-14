@@ -153,6 +153,21 @@ describe("assertEmailAllowed — edge-safety (DNS is opt-in)", () => {
 
         await expect(assertEmailAllowed("cto@acme-corp.example", { mx: true })).rejects.toMatchObject({ code: "EMAIL_UNDELIVERABLE" });
     });
+
+    it("does not reject on a transient DNS failure (deferred) when mx is on", async () => {
+        expect.assertions(1);
+
+        checkMxRecords.mockResolvedValueOnce({
+            deferred: true,
+            domainResolves: false,
+            error: "queryMx ETIMEOUT",
+            records: [],
+            resolvedVia: "none",
+            valid: false,
+        });
+
+        await expect(assertEmailAllowed("cto@acme-corp.example", { mx: true })).resolves.toMatchObject({ emailClass: "business" });
+    });
 });
 
 /**

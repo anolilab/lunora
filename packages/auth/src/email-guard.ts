@@ -21,8 +21,8 @@
 
 import { LunoraError } from "@lunora/errors";
 import type { Middleware } from "@lunora/server";
-import { isDisposableDomain, setDomains as setDisposableDomains } from "@visulima/disposable-email-domains";
-import { extractDomain, isFreeDomain, setDomains as setFreeDomains } from "@visulima/free-email-domains";
+import { assertListLoaded as assertDisposableListLoaded, isDisposableDomain, setDomains as setDisposableDomains } from "@visulima/disposable-email-domains";
+import { assertListLoaded as assertFreeListLoaded, extractDomain, isFreeDomain, setDomains as setFreeDomains } from "@visulima/free-email-domains";
 
 /**
  * The resolved trust class of an email address' domain: `disposable` (a
@@ -208,6 +208,21 @@ const classifyEmail = (email: string, config: EmailGateConfig = {}): EmailClassi
         return { domain: undefined, emailClass: "business" };
     }
 
+    // The list packages answer "not on the list" for every address when their data
+    // cannot be read (no filesystem on workerd), which would wave every disposable
+    // signup through as `business`. Fail loudly instead.
+    try {
+        assertDisposableListLoaded();
+        assertFreeListLoaded();
+    } catch (error) {
+        throw new Error(
+            "@lunora/auth: the email domain lists are not loaded; `await loadEmailDomainLists()` before calling classifyEmail (assertEmailAllowed does this for you).",
+            {
+                cause: error,
+            },
+        );
+    }
+
     const domain = toAsciiDomain(extracted);
 
     const allowDomains = toDomainSet(config.allowDomains);
@@ -232,7 +247,10 @@ const verifyMx = async (domain: string): Promise<boolean> => {
     const { checkMxRecords } = await import("@visulima/email-verifier/checks/mx");
     const result = await checkMxRecords(domain);
 
-    return result.valid;
+    // A transient resolver failure (SERVFAIL, timeout, EAI_AGAIN) comes back as
+    // `valid: false, deferred: true`. That says nothing about the domain, so it must
+    // not reject the signup as undeliverable; only a definitive "no records" does.
+    return result.valid || result.deferred === true;
 };
 
 /**
