@@ -948,9 +948,9 @@ catalogs:
   redact:
     "@visulima/redact": 5.0.0
   email:
-    "@visulima/disposable-email-domains": 1.1.19
-    "@visulima/free-email-domains": 1.0.1
-    "@visulima/email-verifier": 1.0.36
+    "@visulima/disposable-email-domains": 1.1.25
+    "@visulima/free-email-domains": 1.0.2
+    "@visulima/email-verifier": 1.0.42
 
 # multi-semantic-release rewrites every intra-repo dependency from `workspace:*`
 # to the exact released version (e.g. "@lunora/errors": "1.0.0-alpha.9") and
@@ -1084,14 +1084,17 @@ minimumReleaseAgeExclude:
   - '@tanstack/react-virtual@3.14.2'
   - '@tanstack/virtual-core@3.17.0'
   - '@types/react@19.2.16'
-  # Published 2026-10-09 04:54 UTC, inside the 24h window; drop after 2026-10-10.
-  - '@visulima/disposable-email-domains@1.1.19'
-  # Message-ID fix (visulima/visulima#935), published 2026-10-08 — dead weight
-  # after 2026-10-09, drop it then.
-  - '@visulima/email@3.0.28'
-  # Published 2026-10-09 05:01 UTC, inside the 24h window; drop after 2026-10-10.
-  - '@visulima/email-verifier@1.0.36'
+  # Disk loader resolved lazily — no import-time fileURLToPath(import.meta.url),
+  # so the barrel is safe to evaluate on workerd. Published 2026-10-14 11:06 UTC,
+  # inside the 24h window; drop after 2026-10-15.
+  - '@visulima/disposable-email-domains@1.1.25'
+  # Published 2026-10-14 11:15 UTC (pulls the two list packages above/below),
+  # inside the 24h window; drop after 2026-10-15.
+  - '@visulima/email-verifier@1.0.42'
   - '@visulima/find-ai-runner@1.0.0-alpha.9'
+  # Same lazy disk-loader fix as disposable-email-domains. Published 2026-10-14
+  # 11:11 UTC, inside the 24h window; drop after 2026-10-15.
+  - '@visulima/free-email-domains@1.0.2'
   # Per-message ttl/urgency (visulima/visulima#936), published 2026-10-08 —
   # dead weight after 2026-10-09, drop it then.
   - '@visulima/notification@1.2.0'

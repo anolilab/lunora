@@ -697,7 +697,9 @@ for the full pattern and the `withoutHeaders()` escape hatch.
 Reject throwaway/disposable signups (and branch on free-vs-business email) at
 registration by reusing the visulima email lists. The classification is
 **pure-data and edge-safe on the default path**, with no DNS and no filesystem
-access.
+access. The lists (~3 MB) are not evaluated when `@lunora/auth` is imported; they
+load on the first gated check, so their cost is paid there instead of during
+Worker startup. They are still part of the bundle, so upload size is unaffected.
 
 Wire it into better-auth's native `/sign-up/email` endpoint with `withEmailGate`
 (or spread `emailGateDatabaseHooks(...)` into `createAuth({ databaseHooks })`):
@@ -728,7 +730,7 @@ For non-auth procedures, `@lunora/auth/email-guard` exports the building blocks:
 - `classifyEmail(email, config)`: sync, pure-data → `{ emailClass, domain }`.
 - `assertEmailAllowed(email, config)`: async; throws the coded error on a policy failure.
 - `emailGateMiddleware({ email })`: a `.use()` gate whose `email` selector reads the address off **`ctx`**, including the validated `ctx.args` — see the note below.
-- `loadEmailDomainLists()`: call once at worker init on workerd (the gate helpers already do).
+- `loadEmailDomainLists()`: loads the built-in lists once (the gate helpers already do, on first use). Needed only before calling the synchronous `classifyEmail` on workerd.
 
 Call `assertEmailAllowed` at the top of your own signup mutation, where the
 address is in scope:

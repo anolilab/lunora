@@ -109,13 +109,14 @@ interface EmailGateMiddlewareOptions<Context> extends EmailGateConfig {
 }
 
 // The list packages lazy-load from `node:fs` by default, which is unavailable on
-// workerd. Inject the statically-importable JSON lists via each package's
-// `setDomains` escape hatch so the classification path is pure-data/edge-safe.
-// The JSON is pulled through a dynamic `import()` (its `.d.ts` uses `export =`,
-// which the repo's strict module-syntax rule forbids as a static default import)
-// and memoized, so the load happens at most once.
+// workerd. Inject the statically-importable lists via each package's `setDomains`
+// escape hatch so the classification path is pure-data/edge-safe. The lists are
+// pulled through a dynamic `import()` — never a static one — so the ~3 MB of data
+// is only evaluated on the first gated check, not when this module (or the
+// `@lunora/auth` barrel) is imported; the load is memoized, so it happens at most
+// once. The package barrels themselves are side-effect free to import.
 
-/** A dynamically-imported list module (`export = string[]`), surfaced as the namespace's `default` under interop. */
+/** A dynamically-imported list module (`export default string[]`), read off the namespace's `default`. */
 const listFromModule = (module: unknown): ReadonlyArray<string> => {
     const value = (module as { default?: unknown }).default ?? module;
 
@@ -138,13 +139,14 @@ const loadEmailDomainLists = async (): Promise<void> => {
 
     const run = (async (): Promise<void> => {
         const [disposable, free] = await Promise.all([
+            // Both `/domains` subpaths resolve to a JS module (`dist/domains.js`) that
+            // imports the JSON itself with the attribute, so these are plain imports:
+            // adding `with { type: "json" }` here would make native ESM reject the JS
+            // module (`ERR_IMPORT_ATTRIBUTE_TYPE_INCOMPATIBLE`). Bundlers inline the data
+            // and never notice either way — only the published `dist/email-guard.mjs`
+            // under real Node does, where a wrong form turns every signup into a 500.
             import("@visulima/disposable-email-domains/domains"),
-            // `with { type: "json" }` is load-bearing: this specifier resolves to a raw
-            // `dist/domains.json`, and native ESM rejects a JSON module imported without
-            // the attribute (`ERR_IMPORT_ATTRIBUTE_MISSING`). Vite and wrangler's esbuild
-            // inline the JSON, so the bundled paths never notice — only the published
-            // `dist/email-guard.mjs` hits it, where it turns every signup into a 500.
-            import("@visulima/free-email-domains/domains", { with: { type: "json" } }),
+            import("@visulima/free-email-domains/domains"),
         ]);
 
         setDisposableDomains(listFromModule(disposable));

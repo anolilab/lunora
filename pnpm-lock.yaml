@@ -201,14 +201,14 @@ catalogs:
       version: 1.63.0
   email:
     '@visulima/disposable-email-domains':
-      specifier: 1.1.19
-      version: 1.1.19
+      specifier: 1.1.25
+      version: 1.1.25
     '@visulima/email-verifier':
-      specifier: 1.0.36
-      version: 1.0.36
+      specifier: 1.0.42
+      version: 1.0.42
     '@visulima/free-email-domains':
-      specifier: 1.0.1
-      version: 1.0.1
+      specifier: 1.0.2
+      version: 1.0.2
   expo:
     '@react-native-async-storage/async-storage':
       specifier: 3.1.1
@@ -2714,13 +2714,13 @@ importers:
         version: link:../values
       '@visulima/disposable-email-domains':
         specifier: catalog:email
-        version: 1.1.19
+        version: 1.1.25
       '@visulima/email-verifier':
         specifier: catalog:email
-        version: 1.0.36
+        version: 1.0.42
       '@visulima/free-email-domains':
         specifier: catalog:email
-        version: 1.0.1
+        version: 1.0.2
       '@visulima/redact':
         specifier: catalog:redact
         version: 5.0.0(compromise@14.15.1)
@@ -13988,16 +13988,16 @@ packages:
     resolution: {integrity: sha512-1GbjS5hit7JA90RKVfN6u0qlqmhoem8ui2kyB8qBnR243V1tT9KDqPnYKyoqSKkgDnzIu9aRb9r07xrflXzVGQ==}
     engines: {node: ^22.22.2 || >= 24.10.0}
 
-  '@visulima/disposable-email-domains@1.1.19':
-    resolution: {integrity: sha512-KqgUPUBYh5hSlGIuLLj9E1WSI0lE5RtNW/Mh3WmyoGrvxOpHzXeJAhMt9OZ17XhZ+vF71zTZ2P19Eh+vJJQyqQ==}
+  '@visulima/disposable-email-domains@1.1.25':
+    resolution: {integrity: sha512-wQrlbI+IZ0YPQOBU7JrDwcwbf5WjRWZ77BhqUhtdqWtBAgw2SAVL/hFe+y+bZ69nvgzXj+gleNIugPxUt3/sRA==}
     engines: {node: ^22.14.0 || >=24.10.0}
 
   '@visulima/email-provider-mx@1.0.1':
     resolution: {integrity: sha512-qqArntkNfG4xADVxNIjSoIwqzS5/BMX8Vz9Yfb/LRI3ERFz5mk1uQY6g2cLeeXpwUWVfErs8SaBzHfPH8hpJ3Q==}
     engines: {node: ^22.14.0 || >=24.10.0}
 
-  '@visulima/email-verifier@1.0.36':
-    resolution: {integrity: sha512-fcM5YiRH5Tx4q+9rRaMCX9LXNDXXLqH/25pX2Mee5biMu8wNV8nvld+WFkepSF7Ib/AiddHae+29NTCN1KzU0Q==}
+  '@visulima/email-verifier@1.0.42':
+    resolution: {integrity: sha512-C0uQudxDRmhBGQbF5z4UXZAKb+l7L1Lw1NF00OPYiqtSCEnZYChY7XkSv3G3utWsxvniy+otrf9wdGiI3Spg7w==}
     engines: {node: ^22.14.0 || >=24.10.0}
 
   '@visulima/email@3.0.28':
@@ -14064,8 +14064,8 @@ packages:
     resolution: {integrity: sha512-91WavXZKn62fN5nUbG4EQLqp4NMcxsgQPIQafudtkuyVV7Q7QmWIsg/EVKmYmufOYviEFKG8dXIp50X3/qwmtA==}
     engines: {node: ^22.14.0 || >=24.10.0}
 
-  '@visulima/free-email-domains@1.0.1':
-    resolution: {integrity: sha512-bQxyCON/25eEog7J45ykVCVPYPxfLEoocejD+HufBd23UQ1FpJ3RVQUyE2VFHiMDpIf4wvJQsEePiEFuuUHIqQ==}
+  '@visulima/free-email-domains@1.0.2':
+    resolution: {integrity: sha512-qTOpU9Qkx7oACXUc8SdMHCGT02M3Ietbbeg/8wpdRBc4E/KiiZfCY9sKvj1sRV0WMan0MvaXfoWd4N0pZg3XMg==}
     engines: {node: ^22.14.0 || >=24.10.0}
 
   '@visulima/fs@4.1.0':
@@ -35296,15 +35296,15 @@ snapshots:
 
   '@visulima/css-style-inject@1.0.1': {}
 
-  '@visulima/disposable-email-domains@1.1.19': {}
+  '@visulima/disposable-email-domains@1.1.25': {}
 
   '@visulima/email-provider-mx@1.0.1': {}
 
-  '@visulima/email-verifier@1.0.36':
+  '@visulima/email-verifier@1.0.42':
     dependencies:
-      '@visulima/disposable-email-domains': 1.1.19
+      '@visulima/disposable-email-domains': 1.1.25
       '@visulima/email-provider-mx': 1.0.1
-      '@visulima/free-email-domains': 1.0.1
+      '@visulima/free-email-domains': 1.0.2
       lru-cache: 11.5.3
 
   '@visulima/email@3.0.28(@opentelemetry/api@1.9.1)(@react-email/render@2.1.0(react-dom@19.3.0(react@19.3.0))(react@19.3.0))(@types/node@26.6.4)(asn1js@3.0.10)(dayjs@1.11.21)(fast-xml-parser@5.10.1)(handlebars@4.7.10)(luxon@3.7.2)(moment@2.31.0)(unstorage@1.17.5(@netlify/blobs@10.7.9(supports-color@10.2.2))(aws4fetch@1.0.20)(db0@0.3.4(@electric-sql/pglite@0.5.8)(better-sqlite3@13.0.3)(drizzle-orm@0.45.3(@cloudflare/workers-types@5.20261004.1(patch_hash=4bd971e7c2b6760a24ef737fb6e2cb17b2cf8f50615cff5e2d1786e677436a93))(@electric-sql/pglite@0.5.8)(@opentelemetry/api@1.9.1)(@types/better-sqlite3@9.6.0)(@types/pg@8.23.1)(better-sqlite3@13.0.3)(kysely@0.29.6)(mysql2@3.24.5(@types/node@26.6.4))(pg@8.23.1)(postgres@3.4.9)(sql.js@1.14.1))(mysql2@3.24.5(@types/node@26.6.4)))(ioredis@5.11.1(supports-color@10.2.2)))':
@@ -35339,7 +35339,7 @@ snapshots:
 
   '@visulima/find-cache-dir@3.0.1': {}
 
-  '@visulima/free-email-domains@1.0.1': {}
+  '@visulima/free-email-domains@1.0.2': {}
 
   '@visulima/fs@4.1.0(yaml@2.9.1)':
     dependencies:
