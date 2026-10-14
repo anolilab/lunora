@@ -957,7 +957,20 @@
     # skipped (so a no-package-change PR with all jobs skipped still passes).
     "test-required-check":
         "name": "Check Test Run"
-        "needs": ["files-changed", "test", "test-workerd", "test-celld", "test-mysql", "e2e", "templates", "templates-expo", "worker-size", "sdk-conformance"]
+        "needs":
+            [
+                "files-changed",
+                "test",
+                "test-workerd",
+                "test-celld",
+                "test-mysql",
+                "e2e",
+                "templates",
+                "templates-expo",
+                "worker-size",
+                "worker-startup",
+                "sdk-conformance",
+            ]
         "if": "always()"
         "runs-on": "ubuntu-latest"
         "timeout-minutes": 5
