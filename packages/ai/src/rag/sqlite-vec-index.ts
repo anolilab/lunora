@@ -153,4 +153,4 @@ const sqliteVecIndex = (options: { dimensions: number; exec: RagSqlExec; table: 
 };
 
 export type { SqliteVecIndex };
-export { sqliteVecIndex };
+export { MAX_K, sqliteVecIndex };

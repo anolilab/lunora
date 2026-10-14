@@ -25,7 +25,7 @@ import matchesMetadataFilter from "./metadata-filter";
 import type { RagSqlExec } from "./sql";
 import { assertSafeIdentifier, cosineSimilarity, inListBatches, placeholderList, readJsonColumn } from "./sql";
 import type { SqliteVecIndex } from "./sqlite-vec-index";
-import { sqliteVecIndex } from "./sqlite-vec-index";
+import { MAX_K, sqliteVecIndex } from "./sqlite-vec-index";
 import type { RagVectorMatch, RagVectorMatches, RagVectorQueryInput, RagVectorRecord, RagVectorUpsertInput } from "./types";
 import type { RagVectorStore, RagVectorStoreCapabilities } from "./vector-store";
 
@@ -83,6 +83,14 @@ const DEFAULT_MAX_SCAN = 50_000;
  * text-store path advertises everywhere else.
  */
 const MAX_TOP_K = 100;
+
+/**
+ * A filtered query asks the ANN index for `topK * factor` candidates and keeps
+ * the ones that pass the filter (the vec0 index has no metadata predicate).
+ * Each factor is tried in turn; if none yields `topK` survivors the store falls
+ * back to the exact scan, so a selective filter never silently under-returns.
+ */
+const OVER_FETCH_FACTORS = [4, 16] as const;
 
 /**
  * The value bound for a SQL NULL. `null` is not interchangeable with
@@ -216,9 +224,14 @@ const sqliteVectorStore = (options: SqliteVectorStoreOptions): RagVectorStore =>
      * index; a match whose row is gone (an interrupted upsert or delete) is
      * dropped rather than returned without its record.
      */
-    const queryIndex = async (index: SqliteVecIndex, values: ReadonlyArray<number>, input: RagVectorQueryInput): Promise<RagVectorMatches> => {
+    const queryIndex = async (
+        index: SqliteVecIndex,
+        values: ReadonlyArray<number>,
+        input: RagVectorQueryInput,
+        k: number,
+    ): Promise<RagVectorMatches & { exhausted: boolean }> => {
         const namespace = namespaceKey(input.namespace);
-        const nearest = await index.nearest(namespace, values, input.topK ?? 10);
+        const nearest = await index.nearest(namespace, values, k);
         const stored = await getByIds(
             nearest.map((match) => match.id),
             namespace,
@@ -229,7 +242,7 @@ const sqliteVectorStore = (options: SqliteVectorStoreOptions): RagVectorStore =>
         for (const { distance, id } of nearest) {
             const record = records.get(id);
 
-            if (record === undefined) {
+            if (record === undefined || !matchesMetadataFilter(record.metadata, input.filter)) {
                 continue;
             }
 
@@ -242,7 +255,32 @@ const sqliteVectorStore = (options: SqliteVectorStoreOptions): RagVectorStore =>
             });
         }
 
-        return { count: matches.length, matches };
+        const page = matches.slice(0, input.topK ?? 10);
+
+        // Fewer rows than asked for means the index has no more in this namespace.
+        return { count: page.length, exhausted: nearest.length < Math.min(k, MAX_K), matches: page };
+    };
+
+    /** The ANN answer, or `undefined` when a filter left it short of `topK` and the exact scan must decide. */
+    const queryAnn = async (index: SqliteVecIndex, values: ReadonlyArray<number>, input: RagVectorQueryInput): Promise<RagVectorMatches | undefined> => {
+        const topK = input.topK ?? 10;
+
+        if (input.filter === undefined) {
+            const { count, matches } = await queryIndex(index, values, input, topK);
+
+            return { count, matches };
+        }
+
+        for (const factor of OVER_FETCH_FACTORS) {
+            // eslint-disable-next-line no-await-in-loop -- each widening only runs when the previous one fell short
+            const { count, exhausted, matches } = await queryIndex(index, values, input, topK * factor);
+
+            if (count >= topK || exhausted) {
+                return { count, matches };
+            }
+        }
+
+        return undefined;
     };
 
     const query = async (input: RagVectorQueryInput): Promise<RagVectorMatches> => {
@@ -256,8 +294,12 @@ const sqliteVectorStore = (options: SqliteVectorStoreOptions): RagVectorStore =>
             throw new TypeError("@lunora/ai/rag: sqliteVectorStore query requires both `input` and `embed`");
         }
 
-        if (annIndex !== undefined && input.filter === undefined) {
-            return queryIndex(annIndex, values, input);
+        if (annIndex !== undefined) {
+            const answered = await queryAnn(annIndex, values, input);
+
+            if (answered !== undefined) {
+                return answered;
+            }
         }
 
         // `LIMIT maxScan + 1` rather than an unbounded SELECT: the overflow row

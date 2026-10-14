@@ -68,7 +68,7 @@ describe("sqliteVectorStore with a vec0 index", () => {
         expect(indexed.statements.some((sql) => sql.includes("MATCH") && sql.includes("lunora_rag_vectors_ann"))).toBe(true);
     });
 
-    it("keeps the exact scan for a filtered query, so a filter cannot shorten the page", async () => {
+    it("serves a filtered query from the index, ranked as the exact scan would", async () => {
         expect.assertions(2);
 
         const { exec, statements } = open();
@@ -80,7 +80,56 @@ describe("sqliteVectorStore with a vec0 index", () => {
         const result = await store.query({ embed: fixed([1, 0, 0]), filter: { kind: "b" }, input: "q", topK: 2 });
 
         expect(result.matches.map((match) => match.id)).toStrictEqual(["z", "y"]);
-        expect(statements.some((sql) => sql.includes("MATCH"))).toBe(false);
+        expect(statements.some((sql) => sql.includes("MATCH"))).toBe(true);
+    });
+
+    describe("filtered retrieval over a large namespace", () => {
+        const COUNT = 5000;
+        const vectorFor = (index: number): number[] => [Math.sin(index), Math.cos(index * 1.3), Math.sin(index * 0.7)];
+
+        const seedMany = async (store: ReturnType<typeof sqliteVectorStore>): Promise<void> => {
+            await store.upsertMany?.(
+                Array.from({ length: COUNT }, (_, index) => {
+                    return { embed: fixed(vectorFor(index)), id: `v${String(index)}`, input: "v", metadata: { index, tenant: `t${String(index % 10)}` } };
+                }),
+            );
+        };
+
+        it("matches the brute-force top 5 without the maxScan read", async () => {
+            expect.assertions(3);
+
+            const indexed = open();
+            const scanned = open();
+            const annStore = sqliteVectorStore({ ann: { dimensions: 3 }, exec: indexed.exec });
+            const scanStore = sqliteVectorStore({ exec: scanned.exec });
+
+            await seedMany(annStore);
+            await seedMany(scanStore);
+            indexed.statements.length = 0;
+
+            const query = { embed: fixed([0.3, 0.8, -0.2]), filter: { tenant: "t3" }, input: "q", topK: 5 };
+            const fromIndex = await annStore.query(query);
+            const fromScan = await scanStore.query(query);
+
+            expect(fromIndex.matches.map((match) => match.id)).toStrictEqual(fromScan.matches.map((match) => match.id));
+            expect(fromIndex.count).toBe(5);
+            expect(indexed.statements.some((sql) => sql.includes("SELECT id, vector, metadata"))).toBe(false);
+        });
+
+        it("falls back to the exact path when fewer than topK rows pass the filter", async () => {
+            expect.assertions(1);
+
+            const { exec } = open();
+            const store = sqliteVectorStore({ ann: { dimensions: 3 }, exec });
+
+            await seedMany(store);
+            await store.upsert({ embed: fixed([1, 0, 0]), id: "rare-1", input: "r", metadata: { tenant: "rare" } });
+            await store.upsert({ embed: fixed([0, 0, 1]), id: "rare-2", input: "r", metadata: { tenant: "rare" } });
+
+            const result = await store.query({ embed: fixed([0.3, 0.8, -0.2]), filter: { tenant: "rare" }, input: "q", topK: 5 });
+
+            expect(result.matches.map((match) => match.id).toSorted((a, b) => a.localeCompare(b))).toStrictEqual(["rare-1", "rare-2"]);
+        });
     });
 
     it("backfills an index created over an existing table", async () => {
