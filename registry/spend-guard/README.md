@@ -15,7 +15,7 @@ This adds an R2 bucket binding `SPEND_GUARD` (`lunora-spend-guard`) to `wrangler
 1. Wrap the Worker's default export:
 
     ```ts
-    import { withSpendGuard } from "../../lunora/spend-guard";
+    import { withSpendGuard } from "../../lunora/spend-guard/index.js";
 
     export default withSpendGuard(createWorker({/* ... */}));
     ```
@@ -42,9 +42,9 @@ This adds an R2 bucket binding `SPEND_GUARD` (`lunora-spend-guard`) to `wrangler
 ## What happens
 
 - `POST /_lunora/spend-alert` with a matching `cf-webhook-auth` header and a body whose `alert_type` is `billing_usage_alert` writes the `spend-paused` object to the bucket.
-- While that object exists, every request except `/_lunora/health` and `/_lunora/health/ready` gets `503`, and cron jobs (`scheduled`) do nothing.
+- While that object exists, every request gets `503`, except the health probes (`/_lunora/health`, `/_lunora/health/ready`) and the internal dispatch paths (`/_lunora/scheduler/dispatch`, `/_lunora/queue`). Cron jobs (`scheduled`) do nothing. The `queue` and `email` entries of the Worker pass through untouched.
 - Requests with a missing or wrong secret get `403`. With `SPEND_GUARD_SECRET` unset, every request gets `403`, so an unconfigured app cannot be paused from outside.
-- A delivery that is authenticated but not a usage alert gets `202` and pauses nothing. That includes the dashboard's test send, so creating the destination does not take the app down.
+- A delivery that is authenticated but not a usage alert gets `202` and pauses nothing. Cloudflare's documented test message is `{"text": "..."}` with no `alert_type`, so the dashboard's Save and Test does not pause the app.
 
 ## Resume
 
@@ -63,10 +63,11 @@ The `alert_type` check uses `billing_usage_alert`, the value Cloudflare's Terraf
 ## What the pause does not stop
 
 - **Durable Object alarms and in-flight WebSocket sessions.** Shards keep running. A hibernated WebSocket attached to a Durable Object stays connected.
-- **Scheduled jobs from `runAfter` / `runAt` and queue consumers.** They reach the Worker at `/_lunora/scheduler/dispatch` and `/_lunora/queue`, which are not gated. A `503` there would make the scheduler and queue retry the job for as long as the pause lasts.
+- **Scheduled jobs from `runAfter` / `runAt`.** They reach the Worker at `/_lunora/scheduler/dispatch`, which is not gated: a `503` there would make the scheduler retry the job for as long as the pause lasts.
+- **Push-queue consumers.** They run through the Worker's `queue()` entry, which passes through, so they keep consuming while paused. The `/_lunora/queue` forwarding endpoint for Workers-for-Platforms is not gated either.
 - **Traffic that reaches a Durable Object without passing through the Worker's `fetch`.** Gating happens in the Worker only.
 - **Budget alerts.** Cloudflare exposes no API for account budget alerts. Set one in the dashboard; this item does not read it.
-- **Limits that never reach a usage alert.** A product Cloudflare offers no usage alert for, such as Image Transformations, is not covered by this item. Its only guard is an account budget alert.
+- **Products with no documented usage alert.** Image Transformations, for example, is not covered by a usage alert, so this item cannot pause on it. Its only guard is an account budget alert.
 
 ## Cost
 

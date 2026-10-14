@@ -25,9 +25,9 @@ const SECRET_HEADER = "cf-webhook-auth";
 const HEALTH_PATHS: ReadonlySet<string> = new Set(["/_lunora/health", "/_lunora/health/ready"]);
 
 /**
- * Internal dispatch receivers, deliberately not gated: a 503 makes the scheduler
- * and the queue consumer retry the job, so a paused app would retry its backlog
- * for as long as the pause lasts. Those jobs keep running; see the README.
+ * Internal dispatch receivers, deliberately not gated: the scheduler and the
+ * platform queue forwarder retry any non-2xx answer, so a 503 here would turn the
+ * pause into a retry backlog. Those jobs keep running; see the README.
  */
 const DISPATCH_PATHS: ReadonlySet<string> = new Set(["/_lunora/scheduler/dispatch", "/_lunora/queue"]);
 
@@ -91,8 +91,9 @@ const alertTypeOf = (text: string): unknown => {
 /**
  * Verify and act on one delivery. Fails closed: with no secret configured every
  * request is refused, so an unconfigured app can never be paused by a stranger.
- * Only a delivery whose `alert_type` is a usage alert pauses the app. A test send
- * from the dashboard carries no such type, so it cannot take production down.
+ * Only a delivery whose `alert_type` is a usage alert pauses the app. Cloudflare's
+ * documented test message has no `alert_type`, so the dashboard's Save and Test
+ * cannot take production down.
  */
 const handleSpendAlert = async (request: Request, env: SpendGuardEnv): Promise<Response> => {
     if (request.method !== "POST") {
