@@ -1,6 +1,6 @@
+import { jsonSchema, tool } from "@ai-sdk/provider-utils";
 import { isLunoraError, LunoraError } from "@lunora/errors";
 import type { EmbeddingModel } from "ai";
-import { embed as aiEmbed, embedMany as aiEmbedMany, jsonSchema, tool } from "ai";
 
 // Repo-root inlined helper (see shared/stable-key.ts) — the canonical
 // code-point-stable, recursively-sorted encoder, used here to give a source's
@@ -353,6 +353,15 @@ const requireVectors = (vectors: RagContext["vectors"]): NonNullable<RagContext[
     return vectors;
 };
 
+/** The `ai` root is a ~720 KB barrel: load it on the first embed, once, rather than at module load. */
+let aiRoot: Promise<typeof import("ai")> | undefined;
+
+const loadAi = async (): Promise<typeof import("ai")> => {
+    aiRoot ??= import("ai");
+
+    return aiRoot;
+};
+
 const defineRag = (config: RagConfig): ((context: RagContext) => Rag) => {
     if (typeof config.index !== "string" || config.index.length === 0) {
         throw new LunoraError("BAD_REQUEST", "@lunora/ai/rag: `index` must be a non-empty Vectorize index name");
@@ -546,7 +555,8 @@ const defineRag = (config: RagConfig): ((context: RagContext) => Rag) => {
             // model id is stamped at span start; token usage / cost are known only
             // after the call resolves, so they are attached through the handle.
             const run = async (span?: AiSpan): Promise<ReadonlyArray<number>> => {
-                const { embedding, providerMetadata, usage } = await aiEmbed({ model: resolvedModel, value: text });
+                const ai = await loadAi();
+                const { embedding, providerMetadata, usage } = await ai.embed({ model: resolvedModel, value: text });
 
                 assertDimensionsFit(embedding.length, resolvedModel);
                 recordUsage(modelIdOf(resolvedModel), { providerMetadata, usage: { inputTokens: { total: usage.tokens } } }, span, metrics);
@@ -621,10 +631,12 @@ const defineRag = (config: RagConfig): ((context: RagContext) => Rag) => {
                 return batch;
             }
 
+            const ai = await loadAi();
+
             model ??= resolveEmbeddingModel(config.embeddingModel, context.ai);
 
             try {
-                const { embeddings, providerMetadata, usage } = await aiEmbedMany({ model, values: pending });
+                const { embeddings, providerMetadata, usage } = await ai.embedMany({ model, values: pending });
 
                 recordUsage(modelIdOf(model), { providerMetadata, usage: { inputTokens: { total: usage.tokens } } }, undefined, metrics);
 

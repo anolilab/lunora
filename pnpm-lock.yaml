@@ -1115,6 +1115,7 @@ patchedDependencies:
   '@cloudflare/workers-types@5.20261004.1': 4bd971e7c2b6760a24ef737fb6e2cb17b2cf8f50615cff5e2d1786e677436a93
   gray-matter@4.0.3: 6867093d18e007f9f610b1c4c6871b64734503b546ffcd3bc7a3675dd11f2188
   recast@0.23.11: 1afc7b5721808dfc4a9f0d5129cac96093c3d92cd182e7ed5e1df4087f2e68c0
+  workers-ai-provider@4.0.0: 67f863f4e762530837534cfd4c91770d344cd04290add064682eff31b01aba9b
 
 importers:
 
@@ -2574,6 +2575,9 @@ importers:
       '@ai-sdk/openai':
         specifier: catalog:ai
         version: 4.0.83(zod@4.6.5)
+      '@ai-sdk/provider-utils':
+        specifier: catalog:ai
+        version: 5.0.53(zod@4.6.5)
       '@lunora/errors':
         specifier: workspace:*
         version: link:../errors
@@ -2582,7 +2586,7 @@ importers:
         version: 7.0.127(zod@4.6.5)
       workers-ai-provider:
         specifier: catalog:ai
-        version: 4.0.0(@ai-sdk/anthropic@4.0.71(zod@4.6.5))(@ai-sdk/openai@4.0.83(zod@4.6.5))(@ai-sdk/provider@4.0.21)(ai@7.0.127(zod@4.6.5))
+        version: 4.0.0(patch_hash=67f863f4e762530837534cfd4c91770d344cd04290add064682eff31b01aba9b)(@ai-sdk/anthropic@4.0.71(zod@4.6.5))(@ai-sdk/openai@4.0.83(zod@4.6.5))(@ai-sdk/provider@4.0.21)(ai@7.0.127(zod@4.6.5))
     devDependencies:
       '@lunora/search-core':
         specifier: workspace:*
@@ -48082,7 +48086,7 @@ snapshots:
 
   workerpool@10.0.3: {}
 
-  workers-ai-provider@4.0.0(@ai-sdk/anthropic@4.0.71(zod@4.6.5))(@ai-sdk/openai@4.0.83(zod@4.6.5))(@ai-sdk/provider@4.0.21)(ai@7.0.127(zod@4.6.5)):
+  workers-ai-provider@4.0.0(patch_hash=67f863f4e762530837534cfd4c91770d344cd04290add064682eff31b01aba9b)(@ai-sdk/anthropic@4.0.71(zod@4.6.5))(@ai-sdk/openai@4.0.83(zod@4.6.5))(@ai-sdk/provider@4.0.21)(ai@7.0.127(zod@4.6.5)):
     dependencies:
       '@ai-sdk/provider': 4.0.21
       ai: 7.0.127(zod@4.6.5)

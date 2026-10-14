@@ -239,6 +239,48 @@ Re-exported from `ai` — signature tracked at its source.
 
 Re-exported from `@ai-sdk/provider-utils` — signature tracked at its source.
 
+## `@lunora/ai/create`
+
+### `AiBindingLike` (interface)
+
+_Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
+
+### `AiWebSearchItem` (interface)
+
+_Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
+
+### `AiWebSearchProvider` (type)
+
+_Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
+
+### `D` (const)
+
+Re-exported from `@lunora/ai` — signature tracked in that section.
+
+### `LunoraAi` (interface)
+
+_Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
+
+### `M` (interface)
+
+Re-exported from `@lunora/ai` — signature tracked in that section.
+
+### `a` (interface)
+
+Re-exported from `@lunora/ai` — signature tracked in that section.
+
+### `createAi` (const)
+
+_Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
+
+### `estimateModelCost` (const)
+
+_Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
+
+### `l` (const)
+
+_Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
+
 ## `@lunora/ai/rag`
 
 ### `BatchRerankerOptions` (interface)

@@ -989,7 +989,7 @@ export const summarize = action({ args: { text: v.string() }, handler: async (ct
 
             const result = runCodegen({ projectRoot: workdir, wranglerQueueProducers: [] });
 
-            expect(result.generated.shard).toContain('import { createAi } from "@lunora/ai"');
+            expect(result.generated.shard).toContain('import { createAi } from "@lunora/ai/create"');
             expect(result.generated.shard).toContain("ctx.ai = ai;");
             expect(result.generated.server).toContain('readonly ai: import("@lunora/ai").LunoraAi;');
         });
@@ -4636,7 +4636,7 @@ export const ping = query({ args: { id: v.string() }, handler: async (_context, 
             // Pull the AI helper + binding type, expose the override config field,
             // and assemble ctx.ai (built from env.AI; createAi itself throws on use
             // when nothing backs it, so no stub is emitted).
-            expect(output).toContain('import { createAi } from "@lunora/ai"');
+            expect(output).toContain('import { createAi } from "@lunora/ai/create"');
             expect(output).toContain("AiBindingLike");
             expect(output).toContain("ai?: (env: Record<string, unknown>) => AiBindingLike;");
             expect(output).not.toContain("aiStub");
