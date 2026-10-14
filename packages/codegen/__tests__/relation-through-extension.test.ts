@@ -8,9 +8,9 @@ import { runCodegen } from "../src/run-codegen";
 
 /**
  * A many-to-many relation declared inside a plugin's schema extension. Extension tables are namespaced to
- * `<key>_<name>` and their relation `table` / `through.table` are rewritten, but the join table's bare `v.id(...)`
- * columns are not; the codegen advisor reads the join table's indexes by its namespaced name, so the unique-index
- * rule must still hold for it.
+ * `<key>_<name>`; their relation `table` / `through.table` and the `v.id(...)` columns that name a sibling extension
+ * table are rewritten with them. The codegen advisor reads the join table's indexes by its namespaced name, so the
+ * unique-index rule must still hold for it.
  */
 const schemaSource = (joinIndex: string): string => `import { defineSchema, defineSchemaExtension, defineTable, v } from "@lunora/server";
 
@@ -60,6 +60,16 @@ describe("many-to-many relation declared by a plugin extension", () => {
         const { dataModel } = generate(UNIQUE_PAIR).generated;
 
         expect(dataModel).toContain('    cms_posts: {\n        tags: ManyRelation<"cms_tags">;\n    };');
+    });
+
+    it("emits the join table's id columns against the namespaced tables", () => {
+        expect.assertions(3);
+
+        const { dataModel } = generate(UNIQUE_PAIR).generated;
+
+        expect(dataModel).toContain('postId: Id<"cms_posts">;');
+        expect(dataModel).toContain('tagId: Id<"cms_tags">;');
+        expect(dataModel).not.toContain('Id<"posts">');
     });
 
     it("is silent on the documented shape: no through or relation lint fires for the namespaced join", () => {

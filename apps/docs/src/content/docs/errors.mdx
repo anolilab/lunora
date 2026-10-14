@@ -82,7 +82,7 @@ to branch on, see [Error handling](/docs/concepts/error-handling).
 
 ## Error codes
 
-All 165 codes Lunora publishes, generated from the catalog the runtime, CLI, overlay, Studio and client SDK all read.
+All 166 codes Lunora publishes, generated from the catalog the runtime, CLI, overlay, Studio and client SDK all read.
 Every heading is an anchor, so `/docs/errors#conflict` links straight to one.
 
 ### `ADMIN_FORBIDDEN`
@@ -664,6 +664,10 @@ Add a read policy with `.rls(...)`, or mark the table `.public()` if it is inten
 ### `SHAPE_NOT_FOUND`
 
 `404` — Shape not found
+
+### `SHAPE_RELATION_PREDICATE`
+
+`400` — Shape filtered by a relation is unsupported
 
 ### `SHAPE_REQUIRES_CDC`
 

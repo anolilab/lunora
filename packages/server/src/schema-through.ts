@@ -19,24 +19,8 @@ const requiredIdTarget = (validator: Validator | undefined): string | undefined 
     return typeof tableName === "string" ? tableName : undefined;
 };
 
-/**
- * Where a plugin extension's join tables are merged: `owned` holds the prefixed names the extension contributed, and
- * `resolve` maps the bare `v.id("…")` target written inside it to its merged name (`tags` → `cms_tags`). Joins outside
- * `owned` are app tables and their `v.id` targets already name merged tables.
- */
-interface ExtensionScope {
-    readonly owned: ReadonlySet<string>;
-    readonly resolve: (bareName: string) => string;
-}
-
 /** Check one through relation against its join table. */
-const validateThroughRelation = (
-    tables: Record<string, TableDefinition>,
-    tableName: string,
-    name: string,
-    relation: ThroughRelationDefinition,
-    scope: ExtensionScope | undefined,
-): void => {
+const validateThroughRelation = (tables: Record<string, TableDefinition>, tableName: string, name: string, relation: ThroughRelationDefinition): void => {
     const { from, table: joinName, to } = relation.through;
     const label = `defineSchema: relation "${name}" on table "${tableName}" (through "${joinName}")`;
     const join = tables[joinName];
@@ -53,14 +37,11 @@ const validateThroughRelation = (
         throw new LunoraError("INTERNAL", `${label}: "from" and "to" both name "${from}"; a link needs two different columns`);
     }
 
-    const resolveTarget = (target: string | undefined): string | undefined =>
-        target !== undefined && scope?.owned.has(joinName) === true ? scope.resolve(target) : target;
-
     for (const [column, expected] of [
         [from, tableName],
         [to, relation.table],
     ] as const) {
-        if (resolveTarget(requiredIdTarget(join.shape[column])) !== expected) {
+        if (requiredIdTarget(join.shape[column]) !== expected) {
             throw new LunoraError("INTERNAL", `${label}: "${joinName}.${column}" must be a required v.id("${expected}") column`);
         }
     }
@@ -73,12 +54,12 @@ const validateThroughRelation = (
     }
 };
 
-/** Validate every through relation in `tables`; see the module docblock. `scope` is set only when merging an extension. */
-const validateThroughRelations = (tables: Record<string, TableDefinition>, scope?: ExtensionScope): void => {
+/** Validate every through relation in `tables`; see the module docblock. */
+const validateThroughRelations = (tables: Record<string, TableDefinition>): void => {
     for (const [tableName, table] of Object.entries(tables)) {
         for (const [name, relation] of Object.entries(table.relationMap)) {
             if (relation.through !== undefined) {
-                validateThroughRelation(tables, tableName, name, relation, scope);
+                validateThroughRelation(tables, tableName, name, relation);
             }
         }
     }

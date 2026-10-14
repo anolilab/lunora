@@ -697,6 +697,10 @@ const ERROR_CATALOG: {
         readonly status: 400;
         readonly title: "Shape cross-shard join is unsupported";
     };
+    readonly SHAPE_RELATION_PREDICATE: {
+        readonly status: 400;
+        readonly title: "Shape filtered by a relation is unsupported";
+    };
     readonly UNAUTHENTICATED: {
         readonly status: 401;
         readonly title: "Unauthenticated";

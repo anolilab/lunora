@@ -59,6 +59,7 @@
  */
 
 import { LunoraError } from "@lunora/errors";
+import type { Validator } from "@lunora/values";
 
 import composeMiddleware from "./builder/compose-middleware";
 import type { Middleware } from "./builder/types";
@@ -90,6 +91,46 @@ const prefixTableName = (key: string, bareName: string): string => `${key}_${bar
  */
 const rewriteReference = (target: string, key: string, bareNames: ReadonlySet<string>): string =>
     bareNames.has(target) ? prefixTableName(key, target) : target;
+
+/** The slice of a runtime validator an id retarget reads: its kind and the `_meta` bag that holds the target table and the wrapped child. */
+interface IdMeta {
+    readonly inner?: Validator;
+    readonly tableName?: string;
+}
+
+/** A shallow copy of `validator` carrying `meta` in place of its own `_meta`. */
+const withMeta = (validator: Validator, meta: IdMeta): Validator => {
+    const copy: Validator & { _meta: IdMeta } = { ...validator, _meta: meta };
+
+    return copy;
+};
+
+/**
+ * Point every `v.id("table")` in `validator` that names an extension table at its prefixed name, through the
+ * `optional` / `array` wrappers an id column is declared under. Returns the same validator when nothing changes, and
+ * a shallow copy otherwise: extension definitions are shared across apps, so they are never mutated.
+ */
+const retargetId = (validator: Validator, resolve: (name: string) => string): Validator => {
+    const meta = (validator as { _meta?: IdMeta })._meta;
+
+    if (meta === undefined) {
+        return validator;
+    }
+
+    if (validator.kind === "id" && meta.tableName !== undefined) {
+        const tableName = resolve(meta.tableName);
+
+        return tableName === meta.tableName ? validator : withMeta(validator, { ...meta, tableName });
+    }
+
+    if ((validator.kind === "optional" || validator.kind === "array") && meta.inner !== undefined) {
+        const inner = retargetId(meta.inner, resolve);
+
+        return inner === meta.inner ? validator : withMeta(validator, { ...meta, inner });
+    }
+
+    return validator;
+};
 
 /**
  * Produce a copy of an extension table with every intra-extension table
@@ -128,7 +169,11 @@ const rewriteTableReferences = (table: TableDefinition, key: string, bareNames: 
         return { ...index, on: rewriteOn(index.on) };
     });
 
-    return { ...table, aggregateIndexes, rankIndexes, relationMap };
+    const shape = Object.fromEntries(
+        Object.entries(table.shape).map(([field, validator]) => [field, retargetId(validator, (name) => rewriteReference(name, key, bareNames))]),
+    );
+
+    return { ...table, aggregateIndexes, rankIndexes, relationMap, shape };
 };
 
 /* eslint-disable @typescript-eslint/no-explicit-any -- the install/compose accumulator types fold over a heterogeneous tuple of plugins; per-plugin types are recovered by the `infer`s below. */
@@ -416,7 +461,6 @@ export const mergeSchemaExtension = <T extends Record<string, TableDefinition>, 
     const { key } = extension;
     const bareNames = new Set(Object.keys(extension.tables));
     const merged: Record<string, TableDefinition> = { ...base.tables };
-    const owned = new Set<string>();
 
     for (const [bareName, table] of Object.entries(extension.tables)) {
         const prefixed = prefixTableName(key, bareName);
@@ -429,7 +473,6 @@ export const mergeSchemaExtension = <T extends Record<string, TableDefinition>, 
         }
 
         merged[prefixed] = rewriteTableReferences(table, key, bareNames, bareName);
-        owned.add(prefixed);
     }
 
     const mergedVectorIndexes: Record<string, VectorIndexDefinition> = { ...base.vectorIndexes };
@@ -455,7 +498,7 @@ export const mergeSchemaExtension = <T extends Record<string, TableDefinition>, 
     validateIndexFields(merged);
     validateTableModes(merged);
     validateGlobalVectors(merged, mergedVectorIndexes);
-    validateThroughRelations(merged, { owned, resolve: (bareName) => rewriteReference(bareName, key, bareNames) });
+    validateThroughRelations(merged);
 
     return {
         // Preserve secure-by-default RLS across `.extend(...)` — a plugin's

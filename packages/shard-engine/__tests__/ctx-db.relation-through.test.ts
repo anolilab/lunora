@@ -92,11 +92,24 @@ describe("a live shape whose predicate goes through a join table", () => {
     };
     const predicate = { tags: { some: { label: "red" } } };
 
-    it("is accepted when the owner, the join table and the target all live in one Durable Object", () => {
+    it("is refused even when the owner, the join table and the target all live in one Durable Object", () => {
         expect.assertions(1);
 
+        // The shape's seed and probe read `posts` alone, so a relation predicate would match nothing.
         expect(() => {
             assertShapeShardable(predicate, withJoin({}), "posts");
+        }).toThrow(expect.objectContaining({ code: "SHAPE_RELATION_PREDICATE" }));
+    });
+
+    it("is accepted on a .global() table, whose shape is read through the store's findMany", () => {
+        expect.assertions(1);
+
+        const globalSchema = {
+            tables: { ...withJoin({}).tables, posts: { ...THROUGH_SCHEMA.tables.posts, shardMode: { kind: "global" } } },
+        } as unknown as SchemaLike;
+
+        expect(() => {
+            assertShapeShardable(predicate, globalSchema, "posts");
         }).not.toThrow();
     });
 

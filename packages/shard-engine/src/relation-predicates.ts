@@ -677,6 +677,27 @@ const findUnreplicableRelationTarget = (where: WhereInput, schema: ResolveContex
 };
 
 /**
+ * A shard-local shape cannot filter by a relation. Its seed and its per-flush membership probe compile `effectiveWhere`
+ * straight to SQL over the shape's own table, with no step that resolves a relation predicate first, so the relation
+ * key compiles as a column and matches nothing: the shape seeds empty and stays empty, with no error. And a write that
+ * touches only the related table (a join row, a child) produces no changed key on the shape's own table, so the shape
+ * would never be told its membership moved. A `.global()` shape is read through the store's `findMany`, which does
+ * resolve relations, so it is exempt.
+ */
+const assertNoRelationPredicate = (effectiveWhere: WhereInput, schema: ResolveContext["schema"], table: string): void => {
+    if (schema.tables[table]?.shardMode?.kind === "global" || !containsRelationPredicate(effectiveWhere, schema, table)) {
+        return;
+    }
+
+    throw Object.assign(
+        new Error(
+            `shape on "${table}" filters by a relation, which a shard-local shape cannot replicate: its seed and membership probe read "${table}" alone, so the relation never matches, and a write that only touches the related table never moves the shape. Fix it by (a) denormalizing the related columns into "${table}" and filtering on those, (b) moving "${table}" to .global() so it is served through the latency-tiered D1 shape tier, or (c) reading it through a live query (\`useQuery\`), which does resolve relations.`,
+        ),
+        { code: "SHAPE_RELATION_PREDICATE", name: "LunoraError", status: 400 },
+    );
+};
+
+/**
  * Registration-time guard for partial-replication shapes: both ways a shape can
  * name rows its poke loop is unable to observe. Called from the generated
  * `resolveShape` override the moment a socket subscribes — the first point the
@@ -723,6 +744,8 @@ const assertShapeShardable = (effectiveWhere: WhereInput | undefined, schema: Re
     const offending = findUnreplicableRelationTarget(effectiveWhere, schema, table);
 
     if (!offending) {
+        assertNoRelationPredicate(effectiveWhere, schema, table);
+
         return;
     }
 

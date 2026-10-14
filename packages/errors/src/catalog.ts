@@ -607,6 +607,14 @@ export const ERROR_CATALOG = {
      */
     SHAPE_MEMORY_TABLE: { status: 400, title: "Shape over a memory table is unsupported" },
     SHAPE_CROSS_SHARD_JOIN: { status: 400, title: "Shape cross-shard join is unsupported" },
+
+    /**
+     * A shard-local shape's predicate filters by a relation. The shape's seed and membership probe read its own table
+     * only, so the relation would never match and a write to the related table would never move the shape. Refused at
+     * subscribe, with the same remedies as `SHAPE_CROSS_SHARD_JOIN`. A `.global()` shape is read through the store's
+     * `findMany`, which resolves relations, and is not refused.
+     */
+    SHAPE_RELATION_PREDICATE: { status: 400, title: "Shape filtered by a relation is unsupported" },
     UNAUTHENTICATED: { status: 401, title: "Unauthenticated" },
 
     /**

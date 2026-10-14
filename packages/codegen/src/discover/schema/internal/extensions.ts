@@ -2,7 +2,7 @@ import type { CallExpression, Expression, Node as TsNode, ObjectLiteralExpressio
 import { Node } from "ts-morph";
 
 import { diagnosticAt } from "../../../diagnostics";
-import type { TableIR, VectorIndexIR } from "../../../ir";
+import type { TableIR, ValidatorIR, VectorIndexIR } from "../../../ir";
 import { resolvePackageExtension } from "../../../resolve-package-extension";
 import { findObjectProperty, propertyKeyName } from "../../ast";
 import { asMetric, getNumberProperty, getStringProperty, objectPropertyInitializer } from "./properties";
@@ -120,6 +120,26 @@ const rewriteReference = (target: string, key: string, bareNames: ReadonlySet<st
     bareNames.has(target) ? prefixTableName(key, target) : target;
 
 /**
+ * Point every `v.id("table")` inside `validator` that names an extension table at its prefixed name, through the
+ * wrappers an id column is declared under (`optional`, `array`, a union member, an object field, a record).
+ */
+const retargetIds = (validator: ValidatorIR, resolve: (name: string) => string): ValidatorIR => {
+    const next = (child: ValidatorIR | undefined): ValidatorIR | undefined => (child === undefined ? undefined : retargetIds(child, resolve));
+
+    return {
+        ...validator,
+        ...(validator.tableName === undefined ? {} : { tableName: resolve(validator.tableName) }),
+        ...(validator.inner === undefined ? {} : { inner: next(validator.inner) }),
+        ...(validator.keyType === undefined ? {} : { keyType: next(validator.keyType) }),
+        ...(validator.valueType === undefined ? {} : { valueType: next(validator.valueType) }),
+        ...(validator.members === undefined ? {} : { members: validator.members.map((member) => retargetIds(member, resolve)) }),
+        ...(validator.shape === undefined
+            ? {}
+            : { shape: Object.fromEntries(Object.entries(validator.shape).map(([field, child]) => [field, retargetIds(child, resolve)])) }),
+    };
+};
+
+/**
  * Apply the runtime namespacing transform to one parsed extension table:
  * prefix the table's own name, rewrite relation targets, and rewrite inline
  * vector-index `table` references. The inline-vectorize parser stamps the
@@ -149,6 +169,10 @@ const namespaceExtensionTable = (table: TableIR, key: string, bareNames: Readonl
         // (registry item) has code under `lunora/<key>/` for its module to own.
         ...(fromPackage ? { extensionFromPackage: true as const } : {}),
         name: ownPrefixed,
+        // A column pointing at another extension table (`v.id("tags")`) names it bare inside the extension.
+        shape: Object.fromEntries(
+            Object.entries(table.shape).map(([field, validator]) => [field, retargetIds(validator, (name) => rewriteReference(name, key, bareNames))]),
+        ),
         relations: table.relations.map((relation) => {
             const target = rewriteReference(relation.table, key, bareNames);
 

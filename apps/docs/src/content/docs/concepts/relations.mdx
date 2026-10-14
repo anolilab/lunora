@@ -161,7 +161,7 @@ export default defineSchema({
   `with: { _count: { tags: true } }` counts. Rows come back in the target read's order (its `orderBy`), not in the
   order the links were created. The join table's and the target's read policies both apply, so a link the caller
   cannot see, or one to a tag it cannot read, is not returned or counted. A join table or target that sits on a
-  sharded table is refused in a live shape's predicate, as any other relation is.
+  sharded table is refused in a live shape's predicate, as any other relation is. A shard-local live shape (`defineShape`) cannot filter by a relation at all and is refused with `SHAPE_RELATION_PREDICATE`; filter on a denormalized column, make the table `.global()`, or use a live query.
 - **Reads are bounded and fail closed.** A `with` or `_count` over a page whose parents link more than 10 000 join
   rows is an error (load fewer parents at a time), and a `some` / `every` / `none` whose join table matches more
   than `maxRelationKeys` rows (5 000 by default) is refused. Silently dropping links would return a wrong, partly
