@@ -261,6 +261,13 @@ worker_size:
     # This file too, or the hole reopens one level up.
     - ".github/file-filters.yml"
 
+# Worker startup budget (Cloudflare's 1 s startup-CPU limit). Self-lists like `worker_size`.
+worker_startup:
+    - "scripts/check-worker-startup.js"
+    - "worker-startup.json"
+    - ".github/workflows/test.yml"
+    - ".github/file-filters.yml"
+
 # The non-JS SDK conformance suites. `protocol/**` is listed because the golden frames
 # under `protocol/fixtures/` ARE the contract those SDKs are tested against: a wire
 # change lands there first, and this is the only gate catching a port that drifts off

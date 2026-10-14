@@ -140,6 +140,46 @@ const coldWake = async (env: Record<string, unknown> = {}): Promise<void> => {
     await shard.alarm();
 };
 
+/**
+ * A healthy 2 s poll whose I/O runs after the next-due is computed. The clock moves 300 ms
+ * before the target is returned, so a check against the admit-time clock would see the
+ * target 1 700 ms out and count a healthy re-arm.
+ */
+class IoHealthyShard extends LoopShard {
+    // eslint-disable-next-line class-methods-use-this -- a fixed 2 s cadence, with I/O after the target is set
+    protected override pollExternalSources(): Promise<number | undefined> {
+        const nextDueAt = Date.now() + 2000;
+
+        vi.setSystemTime(Date.now() + 300);
+
+        return Promise.resolve(nextDueAt);
+    }
+}
+
+/**
+ * The generated source tier as it is written: the alarm reached the shard 5 ms late, the poll did
+ * 300 ms of I/O, and the next-due is taken after the poll (`polledAt + everyMs`), not before it.
+ */
+class LatePollShard extends LoopShard {
+    // eslint-disable-next-line class-methods-use-this -- a fixed 2 s cadence, with a late alarm and I/O before the next-due
+    protected override pollExternalSources(): Promise<number | undefined> {
+        vi.setSystemTime(Date.now() + 5 + 300);
+
+        const polledAt = Date.now();
+
+        return Promise.resolve(polledAt + 2000);
+    }
+}
+
+/**
+ * One eviction-driven wake: a new instance runs the cold-start arm, then its alarm tick. The arm is
+ * the call the codegen constructor makes, issued straight after construction, so nothing runs between.
+ */
+const coldWakeOf = async (shard: LoopShard): Promise<void> => {
+    await (shard as unknown as { scheduleSourcePoll: () => Promise<void> }).scheduleSourcePoll();
+    await shard.alarm();
+};
+
 const newShard = (env: Record<string, unknown> = {}): LoopShard => new LoopShard(makeState(), env);
 
 /** Fill the durable window to the limit, as if a burst had just spent the budget. */
@@ -176,11 +216,11 @@ const runChain = async (horizon: number, maxWakes: number, run: () => Promise<un
     return wakes;
 };
 
-/** Admitted re-arms per window, counted from the `setAlarm` history, for windows `0..count-1` from `NOW`. */
-const armsPerWindow = (count: number): number[] => {
+/** Events per window, for windows `0..count-1` from `NOW`. Pass the `setAlarm` history or the alarm deliveries. */
+const wakesPerWindow = (wakes: number[], count: number): number[] => {
     const buckets = Array.from<number>({ length: count }).fill(0);
 
-    for (const at of armed) {
+    for (const at of wakes) {
         const index = Math.floor((at - NOW) / WINDOW);
 
         if (index >= 0 && index < count) {
@@ -340,8 +380,8 @@ describe("alarm re-arm breaker", () => {
 
             expect(armed).toHaveLength(1);
 
-            // Only the first, real arm was counted; the budget is untouched.
-            expect(readRearmWindow(asShardSql(harness.sql))?.currentCount).toBe(1);
+            // The cold start is floor-paced, so no arm is recorded and the budget is untouched.
+            expect(readRearmWindow(asShardSql(harness.sql))?.currentCount ?? 0).toBe(0);
             expect(error).not.toHaveBeenCalled();
         });
 
@@ -397,7 +437,7 @@ describe("alarm re-arm breaker", () => {
             await deliver(() => shard.alarm(), NOW);
             await runChain(NOW + 5 * WINDOW, 20_000, () => shard.alarm());
 
-            const perWindow = armsPerWindow(5);
+            const perWindow = wakesPerWindow(armed, 5);
 
             // Never stopped: every window of the run admits at least one re-arm.
             expect(perWindow.every((count) => count >= 1)).toBe(true);
@@ -408,19 +448,23 @@ describe("alarm re-arm breaker", () => {
         });
 
         it("a still-looping eviction-driven loop is throttled too: a cold start while tripped does not re-arm faster", async () => {
-            expect.assertions(3);
+            expect.assertions(4);
 
             vi.spyOn(console, "error").mockImplementation(() => undefined);
 
-            // Every wake is a new instance, so only the durable budget can slow the loop.
-            await deliver(() => coldWake(), NOW);
-            await runChain(NOW + 5 * WINDOW, 20_000, () => coldWake());
+            // Every wake is a new instance, so only the durable budget can slow the loop. Each cold
+            // start also calls setAlarm, a floor arm that the tick then replaces, so the count is of
+            // deliveries: the wakes the runtime actually runs.
+            const wakes = [await deliver(() => coldWake(), NOW), ...(await runChain(NOW + 5 * WINDOW, 20_000, () => coldWake()))];
 
-            const perWindow = armsPerWindow(5);
+            const perWindow = wakesPerWindow(wakes, 5);
 
             expect(perWindow.every((count) => count >= 1)).toBe(true);
             expect(Math.max(...perWindow)).toBeLessThanOrEqual(LIMIT + LIMIT / 10);
-            expect(armed.length).toBeLessThanOrEqual(LIMIT * 6);
+            // Quieter windows between the bursts, as the docs promise. A tripped cold start that re-armed
+            // at the floor would keep every window at the limit instead.
+            expect(perWindow.slice(1).some((count) => count <= LIMIT / 10)).toBe(true);
+            expect(wakes.length).toBeLessThanOrEqual(LIMIT * 6);
         });
 
         it("never refuses a re-arm when disabled with LUNORA_ALARM_REARM_LIMIT=0", async () => {
@@ -500,7 +544,10 @@ describe("alarm re-arm breaker", () => {
     });
 
     describe("what a healthy re-arm costs in window writes", () => {
-        it("reads and writes the window row once per admitted re-arm, and runs no other window statements", async () => {
+        it.each([
+            ["the next-due is computed before the I/O", () => coldWakeOf(new IoHealthyShard(makeState(), {}))],
+            ["the alarm is late and the next-due is computed after the poll", () => coldWakeOf(new LatePollShard(makeState(), {}))],
+        ])("writes no window row for a 2 s poll, where %s, even when every wake is a fresh instance", async (_case, wake) => {
             expect.assertions(4);
 
             // Count the window's statements on the same handle the shard drives.
@@ -520,19 +567,18 @@ describe("alarm re-arm breaker", () => {
                 return original(query, ...bindings);
             };
 
-            const shard = new HealthyShard(makeState(), {});
+            // Each wake is a new instance: an eviction between 2 s polls, the case that would otherwise write
+            // per wake. The clock moves during each poll, so the pacing has to hold on that clock.
+            const wakes = [await deliver(() => wake(), NOW), ...(await runChain(NOW + 60_000, 30, () => wake()))];
 
-            await deliver(() => shard.alarm(), NOW);
-            const wakes = await runChain(NOW + 60_000, 30, () => shard.alarm());
-            // The first delivery plus the chain: every one of them is a consulted, admitted re-arm.
-            const ticks = wakes.length + 1;
+            expect(wakes.length).toBeGreaterThan(20);
+            // A healthy poll and its cold starts read the window and write nothing to it.
+            expect(counts.write).toBe(0);
+            expect(counts.read).toBeGreaterThan(wakes.length);
 
-            expect(ticks).toBeGreaterThan(20);
-            // One re-arm per healthy tick: one SELECT and one upsert of the single window row each.
-            expect(counts.read).toBe(ticks);
-            expect(counts.write).toBe(ticks);
-            // The table DDL runs on every consulted tick too; it writes no rows.
-            expect(counts.ddl).toBe(ticks);
+            const [rows] = harness.sql.exec<{ n: number }>('SELECT count(*) AS n FROM "__lunora_alarm_rearm_window"').toArray();
+
+            expect(rows?.n).toBe(0);
         });
     });
 });

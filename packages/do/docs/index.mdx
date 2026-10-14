@@ -135,9 +135,9 @@ apply to it.)
 A shard's poll alarm re-arms itself on each tick while a global shape, a source or a
 TTL backlog still has work. Left unchecked, an always-due source turns that into a loop
 that wakes the DO as fast as the runtime allows. Each shard therefore gets a budget of
-**300 self re-arms per 60 seconds**, a sliding-window count kept in the shard's own
-SQLite. The default is ten times the 2 s global-shape floor (30 re-arms a minute), so
-steady workloads never reach it.
+**300 re-arms due sooner than the 2 s floor per 60 seconds**, a sliding-window count kept in
+the shard's own SQLite. Re-arms at or beyond the floor are not counted: they are at most one
+per 2 s, so 30 a minute, and the default is ten times that. Steady workloads never reach it.
 
 When the budget is spent, the re-arm is refused and the shard arms **one recovery wake
 one minute later**, one millisecond past the window so the previous window has begun to
@@ -153,17 +153,21 @@ re-arm.
 Writes are never refused. A pending schedule-outbox retry is exempt, so a job the
 scheduler has not yet accepted still gets its retry. TTL rows and source updates are
 delayed by about one window, never discarded. The codegen constructor's cold-start arms
-count against the same budget.
+are refused while the budget is spent, and they are not counted in it.
 
-**The window costs a write on every re-arm attempt.** Each attempt, healthy or not, runs
-one `SELECT` of the window row and one upsert of it. On Cloudflare's SQLite engine that
-upsert counts as one row written, the first insert included, and the `SELECT` reads one
-row. A shard polling every 2 s therefore writes one extra row per poll: 30 rows a minute,
-about 43,200 a day, about 1.3 million a month. Check these against your plan.
+**Only re-arms due sooner than the 2 s floor write the window.** A re-arm whose next wake
+is at least 2 s after its tick began is floor-paced. Those are checked against the window
+with a `SELECT` and recorded nowhere, so a healthy 2 s poll writes no window row. A
+healthy shard still reads the window row once per poll. A re-arm due sooner than 2 s, such
+as a source that is due now, is counted and written when admitted. Those are the re-arms
+that can loop, and they are the only ones the budget spends. A source with
+`refresh.everyMs` under 2 s is due sooner than the floor on every poll, so each of its
+polls is counted and written. A source at 2 s or slower is not. The window is one row, so an
+eviction does not reset it.
 
-Cold starts count too. A shard whose schema has a sourced or TTL tier arms that tier from
-its constructor on every instance, so each cold start is one or two more attempts, each
-with the same write. A shard that never attempts a re-arm writes nothing.
+Cold starts are floor-paced too. A shard whose schema has a sourced or TTL tier arms that
+tier from its constructor on every instance, which is one read and no write. A tripped
+window still refuses that arm, so an eviction-driven loop cannot get around the budget.
 
 Set `LUNORA_ALARM_REARM_LIMIT` to a positive integer to change the budget, or to `0` to
 disable it. An unset or malformed value keeps the default. A bulk backfill that drains a
@@ -185,6 +189,16 @@ The default is **600 invocations per minute**, or 10 per second. A self-loop run
 one iteration per round trip (the scheduler's alarm pass, the dispatch, the run). At an
 assumed 100 ms round trip, a loop reaches the budget at 10 iterations per second, and its
 daily ceiling is 864,000 per target per shard.
+
+The budget is **not lowered** for slower loops, and a self-loop gets no lower limit. At
+600 per minute, a loop that reschedules itself 2 times per second (120 per minute,
+172,800 per day per target) is not caught. A blanket limit of 120 would defer any app
+that schedules one target from more than 2 invocations per second, the whole app
+being one shard by default. A self-only limit needs the calling function's path, which
+the generated `buildCtx` has but does not pass to the scheduler facade. Its composed
+calls also inherit the outer function's path, so a self-loop through `ctx.runMutation`
+would still count as fan-in. Only `ctx.scheduler` is covered: `createWorkpool` and
+`createQueueWorkpool` enqueues do not pass through this budget.
 
 When the budget is spent, the schedule is **deferred one minute**, not refused and not
 dropped. Its due time moves to one window out. A job already due later than that keeps its

@@ -77,4 +77,52 @@ describe("alarm re-arm breaker window on real workerd SQLite", () => {
             expect(tenHealthy).toBe(10);
         });
     });
+
+    it("writes no engine row across healthy checks: the table DDL and the window read", async () => {
+        expect.assertions(2);
+
+        const stub = env.SHARD.get(env.SHARD.idFromName("alarm-rearm-breaker-healthy"));
+
+        await runInDurableObject(stub, async (_instance, state) => {
+            const engine = state.storage.sql as unknown as ShardSqlExec;
+
+            // Sums the engine's own rows-written count for every statement the helpers issue. The
+            // count is read after `toArray()`, which is when workerd reports it.
+            let rowsWritten = 0;
+            const counted = {
+                exec: (query: string, ...bindings: unknown[]) => {
+                    const cursor = engine.exec(query, ...bindings);
+
+                    return {
+                        toArray: () => {
+                            const rows = cursor.toArray();
+
+                            rowsWritten += (cursor as { rowsWritten?: number }).rowsWritten ?? 0;
+
+                            return rows;
+                        },
+                    };
+                },
+            } as unknown as ShardSqlExec;
+
+            // The first creation writes schema rows, so it is counted and then set aside: the check below is about a
+            // table that already exists, as every healthy poll finds it.
+            ensureRearmWindowTable(counted);
+            rowsWritten = 0;
+
+            // A positive control: a real upsert must register on this counter, or the zero below proves nothing.
+            writeRearmWindow(counted, { currentCount: 1, previousCount: 0, windowStart: NOW });
+
+            expect(rowsWritten).toBe(1);
+
+            rowsWritten = 0;
+
+            for (let check = 0; check < 50; check += 1) {
+                ensureRearmWindowTable(counted);
+                readRearmWindow(counted);
+            }
+
+            expect(rowsWritten).toBe(0);
+        });
+    });
 });

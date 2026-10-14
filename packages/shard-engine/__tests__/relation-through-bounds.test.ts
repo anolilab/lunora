@@ -93,10 +93,10 @@ describe("many-to-many read bounds", () => {
             expect(fetcher.mock.calls.map(([, args]) => args.limit)).toStrictEqual([4, 4]);
         });
 
-        it("fails closed when the join table holds more rows than the cap, even for few distinct owners", async () => {
+        it("resolves when the join table holds more rows than the cap for few distinct owners", async () => {
             expect.assertions(1);
 
-            // Four join rows, all for one owner: one distinct key, but four rows read before the cap could be checked.
+            // Four join rows, all for one owner: one distinct key, well under a cap of three.
             const fetcher = async (tableName: string): Promise<QueryPage> =>
                 page(
                     tableName === "tags"
@@ -106,7 +106,87 @@ describe("many-to-many read bounds", () => {
                           }),
                 );
 
-            await expect(resolve(fetcher)).rejects.toThrow(/matched at least 4 rows, exceeding the 3-key limit/u);
+            await expect(resolve(fetcher)).resolves.toStrictEqual({ _id: { in: ["p1"] } });
+        });
+
+        it("walks every page of join rows, so an owner that only appears on a later page still matches", async () => {
+            expect.assertions(2);
+
+            const fetcher = vi.fn<Fetcher>(async (tableName: string, args: QueryArgs): Promise<QueryPage> => {
+                if (tableName === "tags") {
+                    return page([{ _id: "t0" }]);
+                }
+
+                return args.cursor === undefined
+                    ? {
+                          continueCursor: "c1",
+                          isDone: false,
+                          page: Array.from({ length: 4 }, () => {
+                              return { postId: "p1" };
+                          }),
+                      }
+                    : page([{ postId: "p2" }]);
+            });
+
+            await expect(resolve(fetcher)).resolves.toStrictEqual({ _id: { in: ["p1", "p2"] } });
+            expect(fetcher.mock.calls.filter(([tableName]) => tableName === "post_tags")[1]?.[1].cursor).toBe("c1");
+        });
+
+        it("fails closed once the distinct owners pass the cap, without reading the rest of the join table", async () => {
+            expect.assertions(2);
+
+            // Page two crosses the cap of three (four distinct owners), so the third page is never read.
+            const joinPages: QueryPage[] = [
+                { continueCursor: "c1", isDone: false, page: [{ postId: "p1" }, { postId: "p2" }] },
+                { continueCursor: "c2", isDone: false, page: [{ postId: "p3" }, { postId: "p4" }] },
+                page([{ postId: "p5" }]),
+            ];
+            let joinReads = 0;
+            const fetcher = async (tableName: string): Promise<QueryPage> => {
+                if (tableName === "tags") {
+                    return page([{ _id: "t0" }]);
+                }
+
+                joinReads += 1;
+
+                return joinPages[joinReads - 1] ?? page([]);
+            };
+
+            await expect(resolve(fetcher)).rejects.toThrow(/matched at least 4 distinct keys, exceeding the 3-key limit/u);
+            expect(joinReads).toBe(2);
+        });
+
+        it("refuses a page larger than the limit it asked for, rather than trusting a store that ignored it", async () => {
+            expect.assertions(1);
+
+            const fetcher = async (tableName: string): Promise<QueryPage> =>
+                tableName === "tags"
+                    ? page([{ _id: "t0" }])
+                    : page(
+                          Array.from({ length: 5 }, (_, index) => {
+                              return { postId: `p${String(index)}` };
+                          }),
+                      );
+
+            await expect(resolve(fetcher)).rejects.toThrow(/did not honour the page limit/u);
+        });
+
+        it("refuses a page that is not final but names no cursor, rather than stopping short", async () => {
+            expect.assertions(1);
+
+            const fetcher = async (tableName: string): Promise<QueryPage> =>
+                tableName === "tags" ? page([{ _id: "t0" }]) : { continueCursor: null, isDone: false, page: [{ postId: "p1" }] };
+
+            await expect(resolve(fetcher)).rejects.toThrow(/no cursor to continue from/u);
+        });
+
+        it("refuses a cursor that does not advance, rather than re-reading the same page forever", async () => {
+            expect.assertions(1);
+
+            const fetcher = async (tableName: string): Promise<QueryPage> =>
+                tableName === "tags" ? page([{ _id: "t0" }]) : { continueCursor: "c1", isDone: false, page: [{ postId: "p1" }] };
+
+            await expect(resolve(fetcher)).rejects.toThrow(/cursor that did not advance/u);
         });
     });
 });

@@ -17,13 +17,22 @@
  * scheduler has not yet accepted. TTL rows and source updates are delayed by about a
  * window, never discarded.
  *
- * Arithmetic behind the default. Tiers coalesce into one alarm, so the
- * legitimate steady-state re-arm rate is set by the fastest recurring tier, the
- * 2 s global-shape floor: 60 000 / 2 000 = 30 re-arms per minute. The default
- * limit is 300 per 60 s, ten times that floor. A legitimate backlog only reaches
- * it by re-arming "due now" at 5 or more ticks per second, for example a large
- * TTL drain, and that is the case the knob exists for. The outbox retry starts at
- * 5 s, so it never approaches the limit at all.
+ * Two kinds of re-arm. A re-arm whose target is at least the 2 s global-shape floor
+ * after the start of its tick is floor-paced: each wake is then at least 2 s after the
+ * previous one, so 60 000 / 2 000 = 30 floor-paced wakes fit a 60 s window (31 counting
+ * both ends). Those are checked against the window read-only and never recorded, so a
+ * healthy 2 s poll writes no window row, and a cold start (a fresh instance on an
+ * eviction-driven wake) writes none either. A re-arm due sooner than the floor is the
+ * loop the breaker exists for. It is counted in the window and written when admitted.
+ * The floor is measured from the tick's start, not from the moment of the check, because
+ * a tier's next-due is computed during the tick and I/O in the tick moves the clock.
+ *
+ * Arithmetic behind the default. The default limit is 300 per 60 s, ten times the
+ * floor's 30. Only sub-floor re-arms count, so the bound on a window is the limit plus
+ * the 31 floor-paced wakes. A legitimate backlog only reaches the limit by re-arming
+ * "due now" at 5 or more ticks per second, for example a large TTL drain, and that is
+ * the case the knob exists for. The outbox retry starts at 5 s, so it never approaches
+ * the limit at all.
  *
  * Tuning and disabling: `LUNORA_ALARM_REARM_LIMIT` (a positive integer), or `0`
  * to turn the breaker off. Unset or malformed values keep the default, matching
@@ -102,6 +111,9 @@ const estimateRearms = (window: RearmWindow, now: number): number => {
 
     return window.currentCount + window.previousCount * (1 - intoWindow / ALARM_REARM_WINDOW_MS);
 };
+
+/** The estimate a re-arm at `now` would see, read without recording anything. */
+const peekRearms = (window: RearmWindow | undefined, now: number): number => estimateRearms(rollWindow(window, now), now);
 
 /**
  * Admit or refuse one alarm re-arm against `limit`. Pass `Number.POSITIVE_INFINITY`
@@ -200,6 +212,7 @@ export {
     DEFAULT_ALARM_REARM_LIMIT,
     ensureRearmWindowTable,
     estimateRearms,
+    peekRearms,
     readRearmWindow,
     recoveryWakeAt,
     writeRearmWindow,

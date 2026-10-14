@@ -163,8 +163,9 @@ export default defineSchema({
   cannot see, or one to a tag it cannot read, is not returned or counted. A join table or target that sits on a
   sharded table is refused in a live shape's predicate, as any other relation is. A shard-local live shape (`defineShape`) cannot filter by a relation at all and is refused with `SHAPE_RELATION_PREDICATE`; filter on a denormalized column, make the table `.global()`, or use a live query.
 - **Reads are bounded and fail closed.** A `with` or `_count` over a page whose parents link more than 10 000 join
-  rows is an error (load fewer parents at a time), and a `some` / `every` / `none` whose join table matches more
-  than `maxRelationKeys` rows (5 000 by default) is refused. Silently dropping links would return a wrong, partly
+  rows is an error (load fewer parents at a time), and a `some` / `every` / `none` whose matches name more than
+  `maxRelationKeys` distinct owners or targets (5 000 by default) is refused. A join table may hold any number of
+  rows per owner. Silently dropping links would return a wrong, partly
   empty relation. A `limit` on the relation caps the tags returned per parent, not the join rows read to find them.
 - **Deletes follow the join table's own foreign keys.** A through relation declares no `onDelete`. Deleting a post
   or a tag removes its join rows when the join table's `r.one(…, { onDelete: "cascade" })` says so, exactly as it

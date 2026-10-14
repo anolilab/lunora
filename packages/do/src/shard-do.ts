@@ -354,6 +354,7 @@ import {
     alarmRearmLimitFrom,
     ensureRearmWindowTable,
     estimateRearms,
+    peekRearms,
     readRearmWindow,
     recoveryWakeAt,
     writeRearmWindow,
@@ -7653,6 +7654,10 @@ abstract class ShardDO {
         // in a test), which simply leaves these log lines uncorrelated.
         const trace = this.currentTriggerTrace;
 
+        // The pacing anchor for the re-arm breaker: every tier computes its next-due from a
+        // time at or after this one, so a re-arm at or beyond the floor from here is floor-paced.
+        const tickStartedAt = Date.now();
+
         this.globalPollArmedAt = undefined;
 
         let globalShapesRemaining: number;
@@ -7712,7 +7717,9 @@ abstract class ShardDO {
         // exempt: it is a user job the scheduler has not accepted, and refusing its
         // re-arm would strand that job until some unrelated trigger.
         if (nextAlarmAt !== undefined) {
-            await (this.admitAlarmRearm(nextOutboxDueAt !== undefined) ? this.scheduleGlobalPoll(nextAlarmAt) : this.armRecoveryWake());
+            await (this.admitAlarmRearm(nextAlarmAt, tickStartedAt, nextOutboxDueAt !== undefined)
+                ? this.scheduleGlobalPoll(nextAlarmAt)
+                : this.armRecoveryWake());
         }
     }
 
@@ -12707,9 +12714,10 @@ abstract class ShardDO {
      * The cold-start arm behind {@link ShardDO.scheduleSourcePoll} and
      * {@link ShardDO.scheduleTtlSweep}. The codegen constructor calls those on every
      * instance, including the one an alarm wakes after an eviction, so an ungated
-     * arm here would re-arm a tripped loop at the global floor forever. It counts
-     * against the same budget. A refusal arms the recovery wake instead, so an
-     * idle tripped shard still polls and sweeps once the window drains.
+     * arm here would re-arm a tripped loop at the global floor forever. It is
+     * floor-paced, so it is checked against the window read-only and not recorded: a
+     * healthy evicted shard writes no window row for it. A refusal arms the recovery
+     * wake instead, so an idle tripped shard still polls and sweeps once the window drains.
      *
      * A call that would arm nothing is not a re-arm and is not counted:
      * {@link ShardDO.scheduleGlobalPoll} leaves an alarm that is already due at or
@@ -12719,12 +12727,16 @@ abstract class ShardDO {
      */
     private scheduleBootstrapPoll(): Promise<void> {
         const pendingAt = this.globalPollArmedAt;
+        const now = Date.now();
 
-        if (pendingAt !== undefined && pendingAt <= Date.now() + ShardDO.GLOBAL_SHAPE_POLL_INTERVAL_MS) {
+        if (pendingAt !== undefined && pendingAt <= now + ShardDO.GLOBAL_SHAPE_POLL_INTERVAL_MS) {
             return this.scheduleGlobalPoll();
         }
 
-        if (!this.admitAlarmRearm(false)) {
+        // This arm always targets the floor, so it is floor-paced: checked against the
+        // window, never recorded. A tripped window still refuses it, which is what stops
+        // an eviction-driven loop from re-arming through a fresh instance.
+        if (!this.admitAlarmRearm(now + ShardDO.GLOBAL_SHAPE_POLL_INTERVAL_MS, now, false)) {
             return this.armRecoveryWake();
         }
 
@@ -12757,38 +12769,56 @@ abstract class ShardDO {
     }
 
     /**
-     * Whether the poll alarm may re-arm itself on this tick — the runaway breaker
-     * (see alarm-rearm-breaker.ts). `exempt` admits regardless but is still counted.
+     * Whether a poll re-arm to `targetAt` may proceed — the runaway breaker (see
+     * alarm-rearm-breaker.ts). `exempt` admits regardless.
+     *
+     * `tickStartedAt` anchors the pacing. A target at or beyond the floor from it is
+     * floor-paced: it is checked against the window read-only and never recorded, so a
+     * healthy poll writes no window row. A target sooner than the floor is counted and
+     * written when admitted. The anchor is the tick's start, not `Date.now()` here,
+     * because a tier computes its next-due during the tick and I/O moves the clock.
      *
      * Fails open on any storage fault: a breaker that cannot read its window must
      * not stall a shard, and the worst case is one unthrottled tick.
      */
-    private admitAlarmRearm(exempt: boolean): boolean {
+    private admitAlarmRearm(targetAt: number, tickStartedAt: number, exempt: boolean): boolean {
         const limit = alarmRearmLimitFrom(this.env);
 
         if (limit === undefined) {
             return true;
         }
 
+        const now = Date.now();
+        const floorPaced = targetAt - tickStartedAt >= ShardDO.GLOBAL_SHAPE_POLL_INTERVAL_MS;
         const { sql } = this.shardHost;
-        let admission: RearmAdmission;
+        let admitted: boolean;
+        let rearms: number;
 
         try {
             ensureRearmWindowTable(sql);
-            admission = admitRearm(readRearmWindow(sql), Date.now(), exempt ? Number.POSITIVE_INFINITY : limit);
-            writeRearmWindow(sql, admission.window);
+
+            if (floorPaced) {
+                rearms = peekRearms(readRearmWindow(sql), now);
+                admitted = exempt || rearms < limit;
+            } else {
+                const admission: RearmAdmission = admitRearm(readRearmWindow(sql), now, exempt ? Number.POSITIVE_INFINITY : limit);
+
+                writeRearmWindow(sql, admission.window);
+                admitted = admission.admitted;
+                rearms = estimateRearms(admission.window, now);
+            }
         } catch {
             return true;
         }
 
-        if (admission.admitted) {
+        if (admitted) {
             this.alarmRearmTripLogged = false;
         } else if (!this.alarmRearmTripLogged) {
             this.alarmRearmTripLogged = true;
-            this.recordAlarmRearmTrip(limit, estimateRearms(admission.window, Date.now()));
+            this.recordAlarmRearmTrip(limit, rearms);
         }
 
-        return admission.admitted;
+        return admitted;
     }
 
     /**

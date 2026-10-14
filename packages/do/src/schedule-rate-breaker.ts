@@ -15,10 +15,24 @@
  * would trip on a legitimate import that schedules one job per row.
  *
  * Keying: per target, and per shard, since each shard has its own window in its own
- * SQLite. A fan-out spread across tenant shards does not add up. Keying by the
- * (scheduling function -> target) pair would need the calling function's path passed
- * into the facade, which the emitted `buildCtx` does not do. It would not catch more
- * either: in a chain A -> B -> A, each target still sees one unit per cycle.
+ * SQLite. A fan-out spread across tenant shards does not add up. The default topology is
+ * one Durable Object per app, so "per shard per target" is "per app per target".
+ *
+ * A lower limit for direct self-loops (caller equals target) is not built. The caller's
+ * path is in scope in the emitted `buildCtx` (`options.functionPath`), but the facade and
+ * `ShardDO.admitScheduleRate` only receive the target. Threading the caller through means:
+ * the emitter passes `options.functionPath` into `scheduleOutbox(...)`; `ScheduleOutbox.admit`
+ * takes `(target, caller)` and the facade keys its per-dispatch memo on the pair; the shard
+ * reads a second limit knob; and every generated `shard.ts` (examples and golden fixtures)
+ * is regenerated. Two caveats hold even then. `ctx.runMutation` hands the caller's ctx to
+ * the callee, so a composed schedule carries the outer function's path, and a self-loop
+ * through composition is counted as fan-in, at the 600 limit. A chain A -> B -> A is never
+ * a self-loop for either target, so it stays under the fan-in limit.
+ *
+ * Arithmetic for the gap. At 600 per 60 s a direct self-loop is caught from 10 iterations
+ * per second. A self-loop at 2 iterations per second is 120 per minute, 172,800 per day per
+ * target, and is not caught. A blanket 120 would instead defer any app scheduling one target
+ * from more than 2 invocations per second, and a cursor drain running at that rate.
  *
  * On a trip, the job is deferred and not dropped. Its due time is pushed to one window
  * out (`recoveryWakeAt`), and a job already due later than that keeps its time, because
