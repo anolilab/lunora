@@ -240,11 +240,13 @@ describe("emitApp — auth cold start", () => {
     });
 
     it("migrates through the raw binding, never the adapter better-auth rejects", () => {
-        expect.assertions(2);
+        expect.assertions(4);
 
         const output = emitApp({ ...baseOptions, hasAuth: true });
 
         expect(output).toContain("await ensureMigrated(createMigrationAuth({ ...this.authDeclaration.options(env), database: d1(env) as never }));");
+        expect(output).toContain('await import("@lunora/auth/migrate")');
+        expect(output).not.toContain('from "@lunora/auth/migrate"');
         expect(output).not.toContain("ensureMigrated(createAuth({ ...this.authDeclaration.options(env), database: lunoraD1Adapter(");
     });
 });

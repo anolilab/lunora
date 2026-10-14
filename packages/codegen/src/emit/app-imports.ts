@@ -124,7 +124,6 @@ const buildImportLines = (options: ResolvedAppOptions): string[] => {
             ? [
                   `import type { AuthNamespaceLike, LunoraAuth, LunoraAuthOptions } from "@lunora/auth";`,
                   `import { authDiscoveryPathsFor, createAuth, createAuthAdmin, createAuthAuditReader, createDoAuthWiring, d1Executor, handleAuthDiscoveryRequest, handleAuthRequest, lunoraD1Adapter } from "@lunora/auth";`,
-                  `import { createMigrationAuth, ensureMigrated } from "@lunora/auth/migrate";`,
               ]
             : []),
         ...buildAccessImports(hasAccess, hasAuth),
