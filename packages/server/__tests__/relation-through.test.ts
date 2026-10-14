@@ -30,6 +30,9 @@ const buildSchema = () =>
         audit_links: defineTable({ postId: v.id("posts"), tagId: v.id("tags") })
             .global()
             .index("byPair", ["postId", "tagId"], { unique: true }),
+        solo_tags: defineTable({ postId: v.id("posts"), tagId: v.id("tags") })
+            .index("byPair", ["postId", "tagId"], { unique: true })
+            .index("onePerPost", ["postId"], { unique: true }),
         stamped_tags: defineTable({ addedBy: v.string().serverDefault(() => "system"), postId: v.id("posts"), tagId: v.id("tags") }).index(
             "byPair",
             ["postId", "tagId"],
@@ -58,6 +61,7 @@ const buildSchema = () =>
         posts: defineTable({ title: v.string() }).relations((r) => {
             return {
                 audited: r.many("tags", { through: { from: "postId", table: "audit_links", to: "tagId" } }),
+                solo: r.many("tags", { through: { from: "postId", table: "solo_tags", to: "tagId" } }),
                 stamped: r.many("tags", { through: { from: "postId", table: "stamped_tags", to: "tagId" } }),
                 tags: r.many("tags", { through: { from: "postId", table: "post_tags", to: "tagId" } }),
                 voted: r.many("tags", { through: { from: "postId", table: "bad_votes", to: "tagId" } }),
@@ -307,6 +311,20 @@ describe("r.many through: nested writes", () => {
         await expect(runtime.runInTransaction(async () => bare("posts").patch(post, { tags: { set: [b, bad] } }))).rejects.toThrow(/blocked/u);
 
         await expect(linked(post)).resolves.toStrictEqual(sorted([a, b]));
+    });
+
+    it("surfaces a unique conflict that is not the pair, instead of reporting a link that was never written", async () => {
+        expect.assertions(2);
+
+        const [a, b] = [await newTag("a"), await newTag("b")] as [string, string];
+        const post = await newPost();
+
+        await table("posts").patch(post, { solo: { connect: [a] } });
+
+        // `solo_tags` also allows one row per post, so the second tag hits that rule, not the pair.
+        await expect(table("posts").patch(post, { solo: { connect: [b] } })).rejects.toMatchObject({ code: "CONFLICT" });
+        // The pair that already exists is still a no-op.
+        await expect(table("posts").patch(post, { solo: { connect: [a] } })).resolves.toBeUndefined();
     });
 
     it("refuses naming the same id in connect and disconnect", async () => {

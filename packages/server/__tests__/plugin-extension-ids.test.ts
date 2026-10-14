@@ -18,6 +18,8 @@ const extension = () =>
             posts: defineTable({
                 authorId: v.id("authors"),
                 editorIds: v.array(v.id("authors")),
+                meta: v.object({ author: v.id("authors"), tags: v.record(v.string(), v.id("authors")) }),
+                either: v.union(v.id("authors"), v.string()),
                 ownerId: v.id("users"),
                 reviewerId: v.optional(v.id("authors")),
                 title: v.string(),
@@ -42,6 +44,17 @@ describe("plugin extension foreign keys", () => {
         // `users` is an app table, not part of the extension.
         expect(targetOf(shape["ownerId"])).toBe("users");
         expect(shape["authorId"]?.kind).toBe("id");
+    });
+
+    it("follows an id into an object field, a record value and a union member", () => {
+        expect.assertions(3);
+
+        const { shape } = mergeSchemaExtension(base(), extension()).tables["cms_posts"];
+        const meta = (validator: unknown) => (validator as { _meta: Record<string, any> })._meta;
+
+        expect(targetOf(meta(shape["meta"]).shape.author)).toBe("cms_authors");
+        expect(targetOf(meta(meta(shape["meta"]).shape.tags).valueValidator)).toBe("cms_authors");
+        expect(targetOf(meta(shape["either"]).members[0])).toBe("cms_authors");
     });
 
     it("keeps the relation graph's edges to the namespaced tables", () => {

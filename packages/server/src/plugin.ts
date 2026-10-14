@@ -92,10 +92,17 @@ const prefixTableName = (key: string, bareName: string): string => `${key}_${bar
 const rewriteReference = (target: string, key: string, bareNames: ReadonlySet<string>): string =>
     bareNames.has(target) ? prefixTableName(key, target) : target;
 
-/** The slice of a runtime validator an id retarget reads: its kind and the `_meta` bag that holds the target table and the wrapped child. */
+/**
+ * The slice of a runtime validator an id retarget reads: the `_meta` bag that holds the target table of an id and the
+ * children of a wrapper (`optional`/`array` → `inner`, `union` → `members`, `object` → `shape`, `record` → key and value).
+ */
 interface IdMeta {
     readonly inner?: Validator;
+    readonly keyValidator?: Validator;
+    readonly members?: ReadonlyArray<Validator>;
+    readonly shape?: Readonly<Record<string, Validator>>;
     readonly tableName?: string;
+    readonly valueValidator?: Validator;
 }
 
 /** A shallow copy of `validator` carrying `meta` in place of its own `_meta`. */
@@ -106,9 +113,9 @@ const withMeta = (validator: Validator, meta: IdMeta): Validator => {
 };
 
 /**
- * Point every `v.id("table")` in `validator` that names an extension table at its prefixed name, through the
- * `optional` / `array` wrappers an id column is declared under. Returns the same validator when nothing changes, and
- * a shallow copy otherwise: extension definitions are shared across apps, so they are never mutated.
+ * Point every `v.id("table")` in `validator` that names an extension table at its prefixed name, through every
+ * wrapper an id can sit in. Returns the same validator when nothing changes, and a shallow copy otherwise: extension
+ * definitions are shared across apps, so they are never mutated.
  */
 const retargetId = (validator: Validator, resolve: (name: string) => string): Validator => {
     const meta = (validator as { _meta?: IdMeta })._meta;
@@ -123,13 +130,23 @@ const retargetId = (validator: Validator, resolve: (name: string) => string): Va
         return tableName === meta.tableName ? validator : withMeta(validator, { ...meta, tableName });
     }
 
-    if ((validator.kind === "optional" || validator.kind === "array") && meta.inner !== undefined) {
-        const inner = retargetId(meta.inner, resolve);
+    const retarget = (child: Validator | undefined): Validator | undefined => (child === undefined ? undefined : retargetId(child, resolve));
+    const next: IdMeta = {
+        ...meta,
+        ...(meta.inner && { inner: retarget(meta.inner) }),
+        ...(meta.keyValidator && { keyValidator: retarget(meta.keyValidator) }),
+        ...(meta.valueValidator && { valueValidator: retarget(meta.valueValidator) }),
+        ...(meta.members && { members: meta.members.map((member) => retargetId(member, resolve)) }),
+        ...(meta.shape && { shape: Object.fromEntries(Object.entries(meta.shape).map(([field, child]) => [field, retargetId(child, resolve)])) }),
+    };
+    const unchanged =
+        next.inner === meta.inner &&
+        next.keyValidator === meta.keyValidator &&
+        next.valueValidator === meta.valueValidator &&
+        (next.members ?? []).every((member, index) => member === meta.members?.[index]) &&
+        Object.entries(next.shape ?? {}).every(([field, child]) => child === meta.shape?.[field]);
 
-        return inner === meta.inner ? validator : withMeta(validator, { ...meta, inner });
-    }
-
-    return validator;
+    return unchanged ? validator : withMeta(validator, next);
 };
 
 /**

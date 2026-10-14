@@ -3303,6 +3303,7 @@ interface TablesIndexesResult {
 ```ts
 interface ThroughRelationWriteInfo extends RelationWriteBase {
     readonly kind: "many";
+    readonly pairIsOnlyUnique: boolean;
     readonly refusalNow: () => string | undefined;
     readonly through: {
         readonly from: string;

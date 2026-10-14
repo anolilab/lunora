@@ -50,6 +50,9 @@ interface KeyedRelationWriteInfoLike extends RelationWriteBaseLike {
 interface ThroughRelationWriteInfoLike extends RelationWriteBaseLike {
     readonly kind: "many";
 
+    /** Is the (`from`, `to`) pair the join table's only uniqueness rule, so a unique conflict on a join insert can only be that pair? */
+    readonly pairIsOnlyUnique: boolean;
+
     /** Asked when the write runs: the reason it cannot run right now (outside a transaction), or `undefined`. */
     readonly refusalNow: () => string | undefined;
     readonly through: { readonly from: string; readonly table: string; readonly to: string };
@@ -447,8 +450,9 @@ const applyThrough = async (writer: RelationWriteWriterLike, write: ManyWrite<Th
         } catch (error) {
             // A link the join table's read policy hides is invisible to the check above but still holds the pair, so the
             // unique index refuses the insert. The link exists, which is what `connect` asked for; surfacing a conflict
-            // would also tell the caller that a link they cannot read exists.
-            if (!isUniqueConflict(error)) {
+            // would also tell the caller that a link they cannot read exists. Only when the pair is the table's sole
+            // uniqueness rule: otherwise the conflict may be another constraint and the link was never written.
+            if (!isUniqueConflict(error) || !info.pairIsOnlyUnique) {
                 throw error;
             }
         }

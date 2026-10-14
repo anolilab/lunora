@@ -7006,6 +7006,7 @@ interface ThroughManyRelation<Target extends string = string> extends ThroughRel
 ```ts
 interface ThroughRelationWriteInfoLike extends RelationWriteBaseLike {
     readonly kind: "many";
+    readonly pairIsOnlyUnique: boolean;
     readonly refusalNow: () => string | undefined;
     readonly through: {
         readonly from: string;

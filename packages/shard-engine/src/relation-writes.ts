@@ -1,4 +1,5 @@
 import { validatorAcceptsNull } from "../../../shared/accepts-null";
+import { hasUniquePairIndex } from "../../../shared/unique-pair-index";
 import type { SchemaLike, TableDefinitionLike } from "./schema-types";
 
 /** What every relation write needs to know, whichever kind of relation it is. */
@@ -39,6 +40,13 @@ interface KeyedRelationWriteInfo extends RelationWriteBase {
  */
 interface ThroughRelationWriteInfo extends RelationWriteBase {
     readonly kind: "many";
+
+    /**
+     * Is the (`from`, `to`) pair the join table's only uniqueness rule? Then a unique conflict on a join insert can
+     * only be that pair already being linked, which `connect` treats as done. With another unique index or column the
+     * conflict could be a different constraint, and swallowing it would report a link that was never written.
+     */
+    readonly pairIsOnlyUnique: boolean;
 
     /**
      * Asked at write time: the reason the write cannot run right now, or `undefined`. A many-to-many write is
@@ -93,6 +101,12 @@ const unwritableJoinColumns = (join: TableDefinitionLike | undefined, from: stri
 
 const NOT_IN_TRANSACTION = "a many-to-many write is several row writes and only a mutation's transaction makes them atomic; run it in a mutation";
 
+/** Does `join` enforce uniqueness only through the (`from`, `to`) pair index? */
+const uniqueOnlyOnPair = (join: TableDefinitionLike | undefined, from: string, to: string): boolean =>
+    join !== undefined &&
+    join.indexes.filter((index) => index.unique === true).every((index) => hasUniquePairIndex([index], from, to)) &&
+    !Object.values(join.shape).some((validator) => validator._meta?.column?.unique === true);
+
 /** Derive {@link RelationWriteMap} from the schema's `.relations(...)` declarations. */
 const describeRelationWrites = (schema: SchemaLike, inTransaction?: () => boolean): RelationWriteMap => {
     const described: Record<string, Record<string, RelationWriteInfo>> = {};
@@ -112,6 +126,7 @@ const describeRelationWrites = (schema: SchemaLike, inTransaction?: () => boolea
                 forTable[name] = {
                     colocated: target !== undefined && join !== undefined && sameTier(definition, target) && sameTier(definition, join),
                     kind: "many",
+                    pairIsOnlyUnique: uniqueOnlyOnPair(join, from, to),
                     refusalNow: () => (inTransaction?.() === true ? undefined : NOT_IN_TRANSACTION),
                     table: relation.table,
                     through: { from, table: joinName, to },
