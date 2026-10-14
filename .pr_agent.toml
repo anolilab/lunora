@@ -1,0 +1,40 @@
+# Qodo code review configuration
+# https://docs.qodo.ai/configuration/configuration-and-command-reference
+#
+# Qodo reads AGENTS.md from the default branch as review context on its own,
+# so repo conventions live there, not here.
+
+[github_app]
+# Summary comment + review on open / reopen / ready-for-review.
+pr_commands = ["/agentic_describe", "/agentic_review"]
+# Re-review every push, incrementally, updating the same comment.
+handle_push_trigger = true
+push_commands = ["/agentic_review"]
+feedback_on_draft_pr = false
+# Renovate, semantic-release and other bot-opened PRs.
+ignore_bot_pr = true
+
+[config]
+ignore_pr_title = ["^\\[Auto\\]", "^Auto", "(?i)\\bWIP\\b", "(?i)DO NOT MERGE"]
+ignore_pr_labels = ["do-not-merge", "skip-review"]
+
+[review_agent]
+comments_location_policy = "both"
+# Inline only for High + Medium; Low stays in the summary so files-changed
+# does not fill with nits. Formatting, lint and type errors are CI gates.
+inline_comments_severity_threshold = 2
+enable_incremental_review = true
+enable_commitable_suggestions = true
+publish_blast_radius_labels = true
+issues_user_guidelines = """
+Prioritise correctness, security and data-loss bugs over style. Formatting,
+ESLint, type errors and package.json key order are enforced by CI; do not
+report them. Treat `**/_generated/**`, `api-snapshots/**`, `CHANGELOG.md`
+and `registry/auth-ui-*/**` as generated output: review the source that
+produces them, not the output. Code under `packages/*/src` runs on Cloudflare
+Workers / Durable Objects, so flag Node-only APIs and anything that assumes
+a filesystem or long-lived process.
+"""
+
+[review_agent_ux]
+severity_terminology = "high_medium_low"
