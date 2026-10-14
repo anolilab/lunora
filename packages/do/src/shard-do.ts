@@ -41,6 +41,7 @@ import {
     explainIssue,
     foldTraces,
     formatTally,
+    FUNCTION_METRICS_BUCKET_MS,
     FUNCTION_METRICS_MAX_PATHS,
     instrumentDatabase,
     instrumentSqlClient,
@@ -817,6 +818,22 @@ interface ShapeMemo {
  * across all of them, so `totalDurationMs / count` recovers the per-execution
  * average `recordQueryMetric`'s bucket histogram places the entry by.
  */
+/** One path's un-flushed metric delta; see {@link ShardDO.pendingFunctionMetrics}. */
+interface PendingFunctionMetric {
+    calls: number;
+    conflicts: number;
+    durationMaxMs: number;
+    durationMinMs: number;
+    durationTotalMs: number;
+    errors: number;
+    /** `JSON.stringify([table, index])` key -> dispatches that used the index. */
+    indexHits: Map<string, number>;
+    lastErrorAt: number | null;
+    lastErrorMessage: string | null;
+    /** table -> dispatches that full-scanned it. */
+    scans: Map<string, number>;
+}
+
 interface StmtSample {
     count: number;
     rowsRead: number;
@@ -1495,7 +1512,7 @@ const MAX_HELD_SPANS_PER_TRACE = 500;
  * `database-telemetry.ts`'s `MAX_CLIENT_SPANS_PER_TALLY`: a handler that queries in a
  * loop already folds repeats of the SAME statement into one running entry (see
  * `sql` getter), so this only bounds the number of DISTINCT statement shapes one
- * dispatch can accumulate before {@link ShardDO.flushStmtSamples} starts
+ * dispatch can accumulate before {@link ShardDO.foldStmtSamples} starts
  * dropping brand-new ones — a handler building ad-hoc SQL per iteration
  * (dynamic column lists, generated `IN (...)` clauses) would otherwise grow the
  * buffer, and the flush that drains it, without bound.
@@ -2583,7 +2600,7 @@ abstract class ShardDO {
      * that queries in a loop reuses the SAME prepared-statement text on every
      * iteration (bind parameters travel separately via `...params`, never
      * inlined into `query`), so folding each call into its entry as it lands
-     * collapses the loop to one entry — {@link ShardDO.flushStmtSamples} then
+     * collapses the loop to one entry — {@link ShardDO.foldStmtSamples} then
      * pays one upsert per DISTINCT statement instead of one per raw execution.
      * Bounded at {@link MAX_STMT_SAMPLES_PER_DISPATCH} distinct entries; past
      * that, a brand-new statement shape (ad-hoc SQL built per iteration) is
@@ -2595,6 +2612,29 @@ abstract class ShardDO {
      * result-set size only on a host that doesn't expose them.
      */
     private currentStmtSamples: Map<string, StmtSample> | undefined;
+
+    /**
+     * Exact per-path metric deltas not yet written to `__lunora_metrics*`. Every
+     * dispatch folds in here; {@link ShardDO.maybeFlushMetrics} writes the sum once
+     * every N dispatches ({@link ShardDO.metricsFlushEvery}, default 1), so rates stay exact
+     * and only write frequency drops. In memory only: an evicted DO loses at most
+     * N-1 dispatches of counters (no alarm flush).
+     */
+    private pendingFunctionMetrics = new Map<string, PendingFunctionMetric>();
+
+    /** Per-statement samples folded from `currentStmtSamples`, written with {@link ShardDO.pendingFunctionMetrics}. */
+    private pendingStmtSamples = new Map<string, StmtSample>();
+
+    /** Dispatches folded since the last flush. */
+    private dispatchesSinceFlush = 0;
+
+    /** Whether an errored/conflicted dispatch is pending (forces the next flush). */
+    private pendingForceFlush = false;
+
+    /** Time of the first / latest dispatch in the pending delta; `undefined` when empty. */
+    private pendingStartedAt: number | undefined;
+
+    private pendingLastAt: number | undefined;
 
     /**
      * The instrumented `sql` proxy built for {@link ShardDO.currentStmtSamples},
@@ -3226,7 +3266,7 @@ abstract class ShardDO {
         // entry (keyed by the raw query text — see `currentStmtSamples`), rather
         // than appending a new array entry per execution. A handler that queries
         // in a loop reuses the same prepared-statement text every iteration, so
-        // this collapses the loop to one entry that `flushStmtSamples` drains
+        // this collapses the loop to one entry that `foldStmtSamples` drains
         // with a single upsert. Bounded at `MAX_STMT_SAMPLES_PER_DISPATCH`
         // DISTINCT entries; a brand-new statement shape past that cap is
         // dropped and `currentStmtSamplesTruncated` is set — already-tracked
@@ -4893,15 +4933,8 @@ abstract class ShardDO {
             return undefined;
         }
 
-        this.recordFunctionCall(
-            functionPath,
-            Date.now() - dispatchStartedAt,
-            undefined,
-            this.currentScannedTables,
-            this.currentIndexHits,
-            false,
-            sampleHit(this.metricsSampleRate()),
-        );
+        this.recordFunctionCall(functionPath, Date.now() - dispatchStartedAt, undefined, this.currentScannedTables, this.currentIndexHits);
+        this.maybeFlushMetrics();
 
         if (mutatorClass.kind === "already") {
             // Replay of a confirmed (or now-resent) mutation — ack without
@@ -4941,15 +4974,8 @@ abstract class ShardDO {
         mutatorClass: ClientMutationClass | undefined,
         cachedValue: unknown,
     ): Response {
-        this.recordFunctionCall(
-            functionPath,
-            Date.now() - dispatchStartedAt,
-            undefined,
-            this.currentScannedTables,
-            this.currentIndexHits,
-            false,
-            sampleHit(this.metricsSampleRate()),
-        );
+        this.recordFunctionCall(functionPath, Date.now() - dispatchStartedAt, undefined, this.currentScannedTables, this.currentIndexHits);
+        this.maybeFlushMetrics();
 
         if (mutatorClass?.kind === "next") {
             this.advanceClientMutationWatermark();
@@ -7486,15 +7512,13 @@ abstract class ShardDO {
             // Record the handler's own latency (before the subscription
             // write-flush below) against the per-function counters, along
             // with any tables it full-scanned (causal attribution).
-            const durable = sampleHit(this.metricsSampleRate());
+            this.recordFunctionCall(payload.functionPath, durationMs, undefined, this.currentScannedTables, this.currentIndexHits);
 
-            this.recordFunctionCall(payload.functionPath, durationMs, undefined, this.currentScannedTables, this.currentIndexHits, false, durable);
-
-            // Flush per-statement SQL samples accumulated during dispatch to
-            // the durable `__lunora_metrics_queries` table. Best-effort:
-            // a flush failure (e.g. no sql handle in tests) must never fail
-            // the response.
-            this.flushStmtSamples(durable);
+            // Fold the per-statement SQL samples accumulated during dispatch into
+            // the pending delta, then write it if this dispatch is due. Best-effort:
+            // a failure (e.g. no sql handle in tests) must never fail the response.
+            this.foldStmtSamples();
+            this.maybeFlushMetrics();
 
             // Snapshot the written-table set BEFORE `flushChangedTables`
             // drains it — afterwards `pendingChangedTables` is `undefined`,
@@ -7571,19 +7595,13 @@ abstract class ShardDO {
                 // `this.logs` dev buffer, unaffected by this local redaction.
                 const redactedErrorMessage = redactArgs(message, isDevEnvironment(this.env)) as string;
 
-                this.recordFunctionCall(
-                    payload.functionPath,
-                    durationMs,
-                    redactedErrorMessage,
-                    this.currentScannedTables,
-                    this.currentIndexHits,
-                    conflicted,
-                    true,
-                );
+                this.recordFunctionCall(payload.functionPath, durationMs, redactedErrorMessage, this.currentScannedTables, this.currentIndexHits, conflicted);
             }
-            // Flush statement samples even on error paths — partial sampling
-            // is better than losing the timing signal entirely. Errors are never sampled out.
-            this.flushStmtSamples(true);
+            // Fold statement samples even on error paths — partial sampling
+            // is better than losing the timing signal entirely. An errored dispatch
+            // forces the write, so the delta lands with its error counted.
+            this.foldStmtSamples();
+            this.maybeFlushMetrics();
             this.recordRequestLog(
                 payload.functionPath,
                 payload.args ?? {},
@@ -8500,11 +8518,11 @@ abstract class ShardDO {
      * `sql` handle) must never turn a successful dispatch into a failed one,
      * so it is swallowed and the in-memory counters still advance.
      *
-     * The durable upsert is skipped when `durable` is false: a successful
-     * dispatch sampled out by `LUNORA_METRICS_SAMPLE` (errors and conflicts
-     * always persist). The in-memory map still counts every call, so at a rate
-     * below 1 the admin readout, which reads the durable table, shows the
-     * sampled subset.
+     * The durable write is COALESCED, not per-dispatch: the call is folded into
+     * {@link ShardDO.pendingFunctionMetrics} (exact counts, durations, scans and
+     * index hits) and {@link ShardDO.maybeFlushMetrics} writes the whole delta once
+     * every N dispatches ({@link ShardDO.metricsFlushEvery}; default 1 = every dispatch),
+     * so the durable counters stay exact and only the write frequency drops.
      */
     private recordFunctionCall(
         functionPath: string,
@@ -8513,36 +8531,11 @@ abstract class ShardDO {
         scannedTables?: ReadonlySet<string>,
         indexHits?: ReadonlySet<string>,
         conflicted: boolean = false,
-        durable: boolean = true,
     ): void {
         const now = Date.now();
         const scanned = scannedTables ? [...scannedTables] : [];
-        // Each entry is a `JSON.stringify([table, index])` key stamped by the
-        // index-use hook; decode back to `{ table, index }` for the durable
-        // upsert. Skipped entirely when the dispatch used no declared index.
-        const hits: IndexHit[] = indexHits ? [...indexHits].map((key) => decodeIndexHitKey(key)).filter((hit): hit is IndexHit => hit !== undefined) : [];
 
-        // Durable upsert on the hot path: two PK-keyed INSERT…ON CONFLICT
-        // statements plus a bounded bucket trim, plus one upsert per scanned
-        // table and one per exercised index. Survives restart/hibernation.
-        // Skipped when the dispatch was sampled out (LUNORA_METRICS_SAMPLE);
-        // the in-memory `functionStats` below still counts every call.
-        if (durable) {
-            try {
-                recordFunctionMetric(this.shardHost.sql, {
-                    conflicted,
-                    durationMs,
-                    errored: errorMessage !== undefined,
-                    errorMessage,
-                    indexHits: hits,
-                    path: functionPath,
-                    scannedTables: scanned,
-                    ts: now,
-                });
-            } catch {
-                // Best-effort: never let metrics persistence fail the request.
-            }
-        }
+        this.foldFunctionMetric(functionPath, durationMs, now, errorMessage, scanned, indexHits, conflicted);
 
         const existing = this.functionStats.get(functionPath);
         const stat: FunctionCallStat = existing ?? {
@@ -8602,44 +8595,192 @@ abstract class ShardDO {
     }
 
     /**
-     * Flush the per-DISTINCT-statement SQL samples accumulated during the
-     * current dispatch into the durable `__lunora_metrics_queries` table.
-     * Called after `recordFunctionCall` on both the success and error paths.
+     * Fold the per-DISTINCT-statement SQL samples accumulated during the current
+     * dispatch into {@link ShardDO.pendingStmtSamples}. Called after
+     * `recordFunctionCall` on both the success and error paths, followed by
+     * {@link ShardDO.maybeFlushMetrics}.
      *
-     * Already folded by the instrumented `sql` getter (see
-     * `currentStmtSamples`), so this pays exactly one `recordQueryMetric` call
-     * — one accumulator upsert plus one bucket upsert — per distinct statement
-     * the dispatch ran, however many times it actually ran. `count` carries the
-     * real execution count through so the durable `exec_count`/`total_duration_ms`
-     * still reflect every execution, not just one.
-     *
-     * That holds when `durable` is true; a sampled-out success (`durable` false,
-     * see `LUNORA_METRICS_SAMPLE`) writes nothing and the samples are simply
-     * dropped by the dispatch path's `finally`.
-     *
-     * Best-effort: a SQL failure (e.g. a test double without a usable `sql`
-     * handle) must never fail the response, so every call is swallowed.
-     * Clearing `currentStmtSamples` happens in the `finally` block of the
-     * dispatch path, not here, so a partial flush (partial error) still
-     * drains the correct slice.
-     * @param durable false when this dispatch was sampled out; nothing is written.
+     * Already folded by the instrumented `sql` getter (see `currentStmtSamples`);
+     * `count` carries the real execution count so the durable
+     * `exec_count`/`total_duration_ms` still reflect every execution. Pure
+     * in-memory; nothing is written until the flush. Clearing `currentStmtSamples`
+     * happens in the `finally` block of the dispatch path, not here.
      */
-    private flushStmtSamples(durable: boolean): void {
+    private foldStmtSamples(): void {
         const samples = this.currentStmtSamples;
 
-        if (!durable || !samples || samples.size === 0) {
+        if (!samples || samples.size === 0) {
             return;
         }
 
+        for (const [rawSql, sample] of samples) {
+            const pending = this.pendingStmtSamples.get(rawSql);
+
+            if (pending === undefined) {
+                this.pendingStmtSamples.set(rawSql, { ...sample });
+            } else {
+                pending.count += sample.count;
+                pending.rowsRead += sample.rowsRead;
+                pending.rowsWritten += sample.rowsWritten;
+                pending.totalDurationMs += sample.totalDurationMs;
+            }
+        }
+    }
+
+    /** Fold one completed dispatch into {@link ShardDO.pendingFunctionMetrics}. */
+    private foldFunctionMetric(
+        functionPath: string,
+        durationMs: number,
+        now: number,
+        errorMessage: string | undefined,
+        scanned: ReadonlyArray<string>,
+        indexHits: ReadonlySet<string> | undefined,
+        conflicted: boolean,
+    ): void {
+        // A delta is written under ONE minute bucket (the last call's), so close
+        // out the pending delta before a dispatch from a later minute joins it.
+        if (
+            this.pendingStartedAt !== undefined &&
+            Math.floor(now / FUNCTION_METRICS_BUCKET_MS) !== Math.floor(this.pendingStartedAt / FUNCTION_METRICS_BUCKET_MS)
+        ) {
+            this.flushPendingMetrics();
+        }
+
+        this.pendingStartedAt ??= now;
+        this.pendingLastAt = now;
+        this.dispatchesSinceFlush += 1;
+
+        if (errorMessage !== undefined || conflicted) {
+            this.pendingForceFlush = true;
+        }
+
+        let pending = this.pendingFunctionMetrics.get(functionPath);
+
+        if (pending === undefined) {
+            // Same distinct-path cap as the durable twin; a refused path would be refused at flush anyway.
+            if (this.pendingFunctionMetrics.size >= FUNCTION_METRICS_MAX_PATHS) {
+                return;
+            }
+
+            pending = {
+                calls: 0,
+                conflicts: 0,
+                durationMaxMs: durationMs,
+                durationMinMs: durationMs,
+                durationTotalMs: 0,
+                errors: 0,
+                indexHits: new Map(),
+                // eslint-disable-next-line unicorn/no-null -- wire shape: `null` until the function first throws
+                lastErrorAt: null,
+                // eslint-disable-next-line unicorn/no-null -- wire shape: `null` until the function first throws
+                lastErrorMessage: null,
+                scans: new Map(),
+            };
+            this.pendingFunctionMetrics.set(functionPath, pending);
+        }
+
+        pending.calls += 1;
+        pending.durationTotalMs += durationMs;
+        pending.durationMinMs = Math.min(pending.durationMinMs, durationMs);
+        pending.durationMaxMs = Math.max(pending.durationMaxMs, durationMs);
+        if (errorMessage !== undefined) {
+            pending.errors += 1;
+            pending.lastErrorAt = now;
+            pending.lastErrorMessage = errorMessage;
+        }
+
+        if (conflicted) {
+            pending.conflicts += 1;
+        }
+
+        for (const table of new Set(scanned)) {
+            pending.scans.set(table, (pending.scans.get(table) ?? 0) + 1);
+        }
+
+        // Each entry is a `JSON.stringify([table, index])` key stamped by the
+        // index-use hook; one hit per distinct `(table, index)` per dispatch.
+        for (const key of indexHits ?? []) {
+            pending.indexHits.set(key, (pending.indexHits.get(key) ?? 0) + 1);
+        }
+    }
+
+    /**
+     * Write the pending metric delta when this dispatch is due: every
+     * N dispatches ({@link ShardDO.metricsFlushEvery}), immediately after an errored or
+     * conflicted one, or when the pending statement set is as wide as one
+     * dispatch may be. (A minute-boundary crossing flushes earlier, inside
+     * {@link ShardDO.foldFunctionMetric}.) Counts are exact either way; at most
+     * N-1 dispatches of counters are lost if the DO is evicted before a flush.
+     */
+    private maybeFlushMetrics(): void {
+        if (this.dispatchesSinceFlush === 0 && this.pendingStmtSamples.size === 0) {
+            return;
+        }
+
+        if (this.pendingForceFlush || this.dispatchesSinceFlush >= this.metricsFlushEvery() || this.pendingStmtSamples.size >= MAX_STMT_SAMPLES_PER_DISPATCH) {
+            this.flushPendingMetrics();
+        }
+    }
+
+    /**
+     * Persist and clear the pending delta: one `recordFunctionMetric` per path
+     * and one `recordQueryMetric` per distinct statement, each carrying its exact
+     * summed counts. Best-effort: the accumulators are cleared first, so a SQL
+     * failure (e.g. a test double without a `sql` handle) drops that delta
+     * rather than retrying it, and never fails the request.
+     */
+    private flushPendingMetrics(): void {
+        const functions = this.pendingFunctionMetrics;
+        const statements = this.pendingStmtSamples;
+        const ts = this.pendingLastAt ?? Date.now();
+
+        this.pendingFunctionMetrics = new Map();
+        this.pendingStmtSamples = new Map();
+        this.pendingStartedAt = undefined;
+        this.pendingLastAt = undefined;
+        this.pendingForceFlush = false;
+        this.dispatchesSinceFlush = 0;
+
         try {
+            for (const [path, delta] of functions) {
+                try {
+                    recordFunctionMetric(this.shardHost.sql, {
+                        calls: delta.calls,
+                        conflicts: delta.conflicts,
+                        durationMaxMs: delta.durationMaxMs,
+                        durationMinMs: delta.durationMinMs,
+                        durationMs: delta.durationTotalMs,
+                        durationTotalMs: delta.durationTotalMs,
+                        errored: delta.errors > 0,
+                        errorMessage: delta.lastErrorMessage ?? undefined,
+                        errors: delta.errors,
+                        indexHitCounts: [...delta.indexHits]
+                            .map(([key, count]) => {
+                                return { count, hit: decodeIndexHitKey(key) };
+                            })
+                            .filter((entry): entry is { count: number; hit: IndexHit } => entry.hit !== undefined)
+                            .map(({ count, hit }) => {
+                                return { ...hit, count };
+                            }),
+                        lastErrorAt: delta.lastErrorAt,
+                        path,
+                        scanCounts: [...delta.scans].map(([table, count]) => {
+                            return { count, table };
+                        }),
+                        ts,
+                    });
+                } catch {
+                    // Best-effort: never let metrics persistence fail the request.
+                }
+            }
+
             const sqlHandle = this.shardHost.sql as unknown as SqlExec;
 
-            for (const [rawSql, sample] of samples) {
+            for (const [rawSql, sample] of statements) {
                 try {
-                    recordQueryMetric(sqlHandle, rawSql, sample.totalDurationMs, sample.rowsRead, sample.rowsWritten, Date.now(), sample.count);
+                    recordQueryMetric(sqlHandle, rawSql, sample.totalDurationMs, sample.rowsRead, sample.rowsWritten, ts, sample.count);
                 } catch {
-                    // Per-statement failures are swallowed so a bad statement
-                    // never breaks the whole flush.
+                    // Per-statement failures are swallowed so a bad statement never breaks the flush.
                 }
             }
         } catch {
@@ -8647,11 +8788,17 @@ abstract class ShardDO {
         }
     }
 
-    /** Fraction of successful dispatches whose metric upserts are persisted (`LUNORA_METRICS_SAMPLE`, 0..1, default 1). */
-    private metricsSampleRate(): number {
-        const env = (this.env ?? {}) as { LUNORA_METRICS_SAMPLE?: string };
+    /**
+     * Dispatches per durable metric write (env `LUNORA_METRICS_FLUSH_EVERY`): a positive
+     * integer, default 1 (write on every dispatch). Unset, blank, fractional,
+     * non-numeric or < 1 values fall back to 1. An evicted DO loses at most N-1
+     * dispatches of un-flushed counters.
+     */
+    private metricsFlushEvery(): number {
+        const raw = ((this.env ?? {}) as { LUNORA_METRICS_FLUSH_EVERY?: string }).LUNORA_METRICS_FLUSH_EVERY;
+        const value = raw === undefined || raw.trim() === "" ? Number.NaN : Number(raw);
 
-        return parseSampleRate(env.LUNORA_METRICS_SAMPLE);
+        return Number.isInteger(value) && value >= 1 ? value : 1;
     }
 
     /**
@@ -13372,7 +13519,7 @@ abstract class ShardDO {
         this.currentIndexHits = new Set<string>();
 
         // Collect per-statement SQL samples from the instrumented `sql`
-        // getter so `flushStmtSamples` can persist them to the durable
+        // getter so `foldStmtSamples` can fold them toward the durable
         // `__lunora_metrics_queries` table after the handler resolves.
         // Allocating a fresh map here activates the instrumentation (the
         // `sql` getter only wraps when this field is defined).

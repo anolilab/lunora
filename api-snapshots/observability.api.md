@@ -669,12 +669,26 @@ interface RecordAuthEventInput {
 
 ```ts
 interface RecordFunctionMetricInput {
+    calls?: number;
     conflicted?: boolean;
+    conflicts?: number;
+    durationMaxMs?: number;
+    durationMinMs?: number;
     durationMs: number;
+    durationTotalMs?: number;
     errored: boolean;
     errorMessage?: string;
+    errors?: number;
+    indexHitCounts?: ReadonlyArray<IndexHit & {
+        count: number;
+    }>;
     indexHits?: ReadonlyArray<IndexHit>;
+    lastErrorAt?: number | null;
     path: string;
+    scanCounts?: ReadonlyArray<{
+        count: number;
+        table: string;
+    }>;
     scannedTables?: ReadonlyArray<string>;
     ts: number;
 }

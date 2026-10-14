@@ -104,32 +104,39 @@ const adminRequest = (functionPath: string): Request =>
     });
 
 describe("statement sample buffer (OBS-04)", () => {
-    it("writes no statement rows for a successful dispatch when LUNORA_METRICS_SAMPLE=0", async () => {
-        expect.assertions(1);
+    it("coalesces statement samples across dispatches into one exact exec_count per flush", async () => {
+        expect.assertions(3);
 
         const database = createSqliteExec();
 
         try {
-            const shard = new StmtSampleShard(sqliteStateDouble(database), { LUNORA_ADMIN_TOKEN: ADMIN_TOKEN, LUNORA_METRICS_SAMPLE: "0" });
+            const shard = new StmtSampleShard(sqliteStateDouble(database), { LUNORA_ADMIN_TOKEN: ADMIN_TOKEN, LUNORA_METRICS_FLUSH_EVERY: "3" });
 
             shard.attachSpan = false;
-            shard.distinctQueries = 3;
+            shard.distinctQueries = 1;
+
+            await shard.fetch(userRequest("probe:query"));
+            await shard.fetch(userRequest("probe:query"));
+
+            // Two dispatches in: nothing durable yet.
+            expect(database.raw(`SELECT name FROM sqlite_master WHERE name = '${QUERY_METRICS_TABLE}'`)).toEqual([]);
 
             await shard.fetch(userRequest("probe:query"));
 
-            expect(readQueryMetrics(database.sql)).toEqual([]);
+            expect(readQueryMetrics(database.sql)).toHaveLength(1);
+            expect(readQueryMetrics(database.sql)[0]?.execCount).toBe(3);
         } finally {
             database.close();
         }
     });
 
-    it("still records statement rows for an erroring dispatch when LUNORA_METRICS_SAMPLE=0", async () => {
+    it("flushes statement samples immediately when the dispatch errors", async () => {
         expect.assertions(1);
 
         const database = createSqliteExec();
 
         try {
-            const shard = new StmtSampleShard(sqliteStateDouble(database), { LUNORA_ADMIN_TOKEN: ADMIN_TOKEN, LUNORA_METRICS_SAMPLE: "0" });
+            const shard = new StmtSampleShard(sqliteStateDouble(database), { LUNORA_ADMIN_TOKEN: ADMIN_TOKEN, LUNORA_METRICS_FLUSH_EVERY: "50" });
 
             shard.attachSpan = false;
             shard.distinctQueries = 3;
@@ -137,7 +144,8 @@ describe("statement sample buffer (OBS-04)", () => {
 
             await shard.fetch(userRequest("probe:query"));
 
-            expect(readQueryMetrics(database.sql).length).toBeGreaterThan(0);
+            // The three distinct literals normalise to one statement shape with exec_count 3.
+            expect(readQueryMetrics(database.sql)).toMatchObject([{ execCount: 3 }]);
         } finally {
             database.close();
         }

@@ -1509,7 +1509,8 @@ const parseSampleRate = (raw: string | undefined): number => {
         return 1;
     }
 
-    const value = Number.parseFloat(raw);
+    // `Number`, not `parseFloat`: "0.25garbage" must be invalid, not 0.25. A blank string would coerce to 0.
+    const value = raw.trim() === "" ? Number.NaN : Number(raw);
 
     return Number.isFinite(value) ? Math.min(1, Math.max(0, value)) : 1;
 };
