@@ -1,3 +1,16 @@
+## @lunora/auth [1.0.0-alpha.210](https://github.com/anolilab/lunora/compare/@lunora/auth@1.0.0-alpha.209...@lunora/auth@1.0.0-alpha.210) (2026-10-14)
+
+### Documentation
+
+* **auth:** note that jwt iss/aud default to baseURL ([#1158](https://github.com/anolilab/lunora/issues/1158)) ([a4c988d](https://github.com/anolilab/lunora/commit/a4c988d1db5fa7bf09e8bd0ef60f4be30a5066dc))
+
+
+### Dependencies
+
+* **@lunora/config:** upgraded to 1.0.0-alpha.347
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.197
+* **@lunora/server:** upgraded to 1.0.0-alpha.197
+
 ## @lunora/auth [1.0.0-alpha.209](https://github.com/anolilab/lunora/compare/@lunora/auth@1.0.0-alpha.208...@lunora/auth@1.0.0-alpha.209) (2026-10-14)
 
 
