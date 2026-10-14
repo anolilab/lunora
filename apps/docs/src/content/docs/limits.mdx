@@ -122,11 +122,7 @@ total), so take several runs and compare medians.
 2. **Defer heavy imports that only some requests need** with a dynamic `import()`
    inside the handler. A module reached only through a dynamic import is not evaluated
    at startup. Do not make a barrel that re-exports your whole app the thing you
-   import, because it is evaluated as a whole. **Caution:** do not dynamically
-   import an add-on barrel such as `@lunora/auth` yet. A dynamic import makes the
-   bundler evaluate the whole barrel, and its email-guard chain currently throws on
-   Workers (it reads `import.meta.url` at module scope). Defer your own heavy modules
-   instead.
+   import, because it is evaluated as a whole.
 3. **Keep shared helpers light.** A `lunora/lib/` module imported by many function
    modules (auth setup, a rate limiter, a validator library) is evaluated once, but
    it is on the startup path of every one of them. Check what `lunora analyze` shows
