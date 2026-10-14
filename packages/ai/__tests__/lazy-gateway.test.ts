@@ -98,7 +98,10 @@ describe("lazy gateway routing", () => {
 
         ai.model("openai/gpt-4o");
         ai.model(CF_ID);
-        await Promise.resolve();
+        // Long enough for any import started at construction to have evaluated its module.
+        await new Promise((resolve) => {
+            setTimeout(resolve, 50);
+        });
 
         expect(state.evaluated).toStrictEqual([]);
 
