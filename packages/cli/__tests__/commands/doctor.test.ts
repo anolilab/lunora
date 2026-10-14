@@ -233,6 +233,53 @@ describe("runDoctor", () => {
         });
     });
 
+    describe("paid products", () => {
+        /** A fetch that fails the test if anything calls it: the check is config-only. */
+        const noNetwork: typeof globalThis.fetch = async () => {
+            throw new Error("paid-product check must not reach the network");
+        };
+
+        it("warns on each metered binding, naming the scope it is declared in, without any network call", async () => {
+            expect.assertions(3);
+
+            seed(
+                workdir,
+                JSON.stringify({
+                    ai: { binding: "AI" },
+                    compatibility_date: "2026-04-07",
+                    env: { prod: { browser: { binding: "BROWSER" }, images: { binding: "IMAGES" } } },
+                    name: "demo",
+                }),
+            );
+
+            const result = await runDoctor({ cwd: workdir, fetch: noNetwork, logger: makeLogger().logger });
+            const unguarded = result.findings.filter((finding) => finding.code === "paid-product-unguarded");
+
+            expect(unguarded.map((finding) => finding.message)).toStrictEqual([
+                expect.stringContaining("Workers AI is bound (top level)"),
+                expect.stringContaining("Browser Rendering is bound (env.prod)"),
+                expect.stringContaining("Cloudflare Images (Image Transformations) is bound (env.prod)"),
+            ]);
+            expect(unguarded.every((finding) => finding.level === "warn")).toBe(true);
+            expect(unguarded[0]?.fix).toContain("budget alert");
+        });
+
+        it("raises no metered warning for a clean project, and always reports the paid products it cannot read", async () => {
+            expect.assertions(3);
+
+            seed(workdir, CLEAN_WRANGLER);
+
+            const result = await runDoctor({ cwd: workdir, fetch: noNetwork, logger: makeLogger().logger });
+
+            expect(result.findings.some((finding) => finding.code === "paid-product-unguarded")).toBe(false);
+
+            const unknown = result.findings.find((finding) => finding.code === "paid-product-unknown");
+
+            expect(unknown?.level).toBe("info");
+            expect(unknown?.message).toContain("Argo Smart Routing and Log Explorer");
+        });
+    });
+
     /**
      * The one check whose absence is invisible in production. Cloudflare only
      * filters on a Vectorize metadata property that has an explicit metadata

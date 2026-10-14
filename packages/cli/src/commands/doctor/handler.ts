@@ -39,6 +39,7 @@ import checkCimdFetchFlag from "./cimd-checks";
 import { applyDoctorFixes, isD1PlaceholderId } from "./fix";
 import type { DoctorOptions } from "./index";
 import checkObservabilitySampling from "./observability-checks";
+import checkPaidProducts from "./paid-product-checks";
 import checkServices from "./service-checks";
 
 /** Severity of a single doctor check. `fail` drives a non-zero exit; `warn`/`info`/`pass` don't. */
@@ -78,6 +79,8 @@ const DOCTOR_CODES = [
     "do-class-budget-unchecked",
     "email-destination-placeholder",
     "observability-full-sampling",
+    "paid-product-unguarded",
+    "paid-product-unknown",
     "r2-lifecycle-unset",
     "scheduler-origin-missing",
     "schema-unreadable",
@@ -900,6 +903,7 @@ const runDoctor = async (options: RunDoctorOptions): Promise<DoctorResult> => {
     checkStaleProjectConfig(cwd, findings);
     checkCliShadow(cwd, options.executablePath ?? process.argv[1], findings);
     checkServices(cwd, findings);
+    checkPaidProducts(cwd, findings);
 
     const inferred = await inferBindings(cwd, findings);
 
