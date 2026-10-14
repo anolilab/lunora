@@ -1,3 +1,23 @@
+## @lunora/codegen [1.0.0-alpha.300](https://github.com/anolilab/lunora/compare/@lunora/codegen@1.0.0-alpha.299...@lunora/codegen@1.0.0-alpha.300) (2026-10-14)
+
+### Bug Fixes
+
+* **advisor:** clear count_without_index for index-backed counts and cover queue_dispatch_cycle end to end ([#1164](https://github.com/anolilab/lunora/issues/1164)) ([d53ae71](https://github.com/anolilab/lunora/commit/d53ae711ee9eedd9d93585a27dfadc5b470bc51e))
+* **do:** count only sub-floor alarm re-arms and test the schedule budget end to end ([#1163](https://github.com/anolilab/lunora/issues/1163)) ([b311984](https://github.com/anolilab/lunora/commit/b3119847198238f39f7492fa121bd22bfa60dea6))
+
+
+### Dependencies
+
+* **@lunora/advisor:** upgraded to 1.0.0-alpha.214
+* **@lunora/agent:** upgraded to 1.0.0-alpha.203
+* **@lunora/platform:** upgraded to 1.0.0-alpha.64
+* **@lunora/queue:** upgraded to 1.0.0-alpha.105
+* **@lunora/scheduler:** upgraded to 1.0.0-alpha.124
+* **@lunora/bindings:** upgraded to 1.0.0-alpha.111
+* **@lunora/do:** upgraded to 1.0.0-alpha.211
+* **@lunora/server:** upgraded to 1.0.0-alpha.198
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.127
+
 ## @lunora/codegen [1.0.0-alpha.299](https://github.com/anolilab/lunora/compare/@lunora/codegen@1.0.0-alpha.298...@lunora/codegen@1.0.0-alpha.299) (2026-10-14)
 
 

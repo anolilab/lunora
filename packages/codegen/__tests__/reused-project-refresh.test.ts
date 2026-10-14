@@ -1,6 +1,6 @@
-import { cpSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { appendFileSync, cpSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { dirname, join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -99,5 +99,74 @@ export const listItems = query({
         const fresh = runCodegen({ lint: false, projectRoot: workdir, wranglerQueueProducers: [] });
 
         expect(after.generated.functions).toBe(fresh.generated.functions);
+    });
+});
+
+const readGenerated = (root: string): Map<string, string> => {
+    const out = new Map<string, string>();
+    const generatedDirectory = join(root, "lunora", "_generated");
+
+    for (const entry of readdirSync(generatedDirectory, { recursive: true, withFileTypes: true })) {
+        if (entry.isFile()) {
+            const path = join(entry.parentPath, entry.name);
+
+            out.set(relative(generatedDirectory, path), readFileSync(path, "utf8"));
+        }
+    }
+
+    return out;
+};
+
+const procedure = (name: string): string => `export const ${name} = query({
+    handler: async (context) => context.db.query("messages").take(1),
+});
+`;
+
+describe("reused Project — fresh vs reused output", () => {
+    let freshDirectory: string | undefined;
+
+    beforeEach(() => {
+        workdir = mkdtempSync(join(tmpdir(), "lunora-codegen-reuse-"));
+        lunoraDirectory = join(workdir, "lunora");
+
+        cpSync(join(fixtureRoot, "lunora"), lunoraDirectory, { recursive: true });
+        writeFileSync(
+            join(workdir, "tsconfig.json"),
+            JSON.stringify({ compilerOptions: { module: "esnext", moduleResolution: "bundler", strict: true, target: "es2022" } }),
+            "utf8",
+        );
+    });
+
+    afterEach(() => {
+        rmSync(workdir, { force: true, recursive: true });
+
+        if (freshDirectory) {
+            rmSync(freshDirectory, { force: true, recursive: true });
+        }
+    });
+
+    it("emits the same _generated output after a procedure is appended as a fresh Project does", () => {
+        expect.assertions(1);
+
+        const itemsPath = join(lunoraDirectory, "items.ts");
+
+        writeFileSync(itemsPath, `import { query } from "@lunora/server";\n\n${procedure("first")}`, "utf8");
+
+        const project = createCodegenProject(lunoraDirectory);
+
+        runCodegen({ project, projectRoot: workdir, wranglerQueueProducers: [] });
+
+        appendFileSync(itemsPath, `\n${procedure("extra")}`, "utf8");
+        refreshCodegenProject(project, lunoraDirectory);
+        runCodegen({ project, projectRoot: workdir, wranglerQueueProducers: [] });
+
+        const reused = readGenerated(workdir);
+
+        freshDirectory = mkdtempSync(join(tmpdir(), "lunora-codegen-fresh-"));
+        cpSync(workdir, freshDirectory, { recursive: true });
+        rmSync(join(freshDirectory, "lunora", "_generated"), { force: true, recursive: true });
+        runCodegen({ projectRoot: freshDirectory, wranglerQueueProducers: [] });
+
+        expect(reused).toStrictEqual(readGenerated(freshDirectory));
     });
 });
