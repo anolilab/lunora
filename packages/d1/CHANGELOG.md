@@ -1,3 +1,17 @@
+## @lunora/d1 [1.0.0-alpha.178](https://github.com/anolilab/lunora/compare/@lunora/d1@1.0.0-alpha.177...@lunora/d1@1.0.0-alpha.178) (2026-10-14)
+
+### Bug Fixes
+
+* **shard-engine:** bound many-to-many predicates by distinct keys, not join rows ([#1161](https://github.com/anolilab/lunora/issues/1161)) ([bf94391](https://github.com/anolilab/lunora/commit/bf94391a103a6c9fce463f6e5fc4a29a2f919048))
+
+
+### Dependencies
+
+* **@lunora/platform:** upgraded to 1.0.0-alpha.64
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.127
+* **@lunora/sql-store:** upgraded to 1.0.0-alpha.179
+* **@lunora/do:** upgraded to 1.0.0-alpha.211
+
 ## @lunora/d1 [1.0.0-alpha.177](https://github.com/anolilab/lunora/compare/@lunora/d1@1.0.0-alpha.176...@lunora/d1@1.0.0-alpha.177) (2026-10-14)
 
 
