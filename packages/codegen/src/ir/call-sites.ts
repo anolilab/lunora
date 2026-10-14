@@ -115,6 +115,26 @@ export interface WorkflowCallIR {
 }
 
 /**
+ * A `ctx.db.count("table", …)` or `ctx.db.<table>.count(…)` call discovered in a
+ * function body. `count()` is answered from a counter only when the table declares an
+ * aggregate index (`TableIR.aggregateIndexed`); otherwise it runs `COUNT(*)` over the
+ * table. `indexed` is `false` exactly for that scan, so the `count_without_index` lint
+ * reports only those; an unknown table or a dynamic name reads as `indexed: true`.
+ */
+export interface CountReadIR {
+    /** Source file relative to `<projectRoot>/lunora/`, without extension. */
+    file: string;
+    /** `false` only when the table is known and declares no aggregate index. */
+    indexed: boolean;
+    /** 1-based line of the `count(...)` call. */
+    line: number;
+    /** Who the call runs on behalf of. */
+    scope: CallSiteScope;
+    /** Counted table name, or `""` when the table argument is not a string literal. */
+    table: string;
+}
+
+/**
  * A `ctx.db.query("table")…` read discovered in a function body, reduced to what
  * the query advisor lints need: which table, whether the chain narrows with an
  * index, whether it filters, and which terminal materializes the result.

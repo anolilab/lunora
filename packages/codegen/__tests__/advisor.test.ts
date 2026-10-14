@@ -224,6 +224,41 @@ export const requeue = internalMutation.mutation(async ({ ctx }) => {
         expect(findings.map((finding) => finding.cacheKey)).toStrictEqual(flagged ? ["queue_dispatch_cycle:mail:requeue,queue:emailQueue"] : []);
     });
 
+    it("flags a count on a table with no aggregate index, and not one an inline aggregate index covers", () => {
+        expect.assertions(2);
+
+        writeFileSync(
+            join(workdir, "lunora", "schema.ts"),
+            `import { defineSchema, defineTable, v } from "@lunora/server";
+
+export default defineSchema({
+    jobs: defineTable({ state: v.string() }).aggregateIndex("byState", { by: ["state"] }),
+    posts: defineTable({ title: v.string() }),
+});
+`,
+            "utf8",
+        );
+        writeFileSync(
+            join(workdir, "lunora", "tally.ts"),
+            `import { internalMutation } from "./_generated/server.js";
+
+export const tally = internalMutation.mutation(async ({ ctx }) => {
+    await ctx.db.jobs.count({ state: "open" });
+    await ctx.db.posts.count();
+});
+`,
+            "utf8",
+        );
+
+        const findings = runCodegen({ projectRoot: workdir, wranglerQueueProducers: [] }).advisories.filter(
+            (advisory) => advisory.name === "count_without_index",
+        );
+
+        // `jobs` is counter-backed by its inline aggregate index; `posts` is a COUNT(*) scan on line 5.
+        expect(findings.map((finding) => finding.cacheKey)).toStrictEqual(["count_without_index:tally:5:posts"]);
+        expect(findings[0]?.level).toBe("WARN");
+    });
+
     it("flags a container whose sleepAfter outlasts an hour, read from the declaration", () => {
         expect.assertions(2);
 

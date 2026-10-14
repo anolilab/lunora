@@ -20,6 +20,7 @@ import discoverBrowserUrlAccesses from "./discover/browser-url-accesses";
 import discoverConfigCalls from "./discover/config-calls";
 import discoverContainerKeyAccesses from "./discover/container-key-accesses";
 import discoverContainerOverrides from "./discover/container-overrides";
+import discoverCountReads from "./discover/count-reads";
 import discoverExportSinks from "./discover/export-sinks";
 import discoverFailOpenGuards from "./discover/fail-open-guards";
 import discoverFlagReads from "./discover/flag-reads";
@@ -95,6 +96,7 @@ export const advisorEvidenceOf = (project: Project, lunoraDirectory: string, inp
         containerKeyAccesses: discoverContainerKeyAccesses(project, lunoraDirectory),
         containerOverrides: discoverContainerOverrides(project, lunoraDirectory),
         containers,
+        countReads: discoverCountReads(project, lunoraDirectory, schema.tables),
         cronTargets: crons.flatMap((job) => (job.functionPath === undefined ? [] : [job.functionPath])),
         exportSinks: discoverExportSinks(project, lunoraDirectory),
         staleMigrationImports: discoverStaleMigrationImports(project, lunoraDirectory),

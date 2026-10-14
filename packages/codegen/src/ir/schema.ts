@@ -214,6 +214,14 @@ export interface ExternalSourceIR {
 
 export interface TableIR {
     /**
+     * `true` when the table declares an aggregate index that can answer a `count()`
+     * without a scan: an inline `.aggregateIndex(…)`, a standalone `defineAggregateIndex`
+     * naming it, or every table when the standalone argument cannot be read. Optional:
+     * absent means no such index was found.
+     */
+    aggregateIndexed?: true;
+
+    /**
      * `true` when the table chain carried `.commitOrdered()` — every row carries
      * `_commitSeq`, a per-shard integer allocated once per mutation and strictly
      * increasing in commit order. Optional: hand-built IR and tables that never
@@ -268,6 +276,7 @@ export interface TableIR {
      * those predicates encode which comparison is right for hand-built IR.
      */
     globalBackend?: "d1" | "hyperdrive";
+
     indexes: ReadonlyArray<IndexIR>;
 
     /**

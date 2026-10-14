@@ -36,6 +36,7 @@ import containerOversizedInstance from "./lints/static/container-oversized-insta
 import containerPublicInternet from "./lints/static/container-public-internet";
 import containerRuntimeEgressRelaxation from "./lints/static/container-runtime-egress-relaxation";
 import containerStartEnableInternetOverride from "./lints/static/container-start-enable-internet-override";
+import countWithoutIndex from "./lints/static/count-without-index";
 import crossModuleTableWrite from "./lints/static/cross-module-table-write";
 import dispatchCycle from "./lints/static/dispatch-cycle";
 import duplicateIndex from "./lints/static/duplicate-index";
@@ -148,6 +149,7 @@ export type { AdvisorConfigCall } from "./config-calls";
 export type { AdvisorContainerKeyAccess } from "./container-key-accesses";
 export type { AdvisorContainerOverride } from "./container-overrides";
 export type { AdvisorContainer } from "./containers";
+export type { AdvisorCountRead } from "./counts";
 export { dedupeCacheKeys } from "./dedupe-cache-keys";
 export type { AdvisorExportSink } from "./export-sinks";
 export type { AdvisorFailOpenGuard } from "./fail-open-guards";
@@ -190,6 +192,7 @@ export { default as containerOversizedInstance } from "./lints/static/container-
 export { default as containerPublicInternet } from "./lints/static/container-public-internet";
 export { default as containerRuntimeEgressRelaxation } from "./lints/static/container-runtime-egress-relaxation";
 export { default as containerStartEnableInternetOverride } from "./lints/static/container-start-enable-internet-override";
+export { default as countWithoutIndex } from "./lints/static/count-without-index";
 export { default as crossModuleTableWrite } from "./lints/static/cross-module-table-write";
 export { default as dispatchCycle } from "./lints/static/dispatch-cycle";
 export { default as duplicateIndex } from "./lints/static/duplicate-index";
@@ -346,6 +349,7 @@ export const STATIC_LINTS: ReadonlyArray<Lint> = [
     ttlFieldNotTimestamp,
     commitOrderedHardDelete,
     circularFk,
+    countWithoutIndex,
     crossModuleTableWrite,
     unindexedForeignKey,
     unindexedRelationTarget,

@@ -6,7 +6,7 @@ import { globalVectorIndexMessage } from "../../../../../shared/global-vector-in
 import { diagnosticAt } from "../../diagnostics";
 import type { SchemaIR, TableIR, VectorIndexIR } from "../../ir";
 import { applyExtensions, parseStandaloneVectorIndexes } from "./internal/extensions";
-import { chainedStringLiteralArgument, getBooleanProperty } from "./internal/properties";
+import { chainedStringLiteralArgument, getBooleanProperty, getStringProperty } from "./internal/properties";
 import { parseBaseTables } from "./internal/table-builder";
 
 /** Recognised Cloudflare DO data-residency jurisdictions — the literals a `.jurisdiction("…")` call may carry. */
@@ -60,6 +60,57 @@ const rlsModeOf = (defineSchemaCall: CallExpression): SchemaIR["rlsMode"] =>
     chainedStringLiteralArgument(defineSchemaCall, "rls", "rls mode", RLS_MODES, '"required"');
 
 /**
+ * The tables a standalone aggregate block names — `defineSchema(tables, vectors, { name:
+ * defineAggregateIndex(name, { on: "table", … }) })` — or `undefined` when any entry cannot
+ * be read. An unreadable entry could name any table, so the caller then marks every table.
+ */
+const standaloneAggregateTables = (argument: TsNode): Set<string> | undefined => {
+    if (!Node.isObjectLiteralExpression(argument)) {
+        return undefined;
+    }
+
+    const tables = new Set<string>();
+
+    for (const property of argument.getProperties()) {
+        const initializer = Node.isPropertyAssignment(property) ? property.getInitializer() : undefined;
+
+        if (!initializer || !Node.isCallExpression(initializer)) {
+            return undefined;
+        }
+
+        const callee = initializer.getExpression();
+        const options = initializer.getArguments()[1];
+        const on = options && Node.isObjectLiteralExpression(options) ? getStringProperty(options, "on") : undefined;
+
+        if (!Node.isIdentifier(callee) || callee.getText() !== "defineAggregateIndex" || on === undefined) {
+            return undefined;
+        }
+
+        tables.add(on);
+    }
+
+    return tables;
+};
+
+/**
+ * Mark each table a standalone aggregate index names as `aggregateIndexed`, so a `count()`
+ * on it is not reported as a scan. An argument that cannot be read marks every table.
+ */
+const markStandaloneAggregates = (tables: TableIR[], argument: TsNode | undefined): void => {
+    if (argument === undefined) {
+        return;
+    }
+
+    const named = standaloneAggregateTables(argument);
+
+    for (const table of tables) {
+        if (named === undefined || named.has(table.name)) {
+            table.aggregateIndexed = true;
+        }
+    }
+};
+
+/**
  * Load `<projectRoot>/lunora/schema.ts`, find `defineSchema({...})`, and
  * return a structural IR. Throws if the file or call cannot be found.
  */
@@ -92,6 +143,10 @@ const discoverSchema = (project: Project, schemaPath: string, projectRoot?: stri
     // Merge chained `.extend(...)` extensions, mutating `tables` and collecting
     // their standalone vector indexes.
     const extensionStandaloneVectorIndexes = applyExtensions(defineSchemaCall, tables, projectRoot);
+
+    // Standalone aggregate indexes live in the optional third argument; extension
+    // tables are merged above, so they are marked too.
+    markStandaloneAggregates(tables, defineSchemaCall.getArguments()[2]);
 
     // Flatten inline Shape A indexes (hoisted with their owning table) plus Shape B
     // plus extension-contributed standalone vector indexes.
