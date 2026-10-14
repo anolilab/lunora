@@ -722,6 +722,14 @@ const auth = createAuth(
 );
 ```
 
+**Bundle cost.** The built-in lists are bundled data: the disposable list is about 2.7 MB and the
+free-email list about 143 KB. `withEmailGate`, `emailGateDatabaseHooks` and `emailGateMiddleware`
+load only what the config uses. The free list loads only when you set `onClassify`. The disposable
+list loads when `blockDisposable` is not `false` or when `onClassify` is set, so `blockDisposable:
+false` without `onClassify` keeps both out of the request path. Direct `assertEmailAllowed` /
+`classifyEmail` callers get both lists unless they pass `lists` or call
+`loadEmailDomainLists({ free: false })`.
+
 A blocked signup rejects with the coded `EMAIL_DOMAIN_BLOCKED` error; a
 business/free address passes. Every option above is config-gated.
 

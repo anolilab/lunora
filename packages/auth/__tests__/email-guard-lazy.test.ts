@@ -75,4 +75,46 @@ describe("email guard — lazy list loading", () => {
         // One evaluation each, however many checks run.
         expect(evaluated).toStrictEqual({ disposable: 1, free: 1 });
     });
+
+    it("loads only the disposable list for the default middleware", async () => {
+        expect.assertions(1);
+
+        vi.resetModules();
+        mockLists();
+
+        const { emailGateMiddleware } = await import("../src/email-guard");
+        const gate = emailGateMiddleware<{ email: string }>({ email: (ctx) => ctx.email });
+
+        await gate({ ctx: { email: "a@example.com" }, next: async () => {} } as never);
+
+        expect(evaluated).toStrictEqual({ disposable: 1, free: 0 });
+    });
+
+    it("loads both lists when the middleware has an onClassify observer", async () => {
+        expect.assertions(1);
+
+        vi.resetModules();
+        mockLists();
+
+        const { emailGateMiddleware } = await import("../src/email-guard");
+        const gate = emailGateMiddleware<{ email: string }>({ email: (ctx) => ctx.email, onClassify: () => {} });
+
+        await gate({ ctx: { email: "a@example.com" }, next: async () => {} } as never);
+
+        expect(evaluated).toStrictEqual({ disposable: 1, free: 1 });
+    });
+
+    it("loads neither list with blockDisposable false and no observer", async () => {
+        expect.assertions(1);
+
+        vi.resetModules();
+        mockLists();
+
+        const { emailGateMiddleware } = await import("../src/email-guard");
+        const gate = emailGateMiddleware<{ email: string }>({ email: (ctx) => ctx.email, blockDisposable: false });
+
+        await gate({ ctx: { email: "a@example.com" }, next: async () => {} } as never);
+
+        expect(evaluated).toStrictEqual({ disposable: 0, free: 0 });
+    });
 });

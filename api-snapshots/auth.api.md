@@ -683,6 +683,10 @@ interface EmailGateConfig {
     allowDomains?: ReadonlyArray<string>;
     blockDisposable?: boolean;
     denyDomains?: ReadonlyArray<string>;
+    lists?: {
+        disposable?: boolean;
+        free?: boolean;
+    };
     mx?: boolean;
     requireValidSyntax?: boolean;
 }
@@ -1097,7 +1101,10 @@ const listSignUpInvitations: (auth: LunoraAuth, options?: {
 ### `loadEmailDomainLists` (const)
 
 ```ts
-const loadEmailDomainLists: () => Promise<void>;
+const loadEmailDomainLists: ({ disposable, free }?: {
+    disposable?: boolean;
+    free?: boolean;
+}) => Promise<void>;
 ```
 
 ### `lunoraAuthAdapter` (const)
