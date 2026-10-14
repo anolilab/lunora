@@ -1,6 +1,6 @@
 import { LunoraError } from "@lunora/errors";
 import type { EmbeddingModel, LanguageModel } from "ai";
-import { createWorkersAI } from "workers-ai-provider";
+import type { createWorkersAI } from "workers-ai-provider";
 
 import type { AiGatewayMetadata } from "./gateway";
 import {
@@ -76,19 +76,63 @@ const lazyLanguageModel = (modelId: string, provider: string, resolve: () => Pro
     };
 };
 
-const lazyEmbeddingModel = (modelId: string, provider: string, resolve: () => Promise<EmbeddingModelV4>): EmbeddingModelV4 => {
+/** What a Workers AI embedding model reports, so `embedMany` can chunk without loading the provider. */
+const WORKERS_AI_EMBEDDING_LIMITS = { maxEmbeddingsPerCall: 3000, supportsParallelCalls: true };
+
+const lazyEmbeddingModel = (
+    modelId: string,
+    provider: string,
+    resolve: () => Promise<EmbeddingModelV4>,
+    limits?: typeof WORKERS_AI_EMBEDDING_LIMITS,
+): EmbeddingModelV4 => {
     return {
         doEmbed: async (options) => resolve().then((model) => model.doEmbed(options)),
         get maxEmbeddingsPerCall() {
-            return resolve().then((model) => model.maxEmbeddingsPerCall);
+            return limits?.maxEmbeddingsPerCall ?? resolve().then((model) => model.maxEmbeddingsPerCall);
         },
         modelId,
         provider,
         specificationVersion: "v4",
         get supportsParallelCalls() {
-            return resolve().then((model) => model.supportsParallelCalls);
+            return limits?.supportsParallelCalls ?? resolve().then((model) => model.supportsParallelCalls);
         },
     };
+};
+
+/**
+ * `workers-ai-provider` imports the whole `ai` root (~1.7 MB), so it loads on the first
+ * Workers AI model call rather than with this module: `@lunora/ai/create` stays a leaf.
+ */
+let workersAiModule: Promise<{ createWorkersAI: typeof createWorkersAI }> | undefined;
+
+const loadWorkersAi = (): NonNullable<typeof workersAiModule> => {
+    workersAiModule ??= import("workers-ai-provider").catch((error: unknown) => {
+        workersAiModule = undefined;
+
+        throw error;
+    });
+
+    return workersAiModule;
+};
+
+/**
+ * The binding-backed provider as synchronous V4 delegates. `modelId`, `provider` and the
+ * embedding limits match what `createWorkersAI(…)` reports, so nothing needs the import
+ * until a model is actually called.
+ */
+const lazyWorkersAi = (resolve: () => Promise<WorkersAiProviderLike>): WorkersAiProviderLike => {
+    const provider = (modelId: string, settings?: Record<string, unknown>): LanguageModel =>
+        lazyLanguageModel(modelId, "workersai.chat", async () => resolve().then((real) => real(modelId, settings) as LanguageModelV4));
+
+    provider.textEmbeddingModel = (modelId: string): EmbeddingModel =>
+        lazyEmbeddingModel(
+            modelId,
+            "workersai.embedding",
+            async () => resolve().then((real) => real.textEmbeddingModel?.(modelId) as EmbeddingModelV4),
+            WORKERS_AI_EMBEDDING_LIMITS,
+        );
+
+    return provider;
 };
 
 /**
@@ -318,15 +362,27 @@ const createAi = (options: LunoraAiOptions): LunoraAi => {
     // the gateway for gateway-path-only ones), defaulting to
     // the account's `default` gateway when none is configured. `@cf/…` ids are
     // unaffected.
-    const workersai: WorkersAiProviderLike = provider ?? (binding ? createWorkersAI({ binding, gateway: resolvedGateway }) : workersAiUnavailable);
+    let bindingWorkersAi: Promise<WorkersAiProviderLike> | undefined;
+
+    const workersai: WorkersAiProviderLike =
+        provider ??
+        (binding
+            ? lazyWorkersAi(async () => {
+                  bindingWorkersAi ??= loadWorkersAi().then(
+                      ({ createWorkersAI: create }) => create({ binding, gateway: resolvedGateway }) as WorkersAiProviderLike,
+                  );
+
+                  return bindingWorkersAi;
+              })
+            : workersAiUnavailable);
 
     // Gateway slugs need the wire-format plugins, so they go through a second
     // instance built once the plugins have loaded; `@cf/…` ids never wait on it.
     let gatewayWorkersAi: Promise<WorkersAiProviderLike> | undefined;
 
     const loadGatewayWorkersAi = (): Promise<WorkersAiProviderLike> => {
-        gatewayWorkersAi ??= loadGatewayProviders().then(
-            ({ plugins }) => createWorkersAI({ binding, gateway: resolvedGateway, providers: plugins as never }) as WorkersAiProviderLike,
+        gatewayWorkersAi ??= Promise.all([loadWorkersAi(), loadGatewayProviders()]).then(
+            ([{ createWorkersAI: create }, { plugins }]) => create({ binding, gateway: resolvedGateway, providers: plugins as never }) as WorkersAiProviderLike,
         );
 
         return gatewayWorkersAi;

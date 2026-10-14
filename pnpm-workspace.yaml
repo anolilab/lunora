@@ -268,8 +268,6 @@ catalogs:
     # ages out.
     ai: 7.0.127
     "@ai-sdk/provider-utils": 5.0.53
-    # Patched (`patchedDependencies`, so keep it exact): its `generateId` is inlined instead of
-    # imported from the `ai` root, which keeps `ai` out of `@lunora/ai/create`'s static closure.
     workers-ai-provider: 4.0.0
     "@ai-sdk/anthropic": 4.0.71
     "@ai-sdk/openai": 4.0.83
@@ -1201,7 +1199,6 @@ patchedDependencies:
   '@cloudflare/workers-types@5.20261004.1': patches/@cloudflare__workers-types@5.20261004.1.patch
   gray-matter@4.0.3: patches/gray-matter@4.0.3.patch
   recast@0.23.11: patches/recast@0.23.11.patch
-  workers-ai-provider@4.0.0: patches/workers-ai-provider@4.0.0.patch
 
 auditConfig:
   ignoreGhsas:
