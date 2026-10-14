@@ -91,6 +91,35 @@ behaviour and the full option reference are better-auth's, linked per row.
 | `deviceAuthorization` | OAuth 2.0 device grant for CLIs, TVs, and other input-constrained clients.                                | [better-auth: device authorization](https://www.better-auth.com/docs/plugins/device-authorization) |
 | `mcp` / `withMcpAuth` | OAuth-protect a Model Context Protocol server. Pairs with [`@lunora/mcp`](/docs/packages/mcp).            | [better-auth: MCP](https://www.better-auth.com/docs/plugins/mcp)                                   |
 
+#### `iss` and `aud` of a `jwt` token
+
+A token minted by `jwt()` carries `iss` and `aud` equal to the `baseURL` you pass
+to `createAuth`, unless you set them. That is the _site_ URL of the app. When the
+app and the Lunora Worker are served from different origins, it is the app's
+origin, not the Worker's, so a verifier that pins `iss`/`aud` to the Worker
+origin rejects every token. A verifier that swallows the failure and falls back
+to the cookie, then to anonymous, makes the app look signed out with nothing
+logged.
+
+Set them explicitly to the value your verifier expects:
+
+```ts
+import { createAuth } from "@lunora/auth";
+import { jwt } from "@lunora/auth/plugins";
+
+createAuth({
+    baseURL: env.AUTH_URL,
+    plugins: [jwt({ jwt: { issuer: WORKER_ORIGIN, audience: WORKER_ORIGIN } })],
+    secret: env.AUTH_SECRET,
+});
+```
+
+A local setup where the app and the Worker share one origin (or where a dynamic
+`baseURL: { allowedHosts }` follows the request host) yields matching values by
+coincidence, so `lunora dev` may not reproduce a mismatch that appears once
+deployed. When verifying with a library such as `jose`, log the error's `code`
+(for example `ERR_JWT_CLAIM_VALIDATION_FAILED`) on failure, never the token.
+
 ### Abuse protection
 
 | Export           | What it adds                                                                                                                      | Reference                                                                       |
