@@ -1,7 +1,7 @@
 import { createDispatchRunner } from "@lunora/dispatch";
 import { hasToolCall, jsonSchema } from "ai";
 import { MockLanguageModelV4 } from "ai/test";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import { runAgentLoop } from "../src/agent-loop";
 import { defineAgent, defineAgentTool } from "../src/define-agent";
@@ -1982,5 +1982,22 @@ describe("a failing run-completion dispatch", () => {
         expect(completions).toStrictEqual(["idle"]);
         expect(runtime.threads.get("thread-1")?.status).toBe("idle");
         expect(runtime.threads.get("thread-1")?.error).toBeUndefined();
+    });
+
+    it("flushes buffered telemetry once at run end, on success and on failure", async () => {
+        const flush = vi.fn<() => void>();
+        const agent = defineAgent({
+            instructions: "Be helpful.",
+            model: "@cf/meta/llama-3.3-70b-instruct-fp8-fast",
+            telemetry: { integrations: [{ flush } as never], isEnabled: true },
+        });
+
+        await runAgentLoop(loopDefaults(agent, { generate: scriptedGenerate([finalTurn("done")]) }));
+
+        expect(flush).toHaveBeenCalledTimes(1);
+
+        await expect(runAgentLoop(loopDefaults(agent, { generate: scriptedGenerate([]) }))).rejects.toThrow("scripted generate exhausted");
+
+        expect(flush).toHaveBeenCalledTimes(2);
     });
 });

@@ -7,6 +7,14 @@ import type { CommonOptions } from "./common";
 import { contentText, readField, summarizeGatewayTelemetry, summarizeUsage, toolInputOf, toolNameOf } from "./common";
 import { createInFlightCalls } from "./in-flight-calls";
 
+/** Spans per OTLP export before an early flush. */
+const MAX_BATCH_SPANS = 50;
+/** Encoded span bytes per OTLP export before an early flush. */
+const MAX_BATCH_BYTES = 256 * 1024;
+
+/** A {@link Telemetry} that buffers and exports on `flush()`; the agent loop calls it once per run. */
+type FlushableTelemetry = Telemetry & { flush: () => void };
+
 /** Push one attribute, skipping nullish values and JSON-stringifying non-primitives. */
 const pushAttribute = (attributes: OtlpAttribute[], key: string, value: unknown): void => {
     if (value === undefined || value === null) {
@@ -140,8 +148,12 @@ export interface OtlpTelemetryOptions extends CommonOptions {
  * text leaves the worker without an explicit opt-in; only structural metadata +
  * token counts are recorded.
  *
- * Each export is fire-and-forget (registered with `waitUntil` when supplied);
- * every rejection is swallowed so a flaky collector never surfaces to the run.
+ * Spans are buffered and exported as ONE POST per batch (50 spans or 256 KB), and
+ * the agent loop calls `flush()` at run end. A caller driving this integration
+ * outside the loop must call `flush()` itself or the tail of the buffer is never
+ * sent. Each export is fire-and-forget (registered with `waitUntil` when
+ * supplied); every rejection is swallowed so a flaky collector never surfaces to
+ * the run.
  *
  * One deliberate difference from the SDK-backed bridges, which delegate to a host
  * tracer: flat, not nested. Every span gets `traceId` (shared when `traceId` is
@@ -152,7 +164,7 @@ export interface OtlpTelemetryOptions extends CommonOptions {
  * `recordOutputs` privacy flags.
  * @experimental
  */
-export const otlpTelemetry = (options: OtlpTelemetryOptions): Telemetry => {
+export const otlpTelemetry = (options: OtlpTelemetryOptions): FlushableTelemetry => {
     const { conversationId, endpoint, headers, recordInputs = false, recordOutputs = false, token, traceId: fixedTraceId, waitUntil } = options;
     const serviceName = options.serviceName ?? "lunora";
 
@@ -167,7 +179,36 @@ export const otlpTelemetry = (options: OtlpTelemetryOptions): Telemetry => {
     // `token` last so it wins over any authorization in `headers`.
     const mergedHeaders = mergeHeaders({ "content-type": "application/json" }, headers, token);
 
-    /** POST one span body fire-and-forget, keeping it alive past the turn when a `waitUntil` is present. */
+    let buffer: unknown[] = [];
+    let bufferBytes = 0;
+
+    /** POST every buffered span as ONE export, fire-and-forget, kept alive past the turn when a `waitUntil` is present. */
+    const flush = (): void => {
+        if (buffer.length === 0) {
+            return;
+        }
+
+        const spans = buffer;
+
+        buffer = [];
+        bufferBytes = 0;
+
+        try {
+            const sent = fetch(tracesUrl, {
+                body: JSON.stringify(wrapResourceSpans(spans, "@lunora/agent", serviceName)),
+                headers: mergedHeaders,
+                method: "POST",
+            }).catch(() => {
+                // Network error / non-OK — intentionally ignored.
+            });
+
+            waitUntil?.(sent);
+        } catch {
+            // A synchronous `fetch` throw (e.g. invalid URL) must not break the turn.
+        }
+    };
+
+    /** Buffer one span; export when the batch reaches its count or encoded-size ceiling. */
     const emitSpan = (name: string, startTs: number, ok: boolean, message: string | undefined, attributes: OtlpAttribute[]): void => {
         const span = {
             attributes,
@@ -182,18 +223,11 @@ export const otlpTelemetry = (options: OtlpTelemetryOptions): Telemetry => {
             traceId: fixedTraceId ?? otlpRandomHex(16),
         };
 
-        try {
-            const sent = fetch(tracesUrl, {
-                body: JSON.stringify(wrapResourceSpans(span, "@lunora/agent", serviceName)),
-                headers: mergedHeaders,
-                method: "POST",
-            }).catch(() => {
-                // Network error / non-OK — intentionally ignored.
-            });
+        buffer.push(span);
+        bufferBytes += JSON.stringify(span).length;
 
-            waitUntil?.(sent);
-        } catch {
-            // A synchronous `fetch` throw (e.g. invalid URL) must not break the turn.
+        if (buffer.length >= MAX_BATCH_SPANS || bufferBytes >= MAX_BATCH_BYTES) {
+            flush();
         }
     };
 
@@ -313,6 +347,7 @@ export const otlpTelemetry = (options: OtlpTelemetryOptions): Telemetry => {
     };
 
     return {
+        flush,
         executeLanguageModelCall: async (options_) => {
             const { callId } = options_;
 
@@ -408,3 +443,5 @@ export const otlpTelemetry = (options: OtlpTelemetryOptions): Telemetry => {
         },
     };
 };
+
+export type { FlushableTelemetry };

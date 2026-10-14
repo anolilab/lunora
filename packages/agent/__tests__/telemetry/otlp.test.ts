@@ -2,9 +2,46 @@ import { generateText, streamText } from "ai";
 import { MockLanguageModelV4 } from "ai/test";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { otlpTelemetry } from "../../src/telemetry/otlp";
+import type { OtlpTelemetryOptions } from "../../src/telemetry/otlp";
+import { otlpTelemetry as createOtlpTelemetry } from "../../src/telemetry/otlp";
 import type { GenerateResult } from "./model-fixtures";
-import { drain, generatingModel, settle, STOP, streamingModel, usageOf, withTelemetry } from "./model-fixtures";
+import { drain, generatingModel, settle as settleFixture, STOP, streamingModel, usageOf, withTelemetry } from "./model-fixtures";
+
+/** Every integration the test built, so `settle` can export what each still buffers. */
+const created: ReturnType<typeof createOtlpTelemetry>[] = [];
+
+const otlpTelemetry = (options: OtlpTelemetryOptions): ReturnType<typeof createOtlpTelemetry> => {
+    const telemetry = createOtlpTelemetry(options);
+
+    created.push(telemetry);
+
+    return telemetry;
+};
+
+/** Run `count` fake tool executions through the integration, each closing one span. */
+const runTools = async (telemetry: ReturnType<typeof createOtlpTelemetry>, count: number): Promise<void> => {
+    const runOne = async (_: unknown, index: number): Promise<unknown> => {
+        const id = String(index);
+
+        return telemetry.executeTool?.({
+            callId: `c-${id}`,
+            execute: () => Promise.resolve("v"),
+            toolCall: { dynamic: true, input: {}, toolCallId: `tc-${id}`, toolName: "lookup", type: "tool-call" },
+            toolCallId: `tc-${id}`,
+        });
+    };
+
+    await Promise.all(Array.from({ length: count }, runOne));
+};
+
+/** Flush every integration (the agent loop does this at run end), then let the POSTs land. */
+const settle = async (): Promise<void> => {
+    for (const telemetry of created.splice(0)) {
+        telemetry.flush();
+    }
+
+    await settleFixture();
+};
 
 interface CapturedPost {
     body: { resourceSpans: unknown[] };
@@ -39,11 +76,13 @@ interface CapturedSpan {
 }
 
 /** The single span in a captured OTLP trace body. */
-const spanOf = (post: CapturedPost): CapturedSpan => {
+const spansOf = (post: CapturedPost): CapturedSpan[] => {
     const resource = post.body.resourceSpans[0] as { scopeSpans: { spans: unknown[] }[] };
 
-    return resource.scopeSpans[0]?.spans[0] as CapturedSpan;
+    return (resource.scopeSpans[0]?.spans ?? []) as CapturedSpan[];
 };
+
+const spanOf = (post: CapturedPost): CapturedSpan => spansOf(post)[0] as CapturedSpan;
 
 /** Read one attribute's scalar value off a span by key. */
 const attribute = (span: CapturedSpan, key: string): unknown => {
@@ -212,7 +251,7 @@ describe(otlpTelemetry, () => {
         await telemetry.executeTool?.({ callId: "c-1", execute: () => Promise.resolve("ok"), toolCallId: "tc-1" });
         await settle();
 
-        expect(calls.map((post) => spanOf(post).traceId)).toStrictEqual([FIXED_TRACE_ID, FIXED_TRACE_ID]);
+        expect(calls.flatMap((post) => spansOf(post)).map((span) => span.traceId)).toStrictEqual([FIXED_TRACE_ID, FIXED_TRACE_ID]);
     });
 
     it("does not record the prompt unless recordInputs is set", async () => {
@@ -364,6 +403,61 @@ describe(otlpTelemetry, () => {
         expect(attribute(span, "gen_ai.tool.name")).toBe("lookup");
     });
 
+    it("exports N model + tool spans as ONE POST on flush", async () => {
+        const calls = captureFetch();
+        const telemetry = otlpTelemetry({ endpoint: "https://collector.test" });
+
+        await Promise.all(
+            Array.from({ length: 10 }, async () => generateText({ model: generatingModel(), prompt: "hi", telemetry: withTelemetry(telemetry) })),
+        );
+
+        await runTools(telemetry, 20);
+
+        await settleFixture();
+
+        expect(calls).toHaveLength(0);
+
+        telemetry.flush();
+
+        expect(calls).toHaveLength(1);
+        expect(spansOf(calls[0] as CapturedPost)).toHaveLength(30);
+    });
+
+    it("splits 120 spans into 50/50/20 exports", async () => {
+        const calls = captureFetch();
+        const telemetry = otlpTelemetry({ endpoint: "https://collector.test" });
+
+        await runTools(telemetry, 120);
+
+        await settleFixture();
+        telemetry.flush();
+
+        expect(calls.map((post) => spansOf(post).length)).toStrictEqual([50, 50, 20]);
+    });
+
+    it("flush with an empty buffer sends nothing", () => {
+        const calls = captureFetch();
+
+        otlpTelemetry({ endpoint: "https://collector.test" }).flush();
+
+        expect(calls).toHaveLength(0);
+    });
+
+    it("hands every flush promise to waitUntil", async () => {
+        captureFetch();
+
+        const waitUntil = vi.fn<(promise: Promise<unknown>) => void>();
+        const telemetry = otlpTelemetry({ endpoint: "https://collector.test", waitUntil });
+
+        await runTools(telemetry, 51);
+
+        await settleFixture();
+        telemetry.flush();
+
+        // 50-span threshold flush + the final flush of the remaining span.
+        expect(waitUntil).toHaveBeenCalledTimes(2);
+    });
+
     it("an abort in one run does not close a concurrent run's span on a SHARED integration", async () => {
         const calls = captureFetch();
         // The documented app-wired shape — `defineAgent({ telemetry: { integrations:
@@ -391,7 +485,7 @@ describe(otlpTelemetry, () => {
         ]);
         await settle();
 
-        const spans = calls.map((post) => spanOf(post));
+        const spans = calls.flatMap((post) => spansOf(post));
         const ok = spans.filter((span) => span.status.code === 1);
         const failed = spans.filter((span) => span.status.code === 2);
 

@@ -10,7 +10,7 @@ import { buildModelMessages } from "./model-messages";
 import { agentClassName } from "./naming";
 import { toFunctionReference } from "./paths";
 import isPositiveInteger from "./positive-integer";
-import { traceToolExecution } from "./telemetry/tool-execution";
+import { flushTelemetry, traceToolExecution } from "./telemetry/tool-execution";
 import { capToolOutputText } from "./tool-output";
 import type {
     AgentApprovalContext,
@@ -1639,6 +1639,10 @@ const runAgentLoop = async (options: AgentLoopOptions): Promise<AgentRunResult> 
         }
 
         throw error;
+    } finally {
+        // Buffered OTLP spans leave in one export per run; this is the single
+        // run-end point (every return and the rethrow above pass through it).
+        flushTelemetry(agent.telemetry);
     }
 };
 
