@@ -2015,6 +2015,8 @@ interface VectorSearchReader<IndexName extends string = string> {
  * `db.delete` on a vectorized table auto-propagates the matching `deleteByIds`.
  */
 interface VectorSearch<IndexName extends string = string> extends VectorSearchReader<IndexName> {
+    /** Set when `deleteByIds` honours its `operation` and `afterDelete` arguments. */
+    deferredDelete?: boolean;
     deleteByIds: (indexName: IndexName, ids: ReadonlyArray<string>, namespace?: string, operation?: object, afterDelete?: () => Promise<void>) => Promise<void>;
     upsert: (indexName: IndexName, input: VectorUpsertInput, operation?: object) => Promise<void>;
 

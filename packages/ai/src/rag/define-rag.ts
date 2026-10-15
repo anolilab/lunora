@@ -765,10 +765,11 @@ const defineRag = (config: RagConfig): ((context: RagContext) => Rag) => {
                 await config.lexicalStore?.remove?.(ids, { namespace });
             };
 
-            // With a token the text removals ride the (possibly deferred) vector
-            // delete, so a skipped delete never strands vectors without their text;
-            // without one the order is delete then remove, inline.
-            if (operation === undefined) {
+            // With a token, on a store that declares `deferredDelete`, the text
+            // removals ride the (possibly deferred) vector delete, so a skipped delete
+            // never strands vectors without their text. Otherwise the order is delete
+            // then remove, inline.
+            if (operation === undefined || !store.capabilities.deferredDelete) {
                 await store.deleteByIds(ids, namespace);
                 await removeText();
 

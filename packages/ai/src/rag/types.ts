@@ -81,6 +81,8 @@ export interface RagVectorUpsertInput {
  * @experimental
  */
 export interface RagVectors {
+    /** Set by a facade whose `deleteByIds` honours `operation` and `afterDelete`; see `RagVectorStoreCapabilities.deferredDelete`. */
+    deferredDelete?: boolean;
     deleteByIds: (indexName: string, ids: ReadonlyArray<string>, namespace?: string, operation?: object, afterDelete?: () => Promise<void>) => Promise<unknown>;
     getByIds: (indexName: string, ids: ReadonlyArray<string>, namespace?: string) => Promise<ReadonlyArray<RagVectorRecord>>;
     query: (indexName: string, input: RagVectorQueryInput) => Promise<RagVectorMatches>;

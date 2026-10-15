@@ -112,6 +112,7 @@ const sqliteVectorStore = (options: SqliteVectorStoreOptions): RagVectorStore =>
     const annIndex = ann === undefined ? undefined : sqliteVecIndex({ dimensions: ann.dimensions, exec, table });
 
     const capabilities: RagVectorStoreCapabilities = {
+        deferredDelete: true,
         // A vec0 column has one fixed width; a wider embedding cannot be indexed.
         maxDimensions: options.maxDimensions ?? ann?.dimensions ?? false,
         // Rows are TEXT columns in an ordinary table: neither the id nor the

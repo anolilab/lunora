@@ -485,6 +485,7 @@ interface RagVectorStore {
 
 ```ts
 interface RagVectorStoreCapabilities {
+    deferredDelete?: boolean;
     maxDimensions: number | false;
     maxIdBytes: number | false;
     maxMetadataBytes: number | false;

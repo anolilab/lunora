@@ -261,6 +261,7 @@ describe("defineRag index batching", () => {
                 return Promise.resolve();
             };
             const vectors: RagVectors = {
+                deferredDelete: true,
                 deleteByIds: async (_indexName, ids, _namespace, operation, afterDelete) =>
                     run(operation, async () => {
                         for (const id of ids) {
@@ -353,6 +354,67 @@ describe("defineRag index batching", () => {
             expect(events).toStrictEqual(["vectors-deleted", "text-removed"]);
             expect(stored.size + texts.size).toBe(0);
         });
+    });
+
+    it("removes trailing text and lexical entries inline for a store that ignores afterDelete and declares no capability", async () => {
+        expect.assertions(3);
+
+        const stored = new Map<string, RagVectorUpsertInput>();
+        const texts = new Set<string>();
+        const lexical = new Set<string>();
+        const legacy: RagVectors = {
+            // Built against `deleteByIds(ids, namespace)`: ignores the operation and the hook.
+            deleteByIds: async (_indexName, ids) => {
+                for (const id of ids) {
+                    stored.delete(id);
+                }
+            },
+            getByIds: async (_indexName, ids) => ids.flatMap((id) => (stored.has(id) ? [{ id, metadata: stored.get(id)?.metadata }] : [])),
+            query: async () => {
+                return { count: 0, matches: [] };
+            },
+            upsert: async (_indexName, input) => {
+                stored.set(input.id, input);
+            },
+        };
+        const legacyRag = defineRag({
+            allowSharedNamespace: true,
+            chunk: pipeChunker,
+            index: "docs",
+            lexicalStore: {
+                index: async (chunks) => {
+                    for (const chunk of chunks) {
+                        lexical.add(chunk.id);
+                    }
+                },
+                remove: async (ids) => {
+                    for (const id of ids) {
+                        lexical.delete(id);
+                    }
+                },
+                search: async () => [],
+            },
+            textStore: {
+                getMany: async (ids) => ids.map(() => undefined),
+                put: async (chunks) => {
+                    for (const chunk of chunks) {
+                        texts.add(chunk.id);
+                    }
+                },
+                remove: async (ids) => {
+                    for (const id of ids) {
+                        texts.delete(id);
+                    }
+                },
+            },
+        });
+
+        await legacyRag(ctxFor(legacy)).index({ id: "doc", text: "a|b|c|d|e" });
+        await legacyRag(ctxFor(legacy)).index({ id: "doc", text: "x|y" });
+
+        expect([...stored.keys()]).toHaveLength(2);
+        expect([...texts].toSorted((left, right) => left.localeCompare(right))).toStrictEqual(["doc#0", "doc#1"]);
+        expect([...lexical].toSorted((left, right) => left.localeCompare(right))).toStrictEqual(["doc#0", "doc#1"]);
     });
 
     it("passes one operation token per index() call to every batch and the chunk 0 write", async () => {

@@ -64,6 +64,8 @@ interface VectorUpsertInputLike {
  * wherever a function taking fewer parameters is expected.
  */
 interface VectorSearchLike {
+    /** Set when `deleteByIds` honours its `operation` and `afterDelete` arguments. */
+    deferredDelete?: boolean;
     deleteByIds: (indexName: string, ids: ReadonlyArray<string>, namespace?: string, operation?: object, afterDelete?: () => Promise<void>) => Promise<void>;
     getByIds: (indexName: string, ids: ReadonlyArray<string>, namespace?: string) => Promise<ReadonlyArray<VectorRecordLike>>;
     query: (indexName: string, input: VectorQueryInputLike) => Promise<VectorMatchesLike>;
@@ -301,6 +303,7 @@ const createContextVectors = (lunora: LunoraVectors, options?: CreateContextVect
     };
 
     return {
+        deferredDelete: true,
         deleteByIds: async (
             indexName: string,
             ids: ReadonlyArray<string>,

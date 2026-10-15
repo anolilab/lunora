@@ -25,6 +25,15 @@ import type { RagVectorMatches, RagVectorQueryInput, RagVectorRecord, RagVectors
  */
 interface RagVectorStoreCapabilities {
     /**
+     * Whether `deleteByIds` honours its `operation` and `afterDelete` arguments:
+     * the delete may be deferred with the operation's other writes and skipped if
+     * one failed, and `afterDelete` runs when the delete does. Absent means the
+     * store only implements `deleteByIds(ids, namespace)`, and `defineRag` removes
+     * the chunk text itself, inline, after the delete.
+     */
+    deferredDelete?: boolean;
+
+    /**
      * Ceiling on embedding dimensionality, or `false` for no limit.
      *
      * Vectorize stores at most 1536 at 32-bit precision, which rules out
@@ -106,7 +115,7 @@ const vectorizeStore = (vectors: RagVectors, indexName: string): RagVectorStore 
                       vectors.upsertMany?.(indexName, inputs, operation) as Promise<unknown>,
               }
             : {}),
-        capabilities: VECTORIZE_CAPABILITIES,
+        capabilities: vectors.deferredDelete ? { ...VECTORIZE_CAPABILITIES, deferredDelete: true } : VECTORIZE_CAPABILITIES,
         deleteByIds: (ids, namespace, operation, afterDelete) => vectors.deleteByIds(indexName, ids, namespace, operation, afterDelete),
         getByIds: (ids, namespace) => vectors.getByIds(indexName, ids, namespace),
         query: (input) => vectors.query(indexName, input),

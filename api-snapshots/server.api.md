@@ -2944,6 +2944,7 @@ interface VectorRecord {
 
 ```ts
 interface VectorSearch<IndexName extends string = string> extends VectorSearchReader<IndexName> {
+    deferredDelete?: boolean;
     deleteByIds: (indexName: IndexName, ids: ReadonlyArray<string>, namespace?: string, operation?: object, afterDelete?: () => Promise<void>) => Promise<void>;
     upsert: (indexName: IndexName, input: VectorUpsertInput, operation?: object) => Promise<void>;
     upsertMany?: (indexName: IndexName, inputs: ReadonlyArray<VectorUpsertInput>, operation?: object) => Promise<void>;

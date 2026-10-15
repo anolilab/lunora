@@ -2064,6 +2064,7 @@ interface VectorRecordLike {
 
 ```ts
 interface VectorSearchLike {
+    deferredDelete?: boolean;
     deleteByIds: (indexName: string, ids: ReadonlyArray<string>, namespace?: string, operation?: object, afterDelete?: () => Promise<void>) => Promise<void>;
     getByIds: (indexName: string, ids: ReadonlyArray<string>, namespace?: string) => Promise<ReadonlyArray<VectorRecordLike>>;
     query: (indexName: string, input: VectorQueryInputLike) => Promise<VectorMatchesLike>;

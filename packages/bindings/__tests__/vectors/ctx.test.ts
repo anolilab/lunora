@@ -181,6 +181,12 @@ describe("createContextVectors", () => {
             expect(order).toHaveLength(4);
         });
 
+        it("declares that deleteByIds honours the operation and afterDelete arguments", () => {
+            expect.assertions(1);
+
+            expect(harness().context.deferredDelete).toBe(true);
+        });
+
         it("still runs a later write that carries no token", async () => {
             expect.assertions(2);
 
