@@ -753,14 +753,14 @@ const defineRag = (config: RagConfig): ((context: RagContext) => Rag) => {
             };
         };
 
-        const deleteChunkRange = async (sourceId: string, from: number, to: number, namespace: string | undefined): Promise<void> => {
+        const deleteChunkRange = async (sourceId: string, from: number, to: number, namespace: string | undefined, operation?: object): Promise<void> => {
             const ids = Array.from({ length: to - from }, (_, offset) => chunkVectorId(namespace, sourceId, from + offset));
 
             if (ids.length === 0) {
                 return;
             }
 
-            await store.deleteByIds(ids, namespace);
+            await store.deleteByIds(ids, namespace, operation);
             await textStore?.remove?.(ids, { namespace });
             await config.lexicalStore?.remove?.(ids, { namespace });
         };
@@ -891,13 +891,16 @@ const defineRag = (config: RagConfig): ((context: RagContext) => Rag) => {
             };
 
             // One token per call: a deferred facade skips this call's remaining writes (chunk #0 last) once one fails.
-            await writeRecords(store, records, notify, {});
+            const operation = {};
+
+            await writeRecords(store, records, notify, operation);
 
             // A shrinking re-index leaves stale trailing chunks behind — delete
             // them so they cannot keep matching. New chunks are already written,
-            // so retrieval never observes a gap.
+            // so retrieval never observes a gap. Carries the call's token so a
+            // deferred facade queues it after chunk #0 and skips it if a write failed.
             if (previous.chunks !== undefined && previous.chunks > pieces.length) {
-                await deleteChunkRange(input.id, pieces.length, previous.chunks, effectiveNamespace);
+                await deleteChunkRange(input.id, pieces.length, previous.chunks, effectiveNamespace, operation);
             }
 
             return { chunks: pieces.length, ids, unchanged: false };

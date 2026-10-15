@@ -473,7 +473,7 @@ _Tagged `@experimental` — signature not tracked; churn here does not fail the 
 ```ts
 interface RagVectorStore {
     capabilities: RagVectorStoreCapabilities;
-    deleteByIds: (ids: ReadonlyArray<string>, namespace?: string) => Promise<unknown>;
+    deleteByIds: (ids: ReadonlyArray<string>, namespace?: string, operation?: object) => Promise<unknown>;
     getByIds: (ids: ReadonlyArray<string>, namespace?: string) => Promise<ReadonlyArray<RagVectorRecord>>;
     query: (input: RagVectorQueryInput) => Promise<RagVectorMatches>;
     upsert: (input: RagVectorUpsertInput, operation?: object) => Promise<unknown>;

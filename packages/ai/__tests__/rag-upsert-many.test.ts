@@ -206,6 +206,109 @@ describe("defineRag index batching", () => {
         expect(stored.has("doc#0")).toBe(false);
     });
 
+    describe("shrinking re-index in a deferred context", () => {
+        /** Mirrors the context facade: tokened writes queue, run in order, and a failure skips the rest of that token. */
+        const deferredVectors = (failId: string | undefined) => {
+            const stored = new Map<string, RagVectorUpsertInput>();
+            const queue: (() => Promise<void>)[] = [];
+            const failed = new WeakSet<object>();
+            let inline = true;
+            const run = (operation: object | undefined, work: () => Promise<void>): Promise<void> => {
+                const guarded = async (): Promise<void> => {
+                    if (operation && failed.has(operation)) {
+                        throw new Error("skipped");
+                    }
+
+                    try {
+                        await work();
+                    } catch (error) {
+                        if (operation) {
+                            failed.add(operation);
+                        }
+
+                        throw error;
+                    }
+                };
+
+                if (inline) {
+                    return guarded();
+                }
+
+                queue.push(guarded);
+
+                return Promise.resolve();
+            };
+            const vectors: RagVectors = {
+                deleteByIds: async (_indexName, ids, _namespace, operation) =>
+                    run(operation, async () => {
+                        for (const id of ids) {
+                            stored.delete(id);
+                        }
+                    }),
+                getByIds: async (_indexName, ids) => ids.flatMap((id) => (stored.has(id) ? [{ id, metadata: stored.get(id)?.metadata }] : [])),
+                query: async () => {
+                    return { count: 0, matches: [] };
+                },
+                upsert: async (_indexName, input, operation) =>
+                    run(operation, async () => {
+                        if (!inline && input.id === failId) {
+                            throw new Error("write failed");
+                        }
+
+                        stored.set(input.id, input);
+                    }),
+            };
+            const flush = async (): Promise<void> => {
+                for (const work of queue) {
+                    try {
+                        // eslint-disable-next-line no-await-in-loop -- ordered replay, like the shard's queue
+                        await work();
+                    } catch {
+                        // contained, as the shard's queue does
+                    }
+                }
+            };
+
+            return {
+                defer: () => {
+                    inline = false;
+                },
+                flush,
+                stored,
+                vectors,
+            };
+        };
+
+        it("keeps the old trailing chunks and head when a deferred write fails", async () => {
+            expect.assertions(3);
+
+            const { defer, flush, stored, vectors } = deferredVectors("doc#1");
+
+            await rag(ctxFor(vectors)).index({ id: "doc", text: "a|b|c|d|e" });
+            defer();
+            await rag(ctxFor(vectors)).index({ id: "doc", text: "x|y" });
+            await flush();
+
+            expect([...stored.keys()].toSorted((left, right) => left.localeCompare(right))).toStrictEqual(["doc#0", "doc#1", "doc#2", "doc#3", "doc#4"]);
+            expect(stored.get("doc#0")?.metadata?.["__ragChunks"]).toBe(5);
+            expect(stored.get("doc#1")?.input).toBe("b");
+        });
+
+        it("still trims the old trailing chunks when every deferred write succeeds", async () => {
+            expect.assertions(2);
+
+            const { defer, flush, stored, vectors } = deferredVectors(undefined);
+
+            await rag(ctxFor(vectors)).index({ id: "doc", text: "a|b|c|d|e" });
+            defer();
+            await rag(ctxFor(vectors)).index({ id: "doc", text: "x|y" });
+            await flush();
+
+            expect([...stored.keys()].toSorted((left, right) => left.localeCompare(right))).toStrictEqual(["doc#0", "doc#1"]);
+            expect(stored.get("doc#0")?.metadata?.["__ragChunks"]).toBe(2);
+        });
+    });
+
     it("passes one operation token per index() call to every batch and the chunk 0 write", async () => {
         expect.assertions(3);
 

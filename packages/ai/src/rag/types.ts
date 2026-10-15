@@ -81,7 +81,7 @@ export interface RagVectorUpsertInput {
  * @experimental
  */
 export interface RagVectors {
-    deleteByIds: (indexName: string, ids: ReadonlyArray<string>, namespace?: string) => Promise<unknown>;
+    deleteByIds: (indexName: string, ids: ReadonlyArray<string>, namespace?: string, operation?: object) => Promise<unknown>;
     getByIds: (indexName: string, ids: ReadonlyArray<string>, namespace?: string) => Promise<ReadonlyArray<RagVectorRecord>>;
     query: (indexName: string, input: RagVectorQueryInput) => Promise<RagVectorMatches>;
     /** `operation` groups the writes of one logical operation: a deferred facade skips the rest once one fails. */

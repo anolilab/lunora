@@ -132,6 +132,39 @@ describe("createContextVectors", () => {
             expect(index.upsert).not.toHaveBeenCalledWith([expect.objectContaining({ id: "chunk-0" })]);
         });
 
+        it("defers a tokened delete behind the operation's writes and skips it after a failure", async () => {
+            expect.assertions(3);
+
+            const { context, embed, flush, index } = harness();
+            const operation = {};
+
+            await context.upsertMany?.("docs", [{ embed, id: "batch-1", input: "a" }], operation);
+            await context.upsertMany?.("docs", [{ embed, id: "batch-2", input: "b" }], operation);
+            await context.deleteByIds("docs", ["old"], undefined, operation);
+
+            expect(index.deleteByIds).not.toHaveBeenCalled();
+            await expect(flush()).resolves.toStrictEqual(["fulfilled", "rejected", "rejected"]);
+            expect(index.deleteByIds).not.toHaveBeenCalled();
+        });
+
+        it("runs a tokened delete after its writes succeed, and an untokened delete inline", async () => {
+            expect.assertions(3);
+
+            const { context, flush, index } = harness();
+
+            await context.deleteByIds("docs", ["now"]);
+
+            expect(index.deleteByIds).toHaveBeenCalledWith(["now"]);
+
+            await context.deleteByIds("docs", ["later"], undefined, {});
+
+            expect(index.deleteByIds).toHaveBeenCalledTimes(1);
+
+            await flush();
+
+            expect(index.deleteByIds).toHaveBeenLastCalledWith(["later"]);
+        });
+
         it("still runs a later write that carries no token", async () => {
             expect.assertions(2);
 

@@ -67,7 +67,7 @@ interface RagVectorStoreCapabilities {
  */
 interface RagVectorStore {
     capabilities: RagVectorStoreCapabilities;
-    deleteByIds: (ids: ReadonlyArray<string>, namespace?: string) => Promise<unknown>;
+    deleteByIds: (ids: ReadonlyArray<string>, namespace?: string, operation?: object) => Promise<unknown>;
     getByIds: (ids: ReadonlyArray<string>, namespace?: string) => Promise<ReadonlyArray<RagVectorRecord>>;
     query: (input: RagVectorQueryInput) => Promise<RagVectorMatches>;
     /** `operation` is one `index()` call's token, passed to every write of that call. */
@@ -106,7 +106,7 @@ const vectorizeStore = (vectors: RagVectors, indexName: string): RagVectorStore 
               }
             : {}),
         capabilities: VECTORIZE_CAPABILITIES,
-        deleteByIds: (ids, namespace) => vectors.deleteByIds(indexName, ids, namespace),
+        deleteByIds: (ids, namespace, operation) => vectors.deleteByIds(indexName, ids, namespace, operation),
         getByIds: (ids, namespace) => vectors.getByIds(indexName, ids, namespace),
         query: (input) => vectors.query(indexName, input),
         upsert: (input, operation) => vectors.upsert(indexName, input, operation),
