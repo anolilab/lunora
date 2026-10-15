@@ -36,13 +36,15 @@ export interface FunctionIR {
 
     /**
      * Set on lifecycle hooks (`onConnect`/`onDisconnect`/`onShardInit`/
-     * `onQueryChange`/`onWhisper`): the moment the hook fires on. Such a function
-     * is also an internal registration (so it lands in `LUNORA_FUNCTIONS` for path
-     * dispatch) — a mutation for every moment except `whisper`, which is a query;
-     * emit additionally collects it into the `LUNORA_LIFECYCLE_HOOKS` manifest
-     * keyed by this moment. Absent on ordinary functions.
+     * `onQueryChange`/`onWhisper`) and on a `defineRoom` registration: the moment
+     * the hook fires on. Such a function is also an internal registration (so it
+     * lands in `LUNORA_FUNCTIONS` for path dispatch) — a mutation for every moment
+     * except `whisper`, which is a query; emit additionally collects the socket
+     * moments into the `LUNORA_LIFECYCLE_HOOKS` manifest keyed by this moment, and
+     * a `room` registration into the `LUNORA_ROOMS` topic→path map. Absent on
+     * ordinary functions.
      */
-    lifecycle?: "connect" | "disconnect" | "init" | "reactor" | "whisper";
+    lifecycle?: "connect" | "disconnect" | "init" | "reactor" | "room" | "whisper";
 
     /**
      * The `.output(validator)` declaration, when the chain has one.

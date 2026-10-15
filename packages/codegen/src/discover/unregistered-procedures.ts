@@ -57,6 +57,13 @@ const REGISTRATION_BY_TYPE_NAME = new Map<string, { call: string; file?: string;
     ["RegisteredMutator", { call: "defineMutator({ … })", file: "mutators" }],
     ["RegisteredQuery", { call: "query.input({ … }).query(handler)" }],
     ["RegisteredReactor", { call: "onQueryChange(select, handler)", note: "A dropped reactor has no caller to fail — it silently never runs." }],
+    [
+        "RegisteredRoom",
+        {
+            call: "defineRoom({ … })",
+            note: "A dropped room has no caller to fail — its whisper topic is never wired to a handler, so joins, messages and broadcasts are silently ignored.",
+        },
+    ],
     ["RegisteredShape", { call: "defineShape({ … })", file: "shapes" }],
     ["RegisteredStream", { call: "query.input({ … }).stream(handler)" }],
     [

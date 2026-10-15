@@ -415,6 +415,18 @@ interface DefinePresenceOptions {
 }
 ```
 
+### `DefineRoomOptions` (interface)
+
+```ts
+interface DefineRoomOptions<Message extends Validator> {
+    message: Message;
+    name: string;
+    onJoin?: RoomJoinHandler;
+    onLeave?: RoomLeaveHandler;
+    onMessage: RoomMessageHandler<Infer<Message>>;
+}
+```
+
 ### `DefineStorageRuleInput` (interface)
 
 ```ts
@@ -1020,7 +1032,7 @@ interface LifecycleEvent {
 ### `LifecycleEventKind` (type)
 
 ```ts
-type LifecycleEventKind = "connect" | "disconnect" | "init" | "reactor" | "whisper";
+type LifecycleEventKind = "connect" | "disconnect" | "init" | "reactor" | "room" | "whisper";
 ```
 
 ### `LifecycleHandler` (type)
@@ -1772,6 +1784,7 @@ interface RegisteredFunction<A extends ArgsValidator, R, Kind extends FunctionKi
     readonly handler: (context: unknown, args: InferArgs<A>) => Promise<R> | R;
     readonly kind: Kind;
     readonly lifecycle?: LifecycleEventKind;
+    readonly room?: string;
     readonly visibility?: FunctionVisibility;
     readonly x402?: X402ProcedureConfig;
 }
@@ -1820,6 +1833,15 @@ type RegisteredQuery<A extends ArgsValidator, R> = RegisteredFunction<A, R, "que
 ```ts
 type RegisteredReactor = RegisteredFunction<Record<string, never>, ReactorOutcome, "mutation"> & {
     readonly lifecycle: "reactor";
+};
+```
+
+### `RegisteredRoom` (type)
+
+```ts
+type RegisteredRoom = RegisteredFunction<Record<string, never>, void, "mutation"> & {
+    readonly lifecycle: "room";
+    readonly room: string;
 };
 ```
 
@@ -1990,6 +2012,36 @@ interface Role {
     readonly description?: string;
     readonly name: string;
     readonly permissions?: ReadonlyArray<Permission | string>;
+}
+```
+
+### `RoomJoinHandler` (type)
+
+```ts
+type RoomJoinHandler = (context: MutationCtx, socket: RoomSocket) => Promise<void> | void;
+```
+
+### `RoomLeaveHandler` (type)
+
+```ts
+type RoomLeaveHandler = (context: MutationCtx, socket: RoomSocket) => Promise<void> | void;
+```
+
+### `RoomMessageHandler` (type)
+
+```ts
+type RoomMessageHandler<Message> = (context: MutationCtx, message: Message, socket: RoomSocket) => Promise<void> | void;
+```
+
+### `RoomSocket` (interface)
+
+```ts
+interface RoomSocket {
+    broadcast: (message: unknown) => void;
+    readonly connectionId: string;
+    readonly context?: Record<string, unknown>;
+    readonly shardKey: string;
+    readonly userId: null | string;
 }
 ```
 
@@ -3354,6 +3406,12 @@ const defineRankIndex: (name: string, options: RankIndexOptions) => RankIndexDef
 
 ```ts
 const defineRole: (name: string, options?: Omit<Role, "name">) => Role;
+```
+
+### `defineRoom` (const)
+
+```ts
+const defineRoom: <Message extends Validator>(options: DefineRoomOptions<Message>) => RegisteredRoom;
 ```
 
 ### `defineSchema` (const)

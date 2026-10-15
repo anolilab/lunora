@@ -86,6 +86,7 @@ describe("registration-type parity (anti-drift lock for the dropped-registration
             "RegisteredMutator",
             "RegisteredQuery",
             "RegisteredReactor",
+            "RegisteredRoom",
             "RegisteredShape",
             "RegisteredStream",
             "RegisteredWhisperAuthorizer",

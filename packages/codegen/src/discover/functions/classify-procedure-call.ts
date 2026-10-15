@@ -25,11 +25,15 @@ const INTERNAL_FACTORIES: Record<string, "action" | "mutation" | "query"> = {
  * manifest: `connect`/`disconnect` are dispatched per socket, `init` once per
  * Durable Object instance before any handler runs, `reactor` after each write
  * flush whose tables the reactor's watched read touched, and `whisper` before a
- * socket joins or broadcasts to a whisper topic.
+ * socket joins or broadcasts to a whisper topic. `room` is a `defineRoom`
+ * registration, dispatched server-side when a socket joins, leaves, or sends to
+ * the room's whisper topic — emit derives the `LUNORA_ROOMS` topic→path map from
+ * it.
  */
-type LifecycleMoment = "connect" | "disconnect" | "init" | "reactor" | "whisper";
+type LifecycleMoment = "connect" | "disconnect" | "init" | "reactor" | "room" | "whisper";
 
 const LIFECYCLE_FACTORIES: Record<string, LifecycleMoment> = {
+    defineRoom: "room",
     onConnect: "connect",
     onDisconnect: "disconnect",
     onQueryChange: "reactor",
@@ -43,6 +47,7 @@ const LIFECYCLE_FACTORIES: Record<string, LifecycleMoment> = {
  * verdict the shard acts on and must not be able to write while deciding.
  * Getting this wrong is not cosmetic: `handleRpc` transaction-wraps a `mutation`,
  * so a misclassified authorizer would open a write span on every topic join.
+ * A `room` handler is a mutation: its `ctx.db` writes must commit all-or-nothing.
  */
 const lifecycleKind = (moment: LifecycleMoment): "mutation" | "query" => (moment === "whisper" ? "query" : "mutation");
 

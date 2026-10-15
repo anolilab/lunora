@@ -2896,6 +2896,15 @@ abstract class ShardDO {
             if (attachment.connectionId !== undefined) {
                 await this.dispatchLifecycle("disconnect", this.lifecycleInfo(attachment));
             }
+
+            // A closed socket leaves every room it still holds, so `onLeave` runs
+            // for a dropped tab or network loss too, not only an explicit unsubscribe.
+            for (const topic of attachment.whispers ?? []) {
+                if (this.roomHandlerPath(topic) !== undefined) {
+                    // eslint-disable-next-line no-await-in-loop -- each room's leave is its own mutation; they run in order
+                    await this.dispatchRoomEvent(ws, topic, "leave");
+                }
+            }
         } catch (error) {
             dispatchError = { error };
         } finally {
@@ -3063,6 +3072,22 @@ abstract class ShardDO {
     // eslint-disable-next-line class-methods-use-this -- base-class override hook: the codegen subclass returns the generated lifecycle manifest
     protected lifecycleHookPaths(_event: "connect" | "disconnect" | "init" | "reactor" | "whisper"): ReadonlyArray<string> {
         return [];
+    }
+
+    /**
+     * The registered `defineRoom` function path a room whisper `topic` resolves
+     * to, or `undefined` when the topic is an ordinary ephemeral whisper topic
+     * (cursor, typing indicator). Base default is `undefined`, so every whisper
+     * topic behaves exactly as before on a shard with no rooms; the codegen
+     * subclass overrides it with the generated `LUNORA_ROOMS` map.
+     *
+     * A room is a TYPED LAYER over the whisper channel — this is the one seam
+     * that turns a whisper topic into a server-dispatched room, so no new DO, no
+     * new upgrade route, and no second socket registry are introduced.
+     */
+    // eslint-disable-next-line class-methods-use-this -- base-class override hook: the codegen subclass returns the generated room map
+    protected roomHandlerPath(_topic: string): string | undefined {
+        return undefined;
     }
 
     /**
@@ -7161,13 +7186,31 @@ abstract class ShardDO {
                     return;
                 }
 
-                this.setWhisperMembership(ws, envelope.topic, join);
+                // A room join/leave runs the room's mutation, so it takes the same
+                // admission as a room message; otherwise a join/leave loop is an
+                // unbounded write stream.
+                if (this.roomHandlerPath(envelope.topic) !== undefined && !this.allowWhisper(ws)) {
+                    return;
+                }
+
+                // Only a real membership change fires the room handler: a duplicate
+                // join, a join refused at the topic cap, or a leave of a topic the
+                // socket never held must not run `onJoin` / `onLeave`.
+                if (!this.setWhisperMembership(ws, envelope.topic, join)) {
+                    return;
+                }
 
                 // Relay tier (plan 075 Phase 2): once a relay holds a subscriber, it
                 // announces itself so the owner forwards whisper frames to it.
                 if (join) {
                     await this.relay?.announce();
                 }
+
+                // A `defineRoom` topic ALSO dispatches the room's server handler:
+                // `onJoin` after the authorized join is recorded, `onLeave` on
+                // every unsubscribe (never authorization-gated). An ordinary
+                // whisper topic resolves to no room and dispatches nothing.
+                await this.dispatchRoomEvent(ws, envelope.topic, join ? "join" : "leave");
             }
 
             return;
@@ -7175,7 +7218,21 @@ abstract class ShardDO {
 
         if (envelope.type === "whisper") {
             if (typeof envelope.topic === "string" && envelope.topic.length > 0 && (await this.authorizeWhisper(ws, envelope.topic, "send"))) {
-                await this.broadcastWhisper(ws, envelope.topic, envelope.data);
+                // A room topic is handled server-side rather than blindly relayed:
+                // the shard decodes the client's typed message, dispatches the
+                // room's `onMessage` (which decides what, if anything, members
+                // see via `socket.broadcast`), and does NOT relay the raw frame.
+                // An ordinary whisper topic keeps the direct peer relay.
+                // Reuse the whisper rate bucket: a room's fan-out is the same
+                // O(members) cost a whisper is, so it gets the same admission. The
+                // client wire-encoded `data`; decode it back to real values
+                // (`bigint`/`Date`/bytes) before it reaches the handler, mirroring
+                // the `subscribe`/`stream` branches.
+                if (this.roomHandlerPath(envelope.topic) === undefined) {
+                    await this.broadcastWhisper(ws, envelope.topic, envelope.data);
+                } else if (this.isWhisperMember(ws, envelope.topic) && this.allowWhisper(ws)) {
+                    await this.dispatchRoomEvent(ws, envelope.topic, "message", envelope.data);
+                }
             }
 
             return;
@@ -14718,20 +14775,20 @@ abstract class ShardDO {
      * whispering is never acked, and an over-cap join or a serialize failure is
      * simply dropped (the join just doesn't take).
      */
-    private setWhisperMembership(ws: ShardSocketLike, topic: string, join: boolean): void {
+    private setWhisperMembership(ws: ShardSocketLike, topic: string, join: boolean): boolean {
         const attachment = this.readAttachment(ws);
         const topics = attachment.whispers ?? [];
         const has = topics.includes(topic);
 
         if (join) {
             if (has || topics.length >= ShardDO.MAX_WHISPER_TOPICS_PER_SOCKET) {
-                return;
+                return false;
             }
 
             attachment.whispers = [...topics, topic];
         } else {
             if (!has) {
-                return;
+                return false;
             }
 
             const next = topics.filter((entry) => entry !== topic);
@@ -14748,6 +14805,13 @@ abstract class ShardDO {
         } catch {
             /* over-large attachment — the membership change just doesn't persist */
         }
+
+        return true;
+    }
+
+    /** Whether `ws` currently holds membership of `topic` (the join recorded on its attachment). */
+    private isWhisperMember(ws: ShardSocketLike, topic: string): boolean {
+        return (this.readAttachment(ws).whispers ?? []).includes(topic);
     }
 
     /**
@@ -14867,6 +14931,101 @@ abstract class ShardDO {
         this.fanout.whisper = recordFanoutPass(this.fanout.whisper, scanned, delivered, 0);
 
         return delivered;
+    }
+
+    /**
+     * Dispatch a `defineRoom` lifecycle moment — `join` on an authorized
+     * `whisper_subscribe`, `leave` on a `whisper_unsubscribe`, `message` for each
+     * authorized `whisper` frame whose `data` is the room's typed message.
+     *
+     * The registration is an internal mutation, dispatched through `handleRpc`
+     * under the socket's verified identity + a trusted system dispatch — exactly
+     * as `dispatchLifecycle` and `runWhisperAuthorizers` dispatch theirs — so
+     * `ctx.auth` is the connecting user and `ctx.db` is RLS-scoped to them.
+     * `ctx.db` is the shard's SQLite, so room state written here is durable and
+     * survives hibernation without a per-room Durable Object.
+     *
+     * A handler that throws is logged and swallowed: a broken room handler must
+     * not take the socket (or the shard) down, mirroring the lifecycle-hook
+     * contract. `onLeave` is never authorization-gated, so a revoked member can
+     * always leave.
+     */
+    private async dispatchRoomEvent(ws: ShardSocketLike, topic: string, kind: "join" | "leave" | "message", message?: unknown): Promise<void> {
+        const functionPath = this.roomHandlerPath(topic);
+
+        if (functionPath === undefined) {
+            return;
+        }
+
+        const info = this.lifecycleInfo(this.readAttachment(ws));
+        // `socket.broadcast` only queues: the frame goes out after the handler's
+        // mutation has committed, so members never see a message whose writes were
+        // rolled back.
+        const pending: unknown[] = [];
+        const socket = {
+            broadcast: (payload: unknown): void => {
+                pending.push(payload);
+            },
+            connectionId: info.event.connectionId,
+            ...(info.event.context === undefined ? {} : { context: info.event.context }),
+            shardKey: info.event.shardKey,
+            userId: info.event.userId,
+        };
+        try {
+            // The client wire-encoded `message`; decode it back to real values here
+            // so a malformed payload is logged, not thrown out of the socket handler.
+            const args = { kind, socket, ...(kind === "message" ? { message: decodeWire(message) } : {}) };
+
+            await this.withRequestIdentity(info.userId, info.identity, info.ip, () => this.withSystemDispatch(() => this.handleRpc(functionPath, args)));
+
+            for (const payload of pending) {
+                this.broadcastRoomMessage(topic, payload);
+            }
+        } catch (error: unknown) {
+            this.logs.push({
+                functionPath,
+                level: "error",
+                message: error instanceof Error ? error.message : String(error),
+                timestamp: Date.now(),
+            });
+        }
+    }
+
+    /**
+     * Fan a room handler's `socket.broadcast(message)` out to EVERY socket joined
+     * to the room `topic` — the sender included, since the server handler's
+     * payload is authoritative. Reuses {@link ShardDO.deliverWhisperLocal} for
+     * local fan-out and the relay hub for the cross-DO hop, so a room broadcast
+     * reaches members on every DO serving the shard exactly like a client
+     * whisper does. The payload is `encodeWire`-tagged before it leaves, so
+     * `bigint`/bytes survive the hop and the receiving client's `decodeWire`
+     * restores them. Fire-and-forget: `broadcast` is a synchronous callback.
+     */
+    private broadcastRoomMessage(topic: string, data: unknown): void {
+        // eslint-disable-next-line unicorn/no-null -- an undefined broadcast body is delivered as an explicit JSON `null`, mirroring `broadcastWhisper`
+        const dataJson = JSON.stringify(encodeWire(data ?? null));
+
+        // The same cap a client whisper and a live publish carry; thrown so the
+        // dispatch logs it against the room instead of fanning out an unbounded frame.
+        if (dataJson.length > ShardDO.MAX_WHISPER_BYTES) {
+            throw new LunoraError(
+                "PAYLOAD_TOO_LARGE",
+                `room broadcast is ${String(dataJson.length)} bytes, over the ${String(ShardDO.MAX_WHISPER_BYTES)}-byte limit`,
+            );
+        }
+
+        const frame = `{"type":"whisper","topic":${JSON.stringify(topic)},"data":${dataJson}}`;
+
+        this.deliverWhisperLocal(topic, frame, undefined);
+
+        const { relay } = this;
+
+        if (relay) {
+            relay.forwardWhisper(topic, frame).catch((error: unknown) => {
+                // eslint-disable-next-line no-console -- server-side diagnostic for a dropped relayed room broadcast; `broadcast` cannot reject
+                console.error("[@lunora/do] room broadcast relay failed:", error);
+            });
+        }
     }
 
     // eslint-disable-next-line class-methods-use-this -- cohesive DO instance method grouped with the hibernation/attachment helpers; reads only the socket

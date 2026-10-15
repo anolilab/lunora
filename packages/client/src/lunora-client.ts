@@ -1868,6 +1868,50 @@ class LunoraClient {
     }
 
     /**
+     * Join a `defineRoom` room from the client: subscribe to the room's server
+     * dispatches and send typed messages to it. A thin, typed wrapper over
+     * {@link whisperSubscribe} / {@link whisper} on the room's topic
+     * (`room:<name>`, the topic the shard resolves to the room's handler).
+     *
+     * `Message` is the room's message type. Codegen does NOT yet infer it from
+     * the room's validator, so pass it explicitly (or rely on a room-typed
+     * wrapper in your app):
+     *
+     * ```ts
+     * const chat = client.connectRoom<{ text: string }>("chat", {
+     *     onMessage: (message) => append(message.text),
+     * });
+     * chat.send({ text: "hello" });
+     * chat.close();
+     * ```
+     *
+     * `onMessage` receives what the room's server handler broadcasts (via its
+     * `socket.broadcast`), NOT the sender's own raw send — the handler is
+     * authoritative. Returns a handle with `send` and `close`.
+     */
+    public connectRoom<Message>(
+        name: string,
+        handlers: { onMessage: (message: Message, from?: string) => void },
+        options: { shardKey?: string } = {},
+    ): { close: () => void; send: (message: Message) => void } {
+        const topic = `room:${name}`;
+        const unsubscribe = this.whisperSubscribe(
+            topic,
+            (data, from) => {
+                handlers.onMessage(data as Message, from);
+            },
+            options,
+        );
+
+        return {
+            close: unsubscribe,
+            send: (message: Message) => {
+                this.whisper(topic, message, options);
+            },
+        };
+    }
+
+    /**
      * Subscribe to token-expiry events: invoked whenever the server drops a
      * shard socket because the connection's credential lapsed (close code
      * `4001`). The client already reconnects automatically (re-resolving

@@ -274,7 +274,10 @@ const renderLifecycleManifest = (
     };
 
     for (const definition of functions) {
-        if (!definition.lifecycle) {
+        // A `room` registration is dispatched through the dedicated
+        // `LUNORA_ROOMS` map, not the socket-lifecycle manifest, so it is
+        // excluded here (the emitted manifest keeps its five socket moments).
+        if (!definition.lifecycle || definition.lifecycle === "room") {
             continue;
         }
 
@@ -330,6 +333,21 @@ const emitFunctions = (options: EmitFunctionsOptions): string => {
             ? `\n/**\n * Custom-mutator function paths — the \`LUNORA_FUNCTIONS\` keys the generated\n * ShardDO's \`isCustomMutator\` override routes through the client-watermark push\n * protocol (\`x-lunora-client-id\`/\`x-lunora-client-seq\` ordering).\n */\nexport const LUNORA_MUTATOR_PATHS: ReadonlySet<string> = new Set([${mutatorPaths.map((path) => JSON.stringify(path)).join(", ")}]);\n`
             : "";
 
+    // Room registry (`defineRoom`): topic → function path. Gated on a declared
+    // room so a room-free project emits a byte-identical `functions.ts`. The key
+    // is the room's whisper topic (`roomTopic(name)`), the SAME string the client
+    // subscribes/sends on, so the ShardDO's `roomHandlerPath` override resolves a
+    // room topic without a second name convention.
+    const hasRooms = functions.some((definition) => definition.lifecycle === "room");
+    //
+    // The `room:` prefix is written literally (NOT imported from `@lunora/server`)
+    // so the generated file does not depend on a server symbol the umbrella
+    // package must also re-export; `room.ts`'s `ROOM_TOPIC_PREFIX` is the source
+    // of truth and the two are kept in step by the room codegen test.
+    const roomsRegistry = hasRooms
+        ? `\n/**\n * Room registry: the whisper topic of each \`defineRoom\` registration → its\n * function path. The generated ShardDO's \`roomHandlerPath\` override resolves a\n * room topic through this map so a room's typed \`onJoin\`/\`onMessage\`/\`onLeave\`\n * dispatch server-side, reusing the whisper channel for membership and fan-out.\n * Two registrations under one name throw at module load: the map would otherwise\n * silently keep whichever came last.\n */\nexport const LUNORA_ROOMS: Readonly<Record<string, string>> = (() => {\n    const registry: Record<string, string> = {};\n\n    for (const [path, fn] of Object.entries(LUNORA_FUNCTIONS)) {\n        if (fn.lifecycle !== "room" || typeof fn.room !== "string") {\n            continue;\n        }\n\n        const topic = \`room:\${fn.room}\`;\n\n        if (topic in registry) {\n            throw new Error(\`two defineRoom registrations are named "\${fn.room}"; room names must be unique\`);\n        }\n\n        registry[topic] = path;\n    }\n\n    return registry;\n})();\n`
+        : "";
+
     // Pull in the compiled-args seam only when at least one function compiled —
     // an unused import would trip `noUnusedLocals`.
     const compiledArgsImport = installBlock.length > 0 ? `import { DEFER_VALIDATION as DEFER, installCompiledValidatorMap } from "${base.values}";\n` : "";
@@ -380,12 +398,20 @@ export interface RegisteredLunoraFunction {
     handler: ((context: unknown, args: Record<string, unknown>) => Promise<unknown> | unknown) | ((context: unknown, args: Record<string, unknown>, signal?: AbortSignal) => AsyncIterable<unknown>);
     /**
      * The lifecycle moment a hook fires on, when this registration came from
-     * \`onConnect\`/\`onDisconnect\`/\`onShardInit\`/\`onQueryChange\`/\`onWhisper\`.
-     * Read at dispatch to decide whether the function runs system-trusted:
-     * \`init\` and \`reactor\` have no caller identity, so RLS has no user to scope
-     * to. \`whisper\` does have one — it runs under the asking socket's identity.
+     * \`onConnect\`/\`onDisconnect\`/\`onShardInit\`/\`onQueryChange\`/\`onWhisper\`/
+     * \`defineRoom\`. Read at dispatch to decide whether the function runs
+     * system-trusted: \`init\` and \`reactor\` have no caller identity, so RLS has
+     * no user to scope to. \`whisper\` and \`room\` do have one — they run under the
+     * asking socket's identity.
      */
-    lifecycle?: "connect" | "disconnect" | "init" | "reactor" | "whisper";
+    lifecycle?: "connect" | "disconnect" | "init" | "reactor" | "room" | "whisper";
+    /**
+     * Set on a \`defineRoom\` registration: the room name (without the \`room:\`
+     * topic prefix). The generated \`LUNORA_ROOMS\` map keys it on the room's
+     * \`room:<name>\` whisper topic so the ShardDO resolves a room topic to this
+     * path.
+     */
+    room?: string;
     /**
      * Hoisted by the builder when the \`.use()\` chain carries a step with a
      * per-dispatch effect — \`rateLimit(...)\` consuming budget, a single-use
@@ -408,7 +434,7 @@ ${agentRegistry.prelude}${sandboxRegistry.prelude}
  * emits (\`api[namespace][fn].__lunoraRef === "namespace:fn"\`).
  */
 export const LUNORA_FUNCTIONS: Record<string, RegisteredLunoraFunction> = {${dispatchBodyWithAgents}};
-${compiledArgsInstall}${shapeRegistry}${mutatorPathsRegistry}
+${compiledArgsInstall}${shapeRegistry}${mutatorPathsRegistry}${roomsRegistry}
 /**
  * Lifecycle manifest: the function paths the generated ShardDO dispatches when a
  * client's WebSocket connects (\`connect\`) or disconnects (\`disconnect\`), once

@@ -103,6 +103,8 @@ export {
     rls,
     toWhereInput,
 } from "./rls/index";
+export type { DefineRoomOptions, RegisteredRoom, RoomJoinHandler, RoomLeaveHandler, RoomMessageHandler, RoomSocket } from "./room";
+export { defineRoom } from "./room";
 export type {
     AggregateIndexOptions,
     ExtendableSchema,
