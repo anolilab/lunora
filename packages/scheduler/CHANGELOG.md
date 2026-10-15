@@ -1,3 +1,14 @@
+## @lunora/scheduler [1.0.0-alpha.126](https://github.com/anolilab/lunora/compare/@lunora/scheduler@1.0.0-alpha.125...@lunora/scheduler@1.0.0-alpha.126) (2026-10-15)
+
+### Performance Improvements
+
+* **scheduler:** validate cron grammar without cron-parser on the runtime path ([#1174](https://github.com/anolilab/lunora/issues/1174)) ([ce7110e](https://github.com/anolilab/lunora/commit/ce7110eb9e0cac6c059c2c600e8045ade44147cd))
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.55
+
 ## @lunora/scheduler [1.0.0-alpha.125](https://github.com/anolilab/lunora/compare/@lunora/scheduler@1.0.0-alpha.124...@lunora/scheduler@1.0.0-alpha.125) (2026-10-14)
 
 ### Performance Improvements

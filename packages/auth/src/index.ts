@@ -58,7 +58,6 @@ export type { AuthJurisdictionMove, AuthMoveResult, AuthMoveTableReport } from "
 export { legacyIssuerCleanupStatements } from "./legacy-issuer";
 export type { LunoraAuthApiContext, WithAuthPluginsMiddleware, WithAuthPluginsOptions } from "./middleware";
 export { LunoraAuthHeadersError, withAuthPlugins } from "./middleware";
-export { compileMigrationsSql, ensureMigrated } from "./migrate";
 export { default as authTables } from "./schema";
 export type { SessionPolicy } from "./session";
 export { sessionPresets, validateSessionPolicy } from "./session";

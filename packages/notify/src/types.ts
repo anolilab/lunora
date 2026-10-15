@@ -16,6 +16,13 @@ export type SubscriptionKind = "fcm" | "web-push";
 /** The last-known delivery outcome recorded on a subscription. */
 export type SubscriptionStatus = "expired" | "failed" | "ok";
 
+/** The delivery outcomes of one broadcast page, grouped for {@link SubscriptionStore.applyOutcomes}. */
+export interface SubscriptionOutcomes {
+    failed: { error?: string; id: string }[];
+    gone: string[];
+    ok: string[];
+}
+
 /**
  * A registered device/browser subscription. Web Push carries a W3C Push API
  * `endpoint` + `keys`; FCM carries a device registration `token`. `id` is a
@@ -133,6 +140,14 @@ export interface SubscriptionFilter {
  * and a D1-backed store (durable, edge-safe).
  */
 export interface SubscriptionStore {
+    /**
+     * Apply a whole broadcast page's delivery outcomes at once (best-effort):
+     * `ok` ids are marked ok, `failed` ids marked failed with their error, `gone`
+     * ids deleted. OPTIONAL — when absent, `broadcast` calls `markStatus` /
+     * `delete` per id.
+     */
+    applyOutcomes?: (outcomes: SubscriptionOutcomes) => Promise<void>;
+
     /** Remove a subscription by id (idempotent). */
     delete: (id: string) => Promise<void>;
 
@@ -160,6 +175,7 @@ export interface SubscriptionStore {
      * @returns `true` when a row was removed.
      */
     deleteOwned: (id: string, userId: string | null) => Promise<boolean>;
+
     /** Read a subscription by id, or `undefined`. */
     get: (id: string) => Promise<StoredSubscription | undefined>;
 

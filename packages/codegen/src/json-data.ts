@@ -13,6 +13,8 @@
  * from the value. The doubly-encoded string is a valid JS string literal for any
  * input, including `"`, `\`, control characters, and U+2028/U+2029.
  */
-const renderJsonData = (value: unknown, type: string): string => `JSON.parse(${JSON.stringify(JSON.stringify(value))}) as ${type}`;
+const renderJsonData = (value: unknown, type: string): string =>
+    // codeql[js/bad-code-sanitization] -- double JSON.stringify yields a valid JS string literal; the only caller is codegen's emitter and `type` is an internal literal
+    `JSON.parse(${JSON.stringify(JSON.stringify(value))}) as ${type}`;
 
 export default renderJsonData;

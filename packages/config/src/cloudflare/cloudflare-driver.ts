@@ -89,6 +89,21 @@ const CLOUDFLARE_TOOLCHAIN: DriverToolchain = {
         return { args, tool: "wrangler" };
     },
 
+    secretBulk: (request) => {
+        // The JSON body (name to value) is fed on stdin by the caller, never argv.
+        const args: string[] = ["secret", "bulk"];
+
+        if (request.environment !== undefined) {
+            args.push("--env", request.environment);
+        }
+
+        if (request.temporary === true) {
+            args.push("--temporary");
+        }
+
+        return { args, tool: "wrangler" };
+    },
+
     secretPut: (request) => {
         // The value is fed on stdin by the caller, never argv — so it stays out
         // of the process table and shell history.

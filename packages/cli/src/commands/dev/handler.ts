@@ -1,10 +1,11 @@
 import { runCodegen } from "@lunora/codegen";
-import type { ContainerLogStreamHandle } from "@lunora/config";
+import type { ContainerLogStreamHandle, DiscoveryCache } from "@lunora/config";
 import {
     AGENT_RULES_HINT,
     claimAgentRulesHint,
     claimDevServerState,
     clearDevServerState,
+    createDiscoveryCache,
     detectAgentRules,
     detectAiAgent,
     DEV_BINDINGS_FILE,
@@ -123,11 +124,11 @@ const printAgentRulesHint = (logger: Logger, cwd: string): void => {
  * Phase 2 (existing flow): offer to generate (or top up) `.dev.vars` from the
  * now-complete `.dev.vars.example`, then log the non-interactive hint if declined.
  */
-const offerDevVariablesScaffold = async (options: DevCommandOptions, cwd: string): Promise<void> => {
+const offerDevVariablesScaffold = async (options: DevCommandOptions, cwd: string, cache: DiscoveryCache): Promise<void> => {
     // Phase 1 — seed .dev.vars.example with any package-required secrets that
     // are not already listed there. Best-effort: a scan failure is non-fatal.
     try {
-        const bindings = await inferLunoraBindings({ projectRoot: cwd, schemaDir: resolveSchemaDirectory(cwd) });
+        const bindings = await inferLunoraBindings({ cache, projectRoot: cwd, schemaDir: resolveSchemaDirectory(cwd) });
         const sources = secretSourcesFromBindings(bindings);
         const addedKeys = (options.ensureExample ?? ensureDevVarsExample)(cwd, sources);
 
@@ -416,6 +417,8 @@ const startPlannedWorker = async (
  */
 const runDevCommand = async (options: DevCommandOptions): Promise<{ code: number; plan: DevCommandPlan }> => {
     const { logger } = options;
+    // Startup discovery (binding provisioning, then the dev-vars scaffold) parses the same sources twice; share one scan.
+    const discoveryCache = createDiscoveryCache();
     // Resolved the same way `buildDevPlan` / `planDevCommand` resolve them, so
     // the pre-plan work below sees exactly the project (and flavor) the plan
     // will describe.
@@ -464,7 +467,7 @@ const runDevCommand = async (options: DevCommandOptions): Promise<{ code: number
     // binding this call had just written. Same ordering the Vite plugin's remote
     // path had to adopt.
     if (flavor === "wrangler") {
-        await provisionBindings(cwd, logger, undefined, target, undefined);
+        await provisionBindings(cwd, logger, undefined, target, undefined, discoveryCache);
     }
 
     const plan = await buildDevPlan({ ...options, flavor, target });
@@ -514,7 +517,7 @@ const runDevCommand = async (options: DevCommandOptions): Promise<{ code: number
             plan.wrangler.env = { ...plan.wrangler.env, [DEV_HANDOFF_ENV]: String(process.pid) };
         }
 
-        await offerDevVariablesScaffold(options, cwd);
+        await offerDevVariablesScaffold(options, cwd, discoveryCache);
 
         logger.info(startBanner(plan));
 

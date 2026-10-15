@@ -607,6 +607,47 @@ describe("shardDO admin introspection", () => {
         await expect(response.json()).resolves.toEqual({ result: { advisories: [finding] } });
     });
 
+    it("serves findings rehydrated from per-rule text and slim rows exactly as the flat list", async () => {
+        expect.assertions(1);
+
+        const flat: AdvisoryFinding[] = ["a", "b", "c"].map((table) => {
+            return {
+                cacheKey: `unindexed_foreign_key:${table}:authorId`,
+                categories: ["PERFORMANCE"],
+                description: "A foreign-key column has no index.",
+                detail: `Table "${table}" has an unindexed FK.`,
+                facing: "EXTERNAL",
+                level: "INFO",
+                metadata: { table },
+                name: "unindexed_foreign_key",
+                remediation: "Add an index leading with the FK column.",
+                title: "Unindexed foreign key",
+            };
+        });
+        const { categories, description, facing, level, remediation, title } = flat[0]!;
+        const rules: Record<string, Partial<AdvisoryFinding>> = { unindexed_foreign_key: { categories, description, facing, level, remediation, title } };
+        const rows = flat.map(({ cacheKey, detail, metadata, name }) => {
+            return { cacheKey, detail, metadata, name };
+        });
+
+        // The shape the generated shard emits: memoised, rehydrated on first read.
+        class RehydratedShard extends AdminShard {
+            private cached: AdvisoryFinding[] | undefined;
+
+            protected override advisories(): AdvisoryFinding[] {
+                this.cached ??= rows.map((row) => ({ ...rules[row.name], ...row }) as AdvisoryFinding);
+
+                return this.cached;
+            }
+        }
+
+        const response = await new RehydratedShard(state, { LUNORA_ADMIN_TOKEN: ADMIN_TOKEN }).fetch(
+            tokenAdminRequest(ADMIN_FUNCTIONS.getAdvisories, {}, ADMIN_TOKEN),
+        );
+
+        await expect(response.json()).resolves.toEqual({ result: { advisories: flat } });
+    });
+
     it("reports every studio feature off from the base hook, and the subclass-declared flags when overridden", async () => {
         expect.assertions(2);
 
