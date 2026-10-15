@@ -670,12 +670,22 @@ class AppBuilder<Env extends object> {
                     identityCacheMs = Number(identityCacheRaw);
                 }
 
-                const cookieCache = authDeclaration?.options(env).session?.cookieCache;
-                // better-auth's `maxAge` is in SECONDS; createAuth fills 60 when it is unset.
-                const cookieCacheSeconds = typeof cookieCache?.maxAge === "number" && cookieCache.maxAge >= 0 ? cookieCache.maxAge : 60;
-                // createAuth fills `{ enabled: true, maxAge: 60 }` only when `cookieCache` is absent; a partial
-                // object without `enabled: true` has NO cookie cache, so the memo stays per-request there.
-                const defaultMs = cookieCache === undefined || cookieCache.enabled === true ? Math.min(60_000, cookieCacheSeconds * 1000) : 0;
+                // `options(env)` is application code. A scheduled, queue or serverQuery event must
+                // not fail to construct — and so never run — because that callback throws, so a
+                // throw falls back to the 60s default window below rather than escaping.
+                let defaultMs: number;
+
+                try {
+                    const cookieCache = authDeclaration?.options(env).session?.cookieCache;
+                    // better-auth's `maxAge` is in SECONDS; createAuth fills 60 when it is unset.
+                    const cookieCacheSeconds = typeof cookieCache?.maxAge === "number" && cookieCache.maxAge >= 0 ? cookieCache.maxAge : 60;
+
+                    // createAuth fills `{ enabled: true, maxAge: 60 }` only when `cookieCache` is absent; a partial
+                    // object without `enabled: true` has NO cookie cache, so the memo stays per-request there.
+                    defaultMs = cookieCache === undefined || cookieCache.enabled === true ? Math.min(60_000, cookieCacheSeconds * 1000) : 0;
+                } catch {
+                    defaultMs = 60_000;
+                }
 
                 memo = memoizeIdentity(options.resolveIdentity, {
                     // better-auth resolves the session from ALL request headers, so the key
