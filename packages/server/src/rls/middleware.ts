@@ -1202,9 +1202,12 @@ const wrapDatabase = (base: RlsDatabase, raw: RlsDatabase, steps: ReadonlyArray<
      * The fresh image is read by id under the table's read scope (and, on that read's own relation hops, the
      * child read filter), so a row a concurrent write moved out of the caller's read-visible set is skipped.
      * The delete policy is taken on that image, so a row it now denies fails loudly instead of reading as
-     * gone. `deleteWhere`'s own `where` still scopes the erase: a row that no longer matches it is skipped,
-     * not deleted. A `{ hard: true }` erase relaxes the soft-delete scope (`includeDeleted`) so it can reach —
-     * and physically remove — a row an earlier delete of the page soft-deleted; the filters still apply.
+     * gone. `deleteWhere`'s own `where` still scopes the erase, re-applied through the SAME filtered read the
+     * page used (a JS re-evaluation would diverge — `contains`, for one, is case-sensitive in the in-memory
+     * matcher and folded in SQL): a row that no longer matches it is skipped, not deleted, though its delete
+     * policy is still taken so a denial fails loudly. A `{ hard: true }` erase relaxes the soft-delete scope
+     * (`includeDeleted`) so it can reach — and physically remove — a row an earlier delete of the page
+     * soft-deleted; the filters still apply.
      */
     const deleteLocated = async (
         id: string,
@@ -1217,45 +1220,50 @@ const wrapDatabase = (base: RlsDatabase, raw: RlsDatabase, steps: ReadonlyArray<
         const reader = gated ? raw : base;
         const readScope = gated ? { baseWhere: readBase(tableName).baseWhere } : {};
 
-        const row = await reader.findFirst(tableName, {
+        const erase = async (row: null | Record<string, unknown>): Promise<boolean> => {
+            if (!row || isSoftDeleted(tableName, row, deleteOptions)) {
+                return false;
+            }
+
+            if (gated && !allowsWrite(tableName, "delete", row)) {
+                // Same table-agnostic message as `gateById`.
+                throw new LunoraError("FORBIDDEN", "delete denied by policy");
+            }
+
+            await reader.delete(id, tableName, deleteOptions);
+
+            return true;
+        };
+
+        const readById = (): Promise<null | Record<string, unknown>> =>
+            reader.findFirst(tableName, { ...readScope, ...scope, limit: 1, relationBaseWhere: relationReadFilter, where: { _id: id } });
+
+        if (where === undefined) {
+            return await erase(await readById());
+        }
+
+        // The caller's filter first, through the SQL path so it folds exactly as the page read did. A match is
+        // erased; a miss falls through to a by-id read ONLY so a delete-policy denial still fails loudly — a
+        // permitted row that left the filter is skipped, not removed from outside the scope of the erase.
+        const filtered = await reader.findFirst(tableName, {
             ...readScope,
             ...scope,
             limit: 1,
             relationBaseWhere: relationReadFilter,
-            where: { _id: id },
+            where: mergeBaseWhere(where, { _id: id }),
         });
 
-        if (!row || isSoftDeleted(tableName, row, deleteOptions)) {
-            return false;
+        if (filtered !== null) {
+            return await erase(filtered);
         }
 
-        if (gated && !allowsWrite(tableName, "delete", row)) {
-            // Same table-agnostic message as `gateById`.
+        const row = await readById();
+
+        if (row && !isSoftDeleted(tableName, row, deleteOptions) && gated && !allowsWrite(tableName, "delete", row)) {
             throw new LunoraError("FORBIDDEN", "delete denied by policy");
         }
 
-        // `deleteWhere`'s filter still scopes the erase: a row a concurrent write moved out of it is skipped.
-        // A flat predicate is re-evaluated on the fresh row; a relation predicate needs the child read filter,
-        // so it re-reads the row under `where`.
-        if (where !== undefined) {
-            const stillMatches = containsRelationPredicate(where)
-                ? (await reader.findFirst(tableName, {
-                      ...readScope,
-                      ...scope,
-                      limit: 1,
-                      relationBaseWhere: relationReadFilter,
-                      where: mergeBaseWhere(where, { _id: id }),
-                  })) !== null
-                : matchesWhere(row, where);
-
-            if (!stillMatches) {
-                return false;
-            }
-        }
-
-        await reader.delete(id, tableName, deleteOptions);
-
-        return true;
+        return false;
     };
 
     /**

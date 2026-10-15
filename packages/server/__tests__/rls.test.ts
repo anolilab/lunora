@@ -1891,12 +1891,15 @@ describe("rls — batch write path", () => {
 
         // An action: no transaction, so `deleteWhere` re-locates each row.
         Object.assign(database.writer, { inTransaction: () => false });
-        // The re-location read fetches the fresh row by id; the caller's flat `where` is then re-evaluated on it.
+        // The re-location applies the caller's filter through the SQL path (merged as `{ AND: [{ _id }, { status }] }`).
         database.writer.findFirst = async (tableName, args) => {
             database.calls.push({ args, method: "findFirst", tableOrId: tableName });
-            const id = (args as { where?: { _id?: string } } | undefined)?.where?._id;
+            const where = (args as { where?: { _id?: string; AND?: [{ _id?: string }, { status?: string }] } } | undefined)?.where;
+            const id = where?._id ?? where?.AND?.[0]?._id;
+            const status = where?.AND?.[1]?.status;
+            const row = rows.find((entry) => entry.table === tableName && entry._id === id);
 
-            return rows.find((row) => row.table === tableName && row._id === id) ?? null;
+            return row && (status === undefined || row.status === status) ? row : null;
         };
         // A concurrent write un-archives B after the page read.
         database.writer.findMany = async (tableName, args) => {
