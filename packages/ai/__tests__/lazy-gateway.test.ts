@@ -9,7 +9,7 @@ const state = vi.hoisted(() => {
     };
 });
 
-vi.mock(import("workers-ai-provider"), () => {
+vi.mock(import('workers-ai-provider'), () => {
     state.evaluated.push("workers-ai-provider");
 
     return {
@@ -47,7 +47,7 @@ vi.mock(import("workers-ai-provider"), () => {
     };
 });
 
-vi.mock(import("workers-ai-provider/openai"), () => {
+vi.mock(import('workers-ai-provider/openai'), () => {
     state.evaluated.push("openai-plugin");
 
     return { openai: {} };
