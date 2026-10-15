@@ -40,6 +40,10 @@
             "types": "./dist/index.d.ts",
             "import": "./dist/index.mjs"
         },
+        "./validate": {
+            "types": "./dist/validate-cron-full.d.ts",
+            "import": "./dist/validate-cron-full.mjs"
+        },
         "./package.json": "./package.json"
     },
     "publishConfig": {

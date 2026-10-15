@@ -5,6 +5,7 @@
  */
 import { existsSync } from "node:fs";
 
+import type { DiscoveryCache } from "@lunora/config";
 import { COMPOSED_WORKER_ENTRY, discoverContainerInfo } from "@lunora/config";
 import type { WranglerConfig } from "@lunora/config/cloudflare";
 import { findWranglerFile, mergeWranglerEnvironment, readWranglerJsonc } from "@lunora/config/cloudflare";
@@ -171,8 +172,8 @@ const resolveComposedWorkerEntry = (cwd: string): string | undefined => (existsS
  * Registry images have no local source, so they're skipped. Returns the first
  * error message, or `undefined` when all sources exist (or none are local).
  */
-const checkContainerSourcesExist = (cwd: string, logger: Logger, command: PreDeployCommand = "deploy"): string | undefined => {
-    for (const container of discoverContainerInfo(cwd, "lunora").containers) {
+const checkContainerSourcesExist = (cwd: string, logger: Logger, command: PreDeployCommand = "deploy", cache?: DiscoveryCache): string | undefined => {
+    for (const container of discoverContainerInfo(cwd, "lunora", cache).containers) {
         const image = container.schedulingPolicy === undefined ? container.image : undefined;
         // A `durable_object` container's local sources are its named images.
         const dockerfiles = [
@@ -369,7 +370,7 @@ const runPreDeployChecks = (cwd: string, options: DeployCommandOptions, command:
         return { code: EXIT_CODE.USAGE, error: localhostOriginError };
     }
 
-    const sourceError = checkContainerSourcesExist(cwd, options.logger, command);
+    const sourceError = checkContainerSourcesExist(cwd, options.logger, command, options.discoveryCache);
 
     if (sourceError !== undefined) {
         return { code: EXIT_CODE.USAGE, error: sourceError };

@@ -96,6 +96,10 @@
             "types": "./dist/store.d.ts",
             "import": "./dist/store.mjs"
         },
+        "./migrate": {
+            "types": "./dist/migrate.d.ts",
+            "import": "./dist/migrate.mjs"
+        },
         "./sql-store": {
             "types": "./dist/sql-store.d.ts",
             "import": "./dist/sql-store.mjs"

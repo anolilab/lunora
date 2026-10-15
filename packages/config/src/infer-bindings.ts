@@ -44,6 +44,7 @@ import type { ContainerIR } from "./container-info";
 import { discoverContainerInfo } from "./container-info";
 import { escapeRegExp } from "./dev-variables-format";
 import { discoverIr } from "./discover-info";
+import type { DiscoveryCache } from "./discovery-cache";
 import { discoverFlagsInfo } from "./flags-info";
 import isWithinDirectory from "./is-within-directory";
 import { PACKAGE_SECRETS_REGISTRY } from "./package-secrets-registry";
@@ -426,6 +427,8 @@ const collectSourceFiles = (directory: string, accumulator: string[]): void => {
 };
 
 interface InferOptions {
+    /** Memoises the source scans, so one CLI invocation parses the project once. */
+    cache?: DiscoveryCache;
     projectRoot: string;
     /** Directories (relative to root) to scan. Defaults to `lunora` + `src`. */
     scanDirs?: ReadonlyArray<string>;
@@ -447,8 +450,8 @@ interface SchemaFacts {
  * unparseable schema yields no D1 need and no jurisdiction — codegen surfaces the
  * actionable error elsewhere.
  */
-const schemaFacts = (projectRoot: string, schemaDirectory: string): SchemaFacts => {
-    const { info } = discoverSchemaInfo(projectRoot, schemaDirectory);
+const schemaFacts = (projectRoot: string, schemaDirectory: string, cache?: DiscoveryCache): SchemaFacts => {
+    const { info } = discoverSchemaInfo(projectRoot, schemaDirectory, cache);
 
     return { jurisdiction: info?.jurisdiction, needsD1: info?.hasD1GlobalTable ?? false };
 };
@@ -635,7 +638,9 @@ const inferLunoraBindings = async (options: InferOptions): Promise<InferredBindi
     const schemaDirectory = options.schemaDir ?? "lunora";
     const scanDirectories = options.scanDirs ?? DEFAULT_SCAN_DIRECTORIES;
 
-    const capabilities = scanCapabilities(options.projectRoot, scanDirectories, schemaDirectory);
+    const scan = (): Capabilities => scanCapabilities(options.projectRoot, scanDirectories, schemaDirectory);
+    const capabilities =
+        options.cache === undefined ? scan() : options.cache.memo(`capabilities:${options.projectRoot}:${schemaDirectory}:${scanDirectories.join(",")}`, scan);
     const entry = resolveWorkerEntry(options.projectRoot);
     let durableObjects: DurableObjectSpec[];
 
@@ -656,9 +661,9 @@ const inferLunoraBindings = async (options: InferOptions): Promise<InferredBindi
         durableObjects = entry.path === undefined ? [] : detectExportedDurableObjects(entry.path);
     }
 
-    const discoveredSchema = schemaFacts(options.projectRoot, schemaDirectory);
+    const discoveredSchema = schemaFacts(options.projectRoot, schemaDirectory, options.cache);
     const schema: SchemaFacts = { ...discoveredSchema, needsD1: capabilities.needsD1 || discoveredSchema.needsD1 };
-    const containers = detectClassExports(entry, discoverContainerInfo(options.projectRoot, schemaDirectory).containers, "containers");
+    const containers = detectClassExports(entry, discoverContainerInfo(options.projectRoot, schemaDirectory, options.cache).containers, "containers");
     const workflows = detectClassExports(entry, discoverWorkflowInfo(options.projectRoot, schemaDirectory).workflows, "workflows");
     // Agents compile onto Cloudflare Workflows, so — like workflows — only an
     // exported agent WorkflowEntrypoint class is safe to reconcile into `exports`.

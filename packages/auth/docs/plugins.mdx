@@ -9,8 +9,8 @@ The Lunora-specific surface is small on purpose:
 - `createAuth(options)`: `betterAuth(options)` with a clearer error when
   `secret` is missing.
 - `handleAuthRequest(auth, request)`: prefix routing for `/api/auth/*`.
-- `ensureMigrated(auth)` / `compileMigrationsSql(options)`: schema sync for
-  the configured plugins.
+- `createMigrationAuth(options)` / `ensureMigrated(auth)` / `compileMigrationsSql(options)`
+  (from `@lunora/auth/migrate`): schema sync for the configured plugins.
 - `withAuthPlugins(auth)`: middleware that mounts the plugin endpoint API
   onto `ctx.authApi`.
 
@@ -586,7 +586,8 @@ migration-only instance for it; the adapter stays on the one serving requests:
 
 ```ts
 // src/server/index.ts
-import { createAuth, ensureMigrated, handleAuthRequest } from "@lunora/auth";
+import { handleAuthRequest } from "@lunora/auth";
+import { createMigrationAuth, ensureMigrated } from "@lunora/auth/migrate";
 
 import { buildAuth } from "../../lunora/auth.js";
 
@@ -601,7 +602,7 @@ export default {
     async fetch(request, env, ctx) {
         const auth = buildAuth(env);
 
-        migrated ??= ensureMigrated(createAuth({ ...authOptions, database: env.DB, secret: env.AUTH_SECRET })).catch((error) => {
+        migrated ??= ensureMigrated(createMigrationAuth({ ...authOptions, database: env.DB, secret: env.AUTH_SECRET })).catch((error) => {
             migrated = null;
             throw error;
         });
@@ -624,7 +625,7 @@ you get the full schema, with no Cloudflare binding involved:
 ```bash
 node -e "
 import('node:sqlite').then(async ({ DatabaseSync }) => {
-    const { compileMigrationsSql } = await import('@lunora/auth');
+    const { compileMigrationsSql } = await import('@lunora/auth/migrate');
     const sql = await compileMigrationsSql({
         database: new DatabaseSync(':memory:'), // empty ⇒ emits the whole schema
         secret: 'placeholder',

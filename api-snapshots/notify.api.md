@@ -52,6 +52,7 @@ interface CreateNotifyOptions {
 
 ```ts
 interface D1Like {
+    batch: (statements: D1PreparedLike[]) => Promise<unknown>;
     prepare: (query: string) => D1PreparedLike;
 }
 ```
@@ -328,6 +329,19 @@ interface SubscriptionFilter {
 type SubscriptionKind = "fcm" | "web-push";
 ```
 
+### `SubscriptionOutcomes` (interface)
+
+```ts
+interface SubscriptionOutcomes {
+    failed: {
+        error?: string;
+        id: string;
+    }[];
+    gone: string[];
+    ok: string[];
+}
+```
+
 ### `SubscriptionStatus` (type)
 
 ```ts
@@ -338,6 +352,7 @@ type SubscriptionStatus = "expired" | "failed" | "ok";
 
 ```ts
 interface SubscriptionStore {
+    applyOutcomes?: (outcomes: SubscriptionOutcomes) => Promise<void>;
     delete: (id: string) => Promise<void>;
     deleteOwned: (id: string, userId: string | null) => Promise<boolean>;
     get: (id: string) => Promise<StoredSubscription | undefined>;
