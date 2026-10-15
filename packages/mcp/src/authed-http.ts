@@ -74,6 +74,7 @@
  * omitted from `tools/list` *and* refused at dispatch for the former, because
  * `allowWrites` is resolved per request rather than per deployment.
  */
+import type { LunoraClient } from "@lunora/client";
 import { LunoraError } from "@lunora/errors";
 
 import { isAgentToolName } from "./agent-tools";
@@ -245,9 +246,11 @@ const requiredScopes = (messages: ReadonlyArray<unknown>, server: LunoraMcpServe
  * A fixed `server` object names one deployment, so its `LunoraClient` is
  * resolved once and shared: the public-function registry memo in `./tools` is
  * keyed by client identity and never hits when each request builds its own. The
- * `(claims) => …` form is per-request by construction — the claims decide which
- * deployment and token to use — so it keeps a client per request.
+ * `(claims) => …` form decides the deployment and token per request, so it
+ * shares a client per distinct `(url, token, fetch)` instead (bounded LRU).
  */
+const CLIENT_MEMO_LIMIT = 256;
+
 const createAuthedMcpFetchHandler = (options: AuthedMcpFetchHandlerOptions): McpFetchHandler => {
     const { maxRequestBytes, stepUp } = options;
 
@@ -259,10 +262,40 @@ const createAuthedMcpFetchHandler = (options: AuthedMcpFetchHandlerOptions): Mcp
 
     const sharedClient = typeof options.server === "function" ? undefined : resolveClient(options.server);
 
+    // The `(claims) => …` form yields url/token/fetch per request; reuse one client per
+    // distinct triple so the function-list memo in `./tools` (keyed by client) can hit.
+    // Insertion-ordered Map as an LRU: a hit is re-inserted, the oldest key is evicted.
+    const clients = new Map<string, { client: LunoraClient; fetch: LunoraMcpServerOptions["fetch"] }>();
+    const clientFor = (base: LunoraMcpServerOptions): LunoraClient => {
+        if (base.client !== undefined || base.url === undefined || base.token === undefined || base.token.length === 0) {
+            return resolveClient(base);
+        }
+
+        const key = JSON.stringify([base.url, base.token]);
+        const hit = clients.get(key);
+
+        if (hit !== undefined && hit.fetch === base.fetch) {
+            clients.delete(key);
+            clients.set(key, hit);
+
+            return hit.client;
+        }
+
+        const client = resolveClient(base);
+
+        clients.delete(key);
+        clients.set(key, { client, fetch: base.fetch });
+
+        if (clients.size > CLIENT_MEMO_LIMIT) {
+            clients.delete(clients.keys().next().value as string);
+        }
+
+        return client;
+    };
+
     return options.protect(async (request: Request, claims: McpAccessTokenClaims): Promise<Response> => {
         const scopes = mcpTokenScopes(claims);
         const base = typeof options.server === "function" ? await options.server(claims) : { ...options.server, client: sharedClient };
-        const resolved = withTokenScopes(base, scopes);
         let parsedBody: unknown;
 
         if (stepUp !== undefined) {
@@ -288,6 +321,9 @@ const createAuthedMcpFetchHandler = (options: AuthedMcpFetchHandlerOptions): Mcp
                 throw stepUp.challenge(missing);
             }
         }
+
+        // Resolved after the step-up screen so a misconfigured `server` still fails where it did.
+        const resolved = withTokenScopes(typeof options.server === "function" ? { ...base, client: clientFor(base) } : base, scopes);
 
         return await serveStateless(createLunoraMcpServer(resolved), request, { maxRequestBytes, parsedBody });
     });

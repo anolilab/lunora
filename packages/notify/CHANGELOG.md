@@ -1,3 +1,14 @@
+## @lunora/notify [1.0.0-alpha.80](https://github.com/anolilab/lunora/compare/@lunora/notify@1.0.0-alpha.79...@lunora/notify@1.0.0-alpha.80) (2026-10-15)
+
+### Performance Improvements
+
+* **notify:** apply push outcomes in one batch per page ([#1182](https://github.com/anolilab/lunora/issues/1182)) ([b4feebe](https://github.com/anolilab/lunora/commit/b4feebebf02fcaa3f0d5453b8a4233d2c1de0d64))
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.55
+
 ## @lunora/notify [1.0.0-alpha.79](https://github.com/anolilab/lunora/compare/@lunora/notify@1.0.0-alpha.78...@lunora/notify@1.0.0-alpha.79) (2026-10-14)
 
 

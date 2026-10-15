@@ -2,7 +2,7 @@ import { existsSync } from "node:fs";
 import { join } from "node:path";
 
 import { LunoraError } from "@lunora/errors";
-import { isValidCronExpression } from "@lunora/scheduler";
+import isValidCronExpression from "@lunora/scheduler/validate";
 import { workflowClassName, workflowDefaultName } from "@lunora/workflow";
 import type { CallExpression, Expression, Identifier, ObjectLiteralExpression, Project, PropertyAccessExpression, SourceFile } from "ts-morph";
 import { Node, SyntaxKind, VariableDeclarationKind } from "ts-morph";

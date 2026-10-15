@@ -1,5 +1,7 @@
 /* eslint-disable no-restricted-syntax -- `sql\`…\`` is a drizzle tagged-template SQL builder, not a string conversion. */
 import { sql } from "drizzle-orm";
+import { MySqlDialect } from "drizzle-orm/mysql-core";
+import { PgDialect } from "drizzle-orm/pg-core";
 import { describe, expect, it } from "vitest";
 
 import type { SqlEngine } from "../src/drizzle";
@@ -44,7 +46,13 @@ const render = (where: Record<string, unknown>, engine: SqlEngine, strategy: Whe
         return { params: [], sql: "" };
     }
 
-    return renderSql(engine, compiled);
+    if (engine === "sqlite") {
+        return renderSql(engine, compiled);
+    }
+
+    const { params, sql: text } = (engine === "postgres" ? new PgDialect() : new MySqlDialect()).sqlToQuery(compiled);
+
+    return { params, sql: text };
 };
 
 // Clause chains render BALANCED, not flat — see `joinClauses` for why.

@@ -604,6 +604,14 @@ const resolveScheduleId: (requested: unknown) => string;
 const warnIfSecondsLeading: (schedule: string, context: string) => void;
 ```
 
+## `@lunora/scheduler/validate`
+
+### `default` (const)
+
+```ts
+const isValidCronExpression: (schedule: string) => boolean;
+```
+
 ## Referenced internal declarations
 
 Not exported, and reachable only through a signature above. Their members

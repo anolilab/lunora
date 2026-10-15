@@ -2162,7 +2162,7 @@ export const buyReport = action.input({ url: v.string() }).action(async ({ args,
 
             expect(result.generated.app).toContain("public auth(");
             expect(result.generated.app).toContain(
-                'import { authDiscoveryPathsFor, createAuth, createAuthAdmin, createAuthAuditReader, createDoAuthWiring, d1Executor, ensureMigrated, handleAuthDiscoveryRequest, handleAuthRequest, lunoraD1Adapter } from "@lunora/auth"',
+                'import { authDiscoveryPathsFor, createAuth, createAuthAdmin, createAuthAuditReader, createDoAuthWiring, d1Executor, handleAuthDiscoveryRequest, handleAuthRequest, lunoraD1Adapter } from "@lunora/auth"',
             );
             expect(result.generated.app).toContain("options.authAuditReader = createAuthAuditReader(d1Executor(authD1(env) as never));");
             // The OAuth discovery documents (plan 461 B): served by the auth instance
@@ -3834,7 +3834,7 @@ export const ping = query({ args: { id: v.string() }, handler: async (_context, 
             });
 
             expect(output).toContain("protected override storageRulesMetadata(): StorageRulesResult {");
-            expect(output).toContain("const LUNORA_STORAGE_RULES = JSON.parse(");
+            expect(output).toContain("const LUNORA_STORAGE_RULES = ");
             expect(emittedJsonData(output, "LUNORA_STORAGE_RULES")).toStrictEqual({
                 rules: [{ bucket: "avatars", file: "avatars", on: "read", prefix: "user/", procedure: "upload" }],
             });

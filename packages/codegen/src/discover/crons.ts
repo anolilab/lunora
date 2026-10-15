@@ -1,6 +1,7 @@
 import { LunoraError } from "@lunora/errors";
 import type { CronScheduleKind } from "@lunora/scheduler";
-import { compileCronSchedule, CRON_SCHEDULE_KINDS, isValidCronExpression, warnIfSecondsLeading } from "@lunora/scheduler";
+import { compileCronSchedule, CRON_SCHEDULE_KINDS, warnIfSecondsLeading } from "@lunora/scheduler";
+import isValidCronExpression from "@lunora/scheduler/validate";
 import type { CallExpression, Identifier, ObjectLiteralExpression, Project, PropertyAccessExpression, SourceFile } from "ts-morph";
 import { Node, SyntaxKind } from "ts-morph";
 

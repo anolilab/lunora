@@ -72,7 +72,12 @@ const buildBeforeHook =
         let classification: EmailClassification;
 
         try {
-            classification = await assertEmailAllowed(email, config);
+            const observed = config.onClassify !== undefined;
+
+            classification = await assertEmailAllowed(email, {
+                ...config,
+                lists: { disposable: config.blockDisposable !== false || observed, free: observed },
+            });
         } catch (error) {
             if (error instanceof LunoraError) {
                 throw new APIError(statusString(error.status), { code: error.code, message: error.message });

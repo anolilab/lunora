@@ -1,6 +1,6 @@
 {
     "name": "@lunora/scheduler",
-    "version": "1.0.0-alpha.125",
+    "version": "1.0.0-alpha.126",
     "description": "Scheduling for Lunora: runAfter / runAt and Cron Triggers via SchedulerDO",
     "keywords": [
         "cloudflare",
@@ -39,6 +39,10 @@
         ".": {
             "types": "./dist/index.d.ts",
             "import": "./dist/index.mjs"
+        },
+        "./validate": {
+            "types": "./dist/validate-cron-full.d.ts",
+            "import": "./dist/validate-cron-full.mjs"
         },
         "./package.json": "./package.json"
     },
