@@ -38,8 +38,11 @@ const vectorsNamespaceMethod = (node: TsNode): string | undefined => {
 };
 
 /** The `namespace` of one record: an explicit initializer or a shorthand `{ namespace }` (the identifier, which the taint check resolves). */
-const recordNamespace = (record: TsNode): TsNode | undefined => {
-    if (!Node.isObjectLiteralExpression(record)) {
+const recordNamespace = (element: TsNode): TsNode | undefined => {
+    // An identifier element (`[record]`) resolves one local hop to its initializer.
+    const record = Node.isIdentifier(element) ? singleHopInitializer(element) : element;
+
+    if (!record || !Node.isObjectLiteralExpression(record)) {
         return undefined;
     }
 
@@ -66,6 +69,32 @@ const mapCallbackRecords = (callback: TsNode | undefined): TsNode[] => {
         .flatMap((statement) => statement.getExpression() ?? []);
 };
 
+/** A record's `namespace` node, plus whether it reads a `.map` callback parameter whose source array is argument-derived. */
+interface NamespaceCandidate {
+    namespace: TsNode | undefined;
+    viaParameter?: boolean;
+}
+
+/** The names a `.map` callback's first parameter binds: the parameter itself, or each element of a destructuring pattern. */
+const callbackParameterNames = (callback: TsNode | undefined): string[] => {
+    if (!callback || !(Node.isArrowFunction(callback) || Node.isFunctionExpression(callback))) {
+        return [];
+    }
+
+    const name = callback.getParameters()[0]?.getNameNode();
+
+    if (!name) {
+        return [];
+    }
+
+    return Node.isIdentifier(name) ? [name.getText()] : name.getDescendantsOfKind(SyntaxKind.BindingElement).map((element) => element.getName());
+};
+
+/** Whether `node` is, or contains, an identifier spelled as one of `names`. */
+const referencesAnyName = (node: TsNode, names: string[]): boolean =>
+    names.length > 0 &&
+    [node, ...node.getDescendantsOfKind(SyntaxKind.Identifier)].some((candidate) => Node.isIdentifier(candidate) && names.includes(candidate.getText()));
+
 /**
  * The `namespace` nodes of the records an `upsertMany` second argument holds,
  * traced statically: an array literal (spread elements followed), a `.map(...)`
@@ -73,7 +102,7 @@ const mapCallbackRecords = (callback: TsNode | undefined): TsNode[] => {
  * `const` hop to either. Anything else yields nothing — fail open, as the
  * single-record methods do for a non-literal input.
  */
-const recordNamespaces = (input: TsNode, canHop = true): (TsNode | undefined)[] => {
+const recordNamespaces = (input: TsNode, canHop = true): NamespaceCandidate[] => {
     if (Node.isIdentifier(input)) {
         const initializer = canHop ? singleHopInitializer(input) : undefined;
 
@@ -83,13 +112,24 @@ const recordNamespaces = (input: TsNode, canHop = true): (TsNode | undefined)[] 
     if (Node.isArrayLiteralExpression(input)) {
         return input
             .getElements()
-            .flatMap((element) => (Node.isSpreadElement(element) ? recordNamespaces(element.getExpression(), canHop) : [recordNamespace(element)]));
+            .flatMap((element) =>
+                Node.isSpreadElement(element) ? recordNamespaces(element.getExpression(), canHop) : [{ namespace: recordNamespace(element) }],
+            );
     }
 
     const callee = Node.isCallExpression(input) ? input.getExpression() : undefined;
 
     if (Node.isCallExpression(input) && Node.isPropertyAccessExpression(callee) && callee.getName() === "map") {
-        return mapCallbackRecords(input.getArguments()[0]).map((record) => recordNamespace(record));
+        const callback = input.getArguments()[0];
+
+        // A callback parameter is as tainted as the array it iterates over.
+        const names = isArgumentDerived(callee.getExpression()) ? callbackParameterNames(callback) : [];
+
+        return mapCallbackRecords(callback).map((record) => {
+            const namespace = recordNamespace(record);
+
+            return { namespace, viaParameter: namespace !== undefined && referencesAnyName(namespace, names) };
+        });
     }
 
     return [];
@@ -110,12 +150,14 @@ const vectorNamespaceAccessInCall = (call: CallExpression, relativePath: string)
     }
 
     // `upsertMany` takes an array literal: every element's namespace is checked.
-    const namespaces = method === "upsertMany" ? recordNamespaces(input) : [propertyInitializer(input, "namespace")];
+    const namespaces = method === "upsertMany" ? recordNamespaces(input) : [{ namespace: propertyInitializer(input, "namespace") }];
 
     // Arg-derived (directly or through one local `const` hop) *and* not scoped by
     // a server-trusted `ctx.*` value — a namespace like `` `${ctx.auth.orgId}` ``
     // references `ctx` and is treated as scoped, so it is not flagged.
-    if (!namespaces.some((namespace) => namespace && isArgumentDerived(namespace) && !isScopedByContext(namespace))) {
+    if (
+        !namespaces.some(({ namespace, viaParameter }) => namespace && (viaParameter === true || isArgumentDerived(namespace)) && !isScopedByContext(namespace))
+    ) {
         return undefined;
     }
 
