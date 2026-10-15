@@ -184,6 +184,9 @@ const identityExpiryMs = (identity: Awaited<ReturnType<IdentityResolver>>): numb
  * attribute MUST supply {@link MemoizeIdentityOptions.cacheKey}, or the cache will
  * serve one principal's identity to another — see that option's contract.
  */
+/** How many of the oldest entries a miss on a full cache inspects for expiry before evicting. */
+const EXPIRY_SWEEP_LIMIT = 32;
+
 const memoizeIdentity = (resolver: IdentityResolver, options: MemoizeIdentityOptions = {}): IdentityResolver => {
     const ttlMs = options.ttlMs ?? DEFAULT_TTL_MS;
     const maxEntries = Math.max(1, options.maxEntries ?? DEFAULT_MAX_ENTRIES);
@@ -221,14 +224,24 @@ const memoizeIdentity = (resolver: IdentityResolver, options: MemoizeIdentityOpt
             return hit.value;
         }
 
-        // Drop the expired entry on read, and (at capacity) every other expired one, so
-        // dead entries never push a still-live credential out through oldest-first eviction.
+        // Drop the expired entry on read and, at capacity, sweep a bounded number of the OLDEST
+        // entries (insertion order) so dead entries never push a still-live credential out through
+        // oldest-first eviction. The bound keeps a miss on a full cache at constant cost instead of a
+        // scan of every live entry.
         if (hit) {
             cache.delete(key);
         }
 
         if (cache.size >= maxEntries) {
+            let inspected = 0;
+
             for (const [staleKey, stale] of cache) {
+                if (inspected >= EXPIRY_SWEEP_LIMIT) {
+                    break;
+                }
+
+                inspected += 1;
+
                 if (stale.expiresAt <= now) {
                     cache.delete(staleKey);
                 }
