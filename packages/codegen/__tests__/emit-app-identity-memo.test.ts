@@ -22,7 +22,16 @@ type Resolver = (request: Request, env?: unknown, context?: unknown) => Promise<
 
 const scratch = mkdtempSync(join(tmpdir(), "lunora-emit-app-identity-memo-"));
 
-const wrap = async (inner: Resolver, env: Record<string, string> = {}, memo: typeof memoizeIdentity = memoizeIdentity): Promise<Resolver> => {
+interface Built {
+    /** One `buildWorkerOptions` pass over the emitted memo block; the builder's memo store persists across passes. */
+    build: (inner: Resolver, env?: object) => Resolver;
+}
+
+type Declaration = { options: (env: unknown) => { session?: { cookieCache?: { enabled?: boolean } } } };
+
+const defaultEnv = {};
+
+const prepare = async (memo: typeof memoizeIdentity = memoizeIdentity, authDeclaration?: Declaration): Promise<Built> => {
     const source = emitApp({ ...baseOptions, hasAuth: true });
     const match = /(if \(options\.resolveIdentity\) \{\n[\s\S]*?\n {8}\})/u.exec(source);
 
@@ -31,18 +40,31 @@ const wrap = async (inner: Resolver, env: Record<string, string> = {}, memo: typ
     }
 
     // codeql[js/bad-code-sanitization] -- test-local literal rendered by codegen and compiled in-process, not user input
-    const compiled = transformSync(`export const build = (memoizeIdentity, options, env) => { ${match[1]} return options.resolveIdentity; };`, {
-        loader: "ts",
-    }).code;
+    const compiled = transformSync(
+        `export const build = (memoizeIdentity, self, options, env, authDeclaration) => { (function () { ${match[1]} }).call(self); return options.resolveIdentity; };`,
+        { loader: "ts" },
+    ).code;
     const file = join(scratch, `memo-${randomUUID()}.mjs`);
 
     writeFileSync(file, compiled);
 
     const loaded = (await import(pathToFileURL(file).href)) as {
-        build: (memo: typeof memoizeIdentity, options: { resolveIdentity: Resolver }, env: Record<string, string>) => Resolver;
+        build: (memo: typeof memoizeIdentity, self: object, options: { resolveIdentity: Resolver }, env: object, authDeclaration?: Declaration) => Resolver;
     };
+    const self = { identityMemos: new WeakMap() };
 
-    return loaded.build(memo, { resolveIdentity: inner }, env);
+    return { build: (inner, env = defaultEnv) => loaded.build(memo, self, { resolveIdentity: inner }, env, authDeclaration) };
+};
+
+const wrap = async (
+    inner: Resolver,
+    env: Record<string, string> = {},
+    memo: typeof memoizeIdentity = memoizeIdentity,
+    authDeclaration?: Declaration,
+): Promise<Resolver> => {
+    const { build } = await prepare(memo, authDeclaration);
+
+    return build(inner, env);
 };
 
 const withCookie = (cookie: string): Request => new Request("https://app.example/_lunora/rpc", { headers: { cookie } });
@@ -128,5 +150,81 @@ describe("emitApp — identity memoisation", () => {
         }) as unknown as typeof memoizeIdentity);
 
         expect(spy.ttlMs).toBe(ttlMs);
+    });
+
+    describe("strict session preset", () => {
+        const strict: Declaration = {
+            options: () => {
+                return { session: { cookieCache: { enabled: false } } };
+            },
+        };
+        const rolling: Declaration = {
+            options: () => {
+                return { session: { cookieCache: { enabled: true, maxAge: 60 } } };
+            },
+        };
+
+        const ttlFor = async (declaration: Declaration | undefined, env: Record<string, string>): Promise<number | undefined> => {
+            const spy: { ttlMs?: number } = {};
+
+            await wrap(
+                () => Promise.resolve(null),
+                env,
+                ((inner: Resolver, o: { ttlMs: number }) => {
+                    spy.ttlMs = o.ttlMs;
+
+                    return inner;
+                }) as unknown as typeof memoizeIdentity,
+                declaration,
+            );
+
+            return spy.ttlMs;
+        };
+
+        it("defaults to per-request memoisation when the cookie cache is off", async () => {
+            expect.assertions(1);
+
+            await expect(ttlFor(strict, {})).resolves.toBe(0);
+        });
+
+        it("keeps the 60s default when the cookie cache is on, or no policy is declared", async () => {
+            expect.assertions(2);
+
+            await expect(ttlFor(rolling, {})).resolves.toBe(60_000);
+            await expect(ttlFor(undefined, {})).resolves.toBe(60_000);
+        });
+
+        it("still honours an explicit LUNORA_IDENTITY_CACHE_MS under the strict preset", async () => {
+            expect.assertions(2);
+
+            await expect(ttlFor(strict, { LUNORA_IDENTITY_CACHE_MS: "5000" })).resolves.toBe(5000);
+            await expect(ttlFor(strict, { LUNORA_IDENTITY_CACHE_MS: "  " })).resolves.toBe(0);
+        });
+    });
+
+    describe("framework-hosted rebuilds", () => {
+        it("shares one resolver call across option builds that see the same env", async () => {
+            expect.assertions(2);
+
+            let calls = 0;
+            const resolver: Resolver = () => {
+                calls += 1;
+
+                return Promise.resolve({ userId: "u1" });
+            };
+            const { build } = await prepare();
+            const env = {};
+
+            // A framework-hosted worker rebuilds its options (and so the inner resolver) per request.
+            await build(resolver, env)(withCookie("s=a"));
+            await build(resolver, env)(withCookie("s=a"));
+
+            expect(calls).toBe(1);
+
+            // A request-selected environment is a different object and stays separate.
+            await build(resolver, {})(withCookie("s=a"));
+
+            expect(calls).toBe(2);
+        });
     });
 });

@@ -75,6 +75,7 @@ interface ComposedApp extends LunoraWorker {
 class AppBuilder<Env extends object> {
     private adminToken?: Selector<Env, string>;
     private authDeclaration?: AuthDeclaration<Env>;
+    private readonly identityMemos = new WeakMap<object, NonNullable<WorkerOptions["resolveIdentity"]>>();
     private cdcEnabled = false;
     private reactiveCacheConfig: boolean | { maxBytes?: number; maxEntries?: number } = false;
     private maxRelationKeysLimit?: ShardConfig["maxRelationKeys"];
@@ -604,15 +605,32 @@ class AppBuilder<Env extends object> {
         // Memoise per credential for the window better-auth's own cookie cache already
         // tolerates (60s); `LUNORA_IDENTITY_CACHE_MS` overrides it, `0` disables the
         // cross-request cache. A revoked session can therefore resolve for up to that long.
+        //
+        // An app that switched better-auth's cookie cache OFF (the `strict` session
+        // preset) asked for fast revocation, so its default is per-request memoisation
+        // only; the env var still opts back in. Read from the declared options at
+        // runtime, the one place the chosen policy is visible.
+        //
+        // Built once per `env` object and kept on the builder: a framework-hosted
+        // worker rebuilds these options on every request, and a fresh memo per build
+        // would never hit. A different `env` object gets its own memo.
         if (options.resolveIdentity) {
-            // A blank var (wrangler allows `""`) is unset, not `0`: `Number("")` is 0.
-            const identityCacheRaw = (env as { LUNORA_IDENTITY_CACHE_MS?: string }).LUNORA_IDENTITY_CACHE_MS;
-            const identityCacheMs = identityCacheRaw?.trim() ? Number(identityCacheRaw) : Number.NaN;
+            let memo = this.identityMemos.get(env);
 
-            options.resolveIdentity = memoizeIdentity(options.resolveIdentity, {
-                maxEntries: 10_000,
-                ttlMs: Number.isFinite(identityCacheMs) && identityCacheMs >= 0 ? identityCacheMs : 60_000,
-            });
+            if (!memo) {
+                // A blank var (wrangler allows `""`) is unset, not `0`: `Number("")` is 0.
+                const identityCacheRaw = (env as { LUNORA_IDENTITY_CACHE_MS?: string }).LUNORA_IDENTITY_CACHE_MS;
+                const identityCacheMs = identityCacheRaw?.trim() ? Number(identityCacheRaw) : Number.NaN;
+                const cookieCacheOff = authDeclaration?.options(env).session?.cookieCache?.enabled === false;
+
+                memo = memoizeIdentity(options.resolveIdentity, {
+                    maxEntries: 10_000,
+                    ttlMs: Number.isFinite(identityCacheMs) && identityCacheMs >= 0 ? identityCacheMs : cookieCacheOff ? 0 : 60_000,
+                });
+                this.identityMemos.set(env, memo);
+            }
+
+            options.resolveIdentity = memo;
         }
 
         for (const fn of this.extendFns) {
