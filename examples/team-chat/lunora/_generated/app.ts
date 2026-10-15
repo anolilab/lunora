@@ -22,6 +22,9 @@ type Selector<Env, T> = (env: Env) => T | undefined;
 /** The generated `createShardDO` config — `.observability()`, `.maxRelationKeys()` and the long-tail `.ai()` / `.kv()` / … methods pass straight through to it. */
 type ShardConfig = NonNullable<Parameters<typeof createShardDO>[0]>;
 
+/** The identity memo per `env` object, owned by one assembled worker. */
+type IdentityMemoStore = WeakMap<object, ReturnType<typeof memoizeIdentity>>;
+
 /** `.storage(...)` declaration — one bucket (required) plus optional extra named buckets and signed-URL config. Backs `ctx.storage` AND the studio file browser. */
 interface StorageDeclaration<Env> {
     /** The default R2 bucket binding (the bare `ctx.storage`). */
@@ -285,7 +288,7 @@ class AppBuilder<Env extends object> {
         let authInit: Promise<void> | null = null;
         // One memo per env for THIS assembled worker: a framework-hosted worker rebuilds its options per
         // request and must reuse it, but a second `assemble()` has its own auth closure and must not share.
-        const identityMemos = new WeakMap<object, NonNullable<WorkerOptions["resolveIdentity"]>>();
+        const identityMemos: IdentityMemoStore = new WeakMap();
 
         const initAuth = async (env: Env): Promise<void> => {
             if (!this.authDeclaration) {
@@ -477,7 +480,7 @@ class AppBuilder<Env extends object> {
     }
 
     /** Fan the recorded declarations into the worker-side `createWorker` options. */
-    private buildWorkerOptions(env: Env, getAuth: () => LunoraAuth | null, identityMemos: WeakMap<object, NonNullable<WorkerOptions["resolveIdentity"]>>): WorkerOptions {
+    private buildWorkerOptions(env: Env, getAuth: () => LunoraAuth | null, identityMemos: IdentityMemoStore): WorkerOptions {
         const options: WorkerOptions = {
             cronJobs: LUNORA_CRONS,
             functions: LUNORA_FUNCTIONS,
@@ -653,13 +656,29 @@ class AppBuilder<Env extends object> {
             let memo = identityMemos.get(env);
 
             if (!memo) {
-                // A blank var (wrangler allows `""`) is unset, not `0`: `Number("")` is 0.
-                const identityCacheRaw = (env as { LUNORA_IDENTITY_CACHE_MS?: string }).LUNORA_IDENTITY_CACHE_MS;
-                const identityCacheMs = identityCacheRaw?.trim() ? Number(identityCacheRaw) : Number.NaN;
+                // A wrangler var may be a JSON number (`0`) or a string. A blank string is
+                // unset, not `0` (`Number("")` is 0); anything else non-numeric is unset too.
+                const identityCacheRaw = (env as { LUNORA_IDENTITY_CACHE_MS?: unknown }).LUNORA_IDENTITY_CACHE_MS;
+                let identityCacheMs = Number.NaN;
+
+                if (typeof identityCacheRaw === "number") {
+                    identityCacheMs = identityCacheRaw;
+                } else if (typeof identityCacheRaw === "string" && identityCacheRaw.trim() !== "") {
+                    identityCacheMs = Number(identityCacheRaw);
+                }
+
                 const cookieCacheOff = authDeclaration?.options(env).session?.cookieCache?.enabled === false;
 
                 memo = memoizeIdentity(options.resolveIdentity, {
-                    maxEntries: 10_000,
+                    // better-auth resolves the session from ALL request headers, so the key
+                    // must cover every header a supported plugin authenticates on: the
+                    // session cookie, `Authorization` (bearer / jwt) and `x-api-key` (apiKey).
+                    cacheKey: (request: Request) => {
+                        const parts = ["authorization", "cookie", "x-api-key"].map((name) => request.headers.get(name) ?? "");
+
+                        return parts.every((part) => part === "") ? undefined : parts.join("\u0000");
+                    },
+                    maxEntries: 2_000,
                     ttlMs: Number.isFinite(identityCacheMs) && identityCacheMs >= 0 ? identityCacheMs : cookieCacheOff ? 0 : 60_000,
                 });
                 identityMemos.set(env, memo);

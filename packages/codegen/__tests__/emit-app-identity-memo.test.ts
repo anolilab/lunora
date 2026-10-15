@@ -64,7 +64,7 @@ const prepare = async (memo: typeof memoizeIdentity = memoizeIdentity, authDecla
 
 const wrap = async (
     inner: Resolver,
-    env: Record<string, string> = {},
+    env: Record<string, unknown> = {},
     memo: typeof memoizeIdentity = memoizeIdentity,
     authDeclaration?: Declaration,
 ): Promise<Resolver> => {
@@ -158,6 +158,45 @@ describe("emitApp — identity memoisation", () => {
         expect(spy.ttlMs).toBe(ttlMs);
     });
 
+    it.each([
+        [0, 0],
+        [30_000, 30_000],
+        [-5, 60_000],
+    ])("a numeric wrangler var %j resolves to a %i ms cache window instead of throwing", async (value, ttlMs) => {
+        expect.assertions(1);
+
+        const spy: { ttlMs?: number } = {};
+
+        await wrap(() => Promise.resolve(null), { LUNORA_IDENTITY_CACHE_MS: value }, ((inner: Resolver, o: { ttlMs: number }) => {
+            spy.ttlMs = o.ttlMs;
+
+            return inner;
+        }) as unknown as typeof memoizeIdentity);
+
+        expect(spy.ttlMs).toBe(ttlMs);
+    });
+
+    it("keys the cross-request cache on x-api-key as well as the cookie", async () => {
+        expect.assertions(2);
+
+        let calls = 0;
+        const resolve = await wrap(() => {
+            calls += 1;
+
+            return Promise.resolve({ userId: `u${String(calls)}` });
+        });
+        const withKey = (key: string): Request => new Request("https://app.example/x", { headers: { cookie: "s=a", "x-api-key": key } });
+
+        await resolve(withKey("k1"));
+        await resolve(withKey("k2"));
+
+        expect(calls).toBe(2);
+
+        await resolve(withKey("k1"));
+
+        expect(calls).toBe(2);
+    });
+
     describe("strict session preset", () => {
         const strict: Declaration = {
             options: () => {
@@ -170,7 +209,7 @@ describe("emitApp — identity memoisation", () => {
             },
         };
 
-        const ttlFor = async (declaration: Declaration | undefined, env: Record<string, string>): Promise<number | undefined> => {
+        const ttlFor = async (declaration: Declaration | undefined, env: Record<string, unknown>): Promise<number | undefined> => {
             const spy: { ttlMs?: number } = {};
 
             await wrap(
@@ -233,6 +272,27 @@ describe("emitApp — identity memoisation", () => {
             expect(calls).toBe(2);
         });
 
+        it("reads the session policy once per env, not once per build", async () => {
+            expect.assertions(1);
+
+            let reads = 0;
+            const declaration: Declaration = {
+                options: () => {
+                    reads += 1;
+
+                    return { session: { cookieCache: { enabled: false } } };
+                },
+            };
+            const { build } = await prepare(memoizeIdentity, declaration);
+            const env = {};
+
+            build(() => Promise.resolve(null), env);
+            build(() => Promise.resolve(null), env);
+            build(() => Promise.resolve(null), env);
+
+            expect(reads).toBe(1);
+        });
+
         it("gives each assembled worker its own memo, even for the same env", async () => {
             expect.assertions(2);
 
@@ -261,12 +321,14 @@ describe("emitApp — identity memoisation", () => {
         });
 
         it("declares the memo store per assemble() call, not on the builder", () => {
-            expect.assertions(2);
+            expect.assertions(4);
 
             const source = emitApp({ ...baseOptions, hasAuth: true });
             const assemble = source.slice(source.indexOf("private assemble("), source.indexOf("private buildWorkerOptions("));
 
-            expect(assemble).toContain("const identityMemos = new WeakMap");
+            expect(assemble).toContain("const identityMemos: IdentityMemoStore = new WeakMap()");
+            expect(source).toContain("type IdentityMemoStore = WeakMap<object, ReturnType<typeof memoizeIdentity>>");
+            expect(source).not.toContain("no-secrets");
             expect(source).not.toContain("private readonly identityMemos");
         });
     });
