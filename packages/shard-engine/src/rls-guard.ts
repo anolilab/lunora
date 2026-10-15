@@ -233,6 +233,9 @@ const WRITER_METHOD_GATING = {
      */
     relationEdges: "ungated",
 
+    /** Schema-derived metadata: names tables, reaches no row. */
+    deleteRereadTables: "ungated",
+
     /** Schema-derived metadata for the facade's nested relation writes: names tables and columns, reaches no row. */
     relationWrites: "ungated",
     replace: "id-gated",

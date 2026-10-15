@@ -1601,6 +1601,49 @@ describe("rls — batch write path", () => {
         expect(database.calls.filter((call) => call.method === "delete").map((call) => call.tableOrId)).toStrictEqual(["P"]);
     });
 
+    it("deleteAll re-reads every row of a .global() table, so another shard's update after the page read is seen", async () => {
+        expect.assertions(2);
+
+        const rows = [
+            { _id: "A", parentId: "x", table: "documents" },
+            { _id: "B", parentId: "x", table: "documents" },
+        ];
+        const database = createFakeDatabase(rows);
+        const { findMany } = database.writer;
+
+        Object.assign(database.writer, { deleteRereadTables: new Set(["documents"]) });
+        // The page is a snapshot; then another shard turns B into a policy-denied row before the delete reaches it.
+        database.writer.findMany = async (tableName, args) => {
+            const result = await findMany(tableName, args);
+            const page = result.page.map((row) => {
+                return { ...row };
+            });
+
+            rows[1]!.parentId = null as unknown as string;
+
+            return { ...result, page };
+        };
+
+        const handler = lunora.mutation.use(rlsForTest<TestContext>([parentIdPolicy])).mutation(async ({ ctx }) => ctx.db.deleteAll("documents"));
+
+        await expect(handler.handler(makeContext(database, "u1"), {})).rejects.toMatchObject({ code: "FORBIDDEN", name: "LunoraError" });
+        expect(database.calls.filter((call) => call.method === "delete").map((call) => call.tableOrId)).toStrictEqual(["A"]);
+    });
+
+    it("deleteAll re-reads a later row of a table with a delete trigger, so a trigger patch cannot leave it deletable", async () => {
+        expect.assertions(2);
+
+        // The fake's delete nulls the child's `parentId`, as a delete trigger patching the next row would.
+        const database = seedSelfReferential([]);
+
+        Object.assign(database.writer, { deleteRereadTables: new Set(["documents"]) });
+
+        const handler = lunora.mutation.use(rlsForTest<TestContext>([parentIdPolicy])).mutation(async ({ ctx }) => ctx.db.deleteAll("documents"));
+
+        await expect(handler.handler(makeContext(database, "u1"), {})).rejects.toMatchObject({ code: "FORBIDDEN", name: "LunoraError" });
+        expect(database.calls.filter((call) => call.method === "delete").map((call) => call.tableOrId)).toStrictEqual(["P"]);
+    });
+
     it("deleteAll keeps the no-relocate fast path when the table is not self-referential", async () => {
         expect.assertions(3);
 

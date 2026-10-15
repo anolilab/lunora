@@ -132,7 +132,7 @@ import { createSystemReader } from "./system-reader";
 import { ConflictError } from "./transaction";
 import type { TransactionHeadroomTracker } from "./transaction-headroom";
 import type { SchedulerLike, TriggerContextLike, TriggerEventLike, TriggerOpLike, TriggerTimingLike } from "./triggers";
-import { runTriggers } from "./triggers";
+import { hasTrigger, runTriggers } from "./triggers";
 import type { TextFragment } from "./where-fragments";
 import { identifierText, joinText, rawText, textFragments } from "./where-fragments";
 import type { WhereSqlStrategy } from "./where-sql";
@@ -1924,6 +1924,11 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
      */
     const relationEdges = deriveRelationEdges(schema);
     const relationWrites = describeRelationWrites(schema, options.inTransaction);
+    const deleteRereadTables = new Set(
+        Object.entries(schema.tables)
+            .filter(([name, table]) => table.shardMode?.kind === "global" || hasTrigger(schema, name, "delete"))
+            .map(([name]) => name),
+    );
 
     /**
      * This mutation's `_commitSeq`, allocated on first use and reused for every
@@ -4229,6 +4234,9 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
          * per table can run it itself — see `DatabaseWriterLike.relationEdges`.
          */
         relationEdges,
+
+        /** Published so a chunked delete knows which tables cannot trust a page-wide row image — see `DatabaseWriterLike.deleteRereadTables`. */
+        deleteRereadTables,
 
         /** Published for the table facade's nested relation writes — see `DatabaseWriterLike.relationWrites`. */
         relationWrites,

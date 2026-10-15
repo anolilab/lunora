@@ -5868,6 +5868,7 @@ interface DatabaseWriterLike {
     }, expectedTable?: string) => Promise<{
         deleted: number;
     }>;
+    deleteRereadTables?: ReadonlySet<string>;
     deleteWhere?: (tableName: string, where: WhereInput, options?: {
         limit?: number;
     }) => Promise<{

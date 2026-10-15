@@ -50,6 +50,7 @@ const RESERVED_TABLE_NAMES = new Set([
     "delete",
     "deleteAll",
     "deleteMany",
+    "deleteRereadTables",
     "deleteWhere",
     "explain",
     "findFirst",

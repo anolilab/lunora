@@ -258,10 +258,17 @@ interface DatabaseWriterLike {
     /** Uncapped, chunked erase of a whole table. The RLS wrapper gates each row like a single delete. */
     deleteAll?: (tableName: string, options?: { chunkSize?: number; hard?: boolean }) => Promise<{ deleted: number }>;
     deleteMany: (ids: ReadonlyArray<string>, options?: { limit?: number }, expectedTable?: string) => Promise<{ deleted: number }>;
+
+    /**
+     * Tables a chunked delete cannot trust a page-wide row image for: `.global()` tables and tables with a delete
+     * trigger. Published by the writer (see `@lunora/shard-engine`'s `DatabaseWriterLike`).
+     */
+    deleteRereadTables?: ReadonlySet<string>;
     deleteWhere?: (tableName: string, where: WhereInput, options?: { limit?: number }) => Promise<{ deleted: number }>;
     explain: (tableName: string, args?: QueryArgs) => Promise<QueryPlan>;
     findFirst: (tableName: string, args?: QueryArgs) => Promise<Record<string, unknown> | null>;
     findFirstOrThrow: (tableName: string, args?: QueryArgs) => Promise<Record<string, unknown>>;
+
     findMany: (tableName: string, args?: QueryArgs) => Promise<QueryPage>;
 
     get: (id: string, expectedTable?: string) => Promise<Record<string, unknown> | null>;
@@ -273,6 +280,7 @@ interface DatabaseWriterLike {
      */
     groupBy: (tableName: string, options: GroupByArgs) => Promise<ReadonlyArray<{ key: Record<string, unknown>; value: null | number }>>;
     insert: (tableName: string, document: Record<string, unknown>, options?: { clientId?: string }) => Promise<string>;
+
     insertMany: (
         tableName: string,
         documents: ReadonlyArray<Record<string, unknown>>,
@@ -296,7 +304,6 @@ interface DatabaseWriterLike {
     lookupById?: (id: string, expectedTable?: string) => Promise<null | { row: Record<string, unknown>; tableName: string }>;
 
     patch: (id: string, patch: Record<string, unknown>, expectedTable?: string, options?: PatchWriteOptions) => Promise<void>;
-
     /** Conditional patch. Optional: a writer without an atomic conditional write omits it, and the wrapper refuses. */
     patchIf?: (
         tableName: string,
@@ -309,6 +316,7 @@ interface DatabaseWriterLike {
         expectedTable?: string,
     ) => Promise<{ patched: number }>;
     patchWhere?: (tableName: string, args: { patch: Record<string, unknown>; where: WhereInput }, options?: { limit?: number }) => Promise<{ patched: number }>;
+
     query: (tableName: string) => TableReaderLike;
 
     /**
@@ -1143,17 +1151,28 @@ const wrapDatabase = (base: RlsDatabase, raw: RlsDatabase, steps: ReadonlyArray<
     };
 
     /**
-     * Can a delete of one `tableName` row change another row of the same table? True when a foreign key on the
-     * table points back at it. Conservative: `restrict` and `cascade` self-relations lose the fast path too, because
-     * the writer publishes only the edge set (`relationEdges`), not each relation's `onDelete`. Memoised per table.
+     * Can the row image a page read returned go stale before its delete? Each reason is conservative, so a table that
+     * hits one loses the page-wide image and re-locates the row (`gateById`) instead:
+     * - a self-referential relation edge: deleting one row can rewrite a later one (an `onDelete` that nulls its
+     * holders). `restrict` and `cascade` lose the fast path too, since the writer publishes the edge set, not each
+     * relation's `onDelete`.
+     * - a `.global()` table: the rows live in D1, shared across shards, so another shard can move a row into a
+     * policy-denied state between the page read and the delete. The global writer's own delete does not re-check
+     * the policy. Every row re-reads, the first included.
+     * - a delete trigger: its handler can patch a later row of the same table through the raw writer.
+     * Memoised per table.
      */
-    const selfReferentialMemo = new Map<string, boolean>();
-    const selfReferential = (tableName: string): boolean => {
-        let answer = selfReferentialMemo.get(tableName);
+    const rereadMemo = new Map<string, { all: boolean; later: boolean }>();
+    const needsReread = (tableName: string): { all: boolean; later: boolean } => {
+        let answer = rereadMemo.get(tableName);
 
         if (answer === undefined) {
-            answer = base.relationEdges?.some((edge) => edge.sourceTable === tableName && edge.targetTable === tableName) ?? false;
-            selfReferentialMemo.set(tableName, answer);
+            answer = {
+                // The listed tables re-read every row: for a trigger table this is one lookup more than strictly needed.
+                all: base.deleteRereadTables?.has(tableName) === true,
+                later: base.relationEdges?.some((edge) => edge.sourceTable === tableName && edge.targetTable === tableName) ?? false,
+            };
+            rereadMemo.set(tableName, answer);
         }
 
         return answer;
@@ -1165,21 +1184,21 @@ const wrapDatabase = (base: RlsDatabase, raw: RlsDatabase, steps: ReadonlyArray<
      * chunked erase already holds both, so the delete verdict is taken on that row image instead. The verdict is
      * still evaluated per row through `allowsWrite`, so a delete policy stricter than the read policy denies
      * exactly as before. A table with no policy runs the guarded `base`, as `gateById` does for an unlocated row.
-     * The image is the one read in the same call: inside a mutation the DO serialises writes, and the re-read
-     * never closed the window for a `.global()` table either.
+     * The image is the one read in the same call: inside a mutation the DO serialises writes, except for the
+     * tables `needsReread` lists.
      */
     const deleteReadRows = async (tableName: string, rows: ReadonlyArray<Record<string, unknown>>, hard?: boolean): Promise<void> => {
         const gated = policyTables.has(tableName);
         const writer = gated ? raw : base;
         const deleteOptions = hard === undefined ? undefined : { hard };
-        const reread = gated && selfReferential(tableName);
+        const reread = gated ? needsReread(tableName) : undefined;
 
         for (const [index, row] of rows.entries()) {
             const id = String(row["_id"]);
 
-            // Deleting an earlier row of this page can rewrite a later one (a self-relation's `onDelete` nulls its
-            // holders), so the image read before the page began may be stale: locate the row again, as `gateById` does.
-            if (reread && index > 0) {
+            // The image read before the page began may be stale (see `needsReread`): locate the row again, as
+            // `gateById` does.
+            if (reread && (reread.all || (reread.later && index > 0))) {
                 // eslint-disable-next-line no-await-in-loop -- sequential, mirrors looped single deletes
                 await gateById(id, "delete", (target) => target.delete(id, tableName, deleteOptions), undefined, tableName);
 
