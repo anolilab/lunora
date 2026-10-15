@@ -766,7 +766,7 @@ interface HttpRouteBuilder<SearchParams extends ArgsValidator, Body extends Args
         Output
     ] extends [
         undefined
-    ] ? <R>(handler: (options: HttpStreamHandlerOptions<SearchParams, Params>) => AsyncGenerator<R, void, void> | AsyncIterable<R>) => LunoraRouteHandler : (handler: (options: HttpStreamHandlerOptions<SearchParams, Params>) => AsyncGenerator<Output, void, void> | AsyncIterable<Output>) => LunoraRouteHandler;
+    ] ? <R>(handler: (options: HttpStreamHandlerOptions<SearchParams, Params>) => AsyncGenerator<R | SseEvent<R>, void, void> | AsyncIterable<R | SseEvent<R>>) => LunoraRouteHandler : (handler: (options: HttpStreamHandlerOptions<SearchParams, Params>) => AsyncGenerator<Output | SseEvent<Output>, void, void> | AsyncIterable<Output | SseEvent<Output>>) => LunoraRouteHandler;
     vary: (value: string) => HttpRouteBuilder<SearchParams, Body, Params, Output>;
 }
 ```
@@ -2251,6 +2251,15 @@ interface SpanOptions {
 }
 ```
 
+### `SseEvent` (interface)
+
+```ts
+interface SseEvent<R> {
+    readonly data: R;
+    readonly id: string;
+}
+```
+
 ### `Storage` (interface)
 
 ```ts
@@ -3468,6 +3477,12 @@ const isPerDispatchMiddleware: (middleware: unknown) => boolean;
 const isSafeHeaderValue: (value: string) => boolean;
 ```
 
+### `lastEventId` (const)
+
+```ts
+const lastEventId: (request: Request) => string | undefined;
+```
+
 ### `mask` (const)
 
 ```ts
@@ -3548,6 +3563,15 @@ const rls: <Context extends RlsContextIn = RlsContextIn>(policies: ReadonlyArray
 
 ```ts
 const serveStorageObject: (context: ContextWithStorage, key: string, request: Request, authorize: StorageServeAuthorizer, cacheControl?: string) => Promise<Response>;
+```
+
+### `sseEvent` (const)
+
+```ts
+const sseEvent: <R>(frame: {
+    data: R;
+    id: string;
+}) => SseEvent<R>;
 ```
 
 ### `storageRules` (const)

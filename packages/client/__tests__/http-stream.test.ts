@@ -21,20 +21,21 @@ const sseResponse = (parts: string[], init: { status?: number } = {}): Response 
     return new Response(stream, { headers: { "content-type": "text/event-stream; charset=utf-8" }, status: init.status ?? 200 });
 };
 
+/** Normalise a `fetch` input to its URL string. */
+const requestUrl = (input: RequestInfo | URL): string => {
+    if (typeof input === "string") {
+        return input;
+    }
+
+    return input instanceof URL ? input.href : input.url;
+};
+
 /** A `fetch` double resolving to one SSE response, recording the request it saw. */
 const fetchReturning = (
     parts: string[],
     init: { status?: number } = {},
 ): { calls: { init: RequestInit | undefined; url: string }[]; fetchImpl: typeof fetch } => {
     const calls: { init: RequestInit | undefined; url: string }[] = [];
-
-    const requestUrl = (input: RequestInfo | URL): string => {
-        if (typeof input === "string") {
-            return input;
-        }
-
-        return input instanceof URL ? input.href : input.url;
-    };
 
     const fetchImpl = vi.fn<(input: RequestInfo | URL, requestInit?: RequestInit) => Promise<Response>>(
         async (input: RequestInfo | URL, requestInit?: RequestInit): Promise<Response> => {
@@ -46,6 +47,37 @@ const fetchReturning = (
 
     return { calls, fetchImpl };
 };
+
+/**
+ * A `fetch` double resolving one response PER call (the last is reused once
+ * exhausted), recording every request — for reconnect tests that need the first
+ * call to fail and the next to succeed.
+ */
+const fetchReturningSequence = (responses: (() => Response)[]): { calls: { init: RequestInit | undefined; url: string }[]; fetchImpl: typeof fetch } => {
+    const calls: { init: RequestInit | undefined; url: string }[] = [];
+    let index = 0;
+
+    const fetchImpl = vi.fn<(input: RequestInfo | URL, requestInit?: RequestInit) => Promise<Response>>(
+        async (input: RequestInfo | URL, requestInit?: RequestInit): Promise<Response> => {
+            calls.push({ init: requestInit, url: requestUrl(input) });
+
+            const make = responses[Math.min(index, responses.length - 1)];
+
+            index += 1;
+
+            if (!make) {
+                throw new Error("fetchReturningSequence: no response configured");
+            }
+
+            return make();
+        },
+    ) as unknown as typeof fetch;
+
+    return { calls, fetchImpl };
+};
+
+/** Read one request header out of a recorded `RequestInit`. */
+const headerOf = (init: RequestInit | undefined, name: string): string | undefined => (init?.headers as Record<string, string> | undefined)?.[name];
 
 const tokensRef: HttpStreamRef<{ text: string }, { prompt: string }> = { method: "GET", path: "/api/tokens" };
 
@@ -319,5 +351,108 @@ describe("httpStream", () => {
         expect(chunks[0]?.at).toStrictEqual(new Date(1_700_000_000_000));
         expect(chunks[0]?.balance).toBe(9_007_199_254_740_993n);
         expect(chunks[0]?.ratio).toBeNaN();
+    });
+
+    it("seeds the Last-Event-ID header and reports each frame id via onEventId", async () => {
+        expect.assertions(3);
+
+        const ids: string[] = [];
+        const { calls, fetchImpl } = fetchReturning(['id: e1\ndata: {"text":"a"}\n\nid: e2\ndata: {"text":"b"}\n\nevent: complete\ndata: {}\n\n']);
+
+        const chunks = await collect(httpStream(tokensRef, {}, { fetch: fetchImpl, lastEventId: "seed", onEventId: (id) => ids.push(id) }));
+
+        expect(chunks).toStrictEqual([{ text: "a" }, { text: "b" }]);
+        expect(ids).toStrictEqual(["e1", "e2"]);
+        // The seeded id reaches the first request so the server can resume.
+        expect(headerOf(calls[0]?.init, "last-event-id")).toBe("seed");
+    });
+
+    it("reports a server `retry:` via onRetry and ignores a malformed one", async () => {
+        expect.assertions(1);
+
+        const retries: number[] = [];
+        const { fetchImpl } = fetchReturning(['retry: 1500\ndata: {"text":"a"}\n\nretry: nope\n\ndata: {"text":"b"}\n\nevent: complete\ndata: {}\n\n']);
+
+        await collect(httpStream(tokensRef, {}, { fetch: fetchImpl, onRetry: (ms) => retries.push(ms) }));
+
+        expect(retries).toStrictEqual([1500]);
+    });
+
+    it("does not reconnect by default — a bare EOF still fails once with HTTP_STREAM_INTERRUPTED", async () => {
+        expect.assertions(2);
+
+        const { calls, fetchImpl } = fetchReturning(['id: e1\ndata: {"text":"a"}\n\n']);
+
+        const error = await collect(httpStream(tokensRef, {}, { fetch: fetchImpl })).catch((error_: unknown) => error_ as Error & { code?: string });
+
+        expect((error as Error & { code?: string }).code).toBe("HTTP_STREAM_INTERRUPTED");
+        expect(calls).toHaveLength(1);
+    });
+
+    it("reconnects from the last seen id, replaying it as Last-Event-ID", async () => {
+        expect.assertions(4);
+
+        const ids: string[] = [];
+        const { calls, fetchImpl } = fetchReturningSequence([
+            // First response: one frame carrying an id and a `retry:`, then a bare
+            // EOF (no terminal frame) — a transport interruption.
+            () => sseResponse(['id: e1\ndata: {"text":"a"}\nretry: 5\n\n']),
+            // Second response resumes and finishes cleanly.
+            () => sseResponse(['id: e2\ndata: {"text":"b"}\n\nevent: complete\ndata: {}\n\n']),
+        ]);
+
+        const chunks = await collect(httpStream(tokensRef, {}, { fetch: fetchImpl, onEventId: (id) => ids.push(id), reconnect: true }));
+
+        expect(chunks).toStrictEqual([{ text: "a" }, { text: "b" }]);
+        expect(ids).toStrictEqual(["e1", "e2"]);
+        expect(calls).toHaveLength(2);
+        // The reconnect carries the last id the first attempt saw.
+        expect(headerOf(calls[1]?.init, "last-event-id")).toBe("e1");
+    });
+
+    it("reconnects after a transport error when enabled", async () => {
+        expect.assertions(2);
+
+        let attempt = 0;
+        const fetchImpl = vi.fn<() => Promise<Response>>(async (): Promise<Response> => {
+            attempt += 1;
+
+            if (attempt === 1) {
+                throw new Error("network down");
+            }
+
+            return sseResponse(["event: complete\ndata: {}\n\n"]);
+        }) as unknown as typeof fetch;
+
+        const chunks = await collect(httpStream(tokensRef, {}, { fetch: fetchImpl, reconnect: true }));
+
+        expect(chunks).toStrictEqual([]);
+        expect(attempt).toBe(2);
+    });
+
+    it("never reconnects on a consumer cancel, even with reconnect: true", async () => {
+        expect.assertions(1);
+
+        let calls = 0;
+        const fetchImpl = vi.fn<(input: RequestInfo | URL, init?: RequestInit) => Promise<Response>>(async (): Promise<Response> => {
+            calls += 1;
+
+            // A tiny server retry, so a (buggy) reconnect would fire fast
+            // enough to be caught by the wait below.
+            return sseResponse(['retry: 1\ndata: {"text":"a"}\n\n']);
+        }) as unknown as typeof fetch;
+
+        const stream = httpStream(tokensRef, {}, { fetch: fetchImpl, reconnect: true });
+        const iterator = stream[Symbol.asyncIterator]();
+
+        await iterator.next();
+
+        stream.cancel();
+
+        await new Promise((resolve) => {
+            setTimeout(resolve, 25);
+        });
+
+        expect(calls).toBe(1);
     });
 });

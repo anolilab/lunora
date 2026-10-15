@@ -328,7 +328,11 @@ interface HttpStreamOptions {
     baseUrl?: string;
     fetch?: typeof fetch;
     headers?: Record<string, string>;
+    lastEventId?: string;
     maxBuffer?: number;
+    onEventId?: (id: string) => void;
+    onRetry?: (ms: number) => void;
+    reconnect?: boolean;
     signal?: AbortSignal;
 }
 ```

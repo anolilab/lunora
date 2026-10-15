@@ -128,6 +128,45 @@ const typeErrorWithin = (handler: Node): TypeError | undefined => {
 };
 
 /**
+ * Collapse the SSE `id:` wrapper a `.stream()` handler may yield.
+ *
+ * `sseEvent({ data, id })` (`@lunora/server`) produces an `SseEvent<data>`
+ * envelope, and the pump puts only its INNER `data` on the wire, so the client
+ * decodes `data` — never the envelope — and the emitted `HttpStreamRef<Chunk>`
+ * must name `data`. A handler may mix the wrapper freely with plain chunks
+ * (`SseEvent<T> | T`), which collapses to `T`.
+ *
+ * Matched by symbol NAME, not an import: codegen carries no dependency on
+ * `@lunora/server`, and `SseEvent` appears in no query/mutation return, so this
+ * is inert for every other handler kind. A union of genuinely different chunk
+ * shapes is returned unchanged.
+ */
+const collapseSseEventChunk = (returnType: Type): Type | undefined => {
+    const members = returnType.isUnion() ? returnType.getUnionTypes() : [returnType];
+    const symbols = members.map((member) => member.getSymbol() ?? member.getAliasSymbol());
+    const isSseEventMember = (symbol: (typeof symbols)[number]): boolean => symbol?.getName() === "SseEvent";
+
+    // Nothing to do — and nothing expensive to render — for the overwhelming
+    // majority of handlers, which never name `SseEvent`. Skipping `getText()`
+    // here keeps this off the hot path of every other discovery walk.
+    if (!symbols.some((symbol) => isSseEventMember(symbol))) {
+        return undefined;
+    }
+
+    const inner = members.map((member, index) => (isSseEventMember(symbols[index]) ? (member.getTypeArguments()[0] ?? member) : member));
+    const first = inner[0];
+
+    if (first === undefined) {
+        return undefined;
+    }
+
+    const firstText = first.getText();
+    const rest = inner.slice(1);
+
+    return rest.every((member) => member.getText() === firstText) ? first : undefined;
+};
+
+/**
  * Render a handler's resolved return type via ts-morph's type checker. Unwraps
  * the outer `Promise<…>` so the emitted `FunctionReference<Kind, Args, Return>`
  * matches what callers see post-await. Shared by the object-literal `query(...)`
@@ -158,6 +197,8 @@ const unwrapHandlerReturn = (handler: Node): string => {
             returnType = innerTypeArgument;
         }
     }
+
+    returnType = collapseSseEventChunk(returnType) ?? returnType;
 
     const rendered = returnType.getText(handler);
 

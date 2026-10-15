@@ -183,6 +183,9 @@ const DEFAULT_PERMISSIONS_POLICY =
 const DEFAULT_CORS_HEADERS = [
     "Authorization",
     "Content-Type",
+    // The browser's own SSE reconnect and `connectLiveStream` resume send this
+    // unprompted; without it a cross-origin resume fails at the preflight.
+    "Last-Event-ID",
     "X-D1-Bookmark",
     "X-Lunora-Client-Id",
     "X-Lunora-Client-Seq",

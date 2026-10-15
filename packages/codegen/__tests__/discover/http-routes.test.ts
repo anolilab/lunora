@@ -81,6 +81,35 @@ describe("discover/http-routes", () => {
         expect(routes[0]?.chunkType).toBe("{ text: string; }");
     });
 
+    it("collapses the SSE `sseEvent` id wrapper out of a `.stream()` chunk type", () => {
+        expect.assertions(1);
+
+        // The wrapper is transport, not part of the user's chunk contract: the
+        // server puts only its inner `data` on the wire, so the client chunk type
+        // must be the inner type even when a handler mixes branded + plain chunks.
+        writeSource(
+            "http.ts",
+            `
+            import { httpRoute } from "@lunora/server";
+
+            interface SseEvent<R> {
+                readonly data: R;
+                readonly id: string;
+            }
+
+            const iterate = async function* (): AsyncGenerator<SseEvent<{ text: string }> | { text: string }, void, void> {
+                yield { text: "a" };
+            };
+
+            export const streamTokens = httpRoute.get("/api/tokens").stream(() => iterate());
+        `,
+        );
+
+        const routes = discoverHttpRoutes(newProject(), workdir);
+
+        expect(routes[0]?.chunkType).toBe("{ text: string; }");
+    });
+
     it("captures the chunk type of an arrow handler returning an AsyncIterable", () => {
         expect.assertions(2);
 

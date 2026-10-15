@@ -221,11 +221,20 @@ interface HttpRouteBuilder<SearchParams extends ArgsValidator, Body extends Args
      * handler's yielded type — unless `.output()` was declared, in which case each
      * chunk must be that type and is parsed through the validator before the frame
      * is written (a violation ends the stream with an `event: error` frame).
+     *
+     * A handler may yield a plain `R` (unchanged) or {@link sseEvent}, which
+     * wraps one chunk so the pump emits an `id:` line ahead of its `data:`.
      */
     stream: [Output] extends [undefined]
-        ? <R>(handler: (options: HttpStreamHandlerOptions<SearchParams, Params>) => AsyncGenerator<R, void, void> | AsyncIterable<R>) => LunoraRouteHandler
+        ? <R>(
+              handler: (
+                  options: HttpStreamHandlerOptions<SearchParams, Params>,
+              ) => AsyncGenerator<R | SseEvent<R>, void, void> | AsyncIterable<R | SseEvent<R>>,
+          ) => LunoraRouteHandler
         : (
-              handler: (options: HttpStreamHandlerOptions<SearchParams, Params>) => AsyncGenerator<Output, void, void> | AsyncIterable<Output>,
+              handler: (
+                  options: HttpStreamHandlerOptions<SearchParams, Params>,
+              ) => AsyncGenerator<Output | SseEvent<Output>, void, void> | AsyncIterable<Output | SseEvent<Output>>,
           ) => LunoraRouteHandler;
 
     /**
@@ -519,9 +528,82 @@ const SSE_HEADERS: Record<string, string> = {
 };
 
 /**
+ * Read the SSE resume position off a request: the `Last-Event-ID` header a
+ * browser `EventSource` replays automatically on reconnect, falling back to a
+ * `lastEventId` query parameter for clients that cannot set that header.
+ * Returns `undefined` when neither is present (or both are empty), so a handler
+ * can treat "no resume position" the same as "resume from the beginning".
+ *
+ * The handler decides what to replay — the framework only surfaces the value.
+ */
+const lastEventId = (request: Request): string | undefined => {
+    const header = request.headers.get("last-event-id");
+
+    if (header !== null && header !== "") {
+        return header;
+    }
+
+    const query = new URL(request.url).searchParams.get("lastEventId");
+
+    return query === null || query === "" ? undefined : query;
+};
+
+/**
+ * Module-unique brand marking a yielded chunk as an opt-in SSE frame that
+ * carries an event id. `Symbol.for` (not a fresh `Symbol()`) keeps the key
+ * stable even if this package is bundled twice into one worker, and the brand
+ * means a plain user chunk that happens to have `id`/`data` fields is NOT
+ * mistaken for a frame — {@link sseEvent} is the only way to opt in.
+ */
+const SSE_EVENT_BRAND: unique symbol = Symbol.for("@lunora/server/sse-event");
+
+/**
+ * The public shape {@link sseEvent} returns and a `.stream()` handler yields to
+ * attach an SSE `id:` to one chunk. Structural on purpose: the runtime brand
+ * that makes it unambiguous stays internal.
+ */
+interface SseEvent<R> {
+    readonly data: R;
+    readonly id: string;
+}
+
+/** Internal: the public frame plus the brand {@link isSseEvent} checks for. */
+interface BrandedSseEvent<R> extends SseEvent<R> {
+    readonly [SSE_EVENT_BRAND]: true;
+}
+
+/**
+ * Wrap a chunk so the SSE pump emits `id: <id>` immediately before its `data:`
+ * line:
+ *
+ * ```ts
+ * httpRoute.get("/api/logs").stream(async function* logs() {
+ *     for await (const entry of tail()) {
+ *         yield sseEvent({ data: entry, id: entry.seq });
+ *     }
+ * });
+ * ```
+ *
+ * `data` goes through the same wire codec and per-chunk `.output()` enforcement
+ * as a plain yield; the wrapper is transport, not part of the user's contract.
+ */
+const sseEvent = <R>(frame: { data: R; id: string }): SseEvent<R> => {
+    const branded: BrandedSseEvent<R> = { [SSE_EVENT_BRAND]: true, data: frame.data, id: frame.id };
+
+    return branded;
+};
+
+const isSseEvent = (value: unknown): value is BrandedSseEvent<unknown> =>
+    typeof value === "object" && value !== null && (value as Partial<BrandedSseEvent<unknown>>)[SSE_EVENT_BRAND] === true;
+
+/** A header or SSE field value that cannot break out of its line. */
+const isSafeHeaderValue = (value: string): boolean => !(value.includes("\r") || value.includes("\n") || value.includes("\0"));
+
+/**
  * Format one SSE frame. Each frame ends with `\n\n`, the spec-required
  * separator. `event:` is omitted for `data` (the default event name); we use
- * named events only for the terminal sentinels (`complete`, `error`).
+ * named events only for the terminal sentinels (`complete`, `error`). `id:` is
+ * omitted unless the chunk opted in via {@link sseEvent}.
  *
  * A default `data` frame carries a user chunk, so it goes through the wire codec
  * — the same bracketing the WS stream path has always had, and which this
@@ -533,11 +615,38 @@ const SSE_HEADERS: Record<string, string> = {
  * The terminal sentinels are NOT encoded: `complete` carries `{}` and `error`
  * carries a plain `{ code, message }` that the client reads without decoding.
  */
-const sseFrame = (chunk: unknown, event?: "complete" | "error"): string => {
+const sseFrame = (chunk: unknown, event?: "complete" | "error", id?: string): string => {
     const data = JSON.stringify(event === undefined ? encodeWire(chunk) : chunk);
+
+    // An id is written verbatim into an `id:` line, so a line break in it would
+    // end the frame early and let the id inject `event:` / `data:` lines.
+    if (id !== undefined && !isSafeHeaderValue(id)) {
+        throw new LunoraError("INTERNAL", "sseEvent id must not contain CR, LF or NUL");
+    }
+
+    const idLine = id === undefined ? "" : `id: ${id}\n`;
     const prefix = event ? `event: ${event}\n` : "";
 
-    return `${prefix}data: ${data}\n\n`;
+    return `${idLine}${prefix}data: ${data}\n\n`;
+};
+
+/**
+ * Encode one yielded chunk into a default SSE frame. `.output()` is enforced
+ * HERE — the pump's per-chunk contract check — against the chunk itself, or
+ * against a branded {@link sseEvent}'s inner `data` (the wrapper is transport,
+ * not the user's contract). A violating chunk throws out of the pump into its
+ * catch and becomes a redacted `event: error` frame, the same verdict the RPC
+ * and REST paths reach for a contract breach — a wrong chunk is not a stream
+ * that keeps going.
+ */
+const frameChunk = (output: Validator | undefined, chunk: unknown): string => {
+    if (isSseEvent(chunk)) {
+        const data = output ? applyOutput(output, chunk.data) : chunk.data;
+
+        return sseFrame(data, undefined, chunk.id);
+    }
+
+    return sseFrame(output ? applyOutput(output, chunk) : chunk);
 };
 
 /**
@@ -616,17 +725,12 @@ const buildStreamHandler =
                             break;
                         }
 
-                        // `.output()` applies HERE too. SSE was the one result path
-                        // that skipped `applyOutput`, whose own contract is "every
-                        // result-parsing site (RPC, REST, any future transport) must
-                        // route through this helper" — so a `.stream()` route accepted
-                        // an `.output()`, type-checked the handler against it, and then
-                        // discarded it, sending whatever the generator yielded. A
-                        // violating chunk throws out of the pump into the catch below
-                        // and becomes a redacted `event: error` frame, which is the
-                        // same verdict the RPC and REST paths reach for a contract
-                        // breach — a wrong chunk is not a stream that keeps going.
-                        controller.enqueue(encoder.encode(sseFrame(state.output ? applyOutput(state.output, chunk) : chunk)));
+                        // SSE was the one result path that skipped `applyOutput`,
+                        // whose own contract is "every result-parsing site (RPC,
+                        // REST, any future transport) must route through this
+                        // helper" — so `.output()` is enforced per chunk inside
+                        // `frameChunk`, alongside the branded-`sseEvent` framing.
+                        controller.enqueue(encoder.encode(frameChunk(state.output, chunk)));
                     }
 
                     // Re-check after the loop: a consumer `cancel()` (or a client
@@ -737,9 +841,8 @@ const httpRoute: HttpRoute = {
  * handler can guard a request-derived header value before writing it — the fix the
  * `http_action_response_header_injection` advisor lint points to.
  */
-const isSafeHeaderValue = (value: string): boolean => !(value.includes("\r") || value.includes("\n") || value.includes("\0"));
 
-export { httpAction, httpRoute, httpRouter, isSafeHeaderValue };
+export { httpAction, httpRoute, httpRouter, isSafeHeaderValue, lastEventId, sseEvent };
 
 export type {
     HttpActionCtx,
@@ -754,4 +857,5 @@ export type {
     LunoraHttpApp,
     LunoraHttpEnv,
     LunoraRouteHandler,
+    SseEvent,
 };
