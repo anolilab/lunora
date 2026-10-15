@@ -4,18 +4,17 @@
  * (see `./jobs.ts`). Keeping the check in one place means the two surfaces can
  * never drift apart on what counts as a valid expression.
  *
- * Validation is delegated to `cron-parser`, so the full standard cron grammar is
- * accepted — wildcards, lists, ranges, steps, the 3-letter month/weekday names,
- * the Quartz-style `L`/`W`/`#`/`?` operators, the `@hourly`/`@daily`/… macros,
- * and both 5-field (minute…dow) and 6-field (seconds-leading) forms. We only
- * decide *well-formedness* here; out-of-platform values (Cloudflare caps the
+ * Validation is a dependency-free grammar check (see `./cron-grammar.ts`): wildcards,
+ * lists, ranges, steps, month/weekday names, `L`/`#`, the `@hourly`/`@daily`/…
+ * macros, and the 5-field (minute…dow) and 6-field (seconds-leading) forms. We
+ * only decide *well-formedness* here; out-of-platform values (Cloudflare caps the
  * number of triggers, doesn't run seconds, etc.) are still rejected downstream
  * by wrangler/Cloudflare at deploy time.
  *
- * `cron-parser` is a Node/codegen-time dependency: this module is pulled in by
- * the `cronJobs()` builder (authoring) and `@lunora/codegen` (build), never by
- * the `SchedulerDO` runtime path — so with `sideEffects: false` it tree-shakes
- * out of the Worker bundle.
+ * This module is reachable from the Worker bundle via the `cronJobs()` builder, so
+ * it must not import `cron-parser` (which drags in `luxon`). The authoritative
+ * `cron-parser` check lives in `./validate-cron-full.ts`, exported as
+ * `@lunora/scheduler/validate` for `@lunora/codegen`.
  *
  * The ergonomic `crons.interval({ seconds })` form is rejected outright by
  * `compileInterval` in `./jobs.ts` before it ever reaches this validator. The
@@ -28,22 +27,11 @@
  * module doesn't otherwise validate against a specific platform.
  */
 import { LunoraError } from "@lunora/errors";
-import { CronExpressionParser } from "cron-parser";
 
-/** Standard cron expression (5- or 6-field) or a supported `@macro`, per `cron-parser`. */
-const isValidCronExpression = (schedule: string): boolean => {
-    if (typeof schedule !== "string" || schedule.trim() === "") {
-        return false;
-    }
+import isWellFormedCron from "./cron-grammar";
 
-    try {
-        CronExpressionParser.parse(schedule.trim());
-
-        return true;
-    } catch {
-        return false;
-    }
-};
+/** Standard cron expression (5- or 6-field) or a supported `@macro`. */
+const isValidCronExpression = (schedule: string): boolean => isWellFormedCron(schedule);
 
 /** Splits a cron expression on whitespace to count its fields. */
 const CRON_FIELD_SPLIT_PATTERN = /\s+/u;

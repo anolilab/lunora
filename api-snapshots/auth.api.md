@@ -683,6 +683,10 @@ interface EmailGateConfig {
     allowDomains?: ReadonlyArray<string>;
     blockDisposable?: boolean;
     denyDomains?: ReadonlyArray<string>;
+    lists?: {
+        disposable?: boolean;
+        free?: boolean;
+    };
     mx?: boolean;
     requireValidSyntax?: boolean;
 }
@@ -978,12 +982,6 @@ const buildAuditEntry: (context: AuditHookContext, { now, trustProxyHeaders }?: 
 const classifyEmail: (email: string, config?: EmailGateConfig) => EmailClassification;
 ```
 
-### `compileMigrationsSql` (const)
-
-```ts
-const compileMigrationsSql: (options: LunoraAuthOptions) => Promise<string>;
-```
-
 ### `createAuth` (const)
 
 ```ts
@@ -1054,14 +1052,6 @@ const emailGateMiddleware: <Context>(options: EmailGateMiddlewareOptions<Context
 const ensureAuthAuditTable: (executor: SqlExecutor) => Promise<void>;
 ```
 
-### `ensureMigrated` (const)
-
-```ts
-const ensureMigrated: (auth: LunoraAuth | {
-    options: LunoraAuthOptions;
-}) => Promise<void>;
-```
-
 ### `eventForPath` (const)
 
 ```ts
@@ -1097,7 +1087,10 @@ const listSignUpInvitations: (auth: LunoraAuth, options?: {
 ### `loadEmailDomainLists` (const)
 
 ```ts
-const loadEmailDomainLists: () => Promise<void>;
+const loadEmailDomainLists: ({ disposable, free }?: {
+    disposable?: boolean;
+    free?: boolean;
+}) => Promise<void>;
 ```
 
 ### `lunoraAuthAdapter` (const)
@@ -1331,6 +1324,28 @@ Re-exported from `@lunora/auth` — signature tracked in that section.
 ### `withAuthPlugins` (const)
 
 Re-exported from `@lunora/auth` — signature tracked in that section.
+
+## `@lunora/auth/migrate`
+
+### `compileMigrationsSql` (const)
+
+```ts
+const compileMigrationsSql: (options: LunoraAuthOptions) => Promise<string>;
+```
+
+### `createMigrationAuth` (const)
+
+```ts
+const createMigrationAuth: (options: LunoraAuthOptions) => LunoraAuth;
+```
+
+### `ensureMigrated` (const)
+
+```ts
+const ensureMigrated: (auth: LunoraAuth | {
+    options: LunoraAuthOptions;
+}) => Promise<void>;
+```
 
 ## `@lunora/auth/plugins`
 

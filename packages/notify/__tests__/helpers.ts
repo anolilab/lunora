@@ -264,6 +264,26 @@ const fakeD1 = (options: FakeD1Options = {}): D1Like => {
     // store-error path (e.g. a failing `markStatus` UPDATE) the facade must tolerate.
     const shouldFail = (sql: string): boolean => options.failOn !== undefined && sql.trimStart().toUpperCase().startsWith(options.failOn);
 
+    // Bulk outcome statements from `applyOutcomes`: `DELETE … IN (ids)` or
+    // `UPDATE … SET status, error, seenAt WHERE id IN (ids)`.
+    const applyBulk = (sql: string, bound: unknown[]): void => {
+        if (sql.startsWith("DELETE")) {
+            for (const id of bound) {
+                rows.delete(id as string);
+            }
+
+            return;
+        }
+
+        for (const id of bound.slice(3)) {
+            const row = rows.get(id as string);
+
+            if (row !== undefined) {
+                [row.last_status, row.last_error, row.last_seen_at] = bound.slice(0, 3) as [string | null, string | null, number];
+            }
+        }
+    };
+
     const prepared = (sql: string): D1PreparedLike => {
         let bound: unknown[] = [];
 
@@ -365,6 +385,12 @@ const fakeD1 = (options: FakeD1Options = {}): D1Like => {
                     return undefined;
                 }
 
+                if (sql.includes(" IN (")) {
+                    applyBulk(sql, bound);
+
+                    return undefined;
+                }
+
                 if (sql.startsWith("DELETE")) {
                     // The legacy-row eviction carries an owner predicate, so a fake
                     // that deletes by id alone reports the store as having removed a
@@ -397,7 +423,14 @@ const fakeD1 = (options: FakeD1Options = {}): D1Like => {
         return self;
     };
 
-    return { prepare: prepared };
+    return {
+        batch: async (statements) => {
+            await Promise.all(statements.map(async (statement) => statement.run()));
+
+            return undefined;
+        },
+        prepare: prepared,
+    };
 };
 
 export { compareById, fakeD1, FCM_DEAD_TOKEN_ERROR, mockChatProvider, mockEngine, mockFlakyPushProvider, mockPushProvider, mockThrowingPushProvider };

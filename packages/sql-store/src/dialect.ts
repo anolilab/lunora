@@ -13,6 +13,7 @@
  *
  * Pure — no runtime dependency on `@lunora/do` or a SQL driver.
  */
+import type { RenderedSql } from "@lunora/shard-engine";
 import type { SQL } from "drizzle-orm";
 
 /** Outcome of a non-`SELECT` statement: the row count it changed (for MySQL OCC, which lacks `RETURNING`). */
@@ -145,7 +146,7 @@ export interface SqlDialect {
      */
     maxTableColumns?: number;
 
-    /** A short engine tag for diagnostics/branching (`"sqlite" | "postgres" | "mysql"`). The store core selects drizzle's matching dialect for rendering off this. */
+    /** A short engine tag for diagnostics/branching (`"sqlite" | "postgres" | "mysql"`). */
     readonly name: "mysql" | "postgres" | "sqlite";
 
     /**
@@ -185,6 +186,9 @@ export interface SqlDialect {
         /** The `ORDER BY` expression, best first. */
         rank: (companion: string, terms: ReadonlyArray<string>) => SQL;
     };
+
+    /** Render a composable drizzle `SQL` to this engine's `{ sql, params }`. Each dialect imports only its own drizzle dialect, so a bundle carries one engine's renderer. */
+    render: (query: SQL) => RenderedSql;
 
     /**
      * How an operator completes a search index that is still backfilling on

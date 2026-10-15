@@ -1,5 +1,6 @@
 import type { LunoraAuthOptions } from "@lunora/auth";
 import { createAuth, lunoraD1Adapter } from "@lunora/auth";
+import { createMigrationAuth } from "@lunora/auth/migrate";
 import { bearer } from "@lunora/auth/plugins";
 import { expo } from "@better-auth/expo";
 
@@ -58,5 +59,5 @@ export const buildAuth = (env: { AUTH_SECRET: string; AUTH_URL?: string; DB: unk
  * Migration-only instance wired to raw D1 so `ensureMigrated`'s Kysely migrator
  * can create the better-auth tables the SQL adapter then reads/writes.
  */
-export const buildMigrationAuth = (env: { AUTH_SECRET: string; AUTH_URL?: string; DB: unknown }): ReturnType<typeof createAuth> =>
-    createAuth({ ...options(env), database: env.DB as never });
+export const buildMigrationAuth = (env: { AUTH_SECRET: string; AUTH_URL?: string; DB: unknown }): ReturnType<typeof createMigrationAuth> =>
+    createMigrationAuth({ ...options(env), database: env.DB as never });

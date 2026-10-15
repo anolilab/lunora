@@ -1,3 +1,18 @@
+## @lunora/config [1.0.0-alpha.350](https://github.com/anolilab/lunora/compare/@lunora/config@1.0.0-alpha.349...@lunora/config@1.0.0-alpha.350) (2026-10-15)
+
+### Performance Improvements
+
+* **cli:** memoise discovery and push secrets in one call ([#1196](https://github.com/anolilab/lunora/issues/1196)) ([94925fc](https://github.com/anolilab/lunora/commit/94925fcdb86d6f8c13c3208e4b2903e6102e20b2))
+
+
+### Dependencies
+
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.302
+* **@lunora/container:** upgraded to 1.0.0-alpha.75
+* **@lunora/errors:** upgraded to 1.0.0-alpha.55
+* **@lunora/seed:** upgraded to 1.0.0-alpha.218
+* **@lunora/studio:** upgraded to 1.0.0-alpha.297
+
 ## @lunora/config [1.0.0-alpha.349](https://github.com/anolilab/lunora/compare/@lunora/config@1.0.0-alpha.348...@lunora/config@1.0.0-alpha.349) (2026-10-14)
 
 

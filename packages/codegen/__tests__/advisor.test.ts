@@ -11,7 +11,7 @@ import { errorAdvisoryNames } from "../src/blocking";
 import discoverSchema from "../src/discover/schema";
 import { runCodegen } from "../src/index";
 import type { QueryReadIR } from "../src/ir";
-import emittedJsonData from "./emitted-json-data";
+import emittedAdvisories from "./emitted-advisories";
 
 /** Build a `SchemaIR` from in-memory schema source (no disk). */
 const irFrom = (schemaSource: string) => {
@@ -320,17 +320,15 @@ export const tally = internalMutation.mutation(async ({ ctx }) => {
 
         // The generated subclass overrides `advisories()` with the baked list,
         // so the DO's `getAdvisories` admin RPC can serve them to the studio.
-        expect(shard).toContain("const LUNORA_ADVISORIES = JSON.parse(");
+        expect(shard).toContain("const LUNORA_ADVISORY_ROWS = ");
         expect(shard).toContain("protected override advisories(): AdvisoryFinding[]");
-        expect((emittedJsonData(shard, "LUNORA_ADVISORIES") as { name: string }[]).map((advisory) => advisory.name)).toContain("unindexed_foreign_key");
+        expect((emittedAdvisories(shard) as { name: string }[]).map((advisory) => advisory.name)).toContain("unindexed_foreign_key");
     });
 
     it("emits an empty advisory list under `lint: false`", () => {
         expect.assertions(1);
 
-        expect(
-            emittedJsonData(runCodegen({ lint: false, projectRoot: workdir, wranglerQueueProducers: [] }).generated.shard, "LUNORA_ADVISORIES"),
-        ).toStrictEqual([]);
+        expect(emittedAdvisories(runCodegen({ lint: false, projectRoot: workdir, wranglerQueueProducers: [] }).generated.shard)).toStrictEqual([]);
     });
 
     it("flags replication shapes targeting an unknown table and a `.global()` table (full discover → lint path)", () => {
@@ -413,7 +411,7 @@ export const schema = defineSchema({
             writeFileSync(join(workdir, "lunora.config.ts"), `export default { advisor: { minSeverity: "warn" } };\n`, "utf8");
 
             const { advisories, generated } = runCodegen({ projectRoot: workdir, wranglerQueueProducers: [] });
-            const emitted = emittedJsonData(generated.shard, "LUNORA_ADVISORIES") as { level: string; name: string }[];
+            const emitted = emittedAdvisories(generated.shard) as { level: string; name: string }[];
 
             expect(levels(unfiltered)["INFO"]).toBeGreaterThan(0);
             // COUNTS: every WARN and ERROR survives, no INFO does, in both channels.

@@ -759,6 +759,104 @@ describe("ctx.push.broadcast fault-tolerance", () => {
     });
 });
 
+describe("broadcast batches status writes per page", () => {
+    const sub = (suffix: string) => {
+        return { endpoint: `https://push.example/${suffix}`, keys: { auth: "a", p256dh: "p" } };
+    };
+
+    const setupD1 = (overrides: { batch?: () => Promise<unknown> } = {}) => {
+        const inner = fakeD1();
+        const prepared: string[] = [];
+        const batches: unknown[][] = [];
+        const database = {
+            batch: async (statements: Parameters<typeof inner.batch>[0]) => {
+                batches.push(statements);
+
+                return overrides.batch === undefined ? inner.batch(statements) : overrides.batch();
+            },
+            prepare: (sql: string) => {
+                prepared.push(sql);
+
+                return inner.prepare(sql);
+            },
+        };
+        const store = d1SubscriptionStore(database);
+        const { push } = createNotify(baseDefinition(store), {}, { engine: mockEngine({ push: mockPushProvider().provider }), silent: true });
+
+        return { batches, prepared, push, store };
+    };
+
+    it("writes a 250-subscription page in at most 3 batched statements, never per row", async () => {
+        expect.hasAssertions();
+
+        const { batches, prepared, push, store } = setupD1();
+
+        await Promise.all(Array.from({ length: 250 }, async (_, index) => push.register({ subscription: sub(`ok-${index.toString().padStart(3, "0")}`) })));
+
+        const result = await push.broadcast({ body: "b" });
+
+        expect(result.sent).toBe(250);
+        expect(batches).toHaveLength(1);
+        expect(batches[0]?.length).toBeLessThanOrEqual(3);
+        expect(prepared.filter((sql) => sql.startsWith("UPDATE") && sql.includes("WHERE id = ?1"))).toHaveLength(0);
+
+        const rows = await store.list();
+
+        expect(rows.every((row) => row.lastStatus === "ok")).toBe(true);
+    });
+
+    it("deletes gone ids and stores failed errors", async () => {
+        expect.hasAssertions();
+
+        const { push, store } = setupD1();
+
+        await push.register({ subscription: sub("ok-1") });
+        await push.register({ subscription: sub("gone-1") });
+        await push.register({ subscription: sub("fail-1") });
+
+        const result = await push.broadcast({ body: "b" });
+
+        expect(result.pruned).toBe(1);
+
+        const rows = await store.list();
+
+        expect(rows).toHaveLength(2);
+        expect(rows.find((row) => row.endpoint?.includes("fail-1"))).toMatchObject({ lastError: expect.stringContaining("503"), lastStatus: "failed" });
+        expect(rows.find((row) => row.endpoint?.includes("ok-1"))?.lastStatus).toBe("ok");
+    });
+
+    it("falls back to per-id calls when the store has no applyOutcomes", async () => {
+        expect.hasAssertions();
+
+        const inner = memorySubscriptionStore();
+        const markStatus = vi.fn(inner.markStatus);
+        const remove = vi.fn(inner.delete);
+        const store: SubscriptionStore = { ...inner, applyOutcomes: undefined, delete: remove, markStatus };
+        const { push } = createNotify(baseDefinition(store), {}, { engine: mockEngine({ push: mockPushProvider().provider }), silent: true });
+
+        await push.register({ subscription: sub("ok-1") });
+        await push.register({ subscription: sub("gone-1") });
+        await push.register({ subscription: sub("fail-1") });
+        await push.broadcast({ body: "b" });
+
+        expect(markStatus).toHaveBeenCalledTimes(2);
+        expect(remove).toHaveBeenCalledTimes(1);
+    });
+
+    it("a rejecting batch does not fail the broadcast", async () => {
+        expect.hasAssertions();
+
+        const { push } = setupD1({ batch: () => Promise.reject(new Error("d1 down")) });
+
+        await push.register({ subscription: sub("ok-1") });
+
+        const result = await push.broadcast({ body: "b" });
+
+        expect(result.sent).toBe(1);
+        expect(result.failed).toBe(0);
+    });
+});
+
 describe("ctx.notify multi-channel", () => {
     it("delivers a multi-channel message through the engine", async () => {
         expect.hasAssertions();

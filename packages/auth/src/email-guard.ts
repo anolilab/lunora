@@ -64,6 +64,15 @@ interface EmailGateConfig {
     denyDomains?: ReadonlyArray<string>;
 
     /**
+     * Which built-in lists {@link assertEmailAllowed} loads (both by default, so the
+     * returned class is complete). The disposable list is ~2.7 MB and the free list
+     * ~143 KB of bundle; `emailGateMiddleware` and `emailGateDatabaseHooks` set this
+     * for you: the free list loads only with `onClassify`, the disposable list only
+     * with `blockDisposable !== false` or `onClassify`.
+     */
+    lists?: { disposable?: boolean; free?: boolean };
+
+    /**
      * Opt-in MX deliverability verification. Off by default because it needs DNS
      * (`@visulima/email-verifier/checks/mx` → `node:dns`), which is not available
      * on the default workerd path. When `true`, {@link assertEmailAllowed} rejects
@@ -123,46 +132,67 @@ const listFromModule = (module: unknown): ReadonlyArray<string> => {
     return Array.isArray(value) ? (value as string[]) : [];
 };
 
-let listsPromise: Promise<void> | undefined;
+let disposablePromise: Promise<void> | undefined;
+let freePromise: Promise<void> | undefined;
+let freeLoaded = false;
 
-/**
- * Inject the built-in disposable + free domain lists into the lookup packages,
- * once. Call this at worker init on workerd (where the packages' `node:fs`
- * loader is unavailable) so {@link classifyEmail} has data to match against;
- * {@link assertEmailAllowed} / {@link emailGateMiddleware} await it for you, so
- * the gating path is always edge-safe. Idempotent — repeat calls share one load.
- */
-const loadEmailDomainLists = async (): Promise<void> => {
-    if (listsPromise) {
-        return listsPromise;
+// Single-flight per list, evicted on rejection so a transient failure doesn't brick the
+// gate for the isolate's life — a memoised rejection would make `emailGateMiddleware`
+// answer 500 forever. Mirrors `audit.ts`'s `ensured` and `migrate.ts`'s `migrating`.
+const loadOnce = (current: Promise<void> | undefined, load: () => Promise<void>, evict: () => void): Promise<void> => {
+    if (current) {
+        return current;
     }
 
-    const run = (async (): Promise<void> => {
-        const [disposable, free] = await Promise.all([
+    const run = load();
+
+    run.catch(evict);
+
+    return run;
+};
+
+/**
+ * Inject the built-in domain lists into the lookup packages, once each. Call this
+ * at worker init on workerd (where the packages' `node:fs` loader is unavailable)
+ * so {@link classifyEmail} has data to match against; {@link assertEmailAllowed} /
+ * {@link emailGateMiddleware} await it for you, loading only what the config needs.
+ * Both lists (~2.7 MB disposable, ~143 KB free) load by default; pass
+ * `{ free: false }` or `{ disposable: false }` to skip one. Idempotent — repeat
+ * calls share one load per list.
+ */
+const loadEmailDomainLists = async ({ disposable = true, free = true }: { disposable?: boolean; free?: boolean } = {}): Promise<void> => {
+    if (disposable) {
+        disposablePromise = loadOnce(
+            disposablePromise,
             // Both `/domains` subpaths resolve to a JS module (`dist/domains.js`) that
             // imports the JSON itself with the attribute, so these are plain imports:
             // adding `with { type: "json" }` here would make native ESM reject the JS
             // module (`ERR_IMPORT_ATTRIBUTE_TYPE_INCOMPATIBLE`). Bundlers inline the data
             // and never notice either way — only the published `dist/email-guard.mjs`
             // under real Node does, where a wrong form turns every signup into a 500.
-            import("@visulima/disposable-email-domains/domains"),
-            import("@visulima/free-email-domains/domains"),
-        ]);
+            async () => {
+                setDisposableDomains(listFromModule(await import("@visulima/disposable-email-domains/domains")));
+            },
+            () => {
+                disposablePromise = undefined;
+            },
+        );
+    }
 
-        setDisposableDomains(listFromModule(disposable));
-        setFreeDomains(listFromModule(free));
-    })();
+    if (free) {
+        freePromise = loadOnce(
+            freePromise,
+            async () => {
+                setFreeDomains(listFromModule(await import("@visulima/free-email-domains/domains")));
+                freeLoaded = true;
+            },
+            () => {
+                freePromise = undefined;
+            },
+        );
+    }
 
-    // Recorded synchronously so concurrent callers single-flight onto this run, and
-    // evicted on rejection so a transient failure doesn't brick the gate for the
-    // isolate's life — a memoised rejection would make `emailGateMiddleware` answer
-    // 500 forever. Mirrors `audit.ts`'s `ensured` and `migrate.ts`'s `migrating`.
-    listsPromise = run;
-    run.catch(() => {
-        listsPromise = undefined;
-    });
-
-    return run;
+    await Promise.all([disposable ? disposablePromise : undefined, free ? freePromise : undefined]);
 };
 
 /**
@@ -213,7 +243,10 @@ const classifyEmail = (email: string, config: EmailGateConfig = {}): EmailClassi
     // signup through as `business`. Fail loudly instead.
     try {
         assertDisposableListLoaded();
-        assertFreeListLoaded();
+
+        if (freeLoaded) {
+            assertFreeListLoaded();
+        }
     } catch (error) {
         throw new Error(
             "@lunora/auth: the email domain lists are not loaded; `await loadEmailDomainLists()` before calling classifyEmail (assertEmailAllowed does this for you).",
@@ -231,7 +264,7 @@ const classifyEmail = (email: string, config: EmailGateConfig = {}): EmailClassi
         return { domain, emailClass: "disposable" };
     }
 
-    if (isFreeDomain(domain, { allowDomains })) {
+    if (freeLoaded && isFreeDomain(domain, { allowDomains })) {
         return { domain, emailClass: "free" };
     }
 
@@ -276,9 +309,17 @@ const assertEmailAllowed = async (email: string, config: EmailGateConfig = {}): 
 
     // Ensure the domain lists are injected before classifying — this is what
     // keeps the gate edge-safe (workerd has no `node:fs` auto-loader).
-    await loadEmailDomainLists();
+    // Direct callers get the full classification (both lists). The middleware and the
+    // signup hook pass `lists` to load only what their config consumes.
+    const lists = config.lists ?? {};
+    const disposable = lists.disposable !== false;
 
-    const classification = classifyEmail(email, config);
+    await loadEmailDomainLists({ disposable, free: lists.free !== false });
+
+    const extracted = extractDomain(email);
+    const classification: EmailClassification = disposable
+        ? classifyEmail(email, config)
+        : { domain: extracted === undefined ? undefined : toAsciiDomain(extracted), emailClass: "business" };
 
     if (classification.emailClass === "disposable" && config.blockDisposable !== false) {
         throw new LunoraError(
@@ -320,7 +361,11 @@ const emailGateMiddleware =
             throw new LunoraError("VALIDATION_ERROR", "@lunora/auth: emailGateMiddleware received no email to check.");
         }
 
-        const classification = await assertEmailAllowed(email, options);
+        const observed = options.onClassify !== undefined;
+        const classification = await assertEmailAllowed(email, {
+            ...options,
+            lists: { disposable: options.blockDisposable !== false || observed, free: observed },
+        });
 
         options.onClassify?.(classification, ctx);
 
