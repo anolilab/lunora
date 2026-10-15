@@ -1,7 +1,10 @@
+import { DatabaseSync } from "node:sqlite";
+
 import type { EmbeddingModel } from "ai";
 import { describe, expect, it, vi } from "vitest";
 
 import { defineRag } from "../src/rag";
+import { sqliteVectorStore } from "../src/rag/sqlite-vector-store";
 import type { RagContext, RagVectors, RagVectorUpsertInput } from "../src/rag/types";
 
 vi.mock(import("ai"), async (importOriginal) => {
@@ -97,5 +100,39 @@ describe("defineRag index batching", () => {
 
         await expect(big(ctxFor(vectors)).index({ id: "doc", text: "ignored" })).rejects.toThrow(/per-vector ceiling/u);
         expect(manyCalls).toHaveLength(0);
+    });
+
+    it("keeps per-chunk progress on a sqlite store when a later write fails", async () => {
+        expect.assertions(2);
+
+        const database = new DatabaseSync(":memory:");
+        let inserts = 0;
+        const store = sqliteVectorStore({
+            exec: (sql, parameters) => {
+                if (/^\s*INSERT/iu.test(sql)) {
+                    inserts += 1;
+
+                    if (inserts === 3) {
+                        throw new Error("disk full");
+                    }
+                }
+
+                return database.prepare(sql).all(...(parameters as never[]));
+            },
+        });
+        const sqliteRag = defineRag({ allowSharedNamespace: true, chunk: pipeChunker, index: "docs", store: () => store });
+        const seen: number[] = [];
+
+        await expect(
+            sqliteRag({ ai: ctxFor(fakeVectors(false).vectors).ai }).index({
+                id: "doc",
+                onChunk: ({ chunkIndex }) => seen.push(chunkIndex),
+                text: makeText(4),
+            }),
+        ).rejects.toThrow(/disk full/u);
+
+        expect(seen).toStrictEqual(expect.arrayContaining([0, 1]));
+
+        database.close();
     });
 });
