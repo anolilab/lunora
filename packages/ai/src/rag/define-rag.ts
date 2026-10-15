@@ -86,31 +86,47 @@ const MODEL_KEY = "__ragModel";
 const INTERNAL_KEYS = new Set([CHUNK_INDEX_KEY, COUNT_KEY, HASH_KEY, IMPORTANCE_KEY, MODEL_KEY, SOURCE_KEY, TEXT_KEY]);
 
 /**
- * Write chunk records: `upsertMany` in {@link UPSERT_BATCH}-sized calls when the
- * store has it (one subrequest per batch instead of per chunk), else one
- * bounded-concurrent `upsert` per chunk. `notify` fires after each chunk's write.
+ * Write chunk records, chunk #0 LAST. Chunk #0 carries the document's
+ * bookkeeping (hash, chunk count, model tag), so writing it first would let a
+ * failed later write leave a partial index that claims to be complete, and a
+ * retry would take the `unchanged` shortcut. Chunks 1..n go first: `upsertMany`
+ * in {@link UPSERT_BATCH}-sized calls when the store has it (one subrequest per
+ * batch instead of per chunk), else one bounded-concurrent `upsert` per chunk.
+ * Then chunk #0 alone (a one-element `upsertMany` on the batch path).
+ * `notify` fires after each chunk's write; chunk #0's comes last.
  * ponytail: batches run sequentially so `notify` keeps index order; add bounded concurrency if a document needs >10k chunks.
  */
 const writeRecords = async (store: RagVectorStore, records: ReadonlyArray<RagVectorUpsertInput>, notify: (chunkIndex: number) => void): Promise<void> => {
+    if (records.length === 0) {
+        return;
+    }
+
+    const rest = records.slice(1);
+
     if (!store.upsertMany) {
-        await concurrentMap(records, INDEX_CONCURRENCY, async (record, chunkIndex) => {
+        await concurrentMap(rest, INDEX_CONCURRENCY, async (record, restIndex) => {
             await store.upsert(record);
-            notify(chunkIndex);
+            notify(restIndex + 1);
         });
+        await store.upsert(records[0] as RagVectorUpsertInput);
+        notify(0);
 
         return;
     }
 
-    for (let start = 0; start < records.length; start += UPSERT_BATCH) {
-        const end = Math.min(start + UPSERT_BATCH, records.length);
+    for (let start = 0; start < rest.length; start += UPSERT_BATCH) {
+        const end = Math.min(start + UPSERT_BATCH, rest.length);
 
         // eslint-disable-next-line no-await-in-loop -- sequential by design, see above
-        await store.upsertMany(records.slice(start, end));
+        await store.upsertMany(rest.slice(start, end));
 
-        for (let chunkIndex = start; chunkIndex < end; chunkIndex += 1) {
-            notify(chunkIndex);
+        for (let restIndex = start; restIndex < end; restIndex += 1) {
+            notify(restIndex + 1);
         }
     }
+
+    await store.upsertMany([records[0] as RagVectorUpsertInput]);
+    notify(0);
 };
 
 /**

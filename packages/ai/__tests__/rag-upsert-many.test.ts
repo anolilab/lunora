@@ -6,6 +6,7 @@ import { describe, expect, it, vi } from "vitest";
 import { defineRag } from "../src/rag";
 import { sqliteVectorStore } from "../src/rag/sqlite-vector-store";
 import type { RagContext, RagVectors, RagVectorUpsertInput } from "../src/rag/types";
+import type { RagVectorStore } from "../src/rag/vector-store";
 
 vi.mock(import("ai"), async (importOriginal) => {
     const actual = await importOriginal<typeof import("ai")>();
@@ -56,6 +57,20 @@ const ctxFor = (vectors: RagVectors): RagContext => {
     };
 };
 
+const fakeVectorStore = (stored: Map<string, RagVectorUpsertInput>): RagVectorStore => {
+    return {
+        capabilities: { maxDimensions: false, maxIdBytes: false, maxMetadataBytes: false, maxTopK: 100, maxTopKWithMetadata: 100 },
+        deleteByIds: async () => undefined,
+        getByIds: async (ids) => ids.flatMap((id) => (stored.has(id) ? [{ id, metadata: stored.get(id)?.metadata }] : [])),
+        query: async () => {
+            return { count: 0, matches: [] };
+        },
+        upsert: async (record) => {
+            stored.set(record.id, record);
+        },
+    };
+};
+
 const rag = defineRag({ allowSharedNamespace: true, chunk: pipeChunker, index: "docs" });
 
 describe("defineRag index batching", () => {
@@ -66,7 +81,7 @@ describe("defineRag index batching", () => {
 
         await rag(ctxFor(vectors)).index({ id: "doc", text: makeText(CHUNKS) });
 
-        expect(manyCalls).toStrictEqual([1000, 1000, 500]);
+        expect(manyCalls).toStrictEqual([1000, 1000, 499, 1]);
         expect(upsertCalls).toHaveLength(0);
     });
 
@@ -80,7 +95,7 @@ describe("defineRag index batching", () => {
         expect(upsertCalls).toHaveLength(CHUNKS);
     });
 
-    it("fires onChunk once per chunk in index order", async () => {
+    it("fires onChunk once per chunk, chunk 0 last", async () => {
         expect.assertions(1);
 
         const { vectors } = fakeVectors(true);
@@ -88,7 +103,7 @@ describe("defineRag index batching", () => {
 
         await rag(ctxFor(vectors)).index({ id: "doc", onChunk: ({ chunkIndex }) => seen.push(chunkIndex), text: makeText(CHUNKS) });
 
-        expect(seen).toStrictEqual(Array.from({ length: CHUNKS }, (_, index) => index));
+        expect(seen).toStrictEqual([...Array.from({ length: CHUNKS - 1 }, (_, index) => index + 1), 0]);
     });
 
     it("rejects an oversized chunk before any write", async () => {
@@ -103,7 +118,7 @@ describe("defineRag index batching", () => {
     });
 
     it("keeps per-chunk progress on a sqlite store when a later write fails", async () => {
-        expect.assertions(2);
+        expect.assertions(3);
 
         const database = new DatabaseSync(":memory:");
         let inserts = 0;
@@ -131,8 +146,63 @@ describe("defineRag index batching", () => {
             }),
         ).rejects.toThrow(/disk full/u);
 
-        expect(seen).toStrictEqual(expect.arrayContaining([0, 1]));
+        expect(seen).toHaveLength(2);
+        expect(seen).not.toContain(0);
 
         database.close();
+    });
+
+    it("does not report unchanged after a partial index, because chunk 0 is written last", async () => {
+        expect.assertions(4);
+
+        const stored = new Map<string, RagVectorUpsertInput>();
+        let failing = true;
+        const flaky = defineRag({
+            allowSharedNamespace: true,
+            chunk: pipeChunker,
+            index: "docs",
+            store: () => {
+                return {
+                    ...fakeVectorStore(stored),
+                    upsert: async (record: RagVectorUpsertInput) => {
+                        if (failing && record.id.endsWith("#2")) {
+                            throw new Error("write failed");
+                        }
+
+                        stored.set(record.id, record);
+                    },
+                };
+            },
+        });
+
+        await expect(flaky(ctxFor(fakeVectors(false).vectors)).index({ id: "doc", text: "a|b|c" })).rejects.toThrow(/write failed/u);
+        expect(stored.has("doc#0")).toBe(false);
+
+        failing = false;
+
+        const retry = await flaky(ctxFor(fakeVectors(false).vectors)).index({ id: "doc", text: "a|b|c" });
+
+        expect(retry.unchanged).toBe(false);
+        expect(stored.has("doc#2")).toBe(true);
+    });
+
+    it("leaves chunk 0 unwritten when onChunk throws on chunk 1", async () => {
+        expect.assertions(2);
+
+        const stored = new Map<string, RagVectorUpsertInput>();
+        const callbackRag = defineRag({ allowSharedNamespace: true, chunk: pipeChunker, index: "docs", store: () => fakeVectorStore(stored) });
+
+        await expect(
+            callbackRag(ctxFor(fakeVectors(false).vectors)).index({
+                id: "doc",
+                onChunk: ({ chunkIndex }) => {
+                    if (chunkIndex === 1) {
+                        throw new Error("callback failed");
+                    }
+                },
+                text: "a|b|c",
+            }),
+        ).rejects.toThrow(/callback failed/u);
+        expect(stored.has("doc#0")).toBe(false);
     });
 });

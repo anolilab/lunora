@@ -1377,9 +1377,9 @@ describe(defineRag, () => {
             });
 
             expect(calls).toStrictEqual([
-                { chunkIndex: 0, id: "doc-1#0", total: 3 },
                 { chunkIndex: 1, id: "doc-1#1", total: 3 },
                 { chunkIndex: 2, id: "doc-1#2", total: 3 },
+                { chunkIndex: 0, id: "doc-1#0", total: 3 },
             ]);
         });
 
