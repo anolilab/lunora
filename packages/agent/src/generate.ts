@@ -96,7 +96,13 @@ type AiModule = typeof import("ai");
  */
 let aiPromise: Promise<AiModule> | undefined;
 const loadAi = (): Promise<AiModule> => {
-    aiPromise ??= import("ai");
+    // A rejected import is not memoised: the extractors call this directly and a durable step
+    // retry must be able to load again.
+    aiPromise ??= import("ai").catch((error: unknown) => {
+        aiPromise = undefined;
+
+        throw error;
+    });
 
     return aiPromise;
 };
