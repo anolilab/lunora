@@ -43,6 +43,8 @@ export {
 } from "./auth-do";
 export type { LunoraAuth, LunoraAuthOptions } from "./create-auth";
 export { createAuth, resolveAuthOptions } from "./create-auth";
+export type { AuthDataPortLike, AuthImportResult, AuthReplaceResult } from "./data-port";
+export { authCredentialTableNames, authTableNames, createSqlAuthDataPort } from "./data-port";
 export { authDiscoveryPaths, authDiscoveryPathsFor, handleAuthDiscoveryRequest } from "./discovery";
 export { authDoColumnAdditions, authDoSchemaStatements } from "./do-schema";
 export type { AuthJurisdiction, AuthNamespaceLike, DoAuthWiring, DoAuthWiringOptions } from "./do-wiring";
@@ -58,6 +60,7 @@ export type { AuthJurisdictionMove, AuthMoveResult, AuthMoveTableReport } from "
 export { legacyIssuerCleanupStatements } from "./legacy-issuer";
 export type { LunoraAuthApiContext, WithAuthPluginsMiddleware, WithAuthPluginsOptions } from "./middleware";
 export { LunoraAuthHeadersError, withAuthPlugins } from "./middleware";
+export { compileMigrationsSql, ensureMigrated } from "./migrate";
 export { default as authTables } from "./schema";
 export type { SessionPolicy } from "./session";
 export { sessionPresets, validateSessionPolicy } from "./session";

@@ -35,6 +35,7 @@ import type { AuthAuditEntry, ReadAuthAuditOptions } from "./audit";
 import { AUTH_AUDIT_TABLE, createAuthAuditReader, ensureAuthAuditTable } from "./audit";
 import type { LunoraAuth, LunoraAuthOptions } from "./create-auth";
 import { createAuth, resolveAuthOptions } from "./create-auth";
+import { parentsFirst } from "./data-port";
 import { handleAuthDiscoveryRequest } from "./discovery";
 import { authDoColumnAdditions, authDoSchemaStatements } from "./do-schema";
 import type { DoStorageLike } from "./do-store";
@@ -199,11 +200,21 @@ class LunoraAuthDO {
 
         const { tables } = getAuthTablesWithResolvedIndexes(resolved);
 
-        // The copy into a pinned object goes `user`, `account`, `session` first, and the
-        // unbounded audit and rate-limit tables last.
+        // The copy into a pinned object (and the data port's export) goes parents
+        // first — every table after the tables it references — and the unbounded
+        // audit and rate-limit tables last.
+        const rateLimit = tables["rateLimit"]?.modelName ?? "rateLimit";
+        const leading = [tables["user"]?.modelName ?? "user", tables["account"]?.modelName ?? "account", tables["session"]?.modelName ?? "session"];
+
         this.#moveOrder = {
-            first: [tables["user"]?.modelName ?? "user", tables["account"]?.modelName ?? "account", tables["session"]?.modelName ?? "session"],
-            last: [AUTH_AUDIT_TABLE, tables["rateLimit"]?.modelName ?? "rateLimit"],
+            // `user`, `account`, `session` lead (each references only `user`); the rest follow parents first.
+            first: [
+                ...leading,
+                ...parentsFirst(tables)
+                    .map(([, physical]) => physical)
+                    .filter((physical) => physical !== rateLimit && !leading.includes(physical)),
+            ],
+            last: [AUTH_AUDIT_TABLE, rateLimit],
         };
 
         if (!this.#schemaApplied) {

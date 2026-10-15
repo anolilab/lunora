@@ -11,11 +11,14 @@
 import { MAX_BODY_BYTES } from "./body-readers";
 import type { ShardingInfo, WorkerOptions } from "./create-worker";
 import { LunoraError } from "./errors";
+import type { SectionRow } from "./export-sections";
+import { assertSupportedHeader, HEADER_TABLE, importSectionRows, isSectionTable } from "./export-sections";
 import type { QueryCoordinator } from "./query-coordinator";
 import type { ShardNamespaceLike } from "./resolve-shard";
 
 interface AdminBatch {
-    rows: { doc: Record<string, unknown>; table: string }[];
+    /** Each row with its physical source line (a staged replace stores it for error attribution at commit). */
+    rows: { doc: Record<string, unknown>; line: number; table: string }[];
     shardKey: string;
     startLine: number;
 }
@@ -101,6 +104,12 @@ interface BucketedImport {
      * failed row twice — once in its bucket and again as an error.
      */
     received: number;
+
+    /**
+     * Section lines (`$lunora` / `$auth` / `$kv` / `$storage`, see
+     * `./export-sections`), in file order.
+     */
+    sectionRows: SectionRow[];
 }
 
 /**
@@ -109,8 +118,14 @@ interface BucketedImport {
  * the global-rows list, or the per-row error list. Pure routing — the caller
  * fans the buckets out to their storage planes.
  */
-const bucketImportStream = async (request: Request, options: WorkerOptions, defaultShard: string): Promise<BucketedImport> => {
-    if (!request.body) {
+const bucketImportStream = async (
+    request: Request,
+    options: WorkerOptions,
+    defaultShard: string,
+    replaceScope: ReadonlySet<string> | undefined,
+): Promise<BucketedImport> => {
+    // An empty replace is meaningful — it empties every table in scope.
+    if (!request.body && replaceScope === undefined) {
         throw new LunoraError("Import endpoint requires a request body", { code: "BAD_REQUEST", status: 400 });
     }
 
@@ -120,12 +135,17 @@ const bucketImportStream = async (request: Request, options: WorkerOptions, defa
     // only describe rows physically contiguous from the first one.
     const globalRows: { doc: Record<string, unknown>; line: number; table: string }[] = [];
     const perShard = new Map<string, AdminBatch>();
+    const sectionRows: SectionRow[] = [];
     let received = 0;
     // Physical 1-based source line index. Incremented for EVERY line handled,
     // including blank ones, so `error.line` / `startLine` always point at the
     // user's actual source line. Counting only non-blank lines (the old bug)
     // mis-attributed errors whenever the NDJSON had a leading/interior blank line.
     let physicalLine = 0;
+
+    if (!request.body) {
+        return { errors, globalRows, perShard, received, sectionRows };
+    }
 
     const reader = request.body.getReader();
     const decoder = new TextDecoder();
@@ -157,6 +177,24 @@ const bucketImportStream = async (request: Request, options: WorkerOptions, defa
         }
 
         const { doc: documentRow, table } = row;
+
+        if (isSectionTable(table)) {
+            // A header from a newer format is refused here, before anything is written.
+            if (table === HEADER_TABLE) {
+                assertSupportedHeader(documentRow);
+            }
+
+            sectionRows.push({ doc: documentRow, line: physicalLine, table });
+
+            return;
+        }
+
+        if (replaceScope !== undefined && !replaceScope.has(table)) {
+            errors.push({ code: "BAD_ROW", line: physicalLine, message: `table "${table}" is not in this replace import's tables`, table });
+
+            return;
+        }
+
         const info = options.resolveTableSharding?.(table);
 
         if (info?.mode.kind === "global") {
@@ -178,9 +216,9 @@ const bucketImportStream = async (request: Request, options: WorkerOptions, defa
         const existing = perShard.get(resolved.shardKey);
 
         if (existing) {
-            existing.rows.push({ doc: documentRow, table });
+            existing.rows.push({ doc: documentRow, line: physicalLine, table });
         } else {
-            perShard.set(resolved.shardKey, { rows: [{ doc: documentRow, table }], shardKey: resolved.shardKey, startLine: physicalLine });
+            perShard.set(resolved.shardKey, { rows: [{ doc: documentRow, line: physicalLine, table }], shardKey: resolved.shardKey, startLine: physicalLine });
         }
     };
 
@@ -222,7 +260,7 @@ const bucketImportStream = async (request: Request, options: WorkerOptions, defa
         handleLine(buffer);
     }
 
-    return { errors, globalRows, perShard, received };
+    return { errors, globalRows, perShard, received, sectionRows };
 };
 
 /**
@@ -279,10 +317,89 @@ const mergeImportResult = (
 };
 
 /**
+ * Append one audit entry for an import half no shard records itself (see
+ * `recordImportAudit` on the shard). Gets counts and table names only — never a
+ * row. Throws when the entry could not be written.
+ */
+type RecordImportAudit = (args: Record<string, unknown>) => Promise<void>;
+
+/**
+ * Record a plane's outcome in the audit log. An audit write that fails comes
+ * back as a warning rather than failing the import: the data is already
+ * written, and an error would invite a retry into duplicate rows.
+ */
+const auditPlane = async (
+    recordAudit: RecordImportAudit,
+    warnings: string[],
+    op: "importGlobal" | "importSections",
+    result: { conflicts: number; deleted?: Record<string, number>; errors: ReadonlyArray<ImportRowError>; inserted: Record<string, number> },
+    scope: { replaceTables?: ReadonlyArray<string>; session?: string; tables?: ReadonlyArray<string> },
+): Promise<void> => {
+    try {
+        await recordAudit({
+            conflicts: result.conflicts,
+            errors: result.errors.length,
+            inserted: result.inserted,
+            op,
+            ...(result.deleted === undefined ? {} : { deleted: result.deleted }),
+            ...scope,
+        });
+    } catch (error) {
+        warnings.push(`the ${op} audit entry was not recorded: ${error instanceof Error ? error.message : String(error)}`);
+    }
+};
+
+/** Hand the `.global()` rows to the user-supplied `importGlobals`, folding its result into `totals` and auditing it as `importGlobal`. */
+const importGlobalPlane = async (
+    options: WorkerOptions,
+    totals: ImportTotals,
+    warnings: string[],
+    globalRows: BucketedImport["globalRows"],
+    recordAudit: RecordImportAudit,
+): Promise<void> => {
+    if (globalRows.length === 0) {
+        return;
+    }
+
+    if (!options.importGlobals) {
+        for (const globalRow of globalRows) {
+            totals.errors.push({
+                code: "GLOBAL_NOT_CONFIGURED",
+                line: globalRow.line,
+                message: `row targets global table "${globalRow.table}" but no \`importGlobals\` is configured`,
+                table: globalRow.table,
+            });
+        }
+
+        return;
+    }
+
+    // Pass each row's true physical `line` (carried on the row) so error
+    // attribution is correct even when global rows are interspersed with shard
+    // rows or blank lines. `startLine` is the first global row's line, retained
+    // only as a backward-compat fallback.
+    const result = await options.importGlobals({ rows: globalRows, startLine: globalRows[0]?.line ?? 1 });
+
+    mergeImportResult(totals, result);
+
+    const tables = [...new Set(globalRows.map((row) => row.table))].toSorted((a, b) => a.localeCompare(b));
+
+    await auditPlane(recordAudit, warnings, "importGlobal", result, { tables });
+};
+
+/** Why a worker with no `resolveTableSharding` routed every row to the default shard. */
+const UNSHARDED_WARNING: string =
+    "no `resolveTableSharding` is configured, so every row was routed to the default shard and no row could be recognised as `.global()` — " +
+    "correct for a single-shard app, silent misplacement for a sharded one";
+
+/**
  * Stream the inbound NDJSON body, bucket rows per shard, and forward them to
  * the coordinator's import fan-out. Globals are siphoned off and handed to the
  * `importGlobals` callback (if present) so the two storage planes can run in
  * parallel.
+ *
+ * An append: an `_id` that already exists is a skipped conflict. A replace is a
+ * staged session (`./import-session`), which reuses {@link bucketImportStream}.
  */
 const streamingImport = async (
     request: Request,
@@ -290,6 +407,7 @@ const streamingImport = async (
     coordinator: QueryCoordinator,
     forwardedHeaders: Record<string, string>,
     namespace: ShardNamespaceLike,
+    recordAudit: RecordImportAudit,
 ): Promise<{
     conflicts: number;
     errors: ImportRowError[];
@@ -299,8 +417,7 @@ const streamingImport = async (
     warnings?: string[];
 }> => {
     const defaultShard = options.defaultShardKey ?? "__root__";
-
-    const { errors, globalRows, perShard, received } = await bucketImportStream(request, options, defaultShard);
+    const { errors, globalRows, perShard, received, sectionRows } = await bucketImportStream(request, options, defaultShard, undefined);
 
     const totals: ImportTotals = { conflicts: 0, errors, failed: [], inserted: {} };
     const warnings: string[] = [];
@@ -313,10 +430,7 @@ const streamingImport = async (
     // cancelling out each other's diagnostics is why this read as a 200 with
     // nothing written and nothing wrong.
     if (options.resolveTableSharding === undefined && perShard.size > 0) {
-        warnings.push(
-            "no `resolveTableSharding` is configured, so every row was routed to the default shard and no row could be recognised as `.global()` — " +
-                "correct for a single-shard app, silent misplacement for a sharded one",
-        );
+        warnings.push(UNSHARDED_WARNING);
     }
 
     // Fan shard-local batches out via the coordinator. The order of batches
@@ -327,36 +441,19 @@ const streamingImport = async (
         // the app reads — using the raw `options.shardDO` would land rows in the
         // un-pinned global DOs, outside the residency boundary and unreachable by
         // the live worker (a fail-open leak).
-        const result = await coordinator.orchestrateImport(namespace, {
-            batches: [...perShard.values()],
-            headers: forwardedHeaders,
-        });
+        const result = await coordinator.orchestrateImport(namespace, { batches: [...perShard.values()], headers: forwardedHeaders });
 
         mergeImportResult(totals, result);
         totals.failed.push(...shardFailures(result.shards));
     }
 
-    // Run global imports through the user-supplied helper.
-    if (globalRows.length > 0) {
-        if (options.importGlobals) {
-            // Pass each row's true physical `line` (carried on the row) so error
-            // attribution is correct even when global rows are interspersed with
-            // shard rows or blank lines. `startLine` is the first global row's
-            // line, retained only as a backward-compat fallback.
-            const startLine = globalRows[0]?.line ?? 1;
-            const result = await options.importGlobals({ rows: globalRows, startLine });
+    await importGlobalPlane(options, totals, warnings, globalRows, recordAudit);
 
-            mergeImportResult(totals, result);
-        } else {
-            for (const globalRow of globalRows) {
-                totals.errors.push({
-                    code: "GLOBAL_NOT_CONFIGURED",
-                    line: globalRow.line,
-                    message: `row targets global table "${globalRow.table}" but no \`importGlobals\` is configured`,
-                    table: globalRow.table,
-                });
-            }
-        }
+    if (sectionRows.length > 0) {
+        const sections = await importSectionRows(options, sectionRows);
+
+        mergeImportResult(totals, sections);
+        await auditPlane(recordAudit, warnings, "importSections", sections, {});
     }
 
     // `received` is the honest denominator, counted as each line was read (see
@@ -381,5 +478,5 @@ const streamingImport = async (
     };
 };
 
-export type { ImportRowError };
-export { streamingImport };
+export type { BucketedImport, ImportRowError, ImportShardFailure, RecordImportAudit };
+export { auditPlane, bucketImportStream, streamingImport, UNSHARDED_WARNING };

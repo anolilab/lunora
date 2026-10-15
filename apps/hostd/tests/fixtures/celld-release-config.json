@@ -1,0 +1,789 @@
+[
+    {
+        "name": "every binding type celld runs",
+        "manifest": {
+            "bindings": [
+                {
+                    "binding": "ASSETS",
+                    "type": "assets"
+                },
+                {
+                    "binding": "DB",
+                    "resource": "app",
+                    "resourceId": "x",
+                    "type": "d1"
+                },
+                {
+                    "binding": "SHARD",
+                    "className": "ShardDO",
+                    "sqlite": true,
+                    "type": "durable_object"
+                },
+                {
+                    "binding": "SESSION",
+                    "className": "sessionDO",
+                    "sqlite": true,
+                    "type": "durable_object"
+                },
+                {
+                    "binding": "SHARD_2",
+                    "className": "ShardDO",
+                    "sqlite": true,
+                    "type": "durable_object"
+                },
+                {
+                    "binding": "_Agent",
+                    "className": "_Agent",
+                    "sqlite": true,
+                    "type": "durable_object"
+                },
+                {
+                    "binding": "CACHE",
+                    "type": "kv"
+                },
+                {
+                    "binding": "JOBS",
+                    "resource": "jobs",
+                    "type": "queue_producer"
+                },
+                {
+                    "binding": "JOBS_IN",
+                    "resource": "jobs",
+                    "type": "queue_consumer"
+                },
+                {
+                    "binding": "UPLOADS",
+                    "resource": "uploads",
+                    "type": "r2"
+                },
+                {
+                    "binding": "FLOW",
+                    "className": "Flow",
+                    "resource": "my-flow",
+                    "type": "workflow"
+                },
+                {
+                    "binding": "OTHER_FLOW",
+                    "className": "OtherFlow",
+                    "type": "workflow"
+                }
+            ],
+            "compatibilityDate": "2026-04-01",
+            "compatibilityFlags": ["nodejs_compat", "global_fetch_strictly_public"]
+        },
+        "options": {
+            "alias": "my-app",
+            "crons": ["*/5 * * * *", "0 0 * * *"],
+            "hasAssets": true,
+            "vars": {
+                "API_KEY": "secret-value",
+                "WORKER_ENV": "production"
+            },
+            "assetsConfig": {
+                "html_handling": "drop-trailing-slash",
+                "not_found_handling": "single-page-application",
+                "run_worker_first": ["/api/*"]
+            }
+        },
+        "expected": {
+            "name": "my-app",
+            "main": "worker.js",
+            "no_bundle": true,
+            "compatibility_date": "2026-04-01",
+            "compatibility_flags": ["nodejs_compat", "global_fetch_strictly_public"],
+            "vars": {
+                "API_KEY": "secret-value",
+                "WORKER_ENV": "production"
+            },
+            "triggers": {
+                "crons": ["*/5 * * * *", "0 0 * * *"]
+            },
+            "assets": {
+                "binding": "ASSETS",
+                "directory": "./assets",
+                "html_handling": "drop-trailing-slash",
+                "not_found_handling": "single-page-application",
+                "run_worker_first": ["/api/*"]
+            },
+            "d1_databases": [
+                {
+                    "binding": "DB",
+                    "database_id": "my-app--db",
+                    "database_name": "my-app--db"
+                }
+            ],
+            "durable_objects": {
+                "bindings": [
+                    {
+                        "class_name": "ShardDO",
+                        "name": "SHARD"
+                    },
+                    {
+                        "class_name": "sessionDO",
+                        "name": "SESSION"
+                    },
+                    {
+                        "class_name": "ShardDO",
+                        "name": "SHARD_2"
+                    },
+                    {
+                        "class_name": "_Agent",
+                        "name": "_Agent"
+                    }
+                ]
+            },
+            "kv_namespaces": [
+                {
+                    "binding": "CACHE",
+                    "id": "my-app--cache"
+                }
+            ],
+            "migrations": [
+                {
+                    "new_sqlite_classes": ["_Agent", "sessionDO", "ShardDO"],
+                    "tag": "lunora-v1"
+                }
+            ],
+            "queues": {
+                "producers": [
+                    {
+                        "binding": "JOBS",
+                        "queue": "my-app--jobs"
+                    }
+                ],
+                "consumers": [
+                    {
+                        "queue": "my-app--jobs"
+                    }
+                ]
+            },
+            "r2_buckets": [
+                {
+                    "binding": "UPLOADS",
+                    "bucket_name": "my-app--uploads"
+                }
+            ],
+            "workflows": [
+                {
+                    "binding": "FLOW",
+                    "class_name": "Flow",
+                    "name": "my-flow"
+                },
+                {
+                    "binding": "OTHER_FLOW",
+                    "class_name": "OtherFlow",
+                    "name": "OTHER_FLOW"
+                }
+            ]
+        }
+    },
+    {
+        "name": "a minimal release: no bindings, empty vars and crons",
+        "manifest": {
+            "bindings": []
+        },
+        "options": {
+            "alias": "my-app",
+            "crons": [],
+            "hasAssets": false,
+            "vars": {}
+        },
+        "expected": {
+            "name": "my-app",
+            "main": "worker.js",
+            "no_bundle": true,
+            "compatibility_flags": ["nodejs_compat"]
+        }
+    },
+    {
+        "name": "unsupported binding types are refused together",
+        "manifest": {
+            "bindings": [
+                {
+                    "binding": "AI",
+                    "type": "ai"
+                },
+                {
+                    "binding": "DB",
+                    "type": "d1"
+                },
+                {
+                    "binding": "API",
+                    "resource": "api-worker",
+                    "type": "service"
+                },
+                {
+                    "binding": "VEC",
+                    "resource": "index",
+                    "type": "vectorize"
+                }
+            ]
+        },
+        "options": {
+            "alias": "my-app",
+            "crons": [],
+            "hasAssets": false,
+            "vars": {}
+        },
+        "error": {
+            "message": "this release cannot run on celld: AI (ai): ai bindings do not run on celld; API (service): service bindings do not run on celld; VEC (vectorize): vectorize bindings do not run on celld",
+            "refused": [
+                {
+                    "binding": "AI",
+                    "reason": "ai bindings do not run on celld",
+                    "type": "ai"
+                },
+                {
+                    "binding": "API",
+                    "reason": "service bindings do not run on celld",
+                    "type": "service"
+                },
+                {
+                    "binding": "VEC",
+                    "reason": "vectorize bindings do not run on celld",
+                    "type": "vectorize"
+                }
+            ]
+        }
+    },
+    {
+        "name": "a KV-backed Durable Object is refused",
+        "manifest": {
+            "bindings": [
+                {
+                    "binding": "LEGACY",
+                    "className": "LegacyDO",
+                    "sqlite": false,
+                    "type": "durable_object"
+                }
+            ]
+        },
+        "options": {
+            "alias": "my-app",
+            "crons": [],
+            "hasAssets": false,
+            "vars": {}
+        },
+        "error": {
+            "message": "this release cannot run on celld: LEGACY (durable_object): class LegacyDO is KV-backed, and celld creates only SQLite-backed classes",
+            "refused": [
+                {
+                    "binding": "LEGACY",
+                    "reason": "class LegacyDO is KV-backed, and celld creates only SQLite-backed classes",
+                    "type": "durable_object"
+                }
+            ]
+        }
+    },
+    {
+        "name": "a Durable Object of another Worker is refused",
+        "manifest": {
+            "bindings": [
+                {
+                    "binding": "FOREIGN",
+                    "className": "TheirDO",
+                    "type": "durable_object"
+                }
+            ]
+        },
+        "options": {
+            "alias": "my-app",
+            "crons": [],
+            "hasAssets": false,
+            "vars": {}
+        },
+        "error": {
+            "message": "this release cannot run on celld: FOREIGN (durable_object): class TheirDO belongs to another Worker; a celld fleet runs one",
+            "refused": [
+                {
+                    "binding": "FOREIGN",
+                    "reason": "class TheirDO belongs to another Worker; a celld fleet runs one",
+                    "type": "durable_object"
+                }
+            ]
+        }
+    },
+    {
+        "name": "a Durable Object without a class is refused",
+        "manifest": {
+            "bindings": [
+                {
+                    "binding": "NAMELESS",
+                    "sqlite": true,
+                    "type": "durable_object"
+                }
+            ]
+        },
+        "options": {
+            "alias": "my-app",
+            "crons": [],
+            "hasAssets": false,
+            "vars": {}
+        },
+        "error": {
+            "message": "this release cannot run on celld: NAMELESS (durable_object): a Durable Object binding must name its class",
+            "refused": [
+                {
+                    "binding": "NAMELESS",
+                    "reason": "a Durable Object binding must name its class",
+                    "type": "durable_object"
+                }
+            ]
+        }
+    },
+    {
+        "name": "a workflow without a class is refused",
+        "manifest": {
+            "bindings": [
+                {
+                    "binding": "FLOW",
+                    "resource": "flow",
+                    "type": "workflow"
+                }
+            ]
+        },
+        "options": {
+            "alias": "my-app",
+            "crons": [],
+            "hasAssets": false,
+            "vars": {}
+        },
+        "error": {
+            "message": "this release cannot run on celld: FLOW (workflow): a workflow binding must name its class",
+            "refused": [
+                {
+                    "binding": "FLOW",
+                    "reason": "a workflow binding must name its class",
+                    "type": "workflow"
+                }
+            ]
+        }
+    },
+    {
+        "name": "an assets binding without assets",
+        "manifest": {
+            "bindings": [
+                {
+                    "binding": "ASSETS",
+                    "type": "assets"
+                }
+            ]
+        },
+        "options": {
+            "alias": "my-app",
+            "crons": [],
+            "hasAssets": false,
+            "vars": {}
+        },
+        "error": {
+            "message": "the manifest has an assets binding but the release carries no assets",
+            "refused": []
+        }
+    },
+    {
+        "name": "assets without an assets binding",
+        "manifest": {
+            "bindings": []
+        },
+        "options": {
+            "alias": "my-app",
+            "crons": [],
+            "hasAssets": true,
+            "vars": {}
+        },
+        "error": {
+            "message": "the release carries assets but its manifest has no assets binding",
+            "refused": []
+        }
+    },
+    {
+        "name": "assets without serving options",
+        "manifest": {
+            "bindings": [
+                {
+                    "binding": "STATIC",
+                    "type": "assets"
+                }
+            ]
+        },
+        "options": {
+            "alias": "my-app",
+            "crons": [],
+            "hasAssets": true,
+            "vars": {}
+        },
+        "expected": {
+            "name": "my-app",
+            "main": "worker.js",
+            "no_bundle": true,
+            "compatibility_flags": ["nodejs_compat"],
+            "assets": {
+                "binding": "STATIC",
+                "directory": "./assets"
+            }
+        }
+    },
+    {
+        "name": "assets with run_worker_first true",
+        "manifest": {
+            "bindings": [
+                {
+                    "binding": "ASSETS",
+                    "type": "assets"
+                }
+            ]
+        },
+        "options": {
+            "alias": "my-app",
+            "crons": [],
+            "hasAssets": true,
+            "vars": {},
+            "assetsConfig": {
+                "run_worker_first": true
+            }
+        },
+        "expected": {
+            "name": "my-app",
+            "main": "worker.js",
+            "no_bundle": true,
+            "compatibility_flags": ["nodejs_compat"],
+            "assets": {
+                "binding": "ASSETS",
+                "directory": "./assets",
+                "run_worker_first": true
+            }
+        }
+    },
+    {
+        "name": "queues: consumers share a producer's queue, a later producer of the same queue wins",
+        "manifest": {
+            "bindings": [
+                {
+                    "binding": "EMAIL_OUT",
+                    "resource": "email",
+                    "type": "queue_producer"
+                },
+                {
+                    "binding": "EMAIL_IN",
+                    "resource": "email",
+                    "type": "queue_consumer"
+                },
+                {
+                    "binding": "MAIL_OUT",
+                    "resource": "email",
+                    "type": "queue_producer"
+                },
+                {
+                    "binding": "AUDIT",
+                    "type": "queue_consumer"
+                },
+                {
+                    "binding": "AUDIT",
+                    "type": "queue_producer"
+                },
+                {
+                    "binding": "EXTERNAL",
+                    "resource": "someone-elses",
+                    "type": "queue_consumer"
+                }
+            ]
+        },
+        "options": {
+            "alias": "my-app",
+            "crons": [],
+            "hasAssets": false,
+            "vars": {}
+        },
+        "expected": {
+            "name": "my-app",
+            "main": "worker.js",
+            "no_bundle": true,
+            "compatibility_flags": ["nodejs_compat"],
+            "queues": {
+                "producers": [
+                    {
+                        "binding": "EMAIL_OUT",
+                        "queue": "my-app--email-out"
+                    },
+                    {
+                        "binding": "MAIL_OUT",
+                        "queue": "my-app--mail-out"
+                    },
+                    {
+                        "binding": "AUDIT",
+                        "queue": "my-app--audit"
+                    }
+                ],
+                "consumers": [
+                    {
+                        "queue": "my-app--mail-out"
+                    },
+                    {
+                        "queue": "my-app--audit"
+                    },
+                    {
+                        "queue": "my-app--external"
+                    }
+                ]
+            }
+        }
+    },
+    {
+        "name": "only consumers",
+        "manifest": {
+            "bindings": [
+                {
+                    "binding": "IN",
+                    "resource": "in",
+                    "type": "queue_consumer"
+                }
+            ]
+        },
+        "options": {
+            "alias": "my-app",
+            "crons": [],
+            "hasAssets": false,
+            "vars": {}
+        },
+        "expected": {
+            "name": "my-app",
+            "main": "worker.js",
+            "no_bundle": true,
+            "compatibility_flags": ["nodejs_compat"],
+            "queues": {
+                "consumers": [
+                    {
+                        "queue": "my-app--in"
+                    }
+                ]
+            }
+        }
+    },
+    {
+        "name": "an over-long resource name",
+        "manifest": {
+            "bindings": [
+                {
+                    "binding": "A_VERY_LONG_BINDING_NAME_FOR_A_BUCKET",
+                    "type": "r2"
+                }
+            ]
+        },
+        "options": {
+            "alias": "a-rather-long-project-alias-name",
+            "crons": [],
+            "hasAssets": false,
+            "vars": {}
+        },
+        "error": {
+            "message": "resource name \"a-rather-long-project-alias-name--a-very-long-binding-name-for-a-bucket\" exceeds 63 characters; shorten the project name or binding A_VERY_LONG_BINDING_NAME_FOR_A_BUCKET",
+            "refused": []
+        }
+    },
+    {
+        "name": "a resource name of exactly 63 characters",
+        "manifest": {
+            "bindings": [
+                {
+                    "binding": "BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB",
+                    "type": "kv"
+                }
+            ]
+        },
+        "options": {
+            "alias": "abcdef",
+            "crons": [],
+            "hasAssets": false,
+            "vars": {}
+        },
+        "expected": {
+            "name": "abcdef",
+            "main": "worker.js",
+            "no_bundle": true,
+            "compatibility_flags": ["nodejs_compat"],
+            "kv_namespaces": [
+                {
+                    "binding": "BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB",
+                    "id": "abcdef--bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+                }
+            ]
+        }
+    },
+    {
+        "name": "a malformed alias, named by the first resource",
+        "manifest": {
+            "bindings": [
+                {
+                    "binding": "DB",
+                    "type": "d1"
+                }
+            ]
+        },
+        "options": {
+            "alias": "My_App",
+            "crons": [],
+            "hasAssets": false,
+            "vars": {}
+        },
+        "error": {
+            "message": "alias \"My_App\" must be dash-separated runs of [a-z0-9], at most 63 characters",
+            "refused": []
+        }
+    },
+    {
+        "name": "a malformed alias with no resource to name",
+        "manifest": {
+            "bindings": [
+                {
+                    "binding": "SHARD",
+                    "className": "ShardDO",
+                    "sqlite": true,
+                    "type": "durable_object"
+                }
+            ]
+        },
+        "options": {
+            "alias": "My_App",
+            "crons": [],
+            "hasAssets": false,
+            "vars": {}
+        },
+        "expected": {
+            "name": "My_App",
+            "main": "worker.js",
+            "no_bundle": true,
+            "compatibility_flags": ["nodejs_compat"],
+            "durable_objects": {
+                "bindings": [
+                    {
+                        "class_name": "ShardDO",
+                        "name": "SHARD"
+                    }
+                ]
+            },
+            "migrations": [
+                {
+                    "new_sqlite_classes": ["ShardDO"],
+                    "tag": "lunora-v1"
+                }
+            ]
+        }
+    },
+    {
+        "name": "the job's compatibility date and flags win over the manifest's",
+        "manifest": {
+            "bindings": [],
+            "compatibilityDate": "2025-01-01",
+            "compatibilityFlags": ["from_manifest"]
+        },
+        "options": {
+            "alias": "my-app",
+            "crons": [],
+            "hasAssets": false,
+            "vars": {},
+            "compatibilityDate": "2026-09-01",
+            "compatibilityFlags": ["from_job", "nodejs_compat"]
+        },
+        "expected": {
+            "name": "my-app",
+            "main": "worker.js",
+            "no_bundle": true,
+            "compatibility_date": "2026-09-01",
+            "compatibility_flags": ["from_job", "nodejs_compat"]
+        }
+    },
+    {
+        "name": "the manifest's flags win over the default",
+        "manifest": {
+            "bindings": [],
+            "compatibilityDate": "2025-01-01",
+            "compatibilityFlags": []
+        },
+        "options": {
+            "alias": "my-app",
+            "crons": [],
+            "hasAssets": false,
+            "vars": {}
+        },
+        "expected": {
+            "name": "my-app",
+            "main": "worker.js",
+            "no_bundle": true,
+            "compatibility_date": "2025-01-01",
+            "compatibility_flags": []
+        }
+    },
+    {
+        "name": "no date and no flags anywhere",
+        "manifest": {
+            "bindings": []
+        },
+        "options": {
+            "alias": "my-app",
+            "crons": ["0 * * * *"],
+            "hasAssets": false,
+            "vars": {}
+        },
+        "expected": {
+            "name": "my-app",
+            "main": "worker.js",
+            "no_bundle": true,
+            "compatibility_flags": ["nodejs_compat"],
+            "triggers": {
+                "crons": ["0 * * * *"]
+            }
+        }
+    },
+    {
+        "name": "a manifest's null date is written as it is",
+        "manifest": {
+            "bindings": [],
+            "compatibilityDate": null,
+            "compatibilityFlags": null
+        },
+        "options": {
+            "alias": "my-app",
+            "crons": [],
+            "hasAssets": false,
+            "vars": {}
+        },
+        "expected": {
+            "name": "my-app",
+            "main": "worker.js",
+            "no_bundle": true,
+            "compatibility_date": null,
+            "compatibility_flags": ["nodejs_compat"]
+        }
+    },
+    {
+        "name": "vars keep their order, array-index keys first",
+        "manifest": {
+            "bindings": []
+        },
+        "options": {
+            "alias": "my-app",
+            "crons": [],
+            "hasAssets": false,
+            "vars": {
+                "2": "two",
+                "10": "ten",
+                "ZETA": "z",
+                "ALPHA": "a",
+                "": "empty"
+            }
+        },
+        "expected": {
+            "name": "my-app",
+            "main": "worker.js",
+            "no_bundle": true,
+            "compatibility_flags": ["nodejs_compat"],
+            "vars": {
+                "2": "two",
+                "10": "ten",
+                "ZETA": "z",
+                "ALPHA": "a",
+                "": "empty"
+            }
+        }
+    }
+]

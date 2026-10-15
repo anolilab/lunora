@@ -58,6 +58,8 @@ export const ERROR_CATALOG = {
     UNAUTHORIZED: { status: 401, title: "Unauthorized" },
     FORBIDDEN: { status: 403, title: "Forbidden" },
     NOT_FOUND: { status: 404, title: "Not found" },
+    SOLE_ORGANIZATION_OWNER: { status: 409, title: "Sole organization owner" },
+    YOU_ARE_NOT_ALLOWED_TO_DELETE_USERS: { status: 403, title: "Not allowed to delete users" },
 
     CONFLICT: {
         hint: [
@@ -387,6 +389,25 @@ export const ERROR_CATALOG = {
         title: "Export failed on one or more shards",
     },
     EXPORT_TAP_NOT_CONFIGURED: { status: 400, title: "Export tap not configured" },
+    // Export format 2 sections and staged (replace) import sessions.
+    AUTH_DATA_FAILED: { status: 502, title: "Auth data call to the auth object failed" },
+    AUTH_IMPORT_FAILED: { status: 409, title: "Auth row could not be imported" },
+    IMPORT_FORMAT_UNSUPPORTED: { status: 400, title: "Export format newer than this runtime reads" },
+    IMPORT_REFUSED: { status: 400, title: "Replace import refused on a shard" },
+    IMPORT_SESSION_CHANGED: { status: 409, title: "Import session changed after the commit's dry run" },
+    IMPORT_SESSION_CLOSED: { status: 409, title: "Import session closed to new batches" },
+    IMPORT_SESSION_COMMITTED: { status: 409, title: "Import session already committed" },
+    IMPORT_SESSION_COMMITTING: { status: 409, title: "Import session commit already under way" },
+    IMPORT_SESSION_CORRUPT: { status: 409, title: "Import session state unreadable" },
+    IMPORT_SESSION_EXPIRED: { status: 410, title: "Import session expired" },
+    IMPORT_SESSION_INCOMPLETE: { status: 409, title: "Import session has a batch that never closed" },
+    IMPORT_SESSION_MISMATCH: { status: 400, title: "Import session does not match this request" },
+    IMPORT_SESSION_NOT_COMMITTING: { status: 409, title: "Import session is not committing" },
+    IMPORT_SESSION_NOT_FOUND: { status: 404, title: "Import session not found" },
+    IMPORT_SESSION_REJECTED: { status: 409, title: "Import session rejected during staging" },
+    IMPORT_SESSION_STALE: { status: 409, title: "Import session belongs to an earlier session of the same id" },
+    SECTION_COMMIT_FAILED: { status: 502, title: "Export section could not be committed" },
+    SECTION_NOT_CONFIGURED: { status: 400, title: "Export section not configured on this worker" },
     FUNCTIONS_NOT_CONFIGURED: { status: 400, title: "Functions registry not configured" },
     GLOBALS_NOT_CONFIGURED: { status: 400, title: "Global-table introspector not configured" },
     ID_COLLISION: {
@@ -571,6 +592,18 @@ export const ERROR_CATALOG = {
     FORBIDDEN_SHARD: { status: 403, title: "Shard access forbidden" },
     GLOBAL_NOT_CONFIGURED: { status: 400, title: "Global table import not configured" },
     INVALID_INPUT: { status: 400, title: "Invalid input" },
+    /** App catalog: a fetched file could not be read. Internal: the message can carry the upstream's own failure text. */
+    FETCH: { internal: true, status: 502, title: "Catalog fetch failed" },
+    /** App catalog: the signed index or manifest is signed by a key the control plane does not trust, or the signature does not verify. */
+    BAD_SIGNATURE: { status: 422, title: "Catalog signature does not verify" },
+    UNKNOWN_KEY: { status: 422, title: "Catalog signed by an unknown key" },
+    /** App catalog: a fetched file does not hash to the digest its signed manifest names. */
+    HASH_MISMATCH: { status: 422, title: "Catalog file hash mismatch" },
+    /** App catalog: the signed index is malformed, stale, or dated in the future. */
+    INVALID_INDEX: { status: 502, title: "Invalid catalog index" },
+    /** App catalog: a manifest is malformed or names something it may not. */
+    INVALID_MANIFEST: { status: 422, title: "Invalid catalog manifest" },
+    UNSUPPORTED_FORMAT: { status: 422, title: "Unsupported catalog format" },
     /** A caller-supplied `RunOptions.id` that is not a safe key segment. NOT internal: the message is fixed guidance about the caller's own argument, and withholding it would leave them guessing at a 400. */
     INVALID_SCHEDULE_ID: { status: 400, title: "Invalid schedule id" },
     RATE_LIMITED: { status: 429, title: "Rate limited" },

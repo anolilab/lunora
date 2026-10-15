@@ -65,14 +65,27 @@ interface KvValueResult {
 interface KvIntrospector {
     /** Delete a key from a namespace. No-op when the key is absent. */
     deleteKey: (options: { key: string; namespace: string }) => Promise<void>;
-    /** Read a value (as text) and its metadata from a namespace key. */
-    getValue: (options: { key: string; namespace: string }) => Promise<KvValueResult>;
+
+    /**
+     * Read a value and its metadata from a namespace key — as text, or with
+     * `encoding: "base64"` as the base64 of its raw bytes (what the admin export
+     * uses, so a binary value survives the round trip).
+     */
+    getValue: (options: { encoding?: "base64"; key: string; namespace: string }) => Promise<KvValueResult>;
     /** List keys in a namespace, optionally filtered by prefix and paginated. */
     listKeys: (options: { cursor?: string; limit?: number; namespace: string; prefix?: string }) => Promise<KvKeyListResult>;
     /** List the registered KV namespaces (binding names). */
     listNamespaces: () => Promise<KvNamespaceSummary[]>;
-    /** Write a value (as text) with optional absolute expiration / relative TTL and metadata. */
-    putValue: (options: { expiration?: number; expirationTtl?: number; key: string; metadata?: unknown; namespace: string; value: string }) => Promise<void>;
+    /** Write a value (as text, or the bytes of a base64 `value` under `encoding: "base64"`) with optional absolute expiration / relative TTL and metadata. */
+    putValue: (options: {
+        encoding?: "base64";
+        expiration?: number;
+        expirationTtl?: number;
+        key: string;
+        metadata?: unknown;
+        namespace: string;
+        value: string;
+    }) => Promise<void>;
 }
 
 /** The worker internals the KV routes reach through injection rather than closure. */

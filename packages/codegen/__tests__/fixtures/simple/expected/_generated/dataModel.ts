@@ -60,7 +60,7 @@ export interface Doc_attachments {
     ownerId: Id<"users">;
     size: bigint;
     tags: Array<string>;
-    title?: string;
+    title?: string | null;
 }
 
 export interface DataModel {

@@ -145,8 +145,8 @@ const NON_BINDING_FIELDS = new Set([
 
 /**
  * The wider config this reads. {@link WranglerConfigShape} covers what the
- * Alchemy translation models; a manifest additionally reports the sections that
- * translation lists as unsupported, so those are declared here.
+ * Alchemy translation models; a manifest additionally lists the sections that
+ * translation reports as unsupported, so those it reads are declared here.
  */
 interface ManifestConfigShape extends WranglerConfigShape {
     ai?: { binding?: string };

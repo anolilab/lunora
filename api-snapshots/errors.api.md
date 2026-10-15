@@ -49,6 +49,14 @@ const ERROR_CATALOG: {
         readonly status: 404;
         readonly title: "Not found";
     };
+    readonly SOLE_ORGANIZATION_OWNER: {
+        readonly status: 409;
+        readonly title: "Sole organization owner";
+    };
+    readonly YOU_ARE_NOT_ALLOWED_TO_DELETE_USERS: {
+        readonly status: 403;
+        readonly title: "Not allowed to delete users";
+    };
     readonly CONFLICT: {
         readonly hint: readonly [
             "Another write changed this row while your mutation was running (optimistic concurrency conflict).",
@@ -410,6 +418,78 @@ const ERROR_CATALOG: {
         readonly status: 400;
         readonly title: "Export tap not configured";
     };
+    readonly AUTH_DATA_FAILED: {
+        readonly status: 502;
+        readonly title: "Auth data call to the auth object failed";
+    };
+    readonly AUTH_IMPORT_FAILED: {
+        readonly status: 409;
+        readonly title: "Auth row could not be imported";
+    };
+    readonly IMPORT_FORMAT_UNSUPPORTED: {
+        readonly status: 400;
+        readonly title: "Export format newer than this runtime reads";
+    };
+    readonly IMPORT_REFUSED: {
+        readonly status: 400;
+        readonly title: "Replace import refused on a shard";
+    };
+    readonly IMPORT_SESSION_CHANGED: {
+        readonly status: 409;
+        readonly title: "Import session changed after the commit's dry run";
+    };
+    readonly IMPORT_SESSION_CLOSED: {
+        readonly status: 409;
+        readonly title: "Import session closed to new batches";
+    };
+    readonly IMPORT_SESSION_COMMITTED: {
+        readonly status: 409;
+        readonly title: "Import session already committed";
+    };
+    readonly IMPORT_SESSION_COMMITTING: {
+        readonly status: 409;
+        readonly title: "Import session commit already under way";
+    };
+    readonly IMPORT_SESSION_CORRUPT: {
+        readonly status: 409;
+        readonly title: "Import session state unreadable";
+    };
+    readonly IMPORT_SESSION_EXPIRED: {
+        readonly status: 410;
+        readonly title: "Import session expired";
+    };
+    readonly IMPORT_SESSION_INCOMPLETE: {
+        readonly status: 409;
+        readonly title: "Import session has a batch that never closed";
+    };
+    readonly IMPORT_SESSION_MISMATCH: {
+        readonly status: 400;
+        readonly title: "Import session does not match this request";
+    };
+    readonly IMPORT_SESSION_NOT_COMMITTING: {
+        readonly status: 409;
+        readonly title: "Import session is not committing";
+    };
+    readonly IMPORT_SESSION_NOT_FOUND: {
+        readonly status: 404;
+        readonly title: "Import session not found";
+    };
+    readonly IMPORT_SESSION_REJECTED: {
+        readonly status: 409;
+        readonly title: "Import session rejected during staging";
+    };
+    readonly IMPORT_SESSION_STALE: {
+        readonly status: 409;
+        readonly title: "Import session belongs to an earlier session of the same id";
+    };
+    readonly SECTION_COMMIT_FAILED: {
+        readonly status: 502;
+        readonly title: "Export section could not be committed";
+    };
+    readonly SECTION_NOT_CONFIGURED: {
+        readonly status: 400;
+        readonly title: "Export section not configured on this worker";
+    };
     readonly FUNCTIONS_NOT_CONFIGURED: {
         readonly status: 400;
         readonly title: "Functions registry not configured";
@@ -664,6 +744,35 @@ const ERROR_CATALOG: {
     readonly INVALID_INPUT: {
         readonly status: 400;
         readonly title: "Invalid input";
+    };
+    readonly FETCH: {
+        readonly internal: true;
+        readonly status: 502;
+        readonly title: "Catalog fetch failed";
+    };
+    readonly BAD_SIGNATURE: {
+        readonly status: 422;
+        readonly title: "Catalog signature does not verify";
+    };
+    readonly UNKNOWN_KEY: {
+        readonly status: 422;
+        readonly title: "Catalog signed by an unknown key";
+    };
+    readonly HASH_MISMATCH: {
+        readonly status: 422;
+        readonly title: "Catalog file hash mismatch";
+    };
+    readonly INVALID_INDEX: {
+        readonly status: 502;
+        readonly title: "Invalid catalog index";
+    };
+    readonly INVALID_MANIFEST: {
+        readonly status: 422;
+        readonly title: "Invalid catalog manifest";
+    };
+    readonly UNSUPPORTED_FORMAT: {
+        readonly status: 422;
+        readonly title: "Unsupported catalog format";
     };
     readonly INVALID_SCHEDULE_ID: {
         readonly status: 400;

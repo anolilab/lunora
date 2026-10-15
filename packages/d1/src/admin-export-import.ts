@@ -39,9 +39,12 @@ interface ImportError {
 }
 
 interface ImportResult {
-    /** Skipped rows whose `_id` already exists. */
+    /** Skipped rows whose `_id` already exists. Always 0 in a staged replace. */
     conflicts: number;
+    /** A staged replace's commit only: rows removed per table because the snapshot did not hold them. */
+    deleted?: Record<string, number>;
     errors: ImportError[];
+    /** Rows written per table (in a staged replace, overwritten rows included). */
     inserted: Record<string, number>;
 }
 
@@ -266,6 +269,7 @@ interface ImportGlobalArgs {
      * — the writer-fallback is O(N tables) per row.
      */
     exec?: D1ExecLike;
+
     rows: ReadonlyArray<ExportRow>;
     startLine?: number;
 }
@@ -300,8 +304,10 @@ const explicitIdConflicts = async (writer: DatabaseWriterLike, exec: D1ExecLike 
 
 type RowOutcome = { error: ImportError; kind: "error" } | { inserted: string; kind: "inserted" } | { kind: "conflict" } | { kind: "skip" };
 
-/** Resolve one import row to a single outcome, isolating the per-row branching from the accumulation loop. */
-const importOneRow = async (writer: DatabaseWriterLike, schema: SchemaLike, args: ImportGlobalArgs, row: ExportRow, line: number): Promise<RowOutcome> => {
+type PreparedRow = { decoded: Record<string, unknown>; kind: "ready"; table: string } | { error: ImportError; kind: "error" } | { kind: "skip" };
+
+/** Decode, normalise and validate one import row — everything short of writing it. */
+const prepareRow = (schema: SchemaLike, row: ExportRow, line: number): PreparedRow => {
     const { doc, table } = row;
 
     // A row with no usable `table` is CORRUPT, not "someone else's" — check it
@@ -351,28 +357,91 @@ const importOneRow = async (writer: DatabaseWriterLike, schema: SchemaLike, args
         return { error: { code: "VALIDATION_ERROR", line, message: failure, table }, kind: "error" };
     }
 
+    return { decoded, kind: "ready", table };
+};
+
+/**
+ * Run one row's write, turning a throw into a per-row error. Routed through
+ * `toErrorBody` (mirrors `@lunora/do`'s twin): a recognized `LunoraError` still
+ * surfaces its real code/message, but an internal-coded or unrecognized throw is
+ * redacted instead of leaking raw error text into the admin import response.
+ */
+const writeRow = async (table: string, line: number, write: () => Promise<unknown>): Promise<RowOutcome> => {
+    try {
+        await write();
+
+        return { inserted: table, kind: "inserted" };
+    } catch (error: unknown) {
+        const { body } = toErrorBody(error, { fallbackCode: "INSERT_FAILED" });
+
+        return { error: { code: body.code, line, message: body.message, table }, kind: "error" };
+    }
+};
+
+/** Resolve one import row to a single outcome, isolating the per-row branching from the accumulation loop. */
+const importOneRow = async (writer: DatabaseWriterLike, schema: SchemaLike, args: ImportGlobalArgs, row: ExportRow, line: number): Promise<RowOutcome> => {
+    const prepared = prepareRow(schema, row, line);
+
+    if (prepared.kind !== "ready") {
+        return prepared;
+    }
+
+    const { decoded, table } = prepared;
     const explicitId = typeof decoded["_id"] === "string" ? decoded["_id"] : undefined;
 
     if (explicitId !== undefined && (await explicitIdConflicts(writer, args.exec, table, explicitId))) {
         return { kind: "conflict" };
     }
 
-    try {
-        // Trusted admin import path: preserve the pinned `_id` from the
-        // snapshot (the default insert path now strips client-chosen ids).
-        await writer.insert(table, decoded, { allowExplicitId: true });
+    // Trusted admin import path: preserve the pinned `_id` from the snapshot
+    // (the default insert path now strips client-chosen ids).
+    return writeRow(table, line, () => writer.insert(table, decoded, { allowExplicitId: true }));
+};
 
-        return { inserted: table, kind: "inserted" };
-    } catch (error: unknown) {
-        // Routed through `toErrorBody` (mirrors `@lunora/do`'s twin) rather than
-        // the naked `error.message`/`.code` this used to embed directly: a
-        // recognized `LunoraError` still surfaces its real code/message, but an
-        // internal-coded or unrecognized throw is redacted instead of leaking
-        // raw error text into the admin import response.
-        const { body } = toErrorBody(error, { fallbackCode: "INSERT_FAILED" });
+interface ReplaceRow {
+    decoded: Record<string, unknown>;
+    id: string;
+    line: number;
+    table: string;
+}
 
-        return { error: { code: body.code, line, message: body.message, table }, kind: "error" };
+/** Validate every row of a replace before any is staged, so one bad row stages nothing. */
+const prepareReplaceRows = (
+    schema: SchemaLike,
+    args: Pick<ImportGlobalArgs, "rows" | "startLine">,
+    scope: ReadonlySet<string>,
+): { errors: ImportError[]; ready: ReplaceRow[] } => {
+    const errors: ImportError[] = [];
+    const ready: ReplaceRow[] = [];
+    let line = (args.startLine ?? 1) - 1;
+
+    for (const row of args.rows) {
+        line += 1;
+
+        const effectiveLine = row.line ?? line;
+
+        if (!scope.has(row.table)) {
+            errors.push({ code: "BAD_ROW", line: effectiveLine, message: `table "${row.table}" is not in this replace import's tables`, table: row.table });
+            continue;
+        }
+
+        const prepared = prepareRow(schema, row, effectiveLine);
+
+        if (prepared.kind === "error") {
+            errors.push(prepared.error);
+        } else if (prepared.kind === "ready") {
+            const id = prepared.decoded["_id"];
+
+            // Rows are kept by `_id`, so one without it would be written and then pruned.
+            if (typeof id === "string") {
+                ready.push({ decoded: prepared.decoded, id, line: effectiveLine, table: prepared.table });
+            } else {
+                errors.push({ code: "BAD_ROW", line: effectiveLine, message: "a replace import row must carry its `_id`", table: prepared.table });
+            }
+        }
     }
+
+    return { errors, ready };
 };
 
 /**
@@ -425,5 +494,5 @@ const importGlobalRows = async (writer: DatabaseWriterLike, schema: SchemaLike, 
     return { conflicts, errors, inserted };
 };
 
-export { exportGlobalRows, importGlobalRows, selectGlobalTables };
-export type { ExportGlobalArgs, ExportRow, ImportError, ImportGlobalArgs, ImportResult };
+export { explicitIdConflicts, exportGlobalRows, importGlobalRows, prepareReplaceRows, selectGlobalTables, writeRow };
+export type { D1ExecLike, ExportGlobalArgs, ExportRow, ImportError, ImportGlobalArgs, ImportResult };

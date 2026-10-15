@@ -1,0 +1,38 @@
+# `cargo deny check` (the `deny` job in .github/workflows/hostd-cargo.yml): licenses,
+# advisories, bans and sources of everything in Cargo.lock.
+
+[advisories]
+yanked = "warn"
+
+[licenses]
+version = 2
+# Each entry names the crates that need it; an `A OR B` crate needs only one of its
+# choices allowed, so a license no crate requires on its own is left out.
+allow = [
+  "MIT",
+  "Apache-2.0",
+  # ring (Apache-2.0 AND ISC), rustls-webpki, untrusted: the TLS stack.
+  "ISC",
+  # rusty-s3.
+  "BSD-2-Clause",
+  # curve25519-dalek, ed25519-dalek, subtle: release-manifest signature checks.
+  "BSD-3-Clause",
+  # webpki-roots, webpki-root-certs: Mozilla's root store, as data.
+  "CDLA-Permissive-2.0",
+  # unicode-ident (AND Unicode-3.0) and the icu_* crates under url's IDNA.
+  "Unicode-3.0",
+]
+
+# lunora-hostd itself is FSL-1.1-Apache-2.0 and `publish = false`: not a dependency.
+[licenses.private]
+ignore = true
+
+[bans]
+multiple-versions = "warn"
+wildcards = "allow"
+
+[sources]
+unknown-registry = "warn"
+unknown-git = "warn"
+allow-registry = [ "https://github.com/rust-lang/crates.io-index" ]
+allow-git = []

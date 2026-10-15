@@ -1,5 +1,5 @@
 import { decodeWire, encodeWire } from "@lunora/wire";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import type { ShardDOState } from "../src/shard-do";
 import { ShardDO } from "../src/shard-do";
@@ -150,23 +150,32 @@ describe("shardDO whispering", () => {
     it("rate-limits a sender that floods whispers", async () => {
         expect.assertions(2);
 
-        const a = new FakeSocket({ subs: {} });
-        const b = new FakeSocket({ subs: {} });
-        const shard = makeShard([a, b]);
+        // The bucket refills against the wall clock, so a slow run would earn extra
+        // tokens mid-flood. Freezing Date makes "the same instant" true.
+        vi.useFakeTimers({ toFake: ["Date"] });
+        vi.setSystemTime(1_700_000_000_000);
 
-        await send(shard, a, { topic: "t", type: "whisper_subscribe" });
-        await send(shard, b, { topic: "t", type: "whisper_subscribe" });
+        try {
+            const a = new FakeSocket({ subs: {} });
+            const b = new FakeSocket({ subs: {} });
+            const shard = makeShard([a, b]);
 
-        // Burst far past the per-socket budget in the same instant (no refill).
-        for (let index = 0; index < 200; index += 1) {
-            // eslint-disable-next-line no-await-in-loop -- sequential sends model one client's flood
-            await send(shard, a, { data: index, topic: "t", type: "whisper" });
+            await send(shard, a, { topic: "t", type: "whisper_subscribe" });
+            await send(shard, b, { topic: "t", type: "whisper_subscribe" });
+
+            // Burst far past the per-socket budget in the same instant (no refill).
+            for (let index = 0; index < 200; index += 1) {
+                // eslint-disable-next-line no-await-in-loop -- sequential sends model one client's flood
+                await send(shard, a, { data: index, topic: "t", type: "whisper" });
+            }
+
+            // Receiver got at most the burst budget (WHISPER_RATE_BURST = 50), not
+            // all 200 — the rest were dropped by the token bucket.
+            expect(b.frames.length).toBeLessThanOrEqual(50);
+            expect(b.frames.length).toBeGreaterThan(0);
+        } finally {
+            vi.useRealTimers();
         }
-
-        // Receiver got at most the burst budget (WHISPER_RATE_BURST = 50), not
-        // all 200 — the rest were dropped by the token bucket.
-        expect(b.frames.length).toBeLessThanOrEqual(50);
-        expect(b.frames.length).toBeGreaterThan(0);
     });
 
     it("drops an over-limit whisper payload", async () => {

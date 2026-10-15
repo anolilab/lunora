@@ -1,0 +1,925 @@
+import { LunoraError } from "@lunora/server";
+
+import { isDataMovementPath } from "../src/admin/proxy";
+import { highestPlan } from "../src/billing/plans";
+import type { AdmissionRow } from "../src/billing/spend";
+import { organizationServing } from "../src/billing/spend";
+import { endInstallBadge, restoreInstallBadge } from "../src/catalog/install-badge";
+import { previewExpiry } from "../src/deploy/preview";
+import { assertStatusMove } from "../src/deploy/status-transitions";
+import { PLAIN_WORKER_NO_ADMIN, RUNTIME_LABELS, storedRuntime } from "../src/project-runtime";
+import type { TargetId } from "../src/provision-contract";
+import { classesMissingFrom, DEFAULT_TARGET, storedTarget, TARGETS } from "../src/provision-contract";
+import { isCellPlaced, resourceRefOf } from "../src/targets/placement";
+import type { Doc as Document_, Id } from "./_generated/dataModel.js";
+import type { MutationCtx as MutationContext, QueryCtx as QueryContext } from "./_generated/server.js";
+import { internalMutation, internalQuery, mutation, query, v } from "./_generated/server.js";
+import { assertMember, authorizeDeployKey } from "./authz";
+import { claimDeploymentAlias } from "./deployment-aliases";
+import { installBadgeOf, isWebUrl, onEnter, PHASE_TIMESTAMP, projectNameOf, releaseDetail } from "./deployment-lifecycle";
+import { orgEntitlements } from "./entitlements";
+import { rateLimit } from "./guards";
+import { assertProjectNotHalted } from "./halts";
+import { enqueueNotification } from "./notification-outbox";
+import { collectAll } from "./paginate";
+import { storedProjectRuntime } from "./tables/shared";
+import { boundedString, LIMITS } from "./validators";
+
+type DeploymentRow = Document_<"deployments">;
+
+/**
+ * The releases that tell what the alias's one Worker is running: the newest
+ * release of the alias that reached the Worker (`live`, `superseded`, or
+ * `failed` after it was verified, i.e. after it was put on the Worker), and
+ * every `live` one. Keyed by the alias alone — never the kind: a preview and a
+ * production release of one alias converge the same Worker — and by
+ * `createdAt` rather than trusting `status` alone, which a member can rewrite
+ * (`updateStatus`).
+ */
+const aliasWorkerReleases = (rows: ReadonlyArray<DeploymentRow>, alias: string): DeploymentRow[] => {
+    const reached = rows.filter(
+        (row) =>
+            (row.alias ?? row.scriptName) === alias &&
+            (row.status === "live" || row.status === "superseded" || (row.status === "failed" && row.verifyingAt != null)),
+    );
+    const newest = reached.toSorted((a, b) => b.createdAt - a.createdAt).at(0);
+
+    return [...new Set([...(newest === undefined ? [] : [newest]), ...reached.filter((row) => row.status === "live")])];
+};
+
+/**
+ * The stateful classes (Durable Object or Workflow) a release recorded, by name. A row from before
+ * classes were recorded binds `ShardDO` if it is a Lunora app. This is the stored-row side; the
+ * request side is the deploy path's `statefulClassesOf` (`src/provision-contract.ts`).
+ */
+const recordedClassesOf = (row: Pick<DeploymentRow, "durableObjectClasses" | "runtime">): ReadonlyArray<string> =>
+    row.durableObjectClasses ?? (storedRuntime(row.runtime) === "lunora" ? ["ShardDO"] : []);
+
+/**
+ * Refuse a release that would delete stateful class data (Durable Object storage
+ * or Workflow instances) on the alias's Worker: every release converges that Worker
+ * in place, and on a target that drops unbound classes
+ * (`TARGETS[target].dropsUnboundClasses`) a release that stops binding a class
+ * deletes the class's data.
+ *
+ * Two checks, against {@link aliasWorkerReleases}. The runtime must not change:
+ * a Lunora app always binds `ShardDO` — its whole database — and a plain Worker
+ * never does, so a switch is exactly that deletion (refused on every target,
+ * simpler to state than the targets where it would be safe). And no class the
+ * Worker binds may disappear unless the request names it in `allowDeleteClasses`
+ * — a CLI/API opt-in, audited by the caller. A project with no release on the
+ * Worker yet may do either. The rollback path has its own check (`keepClasses`).
+ * @returns The classes the release deletes with the caller's consent, for the audit log.
+ * @throws {LunoraError} `CONFLICT` naming what would be lost and the way forward.
+ */
+const assertKeepsWorkerData = (
+    current: ReadonlyArray<DeploymentRow>,
+    release: { allowDeleteClasses?: ReadonlyArray<string>; runtime?: "worker"; scriptName: string; statefulClasses?: ReadonlyArray<string> },
+    dropsUnbound: boolean,
+): string[] => {
+    const runtime = storedRuntime(release.runtime);
+    const other = current.find((row) => storedRuntime(row.runtime) !== runtime);
+
+    if (other !== undefined) {
+        const live = RUNTIME_LABELS[storedRuntime(other.runtime)];
+
+        throw new LunoraError(
+            "CONFLICT",
+            `${release.scriptName} is running a ${live}; releasing a ${RUNTIME_LABELS[runtime]} onto the same Worker would drop its Durable Object classes and their data. Deploy it as a new project, or switch this project's runtime back to ${live}.`,
+        );
+    }
+
+    // A target that does not delete a class its Worker stops binding keeps the data either way,
+    // so dropping the binding is not a data loss there and must not refuse the deploy.
+    if (!dropsUnbound || release.statefulClasses === undefined) {
+        return [];
+    }
+
+    const dropped = classesMissingFrom(
+        current.flatMap((row) => recordedClassesOf(row)),
+        release.statefulClasses,
+    ).toSorted((a, b) => a.localeCompare(b));
+    const allowed = new Set(release.allowDeleteClasses);
+    const refused = dropped.filter((className) => !allowed.has(className));
+
+    if (refused.length > 0) {
+        throw new LunoraError(
+            "CONFLICT",
+            `this release no longer binds the stateful class(es) ${refused.join(", ")} (Durable Object storage or Workflow instances) that ${release.scriptName} runs, and deploying it would delete their data. Bind them again — or, to delete that data on purpose, deploy with "allowDeleteClasses": [${refused.map((name) => JSON.stringify(name)).join(", ")}] (POST /v1/deploy).`,
+        );
+    }
+
+    return dropped;
+};
+
+/** The live deployment of one alias + kind — the release currently on that alias's Worker. */
+const liveRelease = async (context: QueryContext, row: Pick<DeploymentRow, "alias" | "kind" | "projectId">): Promise<DeploymentRow | undefined> => {
+    const { page } = await context.db.deployments.findMany({ where: { projectId: row.projectId } }); // secret-scanner:allow -- domain field name
+
+    return page.filter((d) => d.alias === row.alias && d.kind === row.kind && d.status === "live").toSorted((a, b) => b.createdAt - a.createdAt)[0];
+};
+
+/**
+ * Move a project's pointer to a deployment. Production only: the pointer answers
+ * "which release serves this project's own domain", and a preview carries an
+ * alias of its own — letting it move the pointer pointed custom domains at a
+ * preview.
+ */
+const pointProjectAt = async (context: MutationContext, deployment: DeploymentRow): Promise<void> => {
+    if (deployment.kind === "production") {
+        await context.db.patch(deployment.projectId, { activeDeploymentId: deployment._id, activeScriptName: deployment.scriptName });
+    }
+};
+
+/**
+ * Resolve a deployment's tenant URL + *sealed* admin token for the hosted-studio
+ * admin proxy (§3). Asserts the caller is a member of the deployment's org.
+ * Returns the stored admin-token fields (ciphertext + IV, or the plaintext dev
+ * fallback) — the caller decrypts at the edge with `SECRET_ENCRYPTION_KEY`, so
+ * the plaintext bearer never crosses the RPC boundary when sealed. Returns
+ * `null` when the deployment is missing, in another org, has no admin token, or
+ * is not yet live.
+ */
+export const adminTarget = internalQuery
+    .input({ adminPath: v.string(), deploymentId: v.id("deployments"), organizationId: v.id("organizations") })
+    .query(
+        async ({
+            ctx: context,
+            args: { adminPath, deploymentId, organizationId },
+        }): Promise<null | { adminToken?: string; adminTokenCiphertext?: string; adminTokenIv?: string; url: string }> => {
+            // Not bare `assertMember`. This resolves the tenant's ADMIN bearer for
+            // the studio proxy, which forwards writes to the tenant's own admin
+            // API — so a `viewer`, whose whole role is read-only, was able to
+            // mutate tenant data through it. Roles are named explicitly here
+            // rather than at the route, because the token is handed out here.
+            // Internal, and handed the admin path the proxy will forward: the role is
+            // decided here from the action itself, never from a flag a caller sets, and
+            // no browser can call this to collect a target for some other path. Export
+            // and import are owner/admin — an export carries every end user's data, an
+            // import rewrites it. The caller's identity still applies: the HTTP route's
+            // internal call runs under the session it was made with.
+            await assertMember(context, organizationId, isDataMovementPath(adminPath) ? ["owner", "admin"] : ["owner", "admin", "member"]);
+
+            const deployment = await context.db.get(deploymentId);
+            const hasToken = deployment?.adminToken ?? (deployment?.adminTokenCiphertext && deployment.adminTokenIv);
+
+            // Live only: every release of an alias shares one Worker, and only the
+            // release on it holds the admin token that Worker accepts.
+            if (deployment?.organizationId !== organizationId || deployment.status !== "live" || !hasToken || !deployment.url) {
+                return null;
+            }
+
+            // Said, not forwarded: a plain Worker would answer `/_lunora/admin/*`
+            // with whatever its own routes do, which the studio would misread.
+            if (deployment.runtime === "worker") {
+                throw new LunoraError("CONFLICT", PLAIN_WORKER_NO_ADMIN);
+            }
+
+            return {
+                ...(deployment.adminToken ? { adminToken: deployment.adminToken } : {}),
+                ...(deployment.adminTokenCiphertext && deployment.adminTokenIv
+                    ? { adminTokenCiphertext: deployment.adminTokenCiphertext, adminTokenIv: deployment.adminTokenIv }
+                    : {}),
+                url: deployment.url,
+            };
+        },
+    );
+
+/** Whether a project has a preview password set. Read as part of {@link planForScript}. */
+const previewProtectionEnabled = async (context: QueryContext, projectId: Id<"projects">): Promise<boolean> => {
+    const project = (await context.db.get(projectId)) as null | { previewPasswordHash?: string };
+
+    return Boolean(project?.previewPasswordHash);
+};
+
+/**
+ * The one deployment a dispatch script serves for, resolved from verified rows
+ * only — or `null` when that cannot be stated. A script is an alias, and every
+ * release of it shares the name, including those of an organization that held
+ * the alias before it was released and re-claimed. So the owner is the alias's
+ * `aliasOwnership` row where there is one, and the deployment is the owner's
+ * live release (else its newest one that is not destroyed). Every release still
+ * standing must belong to one organization. Anything else — no standing
+ * release, a ledger owner with none, releases of two organizations — is not
+ * guessed at.
+ */
+const servingDeployment = async (context: QueryContext, scriptName: string): Promise<DeploymentRow | null> => {
+    const rows = await collectAll<DeploymentRow>((cursor) => context.db.deployments.findMany({ cursor, where: { scriptName } }));
+    const standing = rows.filter((row) => row.status !== "destroyed");
+    const { page: ledger } = await context.db.aliasOwnership.findMany({ where: { alias: scriptName } });
+    const owner = ledger.at(0)?.organizationId;
+    const candidates = owner === undefined ? standing : standing.filter((row) => row.organizationId === owner);
+
+    if (candidates.length === 0 || new Set(standing.map((row) => row.organizationId)).size > 1) {
+        return null;
+    }
+
+    return candidates.find((row) => row.status === "live") ?? candidates.toSorted((a, b) => b.createdAt - a.createdAt)[0] ?? null;
+};
+
+/**
+ * Resolve a dispatch-namespace script id to its org's plan name, for the
+ * dispatcher's per-plan runtime limits (§4) and its admission check. Public +
+ * unauthenticated by design (returns only a non-sensitive plan tier); the
+ * dispatcher reaches it through a bearer-gated control-plane endpoint.
+ *
+ * Fails closed: a script whose serving deployment cannot be stated from
+ * verified rows answers `"unknown"` (the dispatcher 404s it rather than serving
+ * it on a default tier), and a suspended, over-cap or missing organization
+ * answers `"suspended"`.
+ */
+export const planForScript = query
+    .input({ scriptName: boundedString(LIMITS.name) })
+    .query(async ({ ctx: context, args: { scriptName } }): Promise<{ plan: string; protected?: boolean; recursion?: "allow" }> => {
+        const deployment = await servingDeployment(context, scriptName);
+
+        if (!deployment) {
+            return { plan: "unknown" };
+        }
+
+        // A suspended org (spend cap breached / abuse, GAPS.md C1) resolves to the
+        // sentinel plan "suspended" — the dispatcher serves 503 for it. Encoded in
+        // the plan string so the dispatcher's existing TTL cache carries it.
+        //
+        // The breach bit (plan 365 W3) rides the same read: an org whose running
+        // accrual already breaches its cap is refused here as soon as the ledger
+        // write lands, not an hour later when the sweep suspends it. An org row
+        // this lookup cannot find is refused too — unknown state fails closed.
+        const organization = (await context.db.get(deployment.organizationId)) as (AdmissionRow & { recursionPolicy?: null | string }) | null;
+
+        if (!organizationServing(organization, context.now)) {
+            return { plan: "suspended" };
+        }
+
+        const entitlements = await orgEntitlements(context, deployment.organizationId);
+
+        // Deployment protection rides along on the plan lookup rather than getting
+        // its own endpoint: this is the dispatcher's ONE cached control-plane call
+        // on the request path, and a second resolver would double that traffic to
+        // answer a question the same row already knows. Only the boolean crosses —
+        // the password hash stays in the control plane (`verifyPreviewPassword`).
+        //
+        // Protection applies to PREVIEW deployments only. Production is public by
+        // definition, and gating it here would be a foot-gun with no undo.
+        const isProtectedPreview = deployment.kind === "preview" && (await previewProtectionEnabled(context, deployment.projectId));
+
+        // The org's recursion policy rides the same cached lookup (plan 365 W5). Only an
+        // explicit `allow` crosses; the dispatcher treats anything else as `terminate`.
+        return {
+            plan: highestPlan(entitlements.plans),
+            ...(isProtectedPreview ? { protected: true } : {}),
+            ...(organization?.recursionPolicy === "allow" ? { recursion: "allow" as const } : {}),
+        };
+    });
+
+/** A project's deployments, newest first. Caller must be a member of the org. */
+
+/**
+ * A deployment as the dashboard sees it — the stored row minus its admin token.
+ *
+ * The projection is the whole point. `deployments` stores the tenant admin bearer
+ * (sealed as `adminTokenCiphertext`/`adminTokenIv`, and in plaintext on a
+ * deployment with no master key configured), and this query is authorized for any
+ * org MEMBER. Returning the row verbatim — which it did — handed every member a
+ * credential that proxies into that tenant's `/_lunora/admin/*` API. Nothing
+ * failed and nothing logged it: the `Promise&lt;DeploymentRow[]>` annotation is
+ * compile-time only and strips nothing at the wire.
+ */
+
+/**
+ * The columns `toDeploymentView` writes, typed as the stored row types them. The
+ * nullable columns it leaves out stay on the declared type, nullable as they were,
+ * so the listed API's return type does not change shape.
+ */
+type DeploymentView = Pick<
+    DeploymentRow,
+    | "_id"
+    | "alias"
+    | "bindings"
+    | "branch"
+    | "bundleHash"
+    | "createdAt"
+    | "createdBy"
+    | "expiresAt"
+    | "kind"
+    | "organizationId"
+    | "projectId"
+    | "scriptName"
+    | "status"
+    | "updatedAt"
+    | "url"
+    | "version"
+> & {
+    cronSpecs?: null | string[];
+    durableObjectClasses?: null | string[];
+    runtime?: "worker" | null;
+    target?: string;
+    verifyingAt?: null | number;
+};
+
+/** Drop the admin-token fields from a stored row. */
+export const toDeploymentView = (row: DeploymentRow): DeploymentView => {
+    // Built by naming what is KEPT rather than destructuring away what is dropped:
+    // a rest-spread would silently carry any future column, which is precisely how
+    // the admin token reached the wire in the first place.
+    return {
+        _id: row._id,
+        createdAt: row.createdAt,
+        createdBy: row.createdBy,
+        kind: row.kind,
+        organizationId: row.organizationId,
+        projectId: row.projectId,
+        scriptName: row.scriptName,
+        status: row.status,
+        updatedAt: row.updatedAt,
+        ...(row.alias === undefined ? {} : { alias: row.alias }),
+        ...(row.bindings === undefined ? {} : { bindings: row.bindings }),
+        ...(row.branch === undefined ? {} : { branch: row.branch }),
+        ...(row.bundleHash === undefined ? {} : { bundleHash: row.bundleHash }),
+        ...(row.expiresAt === undefined ? {} : { expiresAt: row.expiresAt }),
+        ...(row.url === undefined ? {} : { url: row.url }),
+        ...(row.version === undefined ? {} : { version: row.version }),
+    };
+};
+
+export const listByProject = query
+    .input({ organizationId: v.id("organizations"), projectId: v.id("projects") })
+    .query(async ({ ctx: context, args: { organizationId, projectId } }): Promise<DeploymentView[]> => {
+        await assertMember(context, organizationId);
+
+        const { page } = await context.db.deployments.findMany({ where: { organizationId, projectId } });
+
+        return page.map((row) => toDeploymentView(row)).toSorted((a, b) => b.createdAt - a.createdAt);
+    });
+
+/**
+ * Where a release's tenant lives, copied from its project when the row is
+ * created — so its teardown and usage readback still reach it once the project
+ * (and with it the placement) is gone — and the tenant's handle there
+ * (`resourceRefOf`).
+ */
+const placementColumns = (
+    target: TargetId,
+    project: { placementRef?: Id<"boxes"> | Id<"cloudflareAccounts"> | null },
+    alias: string,
+): { placementRef?: Id<"boxes"> | Id<"cloudflareAccounts">; resourceRef: string } => {
+    // A cell-placed target names no host; a stale reference left on its project is not copied.
+    const placementRef = isCellPlaced(target) ? undefined : (project.placementRef ?? undefined);
+
+    return { ...(placementRef === undefined ? {} : { placementRef }), resourceRef: resourceRefOf({ placementRef, target }, alias) };
+};
+
+/** What {@link create} answers: the new row, its release number, and the release live on the alias before it (the revert target). */
+interface CreatedDeployment {
+    deploymentId: Id<"deployments">;
+    previousDeploymentId?: Id<"deployments">;
+    version: number;
+}
+
+/**
+ * Record a new deployment in the `queued` state. Authorized either by a member
+ * session (dashboard) or a valid `deployKey` (CI; §2.2). The actual provisioning
+ * — bundle upload + per-tenant binding creation through the project's target
+ * driver (`src/targets/`), paced by the per-cell scheduler (§2.5) — is driven
+ * separately and reports progress back through `updateStatus`.
+ */
+export const create = mutation
+    .use(rateLimit("provision"))
+    .input({
+        // Tenant admin token the platform set on the worker (for the admin proxy).
+        // Sealed at the edge before it reaches here: the encrypted fields are the
+        // norm; `adminToken` (plaintext) is only the no-master-key dev fallback.
+        adminToken: v.optional(boundedString(LIMITS.sealedToken)),
+        adminTokenCiphertext: v.optional(boundedString(LIMITS.cipher)),
+        adminTokenIv: v.optional(boundedString(LIMITS.id)),
+        // What the tenant's wrangler config binds, captured at deploy time — the
+        // studio renders this as the deployment's binding graph.
+        bindings: v.optional(
+            v.array(v.object({ name: boundedString(LIMITS.name), target: v.optional(boundedString(LIMITS.name)), type: boundedString(LIMITS.tag) })),
+        ),
+        branch: v.optional(boundedString(LIMITS.gitRef)),
+        // The tenant's compiled cron expressions (for the WfP cron fan-out, §2.4).
+        cronSpecs: v.optional(v.array(boundedString(LIMITS.name))),
+        // Stateful classes (Durable Object or Workflow) the release may delete, by name: a CLI/API opt-in, audited.
+        allowDeleteClasses: v.optional(v.array(boundedString(LIMITS.name))),
+        // CI deploy path: a valid deploy key authorizes in lieu of a member session.
+        deployKey: v.optional(boundedString(LIMITS.token)),
+        // The stateful classes the release binds — what a later release must keep. Stored as `durableObjectClasses`.
+        statefulClasses: v.optional(v.array(boundedString(LIMITS.name))),
+        kind: v.union(v.literal("production"), v.literal("preview"), v.literal("dev")),
+        organizationId: v.id("organizations"),
+        projectId: v.id("projects"),
+        // What the release is (`src/project-runtime.ts`); absent is a Lunora app.
+        runtime: v.optional(storedProjectRuntime),
+        // @lunora/runtime version bundled into this release (fleet-upgrade planner input, GAPS.md E4).
+        runtimeVersion: v.optional(boundedString(LIMITS.id)),
+        scriptName: boundedString(LIMITS.name),
+    })
+    .mutation(async ({ ctx: context, args: arguments_ }): Promise<CreatedDeployment> => {
+        let createdBy: string;
+
+        if (arguments_.deployKey) {
+            const deployKeyId = await authorizeDeployKey(context, arguments_.organizationId, arguments_.deployKey, arguments_.projectId);
+
+            createdBy = `deploy-key:${deployKeyId}`;
+        } else {
+            const member = await assertMember(context, arguments_.organizationId, ["owner", "admin", "member"]);
+
+            createdBy = member.userId;
+        }
+
+        // Integrity: the project must belong to the same org (no cross-org linkage).
+        const project = await context.db.get(arguments_.projectId);
+
+        if (project?.organizationId !== arguments_.organizationId) {
+            throw new LunoraError("NOT_FOUND", "project not found in this organization");
+        }
+
+        // An emergency stop holds until a resume: a release now would replace the stub.
+        await assertProjectNotHalted(context, project._id);
+
+        // Isolation: the `alias`/`scriptName` label is the seed for this tenant's
+        // per-deployment D1/R2 resource names (`${alias}-db`/`${alias}-files`) in the
+        // provisioner, and for alias→script routing. It MUST be owned by exactly one
+        // project — otherwise a caller holding a valid key for their own project could
+        // pass a victim's alias here and bind the victim's database/bucket into their
+        // own worker (or hijack the victim's route / overwrite their script). Claim
+        // the alias through the `aliasOwnership` ledger, whose `by_alias` unique index
+        // makes the claim atomic (closing the check-then-insert race): a concurrent
+        // first claim by a different project loses on the unique constraint.
+        await claimDeploymentAlias(context, arguments_.scriptName, arguments_.organizationId, project);
+
+        // One Worker per alias: the script name IS the alias, and every release
+        // updates it in place so its Durable Object data persists. `version`
+        // numbers releases per (project, kind) for history and rollback; the
+        // release itself is the payload the deploy handler stores under this id.
+        const { page: existing } = await context.db.deployments.findMany({ where: { projectId: arguments_.projectId } }); // secret-scanner:allow -- domain field name
+        const version = 1 + Math.max(0, ...existing.filter((d) => d.kind === arguments_.kind).map((d) => d.version ?? 0));
+        const previous = await liveRelease(context, { alias: arguments_.scriptName, kind: arguments_.kind, projectId: arguments_.projectId }); // secret-scanner:allow -- domain field name
+
+        const { now } = context;
+        // A row predating targets answers NULL, which is the default target.
+        const target = storedTarget(project.target) ?? DEFAULT_TARGET;
+        const deletedClasses = assertKeepsWorkerData(aliasWorkerReleases(existing, arguments_.scriptName), arguments_, TARGETS[target].dropsUnboundClasses);
+
+        const deploymentId = await context.db.insert("deployments", {
+            ...(arguments_.adminToken ? { adminToken: arguments_.adminToken } : {}),
+            ...(arguments_.adminTokenCiphertext && arguments_.adminTokenIv
+                ? { adminTokenCiphertext: arguments_.adminTokenCiphertext, adminTokenIv: arguments_.adminTokenIv }
+                : {}),
+            alias: arguments_.scriptName,
+            ...placementColumns(target, project, arguments_.scriptName),
+            branch: arguments_.branch,
+            ...(arguments_.cronSpecs && arguments_.cronSpecs.length > 0 ? { cronSpecs: arguments_.cronSpecs } : {}),
+            createdAt: now,
+            createdBy,
+            // Previews are TTL'd; the cleanup cron tears down expired ones (§2.3).
+            ...(arguments_.kind === "preview" ? { expiresAt: previewExpiry(now) } : {}),
+            kind: arguments_.kind,
+            organizationId: project.organizationId,
+            projectId: arguments_.projectId, // secret-scanner:allow -- domain field name, not a Cypress projectId
+            queuedAt: now,
+            ...(arguments_.bindings === undefined ? {} : { bindings: arguments_.bindings }),
+            ...(arguments_.statefulClasses === undefined ? {} : { durableObjectClasses: arguments_.statefulClasses }),
+            ...(arguments_.runtime === undefined ? {} : { runtime: arguments_.runtime }),
+            ...(arguments_.runtimeVersion === undefined ? {} : { runtimeVersion: arguments_.runtimeVersion }),
+            scriptName: arguments_.scriptName,
+            status: "queued",
+            // Copied from the project, which owns it: the release is converged
+            // there, and its teardown and rollback must follow it there even if
+            // the project's target later changes.
+            target,
+            updatedAt: now,
+            version,
+        });
+
+        // A deliberate deletion of Durable Object data is on the record, with who asked.
+        if (deletedClasses.length > 0) {
+            await context.db.insert("auditLog", {
+                action: "deployment.delete_classes",
+                actorUserId: createdBy,
+                createdAt: now,
+                organizationId: project.organizationId,
+                target: `${arguments_.scriptName}: ${deletedClasses.join(", ")}`,
+            });
+        }
+
+        return { deploymentId, ...(previous ? { previousDeploymentId: previous._id } : {}), version };
+    });
+
+/**
+ * Record a health-checked deployment as its alias's live release (GAPS.md A1).
+ * The Worker already runs it — this is bookkeeping, not a cutover. Marks every
+ * other live deployment of the same alias + kind `superseded`: their stored
+ * bundles are the rollback targets. Authorized by the deploy key (CI) or an
+ * owner/admin member session.
+ */
+export const activate = mutation
+    .use(rateLimit("machine"))
+    .input({
+        deployKey: v.optional(boundedString(LIMITS.token)),
+        id: v.id("deployments"),
+    })
+    .mutation(async ({ ctx: context, args: { deployKey, id } }): Promise<void> => {
+        const deployment = await context.db.get(id);
+
+        if (!deployment) {
+            throw new LunoraError("NOT_FOUND", "deployment not found");
+        }
+
+        await (deployKey
+            ? authorizeDeployKey(context, deployment.organizationId, deployKey, deployment.projectId)
+            : assertMember(context, deployment.organizationId, ["owner", "admin"]));
+
+        if (deployment.status !== "live" && deployment.status !== "verifying") {
+            throw new LunoraError("CONFLICT", `cannot activate a ${deployment.status} deployment`);
+        }
+
+        const { now } = context;
+        const { page } = await context.db.deployments.findMany({ where: { projectId: deployment.projectId } }); // secret-scanner:allow -- domain field name
+        const others = page.filter((d) => d._id !== id && d.alias === deployment.alias && d.kind === deployment.kind && d.status === "live");
+
+        // Every superseded row is checked before the first write, so a refused move leaves the alias as it was.
+        for (const other of others) {
+            assertStatusMove(other.status, "superseded");
+        }
+
+        for (const other of others) {
+            // eslint-disable-next-line no-await-in-loop -- small batch; sequential keeps the writer simple
+            await context.db.patch(other._id, { status: "superseded", supersededAt: now, updatedAt: now });
+            // eslint-disable-next-line no-await-in-loop -- the same small batch
+            await endInstallBadge(installBadgeOf(context), other);
+        }
+
+        await restoreInstallBadge(installBadgeOf(context), deployment, now);
+
+        const project = (await context.db.get(deployment.projectId)) as null | { activeDeploymentId?: string; name?: string };
+        const movesPointer = deployment.kind === "production" && project?.activeDeploymentId !== id;
+
+        await pointProjectAt(context, deployment);
+        // `activate` is the CI path — the most frequent pointer swap on the
+        // platform — and it was the only one of the five that wrote no audit row.
+        // "Who moved this project's stable URL, and when" was answerable for a
+        // manual rollback or a promoted canary and unanswerable for an ordinary
+        // release, which is the case incident forensics actually asks about.
+        await context.db.insert("auditLog", {
+            action: "deployment.activate",
+            actorUserId: deployKey ? "deploy-key" : (context.auth.userId ?? "unknown"),
+            createdAt: now,
+            organizationId: deployment.organizationId,
+            target: deployment.scriptName,
+        });
+
+        // Announce when the stable URL moves to this release, so a retried activation stays quiet.
+        if (movesPointer) {
+            await enqueueNotification(context, deployment.organizationId, "deployment.live", {
+                detail: releaseDetail(deployment, undefined),
+                project: project?.name ?? "project",
+            });
+        }
+    });
+
+/**
+ * Record a completed rollback (GAPS.md A1). The deploy edge calls this only
+ * AFTER it has re-provisioned the target's stored bundle onto the alias's
+ * Worker (`src/deploy/release.ts`) — calling it alone would claim a release the
+ * Worker is not running, so it is an `internalMutation`: only the deploy edge's
+ * rollback routes (`POST /v1/deployments/rollback`, `POST /v1/rollback`) reach it,
+ * after the re-provision. The caller is still authorized here (deploy key or
+ * owner/admin session) — an internal function is only as scoped as its caller.
+ * The target must be a `superseded` (or still-`live`) release; it becomes `live`
+ * and the release it replaced is `superseded`.
+ */
+export const rollback = internalMutation
+    .input({
+        deployKey: v.optional(boundedString(LIMITS.token)),
+        id: v.id("deployments"),
+        organizationId: v.id("organizations"),
+    })
+    .mutation(async ({ ctx: context, args: { deployKey, id, organizationId } }): Promise<{ scriptName: string; version?: number }> => {
+        const target = await context.db.get(id);
+
+        if (target?.organizationId !== organizationId) {
+            throw new LunoraError("NOT_FOUND", "deployment not found in this organization");
+        }
+
+        // Authorize AFTER resolving the target, so a project-scoped deploy key is
+        // checked against the target deployment's OWN project — a key scoped to
+        // project A must not be able to roll back project B's deployment in the same
+        // org (every sibling — create/activate/updateStatus — passes projectId).
+        await (deployKey
+            ? authorizeDeployKey(context, organizationId, deployKey, target.projectId)
+            : assertMember(context, organizationId, ["owner", "admin"]));
+
+        if (target.status !== "superseded" && target.status !== "live") {
+            throw new LunoraError("CONFLICT", `cannot roll back to a ${target.status} deployment`);
+        }
+
+        await assertProjectNotHalted(context, target.projectId);
+
+        const { now } = context;
+        const replaced = await liveRelease(context, target);
+
+        assertStatusMove(target.status, "live");
+
+        if (replaced && replaced._id !== id) {
+            assertStatusMove(replaced.status, "superseded");
+            await context.db.patch(replaced._id, { status: "superseded", supersededAt: now, updatedAt: now });
+            await endInstallBadge(installBadgeOf(context), replaced);
+        }
+
+        await context.db.patch(id, { liveAt: now, status: "live", updatedAt: now });
+        await restoreInstallBadge(installBadgeOf(context), target, now);
+        await pointProjectAt(context, target);
+        await context.db.insert("auditLog", {
+            action: "deployment.rollback",
+            actorUserId: deployKey ? "deploy-key" : (context.auth.userId ?? "unknown"),
+            createdAt: now,
+            organizationId,
+            target: target.scriptName,
+        });
+
+        await enqueueNotification(context, organizationId, "deployment.rolled_back", {
+            ...(target.version === undefined ? {} : { detail: `Version ${String(target.version)} is live again.` }),
+            project: await projectNameOf(context, target.projectId),
+        });
+
+        return { scriptName: target.scriptName, version: target.version ?? undefined };
+    });
+
+/**
+ * What the deploy edge needs to re-provision a stored release onto its alias's
+ * Worker (rollback, or the automatic revert after a failed health check): the
+ * deployment's *sealed* admin token — unsealed at the edge, never here — its
+ * identity, and the release currently live on that Worker. Authorized like
+ * {@link rollback}: the deploy key against the deployment's own project, or an
+ * owner/admin session. Only `live`/`superseded` deployments are releases a
+ * Worker can be put back on. An `internalQuery` because it hands out admin-token
+ * material: only the deploy edge may read it, never RPC.
+ */
+export const releaseTarget = internalQuery
+    .input({ deployKey: v.optional(boundedString(LIMITS.token)), id: v.id("deployments"), organizationId: v.id("organizations") })
+    .query(
+        async ({
+            ctx: context,
+            args: { deployKey, id, organizationId },
+        }): Promise<{
+            adminToken?: string;
+            adminTokenCiphertext?: string;
+            adminTokenIv?: string;
+            alias: string;
+            cronSpecs?: string[];
+            kind: DeploymentRow["kind"];
+            liveDeploymentId?: Id<"deployments">;
+            projectId: Id<"projects">;
+            runtime?: "worker";
+            target?: string;
+        }> => {
+            const target = await context.db.get(id);
+
+            if (target?.organizationId !== organizationId) {
+                throw new LunoraError("NOT_FOUND", "deployment not found in this organization");
+            }
+
+            await (deployKey
+                ? authorizeDeployKey(context, organizationId, deployKey, target.projectId)
+                : assertMember(context, organizationId, ["owner", "admin"]));
+
+            if (target.status !== "superseded" && target.status !== "live") {
+                throw new LunoraError("CONFLICT", `cannot re-provision a ${target.status} deployment`);
+            }
+
+            // A rollback, and a failed deploy's automatic revert, would replace an emergency stop's stub.
+            await assertProjectNotHalted(context, target.projectId);
+
+            const live = await liveRelease(context, target);
+
+            return {
+                ...(target.adminToken ? { adminToken: target.adminToken } : {}),
+                ...(target.adminTokenCiphertext && target.adminTokenIv
+                    ? { adminTokenCiphertext: target.adminTokenCiphertext, adminTokenIv: target.adminTokenIv }
+                    : {}),
+                alias: target.alias ?? target.scriptName,
+                ...(target.cronSpecs != null && target.cronSpecs.length > 0 ? { cronSpecs: target.cronSpecs } : {}),
+                kind: target.kind,
+                ...(live ? { liveDeploymentId: live._id } : {}),
+                projectId: target.projectId, // secret-scanner:allow -- domain field name
+                ...(target.runtime === "worker" ? { runtime: "worker" as const } : {}),
+                ...(target.target == null ? {} : { target: target.target }),
+            };
+        },
+    );
+
+/** Superseded releases retained per alias for rollback (GAPS.md A1). */
+export const SUPERSEDED_RETENTION = 3;
+
+/**
+ * Prune old superseded releases beyond the rollback retention window: per
+ * alias + kind, keep the newest {@link SUPERSEDED_RETENTION} superseded
+ * deployments and mark the rest `destroyed`. A release owns no script — the
+ * alias's one Worker is shared — so the teardown sweep only deletes a pruned
+ * row's stored bundle. The live release is never superseded, so never pruned.
+ * SYSTEM only (cron dispatch).
+ */
+export const pruneSuperseded = internalMutation.mutation(async ({ ctx: context }): Promise<{ pruned: number }> => {
+    const { now } = context;
+    // Filter in the QUERY, not after it. `findMany({})` returns one 1000-row page, so
+    // filtering afterwards meant live/failed/destroyed rows could fill the page and
+    // starve the superseded ones this prune exists to collect.
+    const { page: superseded } = await context.db.deployments.findMany({ where: { status: "superseded" } });
+
+    const byProjectKind = new Map<string, DeploymentRow[]>();
+
+    for (const deployment of superseded) {
+        const groupKey = `${deployment.alias ?? deployment.scriptName}|${deployment.kind}`;
+        const group = byProjectKind.get(groupKey) ?? [];
+
+        group.push(deployment);
+        byProjectKind.set(groupKey, group);
+    }
+
+    const excess = [...byProjectKind.values()].flatMap((group) => group.toSorted((a, b) => b.createdAt - a.createdAt).slice(SUPERSEDED_RETENTION));
+
+    for (const deployment of excess) {
+        assertStatusMove(deployment.status, "destroyed");
+    }
+
+    for (const deployment of excess) {
+        // eslint-disable-next-line no-await-in-loop -- small batch; sequential keeps the writer simple
+        await context.db.patch(deployment._id, { destroyedAt: now, status: "destroyed", updatedAt: now });
+    }
+
+    return { pruned: excess.length };
+});
+
+/**
+ * Mark expired preview deployments as `destroyed`. Driven
+ * by the cleanup cron (`lunora/crons.ts`); `internalMutation` so it is reachable
+ * only via the cron's system dispatch, never from a client. The actual
+ * Cloudflare teardown is the provisioner's `destroy` (orchestrator) — wired once
+ * Alchemy lands; this records the lifecycle transition.
+ */
+export const cleanupExpiredPreviews = internalMutation.mutation(async ({ ctx: context }): Promise<{ destroyed: number }> => {
+    const { now } = context;
+    const { page } = await context.db.deployments.findMany({ where: { kind: "preview" } });
+
+    const expired = page.filter((deployment) => deployment.status !== "destroyed" && deployment.expiresAt != null && deployment.expiresAt < now);
+
+    // One name lookup per project, all at once, rather than one per expired preview.
+    const projectIds = [...new Set(expired.map((deployment) => deployment.projectId))];
+    const names = new Map(await Promise.all(projectIds.map(async (projectId) => [projectId, await projectNameOf(context, projectId)] as const)));
+
+    for (const deployment of expired) {
+        assertStatusMove(deployment.status, "destroyed");
+    }
+
+    for (const deployment of expired) {
+        // eslint-disable-next-line no-await-in-loop -- small batch; sequential keeps the writer simple
+        await context.db.patch(deployment._id, { status: "destroyed", updatedAt: now });
+        // eslint-disable-next-line no-await-in-loop -- see above
+        await enqueueNotification(context, deployment.organizationId, "preview.expired", {
+            detail: `Preview ${deployment.alias ?? deployment.scriptName} was removed after its expiry time.`,
+            project: names.get(deployment.projectId) ?? "",
+        });
+    }
+
+    return { destroyed: expired.length };
+});
+
+/**
+ * Advance a deployment's lifecycle (queued → provisioning → verifying → live, or
+ * → failed). A move the transition table (`src/deploy/status-transitions.ts`) does not
+ * list is refused with a CONFLICT. Driven by the deploy orchestrator as it works through the
+ * provisioner's progress events, authorized by the same `deployKey` (CI) or a
+ * member session (dashboard).
+ *
+ * Kept a public `mutation` deliberately: the deploy endpoint reaches it through
+ * the HTTP action context's `ctx.runMutation`, whose dispatch carries no
+ * system-dispatch flag — so an `internalMutation` would be unreachable from that
+ * seam (it would 404 at the RPC visibility gate). Authorization is enforced
+ * here instead: a deploy key, or an org owner or admin. A plain member may not
+ * retarget a deployment's status or URL.
+ */
+export const updateStatus = mutation
+    .use(rateLimit("machine"))
+    .input({
+        bundleHash: v.optional(boundedString(LIMITS.name)),
+        deployKey: v.optional(boundedString(LIMITS.token)),
+        id: v.id("deployments"),
+        status: v.union(
+            v.literal("queued"),
+            v.literal("provisioning"),
+            v.literal("building"),
+            v.literal("verifying"),
+            v.literal("live"),
+            v.literal("superseded"),
+            v.literal("failed"),
+            v.literal("destroyed"),
+        ),
+        url: v.optional(boundedString(LIMITS.url)),
+    })
+    .mutation(async ({ ctx: context, args: { bundleHash, deployKey, id, status, url } }): Promise<void> => {
+        const existing = await context.db.get(id);
+
+        if (!existing) {
+            throw new LunoraError("NOT_FOUND", "deployment not found");
+        }
+
+        await (deployKey
+            ? authorizeDeployKey(context, existing.organizationId, deployKey, existing.projectId)
+            : assertMember(context, existing.organizationId, ["owner", "admin"]));
+
+        // The URL is what the admin proxy sends the tenant's bearer to, so only web schemes are stored.
+        if (url !== undefined && !isWebUrl(url)) {
+            throw new LunoraError("BAD_REQUEST", "deployment url must be an http:// or https:// URL");
+        }
+
+        assertStatusMove(existing.status, status);
+
+        const { now } = context;
+        const phaseColumn = PHASE_TIMESTAMP[status];
+
+        await context.db.patch(id, {
+            ...(bundleHash === undefined ? {} : { bundleHash }),
+            ...(url === undefined ? {} : { url }),
+            ...(phaseColumn ? { [phaseColumn]: now } : {}),
+            status,
+            updatedAt: now,
+        });
+
+        await onEnter(context, id, existing, status);
+    });
+
+/**
+ * Resolve everything `lunora cloud eject` needs to package a deployment: the
+ * tenant URL, its *sealed* admin token, and the identity the scaffolded config
+ * is named after.
+ *
+ * An `internalQuery` rather than a widening of {@link adminTarget}: that one is
+ * session-authorized for the hosted studio's browser proxy, while eject arrives
+ * over a deploy key from a terminal.
+ *
+ * **The key is authorized HERE, not at the edge.** The org is not resolved from the key
+ * with `orgForDeployKey`, the helper the OTLP endpoints use: that one accepts ANY
+ * non-revoked key and checks neither capability nor project scope, so a full tenant data
+ * export would be reachable from a telemetry `ingest` token, the lowest-privilege
+ * credential on the platform, which the platform injects into every tenant Worker as an
+ * env secret. `authorizeDeployKey` runs inside this query instead, against the
+ * deployment's own org and project, exactly as {@link rollback} does — a route cannot
+ * forget to do what it does not perform.
+ *
+ * The admin token is returned sealed. The edge decrypts it with
+ * `SECRET_ENCRYPTION_KEY` exactly as the studio proxy does, so the plaintext
+ * bearer never crosses the RPC boundary. SYSTEM only.
+ */
+export const ejectTarget = internalQuery.input({ deployKey: boundedString(LIMITS.token), deploymentId: v.id("deployments") }).query(
+    async ({
+        ctx: context,
+        args: { deployKey, deploymentId },
+    }): Promise<null | {
+        adminToken?: string;
+        adminTokenCiphertext?: string;
+        adminTokenIv?: string;
+        organizationId: Id<"organizations">;
+        projectSlug: string;
+        scriptName: string;
+        url: string;
+    }> => {
+        const deployment = await context.db.get(deploymentId);
+
+        if (!deployment) {
+            return null;
+        }
+
+        // Throws for a revoked key, a telemetry-only ingest key, or a key scoped to
+        // another project — the tenant boundary, enforced before anything about the
+        // deployment is read out.
+        await authorizeDeployKey(context, deployment.organizationId, deployKey, deployment.projectId);
+
+        const hasToken = deployment.adminToken ?? (deployment.adminTokenCiphertext && deployment.adminTokenIv);
+
+        // Live only, as in `adminTarget`: the alias's one Worker accepts only the
+        // admin token of the release it is running.
+        if (deployment.status !== "live" || !hasToken || !deployment.url) {
+            return null;
+        }
+
+        // Eject packages the data a Lunora app exports; a plain Worker has neither.
+        if (deployment.runtime === "worker") {
+            throw new LunoraError("CONFLICT", PLAIN_WORKER_NO_ADMIN);
+        }
+
+        const project = (await context.db.get(deployment.projectId)) as { slug?: string } | null;
+
+        return {
+            ...(deployment.adminToken ? { adminToken: deployment.adminToken } : {}),
+            ...(deployment.adminTokenCiphertext && deployment.adminTokenIv
+                ? { adminTokenCiphertext: deployment.adminTokenCiphertext, adminTokenIv: deployment.adminTokenIv }
+                : {}),
+            organizationId: deployment.organizationId,
+            projectSlug: project?.slug ?? deployment.scriptName,
+            scriptName: deployment.scriptName,
+            url: deployment.url,
+        };
+    },
+);

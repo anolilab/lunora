@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { exportGlobalRows, importGlobalRows, selectGlobalTables } from "../src/admin-export-import";
 import { createD1CtxDb as createD1ContextDatabase } from "../src/d1-ctx-db";
+import { abortStagedGlobalRows, commitStagedGlobalRows, stageGlobalRows } from "../src/import-staging";
 import { createD1Exec } from "./_helpers/node-sqlite-d1";
 
 const FIXED_CLOCK = 1_700_000_000_000;
@@ -584,6 +585,204 @@ describe("d1 admin export/import globals", () => {
 
             expect(result.errors).toHaveLength(1);
             expect(result.errors[0]).toMatchObject({ code: "INSERT_FAILED", message: "Internal error" });
+        });
+    });
+
+    describe("staged replace (stageGlobalRows / commitStagedGlobalRows)", () => {
+        const values = async (): Promise<Record<string, unknown>> => {
+            const rows = await harness.exec.all(`SELECT "id", "value" FROM "settings" ORDER BY "id"`, []);
+
+            return Object.fromEntries(rows.map((row) => [row["id"], row["value"]]));
+        };
+
+        const stagedCount = async (): Promise<number> => {
+            const [row] = await harness.exec.all(`SELECT COUNT(*) AS "n" FROM "__lunora_import_stage__"`, []);
+
+            return Number(row?.["n"]);
+        };
+
+        beforeEach(async () => {
+            await writer.insert("settings", { _id: "kept", name: "theme", value: "edited since" }, { allowExplicitId: true });
+            await writer.insert("settings", { _id: "created-since", name: "lang", value: "new" }, { allowExplicitId: true });
+        });
+
+        it("stages across batches without touching the table, then overwrites and prunes at commit", async () => {
+            expect.assertions(4);
+
+            await stageGlobalRows(harness.exec, schema, {
+                generation: "g1",
+                rows: [{ doc: { _creationTime: 1, _id: "kept", name: "theme", value: "as snapshotted" }, table: "settings" }],
+                session: "s1",
+                tables: ["settings"],
+            });
+            await stageGlobalRows(harness.exec, schema, {
+                generation: "g1",
+                rows: [{ doc: { _creationTime: 2, _id: "deleted-since", name: "tz", value: "back" }, table: "settings" }],
+                session: "s1",
+                tables: ["settings"],
+            });
+
+            await expect(values()).resolves.toStrictEqual({ "created-since": "new", kept: "edited since" });
+
+            const result = await commitStagedGlobalRows(writer, harness.exec, schema, { generation: "g1", session: "s1", staged: true, tables: ["settings"] });
+
+            expect(result).toStrictEqual({ conflicts: 0, deleted: { settings: 1 }, errors: [], inserted: { settings: 2 } });
+            await expect(values()).resolves.toStrictEqual({ "deleted-since": "back", kept: "as snapshotted" });
+            await expect(stagedCount()).resolves.toBe(0);
+        });
+
+        it("answers a retried commit with the recorded result instead of running again", async () => {
+            expect.assertions(2);
+
+            await stageGlobalRows(harness.exec, schema, {
+                generation: "g1",
+                rows: [{ doc: { _id: "kept", name: "theme", value: "as snapshotted" }, table: "settings" }],
+                session: "s2",
+                tables: ["settings"],
+            });
+
+            const first = await commitStagedGlobalRows(writer, harness.exec, schema, { generation: "g1", session: "s2", staged: true, tables: ["settings"] });
+
+            // A write after the commit must survive the retry: a re-run would prune it.
+            await writer.insert("settings", { _id: "after", name: "x", value: "later" }, { allowExplicitId: true });
+
+            await expect(
+                commitStagedGlobalRows(writer, harness.exec, schema, { generation: "g1", session: "s2", staged: true, tables: ["settings"] }),
+            ).resolves.toStrictEqual(first);
+            await expect(values()).resolves.toStrictEqual({ after: "later", kept: "as snapshotted" });
+        });
+
+        it("stages nothing when any row is refused", async () => {
+            expect.assertions(3);
+
+            const result = await stageGlobalRows(harness.exec, schema, {
+                generation: "g1",
+                rows: [
+                    { doc: { _id: "kept", name: "theme", value: "as snapshotted" }, table: "settings" },
+                    { doc: { _id: "bad", name: 7, value: "x" }, table: "settings" },
+                ],
+                session: "s3",
+                tables: ["settings"],
+            });
+
+            expect(result.errors).toMatchObject([{ code: "VALIDATION_ERROR", line: 2 }]);
+            await expect(stagedCount()).resolves.toBe(0);
+            await expect(values()).resolves.toStrictEqual({ "created-since": "new", kept: "edited since" });
+        });
+
+        it("refuses a commit whose staged rows expired, rather than pruning the table empty", async () => {
+            expect.assertions(2);
+
+            await stageGlobalRows(
+                harness.exec,
+                schema,
+                { generation: "g1", rows: [{ doc: { _id: "kept", name: "theme", value: "v" }, table: "settings" }], session: "s4", tables: ["settings"] },
+                0,
+            );
+
+            await expect(
+                commitStagedGlobalRows(writer, harness.exec, schema, { generation: "g1", session: "s4", staged: true, tables: ["settings"] }),
+            ).rejects.toMatchObject({
+                code: "IMPORT_SESSION_EXPIRED",
+            });
+            await expect(values()).resolves.toStrictEqual({ "created-since": "new", kept: "edited since" });
+        });
+
+        it("empties the tables when the session staged no row for them", async () => {
+            expect.assertions(1);
+
+            await commitStagedGlobalRows(writer, harness.exec, schema, { generation: "g1", session: "s5", staged: false, tables: ["settings"] });
+
+            await expect(values()).resolves.toStrictEqual({});
+        });
+
+        it("deletes nothing when a write fails part-way, leaving a superset rather than a loss", async () => {
+            expect.assertions(3);
+
+            const failingWriter: DatabaseWriterLike = {
+                ...writer,
+                insert: () => Promise.reject(new Error("driver error")),
+            };
+
+            await stageGlobalRows(harness.exec, schema, {
+                generation: "g1",
+                rows: [
+                    { doc: { _id: "kept", name: "theme", value: "as snapshotted" }, table: "settings" },
+                    { doc: { _id: "deleted-since", name: "tz", value: "back" }, table: "settings" },
+                ],
+                session: "s6",
+                tables: ["settings"],
+            });
+
+            const result = await commitStagedGlobalRows(failingWriter, harness.exec, schema, {
+                generation: "g1",
+                session: "s6",
+                staged: true,
+                tables: ["settings"],
+            });
+
+            expect(result.errors).toMatchObject([{ code: "INSERT_FAILED", line: 2 }]);
+            await expect(values()).resolves.toStrictEqual({ "created-since": "new", kept: "as snapshotted" });
+            // The rows stay staged, so the commit can be sent again.
+            await expect(stagedCount()).resolves.toBe(2);
+        });
+
+        it("refuses a stage or commit of another generation, and an abort of one leaves the rows", async () => {
+            expect.assertions(4);
+
+            await stageGlobalRows(harness.exec, schema, {
+                generation: "g1",
+                rows: [{ doc: { _id: "kept", name: "theme", value: "v" }, table: "settings" }],
+                session: "s8",
+                tables: ["settings"],
+            });
+
+            await expect(stageGlobalRows(harness.exec, schema, { generation: "g2", rows: [], session: "s8", tables: ["settings"] })).rejects.toMatchObject({
+                code: "IMPORT_SESSION_STALE",
+            });
+            await expect(
+                commitStagedGlobalRows(writer, harness.exec, schema, { generation: "g2", session: "s8", staged: false, tables: ["settings"] }),
+            ).rejects.toMatchObject({
+                code: "IMPORT_SESSION_STALE",
+            });
+
+            await abortStagedGlobalRows(harness.exec, "s8", "g2");
+
+            await expect(stagedCount()).resolves.toBe(1);
+            await expect(values()).resolves.toStrictEqual({ "created-since": "new", kept: "edited since" });
+        });
+
+        it("never sweeps, and refuses to commit, a session in a state it cannot read", async () => {
+            expect.assertions(2);
+
+            await stageGlobalRows(
+                harness.exec,
+                schema,
+                { generation: "g1", rows: [{ doc: { _id: "kept", name: "theme", value: "v" }, table: "settings" }], session: "s9", tables: ["settings"] },
+                0,
+            );
+            await harness.exec.run(`UPDATE "__lunora_import_session__" SET state = 'mystery' WHERE session = 's9'`, []);
+
+            await expect(
+                commitStagedGlobalRows(writer, harness.exec, schema, { generation: "g1", session: "s9", staged: true, tables: ["settings"] }),
+            ).rejects.toMatchObject({
+                code: "IMPORT_SESSION_CORRUPT",
+            });
+            await expect(stagedCount()).resolves.toBe(1);
+        });
+
+        it("drops a session's staged rows on abort", async () => {
+            expect.assertions(1);
+
+            await stageGlobalRows(harness.exec, schema, {
+                generation: "g1",
+                rows: [{ doc: { _id: "kept", name: "theme", value: "v" }, table: "settings" }],
+                session: "s7",
+                tables: ["settings"],
+            });
+            await abortStagedGlobalRows(harness.exec, "s7", "g1");
+
+            await expect(stagedCount()).resolves.toBe(0);
         });
     });
 });

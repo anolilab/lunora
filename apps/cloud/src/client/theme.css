@@ -1,0 +1,364 @@
+/**
+ * Lunora Cloud studio styling on Tailwind CSS v4.
+ *
+ * This file supplies the Tailwind engine, the Geist faces and the theme tokens. The
+ * app fills the viewport, with rounded cards on a hairline border, monospace numerics
+ * and a violet/blue accent pair. Both modes ship: dark is the default (`.dark` on <html>, rendered by __root), and the header
+ * toggle swaps to the Ivory light theme.
+ *
+ * The design is expressed as Tailwind utilities in the component JSX. This file
+ * wires Tailwind + the canonical tokens (marketing/design-tokens/tokens.css,
+ * which supplies the `@theme` colors/radius/fonts backing the utilities), styles
+ * the base HTML elements (form controls, headings), and keeps a few genuinely
+ * complex, single-use components as classes (command palette, usage meters/chart,
+ * log viewer, data tables).
+ */
+
+@import "tailwindcss";
+/* Self-hosted Geist (variable weight axis only — no italics needed). */
+@import "@fontsource-variable/geist/wght.css";
+@import "@fontsource-variable/geist-mono/wght.css";
+/* Canonical color + theme tokens (both modes; :root = day, .dark = night). */
+@import "../../../../marketing/design-tokens/tokens.css";
+/* shadcn/ui: overlay/animation utilities + the `.dark`-variant selector its
+   components use. The theme itself comes from the tokens above, not from
+   `shadcn init` (whose neutral OKLCH block would override this palette). */
+@import "tw-animate-css";
+/* React Flow structural styles for the project bindings graph (custom-themed nodes). */
+@import "@xyflow/react/dist/base.css";
+@custom-variant dark (&:is(.dark *));
+
+/* Scan the studio's TSX for the utility classes it uses. */
+@source "../";
+
+/* The tokens name the families "Geist Sans"/"Geist Mono"; the self-hosted
+   Fontsource variable faces register as "Geist Variable"/"Geist Mono Variable",
+   so re-point the font-* theme keys at the loaded families. */
+@theme {
+    --font-sans: "Geist Variable", ui-sans-serif, system-ui, -apple-system, sans-serif;
+    --font-mono: "Geist Mono Variable", ui-monospace, "SF Mono", Menlo, Monaco, Consolas, monospace;
+
+    /* Soft corners: controls (buttons, inputs, menu items) at 8px, cards and
+       popovers at 12–16px. Overrides the shared token scale for the control plane
+       only; marketing keeps its own. */
+    --radius-xs: 4px;
+    --radius-sm: 6px;
+    --radius-md: 8px;
+    --radius-lg: 10px;
+    --radius-xl: 12px;
+    --radius-2xl: 16px;
+}
+
+/* `inline` so the utilities resolve the per-mode value where they are used. */
+@theme inline {
+    --shadow-card: var(--card-shadow);
+    --shadow-window: var(--card-shadow);
+}
+
+/*
+ * Token overrides. Unlayered on purpose: tokens.css declares `:root`/`.dark`
+ * inside `@layer base`, and an unlayered rule wins over any layered one
+ * regardless of source order.
+ */
+:root {
+    /* The copy-in auth UI reads `var(--radius, 0.5rem)`. */
+    --radius: 0.75rem;
+
+    /* Brand marks: the org logo tile and the account avatar. Both modes share them, since
+       white text sits on these saturated fills in either theme. */
+    --brand-gradient: linear-gradient(180deg, hsl(222 95% 66%), hsl(232 80% 52%));
+    --brand-shadow: inset 0 1px 0 hsl(0 0% 100% / 0.25), 0 4px 14px -4px hsl(225 90% 55% / 0.7);
+    --avatar-gradient: radial-gradient(circle at 32% 28%, hsl(220 90% 88%), hsl(230 70% 62%) 45%, hsl(255 60% 34%));
+    --avatar-shadow: inset 0 -4px 8px hsl(240 60% 10% / 0.35), 0 2px 8px -2px hsl(250 80% 40% / 0.6);
+
+    --sidebar: transparent;
+    --sidebar-accent: hsl(0 0% 100% / 0.85);
+    --sidebar-border: hsl(240 16% 50% / 0.14);
+
+    --card-shadow: 0 1px 2px hsl(240 20% 20% / 0.04), 0 4px 16px -8px hsl(240 20% 20% / 0.08);
+
+    --chart-1: hsl(262 70% 58%);
+    --chart-2: hsl(215 80% 52%);
+    --chart-3: hsl(36 92% 48%);
+    --chart-4: hsl(152 60% 38%);
+    --chart-5: hsl(330 70% 54%);
+}
+
+.dark {
+    /* Night: a near-black canvas. */
+    --background: hsl(240 14% 4%);
+    --card: hsl(240 12% 6.5%);
+    --popover: hsl(240 12% 7.5%);
+    --secondary: hsl(240 8% 12%);
+    --muted: hsl(240 8% 11%);
+    --muted-foreground: hsl(232 10% 62%);
+    --accent: hsl(240 8% 13%);
+    --border: hsl(230 30% 96% / 0.085);
+    --input: hsl(230 30% 96% / 0.11);
+    --ring: hsl(264 88% 76%);
+
+    --sidebar: transparent;
+    --sidebar-foreground: hsl(232 14% 68%);
+    --sidebar-accent: hsl(235 20% 100% / 0.08);
+    --sidebar-accent-foreground: hsl(228 30% 97%);
+    --sidebar-border: hsl(230 40% 96% / 0.09);
+
+    --card-shadow: inset 0 1px 0 hsl(230 40% 96% / 0.035), 0 8px 24px -16px hsl(240 50% 2% / 0.8);
+
+    --chart-1: hsl(264 88% 76%);
+    --chart-2: hsl(214 92% 68%);
+    --chart-3: hsl(36 96% 60%);
+    --chart-4: hsl(152 62% 52%);
+    --chart-5: hsl(330 80% 68%);
+
+    --success: hsl(146 64% 52%);
+}
+
+@layer base {
+    *,
+    ::before,
+    ::after {
+        @apply border-border;
+    }
+
+    html {
+        color-scheme: light;
+    }
+
+    html.dark {
+        color-scheme: dark;
+    }
+
+    body {
+        @apply bg-background text-foreground font-sans text-[14px] leading-[1.5] antialiased;
+        min-height: 100svh;
+        text-rendering: optimizeLegibility;
+    }
+
+    /* Numeric readouts line up in columns. */
+    .font-mono {
+        font-variant-numeric: tabular-nums;
+    }
+
+    ::selection {
+        background: color-mix(in oklab, var(--aurora-violet) 30%, transparent);
+    }
+
+    :focus-visible {
+        @apply outline-2 outline-offset-2 outline-ring;
+    }
+
+    /* Headings. h2/h3 sit at the top of a card, so they carry the gap to content. */
+    h1,
+    h2,
+    h3 {
+        @apply font-medium tracking-[-0.01em];
+    }
+
+    h1 {
+        @apply m-0 text-[28px] tracking-[-0.02em];
+    }
+
+    h2 {
+        @apply mt-0 mb-4 text-[20px];
+    }
+
+    h3 {
+        @apply mt-0 mb-4 text-[16px];
+    }
+
+    a {
+        @apply text-foreground no-underline;
+    }
+
+    /* Bare `<label>` elements. Mirrors COLUMN_LABEL in `src/lib/typography.ts`: CSS
+       cannot import it, so the two are kept in step by hand. */
+    label {
+        @apply grid gap-1.5 text-[11px] font-medium tracking-[0.08em] text-muted-foreground uppercase;
+    }
+}
+
+/* ── Usage meters (included-vs-used quota bars) ───── */
+.meter {
+    margin: 12px 0;
+}
+
+.meter-head {
+    display: flex;
+    font-family: var(--font-mono);
+    font-size: 12px;
+    justify-content: space-between;
+    margin-bottom: 6px;
+    color: var(--muted-foreground);
+}
+
+.meter-track {
+    background: var(--secondary);
+    border-radius: var(--radius-xs);
+    height: 6px;
+    overflow: hidden;
+}
+
+.meter-fill {
+    border-radius: var(--radius-xs);
+    height: 100%;
+    transition: width 240ms cubic-bezier(0.25, 0.1, 0.25, 1);
+}
+
+.meter-ok {
+    background: var(--success);
+}
+
+.meter-warn {
+    background: var(--warning);
+}
+
+.meter-over {
+    background: var(--destructive);
+}
+
+.meter-note {
+    color: var(--destructive);
+    font-family: var(--font-mono);
+    font-size: 12px;
+    margin: 6px 0 0;
+}
+
+.meter-note.warn {
+    color: var(--warning);
+}
+
+/* Zero-dep usage bar chart. */
+.usage-chart {
+    margin: 20px 0;
+}
+
+.usage-chart svg {
+    display: block;
+    height: 96px;
+    width: 100%;
+}
+
+.usage-chart rect {
+    fill: var(--aurora-violet);
+}
+
+.usage-chart-legend {
+    display: flex;
+    font-family: var(--font-mono);
+    font-size: 11px;
+    letter-spacing: 0.04em;
+    justify-content: space-between;
+    margin-top: 8px;
+    color: var(--muted-foreground);
+}
+
+/* ── Log viewer (builds + runtime logs) ───────────── */
+.log-view {
+    background: var(--background);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    color: var(--foreground);
+    font-family: var(--font-mono);
+    font-size: 12px;
+    line-height: 1.6;
+    max-height: 480px;
+    overflow: auto;
+    padding: 14px 16px;
+    white-space: pre-wrap;
+    overflow-wrap: break-word;
+}
+
+.log-line.error {
+    color: var(--destructive);
+}
+
+.log-line.warn {
+    color: var(--warning);
+}
+
+/* ── ⌘K command palette ───────────────────────────── */
+.palette-overlay {
+    align-items: flex-start;
+    background: color-mix(in oklab, var(--background) 60%, transparent);
+    display: flex;
+    inset: 0;
+    justify-content: center;
+    padding-top: 14vh;
+    position: fixed;
+    z-index: 60;
+    backdrop-filter: blur(4px);
+}
+
+.palette {
+    background: var(--popover);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    box-shadow: var(--shadow-lg);
+    color: var(--popover-foreground);
+    max-width: 560px;
+    overflow: hidden;
+    width: 92%;
+}
+
+.palette-item {
+    border-radius: 8px;
+}
+
+.palette-input {
+    background: transparent;
+    border: none;
+    border-bottom: 1px solid var(--border);
+    color: inherit;
+    font-family: var(--font-sans);
+    font-size: 15px;
+    outline: none;
+    padding: 16px;
+    width: 100%;
+}
+
+.palette-list {
+    list-style: none;
+    margin: 0;
+    max-height: 340px;
+    overflow-y: auto;
+    padding: 6px;
+}
+
+.palette-item {
+    align-items: baseline;
+    background: transparent;
+    border: none;
+    color: inherit;
+    cursor: pointer;
+    display: flex;
+    font-size: 14px;
+    gap: 12px;
+    padding: 9px 12px;
+    text-align: left;
+    width: 100%;
+}
+
+.palette-item .muted {
+    font-size: 12px;
+    min-width: 56px;
+}
+
+.palette-item.selected {
+    background: var(--accent);
+    box-shadow: inset 2px 0 0 var(--aurora-violet);
+}
+
+.palette-empty {
+    padding: 14px;
+    color: var(--muted-foreground);
+}
+
+.palette-hint {
+    border-top: 1px solid var(--border);
+    font-family: var(--font-mono);
+    font-size: 11px;
+    letter-spacing: 0.04em;
+    padding: 10px 16px;
+    color: var(--muted-foreground);
+}
