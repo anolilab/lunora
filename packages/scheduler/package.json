@@ -68,7 +68,7 @@
         "@lunora/errors": ">=1.0.0-alpha.51 <2.0.0-0",
         "@lunora/platform": "1.0.0-alpha.64",
         "@lunora/wire": "1.0.0-alpha.1",
-        "cron-parser": "catalog:tooling"
+        "@visulima/cron-parser": "catalog:tooling"
     },
     "devDependencies": {
         "@cloudflare/vitest-plugin": "catalog:cloudflare",

@@ -453,8 +453,11 @@ catalogs:
     "@types/better-sqlite3": ^9.6.0
     "better-sqlite3": ^13.0.3
     # Cron expression parsing shared by @lunora/scheduler and
-    # @lunora/platform-node's scheduler host.
-    "cron-parser": 5.10.1
+    # @lunora/platform-node's scheduler host. `@visulima/cron-parser` is a
+    # zero-dependency ESM parser with a `cloudflare` dialect, so one parser
+    # serves the runtime validator, codegen and the Node host — and replaces the
+    # CommonJS `cron-parser` + its `luxon` dependency everywhere.
+    "@visulima/cron-parser": 1.1.0
     dockerode: ^5.0.1
     # Model-layer renderer for `lunora sdk generate`: JSON Schema -> dataclasses
     # in 19 languages. Only the generated SDK's *models* come from quicktype —
@@ -1085,6 +1088,10 @@ minimumReleaseAgeExclude:
   - '@tanstack/react-virtual@3.14.2'
   - '@tanstack/virtual-core@3.17.0'
   - '@types/react@19.2.16'
+  # Zero-dependency ESM cron parser with a `cloudflare` dialect; replaces
+  # `cron-parser` + `luxon` repo-wide. Published 2026-10-15 13:25 UTC, inside
+  # the 24h window; drop after 2026-10-16.
+  - '@visulima/cron-parser@1.1.0'
   # Disk loader resolved lazily — no import-time fileURLToPath(import.meta.url),
   # so the barrel is safe to evaluate on workerd. Published 2026-10-14 11:06 UTC,
   # inside the 24h window; drop after 2026-10-15.

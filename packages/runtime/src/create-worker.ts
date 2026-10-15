@@ -3940,7 +3940,7 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
                 // `@lunora/scheduler`'s `assertScheduleDelay`, restated: this
                 // package does not depend on `@lunora/scheduler` (it speaks to the
                 // SchedulerDO over HTTP), and pulling it in for one guard would
-                // add `cron-parser` to the worker entry. The CODE is kept in step
+                // add `@visulima/cron-parser` to the worker entry. The CODE is kept in step
                 // by hand — a caller's bad argument, never `INTERNAL`.
                 if (!Number.isFinite(delayMs) || delayMs < 0) {
                     throw new LunoraError("ctx.scheduler.runAfter: `delayMs` must be a non-negative finite number", { code: "INVALID_INPUT", status: 400 });

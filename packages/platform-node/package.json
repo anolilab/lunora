@@ -68,9 +68,9 @@
         "@lunora/runtime": "1.0.0-alpha.204",
         "@lunora/sql-store": "1.0.0-alpha.182",
         "@lunora/workflow": "1.0.0-alpha.78",
+        "@visulima/cron-parser": "catalog:tooling",
         "@visulima/workflow": "catalog:workflow",
         "better-sqlite3": "catalog:tooling",
-        "cron-parser": "catalog:tooling",
         "pprof-format": "catalog:tooling"
     },
     "devDependencies": {

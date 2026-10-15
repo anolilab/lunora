@@ -116,7 +116,7 @@ describe("discover/crons", () => {
 
         const result = discoverCrons(newProject(), workdir);
 
-        expect(result[0]).toEqual({ args: {}, cron: "0 8 * * 1", functionPath: "email:report", name: "report" });
+        expect(result[0]).toEqual({ args: {}, cron: "0 8 * * 2", functionPath: "email:report", name: "report" });
     });
 
     it("supports a chained builder", () => {

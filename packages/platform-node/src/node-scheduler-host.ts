@@ -35,18 +35,18 @@
  * live in `wrangler.jsonc` and are reconciled at build time, so there is no
  * runtime call that could add one — and `SchedulerHost.cron`'s docstring is
  * explicit that presence is a host's declaration that dynamic cron works. On
- * Node it does: expressions are parsed by `cron-parser` (the same dependency
- * `@lunora/scheduler` validates with, so one grammar stays authoritative across
- * the repo) and re-armed from the durable table on construction exactly like
- * one-shot jobs.
+ * Node it does: expressions are parsed by `@visulima/cron-parser` (the same
+ * dependency `@lunora/scheduler` validates with, so one grammar stays
+ * authoritative across the repo) and re-armed from the durable table on
+ * construction exactly like one-shot jobs.
  */
 
 import { randomUUID } from "node:crypto";
 import { deserialize, serialize } from "node:v8";
 
 import type { ScheduledJob, ScheduledJobStatus, ScheduleOptions, SchedulerHost } from "@lunora/platform";
+import { CronExpressionParser } from "@visulima/cron-parser";
 import type Database from "better-sqlite3";
-import { CronExpressionParser } from "cron-parser";
 
 /**
  * Retry policy applied when a caller supplies none. `ScheduleOptions.retry`

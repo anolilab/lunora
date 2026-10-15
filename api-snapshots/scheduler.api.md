@@ -608,9 +608,7 @@ const warnIfSecondsLeading: (schedule: string, context: string) => void;
 
 ### `default` (const)
 
-```ts
-const isValidCronExpression: (schedule: string) => boolean;
-```
+Re-exported from `@lunora/scheduler` — signature tracked in that section.
 
 ## Referenced internal declarations
 

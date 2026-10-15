@@ -53,7 +53,7 @@ describe("cronJobs", () => {
         crons.monthly("invoice", { day: 1, hourUTC: 0, minuteUTC: 30 }, fnRef("billing.invoice"));
 
         expect(crons.jobs()[0]?.cron).toBe("5 9 * * *");
-        expect(crons.jobs()[1]?.cron).toBe("0 8 * * 1");
+        expect(crons.jobs()[1]?.cron).toBe("0 8 * * 2");
         expect(crons.jobs()[2]?.cron).toBe("30 0 1 * *");
     });
 
@@ -68,7 +68,7 @@ describe("cronJobs", () => {
         expect(() => crons.cron("bad", "every minute", fnRef("foo.bar"))).toThrow(/invalid cron expression/u);
     });
 
-    it("accepts the full cron grammar via cron-parser (names, lists, ranges, steps, L/#, seconds)", () => {
+    it("accepts the full cron grammar via @visulima/cron-parser (names, lists, ranges, steps, L/#, seconds)", () => {
         expect.assertions(6);
 
         const crons = cronJobs();

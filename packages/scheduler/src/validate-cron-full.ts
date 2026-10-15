@@ -1,24 +1,8 @@
 /**
- * Build-time cron validation backed by `cron-parser`, the authority on what a
- * schedule means. Reached only through `@lunora/scheduler/validate` (codegen,
- * CLI) — never from the Worker-reachable barrel, because `cron-parser` and its
- * `luxon` dependency are ~350 KB of CommonJS that cannot be tree-shaken.
+ * Build-time cron validation reached only through `@lunora/scheduler/validate`
+ * (codegen, CLI). It is the SAME check the runtime `cronJobs()` builder applies —
+ * both run `@visulima/cron-parser` in the `cloudflare` dialect (see
+ * `./validate-cron.ts`) — so codegen can never accept an expression the runtime
+ * would reject at app startup, and there is only one grammar to keep in step.
  */
-import { CronExpressionParser } from "cron-parser";
-
-/** Standard cron expression (5- or 6-field) or a supported `@macro`, per `cron-parser`. */
-const isValidCronExpression = (schedule: string): boolean => {
-    if (typeof schedule !== "string" || schedule.trim() === "") {
-        return false;
-    }
-
-    try {
-        CronExpressionParser.parse(schedule.trim());
-
-        return true;
-    } catch {
-        return false;
-    }
-};
-
-export default isValidCronExpression;
+export { isValidCronExpression as default } from "./validate-cron";
