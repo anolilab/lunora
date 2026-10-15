@@ -1178,6 +1178,24 @@ const wrapDatabase = (base: RlsDatabase, raw: RlsDatabase, steps: ReadonlyArray<
         return answer;
     };
 
+    /** Re-locate one row of the gated `tableName` and delete it on its fresh image; false when it is already gone. */
+    const deleteLocated = async (id: string, tableName: string, deleteOptions: undefined | { hard: boolean }): Promise<boolean> => {
+        const located = await findRowTable(id, tableName);
+
+        if (!located) {
+            return false;
+        }
+
+        if (!allowsWrite(tableName, "delete", located.row)) {
+            // Same table-agnostic message as `gateById`.
+            throw new LunoraError("FORBIDDEN", "delete denied by policy");
+        }
+
+        await raw.delete(id, tableName, deleteOptions);
+
+        return true;
+    };
+
     /**
      * Delete the rows of `tableName` a policy-scoped read just returned. `gateById` would `locateRow` each id
      * again (one `lookupById`, or a `get` plus a `findFirst` probe on a miss) to learn the row and its table; a
@@ -1187,20 +1205,25 @@ const wrapDatabase = (base: RlsDatabase, raw: RlsDatabase, steps: ReadonlyArray<
      * The image is the one read in the same call: inside a mutation the DO serialises writes, except for the
      * tables `needsReread` lists.
      */
-    const deleteReadRows = async (tableName: string, rows: ReadonlyArray<Record<string, unknown>>, hard?: boolean): Promise<void> => {
+    const deleteReadRows = async (tableName: string, rows: ReadonlyArray<Record<string, unknown>>, hard?: boolean): Promise<number> => {
         const gated = policyTables.has(tableName);
         const writer = gated ? raw : base;
         const deleteOptions = hard === undefined ? undefined : { hard };
         const reread = gated ? needsReread(tableName) : undefined;
+        let deleted = 0;
 
         for (const [index, row] of rows.entries()) {
             const id = String(row["_id"]);
 
-            // The image read before the page began may be stale (see `needsReread`): locate the row again, as
-            // `gateById` does.
+            // The image read before the page began may be stale (see `needsReread`): locate the row again. A row an
+            // earlier delete of this page already removed (a cascade, a trigger, another shard) is skipped without
+            // touching any writer: a pinned delete of an absent row would reach the guarded writer, which refuses a
+            // non-public table under `rls("required")`.
             if (reread && (reread.all || (reread.later && index > 0))) {
                 // eslint-disable-next-line no-await-in-loop -- sequential, mirrors looped single deletes
-                await gateById(id, "delete", (target) => target.delete(id, tableName, deleteOptions), undefined, tableName);
+                if (await deleteLocated(id, tableName, deleteOptions)) {
+                    deleted += 1;
+                }
 
                 continue;
             }
@@ -1212,7 +1235,11 @@ const wrapDatabase = (base: RlsDatabase, raw: RlsDatabase, steps: ReadonlyArray<
 
             // eslint-disable-next-line no-await-in-loop -- sequential, mirrors looped single deletes
             await writer.delete(id, tableName, deleteOptions);
+            deleted += 1;
         }
+
+        // Rows this call deleted: a row removed by an earlier delete of the page (cascade) is not counted.
+        return deleted;
     };
 
     /**
@@ -1322,8 +1349,7 @@ const wrapDatabase = (base: RlsDatabase, raw: RlsDatabase, steps: ReadonlyArray<
                 // per-row re-location is needed, and the engine probes only that table (a `.global()` pin
                 // falls straight through to D1) and can never land on another table's row with the same id.
                 // eslint-disable-next-line no-await-in-loop -- chunked by design: one policy-visible page at a time
-                await deleteReadRows(tableName, page, options?.hard);
-                deleted += page.length;
+                deleted += await deleteReadRows(tableName, page, options?.hard);
 
                 if (page.length < chunkSize) {
                     break;
@@ -1364,9 +1390,7 @@ const wrapDatabase = (base: RlsDatabase, raw: RlsDatabase, steps: ReadonlyArray<
 
             assertBatchLimit(ids.length, options?.limit, "deleteWhere");
 
-            await deleteReadRows(tableName, resolved.page);
-
-            return { deleted: ids.length };
+            return { deleted: await deleteReadRows(tableName, resolved.page) };
         },
 
         async findFirst(tableName, args) {

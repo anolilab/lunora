@@ -1644,6 +1644,38 @@ describe("rls — batch write path", () => {
         expect(database.calls.filter((call) => call.method === "delete").map((call) => call.tableOrId)).toStrictEqual(["P"]);
     });
 
+    it("deleteAll skips a .global() row another shard deleted after the page read", async () => {
+        expect.assertions(3);
+
+        const rows = [
+            { _id: "A", parentId: "x", table: "documents" },
+            { _id: "B", parentId: "x", table: "documents" },
+        ];
+        const database = createFakeDatabase(rows);
+        const { findMany } = database.writer;
+
+        Object.assign(database.writer, { deleteRereadTables: new Set(["documents"]) });
+        database.writer.get = async (id) => rows.find((row) => row._id === id) ?? null;
+        database.writer.findMany = async (tableName, args) => {
+            const result = await findMany(tableName, args);
+            const page = result.page.map((row) => {
+                return { ...row };
+            });
+
+            // Another shard deletes B between the page read and the delete.
+            rows.splice(1, 1);
+
+            return { ...result, page };
+        };
+
+        const handler = lunora.mutation.use(rlsForTest<TestContext>([parentIdPolicy])).mutation(async ({ ctx }) => ctx.db.deleteAll("documents"));
+
+        // Only A is deleted by this call; the vanished B is skipped, not deleted and not counted.
+        await expect(handler.handler(makeContext(database, "u1"), {})).resolves.toStrictEqual({ deleted: 1 });
+        expect(database.calls.filter((call) => call.method === "delete").map((call) => call.tableOrId)).toStrictEqual(["A"]);
+        expect(rows).toHaveLength(1);
+    });
+
     it("deleteAll keeps the no-relocate fast path when the table is not self-referential", async () => {
         expect.assertions(3);
 

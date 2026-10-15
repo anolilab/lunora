@@ -161,8 +161,13 @@ const guard = (raw: RawWriter, protectedTables: Set<string>, tableOfId: (id: str
 
             return raw.count(tableName);
         },
-        delete: async (id: string) => {
-            denyById(id);
+        delete: async (id: string, expectedTable?: string) => {
+            // A pinned delete is denied on the pinned table, even when the row is already gone.
+            if (expectedTable === undefined) {
+                denyById(id);
+            } else {
+                deny(expectedTable);
+            }
 
             return raw.delete(id);
         },
@@ -501,5 +506,60 @@ describe("rls — chained rls() steps compose", () => {
         await expect(handler.handler({ auth: { userId: "u1" }, db: guarded }, {})).rejects.toThrow(/denied by policy/u);
 
         expect(log).not.toContain("raw.patch:post_1");
+    });
+});
+
+describe("rls — chunked delete over a guarded writer", () => {
+    const deletePosts = definePolicy<TestContext>({ on: "delete", table: "posts", when: () => true });
+    const readPosts = definePolicy<TestContext>({ on: "read", table: "posts", when: () => true });
+
+    it("deleteAll skips a later row an earlier delete of the page cascaded away, without reaching the guard", async () => {
+        expect.assertions(3);
+
+        const log: string[] = [];
+        // post_2 is post_1's child: deleting post_1 cascades it away.
+        const rows: Row[] = [
+            { _id: "post_1", table: "posts" },
+            { _id: "post_2", table: "posts" },
+        ];
+        const base = createRawWriter(rows, log);
+        const raw = {
+            ...base,
+            async delete(id: string) {
+                log.push(`raw.delete:${id}`);
+
+                if (id === "post_1") {
+                    rows.splice(0, rows.length, ...rows.filter((row) => row._id !== "post_1" && row._id !== "post_2"));
+                } else {
+                    rows.splice(0, rows.length, ...rows.filter((row) => row._id !== id));
+                }
+            },
+            // Page images are snapshots, as a real read returns.
+            async findMany(tableName: string) {
+                log.push(`raw.findMany:${tableName}`);
+
+                return {
+                    continueCursor: null,
+                    isDone: true,
+                    page: rows
+                        .filter((row) => row.table === tableName)
+                        .map((row) => {
+                            return { ...row };
+                        }),
+                };
+            },
+        };
+        const guarded = guard(raw, new Set(["posts"]), () => "posts");
+
+        Object.assign(guarded, { relationEdges: [{ array: false, column: "parentId", name: "posts.parentId", sourceTable: "posts", targetTable: "posts" }] });
+
+        const handler = lunora.mutation
+            .use(rlsForTest<TestContext>(definePolicies([readPosts, deletePosts])))
+            .mutation(async ({ ctx }) => ctx.db.deleteAll("posts"));
+
+        // The cascaded row is not counted: this call issued one delete.
+        await expect(handler.handler({ auth: { userId: "u1" }, db: guarded }, {})).resolves.toStrictEqual({ deleted: 1 });
+        expect(log.filter((entry) => entry.startsWith("raw.delete:"))).toStrictEqual(["raw.delete:post_1"]);
+        expect(rows).toHaveLength(0);
     });
 });
