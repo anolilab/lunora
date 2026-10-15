@@ -1911,6 +1911,52 @@ const countRankBefore = (
 
 // CDC (the __cdc_log changelog + __cdc_meta epoch + replay) lives in ./ctx-db-cdc; the __idempotency table in ./ctx-db-idempotency. Both re-exported below so existing import sites resolve unchanged.
 
+/**
+ * The tables a chunked delete cannot trust a page-wide row image for. A table is listed when it is `.global()`
+ * (another shard writes the shared rows), or when deleting one of its rows can reach, through relation delete
+ * actions followed transitively, a delete trigger or the table itself. Holders whose relation into a reached table
+ * is `cascade` or `set null` are followed (`restrict` does not propagate). Conservative: `set null` is followed
+ * further than it acts, and a cycle back to the table covers the direct self-relation.
+ */
+const deriveDeleteRereadTables = (schema: SchemaLike): Set<string> => {
+    const holdersOf = new Map<string, string[]>();
+
+    for (const [holder, definition] of Object.entries(schema.tables)) {
+        for (const relation of Object.values(definition.relationMap ?? {})) {
+            if (relation.kind === "one" && (relation.onDelete === "cascade" || relation.onDelete === "set null")) {
+                holdersOf.set(relation.table, [...(holdersOf.get(relation.table) ?? []), holder]);
+            }
+        }
+    }
+
+    // Walk the holders a delete of `start` reaches; true on a delete trigger or a cycle back to `start`.
+    const reachesHazard = (start: string): boolean => {
+        const seen = new Set<string>();
+        const queue = [start];
+
+        for (let table = queue.pop(); table !== undefined; table = queue.pop()) {
+            for (const holder of holdersOf.get(table) ?? []) {
+                if (holder === start || hasTrigger(schema, holder, "delete")) {
+                    return true;
+                }
+
+                if (!seen.has(holder)) {
+                    seen.add(holder);
+                    queue.push(holder);
+                }
+            }
+        }
+
+        return false;
+    };
+
+    return new Set(
+        Object.entries(schema.tables)
+            .filter(([name, table]) => table.shardMode?.kind === "global" || hasTrigger(schema, name, "delete") || reachesHazard(name))
+            .map(([name]) => name),
+    );
+};
+
 const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
     const { baselineSeq, onStalePatchDropped } = options;
     const { sql } = options;
@@ -1924,11 +1970,7 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
      */
     const relationEdges = deriveRelationEdges(schema);
     const relationWrites = describeRelationWrites(schema, options.inTransaction);
-    const deleteRereadTables = new Set(
-        Object.entries(schema.tables)
-            .filter(([name, table]) => table.shardMode?.kind === "global" || hasTrigger(schema, name, "delete"))
-            .map(([name]) => name),
-    );
+    const deleteRereadTables = deriveDeleteRereadTables(schema);
 
     /**
      * This mutation's `_commitSeq`, allocated on first use and reused for every

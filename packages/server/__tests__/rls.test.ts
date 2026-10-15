@@ -1546,8 +1546,11 @@ describe("rls — batch write path", () => {
         expect(database.calls.filter((call) => call.method === "get" || call.method === "findFirst")).toHaveLength(0);
     });
 
-    /** Seed a parent P and its child C, and make deleting P null C's `parentId` the way an `onDelete: "set null"` self-relation does. */
-    const seedSelfReferential = (edges: ReadonlyArray<{ sourceTable: string; targetTable: string }>) => {
+    /**
+     * Seed a parent P and its child C, and make deleting P null C's `parentId` the way a cascade or a delete trigger
+     * that patches the next row does. `rereadTables` is what the writer publishes as `deleteRereadTables`.
+     */
+    const seedSelfReferential = (rereadTables: ReadonlyArray<string>) => {
         const rows = [
             { _id: "P", parentId: "root", table: "documents" },
             { _id: "C", parentId: "P", table: "documents" },
@@ -1556,11 +1559,7 @@ describe("rls — batch write path", () => {
         const { findMany } = database.writer;
         const alive = new Set(["C", "P"]);
 
-        Object.assign(database.writer, {
-            relationEdges: edges.map((edge) => {
-                return { ...edge, array: false, column: "parentId", name: `${edge.sourceTable}.parentId` };
-            }),
-        });
+        Object.assign(database.writer, { deleteRereadTables: new Set(rereadTables) });
         database.writer.delete = async (id) => {
             database.calls.push({ args: undefined, method: "delete", tableOrId: id });
             alive.delete(id);
@@ -1590,10 +1589,10 @@ describe("rls — batch write path", () => {
 
     const parentIdPolicy = definePolicy<TestContext>({ on: "delete", table: "documents", when: ({ row }) => row?.["parentId"] != null });
 
-    it("deleteAll re-reads a later row of a self-referential table, so a set-null cascade cannot leave it deletable", async () => {
+    it("deleteAll re-reads a later row of a listed table, so a cascade or trigger patch cannot leave it deletable", async () => {
         expect.assertions(2);
 
-        const database = seedSelfReferential([{ sourceTable: "documents", targetTable: "documents" }]);
+        const database = seedSelfReferential(["documents"]);
         const handler = lunora.mutation.use(rlsForTest<TestContext>([parentIdPolicy])).mutation(async ({ ctx }) => ctx.db.deleteAll("documents"));
 
         // P is deleted first and nulls C's `parentId`; C's current image is denied.
@@ -1630,20 +1629,6 @@ describe("rls — batch write path", () => {
         expect(database.calls.filter((call) => call.method === "delete").map((call) => call.tableOrId)).toStrictEqual(["A"]);
     });
 
-    it("deleteAll re-reads a later row of a table with a delete trigger, so a trigger patch cannot leave it deletable", async () => {
-        expect.assertions(2);
-
-        // The fake's delete nulls the child's `parentId`, as a delete trigger patching the next row would.
-        const database = seedSelfReferential([]);
-
-        Object.assign(database.writer, { deleteRereadTables: new Set(["documents"]) });
-
-        const handler = lunora.mutation.use(rlsForTest<TestContext>([parentIdPolicy])).mutation(async ({ ctx }) => ctx.db.deleteAll("documents"));
-
-        await expect(handler.handler(makeContext(database, "u1"), {})).rejects.toMatchObject({ code: "FORBIDDEN", name: "LunoraError" });
-        expect(database.calls.filter((call) => call.method === "delete").map((call) => call.tableOrId)).toStrictEqual(["P"]);
-    });
-
     it("deleteAll skips a .global() row another shard deleted after the page read", async () => {
         expect.assertions(3);
 
@@ -1676,11 +1661,11 @@ describe("rls — batch write path", () => {
         expect(rows).toHaveLength(1);
     });
 
-    it("deleteAll keeps the no-relocate fast path when the table is not self-referential", async () => {
+    it("deleteAll keeps the no-relocate fast path when the table is not listed", async () => {
         expect.assertions(3);
 
-        // An edge from ANOTHER table into `documents` must not cost the fast path.
-        const database = seedSelfReferential([{ sourceTable: "comments", targetTable: "documents" }]);
+        // Another listed table must not cost `documents` the fast path.
+        const database = seedSelfReferential(["comments"]);
 
         enableGetWithTable(database, []);
 

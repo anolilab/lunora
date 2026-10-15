@@ -260,8 +260,9 @@ interface DatabaseWriterLike {
     deleteMany: (ids: ReadonlyArray<string>, options?: { limit?: number }, expectedTable?: string) => Promise<{ deleted: number }>;
 
     /**
-     * Tables a chunked delete cannot trust a page-wide row image for: `.global()` tables and tables with a delete
-     * trigger. Published by the writer (see `@lunora/shard-engine`'s `DatabaseWriterLike`).
+     * Tables a chunked delete cannot trust a page-wide row image for: `.global()` tables and tables whose delete can
+     * reach a delete trigger or the table itself through relation delete actions. Published by the writer (see
+     * `@lunora/shard-engine`'s `DatabaseWriterLike`).
      */
     deleteRereadTables?: ReadonlySet<string>;
     deleteWhere?: (tableName: string, where: WhereInput, options?: { limit?: number }) => Promise<{ deleted: number }>;
@@ -1150,34 +1151,6 @@ const wrapDatabase = (base: RlsDatabase, raw: RlsDatabase, steps: ReadonlyArray<
         return perform(raw, located.tableName);
     };
 
-    /**
-     * Can the row image a page read returned go stale before its delete? Each reason is conservative, so a table that
-     * hits one loses the page-wide image and re-locates the row (`gateById`) instead:
-     * - a self-referential relation edge: deleting one row can rewrite a later one (an `onDelete` that nulls its
-     * holders). `restrict` and `cascade` lose the fast path too, since the writer publishes the edge set, not each
-     * relation's `onDelete`.
-     * - a `.global()` table: the rows live in D1, shared across shards, so another shard can move a row into a
-     * policy-denied state between the page read and the delete. The global writer's own delete does not re-check
-     * the policy. Every row re-reads, the first included.
-     * - a delete trigger: its handler can patch a later row of the same table through the raw writer.
-     * Memoised per table.
-     */
-    const rereadMemo = new Map<string, { all: boolean; later: boolean }>();
-    const needsReread = (tableName: string): { all: boolean; later: boolean } => {
-        let answer = rereadMemo.get(tableName);
-
-        if (answer === undefined) {
-            answer = {
-                // The listed tables re-read every row: for a trigger table this is one lookup more than strictly needed.
-                all: base.deleteRereadTables?.has(tableName) === true,
-                later: base.relationEdges?.some((edge) => edge.sourceTable === tableName && edge.targetTable === tableName) ?? false,
-            };
-            rereadMemo.set(tableName, answer);
-        }
-
-        return answer;
-    };
-
     /** Re-locate one row of the gated `tableName` and delete it on its fresh image; false when it is already gone. */
     const deleteLocated = async (id: string, tableName: string, deleteOptions: undefined | { hard: boolean }): Promise<boolean> => {
         const located = await findRowTable(id, tableName);
@@ -1203,23 +1176,28 @@ const wrapDatabase = (base: RlsDatabase, raw: RlsDatabase, steps: ReadonlyArray<
      * still evaluated per row through `allowsWrite`, so a delete policy stricter than the read policy denies
      * exactly as before. A table with no policy runs the guarded `base`, as `gateById` does for an unlocated row.
      * The image is the one read in the same call: inside a mutation the DO serialises writes, except for the
-     * tables `needsReread` lists.
+     * tables `DatabaseWriterLike.deleteRereadTables` lists.
      */
     const deleteReadRows = async (tableName: string, rows: ReadonlyArray<Record<string, unknown>>, hard?: boolean): Promise<number> => {
         const gated = policyTables.has(tableName);
         const writer = gated ? raw : base;
         const deleteOptions = hard === undefined ? undefined : { hard };
-        const reread = gated ? needsReread(tableName) : undefined;
+        // Can the page image go stale before its delete? The writer lists the tables where it can, each reason
+        // conservative: a `.global()` table (rows shared across shards, and the global writer's own delete does not
+        // re-check policy); a table whose delete can reach a delete trigger (its handler patches a later row through
+        // the raw writer); a table whose delete cascades or sets null back to itself, directly or through other tables.
+        // Those re-locate every row (`gateById`'s lookup) instead of trusting the image.
+        const reread = gated && base.deleteRereadTables?.has(tableName) === true;
         let deleted = 0;
 
-        for (const [index, row] of rows.entries()) {
+        for (const row of rows) {
             const id = String(row["_id"]);
 
-            // The image read before the page began may be stale (see `needsReread`): locate the row again. A row an
+            // The image read before the page began may be stale (see `reread`): locate the row again. A row an
             // earlier delete of this page already removed (a cascade, a trigger, another shard) is skipped without
             // touching any writer: a pinned delete of an absent row would reach the guarded writer, which refuses a
             // non-public table under `rls("required")`.
-            if (reread && (reread.all || (reread.later && index > 0))) {
+            if (reread) {
                 // eslint-disable-next-line no-await-in-loop -- sequential, mirrors looped single deletes
                 if (await deleteLocated(id, tableName, deleteOptions)) {
                     deleted += 1;

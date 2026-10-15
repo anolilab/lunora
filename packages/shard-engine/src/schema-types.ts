@@ -820,9 +820,10 @@ export interface DatabaseWriterLike {
     deleteMany?: (ids: ReadonlyArray<string>, options?: { limit?: number }, expectedTable?: string) => Promise<{ deleted: number }>;
 
     /**
-     * Tables whose rows can change under a chunked delete between the page read and the delete: `.global()`
-     * tables (another shard writes the shared D1 rows) and tables with a delete trigger (a handler may patch a
-     * later row of the same table). A wrapper that deletes from a page it already read must re-read these.
+     * Tables whose rows can change under a chunked delete between the page read and the delete: `.global()` tables
+     * (another shard writes the shared D1 rows) and tables where deleting a row can reach, through `cascade` or
+     * `set null` relation delete actions followed transitively, a delete trigger or the table itself (a handler or
+     * cascade may patch a later row). A wrapper that deletes from a page it already read must re-read these.
      * Metadata only: it names tables and reaches no row.
      */
     deleteRereadTables?: ReadonlySet<string>;

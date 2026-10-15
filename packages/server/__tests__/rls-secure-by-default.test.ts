@@ -551,7 +551,7 @@ describe("rls — chunked delete over a guarded writer", () => {
         };
         const guarded = guard(raw, new Set(["posts"]), () => "posts");
 
-        Object.assign(guarded, { relationEdges: [{ array: false, column: "parentId", name: "posts.parentId", sourceTable: "posts", targetTable: "posts" }] });
+        Object.assign(guarded, { deleteRereadTables: new Set(["posts"]) });
 
         const handler = lunora.mutation
             .use(rlsForTest<TestContext>(definePolicies([readPosts, deletePosts])))
