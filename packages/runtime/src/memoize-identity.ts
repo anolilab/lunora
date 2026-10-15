@@ -116,6 +116,9 @@ const DEFAULT_TTL_MS = 5000;
 /** Default cache size — bounded so a long-lived isolate can't grow one forever. */
 const DEFAULT_MAX_ENTRIES = 500;
 
+/** How many of the oldest entries a miss on a full cache inspects for expiry before evicting. */
+const EXPIRY_SWEEP_LIMIT = 32;
+
 /**
  * The credential a request authenticates with — the DEFAULT cache key.
  *
@@ -184,9 +187,6 @@ const identityExpiryMs = (identity: Awaited<ReturnType<IdentityResolver>>): numb
  * attribute MUST supply {@link MemoizeIdentityOptions.cacheKey}, or the cache will
  * serve one principal's identity to another — see that option's contract.
  */
-/** How many of the oldest entries a miss on a full cache inspects for expiry before evicting. */
-const EXPIRY_SWEEP_LIMIT = 32;
-
 const memoizeIdentity = (resolver: IdentityResolver, options: MemoizeIdentityOptions = {}): IdentityResolver => {
     const ttlMs = options.ttlMs ?? DEFAULT_TTL_MS;
     const maxEntries = Math.max(1, options.maxEntries ?? DEFAULT_MAX_ENTRIES);
