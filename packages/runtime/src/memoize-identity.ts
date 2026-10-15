@@ -151,6 +151,21 @@ const credentialKey = (request: Request): string | undefined => {
     return `${authorization}\u0000${cookie}`;
 };
 
+/** The credential expiry (epoch ms) an identity declares: `expiresAtMs`, else the JWT `exp` (seconds). */
+const identityExpiryMs = (identity: Awaited<ReturnType<IdentityResolver>>): number | undefined => {
+    if (!identity) {
+        return undefined;
+    }
+
+    const { exp, expiresAtMs } = identity;
+
+    if (typeof expiresAtMs === "number" && Number.isFinite(expiresAtMs)) {
+        return expiresAtMs;
+    }
+
+    return typeof exp === "number" && Number.isFinite(exp) ? exp * 1000 : undefined;
+};
+
 /**
  * Memoize a resolver **across requests**, keyed on the presented credential, for
  * `ttlMs`.
@@ -202,16 +217,30 @@ const memoizeIdentity = (resolver: IdentityResolver, options: MemoizeIdentityOpt
         }
 
         const pending = Promise.resolve(perRequest(request, env, context));
+        const entry = { expiresAt: now + ttlMs, value: pending };
 
         // A rejected verification must not be cached — the next request has to retry
         // rather than inherit a transient failure for the whole TTL.
-        pending.catch(() => {
-            if (cache.get(key)?.value === pending) {
-                cache.delete(key);
-            }
+        pending
+            .then((identity) => {
+                // An entry never outlives the session it describes: a refreshed session
+                // carries a later expiry, and serving the old identity past its own
+                // expiry would answer TOKEN_EXPIRED for a credential that is valid again.
+                const expiry = identityExpiryMs(identity);
 
-            return undefined;
-        });
+                if (expiry !== undefined && expiry < entry.expiresAt) {
+                    entry.expiresAt = expiry;
+                }
+
+                return undefined;
+            })
+            .catch(() => {
+                if (cache.get(key)?.value === pending) {
+                    cache.delete(key);
+                }
+
+                return undefined;
+            });
 
         // `Map.set` on an EXISTING key keeps its original insertion position, so a
         // refreshed hot credential would stay at the old end of the iteration order and
@@ -220,7 +249,7 @@ const memoizeIdentity = (resolver: IdentityResolver, options: MemoizeIdentityOpt
         // insertion order as recency.
         cache.delete(key);
         evictOldestEntry(cache, maxEntries);
-        cache.set(key, { expiresAt: now + ttlMs, value: pending });
+        cache.set(key, entry);
 
         return pending;
     };

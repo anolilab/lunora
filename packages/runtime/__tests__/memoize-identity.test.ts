@@ -239,6 +239,36 @@ describe("memoizeIdentity", () => {
         expect(resolver).toHaveBeenCalledTimes(2);
     });
 
+    it("expires an entry at the identity's own expiry, not the full TTL", async () => {
+        expect.assertions(3);
+
+        vi.useFakeTimers();
+
+        try {
+            const start = Date.now();
+            // The first lookup sees a session expiring in 2s; the credential then gets
+            // refreshed, so the second lookup reports a later expiry.
+            const resolver = vi
+                .fn<() => Promise<{ expiresAtMs: number; userId: string }>>()
+                .mockResolvedValueOnce({ expiresAtMs: start + 2000, userId: "u1" })
+                .mockResolvedValue({ expiresAtMs: start + 3_600_000, userId: "u1" });
+            const memoized = memoizeIdentity(resolver, { ttlMs: 60_000 });
+
+            await memoized(authed(), {});
+            vi.advanceTimersByTime(1000);
+            await memoized(authed(), {});
+
+            expect(resolver).toHaveBeenCalledTimes(1);
+
+            vi.advanceTimersByTime(1500);
+
+            await expect(memoized(authed(), {})).resolves.toMatchObject({ expiresAtMs: start + 3_600_000 });
+            expect(resolver).toHaveBeenCalledTimes(2);
+        } finally {
+            vi.useRealTimers();
+        }
+    });
+
     it("still collapses duplicate calls within one request", async () => {
         expect.assertions(1);
 
