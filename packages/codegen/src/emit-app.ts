@@ -75,7 +75,9 @@ const emitApp = (rawOptions: EmitAppOptions): string => {
     const workerOptionLines = buildWorkerOptionLines(options);
 
     // The auth lazy-init dance is woven through `build()` and `buildWorkerOptions`.
-    const authState = hasAuth ? `        let auth: LunoraAuth | null = null;\n        let authInit: Promise<void> | null = null;\n` : "";
+    const authState = hasAuth
+        ? `        let auth: LunoraAuth | null = null;\n        let authInit: Promise<void> | null = null;\n        // One memo per env for THIS assembled worker: a framework-hosted worker rebuilds its options per\n        // request and must reuse it, but a second \`assemble()\` has its own auth closure and must not share.\n        const identityMemos = new WeakMap<object, NonNullable<WorkerOptions["resolveIdentity"]>>();\n`
+        : "";
     const ensureAuthBlock = hasAuth
         ? `
         const initAuth = async (env: Env): Promise<void> => {
@@ -129,8 +131,11 @@ const emitApp = (rawOptions: EmitAppOptions): string => {
 `
         : "";
     const ensureAuthCall = hasAuth ? `\n                await ensureAuth(env);` : "";
-    const getAuthArgument = hasAuth ? `() => auth` : `() => null`;
-    const getAuthParameter = hasAuth ? `getAuth: () => LunoraAuth | null` : `_getAuth: () => null`;
+    const getAuthArgument = hasAuth ? `() => auth, identityMemos` : `() => null`;
+    const getAuthParameter = hasAuth
+        ? // eslint-disable-next-line no-secrets/no-secrets -- emitted TypeScript type, not a secret
+          `getAuth: () => LunoraAuth | null, identityMemos: WeakMap<object, NonNullable<WorkerOptions["resolveIdentity"]>>`
+        : `_getAuth: () => null`;
 
     // The underlying `LunoraWorker` factory. With a framework adapter present,
     // `.buildFrameworkWorker(host)` passes a host and composition routes through

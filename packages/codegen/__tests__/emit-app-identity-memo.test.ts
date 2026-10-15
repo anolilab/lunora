@@ -24,7 +24,7 @@ const scratch = mkdtempSync(join(tmpdir(), "lunora-emit-app-identity-memo-"));
 
 interface Built {
     /** One `buildWorkerOptions` pass over the emitted memo block; the builder's memo store persists across passes. */
-    build: (inner: Resolver, env?: object) => Resolver;
+    build: (inner: Resolver, env?: object, store?: WeakMap<object, unknown>) => Resolver;
 }
 
 type Declaration = { options: (env: unknown) => { session?: { cookieCache?: { enabled?: boolean } } } };
@@ -40,20 +40,26 @@ const prepare = async (memo: typeof memoizeIdentity = memoizeIdentity, authDecla
     }
 
     // codeql[js/bad-code-sanitization] -- test-local literal rendered by codegen and compiled in-process, not user input
-    const compiled = transformSync(
-        `export const build = (memoizeIdentity, self, options, env, authDeclaration) => { (function () { ${match[1]} }).call(self); return options.resolveIdentity; };`,
-        { loader: "ts" },
-    ).code;
+    const program = `export const build = (memoizeIdentity, identityMemos, options, env, authDeclaration) => { ${match[1]} return options.resolveIdentity; };`;
+    // codeql[js/bad-code-sanitization] -- test-local literal rendered by codegen and compiled in-process, not user input
+    const compiled = transformSync(program, { loader: "ts" }).code;
     const file = join(scratch, `memo-${randomUUID()}.mjs`);
 
     writeFileSync(file, compiled);
 
     const loaded = (await import(pathToFileURL(file).href)) as {
-        build: (memo: typeof memoizeIdentity, self: object, options: { resolveIdentity: Resolver }, env: object, authDeclaration?: Declaration) => Resolver;
+        build: (
+            memo: typeof memoizeIdentity,
+            identityMemos: WeakMap<object, unknown>,
+            options: { resolveIdentity: Resolver },
+            env: object,
+            authDeclaration?: Declaration,
+        ) => Resolver;
     };
-    const self = { identityMemos: new WeakMap() };
+    // One store per `assemble()` call; a test passes its own to model a second assembled worker.
+    const assembled = new WeakMap<object, unknown>();
 
-    return { build: (inner, env = defaultEnv) => loaded.build(memo, self, { resolveIdentity: inner }, env, authDeclaration) };
+    return { build: (inner, env = defaultEnv, store = assembled) => loaded.build(memo, store, { resolveIdentity: inner }, env, authDeclaration) };
 };
 
 const wrap = async (
@@ -225,6 +231,43 @@ describe("emitApp — identity memoisation", () => {
             await build(resolver, {})(withCookie("s=a"));
 
             expect(calls).toBe(2);
+        });
+
+        it("gives each assembled worker its own memo, even for the same env", async () => {
+            expect.assertions(2);
+
+            const calls: string[] = [];
+            const resolverFor =
+                (worker: string): Resolver =>
+                () => {
+                    calls.push(worker);
+
+                    return Promise.resolve({ userId: worker });
+                };
+            const { build } = await prepare();
+            const env = {};
+            const first = new WeakMap<object, unknown>();
+            const second = new WeakMap<object, unknown>();
+
+            await build(resolverFor("first"), env, first)(withCookie("s=a"));
+            await build(resolverFor("second"), env, second)(withCookie("s=a"));
+
+            // Each worker resolved through its own auth closure.
+            expect(calls).toStrictEqual(["first", "second"]);
+
+            await build(resolverFor("first"), env, first)(withCookie("s=a"));
+
+            expect(calls).toHaveLength(2);
+        });
+
+        it("declares the memo store per assemble() call, not on the builder", () => {
+            expect.assertions(2);
+
+            const source = emitApp({ ...baseOptions, hasAuth: true });
+            const assemble = source.slice(source.indexOf("private assemble("), source.indexOf("private buildWorkerOptions("));
+
+            expect(assemble).toContain("const identityMemos = new WeakMap");
+            expect(source).not.toContain("private readonly identityMemos");
         });
     });
 });

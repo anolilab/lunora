@@ -48,7 +48,6 @@ interface ComposedApp extends LunoraWorker {
 class AppBuilder<Env extends object> {
     private adminToken?: Selector<Env, string>;
     private authDeclaration?: AuthDeclaration<Env>;
-    private readonly identityMemos = new WeakMap<object, NonNullable<WorkerOptions["resolveIdentity"]>>();
     private cdcEnabled = false;
     private reactiveCacheConfig: boolean | { maxBytes?: number; maxEntries?: number } = false;
     private maxRelationKeysLimit?: ShardConfig["maxRelationKeys"];
@@ -197,6 +196,9 @@ class AppBuilder<Env extends object> {
         let worker: LunoraWorker | null = null;
         let auth: LunoraAuth | null = null;
         let authInit: Promise<void> | null = null;
+        // One memo per env for THIS assembled worker: a framework-hosted worker rebuilds its options per
+        // request and must reuse it, but a second `assemble()` has its own auth closure and must not share.
+        const identityMemos = new WeakMap<object, NonNullable<WorkerOptions["resolveIdentity"]>>();
 
         const initAuth = async (env: Env): Promise<void> => {
             if (!this.authDeclaration) {
@@ -247,7 +249,7 @@ class AppBuilder<Env extends object> {
                 throw error;
             }));
 
-        const buildWorker = (env: Env): LunoraWorker => createWorker(this.buildWorkerOptions(env, () => auth));
+        const buildWorker = (env: Env): LunoraWorker => createWorker(this.buildWorkerOptions(env, () => auth, identityMemos));
 
         const composed: ComposedApp = {
             ShardDO,
@@ -280,7 +282,7 @@ class AppBuilder<Env extends object> {
     }
 
     /** Fan the recorded declarations into the worker-side `createWorker` options. */
-    private buildWorkerOptions(env: Env, getAuth: () => LunoraAuth | null): WorkerOptions {
+    private buildWorkerOptions(env: Env, getAuth: () => LunoraAuth | null, identityMemos: WeakMap<object, NonNullable<WorkerOptions["resolveIdentity"]>>): WorkerOptions {
         const options: WorkerOptions = {
             cronJobs: LUNORA_CRONS,
             functions: LUNORA_FUNCTIONS,
@@ -412,11 +414,11 @@ class AppBuilder<Env extends object> {
         // only; the env var still opts back in. Read from the declared options at
         // runtime, the one place the chosen policy is visible.
         //
-        // Built once per `env` object and kept on the builder: a framework-hosted
+        // Built once per `env` object and kept for this assembled worker: a framework-hosted
         // worker rebuilds these options on every request, and a fresh memo per build
         // would never hit. A different `env` object gets its own memo.
         if (options.resolveIdentity) {
-            let memo = this.identityMemos.get(env);
+            let memo = identityMemos.get(env);
 
             if (!memo) {
                 // A blank var (wrangler allows `""`) is unset, not `0`: `Number("")` is 0.
@@ -428,7 +430,7 @@ class AppBuilder<Env extends object> {
                     maxEntries: 10_000,
                     ttlMs: Number.isFinite(identityCacheMs) && identityCacheMs >= 0 ? identityCacheMs : cookieCacheOff ? 0 : 60_000,
                 });
-                this.identityMemos.set(env, memo);
+                identityMemos.set(env, memo);
             }
 
             options.resolveIdentity = memo;

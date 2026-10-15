@@ -287,11 +287,11 @@ const buildWorkerOptionLines = (options: ResolvedAppOptions): string[] => [
         // only; the env var still opts back in. Read from the declared options at
         // runtime, the one place the chosen policy is visible.
         //
-        // Built once per \`env\` object and kept on the builder: a framework-hosted
+        // Built once per \`env\` object and kept for this assembled worker: a framework-hosted
         // worker rebuilds these options on every request, and a fresh memo per build
         // would never hit. A different \`env\` object gets its own memo.
         if (options.resolveIdentity) {
-            let memo = this.identityMemos.get(env);
+            let memo = identityMemos.get(env);
 
             if (!memo) {
                 // A blank var (wrangler allows \`""\`) is unset, not \`0\`: \`Number("")\` is 0.
@@ -303,7 +303,7 @@ const buildWorkerOptionLines = (options: ResolvedAppOptions): string[] => [
                     maxEntries: 10_000,
                     ttlMs: Number.isFinite(identityCacheMs) && identityCacheMs >= 0 ? identityCacheMs : cookieCacheOff ? 0 : 60_000,
                 });
-                this.identityMemos.set(env, memo);
+                identityMemos.set(env, memo);
             }
 
             options.resolveIdentity = memo;

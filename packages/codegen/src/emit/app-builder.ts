@@ -78,7 +78,6 @@ const buildFieldLines = (options: ResolvedAppOptions): string[] => [
     ...(options.hasAccess ? [`    private accessSelector?: Selector<Env, CreateAccessResolverOptions | undefined>;`] : []),
     `    private adminToken?: Selector<Env, string>;`,
     ...(options.hasAuth ? [`    private authDeclaration?: AuthDeclaration<Env>;`] : []),
-    ...(options.hasAuth ? [`    private readonly identityMemos = new WeakMap<object, NonNullable<WorkerOptions["resolveIdentity"]>>();`] : []),
     `    private cdcEnabled = false;`,
     `    private reactiveCacheConfig: boolean | { maxBytes?: number; maxEntries?: number } = false;`,
     `    private maxRelationKeysLimit?: ShardConfig["maxRelationKeys"];`,
