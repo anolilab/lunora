@@ -667,6 +667,21 @@ describe("shardDO persisted metrics", () => {
             },
         );
 
+        it("leaves the pending delta alone on an admin read that never touches the metric tables", async () => {
+            expect.assertions(1);
+
+            const { database, shard } = setup("100");
+
+            try {
+                await shard.fetch(userRequest("messages:list"));
+                await shard.fetch(adminRequest(ADMIN_FUNCTIONS.schemaVersion));
+
+                expect(database.raw(`SELECT name FROM sqlite_master WHERE name = '${FUNCTION_METRICS_TABLE}'`)).toEqual([]);
+            } finally {
+                database.close();
+            }
+        });
+
         const failMetricWrites = (database: ReturnType<typeof createSqliteExec>): { failing: boolean } => {
             const realExec = database.sql.exec.bind(database.sql);
             const control = { failing: true };

@@ -10739,11 +10739,15 @@ abstract class ShardDO {
             return readAdminRunSql(sql, args);
         }
 
+        // Query insights read the durable statement tables, so the pending delta lands first; the
+        // other schema-history reads never touch the metric tables and must not force a write.
+        if (functionPath === ADMIN_FUNCTIONS.getQueryInsights) {
+            this.flushUnwrittenMetrics();
+        }
+
         // The SQL linter + schema-version ledger reads live in their own module
         // and register through a lookup, so this chain does not grow an arm per
         // resolver — see `schema-history-reads.ts`.
-        this.flushUnwrittenMetrics();
-
         const schemaHistoryRead = resolveSchemaHistoryRead(functionPath, ADMIN_FUNCTION_PREFIX, sql, args, ADMIN_WILDCARD);
 
         if (schemaHistoryRead !== undefined) {
