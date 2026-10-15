@@ -22,6 +22,7 @@ import type {
     RegisterInput,
     StoredSubscription,
     SubscriptionFilter,
+    SubscriptionOutcomes,
     SubscriptionStore,
 } from "./types";
 
@@ -328,7 +329,7 @@ export const createNotify = (definition: NotifyDefinition, env: NotifyEnv, optio
     const deliver = async (
         subscription: StoredSubscription,
         payload: PushContent,
-        countInline: boolean,
+        { countInline, deferStatus }: { countInline: boolean; deferStatus: boolean },
     ): Promise<{ error?: string; receipt?: Receipt; status: NotifyDeliveryStatus }> => {
         let receipt: Receipt | undefined;
         let error: string | undefined;
@@ -349,18 +350,22 @@ export const createNotify = (definition: NotifyDefinition, env: NotifyEnv, optio
             error = error_ instanceof Error ? error_.message : String(error_);
         }
 
-        try {
-            if (status === "accepted") {
-                await subscriptionStore.markStatus(subscription.id, "ok");
-            } else if (status === "gone") {
-                await subscriptionStore.delete(subscription.id);
-            } else {
-                await subscriptionStore.markStatus(subscription.id, "failed", error);
+        // A broadcast page defers the lifecycle write and applies the whole page
+        // in one batch (see `deliverPage`); a single send writes immediately.
+        if (!deferStatus) {
+            try {
+                if (status === "accepted") {
+                    await subscriptionStore.markStatus(subscription.id, "ok");
+                } else if (status === "gone") {
+                    await subscriptionStore.delete(subscription.id);
+                } else {
+                    await subscriptionStore.markStatus(subscription.id, "failed", error);
+                }
+            } catch {
+                // The store lifecycle write is best-effort: a failing markStatus/delete
+                // (e.g. a transient D1 error) must not abort the fan-out. The send
+                // outcome above still stands; the status just went unrecorded.
             }
-        } catch {
-            // The store lifecycle write is best-effort: a failing markStatus/delete
-            // (e.g. a transient D1 error) must not abort the fan-out. The send
-            // outcome above still stands; the status just went unrecorded.
         }
 
         if (status === "failed") {
@@ -388,10 +393,37 @@ export const createNotify = (definition: NotifyDefinition, env: NotifyEnv, optio
             // `deliver` is total (it never rejects — a throwing recipient
             // becomes a `failed` outcome inside it), so the bounded `Promise.all`
             // pool in `mapWithConcurrency` can never be rejected by one bad send.
-            const { error, status } = await deliver(subscription, payload, false);
+            const { error, status } = await deliver(subscription, payload, { countInline: false, deferStatus: true });
 
             return { error, kind: subscription.kind, status, subscription };
         });
+
+        // Best-effort, like the per-send write: a failing store never fails the page.
+        const outcomesToApply: SubscriptionOutcomes = { failed: [], gone: [], ok: [] };
+
+        for (const { error, status, subscription } of rows) {
+            if (status === "accepted") {
+                outcomesToApply.ok.push(subscription.id);
+            } else if (status === "gone") {
+                outcomesToApply.gone.push(subscription.id);
+            } else {
+                outcomesToApply.failed.push({ error, id: subscription.id });
+            }
+        }
+
+        try {
+            if (subscriptionStore.applyOutcomes === undefined) {
+                await Promise.all([
+                    ...outcomesToApply.ok.map((id) => subscriptionStore.markStatus(id, "ok")),
+                    ...outcomesToApply.failed.map(({ error, id }) => subscriptionStore.markStatus(id, "failed", error)),
+                    ...outcomesToApply.gone.map((id) => subscriptionStore.delete(id)),
+                ]);
+            } else {
+                await subscriptionStore.applyOutcomes(outcomesToApply);
+            }
+        } catch {
+            // The status just went unrecorded for the failed part.
+        }
 
         // Fold the per-recipient statuses into one metric count per (kind,
         // status) bucket — at most kinds×3 emits — instead of one durable
@@ -575,7 +607,7 @@ export const createNotify = (definition: NotifyDefinition, env: NotifyEnv, optio
             checkPushTtl(payload.ttl);
             checkPushUrgency(payload.urgency);
 
-            const { error, receipt } = await deliver(await resolveSubscription(target), payload, true);
+            const { error, receipt } = await deliver(await resolveSubscription(target), payload, { countInline: true, deferStatus: false });
 
             if (receipt === undefined) {
                 // A targeted single send is not a fan-out: when the provider throws

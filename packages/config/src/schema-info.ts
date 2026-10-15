@@ -11,6 +11,7 @@ import type { SchemaIR, ValidatorIR } from "@lunora/codegen";
 import { discoverSchema, isD1GlobalTable, isHyperdriveGlobalTable } from "@lunora/codegen";
 import { Project } from "ts-morph";
 
+import type { DiscoveryCache } from "./discovery-cache";
 import join from "./path";
 
 /** One filterable Vectorize metadata property a schema declares. */
@@ -89,7 +90,7 @@ const filterableKind = (validator: ValidatorIR | undefined): string | undefined 
  * error }` when a present schema could not be parsed — callers decide whether a
  * parse failure is a warning (validator) or simply ignorable (inference).
  */
-const discoverSchemaInfo = (projectRoot: string, schemaDirectory: string): DiscoverSchemaInfoResult => {
+const parseSchemaInfo = (projectRoot: string, schemaDirectory: string): DiscoverSchemaInfoResult => {
     const schemaPath = join(projectRoot, schemaDirectory, "schema.ts");
 
     if (!existsSync(schemaPath)) {
@@ -122,6 +123,12 @@ const discoverSchemaInfo = (projectRoot: string, schemaDirectory: string): Disco
         return { error: error instanceof Error ? error.message : String(error), info: undefined };
     }
 };
+
+/** Discover the schema facts, memoised on `cache` when one is given. */
+const discoverSchemaInfo = (projectRoot: string, schemaDirectory: string, cache?: DiscoveryCache): DiscoverSchemaInfoResult =>
+    cache === undefined
+        ? parseSchemaInfo(projectRoot, schemaDirectory)
+        : cache.memo(`schema:${projectRoot}:${schemaDirectory}`, () => parseSchemaInfo(projectRoot, schemaDirectory));
 
 export type { DiscoverSchemaInfoResult, SchemaInfo, VectorMetadataDeclaration };
 export { discoverSchemaInfo };

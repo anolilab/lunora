@@ -521,6 +521,15 @@ interface DiscoverWorkflowInfoResult {
 }
 ```
 
+### `DiscoveryCache` (interface)
+
+```ts
+interface DiscoveryCache {
+    clear: () => void;
+    memo: <T>(key: string, compute: () => T) => T;
+}
+```
+
 ### `DockerLike` (interface)
 
 ```ts
@@ -558,6 +567,7 @@ interface DriverToolchain {
     dev: (request: DevRequest) => ToolchainCommand;
     readonly devServer: "own" | "workerd";
     readonly prebuildsContainerImages: boolean;
+    secretBulk?: (request: SecretRequest) => ToolchainCommand;
     secretList?: (request: SecretRequest) => ToolchainCommand;
     secretPut?: (request: SecretRequest) => ToolchainCommand;
     tail?: (request: TailRequest) => ToolchainCommand;
@@ -682,6 +692,7 @@ type HookSpawner = (descriptor: HookSpawnDescriptor) => Promise<{
 
 ```ts
 interface InferOptions {
+    cache?: DiscoveryCache;
     projectRoot: string;
     scanDirs?: ReadonlyArray<string>;
     schemaDir?: string;
@@ -1267,6 +1278,12 @@ const clearDevServerState: (projectRoot: string, expectedPid?: number) => void;
 const createConfirm: (prefix?: string) => ((message: string) => Promise<boolean>);
 ```
 
+### `createDiscoveryCache` (const)
+
+```ts
+const createDiscoveryCache: () => DiscoveryCache;
+```
+
 ### `deployTargetIds` (const)
 
 ```ts
@@ -1318,13 +1335,13 @@ const discoverAgentInfo: (projectRoot: string, schemaDirectory: string) => Disco
 ### `discoverContainerInfo` (const)
 
 ```ts
-const discoverContainerInfo: (projectRoot: string, schemaDirectory: string) => DiscoverContainerInfoResult;
+const discoverContainerInfo: (projectRoot: string, schemaDirectory: string, cache?: DiscoveryCache) => DiscoverContainerInfoResult;
 ```
 
 ### `discoverSchemaInfo` (const)
 
 ```ts
-const discoverSchemaInfo: (projectRoot: string, schemaDirectory: string) => DiscoverSchemaInfoResult;
+const discoverSchemaInfo: (projectRoot: string, schemaDirectory: string, cache?: DiscoveryCache) => DiscoverSchemaInfoResult;
 ```
 
 ### `discoverWorkflowInfo` (const)

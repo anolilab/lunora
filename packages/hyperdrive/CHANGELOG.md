@@ -1,3 +1,31 @@
+## @lunora/hyperdrive [1.0.0-alpha.176](https://github.com/anolilab/lunora/compare/@lunora/hyperdrive@1.0.0-alpha.175...@lunora/hyperdrive@1.0.0-alpha.176) (2026-10-15)
+
+### ⚠ BREAKING CHANGES
+
+* **sql-store:** SqlDialect requires a `render(query)` member; custom dialects must supply it.
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+
+* ci(codspeed): give the benchmark job a 60-minute budget
+
+The full bench suite under CodSpeed instrumentation took 25-29 minutes on alpha before any
+new bench landed, and a PR touching a low-level package runs the full suite through
+`vis affected`. Runs were being cancelled at the 30-minute job timeout on PRs that added
+nothing slow.
+
+Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>
+
+### Performance Improvements
+
+* **sql-store:** render through the dialect object so a shard bundles only sqlite-core ([#1176](https://github.com/anolilab/lunora/issues/1176)) ([8942c32](https://github.com/anolilab/lunora/commit/8942c32559f2b69fbd016281b310c9d6bbc66f20))
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.55
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.128
+* **@lunora/sql-store:** upgraded to 1.0.0-alpha.180
+
 ## @lunora/hyperdrive [1.0.0-alpha.175](https://github.com/anolilab/lunora/compare/@lunora/hyperdrive@1.0.0-alpha.174...@lunora/hyperdrive@1.0.0-alpha.175) (2026-10-14)
 
 

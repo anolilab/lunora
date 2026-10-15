@@ -36,7 +36,7 @@ Before deploying to a real Cloudflare account:
 3. Apply better-auth's schema:
 
     ```bash
-    pnpm tsx -e "import('@lunora/auth').then(async ({ compileMigrationsSql, createAuth }) => { const sql = await compileMigrationsSql({ database: undefined, secret: 'placeholder' }); console.log(sql); })" \
+    pnpm tsx -e "import('@lunora/auth/migrate').then(async ({ compileMigrationsSql }) => { const sql = await compileMigrationsSql({ database: undefined, secret: 'placeholder' }); console.log(sql); })" \
       > schema.sql
     wrangler d1 execute lunora-auth-playground --file schema.sql
     ```

@@ -18,7 +18,18 @@ import writeLargeFixture from "./large-fixture";
  * We rebuild the workdir per iteration because `runCodegen` writes
  * `_generated/*.ts` files into the tree and uses `writeIfChanged` — without
  * fresh state the first run dominates and the steady state isn't measured.
+ *
+ * The large-fixture cases are shrunk under CodSpeed (`CODSPEED_ENV`, or `CI`).
+ * That is the CI job budget, not a measurement choice: the `Benchmarks` job
+ * runs every package's benches instrumented (50-100x slower) inside a 30 minute
+ * timeout it already nearly fills. There only the reuse case runs, on a smaller
+ * app and 2 iterations; the full 200 procedure / 40 table matrix runs locally.
  */
+
+const reduced = process.env["CODSPEED_ENV"] !== undefined || process.env["CI"] === "true";
+const largeProcedures = reduced ? 60 : 200;
+const largeTables = reduced ? 12 : 40;
+const largeIterations = reduced ? 2 : 5;
 
 const here = dirname(fileURLToPath(import.meta.url));
 const fixtureRoot = join(here, "..", "__tests__", "fixtures", "simple");
@@ -33,7 +44,7 @@ const primedLargeWorkdir = (): string => {
     largeWorkdir ??= (() => {
         const created = mkdtempSync(join(tmpdir(), "lunora-codegen-bench-large-"));
 
-        writeLargeFixture(created, 200, 40);
+        writeLargeFixture(created, largeProcedures, largeTables);
         runCodegen({ projectRoot: created, wranglerQueueProducers: [] });
 
         return created;
@@ -130,13 +141,13 @@ describe("runCodegen end-to-end (simple fixture, reused Project)", () => {
     );
 });
 
-describe("runCodegen end-to-end (large fixture: 200 procedures, 40 tables)", () => {
-    bench(
+describe(`runCodegen end-to-end (large fixture: ${String(largeProcedures)} procedures, ${String(largeTables)} tables)`, () => {
+    bench.skipIf(reduced)(
         "large cold run — fresh workdir",
         () => {
             const root = mkdtempSync(join(tmpdir(), "lunora-codegen-bench-large-cold-"));
 
-            writeLargeFixture(root, 200, 40);
+            writeLargeFixture(root, largeProcedures, largeTables);
 
             try {
                 runCodegen({ projectRoot: root, wranglerQueueProducers: [] });
@@ -147,7 +158,7 @@ describe("runCodegen end-to-end (large fixture: 200 procedures, 40 tables)", () 
         { iterations: 5, time: 0 },
     );
 
-    bench(
+    bench.skipIf(reduced)(
         "large warm run — same workdir, no Project reuse",
         () => {
             runCodegen({ projectRoot: primedLargeWorkdir(), wranglerQueueProducers: [] });
@@ -164,6 +175,6 @@ describe("runCodegen end-to-end (large fixture: 200 procedures, 40 tables)", () 
             refreshCodegenProject(largeReuseProject, join(root, "lunora"));
             runCodegen({ project: largeReuseProject, projectRoot: root, wranglerQueueProducers: [] });
         },
-        { iterations: 5, time: 0 },
+        { iterations: largeIterations, time: 0 },
     );
 });

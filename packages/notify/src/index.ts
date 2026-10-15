@@ -56,6 +56,7 @@ export type {
     StoredSubscription,
     SubscriptionFilter,
     SubscriptionKind,
+    SubscriptionOutcomes,
     SubscriptionStatus,
     SubscriptionStore,
     WebhookPayload,

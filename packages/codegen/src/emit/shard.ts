@@ -23,6 +23,8 @@ import type {
 } from "../ir";
 import { isShardByTable, plainQueues } from "../ir";
 import renderJsonData from "../json-data";
+import renderLazyJsonData from "../lazy-json-data";
+import splitAdvisoryRules from "./advisory-rules";
 import ADMIN_WRITE_METHODS from "./shard-admin";
 import {
     emitCapabilityShardWiring,
@@ -193,6 +195,7 @@ const LUNORA_SCHEMA_SNAPSHOT: { hash: string; json: string } = { hash: ${JSON.st
     // is typed against it). This assignment fails `tsc` if the two shapes drift —
     // `@lunora/do` hand-mirrors `Finding` to avoid depending on `@lunora/advisor`.
     const advisoryData: ReadonlyArray<AdvisoryFinding> = advisories;
+    const { advisoryRules, advisoryRows } = splitAdvisoryRules(advisoryData);
     // Typed as the DO's shape on purpose: the generated file declares
     // `LUNORA_ADVISOR_PROCEDURES: AdvisorProcedure[]`, so without this assignment
     // a field added to the advisor's type and forgotten in `@lunora/do` compiles
@@ -719,13 +722,13 @@ interface FunctionReference {
 }
 
 /** Foreign-key columns per table (\`v.id("target")\` fields) for the data browser. */
-const LUNORA_TABLE_REFS = ${renderJsonData(tableReferences, "Record<string, Record<string, string>>")};
+const LUNORA_TABLE_REFS = ${renderLazyJsonData(tableReferences, "Record<string, Record<string, string>>")};
 
 /** Declared indexes per table (secondary, search, geo, rank, vector) for the schema viewer. */
-const LUNORA_TABLE_INDEXES = ${renderJsonData(tableIndexes, `Record<string, Array<{ fields: string[]; name: string; type: "geo" | "index" | "rank" | "search" | "vector"; unique?: boolean }>>`)};
+const LUNORA_TABLE_INDEXES = ${renderLazyJsonData(tableIndexes, `Record<string, Array<{ fields: string[]; name: string; type: "geo" | "index" | "rank" | "search" | "vector"; unique?: boolean }>>`)};
 
 /** Columns per table (typed, with PK/FK markers) for the studio's schema diagram, served via \`__lunora_admin__:describeTable\`. */
-const LUNORA_TABLE_COLUMNS = ${renderJsonData(
+const LUNORA_TABLE_COLUMNS = ${renderLazyJsonData(
         tableColumns,
         `Record<
     string,
@@ -745,28 +748,36 @@ const LUNORA_TABLE_COLUMNS = ${renderJsonData(
     )};
 
 /** Storage-key columns per table (\`v.storage(...)\` fields) for the file browser's records↔files join. */
-const LUNORA_STORAGE_COLUMNS = ${renderJsonData(storageColumns, "Record<string, string[]>")};
+const LUNORA_STORAGE_COLUMNS = ${renderLazyJsonData(storageColumns, "Record<string, string[]>")};
 
 /** Declarative TTL policies (\`.ttl(field, { after? })\`) the DO alarm sweep auto-expires rows for. */
 const LUNORA_TTL_SWEEPS = ${renderJsonData(ttlSweeps, "Array<{ after?: number; field: string; softDeleteField?: string; table: string }>")};
 
 /** Static schema advisories (computed by @lunora/advisor at codegen time) served via \`__lunora_admin__:getAdvisories\`. */
-const LUNORA_ADVISORIES = ${renderJsonData(advisoryData, "AdvisoryFinding[]")};
+const LUNORA_ADVISORY_RULES = ${renderLazyJsonData(advisoryRules, "Record<string, Partial<AdvisoryFinding>>")};
+
+/** Per-finding rows; rule-level text lives once in \`LUNORA_ADVISORY_RULES\` and is merged back on first read. */
+const LUNORA_ADVISORY_ROWS = ${renderLazyJsonData(advisoryRows, "Array<Partial<AdvisoryFinding> & { name: string }>")};
+
+const LUNORA_ADVISORIES = ((): (() => AdvisoryFinding[]) => {
+    let cached: AdvisoryFinding[] | undefined;
+    return () => (cached ??= LUNORA_ADVISORY_ROWS().map((row) => ({ ...LUNORA_ADVISORY_RULES()[row.name], ...row }) as AdvisoryFinding));
+})();
 
 /** Every declared procedure (discovered by @lunora/codegen) served via \`__lunora_admin__:getAdvisorProcedures\` — the health map's denominator. */
-const LUNORA_ADVISOR_PROCEDURES = ${renderJsonData(advisorProcedureData, "AdvisorProcedure[]")};
+const LUNORA_ADVISOR_PROCEDURES = ${renderLazyJsonData(advisorProcedureData, "AdvisorProcedure[]")};
 
 /** Read-only RLS metadata (policies + roles discovered from \`.use(rls(...))\` chains) served via \`__lunora_admin__:rlsPolicies\` for the studio's RLS inspector. */
-const LUNORA_RLS_METADATA = ${renderJsonData(rlsData, "RlsPoliciesResult")};
+const LUNORA_RLS_METADATA = ${renderLazyJsonData(rlsData, "RlsPoliciesResult")};
 ${shapeReadPolicyAssertion}
 /** Read-only masking metadata (table + column + strategy discovered from \`.use(mask(...))\` chains) served via \`__lunora_admin__:maskPolicies\` for the studio's data-browser mask preview. */
-const LUNORA_MASK_METADATA = ${renderJsonData(maskData, "MaskPoliciesResult")};
+const LUNORA_MASK_METADATA = ${renderLazyJsonData(maskData, "MaskPoliciesResult")};
 
 /** Read-only storage access-rule metadata (discovered from \`.use(storageRules(...))\` chains) served via \`__lunora_admin__:storageRules\` for the studio's access-rules view. */
-const LUNORA_STORAGE_RULES = ${renderJsonData(storageRulesData, "StorageRulesResult")};
+const LUNORA_STORAGE_RULES = ${renderLazyJsonData(storageRulesData, "StorageRulesResult")};
 
 /** Which optional package-backed features this app wires up (discovered from imports / \`ctx.*\` reads / schema signals) served via \`__lunora_admin__:studioFeatures\` so the studio hides nav pages whose package isn't enabled. */
-const LUNORA_STUDIO_FEATURES = ${renderJsonData(studioFeaturesData, "StudioFeaturesResult")};
+const LUNORA_STUDIO_FEATURES = ${renderLazyJsonData(studioFeaturesData, "StudioFeaturesResult")};
 ${schemaSnapshotConst}${shardRegistryFragments.constant}${flagsOverrides.constant}${workflowsMetadataConst}${queuesMetadataConst}${containerSpecs}${workflowSpecs}${queueSpecs}${topicSpecs}${servicesFragments.specs}${agentSpecs}
 export interface ShardDOConfig {
     /** Opt into change-data-capture: records a post-image to \`__cdc_log\` on every write (backs streaming export + replay-PITR). */
@@ -845,11 +856,11 @@ ${shardRegistryFragments.override}${shardInitOverride}
 
 
         protected override tableRefs(table: string): Record<string, string> | undefined {
-            return LUNORA_TABLE_REFS[table];
+            return LUNORA_TABLE_REFS()[table];
         }
 
         protected override tableIndexes(table: string): Array<{ fields: string[]; name: string; type: "geo" | "index" | "rank" | "search" | "vector"; unique?: boolean }> {
-            return LUNORA_TABLE_INDEXES[table] ?? [];
+            return LUNORA_TABLE_INDEXES()[table] ?? [];
         }
 
         protected override ttlSweeps(): ReadonlyArray<{ after?: number; field: string; softDeleteField?: string; table: string }> {
@@ -868,35 +879,35 @@ ${shardRegistryFragments.override}${shardInitOverride}
             ref?: string;
             type: string;
         }> {
-            return LUNORA_TABLE_COLUMNS[table] ?? [];
+            return LUNORA_TABLE_COLUMNS()[table] ?? [];
         }
 
         protected override storageColumns(): Record<string, string[]> {
-            return LUNORA_STORAGE_COLUMNS;
+            return LUNORA_STORAGE_COLUMNS();
         }
 
         protected override rlsMetadata(): RlsPoliciesResult {
-            return LUNORA_RLS_METADATA;
+            return LUNORA_RLS_METADATA();
         }
 
         protected override maskMetadata(): MaskPoliciesResult {
-            return LUNORA_MASK_METADATA;
+            return LUNORA_MASK_METADATA();
         }
 
         protected override storageRulesMetadata(): StorageRulesResult {
-            return LUNORA_STORAGE_RULES;
+            return LUNORA_STORAGE_RULES();
         }
 
         protected override studioFeatures(): StudioFeaturesResult {
-            return LUNORA_STUDIO_FEATURES;
+            return LUNORA_STUDIO_FEATURES();
         }
 ${flagsOverrides.evaluateOverride}${flagsOverrides.subscriptionOverride}${workflowsMetadataOverride}${queuesMetadataOverride}
         protected override advisories(): AdvisoryFinding[] {
-            return LUNORA_ADVISORIES;
+            return LUNORA_ADVISORIES();
         }
 
         protected override advisorProcedures(): AdvisorProcedure[] {
-            return LUNORA_ADVISOR_PROCEDURES;
+            return LUNORA_ADVISOR_PROCEDURES();
         }
 
 ${ADMIN_WRITE_METHODS}

@@ -112,6 +112,7 @@ interface DeployCommandOptions {
     apiSpec?: ApiSpec;
     commandName?: PreDeployCommand;
     cwd?: string;
+    discoveryCache?: DiscoveryCache;
     dockerAvailable?: DockerProbe;
     dryRun?: boolean;
     emitBindings?: string;

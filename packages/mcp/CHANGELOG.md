@@ -1,3 +1,14 @@
+## @lunora/mcp [1.0.0-alpha.240](https://github.com/anolilab/lunora/compare/@lunora/mcp@1.0.0-alpha.239...@lunora/mcp@1.0.0-alpha.240) (2026-10-15)
+
+### Performance Improvements
+
+* **mcp:** reuse the client across authed requests ([#1186](https://github.com/anolilab/lunora/issues/1186)) ([0bc9335](https://github.com/anolilab/lunora/commit/0bc9335bf040b1d83b21b8e4489e30f79bcceffd))
+
+
+### Dependencies
+
+* **@lunora/auth:** upgraded to 1.0.0-alpha.213
+
 ## @lunora/mcp [1.0.0-alpha.239](https://github.com/anolilab/lunora/compare/@lunora/mcp@1.0.0-alpha.238...@lunora/mcp@1.0.0-alpha.239) (2026-10-14)
 
 

@@ -6,7 +6,7 @@ import { LunoraError } from "@lunora/errors";
 import { getMigrations } from "better-auth/db/migration";
 import { describe, expect, it, vi } from "vitest";
 
-import { compileMigrationsSql, ensureMigrated } from "../src/migrate";
+import { compileMigrationsSql, createMigrationAuth, ensureMigrated } from "../src/migrate";
 
 vi.mock(import("better-auth/db/migration"), () => {
     return { getMigrations: vi.fn<typeof getMigrations>() };
@@ -144,6 +144,22 @@ describe("ensureMigrated", () => {
         await ensureMigrated({ options: { database: { db: database } } });
 
         expect(mockGetMigrations).toHaveBeenCalledTimes(2);
+    });
+
+    it("createMigrationAuth accepts a raw database and hands its options to ensureMigrated", async () => {
+        expect.assertions(2);
+
+        const runMigrations = vi.fn<() => Promise<void>>(async () => {});
+
+        mockGetMigrations.mockReset();
+        mockGetMigrations.mockResolvedValue(makeMigrations(runMigrations) as never);
+
+        const auth = createMigrationAuth({ database: { db: {} } as never, secret: "s".repeat(32) });
+
+        await ensureMigrated(auth);
+
+        expect(runMigrations).toHaveBeenCalledTimes(1);
+        expect(auth.options.rateLimit?.storage).toBe("database");
     });
 
     it("throws — and never reaches better-auth's migrator — for a custom adapter", async () => {
