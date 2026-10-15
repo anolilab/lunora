@@ -12,6 +12,9 @@ const MAX_BATCH_SPANS = 50;
 /** Encoded span bytes per OTLP export before an early flush. */
 const MAX_BATCH_BYTES = 256 * 1024;
 
+/** UTF-8 encoder for the encoded-size counter; `Buffer` does not exist on Workers. */
+const UTF8_ENCODER = new TextEncoder();
+
 /** A {@link Telemetry} that buffers and exports on `flush()`; the agent loop calls it once per run. */
 type FlushableTelemetry = Telemetry & { flush: () => void };
 
@@ -224,7 +227,9 @@ export const otlpTelemetry = (options: OtlpTelemetryOptions): FlushableTelemetry
         };
 
         buffer.push(span);
-        bufferBytes += JSON.stringify(span).length;
+        // The ceiling is documented as ENCODED span bytes, so count UTF-8 length:
+        // `String#length` is UTF-16 code units and undercounts multibyte attributes.
+        bufferBytes += UTF8_ENCODER.encode(JSON.stringify(span)).byteLength;
 
         if (buffer.length >= MAX_BATCH_SPANS || bufferBytes >= MAX_BATCH_BYTES) {
             flush();

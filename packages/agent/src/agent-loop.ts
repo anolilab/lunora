@@ -1642,7 +1642,7 @@ const runAgentLoop = async (options: AgentLoopOptions): Promise<AgentRunResult> 
     } finally {
         // Buffered OTLP spans leave in one export per run; this is the single
         // run-end point (every return and the rethrow above pass through it).
-        flushTelemetry(agent.telemetry);
+        await flushTelemetry(agent.telemetry);
     }
 };
 
