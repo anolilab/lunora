@@ -1,3 +1,9 @@
+## @lunora/observability [1.0.0-alpha.139](https://github.com/anolilab/lunora/compare/@lunora/observability@1.0.0-alpha.138...@lunora/observability@1.0.0-alpha.139) (2026-10-15)
+
+### Performance Improvements
+
+* **do:** coalesce per-dispatch metric upserts every N dispatches ([#1167](https://github.com/anolilab/lunora/issues/1167)) ([a73b72e](https://github.com/anolilab/lunora/commit/a73b72e7b792ad727c8c6d45199b76d4750a523f))
+
 ## @lunora/observability [1.0.0-alpha.138](https://github.com/anolilab/lunora/compare/@lunora/observability@1.0.0-alpha.137...@lunora/observability@1.0.0-alpha.138) (2026-10-15)
 
 

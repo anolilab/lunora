@@ -1,3 +1,9 @@
+## @lunora/ai [1.0.0-alpha.126](https://github.com/anolilab/lunora/compare/@lunora/ai@1.0.0-alpha.125...@lunora/ai@1.0.0-alpha.126) (2026-10-15)
+
+### Performance Improvements
+
+* **ai:** load gateway providers on first use ([#1177](https://github.com/anolilab/lunora/issues/1177)) ([5ddcdbf](https://github.com/anolilab/lunora/commit/5ddcdbf5cf216c2da6e09fa41e901568c29b9a69))
+
 ## @lunora/ai [1.0.0-alpha.125](https://github.com/anolilab/lunora/compare/@lunora/ai@1.0.0-alpha.124...@lunora/ai@1.0.0-alpha.125) (2026-10-15)
 
 
