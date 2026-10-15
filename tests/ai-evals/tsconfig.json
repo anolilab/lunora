@@ -1,0 +1,12 @@
+{
+    "extends": "../../tsconfig.base.json",
+    "compilerOptions": {
+        "outDir": "dist",
+        "rootDir": "../..",
+        "moduleResolution": "bundler",
+        "types": ["node"],
+        "noEmit": true
+    },
+    "include": ["**/*.ts", "../../shared/ai-chat.ts", "../../shared/ai-prompt.ts"],
+    "exclude": ["node_modules", "dist"]
+}

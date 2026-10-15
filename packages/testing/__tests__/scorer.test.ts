@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 
-import { containsScorer, evaluate, exactMatchScorer, keywordScorer, llmScorer, regexScorer, scoreSample } from "../src/scorer";
+import { absentScorer, containsScorer, evaluate, exactMatchScorer, keywordScorer, llmScorer, regexScorer, scoreSample } from "../src/scorer";
 
 describe("heuristic scorers", () => {
     it("containsScorer matches case-insensitively by default", () => {
@@ -15,6 +15,15 @@ describe("heuristic scorers", () => {
 
         // Every string contains "", so this used to score every output a silent 1.
         expect(() => containsScorer("")).toThrow("requires a non-empty needle");
+    });
+
+    it("absentScorer is containsScorer inverted, and shares its case handling", () => {
+        expect.assertions(3);
+
+        expect(absentScorer("DELETE").score({ output: "SELECT id FROM messages" })).toBe(1);
+        expect(absentScorer("delete").score({ output: "DELETE FROM messages" })).toBe(0);
+        // Case-sensitive, so the differently-cased occurrence is not a hit.
+        expect(absentScorer("delete", { caseSensitive: true }).score({ output: "DELETE FROM messages" })).toBe(1);
     });
 
     it("regexScorer is stateless across samples even with a /g pattern", () => {

@@ -38,7 +38,7 @@ import { execFileSync } from "node:child_process";
 
 import { init, parse } from "es-module-lexer";
 import { readdirSync, readFileSync, statSync } from "node:fs";
-import { dirname, join, relative } from "node:path";
+import { dirname, join, relative, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const rootDir = join(dirname(fileURLToPath(import.meta.url)), "..");
@@ -50,7 +50,7 @@ const packagesDir = join(rootDir, "packages");
  */
 const DEV_MARKERS = [
     { marker: "react/jsx-dev-runtime", why: "React dev JSX runtime import — production bundlers may stub this to undefined" },
-    { marker: "jsxDEV", why: "React dev JSX factory call" },
+    { bundledSafe: true, marker: "jsxDEV", why: "React dev JSX factory call" },
     { marker: "react/jsx-dev-runtime.js", why: "React dev JSX runtime import" },
     // The two markers that are not React-specific, so the other 51 packages are
     // checked for something rather than walked past.
@@ -60,6 +60,25 @@ const DEV_MARKERS = [
     },
     { marker: "__DEV__", why: "development guard left in the bundle — a production build eliminates the branch" },
 ];
+
+/**
+ * A BUNDLED application artifact, as opposed to published library output.
+ *
+ * `packages/studio/dist/standalone/` is an esbuild bundle that inlines every
+ * dependency, and third-party code legitimately NAMES `jsxDEV` without needing
+ * React's dev runtime: `hast-util-to-jsx-runtime` — reached by anything that
+ * renders markdown — both guards on `typeof options.jsxDEV` and calls a `jsxDEV`
+ * it receives as a PARAMETER, on a branch it only takes when its caller asks for
+ * `development: true`. No text match can tell that from a real dev build, so the
+ * bare-identifier marker is skipped for bundles. It still applies to every
+ * published library dist, which is the artifact the alpha.31 incident shipped.
+ *
+ * The import-specifier markers still apply here, and the bundle's React mode is
+ * decided upstream by `packages/studio/scripts/build-standalone.mjs`, which
+ * probe-builds under production React and inspects the esbuild METAFILE — an
+ * exact answer to "is React's dev JSX runtime in this graph" that text cannot give.
+ */
+const isBundledArtifact = (file) => file.includes(`${sep}dist${sep}standalone${sep}`);
 
 /** Extensions that are executed by a consumer (declarations can't crash at runtime). */
 const isRuntimeFile = (name) => /\.(?:mjs|cjs|js)$/.test(name) && !name.endsWith(".d.ts");
@@ -127,7 +146,13 @@ for (const name of packageDirs) {
 
         const source = readFileSync(file, "utf8");
 
-        for (const { marker, why } of DEV_MARKERS) {
+        const bundled = isBundledArtifact(file);
+
+        for (const { bundledSafe, marker, why } of DEV_MARKERS) {
+            if (bundledSafe === true && bundled) {
+                continue;
+            }
+
             if (source.includes(marker)) {
                 violations.push({ file: relative(rootDir, file), marker, package: name, why });
                 break;

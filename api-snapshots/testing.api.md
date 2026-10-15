@@ -390,6 +390,14 @@ interface TestSubscription<R> extends AsyncIterable<R> {
 
 Re-exported from `@lunora/mail` — signature tracked at its source.
 
+### `absentScorer` (const)
+
+```ts
+const absentScorer: (needle: string, options?: {
+    caseSensitive?: boolean;
+}) => Scorer;
+```
+
 ### `agentHarness` (const)
 
 ```ts

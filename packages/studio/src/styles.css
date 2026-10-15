@@ -7,6 +7,11 @@
    with our own Tailwind tokens, so we don't pull in React Flow's default theme. */
 @import "@xyflow/react/dist/base.css";
 
+/* Streamdown's base styles for the assistant's rendered replies (tables, code
+   blocks, lists). It is Tailwind-authored like the rest of the studio, so it
+   inherits the theme tokens below rather than shipping a palette of its own. */
+@import "streamdown/styles.css";
+
 /* Theme tokens (shadcn palette, @custom-variant, @layer base) live in the shared
    theme.css so the library CSS and the standalone apps/studio never drift. */
 @import "./theme.css";

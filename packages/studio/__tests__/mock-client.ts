@@ -96,6 +96,8 @@ interface MockClientHooks {
     setAuthUserRole: ReturnType<typeof vi.fn>;
     shardTraffic: ReturnType<typeof vi.fn>;
     signedStorageUrl: ReturnType<typeof vi.fn>;
+    /** The SSE-framed dispatch (`__lunora_admin__:aiChat`). See {@link MockClientImpls.streamRpc}. */
+    streamRpc: ReturnType<typeof vi.fn>;
     subscribe: ReturnType<typeof vi.fn>;
     subscribeScheduledJobs: ReturnType<typeof vi.fn>;
     unbanAuthUser: ReturnType<typeof vi.fn>;
@@ -153,10 +155,21 @@ interface MockClientImpls {
     runCronJob?: (name: string) => { name: string; ran: boolean };
     shardTraffic?: (table: string) => ShardTrafficResult;
     signedStorageUrl?: (key: string) => string;
+
+    /**
+     * The streaming dispatch, for the ops that answer `text/event-stream`.
+     *
+     * Defaults to {@link MockClientImpls.query}: a streamed op RESOLVES with the
+     * same whole result its non-streaming call site returned, so a test that only
+     * cares what the turn answered needs no second impl. Supply this one to
+     * exercise the frames on the way — `options.onFrame` is the third argument.
+     */
+    streamRpc?: Impl;
 }
 
 export const createMockClient = (impls: MockClientImpls = {}): MockClientHooks => {
     const query = makeMethod(impls.query);
+    const streamRpc = makeMethod(impls.streamRpc ?? impls.query);
     const mutation = makeMethod(impls.mutation);
     const action = makeMethod(impls.action);
     const listFunctions = vi.fn<() => Promise<FunctionDescriptor[]>>(async () => impls.listFunctions?.() ?? []);
@@ -513,6 +526,7 @@ export const createMockClient = (impls: MockClientImpls = {}): MockClientHooks =
         runCronJob,
         shardTraffic,
         signedStorageUrl,
+        streamRpc,
         subscribe,
         subscribeScheduledJobs,
         uploadStorageObject,
@@ -555,6 +569,7 @@ export const createMockClient = (impls: MockClientImpls = {}): MockClientHooks =
         runCronJob,
         shardTraffic,
         signedStorageUrl,
+        streamRpc,
         subscribe,
         subscribeScheduledJobs,
         uploadStorageObject,

@@ -19,13 +19,14 @@ When a plan ships: delete its file and remove its row here in the same change.
 
 ## In progress
 
-| Plan                                       | Title                                                           | Remaining                                                                                            |
-| ------------------------------------------ | --------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------- |
-| [460](./460-cloudflare-artifacts.md)       | Cloudflare Artifacts as an action-only `ctx.artifacts`          | A–D shipped (#926 + D deploy check); live probes remain (need Workers Paid)                          |
-| [463](./463-experimental-graduation.md)    | Graduate the experimental tier to stable                        | A shipped (#1002), B1 `payment` graduated (#1001); remaining packages                                |
-| [166](./166-enterprise-auth-saml-scim.md)  | Enterprise auth: SAML SSO + SCIM                                | Phase 1a (OIDC SSO + SCIM Users) shipped; Phase 1b SAML gated                                        |
-| [464](./464-replay-conflict-resolution.md) | Replayed offline writes that conflict                           | Phase A shipped (docs + test); Phase B waits on a real app needing a merge the handler can't express |
-| [468](./468-gdpr-package.md)               | `@lunora/privacy`: data-subject rights (export, erasure, holds) | Phase 0: codegen spike; legal and tax review open (§10)                                              |
+| Plan                                            | Title                                                           | Remaining                                                                                                                                                  |
+| ----------------------------------------------- | --------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| [460](./460-cloudflare-artifacts.md)            | Cloudflare Artifacts as an action-only `ctx.artifacts`          | A–D shipped (#926 + D deploy check); live probes remain (need Workers Paid)                                                                                |
+| [463](./463-experimental-graduation.md)         | Graduate the experimental tier to stable                        | A shipped (#1002), B1 `payment` graduated (#1001); remaining packages                                                                                      |
+| [166](./166-enterprise-auth-saml-scim.md)       | Enterprise auth: SAML SSO + SCIM                                | Phase 1a (OIDC SSO + SCIM Users) shipped; Phase 1b SAML gated                                                                                              |
+| [464](./464-replay-conflict-resolution.md)      | Replayed offline writes that conflict                           | Phase A shipped (docs + test); Phase B waits on a real app needing a merge the handler can't express                                                       |
+| [468](./468-gdpr-package.md)                    | `@lunora/privacy`: data-subject rights (export, erasure, holds) | Phase 0: codegen spike; legal and tax review open (§10)                                                                                                    |
+| [364](./364-studio-conversational-assistant.md) | Conversational assistant for the Studio                         | W1–W9 shipped (assistant reachable studio-wide, server-side data-sharing ladder, hardened markdown); W5 (streaming) blocked — needs its own transport plan |
 
 ## Open (TODO)
 
@@ -43,7 +44,6 @@ When a plan ships: delete its file and remove its row here in the same change.
 | [078](./078-custom-scalar-types.md)                    | Custom scalar types (`v.custom`)                                       | not shipped                                                                       |
 | [089](./089-promise-pipelining-batch.md)               | Promise pipelining over the batch transport                            | draft, design-only                                                                |
 | [160](./160-adapter-voice-agent-consolidation.md)      | Consolidate the voice/agent surface across the 5 adapters              | deferred                                                                          |
-| [364](./364-studio-conversational-assistant.md)        | Conversational assistant for the Studio                                | P3                                                                                |
 | [033](./033-stream.md)                                 | Cloudflare Stream (video)                                              | P3, deferred                                                                      |
 | [037](./037-realtime-calls-webrtc.md)                  | Cloudflare Realtime / Calls (WebRTC)                                   | P3, deferred                                                                      |
 | [133](./133-live-cdc-and-do-consumes-do.md)            | Live CDC ingest + DO-consumes-DO shape                                 | P3, demand-gated                                                                  |

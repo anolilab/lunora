@@ -3,10 +3,10 @@
  *
  * Several files in this repo are written by a script and committed:
  * `labeler-config.yml`, each package's `__assets__/package-og.svg` + README block,
- * `apps/docs/src/data/packages.ts`, the error-code reference in
- * `apps/docs/src/content/docs/errors.mdx`, and every example's `lunora/_generated` tree.
- * Nothing re-ran the generators in CI and compared, so a committed output could
- * drift from what the generator produces and no gate noticed.
+ * `apps/docs/src/data/packages.ts`, `shared/ai-knowledge-data.ts`, the error-code
+ * reference in `apps/docs/src/content/docs/errors.mdx`, and every example's
+ * `lunora/_generated` tree. Nothing re-ran the generators in CI and compared, so a
+ * committed output could drift from what the generator produces and no gate noticed.
  *
  * It had. `apps/docs/src/data/packages.ts` listed 51 packages against the
  * generator's 52 — `@lunora/platform-node` was missing entirely — and the drift
@@ -114,6 +114,7 @@ const GENERATORS = [
     ["node", ["scripts/generate-labeler-config.js"]],
     ["node", ["scripts/generate-package-og-images.js"]],
     ["node", ["apps/docs/scripts/generate-packages.js"]],
+    ["node", ["scripts/build-ai-knowledge.js"]],
     // `--experimental-strip-types` because it imports `packages/errors/src/catalog.ts`
     // directly; the flag is still required on the 22.15 this job pins.
     ["node", ["--experimental-strip-types", "apps/docs/scripts/generate-error-reference.js"]],

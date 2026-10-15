@@ -30,7 +30,7 @@ const numericMock = (): MockClientHooks =>
             }
 
             if (reference === ADMIN_FUNCTIONS.aiAvailable) {
-                return { available: false };
+                return { available: false, level: "disabled" };
             }
 
             throw new Error(`unexpected ${reference}`);
@@ -133,7 +133,7 @@ describe("dashboardsPanel", () => {
                 }
 
                 if (reference === ADMIN_FUNCTIONS.aiAvailable) {
-                    return { available: true };
+                    return { available: true, level: "schema" };
                 }
 
                 if (reference === ADMIN_FUNCTIONS.aiChartConfig) {
@@ -175,7 +175,7 @@ describe("dashboardsPanel", () => {
                 }
 
                 if (reference === ADMIN_FUNCTIONS.aiAvailable) {
-                    return { available: true };
+                    return { available: true, level: "schema" };
                 }
 
                 if (reference === ADMIN_FUNCTIONS.aiChartConfig) {

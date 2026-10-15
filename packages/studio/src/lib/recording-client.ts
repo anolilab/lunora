@@ -28,8 +28,17 @@ import { operationLog } from "./operation-log";
 /** The reserved prefix every Studio-issued admin RPC path carries. */
 const ADMIN_PREFIX = "__lunora_admin__:";
 
-/** The three dispatch methods that take a `FunctionReference` and return a promise. */
-const RECORDED_METHODS = new Set(["action", "mutation", "query"]);
+/**
+ * The dispatch methods that take a `FunctionReference` and return a promise.
+ *
+ * `streamRpc` belongs here for the same reason the other three do, and the shape
+ * it shares with them is what makes it free: it takes the reference first and the
+ * options last, and it resolves with the whole result even though the answer
+ * arrived in pieces. So the tape records a streamed op exactly as it recorded it
+ * before it streamed — the intermediate frames are narration and were never the
+ * operation.
+ */
+const RECORDED_METHODS = new Set(["action", "mutation", "query", "streamRpc"]);
 
 /**
  * Symbol key under which a rejection is tagged with its operation-tape sequence,
