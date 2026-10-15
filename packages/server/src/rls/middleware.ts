@@ -1178,9 +1178,14 @@ const wrapDatabase = (base: RlsDatabase, raw: RlsDatabase, steps: ReadonlyArray<
     };
 
     /**
-     * Is the row already soft-deleted, per the writer's published `softDeleteFields`? A forced physical delete
-     * (`{ hard: true }`) targets the row regardless of the marker, so it is never treated as gone. A table with
-     * no `.softDelete()`, or a writer that publishes no map, has no marker.
+     * Is the row already soft-deleted, per the writer's published `softDeleteFields`?
+     *
+     * This is a second line of defence, NOT the read scope that normally excludes a tombstone: the re-location
+     * reads below go through the object-form `findFirst`, which already ANDs the table's soft-delete scope. A
+     * conforming writer therefore never returns a tombstone here, making this a no-op for it — it only bites a
+     * writer whose list read does not apply that scope. A forced physical delete (`{ hard: true }`) targets the
+     * row regardless of the marker, so it is never treated as gone. A table with no `.softDelete()`, or a
+     * writer that publishes no map, has no marker.
      */
     const isSoftDeleted = (tableName: string, row: Record<string, unknown>, deleteOptions: undefined | { hard: boolean }): boolean => {
         if (deleteOptions?.hard === true) {
@@ -1257,9 +1262,15 @@ const wrapDatabase = (base: RlsDatabase, raw: RlsDatabase, steps: ReadonlyArray<
             return await erase(filtered);
         }
 
+        // Only a gated table has a delete policy to take on the fresh row; a policy-less row that left the
+        // caller's filter is simply skipped, so it is not worth the by-id read.
+        if (!gated) {
+            return false;
+        }
+
         const row = await readById();
 
-        if (row && !isSoftDeleted(tableName, row, deleteOptions) && gated && !allowsWrite(tableName, "delete", row)) {
+        if (row && !isSoftDeleted(tableName, row, deleteOptions) && !allowsWrite(tableName, "delete", row)) {
             throw new LunoraError("FORBIDDEN", "delete denied by policy");
         }
 
