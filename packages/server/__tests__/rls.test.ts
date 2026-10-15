@@ -1828,6 +1828,96 @@ describe("rls — batch write path", () => {
         expect(database.calls.filter((call) => call.method === "delete").map((call) => call.tableOrId)).toStrictEqual(["P"]);
     });
 
+    it("deleteAll from an action skips a row a concurrent write moved out of the read scope", async () => {
+        expect.assertions(2);
+
+        const rows = [
+            { _id: "A", ownerId: "u1", table: "documents" },
+            { _id: "B", ownerId: "u1", table: "documents" },
+        ];
+        const database = createFakeDatabase(rows);
+        const { findMany } = database.writer;
+
+        // An action: no transaction. The fresh read re-applies the read scope (`baseWhere`).
+        Object.assign(database.writer, { inTransaction: () => false });
+        database.writer.findFirst = async (tableName, args) => {
+            database.calls.push({ args, method: "findFirst", tableOrId: tableName });
+            const options = args as { baseWhere?: { ownerId?: { eq?: string } }; includeDeleted?: boolean; where?: { _id?: string } } | undefined;
+            const id = options?.where?._id;
+            const owner = options?.baseWhere?.ownerId?.eq;
+
+            return rows.find((row) => row.table === tableName && row._id === id && (owner === undefined || row.ownerId === owner)) ?? null;
+        };
+        // A concurrent mutation transfers B to another owner after the page read.
+        database.writer.findMany = async (tableName, args) => {
+            const result = await findMany(tableName, args);
+            const page = result.page.map((row) => {
+                return { ...row };
+            });
+
+            rows[1]!.ownerId = "someone-else";
+
+            return { ...result, page };
+        };
+
+        const readOwn = definePolicy<TestContext>({
+            on: "read",
+            table: "documents",
+            when: ({ auth }) => {
+                return { ownerId: { eq: auth.userId } };
+            },
+        });
+        const deleteAny = definePolicy<TestContext>({ on: "delete", table: "documents", when: () => true });
+        const handler = lunora.action.use(rlsForTest<TestContext>([readOwn, deleteAny])).action(async ({ ctx }) => ctx.db.deleteAll("documents"));
+
+        // B left the caller's read scope, so it is not erased even though the delete policy allows it.
+        await expect(handler.handler(makeContext(database, "u1"), {})).resolves.toStrictEqual({ deleted: 1 });
+        expect(database.calls.filter((call) => call.method === "delete").map((call) => call.tableOrId)).toStrictEqual(["A"]);
+    });
+
+    it("deleteAll with { hard: true } reaches a row that became soft-deleted after the page read", async () => {
+        expect.assertions(2);
+
+        const rows: (Record<string, unknown> & { _id: string; table: string })[] = [
+            { _id: "A", deletedAt: null, ownerId: "u1", table: "documents" },
+            { _id: "B", deletedAt: null, ownerId: "u1", table: "documents" },
+        ];
+        const database = createFakeDatabase(rows);
+        const { findMany } = database.writer;
+
+        Object.assign(database.writer, { inTransaction: () => false, softDeleteFields: new Map([["documents", "deletedAt"]]) });
+        database.writer.findFirst = async (tableName, args) => {
+            database.calls.push({ args, method: "findFirst", tableOrId: tableName });
+            const options = args as { includeDeleted?: boolean; where?: { _id?: string } } | undefined;
+            const row = rows.find((entry) => entry.table === tableName && entry._id === options?.where?._id);
+
+            if (!row) {
+                return null;
+            }
+
+            // A live-only read hides the tombstone; `includeDeleted` resurfaces it for a hard erase.
+            return row.deletedAt === null || options?.includeDeleted === true ? row : null;
+        };
+        // A concurrent mutation soft-deletes B after the page read.
+        database.writer.findMany = async (tableName, args) => {
+            const result = await findMany(tableName, args);
+            const page = result.page.map((row) => {
+                return { ...row };
+            });
+
+            rows[1]!.deletedAt = 1;
+
+            return { ...result, page };
+        };
+
+        const deleteAny = definePolicy<TestContext>({ on: "delete", table: "documents", when: () => true });
+        const handler = lunora.mutation.use(rlsForTest<TestContext>([deleteAny])).mutation(async ({ ctx }) => ctx.db.deleteAll("documents", { hard: true }));
+
+        // The hard erase must physically remove the row, tombstone or not: it is found and deleted.
+        await expect(handler.handler(makeContext(database, "u1"), {})).resolves.toStrictEqual({ deleted: 2 });
+        expect(database.calls.filter((call) => call.method === "delete").map((call) => call.tableOrId)).toStrictEqual(["A", "B"]);
+    });
+
     it("wipeShard fails closed under rls() instead of erasing only policy-visible rows", async () => {
         expect.assertions(2);
 

@@ -103,6 +103,14 @@ interface PatchWriteOptions {
 interface QueryArgs {
     baseWhere?: WhereInput;
     cursor?: null | string;
+
+    /**
+     * Opt a list read back into a `.softDelete()` table's tombstoned rows. Set by
+     * the chunked erase's re-location for a `{ hard: true }` delete, which must find
+     * a row an earlier delete of the page soft-deleted and physically remove it; the
+     * read `baseWhere` still applies (see `@lunora/do`'s `QueryArgs`).
+     */
+    includeDeleted?: boolean;
     limit?: number;
     orderBy?: ReadonlyArray<unknown>;
 
@@ -1188,10 +1196,14 @@ const wrapDatabase = (base: RlsDatabase, raw: RlsDatabase, steps: ReadonlyArray<
      * Re-locate one row of `tableName` and delete it on its fresh image; `false` when it is already gone.
      *
      * `gated` says whether the table carries a policy. A gated row is re-located through the unguarded `raw`
-     * (the evaluator must see the protected row) and its fresh image is re-checked; a policy-less row is
-     * re-located and deleted through the guarded `base`, exactly as the fast path deletes it. A row already
-     * soft-deleted counts as gone: the writer's delete is a no-op for it, so re-deleting would inflate the
-     * count and re-run the delete policy against a tombstone.
+     * (the evaluator must see the protected row); a policy-less row is re-located and deleted through the
+     * guarded `base`, exactly as the fast path deletes it.
+     *
+     * The gated fresh read RE-APPLIES the table's read scope, so a row a concurrent write moved out of the
+     * caller's read-visible set is skipped even when its delete policy would still allow the delete: the read
+     * scope is the erase's candidate set, and `deleteAll`/`deleteWhere` only ever name rows it returned. A
+     * `{ hard: true }` erase relaxes the soft-delete scope (`includeDeleted`) so it can reach — and physically
+     * remove — a row an earlier delete of the page soft-deleted; the read scope still applies.
      */
     const deleteLocated = async (id: string, tableName: string, gated: boolean, deleteOptions: undefined | { hard: boolean }): Promise<boolean> => {
         if (!gated) {
@@ -1206,13 +1218,20 @@ const wrapDatabase = (base: RlsDatabase, raw: RlsDatabase, steps: ReadonlyArray<
             return true;
         }
 
-        const located = await findRowTable(id, tableName);
+        // `includeDeleted` only for a hard delete: a soft delete must treat a row an earlier delete of the
+        // page already tombstoned as gone (the writer's delete is a no-op for it), so it is not re-counted.
+        const row = await raw.findFirst(tableName, {
+            baseWhere: readBase(tableName).baseWhere,
+            ...(deleteOptions?.hard === true ? { includeDeleted: true } : {}),
+            limit: 1,
+            where: { _id: id },
+        });
 
-        if (!located || isSoftDeleted(tableName, located.row, deleteOptions)) {
+        if (!row || isSoftDeleted(tableName, row, deleteOptions)) {
             return false;
         }
 
-        if (!allowsWrite(tableName, "delete", located.row)) {
+        if (!allowsWrite(tableName, "delete", row)) {
             // Same table-agnostic message as `gateById`.
             throw new LunoraError("FORBIDDEN", "delete denied by policy");
         }
