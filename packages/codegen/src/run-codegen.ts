@@ -652,7 +652,7 @@ export const runCodegen = (options: CodegenOptions): CodegenResult => {
         flagKeys,
         hasFlags,
         hasNotify,
-        hasRooms: functions.some((definition) => definition.lifecycle === "room"),
+        hasRooms: functions.some((definition) => definition.channel?.kind === "room"),
         // The gate's verdict, exactly as `emitServer`/`emitApp` receive it. The
         // shard emitter recomputed the flag from `schema.vectorIndexes` instead,
         // so the DO kept the whole Vectorize wiring on a host rating

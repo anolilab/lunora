@@ -104,6 +104,7 @@ export type {
     QueryCacheAdapter,
     ReconnectOptions,
     ReturnOf,
+    RoomRef,
     RowOp,
     RpcEnvelope,
     RpcResponseBody,

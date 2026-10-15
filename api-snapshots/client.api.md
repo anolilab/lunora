@@ -428,8 +428,8 @@ class LunoraClient {
     whisper(topic: string, data?: unknown, options?: {
         shardKey?: string;
     }): boolean;
-    connectRoom<Message>(name: string, handlers: {
-        onMessage: (message: Message, from?: string) => void;
+    connectRoom<Message>(room: RoomRef<Message>, handlers: {
+        onMessage: (message: Message) => void;
     }, options?: {
         shardKey?: string;
     }): {
@@ -1144,6 +1144,15 @@ type ReplayIdentityVerdict = {
 
 ```ts
 type ReturnOf<F> = F extends FunctionReference<infer _K, infer _A, infer R> ? R : never;
+```
+
+### `RoomRef` (interface)
+
+```ts
+interface RoomRef<Message = unknown> {
+    readonly __lunoraRoomMessage?: Message;
+    readonly name: string;
+}
 ```
 
 ### `RowOp` (interface)

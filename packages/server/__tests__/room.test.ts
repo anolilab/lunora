@@ -18,7 +18,7 @@ const dispatch = (room: ReturnType<typeof defineRoom>, event: Record<string, unk
     room.handler({}, event as unknown as Record<string, never>) as Promise<void>;
 
 describe("defineRoom", () => {
-    it("tags an internal mutation marked `room`, keyed by its name", () => {
+    it("tags an internal mutation on the room channel, keyed by its name", () => {
         expect.assertions(4);
 
         const room = defineRoom({ message: v.object({ text: v.string() }), name: "chat", onMessage: () => undefined });
@@ -27,8 +27,9 @@ describe("defineRoom", () => {
         // SQLite, so it needs the mutation transaction wrapper.
         expect(room.kind).toBe("mutation");
         expect(room.visibility).toBe("internal");
-        expect(room.lifecycle).toBe("room");
-        expect(room.room).toBe("chat");
+        // A channel, not a lifecycle moment: a socket reaches it by name.
+        expect(room.lifecycle).toBeUndefined();
+        expect(room.channel).toStrictEqual({ kind: "room", name: "chat" });
     });
 
     it("rejects an empty name", () => {

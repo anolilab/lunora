@@ -13,6 +13,9 @@ export interface FunctionIR {
 
     args: Record<string, ValidatorIR>;
 
+    /** A channel registration: a `defineRoom` and its room name. Absent on every other registration. */
+    channel?: { kind: "room"; name: string };
+
     exportName: string;
 
     /**
@@ -44,7 +47,7 @@ export interface FunctionIR {
      * a `room` registration into the `LUNORA_ROOMS` topic→path map. Absent on
      * ordinary functions.
      */
-    lifecycle?: "connect" | "disconnect" | "init" | "reactor" | "room" | "whisper";
+    lifecycle?: "connect" | "disconnect" | "init" | "reactor" | "whisper";
 
     /**
      * The `.output(validator)` declaration, when the chain has one.

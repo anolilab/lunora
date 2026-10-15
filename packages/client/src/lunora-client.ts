@@ -187,6 +187,7 @@ import type {
     QueryCacheAdapter,
     ReconnectOptions,
     ReturnOf,
+    RoomRef,
     ScheduleRecord,
     SchedulerStatus,
     ServerDataMessage,
@@ -1880,12 +1881,13 @@ class LunoraClient {
      * {@link whisperSubscribe} / {@link whisper} on the room's topic
      * (`room:<name>`, the topic the shard resolves to the room's handler).
      *
-     * `Message` is the room's message type. Codegen does NOT yet infer it from
-     * the room's validator, so pass it explicitly (or rely on a room-typed
-     * wrapper in your app):
+     * The room is passed as its generated reference, so `onMessage` and `send` are
+     * typed from the room's own message validator:
      *
      * ```ts
-     * const chat = client.connectRoom<{ text: string }>("chat", {
+     * import { rooms } from "./_generated/api";
+     *
+     * const chat = client.connectRoom(rooms.chat, {
      *     onMessage: (message) => append(message.text),
      * });
      * chat.send({ text: "hello" });
@@ -1897,15 +1899,15 @@ class LunoraClient {
      * authoritative. Returns a handle with `send` and `close`.
      */
     public connectRoom<Message>(
-        name: string,
-        handlers: { onMessage: (message: Message, from?: string) => void },
+        room: RoomRef<Message>,
+        handlers: { onMessage: (message: Message) => void },
         options: { shardKey?: string } = {},
     ): { close: () => void; send: (message: Message) => boolean } {
-        const topic = `room:${name}`;
+        const topic = `room:${room.name}`;
         const unsubscribe = this.whisperSubscribe(
             topic,
-            (data, from) => {
-                handlers.onMessage(data as Message, from);
+            (data) => {
+                handlers.onMessage(data as Message);
             },
             options,
         );

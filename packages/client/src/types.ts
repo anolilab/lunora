@@ -13,6 +13,22 @@ export type { ArgsOf, FunctionReference, ReturnOf } from "../../../shared/functi
  * params types so `httpStream` (and the framework hooks over it) infer the
  * chunk type end-to-end.
  */
+
+/**
+ * A typed reference to a `defineRoom` room, as the generated `rooms` object carries
+ * it. At runtime it is the room's name; the phantom marker carries its message type,
+ * so `connectRoom(rooms.chat, …)` types `onMessage` and `send` from the room itself.
+ */
+export interface RoomRef<Message = unknown> {
+    /**
+     * Phantom marker carrying the room's message type for inference. Never present
+     * at runtime.
+     */
+    readonly __lunoraRoomMessage?: Message;
+    /** The room's name, which the shard routes on (`room:<name>`). */
+    readonly name: string;
+}
+
 export interface HttpStreamRef<Chunk = unknown, SearchParams = unknown, Params = unknown> {
     /**
      * Phantom marker carrying the `Chunk`/`SearchParams`/`Params` type

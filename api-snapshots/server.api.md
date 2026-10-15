@@ -1032,7 +1032,7 @@ interface LifecycleEvent {
 ### `LifecycleEventKind` (type)
 
 ```ts
-type LifecycleEventKind = "connect" | "disconnect" | "init" | "reactor" | "room" | "whisper";
+type LifecycleEventKind = "connect" | "disconnect" | "init" | "reactor" | "whisper";
 ```
 
 ### `LifecycleHandler` (type)
@@ -1780,11 +1780,14 @@ type RegisteredAction<A extends ArgsValidator, R> = RegisteredFunction<A, R, "ac
 ```ts
 interface RegisteredFunction<A extends ArgsValidator, R, Kind extends FunctionKind> {
     readonly args: A;
+    readonly channel?: {
+        readonly kind: "room";
+        readonly name: string;
+    };
     readonly expose?: ExposeConfig;
     readonly handler: (context: unknown, args: InferArgs<A>) => Promise<R> | R;
     readonly kind: Kind;
     readonly lifecycle?: LifecycleEventKind;
-    readonly room?: string;
     readonly visibility?: FunctionVisibility;
     readonly x402?: X402ProcedureConfig;
 }
@@ -1839,9 +1842,12 @@ type RegisteredReactor = RegisteredFunction<Record<string, never>, ReactorOutcom
 ### `RegisteredRoom` (type)
 
 ```ts
-type RegisteredRoom = RegisteredFunction<Record<string, never>, void, "mutation"> & {
-    readonly lifecycle: "room";
-    readonly room: string;
+type RegisteredRoom<Message = unknown> = RegisteredFunction<Record<string, never>, void, "mutation"> & {
+    readonly __roomMessage?: Message;
+    readonly channel: {
+        readonly kind: "room";
+        readonly name: string;
+    };
 };
 ```
 
@@ -2031,6 +2037,12 @@ type RoomLeaveHandler = (context: MutationCtx, socket: RoomSocket) => Promise<vo
 
 ```ts
 type RoomMessageHandler<Message> = (context: MutationCtx, message: Message, socket: RoomSocket) => Promise<void> | void;
+```
+
+### `RoomMessageOf` (type)
+
+```ts
+type RoomMessageOf<Room> = Room extends RegisteredRoom<infer Message> ? Message : never;
 ```
 
 ### `RoomSocket` (interface)
@@ -3411,7 +3423,7 @@ const defineRole: (name: string, options?: Omit<Role, "name">) => Role;
 ### `defineRoom` (const)
 
 ```ts
-const defineRoom: <Message extends Validator>(options: DefineRoomOptions<Message>) => RegisteredRoom;
+const defineRoom: <Message extends Validator>(options: DefineRoomOptions<Message>) => RegisteredRoom<Infer<Message>>;
 ```
 
 ### `defineSchema` (const)

@@ -30,15 +30,26 @@ const INTERNAL_FACTORIES: Record<string, "action" | "mutation" | "query"> = {
  * the room's whisper topic — emit derives the `LUNORA_ROOMS` topic→path map from
  * it.
  */
-type LifecycleMoment = "connect" | "disconnect" | "init" | "reactor" | "room" | "whisper";
+type LifecycleMoment = "connect" | "disconnect" | "init" | "reactor" | "whisper";
 
 const LIFECYCLE_FACTORIES: Record<string, LifecycleMoment> = {
-    defineRoom: "room",
     onConnect: "connect",
     onDisconnect: "disconnect",
     onQueryChange: "reactor",
     onShardInit: "init",
     onWhisper: "whisper",
+};
+
+/**
+ * Channel factories: a socket reaches the registration by its name, not by a
+ * lifecycle moment. A `defineRoom` is dispatched server-side when a socket joins,
+ * leaves, or sends to the room's whisper topic; emit derives the `LUNORA_ROOMS`
+ * topic→path map from it.
+ */
+type ChannelKind = "room";
+
+const CHANNEL_FACTORIES: Record<string, ChannelKind> = {
+    defineRoom: "room",
 };
 
 /**
@@ -151,6 +162,12 @@ interface ProcedureClassification {
      * platform admin can reach the procedure. Absent otherwise.
      */
     adminOnly?: true;
+
+    /**
+     * Set when the call registers a channel (`defineRoom`): the channel's kind. The
+     * name is read from the call's options, not here. Absent otherwise.
+     */
+    channel?: ChannelKind;
 
     /** Registration kind: `query` | `mutation` | `action` | `stream`. */
     kind: string;
@@ -268,6 +285,12 @@ const classifyProcedureCall = (call: CallExpression): ProcedureClassification | 
         return { kind: internalKind, visibility: "internal" };
     }
 
+    const channel = CHANNEL_FACTORIES[exportedName];
+
+    if (channel) {
+        return { channel, kind: "mutation", visibility: "internal" };
+    }
+
     const lifecycle = LIFECYCLE_FACTORIES[exportedName];
 
     if (lifecycle) {
@@ -281,4 +304,4 @@ const classifyProcedureCall = (call: CallExpression): ProcedureClassification | 
 };
 
 export { classifyProcedureCall };
-export type { LifecycleMoment, ProcedureClassification };
+export type { ChannelKind, LifecycleMoment, ProcedureClassification };

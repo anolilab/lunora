@@ -346,6 +346,10 @@ interface FlagsIR {
 interface FunctionIR {
     adminOnly?: true;
     args: Record<string, ValidatorIR>;
+    channel?: {
+        kind: "room";
+        name: string;
+    };
     exportName: string;
     expose?: {
         cache?: ExposeCacheIR;
@@ -353,7 +357,7 @@ interface FunctionIR {
     };
     filePath: string;
     kind: "action" | "mutation" | "query" | "stream";
-    lifecycle?: "connect" | "disconnect" | "init" | "reactor" | "room" | "whisper";
+    lifecycle?: "connect" | "disconnect" | "init" | "reactor" | "whisper";
     output?: ValidatorIR;
     returnType: string;
     visibility?: "internal" | "public";

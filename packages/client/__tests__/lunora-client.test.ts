@@ -4578,7 +4578,7 @@ describe("lunoraClient", () => {
                 url: "https://app.example",
                 WebSocket: createMockWebSocket(),
             });
-            const room = client.connectRoom<{ text: string }>("chat", { onMessage: () => undefined });
+            const room = client.connectRoom<{ text: string }>({ name: "chat" }, { onMessage: () => undefined });
 
             // Before the socket opens the message is held, not dropped.
             expect(room.send({ text: "hi" })).toBe(true);

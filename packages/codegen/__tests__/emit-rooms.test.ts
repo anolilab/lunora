@@ -1,6 +1,7 @@
+import { ts } from "ts-morph";
 import { describe, expect, it } from "vitest";
 
-import { emitFunctions, emitShard } from "../src/emit";
+import { emitApi, emitFunctions, emitShard } from "../src/emit";
 import type { FunctionIR } from "../src/ir";
 
 /**
@@ -13,8 +14,8 @@ const roomFunction: FunctionIR = {
     args: {},
     exportName: "chat",
     filePath: "rooms",
+    channel: { kind: "room", name: "chat" },
     kind: "mutation",
-    lifecycle: "room",
     returnType: "void",
     visibility: "internal",
 };
@@ -67,11 +68,68 @@ describe("emitFunctions — LUNORA_ROOMS registry", () => {
         expect(emitted).toContain("if (topic in registry) {");
     });
 
+    it("types each room's message from its own registration", () => {
+        expect.assertions(2);
+
+        const emitted = emitFunctions({ functions: [roomFunction] });
+
+        expect(emitted).toContain('import type { RoomMessageOf } from "@lunora/server";');
+        expect(emitted).toContain('"chat": RoomMessageOf<typeof lunora_rooms_0["chat"]>;');
+    });
+
+    it("runs the emitted registry: each room topic maps to its path, and a duplicate throws", () => {
+        expect.assertions(2);
+
+        // Evaluate the emitted block, not a string match on it: transpile the registry
+        // and run it against a stubbed function table.
+        const emitted = emitFunctions({ functions: [roomFunction] });
+        const start = emitted.indexOf("export const LUNORA_ROOMS");
+        const block = emitted.slice(start, emitted.indexOf("})();", start) + "})();".length);
+        const js = ts.transpileModule(block, { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 } }).outputText;
+        const registryOf = (functions: Record<string, unknown>): unknown => {
+            const exported: Record<string, unknown> = {};
+
+            // eslint-disable-next-line @typescript-eslint/no-implied-eval, sonarjs/code-eval -- the test runs the emitted registry it just transpiled
+            new Function("LUNORA_FUNCTIONS", "exports", js)(functions, exported);
+
+            return exported["LUNORA_ROOMS"];
+        };
+        const room = { channel: { kind: "room", name: "chat" } };
+
+        expect(registryOf({ "rooms:chat": room })).toStrictEqual({ "room:chat": "rooms:chat" });
+        expect(() => registryOf({ "rooms:a": room, "rooms:b": room })).toThrow(/room names must be unique/u);
+    });
+
+    it("runs the emitted api module: the rooms reference addresses each room by its name", () => {
+        expect.assertions(2);
+
+        // The api module's only value output is the references, so transpiling it and
+        // running it yields the `rooms` object a client would import.
+        const emitted = emitApi({ functions: [roomFunction] });
+        const js = ts.transpileModule(emitted, { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 } }).outputText;
+        const exported: Record<string, unknown> = {};
+
+        // eslint-disable-next-line @typescript-eslint/no-implied-eval, sonarjs/code-eval -- the test runs the emitted api module it just transpiled
+        new Function("exports", "require", js)(exported, () => {
+            return {};
+        });
+
+        expect(exported["rooms"]).toStrictEqual({ chat: { name: "chat" } });
+        expect(emitted).toContain('chat: RoomRef<LunoraRoomMessages["chat"]>;');
+    });
+
     it("keeps the registry out of a room-free project", () => {
-        expect.assertions(1);
+        expect.assertions(4);
 
         // The interface docblock names the map, so assert on the EXPORT, not the
-        // bare token — the emitted registry itself must be absent.
-        expect(emitFunctions({ functions: [] })).not.toContain("export const LUNORA_ROOMS");
+        // bare token — the emitted registry itself must be absent. The room-only
+        // interface field and the message types must be absent too, so an app with no
+        // rooms emits what it always did.
+        const emitted = emitFunctions({ functions: [] });
+
+        expect(emitted).not.toContain("export const LUNORA_ROOMS");
+        expect(emitted).not.toContain("channel?:");
+        expect(emitted).not.toContain("LunoraRoomMessages");
+        expect(emitted).not.toContain("RoomMessageOf");
     });
 });

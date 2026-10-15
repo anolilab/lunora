@@ -769,6 +769,10 @@ Re-exported from `@lunora/server` — signature tracked at its source.
 
 Re-exported from `@lunora/server` — signature tracked at its source.
 
+### `RoomMessageOf` (type)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
 ### `RoomSocket` (interface)
 
 Re-exported from `@lunora/server` — signature tracked at its source.
@@ -1816,6 +1820,10 @@ Re-exported from `@lunora/client` — signature tracked at its source.
 Re-exported from `@lunora/client` — signature tracked at its source.
 
 ### `ReturnOf` (type)
+
+Re-exported from `@lunora/client` — signature tracked at its source.
+
+### `RoomRef` (interface)
 
 Re-exported from `@lunora/client` — signature tracked at its source.
 
@@ -5804,6 +5812,10 @@ Re-exported from `@lunora/server` — signature tracked at its source.
 Re-exported from `@lunora/server` — signature tracked at its source.
 
 ### `RoomMessageHandler` (type)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
+### `RoomMessageOf` (type)
 
 Re-exported from `@lunora/server` — signature tracked at its source.
 

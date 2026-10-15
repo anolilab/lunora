@@ -35,7 +35,7 @@
  * export { chat } from "./rooms";
  * ```
  *
- * The client joins the SAME topic through `connectRoom("chat")`, which wraps the
+ * The client joins the SAME topic through `connectRoom(rooms.chat)`, which wraps the
  * ordinary whisper surface.
  *
  * # It is a mutation, and it is dispatched like a lifecycle hook
@@ -125,15 +125,21 @@ interface RoomDispatchEvent {
 }
 
 /**
- * A registered room — an internal mutation tagged `lifecycle: "room"` with its
- * `room` name, so codegen emits it into `LUNORA_FUNCTIONS` (path dispatch) and
- * derives the generated `LUNORA_ROOMS` topic→path map the shard resolves a room
- * topic through.
+ * A registered room — an internal mutation tagged with its `channel`, so codegen
+ * emits it into `LUNORA_FUNCTIONS` (path dispatch) and derives the generated
+ * `LUNORA_ROOMS` topic→path map the shard resolves a room topic through.
+ *
+ * `Message` is the room's message type, carried type-only (`__roomMessage` is
+ * never set at runtime). The generated room references read it back through
+ * {@link RoomMessageOf}, so a client's `connectRoom` is typed from the room itself.
  */
-type RegisteredRoom = RegisteredFunction<Record<string, never>, void, "mutation"> & {
-    readonly lifecycle: "room";
-    readonly room: string;
+type RegisteredRoom<Message = unknown> = RegisteredFunction<Record<string, never>, void, "mutation"> & {
+    readonly __roomMessage?: Message;
+    readonly channel: { readonly kind: "room"; readonly name: string };
 };
+
+/** The message type a {@link RegisteredRoom} carries. */
+type RoomMessageOf<Room> = Room extends RegisteredRoom<infer Message> ? Message : never;
 
 /**
  * Declare a typed room. See the module docblock for the transport it rides, the
@@ -141,7 +147,7 @@ type RegisteredRoom = RegisteredFunction<Record<string, never>, void, "mutation"
  * @throws {TypeError} when `name` is empty — an empty override would make the
  * room topic collidable and the `LUNORA_ROOMS` map ambiguous.
  */
-const defineRoom = <Message extends Validator>(options: DefineRoomOptions<Message>): RegisteredRoom => {
+const defineRoom = <Message extends Validator>(options: DefineRoomOptions<Message>): RegisteredRoom<Infer<Message>> => {
     const { message, name, onJoin, onLeave, onMessage } = options;
 
     if (typeof name !== "string" || name.length === 0) {
@@ -176,12 +182,11 @@ const defineRoom = <Message extends Validator>(options: DefineRoomOptions<Messag
 
             await onMessage(context as MutationContext, parsed as Infer<Message>, socket);
         },
+        channel: { kind: "room", name },
         kind: "mutation",
-        lifecycle: "room",
-        room: name,
         visibility: "internal",
     };
 };
 
-export type { DefineRoomOptions, RegisteredRoom, RoomJoinHandler, RoomLeaveHandler, RoomMessageHandler, RoomSocket };
+export type { DefineRoomOptions, RegisteredRoom, RoomJoinHandler, RoomLeaveHandler, RoomMessageHandler, RoomMessageOf, RoomSocket };
 export { defineRoom };

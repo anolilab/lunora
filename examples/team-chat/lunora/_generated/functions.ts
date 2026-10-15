@@ -40,14 +40,7 @@ export interface RegisteredLunoraFunction {
      * no user to scope to. `whisper` and `room` do have one — they run under the
      * asking socket's identity.
      */
-    lifecycle?: "connect" | "disconnect" | "init" | "reactor" | "room" | "whisper";
-    /**
-     * Set on a `defineRoom` registration: the room name (without the `room:`
-     * topic prefix). The generated `LUNORA_ROOMS` map keys it on the room's
-     * `room:<name>` whisper topic so the ShardDO resolves a room topic to this
-     * path.
-     */
-    room?: string;
+    lifecycle?: "connect" | "disconnect" | "init" | "reactor" | "whisper";
     /**
      * Hoisted by the builder when the `.use()` chain carries a step with a
      * per-dispatch effect — `rateLimit(...)` consuming budget, a single-use

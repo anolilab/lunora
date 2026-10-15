@@ -420,6 +420,39 @@ const syntheticMutatorApiFunctions = (mutators: ReadonlyArray<MutatorIR>, functi
  * declares no streaming routes; `body` is the rendered type members (fed into
  * the `Doc`/`Id` import detection alongside the api bodies).
  */
+
+/**
+ * The typed room references for a project's `defineRoom` rooms, in the generated
+ * `api` module: a `rooms` object keyed by room name, each entry a `RoomRef` typed
+ * from the room's own message (`LunoraRoomMessages`, emitted beside the registry).
+ * `client.connectRoom(rooms.chat, …)` then types `onMessage` and `send`. Empty when
+ * the project declares no room, so a room-free project's `api` is unchanged.
+ */
+const renderRoomsRef = (functions: ReadonlyArray<FunctionIR>): { block: string; importLine: string } => {
+    const names = functions.flatMap((definition) => (definition.channel?.kind === "room" ? [definition.channel.name] : []));
+
+    if (names.length === 0) {
+        return { block: "", importLine: "" };
+    }
+
+    const typeLines = names.map((name) => `    ${renderObjectKey(name)}: RoomRef<LunoraRoomMessages[${JSON.stringify(name)}]>;`).join("\n");
+    const valueLines = names.map((name) => `    ${renderObjectKey(name)}: { name: ${JSON.stringify(name)} },`).join("\n");
+
+    return {
+        block: `
+/** This project's \`defineRoom\` rooms, addressable as typed references for \`client.connectRoom\`. */
+export interface RoomsRef {
+${typeLines}
+}
+
+export const rooms: RoomsRef = {
+${valueLines}
+};
+`,
+        importLine: `import type { LunoraRoomMessages } from "./functions.js";\n`,
+    };
+};
+
 const renderHttpStreamsRef = (httpRoutes: ReadonlyArray<HttpRouteIR>): { block: string; body: string } => {
     const streams = httpRoutes.filter((route) => route.stream);
 
@@ -534,18 +567,19 @@ interface EmitApiOptions {
 const emitApi = (options: EmitApiOptions): string => {
     const { agents = [], functions, httpRoutes = [], mutators = [], useUmbrella = false, workflows = [] } = options;
     const httpStreamsRef = renderHttpStreamsRef(httpRoutes);
+    const roomsRef = renderRoomsRef(functions);
     const schedulerReferences = renderSchedulerReferences(workflows, agents);
 
     return renderReferenceModule({
-        block: `${schedulerReferences.block}${httpStreamsRef.block}`,
-        clientImports: httpStreamsRef.block === "" ? [] : ["HttpStreamRef"],
+        block: `${schedulerReferences.block}${httpStreamsRef.block}${roomsRef.block}`,
+        clientImports: [...(httpStreamsRef.block === "" ? [] : ["HttpStreamRef"]), ...(roomsRef.block === "" ? [] : ["RoomRef"])],
         constName: "api",
         functions: [
             ...functions.filter((definition) => definition.visibility !== "internal"),
             ...syntheticAgentApiFunctions(agents, functions),
             ...syntheticMutatorApiFunctions(mutators, functions),
         ],
-        importLine: schedulerReferences.importLine,
+        importLine: `${schedulerReferences.importLine}${roomsRef.importLine}`,
         typeName: "ApiTypes",
         typesBody: httpStreamsRef.body,
         useUmbrella,
