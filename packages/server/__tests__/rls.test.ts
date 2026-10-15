@@ -1913,12 +1913,13 @@ describe("rls — batch write path", () => {
             return { ...result, page };
         };
 
-        const deleteAny = definePolicy<TestContext>({ on: "delete", table: "documents", when: () => true });
+        // The row is also delete-denied once un-archived; it must still be skipped, not abort the erase.
+        const deleteArchived = definePolicy<TestContext>({ on: "delete", table: "documents", when: ({ row }) => row?.["status"] === "archived" });
         const handler = lunora.action
-            .use(rlsForTest<TestContext>([deleteAny]))
+            .use(rlsForTest<TestContext>([deleteArchived]))
             .action(async ({ ctx }) => ctx.db.deleteWhere("documents", { status: "archived" }));
 
-        // B no longer matches the filter, so it is not erased even though it was on the page.
+        // B left the filter (and is now delete-denied), so it is skipped, not erased and not an abort.
         await expect(handler.handler(makeContext(database, "u1"), {})).resolves.toStrictEqual({ deleted: 1 });
         expect(database.calls.filter((call) => call.method === "delete").map((call) => call.tableOrId)).toStrictEqual(["A"]);
     });

@@ -1198,21 +1198,20 @@ const wrapDatabase = (base: RlsDatabase, raw: RlsDatabase, steps: ReadonlyArray<
     };
 
     /**
-     * Re-locate one row of `tableName` and delete it on its fresh image; `false` when it is already gone.
+     * Re-locate one row of `tableName` and delete it on its fresh image; `false` when the read does not find it.
      *
      * `gated` says whether the table carries a policy. A gated row is re-located through the unguarded `raw`
      * (the evaluator must see the protected row); a policy-less row is re-located and deleted through the
      * guarded `base`, exactly as the fast path deletes it.
      *
-     * The fresh image is read by id under the table's read scope (and, on that read's own relation hops, the
-     * child read filter), so a row a concurrent write moved out of the caller's read-visible set is skipped.
-     * The delete policy is taken on that image, so a row it now denies fails loudly instead of reading as
-     * gone. `deleteWhere`'s own `where` still scopes the erase, re-applied through the SAME filtered read the
-     * page used (a JS re-evaluation would diverge — `contains`, for one, is case-sensitive in the in-memory
-     * matcher and folded in SQL): a row that no longer matches it is skipped, not deleted, though its delete
-     * policy is still taken so a denial fails loudly. A `{ hard: true }` erase relaxes the soft-delete scope
-     * (`includeDeleted`) so it can reach — and physically remove — a row an earlier delete of the page
-     * soft-deleted; the filters still apply.
+     * The fresh read is the page read's scope re-applied: by id under the table's read scope (and, on that
+     * read's own relation hops, the child read filter) plus, for `deleteWhere`, the caller's `where`. It runs
+     * through the SQL path so it folds exactly as the page did — a JS re-evaluation would diverge (`contains`,
+     * for one, is case-sensitive in the in-memory matcher and folded in SQL). A row the read no longer finds
+     * has left the erase's scope (deleted, reassigned, or filtered out by a concurrent write) and is skipped,
+     * so the delete policy is taken only on a row still in scope, where it denies loudly. A `{ hard: true }`
+     * erase relaxes the soft-delete scope (`includeDeleted`) so it can reach — and physically remove — a row an
+     * earlier delete of the page soft-deleted; the scopes still apply.
      */
     const deleteLocated = async (
         id: string,
@@ -1221,60 +1220,27 @@ const wrapDatabase = (base: RlsDatabase, raw: RlsDatabase, steps: ReadonlyArray<
         deleteOptions: undefined | { hard: boolean },
         where?: WhereInput,
     ): Promise<boolean> => {
-        const scope = deleteOptions?.hard === true ? { includeDeleted: true } : {};
         const reader = gated ? raw : base;
-        const readScope = gated ? { baseWhere: readBase(tableName).baseWhere } : {};
-
-        const erase = async (row: null | Record<string, unknown>): Promise<boolean> => {
-            if (!row || isSoftDeleted(tableName, row, deleteOptions)) {
-                return false;
-            }
-
-            if (gated && !allowsWrite(tableName, "delete", row)) {
-                // Same table-agnostic message as `gateById`.
-                throw new LunoraError("FORBIDDEN", "delete denied by policy");
-            }
-
-            await reader.delete(id, tableName, deleteOptions);
-
-            return true;
-        };
-
-        const readById = (): Promise<null | Record<string, unknown>> =>
-            reader.findFirst(tableName, { ...readScope, ...scope, limit: 1, relationBaseWhere: relationReadFilter, where: { _id: id } });
-
-        if (where === undefined) {
-            return await erase(await readById());
-        }
-
-        // The caller's filter first, through the SQL path so it folds exactly as the page read did. A match is
-        // erased; a miss falls through to a by-id read ONLY so a delete-policy denial still fails loudly — a
-        // permitted row that left the filter is skipped, not removed from outside the scope of the erase.
-        const filtered = await reader.findFirst(tableName, {
-            ...readScope,
-            ...scope,
+        const row = await reader.findFirst(tableName, {
+            ...(gated ? { baseWhere: readBase(tableName).baseWhere } : {}),
+            ...(deleteOptions?.hard === true ? { includeDeleted: true } : {}),
             limit: 1,
             relationBaseWhere: relationReadFilter,
-            where: mergeBaseWhere(where, { _id: id }),
+            where: where === undefined ? { _id: id } : mergeBaseWhere(where, { _id: id }),
         });
 
-        if (filtered !== null) {
-            return await erase(filtered);
-        }
-
-        // Only a gated table has a delete policy to take on the fresh row; a policy-less row that left the
-        // caller's filter is simply skipped, so it is not worth the by-id read.
-        if (!gated) {
+        if (!row || isSoftDeleted(tableName, row, deleteOptions)) {
             return false;
         }
 
-        const row = await readById();
-
-        if (row && !isSoftDeleted(tableName, row, deleteOptions) && !allowsWrite(tableName, "delete", row)) {
+        if (gated && !allowsWrite(tableName, "delete", row)) {
+            // Same table-agnostic message as `gateById`.
             throw new LunoraError("FORBIDDEN", "delete denied by policy");
         }
 
-        return false;
+        await reader.delete(id, tableName, deleteOptions);
+
+        return true;
     };
 
     /**

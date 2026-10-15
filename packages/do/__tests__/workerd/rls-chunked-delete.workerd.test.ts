@@ -1,7 +1,8 @@
 /**
  * Chunked `deleteAll` / `deleteWhere` under `rls()` over the real `createShardCtxDb` writer on a live Durable Object's
  * SQLite. The writer publishes `deleteRereadTables`; the RLS wrapper re-locates the rows of those tables instead of
- * trusting the page image, so a row a set-null cascade or a delete trigger just made policy-denied is refused.
+ * trusting the page image, so a row a set-null cascade just made policy-denied is refused (a `deleteAll`), while a
+ * row a delete trigger pushed out of a `deleteWhere` filter is skipped — it is no longer a target of the erase.
  *
  * Not covered: a `.global()` table's re-read against real D1. The test worker binds no D1 database, so only the
  * published set is asserted for the global table; the page-to-delete race itself is covered with a fake writer in
@@ -122,14 +123,16 @@ describe("rls chunked deletes on workerd", () => {
         });
     });
 
-    it("refuses the row a delete trigger just locked, and keeps it", async () => {
+    it("skips the row a delete trigger just locked — it left the caller's filter — and keeps it", async () => {
         expect.assertions(3);
 
         await withWriter("items", async (writer) => {
             await writer.insert("items", { _id: "i1", nextId: "i2", state: "open" }, { allowExplicitId: true });
             await writer.insert("items", { _id: "i2", state: "open" }, { allowExplicitId: true });
 
-            await expect(eraseWith(writer, (db) => db.deleteWhere("items", { state: "open" }))).rejects.toMatchObject({ code: "FORBIDDEN" });
+            // Deleting i1 fires the trigger, which locks i2. i2 no longer matches `{ state: "open" }`, so the
+            // re-location's filtered read misses it and it is skipped (not deleted, not an abort).
+            await expect(eraseWith(writer, (db) => db.deleteWhere("items", { state: "open" }))).resolves.toStrictEqual({ deleted: 1 });
 
             await expect(writer.get("i1")).resolves.toBeNull();
 
