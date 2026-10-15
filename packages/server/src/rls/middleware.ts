@@ -265,11 +265,12 @@ interface DatabaseWriterLike {
      * `@lunora/shard-engine`'s `DatabaseWriterLike`).
      */
     deleteRereadTables?: ReadonlySet<string>;
+
     deleteWhere?: (tableName: string, where: WhereInput, options?: { limit?: number }) => Promise<{ deleted: number }>;
+
     explain: (tableName: string, args?: QueryArgs) => Promise<QueryPlan>;
     findFirst: (tableName: string, args?: QueryArgs) => Promise<Record<string, unknown> | null>;
     findFirstOrThrow: (tableName: string, args?: QueryArgs) => Promise<Record<string, unknown>>;
-
     findMany: (tableName: string, args?: QueryArgs) => Promise<QueryPage>;
 
     get: (id: string, expectedTable?: string) => Promise<Record<string, unknown> | null>;
@@ -280,8 +281,8 @@ interface DatabaseWriterLike {
      * rows the caller may read. Required for the same reason as `aggregate`.
      */
     groupBy: (tableName: string, options: GroupByArgs) => Promise<ReadonlyArray<{ key: Record<string, unknown>; value: null | number }>>;
-    insert: (tableName: string, document: Record<string, unknown>, options?: { clientId?: string }) => Promise<string>;
 
+    insert: (tableName: string, document: Record<string, unknown>, options?: { clientId?: string }) => Promise<string>;
     insertMany: (
         tableName: string,
         documents: ReadonlyArray<Record<string, unknown>>,
@@ -295,6 +296,14 @@ interface DatabaseWriterLike {
     ) => Promise<string[]>;
 
     /**
+     * Does the store currently hold an atomic write boundary open? Published by the writer (see
+     * `@lunora/shard-engine`'s `DatabaseWriterLike`). A chunked erase trusts the page image only while a
+     * mutation's serialized transaction is open; an action runs outside one, so every row is re-located.
+     * Absent ⇒ treated as "not in a transaction" (the conservative default).
+     */
+    inTransaction?: () => boolean;
+
+    /**
      * Optional table-aware lookup. The underlying writer (e.g. `@lunora/do`)
      * already knows the owning table of an id internally, so it can return
      * `{ row, tableName }` in a single round-trip. When present, the RLS wrapper
@@ -305,6 +314,7 @@ interface DatabaseWriterLike {
     lookupById?: (id: string, expectedTable?: string) => Promise<null | { row: Record<string, unknown>; tableName: string }>;
 
     patch: (id: string, patch: Record<string, unknown>, expectedTable?: string, options?: PatchWriteOptions) => Promise<void>;
+
     /** Conditional patch. Optional: a writer without an atomic conditional write omits it, and the wrapper refuses. */
     patchIf?: (
         tableName: string,
@@ -317,7 +327,6 @@ interface DatabaseWriterLike {
         expectedTable?: string,
     ) => Promise<{ patched: number }>;
     patchWhere?: (tableName: string, args: { patch: Record<string, unknown>; where: WhereInput }, options?: { limit?: number }) => Promise<{ patched: number }>;
-
     query: (tableName: string) => TableReaderLike;
 
     /**
@@ -367,8 +376,17 @@ interface DatabaseWriterLike {
      * traversal off.
      */
     relationEdges?: ReadonlyArray<RelationEdgeLike>;
+
     replace: (id: string, document: Record<string, unknown>, expectedTable?: string) => Promise<void>;
     restore?: (id: string, expectedTable?: string) => Promise<void>;
+
+    /**
+     * Soft-delete marker column per table, for tables declared `.softDelete()`. Published by the writer
+     * (see `@lunora/shard-engine`'s `DatabaseWriterLike`). A re-located row whose marker is already set is
+     * gone — the writer's delete is a no-op for it — so the chunked erase skips it instead of deleting and
+     * counting it.
+     */
+    softDeleteFields?: ReadonlyMap<string, string>;
 
     /**
      * Whole-shard erase. The RLS wrapper deliberately **fails this closed** rather
@@ -1021,14 +1039,14 @@ const wrapDatabase = (base: RlsDatabase, raw: RlsDatabase, steps: ReadonlyArray<
      * keeps the common case — a shard-local row that hits — at the ONE round-trip
      * the seam exists for, and charges the extra probes only to a miss.
      *
-     * `probeTable` narrows the FALLBACK probe set without pinning the lookup.
-     * `expectedTable` does both, which `deleteAll`/`deleteWhere` cannot use: a
-     * pinned table blocks the writer's global fallback and turns every delete on
-     * a `.global()` table into a silent no-op. Those callers know the table
-     * anyway (their ids came from that table's own filtered read), so they pass
-     * it here instead — one probe per row rather than one per policy-gated
-     * table, which is what put a chunked erase into workerd's 1000-subrequest
-     * ceiling partway through.
+     * `expectedTable` pins the lookup to one table (an id owned by another table
+     * resolves to "absent"); `probeTable` scopes only the FALLBACK probe set. A
+     * pin does NOT block the writer's global fallback: when `expectedTable` names
+     * a `.global()` table the engine still reaches its D1 row — `globalFallbackFor`
+     * allows the fall-through and re-applies the pin on the D1 writer — so
+     * `deleteAll`/`deleteWhere` pin `tableName` safely (their ids came from that
+     * table's own filtered read) and skip the per-policy-table probe fan-out that
+     * put a chunked erase into workerd's 1000-subrequest ceiling partway through.
      *
      * `row` is `null` when the id doesn't exist. `tableName` is `undefined` when
      * the row exists but isn't in any policy-gated table (no policy applies →
@@ -1151,11 +1169,46 @@ const wrapDatabase = (base: RlsDatabase, raw: RlsDatabase, steps: ReadonlyArray<
         return perform(raw, located.tableName);
     };
 
-    /** Re-locate one row of the gated `tableName` and delete it on its fresh image; false when it is already gone. */
-    const deleteLocated = async (id: string, tableName: string, deleteOptions: undefined | { hard: boolean }): Promise<boolean> => {
+    /**
+     * Is the row already soft-deleted, per the writer's published `softDeleteFields`? A forced physical delete
+     * (`{ hard: true }`) targets the row regardless of the marker, so it is never treated as gone. A table with
+     * no `.softDelete()`, or a writer that publishes no map, has no marker.
+     */
+    const isSoftDeleted = (tableName: string, row: Record<string, unknown>, deleteOptions: undefined | { hard: boolean }): boolean => {
+        if (deleteOptions?.hard === true) {
+            return false;
+        }
+
+        const field = base.softDeleteFields?.get(tableName);
+
+        return field !== undefined && row[field] !== null && row[field] !== undefined;
+    };
+
+    /**
+     * Re-locate one row of `tableName` and delete it on its fresh image; `false` when it is already gone.
+     *
+     * `gated` says whether the table carries a policy. A gated row is re-located through the unguarded `raw`
+     * (the evaluator must see the protected row) and its fresh image is re-checked; a policy-less row is
+     * re-located and deleted through the guarded `base`, exactly as the fast path deletes it. A row already
+     * soft-deleted counts as gone: the writer's delete is a no-op for it, so re-deleting would inflate the
+     * count and re-run the delete policy against a tombstone.
+     */
+    const deleteLocated = async (id: string, tableName: string, gated: boolean, deleteOptions: undefined | { hard: boolean }): Promise<boolean> => {
+        if (!gated) {
+            const existing = await base.get(id, tableName);
+
+            if (!existing || isSoftDeleted(tableName, existing, deleteOptions)) {
+                return false;
+            }
+
+            await base.delete(id, tableName, deleteOptions);
+
+            return true;
+        }
+
         const located = await findRowTable(id, tableName);
 
-        if (!located) {
+        if (!located || isSoftDeleted(tableName, located.row, deleteOptions)) {
             return false;
         }
 
@@ -1172,34 +1225,34 @@ const wrapDatabase = (base: RlsDatabase, raw: RlsDatabase, steps: ReadonlyArray<
     /**
      * Delete the rows of `tableName` a policy-scoped read just returned. `gateById` would `locateRow` each id
      * again (one `lookupById`, or a `get` plus a `findFirst` probe on a miss) to learn the row and its table; a
-     * chunked erase already holds both, so the delete verdict is taken on that row image instead. The verdict is
+     * chunked erase already holds both, so the delete verdict can be taken on that row image. The verdict is
      * still evaluated per row through `allowsWrite`, so a delete policy stricter than the read policy denies
      * exactly as before. A table with no policy runs the guarded `base`, as `gateById` does for an unlocated row.
-     * The image is the one read in the same call: inside a mutation the DO serialises writes, except for the
-     * tables `DatabaseWriterLike.deleteRereadTables` lists.
+     *
+     * The page image is only trustworthy while the store serialises writes. Inside a mutation the DO holds one
+     * open; an ACTION deliberately runs outside that boundary (its external I/O cannot be rolled back), and the
+     * `.global()` / cascade / trigger tables `DatabaseWriterLike.deleteRereadTables` lists can change under an
+     * `await` even inside a mutation. In either case a concurrent write could reassign a later row before its
+     * delete, so each row is re-located through {@link deleteLocated} instead of trusting the image.
      */
     const deleteReadRows = async (tableName: string, rows: ReadonlyArray<Record<string, unknown>>, hard?: boolean): Promise<number> => {
         const gated = policyTables.has(tableName);
         const writer = gated ? raw : base;
         const deleteOptions = hard === undefined ? undefined : { hard };
-        // Can the page image go stale before its delete? The writer lists the tables where it can, each reason
-        // conservative: a `.global()` table (rows shared across shards, and the global writer's own delete does not
-        // re-check policy); a table whose delete can reach a delete trigger (its handler patches a later row through
-        // the raw writer); a table whose delete cascades or sets null back to itself, directly or through other tables.
-        // Those re-locate every row (`gateById`'s lookup) instead of trusting the image.
-        const reread = gated && base.deleteRereadTables?.has(tableName) === true;
+        // Re-locate when the store is not mid-transaction (an action, or a writer that cannot report it), or when
+        // the writer lists this table as one whose page image can go stale (global / cascade / trigger).
+        const reread = base.inTransaction?.() !== true || base.deleteRereadTables?.has(tableName) === true;
         let deleted = 0;
 
         for (const row of rows) {
             const id = String(row["_id"]);
 
             // The image read before the page began may be stale (see `reread`): locate the row again. A row an
-            // earlier delete of this page already removed (a cascade, a trigger, another shard) is skipped without
-            // touching any writer: a pinned delete of an absent row would reach the guarded writer, which refuses a
-            // non-public table under `rls("required")`.
+            // earlier delete of this page already removed (a cascade, a trigger, another shard, a soft delete) is
+            // skipped without touching any writer.
             if (reread) {
                 // eslint-disable-next-line no-await-in-loop -- sequential, mirrors looped single deletes
-                if (await deleteLocated(id, tableName, deleteOptions)) {
+                if (await deleteLocated(id, tableName, gated, deleteOptions)) {
                     deleted += 1;
                 }
 
@@ -1216,7 +1269,8 @@ const wrapDatabase = (base: RlsDatabase, raw: RlsDatabase, steps: ReadonlyArray<
             deleted += 1;
         }
 
-        // Rows this call deleted: a row removed by an earlier delete of the page (cascade) is not counted.
+        // Rows this call deleted: a row an earlier delete of the page (cascade/trigger), a concurrent write, or an
+        // existing tombstone removed is not counted.
         return deleted;
     };
 
@@ -1323,9 +1377,9 @@ const wrapDatabase = (base: RlsDatabase, raw: RlsDatabase, steps: ReadonlyArray<
                     break;
                 }
 
-                // `deleteReadRows` pins the delete to `tableName`: the rows are provably this table's, so no
-                // per-row re-location is needed, and the engine probes only that table (a `.global()` pin
-                // falls straight through to D1) and can never land on another table's row with the same id.
+                // `deleteReadRows` pins the delete to `tableName`: the rows are provably this table's, so a
+                // re-location (when one is needed) probes only that table — a `.global()` pin still falls
+                // through to D1 — and can never land on another table's row with the same id.
                 // eslint-disable-next-line no-await-in-loop -- chunked by design: one policy-visible page at a time
                 deleted += await deleteReadRows(tableName, page, options?.hard);
 

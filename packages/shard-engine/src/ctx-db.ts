@@ -1961,6 +1961,24 @@ const deriveDeleteRereadTables = (schema: SchemaLike): Set<string> => {
     );
 };
 
+/**
+ * The soft-delete marker column per table, for tables declared `.softDelete()`. Published so a wrapper that
+ * re-locates a row before deleting it (the RLS chunked erase) can tell that an already-marked row is gone —
+ * the writer's delete is a no-op for it, so counting it would over-report and re-running the delete policy
+ * against the tombstone would be wrong. Metadata only: it names columns and reaches no row.
+ */
+const deriveSoftDeleteFields = (schema: SchemaLike): ReadonlyMap<string, string> => {
+    const fields = new Map<string, string>();
+
+    for (const [tableName, definition] of Object.entries(schema.tables)) {
+        if (definition.softDeleteMode) {
+            fields.set(tableName, definition.softDeleteMode.field);
+        }
+    }
+
+    return fields;
+};
+
 const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
     const { baselineSeq, onStalePatchDropped } = options;
     const { sql } = options;
@@ -1975,6 +1993,7 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
     const relationEdges = deriveRelationEdges(schema);
     const relationWrites = describeRelationWrites(schema, options.inTransaction);
     const deleteRereadTables = deriveDeleteRereadTables(schema);
+    const softDeleteFields = deriveSoftDeleteFields(schema);
 
     /**
      * This mutation's `_commitSeq`, allocated on first use and reused for every
@@ -4283,6 +4302,12 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
 
         /** Published so a chunked delete knows which tables cannot trust a page-wide row image — see `DatabaseWriterLike.deleteRereadTables`. */
         deleteRereadTables,
+
+        /** Published so a chunked delete can tell whether the store serialises writes right now — see `DatabaseWriterLike.inTransaction`. */
+        inTransaction,
+
+        /** Published so a chunked delete treats an already-soft-deleted row as gone — see `DatabaseWriterLike.softDeleteFields`. */
+        softDeleteFields,
 
         /** Published for the table facade's nested relation writes — see `DatabaseWriterLike.relationWrites`. */
         relationWrites,

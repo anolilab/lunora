@@ -32,6 +32,8 @@ interface CountingWriter {
     findMany: (tableName: string, args?: unknown) => Promise<{ continueCursor: null | string; isDone: boolean; page: Record<string, unknown>[] }>;
     get: (id: string) => Promise<Record<string, unknown> | null>;
     insert: (tableName: string, document: Record<string, unknown>) => Promise<string>;
+    /** Models a mutation's writer: inside a transaction, so an unlisted table takes the page-image fast path. */
+    inTransaction?: () => boolean;
     lookupById?: (id: string) => Promise<null | { row: Record<string, unknown>; tableName: string }>;
     patch: (id: string, patch: Record<string, unknown>) => Promise<void>;
     query: (tableName: string) => never;
@@ -70,6 +72,7 @@ const makeWriter = (tableCount: number, withTable: boolean): CountingWriter => {
         async get(id) {
             return id === TARGET_ID ? row : null;
         },
+        inTransaction: () => true,
         async insert() {
             return TARGET_ID;
         },

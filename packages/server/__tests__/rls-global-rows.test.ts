@@ -100,6 +100,9 @@ const createSplitWriter = (seed: ReadonlyArray<SeedRow>) => {
             return [];
         },
 
+        // The split writer models a mutation's writer: inside a transaction, so only listed tables re-locate.
+        inTransaction: () => true,
+
         async insert(_tableName: string, document: Record<string, unknown>) {
             return (document["_id"] as string | undefined) ?? "new-id";
         },
@@ -262,13 +265,14 @@ describe("rls — .global() rows addressed by id", () => {
  * The cost of the fallback above, bounded.
  *
  * A `.global()` row always misses `lookupById`, so every id falls through to the
- * probe path. `deleteAll`/`deleteWhere` must leave `expectedTable` unpinned —
- * pinning it blocks the writer's global fallback and makes every global delete a
- * silent no-op — and unpinned USED to mean "probe every policy-gated table", so a
- * chunked erase of N rows over a T-table schema issued N × T `findFirst` round
- * trips (2 + T subrequests per row) and hit workerd's 1000-subrequest ceiling
- * partway through an account deletion. Both callers know the table their ids came
- * from, so it rides along as a probe scope that pins nothing.
+ * probe path. `deleteAll`/`deleteWhere` pin `tableName` as `expectedTable`, which
+ * the engine still routes to D1 (`globalFallbackFor` allows the fall-through and
+ * re-applies the pin over there), so a global delete is never a silent no-op —
+ * and the pin keeps the probe set to that one table. Unpinned USED to mean "probe
+ * every policy-gated table", so a chunked erase of N rows over a T-table schema
+ * issued N × T `findFirst` round trips (2 + T subrequests per row) and hit
+ * workerd's 1000-subrequest ceiling partway through an account deletion. Both
+ * callers know the table their ids came from, so it rides along as a pin.
  */
 describe("rls — probe scope on chunked erases", () => {
     /** Three policy-gated tables; only `profiles` is ever erased. */

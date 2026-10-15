@@ -5894,6 +5894,7 @@ interface DatabaseWriterLike {
         allowExplicitId?: boolean;
         limit?: number;
     }) => Promise<string[]>;
+    inTransaction?: () => boolean;
     lookupById?: (id: string, expectedTable?: string) => Promise<null | {
         row: Record<string, unknown>;
         tableName: string;
@@ -5938,6 +5939,7 @@ interface DatabaseWriterLike {
     relationEdges?: ReadonlyArray<RelationEdgeLike>;
     replace: (id: string, document: Record<string, unknown>, expectedTable?: string) => Promise<void>;
     restore?: (id: string, expectedTable?: string) => Promise<void>;
+    softDeleteFields?: ReadonlyMap<string, string>;
     wipeShard?: (options?: {
         chunkSize?: number;
         exclude?: ReadonlyArray<string>;

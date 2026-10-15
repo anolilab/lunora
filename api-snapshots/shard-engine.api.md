@@ -681,6 +681,7 @@ interface DatabaseWriterLike {
         allowExplicitId?: boolean;
         limit?: number;
     }) => Promise<string[]>;
+    inTransaction?: () => boolean;
     lookupById?: (id: string, expectedTable?: string) => Promise<null | {
         row: Record<string, unknown>;
         tableName: string;
@@ -723,6 +724,7 @@ interface DatabaseWriterLike {
         allowExplicitId?: boolean;
     }) => Promise<void>;
     restore?: (id: string, expectedTable?: string) => Promise<void>;
+    softDeleteFields?: ReadonlyMap<string, string>;
     system?: SystemDatabaseReader;
     wipeShard?: (options?: {
         chunkSize?: number;

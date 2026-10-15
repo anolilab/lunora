@@ -816,7 +816,9 @@ export interface DatabaseWriterLike {
     >;
     count: (tableName: string, where?: RestrictableQueryOptions | WhereInput) => Promise<number>;
     delete: (id: string, expectedTable?: string, options?: { hard?: boolean }) => Promise<void>;
+
     deleteAll?: (tableName: string, options?: { chunkSize?: number; hard?: boolean }) => Promise<{ deleted: number }>;
+
     deleteMany?: (ids: ReadonlyArray<string>, options?: { limit?: number }, expectedTable?: string) => Promise<{ deleted: number }>;
 
     /**
@@ -835,7 +837,9 @@ export interface DatabaseWriterLike {
      * parameters, and the database's own plan for it, one line per step.
      */
     explain: (tableName: string, args?: QueryArgs) => Promise<QueryPlan>;
+
     findFirst: (tableName: string, args?: QueryArgs) => Promise<Record<string, unknown> | null>;
+
     findFirstOrThrow: (tableName: string, args?: QueryArgs) => Promise<Record<string, unknown>>;
     findMany: (tableName: string, args?: QueryArgs) => Promise<QueryPage>;
     get: (id: string, expectedTable?: string) => Promise<Record<string, unknown> | null>;
@@ -851,8 +855,23 @@ export interface DatabaseWriterLike {
         documents: ReadonlyArray<Record<string, unknown>>,
         options?: { allowExplicitId?: boolean; limit?: number },
     ) => Promise<string[]>;
-    lookupById?: (id: string, expectedTable?: string) => Promise<null | { row: Record<string, unknown>; tableName: string }>;
 
+    /**
+     * Does the host currently have an atomic write boundary open?
+     *
+     * Published so a wrapper that reads a page of rows and then deletes them can tell whether the page image
+     * can change under an `await`: inside a mutation the DO serialises writes inside one transaction, but an
+     * action deliberately runs OUTSIDE that boundary (its external I/O cannot be rolled back), so a
+     * concurrent write can reassign a later row before its delete. The RLS middleware's chunked erase
+     * re-locates every row whenever this is not `true`.
+     *
+     * A call-time read, not a flag captured at construction: the transaction opens AFTER the writer is built
+     * (a mutation dispatch wraps the handler), so only a live read reports the truth. Absent ⇒ treated as
+     * "not in a transaction" — the conservative direction, since trusting a stale image is the failure this
+     * exists to prevent.
+     */
+    inTransaction?: () => boolean;
+    lookupById?: (id: string, expectedTable?: string) => Promise<null | { row: Record<string, unknown>; tableName: string }>;
     normalizeId: (tableName: string, id: string) => null | string;
 
     patch: (id: string, patch: Record<string, unknown>, expectedTable?: string, options?: PatchWriteOptions) => Promise<void>;
@@ -881,6 +900,7 @@ export interface DatabaseWriterLike {
         id: string,
         args: { patch: Record<string, unknown>; verify?: PatchVerifier; where: WhereInput },
     ) => Promise<{ applied: boolean; doc: Record<string, unknown> | null }>;
+
     patchMany?: (
         patches: ReadonlyArray<{ id: string; patch: Record<string, unknown> }>,
         options?: { limit?: number },
@@ -891,7 +911,6 @@ export interface DatabaseWriterLike {
     rank: (tableName: string, indexName: string, options: RankOptions) => Promise<null | RankResult>;
     rankBefore?: (tableName: string, indexName: string, options: RankBeforeOptions) => Promise<RankBeforeResult>;
     rankPage: (tableName: string, indexName: string, options?: RankPageOptions) => Promise<RankPage>;
-
     rankPageRows?: (tableName: string, indexName: string, options?: RankPageOptions) => Promise<ShardRankPageResult>;
 
     /**
@@ -931,8 +950,19 @@ export interface DatabaseWriterLike {
 
     /** Per-relation facts the table facade needs for nested relation writes (`connect`/`disconnect`/`set`). */
     relationWrites?: RelationWriteMap;
+
     replace: (id: string, document: Record<string, unknown>, expectedTable?: string, options?: { allowExplicitId?: boolean }) => Promise<void>;
     restore?: (id: string, expectedTable?: string) => Promise<void>;
+
+    /**
+     * Soft-delete marker column per table, for tables declared `.softDelete()`. The writer's `delete`
+     * short-circuits (a no-op) when the row is already marked, so a wrapper that re-locates a row before
+     * deleting it reads this to treat an already-marked row as gone — otherwise a cascade that soft-deletes
+     * a later row of the same page would have that row counted again and its delete policy run against the
+     * tombstone. Absent for a table with no `.softDelete()` (nothing to mark). Metadata only: it names
+     * columns and reaches no row.
+     */
+    softDeleteFields?: ReadonlyMap<string, string>;
 
     /**
      * The system-table reader.

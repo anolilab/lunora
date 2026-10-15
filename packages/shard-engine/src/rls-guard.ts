@@ -204,6 +204,9 @@ const WRITER_METHOD_GATING = {
     insert: "loop-gated",
     insertMany: "loop-gated",
     insertManyUnsafe: "loop-gated",
+
+    /** Runtime transaction state, not a row op: names no table and reaches no row. Read by the RLS chunked erase. */
+    inTransaction: "ungated",
     lookupById: "id-gated",
     /** Pure id validator/parser — returns the id or `null`, reads no row. */
     normalizeId: "ungated",
@@ -238,6 +241,9 @@ const WRITER_METHOD_GATING = {
 
     /** Schema-derived metadata for the facade's nested relation writes: names tables and columns, reaches no row. */
     relationWrites: "ungated",
+
+    /** Schema-derived metadata: names marker columns, reaches no row. */
+    softDeleteFields: "ungated",
     replace: "id-gated",
     restore: "id-gated",
     /** The system-table reader: reserved tables, not user tables, so the per-table policy model does not apply. */

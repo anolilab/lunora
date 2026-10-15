@@ -74,7 +74,8 @@ const withWriter = async (name: string, run: (writer: Writer) => Promise<void>):
         const sql = { exec: state.storage.sql.exec.bind(state.storage.sql) } as never;
 
         runShardMigrations(sql, schema);
-        await run(createShardCtxDb({ schema, sql }));
+        // A mutation's writer: the transaction is open, so only listed tables re-locate (mirrors the DO dispatch).
+        await run(createShardCtxDb({ inTransaction: () => true, schema, sql }));
     });
 };
 
