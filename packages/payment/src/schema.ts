@@ -107,7 +107,6 @@ const usageEvents = defineTable({
     reportedToProvider: v.boolean(),
 })
     .index("by_idempotency", ["provider", "idempotencyKey"], { unique: true })
-    .index("by_reference_feature", ["referenceId", "featureId"])
     .index("by_reference_feature_created", ["referenceId", "featureId", "createdAt"])
     .index("by_reference_created", ["referenceId", "createdAt"]);
 

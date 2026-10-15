@@ -79,9 +79,6 @@ const readOptionalString = (row: PaymentRow, key: string): string | undefined =>
 
 const readNumber = (row: PaymentRow, key: string): number => (typeof row[key] === "number" ? row[key] : 0);
 
-/** Above this many features, one reference-wide period read beats one indexed read per feature. */
-const PER_FEATURE_READ_LIMIT = 8;
-
 const toFoldEvent = (row: PaymentRow): { createdAt: number; idempotencyKey: string; mode: "add" | "set"; quantity: number } => {
     return {
         createdAt: readNumber(row, "createdAt"),
@@ -438,12 +435,9 @@ export const createDatabasePaymentStore = (database: PaymentDatabase): PaymentSt
         sumUsage,
 
         sumUsageByFeature: async (referenceId, featureIds, since) => {
-            // Few features: one indexed range read each (`by_reference_feature_created`). Many: one
-            // range read of the reference's period (`by_reference_created`), bucketed in memory.
-            if (featureIds.length <= PER_FEATURE_READ_LIMIT) {
-                return new Map(await Promise.all(featureIds.map(async (featureId) => [featureId, await sumUsage(referenceId, featureId, since)] as const)));
-            }
-
+            // ONE range read of the reference's period (`by_reference_created`), bucketed in memory, so
+            // every feature's total in a balances response comes from the same ledger snapshot; a
+            // read per feature could interleave with a usage write and mix two states.
             const { rows } = await database.findMany(PAYMENT_TABLES.usageEvents, { createdAt: { gte: since }, referenceId });
             const buckets = new Map<string, ReturnType<typeof toFoldEvent>[]>(featureIds.map((featureId) => [featureId, []]));
 
