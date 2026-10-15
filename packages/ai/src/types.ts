@@ -26,7 +26,9 @@ export interface AiBindingLike {
  * Calling it with a model id yields an AI SDK {@link LanguageModel}; the
  * optional `textEmbeddingModel` factory yields an {@link EmbeddingModel}.
  * Typed structurally so `@lunora/ai` neither re-declares the provider's full
- * surface nor hard-pins its exact type across minor releases.
+ * surface nor hard-pins its exact type across minor releases. It is the shape of
+ * the lazy delegate `ctx.ai.workersai` exposes, so only the callable factory and
+ * `textEmbeddingModel` are part of it.
  * @experimental
  */
 export interface WorkersAiProviderLike {
@@ -283,7 +285,7 @@ export type EmbeddingModelInput = EmbeddingModel | string;
  * so both accept Workers AI and bring-your-own providers. Feed the resolved model
  * to the AI SDK functions re-exported from `@lunora/ai` (`generateText`,
  * `streamText`, `generateObject`, `embed`, …); `run` is the raw binding escape
- * hatch, and `workersai` is the underlying provider for direct model access.
+ * hatch, and `workersai` is the lazy provider delegate for direct model access.
  * @experimental
  */
 export interface LunoraAi {
@@ -314,6 +316,14 @@ export interface LunoraAi {
      * binding was supplied, or if the runtime's binding has no `websearch()`.
      */
     websearch: (query: string, options?: AiWebSearchOptions) => Promise<AiWebSearchResult>;
-    /** The underlying Workers AI provider — `ai.workersai("@cf/...")` for a raw model. */
+
+    /**
+     * A lazy delegate to the Workers AI provider: call it as
+     * `ai.workersai("@cf/…")` for a raw language model, or use
+     * `ai.workersai.textEmbeddingModel("@cf/…")` for embeddings. The provider
+     * module loads on first use, so only the callable factory and
+     * `textEmbeddingModel` are exposed — the rest of the `createWorkersAI`
+     * factories (image, transcription, speech, …) are not part of this surface.
+     */
     workersai: WorkersAiProviderLike;
 }

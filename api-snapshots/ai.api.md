@@ -239,6 +239,48 @@ Re-exported from `ai` — signature tracked at its source.
 
 Re-exported from `@ai-sdk/provider-utils` — signature tracked at its source.
 
+## `@lunora/ai/create`
+
+### `AiBindingLike` (interface)
+
+_Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
+
+### `AiWebSearchItem` (interface)
+
+_Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
+
+### `AiWebSearchProvider` (type)
+
+_Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
+
+### `D` (const)
+
+Re-exported from `@lunora/ai` — signature tracked in that section.
+
+### `LunoraAi` (interface)
+
+_Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
+
+### `M` (interface)
+
+Re-exported from `@lunora/ai` — signature tracked in that section.
+
+### `a` (interface)
+
+Re-exported from `@lunora/ai` — signature tracked in that section.
+
+### `createAi` (const)
+
+_Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
+
+### `estimateModelCost` (const)
+
+_Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
+
+### `l` (const)
+
+_Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
+
 ## `@lunora/ai/rag`
 
 ### `BatchRerankerOptions` (interface)
@@ -473,10 +515,11 @@ _Tagged `@experimental` — signature not tracked; churn here does not fail the 
 ```ts
 interface RagVectorStore {
     capabilities: RagVectorStoreCapabilities;
-    deleteByIds: (ids: ReadonlyArray<string>, namespace?: string) => Promise<unknown>;
+    deleteByIds: (ids: ReadonlyArray<string>, namespace?: string, operation?: object, afterDelete?: () => Promise<void>) => Promise<unknown>;
     getByIds: (ids: ReadonlyArray<string>, namespace?: string) => Promise<ReadonlyArray<RagVectorRecord>>;
     query: (input: RagVectorQueryInput) => Promise<RagVectorMatches>;
-    upsert: (input: RagVectorUpsertInput) => Promise<unknown>;
+    upsert: (input: RagVectorUpsertInput, operation?: object) => Promise<unknown>;
+    upsertMany?: (inputs: ReadonlyArray<RagVectorUpsertInput>, operation?: object) => Promise<unknown>;
 }
 ```
 
@@ -484,6 +527,7 @@ interface RagVectorStore {
 
 ```ts
 interface RagVectorStoreCapabilities {
+    deferredDelete?: boolean;
     maxDimensions: number | false;
     maxIdBytes: number | false;
     maxMetadataBytes: number | false;

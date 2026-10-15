@@ -5,6 +5,15 @@ import { buildGlobalHelpers, buildSchedulerHelper, buildStorageHelpers } from ".
 import buildImportLines from "./emit/app-imports";
 import { buildBaseWorkerOptions, buildWorkerOptionLines } from "./emit/app-worker-options";
 
+/** The per-`env` identity memo store an assembled worker owns; emitted only with `.auth()`. */
+const identityMemoStoreType = (hasAuth: boolean): string =>
+    hasAuth
+        ? `
+/** The identity memo per \`env\` object, owned by one assembled worker. */
+type IdentityMemoStore = WeakMap<object, ReturnType<typeof memoizeIdentity>>;
+`
+        : "";
+
 /** The `export type { ... }` list — only the declaration types that were emitted. */
 const buildExportedTypes = (options: ResolvedAppOptions): string =>
     [
@@ -75,7 +84,9 @@ const emitApp = (rawOptions: EmitAppOptions): string => {
     const workerOptionLines = buildWorkerOptionLines(options);
 
     // The auth lazy-init dance is woven through `build()` and `buildWorkerOptions`.
-    const authState = hasAuth ? `        let auth: LunoraAuth | null = null;\n        let authInit: Promise<void> | null = null;\n` : "";
+    const authState = hasAuth
+        ? `        let auth: LunoraAuth | null = null;\n        let authInit: Promise<void> | null = null;\n        // One memo per env for THIS assembled worker: a framework-hosted worker rebuilds its options per\n        // request and must reuse it, but a second \`assemble()\` has its own auth closure and must not share.\n        const identityMemos: IdentityMemoStore = new WeakMap();\n`
+        : "";
     const ensureAuthBlock = hasAuth
         ? `
         const initAuth = async (env: Env): Promise<void> => {
@@ -132,8 +143,8 @@ const emitApp = (rawOptions: EmitAppOptions): string => {
 `
         : "";
     const ensureAuthCall = hasAuth ? `\n                await ensureAuth(env);` : "";
-    const getAuthArgument = hasAuth ? `() => auth` : `() => null`;
-    const getAuthParameter = hasAuth ? `getAuth: () => LunoraAuth | null` : `_getAuth: () => null`;
+    const getAuthArgument = hasAuth ? `() => auth, identityMemos` : `() => null`;
+    const getAuthParameter = hasAuth ? `getAuth: () => LunoraAuth | null, identityMemos: IdentityMemoStore` : `_getAuth: () => null`;
 
     // The underlying `LunoraWorker` factory. With a framework adapter present,
     // `.buildFrameworkWorker(host)` passes a host and composition routes through
@@ -184,16 +195,16 @@ type Selector<Env, T> = (env: Env) => T | undefined;
 
 /** The generated \`createShardDO\` config — \`.observability()\`, \`.maxRelationKeys()\` and the long-tail \`.ai()\` / \`.kv()\` / … methods pass straight through to it. */
 type ShardConfig = NonNullable<Parameters<typeof createShardDO>[0]>;
-${
-    options.jurisdiction
-        ? `
+${identityMemoStoreType(hasAuth)}${
+        options.jurisdiction
+            ? `
 // Module scope, so every isolate loading this script (the worker and each Durable
 // Object class it exports) knows the schema's jurisdiction before a request runs.
 // \`@lunora/mail\` reads it to pin its shard RPC like every other DO path.
 declareAppJurisdiction(${JSON.stringify(options.jurisdiction)});
 `
-        : ""
-}
+            : ""
+    }
 ${declarationBlocks.join("\n\n")}${declarationBlocks.length > 0 ? "\n\n" : ""}/** The composed app: a Cloudflare module worker (\`fetch\` / \`scheduled\` / optional \`email\`) plus the \`ShardDO\` class binding. */
 interface ComposedApp extends LunoraWorker {
     /** Cloudflare Email Routing entry — present only when \`.onEmail(...)\` was configured. */

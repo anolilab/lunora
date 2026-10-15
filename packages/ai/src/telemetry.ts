@@ -1,5 +1,4 @@
 import type { LanguageModel, LanguageModelMiddleware } from "ai";
-import { wrapLanguageModel } from "ai";
 
 import type { AiSpan, AiTelemetry, AiTracer } from "./types";
 import type { CallOutcome } from "./usage";
@@ -129,14 +128,42 @@ const usageMiddleware = (modelId: string, { metrics, trace = noopTracer }: AiTel
  * when the provider reports a different internal id. Without telemetry — or for
  * a bare model-id string, which has nothing to wrap — the model passes through.
  */
+// eslint-disable-next-line sonarjs/function-return-type -- every arm returns LanguageModel; heuristic false-positive on the union
 const instrumentModel = (model: LanguageModel, telemetry: AiTelemetry | undefined, requestedId?: string): LanguageModel => {
-    let instrumented: LanguageModel = model;
-
-    if (telemetry !== undefined && typeof model !== "string") {
-        instrumented = wrapLanguageModel({ middleware: usageMiddleware(requestedId ?? modelIdOf(model) ?? "unknown", telemetry), model });
+    if (telemetry === undefined || typeof model === "string") {
+        return model;
     }
 
-    return instrumented;
+    const middleware = usageMiddleware(requestedId ?? modelIdOf(model) ?? "unknown", telemetry);
+    // `wrapLanguageModel` lives in the `ai` root, which is a ~720 KB barrel: load it on the
+    // first call (not at module load) so a Worker that never calls a model never evaluates it.
+    let wrapped: Promise<Extract<LanguageModel, { specificationVersion: "v4" }>> | undefined;
+
+    const resolve = async () => {
+        wrapped ??= import("ai").then(
+            ({ wrapLanguageModel }) => wrapLanguageModel({ middleware, model }) as never,
+            (error: unknown) => {
+                wrapped = undefined;
+
+                throw error;
+            },
+        );
+
+        return wrapped;
+    };
+    const base = model as Extract<LanguageModel, { specificationVersion: "v4" }>;
+
+    return {
+        doGenerate: async (options) => resolve().then((m) => m.doGenerate(options)),
+        doStream: async (options) => resolve().then((m) => m.doStream(options)),
+        modelId: base.modelId,
+        provider: base.provider,
+        // `wrapLanguageModel` normalises any model to v4, so the delegate reports what it returns.
+        specificationVersion: "v4",
+        get supportedUrls() {
+            return resolve().then((m) => m.supportedUrls);
+        },
+    };
 };
 
 export default instrumentModel;

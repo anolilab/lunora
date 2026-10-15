@@ -339,7 +339,7 @@ const emitAiFragments = (): CapabilityShardFragments => {
         // auto-reconciles); the thunk lets a caller point it elsewhere or inject
         // a double in tests.
         configField: `\n    ai?: (env: Record<string, unknown>) => AiBindingLike;`,
-        importLines: [`import type { AiBindingLike, LunoraAi } from "@lunora/ai";`, `import { createAi } from "@lunora/ai";`],
+        importLines: [`import type { AiBindingLike, LunoraAi } from "@lunora/ai/create";`, `import { createAi } from "@lunora/ai/create";`],
         stub: "",
     };
 };

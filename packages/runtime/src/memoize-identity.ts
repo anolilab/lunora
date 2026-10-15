@@ -116,6 +116,9 @@ const DEFAULT_TTL_MS = 5000;
 /** Default cache size — bounded so a long-lived isolate can't grow one forever. */
 const DEFAULT_MAX_ENTRIES = 500;
 
+/** How many of the oldest entries a miss on a full cache inspects for expiry before evicting. */
+const EXPIRY_SWEEP_LIMIT = 32;
+
 /**
  * The credential a request authenticates with — the DEFAULT cache key.
  *
@@ -151,6 +154,21 @@ const credentialKey = (request: Request): string | undefined => {
     return `${authorization}\u0000${cookie}`;
 };
 
+/** The credential expiry (epoch ms) an identity declares: `expiresAtMs`, else the JWT `exp` (seconds). */
+const identityExpiryMs = (identity: Awaited<ReturnType<IdentityResolver>>): number | undefined => {
+    if (!identity) {
+        return undefined;
+    }
+
+    const { exp, expiresAtMs } = identity;
+
+    if (typeof expiresAtMs === "number" && Number.isFinite(expiresAtMs)) {
+        return expiresAtMs;
+    }
+
+    return typeof exp === "number" && Number.isFinite(exp) ? exp * 1000 : undefined;
+};
+
 /**
  * Memoize a resolver **across requests**, keyed on the presented credential, for
  * `ttlMs`.
@@ -177,6 +195,11 @@ const memoizeIdentity = (resolver: IdentityResolver, options: MemoizeIdentityOpt
     const keyOf = options.cacheKey ?? credentialKey;
     const perRequest = memoizeIdentityPerRequest(resolver);
 
+    // A zero window can never hit, so keep no cross-request map at all.
+    if (ttlMs <= 0) {
+        return perRequest;
+    }
+
     // Insertion-ordered, so evicting the first key evicts the oldest entry.
     const cache = new Map<string, { expiresAt: number; value: ReturnType<IdentityResolver> }>();
 
@@ -201,17 +224,67 @@ const memoizeIdentity = (resolver: IdentityResolver, options: MemoizeIdentityOpt
             return hit.value;
         }
 
+        // Drop the expired entry on read and, at capacity, sweep a bounded number of the OLDEST
+        // entries (insertion order) so dead entries never push a still-live credential out through
+        // oldest-first eviction. The bound keeps a miss on a full cache at constant cost instead of a
+        // scan of every live entry.
+        if (hit) {
+            cache.delete(key);
+        }
+
+        if (cache.size >= maxEntries) {
+            let inspected = 0;
+
+            for (const [staleKey, stale] of cache) {
+                if (inspected >= EXPIRY_SWEEP_LIMIT) {
+                    break;
+                }
+
+                inspected += 1;
+
+                if (stale.expiresAt <= now) {
+                    cache.delete(staleKey);
+                }
+            }
+        }
+
         const pending = Promise.resolve(perRequest(request, env, context));
+        const entry = { expiresAt: now + ttlMs, value: pending };
 
         // A rejected verification must not be cached — the next request has to retry
         // rather than inherit a transient failure for the whole TTL.
-        pending.catch(() => {
-            if (cache.get(key)?.value === pending) {
-                cache.delete(key);
-            }
+        pending
+            .then((identity) => {
+                // An entry never outlives the session it describes: a refreshed session
+                // carries a later expiry, and serving the old identity past its own
+                // expiry would answer TOKEN_EXPIRED for a credential that is valid again.
+                // An anonymous result is never kept across requests: for a request that
+                // carries a credential it is either a lapsed session or a failed lookup
+                // (the resolver cannot tell them apart), and caching it would serve every
+                // retry as anonymous for the whole window. The per-request memo keeps it.
+                if (identity === null) {
+                    if (cache.get(key) === entry) {
+                        cache.delete(key);
+                    }
 
-            return undefined;
-        });
+                    return undefined;
+                }
+
+                const expiry = identityExpiryMs(identity);
+
+                if (expiry !== undefined && expiry < entry.expiresAt) {
+                    entry.expiresAt = expiry;
+                }
+
+                return undefined;
+            })
+            .catch(() => {
+                if (cache.get(key)?.value === pending) {
+                    cache.delete(key);
+                }
+
+                return undefined;
+            });
 
         // `Map.set` on an EXISTING key keeps its original insertion position, so a
         // refreshed hot credential would stay at the old end of the iteration order and
@@ -220,7 +293,7 @@ const memoizeIdentity = (resolver: IdentityResolver, options: MemoizeIdentityOpt
         // insertion order as recency.
         cache.delete(key);
         evictOldestEntry(cache, maxEntries);
-        cache.set(key, { expiresAt: now + ttlMs, value: pending });
+        cache.set(key, entry);
 
         return pending;
     };

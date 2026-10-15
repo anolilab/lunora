@@ -1,4 +1,4 @@
-import { createAi } from "@lunora/ai";
+import { createAi } from "@lunora/ai/create";
 // eslint-disable-next-line import/no-extraneous-dependencies -- @lunora/dispatch is a devDependency on purpose: packem inlines it into this bundle, so it is not a published runtime dep
 import { createDispatchRunner } from "@lunora/dispatch";
 

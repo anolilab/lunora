@@ -64,10 +64,23 @@ interface VectorUpsertInputLike {
  * wherever a function taking fewer parameters is expected.
  */
 interface VectorSearchLike {
-    deleteByIds: (indexName: string, ids: ReadonlyArray<string>, namespace?: string) => Promise<void>;
+    /** Set when `deleteByIds` honours its `operation` and `afterDelete` arguments. */
+    deferredDelete?: boolean;
+    deleteByIds: (indexName: string, ids: ReadonlyArray<string>, namespace?: string, operation?: object, afterDelete?: () => Promise<void>) => Promise<void>;
     getByIds: (indexName: string, ids: ReadonlyArray<string>, namespace?: string) => Promise<ReadonlyArray<VectorRecordLike>>;
     query: (indexName: string, input: VectorQueryInputLike) => Promise<VectorMatchesLike>;
-    upsert: (indexName: string, input: VectorUpsertInputLike) => Promise<void>;
+    upsert: (indexName: string, input: VectorUpsertInputLike, operation?: object) => Promise<void>;
+
+    /**
+     * Batch form of `upsert` (at most 1000 inputs, one remote call). Optional so
+     * existing implementors keep compiling; `@lunora/ai`'s RAG indexer uses it
+     * when present. The optional `operation` token on `upsert`/`upsertMany`
+     * groups deferred writes: once one fails, later deferred writes carrying the
+     * same token are skipped; `deleteByIds` with a token is deferred and
+     * guarded the same way, and its optional `afterDelete` hook runs right after
+     * the delete (inline order when there is no token) inside that same closure.
+     */
+    upsertMany?: (indexName: string, inputs: ReadonlyArray<VectorUpsertInputLike>, operation?: object) => Promise<void>;
     upsertNow: (indexName: string, input: VectorUpsertInputLike) => Promise<void>;
 }
 
@@ -202,6 +215,34 @@ const createContextVectors = (lunora: LunoraVectors, options?: CreateContextVect
 
     const deferAfterCommit = options?.deferAfterCommit;
 
+    // Deferred writes run after the handler has returned, so a failure cannot
+    // reach the code that queued it. A caller that passes an `operation` token
+    // (an opaque object, one per logical operation such as a RAG `index()`
+    // call) gets its later deferred writes skipped once one of them fails: a
+    // RAG index queues its chunk #0 (the bookkeeping that marks a document
+    // complete) last, and writing it after a failed batch would make a partial
+    // index look finished. A skipped write rethrows the original error so the
+    // queue logs it. Writes without a token, or with another token, are
+    // independent and run as before.
+    const failedOperations = new WeakMap<object, { error: unknown }>();
+    const guardDeferred = (work: () => Promise<void>, operation?: object) => async (): Promise<void> => {
+        const failure = operation === undefined ? undefined : failedOperations.get(operation);
+
+        if (failure !== undefined) {
+            throw failure.error;
+        }
+
+        try {
+            await work();
+        } catch (error) {
+            if (operation !== undefined) {
+                failedOperations.set(operation, { error });
+            }
+
+            throw error;
+        }
+    };
+
     const write = async (indexName: string, input: VectorUpsertInputLike, namespace: string | undefined): Promise<void> => {
         await lunora.upsert(indexName, {
             embed: input.embed,
@@ -219,15 +260,27 @@ const createContextVectors = (lunora: LunoraVectors, options?: CreateContextVect
     const upsert =
         deferAfterCommit === undefined
             ? upsertNow
-            : async (indexName: string, input: VectorUpsertInputLike): Promise<void> => {
+            : async (indexName: string, input: VectorUpsertInputLike, operation?: object): Promise<void> => {
                   // Resolved HERE, not in the deferred closure: `resolveNamespace`
                   // throws for a sharded index reached from the root instance, and
                   // that error belongs to the handler that made the call — thrown
                   // after the commit it is only a log line.
                   const namespace = resolveNamespace(indexName, input.namespace);
 
-                  await deferAfterCommit(async () => write(indexName, input, namespace));
+                  await deferAfterCommit(guardDeferred(async () => write(indexName, input, namespace), operation));
               };
+
+    const upsertMany = async (indexName: string, inputs: ReadonlyArray<VectorUpsertInputLike>, operation?: object): Promise<void> => {
+        // Resolved up front, like `upsert`: a root-instance error must reach the caller.
+        const resolved = inputs.map((input) => {
+            return { embed: input.embed, id: input.id, input: input.input, metadata: input.metadata, namespace: resolveNamespace(indexName, input.namespace) };
+        });
+        const send = async (): Promise<void> => {
+            await lunora.upsertMany(indexName, resolved);
+        };
+
+        await (deferAfterCommit === undefined ? send() : deferAfterCommit(guardDeferred(send, operation)));
+    };
 
     // Shared by `getByIds` and `deleteByIds`: fetch the raw records and, when
     // `namespace` is resolved (non-undefined) for this call, keep only the
@@ -250,25 +303,35 @@ const createContextVectors = (lunora: LunoraVectors, options?: CreateContextVect
     };
 
     return {
-        deleteByIds: async (indexName: string, ids: ReadonlyArray<string>, namespace?: string): Promise<void> => {
+        deferredDelete: true,
+        deleteByIds: async (
+            indexName: string,
+            ids: ReadonlyArray<string>,
+            namespace?: string,
+            operation?: object,
+            afterDelete?: () => Promise<void>,
+        ): Promise<void> => {
             const resolved = resolveNamespace(indexName, namespace);
+            const remove = async (): Promise<void> => {
+                const matching = resolved === undefined ? undefined : await getMatchingRecords(indexName, ids, resolved);
 
-            if (resolved === undefined) {
-                await lunora.deleteByIds(indexName, ids);
+                if (matching === undefined) {
+                    await lunora.deleteByIds(indexName, ids);
+                } else if (matching.length > 0) {
+                    await lunora.deleteByIds(
+                        indexName,
+                        matching.map((record) => record.id),
+                    );
+                }
 
-                return;
-            }
+                // Runs inside the same guarded closure, so it is skipped with the delete.
+                await afterDelete?.();
+            };
 
-            const matching = await getMatchingRecords(indexName, ids, resolved);
-
-            if (matching.length === 0) {
-                return;
-            }
-
-            await lunora.deleteByIds(
-                indexName,
-                matching.map((record) => record.id),
-            );
+            // With an `operation` token the delete joins that operation's deferred
+            // writes (after the ones queued so far, skipped if one failed);
+            // without one it runs inline, as before.
+            await (operation !== undefined && deferAfterCommit !== undefined ? deferAfterCommit(guardDeferred(remove, operation)) : remove());
         },
         getByIds: async (indexName: string, ids: ReadonlyArray<string>, namespace?: string): Promise<ReadonlyArray<VectorRecordLike>> => {
             const resolved = resolveNamespace(indexName, namespace);
@@ -304,6 +367,7 @@ const createContextVectors = (lunora: LunoraVectors, options?: CreateContextVect
             };
         },
         upsert,
+        upsertMany,
         upsertNow,
     };
 };

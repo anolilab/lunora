@@ -15,7 +15,7 @@ const emitVectorFragments = (
     const hasShardedVectors = shardedIndexNames.length > 0;
     const vectorsMissing = "ctx.vectors: no vectors configured. Pass `vectors` to createShardDO().";
     const vectorsStub = hasVectorIndexes
-        ? renderThrowingStub("vectorsStub: VectorSearchLike", vectorsMissing, ["deleteByIds", "getByIds", "query", "upsert", "upsertNow"])
+        ? renderThrowingStub("vectorsStub: VectorSearchLike", vectorsMissing, ["deleteByIds", "getByIds", "query", "upsert", "upsertMany", "upsertNow"])
         : "";
 
     // Vectorize indexes are account-global — a `.shardBy()` table's auto-sync

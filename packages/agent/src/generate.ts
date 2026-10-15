@@ -388,6 +388,16 @@ const COMPACTION_SYSTEM =
     "coherently. Write it as notes for the assistant, not a reply to the user. No preamble.";
 
 /**
+ * Appended to {@link COMPACTION_SYSTEM} on an incremental update, where the
+ * conversation already carries a brief of the earlier turns. Without it the
+ * summarizer may condense only the newly aged-out messages and overwrite the
+ * stored brief, silently dropping facts from every earlier turn.
+ */
+const COMPACTION_MERGE_SYSTEM =
+    " An existing brief of the earlier conversation is included above. UPDATE that brief: keep every still-relevant fact " +
+    "from it and fold in the newly aged-out messages. Do not replace it with a summary of only the new messages.";
+
+/**
  * Build the production history-compaction seam over AI SDK `generateText`: it
  * summarizes the older conversation messages under {@link COMPACTION_SYSTEM} and
  * returns the brief. Wired by `compileAgentWorkflow` and called inside the loop's
@@ -395,12 +405,12 @@ const COMPACTION_SYSTEM =
  */
 const createCompact =
     (): AgentCompact =>
-    async ({ env, messages, model }) => {
+    async ({ env, messages, model, previousSummary }) => {
         const ai = await loadAi();
         const { text } = await ai.generateText({
             messages,
             model: resolveAgentModel(model, env),
-            system: COMPACTION_SYSTEM,
+            system: previousSummary === undefined ? COMPACTION_SYSTEM : `${COMPACTION_SYSTEM}${COMPACTION_MERGE_SYSTEM}`,
         });
 
         return text.trim();

@@ -1,5 +1,5 @@
-import type { AiBindingLike, LunoraAi } from "@lunora/ai";
-import { createAi } from "@lunora/ai";
+import type { AiBindingLike, LunoraAi } from "@lunora/ai/create";
+import { createAi } from "@lunora/ai/create";
 
 /**
  * The `ctx.ai` facade over the Worker's `AI` binding, or `undefined` when the

@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import type { SchemaLike } from "../../src/vectors/context";
 import { createContextVectors, createVectorSyncHook } from "../../src/vectors/context";
@@ -192,6 +192,25 @@ describe("upsert -> query end-to-end against a structural Vectorize fake", () =>
         expect(matches.count).toBe(1);
         expect(matches.matches[0]).toMatchObject({ id: "row-1", metadata: { title: "Greeting" } });
         expect(matches.matches[0]?.score).toBeGreaterThan(0);
+    });
+
+    it("createContextVectors: upsertMany writes the whole batch in one binding call", async () => {
+        expect.assertions(2);
+
+        const index = createStatefulVectorizeIndex();
+        const spy = vi.spyOn(index, "upsert");
+        const context = createContextVectors(createVectors({ indexes: { docs: index } }));
+
+        await context.upsertMany?.("docs", [
+            { embed, id: "row-1", input: "hello world" },
+            { embed, id: "row-2", input: "bye" },
+        ]);
+
+        expect(spy).toHaveBeenCalledTimes(1);
+
+        const records = await context.getByIds("docs", ["row-1", "row-2"]);
+
+        expect(records.map((record) => record.id)).toEqual(["row-1", "row-2"]);
     });
 
     it("createContextVectors: deleteByIds removes a row from subsequent query results", async () => {

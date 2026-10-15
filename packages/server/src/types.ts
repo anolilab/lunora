@@ -2015,8 +2015,18 @@ interface VectorSearchReader<IndexName extends string = string> {
  * `db.delete` on a vectorized table auto-propagates the matching `deleteByIds`.
  */
 interface VectorSearch<IndexName extends string = string> extends VectorSearchReader<IndexName> {
-    deleteByIds: (indexName: IndexName, ids: ReadonlyArray<string>) => Promise<void>;
-    upsert: (indexName: IndexName, input: VectorUpsertInput) => Promise<void>;
+    /** Set when `deleteByIds` honours its `operation` and `afterDelete` arguments. */
+    deferredDelete?: boolean;
+    deleteByIds: (indexName: IndexName, ids: ReadonlyArray<string>, namespace?: string, operation?: object, afterDelete?: () => Promise<void>) => Promise<void>;
+    upsert: (indexName: IndexName, input: VectorUpsertInput, operation?: object) => Promise<void>;
+
+    /**
+     * Batch form of `upsert` (at most 1000 inputs, one remote call). Optional so
+     * existing implementors keep compiling. The optional `operation` token (on
+     * both `upsert` and `upsertMany`) groups deferred writes: once one fails,
+     * later deferred writes carrying the same token are skipped.
+     */
+    upsertMany?: (indexName: IndexName, inputs: ReadonlyArray<VectorUpsertInput>, operation?: object) => Promise<void>;
     upsertNow: (indexName: IndexName, input: VectorUpsertInput) => Promise<void>;
 }
 
