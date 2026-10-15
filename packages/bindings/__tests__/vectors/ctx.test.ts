@@ -76,6 +76,52 @@ describe("createContextVectors", () => {
         expect(index.upsert).toHaveBeenCalledWith([{ id: "a", metadata: undefined, namespace: undefined, values: [5] }]);
     });
 
+    it("skips deferred writes queued after a failed one, so a trailing bookkeeping write never lands", async () => {
+        expect.assertions(3);
+
+        let calls = 0;
+        const index = fakeIndex({
+            upsert: vi.fn<VectorizeIndexLike["upsert"]>(async (vectors): Promise<VectorizeUpsertMutation> => {
+                calls += 1;
+
+                if (calls === 2) {
+                    throw new Error("batch 2 failed");
+                }
+
+                return { mutationId: `upsert-${String(vectors.length)}` };
+            }),
+        });
+        const lunora = createVectors({ indexes: { docs: index } });
+        const queued: (() => Promise<void>)[] = [];
+        const context = createContextVectors(lunora, {
+            deferAfterCommit: async (work) => {
+                queued.push(work);
+            },
+        });
+        const embed = async (value: string): Promise<ReadonlyArray<number>> => [value.length];
+
+        await context.upsertMany?.("docs", [{ embed, id: "batch-1", input: "a" }]);
+        await context.upsertMany?.("docs", [{ embed, id: "batch-2", input: "b" }]);
+        await context.upsertMany?.("docs", [{ embed, id: "chunk-0", input: "c" }]);
+
+        // The queue runs them in order and contains each failure, as `flushAfterCommit` does.
+        const outcomes: string[] = [];
+
+        for (const work of queued) {
+            try {
+                // eslint-disable-next-line no-await-in-loop -- ordered replay, like the shard's queue
+                await work();
+                outcomes.push("fulfilled");
+            } catch {
+                outcomes.push("rejected");
+            }
+        }
+
+        expect(outcomes).toStrictEqual(["fulfilled", "rejected", "rejected"]);
+        expect(index.upsert).toHaveBeenCalledTimes(2);
+        expect(index.upsert).not.toHaveBeenCalledWith([expect.objectContaining({ id: "chunk-0" })]);
+    });
+
     it("resolves the namespace before deferring, so a root-instance misuse throws to the caller", async () => {
         expect.assertions(2);
 

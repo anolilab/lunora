@@ -209,6 +209,29 @@ const createContextVectors = (lunora: LunoraVectors, options?: CreateContextVect
 
     const deferAfterCommit = options?.deferAfterCommit;
 
+    // Deferred writes run after the handler has returned, so a failure cannot
+    // reach the code that queued it. Later writes queued through this facade
+    // are skipped once one fails: a RAG index queues its chunk #0 (the
+    // bookkeeping that marks a document complete) last, and writing it after a
+    // failed batch would make a partial index look finished. The skipped
+    // writes rethrow the original error so the queue logs each one.
+    // ponytail: scoped to this facade (one request); unrelated writes queued
+    // after a failure are skipped too and converge on their next write.
+    let deferredFailure: { error: unknown } | undefined;
+    const guardDeferred = (work: () => Promise<void>) => async (): Promise<void> => {
+        if (deferredFailure !== undefined) {
+            throw deferredFailure.error;
+        }
+
+        try {
+            await work();
+        } catch (error) {
+            deferredFailure = { error };
+
+            throw error;
+        }
+    };
+
     const write = async (indexName: string, input: VectorUpsertInputLike, namespace: string | undefined): Promise<void> => {
         await lunora.upsert(indexName, {
             embed: input.embed,
@@ -233,7 +256,7 @@ const createContextVectors = (lunora: LunoraVectors, options?: CreateContextVect
                   // after the commit it is only a log line.
                   const namespace = resolveNamespace(indexName, input.namespace);
 
-                  await deferAfterCommit(async () => write(indexName, input, namespace));
+                  await deferAfterCommit(guardDeferred(async () => write(indexName, input, namespace)));
               };
 
     const upsertMany = async (indexName: string, inputs: ReadonlyArray<VectorUpsertInputLike>): Promise<void> => {
@@ -245,7 +268,7 @@ const createContextVectors = (lunora: LunoraVectors, options?: CreateContextVect
             await lunora.upsertMany(indexName, resolved);
         };
 
-        await (deferAfterCommit === undefined ? send() : deferAfterCommit(send));
+        await (deferAfterCommit === undefined ? send() : deferAfterCommit(guardDeferred(send)));
     };
 
     // Shared by `getByIds` and `deleteByIds`: fetch the raw records and, when
