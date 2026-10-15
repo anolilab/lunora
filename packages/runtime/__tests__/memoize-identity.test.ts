@@ -145,6 +145,57 @@ describe("memoizeIdentity", () => {
         expect(resolver).toHaveBeenCalledTimes(2);
     });
 
+    it("keeps no cross-request map when the window is zero", async () => {
+        expect.assertions(2);
+
+        const set = vi.spyOn(Map.prototype, "set");
+
+        try {
+            const resolver = vi.fn<() => Promise<{ userId: string }>>(async () => {
+                return { userId: "u1" };
+            });
+            const memoized = memoizeIdentity(resolver, { ttlMs: 0 });
+
+            await memoized(authed(), {});
+            await memoized(authed(), {});
+
+            // One lookup per request, and nothing was written to any Map.
+            expect(resolver).toHaveBeenCalledTimes(2);
+            expect(set.mock.calls.filter(([key]) => typeof key === "string" && key.includes("session=abc"))).toHaveLength(0);
+        } finally {
+            set.mockRestore();
+        }
+    });
+
+    it("drops expired entries before evicting a live one at capacity", async () => {
+        expect.assertions(2);
+
+        vi.useFakeTimers();
+
+        try {
+            const start = Date.now();
+            const resolver = vi.fn<(request: Request) => Promise<{ expiresAtMs?: number; userId: string }>>(async (request) => {
+                const cookie = request.headers.get("cookie");
+
+                return cookie === "s=short" ? { expiresAtMs: start + 1000, userId: "short" } : { userId: cookie ?? "" };
+            });
+            const memoized = memoizeIdentity(resolver, { maxEntries: 2, ttlMs: 60_000 });
+
+            await memoized(authed("s=live"), {});
+            await memoized(authed("s=short"), {});
+            vi.advanceTimersByTime(2000);
+
+            // At capacity: the expired entry must go, not the older but still-live one.
+            await memoized(authed("s=new"), {});
+            await memoized(authed("s=live"), {});
+
+            expect(resolver).toHaveBeenCalledTimes(3);
+            expect(resolver.mock.calls.map(([request]) => request.headers.get("cookie"))).toStrictEqual(["s=live", "s=short", "s=new"]);
+        } finally {
+            vi.useRealTimers();
+        }
+    });
+
     it("does not cache a failed verification", async () => {
         expect.assertions(2);
 

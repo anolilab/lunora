@@ -192,6 +192,11 @@ const memoizeIdentity = (resolver: IdentityResolver, options: MemoizeIdentityOpt
     const keyOf = options.cacheKey ?? credentialKey;
     const perRequest = memoizeIdentityPerRequest(resolver);
 
+    // A zero window can never hit, so keep no cross-request map at all.
+    if (ttlMs <= 0) {
+        return perRequest;
+    }
+
     // Insertion-ordered, so evicting the first key evicts the oldest entry.
     const cache = new Map<string, { expiresAt: number; value: ReturnType<IdentityResolver> }>();
 
@@ -214,6 +219,20 @@ const memoizeIdentity = (resolver: IdentityResolver, options: MemoizeIdentityOpt
 
         if (hit && hit.expiresAt > now) {
             return hit.value;
+        }
+
+        // Drop the expired entry on read, and (at capacity) every other expired one, so
+        // dead entries never push a still-live credential out through oldest-first eviction.
+        if (hit) {
+            cache.delete(key);
+        }
+
+        if (cache.size >= maxEntries) {
+            for (const [staleKey, stale] of cache) {
+                if (stale.expiresAt <= now) {
+                    cache.delete(staleKey);
+                }
+            }
         }
 
         const pending = Promise.resolve(perRequest(request, env, context));
