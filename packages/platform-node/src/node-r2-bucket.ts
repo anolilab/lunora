@@ -719,7 +719,11 @@ const walkUnder = async (
             // eslint-disable-next-line no-await-in-loop -- each component is checked before descending into it
             stats = await lstat(start);
         } catch (error: unknown) {
-            if (isMissing(error) || (error instanceof Error && "code" in error && (error as NodeJS.ErrnoException).code === "ENOTDIR")) {
+            // A segment longer than the filesystem allows (`ENAMETOOLONG`) can hold no stored key, since
+            // `validateKey` rejects it on write: like a missing component, it is an empty page.
+            const code = error instanceof Error && "code" in error ? (error as NodeJS.ErrnoException).code : undefined;
+
+            if (code === "ENOENT" || code === "ENOTDIR" || code === "ENAMETOOLONG") {
                 return { keys, prefixes };
             }
 

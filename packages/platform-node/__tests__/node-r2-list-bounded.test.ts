@@ -91,6 +91,16 @@ describe("createNodeR2Bucket list walk", () => {
         rmSync(dir, { force: true, recursive: true });
     });
 
+    it("returns an empty page for a prefix segment the filesystem cannot name", async () => {
+        expect.hasAssertions();
+
+        // 300 bytes once encoded: `validateKey` refuses such a segment on write, so no key can match.
+        const page = await bucket.list({ prefix: `${"A".repeat(300)}/` });
+
+        expect(page.objects).toStrictEqual([]);
+        expect(page.truncated).toBe(false);
+    });
+
     it("matches the full-walk implementation for 200 random option combinations", async () => {
         expect.hasAssertions();
 
