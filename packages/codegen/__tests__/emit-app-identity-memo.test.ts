@@ -22,15 +22,15 @@ type Resolver = (request: Request, env?: unknown, context?: unknown) => Promise<
 
 const scratch = mkdtempSync(join(tmpdir(), "lunora-emit-app-identity-memo-"));
 
-const wrap = async (inner: Resolver, env: Record<string, string> = {}): Promise<Resolver> => {
+const wrap = async (inner: Resolver, env: Record<string, string> = {}, memo: typeof memoizeIdentity = memoizeIdentity): Promise<Resolver> => {
     const source = emitApp({ ...baseOptions, hasAuth: true });
-    const match = /(if \(options\.resolveIdentity\) \{\n {12}const identityCacheMs[\s\S]*?\n {8}\})/u.exec(source);
+    const match = /(if \(options\.resolveIdentity\) \{\n[\s\S]*?\n {8}\})/u.exec(source);
 
     if (match?.[1] === undefined) {
         throw new Error("could not locate the emitted identity memo in app.ts");
     }
 
-    // codeql[js/bad-code-sanitization]
+    // codeql[js/bad-code-sanitization] -- test-local literal rendered by codegen and compiled in-process, not user input
     const compiled = transformSync(`export const build = (memoizeIdentity, options, env) => { ${match[1]} return options.resolveIdentity; };`, {
         loader: "ts",
     }).code;
@@ -42,7 +42,7 @@ const wrap = async (inner: Resolver, env: Record<string, string> = {}): Promise<
         build: (memo: typeof memoizeIdentity, options: { resolveIdentity: Resolver }, env: Record<string, string>) => Resolver;
     };
 
-    return loaded.build(memoizeIdentity, { resolveIdentity: inner }, env);
+    return loaded.build(memo, { resolveIdentity: inner }, env);
 };
 
 const withCookie = (cookie: string): Request => new Request("https://app.example/_lunora/rpc", { headers: { cookie } });
@@ -112,22 +112,21 @@ describe("emitApp — identity memoisation", () => {
         expect(calls).toBe(2);
     });
 
-    it("a zero cache window from the env override disables the cross-request cache", async () => {
+    it.each([
+        ["", 60_000],
+        ["  ", 60_000],
+        ["0", 0],
+    ])("env override %j resolves to a %i ms cache window", async (value, ttlMs) => {
         expect.assertions(1);
 
-        let calls = 0;
-        const resolve = await wrap(
-            () => {
-                calls += 1;
+        const spy: { ttlMs?: number } = {};
 
-                return Promise.resolve(null);
-            },
-            { LUNORA_IDENTITY_CACHE_MS: "0" },
-        );
+        await wrap(() => Promise.resolve(null), { LUNORA_IDENTITY_CACHE_MS: value }, ((inner: Resolver, o: { ttlMs: number }) => {
+            spy.ttlMs = o.ttlMs;
 
-        await resolve(withCookie("s=a"));
-        await resolve(withCookie("s=a"));
+            return inner;
+        }) as unknown as typeof memoizeIdentity);
 
-        expect(calls).toBe(2);
+        expect(spy.ttlMs).toBe(ttlMs);
     });
 });

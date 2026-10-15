@@ -406,7 +406,9 @@ class AppBuilder<Env extends object> {
         // tolerates (60s); `LUNORA_IDENTITY_CACHE_MS` overrides it, `0` disables the
         // cross-request cache. A revoked session can therefore resolve for up to that long.
         if (options.resolveIdentity) {
-            const identityCacheMs = Number((env as { LUNORA_IDENTITY_CACHE_MS?: string }).LUNORA_IDENTITY_CACHE_MS);
+            // A blank var (wrangler allows `""`) is unset, not `0`: `Number("")` is 0.
+            const identityCacheRaw = (env as { LUNORA_IDENTITY_CACHE_MS?: string }).LUNORA_IDENTITY_CACHE_MS;
+            const identityCacheMs = identityCacheRaw?.trim() ? Number(identityCacheRaw) : Number.NaN;
 
             options.resolveIdentity = memoizeIdentity(options.resolveIdentity, {
                 maxEntries: 10_000,
