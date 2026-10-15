@@ -1,3 +1,9 @@
+## @lunora/bindings [1.0.0-alpha.113](https://github.com/anolilab/lunora/compare/@lunora/bindings@1.0.0-alpha.112...@lunora/bindings@1.0.0-alpha.113) (2026-10-15)
+
+### Performance Improvements
+
+* **ai:** write rag chunks in upsertMany batches ([#1179](https://github.com/anolilab/lunora/issues/1179)) ([4f34594](https://github.com/anolilab/lunora/commit/4f34594f8fa3d4b1c1f397ba01a331dcf000969e)), closes [#0](https://github.com/anolilab/lunora/issues/0) [#0](https://github.com/anolilab/lunora/issues/0) [#0](https://github.com/anolilab/lunora/issues/0) [#0](https://github.com/anolilab/lunora/issues/0)
+
 ## @lunora/bindings [1.0.0-alpha.112](https://github.com/anolilab/lunora/compare/@lunora/bindings@1.0.0-alpha.111...@lunora/bindings@1.0.0-alpha.112) (2026-10-15)
 
 

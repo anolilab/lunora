@@ -1,3 +1,24 @@
+## @lunora/codegen [1.0.0-alpha.306](https://github.com/anolilab/lunora/compare/@lunora/codegen@1.0.0-alpha.305...@lunora/codegen@1.0.0-alpha.306) (2026-10-15)
+
+### Performance Improvements
+
+* **codegen:** memoise identity resolution per credential ([#1192](https://github.com/anolilab/lunora/issues/1192)) ([1192b53](https://github.com/anolilab/lunora/commit/1192b53ca5719c8ad6b400086e95f6a959fe25dc))
+
+## @lunora/codegen [1.0.0-alpha.305](https://github.com/anolilab/lunora/compare/@lunora/codegen@1.0.0-alpha.304...@lunora/codegen@1.0.0-alpha.305) (2026-10-15)
+
+### Performance Improvements
+
+* **ai:** add a create entry that never loads the ai root ([#1197](https://github.com/anolilab/lunora/issues/1197)) ([c5a7001](https://github.com/anolilab/lunora/commit/c5a70013986b99c0f2f340f1a24bbffb18f20ae5))
+* **ai:** write rag chunks in upsertMany batches ([#1179](https://github.com/anolilab/lunora/issues/1179)) ([4f34594](https://github.com/anolilab/lunora/commit/4f34594f8fa3d4b1c1f397ba01a331dcf000969e)), closes [#0](https://github.com/anolilab/lunora/issues/0) [#0](https://github.com/anolilab/lunora/issues/0) [#0](https://github.com/anolilab/lunora/issues/0) [#0](https://github.com/anolilab/lunora/issues/0)
+
+
+### Dependencies
+
+* **@lunora/advisor:** upgraded to 1.0.0-alpha.218
+* **@lunora/agent:** upgraded to 1.0.0-alpha.208
+* **@lunora/bindings:** upgraded to 1.0.0-alpha.113
+* **@lunora/server:** upgraded to 1.0.0-alpha.202
+
 ## @lunora/codegen [1.0.0-alpha.304](https://github.com/anolilab/lunora/compare/@lunora/codegen@1.0.0-alpha.303...@lunora/codegen@1.0.0-alpha.304) (2026-10-15)
 
 ### Performance Improvements

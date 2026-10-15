@@ -2586,6 +2586,9 @@ importers:
       '@ai-sdk/openai':
         specifier: catalog:ai
         version: 4.0.83(zod@4.6.5)
+      '@ai-sdk/provider-utils':
+        specifier: catalog:ai
+        version: 5.0.53(zod@4.6.5)
       '@lunora/errors':
         specifier: workspace:*
         version: link:../errors

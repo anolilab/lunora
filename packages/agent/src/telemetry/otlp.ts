@@ -1,4 +1,4 @@
-import { estimateModelCost } from "@lunora/ai";
+import { estimateModelCost } from "@lunora/ai/create";
 import type { Telemetry } from "ai";
 
 import type { OtlpAttribute, OtlpAttributeValue } from "../../../../shared/otlp";

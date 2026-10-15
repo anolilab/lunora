@@ -112,6 +112,7 @@ const sqliteVectorStore = (options: SqliteVectorStoreOptions): RagVectorStore =>
     const annIndex = ann === undefined ? undefined : sqliteVecIndex({ dimensions: ann.dimensions, exec, table });
 
     const capabilities: RagVectorStoreCapabilities = {
+        deferredDelete: true,
         // A vec0 column has one fixed width; a wider embedding cannot be indexed.
         maxDimensions: options.maxDimensions ?? ann?.dimensions ?? false,
         // Rows are TEXT columns in an ordinary table: neither the id nor the
@@ -301,10 +302,12 @@ const sqliteVectorStore = (options: SqliteVectorStoreOptions): RagVectorStore =>
         return { count: ranked.length, matches: ranked };
     };
 
-    const deleteByIds = async (ids: ReadonlyArray<string>, namespace?: string): Promise<unknown> => {
+    const deleteByIds = async (ids: ReadonlyArray<string>, namespace?: string, _operation?: object, afterDelete?: () => Promise<void>): Promise<unknown> => {
         await ensureTable();
 
         if (ids.length === 0) {
+            await afterDelete?.();
+
             return undefined;
         }
 
@@ -318,6 +321,8 @@ const sqliteVectorStore = (options: SqliteVectorStoreOptions): RagVectorStore =>
             // eslint-disable-next-line no-await-in-loop -- one bounded statement per batch; see `getByIds`
             await annIndex?.remove(namespaceKey(namespace), batch);
         }
+
+        await afterDelete?.();
 
         return undefined;
     };

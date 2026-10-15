@@ -274,6 +274,88 @@ const buildWorkerOptionLines = (options: ResolvedAppOptions): string[] => [
 
             options.authAdmin = authInstance ? createAuthAdmin(authInstance) : undefined;
             options.authAuditReader = createAuthAuditReader(d1Executor(authD1(env) as never));
+        }
+
+        // Both modes pay a session lookup per request (the auth object hop, or a D1
+        // read), and the runtime resolves identity once per RPC and per fan-out leg.
+        // Memoise per credential. The default window is the shorter of 60s and
+        // better-auth's cookie-cache \`maxAge\`; \`LUNORA_IDENTITY_CACHE_MS\` overrides it, \`0\`
+        // disables the cross-request cache. The memoised \`getSession\` result may itself
+        // come from better-auth's cookie cache, so the worst case is the two stacked: a
+        // revoked session or a changed role can resolve for up to the memo window PLUS the
+        // cookie-cache \`maxAge\` (about 120s with the presets).
+        //
+        // An app that switched the cookie cache OFF (the \`strict\` session preset) asked
+        // for fast revocation, so its default is per-request memoisation only; the env var
+        // still opts back in. Read from the declared options at runtime, the one place
+        // the chosen policy is visible.
+        //
+        // Built once per \`env\` object and kept for this assembled worker: a framework-hosted
+        // worker rebuilds these options on every request, and a fresh memo per build
+        // would never hit. A different \`env\` object gets its own memo.
+        if (options.resolveIdentity) {
+            let memo = identityMemos.get(env);
+
+            if (!memo) {
+                // A wrangler var may be a JSON number (\`0\`) or a string. A blank string is
+                // unset, not \`0\` (\`Number("")\` is 0); anything else non-numeric is unset too.
+                const identityCacheRaw = (env as { LUNORA_IDENTITY_CACHE_MS?: unknown }).LUNORA_IDENTITY_CACHE_MS;
+                let identityCacheMs = Number.NaN;
+
+                if (typeof identityCacheRaw === "number") {
+                    identityCacheMs = identityCacheRaw;
+                } else if (typeof identityCacheRaw === "string" && identityCacheRaw.trim() !== "") {
+                    identityCacheMs = Number(identityCacheRaw);
+                }
+
+                // \`options(env)\` is application code. A scheduled, queue or serverQuery event must
+                // not fail to construct — and so never run — because that callback throws, so a
+                // throw is caught rather than escaping.
+                let defaultMs: number;
+
+                try {
+                    const cookieCache = authDeclaration?.options(env).session?.cookieCache;
+                    // better-auth's \`maxAge\` is in SECONDS; createAuth fills 60 when it is unset.
+                    const cookieCacheSeconds = typeof cookieCache?.maxAge === "number" && cookieCache.maxAge >= 0 ? cookieCache.maxAge : 60;
+
+                    // createAuth fills \`{ enabled: true, maxAge: 60 }\` only when \`cookieCache\` is absent; a partial
+                    // object without \`enabled: true\` has NO cookie cache, so the memo stays per-request there.
+                    defaultMs = cookieCache === undefined || cookieCache.enabled === true ? Math.min(60_000, cookieCacheSeconds * 1000) : 0;
+                } catch {
+                    // The policy is unreadable. Fall back to PER-REQUEST memoisation, not the 60s
+                    // window: a 60s cross-request cache would let a revoked session keep
+                    // resolving for a minute, which is exactly what the \`strict\` preset turned
+                    // off. Construction still does not fail, so the event still runs.
+                    defaultMs = 0;
+                }
+
+                memo = memoizeIdentity(options.resolveIdentity, {
+                    // better-auth resolves the session from ALL request headers, so the key
+                    // must cover every header a supported plugin authenticates on: the
+                    // session cookie, \`Authorization\` (bearer / jwt) and \`x-api-key\` (apiKey).
+                    cacheKey: (request: Request) => {
+                        const parts = ["authorization", "cookie", "x-api-key"].map((name) => request.headers.get(name) ?? "");
+
+                        if (parts.every((part) => part === "")) {
+                            return undefined;
+                        }
+
+                        const key = parts.join("\\u0000");
+
+                        // The map is bounded in ENTRIES, not in key size, so a client with one
+                        // valid session could add a junk cookie per request and grow it without
+                        // bound. Skip the cache for an oversized credential set rather than
+                        // truncating the key, which could collide with a different credential and
+                        // hand back the wrong identity.
+                        return key.length > 4_096 ? undefined : key;
+                    },
+                    maxEntries: 2_000,
+                    ttlMs: Number.isFinite(identityCacheMs) && identityCacheMs >= 0 ? identityCacheMs : defaultMs,
+                });
+                identityMemos.set(env, memo);
+            }
+
+            options.resolveIdentity = memo;
         }`,
           ]
         : []),

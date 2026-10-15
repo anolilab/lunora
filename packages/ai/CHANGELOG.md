@@ -1,3 +1,14 @@
+## @lunora/ai [1.0.0-alpha.127](https://github.com/anolilab/lunora/compare/@lunora/ai@1.0.0-alpha.126...@lunora/ai@1.0.0-alpha.127) (2026-10-15)
+
+### Performance Improvements
+
+* **ai:** add a create entry that never loads the ai root ([#1197](https://github.com/anolilab/lunora/issues/1197)) ([c5a7001](https://github.com/anolilab/lunora/commit/c5a70013986b99c0f2f340f1a24bbffb18f20ae5))
+* **ai:** write rag chunks in upsertMany batches ([#1179](https://github.com/anolilab/lunora/issues/1179)) ([4f34594](https://github.com/anolilab/lunora/commit/4f34594f8fa3d4b1c1f397ba01a331dcf000969e)), closes [#0](https://github.com/anolilab/lunora/issues/0) [#0](https://github.com/anolilab/lunora/issues/0) [#0](https://github.com/anolilab/lunora/issues/0) [#0](https://github.com/anolilab/lunora/issues/0)
+
+### Documentation
+
+* **ai:** describe ctx.ai.workersai as the lazy delegate it is ([#1203](https://github.com/anolilab/lunora/issues/1203)) ([e336f63](https://github.com/anolilab/lunora/commit/e336f63417e25896fec80508a5808fd4d7a6ba45))
+
 ## @lunora/ai [1.0.0-alpha.126](https://github.com/anolilab/lunora/compare/@lunora/ai@1.0.0-alpha.125...@lunora/ai@1.0.0-alpha.126) (2026-10-15)
 
 ### Performance Improvements

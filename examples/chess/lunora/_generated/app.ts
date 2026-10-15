@@ -4,7 +4,7 @@
 import type { AuthNamespaceLike, LunoraAuth, LunoraAuthOptions } from "@lunora/auth";
 import { authDiscoveryPathsFor, createAuth, createAuthAdmin, createAuthAuditReader, createDoAuthWiring, d1Executor, handleAuthDiscoveryRequest, handleAuthRequest, lunoraD1Adapter } from "@lunora/auth";
 import type { ExecutionContextLike, HttpRouterLike, LunoraWorker, Route, ScheduledControllerLike, ShardingInfo, ShardNamespaceLike, WorkerOptions } from "lunorash/runtime";
-import { createWorker, resolveLogArchiveFromEnv } from "lunorash/runtime";
+import { createWorker, resolveLogArchiveFromEnv, memoizeIdentity } from "lunorash/runtime";
 
 import { LUNORA_CRONS } from "./crons.js";
 import { LUNORA_FUNCTIONS } from "./functions.js";
@@ -16,6 +16,9 @@ type Selector<Env, T> = (env: Env) => T | undefined;
 
 /** The generated `createShardDO` config — `.observability()`, `.maxRelationKeys()` and the long-tail `.ai()` / `.kv()` / … methods pass straight through to it. */
 type ShardConfig = NonNullable<Parameters<typeof createShardDO>[0]>;
+
+/** The identity memo per `env` object, owned by one assembled worker. */
+type IdentityMemoStore = WeakMap<object, ReturnType<typeof memoizeIdentity>>;
 
 /** `.auth(...)` declaration — better-auth options plus the storage the adapter reads. Give it `d1` (the default) or `namespace` (a Durable Object that hosts the auth tables), never both. The builder owns the lazy build + `ensureMigrated` dance and wires `authHandler` / `resolveIdentity` / `authAdmin`. */
 interface AuthDeclaration<Env> {
@@ -196,6 +199,9 @@ class AppBuilder<Env extends object> {
         let worker: LunoraWorker | null = null;
         let auth: LunoraAuth | null = null;
         let authInit: Promise<void> | null = null;
+        // One memo per env for THIS assembled worker: a framework-hosted worker rebuilds its options per
+        // request and must reuse it, but a second `assemble()` has its own auth closure and must not share.
+        const identityMemos: IdentityMemoStore = new WeakMap();
 
         const initAuth = async (env: Env): Promise<void> => {
             if (!this.authDeclaration) {
@@ -249,7 +255,7 @@ class AppBuilder<Env extends object> {
                 throw error;
             }));
 
-        const buildWorker = (env: Env): LunoraWorker => createWorker(this.buildWorkerOptions(env, () => auth));
+        const buildWorker = (env: Env): LunoraWorker => createWorker(this.buildWorkerOptions(env, () => auth, identityMemos));
 
         const composed: ComposedApp = {
             ShardDO,
@@ -282,7 +288,7 @@ class AppBuilder<Env extends object> {
     }
 
     /** Fan the recorded declarations into the worker-side `createWorker` options. */
-    private buildWorkerOptions(env: Env, getAuth: () => LunoraAuth | null): WorkerOptions {
+    private buildWorkerOptions(env: Env, getAuth: () => LunoraAuth | null, identityMemos: IdentityMemoStore): WorkerOptions {
         const options: WorkerOptions = {
             cronJobs: LUNORA_CRONS,
             functions: LUNORA_FUNCTIONS,
@@ -404,6 +410,88 @@ class AppBuilder<Env extends object> {
 
             options.authAdmin = authInstance ? createAuthAdmin(authInstance) : undefined;
             options.authAuditReader = createAuthAuditReader(d1Executor(authD1(env) as never));
+        }
+
+        // Both modes pay a session lookup per request (the auth object hop, or a D1
+        // read), and the runtime resolves identity once per RPC and per fan-out leg.
+        // Memoise per credential. The default window is the shorter of 60s and
+        // better-auth's cookie-cache `maxAge`; `LUNORA_IDENTITY_CACHE_MS` overrides it, `0`
+        // disables the cross-request cache. The memoised `getSession` result may itself
+        // come from better-auth's cookie cache, so the worst case is the two stacked: a
+        // revoked session or a changed role can resolve for up to the memo window PLUS the
+        // cookie-cache `maxAge` (about 120s with the presets).
+        //
+        // An app that switched the cookie cache OFF (the `strict` session preset) asked
+        // for fast revocation, so its default is per-request memoisation only; the env var
+        // still opts back in. Read from the declared options at runtime, the one place
+        // the chosen policy is visible.
+        //
+        // Built once per `env` object and kept for this assembled worker: a framework-hosted
+        // worker rebuilds these options on every request, and a fresh memo per build
+        // would never hit. A different `env` object gets its own memo.
+        if (options.resolveIdentity) {
+            let memo = identityMemos.get(env);
+
+            if (!memo) {
+                // A wrangler var may be a JSON number (`0`) or a string. A blank string is
+                // unset, not `0` (`Number("")` is 0); anything else non-numeric is unset too.
+                const identityCacheRaw = (env as { LUNORA_IDENTITY_CACHE_MS?: unknown }).LUNORA_IDENTITY_CACHE_MS;
+                let identityCacheMs = Number.NaN;
+
+                if (typeof identityCacheRaw === "number") {
+                    identityCacheMs = identityCacheRaw;
+                } else if (typeof identityCacheRaw === "string" && identityCacheRaw.trim() !== "") {
+                    identityCacheMs = Number(identityCacheRaw);
+                }
+
+                // `options(env)` is application code. A scheduled, queue or serverQuery event must
+                // not fail to construct — and so never run — because that callback throws, so a
+                // throw is caught rather than escaping.
+                let defaultMs: number;
+
+                try {
+                    const cookieCache = authDeclaration?.options(env).session?.cookieCache;
+                    // better-auth's `maxAge` is in SECONDS; createAuth fills 60 when it is unset.
+                    const cookieCacheSeconds = typeof cookieCache?.maxAge === "number" && cookieCache.maxAge >= 0 ? cookieCache.maxAge : 60;
+
+                    // createAuth fills `{ enabled: true, maxAge: 60 }` only when `cookieCache` is absent; a partial
+                    // object without `enabled: true` has NO cookie cache, so the memo stays per-request there.
+                    defaultMs = cookieCache === undefined || cookieCache.enabled === true ? Math.min(60_000, cookieCacheSeconds * 1000) : 0;
+                } catch {
+                    // The policy is unreadable. Fall back to PER-REQUEST memoisation, not the 60s
+                    // window: a 60s cross-request cache would let a revoked session keep
+                    // resolving for a minute, which is exactly what the `strict` preset turned
+                    // off. Construction still does not fail, so the event still runs.
+                    defaultMs = 0;
+                }
+
+                memo = memoizeIdentity(options.resolveIdentity, {
+                    // better-auth resolves the session from ALL request headers, so the key
+                    // must cover every header a supported plugin authenticates on: the
+                    // session cookie, `Authorization` (bearer / jwt) and `x-api-key` (apiKey).
+                    cacheKey: (request: Request) => {
+                        const parts = ["authorization", "cookie", "x-api-key"].map((name) => request.headers.get(name) ?? "");
+
+                        if (parts.every((part) => part === "")) {
+                            return undefined;
+                        }
+
+                        const key = parts.join("\u0000");
+
+                        // The map is bounded in ENTRIES, not in key size, so a client with one
+                        // valid session could add a junk cookie per request and grow it without
+                        // bound. Skip the cache for an oversized credential set rather than
+                        // truncating the key, which could collide with a different credential and
+                        // hand back the wrong identity.
+                        return key.length > 4_096 ? undefined : key;
+                    },
+                    maxEntries: 2_000,
+                    ttlMs: Number.isFinite(identityCacheMs) && identityCacheMs >= 0 ? identityCacheMs : defaultMs,
+                });
+                identityMemos.set(env, memo);
+            }
+
+            options.resolveIdentity = memo;
         }
 
         for (const fn of this.extendFns) {

@@ -560,9 +560,9 @@ describe("defineRag default chunker wiring", () => {
         const result = await docs(context).index({ id: "doc-1", text: "abcdefghij" });
 
         expect(result.chunks).toBe(4);
-        expect(upserts.map((upsert) => upsert.input)).toStrictEqual(["abcd", "cdef", "efgh", "ghij"]);
-        expect(upserts.map((upsert) => upsert.metadata?.["__ragText"])).toStrictEqual(["abcd", "cdef", "efgh", "ghij"]);
-        expect(upserts.map((upsert) => upsert.id)).toStrictEqual(["doc-1#0", "doc-1#1", "doc-1#2", "doc-1#3"]);
+        expect(upserts.map((upsert) => upsert.input)).toStrictEqual(["cdef", "efgh", "ghij", "abcd"]);
+        expect(upserts.map((upsert) => upsert.metadata?.["__ragText"])).toStrictEqual(["cdef", "efgh", "ghij", "abcd"]);
+        expect(upserts.map((upsert) => upsert.id)).toStrictEqual(["doc-1#1", "doc-1#2", "doc-1#3", "doc-1#0"]);
     });
 
     it("rejects a non-integer chunkSize at config time", () => {

@@ -76,6 +76,146 @@ describe("createContextVectors", () => {
         expect(index.upsert).toHaveBeenCalledWith([{ id: "a", metadata: undefined, namespace: undefined, values: [5] }]);
     });
 
+    describe("deferred writes after a failed one", () => {
+        const harness = () => {
+            let calls = 0;
+            const index = fakeIndex({
+                upsert: vi.fn<VectorizeIndexLike["upsert"]>(async (vectors): Promise<VectorizeUpsertMutation> => {
+                    calls += 1;
+
+                    if (calls === 2) {
+                        throw new Error("batch 2 failed");
+                    }
+
+                    return { mutationId: `upsert-${String(vectors.length)}` };
+                }),
+            });
+            const queued: (() => Promise<void>)[] = [];
+            const context = createContextVectors(createVectors({ indexes: { docs: index } }), {
+                deferAfterCommit: async (work) => {
+                    queued.push(work);
+                },
+            });
+            const embed = async (value: string): Promise<ReadonlyArray<number>> => [value.length];
+            // The queue runs them in order and contains each failure, as `flushAfterCommit` does.
+            const flush = async (): Promise<string[]> => {
+                const outcomes: string[] = [];
+
+                for (const work of queued) {
+                    try {
+                        // eslint-disable-next-line no-await-in-loop -- ordered replay, like the shard's queue
+                        await work();
+                        outcomes.push("fulfilled");
+                    } catch {
+                        outcomes.push("rejected");
+                    }
+                }
+
+                return outcomes;
+            };
+
+            return { context, embed, flush, index };
+        };
+
+        it("skips writes of the same operation, so a trailing bookkeeping write never lands", async () => {
+            expect.assertions(3);
+
+            const { context, embed, flush, index } = harness();
+            const operation = {};
+
+            await context.upsertMany?.("docs", [{ embed, id: "batch-1", input: "a" }], operation);
+            await context.upsertMany?.("docs", [{ embed, id: "batch-2", input: "b" }], operation);
+            await context.upsertMany?.("docs", [{ embed, id: "chunk-0", input: "c" }], operation);
+
+            await expect(flush()).resolves.toStrictEqual(["fulfilled", "rejected", "rejected"]);
+            expect(index.upsert).toHaveBeenCalledTimes(2);
+            expect(index.upsert).not.toHaveBeenCalledWith([expect.objectContaining({ id: "chunk-0" })]);
+        });
+
+        it("defers a tokened delete behind the operation's writes and skips it after a failure", async () => {
+            expect.assertions(4);
+
+            const { context, embed, flush, index } = harness();
+            const operation = {};
+            const afterDelete = vi.fn<() => Promise<void>>(async () => undefined);
+
+            await context.upsertMany?.("docs", [{ embed, id: "batch-1", input: "a" }], operation);
+            await context.upsertMany?.("docs", [{ embed, id: "batch-2", input: "b" }], operation);
+            await context.deleteByIds("docs", ["old"], undefined, operation, afterDelete);
+
+            expect(index.deleteByIds).not.toHaveBeenCalled();
+            await expect(flush()).resolves.toStrictEqual(["fulfilled", "rejected", "rejected"]);
+            expect(index.deleteByIds).not.toHaveBeenCalled();
+            expect(afterDelete).not.toHaveBeenCalled();
+        });
+
+        it("runs a tokened delete after its writes succeed, and an untokened delete inline", async () => {
+            expect.assertions(6);
+
+            const { context, flush, index } = harness();
+            const order: string[] = [];
+
+            vi.mocked(index.deleteByIds).mockImplementation(async (ids) => {
+                order.push("delete");
+
+                return { count: ids.length, mutationId: "d" };
+            });
+
+            await context.deleteByIds("docs", ["now"], undefined, undefined, async () => {
+                order.push("hook-now");
+            });
+
+            expect(index.deleteByIds).toHaveBeenCalledWith(["now"]);
+            expect(order).toStrictEqual(["delete", "hook-now"]);
+
+            await context.deleteByIds("docs", ["later"], undefined, {}, async () => {
+                order.push("hook-later");
+            });
+
+            expect(index.deleteByIds).toHaveBeenCalledTimes(1);
+
+            await flush();
+
+            expect(index.deleteByIds).toHaveBeenLastCalledWith(["later"]);
+            expect(order).toStrictEqual(["delete", "hook-now", "delete", "hook-later"]);
+            expect(order).toHaveLength(4);
+        });
+
+        it("declares that deleteByIds honours the operation and afterDelete arguments", () => {
+            expect.assertions(1);
+
+            expect(harness().context.deferredDelete).toBe(true);
+        });
+
+        it("still runs a later write that carries no token", async () => {
+            expect.assertions(2);
+
+            const { context, embed, flush, index } = harness();
+            const operation = {};
+
+            await context.upsertMany?.("docs", [{ embed, id: "batch-1", input: "a" }], operation);
+            await context.upsertMany?.("docs", [{ embed, id: "batch-2", input: "b" }], operation);
+            await context.upsert("docs", { embed, id: "unrelated", input: "u" });
+
+            await expect(flush()).resolves.toStrictEqual(["fulfilled", "rejected", "fulfilled"]);
+            expect(index.upsert).toHaveBeenCalledWith([expect.objectContaining({ id: "unrelated" })]);
+        });
+
+        it("still runs a later write that carries a different token", async () => {
+            expect.assertions(2);
+
+            const { context, embed, flush, index } = harness();
+            const operation = {};
+
+            await context.upsertMany?.("docs", [{ embed, id: "batch-1", input: "a" }], operation);
+            await context.upsertMany?.("docs", [{ embed, id: "batch-2", input: "b" }], operation);
+            await context.upsertMany?.("docs", [{ embed, id: "other-doc", input: "o" }], {});
+
+            await expect(flush()).resolves.toStrictEqual(["fulfilled", "rejected", "fulfilled"]);
+            expect(index.upsert).toHaveBeenCalledWith([expect.objectContaining({ id: "other-doc" })]);
+        });
+    });
+
     it("resolves the namespace before deferring, so a root-instance misuse throws to the caller", async () => {
         expect.assertions(2);
 

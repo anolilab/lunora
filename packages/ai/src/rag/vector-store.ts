@@ -25,6 +25,15 @@ import type { RagVectorMatches, RagVectorQueryInput, RagVectorRecord, RagVectors
  */
 interface RagVectorStoreCapabilities {
     /**
+     * Whether `deleteByIds` honours its `operation` and `afterDelete` arguments:
+     * the delete may be deferred with the operation's other writes and skipped if
+     * one failed, and `afterDelete` runs when the delete does. Absent means the
+     * store only implements `deleteByIds(ids, namespace)`, and `defineRag` removes
+     * the chunk text itself, inline, after the delete.
+     */
+    deferredDelete?: boolean;
+
+    /**
      * Ceiling on embedding dimensionality, or `false` for no limit.
      *
      * Vectorize stores at most 1536 at 32-bit precision, which rules out
@@ -67,10 +76,14 @@ interface RagVectorStoreCapabilities {
  */
 interface RagVectorStore {
     capabilities: RagVectorStoreCapabilities;
-    deleteByIds: (ids: ReadonlyArray<string>, namespace?: string) => Promise<unknown>;
+    /** `afterDelete`, when given, must run once the delete has actually happened (a deferred store runs it with the delete). */
+    deleteByIds: (ids: ReadonlyArray<string>, namespace?: string, operation?: object, afterDelete?: () => Promise<void>) => Promise<unknown>;
     getByIds: (ids: ReadonlyArray<string>, namespace?: string) => Promise<ReadonlyArray<RagVectorRecord>>;
     query: (input: RagVectorQueryInput) => Promise<RagVectorMatches>;
-    upsert: (input: RagVectorUpsertInput) => Promise<unknown>;
+    /** `operation` is one `index()` call's token, passed to every write of that call. */
+    upsert: (input: RagVectorUpsertInput, operation?: object) => Promise<unknown>;
+    /** Batch write of at most 1000 inputs. Optional: without it `defineRag` writes per chunk via `upsert`. */
+    upsertMany?: (inputs: ReadonlyArray<RagVectorUpsertInput>, operation?: object) => Promise<unknown>;
 }
 
 /**
@@ -96,11 +109,17 @@ const VECTORIZE_CAPABILITIES: RagVectorStoreCapabilities = {
  */
 const vectorizeStore = (vectors: RagVectors, indexName: string): RagVectorStore => {
     return {
-        capabilities: VECTORIZE_CAPABILITIES,
-        deleteByIds: (ids, namespace) => vectors.deleteByIds(indexName, ids, namespace),
+        ...(vectors.upsertMany
+            ? {
+                  upsertMany: (inputs: ReadonlyArray<RagVectorUpsertInput>, operation?: object) =>
+                      vectors.upsertMany?.(indexName, inputs, operation) as Promise<unknown>,
+              }
+            : {}),
+        capabilities: vectors.deferredDelete ? { ...VECTORIZE_CAPABILITIES, deferredDelete: true } : VECTORIZE_CAPABILITIES,
+        deleteByIds: (ids, namespace, operation, afterDelete) => vectors.deleteByIds(indexName, ids, namespace, operation, afterDelete),
         getByIds: (ids, namespace) => vectors.getByIds(indexName, ids, namespace),
         query: (input) => vectors.query(indexName, input),
-        upsert: (input) => vectors.upsert(indexName, input),
+        upsert: (input, operation) => vectors.upsert(indexName, input, operation),
     };
 };
 

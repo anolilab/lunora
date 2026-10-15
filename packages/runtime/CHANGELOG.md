@@ -1,3 +1,16 @@
+## @lunora/runtime [1.0.0-alpha.203](https://github.com/anolilab/lunora/compare/@lunora/runtime@1.0.0-alpha.202...@lunora/runtime@1.0.0-alpha.203) (2026-10-15)
+
+### Performance Improvements
+
+* **codegen:** memoise identity resolution per credential ([#1192](https://github.com/anolilab/lunora/issues/1192)) ([1192b53](https://github.com/anolilab/lunora/commit/1192b53ca5719c8ad6b400086e95f6a959fe25dc))
+
+## @lunora/runtime [1.0.0-alpha.202](https://github.com/anolilab/lunora/compare/@lunora/runtime@1.0.0-alpha.201...@lunora/runtime@1.0.0-alpha.202) (2026-10-15)
+
+
+### Dependencies
+
+* **@lunora/bindings:** upgraded to 1.0.0-alpha.113
+
 ## @lunora/runtime [1.0.0-alpha.201](https://github.com/anolilab/lunora/compare/@lunora/runtime@1.0.0-alpha.200...@lunora/runtime@1.0.0-alpha.201) (2026-10-15)
 
 

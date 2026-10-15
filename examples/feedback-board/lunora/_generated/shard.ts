@@ -5,8 +5,8 @@ import type { AdvisorProcedure, AdvisoryFinding, DatabaseWriterLike, DataMigrati
 import { applyCdcChanges, createStableIdFactory, buildReprojectionMigration, createReadFootprint, createShardCtxDb, exportShardRows, importShardRows, markUnvouchableReads, runDataMigration, runShardMigrations, ShardDO as ShardDOBase } from "lunorash/do";
 import { asBucketStorage, beginDeferredDeletes, beginDeferredSchedules, createSecrets, flushDeferredDeletes, LunoraError, withDeferredDeletes, withDeferredSchedules } from "lunorash/server";
 import { bindOrm, bindTableFacade } from "lunorash/server";
-import type { AiBindingLike, LunoraAi } from "@lunora/ai";
-import { createAi } from "@lunora/ai";
+import type { AiBindingLike, LunoraAi } from "@lunora/ai/create";
+import { createAi } from "@lunora/ai/create";
 
 import schema from "../schema.js";
 import { LUNORA_FUNCTIONS, LUNORA_LIFECYCLE_HOOKS, LUNORA_MIGRATIONS } from "./functions.js";

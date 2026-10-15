@@ -1,3 +1,15 @@
+## @lunora/agent [1.0.0-alpha.208](https://github.com/anolilab/lunora/compare/@lunora/agent@1.0.0-alpha.207...@lunora/agent@1.0.0-alpha.208) (2026-10-15)
+
+### Performance Improvements
+
+* **ai:** add a create entry that never loads the ai root ([#1197](https://github.com/anolilab/lunora/issues/1197)) ([c5a7001](https://github.com/anolilab/lunora/commit/c5a70013986b99c0f2f340f1a24bbffb18f20ae5))
+
+
+### Dependencies
+
+* **@lunora/ai:** upgraded to 1.0.0-alpha.127
+* **@lunora/server:** upgraded to 1.0.0-alpha.202
+
 ## @lunora/agent [1.0.0-alpha.207](https://github.com/anolilab/lunora/compare/@lunora/agent@1.0.0-alpha.206...@lunora/agent@1.0.0-alpha.207) (2026-10-15)
 
 ### Performance Improvements

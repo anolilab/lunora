@@ -1,6 +1,6 @@
+import { jsonSchema, tool } from "@ai-sdk/provider-utils";
 import { isLunoraError, LunoraError } from "@lunora/errors";
 import type { EmbeddingModel } from "ai";
-import { embed as aiEmbed, embedMany as aiEmbedMany, jsonSchema, tool } from "ai";
 
 // Repo-root inlined helper (see shared/stable-key.ts) — the canonical
 // code-point-stable, recursively-sorted encoder, used here to give a source's
@@ -21,6 +21,7 @@ import type {
     RagContext,
     RagSource,
     RagToolOptions,
+    RagVectorUpsertInput,
     RemoveInput,
     RetrievedChunk,
     RetrieveOptions,
@@ -33,6 +34,9 @@ const DEFAULT_CHUNK_SIZE = 1000;
 
 const DEFAULT_CHUNK_OVERLAP = 200;
 const DEFAULT_TOP_K = 5;
+
+/** Chunks per `upsertMany` call: Vectorize's hard ceiling on one batch. */
+const UPSERT_BATCH = 1000;
 
 /**
  * Default candidate-pool multiplier when fusion or reranking is active:
@@ -80,6 +84,55 @@ const IMPORTANCE_KEY = "__ragImportance";
 const MODEL_KEY = "__ragModel";
 
 const INTERNAL_KEYS = new Set([CHUNK_INDEX_KEY, COUNT_KEY, HASH_KEY, IMPORTANCE_KEY, MODEL_KEY, SOURCE_KEY, TEXT_KEY]);
+
+/**
+ * Write chunk records, chunk #0 LAST. Chunk #0 carries the document's
+ * bookkeeping (hash, chunk count, model tag), so writing it first would let a
+ * failed later write leave a partial index that claims to be complete, and a
+ * retry would take the `unchanged` shortcut. Chunks 1..n go first: `upsertMany`
+ * in {@link UPSERT_BATCH}-sized calls when the store has it (one subrequest per
+ * batch instead of per chunk), else one bounded-concurrent `upsert` per chunk.
+ * Then chunk #0 alone (a one-element `upsertMany` on the batch path).
+ * `notify` fires after each chunk's write; chunk #0's comes last.
+ * ponytail: batches run sequentially so `notify` keeps index order; add bounded concurrency if a document needs >10k chunks.
+ */
+const writeRecords = async (
+    store: RagVectorStore,
+    records: ReadonlyArray<RagVectorUpsertInput>,
+    notify: (chunkIndex: number) => void,
+    operation: object,
+): Promise<void> => {
+    if (records.length === 0) {
+        return;
+    }
+
+    const rest = records.slice(1);
+
+    if (!store.upsertMany) {
+        await concurrentMap(rest, INDEX_CONCURRENCY, async (record, restIndex) => {
+            await store.upsert(record, operation);
+            notify(restIndex + 1);
+        });
+        await store.upsert(records[0] as RagVectorUpsertInput, operation);
+        notify(0);
+
+        return;
+    }
+
+    for (let start = 0; start < rest.length; start += UPSERT_BATCH) {
+        const end = Math.min(start + UPSERT_BATCH, rest.length);
+
+        // eslint-disable-next-line no-await-in-loop -- sequential by design, see above
+        await store.upsertMany(rest.slice(start, end), operation);
+
+        for (let restIndex = start; restIndex < end; restIndex += 1) {
+            notify(restIndex + 1);
+        }
+    }
+
+    await store.upsertMany([records[0] as RagVectorUpsertInput], operation);
+    notify(0);
+};
 
 /**
  * Refuse a metadata object over Vectorize's ceiling, naming what breached it.
@@ -353,6 +406,23 @@ const requireVectors = (vectors: RagContext["vectors"]): NonNullable<RagContext[
     return vectors;
 };
 
+/**
+ * The `ai` root is a ~720 KB barrel: load it on the first embed, once, rather
+ * than at module load. A rejected import clears the memo so a later embed can
+ * retry instead of being pinned to the first failure for the isolate's life.
+ */
+let aiRoot: Promise<typeof import("ai")> | undefined;
+
+const loadAi = async (): Promise<typeof import("ai")> => {
+    aiRoot ??= import("ai").catch((error: unknown) => {
+        aiRoot = undefined;
+
+        throw error;
+    });
+
+    return aiRoot;
+};
+
 const defineRag = (config: RagConfig): ((context: RagContext) => Rag) => {
     if (typeof config.index !== "string" || config.index.length === 0) {
         throw new LunoraError("BAD_REQUEST", "@lunora/ai/rag: `index` must be a non-empty Vectorize index name");
@@ -546,7 +616,8 @@ const defineRag = (config: RagConfig): ((context: RagContext) => Rag) => {
             // model id is stamped at span start; token usage / cost are known only
             // after the call resolves, so they are attached through the handle.
             const run = async (span?: AiSpan): Promise<ReadonlyArray<number>> => {
-                const { embedding, providerMetadata, usage } = await aiEmbed({ model: resolvedModel, value: text });
+                const ai = await loadAi();
+                const { embedding, providerMetadata, usage } = await ai.embed({ model: resolvedModel, value: text });
 
                 assertDimensionsFit(embedding.length, resolvedModel);
                 recordUsage(modelIdOf(resolvedModel), { providerMetadata, usage: { inputTokens: { total: usage.tokens } } }, span, metrics);
@@ -624,7 +695,10 @@ const defineRag = (config: RagConfig): ((context: RagContext) => Rag) => {
             model ??= resolveEmbeddingModel(config.embeddingModel, context.ai);
 
             try {
-                const { embeddings, providerMetadata, usage } = await aiEmbedMany({ model, values: pending });
+                // Inside the try: a rejected `import("ai")` is a provider failure like any other and
+                // must fall back to per-chunk embeds, as the docstring promises.
+                const ai = await loadAi();
+                const { embeddings, providerMetadata, usage } = await ai.embedMany({ model, values: pending });
 
                 recordUsage(modelIdOf(model), { providerMetadata, usage: { inputTokens: { total: usage.tokens } } }, undefined, metrics);
 
@@ -700,16 +774,30 @@ const defineRag = (config: RagConfig): ((context: RagContext) => Rag) => {
             };
         };
 
-        const deleteChunkRange = async (sourceId: string, from: number, to: number, namespace: string | undefined): Promise<void> => {
+        const deleteChunkRange = async (sourceId: string, from: number, to: number, namespace: string | undefined, operation?: object): Promise<void> => {
             const ids = Array.from({ length: to - from }, (_, offset) => chunkVectorId(namespace, sourceId, from + offset));
 
             if (ids.length === 0) {
                 return;
             }
 
-            await store.deleteByIds(ids, namespace);
-            await textStore?.remove?.(ids, { namespace });
-            await config.lexicalStore?.remove?.(ids, { namespace });
+            const removeText = async (): Promise<void> => {
+                await textStore?.remove?.(ids, { namespace });
+                await config.lexicalStore?.remove?.(ids, { namespace });
+            };
+
+            // With a token, on a store that declares `deferredDelete`, the text
+            // removals ride the (possibly deferred) vector delete, so a skipped delete
+            // never strands vectors without their text. Otherwise the order is delete
+            // then remove, inline.
+            if (operation === undefined || !store.capabilities.deferredDelete) {
+                await store.deleteByIds(ids, namespace);
+                await removeText();
+
+                return;
+            }
+
+            await store.deleteByIds(ids, namespace, operation, removeText);
         };
 
         const index = async (input: IndexInput): Promise<IndexResult> => {
@@ -797,7 +885,9 @@ const defineRag = (config: RagConfig): ((context: RagContext) => Rag) => {
             // `index()` on the same bound Rag can neither read it nor drop it.
             const embedChunk = async (text: string): Promise<ReadonlyArray<number>> => batch.get(text) ?? (await embedText(text));
 
-            await concurrentMap(pieces, INDEX_CONCURRENCY, async (piece, chunkIndex) => {
+            // Every record is built (and its metadata size-checked) before the
+            // first write, so an oversized chunk fails the call with nothing written.
+            const records = pieces.map((piece, chunkIndex) => {
                 const id = ids[chunkIndex] as string;
                 const metadata: Record<string, unknown> = {
                     ...input.metadata,
@@ -826,25 +916,26 @@ const defineRag = (config: RagConfig): ((context: RagContext) => Rag) => {
 
                 assertMetadataFits(metadata, chunkIndex, input.id, store.capabilities.maxMetadataBytes);
 
-                // Vector upsert
-                await store.upsert({
-                    embed: embedChunk,
-                    id,
-                    input: piece,
-                    metadata,
-                    namespace: effectiveNamespace,
-                });
-
-                // Progress callback — fires after the upsert so callers see a
-                // consistent state when the callback runs.
-                input.onChunk?.({ chunkIndex, id, text: piece, total: pieces.length });
+                return { embed: embedChunk, id, input: piece, metadata, namespace: effectiveNamespace };
             });
+
+            // Progress callback — fires after the write so callers see a
+            // consistent state when the callback runs.
+            const notify = (chunkIndex: number): void => {
+                input.onChunk?.({ chunkIndex, id: ids[chunkIndex] as string, text: pieces[chunkIndex] as string, total: pieces.length });
+            };
+
+            // One token per call: a deferred facade skips this call's remaining writes (chunk #0 last) once one fails.
+            const operation = {};
+
+            await writeRecords(store, records, notify, operation);
 
             // A shrinking re-index leaves stale trailing chunks behind — delete
             // them so they cannot keep matching. New chunks are already written,
-            // so retrieval never observes a gap.
+            // so retrieval never observes a gap. Carries the call's token so a
+            // deferred facade queues it after chunk #0 and skips it if a write failed.
             if (previous.chunks !== undefined && previous.chunks > pieces.length) {
-                await deleteChunkRange(input.id, pieces.length, previous.chunks, effectiveNamespace);
+                await deleteChunkRange(input.id, pieces.length, previous.chunks, effectiveNamespace, operation);
             }
 
             return { chunks: pieces.length, ids, unchanged: false };
