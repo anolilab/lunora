@@ -631,11 +631,12 @@ const defineRag = (config: RagConfig): ((context: RagContext) => Rag) => {
                 return batch;
             }
 
-            const ai = await loadAi();
-
             model ??= resolveEmbeddingModel(config.embeddingModel, context.ai);
 
             try {
+                // Inside the try: a rejected `import("ai")` is a provider failure like any other and
+                // must fall back to per-chunk embeds, as the docstring promises.
+                const ai = await loadAi();
                 const { embeddings, providerMetadata, usage } = await ai.embedMany({ model, values: pending });
 
                 recordUsage(modelIdOf(model), { providerMetadata, usage: { inputTokens: { total: usage.tokens } } }, undefined, metrics);
