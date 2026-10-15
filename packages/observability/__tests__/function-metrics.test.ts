@@ -93,6 +93,37 @@ describe("recordFunctionMetric", () => {
         expect(row?.errors).toBe(0);
     });
 
+    it("writes a coalesced delta exactly as N single-dispatch records would", () => {
+        expect.assertions(4);
+
+        const harness = createSqliteExec();
+        const { sql } = harness;
+
+        recordFunctionMetric(sql, {
+            calls: 5,
+            conflicts: 1,
+            durationMaxMs: 40,
+            durationMinMs: 2,
+            durationMs: 100,
+            durationTotalMs: 100,
+            errored: true,
+            errorMessage: "boom",
+            errors: 2,
+            indexHitCounts: [{ count: 4, index: "byChannel", table: "messages" }],
+            lastErrorAt: 1500,
+            path: "feed:list",
+            scanCounts: [{ count: 3, table: "posts" }],
+            ts: 2000,
+        });
+
+        const [row] = readFunctionMetrics(sql);
+
+        expect(row).toMatchObject({ calls: 5, conflicts: 1, errors: 2, lastErrorAt: 1500, maxDurationMs: 40, scans: 3, totalDurationMs: 100 });
+        expect(harness.raw(`SELECT min_duration_ms AS m FROM "${FUNCTION_METRICS_TABLE}"`)).toEqual([{ m: 2 }]);
+        expect(readFunctionMetricIndexHits(sql)).toEqual([{ index: "byChannel", reads: 4, table: "messages" }]);
+        expect(readFunctionMetricBuckets(sql, "feed:list").buckets).toMatchObject([{ calls: 5, errors: 2 }]);
+    });
+
     it("keeps the smallest latency as the minimum when a faster call follows a slower one", () => {
         expect.assertions(1);
 
@@ -142,6 +173,21 @@ describe("recordFunctionMetric", () => {
         const [row] = harness.raw(`SELECT min_duration_ms FROM "${FUNCTION_METRICS_TABLE}"`);
 
         expect(row?.["min_duration_ms"]).toBe(7);
+    });
+
+    it("keeps an explicit null last-error time on a coalesced failure count", () => {
+        expect.assertions(3);
+
+        const harness = createSqliteExec();
+        const { sql } = harness;
+
+        recordFunctionMetric(sql, dispatch({ calls: 3, errorMessage: "boom", errored: true, errors: 2, lastErrorAt: null, ts: 5000 }));
+
+        const [row] = readFunctionMetrics(sql);
+
+        expect(row?.errors).toBe(2);
+        expect(row?.lastErrorAt).toBeNull();
+        expect(row?.lastErrorMessage).toBeNull();
     });
 
     it("records the failure message and timestamp when a dispatch throws", () => {

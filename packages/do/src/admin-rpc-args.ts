@@ -1504,12 +1504,20 @@ const parseEmit = (raw: string | undefined, devDefault: boolean): boolean => {
 };
 
 /** Parse a 0..1 sample rate (`LUNORA_REQUEST_LOG_SAMPLE`); clamped to `[0, 1]`, defaulting to `1` (record all) when unset/invalid. */
-const parseSampleRate = (raw: string | undefined): number => {
+const parseSampleRate = (raw: unknown): number => {
     if (raw === undefined) {
         return 1;
     }
 
-    const value = Number.parseFloat(raw);
+    // `Number`, not `parseFloat`: "0.25garbage" must be invalid, not 0.25. A blank string would coerce to 0.
+    // A bare number in wrangler config arrives as a number, not a string.
+    let value = Number.NaN;
+
+    if (typeof raw === "number") {
+        value = raw;
+    } else if (typeof raw === "string" && raw.trim() !== "") {
+        value = Number(raw);
+    }
 
     return Number.isFinite(value) ? Math.min(1, Math.max(0, value)) : 1;
 };

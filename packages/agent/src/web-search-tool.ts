@@ -1,6 +1,6 @@
+import { jsonSchema } from "@ai-sdk/provider-utils";
 import type { AiWebSearchItem, AiWebSearchProvider } from "@lunora/ai";
 import { LunoraError } from "@lunora/errors";
-import { jsonSchema } from "ai";
 
 import resolveAgentAi from "./agent-ai";
 import type { AgentToolDefinition } from "./types";

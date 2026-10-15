@@ -1,6 +1,6 @@
+import { jsonSchema } from "@ai-sdk/provider-utils";
 import { LunoraError } from "@lunora/errors";
 import type { LanguageModel, LanguageModelUsage, ModelMessage, Tool } from "ai";
-import { generateText, jsonSchema, Output, streamText, tool as aiTool } from "ai";
 
 import resolveAgentAi from "./agent-ai";
 import type {
@@ -86,6 +86,27 @@ const resolveAgentModel = (model: AgentModelInput, env: Record<string, unknown>)
     return model;
 };
 
+type AiModule = typeof import("ai");
+
+/**
+ * The `ai` root is ~720 KB and builds schemas at module scope, so it loads on the
+ * first model call, not at import. Known limit: `@lunora/ai`'s barrel re-exports
+ * values from `ai`, so an agent definition still evaluates `ai` through
+ * `agent-ai` -> `@lunora/ai`; this deferral pays off once that barrel is split.
+ */
+let aiPromise: Promise<AiModule> | undefined;
+const loadAi = (): Promise<AiModule> => {
+    // A rejected import is not memoised: the extractors call this directly and a durable step
+    // retry must be able to load again.
+    aiPromise ??= import("ai").catch((error: unknown) => {
+        aiPromise = undefined;
+
+        throw error;
+    });
+
+    return aiPromise;
+};
+
 /**
  * The per-agent turn preparation shared by the `generateText` and `streamText`
  * seams: the resolved default model, the schema-only tool map (NO `execute` —
@@ -93,16 +114,16 @@ const resolveAgentModel = (model: AgentModelInput, env: Record<string, unknown>)
  * structured-output spec, and the static generation settings pulled off the
  * config. Built once per seam; the per-turn overrides arrive on each call.
  */
-const prepareAgentTurn = (agent: AgentDefinition, env: Record<string, unknown>) => {
+const prepareAgentTurn = (ai: AiModule, agent: AgentDefinition, env: Record<string, unknown>) => {
     const defaultModel = resolveAgentModel(agent.model, env);
 
     const tools: Record<string, Tool> = {};
 
     for (const [name, definition] of Object.entries(agent.tools ?? {})) {
-        tools[name] = aiTool({ description: definition.description, inputSchema: definition.inputSchema });
+        tools[name] = ai.tool({ description: definition.description, inputSchema: definition.inputSchema });
     }
 
-    const output = agent.output === undefined ? undefined : Output.object({ schema: agent.output });
+    const output = agent.output === undefined ? undefined : ai.Output.object({ schema: agent.output });
 
     const staticSettings = {
         ...(agent.temperature === undefined ? {} : { temperature: agent.temperature }),
@@ -112,6 +133,27 @@ const prepareAgentTurn = (agent: AgentDefinition, env: Record<string, unknown>) 
     };
 
     return { defaultModel, output, staticSettings, tools };
+};
+
+/** Memoised per-seam turn preparation, built on the seam's first call once `ai` has loaded. */
+const lazyTurn = (agent: AgentDefinition, env: Record<string, unknown>) => {
+    let prepared: Promise<{ ai: AiModule; base: ReturnType<typeof prepareAgentTurn> }> | undefined;
+
+    return () => {
+        // A rejected preparation (a transient failure in a function-valued `model`, say) is not
+        // memoised: the durable step retries through this seam and must call the factory again.
+        prepared ??= loadAi()
+            .then((ai) => {
+                return { ai, base: prepareAgentTurn(ai, agent, env) };
+            })
+            .catch((error: unknown) => {
+                prepared = undefined;
+
+                throw error;
+            });
+
+        return prepared;
+    };
 };
 
 /**
@@ -155,10 +197,11 @@ const buildTurnRequest = (base: ReturnType<typeof prepareAgentTurn>, { activeToo
  * @experimental
  */
 const createAgentGenerate = (agent: AgentDefinition, env: Record<string, unknown>): AgentGenerate => {
-    const base = prepareAgentTurn(agent, env);
+    const getBase = lazyTurn(agent, env);
 
     return async (options) => {
-        const result = await generateText(buildTurnRequest(base, options));
+        const { ai, base } = await getBase();
+        const result = await ai.generateText(buildTurnRequest(base, options));
 
         const usage = toAgentUsage(result.usage);
 
@@ -186,10 +229,11 @@ const createAgentGenerate = (agent: AgentDefinition, env: Record<string, unknown
  * @experimental
  */
 const createStreamGenerate = (agent: AgentDefinition, env: Record<string, unknown>): AgentStreamGenerate => {
-    const base = prepareAgentTurn(agent, env);
+    const getBase = lazyTurn(agent, env);
 
     return async (options, onDelta) => {
-        const result = streamText(buildTurnRequest(base, options));
+        const { ai, base } = await getBase();
+        const result = ai.streamText(buildTurnRequest(base, options));
 
         // Drain the delta stream first, teeing each chunk to the live sink. This
         // both feeds the live channel and drives the call to completion, so the
@@ -295,9 +339,10 @@ const buildExtractionPrompt = (userInput: string, assistantText: string): string
 const createGraphExtract =
     (): AgentGraphExtract =>
     async ({ assistantText, env, model, userInput }) => {
-        const { output } = await generateText({
+        const ai = await loadAi();
+        const { output } = await ai.generateText({
             model: resolveAgentModel(model, env),
-            output: Output.object({ schema: GRAPH_EXTRACTION_SCHEMA }),
+            output: ai.Output.object({ schema: GRAPH_EXTRACTION_SCHEMA }),
             prompt: buildExtractionPrompt(userInput, assistantText),
         });
 
@@ -327,7 +372,8 @@ const buildEpisodePrompt = (userInput: string, assistantText: string): string =>
 const createEpisodeExtract =
     (): AgentEpisodeExtract =>
     async ({ assistantText, env, model, userInput }) => {
-        const { text } = await generateText({
+        const ai = await loadAi();
+        const { text } = await ai.generateText({
             model: resolveAgentModel(model, env),
             prompt: buildEpisodePrompt(userInput, assistantText),
         });
@@ -350,7 +396,8 @@ const COMPACTION_SYSTEM =
 const createCompact =
     (): AgentCompact =>
     async ({ env, messages, model }) => {
-        const { text } = await generateText({
+        const ai = await loadAi();
+        const { text } = await ai.generateText({
             messages,
             model: resolveAgentModel(model, env),
             system: COMPACTION_SYSTEM,

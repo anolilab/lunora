@@ -15,9 +15,10 @@ import {
     recordFunctionMetric,
 } from "@lunora/observability";
 import type { FunctionCallStat } from "@lunora/shard-engine";
-import { ConflictError, SCAN_DEP } from "@lunora/shard-engine";
-import { describe, expect, it } from "vitest";
+import { ADMIN_FUNCTIONS, ConflictError, SCAN_DEP } from "@lunora/shard-engine";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
+import { parseSampleRate } from "../src/admin-rpc-args";
 import type { ShardDOState } from "../src/shard-do";
 import { ShardDO } from "../src/shard-do";
 import createSqliteExec from "./_helpers/node-sqlite";
@@ -446,6 +447,371 @@ describe("shardDO persisted metrics", () => {
         } finally {
             database.close();
         }
+    });
+
+    describe("coalesced writes (flush-every setting)", () => {
+        const BASE = 600 * FUNCTION_METRICS_BUCKET_MS + 1000;
+
+        const clock = { now: BASE };
+
+        /** Advances a fake clock by a queued duration per dispatch so handler latency is exact. */
+        class ClockShard extends ShardDO {
+            public durations: number[] = [];
+
+            public throwNext = false;
+
+            public useIndex = false;
+
+            public useScan = false;
+
+            public override async handleRpc(): Promise<unknown> {
+                clock.now += this.durations.shift() ?? 0;
+
+                if (this.useIndex) {
+                    this.getCtxDbIndexUseHook()("messages", "byChannel");
+                }
+
+                if (this.useScan) {
+                    this.getCtxDbReadHook()("posts", SCAN_DEP);
+                }
+
+                if (this.throwNext) {
+                    throw new Error("boom");
+                }
+
+                return { ok: true };
+            }
+        }
+
+        const setup = (flushEvery?: number | string) => {
+            clock.now = BASE;
+            vi.spyOn(Date, "now").mockImplementation(() => clock.now);
+
+            const database = createSqliteExec();
+            const env: Record<string, number | string> = { LUNORA_ADMIN_TOKEN: ADMIN_TOKEN };
+
+            if (flushEvery !== undefined) {
+                env.LUNORA_METRICS_FLUSH_EVERY = flushEvery;
+            }
+
+            return { database, shard: new ClockShard(makeState(database), env) };
+        };
+
+        afterEach(() => {
+            vi.restoreAllMocks();
+        });
+
+        it("writes nothing for 19 dispatches then one exact row on the 20th", async () => {
+            expect.assertions(5);
+
+            const { database, shard } = setup("20");
+
+            try {
+                shard.durations = Array.from({ length: 20 }, (_, index) => index + 1);
+
+                for (let index = 0; index < 19; index += 1) {
+                    // eslint-disable-next-line no-await-in-loop -- sequential dispatches
+                    await shard.fetch(userRequest("messages:list"));
+                }
+
+                expect(readFunctionMetrics(database.sql)).toEqual([]);
+
+                await shard.fetch(userRequest("messages:list"));
+
+                expect(readFunctionMetrics(database.sql)).toMatchObject([{ calls: 20, errors: 0, maxDurationMs: 20, totalDurationMs: 210 }]);
+                expect(database.raw(`SELECT min_duration_ms AS m FROM "${FUNCTION_METRICS_TABLE}"`)).toEqual([{ m: 1 }]);
+                expect(database.raw(`SELECT calls FROM "${FUNCTION_METRICS_BUCKETS_TABLE}"`)).toEqual([{ calls: 20 }]);
+                expect(database.raw(`SELECT COUNT(*) AS c FROM "${FUNCTION_METRICS_TABLE}"`)).toEqual([{ c: 1 }]);
+            } finally {
+                database.close();
+            }
+        });
+
+        it("flushes immediately on an error with exact counts for the whole delta", async () => {
+            expect.assertions(1);
+
+            const { database, shard } = setup("20");
+
+            try {
+                for (let index = 0; index < 4; index += 1) {
+                    // eslint-disable-next-line no-await-in-loop -- sequential dispatches
+                    await shard.fetch(userRequest("messages:list"));
+                }
+
+                shard.throwNext = true;
+                await shard.fetch(userRequest("messages:list"));
+
+                expect(readFunctionMetrics(database.sql)).toMatchObject([{ calls: 5, errors: 1, lastErrorMessage: "boom" }]);
+            } finally {
+                database.close();
+            }
+        });
+
+        it("attributes every coalesced dispatch's index hits and scans", async () => {
+            expect.assertions(2);
+
+            const { database, shard } = setup("5");
+
+            try {
+                shard.useIndex = true;
+                shard.useScan = true;
+
+                for (let index = 0; index < 5; index += 1) {
+                    // eslint-disable-next-line no-await-in-loop -- sequential dispatches
+                    await shard.fetch(userRequest("feed:list"));
+                }
+
+                expect(readFunctionMetricIndexHits(database.sql)).toEqual([{ index: "byChannel", reads: 5, table: "messages" }]);
+                expect(readFunctionMetricScans(database.sql).get("feed:list")).toEqual([{ scans: 5, table: "posts" }]);
+            } finally {
+                database.close();
+            }
+        });
+
+        it("flushes the pending delta when the minute bucket changes, keeping each minute exact", async () => {
+            expect.assertions(2);
+
+            const { database, shard } = setup("100");
+
+            try {
+                await shard.fetch(userRequest("messages:list"));
+                await shard.fetch(userRequest("messages:list"));
+
+                expect(readFunctionMetrics(database.sql)).toEqual([]);
+
+                clock.now += FUNCTION_METRICS_BUCKET_MS;
+                await shard.fetch(userRequest("messages:list"));
+
+                // The two minute-A calls were written under minute A; the minute-B call is still pending.
+                expect(database.raw(`SELECT bucket_ms, calls FROM "${FUNCTION_METRICS_BUCKETS_TABLE}"`)).toEqual([
+                    { bucket_ms: 600 * FUNCTION_METRICS_BUCKET_MS, calls: 2 },
+                ]);
+            } finally {
+                database.close();
+            }
+        });
+
+        it("stamps each coalesced path with its own last-called time", async () => {
+            expect.assertions(2);
+
+            const { database, shard } = setup("10");
+
+            try {
+                await shard.fetch(userRequest("a:first"));
+                clock.now += 5000;
+                await shard.fetch(userRequest("b:second"));
+                shard.throwNext = true;
+                await shard.fetch(userRequest("b:second"));
+
+                const rows = readFunctionMetrics(database.sql);
+
+                expect(rows.map((row) => row.path)).toEqual(["b:second", "a:first"]);
+                expect(rows.find((row) => row.path === "a:first")?.lastCalledAt).toBe(BASE);
+            } finally {
+                database.close();
+            }
+        });
+
+        it("records an errored dispatch for a new path once the pending map is full, instead of dropping it", async () => {
+            expect.assertions(3);
+
+            const { database, shard } = setup("100000");
+
+            try {
+                const pending = (shard as unknown as { pendingFunctionMetrics: Map<string, unknown> }).pendingFunctionMetrics;
+
+                for (let index = 0; index < FUNCTION_METRICS_MAX_PATHS; index += 1) {
+                    pending.set(`fill:${String(index)}`, {
+                        calls: 1,
+                        conflicts: 0,
+                        durationMaxMs: 1,
+                        durationMinMs: 1,
+                        durationTotalMs: 1,
+                        errors: 0,
+                        indexHits: new Map(),
+                        lastCalledAt: BASE,
+                        lastErrorAt: null,
+                        lastErrorMessage: null,
+                        scans: new Map(),
+                    });
+                }
+
+                // The new path arrives with the map at the cap: the full map is flushed first.
+                await shard.fetch(userRequest("late:path"));
+
+                const after = (shard as unknown as { pendingFunctionMetrics: Map<string, { calls: number }> }).pendingFunctionMetrics;
+
+                expect(database.raw(`SELECT COUNT(*) AS c FROM "${FUNCTION_METRICS_TABLE}"`)).toEqual([{ c: FUNCTION_METRICS_MAX_PATHS }]);
+                expect(after.get("late:path")?.calls).toBe(1);
+                expect(after.size).toBe(1);
+            } finally {
+                database.close();
+            }
+        }, 60_000);
+
+        it.each([ADMIN_FUNCTIONS.getFunctionStats, ADMIN_FUNCTIONS.getMetrics, ADMIN_FUNCTIONS.getQueryInsights])(
+            "flushes the pending delta before the admin read %s",
+            async (functionPath) => {
+                expect.assertions(1);
+
+                const { database, shard } = setup("100");
+
+                try {
+                    await shard.fetch(userRequest("messages:list"));
+                    await shard.fetch(adminRequest(functionPath));
+
+                    expect(readFunctionMetrics(database.sql)).toMatchObject([{ calls: 1, path: "messages:list" }]);
+                } finally {
+                    database.close();
+                }
+            },
+        );
+
+        it("leaves the pending delta alone on an admin read that never touches the metric tables", async () => {
+            expect.assertions(1);
+
+            const { database, shard } = setup("100");
+
+            try {
+                await shard.fetch(userRequest("messages:list"));
+                await shard.fetch(adminRequest(ADMIN_FUNCTIONS.schemaVersion));
+
+                expect(database.raw(`SELECT name FROM sqlite_master WHERE name = '${FUNCTION_METRICS_TABLE}'`)).toEqual([]);
+            } finally {
+                database.close();
+            }
+        });
+
+        const failMetricWrites = (database: ReturnType<typeof createSqliteExec>): { failing: boolean } => {
+            const realExec = database.sql.exec.bind(database.sql);
+            const control = { failing: true };
+
+            Object.assign(database.sql, {
+                exec: (query: string, ...params: unknown[]) => {
+                    if (control.failing && query.includes("__lunora_metrics")) {
+                        throw new Error("storage hiccup");
+                    }
+
+                    return realExec(query, ...params);
+                },
+            });
+
+            return control;
+        };
+
+        it("drops a failed function delta and starts the next write clean, without double counting", async () => {
+            expect.assertions(3);
+
+            const { database, shard } = setup("1");
+            const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+            try {
+                const control = failMetricWrites(database);
+
+                await shard.fetch(userRequest("messages:list"));
+
+                expect(database.raw(`SELECT name FROM sqlite_master WHERE name = '${FUNCTION_METRICS_TABLE}'`)).toEqual([]);
+
+                control.failing = false;
+                await shard.fetch(userRequest("messages:list"));
+
+                expect(readFunctionMetrics(database.sql)).toMatchObject([{ calls: 1, errors: 0, path: "messages:list" }]);
+                expect(warn).toHaveBeenCalledTimes(1);
+            } finally {
+                database.close();
+            }
+        });
+
+        it("warns once per flush with the dropped counts", async () => {
+            expect.assertions(2);
+
+            const { database, shard } = setup("2");
+            const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+            try {
+                failMetricWrites(database);
+
+                await shard.fetch(userRequest("a:first"));
+                await shard.fetch(userRequest("b:second"));
+
+                expect(warn).toHaveBeenCalledTimes(1);
+                expect(warn).toHaveBeenCalledWith("[@lunora/do] metric write failed, dropped 2 function deltas and 0 statement samples: storage hiccup");
+            } finally {
+                database.close();
+            }
+        });
+
+        it.each([3, "3"])("accepts %j as the flush-every value (a bare number in wrangler config arrives as a number)", async (value) => {
+            expect.assertions(2);
+
+            const { database, shard } = setup(value);
+
+            try {
+                await shard.fetch(userRequest("messages:list"));
+                await shard.fetch(userRequest("messages:list"));
+
+                expect(readFunctionMetrics(database.sql)).toEqual([]);
+
+                await shard.fetch(userRequest("messages:list"));
+
+                expect(readFunctionMetrics(database.sql)).toMatchObject([{ calls: 3 }]);
+            } finally {
+                database.close();
+            }
+        });
+
+        it("lets an authorised SQL console query see the pending calls of the metrics table", async () => {
+            expect.assertions(1);
+
+            const { database, shard } = setup("100");
+
+            try {
+                await shard.fetch(userRequest("messages:list"));
+
+                const response = await shard.fetch(
+                    new Request("https://shard.internal/rpc", {
+                        body: JSON.stringify({
+                            args: { sql: `SELECT path, calls FROM "${FUNCTION_METRICS_TABLE}"` },
+                            functionPath: ADMIN_FUNCTIONS.runSql,
+                        }),
+                        headers: { authorization: `Bearer ${ADMIN_TOKEN}`, "content-type": "application/json" },
+                        method: "POST",
+                    }),
+                );
+
+                expect(JSON.stringify(await response.json())).toContain('"calls":1');
+            } finally {
+                database.close();
+            }
+        });
+
+        it.each(["abc", "0", "2.5", "-3", ""])("treats %j as an invalid flush-every value (behaves as 1)", async (value) => {
+            expect.assertions(1);
+
+            const { database, shard } = setup(value);
+
+            try {
+                await shard.fetch(userRequest("messages:list"));
+
+                expect(readFunctionMetrics(database.sql)).toMatchObject([{ calls: 1 }]);
+            } finally {
+                database.close();
+            }
+        });
+    });
+
+    it("parseSampleRate rejects trailing garbage instead of truncating it", () => {
+        expect.assertions(8);
+
+        expect(parseSampleRate("0.25garbage")).toBe(1);
+        expect(parseSampleRate("")).toBe(1);
+        expect(parseSampleRate("0.25")).toBe(0.25);
+        expect(parseSampleRate(undefined)).toBe(1);
+        // A bare number in wrangler config arrives as a number.
+        expect(parseSampleRate(0.25)).toBe(0.25);
+        expect(parseSampleRate(5)).toBe(1);
+        expect(parseSampleRate(-1)).toBe(0);
+        expect(parseSampleRate(Number.NaN)).toBe(1);
     });
 
     it("counts only OCC conflicts through fetch — a unique-violation 409 is an error but not a conflict", async () => {

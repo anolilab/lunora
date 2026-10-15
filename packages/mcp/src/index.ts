@@ -57,6 +57,7 @@ export type {
 } from "./paid";
 export { createPaidMcpServer } from "./paid";
 export type { LunoraMcpServerOptions } from "./server";
-export { connectStdio, createLunoraMcpServer } from "./server";
+export { createLunoraMcpServer } from "./server";
+export { default as connectStdio } from "./stdio";
 export type { ToolDefinition, ToolInputSchema, ToolResult } from "./tools";
 export { callTool, OBSERVABILITY_TOOL_DEFINITIONS, READ_ONLY_TOOL_DEFINITIONS, toolDefinitions, WRITE_TOOL_DEFINITIONS } from "./tools";

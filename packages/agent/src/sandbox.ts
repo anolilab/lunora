@@ -1,5 +1,5 @@
+import { jsonSchema } from "@ai-sdk/provider-utils";
 import { LunoraError } from "@lunora/errors";
-import { jsonSchema } from "ai";
 
 import { SANDBOX_INVOKE_PATH, toFunctionReference } from "./paths";
 import { SANDBOX_BROWSER_DISPATCH_TIMEOUT_MS, SANDBOX_CONTAINER_DISPATCH_TIMEOUT_MS } from "./sandbox-budgets";

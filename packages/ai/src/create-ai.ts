@@ -1,9 +1,6 @@
-import { createOpenAI } from "@ai-sdk/openai";
 import { LunoraError } from "@lunora/errors";
 import type { EmbeddingModel, LanguageModel } from "ai";
 import { createWorkersAI } from "workers-ai-provider";
-import { anthropic } from "workers-ai-provider/anthropic";
-import { openai } from "workers-ai-provider/openai";
 
 import type { AiGatewayMetadata } from "./gateway";
 import {
@@ -31,13 +28,68 @@ import type {
     WorkersAiProviderLike,
 } from "./types";
 
+type LanguageModelV4 = Extract<LanguageModel, { specificationVersion: "v4" }>;
+type EmbeddingModelV4 = Extract<EmbeddingModel, { specificationVersion: "v4" }>;
+
 /**
- * Wire-format plugins for AI Gateway catalog models. `openai` parses every
- * OpenAI-compatible provider (OpenAI, Google and xAI on the run path, Groq,
- * DeepSeek, Mistral, …) and dynamic routes; `anthropic` is needed because the
- * gateway passes Anthropic through in its native format.
+ * Wire-format plugins for AI Gateway catalog models, plus `createOpenAI` for the
+ * proxy path. `openai` parses every OpenAI-compatible provider (OpenAI, Google and
+ * xAI on the run path, Groq, DeepSeek, Mistral, …) and dynamic routes; `anthropic`
+ * is needed because the gateway passes Anthropic through in its native format.
+ *
+ * They pull ~590 KB of provider code and ~40 zod schemas, so they load on the first
+ * gateway/proxy model rather than at module load: a Worker that only runs `@cf/…`
+ * models never evaluates them.
  */
-const GATEWAY_PROVIDER_PLUGINS = [openai, anthropic];
+let gatewayProviders: Promise<{ createOpenAI: typeof import("@ai-sdk/openai").createOpenAI; plugins: unknown[] }> | undefined;
+
+const loadGatewayProviders = (): NonNullable<typeof gatewayProviders> => {
+    gatewayProviders ??= Promise.all([import("@ai-sdk/openai"), import("workers-ai-provider/openai"), import("workers-ai-provider/anthropic")]).then(
+        ([sdk, { openai }, { anthropic }]) => {
+            return { createOpenAI: sdk.createOpenAI, plugins: [openai, anthropic] };
+        },
+        (error: unknown) => {
+            // A failed import (a flaky chunk fetch) must not poison the isolate.
+            gatewayProviders = undefined;
+
+            throw error;
+        },
+    );
+
+    return gatewayProviders;
+};
+
+/**
+ * A model that is not built yet: `model()` is synchronous but the provider that
+ * builds it is still importing, so each call awaits `resolve()` and delegates.
+ */
+const lazyLanguageModel = (modelId: string, provider: string, resolve: () => Promise<LanguageModelV4>): LanguageModelV4 => {
+    return {
+        doGenerate: async (options) => resolve().then((model) => model.doGenerate(options)),
+        doStream: async (options) => resolve().then((model) => model.doStream(options)),
+        modelId,
+        provider,
+        specificationVersion: "v4",
+        get supportedUrls() {
+            return resolve().then((model) => model.supportedUrls);
+        },
+    };
+};
+
+const lazyEmbeddingModel = (modelId: string, provider: string, resolve: () => Promise<EmbeddingModelV4>): EmbeddingModelV4 => {
+    return {
+        doEmbed: async (options) => resolve().then((model) => model.doEmbed(options)),
+        get maxEmbeddingsPerCall() {
+            return resolve().then((model) => model.maxEmbeddingsPerCall);
+        },
+        modelId,
+        provider,
+        specificationVersion: "v4",
+        get supportsParallelCalls() {
+            return resolve().then((model) => model.supportsParallelCalls);
+        },
+    };
+};
 
 /**
  * A `"<provider>/<model>"` catalog slug or a `dynamic/<route>` — anything slashed
@@ -137,7 +189,18 @@ const resolveProxy = (env: Record<string, unknown> | undefined): ProxyProvider |
         return { chat: refuse, embedding: refuse };
     }
 
-    return createOpenAI({ apiKey: token ?? "", baseURL: proxyURL, name: "lunora-proxy" });
+    let proxy: Promise<ProxyProvider> | undefined;
+
+    const load = (): Promise<ProxyProvider> => {
+        proxy ??= loadGatewayProviders().then(({ createOpenAI }) => createOpenAI({ apiKey: token ?? "", baseURL: proxyURL, name: "lunora-proxy" }));
+
+        return proxy;
+    };
+
+    return {
+        chat: (modelId) => lazyLanguageModel(modelId, "lunora-proxy", async () => load().then((openai) => openai.chat(modelId) as LanguageModelV4)),
+        embedding: (modelId) => lazyEmbeddingModel(modelId, "lunora-proxy", async () => load().then((openai) => openai.embedding(modelId) as EmbeddingModelV4)),
+    };
 };
 
 /**
@@ -255,9 +318,26 @@ const createAi = (options: LunoraAiOptions): LunoraAi => {
     // the gateway for gateway-path-only ones), defaulting to
     // the account's `default` gateway when none is configured. `@cf/…` ids are
     // unaffected.
-    const workersai: WorkersAiProviderLike =
-        provider ?? (binding ? createWorkersAI({ binding, gateway: resolvedGateway, providers: GATEWAY_PROVIDER_PLUGINS }) : workersAiUnavailable);
+    const workersai: WorkersAiProviderLike = provider ?? (binding ? createWorkersAI({ binding, gateway: resolvedGateway }) : workersAiUnavailable);
 
+    // Gateway slugs need the wire-format plugins, so they go through a second
+    // instance built once the plugins have loaded; `@cf/…` ids never wait on it.
+    let gatewayWorkersAi: Promise<WorkersAiProviderLike> | undefined;
+
+    const loadGatewayWorkersAi = (): Promise<WorkersAiProviderLike> => {
+        gatewayWorkersAi ??= loadGatewayProviders().then(
+            ({ plugins }) => createWorkersAI({ binding, gateway: resolvedGateway, providers: plugins as never }) as WorkersAiProviderLike,
+        );
+
+        return gatewayWorkersAi;
+    };
+
+    if (provider === undefined && binding && resolvedGateway !== undefined) {
+        // Start the import now so the first gateway call rarely waits on it.
+        loadGatewayWorkersAi().catch(() => {});
+    }
+
+    // eslint-disable-next-line sonarjs/function-return-type -- every arm returns LanguageModel; heuristic false-positive on the union
     const resolveModelId = (modelId: string, modelOptions: AiModelOptions | undefined): LanguageModel => {
         if (!isGatewayModelId(modelId)) {
             // Unlisted provider settings are forwarded to `binding.run`'s options.
@@ -268,7 +348,15 @@ const createAi = (options: LunoraAiOptions): LunoraAi => {
             return proxy.chat(modelId);
         }
 
-        return gatewayMetadataFields === undefined ? workersai(modelId) : workersai(modelId, { metadata: gatewayMetadataFields });
+        const settings = gatewayMetadataFields === undefined ? undefined : { metadata: gatewayMetadataFields };
+
+        if (provider !== undefined || !binding) {
+            return workersai(modelId, settings);
+        }
+
+        return lazyLanguageModel(modelId, "workersai", async () =>
+            loadGatewayWorkersAi().then((gatewayProvider) => gatewayProvider(modelId, settings) as LanguageModelV4),
+        );
     };
 
     const model = (input?: ModelInput, modelOptions?: AiModelOptions): LanguageModel => {

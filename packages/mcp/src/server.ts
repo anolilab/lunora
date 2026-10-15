@@ -1,62 +1,23 @@
 /* eslint-disable sonarjs/deprecation -- the SDK marks the low-level `Server` @deprecated in favour of the high-level `McpServer`, but explicitly sanctions `Server` for "advanced use cases". Ours qualifies: we dispatch tools defined with plain JSON Schema and bridge structured results ourselves, which avoids McpServer's per-tool zod dependency. */
-import { readFileSync } from "node:fs";
-import { dirname, join } from "node:path";
-import { fileURLToPath } from "node:url";
-
 import { LunoraClient } from "@lunora/client";
 import { LunoraError } from "@lunora/errors";
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
-import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { CallToolRequestSchema, ListToolsRequestSchema } from "@modelcontextprotocol/sdk/types.js";
 
+import pkg from "../package.json";
 import type { McpAgentExposure } from "./agent-tools";
 import { agentToolDefinitions, callAgentTool, isAgentToolName } from "./agent-tools";
 import { callTool, toolDefinitions } from "./tools";
 
 /**
- * Resolve the package's real version so the MCP `initialize` handshake reports
- * the build a client is actually talking to. Reading `package.json` at runtime
- * (rather than hardcoding) keeps the advertised version in lockstep with
- * semantic-release bumps; if resolution ever fails we fall back to `0.0.0`.
+ * Server name advertised in the MCP `initialize` handshake. The version defaults
+ * to the `package.json` bundled at build time, which is stamped before
+ * semantic-release bumps the manifest and so can lag one release behind on
+ * Workers (it was `0.0.0` there before). The Node entry passes the installed
+ * manifest's exact version via `version`.
  */
-const resolveVersion = (): string => {
-    // Walk up from this module's directory to the nearest `package.json`. A
-    // relative `../package.json` is unreliable because the bundler emits this
-    // code into a hashed shared-chunk subdirectory whose depth isn't fixed.
-    try {
-        let directory = dirname(fileURLToPath(import.meta.url));
-
-        for (let depth = 0; depth < 8; depth += 1) {
-            try {
-                const raw = readFileSync(join(directory, "package.json"), "utf8");
-                const pkg = JSON.parse(raw) as { name?: string; version?: string };
-
-                // Skip any nested package.json that isn't ours.
-                if (pkg.name === "@lunora/mcp" && typeof pkg.version === "string" && pkg.version.length > 0) {
-                    return pkg.version;
-                }
-            } catch {
-                // No package.json at this level (or unreadable); keep climbing.
-            }
-
-            const parent = dirname(directory);
-
-            if (parent === directory) {
-                break;
-            }
-
-            directory = parent;
-        }
-    } catch {
-        // Fall through to the static fallback below.
-    }
-
-    return "0.0.0";
-};
-
-/** Server name/version advertised in the MCP `initialize` handshake. */
-const SERVER_INFO = { name: "lunora", version: resolveVersion() } as const;
+const SERVER_NAME = "lunora";
 
 interface LunoraMcpServerOptions {
     /** Wall-clock budget a single agent tool call awaits before returning a pending result. */
@@ -139,6 +100,8 @@ interface LunoraMcpServerOptions {
     token?: string;
     /** Base URL of the deployed Lunora Worker. Required unless `client` is given. */
     url?: string;
+    /** Version reported in the `initialize` handshake. Defaults to the version bundled at build time. */
+    version?: string;
 }
 
 /**
@@ -197,7 +160,7 @@ const createLunoraMcpServer = (options: LunoraMcpServerOptions): Server => {
     // Its own gate, not folded into observability: log lines and raw table rows
     // are different data classes, and one opt-in must not silently grant both.
     const allowDataReads = options.allowDataReads === true && hasAdminToken;
-    const server = new Server(SERVER_INFO, { capabilities: { tools: {} } });
+    const server = new Server({ name: SERVER_NAME, version: options.version ?? pkg.version }, { capabilities: { tools: {} } });
 
     server.setRequestHandler(ListToolsRequestSchema, () => {
         return { tools: [...toolDefinitions(allowWrites, allowObservability, allowDataReads), ...agentToolDefinitions(agents, allowAgents)] };
@@ -224,18 +187,5 @@ const createLunoraMcpServer = (options: LunoraMcpServerOptions): Server => {
     return server;
 };
 
-/**
- * Build the server and connect it over stdio — the transport MCP clients use
- * when they spawn the `lunora-mcp` binary. Resolves once the transport is
- * connected; the process then stays alive serving requests.
- */
-const connectStdio = async (options: LunoraMcpServerOptions): Promise<Server> => {
-    const server = createLunoraMcpServer(options);
-
-    await server.connect(new StdioServerTransport());
-
-    return server;
-};
-
 export type { LunoraMcpServerOptions };
-export { connectStdio, createLunoraMcpServer, resolveClient };
+export { createLunoraMcpServer, resolveClient };

@@ -139,8 +139,8 @@ const normalizeSql = (sql: string): string => {
 
 /**
  * SQL handles whose reserved tables have already been ensured this instance.
- * `recordQueryMetric` runs once per instrumented statement — potentially many
- * times per dispatch — so without memoizing, a query-in-a-loop handler re-ran
+ * `recordQueryMetric` runs once per distinct statement per flush (the DO folds
+ * repeats and coalesces dispatches, see `LUNORA_METRICS_FLUSH_EVERY`) — so without memoizing, a query-in-a-loop handler re-ran
  * `CREATE TABLE IF NOT EXISTS` (twice, counting the bucket table) on every
  * single execution. A `WeakSet` so a torn-down shard's handle is collectable;
  * a fresh handle (a new isolate after hibernation) re-ensures, which is
@@ -599,6 +599,7 @@ const readQueryMetrics = (sql: SqlExec): QueryStatEntry[] => {
 };
 
 export {
+    latencyBucketIndex,
     normalizeSql,
     pruneQueryBuckets,
     QUERY_BUCKET_RETENTION,

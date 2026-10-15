@@ -1,6 +1,6 @@
 {
     "name": "@lunora/mcp",
-    "version": "1.0.0-alpha.240",
+    "version": "1.0.0-alpha.241",
     "description": "Model Context Protocol server exposing a Lunora deployment to AI agents",
     "keywords": [
         "ai-agents",
@@ -46,6 +46,14 @@
         "./docs": {
             "types": "./dist/docs/index.d.ts",
             "import": "./dist/docs/index.mjs"
+        },
+        "./node": {
+            "types": "./dist/node/index.d.ts",
+            "import": "./dist/node/index.mjs"
+        },
+        "./worker": {
+            "types": "./dist/worker/index.d.ts",
+            "import": "./dist/worker/index.mjs"
         },
         "./package.json": "./package.json"
     },

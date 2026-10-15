@@ -8,10 +8,10 @@
  * real SQLite handle so the durable `__lunora_metrics_queries` table can be
  * read back afterwards.
  */
-import { readQueryMetrics } from "@lunora/observability";
+import { readQueryInsights, readQueryMetrics } from "@lunora/observability";
 import type { SqlExec } from "@lunora/shard-engine";
 import { ADMIN_FUNCTIONS } from "@lunora/shard-engine";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type { ShardDOState } from "../src/shard-do";
 import { ShardDO } from "../src/shard-do";
@@ -58,6 +58,8 @@ class StmtSampleShard extends ShardDO {
 
     public repeatsOfFirst = 0;
 
+    public throwAfterQueries = false;
+
     public override async handleRpc(): Promise<unknown> {
         if (this.attachSpan) {
             const anchor = this.getCurrentTrace();
@@ -75,6 +77,10 @@ class StmtSampleShard extends ShardDO {
 
         for (let index = 0; index < this.repeatsOfFirst; index += 1) {
             sql.exec(`SELECT 0 AS x`).toArray();
+        }
+
+        if (this.throwAfterQueries) {
+            throw new Error("boom");
         }
 
         this.handlesSeen.push(sql, this.sql, this.sql);
@@ -98,6 +104,182 @@ const adminRequest = (functionPath: string): Request =>
     });
 
 describe("statement sample buffer (OBS-04)", () => {
+    it("coalesces statement samples across dispatches into one exact exec_count per flush", async () => {
+        expect.assertions(3);
+
+        const database = createSqliteExec();
+
+        try {
+            const shard = new StmtSampleShard(sqliteStateDouble(database), { LUNORA_ADMIN_TOKEN: ADMIN_TOKEN, LUNORA_METRICS_FLUSH_EVERY: "3" });
+
+            shard.attachSpan = false;
+            shard.distinctQueries = 1;
+
+            await shard.fetch(userRequest("probe:query"));
+            await shard.fetch(userRequest("probe:query"));
+
+            // Two dispatches in: nothing durable yet.
+            expect(database.raw(`SELECT name FROM sqlite_master WHERE name = '${QUERY_METRICS_TABLE}'`)).toEqual([]);
+
+            await shard.fetch(userRequest("probe:query"));
+
+            expect(readQueryMetrics(database.sql)).toHaveLength(1);
+            expect(readQueryMetrics(database.sql)[0]?.execCount).toBe(3);
+        } finally {
+            database.close();
+        }
+    });
+
+    describe("with a controlled clock", () => {
+        const NOW = 600 * 60_000 + 1000;
+        const clock = { latency: 0, now: NOW };
+
+        afterEach(() => {
+            vi.restoreAllMocks();
+        });
+
+        /** A SQLite handle whose every exec advances the fake clock by `clock.latency`. */
+        const timedDatabase = () => {
+            clock.now = NOW;
+            clock.latency = 0;
+            vi.spyOn(Date, "now").mockImplementation(() => clock.now);
+
+            const database = createSqliteExec();
+            const realExec = database.sql.exec.bind(database.sql);
+
+            database.sql.exec = (query: string, ...params: unknown[]) => {
+                clock.now += clock.latency;
+
+                return realExec(query, ...params);
+            };
+
+            return database;
+        };
+
+        it("keeps each dispatch's own latency in the histogram instead of averaging a coalesced batch", async () => {
+            expect.assertions(2);
+
+            const database = timedDatabase();
+
+            try {
+                const shard = new StmtSampleShard(sqliteStateDouble(database), { LUNORA_ADMIN_TOKEN: ADMIN_TOKEN, LUNORA_METRICS_FLUSH_EVERY: "20" });
+
+                shard.attachSpan = false;
+                shard.repeatsOfFirst = 1;
+
+                for (let index = 0; index < 20; index += 1) {
+                    clock.latency = index === 19 ? 1000 : 1;
+                    // eslint-disable-next-line no-await-in-loop -- sequential dispatches
+                    await shard.fetch(userRequest("probe:query"));
+                }
+
+                clock.latency = 0;
+
+                const insights = readQueryInsights(database.sql, 3_600_000, clock.now);
+
+                expect(insights.entries).toHaveLength(1);
+                // 19 of 20 executions took 1ms: the p95 is the 1ms bucket, not the 100ms one the batch average lands in.
+                expect(insights.entries[0]?.p95DurationMs).toBe(1);
+            } finally {
+                database.close();
+            }
+        });
+
+        it("writes one lifetime upsert for dispatches of the same statement in the same latency bucket", async () => {
+            expect.assertions(2);
+
+            const database = timedDatabase();
+
+            try {
+                const realExec = database.sql.exec.bind(database.sql);
+                let lifetimeUpserts = 0;
+
+                database.sql.exec = (query: string, ...params: unknown[]) => {
+                    if (query.startsWith(`INSERT INTO "${QUERY_METRICS_TABLE}" `)) {
+                        lifetimeUpserts += 1;
+                    }
+
+                    return realExec(query, ...params);
+                };
+
+                const shard = new StmtSampleShard(sqliteStateDouble(database), { LUNORA_ADMIN_TOKEN: ADMIN_TOKEN, LUNORA_METRICS_FLUSH_EVERY: "5" });
+
+                shard.attachSpan = false;
+                shard.repeatsOfFirst = 1;
+                clock.latency = 1;
+
+                for (let index = 0; index < 5; index += 1) {
+                    // eslint-disable-next-line no-await-in-loop -- sequential dispatches
+                    await shard.fetch(userRequest("probe:query"));
+                }
+
+                clock.latency = 0;
+
+                expect(lifetimeUpserts).toBe(1);
+                expect(readQueryMetrics(database.sql)).toMatchObject([{ execCount: 5 }]);
+            } finally {
+                database.close();
+            }
+        });
+
+        it("drops only the failed statement sample and still writes the rest of the batch", async () => {
+            expect.assertions(3);
+
+            const database = timedDatabase();
+            const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+            try {
+                const realExec = database.sql.exec.bind(database.sql);
+                let failures = 1;
+
+                database.sql.exec = (query: string, ...params: unknown[]) => {
+                    if (failures > 0 && query.includes(QUERY_METRICS_TABLE)) {
+                        failures -= 1;
+
+                        throw new Error("storage hiccup");
+                    }
+
+                    return realExec(query, ...params);
+                };
+
+                const shard = new StmtSampleShard(sqliteStateDouble(database), { LUNORA_ADMIN_TOKEN: ADMIN_TOKEN });
+
+                shard.attachSpan = false;
+                // Two raw statement texts (two samples) that normalise to the same row.
+                shard.distinctQueries = 2;
+
+                await shard.fetch(userRequest("probe:query"));
+
+                expect(readQueryMetrics(database.sql)).toMatchObject([{ execCount: 1 }]);
+                expect(warn).toHaveBeenCalledTimes(1);
+                expect(warn).toHaveBeenCalledWith("[@lunora/do] metric write failed, dropped 0 function deltas and 1 statement samples: storage hiccup");
+            } finally {
+                database.close();
+            }
+        });
+    });
+
+    it("flushes statement samples immediately when the dispatch errors", async () => {
+        expect.assertions(1);
+
+        const database = createSqliteExec();
+
+        try {
+            const shard = new StmtSampleShard(sqliteStateDouble(database), { LUNORA_ADMIN_TOKEN: ADMIN_TOKEN, LUNORA_METRICS_FLUSH_EVERY: "50" });
+
+            shard.attachSpan = false;
+            shard.distinctQueries = 3;
+            shard.throwAfterQueries = true;
+
+            await shard.fetch(userRequest("probe:query"));
+
+            // The three distinct literals normalise to one statement shape with exec_count 3.
+            expect(readQueryMetrics(database.sql)).toMatchObject([{ execCount: 3 }]);
+        } finally {
+            database.close();
+        }
+    });
+
     it("folds many repeats of the same statement into one durable row with the real exec_count", async () => {
         expect.assertions(3);
 

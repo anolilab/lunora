@@ -1,3 +1,9 @@
+## @lunora/payment [1.0.0-alpha.204](https://github.com/anolilab/lunora/compare/@lunora/payment@1.0.0-alpha.203...@lunora/payment@1.0.0-alpha.204) (2026-10-15)
+
+### Performance Improvements
+
+* **payment:** read the current period's usage events through an index ([#1180](https://github.com/anolilab/lunora/issues/1180)) ([435a38f](https://github.com/anolilab/lunora/commit/435a38fa7b55596acb99ee86509a7a550e380e00))
+
 ## @lunora/payment [1.0.0-alpha.203](https://github.com/anolilab/lunora/compare/@lunora/payment@1.0.0-alpha.202...@lunora/payment@1.0.0-alpha.203) (2026-10-15)
 
 

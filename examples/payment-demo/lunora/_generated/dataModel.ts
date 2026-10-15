@@ -117,7 +117,7 @@ export interface IndexNamesByTable {
     payment_events: "by_provider_event";
     payment_sessions: "by_provider_session" | "by_provider_subscription" | "by_reference";
     payment_subscriptions: "by_provider_subscription" | "by_reference";
-    payment_usageEvents: "by_idempotency" | "by_reference_feature";
+    payment_usageEvents: "by_idempotency" | "by_reference_feature_created" | "by_reference_created";
     ratelimit_buckets: "by_key";
 }
 

@@ -28,7 +28,7 @@ vi.mock("workers-ai-provider", () => {
 
 const { default: createAi } = await import("../src/create-ai");
 
-/** The AI Gateway wire-format plugins every binding-built provider is configured with. */
+/** The AI Gateway wire-format plugins the gateway-slug provider is configured with. */
 const GATEWAY_PLUGINS = [expect.objectContaining({ wireFormat: "openai" }), expect.objectContaining({ wireFormat: "anthropic" })];
 
 const fakeBinding = (): AiBindingLike => {
@@ -52,7 +52,26 @@ describe("provider construction from a binding", () => {
         createAi({ binding });
 
         expect(createWorkersAI).toHaveBeenCalledTimes(1);
-        expect(createWorkersAI).toHaveBeenCalledWith({ binding, providers: GATEWAY_PLUGINS, gateway: undefined });
+        expect(createWorkersAI).toHaveBeenCalledWith({ binding, gateway: undefined });
+    });
+
+    it("builds the plugin-less provider for @cf ids and a plugin-equipped one only for gateway slugs", async () => {
+        expect.assertions(4);
+
+        const ai = createAi({ binding: fakeBinding() });
+
+        ai.model("@cf/meta/llama");
+
+        expect(createWorkersAI).toHaveBeenCalledTimes(1);
+
+        const slug = ai.model("openai/gpt-4o");
+        const model = slug as unknown as { doGenerate: (options: never) => Promise<unknown> };
+
+        await model.doGenerate({} as never).catch(() => {});
+
+        expect(createWorkersAI).toHaveBeenCalledTimes(2);
+        expect(createWorkersAI).toHaveBeenLastCalledWith({ binding: expect.anything(), providers: GATEWAY_PLUGINS, gateway: undefined });
+        expect(createWorkersAI.mock.calls[0]?.[0]).not.toHaveProperty("providers");
     });
 
     it("threads the AI Gateway config through createWorkersAI", () => {
@@ -63,7 +82,7 @@ describe("provider construction from a binding", () => {
 
         createAi({ binding, gateway });
 
-        expect(createWorkersAI).toHaveBeenCalledWith({ binding, providers: GATEWAY_PLUGINS, gateway });
+        expect(createWorkersAI).toHaveBeenCalledWith({ binding, gateway });
     });
 
     it("does not call createWorkersAI when a provider is supplied", () => {
@@ -85,7 +104,7 @@ describe("provider construction from a binding", () => {
 
         // The env vars derive the Workers AI `gateway` option by id so the gateway
         // computes token + dollar-cost telemetry.
-        expect(createWorkersAI).toHaveBeenCalledWith({ binding, providers: GATEWAY_PLUGINS, gateway: { id: "my-gateway" } });
+        expect(createWorkersAI).toHaveBeenCalledWith({ binding, gateway: { id: "my-gateway" } });
     });
 
     it("leaves the direct-provider path unchanged when env has no gateway vars", () => {
@@ -95,7 +114,7 @@ describe("provider construction from a binding", () => {
 
         createAi({ binding, env: { SOME_OTHER: "x" } });
 
-        expect(createWorkersAI).toHaveBeenCalledWith({ binding, providers: GATEWAY_PLUGINS, gateway: undefined });
+        expect(createWorkersAI).toHaveBeenCalledWith({ binding, gateway: undefined });
     });
 
     it("prefers an explicit gateway over the env-derived one", () => {
@@ -106,7 +125,7 @@ describe("provider construction from a binding", () => {
 
         createAi({ binding, env: { LUNORA_AI_GATEWAY_ACCOUNT_ID: "acct-123", LUNORA_AI_GATEWAY_ID: "env-gateway" }, gateway });
 
-        expect(createWorkersAI).toHaveBeenCalledWith({ binding, providers: GATEWAY_PLUGINS, gateway });
+        expect(createWorkersAI).toHaveBeenCalledWith({ binding, gateway });
     });
 });
 
@@ -133,7 +152,7 @@ describe("gateway correlation metadata", () => {
 
         expect(createWorkersAI).toHaveBeenCalledWith({
             binding,
-            providers: GATEWAY_PLUGINS,
+
             gateway: { id: "my-gateway", metadata: { functionPath: "messages:send", traceId: FAKE_TRACE_ID } },
         });
     });
@@ -151,7 +170,7 @@ describe("gateway correlation metadata", () => {
 
         expect(createWorkersAI).toHaveBeenCalledWith({
             binding,
-            providers: GATEWAY_PLUGINS,
+
             gateway: { id: "my-gateway", metadata: { functionPath: "messages:send" } },
         });
     });
@@ -169,7 +188,7 @@ describe("gateway correlation metadata", () => {
 
         // No `metadata` key on the gateway option — the env-derived gateway is
         // still routed by id, unchanged from the no-metadata case.
-        expect(createWorkersAI).toHaveBeenCalledWith({ binding, providers: GATEWAY_PLUGINS, gateway: { id: "my-gateway" } });
+        expect(createWorkersAI).toHaveBeenCalledWith({ binding, gateway: { id: "my-gateway" } });
     });
 
     it("does not attach metadata when no gateway is configured (additive/opt-in)", () => {
@@ -181,7 +200,7 @@ describe("gateway correlation metadata", () => {
 
         // Without gateway env vars there is no gateway to correlate — the direct
         // Workers AI path stays exactly as before.
-        expect(createWorkersAI).toHaveBeenCalledWith({ binding, providers: GATEWAY_PLUGINS, gateway: undefined });
+        expect(createWorkersAI).toHaveBeenCalledWith({ binding, gateway: undefined });
     });
 
     it("folds metadata into an explicit gateway that carries none", () => {
@@ -193,7 +212,7 @@ describe("gateway correlation metadata", () => {
 
         expect(createWorkersAI).toHaveBeenCalledWith({
             binding,
-            providers: GATEWAY_PLUGINS,
+
             gateway: { cacheTtl: 60, id: "explicit", metadata: { functionPath: "messages:send", traceId: FAKE_TRACE_ID } },
         });
     });
@@ -206,6 +225,6 @@ describe("gateway correlation metadata", () => {
 
         createAi({ binding, gateway, metadata: { functionPath: "messages:send", traceId: FAKE_TRACE_ID } });
 
-        expect(createWorkersAI).toHaveBeenCalledWith({ binding, providers: GATEWAY_PLUGINS, gateway });
+        expect(createWorkersAI).toHaveBeenCalledWith({ binding, gateway });
     });
 });

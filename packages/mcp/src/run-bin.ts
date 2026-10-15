@@ -1,6 +1,6 @@
 import { parseAgentsEnv } from "./agent-tools";
 import type { LunoraMcpServerOptions } from "./server";
-import { connectStdio } from "./server";
+import connectStdio from "./stdio";
 
 /**
  * Environment the `lunora-mcp` binary reads its configuration from. Modelled as
