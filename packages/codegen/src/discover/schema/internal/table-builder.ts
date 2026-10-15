@@ -61,6 +61,7 @@ const RESERVED_TABLE_NAMES = new Set([
     "insert",
     "insertMany",
     "insertManyUnsafe",
+    "inTransaction",
     "lookupById",
     "normalizeId",
     "patch",
@@ -77,6 +78,7 @@ const RESERVED_TABLE_NAMES = new Set([
     "relationWrites",
     "replace",
     "restore",
+    "softDeleteFields",
     "system",
     "wipeShard",
 ]);
