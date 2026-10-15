@@ -457,7 +457,7 @@ catalogs:
     # zero-dependency ESM parser with a `cloudflare` dialect, so one parser
     # serves the runtime validator, codegen and the Node host — and replaces the
     # CommonJS `cron-parser` + its `luxon` dependency everywhere.
-    "@visulima/cron-parser": 1.1.0
+    "@visulima/cron-parser": 2.0.0
     dockerode: ^5.0.1
     # Model-layer renderer for `lunora sdk generate`: JSON Schema -> dataclasses
     # in 19 languages. Only the generated SDK's *models* come from quicktype —
@@ -1089,9 +1089,9 @@ minimumReleaseAgeExclude:
   - '@tanstack/virtual-core@3.17.0'
   - '@types/react@19.2.16'
   # Zero-dependency ESM cron parser with a `cloudflare` dialect; replaces
-  # `cron-parser` + `luxon` repo-wide. Published 2026-10-15 13:25 UTC, inside
-  # the 24h window; drop after 2026-10-16.
-  - '@visulima/cron-parser@1.1.0'
+  # `cron-parser` + `luxon` repo-wide. 1.1.0 is the alpha lockfile's pin; 2.0.0
+  # (published 2026-10-15 16:23 UTC) is the current one. Drop both after 2026-10-16.
+  - '@visulima/cron-parser@1.1.0 || 2.0.0'
   # Disk loader resolved lazily — no import-time fileURLToPath(import.meta.url),
   # so the barrel is safe to evaluate on workerd. Published 2026-10-14 11:06 UTC,
   # inside the 24h window; drop after 2026-10-15.

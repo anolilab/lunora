@@ -4,13 +4,14 @@
  * (see `./jobs.ts`). Keeping the check in one place means the two surfaces can
  * never drift apart on what counts as a valid expression.
  *
- * Validation is `@visulima/cron-parser` held to its `cloudflare` dialect: five
- * fields of `*`, lists, ranges, steps, month/weekday names and the `L`/`W`/`n#k`
- * operators — the grammar Cloudflare Cron Triggers actually run. `seconds:
- * "optional"` is the one relaxation: a 6-field, seconds-leading expression still
- * parses here and only warns (see {@link warnIfSecondsLeading}), because the raw
- * `.cron()` escape hatch exists so callers can hand-author grammar the platform
- * will reject at `wrangler deploy`.
+ * Validation is `@visulima/cron-parser`'s `cloudflare` entry (which defaults to
+ * that dialect): five fields of `*`, lists, ranges, steps, month/weekday names
+ * and the `L`/`W`/`n#k` operators — the grammar Cloudflare Cron Triggers
+ * actually run. `seconds: "optional"` is the one relaxation: a 6-field,
+ * seconds-leading expression still parses here and only warns (see
+ * {@link warnIfSecondsLeading}), because the raw `.cron()` escape hatch exists
+ * so callers can hand-author grammar the platform will reject at `wrangler
+ * deploy`.
  *
  * `@visulima/cron-parser` is a zero-dependency ESM parser, so this same module
  * backs both the runtime builder and `@lunora/scheduler/validate` (codegen, CLI)
@@ -20,13 +21,13 @@
  * `compileInterval` in `./jobs.ts` before it ever reaches this validator.
  */
 import { LunoraError } from "@lunora/errors";
-import { CronExpressionParser } from "@visulima/cron-parser";
+import { parse } from "@visulima/cron-parser/cloudflare";
 
 /** Splits a cron expression on whitespace to count its fields. */
 const CRON_FIELD_SPLIT_PATTERN = /\s+/u;
 
-/** The dialect every raw cron surface is validated against; `seconds` keeps the 6-field escape hatch. */
-const CLOUDFLARE_CRON_OPTIONS = { dialect: "cloudflare", seconds: "optional" } as const;
+/** The `cloudflare` entry already fixes the dialect; `seconds` keeps the 6-field escape hatch. */
+const CRON_PARSE_OPTIONS = { seconds: "optional" } as const;
 
 /** True when `schedule` is a Cloudflare Cron Trigger expression (or a 6-field escape-hatch one). */
 const isValidCronExpression = (schedule: string): boolean => {
@@ -44,7 +45,7 @@ const isValidCronExpression = (schedule: string): boolean => {
     }
 
     try {
-        CronExpressionParser.parse(fields.join(" "), CLOUDFLARE_CRON_OPTIONS);
+        parse(fields.join(" "), CRON_PARSE_OPTIONS);
 
         return true;
     } catch {

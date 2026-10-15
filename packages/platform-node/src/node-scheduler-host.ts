@@ -45,7 +45,7 @@ import { randomUUID } from "node:crypto";
 import { deserialize, serialize } from "node:v8";
 
 import type { ScheduledJob, ScheduledJobStatus, ScheduleOptions, SchedulerHost } from "@lunora/platform";
-import { CronExpressionParser } from "@visulima/cron-parser";
+import { parse } from "@visulima/cron-parser";
 import type Database from "better-sqlite3";
 
 /**
@@ -355,7 +355,7 @@ const createNodeSchedulerHost = (database: Database.Database, options: NodeSched
         let nextAt: number;
 
         try {
-            nextAt = CronExpressionParser.parse(row.expression).next().getTime();
+            nextAt = parse(row.expression).next().getTime();
         } catch {
             // An unparseable expression is a permanent condition, not a transient
             // one — re-arming would spin. `cron()` validates before it ever
@@ -430,7 +430,7 @@ const createNodeSchedulerHost = (database: Database.Database, options: NodeSched
 
             // Parse before writing: an invalid expression must fail the caller's
             // await rather than land a row that can never be armed.
-            CronExpressionParser.parse(expression);
+            parse(expression);
 
             const row: CronRow = {
                 args: serialize(args ?? {}),

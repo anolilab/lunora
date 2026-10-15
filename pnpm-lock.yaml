@@ -608,8 +608,8 @@ catalogs:
       specifier: ^9.6.0
       version: 9.6.0
     '@visulima/cron-parser':
-      specifier: 1.1.0
-      version: 1.1.0
+      specifier: 2.0.0
+      version: 2.0.0
     better-sqlite3:
       specifier: ^13.0.3
       version: 13.0.3
@@ -4299,7 +4299,7 @@ importers:
         version: link:../workflow
       '@visulima/cron-parser':
         specifier: catalog:tooling
-        version: 1.1.0
+        version: 2.0.0
       '@visulima/workflow':
         specifier: catalog:workflow
         version: 3.0.0(unstorage@1.17.5(@netlify/blobs@10.7.9(supports-color@10.2.2))(aws4fetch@1.0.20)(db0@0.3.4(@electric-sql/pglite@0.5.8)(better-sqlite3@13.0.3)(drizzle-orm@0.45.3(@cloudflare/workers-types@5.20261004.1(patch_hash=4bd971e7c2b6760a24ef737fb6e2cb17b2cf8f50615cff5e2d1786e677436a93))(@electric-sql/pglite@0.5.8)(@opentelemetry/api@1.9.1)(@types/better-sqlite3@9.6.0)(@types/pg@8.23.1)(better-sqlite3@13.0.3)(kysely@0.29.6)(mysql2@3.24.5(@types/node@26.6.4))(pg@8.23.1)(postgres@3.4.9)(sql.js@1.14.1))(mysql2@3.24.5(@types/node@26.6.4)))(ioredis@5.11.1(supports-color@10.2.2)))
@@ -4791,7 +4791,7 @@ importers:
         version: link:../wire
       '@visulima/cron-parser':
         specifier: catalog:tooling
-        version: 1.1.0
+        version: 2.0.0
     devDependencies:
       '@cloudflare/vitest-plugin':
         specifier: catalog:cloudflare
@@ -14107,8 +14107,8 @@ packages:
     engines: {node: ^22.14.0 || >=24.10.0}
     os: [darwin, linux, win32]
 
-  '@visulima/cron-parser@1.1.0':
-    resolution: {integrity: sha512-vkSq5EjyYzixvKLvxpjY1kxdnFZSelQZLxZC1qLl/sqNnIckbm7foVMWeoW3a1BH8i2iQXQx71O4rYjXDfTP5g==}
+  '@visulima/cron-parser@2.0.0':
+    resolution: {integrity: sha512-5QBN4gQUKkzUrvvfhRy8U8JJ6RAeq1cF8YClny4INInf5v3bz/g63UqYCkpDNw+nD7uOF9v+7ooIo+xVekER4Q==}
     engines: {node: ^22.14.0 || >=24.10.0}
 
   '@visulima/css-style-inject@1.0.1':
@@ -35421,7 +35421,7 @@ snapshots:
     dependencies:
       '@visulima/is-ansi-color-supported': 4.0.0
 
-  '@visulima/cron-parser@1.1.0': {}
+  '@visulima/cron-parser@2.0.0': {}
 
   '@visulima/css-style-inject@1.0.1': {}
 
