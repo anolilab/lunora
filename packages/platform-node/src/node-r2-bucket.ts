@@ -65,7 +65,7 @@
 
 import { createHash, randomUUID } from "node:crypto";
 import type { FileHandle } from "node:fs/promises";
-import { mkdir, open, readdir, rename, rmdir, unlink } from "node:fs/promises";
+import { lstat, mkdir, open, readdir, rename, rmdir, unlink } from "node:fs/promises";
 import { dirname, join, sep } from "node:path";
 
 import { LunoraError } from "@lunora/errors";
@@ -166,23 +166,6 @@ const encodeKey = (key: string): string =>
         .map((segment) => encodeSegment(segment))
         .join("/");
 
-/** Inverse of {@link encodeKey}, or `undefined` when any segment is undecodable. */
-const decodeKey = (relativePath: string): string | undefined => {
-    const segments: string[] = [];
-
-    for (const segment of relativePath.split("/")) {
-        const decoded = decodeSegment(segment);
-
-        if (decoded === undefined) {
-            return undefined;
-        }
-
-        segments.push(decoded);
-    }
-
-    return segments.join("/");
-};
-
 /** Shared encoder for measuring UTF-8 byte length (not UTF-16 `String.length`). */
 const R2_KEY_ENCODER = new TextEncoder();
 
@@ -249,7 +232,7 @@ const validateKey = (key: string): void => {
             throw new LunoraError("VALIDATION_ERROR", `@lunora/platform-node: R2 key has an empty, \`.\` or \`..\` path segment ("${key}")`);
         }
 
-        // Reserved at every depth, not just the first: `walkObjects` skips the
+        // Reserved at every depth, not just the first: the listing walk skips the
         // staging tree wherever it appears, so a key like `a/.lunora-tmp/b` would
         // otherwise be writable and readable but invisible to `list()` — and
         // anything that reconciles through `list` would quietly lose it.
@@ -604,78 +587,160 @@ const toChunks = async function* (body: ReadableStream | ArrayBuffer | ArrayBuff
     throw new LunoraError("VALIDATION_ERROR", "@lunora/platform-node: unsupported R2 put body");
 };
 
-/** Recursively collect object keys under the bucket directory, skipping the staging tree. */
-const walkObjects = async (directory: string): Promise<string[]> => {
-    const keys: string[] = [];
+/** Codepoint order, the order R2 lists in. `localeCompare` would interleave case differently. */
+const byCodepoint = (a: string, b: string): number => (a < b ? -1 : Number(a > b));
 
-    const walk = async (currentPath: string, relative: string): Promise<void> => {
-        let entries;
+/** The entries of one bucket directory as decoded names, in key order; unrelated and staging names drop out. */
+const readSegments = async (path: string): Promise<{ isDirectory: boolean; name: string; sortKey: string }[]> => {
+    let entries;
+
+    try {
+        entries = await readdir(path, { withFileTypes: true });
+    } catch (error: unknown) {
+        // `ENOTDIR`: a leading prefix segment names an object, not a directory.
+        if (isMissing(error) || (error instanceof Error && "code" in error && (error as NodeJS.ErrnoException).code === "ENOTDIR")) {
+            return [];
+        }
+
+        throw error;
+    }
+
+    const segments = [];
+
+    for (const entry of entries) {
+        // A name that does not decode was not written by this bucket, so it drops
+        // out the same way an unrelated file without a trailer does.
+        const text = entry.name === TMP_DIR ? undefined : decodeSegment(entry.name);
+
+        if (text !== undefined) {
+            const isDirectory = entry.isDirectory();
+
+            // A directory's keys all continue with `/`, which is what orders it
+            // against its siblings (`a.b` sorts before everything under `a/`).
+            segments.push({ isDirectory, name: entry.name, sortKey: isDirectory ? `${text}/` : text });
+        }
+    }
+
+    // Order is by decoded key, not file name: escaping moves `A` (`%41`) around.
+    return segments.toSorted((a, b) => byCodepoint(a.sortKey, b.sortKey));
+};
+
+/** True when any key lives under `path`; stops at the first one. */
+const hasAnyKey = async (path: string): Promise<boolean> => {
+    for (const segment of await readSegments(path)) {
+        // eslint-disable-next-line no-await-in-loop -- stops at the first key, so siblings are not read ahead
+        if (!segment.isDirectory || (await hasAnyKey(join(path, segment.name)))) {
+            return true;
+        }
+    }
+
+    return false;
+};
+
+/** The common prefix `key` rolls up into: everything through the first `delimiter` after `prefix`. */
+const commonPrefixOf = (key: string, prefix: string, delimiter: string | undefined): string | undefined => {
+    if (delimiter === undefined || !key.startsWith(prefix)) {
+        return undefined;
+    }
+
+    const at = key.slice(prefix.length).indexOf(delimiter);
+
+    return at === -1 ? undefined : key.slice(0, prefix.length + at + delimiter.length);
+};
+
+/**
+ * List keys under `prefix` in key order, touching only the directories the
+ * prefix, the cursor and the page need. Collects up to `limit + 1` keys after
+ * `after` (the extra one decides `truncated`) and, with a delimiter, every
+ * common prefix - collapsing a subdirectory to one entry without descending
+ * when the delimiter already occurs in its path.
+ */
+const walkUnder = async (
+    directory: string,
+    { after, delimiter, limit, prefix }: { after: string | undefined; delimiter: string | undefined; limit: number; prefix: string },
+): Promise<{ keys: string[]; prefixes: Set<string> }> => {
+    const keys: string[] = [];
+    const prefixes = new Set<string>();
+    // Complete leading segments of the prefix select the directory to start in.
+    // Keys never hold empty, `.`, `..`, staging or backslash segments, so a prefix
+    // that does matches nothing (and must not walk outside the bucket).
+    const leading = prefix.split("/").slice(0, -1);
+
+    if (leading.some((segment) => segment === "" || segment === "." || segment === ".." || segment === TMP_DIR || segment.includes("\\"))) {
+        return { keys, prefixes };
+    }
+
+    // Whether a directory (`full` ends in `/`) can hold anything this listing wants.
+    const wanted = (full: string): boolean =>
+        (full.startsWith(prefix) || prefix.startsWith(full)) && (delimiter !== undefined || after === undefined || full > after || after.startsWith(full));
+
+    // Without a delimiter nothing past the page can change the answer.
+    const pageIsFull = (): boolean => delimiter === undefined && keys.length > limit;
+    const wantsKey = (key: string): boolean => key.startsWith(prefix) && keys.length <= limit && (after === undefined || key > after);
+
+    const walk = async (path: string, relative: string): Promise<void> => {
+        for (const segment of await readSegments(path)) {
+            const full = relative + segment.sortKey;
+
+            if (pageIsFull()) {
+                return;
+            }
+
+            const rolled = commonPrefixOf(full, prefix, delimiter);
+
+            if (segment.isDirectory && rolled !== undefined) {
+                // eslint-disable-next-line no-await-in-loop -- key order matters, and a directory husk must not yield a prefix
+                if (await hasAnyKey(join(path, segment.name))) {
+                    prefixes.add(rolled);
+                }
+            } else if (segment.isDirectory) {
+                if (wanted(full)) {
+                    // eslint-disable-next-line no-await-in-loop -- strictly in key order so the walk can stop at the page bound
+                    await walk(join(path, segment.name), full);
+                }
+            } else if (rolled !== undefined) {
+                prefixes.add(rolled);
+            } else if (wantsKey(full)) {
+                keys.push(full);
+            }
+        }
+    };
+
+    // The root walk never follows a symlink (`Dirent.isDirectory()` is false for one), so
+    // a prefix must not either: every selected component has to be a real directory.
+    let start = directory;
+
+    for (const segment of leading) {
+        start = join(start, encodeSegment(segment));
+
+        let stats;
 
         try {
-            entries = await readdir(currentPath, { withFileTypes: true });
+            // eslint-disable-next-line no-await-in-loop -- each component is checked before descending into it
+            stats = await lstat(start);
         } catch (error: unknown) {
-            if (isMissing(error)) {
-                return;
+            // A segment longer than the filesystem allows (`ENAMETOOLONG`) can hold no stored key, since
+            // `validateKey` rejects it on write: like a missing component, it is an empty page.
+            const code = error instanceof Error && "code" in error ? (error as NodeJS.ErrnoException).code : undefined;
+
+            if (code === "ENOENT" || code === "ENOTDIR" || code === "ENAMETOOLONG") {
+                return { keys, prefixes };
             }
 
             throw error;
         }
 
-        const promises: Promise<void>[] = [];
-
-        for (const entry of entries) {
-            if (entry.name === TMP_DIR) {
-                continue;
-            }
-
-            // Keys always join with `/`, never the platform separator — `sep` would
-            // hand back `a\b` on Windows for a key stored as `a/b`.
-            const relativePath = relative === "" ? entry.name : `${relative}/${entry.name}`;
-
-            if (entry.isDirectory()) {
-                promises.push(walk(join(currentPath, entry.name), relativePath));
-            } else {
-                // Back to the key the caller wrote — the tree holds encoded
-                // segments, and `list` deals in keys. A name that does not decode
-                // was not written by this bucket, so it drops out the same way an
-                // unrelated file without a trailer does.
-                const key = decodeKey(relativePath);
-
-                if (key !== undefined) {
-                    keys.push(key);
-                }
-            }
-        }
-
-        await Promise.all(promises);
-    };
-
-    await walk(directory, "");
-    // Codepoint order, matching the `<=` comparison `firstIndexGreaterThan` uses
-    // to place the cursor. `localeCompare` would order them differently and the
-    // binary search would land in the wrong place.
-    keys.sort((a, b) => (a < b ? -1 : Number(a > b)));
-
-    return keys;
-};
-
-/** Index of the first element strictly greater than `value` in a sorted array. */
-const firstIndexGreaterThan = (values: ReadonlyArray<string>, value: string): number => {
-    let low = 0;
-    let high = values.length;
-
-    while (low < high) {
-        const mid = low + Math.floor((high - low) / 2);
-        const candidate = values[mid];
-
-        if (candidate === undefined || candidate <= value) {
-            low = mid + 1;
-        } else {
-            high = mid;
+        if (!stats.isDirectory()) {
+            return { keys, prefixes };
         }
     }
 
-    return low;
+    await walk(
+        leading.length === 0 ? directory : join(directory, ...leading.map((segment) => encodeSegment(segment))),
+        leading.length === 0 ? "" : `${leading.join("/")}/`,
+    );
+
+    return { keys, prefixes };
 };
 
 /**
@@ -932,34 +997,8 @@ const createNodeR2Bucket = (options: NodeR2BucketOptions): R2BucketLike => {
                 throw new LunoraError("VALIDATION_ERROR", "@lunora/platform-node: R2 list prefix contains a NUL byte");
             }
 
-            const all = await walkObjects(directory);
             const prefix = listOptions.prefix ?? "";
-            const underPrefix = all.filter((key) => key.startsWith(prefix));
             const { delimiter } = listOptions;
-            const filtered = delimiter === undefined ? underPrefix : underPrefix.filter((key) => !key.slice(prefix.length).includes(delimiter));
-
-            // Keys the delimiter rolled up. R2 does not drop them — it returns
-            // the common prefix (through the delimiter) in `delimitedPrefixes`,
-            // which is the entire point of asking for a delimiter. Filtering
-            // them out and returning nothing else made a delimited list report
-            // an empty, untruncated page over a full bucket.
-            const delimitedPrefixes =
-                delimiter === undefined
-                    ? undefined
-                    : [
-                          ...new Set(
-                              underPrefix
-                                  .map((key) => {
-                                      const rest = key.slice(prefix.length);
-                                      const at = rest.indexOf(delimiter);
-
-                                      return at === -1 ? undefined : key.slice(0, prefix.length + at + delimiter.length);
-                                  })
-                                  .filter((value): value is string => value !== undefined),
-                          ),
-                          // Codepoint order, the order R2 itself lists in.
-                          // `localeCompare` would interleave case differently.
-                      ].toSorted((a, b) => (a < b ? -1 : Number(a > b)));
 
             // `startAfter` and `cursor` are the same operation on a sorted key
             // list — resume strictly after a key — and R2 honours both when both
@@ -979,9 +1018,14 @@ const createNodeR2Bucket = (options: NodeR2BucketOptions): R2BucketLike => {
                 after = listOptions.startAfter;
             }
 
-            const startIndex = after === undefined ? 0 : firstIndexGreaterThan(filtered, after);
-            const page = filtered.slice(startIndex, startIndex + limit);
-            const truncated = startIndex + limit < filtered.length;
+            const { keys, prefixes } = await walkUnder(directory, { after, delimiter, limit, prefix });
+            const page = keys.slice(0, limit);
+            const truncated = keys.length > limit;
+            // Keys the delimiter rolled up. R2 does not drop them — it returns
+            // the common prefix (through the delimiter) in `delimitedPrefixes`,
+            // which is the entire point of asking for a delimiter.
+            const delimitedPrefixes = delimiter === undefined ? undefined : [...prefixes].toSorted(byCodepoint);
+
             // A key can vanish (or turn out to be an unrelated file) between the
             // walk and the trailer read; those drop out of the page rather than
             // failing the whole listing.

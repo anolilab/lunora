@@ -35,7 +35,8 @@
  * headers: request.headers })` inside it.
  */
 import type { LunoraAuth } from "@lunora/auth";
-import { createAuth, DEFAULT_AUTH_BASE_PATH, ensureMigrated, handleAuthRequest, lunoraD1Adapter } from "@lunora/auth";
+import { createAuth, DEFAULT_AUTH_BASE_PATH, handleAuthRequest, lunoraD1Adapter } from "@lunora/auth";
+import { createMigrationAuth, ensureMigrated } from "@lunora/auth/migrate";
 import { uiConfig } from "@lunora/auth/plugins";
 import { createMailerFromEnv } from "@lunora/mail";
 
@@ -171,7 +172,7 @@ export const buildAuth = (env: AuthEnv): LunoraAuth =>
  * handling always goes through {@link buildAuth}'s adapter-backed instance.
  */
 const buildMigrationAuth = (env: AuthEnv): LunoraAuth =>
-    createAuth({
+    createMigrationAuth({
         baseURL: env.BETTER_AUTH_URL,
         // Raw D1 on purpose — the migration runner resolves Kysely itself.
         database: env.DB as never,

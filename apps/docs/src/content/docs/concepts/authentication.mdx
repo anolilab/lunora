@@ -136,7 +136,8 @@ so you fall through to the Lunora worker for everything else:
 
 ```ts
 // src/server/index.ts
-import { ensureMigrated, handleAuthRequest } from "@lunora/auth";
+import { handleAuthRequest } from "@lunora/auth";
+import { ensureMigrated } from "@lunora/auth/migrate";
 
 import { buildAuth } from "../../lunora/auth";
 

@@ -18,7 +18,7 @@
 
 import { LunoraError } from "@lunora/errors";
 import type { RankIndexDefinitionLike, SchemaLike, ValidatorLike } from "@lunora/shard-engine";
-import { aggregateTableName, rankTableName, renderSql, sortColumnName } from "@lunora/shard-engine";
+import { aggregateTableName, rankTableName, sortColumnName } from "@lunora/shard-engine";
 import type { SQL } from "drizzle-orm";
 import { sql } from "drizzle-orm";
 
@@ -326,9 +326,7 @@ const indexColumnList = (statement: string): string | undefined => {
 const declaredIndexColumnList = (dialect: SqlDialect, spec: { columns: SQL; name: string; table: string; unique: boolean }): string | undefined => {
     const unique = spec.unique ? sql`UNIQUE ` : sql``;
 
-    return indexColumnList(
-        renderSql(dialect.name, sql`CREATE ${unique}INDEX ${sql.identifier(spec.name)} ON ${sql.identifier(spec.table)} (${spec.columns})`).sql,
-    );
+    return indexColumnList(dialect.render(sql`CREATE ${unique}INDEX ${sql.identifier(spec.name)} ON ${sql.identifier(spec.table)} (${spec.columns})`).sql);
 };
 
 /**

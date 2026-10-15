@@ -1,4 +1,5 @@
-import { ensureMigrated, handleAuthRequest } from "@lunora/auth";
+import { handleAuthRequest } from "@lunora/auth";
+import { ensureMigrated } from "@lunora/auth/migrate";
 import type { ExecutionContextLike, ShardNamespaceLike } from "lunorash/runtime";
 import { createWorker } from "lunorash/runtime";
 

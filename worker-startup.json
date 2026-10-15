@@ -2,8 +2,8 @@
     "$comment": "Committed baseline for the Worker startup budget, measured by scripts/check-worker-startup.js against a synthetic app (procedures x tables, every function module importing one shared module that imports @lunora/auth). Cloudflare rejects a Worker whose global scope takes more than 1 s of CPU to evaluate (error 10021, not raisable). eagerModules / eagerBytes are the modules reachable from the entry through STATIC imports only (dynamic import() edges excluded): deterministic, unlike CPU time, which is printed as advisory and never gates. `pnpm run worker-startup:update` re-baselines an intentional change.",
     "procedures": 300,
     "tables": 60,
-    "eagerModules": 1177,
-    "eagerBytes": 6779749,
+    "eagerModules": 915,
+    "eagerBytes": 6046937,
     "allowanceModules": 40,
     "allowanceBytes": 262144
 }

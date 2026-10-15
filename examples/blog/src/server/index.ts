@@ -1,5 +1,6 @@
 import type { LunoraAuth } from "@lunora/auth";
-import { createAuth, ensureMigrated, handleAuthRequest, lunoraD1Adapter } from "@lunora/auth";
+import { createAuth, handleAuthRequest, lunoraD1Adapter } from "@lunora/auth";
+import { createMigrationAuth, ensureMigrated } from "@lunora/auth/migrate";
 import type { VectorizeIndexLike } from "@lunora/bindings/vectors";
 import { createVectorAdminIntrospector } from "@lunora/bindings/vectors";
 import type { DurableObjectNamespaceLike } from "@lunora/scheduler";
@@ -138,7 +139,7 @@ const authOptions = (env: Env): Parameters<typeof createAuth>[0] => {
 const buildAuth = (env: Env): LunoraAuth => createAuth({ ...authOptions(env), database: lunoraD1Adapter(env.DB as never) });
 
 // Raw-D1 instance used only to drive `ensureMigrated` (Kysely migrator → tables).
-const buildMigrationAuth = (env: Env): LunoraAuth => createAuth({ ...authOptions(env), database: env.DB as never });
+const buildMigrationAuth = (env: Env): LunoraAuth => createMigrationAuth({ ...authOptions(env), database: env.DB as never });
 
 const buildWorker = (env: Env): ReturnType<typeof createWorker> =>
     createWorker({

@@ -1,3 +1,19 @@
+## @lunora/do [1.0.0-alpha.213](https://github.com/anolilab/lunora/compare/@lunora/do@1.0.0-alpha.212...@lunora/do@1.0.0-alpha.213) (2026-10-15)
+
+### Performance Improvements
+
+* **codegen:** parse admin payloads on first use and dedupe advisory rule text ([#1175](https://github.com/anolilab/lunora/issues/1175)) ([bdde65a](https://github.com/anolilab/lunora/commit/bdde65afc69e2dd3644a78c297887ee438716730))
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.55
+* **@lunora/observability:** upgraded to 1.0.0-alpha.138
+* **@lunora/platform-cloudflare:** upgraded to 1.0.0-alpha.88
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.128
+* **@lunora/values:** upgraded to 1.0.0-alpha.65
+* **@lunora/bindings:** upgraded to 1.0.0-alpha.112
+
 ## @lunora/do [1.0.0-alpha.212](https://github.com/anolilab/lunora/compare/@lunora/do@1.0.0-alpha.211...@lunora/do@1.0.0-alpha.212) (2026-10-14)
 
 ### Performance Improvements
