@@ -175,6 +175,21 @@ describe("recordFunctionMetric", () => {
         expect(row?.["min_duration_ms"]).toBe(7);
     });
 
+    it("keeps an explicit null last-error time on a coalesced failure count", () => {
+        expect.assertions(3);
+
+        const harness = createSqliteExec();
+        const { sql } = harness;
+
+        recordFunctionMetric(sql, dispatch({ calls: 3, errorMessage: "boom", errored: true, errors: 2, lastErrorAt: null, ts: 5000 }));
+
+        const [row] = readFunctionMetrics(sql);
+
+        expect(row?.errors).toBe(2);
+        expect(row?.lastErrorAt).toBeNull();
+        expect(row?.lastErrorMessage).toBeNull();
+    });
+
     it("records the failure message and timestamp when a dispatch throws", () => {
         expect.assertions(3);
 

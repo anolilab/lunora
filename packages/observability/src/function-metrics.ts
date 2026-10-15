@@ -460,8 +460,12 @@ const recordFunctionMetric = (sql: SqlExec, input: RecordFunctionMetricInput): v
     const totalDuration = input.durationTotalMs ?? input.durationMs;
     const minDuration = input.durationMinMs ?? input.durationMs;
     const maxDuration = input.durationMaxMs ?? input.durationMs;
-    // eslint-disable-next-line unicorn/no-null -- SQL NULL is the correct value for "no failure yet"; coalesced into the row on the first throw.
-    const lastErrorAt = input.lastErrorAt ?? (input.errored ? input.ts : null);
+    // An explicit `null` (a coalesced failure count with no known latest-error time) is kept; only an
+    // omitted field defaults to this dispatch's time on a throw.
+     
+    // eslint-disable-next-line unicorn/no-null -- SQL NULL is the correct value for "no failure yet"
+    const defaultLastErrorAt = input.errored ? input.ts : null;
+    const lastErrorAt = input.lastErrorAt === undefined ? defaultLastErrorAt : input.lastErrorAt;
     // eslint-disable-next-line unicorn/no-null -- SQL NULL is the correct value for "no failure yet".
     const lastErrorMessage = lastErrorAt === null ? null : (input.errorMessage ?? null);
 
