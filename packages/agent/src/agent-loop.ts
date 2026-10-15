@@ -125,6 +125,8 @@ interface TurnContext {
     generate: AgentGenerate;
     /** Read the thread's synced state (dispatches `agents:agentState`) — the tool ctx's `getState`. */
     getState: () => Promise<Record<string, unknown> | undefined>;
+    /** Dispatch ref of `agents:agentHistory` — the stored summary plus the not-yet-summarised messages. */
+    historyRef: ReturnType<typeof toFunctionReference>;
     instanceId: string;
     /** The resolved system prompt (static string, or a dynamic thunk's result). */
     instructions: string | undefined;
@@ -669,10 +671,9 @@ const splitForCompaction = (
  * summarization is replay-safe. Best-effort: a summarization throw falls back to
  * the full, uncompacted history rather than failing the turn.
  *
- * COST: the brief is recomputed per FRESH turn (a replay serves it from the memo),
- * so a long multi-turn run over the threshold issues one summarization call per
- * turn — the price of the per-turn memoized-step model. Persisting a running brief
- * to reuse across turns is a deliberate future optimization.
+ * COST: this whole-history form re-summarizes everything older than the tail on
+ * every call. The durable loop uses {@link compactIncrementally} instead, which
+ * persists a running brief; this one remains for the voice pipeline.
  */
 const compactHistory = async (
     context: { agent: AgentConfig; compact: AgentCompact | undefined; env: Record<string, unknown> },
@@ -696,6 +697,88 @@ const compactHistory = async (
 };
 
 /**
+ * Incremental twin of {@link compactHistory} for the durable loop. Reads the
+ * thread's stored running summary plus ONLY the messages it does not cover, and
+ * when those exceed `maxMessages` folds the aged-out part into the previous
+ * summary and persists the result — so a turn's read and summarisation input are
+ * bounded by the uncovered tail instead of the whole thread. The persist runs
+ * inside the memoized `llm:turn:N` step, so a replay re-summarises and re-writes
+ * nothing. Best-effort like {@link compactHistory}: a failed summary keeps the
+ * stored brief and the uncovered history.
+ */
+interface AgentHistoryResult {
+    fallback?: { summary: string; throughSeq: number };
+    messages: AgentMessageRow[];
+    runs: number;
+    summary?: string;
+}
+
+const compactIncrementally = async (context: TurnContext): Promise<{ history: AgentMessageRow[]; summary: string | undefined }> => {
+    const { agent, compact, env, historyRef, instanceId, patchThread, run, threadKey } = context;
+    const stored = (await run(historyRef, { key: threadKey })) as AgentHistoryResult;
+    const { messages, summary: previous } = stored;
+    const split = splitForCompaction(messages, agent.compaction);
+
+    if (split === undefined || compact === undefined) {
+        return { history: messages, summary: previous };
+    }
+
+    // A failed from-scratch rebuild: keep the stored brief plus the messages after
+    // its cursor, and restart the run counter so the next rebuild is
+    // `SUMMARY_REBUILD_EVERY` turns away instead of every turn re-reading and
+    // re-summarising the whole thread.
+    const degrade = async (): Promise<{ history: AgentMessageRow[]; summary: string | undefined }> => {
+        const { fallback } = stored;
+
+        if (fallback === undefined) {
+            return { history: messages, summary: previous };
+        }
+
+        await patchThread({ ifInstanceId: instanceId, summaryRuns: 0 }).catch((error: unknown) => {
+            // eslint-disable-next-line no-console -- best-effort checkpoint; the failure must be visible, not swallowed
+            console.warn(`@lunora/agent: could not reset the summary run counter for thread "${threadKey}"`, error);
+        });
+
+        return { history: messages.filter((message) => message.seq > fallback.throughSeq), summary: fallback.summary };
+    };
+
+    let summary: string;
+
+    try {
+        summary = await compact({
+            env,
+            messages: buildModelMessages({ history: split.older, summary: previous }),
+            model: agent.compaction?.model ?? agent.model,
+        });
+    } catch (error) {
+        // eslint-disable-next-line no-console -- best-effort summarisation; the failure must be visible, not swallowed
+        console.warn(`@lunora/agent: summarising thread "${threadKey}" failed`, error);
+
+        return degrade();
+    }
+
+    if (summary.length === 0) {
+        return degrade();
+    }
+
+    // Guarded on the run still owning the thread: a replaced run's late write
+    // must not roll back a newer run's checkpoint. A failed WRITE does not throw
+    // the summary away: this turn still uses it, and the untouched cursor means a
+    // later turn retries the checkpoint.
+    await patchThread({
+        ifInstanceId: instanceId,
+        summary,
+        summaryRuns: previous === undefined ? 1 : stored.runs + 1,
+        summaryThroughSeq: split.older.at(-1)?.seq,
+    }).catch((error: unknown) => {
+        // eslint-disable-next-line no-console -- best-effort checkpoint; the failure must be visible, not swallowed
+        console.warn(`@lunora/agent: could not persist the summary checkpoint for thread "${threadKey}"`, error);
+    });
+
+    return { history: split.recent, summary };
+};
+
+/**
  * One LLM turn's decision, produced inside the `llm:turn:N` durable step so the
  * whole turn — history read, compaction, `prepareStep` overrides, and the model
  * call — memoizes as a unit and a replay returns the recorded decision without
@@ -706,8 +789,10 @@ const generateTurn = async (turnContext: TurnContext, turn: number, steps: Reado
     const { agent, env, generate, instructions, listMessages, memoryContext, onTokenDelta, run, step, streamGenerate, threadKey } = turnContext;
 
     return step.do(`llm:turn:${String(turn)}`, async () => {
-        const rawHistory = (await run(listMessages, { key: threadKey })) as AgentMessageRow[];
-        const { history, summary } = await compactHistory(turnContext, rawHistory);
+        const { history, summary } =
+            agent.compaction !== undefined && turnContext.compact !== undefined
+                ? await compactIncrementally(turnContext)
+                : await compactHistory(turnContext, (await run(listMessages, { key: threadKey })) as AgentMessageRow[]);
 
         let prepared: PreparedTurn = {
             activeTools: agent.activeTools,
@@ -1315,6 +1400,7 @@ const runAgentLoop = async (options: AgentLoopOptions): Promise<AgentRunResult> 
     const completeRun = toFunctionReference(paths.completeRun);
     const ensureThread = toFunctionReference(paths.ensureThread);
     const listMessages = toFunctionReference(paths.listMessages);
+    const historyRef = toFunctionReference(paths.history);
     const deleteMessageRef = toFunctionReference(paths.deleteMessage);
     const patchThread = toFunctionReference(paths.patchThread);
     const setStateRef = toFunctionReference(paths.setState);
@@ -1418,6 +1504,7 @@ const runAgentLoop = async (options: AgentLoopOptions): Promise<AgentRunResult> 
         exports,
         generate,
         getState,
+        historyRef,
         instanceId,
         instructions,
         listMessages,

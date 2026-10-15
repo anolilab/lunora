@@ -858,7 +858,13 @@ describe(runAgentLoop, () => {
         const history = Array.from({ length: 6 }, (_, index) => {
             return { content: `m${String(index)}`, role: "user" as const, seq: index };
         });
-        const runtime = memoryRuntime({ handlers: { [DEFAULT_AGENT_FUNCTION_PATHS.listMessages]: (): unknown => history } });
+        const runtime = memoryRuntime({
+            handlers: {
+                [DEFAULT_AGENT_FUNCTION_PATHS.history]: (): unknown => {
+                    return { messages: history, runs: 0 };
+                },
+            },
+        });
         let compactCalls = 0;
         const compact: AgentCompact = async () => {
             compactCalls += 1;
@@ -884,7 +890,13 @@ describe(runAgentLoop, () => {
         const history = Array.from({ length: 6 }, (_, index) => {
             return { content: `m${String(index)}`, role: "user" as const, seq: index };
         });
-        const runtime = memoryRuntime({ handlers: { [DEFAULT_AGENT_FUNCTION_PATHS.listMessages]: (): unknown => history } });
+        const runtime = memoryRuntime({
+            handlers: {
+                [DEFAULT_AGENT_FUNCTION_PATHS.history]: (): unknown => {
+                    return { messages: history, runs: 0 };
+                },
+            },
+        });
         const compact: AgentCompact = async () => {
             throw new Error("summarizer down");
         };

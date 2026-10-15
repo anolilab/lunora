@@ -1,3 +1,15 @@
+## @lunora/do [1.0.0-alpha.214](https://github.com/anolilab/lunora/compare/@lunora/do@1.0.0-alpha.213...@lunora/do@1.0.0-alpha.214) (2026-10-15)
+
+### Performance Improvements
+
+* **do:** coalesce per-dispatch metric upserts every N dispatches ([#1167](https://github.com/anolilab/lunora/issues/1167)) ([a73b72e](https://github.com/anolilab/lunora/commit/a73b72e7b792ad727c8c6d45199b76d4750a523f))
+* **do:** load the sql assistant on first admin rpc ([#1195](https://github.com/anolilab/lunora/issues/1195)) ([a2e65ba](https://github.com/anolilab/lunora/commit/a2e65bae457bd622a0a7d6bfb7a5e3d46469bcc7))
+
+
+### Dependencies
+
+* **@lunora/observability:** upgraded to 1.0.0-alpha.139
+
 ## @lunora/do [1.0.0-alpha.213](https://github.com/anolilab/lunora/compare/@lunora/do@1.0.0-alpha.212...@lunora/do@1.0.0-alpha.213) (2026-10-15)
 
 ### Performance Improvements

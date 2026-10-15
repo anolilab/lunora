@@ -22,6 +22,9 @@ export interface StoredThread {
     key: string;
     messageCount: number;
     status: string;
+    summary?: string;
+    summaryRuns?: number;
+    summaryThroughSeq?: number;
     title?: string;
     usage?: { inputTokens?: number; outputTokens?: number; totalTokens?: number };
 }
@@ -180,10 +183,28 @@ export const memoryRuntime = (options?: {
         return [...messages.values()].filter((message) => message.threadKey === key).toSorted((a, b) => a.seq - b.seq);
     };
 
+    /** Mirrors `agentHistory`: the stored summary plus only the messages past `summaryThroughSeq` (rebuilt from scratch every 10th update). */
+    const history = (args?: Record<string, unknown>): unknown => {
+        const key = args?.["key"] as string;
+        const thread = threads.get(key);
+        const all = listMessages(args) as StoredMessage[];
+        const incremental = thread?.summary !== undefined && thread.summaryThroughSeq !== undefined && (thread.summaryRuns ?? 0) < 10;
+
+        return incremental
+            ? { messages: all.filter((message) => message.seq > (thread?.summaryThroughSeq ?? -1)), runs: thread?.summaryRuns ?? 0, summary: thread?.summary }
+            : {
+                  ...(thread?.summary !== undefined && thread.summaryThroughSeq !== undefined
+                      ? { fallback: { summary: thread.summary, throughSeq: thread.summaryThroughSeq } }
+                      : {}),
+                  messages: all,
+                  runs: 0,
+              };
+    };
+
     const patchThread = (args?: Record<string, unknown>): unknown => {
         const thread = threads.get(args?.["key"] as string);
 
-        if (thread) {
+        if (thread && (args?.["ifInstanceId"] === undefined || thread.instanceId === (args["ifInstanceId"] as string))) {
             if (args?.["status"] !== undefined) {
                 thread.status = args["status"] as string;
             }
@@ -194,6 +215,14 @@ export const memoryRuntime = (options?: {
 
             if (args?.["usage"] !== undefined) {
                 thread.usage = args["usage"] as StoredThread["usage"];
+            }
+
+            if (args?.["summary"] !== undefined) {
+                thread.summary = args["summary"] as string;
+                thread.summaryRuns = args["summaryRuns"] as number;
+                thread.summaryThroughSeq = args["summaryThroughSeq"] as number;
+            } else if (args?.["summaryRuns"] !== undefined) {
+                thread.summaryRuns = args["summaryRuns"] as number;
             }
         }
 
@@ -244,6 +273,7 @@ export const memoryRuntime = (options?: {
         [DEFAULT_AGENT_FUNCTION_PATHS.completeRun, completeRun],
         [DEFAULT_AGENT_FUNCTION_PATHS.deleteMessage, deleteMessage],
         [DEFAULT_AGENT_FUNCTION_PATHS.ensureThread, ensureThread],
+        [DEFAULT_AGENT_FUNCTION_PATHS.history, history],
         [DEFAULT_AGENT_FUNCTION_PATHS.listMessages, listMessages],
         [DEFAULT_AGENT_FUNCTION_PATHS.patchThread, patchThread],
         ...(options?.memory ? ([[options.memory.path, memoryHandler]] as const) : []),

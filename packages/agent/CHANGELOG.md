@@ -1,3 +1,14 @@
+## @lunora/agent [1.0.0-alpha.206](https://github.com/anolilab/lunora/compare/@lunora/agent@1.0.0-alpha.205...@lunora/agent@1.0.0-alpha.206) (2026-10-15)
+
+### Performance Improvements
+
+* **agent:** import jsonSchema from provider-utils and load the ai root on first model call ([#1178](https://github.com/anolilab/lunora/issues/1178)) ([efb0cb1](https://github.com/anolilab/lunora/commit/efb0cb13ee71c86064295090b569a7514ea5d57e))
+
+
+### Dependencies
+
+* **@lunora/ai:** upgraded to 1.0.0-alpha.126
+
 ## @lunora/agent [1.0.0-alpha.205](https://github.com/anolilab/lunora/compare/@lunora/agent@1.0.0-alpha.204...@lunora/agent@1.0.0-alpha.205) (2026-10-15)
 
 

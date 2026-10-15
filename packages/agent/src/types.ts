@@ -1099,6 +1099,12 @@ export interface AgentFunctionPaths {
     graphTraverse: string;
     /** The internal `agents:agentGraphUpsert` mutation the loop dispatches on run-end graph extraction. */
     graphUpsert: string;
+
+    /**
+     * The internal `agents:agentHistory` query the loop dispatches for a compacting
+     * turn: the stored running summary plus only the messages it does not yet cover.
+     */
+    history: string;
     listMessages: string;
     patchThread: string;
 

@@ -36,6 +36,7 @@ export const DEFAULT_AGENT_FUNCTION_PATHS: AgentFunctionPaths = {
     episodeUpsert: `${AGENT_MODULE}:agentEpisodeUpsert`,
     graphTraverse: `${AGENT_MODULE}:agentGraphTraverse`,
     graphUpsert: `${AGENT_MODULE}:agentGraphUpsert`,
+    history: `${AGENT_MODULE}:agentHistory`,
     listMessages: `${AGENT_MODULE}:agentMessages`,
     patchThread: `${AGENT_MODULE}:agentPatchThread`,
     run: `${AGENT_MODULE}:agentRun`,
