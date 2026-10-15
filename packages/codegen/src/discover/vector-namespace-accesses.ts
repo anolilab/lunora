@@ -90,6 +90,19 @@ const callbackParameterNames = (callback: TsNode | undefined): string[] => {
     return Node.isIdentifier(name) ? [name.getText()] : name.getDescendantsOfKind(SyntaxKind.BindingElement).map((element) => element.getName());
 };
 
+/** An identifier bound by a `const` inside the `.map` callback resolves one hop to its initializer; any other node is returned unchanged. */
+const callbackLocalInitializer = (callback: TsNode | undefined, node: TsNode | undefined): TsNode | undefined => {
+    if (!callback || !node || !Node.isIdentifier(node)) {
+        return node;
+    }
+
+    const declaration = callback
+        .getDescendantsOfKind(SyntaxKind.VariableDeclaration)
+        .find((variable) => variable.getName() === node.getText() && variable.getInitializer() !== undefined);
+
+    return declaration?.getInitializer() ?? node;
+};
+
 /** Whether `node` is, or contains, an identifier spelled as one of `names`. */
 const referencesAnyName = (node: TsNode, names: string[]): boolean =>
     names.length > 0 &&
@@ -126,7 +139,7 @@ const recordNamespaces = (input: TsNode, canHop = true): NamespaceCandidate[] =>
         const names = isArgumentDerived(callee.getExpression()) ? callbackParameterNames(callback) : [];
 
         return mapCallbackRecords(callback).map((record) => {
-            const namespace = recordNamespace(record);
+            const namespace = callbackLocalInitializer(callback, recordNamespace(record));
 
             return { namespace, viaParameter: namespace !== undefined && referencesAnyName(namespace, names) };
         });

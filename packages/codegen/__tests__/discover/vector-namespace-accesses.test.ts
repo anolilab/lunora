@@ -101,6 +101,10 @@ describe("discoverVectorNamespaceAccesses", () => {
             "map destructured parameter",
             `await ctx.vectors.upsertMany(idx, args.rows.map(({ tenant }) => ({ namespace: tenant, embed, id: "a", input: "x" })));`,
         ],
+        [
+            "map callback alias",
+            `await ctx.vectors.upsertMany(idx, args.rows.map((row) => { const namespace = row.tenant; return { namespace, embed, id: row.id, input: "x" }; }));`,
+        ],
     ])("flags an arg-derived upsertMany namespace (%s)", (_name, body) => {
         expect.assertions(1);
 
@@ -124,6 +128,10 @@ describe("discoverVectorNamespaceAccesses", () => {
         [
             "map over a local array",
             `const rows = [{ id: "a" }]; await ctx.vectors.upsertMany(idx, rows.map((row) => ({ namespace: row.id, embed, id: row.id })));`,
+        ],
+        [
+            "map callback alias",
+            `await ctx.vectors.upsertMany(idx, args.rows.map((row) => { const namespace = ctx.identity.orgId; return { namespace, embed, id: row.id, input: "x" }; }));`,
         ],
     ])("ignores a ctx-scoped upsertMany namespace (%s)", (_name, body) => {
         expect.assertions(1);
