@@ -1220,10 +1220,13 @@ const wrapDatabase = (base: RlsDatabase, raw: RlsDatabase, steps: ReadonlyArray<
 
         // `includeDeleted` only for a hard delete: a soft delete must treat a row an earlier delete of the
         // page already tombstoned as gone (the writer's delete is a no-op for it), so it is not re-counted.
+        // `relationBaseWhere` mirrors the page read, so a relation-based read policy that matches through a
+        // child the caller can no longer read does not sneak the parent back into the erase.
         const row = await raw.findFirst(tableName, {
             baseWhere: readBase(tableName).baseWhere,
             ...(deleteOptions?.hard === true ? { includeDeleted: true } : {}),
             limit: 1,
+            relationBaseWhere: relationReadFilter,
             where: { _id: id },
         });
 

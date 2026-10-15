@@ -1918,6 +1918,38 @@ describe("rls — batch write path", () => {
         expect(database.calls.filter((call) => call.method === "delete").map((call) => call.tableOrId)).toStrictEqual(["A", "B"]);
     });
 
+    it("deleteAll re-locates with the same relation read filter its page read used", async () => {
+        expect.assertions(2);
+
+        const database = createFakeDatabase([{ _id: "A", ownerId: "u1", table: "documents" }]);
+
+        // Force the re-location path (a listed table) and capture the read filter each read threads.
+        Object.assign(database.writer, { deleteRereadTables: new Set(["documents"]) });
+
+        const filters: unknown[] = [];
+        const { findMany } = database.writer;
+
+        database.writer.findMany = async (tableName, args) => {
+            filters.push((args as { relationBaseWhere?: unknown } | undefined)?.relationBaseWhere);
+
+            return findMany(tableName, args);
+        };
+        database.writer.findFirst = async (_tableName, args) => {
+            filters.push((args as { relationBaseWhere?: unknown } | undefined)?.relationBaseWhere);
+
+            return { _id: "A", ownerId: "u1", table: "documents" };
+        };
+
+        const handler = lunora.mutation.use(rlsForTest<TestContext>([deletePolicy])).mutation(async ({ ctx }) => ctx.db.deleteAll("documents"));
+
+        await handler.handler(makeContext(database, "u1"), {});
+
+        // Page read and re-location carry the SAME child read filter, so a relation-based read policy
+        // cannot re-admit a parent through a child the caller can no longer read.
+        expect(filters[0]).toBeTypeOf("function");
+        expect(filters[0]).toBe(filters[1]);
+    });
+
     it("wipeShard fails closed under rls() instead of erasing only policy-visible rows", async () => {
         expect.assertions(2);
 
