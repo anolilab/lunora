@@ -1891,14 +1891,12 @@ describe("rls — batch write path", () => {
 
         // An action: no transaction, so `deleteWhere` re-locates each row.
         Object.assign(database.writer, { inTransaction: () => false });
-        // The fresh read carries the caller's `where`, merged as `{ AND: [{ _id }, { status }] }`.
+        // The re-location read fetches the fresh row by id; the caller's flat `where` is then re-evaluated on it.
         database.writer.findFirst = async (tableName, args) => {
             database.calls.push({ args, method: "findFirst", tableOrId: tableName });
-            const where = (args as { where?: { AND?: [{ _id?: string }, { status?: string }] } } | undefined)?.where;
-            const row = rows.find((entry) => entry.table === tableName && entry._id === where?.AND?.[0]?._id);
-            const status = where?.AND?.[1]?.status;
+            const id = (args as { where?: { _id?: string } } | undefined)?.where?._id;
 
-            return row && (status === undefined || row.status === status) ? row : null;
+            return rows.find((row) => row.table === tableName && row._id === id) ?? null;
         };
         // A concurrent write un-archives B after the page read.
         database.writer.findMany = async (tableName, args) => {
@@ -2013,7 +2011,9 @@ describe("rls — batch write path", () => {
 
         // `plain` carries no policy; the erase is scoped only by the caller's relational `where`, whose child
         // hop must still be filtered by `relationReadFilter` on the re-location read.
-        const handler = lunora.action.use(rlsForTest<TestContext>([])).action(async ({ ctx }) => ctx.db.deleteWhere("plain", { parent: { id: "child" } }));
+        const handler = lunora.action
+            .use(rlsForTest<TestContext>([]))
+            .action(async ({ ctx }) => ctx.db.deleteWhere("plain", { parent: { is: { id: "child" } } }));
 
         await handler.handler(makeContext(database, "u1"), {});
 

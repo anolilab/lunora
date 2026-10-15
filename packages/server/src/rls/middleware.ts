@@ -1199,12 +1199,12 @@ const wrapDatabase = (base: RlsDatabase, raw: RlsDatabase, steps: ReadonlyArray<
      * (the evaluator must see the protected row); a policy-less row is re-located and deleted through the
      * guarded `base`, exactly as the fast path deletes it.
      *
-     * The fresh read RE-APPLIES the erase's own scope: the caller's `where` (so a row a concurrent write moved
-     * out of a `deleteWhere` filter is skipped) and, for a gated table, the read scope (so a row moved out of the
-     * caller's read-visible set is skipped even when its delete policy would still allow the delete) plus the
-     * relation child filter the page read used. A `{ hard: true }` erase relaxes the soft-delete scope
-     * (`includeDeleted`) so it can reach — and physically remove — a row an earlier delete of the page
-     * soft-deleted; the filters still apply.
+     * The fresh image is read by id under the table's read scope (and, on that read's own relation hops, the
+     * child read filter), so a row a concurrent write moved out of the caller's read-visible set is skipped.
+     * The delete policy is taken on that image, so a row it now denies fails loudly instead of reading as
+     * gone. `deleteWhere`'s own `where` still scopes the erase: a row that no longer matches it is skipped,
+     * not deleted. A `{ hard: true }` erase relaxes the soft-delete scope (`includeDeleted`) so it can reach —
+     * and physically remove — a row an earlier delete of the page soft-deleted; the filters still apply.
      */
     const deleteLocated = async (
         id: string,
@@ -1213,35 +1213,47 @@ const wrapDatabase = (base: RlsDatabase, raw: RlsDatabase, steps: ReadonlyArray<
         deleteOptions: undefined | { hard: boolean },
         where?: WhereInput,
     ): Promise<boolean> => {
-        const rowWhere = mergeBaseWhere(where, { _id: id });
         const scope = deleteOptions?.hard === true ? { includeDeleted: true } : {};
+        const reader = gated ? raw : base;
+        const readScope = gated ? { baseWhere: readBase(tableName).baseWhere } : {};
 
-        const row = gated
-            ? await raw.findFirst(tableName, {
-                  baseWhere: readBase(tableName).baseWhere,
-                  ...scope,
-                  limit: 1,
-                  relationBaseWhere: relationReadFilter,
-                  where: rowWhere,
-              })
-            : await base.findFirst(tableName, { ...scope, limit: 1, relationBaseWhere: relationReadFilter, where: rowWhere });
+        const row = await reader.findFirst(tableName, {
+            ...readScope,
+            ...scope,
+            limit: 1,
+            relationBaseWhere: relationReadFilter,
+            where: { _id: id },
+        });
 
         if (!row || isSoftDeleted(tableName, row, deleteOptions)) {
             return false;
         }
 
-        if (gated) {
-            if (!allowsWrite(tableName, "delete", row)) {
-                // Same table-agnostic message as `gateById`.
-                throw new LunoraError("FORBIDDEN", "delete denied by policy");
-            }
-
-            await raw.delete(id, tableName, deleteOptions);
-
-            return true;
+        if (gated && !allowsWrite(tableName, "delete", row)) {
+            // Same table-agnostic message as `gateById`.
+            throw new LunoraError("FORBIDDEN", "delete denied by policy");
         }
 
-        await base.delete(id, tableName, deleteOptions);
+        // `deleteWhere`'s filter still scopes the erase: a row a concurrent write moved out of it is skipped.
+        // A flat predicate is re-evaluated on the fresh row; a relation predicate needs the child read filter,
+        // so it re-reads the row under `where`.
+        if (where !== undefined) {
+            const stillMatches = containsRelationPredicate(where)
+                ? (await reader.findFirst(tableName, {
+                      ...readScope,
+                      ...scope,
+                      limit: 1,
+                      relationBaseWhere: relationReadFilter,
+                      where: mergeBaseWhere(where, { _id: id }),
+                  })) !== null
+                : matchesWhere(row, where);
+
+            if (!stillMatches) {
+                return false;
+            }
+        }
+
+        await reader.delete(id, tableName, deleteOptions);
 
         return true;
     };
