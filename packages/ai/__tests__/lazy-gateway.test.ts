@@ -9,7 +9,7 @@ const state = vi.hoisted(() => {
     };
 });
 
-vi.mock(import('workers-ai-provider'), () => {
+vi.mock(import("workers-ai-provider"), (() => {
     state.evaluated.push("workers-ai-provider");
 
     return {
@@ -45,21 +45,21 @@ vi.mock(import('workers-ai-provider'), () => {
             return provider;
         },
     };
-});
+}) as never);
 
-vi.mock(import('workers-ai-provider/openai'), () => {
+vi.mock(import("workers-ai-provider/openai"), (() => {
     state.evaluated.push("openai-plugin");
 
     return { openai: {} };
-});
+}) as never);
 
-vi.mock(import("workers-ai-provider/anthropic"), () => {
+vi.mock(import("workers-ai-provider/anthropic"), (() => {
     state.evaluated.push("anthropic-plugin");
 
     return { anthropic: {} };
-});
+}) as never);
 
-vi.mock(import("@ai-sdk/openai"), () => {
+vi.mock(import("@ai-sdk/openai"), (() => {
     state.evaluated.push("@ai-sdk/openai");
 
     return {
@@ -67,7 +67,7 @@ vi.mock(import("@ai-sdk/openai"), () => {
             return {};
         },
     };
-});
+}) as never);
 
 const { default: createAi } = await import("../src/create-ai");
 
