@@ -88,7 +88,7 @@ describe("createSqlCtxDb — orderBy null placement", () => {
                 return query.startsWith("SELECT") ? [] : harness.exec.all(query, parameters);
             },
         };
-        const writer = createSqlCtxDb({ clock: () => 1, dialect: { ...makeSqliteDialect(), name }, exec, schema: nullSchema });
+        const writer = createSqlCtxDb({ clock: () => 1, dialect: makeSqliteDialect(name), exec, schema: nullSchema });
 
         await writer.findMany("items", { orderBy: [{ score: spec }] }).catch(() => undefined);
 

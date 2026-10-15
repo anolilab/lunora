@@ -4,6 +4,7 @@ import { sql } from "drizzle-orm";
 
 import type { SqlCtxExec } from "../../src/ctx-db";
 import type { SqlDialect } from "../../src/dialect";
+import renderFor from "./render-for";
 
 /**
  * The node-only SQLite harness the sql-store suites share: a minimal reference dialect over
@@ -75,6 +76,7 @@ export const makeSqliteDialect = (name: SqlDialect["name"] = "sqlite"): SqlDiale
             { name: "_creationTime", type: "REAL NOT NULL" },
         ],
         isUniqueViolation: (error) => error instanceof Error && UNIQUE_VIOLATION_RE.test(error.message),
+        render: renderFor(name),
         name,
         supportsFts5: RUNTIME_HAS_FTS5,
         supportsReturning: true,

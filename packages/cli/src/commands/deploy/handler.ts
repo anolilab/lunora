@@ -2,8 +2,9 @@ import { dirname } from "node:path";
 
 import type { CodegenResult } from "@lunora/codegen";
 import { readServiceBindings, runCodegen } from "@lunora/codegen";
-import type { DeployDriver, DeployRequest, ToolchainCommand } from "@lunora/config";
+import type { DeployDriver, DeployRequest, DiscoveryCache, ToolchainCommand } from "@lunora/config";
 import {
+    createDiscoveryCache,
     discoverContainerInfo,
     discoverSchemaInfo,
     inferLunoraBindings,
@@ -87,7 +88,7 @@ const buildContainerImages = async (cwd: string, options: DeployCommandOptions):
         return undefined;
     }
 
-    const targets = discoverContainerInfo(cwd, "lunora").containers.flatMap((container) =>
+    const targets = discoverContainerInfo(cwd, "lunora", options.discoveryCache).containers.flatMap((container) =>
         container.schedulingPolicy === undefined && container.image.kind === "build"
             ? [{ buildDir: container.image.buildDir, exportName: container.exportName }]
             : [],
@@ -164,6 +165,7 @@ const provisionBindings = async (
     cronTriggers: ReadonlyArray<string> | undefined,
     target: string,
     environment: string | undefined,
+    cache?: DiscoveryCache,
 ): Promise<void> => {
     try {
         // Resolved for its side effect: reject an unregistered target before
@@ -172,7 +174,7 @@ const provisionBindings = async (
         // through this function, so this is the one guard.
         resolveDeployDriver(target);
 
-        const inferred = await inferLunoraBindings({ projectRoot: cwd, schemaDir: resolveSchemaDirectory(cwd) });
+        const inferred = await inferLunoraBindings({ cache, projectRoot: cwd, schemaDir: resolveSchemaDirectory(cwd) });
         const reconciled = reconcileWranglerBindings(cwd, inferred, { environment, target });
 
         const writtenTo = reconciled.wranglerPath ?? "wrangler.jsonc";
@@ -576,6 +578,8 @@ const runPreDeployPipeline = async (options: DeployCommandOptions, command: PreD
         }
 
         codegen = codegenStep.result;
+        // Codegen rewrites what discovery reads; nothing memoised before it may outlive it.
+        options.discoveryCache?.clear();
     }
 
     let reblessSchemaBaseline: (() => void) | undefined;
@@ -610,7 +614,7 @@ const runPreDeployPipeline = async (options: DeployCommandOptions, command: PreD
     // function returns. Restoring here derived both from the reverted config, so
     // `build --emit-bindings` handed a deployer `"crons": []` for an app with a
     // nightly cron. See `snapshotWranglerConfig`.
-    await provisionBindings(cwd, options.logger, codegen?.cronTriggers, target, options.env);
+    await provisionBindings(cwd, options.logger, codegen?.cronTriggers, target, options.env, options.discoveryCache);
 
     const checkError = runPreDeployChecks(cwd, options, command);
 
@@ -748,6 +752,7 @@ const checkArtifactsNamespaces = async (
     target: string,
     environment: string | undefined,
     logger: Logger,
+    cache: DiscoveryCache | undefined,
 ): Promise<string | undefined> => {
     const parsed = target === "cloudflare" && wranglerPath !== undefined ? readWranglerJsonc<WranglerConfig>(wranglerPath).parsed : undefined;
 
@@ -760,7 +765,7 @@ const checkArtifactsNamespaces = async (
         typeof entry?.binding === "string" && typeof entry.namespace === "string" ? [{ binding: entry.binding, namespace: entry.namespace }] : [],
     );
     // Parsed only once something is bound: the schema scan is the slow half.
-    const jurisdiction = entries.length === 0 ? undefined : discoverSchemaInfo(cwd, resolveSchemaDirectory(cwd)).info?.jurisdiction;
+    const jurisdiction = entries.length === 0 ? undefined : discoverSchemaInfo(cwd, resolveSchemaDirectory(cwd), cache).info?.jurisdiction;
 
     if (jurisdiction === undefined) {
         return undefined;
@@ -785,7 +790,8 @@ const checkArtifactsNamespaces = async (
     return failures.length === 0 ? undefined : failures.join("\n");
 };
 
-const executeDeploy = async (options: DeployCommandOptions): Promise<DeployCommandResult> => {
+const executeDeploy = async (input: DeployCommandOptions): Promise<DeployCommandResult> => {
+    const options: DeployCommandOptions = { ...input, discoveryCache: input.discoveryCache ?? createDiscoveryCache() };
     const cwd = options.cwd ?? process.cwd();
     const interactive = isInteractive(options);
 
@@ -809,7 +815,8 @@ const executeDeploy = async (options: DeployCommandOptions): Promise<DeployComma
     // The Artifacts lookup is read-only, so it runs on `--dry-run` too: a dry run
     // reports what a real deploy would refuse.
     const preflightError =
-        validateMigrateDeployPreflight(options) ?? (await checkArtifactsNamespaces(cwd, validation.wranglerPath, pipeline.target, options.env, options.logger));
+        validateMigrateDeployPreflight(options) ??
+        (await checkArtifactsNamespaces(cwd, validation.wranglerPath, pipeline.target, options.env, options.logger, options.discoveryCache));
 
     if (preflightError !== undefined) {
         return abortResult(preflightError);

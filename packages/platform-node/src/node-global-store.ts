@@ -50,34 +50,7 @@ import {
 } from "@lunora/sql-store";
 import Database from "better-sqlite3";
 
-/**
- * Per-connection cache of compiled statements, keyed by SQL text.
- *
- * `database.prepare(sql)` recompiles the statement on every call, and this
- * exec wraps every read and write the `.global()` table core issues through
- * `SqlCtxExec` — so the same SQL text would otherwise be recompiled repeatedly
- * on a hot path. The `WeakMap` key keeps a cache from ever pinning a closed
- * connection.
- */
-const statementCache = new WeakMap<Database.Database, Map<string, Database.Statement>>();
-
-const preparedStatement = (database: Database.Database, statement: string): Database.Statement => {
-    let cache = statementCache.get(database);
-
-    if (cache === undefined) {
-        cache = new Map();
-        statementCache.set(database, cache);
-    }
-
-    let prepared = cache.get(statement);
-
-    if (prepared === undefined) {
-        prepared = database.prepare(statement);
-        cache.set(statement, prepared);
-    }
-
-    return prepared;
-};
+import preparedStatement from "./prepared-statement";
 
 /**
  * D1's dialect, with the one thing that differs on this host: how a search index

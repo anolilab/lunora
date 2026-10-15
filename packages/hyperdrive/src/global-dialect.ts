@@ -19,9 +19,24 @@
  * `"…"`/`` `…` `` identifiers per engine. These dialects only carry what drizzle
  * can't infer from a dynamic, column-per-field schema.
  */
+import type { RenderedSql } from "@lunora/shard-engine";
 import type { SqlDialect } from "@lunora/sql-store";
 import type { SQL } from "drizzle-orm";
 import { sql } from "drizzle-orm";
+import { MySqlDialect } from "drizzle-orm/mysql-core";
+import { PgDialect } from "drizzle-orm/pg-core";
+
+const PG_DIALECT = new PgDialect();
+const MYSQL_DIALECT = new MySqlDialect();
+
+/** Render through this engine's own drizzle dialect, so a bundle without it never loads the other. */
+const renderWith =
+    (dialect: PgDialect | MySqlDialect) =>
+    (query: SQL): RenderedSql => {
+        const { params, sql: text } = dialect.sqlToQuery(query);
+
+        return { params, sql: text };
+    };
 
 /** Companion columns for the Postgres native layout: the document id and its indexed vector. */
 const VECTOR_ID_COLUMN = "__id__";
@@ -216,6 +231,7 @@ export const postgresDialect: SqlDialect = {
     /** Postgres allows 1,600 columns per table (fewer once wide types are involved, which the engine reports on its own). */
     maxTableColumns: 1600,
     name: "postgres",
+    render: renderWith(PG_DIALECT),
     searchBackfillHint: "call backfillSqlSearchIndexes from @lunora/sql-store with the store's exec from a host-side admin path",
     supportsFts5: false,
 
@@ -305,6 +321,7 @@ export const mysqlDialect: SqlDialect = {
     /** MySQL's hard ceiling is 4,096 columns per table; InnoDB's practical limit is lower and row-size-bound, which the engine reports on its own. */
     maxTableColumns: 4096,
     name: "mysql",
+    render: renderWith(MYSQL_DIALECT),
     searchBackfillHint: "call backfillSqlSearchIndexes from @lunora/sql-store with the store's exec from a host-side admin path",
     supportsFts5: false,
     supportsReturning: false,

@@ -79,10 +79,10 @@ better-auth needs its tables (`user`, `session`, `account`, `verification`) in y
 
 ```ts
 // scripts/auth-migrate.ts
-import { compileMigrationsSql, createAuth } from "@lunora/auth";
+import { compileMigrationsSql, createMigrationAuth } from "@lunora/auth/migrate";
 
 const sql = await compileMigrationsSql(
-    createAuth({
+    createMigrationAuth({
         database: (process.env as never).DB,
         emailAndPassword: { enabled: true },
         secret: process.env.BETTER_AUTH_SECRET,

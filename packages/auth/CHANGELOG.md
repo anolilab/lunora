@@ -1,3 +1,45 @@
+## @lunora/auth [1.0.0-alpha.213](https://github.com/anolilab/lunora/compare/@lunora/auth@1.0.0-alpha.212...@lunora/auth@1.0.0-alpha.213) (2026-10-15)
+
+### ⚠ BREAKING CHANGES
+
+* **auth:** createAuth throws unless `database` is an adapter factory. ensureMigrated and
+compileMigrationsSql are no longer exported from @lunora/auth; import them, and build the raw-D1
+migration instance with createMigrationAuth, from @lunora/auth/migrate.
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+
+* test(startup): re-baseline the worker startup gate after the auth split
+
+Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>
+
+* ci(codspeed): accept an empty benchmark run
+
+On a pull request the job runs vis affected test:bench, which legitimately executes nothing when
+no affected package declares a bench. The action then fails the check on the empty upload, so
+PRs touching bench-less packages go red for no reason.
+
+Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>
+
+* perf(codegen): load the auth migrator on first use
+
+The generated app imported @lunora/auth/migrate statically, so every app using .auth() put kysely
+and better-auth's migrator (~550 KiB) into the worker startup closure. Load it with a dynamic
+import() inside the lazy auth initialiser instead; ensureMigrated still runs once, single-flighted,
+with errors surfacing as before.
+
+The earlier report that a dynamic import of the migration path hangs under the Cloudflare vite
+plugin does not reproduce: the initialiser runs from the Worker-level fetch before any Durable
+Object is touched, and sign-up, sign-in and the migration all complete in the dev server.
+
+Also map @lunora/auth/migrate in registry/tsconfig.json so the registry typecheck resolves it.
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+
+### Performance Improvements
+
+* **auth:** init through better-auth/minimal and move the migrator to a migrate entry ([#1199](https://github.com/anolilab/lunora/issues/1199)) ([4b05283](https://github.com/anolilab/lunora/commit/4b0528357d04519e1fbee6b814bb7feef56e51a1))
+* **auth:** load the free-email list only when a caller classifies ([#1193](https://github.com/anolilab/lunora/issues/1193)) ([1ed9abc](https://github.com/anolilab/lunora/commit/1ed9abc2df6aaff8713c51bb15668f16abe397d5))
+
 ## @lunora/auth [1.0.0-alpha.212](https://github.com/anolilab/lunora/compare/@lunora/auth@1.0.0-alpha.211...@lunora/auth@1.0.0-alpha.212) (2026-10-14)
 
 

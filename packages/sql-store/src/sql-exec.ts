@@ -14,7 +14,6 @@
 
 import { LunoraError } from "@lunora/errors";
 import type { ColumnMetaLike, TableDefinitionLike } from "@lunora/shard-engine";
-import { renderSql } from "@lunora/shard-engine";
 import { SQL, sql } from "drizzle-orm";
 
 import type { RangeOperandType } from "../../../shared/json-field-path";
@@ -299,7 +298,7 @@ const tableColumns = (definition: TableDefinitionLike): [string, ColumnMetaLike]
  * rewrites become redundant once every site is on this path.
  */
 const queryAll = (exec: SqlCtxExec, dialect: SqlDialect, query: SQL): Promise<Record<string, unknown>[]> => {
-    const { params, sql: text } = renderSql(dialect.name, query);
+    const { params, sql: text } = dialect.render(query);
 
     return exec.all(text, params);
 };
@@ -307,7 +306,7 @@ const queryAll = (exec: SqlCtxExec, dialect: SqlDialect, query: SQL): Promise<Re
 /** Write twin of {@link queryAll}: render a drizzle {@link SQL} for the engine and run it. */
 // eslint-disable-next-line @typescript-eslint/no-invalid-void-type -- `void` is intentional: mirrors SqlExec.run, whose union accepts a void-returning exec (no affected-rows count)
 const queryRun = (exec: SqlCtxExec, dialect: SqlDialect, query: SQL): Promise<SqlRunResult | void> => {
-    const { params, sql: text } = renderSql(dialect.name, query);
+    const { params, sql: text } = dialect.render(query);
 
     return exec.run(text, params);
 };
@@ -376,7 +375,7 @@ const queryBatch = async (exec: SqlCtxExec, dialect: SqlDialect, queries: Readon
         return;
     }
 
-    await exec.batch(queries.map((query) => renderSql(dialect.name, query)));
+    await exec.batch(queries.map((query) => dialect.render(query)));
 };
 
 /**
@@ -387,7 +386,7 @@ const queryBatch = async (exec: SqlCtxExec, dialect: SqlDialect, queries: Readon
  */
 const runInOrder = async (exec: SqlCtxExec, dialect: SqlDialect, queries: ReadonlyArray<SQL>): Promise<void> => {
     if (exec.batch && dialect.name === "sqlite") {
-        await exec.batch(queries.map((query) => renderSql(dialect.name, query)));
+        await exec.batch(queries.map((query) => dialect.render(query)));
 
         return;
     }

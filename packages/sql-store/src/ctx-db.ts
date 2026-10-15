@@ -98,7 +98,6 @@ import {
     rankTableName,
     readAggregateValue,
     relationHooks,
-    renderSql,
     resolvePatch,
     resolveRankPartition,
     resolveRankSeekTuple,
@@ -1610,7 +1609,7 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
     const { dialect } = options;
     // Value encode stays the shared SQLite codec on every engine — storage is
     // SQLite-shaped everywhere. Identifier quoting and placeholder numbering are
-    // drizzle's job (rendered per-engine via renderSql), so the base only carries
+    // drizzle's job (rendered per-engine via SqlDialect.render), so the base only carries
     // the per-engine WHERE differences: the substring test's position function,
     // and (on D1) the bound-parameter budget. `serialize` is per-TABLE — see
     // {@link whereSqlStrategyFor}.
@@ -3472,7 +3471,7 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
             // SQLite and D1 spell it `EXPLAIN QUERY PLAN`; Postgres and MySQL, plain `EXPLAIN`.
             const prefix = dialect.name === "sqlite" ? "EXPLAIN QUERY PLAN" : "EXPLAIN";
             const steps = await queryAll(exec, dialect, sql`${sql.raw(prefix)} ${query}`);
-            const { params, sql: text } = renderSql(dialect.name, query);
+            const { params, sql: text } = dialect.render(query);
 
             return { params, plan: steps.map((step) => planStepText(step)), sql: text };
         },
@@ -3881,7 +3880,7 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
                 const tooWide =
                     compiled !== undefined &&
                     dialect.name === "sqlite" &&
-                    renderSql(dialect.name, compiled).params.length + searchParams > WORKERD_SQLITE_LIMITS.boundParams;
+                    dialect.render(compiled).params.length + searchParams > WORKERD_SQLITE_LIMITS.boundParams;
                 const scope = tooWide ? undefined : compiled;
                 const selective = inMemoryFilters > 0 || tooWide;
                 const rows = await runSqlSearch(
