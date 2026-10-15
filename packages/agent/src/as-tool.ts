@@ -1,6 +1,6 @@
+import { jsonSchema } from "@ai-sdk/provider-utils";
 import { LunoraError } from "@lunora/errors";
 import { isDuplicateInstanceError } from "@lunora/workflow";
-import { jsonSchema } from "ai";
 
 import { fnv1a64Hex } from "../../../shared/fnv1a";
 import { resolveWorkflowHandle } from "../../../shared/workflow-binding";

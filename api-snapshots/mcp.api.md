@@ -23,23 +23,11 @@ const AGENT_STATUS_TOOL_NAME = "lunora_agent_status";
 
 ### `AuthedMcpFetchHandlerOptions` (interface)
 
-```ts
-interface AuthedMcpFetchHandlerOptions {
-    maxRequestBytes?: number;
-    protect: McpAuthProtect;
-    server: AuthedMcpServerOptions;
-    stepUp?: {
-        challenge: (scopes: string[]) => unknown;
-        scope: string;
-    };
-}
-```
+Re-exported from `@lunora/mcp/worker` — signature tracked in that section.
 
 ### `AuthedMcpServerOptions` (type)
 
-```ts
-type AuthedMcpServerOptions = ((claims: McpAccessTokenClaims) => LunoraMcpServerOptions | Promise<LunoraMcpServerOptions>) | LunoraMcpServerOptions;
-```
+Re-exported from `@lunora/mcp/worker` — signature tracked in that section.
 
 ### `CallAgentToolOptions` (interface)
 
@@ -61,39 +49,19 @@ const DEFAULT_MAX_REQUEST_BYTES: number;
 
 ### `LOCAL_SERVER_NAME` (const)
 
-```ts
-const LOCAL_SERVER_NAME = "lunora";
-```
+Re-exported from `@lunora/mcp/node` — signature tracked in that section.
 
 ### `LocalDeployment` (interface)
 
-```ts
-interface LocalDeployment {
-    token?: string;
-    url: string;
-}
-```
+Re-exported from `@lunora/mcp/node` — signature tracked in that section.
 
 ### `LocalDeploymentSource` (type)
 
-```ts
-type LocalDeploymentSource = (() => LocalDeployment | undefined) | LocalDeployment;
-```
+Re-exported from `@lunora/mcp/node` — signature tracked in that section.
 
 ### `LocalMcpServerOptions` (interface)
 
-```ts
-interface LocalMcpServerOptions {
-    allowWrites?: boolean;
-    deployment?: LocalDeploymentSource;
-    docs?: false | {
-        baseUrl?: string;
-    };
-    extraTools?: ReadonlyArray<McpTool>;
-    fetch?: typeof fetch;
-    version?: string;
-}
-```
+Re-exported from `@lunora/mcp/node` — signature tracked in that section.
 
 ### `LunoraMcpServerOptions` (interface)
 
@@ -110,18 +78,13 @@ interface LunoraMcpServerOptions {
     fetch?: typeof fetch;
     token?: string;
     url?: string;
+    version?: string;
 }
 ```
 
 ### `McpAccessTokenClaims` (interface)
 
-```ts
-interface McpAccessTokenClaims {
-    readonly [claim: string]: unknown;
-    readonly scope?: unknown;
-    readonly sub?: string;
-}
-```
+Re-exported from `@lunora/mcp/worker` — signature tracked in that section.
 
 ### `McpAgentExposure` (interface)
 
@@ -135,9 +98,7 @@ interface McpAgentExposure {
 
 ### `McpAuthProtect` (type)
 
-```ts
-type McpAuthProtect = (handler: (request: Request, claims: McpAccessTokenClaims) => Promise<Response>) => McpFetchHandler;
-```
+Re-exported from `@lunora/mcp/worker` — signature tracked in that section.
 
 ### `McpFetchHandler` (type)
 
@@ -147,11 +108,7 @@ type McpFetchHandler = (request: Request) => Promise<Response>;
 
 ### `McpFetchHandlerOptions` (interface)
 
-```ts
-interface McpFetchHandlerOptions extends LunoraMcpServerOptions {
-    maxRequestBytes?: number;
-}
-```
+Re-exported from `@lunora/mcp/worker` — signature tracked in that section.
 
 ### `McpServerInfo` (interface)
 
@@ -173,83 +130,43 @@ interface McpTool {
 
 ### `NO_DEPLOYMENT_MESSAGE` (const)
 
-```ts
-const NO_DEPLOYMENT_MESSAGE = "no Lunora dev server is running for this project — start one with `lunora dev`, then call this tool again (call lunora_dev_status to check).";
-```
+Re-exported from `@lunora/mcp/node` — signature tracked in that section.
 
 ### `OBSERVABILITY_TOOL_DEFINITIONS` (const)
 
-```ts
-const OBSERVABILITY_TOOL_DEFINITIONS: ReadonlyArray<ToolDefinition>;
-```
+Re-exported from `@lunora/mcp/worker` — signature tracked in that section.
 
 ### `PaidMcpChargeConfig` (type)
 
-```ts
-type PaidMcpChargeConfig = X402ChargeSettings;
-```
+Re-exported from `@lunora/mcp/worker` — signature tracked in that section.
 
 ### `PaidMcpExecutionContext` (interface)
 
-```ts
-interface PaidMcpExecutionContext {
-    waitUntil?: (promise: Promise<unknown>) => void;
-}
-```
+Re-exported from `@lunora/mcp/worker` — signature tracked in that section.
 
 ### `PaidMcpFetchHandler` (type)
 
-```ts
-type PaidMcpFetchHandler = (request: Request, env?: unknown, context?: PaidMcpExecutionContext) => Promise<Response>;
-```
+Re-exported from `@lunora/mcp/worker` — signature tracked in that section.
 
 ### `PaidMcpServer` (interface)
 
-```ts
-interface PaidMcpServer {
-    readonly fetchHandler: PaidMcpFetchHandler;
-    paidTool: (options: RegisterPaidToolOptions, handler: ToolHandler) => void;
-    tool: (options: RegisterToolOptions, handler: ToolHandler) => void;
-}
-```
+Re-exported from `@lunora/mcp/worker` — signature tracked in that section.
 
 ### `PaidMcpServerConfig` (interface)
 
-```ts
-interface PaidMcpServerConfig {
-    charge: PaidMcpChargeConfig;
-    maxRequestBytes?: number;
-    serverInfo?: {
-        name: string;
-        version: string;
-    };
-}
-```
+Re-exported from `@lunora/mcp/worker` — signature tracked in that section.
 
 ### `READ_ONLY_TOOL_DEFINITIONS` (const)
 
-```ts
-const READ_ONLY_TOOL_DEFINITIONS: ReadonlyArray<ToolDefinition>;
-```
+Re-exported from `@lunora/mcp/worker` — signature tracked in that section.
 
 ### `RegisterPaidToolOptions` (interface)
 
-```ts
-interface RegisterPaidToolOptions extends RegisterToolOptions {
-    price: X402Price;
-}
-```
+Re-exported from `@lunora/mcp/worker` — signature tracked in that section.
 
 ### `RegisterToolOptions` (interface)
 
-```ts
-interface RegisterToolOptions {
-    annotations?: Tool["annotations"];
-    description: string;
-    inputSchema: ToolInputSchema;
-    name: string;
-}
-```
+Re-exported from `@lunora/mcp/worker` — signature tracked in that section.
 
 ### `ServeStatelessOptions` (interface)
 
@@ -273,9 +190,7 @@ interface ToolDefinition {
 
 ### `ToolHandler` (type)
 
-```ts
-type ToolHandler = (arguments_: Record<string, unknown>) => Promise<ToolResult> | ToolResult;
-```
+Re-exported from `@lunora/mcp/worker` — signature tracked in that section.
 
 ### `ToolInputSchema` (interface)
 
@@ -302,9 +217,7 @@ interface ToolResult {
 
 ### `WRITE_TOOL_DEFINITIONS` (const)
 
-```ts
-const WRITE_TOOL_DEFINITIONS: ReadonlyArray<ToolDefinition>;
-```
+Re-exported from `@lunora/mcp/worker` — signature tracked in that section.
 
 ### `agentToolDefinitions` (const)
 
@@ -320,33 +233,23 @@ const callAgentTool: (client: LunoraClient, name: string, input: Record<string, 
 
 ### `callTool` (const)
 
-```ts
-const callTool: (client: LunoraClient, name: string, input: Record<string, unknown>, allowWrites?: boolean, allowObservability?: boolean, allowDataReads?: boolean) => Promise<ToolResult>;
-```
+Re-exported from `@lunora/mcp/worker` — signature tracked in that section.
 
 ### `connectLocalStdio` (const)
 
-```ts
-const connectLocalStdio: (options?: LocalMcpServerOptions) => Promise<Server>;
-```
+Re-exported from `@lunora/mcp/node` — signature tracked in that section.
 
 ### `connectStdio` (const)
 
-```ts
-const connectStdio: (options: LunoraMcpServerOptions) => Promise<Server>;
-```
+Re-exported from `@lunora/mcp/node` — signature tracked in that section.
 
 ### `createAuthedMcpFetchHandler` (const)
 
-```ts
-const createAuthedMcpFetchHandler: (options: AuthedMcpFetchHandlerOptions) => McpFetchHandler;
-```
+Re-exported from `@lunora/mcp/worker` — signature tracked in that section.
 
 ### `createLocalMcpServer` (const)
 
-```ts
-const createLocalMcpServer: (options?: LocalMcpServerOptions) => Server;
-```
+Re-exported from `@lunora/mcp/node` — signature tracked in that section.
 
 ### `createLunoraMcpServer` (const)
 
@@ -356,15 +259,11 @@ const createLunoraMcpServer: (options: LunoraMcpServerOptions) => Server;
 
 ### `createMcpFetchHandler` (const)
 
-```ts
-const createMcpFetchHandler: (options: McpFetchHandlerOptions) => McpFetchHandler;
-```
+Re-exported from `@lunora/mcp/worker` — signature tracked in that section.
 
 ### `createPaidMcpServer` (const)
 
-```ts
-const createPaidMcpServer: (config: PaidMcpServerConfig) => PaidMcpServer;
-```
+Re-exported from `@lunora/mcp/worker` — signature tracked in that section.
 
 ### `createToolServer` (const)
 
@@ -374,15 +273,11 @@ const createToolServer: (info: McpServerInfo, tools: ReadonlyArray<McpTool>, res
 
 ### `localTools` (const)
 
-```ts
-const localTools: (options: LocalMcpServerOptions, clientFor?: (deployment: LocalDeployment) => LunoraClient) => ReadonlyArray<McpTool>;
-```
+Re-exported from `@lunora/mcp/node` — signature tracked in that section.
 
 ### `mcpTokenScopes` (const)
 
-```ts
-const mcpTokenScopes: (claims: McpAccessTokenClaims) => ReadonlySet<string>;
-```
+Re-exported from `@lunora/mcp/worker` — signature tracked in that section.
 
 ### `parseAgentsEnv` (const)
 
@@ -398,9 +293,7 @@ const serveStateless: (server: Server, request: Request, options?: ServeStateles
 
 ### `toolDefinitions` (const)
 
-```ts
-const toolDefinitions: (allowWrites: boolean, allowObservability?: boolean, allowDataReads?: boolean) => ReadonlyArray<ToolDefinition>;
-```
+Re-exported from `@lunora/mcp/worker` — signature tracked in that section.
 
 ## `@lunora/mcp/docs`
 
@@ -609,6 +502,318 @@ const toDocsSearchHits: (results: ReadonlyArray<unknown>) => DocsSearchHit[];
 
 ```ts
 const toDocsUri: (url: string) => string;
+```
+
+## `@lunora/mcp/node`
+
+### `LOCAL_SERVER_NAME` (const)
+
+```ts
+const LOCAL_SERVER_NAME = "lunora";
+```
+
+### `LocalDeployment` (interface)
+
+```ts
+interface LocalDeployment {
+    token?: string;
+    url: string;
+}
+```
+
+### `LocalDeploymentSource` (type)
+
+```ts
+type LocalDeploymentSource = (() => LocalDeployment | undefined) | LocalDeployment;
+```
+
+### `LocalMcpServerOptions` (interface)
+
+```ts
+interface LocalMcpServerOptions {
+    allowWrites?: boolean;
+    deployment?: LocalDeploymentSource;
+    docs?: false | {
+        baseUrl?: string;
+    };
+    extraTools?: ReadonlyArray<McpTool>;
+    fetch?: typeof fetch;
+    version?: string;
+}
+```
+
+### `LunoraMcpServerOptions` (interface)
+
+Re-exported from `@lunora/mcp` — signature tracked in that section.
+
+### `NO_DEPLOYMENT_MESSAGE` (const)
+
+```ts
+const NO_DEPLOYMENT_MESSAGE = "no Lunora dev server is running for this project — start one with `lunora dev`, then call this tool again (call lunora_dev_status to check).";
+```
+
+### `connectLocalStdio` (const)
+
+```ts
+const connectLocalStdio: (options?: LocalMcpServerOptions) => Promise<Server>;
+```
+
+### `connectStdio` (const)
+
+```ts
+const connectStdio: (options: LunoraMcpServerOptions) => Promise<Server>;
+```
+
+### `createLocalMcpServer` (const)
+
+```ts
+const createLocalMcpServer: (options?: LocalMcpServerOptions) => Server;
+```
+
+### `createLunoraMcpServer` (const)
+
+Re-exported from `@lunora/mcp` — signature tracked in that section.
+
+### `localTools` (const)
+
+```ts
+const localTools: (options: LocalMcpServerOptions, clientFor?: (deployment: LocalDeployment) => LunoraClient) => ReadonlyArray<McpTool>;
+```
+
+## `@lunora/mcp/worker`
+
+### `AGENT_RUN_INPUT_SCHEMA` (const)
+
+Re-exported from `@lunora/mcp` — signature tracked in that section.
+
+### `AGENT_STATUS_TOOL_NAME` (const)
+
+Re-exported from `@lunora/mcp` — signature tracked in that section.
+
+### `AuthedMcpFetchHandlerOptions` (interface)
+
+```ts
+interface AuthedMcpFetchHandlerOptions {
+    maxRequestBytes?: number;
+    protect: McpAuthProtect;
+    server: AuthedMcpServerOptions;
+    stepUp?: {
+        challenge: (scopes: string[]) => unknown;
+        scope: string;
+    };
+}
+```
+
+### `AuthedMcpServerOptions` (type)
+
+```ts
+type AuthedMcpServerOptions = ((claims: McpAccessTokenClaims) => LunoraMcpServerOptions | Promise<LunoraMcpServerOptions>) | LunoraMcpServerOptions;
+```
+
+### `CallAgentToolOptions` (interface)
+
+Re-exported from `@lunora/mcp` — signature tracked in that section.
+
+### `DEFAULT_MAX_REQUEST_BYTES` (const)
+
+Re-exported from `@lunora/mcp` — signature tracked in that section.
+
+### `McpAccessTokenClaims` (interface)
+
+```ts
+interface McpAccessTokenClaims {
+    readonly [claim: string]: unknown;
+    readonly scope?: unknown;
+    readonly sub?: string;
+}
+```
+
+### `McpAgentExposure` (interface)
+
+Re-exported from `@lunora/mcp` — signature tracked in that section.
+
+### `McpAuthProtect` (type)
+
+```ts
+type McpAuthProtect = (handler: (request: Request, claims: McpAccessTokenClaims) => Promise<Response>) => McpFetchHandler;
+```
+
+### `McpFetchHandler` (type)
+
+Re-exported from `@lunora/mcp` — signature tracked in that section.
+
+### `McpFetchHandlerOptions` (interface)
+
+```ts
+interface McpFetchHandlerOptions extends LunoraMcpServerOptions {
+    maxRequestBytes?: number;
+}
+```
+
+### `McpServerInfo` (interface)
+
+Re-exported from `@lunora/mcp` — signature tracked in that section.
+
+### `McpTool` (interface)
+
+Re-exported from `@lunora/mcp` — signature tracked in that section.
+
+### `OBSERVABILITY_TOOL_DEFINITIONS` (const)
+
+```ts
+const OBSERVABILITY_TOOL_DEFINITIONS: ReadonlyArray<ToolDefinition>;
+```
+
+### `PaidMcpChargeConfig` (type)
+
+```ts
+type PaidMcpChargeConfig = X402ChargeSettings;
+```
+
+### `PaidMcpExecutionContext` (interface)
+
+```ts
+interface PaidMcpExecutionContext {
+    waitUntil?: (promise: Promise<unknown>) => void;
+}
+```
+
+### `PaidMcpFetchHandler` (type)
+
+```ts
+type PaidMcpFetchHandler = (request: Request, env?: unknown, context?: PaidMcpExecutionContext) => Promise<Response>;
+```
+
+### `PaidMcpServer` (interface)
+
+```ts
+interface PaidMcpServer {
+    readonly fetchHandler: PaidMcpFetchHandler;
+    paidTool: (options: RegisterPaidToolOptions, handler: ToolHandler) => void;
+    tool: (options: RegisterToolOptions, handler: ToolHandler) => void;
+}
+```
+
+### `PaidMcpServerConfig` (interface)
+
+```ts
+interface PaidMcpServerConfig {
+    charge: PaidMcpChargeConfig;
+    maxRequestBytes?: number;
+    serverInfo?: {
+        name: string;
+        version: string;
+    };
+}
+```
+
+### `READ_ONLY_TOOL_DEFINITIONS` (const)
+
+```ts
+const READ_ONLY_TOOL_DEFINITIONS: ReadonlyArray<ToolDefinition>;
+```
+
+### `RegisterPaidToolOptions` (interface)
+
+```ts
+interface RegisterPaidToolOptions extends RegisterToolOptions {
+    price: X402Price;
+}
+```
+
+### `RegisterToolOptions` (interface)
+
+```ts
+interface RegisterToolOptions {
+    annotations?: Tool["annotations"];
+    description: string;
+    inputSchema: ToolInputSchema;
+    name: string;
+}
+```
+
+### `ServeStatelessOptions` (interface)
+
+Re-exported from `@lunora/mcp` — signature tracked in that section.
+
+### `ToolDefinition` (interface)
+
+Re-exported from `@lunora/mcp` — signature tracked in that section.
+
+### `ToolHandler` (type)
+
+```ts
+type ToolHandler = (arguments_: Record<string, unknown>) => Promise<ToolResult> | ToolResult;
+```
+
+### `ToolInputSchema` (interface)
+
+Re-exported from `@lunora/mcp` — signature tracked in that section.
+
+### `ToolResult` (interface)
+
+Re-exported from `@lunora/mcp` — signature tracked in that section.
+
+### `WRITE_TOOL_DEFINITIONS` (const)
+
+```ts
+const WRITE_TOOL_DEFINITIONS: ReadonlyArray<ToolDefinition>;
+```
+
+### `agentToolDefinitions` (const)
+
+Re-exported from `@lunora/mcp` — signature tracked in that section.
+
+### `callAgentTool` (const)
+
+Re-exported from `@lunora/mcp` — signature tracked in that section.
+
+### `callTool` (const)
+
+```ts
+const callTool: (client: LunoraClient, name: string, input: Record<string, unknown>, allowWrites?: boolean, allowObservability?: boolean, allowDataReads?: boolean) => Promise<ToolResult>;
+```
+
+### `createAuthedMcpFetchHandler` (const)
+
+```ts
+const createAuthedMcpFetchHandler: (options: AuthedMcpFetchHandlerOptions) => McpFetchHandler;
+```
+
+### `createMcpFetchHandler` (const)
+
+```ts
+const createMcpFetchHandler: (options: McpFetchHandlerOptions) => McpFetchHandler;
+```
+
+### `createPaidMcpServer` (const)
+
+```ts
+const createPaidMcpServer: (config: PaidMcpServerConfig) => PaidMcpServer;
+```
+
+### `createToolServer` (const)
+
+Re-exported from `@lunora/mcp` — signature tracked in that section.
+
+### `mcpTokenScopes` (const)
+
+```ts
+const mcpTokenScopes: (claims: McpAccessTokenClaims) => ReadonlySet<string>;
+```
+
+### `parseAgentsEnv` (const)
+
+Re-exported from `@lunora/mcp` — signature tracked in that section.
+
+### `serveStateless` (const)
+
+Re-exported from `@lunora/mcp` — signature tracked in that section.
+
+### `toolDefinitions` (const)
+
+```ts
+const toolDefinitions: (allowWrites: boolean, allowObservability?: boolean, allowDataReads?: boolean) => ReadonlyArray<ToolDefinition>;
 ```
 
 ## Referenced internal declarations

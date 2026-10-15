@@ -1,3 +1,66 @@
+## @lunora/codegen [1.0.0-alpha.302](https://github.com/anolilab/lunora/compare/@lunora/codegen@1.0.0-alpha.301...@lunora/codegen@1.0.0-alpha.302) (2026-10-15)
+
+### ⚠ BREAKING CHANGES
+
+* **auth:** createAuth throws unless `database` is an adapter factory. ensureMigrated and
+compileMigrationsSql are no longer exported from @lunora/auth; import them, and build the raw-D1
+migration instance with createMigrationAuth, from @lunora/auth/migrate.
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+
+* test(startup): re-baseline the worker startup gate after the auth split
+
+Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>
+
+* ci(codspeed): accept an empty benchmark run
+
+On a pull request the job runs vis affected test:bench, which legitimately executes nothing when
+no affected package declares a bench. The action then fails the check on the empty upload, so
+PRs touching bench-less packages go red for no reason.
+
+Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>
+
+* perf(codegen): load the auth migrator on first use
+
+The generated app imported @lunora/auth/migrate statically, so every app using .auth() put kysely
+and better-auth's migrator (~550 KiB) into the worker startup closure. Load it with a dynamic
+import() inside the lazy auth initialiser instead; ensureMigrated still runs once, single-flighted,
+with errors surfacing as before.
+
+The earlier report that a dynamic import of the migration path hangs under the Cloudflare vite
+plugin does not reproduce: the initialiser runs from the Worker-level fetch before any Durable
+Object is touched, and sign-up, sign-in and the migration all complete in the dev server.
+
+Also map @lunora/auth/migrate in registry/tsconfig.json so the registry typecheck resolves it.
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+
+### Performance Improvements
+
+* **auth:** init through better-auth/minimal and move the migrator to a migrate entry ([#1199](https://github.com/anolilab/lunora/issues/1199)) ([4b05283](https://github.com/anolilab/lunora/commit/4b0528357d04519e1fbee6b814bb7feef56e51a1))
+* **codegen:** parse admin payloads on first use and dedupe advisory rule text ([#1175](https://github.com/anolilab/lunora/issues/1175)) ([bdde65a](https://github.com/anolilab/lunora/commit/bdde65afc69e2dd3644a78c297887ee438716730))
+* **scheduler:** validate cron grammar without cron-parser on the runtime path ([#1174](https://github.com/anolilab/lunora/issues/1174)) ([ce7110e](https://github.com/anolilab/lunora/commit/ce7110eb9e0cac6c059c2c600e8045ade44147cd))
+
+### Tests
+
+* **codegen:** keep the large codegen bench inside the CodSpeed job budget ([#1187](https://github.com/anolilab/lunora/issues/1187)) ([d63e6be](https://github.com/anolilab/lunora/commit/d63e6beba14c20b621b6e11509d99b9d03d3a52e))
+
+
+### Dependencies
+
+* **@lunora/advisor:** upgraded to 1.0.0-alpha.216
+* **@lunora/agent:** upgraded to 1.0.0-alpha.205
+* **@lunora/container:** upgraded to 1.0.0-alpha.75
+* **@lunora/errors:** upgraded to 1.0.0-alpha.55
+* **@lunora/queue:** upgraded to 1.0.0-alpha.106
+* **@lunora/scheduler:** upgraded to 1.0.0-alpha.126
+* **@lunora/values:** upgraded to 1.0.0-alpha.65
+* **@lunora/workflow:** upgraded to 1.0.0-alpha.77
+* **@lunora/bindings:** upgraded to 1.0.0-alpha.112
+* **@lunora/do:** upgraded to 1.0.0-alpha.213
+* **@lunora/server:** upgraded to 1.0.0-alpha.200
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.128
+
 ## @lunora/codegen [1.0.0-alpha.301](https://github.com/anolilab/lunora/compare/@lunora/codegen@1.0.0-alpha.300...@lunora/codegen@1.0.0-alpha.301) (2026-10-14)
 
 ### Bug Fixes

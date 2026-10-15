@@ -160,8 +160,16 @@ interface FunctionMetricIndexHit {
     table: string;
 }
 
-/** Fields recorded for one completed dispatch. `errored` advances the failure counters. */
+/**
+ * Fields recorded for one completed dispatch, or for a coalesced delta of
+ * several. `errored` advances the failure counters. The optional count-carrying
+ * fields let a caller that batched N dispatches write their exact sum in one
+ * upsert; omitted, every field defaults to the single-dispatch value.
+ */
 interface RecordFunctionMetricInput {
+    /** Dispatches this record stands for. Default `1`. */
+    calls?: number;
+
     /**
      * Whether the dispatch failed on an optimistic-concurrency (OCC) write
      * conflict — a compare-and-swap that lost to a concurrent commit. Advances
@@ -170,12 +178,28 @@ interface RecordFunctionMetricInput {
      * Omitted/false on the common path, keeping the hot path unchanged.
      */
     conflicted?: boolean;
+    /** Conflicts in a coalesced delta. Default `conflicted ? 1 : 0`. */
+    conflicts?: number;
+    /** Longest handler time in a coalesced delta. Default `durationMs`. */
+    durationMaxMs?: number;
+    /** Shortest handler time in a coalesced delta. Default `durationMs`. */
+    durationMinMs?: number;
     /** Wall-clock millis the handler took. */
     durationMs: number;
+    /** Summed handler time of a coalesced delta. Default `durationMs`. */
+    durationTotalMs?: number;
     /** Whether the dispatch threw. */
     errored: boolean;
     /** Most recent failure message, recorded only when `errored`. */
     errorMessage?: string;
+    /** Failed dispatches in a coalesced delta. Default `errored ? 1 : 0`. */
+    errors?: number;
+
+    /**
+     * Per-`(table, index)` hit counts of a coalesced delta (one per dispatch that
+     * used the index). When set, replaces {@link RecordFunctionMetricInput.indexHits}.
+     */
+    indexHitCounts?: ReadonlyArray<IndexHit & { count: number }>;
 
     /**
      * Distinct declared indexes this dispatch exercised (used to narrow a read),
@@ -185,8 +209,16 @@ interface RecordFunctionMetricInput {
      * dispatch used no declared index, keeping the hot path unchanged.
      */
     indexHits?: ReadonlyArray<IndexHit>;
+    /** Epoch-ms of the latest failure in a coalesced delta. Default `errored ? ts : null`. */
+    lastErrorAt?: number | null;
     /** The `<file>:<function>` identifier. */
     path: string;
+
+    /**
+     * Per-table full-scan counts of a coalesced delta (one per dispatch that
+     * scanned the table). When set, replaces {@link RecordFunctionMetricInput.scannedTables}.
+     */
+    scanCounts?: ReadonlyArray<{ count: number; table: string }>;
 
     /**
      * Distinct tables this dispatch full-scanned (read with no index / point
@@ -409,17 +441,33 @@ const recordFunctionMetric = (sql: SqlExec, input: RecordFunctionMetricInput): v
 
     // Dedupe defensively: a handler can stamp the same table's SCAN_DEP more
     // than once in a request, but we attribute one scan per distinct table.
-    const scannedTables = input.scannedTables ? [...new Set(input.scannedTables)] : [];
-    const scanCount = scannedTables.length;
+    const scans =
+        input.scanCounts ??
+        [...new Set(input.scannedTables)].map((table) => {
+            return { count: 1, table };
+        });
+    const scanCount = scans.reduce((sum, entry) => sum + entry.count, 0);
     // Same dedupe for index hits: one read per distinct `(table, index)` per
     // dispatch, regardless of how many rows it narrowed.
-    const indexHits = dedupeIndexHits(input.indexHits ?? []);
-    const errorCount = input.errored ? 1 : 0;
-    const conflictCount = input.conflicted ? 1 : 0;
-    // eslint-disable-next-line unicorn/no-null -- SQL NULL is the correct value for "no failure yet"; coalesced into the row on the first throw.
-    const lastErrorAt = input.errored ? input.ts : null;
+    const indexHits =
+        input.indexHitCounts ??
+        dedupeIndexHits(input.indexHits ?? []).map((hit) => {
+            return { ...hit, count: 1 };
+        });
+    const callCount = input.calls ?? 1;
+    const errorCount = input.errors ?? (input.errored ? 1 : 0);
+    const conflictCount = input.conflicts ?? (input.conflicted ? 1 : 0);
+    const totalDuration = input.durationTotalMs ?? input.durationMs;
+    const minDuration = input.durationMinMs ?? input.durationMs;
+    const maxDuration = input.durationMaxMs ?? input.durationMs;
+    // An explicit `null` (a coalesced failure count with no known latest-error time) is kept; only an
+    // omitted field defaults to this dispatch's time on a throw.
+
+    // eslint-disable-next-line unicorn/no-null -- SQL NULL is the correct value for "no failure yet"
+    const defaultLastErrorAt = input.errored ? input.ts : null;
+    const lastErrorAt = input.lastErrorAt === undefined ? defaultLastErrorAt : input.lastErrorAt;
     // eslint-disable-next-line unicorn/no-null -- SQL NULL is the correct value for "no failure yet".
-    const lastErrorMessage = input.errored ? (input.errorMessage ?? null) : null;
+    const lastErrorMessage = lastErrorAt === null ? null : (input.errorMessage ?? null);
 
     // Accumulator upsert. On conflict we fold the new sample in: counts add,
     // total latency adds, min/max collapse via MIN/MAX, last-called advances,
@@ -429,9 +477,9 @@ const recordFunctionMetric = (sql: SqlExec, input: RecordFunctionMetricInput): v
         sql,
         `INSERT INTO "${FUNCTION_METRICS_TABLE}"
             (path, calls, errors, conflicts, scans, total_duration_ms, min_duration_ms, max_duration_ms, last_called_at, last_error_at, last_error_message)
-         VALUES (?, 1, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
          ON CONFLICT(path) DO UPDATE SET
-            calls = calls + 1,
+            calls = calls + excluded.calls,
             errors = errors + excluded.errors,
             conflicts = conflicts + excluded.conflicts,
             scans = scans + excluded.scans,
@@ -442,12 +490,13 @@ const recordFunctionMetric = (sql: SqlExec, input: RecordFunctionMetricInput): v
             last_error_at = CASE WHEN excluded.last_error_at IS NULL THEN last_error_at ELSE excluded.last_error_at END,
             last_error_message = CASE WHEN excluded.last_error_at IS NULL THEN last_error_message ELSE excluded.last_error_message END`,
         input.path,
+        callCount,
         errorCount,
         conflictCount,
         scanCount,
-        input.durationMs,
-        input.durationMs,
-        input.durationMs,
+        totalDuration,
+        minDuration,
+        maxDuration,
         input.ts,
         lastErrorAt,
         lastErrorMessage,
@@ -460,12 +509,13 @@ const recordFunctionMetric = (sql: SqlExec, input: RecordFunctionMetricInput): v
     runSql(
         sql,
         `INSERT INTO "${FUNCTION_METRICS_BUCKETS_TABLE}" (path, bucket_ms, calls, errors)
-         VALUES (?, ?, 1, ?)
+         VALUES (?, ?, ?, ?)
          ON CONFLICT(path, bucket_ms) DO UPDATE SET
-            calls = calls + 1,
+            calls = calls + excluded.calls,
             errors = errors + excluded.errors`,
         input.path,
         bucket,
+        callCount,
         errorCount,
     );
 
@@ -493,15 +543,16 @@ const recordFunctionMetric = (sql: SqlExec, input: RecordFunctionMetricInput): v
     // Causal attribution: one PK-keyed upsert per distinct full-scanned table.
     // Skipped entirely for the common indexed dispatch (empty `scannedTables`),
     // so the hot path stays at the two upserts + trim above unless a scan fired.
-    for (const table of scannedTables) {
+    for (const { count, table } of scans) {
         runSql(
             sql,
             `INSERT INTO "${FUNCTION_METRICS_SCANS_TABLE}" (path, table_name, scans)
-             VALUES (?, ?, 1)
+             VALUES (?, ?, ?)
              ON CONFLICT(path, table_name) DO UPDATE SET
-                scans = scans + 1`,
+                scans = scans + excluded.scans`,
             input.path,
             table,
+            count,
         );
     }
 
@@ -512,11 +563,12 @@ const recordFunctionMetric = (sql: SqlExec, input: RecordFunctionMetricInput): v
         runSql(
             sql,
             `INSERT INTO "${FUNCTION_METRICS_INDEX_TABLE}" (table_name, index_name, reads)
-             VALUES (?, ?, 1)
+             VALUES (?, ?, ?)
              ON CONFLICT(table_name, index_name) DO UPDATE SET
-                reads = reads + 1`,
+                reads = reads + excluded.reads`,
             hit.table,
             hit.index,
+            hit.count,
         );
     }
 };

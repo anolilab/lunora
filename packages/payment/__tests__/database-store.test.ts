@@ -46,7 +46,15 @@ const makeDb = (): ProbedDatabase => {
         return created;
     };
 
-    const matches = (row: PaymentRow, where: Record<string, unknown>): boolean => Object.entries(where).every(([key, value]) => row[key] === value);
+    // Equality, plus the `{ gte }` range operator `ctx.db` accepts (the only one the store uses).
+    const matches = (row: PaymentRow, where: Record<string, unknown>): boolean =>
+        Object.entries(where).every(([key, value]) => {
+            if (typeof value === "object" && value !== null && "gte" in value) {
+                return (row[key] as number) >= (value.gte as number);
+            }
+
+            return row[key] === value;
+        });
 
     // `ctx.db.patch` REJECTS a key whose value is explicitly `undefined` (shard-engine's
     // `assertNoExplicitUndefined`), because the merge that builds the written row would silently
@@ -174,6 +182,19 @@ const subscription: Subscription = {
     referenceId: "user_1",
     state: "active",
     updatedAt: 1,
+};
+
+const usageEvent = (idempotencyKey: string, createdAt: number, quantity: number, mode?: "set") => {
+    return {
+        createdAt,
+        featureId: "api_calls",
+        idempotencyKey,
+        ...(mode === undefined ? {} : { mode }),
+        provider: "stripe" as const,
+        quantity,
+        referenceId: "user_1",
+        reportedToProvider: false,
+    };
 };
 
 describe("createDatabasePaymentStore", () => {
@@ -383,33 +404,61 @@ describe("createDatabasePaymentStore", () => {
         expect.assertions(3);
 
         const store = createDatabasePaymentStore(makeDb());
-        const event = (idempotencyKey: string, createdAt: number, quantity: number, mode?: "set") => {
-            return {
-                createdAt,
-                featureId: "api_calls",
-                idempotencyKey,
-                ...(mode === undefined ? {} : { mode }),
-                provider: "stripe" as const,
-                quantity,
-                referenceId: "user_1",
-                reportedToProvider: false,
-            };
-        };
 
-        await store.recordUsage(event("a", 10, 30));
+        await store.recordUsage(usageEvent("a", 10, 30));
 
         await expect(store.sumUsage("user_1", "api_calls", 0)).resolves.toBe(30);
 
         // The marker RESETS the period rather than adding to it — the `mode` column
         // has to survive the row round-trip for that to hold.
-        await store.recordUsage(event("b", 20, 5, "set"));
+        await store.recordUsage(usageEvent("b", 20, 5, "set"));
 
         await expect(store.sumUsage("user_1", "api_calls", 0)).resolves.toBe(5);
 
         // …and a later `add` accrues on top of the reset total.
-        await store.recordUsage(event("c", 30, 7));
+        await store.recordUsage(usageEvent("c", 30, 7));
 
         await expect(store.sumUsage("user_1", "api_calls", 0)).resolves.toBe(12);
+    });
+
+    it("sumUsage range-reads the current period only, and a `set` outside it neither leaks in nor is read", async () => {
+        expect.assertions(5);
+
+        const db = makeDb();
+        const wheres: Record<string, unknown>[] = [];
+        const store = createDatabasePaymentStore({
+            ...db,
+            findMany: async (table, where, page) => {
+                wheres.push(where);
+
+                return db.findMany(table, where, page);
+            },
+        });
+
+        // 10 periods of 100 events, `createdAt` = period * 1000 + i; a `set` marker opens period 0.
+        await store.recordUsage(usageEvent("set-old", 1, 999, "set"));
+
+        for (let period = 0; period < 10; period += 1) {
+            for (let index = 0; index < 100; index += 1) {
+                // eslint-disable-next-line no-await-in-loop -- ordered ledger writes
+                await store.recordUsage(usageEvent(`e-${String(period)}-${String(index)}`, period * 1000 + index + 10, 1));
+            }
+        }
+
+        const before = db.rowsRead();
+
+        // The pre-period `set` (999) must not leak in: the period total is exactly its 100 adds.
+        await expect(store.sumUsage("user_1", "api_calls", 9000)).resolves.toBe(100);
+
+        expect(wheres.at(-1)).toMatchObject({ createdAt: { gte: 9000 }, featureId: "api_calls", referenceId: "user_1" });
+        // Only the last period was pulled into memory, not the 1,001-event lifetime ledger.
+        expect(db.rowsRead() - before).toBe(100);
+
+        // A `set` inside the period resets the fold.
+        await store.recordUsage(usageEvent("set-new", 9500, 7, "set"));
+
+        await expect(store.sumUsage("user_1", "api_calls", 9000)).resolves.toBe(7);
+        expect(db.rowsRead() - before).toBe(100 + 101);
     });
 
     it("sumUsageByFeature matches per-feature sumUsage in one read (parity)", async () => {

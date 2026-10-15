@@ -669,12 +669,26 @@ interface RecordAuthEventInput {
 
 ```ts
 interface RecordFunctionMetricInput {
+    calls?: number;
     conflicted?: boolean;
+    conflicts?: number;
+    durationMaxMs?: number;
+    durationMinMs?: number;
     durationMs: number;
+    durationTotalMs?: number;
     errored: boolean;
     errorMessage?: string;
+    errors?: number;
+    indexHitCounts?: ReadonlyArray<IndexHit & {
+        count: number;
+    }>;
     indexHits?: ReadonlyArray<IndexHit>;
+    lastErrorAt?: number | null;
     path: string;
+    scanCounts?: ReadonlyArray<{
+        count: number;
+        table: string;
+    }>;
     scannedTables?: ReadonlyArray<string>;
     ts: number;
 }
@@ -1099,6 +1113,12 @@ const instrumentDatabase: <T extends object>(database: T, deps: DatabaseTelemetr
 
 ```ts
 const instrumentSqlClient: <T extends SqlClientLike>(client: T, deps: DatabaseTelemetryDeps) => T;
+```
+
+### `latencyBucketIndex` (const)
+
+```ts
+const latencyBucketIndex: (durationMs: number) => number;
 ```
 
 ### `mergeScanAttribution` (const)

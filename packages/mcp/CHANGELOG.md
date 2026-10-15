@@ -1,3 +1,20 @@
+## @lunora/mcp [1.0.0-alpha.241](https://github.com/anolilab/lunora/compare/@lunora/mcp@1.0.0-alpha.240...@lunora/mcp@1.0.0-alpha.241) (2026-10-15)
+
+### Performance Improvements
+
+* **mcp:** add worker and node entries and build the schema validator lazily ([#1190](https://github.com/anolilab/lunora/issues/1190)) ([b0485c5](https://github.com/anolilab/lunora/commit/b0485c5766a9bf462c236c0ca0eab9c7d4400c1e))
+
+## @lunora/mcp [1.0.0-alpha.240](https://github.com/anolilab/lunora/compare/@lunora/mcp@1.0.0-alpha.239...@lunora/mcp@1.0.0-alpha.240) (2026-10-15)
+
+### Performance Improvements
+
+* **mcp:** reuse the client across authed requests ([#1186](https://github.com/anolilab/lunora/issues/1186)) ([0bc9335](https://github.com/anolilab/lunora/commit/0bc9335bf040b1d83b21b8e4489e30f79bcceffd))
+
+
+### Dependencies
+
+* **@lunora/auth:** upgraded to 1.0.0-alpha.213
+
 ## @lunora/mcp [1.0.0-alpha.239](https://github.com/anolilab/lunora/compare/@lunora/mcp@1.0.0-alpha.238...@lunora/mcp@1.0.0-alpha.239) (2026-10-14)
 
 

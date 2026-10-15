@@ -95,6 +95,7 @@
         "test:coverage": "pnpm exec vitest run --coverage"
     },
     "dependencies": {
+        "@ai-sdk/provider-utils": "catalog:ai",
         "@lunora/ai": "1.0.0-alpha.125",
         "@lunora/errors": ">=1.0.0-alpha.51 <2.0.0-0",
         "@lunora/mail": "1.0.0-alpha.107",

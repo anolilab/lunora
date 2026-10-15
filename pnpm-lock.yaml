@@ -12,6 +12,9 @@ catalogs:
     '@ai-sdk/openai':
       specifier: 4.0.83
       version: 4.0.83
+    '@ai-sdk/provider-utils':
+      specifier: 5.0.53
+      version: 5.0.53
     ai:
       specifier: 7.0.127
       version: 7.0.127
@@ -2507,6 +2510,9 @@ importers:
 
   packages/agent:
     dependencies:
+      '@ai-sdk/provider-utils':
+        specifier: catalog:ai
+        version: 5.0.53(zod@4.6.5)
       '@lunora/ai':
         specifier: workspace:*
         version: link:../ai

@@ -81,7 +81,8 @@ export const payment_usageEvents = sqliteTable("payment_usageEvents", {
     reportedToProvider: integer("reportedToProvider", { mode: "boolean" }).notNull(),
 }, (t) => ({
     by_idempotency: uniqueIndex("by_idempotency").on(t.provider, t.idempotencyKey),
-    by_reference_feature: index("by_reference_feature").on(t.referenceId, t.featureId),
+    by_reference_feature_created: index("by_reference_feature_created").on(t.referenceId, t.featureId, t.createdAt),
+    by_reference_created: index("by_reference_created").on(t.referenceId, t.createdAt),
 }));
 
 export const ratelimit_buckets = sqliteTable("ratelimit_buckets", {
