@@ -70,6 +70,8 @@ export {
     upsertDevVariableLine,
 } from "./dev-variables-format";
 export { DEV_WORKER_ENV_VALUE, DEV_WORKER_ENV_VAR, ensureDevWorkerEnv } from "./dev-worker-env";
+export type { DiscoveryCache } from "./discovery-cache";
+export { createDiscoveryCache } from "./discovery-cache";
 export type { ToolchainInvocation } from "./driver-registry";
 export {
     DEFAULT_DEPLOY_TARGET,

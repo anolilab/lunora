@@ -45,7 +45,8 @@ request and a falsy value otherwise, so you fall through to the Lunora worker fo
 everything else:
 
 ```ts
-import { createAuth, ensureMigrated, handleAuthRequest } from "@lunora/auth";
+import { handleAuthRequest } from "@lunora/auth";
+import { createMigrationAuth, ensureMigrated } from "@lunora/auth/migrate";
 
 // `ensureMigrated` needs the RAW binding: better-auth migrates only through its
 // Kysely adapter and throws on `lunoraD1Adapter`. This second, migration-only
@@ -55,7 +56,7 @@ import { createAuth, ensureMigrated, handleAuthRequest } from "@lunora/auth";
 // Built ONCE and retained. `ensureMigrated` single-flights on the options object
 // it is handed, so a `createAuth({...})` built inside `fetch` is a fresh key on
 // every request and the migration re-runs on each one.
-const migrationAuth = createAuth({ ...options, database: env.DB });
+const migrationAuth = createMigrationAuth({ ...options, database: env.DB });
 
 export default {
     async fetch(request, env, ctx) {
@@ -721,6 +722,14 @@ const auth = createAuth(
     ),
 );
 ```
+
+**Bundle cost.** The built-in lists are bundled data: the disposable list is about 2.7 MB and the
+free-email list about 143 KB. `withEmailGate`, `emailGateDatabaseHooks` and `emailGateMiddleware`
+load only what the config uses. The free list loads only when you set `onClassify`. The disposable
+list loads when `blockDisposable` is not `false` or when `onClassify` is set, so `blockDisposable:
+false` without `onClassify` keeps both out of the request path. Direct `assertEmailAllowed` /
+`classifyEmail` callers get both lists unless they pass `lists` or call
+`loadEmailDomainLists({ free: false })`.
 
 A blocked signup rejects with the coded `EMAIL_DOMAIN_BLOCKED` error; a
 business/free address passes. Every option above is config-gated.

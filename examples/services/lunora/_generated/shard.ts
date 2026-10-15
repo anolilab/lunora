@@ -17,13 +17,13 @@ interface FunctionReference {
 }
 
 /** Foreign-key columns per table (`v.id("target")` fields) for the data browser. */
-const LUNORA_TABLE_REFS = JSON.parse("{}") as Record<string, Record<string, string>>;
+const LUNORA_TABLE_REFS = ((): (() => Record<string, Record<string, string>>) => { let cached: Record<string, Record<string, string>> | undefined; return () => (cached ??= JSON.parse("{}") as Record<string, Record<string, string>>); })();
 
 /** Declared indexes per table (secondary, search, geo, rank, vector) for the schema viewer. */
-const LUNORA_TABLE_INDEXES = JSON.parse("{}") as Record<string, Array<{ fields: string[]; name: string; type: "geo" | "index" | "rank" | "search" | "vector"; unique?: boolean }>>;
+const LUNORA_TABLE_INDEXES = ((): (() => Record<string, Array<{ fields: string[]; name: string; type: "geo" | "index" | "rank" | "search" | "vector"; unique?: boolean }>>) => { let cached: Record<string, Array<{ fields: string[]; name: string; type: "geo" | "index" | "rank" | "search" | "vector"; unique?: boolean }>> | undefined; return () => (cached ??= JSON.parse("{}") as Record<string, Array<{ fields: string[]; name: string; type: "geo" | "index" | "rank" | "search" | "vector"; unique?: boolean }>>); })();
 
 /** Columns per table (typed, with PK/FK markers) for the studio's schema diagram, served via `__lunora_admin__:describeTable`. */
-const LUNORA_TABLE_COLUMNS = JSON.parse("{}") as Record<
+const LUNORA_TABLE_COLUMNS = ((): (() => Record<
     string,
     Array<{
         bucket?: string;
@@ -37,31 +37,67 @@ const LUNORA_TABLE_COLUMNS = JSON.parse("{}") as Record<
         ref?: string;
         type: string;
     }>
->;
+>) => { let cached: Record<
+    string,
+    Array<{
+        bucket?: string;
+        enumValues?: string[];
+        isStorage?: boolean;
+        name: string;
+        nullable?: boolean;
+        onDelete?: "cascade" | "restrict" | "set null";
+        optional: boolean;
+        pk?: boolean;
+        ref?: string;
+        type: string;
+    }>
+> | undefined; return () => (cached ??= JSON.parse("{}") as Record<
+    string,
+    Array<{
+        bucket?: string;
+        enumValues?: string[];
+        isStorage?: boolean;
+        name: string;
+        nullable?: boolean;
+        onDelete?: "cascade" | "restrict" | "set null";
+        optional: boolean;
+        pk?: boolean;
+        ref?: string;
+        type: string;
+    }>
+>); })();
 
 /** Storage-key columns per table (`v.storage(...)` fields) for the file browser's records↔files join. */
-const LUNORA_STORAGE_COLUMNS = JSON.parse("{}") as Record<string, string[]>;
+const LUNORA_STORAGE_COLUMNS = ((): (() => Record<string, string[]>) => { let cached: Record<string, string[]> | undefined; return () => (cached ??= JSON.parse("{}") as Record<string, string[]>); })();
 
 /** Declarative TTL policies (`.ttl(field, { after? })`) the DO alarm sweep auto-expires rows for. */
 const LUNORA_TTL_SWEEPS = JSON.parse("[]") as Array<{ after?: number; field: string; softDeleteField?: string; table: string }>;
 
 /** Static schema advisories (computed by @lunora/advisor at codegen time) served via `__lunora_admin__:getAdvisories`. */
-const LUNORA_ADVISORIES = JSON.parse("[{\"cacheKey\":\"public_mutation_without_ratelimit:documents:summarise\",\"categories\":[\"SECURITY\"],\"description\":\"A public `mutation`/`action` has no `rateLimit` middleware. Publicly-callable writes are flood and brute-force targets — an attacker can exhaust writes, mail quota, or credits, or guess credentials on auth-shaped endpoints.\",\"detail\":\"Public action `summarise` (documents) has no rate limit. Add `.use(rateLimit(...))` or `.use(protectPublic({ rateLimit }))`.\",\"facing\":\"EXTERNAL\",\"level\":\"WARN\",\"metadata\":{\"exportName\":\"summarise\",\"file\":\"documents\",\"kind\":\"action\",\"sensitive\":false},\"name\":\"public_mutation_without_ratelimit\",\"remediation\":\"Attach a rate limit: `.use(rateLimit(limiter, \\\"<bucket>\\\"))` from `@lunora/ratelimit`, or wrap the recommended public-procedure guards with `.use(protectPublic({ rateLimit, captcha }))` from `@lunora/server`. Genuinely-open writes can be acknowledged by adding a permissive limiter.\",\"title\":\"Public write without a rate limit\"},{\"cacheKey\":\"unbounded_string_arg:documents:summarise:prompt\",\"categories\":[\"SECURITY\"],\"description\":\"A public `v.string()` argument has no maximum-length bound. An unbounded string lets a client submit arbitrarily large input — abusing storage and CPU on every request that processes it.\",\"detail\":\"Arg `prompt` of public procedure `summarise` (documents:7) is an unbounded `v.string()`. Add a max-length bound to cap payload size.\",\"facing\":\"EXTERNAL\",\"level\":\"INFO\",\"metadata\":{\"argument\":\"prompt\",\"exportName\":\"summarise\",\"file\":\"documents\",\"line\":7},\"name\":\"unbounded_string_arg\",\"remediation\":\"Add an enforced max-length bound with `.max(n)` on the string validator (e.g. cap a name at 256, a body at a few KB). `.meta({ maxLength })` only documents a cap — the parser does not enforce it. Size the cap to the field's real-world maximum.\",\"title\":\"Public string argument has no length bound\"},{\"cacheKey\":\"procedure_without_structured_event:documents:summarise\",\"categories\":[\"SCHEMA\"],\"description\":\"A public `mutation`/`action` emits no structured event. When it fails you get a stack trace with no request context — no ids, no tenant, no outcome — so the failure is visible but not searchable.\",\"detail\":\"Public action `summarise` (documents) emits no structured event. Add a `ctx.log` line or a `ctx.span` so a failure carries its request context.\",\"facing\":\"INTERNAL\",\"level\":\"INFO\",\"metadata\":{\"exportName\":\"summarise\",\"file\":\"documents\",\"kind\":\"action\"},\"name\":\"procedure_without_structured_event\",\"remediation\":\"Emit one event on the primary path: `ctx.log.info(\\\"<verb>\\\", { … })`, or wrap the handler in `ctx.span(\\\"<name>\\\", …)` to attach timing too.\",\"title\":\"Public write emits no structured event\"}]") as AdvisoryFinding[];
+const LUNORA_ADVISORY_RULES = ((): (() => Record<string, Partial<AdvisoryFinding>>) => { let cached: Record<string, Partial<AdvisoryFinding>> | undefined; return () => (cached ??= JSON.parse("{\"public_mutation_without_ratelimit\":{\"categories\":[\"SECURITY\"],\"description\":\"A public `mutation`/`action` has no `rateLimit` middleware. Publicly-callable writes are flood and brute-force targets — an attacker can exhaust writes, mail quota, or credits, or guess credentials on auth-shaped endpoints.\",\"facing\":\"EXTERNAL\",\"level\":\"WARN\",\"remediation\":\"Attach a rate limit: `.use(rateLimit(limiter, \\\"<bucket>\\\"))` from `@lunora/ratelimit`, or wrap the recommended public-procedure guards with `.use(protectPublic({ rateLimit, captcha }))` from `@lunora/server`. Genuinely-open writes can be acknowledged by adding a permissive limiter.\",\"title\":\"Public write without a rate limit\"},\"unbounded_string_arg\":{\"categories\":[\"SECURITY\"],\"description\":\"A public `v.string()` argument has no maximum-length bound. An unbounded string lets a client submit arbitrarily large input — abusing storage and CPU on every request that processes it.\",\"facing\":\"EXTERNAL\",\"level\":\"INFO\",\"remediation\":\"Add an enforced max-length bound with `.max(n)` on the string validator (e.g. cap a name at 256, a body at a few KB). `.meta({ maxLength })` only documents a cap — the parser does not enforce it. Size the cap to the field's real-world maximum.\",\"title\":\"Public string argument has no length bound\"},\"procedure_without_structured_event\":{\"categories\":[\"SCHEMA\"],\"description\":\"A public `mutation`/`action` emits no structured event. When it fails you get a stack trace with no request context — no ids, no tenant, no outcome — so the failure is visible but not searchable.\",\"facing\":\"INTERNAL\",\"level\":\"INFO\",\"remediation\":\"Emit one event on the primary path: `ctx.log.info(\\\"<verb>\\\", { … })`, or wrap the handler in `ctx.span(\\\"<name>\\\", …)` to attach timing too.\",\"title\":\"Public write emits no structured event\"}}") as Record<string, Partial<AdvisoryFinding>>); })();
+
+/** Per-finding rows; rule-level text lives once in `LUNORA_ADVISORY_RULES` and is merged back on first read. */
+const LUNORA_ADVISORY_ROWS = ((): (() => Array<Partial<AdvisoryFinding> & { name: string }>) => { let cached: Array<Partial<AdvisoryFinding> & { name: string }> | undefined; return () => (cached ??= JSON.parse("[{\"cacheKey\":\"public_mutation_without_ratelimit:documents:summarise\",\"detail\":\"Public action `summarise` (documents) has no rate limit. Add `.use(rateLimit(...))` or `.use(protectPublic({ rateLimit }))`.\",\"metadata\":{\"exportName\":\"summarise\",\"file\":\"documents\",\"kind\":\"action\",\"sensitive\":false},\"name\":\"public_mutation_without_ratelimit\"},{\"cacheKey\":\"unbounded_string_arg:documents:summarise:prompt\",\"detail\":\"Arg `prompt` of public procedure `summarise` (documents:7) is an unbounded `v.string()`. Add a max-length bound to cap payload size.\",\"metadata\":{\"argument\":\"prompt\",\"exportName\":\"summarise\",\"file\":\"documents\",\"line\":7},\"name\":\"unbounded_string_arg\"},{\"cacheKey\":\"procedure_without_structured_event:documents:summarise\",\"detail\":\"Public action `summarise` (documents) emits no structured event. Add a `ctx.log` line or a `ctx.span` so a failure carries its request context.\",\"metadata\":{\"exportName\":\"summarise\",\"file\":\"documents\",\"kind\":\"action\"},\"name\":\"procedure_without_structured_event\"}]") as Array<Partial<AdvisoryFinding> & { name: string }>); })();
+
+const LUNORA_ADVISORIES = ((): (() => AdvisoryFinding[]) => {
+    let cached: AdvisoryFinding[] | undefined;
+    return () => (cached ??= LUNORA_ADVISORY_ROWS().map((row) => ({ ...LUNORA_ADVISORY_RULES()[row.name], ...row }) as AdvisoryFinding));
+})();
 
 /** Every declared procedure (discovered by @lunora/codegen) served via `__lunora_admin__:getAdvisorProcedures` — the health map's denominator. */
-const LUNORA_ADVISOR_PROCEDURES = JSON.parse("[{\"callsMail\":false,\"emitsEvent\":false,\"fanOut\":false,\"handlesErrors\":false,\"reachesOutbound\":false,\"runsAiGeneration\":false,\"throwsBareError\":false,\"unboundedAiGeneration\":false,\"usesInsertManyUnsafe\":false,\"writesUserTable\":false,\"exempt\":false,\"exemptReason\":\"\",\"usesCaptcha\":false,\"usesEmailGate\":false,\"usesMask\":false,\"usesRateLimit\":false,\"usesRls\":false,\"analyzableBody\":true,\"exportName\":\"summarise\",\"file\":\"documents\",\"hasEmailArg\":false,\"kind\":\"action\",\"visibility\":\"public\"}]") as AdvisorProcedure[];
+const LUNORA_ADVISOR_PROCEDURES = ((): (() => AdvisorProcedure[]) => { let cached: AdvisorProcedure[] | undefined; return () => (cached ??= JSON.parse("[{\"callsMail\":false,\"emitsEvent\":false,\"fanOut\":false,\"handlesErrors\":false,\"reachesOutbound\":false,\"runsAiGeneration\":false,\"throwsBareError\":false,\"unboundedAiGeneration\":false,\"usesInsertManyUnsafe\":false,\"writesUserTable\":false,\"exempt\":false,\"exemptReason\":\"\",\"usesCaptcha\":false,\"usesEmailGate\":false,\"usesMask\":false,\"usesRateLimit\":false,\"usesRls\":false,\"analyzableBody\":true,\"exportName\":\"summarise\",\"file\":\"documents\",\"hasEmailArg\":false,\"kind\":\"action\",\"visibility\":\"public\"}]") as AdvisorProcedure[]); })();
 
 /** Read-only RLS metadata (policies + roles discovered from `.use(rls(...))` chains) served via `__lunora_admin__:rlsPolicies` for the studio's RLS inspector. */
-const LUNORA_RLS_METADATA = JSON.parse("{\"policies\":[],\"roles\":[]}") as RlsPoliciesResult;
+const LUNORA_RLS_METADATA = ((): (() => RlsPoliciesResult) => { let cached: RlsPoliciesResult | undefined; return () => (cached ??= JSON.parse("{\"policies\":[],\"roles\":[]}") as RlsPoliciesResult); })();
 
 /** Read-only masking metadata (table + column + strategy discovered from `.use(mask(...))` chains) served via `__lunora_admin__:maskPolicies` for the studio's data-browser mask preview. */
-const LUNORA_MASK_METADATA = JSON.parse("{\"columns\":[]}") as MaskPoliciesResult;
+const LUNORA_MASK_METADATA = ((): (() => MaskPoliciesResult) => { let cached: MaskPoliciesResult | undefined; return () => (cached ??= JSON.parse("{\"columns\":[]}") as MaskPoliciesResult); })();
 
 /** Read-only storage access-rule metadata (discovered from `.use(storageRules(...))` chains) served via `__lunora_admin__:storageRules` for the studio's access-rules view. */
-const LUNORA_STORAGE_RULES = JSON.parse("{\"rules\":[]}") as StorageRulesResult;
+const LUNORA_STORAGE_RULES = ((): (() => StorageRulesResult) => { let cached: StorageRulesResult | undefined; return () => (cached ??= JSON.parse("{\"rules\":[]}") as StorageRulesResult); })();
 
 /** Which optional package-backed features this app wires up (discovered from imports / `ctx.*` reads / schema signals) served via `__lunora_admin__:studioFeatures` so the studio hides nav pages whose package isn't enabled. */
-const LUNORA_STUDIO_FEATURES = JSON.parse("{\"platform\":{\"id\":\"cloudflare\",\"name\":\"Cloudflare\",\"unsupported\":[]},\"analytics\":false,\"auth\":false,\"containers\":false,\"flags\":false,\"kv\":false,\"mail\":false,\"notifications\":false,\"payments\":false,\"privacy\":false,\"queues\":false,\"scheduler\":false,\"storage\":false,\"vectors\":false,\"workflows\":false}") as StudioFeaturesResult;
+const LUNORA_STUDIO_FEATURES = ((): (() => StudioFeaturesResult) => { let cached: StudioFeaturesResult | undefined; return () => (cached ??= JSON.parse("{\"platform\":{\"id\":\"cloudflare\",\"name\":\"Cloudflare\",\"unsupported\":[]},\"analytics\":false,\"auth\":false,\"containers\":false,\"flags\":false,\"kv\":false,\"mail\":false,\"notifications\":false,\"payments\":false,\"privacy\":false,\"queues\":false,\"scheduler\":false,\"storage\":false,\"vectors\":false,\"workflows\":false}") as StudioFeaturesResult); })();
 
 /** Structural schema snapshot + its content hash, recorded in the shard's `__lunora_schema_history` ledger on cold start so the studio can show a schema-version timeline and diff any two versions. */
 const LUNORA_SCHEMA_SNAPSHOT: { hash: string; json: string } = { hash: "d081a0b5a40f39c3", json: "{\n  \"migrationIds\": [],\n  \"tables\": {},\n  \"version\": 1\n}\n" };
@@ -531,11 +567,11 @@ export const createShardDO = (config: ShardDOConfig = {}): new (state: ShardDOSt
 
 
         protected override tableRefs(table: string): Record<string, string> | undefined {
-            return LUNORA_TABLE_REFS[table];
+            return LUNORA_TABLE_REFS()[table];
         }
 
         protected override tableIndexes(table: string): Array<{ fields: string[]; name: string; type: "geo" | "index" | "rank" | "search" | "vector"; unique?: boolean }> {
-            return LUNORA_TABLE_INDEXES[table] ?? [];
+            return LUNORA_TABLE_INDEXES()[table] ?? [];
         }
 
         protected override ttlSweeps(): ReadonlyArray<{ after?: number; field: string; softDeleteField?: string; table: string }> {
@@ -554,35 +590,35 @@ export const createShardDO = (config: ShardDOConfig = {}): new (state: ShardDOSt
             ref?: string;
             type: string;
         }> {
-            return LUNORA_TABLE_COLUMNS[table] ?? [];
+            return LUNORA_TABLE_COLUMNS()[table] ?? [];
         }
 
         protected override storageColumns(): Record<string, string[]> {
-            return LUNORA_STORAGE_COLUMNS;
+            return LUNORA_STORAGE_COLUMNS();
         }
 
         protected override rlsMetadata(): RlsPoliciesResult {
-            return LUNORA_RLS_METADATA;
+            return LUNORA_RLS_METADATA();
         }
 
         protected override maskMetadata(): MaskPoliciesResult {
-            return LUNORA_MASK_METADATA;
+            return LUNORA_MASK_METADATA();
         }
 
         protected override storageRulesMetadata(): StorageRulesResult {
-            return LUNORA_STORAGE_RULES;
+            return LUNORA_STORAGE_RULES();
         }
 
         protected override studioFeatures(): StudioFeaturesResult {
-            return LUNORA_STUDIO_FEATURES;
+            return LUNORA_STUDIO_FEATURES();
         }
 
         protected override advisories(): AdvisoryFinding[] {
-            return LUNORA_ADVISORIES;
+            return LUNORA_ADVISORIES();
         }
 
         protected override advisorProcedures(): AdvisorProcedure[] {
-            return LUNORA_ADVISOR_PROCEDURES;
+            return LUNORA_ADVISOR_PROCEDURES();
         }
 
         /**

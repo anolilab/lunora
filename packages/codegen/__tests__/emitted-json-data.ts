@@ -1,5 +1,5 @@
 /**
- * Read back a data table codegen emits as `const NAME = JSON.parse("…") as T;`
+ * Read back a data table codegen emits as `const NAME = JSON.parse("…") as T;` (or the same wrapped in a lazy thunk)
  * (see `src/json-data.ts`), so tests assert on the data rather than on its
  * encoding. Throws when `name` is missing or not emitted in that form.
  *
@@ -14,12 +14,24 @@ const emittedJsonData = (source: string, name: string): unknown => {
         .flatMap((statement) => statement.declarationList.declarations)
         .find((candidate) => candidate.name.getText(file) === name);
     const initializer = declaration?.initializer;
+    let call: ts.CallExpression | undefined;
+    const find = (node: ts.Node): void => {
+        if (call === undefined && ts.isCallExpression(node) && node.expression.getText(file) === "JSON.parse") {
+            call = node;
+        }
 
-    if (initializer === undefined || !ts.isAsExpression(initializer) || !ts.isCallExpression(initializer.expression)) {
+        ts.forEachChild(node, find);
+    };
+
+    if (initializer !== undefined) {
+        find(initializer);
+    }
+
+    if (call === undefined) {
         throw new Error(`${name} is not emitted as JSON.parse(...) as T`);
     }
 
-    const [argument] = initializer.expression.arguments;
+    const [argument] = call.arguments;
 
     if (argument === undefined || !ts.isStringLiteral(argument)) {
         throw new Error(`${name}'s JSON.parse argument is not a string literal`);

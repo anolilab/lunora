@@ -101,7 +101,7 @@ const runPostDeployMigrations = async (options: DeployCommandOptions, cwd: strin
  * a failure here is reported with the command to run, not a failed deploy.
  */
 const provisionVectorMetadataIndexes = async (options: DeployCommandOptions, cwd: string): Promise<void> => {
-    const { info } = discoverSchemaInfo(cwd, "lunora");
+    const { info } = discoverSchemaInfo(cwd, "lunora", options.discoveryCache);
     const declared = info?.vectorMetadata ?? [];
 
     if (declared.length === 0) {

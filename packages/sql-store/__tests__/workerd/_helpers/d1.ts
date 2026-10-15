@@ -1,4 +1,5 @@
 import type { ValidatorLike } from "@lunora/shard-engine";
+import { renderSql } from "@lunora/shard-engine";
 import { env } from "cloudflare:test";
 import { sql } from "drizzle-orm";
 
@@ -24,6 +25,7 @@ export const d1Dialect: SqlDialect = {
     isUniqueViolation: (error) => error instanceof Error && UNIQUE_VIOLATION_RE.test(error.message),
     maxTableColumns: 100,
     name: "sqlite",
+    render: (query) => renderSql("sqlite", query),
     supportsFts5: false,
     supportsReturning: true,
     tableExists: (table) => sql`SELECT name FROM sqlite_master WHERE type = 'table' AND name = ${table}`,

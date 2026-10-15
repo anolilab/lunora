@@ -23,6 +23,7 @@ import { emitShard } from "../src/emit";
 import type { TableIR } from "../src/ir";
 import { emitOpenApiModule } from "../src/openapi";
 import { emitOpenRpcModule } from "../src/openrpc";
+import emittedAdvisories from "./emitted-advisories";
 import emittedJsonData from "./emitted-json-data";
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -158,7 +159,9 @@ describe("generated data tables typecheck at project scale (#823)", () => {
 
         const shard = emitShard({ advisories: findings(SCALE), advisorProcedures: procedures(SCALE), schema: { tables: [], vectorIndexes: [] } });
 
-        expect(typecheck(pickDeclarations(shard, ["LUNORA_ADVISORIES", "LUNORA_ADVISOR_PROCEDURES"]))).toStrictEqual([]);
+        expect(
+            typecheck(pickDeclarations(shard, ["LUNORA_ADVISORY_RULES", "LUNORA_ADVISORY_ROWS", "LUNORA_ADVISORIES", "LUNORA_ADVISOR_PROCEDURES"])),
+        ).toStrictEqual([]);
     }, 120_000);
 
     it("round-trips the data exactly through the emitted string literal", () => {
@@ -169,8 +172,18 @@ describe("generated data tables typecheck at project scale (#823)", () => {
         const advisorProcedures = procedures(16);
         const shard = emitShard({ advisories, advisorProcedures, schema: { tables: [], vectorIndexes: [] } });
 
-        expect(emittedJsonData(shard, "LUNORA_ADVISORIES")).toStrictEqual(advisories);
+        expect(emittedAdvisories(shard)).toStrictEqual(advisories);
         expect(emittedJsonData(shard, "LUNORA_ADVISOR_PROCEDURES")).toStrictEqual(advisorProcedures);
+    });
+
+    it("emits each rule's text once, not once per finding", () => {
+        expect.assertions(2);
+
+        const advisories = findings(RULES * 3);
+        const shard = emitShard({ advisories, schema: { tables: [], vectorIndexes: [] } });
+
+        expect(shard.split("Fix rule 0.").length - 1).toBe(1);
+        expect(emittedAdvisories(shard)).toStrictEqual(advisories);
     });
 
     it(`compiles the per-table schema tables for ${String(SCALE)} tables without TS2590`, () => {

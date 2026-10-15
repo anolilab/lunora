@@ -189,7 +189,7 @@ describe("emitApp — auth cold start", () => {
         expect.assertions(1);
 
         const output = emitApp({ ...baseOptions, hasAuth: true });
-        const migration = output.indexOf("await ensureMigrated(createAuth(");
+        const migration = output.indexOf("await ensureMigrated(createMigrationAuth(");
         const assignment = output.indexOf("auth = requestAuth;");
 
         expect(migration).toBeLessThan(assignment);
@@ -208,7 +208,7 @@ describe("emitApp — auth cold start", () => {
 
         const output = emitApp({ ...baseOptions, hasAuth: true });
         const construction = output.indexOf("const requestAuth = createAuth({ ...this.authDeclaration.options(env), database: lunoraD1Adapter(");
-        const migration = output.indexOf("await ensureMigrated(createAuth(");
+        const migration = output.indexOf("await ensureMigrated(createMigrationAuth(");
 
         expect(construction).toBeGreaterThan(-1);
         expect(construction).toBeLessThan(migration);
@@ -240,11 +240,13 @@ describe("emitApp — auth cold start", () => {
     });
 
     it("migrates through the raw binding, never the adapter better-auth rejects", () => {
-        expect.assertions(2);
+        expect.assertions(4);
 
         const output = emitApp({ ...baseOptions, hasAuth: true });
 
-        expect(output).toContain("await ensureMigrated(createAuth({ ...this.authDeclaration.options(env), database: d1(env) as never }));");
+        expect(output).toContain("await ensureMigrated(createMigrationAuth({ ...this.authDeclaration.options(env), database: d1(env) as never }));");
+        expect(output).toContain('await import("@lunora/auth/migrate")');
+        expect(output).not.toContain('from "@lunora/auth/migrate"');
         expect(output).not.toContain("ensureMigrated(createAuth({ ...this.authDeclaration.options(env), database: lunoraD1Adapter(");
     });
 });

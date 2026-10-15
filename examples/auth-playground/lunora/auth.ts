@@ -1,5 +1,6 @@
 import type { LunoraAuthOptions } from "@lunora/auth";
 import { createAuth, lunoraD1Adapter } from "@lunora/auth";
+import { createMigrationAuth } from "@lunora/auth/migrate";
 import { admin, organization, twoFactor } from "@lunora/auth/plugins";
 
 /** Shown in authenticator apps (2FA issuer) and as the default email "from" name. */
@@ -102,5 +103,5 @@ export const buildAuth = (env: { AUTH_SECRET: string; DB: unknown }): ReturnType
  * can create the tables the SQL adapter then reads/writes. Its `$context` is
  * never touched, so the dynamic-import hang above doesn't apply.
  */
-export const buildMigrationAuth = (env: { AUTH_SECRET: string; DB: unknown }): ReturnType<typeof createAuth> =>
-    createAuth({ ...options(env), database: env.DB as never });
+export const buildMigrationAuth = (env: { AUTH_SECRET: string; DB: unknown }): ReturnType<typeof createMigrationAuth> =>
+    createMigrationAuth({ ...options(env), database: env.DB as never });

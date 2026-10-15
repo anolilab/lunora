@@ -141,6 +141,8 @@ export interface DriverToolchain {
      * host CLI builds each image from its Dockerfile during the deploy.
      */
     readonly prebuildsContainerImages: boolean;
+    /** The command that writes many secrets in one call, as a JSON object of name to value on stdin. Optional: hosts without it get one `secretPut` per key. */
+    secretBulk?: (request: SecretRequest) => ToolchainCommand;
     /** The command that lists remote secret names, when the host has a secret store. */
     secretList?: (request: SecretRequest) => ToolchainCommand;
     /** The command that writes one secret, when the host has a secret store. Its value is passed on stdin, never argv. */

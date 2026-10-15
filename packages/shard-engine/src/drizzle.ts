@@ -12,15 +12,9 @@
 import { LunoraError } from "@lunora/errors";
 import type { SQL } from "drizzle-orm";
 import { sql } from "drizzle-orm";
-import { MySqlDialect } from "drizzle-orm/mysql-core";
-import { PgDialect } from "drizzle-orm/pg-core";
 import { SQLiteSyncDialect } from "drizzle-orm/sqlite-core";
 
-const PG_DIALECT = new PgDialect();
-const MYSQL_DIALECT = new MySqlDialect();
 const SQLITE_DIALECT = new SQLiteSyncDialect();
-
-const DIALECTS = { mysql: MYSQL_DIALECT, postgres: PG_DIALECT, sqlite: SQLITE_DIALECT } as const;
 
 /**
  * The limits Workerd's SQLite build sets far below stock SQLite's, and the
@@ -119,11 +113,16 @@ export interface RenderedSql {
 }
 
 /**
- * Render a composable drizzle {@link SQL} to `{ sql, params }` for `engine` —
- * identifiers quoted and placeholders numbered the way that engine expects.
+ * Render a composable drizzle {@link SQL} to `{ sql, params }` for SQLite.
+ * Postgres/MySQL render through `SqlDialect.render` in `@lunora/sql-store`, so a
+ * SQLite-only bundle never pulls in `pg-core`/`mysql-core`.
  */
 export const renderSql = (engine: SqlEngine, query: SQL): RenderedSql => {
-    const { params, sql: text } = DIALECTS[engine].sqlToQuery(query);
+    if (engine !== "sqlite") {
+        throw new LunoraError("INTERNAL", `renderSql only renders SQLite; use SqlDialect.render for "${engine}"`);
+    }
+
+    const { params, sql: text } = SQLITE_DIALECT.sqlToQuery(query);
 
     return { params, sql: text };
 };

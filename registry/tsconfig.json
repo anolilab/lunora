@@ -8,6 +8,9 @@
             "node"
         ],
         "paths": {
+            "@lunora/auth/migrate": [
+                "../packages/auth/dist/migrate.d.ts"
+            ],
             "@lunora/auth/plugins": [
                 "../packages/auth/dist/plugins.d.ts"
             ],
