@@ -643,7 +643,9 @@ class AppBuilder<Env extends object> {
                 const cookieCache = authDeclaration?.options(env).session?.cookieCache;
                 // better-auth's `maxAge` is in SECONDS; createAuth fills 60 when it is unset.
                 const cookieCacheSeconds = typeof cookieCache?.maxAge === "number" && cookieCache.maxAge >= 0 ? cookieCache.maxAge : 60;
-                const defaultMs = cookieCache?.enabled === false ? 0 : Math.min(60_000, cookieCacheSeconds * 1000);
+                // createAuth fills `{ enabled: true, maxAge: 60 }` only when `cookieCache` is absent; a partial
+                // object without `enabled: true` has NO cookie cache, so the memo stays per-request there.
+                const defaultMs = cookieCache === undefined || cookieCache.enabled === true ? Math.min(60_000, cookieCacheSeconds * 1000) : 0;
 
                 memo = memoizeIdentity(options.resolveIdentity, {
                     // better-auth resolves the session from ALL request headers, so the key

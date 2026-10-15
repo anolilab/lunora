@@ -244,6 +244,8 @@ describe("emitApp — identity memoisation", () => {
             [{ enabled: true }, 60_000],
             [{ enabled: true, maxAge: 600 }, 60_000],
             [{ enabled: false, maxAge: 10 }, 0],
+            [{ maxAge: 30 }, 0],
+            [undefined, 60_000],
         ])("cookie cache %j defaults the window to %i ms", async (cookieCache, ttlMs) => {
             expect.assertions(1);
 
