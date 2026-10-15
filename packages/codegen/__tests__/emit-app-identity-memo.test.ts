@@ -27,7 +27,7 @@ interface Built {
     build: (inner: Resolver, env?: object, store?: WeakMap<object, unknown>) => Resolver;
 }
 
-type Declaration = { options: (env: unknown) => { session?: { cookieCache?: { enabled?: boolean } } } };
+type Declaration = { options: (env: unknown) => { session?: { cookieCache?: { enabled?: boolean; maxAge?: number } } } };
 
 const defaultEnv = {};
 
@@ -237,6 +237,41 @@ describe("emitApp — identity memoisation", () => {
 
             await expect(ttlFor(rolling, {})).resolves.toBe(60_000);
             await expect(ttlFor(undefined, {})).resolves.toBe(60_000);
+        });
+
+        it.each([
+            [{ enabled: true, maxAge: 10 }, 10_000],
+            [{ enabled: true }, 60_000],
+            [{ enabled: true, maxAge: 600 }, 60_000],
+            [{ enabled: false, maxAge: 10 }, 0],
+        ])("cookie cache %j defaults the window to %i ms", async (cookieCache, ttlMs) => {
+            expect.assertions(1);
+
+            await expect(
+                ttlFor(
+                    {
+                        options: () => {
+                            return { session: { cookieCache } };
+                        },
+                    },
+                    {},
+                ),
+            ).resolves.toBe(ttlMs);
+        });
+
+        it("lets an explicit env value override a short cookie-cache max age", async () => {
+            expect.assertions(1);
+
+            await expect(
+                ttlFor(
+                    {
+                        options: () => {
+                            return { session: { cookieCache: { enabled: true, maxAge: 10 } } };
+                        },
+                    },
+                    { LUNORA_IDENTITY_CACHE_MS: "45000" },
+                ),
+            ).resolves.toBe(45_000);
         });
 
         it("still honours an explicit LUNORA_IDENTITY_CACHE_MS under the strict preset", async () => {

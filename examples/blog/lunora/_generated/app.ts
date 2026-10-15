@@ -610,14 +610,17 @@ class AppBuilder<Env extends object> {
 
         // Both modes pay a session lookup per request (the auth object hop, or a D1
         // read), and the runtime resolves identity once per RPC and per fan-out leg.
-        // Memoise per credential for the window better-auth's own cookie cache already
-        // tolerates (60s); `LUNORA_IDENTITY_CACHE_MS` overrides it, `0` disables the
-        // cross-request cache. A revoked session can therefore resolve for up to that long.
+        // Memoise per credential. The default window is the shorter of 60s and
+        // better-auth's cookie-cache `maxAge`; `LUNORA_IDENTITY_CACHE_MS` overrides it, `0`
+        // disables the cross-request cache. The memoised `getSession` result may itself
+        // come from better-auth's cookie cache, so the worst case is the two stacked: a
+        // revoked session or a changed role can resolve for up to the memo window PLUS the
+        // cookie-cache `maxAge` (about 120s with the presets).
         //
-        // An app that switched better-auth's cookie cache OFF (the `strict` session
-        // preset) asked for fast revocation, so its default is per-request memoisation
-        // only; the env var still opts back in. Read from the declared options at
-        // runtime, the one place the chosen policy is visible.
+        // An app that switched the cookie cache OFF (the `strict` session preset) asked
+        // for fast revocation, so its default is per-request memoisation only; the env var
+        // still opts back in. Read from the declared options at runtime, the one place
+        // the chosen policy is visible.
         //
         // Built once per `env` object and kept for this assembled worker: a framework-hosted
         // worker rebuilds these options on every request, and a fresh memo per build
@@ -637,7 +640,10 @@ class AppBuilder<Env extends object> {
                     identityCacheMs = Number(identityCacheRaw);
                 }
 
-                const cookieCacheOff = authDeclaration?.options(env).session?.cookieCache?.enabled === false;
+                const cookieCache = authDeclaration?.options(env).session?.cookieCache;
+                // better-auth's `maxAge` is in SECONDS; createAuth fills 60 when it is unset.
+                const cookieCacheSeconds = typeof cookieCache?.maxAge === "number" && cookieCache.maxAge >= 0 ? cookieCache.maxAge : 60;
+                const defaultMs = cookieCache?.enabled === false ? 0 : Math.min(60_000, cookieCacheSeconds * 1000);
 
                 memo = memoizeIdentity(options.resolveIdentity, {
                     // better-auth resolves the session from ALL request headers, so the key
@@ -649,7 +655,7 @@ class AppBuilder<Env extends object> {
                         return parts.every((part) => part === "") ? undefined : parts.join("\u0000");
                     },
                     maxEntries: 2_000,
-                    ttlMs: Number.isFinite(identityCacheMs) && identityCacheMs >= 0 ? identityCacheMs : cookieCacheOff ? 0 : 60_000,
+                    ttlMs: Number.isFinite(identityCacheMs) && identityCacheMs >= 0 ? identityCacheMs : defaultMs,
                 });
                 identityMemos.set(env, memo);
             }
