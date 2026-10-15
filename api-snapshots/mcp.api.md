@@ -78,6 +78,7 @@ interface LunoraMcpServerOptions {
     fetch?: typeof fetch;
     token?: string;
     url?: string;
+    version?: string;
 }
 ```
 

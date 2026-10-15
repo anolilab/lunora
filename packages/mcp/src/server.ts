@@ -10,8 +10,14 @@ import type { McpAgentExposure } from "./agent-tools";
 import { agentToolDefinitions, callAgentTool, isAgentToolName } from "./agent-tools";
 import { callTool, toolDefinitions } from "./tools";
 
-/** Server name/version advertised in the MCP `initialize` handshake. */
-const SERVER_INFO = { name: "lunora", version: pkg.version } as const;
+/**
+ * Server name advertised in the MCP `initialize` handshake. The version defaults
+ * to the `package.json` bundled at build time, which is stamped before
+ * semantic-release bumps the manifest and so can lag one release behind on
+ * Workers (it was `0.0.0` there before). The Node entry passes the installed
+ * manifest's exact version via `version`.
+ */
+const SERVER_NAME = "lunora";
 
 interface LunoraMcpServerOptions {
     /** Wall-clock budget a single agent tool call awaits before returning a pending result. */
@@ -94,6 +100,8 @@ interface LunoraMcpServerOptions {
     token?: string;
     /** Base URL of the deployed Lunora Worker. Required unless `client` is given. */
     url?: string;
+    /** Version reported in the `initialize` handshake. Defaults to the version bundled at build time. */
+    version?: string;
 }
 
 /**
@@ -152,7 +160,7 @@ const createLunoraMcpServer = (options: LunoraMcpServerOptions): Server => {
     // Its own gate, not folded into observability: log lines and raw table rows
     // are different data classes, and one opt-in must not silently grant both.
     const allowDataReads = options.allowDataReads === true && hasAdminToken;
-    const server = new Server(SERVER_INFO, { capabilities: { tools: {} } });
+    const server = new Server({ name: SERVER_NAME, version: options.version ?? pkg.version }, { capabilities: { tools: {} } });
 
     server.setRequestHandler(ListToolsRequestSchema, () => {
         return { tools: [...toolDefinitions(allowWrites, allowObservability, allowDataReads), ...agentToolDefinitions(agents, allowAgents)] };

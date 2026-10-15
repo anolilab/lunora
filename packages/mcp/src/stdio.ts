@@ -2,6 +2,7 @@
 import type { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 
+import installedVersion from "./installed-version";
 import type { LunoraMcpServerOptions } from "./server";
 import { createLunoraMcpServer } from "./server";
 
@@ -14,7 +15,8 @@ import { createLunoraMcpServer } from "./server";
  * in the stdio transport (and its `node:process` import).
  */
 const connectStdio = async (options: LunoraMcpServerOptions): Promise<Server> => {
-    const server = createLunoraMcpServer(options);
+    const version = installedVersion();
+    const server = createLunoraMcpServer(version === undefined ? options : { version, ...options });
 
     await server.connect(new StdioServerTransport());
 
