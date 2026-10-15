@@ -141,6 +141,84 @@ describe("discoverVectorNamespaceAccesses", () => {
         expect(discoverVectorNamespaceAccesses(project, join(workdir, "lunora"))).toHaveLength(0);
     });
 
+    it.each([
+        [
+            "handler const captured by the callback",
+            `const namespace = args.tenant; await ctx.vectors.upsertMany(idx, args.rows.map((row) => ({ namespace, embed, id: row.id })));`,
+        ],
+        [
+            "callback const shadowing a scoped handler const",
+            `const namespace = ctx.identity.orgId; await ctx.vectors.upsertMany(idx, args.rows.map((row) => { const namespace = row.tenant; return { namespace, embed, id: row.id }; }));`,
+        ],
+        [
+            "destructured callback local",
+            `await ctx.vectors.upsertMany(idx, args.rows.map((row) => { const { tenant } = row; return { namespace: tenant, embed, id: row.id }; }));`,
+        ],
+        [
+            "as assertion on the namespace",
+            `await ctx.vectors.upsertMany(idx, args.rows.map((row) => ({ namespace: row.tenant as string, embed, id: row.id })));`,
+        ],
+        ["as assertion on the record", `await ctx.vectors.upsertMany(idx, [{ namespace: args.tenant, embed, id: "a" } as Rec]);`],
+        ["satisfies on the record", `await ctx.vectors.upsertMany(idx, [{ namespace: args.tenant, embed, id: "a" } satisfies Rec]);`],
+        ["non-null on the record", `await ctx.vectors.upsertMany(idx, [({ namespace: args.tenant, embed, id: "a" })!]);`],
+        ["angle-bracket assertion on the record", `await ctx.vectors.upsertMany(idx, [<Rec>{ namespace: args.tenant, embed, id: "a" }]);`],
+        [
+            "tainted conditional branch",
+            `await ctx.vectors.upsertMany(idx, args.rows.map((row) => (row.ok ? { namespace: row.tenant, embed, id: "a" } : trusted)));`,
+        ],
+        [
+            "tainted second conditional branch",
+            `await ctx.vectors.upsertMany(idx, args.rows.map((row) => (row.ok ? { namespace: ctx.identity.orgId, embed } : { namespace: row.tenant, embed })));`,
+        ],
+        [
+            "conditional in a block return",
+            `await ctx.vectors.upsertMany(idx, args.rows.map((row) => { return row.ok ? { namespace: ctx.identity.orgId, embed } : { namespace: row.tenant, embed }; }));`,
+        ],
+        ["spread of a local record", `const base = { namespace: args.tenant }; await ctx.vectors.upsertMany(idx, [{ ...base, embed, id: "a" }]);`],
+        ["opaque arg-derived spread", `await ctx.vectors.upsertMany(idx, [{ ...args.record, embed, id: "a" }]);`],
+    ])("flags an arg-derived upsertMany namespace (%s)", (_name, body) => {
+        expect.assertions(1);
+
+        write("symbols.ts", `export const indexMany = mutation(async ({ ctx, args }) => { ${body} });`);
+
+        expect(discoverVectorNamespaceAccesses(project, join(workdir, "lunora"))).toHaveLength(1);
+    });
+
+    it.each([
+        [
+            "callback const shadowing a tainted handler const",
+            `const namespace = args.tenant; await ctx.vectors.upsertMany(idx, args.rows.map((row) => { const namespace = ctx.identity.orgId; return { namespace, embed, id: row.id }; }));`,
+        ],
+        [
+            "property key and member name sharing the parameter spelling",
+            `await ctx.vectors.upsertMany(idx, args.rows.map((row) => ({ namespace: ({ row: "global" }).row, embed, id: row.id })));`,
+        ],
+        ["scoped as assertion", `await ctx.vectors.upsertMany(idx, args.rows.map((row) => ({ namespace: ctx.identity.orgId as string, embed, id: row.id })));`],
+        [
+            "scoped conditional branches",
+            `await ctx.vectors.upsertMany(idx, args.rows.map((row) => (row.ok ? { namespace: ctx.identity.orgId, embed } : { namespace: ctx.identity.orgId, embed })));`,
+        ],
+        [
+            "scoped spread of a local record",
+            `const base = { namespace: ctx.identity.orgId }; await ctx.vectors.upsertMany(idx, [{ ...base, embed, id: "a" }]);`,
+        ],
+        ["spread of a non-argument value", `await ctx.vectors.upsertMany(idx, [{ ...ctx.defaults, embed, id: "a" }]);`],
+    ])("ignores a safe upsertMany namespace (%s)", (_name, body) => {
+        expect.assertions(1);
+
+        write("symbols-safe.ts", `export const indexMany = mutation(async ({ ctx, args }) => { ${body} });`);
+
+        expect(discoverVectorNamespaceAccesses(project, join(workdir, "lunora"))).toHaveLength(0);
+    });
+
+    it("flags an opaque arg-derived spread in a single-record query too", () => {
+        expect.assertions(1);
+
+        write("query-spread.ts", `export const search = query(async ({ ctx, args }) => { return ctx.vectors.query(idx, { ...args.filter, topK: 5 }); });`);
+
+        expect(discoverVectorNamespaceAccesses(project, join(workdir, "lunora"))).toHaveLength(1);
+    });
+
     it("ignores an upsertMany whose every element namespace is scoped by ctx", () => {
         expect.assertions(1);
 
