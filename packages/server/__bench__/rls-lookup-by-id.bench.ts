@@ -26,6 +26,7 @@ import { definePolicy, initLunora, rls } from "../src/index";
 interface CountingWriter {
     count: (tableName: string, whereOrArgs?: unknown) => Promise<number>;
     delete: (id: string) => Promise<void>;
+    deleteRereadTables?: ReadonlySet<string>;
     findFirst: (tableName: string, args?: { where?: Record<string, unknown> }) => Promise<Record<string, unknown> | null>;
     findFirstOrThrow: (tableName: string, args?: unknown) => Promise<Record<string, unknown>>;
     findMany: (tableName: string, args?: unknown) => Promise<{ continueCursor: null | string; isDone: boolean; page: Record<string, unknown>[] }>;
@@ -188,7 +189,7 @@ const eraseHandler = lunora.mutation
         }),
     );
 
-const rereadEraseWriter: CountingWriter = { ...eraseWriter, deleteRereadTables: new Set(["t0"]) } as CountingWriter;
+const rereadEraseWriter: CountingWriter = { ...eraseWriter, deleteRereadTables: new Set(["t0"]) };
 
 describe("rls() deleteAll — 100 rows, 3 policy tables", () => {
     bench("deleteAll 100 rows — local table (verdict on the read page)", async () => {
