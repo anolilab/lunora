@@ -152,6 +152,9 @@ const vectorsStub: VectorSearchLike = {
     upsert: async () => {
         throw new Error("ctx.vectors: no vectors configured. Pass `vectors` to createShardDO().");
     },
+    upsertMany: async () => {
+        throw new Error("ctx.vectors: no vectors configured. Pass `vectors` to createShardDO().");
+    },
     upsertNow: async () => {
         throw new Error("ctx.vectors: no vectors configured. Pass `vectors` to createShardDO().");
     },

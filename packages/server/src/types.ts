@@ -2017,6 +2017,12 @@ interface VectorSearchReader<IndexName extends string = string> {
 interface VectorSearch<IndexName extends string = string> extends VectorSearchReader<IndexName> {
     deleteByIds: (indexName: IndexName, ids: ReadonlyArray<string>) => Promise<void>;
     upsert: (indexName: IndexName, input: VectorUpsertInput) => Promise<void>;
+
+    /**
+     * Batch form of `upsert` (at most 1000 inputs, one remote call). Optional so
+     * existing implementors keep compiling.
+     */
+    upsertMany?: (indexName: IndexName, inputs: ReadonlyArray<VectorUpsertInput>) => Promise<void>;
     upsertNow: (indexName: IndexName, input: VectorUpsertInput) => Promise<void>;
 }
 
