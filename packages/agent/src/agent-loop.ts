@@ -734,35 +734,48 @@ const compactIncrementally = async (context: TurnContext): Promise<{ history: Ag
             return { history: messages, summary: previous };
         }
 
-        await patchThread({ ifInstanceId: instanceId, summaryRuns: 0 }).catch(() => undefined);
+        await patchThread({ ifInstanceId: instanceId, summaryRuns: 0 }).catch((error: unknown) => {
+            // eslint-disable-next-line no-console -- best-effort checkpoint; the failure must be visible, not swallowed
+            console.warn(`@lunora/agent: could not reset the summary run counter for thread "${threadKey}"`, error);
+        });
 
         return { history: messages.filter((message) => message.seq > fallback.throughSeq), summary: fallback.summary };
     };
 
+    let summary: string;
+
     try {
-        const summary = await compact({
+        summary = await compact({
             env,
             messages: buildModelMessages({ history: split.older, summary: previous }),
             model: agent.compaction?.model ?? agent.model,
         });
+    } catch (error) {
+        // eslint-disable-next-line no-console -- best-effort summarisation; the failure must be visible, not swallowed
+        console.warn(`@lunora/agent: summarising thread "${threadKey}" failed`, error);
 
-        if (summary.length === 0) {
-            return await degrade();
-        }
-
-        // Guarded on the run still owning the thread: a replaced run's late write
-        // must not roll back a newer run's checkpoint.
-        await patchThread({
-            ifInstanceId: instanceId,
-            summary,
-            summaryRuns: previous === undefined ? 1 : stored.runs + 1,
-            summaryThroughSeq: split.older.at(-1)?.seq,
-        });
-
-        return { history: split.recent, summary };
-    } catch {
         return degrade();
     }
+
+    if (summary.length === 0) {
+        return degrade();
+    }
+
+    // Guarded on the run still owning the thread: a replaced run's late write
+    // must not roll back a newer run's checkpoint. A failed WRITE does not throw
+    // the summary away: this turn still uses it, and the untouched cursor means a
+    // later turn retries the checkpoint.
+    await patchThread({
+        ifInstanceId: instanceId,
+        summary,
+        summaryRuns: previous === undefined ? 1 : stored.runs + 1,
+        summaryThroughSeq: split.older.at(-1)?.seq,
+    }).catch((error: unknown) => {
+        // eslint-disable-next-line no-console -- best-effort checkpoint; the failure must be visible, not swallowed
+        console.warn(`@lunora/agent: could not persist the summary checkpoint for thread "${threadKey}"`, error);
+    });
+
+    return { history: split.recent, summary };
 };
 
 /**

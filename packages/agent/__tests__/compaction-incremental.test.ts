@@ -32,6 +32,18 @@ const seeded = async (count: number): Promise<Runtime> => {
     return runtime;
 };
 
+/** A generate seam that records each turn's serialised prompt. */
+const promptCapture = (): { generate: AgentGenerate; prompts: string[] } => {
+    const prompts: string[] = [];
+    const generate: AgentGenerate = async (options) => {
+        prompts.push(JSON.stringify(options.messages));
+
+        return finalTurn("ok");
+    };
+
+    return { generate, prompts };
+};
+
 const turn = async (runtime: Runtime, compact: AgentCompact, step = new DurableStepJournal(), input = "next"): Promise<void> => {
     await runAgentLoop(
         loopDefaults(agent, { compact, generate: scriptedGenerate([finalTurn("ok")]), params: { input, threadKey: "thread-1" }, run: runtime.run, step }),
@@ -123,12 +135,7 @@ describe("incremental compaction", () => {
 
             return result;
         };
-        const prompts: string[] = [];
-        const generate: AgentGenerate = async (options) => {
-            prompts.push(JSON.stringify(options.messages));
-
-            return finalTurn("ok");
-        };
+        const { generate, prompts } = promptCapture();
         let calls = 0;
         const compact: AgentCompact = async () => {
             calls += 1;
@@ -151,5 +158,47 @@ describe("incremental compaction", () => {
 
         expect(historySizes[0]).toBeGreaterThanOrEqual(51);
         expect(historySizes[1]).toBeLessThan(15);
+    });
+
+    it("uses a fresh summary for the turn when persisting the checkpoint fails, leaving the cursor for a retry", async () => {
+        const runtime = await seeded(50);
+        const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+        const run: typeof runtime.run = async (reference, args) => {
+            if (JSON.stringify(reference).includes("agentPatchThread") && args?.["summary"] !== undefined) {
+                throw new Error("write failed");
+            }
+
+            return runtime.run(reference, args);
+        };
+        const { generate, prompts } = promptCapture();
+        const compact: AgentCompact = async () => "freshbrief";
+
+        await runAgentLoop(loopDefaults(agent, { compact, generate, params: { input: "next", threadKey: "thread-1" }, run, step: new DurableStepJournal() }));
+
+        expect(prompts[0]).toContain("freshbrief");
+        expect(prompts[0]).not.toContain('"m0"');
+        expect(runtime.threads.get("thread-1")?.summary).toBeUndefined();
+        expect(runtime.threads.get("thread-1")?.summaryThroughSeq).toBeUndefined();
+        expect(warn).toHaveBeenCalledWith(expect.stringContaining("could not persist"), expect.any(Error));
+
+        warn.mockRestore();
+    });
+
+    it("still degrades to the full history when the compactor throws and nothing is stored", async () => {
+        const runtime = await seeded(50);
+        const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+        const { generate, prompts } = promptCapture();
+        const compact: AgentCompact = async () => {
+            throw new Error("summariser down");
+        };
+
+        await runAgentLoop(
+            loopDefaults(agent, { compact, generate, params: { input: "next", threadKey: "thread-1" }, run: runtime.run, step: new DurableStepJournal() }),
+        );
+
+        expect(prompts[0]).toContain('"m0"');
+        expect(runtime.threads.get("thread-1")?.summary).toBeUndefined();
+
+        warn.mockRestore();
     });
 });
