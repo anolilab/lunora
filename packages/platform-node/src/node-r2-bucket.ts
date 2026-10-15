@@ -65,7 +65,7 @@
 
 import { createHash, randomUUID } from "node:crypto";
 import type { FileHandle } from "node:fs/promises";
-import { mkdir, open, readdir, rename, rmdir, unlink } from "node:fs/promises";
+import { lstat, mkdir, open, readdir, rename, rmdir, unlink } from "node:fs/promises";
 import { dirname, join, sep } from "node:path";
 
 import { LunoraError } from "@lunora/errors";
@@ -705,6 +705,31 @@ const walkUnder = async (
             }
         }
     };
+
+    // The root walk never follows a symlink (`Dirent.isDirectory()` is false for one), so
+    // a prefix must not either: every selected component has to be a real directory.
+    let start = directory;
+
+    for (const segment of leading) {
+        start = join(start, encodeSegment(segment));
+
+        let stats;
+
+        try {
+            // eslint-disable-next-line no-await-in-loop -- each component is checked before descending into it
+            stats = await lstat(start);
+        } catch (error: unknown) {
+            if (isMissing(error) || (error instanceof Error && "code" in error && (error as NodeJS.ErrnoException).code === "ENOTDIR")) {
+                return { keys, prefixes };
+            }
+
+            throw error;
+        }
+
+        if (!stats.isDirectory()) {
+            return { keys, prefixes };
+        }
+    }
 
     await walk(
         leading.length === 0 ? directory : join(directory, ...leading.map((segment) => encodeSegment(segment))),

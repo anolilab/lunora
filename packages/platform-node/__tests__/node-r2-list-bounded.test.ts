@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, rmSync, symlinkSync } from "node:fs";
 import { readdir } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -150,5 +150,51 @@ describe("createNodeR2Bucket list walk", () => {
         expect(page.objects).toHaveLength(5);
         // Whole-bucket walk reads ~50 tops * ~6 dirs; the bounded walk reads the one directory.
         expect(vi.mocked(readdir).mock.calls.length).toBeLessThanOrEqual(3);
+    });
+});
+
+// Symlinks need privileges on Windows; the root walk ignores them everywhere.
+describe.skipIf(process.platform === "win32")("createNodeR2Bucket list does not follow symlinks", () => {
+    let base: string;
+    let bucket: ReturnType<typeof createNodeR2Bucket>;
+
+    beforeAll(async () => {
+        base = mkdtempSync(join(tmpdir(), "lunora-platform-node-r2-link-"));
+        bucket = createNodeR2Bucket({ directory: join(base, "bucket") });
+
+        await bucket.put("real/inside", "x");
+        await createNodeR2Bucket({ directory: join(base, "elsewhere") }).put("secret", "x");
+
+        symlinkSync(join(base, "elsewhere"), join(base, "bucket", "outside"), "dir");
+        symlinkSync(join(base, "bucket", "real"), join(base, "bucket", "alias"), "dir");
+    });
+
+    afterAll(() => {
+        rmSync(base, { force: true, recursive: true });
+    });
+
+    it("returns nothing for a prefix through a symlink to a directory outside the bucket", async () => {
+        expect.hasAssertions();
+
+        const page = await bucket.list({ prefix: "outside/" });
+
+        expect(page.objects).toStrictEqual([]);
+        expect(page.truncated).toBe(false);
+        expect(page.cursor).toBeUndefined();
+
+        // The unprefixed walk agrees: neither link is listed.
+        const root = await bucket.list();
+
+        expect(root.objects.map((object) => object.key)).toStrictEqual(["real/inside"]);
+    });
+
+    it("returns nothing for a prefix through a symlink to a directory inside the bucket", async () => {
+        expect.hasAssertions();
+
+        const alias = await bucket.list({ prefix: "alias/" });
+        const real = await bucket.list({ prefix: "real/" });
+
+        expect(alias.objects).toStrictEqual([]);
+        expect(real.objects.map((object) => object.key)).toStrictEqual(["real/inside"]);
     });
 });
