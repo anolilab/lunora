@@ -15,7 +15,11 @@ import { createShardCtxDb, runShardMigrations } from "@lunora/shard-engine";
 import { env, runInDurableObject } from "cloudflare:test";
 import { describe, expect, it } from "vitest";
 
-import { definePolicies, definePolicy, initLunora, rls } from "../../../server/src/index";
+// Leaf modules, not the `@lunora/server` barrel: the barrel re-exports packages this workerd job
+// does not build (`@lunora/scheduler`, …), while these two reach only errors, shard-engine, values
+// and search-core, all upstream of `@lunora/do`.
+import { initLunora } from "../../../server/src/builder/index";
+import { definePolicies, definePolicy, rls } from "../../../server/src/rls/index";
 
 const lunora = initLunora.dataModel<Record<string, never>>().create();
 
