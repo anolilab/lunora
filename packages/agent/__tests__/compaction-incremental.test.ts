@@ -3,7 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 import { runAgentLoop } from "../src/agent-loop";
 import { defineAgent } from "../src/define-agent";
 import { DEFAULT_AGENT_FUNCTION_PATHS, toFunctionReference } from "../src/paths";
-import type { AgentCompact } from "../src/types";
+import type { AgentCompact, AgentGenerate } from "../src/types";
 import { DurableStepJournal, finalTurn, loopDefaults, memoryRuntime, scriptedGenerate } from "./loop-harness";
 
 const agent = defineAgent({ compaction: { keepRecent: 5, maxMessages: 10 }, model: "@cf/meta/llama-3.3-70b-instruct-fp8-fast" });
@@ -26,7 +26,7 @@ const appendMore = async (runtime: Runtime, from: number, count: number): Promis
 const seeded = async (count: number): Promise<Runtime> => {
     const runtime = memoryRuntime();
 
-    await runtime.run(toFunctionReference(DEFAULT_AGENT_FUNCTION_PATHS.ensureThread), { agent: "support", key: "thread-1" });
+    await runtime.run(toFunctionReference(DEFAULT_AGENT_FUNCTION_PATHS.ensureThread), { agent: "support", instanceId: "wf-1", key: "thread-1" });
     await appendMore(runtime, 0, count);
 
     return runtime;
@@ -87,5 +87,69 @@ describe("incremental compaction", () => {
 
         expect(compact).not.toHaveBeenCalled();
         expect(runtime.threads.get("thread-1")?.summary).toBeUndefined();
+    });
+
+    it("drops a replaced run's late summary write instead of rolling back the newer checkpoint", async () => {
+        const runtime = await seeded(50);
+        const compact: AgentCompact = async () => {
+            // A replacement run takes the thread and checkpoints further while this run is still summarising.
+            const thread = runtime.threads.get("thread-1");
+
+            if (thread) {
+                Object.assign(thread, { instanceId: "wf-2", summary: "newer", summaryRuns: 1, summaryThroughSeq: 49 });
+            }
+
+            return "stale";
+        };
+
+        await turn(runtime, compact);
+
+        expect(runtime.threads.get("thread-1")).toMatchObject({ summary: "newer", summaryRuns: 1, summaryThroughSeq: 49 });
+    });
+
+    it("falls back to the stored brief plus the tail when a rebuild fails, and stops re-reading the thread", async () => {
+        const runtime = await seeded(50);
+        const thread = runtime.threads.get("thread-1");
+
+        Object.assign(thread ?? {}, { summary: "storedbrief", summaryRuns: 10, summaryThroughSeq: 44 });
+
+        const historySizes: number[] = [];
+        const run: typeof runtime.run = async (reference, args) => {
+            const result = await runtime.run(reference, args);
+
+            if (JSON.stringify(reference).includes("agentHistory")) {
+                historySizes.push((result as { messages: unknown[] }).messages.length);
+            }
+
+            return result;
+        };
+        const prompts: string[] = [];
+        const generate: AgentGenerate = async (options) => {
+            prompts.push(JSON.stringify(options.messages));
+
+            return finalTurn("ok");
+        };
+        let calls = 0;
+        const compact: AgentCompact = async () => {
+            calls += 1;
+
+            throw new Error("summariser down");
+        };
+        const runTurn = async (input: string): Promise<void> => {
+            await runAgentLoop(loopDefaults(agent, { compact, generate, params: { input, threadKey: "thread-1" }, run, step: new DurableStepJournal() }));
+        };
+
+        await runTurn("one");
+
+        expect(calls).toBe(1);
+        expect(prompts[0]).toContain("storedbrief");
+        // 51 rows total; the tail after seq 44 is 6 rows, not the whole thread.
+        expect(prompts[0]).not.toContain('"m0"');
+        expect(runtime.threads.get("thread-1")).toMatchObject({ summary: "storedbrief", summaryRuns: 0, summaryThroughSeq: 44 });
+
+        await runTurn("two");
+
+        expect(historySizes[0]).toBeGreaterThanOrEqual(51);
+        expect(historySizes[1]).toBeLessThan(15);
     });
 });

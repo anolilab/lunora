@@ -192,13 +192,19 @@ export const memoryRuntime = (options?: {
 
         return incremental
             ? { messages: all.filter((message) => message.seq > (thread?.summaryThroughSeq ?? -1)), runs: thread?.summaryRuns ?? 0, summary: thread?.summary }
-            : { messages: all, runs: 0 };
+            : {
+                  ...(thread?.summary !== undefined && thread.summaryThroughSeq !== undefined
+                      ? { fallback: { summary: thread.summary, throughSeq: thread.summaryThroughSeq } }
+                      : {}),
+                  messages: all,
+                  runs: 0,
+              };
     };
 
     const patchThread = (args?: Record<string, unknown>): unknown => {
         const thread = threads.get(args?.["key"] as string);
 
-        if (thread) {
+        if (thread && (args?.["ifInstanceId"] === undefined || thread.instanceId === (args["ifInstanceId"] as string))) {
             if (args?.["status"] !== undefined) {
                 thread.status = args["status"] as string;
             }
@@ -215,6 +221,8 @@ export const memoryRuntime = (options?: {
                 thread.summary = args["summary"] as string;
                 thread.summaryRuns = args["summaryRuns"] as number;
                 thread.summaryThroughSeq = args["summaryThroughSeq"] as number;
+            } else if (args?.["summaryRuns"] !== undefined) {
+                thread.summaryRuns = args["summaryRuns"] as number;
             }
         }
 

@@ -36,6 +36,8 @@ const SUMMARY_REBUILD_EVERY = 10;
 
 /** What `agentHistory` returns: the uncovered messages plus the summary covering the rest. */
 interface AgentHistory {
+    /** Rebuild only: the stored summary and its cursor, for when the from-scratch summary fails. */
+    fallback?: { summary: string; throughSeq: number };
     messages: Record<string, unknown>[];
     runs: number;
     summary?: string;
@@ -655,6 +657,9 @@ export const agentComponent = (): AgentComponent => {
     const agentPatchThread = mutation
         .input({
             error: v.optional(v.string()),
+            // When set, the whole patch applies only while this run still owns the
+            // thread (`instanceId`), so a replaced run's late write is a no-op.
+            ifInstanceId: v.optional(v.string()),
             // Target by thread key (the loop) OR by workflow instance id (cancel,
             // which only knows the instance it terminated). Exactly one is set.
             instanceId: v.optional(v.string()),
@@ -682,7 +687,7 @@ export const agentComponent = (): AgentComponent => {
                     .first();
             }
 
-            if (!thread) {
+            if (!thread || (args.ifInstanceId !== undefined && thread["instanceId"] !== args.ifInstanceId)) {
                 return;
             }
 
@@ -705,8 +710,9 @@ export const agentComponent = (): AgentComponent => {
      * does not yet cover (`seq > summaryThroughSeq`), so a turn's read and
      * summarisation input stay bounded by the uncovered tail instead of growing
      * with the thread. Every `SUMMARY_REBUILD_EVERY`th incremental update the
-     * stored summary is withheld and the whole thread returned, so a summary of
-     * a summary cannot drift unboundedly. Internal: the loop is the only reader.
+     * whole thread is returned for a from-scratch summary, so a summary of a
+     * summary cannot drift unboundedly; the stored summary and cursor ride along
+     * as `fallback` for when that rebuild fails. Internal: the loop is the only reader.
      */
     const agentHistory = query.input({ key: v.string() }).query(async ({ args, ctx: context }): Promise<AgentHistory> => {
         const thread = await context.db
@@ -722,7 +728,13 @@ export const agentComponent = (): AgentComponent => {
             .withIndex("byThread", (q) => (incremental ? q.eq("threadKey", args.key).gt("seq", through) : q.eq("threadKey", args.key)))
             .collect();
 
-        return incremental ? { messages, runs, summary } : { messages, runs: 0 };
+        if (incremental) {
+            return { messages, runs, summary };
+        }
+
+        return typeof summary === "string" && summary.length > 0 && typeof through === "number"
+            ? { fallback: { summary, throughSeq: through }, messages, runs: 0 }
+            : { messages, runs: 0 };
     });
 
     /**

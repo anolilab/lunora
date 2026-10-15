@@ -706,15 +706,38 @@ const compactHistory = async (
  * nothing. Best-effort like {@link compactHistory}: a failed summary keeps the
  * stored brief and the uncovered history.
  */
+interface AgentHistoryResult {
+    fallback?: { summary: string; throughSeq: number };
+    messages: AgentMessageRow[];
+    runs: number;
+    summary?: string;
+}
+
 const compactIncrementally = async (context: TurnContext): Promise<{ history: AgentMessageRow[]; summary: string | undefined }> => {
-    const { agent, compact, env, historyRef, patchThread, run, threadKey } = context;
-    const stored = (await run(historyRef, { key: threadKey })) as { messages: AgentMessageRow[]; runs: number; summary?: string };
+    const { agent, compact, env, historyRef, instanceId, patchThread, run, threadKey } = context;
+    const stored = (await run(historyRef, { key: threadKey })) as AgentHistoryResult;
     const { messages, summary: previous } = stored;
     const split = splitForCompaction(messages, agent.compaction);
 
     if (split === undefined || compact === undefined) {
         return { history: messages, summary: previous };
     }
+
+    // A failed from-scratch rebuild: keep the stored brief plus the messages after
+    // its cursor, and restart the run counter so the next rebuild is
+    // `SUMMARY_REBUILD_EVERY` turns away instead of every turn re-reading and
+    // re-summarising the whole thread.
+    const degrade = async (): Promise<{ history: AgentMessageRow[]; summary: string | undefined }> => {
+        const { fallback } = stored;
+
+        if (fallback === undefined) {
+            return { history: messages, summary: previous };
+        }
+
+        await patchThread({ ifInstanceId: instanceId, summaryRuns: 0 }).catch(() => undefined);
+
+        return { history: messages.filter((message) => message.seq > fallback.throughSeq), summary: fallback.summary };
+    };
 
     try {
         const summary = await compact({
@@ -724,14 +747,21 @@ const compactIncrementally = async (context: TurnContext): Promise<{ history: Ag
         });
 
         if (summary.length === 0) {
-            return { history: messages, summary: previous };
+            return await degrade();
         }
 
-        await patchThread({ summary, summaryRuns: previous === undefined ? 1 : stored.runs + 1, summaryThroughSeq: split.older.at(-1)?.seq });
+        // Guarded on the run still owning the thread: a replaced run's late write
+        // must not roll back a newer run's checkpoint.
+        await patchThread({
+            ifInstanceId: instanceId,
+            summary,
+            summaryRuns: previous === undefined ? 1 : stored.runs + 1,
+            summaryThroughSeq: split.older.at(-1)?.seq,
+        });
 
         return { history: split.recent, summary };
     } catch {
-        return { history: messages, summary: previous };
+        return degrade();
     }
 };
 
