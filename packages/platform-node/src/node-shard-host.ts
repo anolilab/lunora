@@ -18,6 +18,8 @@ import { LunoraError } from "@lunora/errors";
 import type { ShardAlarms, ShardHost, ShardSqlCursor, ShardSqlExec, SqlRow } from "@lunora/platform";
 import Database from "better-sqlite3";
 
+import preparedStatement from "./prepared-statement";
+
 /**
  * Largest delay `setTimeout` accepts as a 32-bit signed integer. Any delay
  * above this (~24.8 days) is clamped to 1 ms with a `TimeoutOverflowWarning`,
@@ -78,7 +80,7 @@ const createSql = (database: Database.Database, assertOwnTurn: (action: string) 
         exec: <Row = SqlRow>(query: string, ...bindings: ReadonlyArray<unknown>): ShardSqlCursor<Row> => {
             assertOwnTurn("run SQL");
 
-            const statement = database.prepare(query);
+            const statement = preparedStatement(database, query);
             const normalized = bindings.map((value) => normalizeBinding(value));
 
             const rows = (
@@ -120,13 +122,15 @@ const createSql = (database: Database.Database, assertOwnTurn: (action: string) 
                 },
                 ...(statement.reader
                     ? {
-                          raw: (): IterableIterator<unknown[]> =>
-                              (
-                                  database
-                                      .prepare(query)
-                                      .raw(true)
-                                      .all(...normalized) as unknown[][]
-                              )[Symbol.iterator](),
+                          // The statement is shared through the cache, so positional
+                          // mode must not outlive this call.
+                          raw: (): IterableIterator<unknown[]> => {
+                              try {
+                                  return (statement.raw(true).all(...normalized) as unknown[][])[Symbol.iterator]();
+                              } finally {
+                                  statement.raw(false);
+                              }
+                          },
                       }
                     : {}),
                 toArray: () => [...rows],

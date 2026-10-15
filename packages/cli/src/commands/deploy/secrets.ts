@@ -5,7 +5,7 @@
  */
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 
-import type { DeployDriver } from "@lunora/config";
+import type { DeployDriver, DiscoveryCache } from "@lunora/config";
 import {
     DEV_VARS_FILE,
     generateSecretValue,
@@ -74,11 +74,11 @@ const warnDevVariablesNotPushed = (cwd: string, logger: Logger, driver: DeployDr
 };
 
 /** The secret keys this project requires on the deployed worker: its packages' + any secret-typed local var. */
-const resolveRequiredSecretKeys = async (cwd: string): Promise<string[]> => {
+const resolveRequiredSecretKeys = async (cwd: string, cache: DiscoveryCache | undefined): Promise<string[]> => {
     let packages: ReadonlyArray<string> = [];
 
     try {
-        packages = secretSourcesFromBindings(await inferLunoraBindings({ projectRoot: cwd, schemaDir: resolveSchemaDirectory(cwd) }));
+        packages = secretSourcesFromBindings(await inferLunoraBindings({ cache, projectRoot: cwd, schemaDir: resolveSchemaDirectory(cwd) }));
     } catch {
         // Scan failure → fall back to the core secrets + whatever is declared locally.
     }
@@ -150,11 +150,37 @@ const pushMintableSecrets = async (
         return { minted: [], ok: false };
     }
 
+    const pending = keys.map((key) => {
+        return { key, value: generateSecretValue() };
+    });
+    const secretBulk = driver.toolchain?.secretBulk;
+
+    // One `wrangler secret bulk` instead of K spawns. A failure falls through to
+    // the per-key loop below (same values — a put is idempotent), which is what
+    // gives the precise per-key error and the partial `minted` list.
+    if (secretBulk !== undefined && pending.length >= 2) {
+        const bulkExec = toolchainExecArgs(manager, secretBulk({ environment: options.env, temporary: options.temporary }));
+        const bulkResult = await spawner({
+            args: bulkExec.args,
+            command: bulkExec.command,
+            cwd,
+            input: JSON.stringify(Object.fromEntries(pending.map((entry) => [entry.key, entry.value]))),
+        });
+
+        if (bulkResult.code === 0) {
+            for (const { key } of pending) {
+                logger.success(`generated + pushed ${key}`);
+            }
+
+            return { minted: pending, ok: true };
+        }
+
+        logger.warn(`bulk secret push failed (exit ${String(bulkResult.code)}); retrying one key at a time`);
+    }
+
     const minted: { key: string; value: string }[] = [];
 
-    for (const key of keys) {
-        const value = generateSecretValue();
-
+    for (const { key, value } of pending) {
         const secretCommand = secretPut({ environment: options.env, key, temporary: options.temporary });
         const exec = toolchainExecArgs(manager, secretCommand);
 
@@ -355,7 +381,7 @@ const offerMissingSecrets = async (cwd: string, options: DeployCommandOptions, i
     }
 
     const remoteNames = new Set(remote.names);
-    const required = await resolveRequiredSecretKeys(cwd);
+    const required = await resolveRequiredSecretKeys(cwd, options.discoveryCache);
     const missing = required.filter((key) => !remoteNames.has(key));
 
     if (missing.length === 0) {

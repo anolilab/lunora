@@ -1,6 +1,7 @@
 import { DatabaseSync } from "node:sqlite";
 
 import type { SchemaLike, SearchIndexDefinitionLike, TableDefinitionLike, ValidatorLike } from "@lunora/shard-engine";
+import { renderSql } from "@lunora/shard-engine";
 import { sql } from "drizzle-orm";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
@@ -60,6 +61,7 @@ const dialect: SqlDialect = {
     ],
     isUniqueViolation: (error) => error instanceof Error && /unique constraint failed/iu.test(error.message),
     name: "sqlite",
+    render: (query) => renderSql("sqlite", query),
     // The portable layout, so the companion's rows can be read back directly.
     supportsFts5: false,
     supportsReturning: true,

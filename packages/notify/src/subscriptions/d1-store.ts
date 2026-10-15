@@ -1,7 +1,7 @@
 import { LunoraError } from "@lunora/errors";
 
 import { isBareIdentifier } from "../../../../shared/bare-identifier";
-import type { StoredSubscription, SubscriptionFilter, SubscriptionKind, SubscriptionStatus, SubscriptionStore } from "../types";
+import type { StoredSubscription, SubscriptionFilter, SubscriptionKind, SubscriptionOutcomes, SubscriptionStatus, SubscriptionStore } from "../types";
 import { claimRefusal, legacyIdFor } from "./normalize";
 
 /**
@@ -10,6 +10,7 @@ import { claimRefusal, legacyIdFor } from "./normalize";
  * store runtime-agnostic and trivially fakeable in tests.
  */
 interface D1Like {
+    batch: (statements: D1PreparedLike[]) => Promise<unknown>;
     prepare: (query: string) => D1PreparedLike;
 }
 
@@ -103,6 +104,9 @@ interface D1StoreOptions {
  * });
  * ```
  */
+/** Ids per bulk statement — D1 caps bound parameters at 100 and three are taken by the SET values. */
+const OUTCOME_CHUNK = 90;
+
 const d1SubscriptionStore = (database: D1Like, options: D1StoreOptions = {}): SubscriptionStore => {
     const table = options.tableName ?? "lunora_push_subscriptions";
 
@@ -328,7 +332,55 @@ const d1SubscriptionStore = (database: D1Like, options: D1StoreOptions = {}): Su
             .run();
     };
 
-    return { delete: remove, deleteOwned: removeOwned, get, list, markStatus, put };
+    /**
+     * Apply a page's outcomes in ONE `batch` (one subrequest), chunking ids so a
+     * statement stays under D1's bound-parameter cap. Failures are grouped by
+     * error text so each group is one `UPDATE … WHERE id IN (…)`.
+     */
+    const applyOutcomes = async ({ failed, gone, ok }: SubscriptionOutcomes): Promise<void> => {
+        await ensureSchema();
+
+        const now = Date.now();
+        const statements: D1PreparedLike[] = [];
+        const update = (status: SubscriptionStatus, error: string | null, ids: string[]): void => {
+            for (let index = 0; index < ids.length; index += OUTCOME_CHUNK) {
+                const chunk = ids.slice(index, index + OUTCOME_CHUNK);
+                const marks = chunk.map((_, position) => `?${(position + 4).toString()}`).join(", ");
+
+                statements.push(
+                    database
+                        .prepare(`UPDATE ${table} SET last_status = ?1, last_error = ?2, last_seen_at = ?3 WHERE id IN (${marks})`)
+                        .bind(status, error, now, ...chunk),
+                );
+            }
+        };
+
+        update("ok", null, ok);
+
+        const byError = new Map<string | null, string[]>();
+
+        for (const { error, id } of failed) {
+            byError.set(error ?? null, [...(byError.get(error ?? null) ?? []), id]);
+        }
+
+        for (const [error, ids] of byError) {
+            update("failed", error, ids);
+        }
+
+        for (let index = 0; index < gone.length; index += OUTCOME_CHUNK) {
+            const chunk = gone.slice(index, index + OUTCOME_CHUNK);
+
+            statements.push(
+                database.prepare(`DELETE FROM ${table} WHERE id IN (${chunk.map((_, position) => `?${(position + 1).toString()}`).join(", ")})`).bind(...chunk),
+            );
+        }
+
+        if (statements.length > 0) {
+            await database.batch(statements);
+        }
+    };
+
+    return { applyOutcomes, delete: remove, deleteOwned: removeOwned, get, list, markStatus, put };
 };
 
 export type { D1Like, D1PreparedLike, D1StoreOptions };

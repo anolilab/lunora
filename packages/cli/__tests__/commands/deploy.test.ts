@@ -5,6 +5,8 @@ import { fileURLToPath } from "node:url";
 
 import type { CodegenResult, PlatformDiagnostic } from "@lunora/codegen";
 import { runCodegen } from "@lunora/codegen";
+import type { DiscoveryCache } from "@lunora/config";
+import { createDiscoveryCache } from "@lunora/config";
 import { CLOUDFLARE_CLI_CONFIG_WARNING_ENV } from "@lunora/config/cloudflare";
 import { parse as parseJsonc } from "jsonc-parser";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -2040,6 +2042,108 @@ export const backfillNames = defineMigration({
                 // A fresh value was minted — never the pre-existing local one.
                 expect(secretPush?.descriptor.input).toMatch(/^[a-f0-9]{64}$/u);
                 expect(secretPush?.descriptor.input).not.toBe(existingValue);
+            });
+
+            it("pushes several minted secrets in one `secret bulk` call carrying a JSON body on stdin", async () => {
+                expect.assertions(5);
+
+                writeFileSync(join(workdir, "wrangler.jsonc"), VALID_WRANGLER, "utf8");
+                // A second secret-typed key the remote lacks → two mintable keys in one gate.
+                writeFileSync(join(workdir, ".dev.vars"), 'AUTH_SECRET="local"\n', "utf8");
+
+                const { calls, spawner } = createRecordingSpawner();
+                const { logger } = silentLogger();
+
+                const result = await runDeployCommand({
+                    cwd: workdir,
+                    interactive: true,
+                    logger,
+                    secretConfirm: () => Promise.resolve(true),
+                    secretLister: () => Promise.resolve({ names: [], ok: true }),
+                    spawner,
+                });
+
+                const bulkCalls = calls.filter((call) => call.descriptor.args.join(" ").includes("secret bulk"));
+                const bodies = bulkCalls.map((call) => JSON.parse(call.descriptor.input ?? "{}") as Record<string, string>);
+
+                expect(result.code).toBe(0);
+                expect(bulkCalls).toHaveLength(1);
+                expect(Object.keys(bodies[0] ?? {}).toSorted((a, b) => a.localeCompare(b))).toStrictEqual(["AUTH_SECRET", "LUNORA_ADMIN_TOKEN"]);
+                expect(calls.filter((call) => call.descriptor.args.join(" ").includes("secret put"))).toHaveLength(0);
+                // The recorded values are the pushed ones.
+                expect(readFileSync(join(workdir, ".dev.vars"), "utf8")).toContain(`LUNORA_ADMIN_TOKEN="${bodies[0]?.LUNORA_ADMIN_TOKEN ?? ""}"`);
+            });
+
+            it("falls back to one `secret put` per key when the bulk push fails", async () => {
+                expect.assertions(4);
+
+                writeFileSync(join(workdir, "wrangler.jsonc"), VALID_WRANGLER, "utf8");
+                writeFileSync(join(workdir, ".dev.vars"), 'AUTH_SECRET="local"\n', "utf8");
+
+                const calls: RecordedSpawn[] = [];
+                const spawner: Spawner = (descriptor) => {
+                    calls.push({ descriptor });
+
+                    return Promise.resolve({ code: descriptor.args.includes("bulk") ? 1 : 0 });
+                };
+                const { logger } = silentLogger();
+
+                const result = await runDeployCommand({
+                    cwd: workdir,
+                    interactive: true,
+                    logger,
+                    secretConfirm: () => Promise.resolve(true),
+                    secretLister: () => Promise.resolve({ names: [], ok: true }),
+                    spawner,
+                });
+
+                const puts = calls.filter((call) => call.descriptor.args.join(" ").includes("secret put"));
+
+                expect(result.code).toBe(0);
+                expect(calls.filter((call) => call.descriptor.args.includes("bulk"))).toHaveLength(1);
+                expect(puts).toHaveLength(2);
+                expect(puts.every((call) => /^[a-f0-9]{64}$/u.test(call.descriptor.input ?? ""))).toBe(true);
+            });
+
+            it("scans the project once per deploy: each discovery result is computed a single time", async () => {
+                expect.assertions(3);
+
+                writeFileSync(join(workdir, "wrangler.jsonc"), VALID_WRANGLER, "utf8");
+
+                const computed = new Map<string, number>();
+                const requested = new Map<string, number>();
+                const inner = createDiscoveryCache();
+                const discoveryCache: DiscoveryCache = {
+                    clear: () => {
+                        inner.clear();
+                    },
+                    memo: (key, compute) => {
+                        requested.set(key, (requested.get(key) ?? 0) + 1);
+
+                        return inner.memo(key, () => {
+                            computed.set(key, (computed.get(key) ?? 0) + 1);
+
+                            return compute();
+                        });
+                    },
+                };
+                const { spawner } = createRecordingSpawner();
+                const { logger } = silentLogger();
+
+                await runDeployCommand({
+                    cwd: workdir,
+                    discoveryCache,
+                    interactive: true,
+                    logger,
+                    secretConfirm: () => Promise.resolve(true),
+                    secretLister: () => Promise.resolve({ names: [], ok: true }),
+                    spawner,
+                });
+
+                // Provisioning and the secrets gate both infer bindings → the same scan is requested twice.
+                expect([...requested.keys()].some((key) => key.startsWith("capabilities:") && (requested.get(key) ?? 0) >= 2)).toBe(true);
+                expect([...computed.keys()].some((key) => key.startsWith("capabilities:"))).toBe(true);
+                expect([...computed.values()].every((count) => count === 1)).toBe(true);
             });
 
             it("--env production writes the minted secret into a sibling .dev.vars.production, leaving bare .dev.vars untouched", async () => {
