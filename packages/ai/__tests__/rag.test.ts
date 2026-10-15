@@ -79,10 +79,12 @@ const memoryVectors = (): { queryCalls: RagVectorQueryInput[]; store: Map<string
     const dot = (a: ReadonlyArray<number>, b: ReadonlyArray<number>): number => a.reduce((sum, value, index) => sum + value * (b[index] as number), 0);
 
     const vectors: RagVectors = {
-        deleteByIds: async (_indexName, ids) => {
+        deleteByIds: async (_indexName, ids, _namespace, _operation, afterDelete) => {
             for (const id of ids) {
                 store.delete(id);
             }
+
+            await afterDelete?.();
         },
         getByIds: async (_indexName, ids) =>
             ids.flatMap((id) => {

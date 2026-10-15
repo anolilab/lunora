@@ -133,36 +133,52 @@ describe("createContextVectors", () => {
         });
 
         it("defers a tokened delete behind the operation's writes and skips it after a failure", async () => {
-            expect.assertions(3);
+            expect.assertions(4);
 
             const { context, embed, flush, index } = harness();
             const operation = {};
+            const afterDelete = vi.fn<() => Promise<void>>(async () => undefined);
 
             await context.upsertMany?.("docs", [{ embed, id: "batch-1", input: "a" }], operation);
             await context.upsertMany?.("docs", [{ embed, id: "batch-2", input: "b" }], operation);
-            await context.deleteByIds("docs", ["old"], undefined, operation);
+            await context.deleteByIds("docs", ["old"], undefined, operation, afterDelete);
 
             expect(index.deleteByIds).not.toHaveBeenCalled();
             await expect(flush()).resolves.toStrictEqual(["fulfilled", "rejected", "rejected"]);
             expect(index.deleteByIds).not.toHaveBeenCalled();
+            expect(afterDelete).not.toHaveBeenCalled();
         });
 
         it("runs a tokened delete after its writes succeed, and an untokened delete inline", async () => {
-            expect.assertions(3);
+            expect.assertions(6);
 
             const { context, flush, index } = harness();
+            const order: string[] = [];
 
-            await context.deleteByIds("docs", ["now"]);
+            vi.mocked(index.deleteByIds).mockImplementation(async (ids) => {
+                order.push("delete");
+
+                return { count: ids.length, mutationId: "d" };
+            });
+
+            await context.deleteByIds("docs", ["now"], undefined, undefined, async () => {
+                order.push("hook-now");
+            });
 
             expect(index.deleteByIds).toHaveBeenCalledWith(["now"]);
+            expect(order).toStrictEqual(["delete", "hook-now"]);
 
-            await context.deleteByIds("docs", ["later"], undefined, {});
+            await context.deleteByIds("docs", ["later"], undefined, {}, async () => {
+                order.push("hook-later");
+            });
 
             expect(index.deleteByIds).toHaveBeenCalledTimes(1);
 
             await flush();
 
             expect(index.deleteByIds).toHaveBeenLastCalledWith(["later"]);
+            expect(order).toStrictEqual(["delete", "hook-now", "delete", "hook-later"]);
+            expect(order).toHaveLength(4);
         });
 
         it("still runs a later write that carries no token", async () => {

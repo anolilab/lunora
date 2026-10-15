@@ -64,7 +64,7 @@ interface VectorUpsertInputLike {
  * wherever a function taking fewer parameters is expected.
  */
 interface VectorSearchLike {
-    deleteByIds: (indexName: string, ids: ReadonlyArray<string>, namespace?: string, operation?: object) => Promise<void>;
+    deleteByIds: (indexName: string, ids: ReadonlyArray<string>, namespace?: string, operation?: object, afterDelete?: () => Promise<void>) => Promise<void>;
     getByIds: (indexName: string, ids: ReadonlyArray<string>, namespace?: string) => Promise<ReadonlyArray<VectorRecordLike>>;
     query: (indexName: string, input: VectorQueryInputLike) => Promise<VectorMatchesLike>;
     upsert: (indexName: string, input: VectorUpsertInputLike, operation?: object) => Promise<void>;
@@ -75,7 +75,8 @@ interface VectorSearchLike {
      * when present. The optional `operation` token on `upsert`/`upsertMany`
      * groups deferred writes: once one fails, later deferred writes carrying the
      * same token are skipped; `deleteByIds` with a token is deferred and
-     * guarded the same way.
+     * guarded the same way, and its optional `afterDelete` hook runs right after
+     * the delete (inline order when there is no token) inside that same closure.
      */
     upsertMany?: (indexName: string, inputs: ReadonlyArray<VectorUpsertInputLike>, operation?: object) => Promise<void>;
     upsertNow: (indexName: string, input: VectorUpsertInputLike) => Promise<void>;
@@ -300,25 +301,28 @@ const createContextVectors = (lunora: LunoraVectors, options?: CreateContextVect
     };
 
     return {
-        deleteByIds: async (indexName: string, ids: ReadonlyArray<string>, namespace?: string, operation?: object): Promise<void> => {
+        deleteByIds: async (
+            indexName: string,
+            ids: ReadonlyArray<string>,
+            namespace?: string,
+            operation?: object,
+            afterDelete?: () => Promise<void>,
+        ): Promise<void> => {
             const resolved = resolveNamespace(indexName, namespace);
             const remove = async (): Promise<void> => {
-                if (resolved === undefined) {
+                const matching = resolved === undefined ? undefined : await getMatchingRecords(indexName, ids, resolved);
+
+                if (matching === undefined) {
                     await lunora.deleteByIds(indexName, ids);
-
-                    return;
+                } else if (matching.length > 0) {
+                    await lunora.deleteByIds(
+                        indexName,
+                        matching.map((record) => record.id),
+                    );
                 }
 
-                const matching = await getMatchingRecords(indexName, ids, resolved);
-
-                if (matching.length === 0) {
-                    return;
-                }
-
-                await lunora.deleteByIds(
-                    indexName,
-                    matching.map((record) => record.id),
-                );
+                // Runs inside the same guarded closure, so it is skipped with the delete.
+                await afterDelete?.();
             };
 
             // With an `operation` token the delete joins that operation's deferred

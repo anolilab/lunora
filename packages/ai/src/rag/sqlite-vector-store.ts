@@ -301,10 +301,12 @@ const sqliteVectorStore = (options: SqliteVectorStoreOptions): RagVectorStore =>
         return { count: ranked.length, matches: ranked };
     };
 
-    const deleteByIds = async (ids: ReadonlyArray<string>, namespace?: string): Promise<unknown> => {
+    const deleteByIds = async (ids: ReadonlyArray<string>, namespace?: string, _operation?: object, afterDelete?: () => Promise<void>): Promise<unknown> => {
         await ensureTable();
 
         if (ids.length === 0) {
+            await afterDelete?.();
+
             return undefined;
         }
 
@@ -318,6 +320,8 @@ const sqliteVectorStore = (options: SqliteVectorStoreOptions): RagVectorStore =>
             // eslint-disable-next-line no-await-in-loop -- one bounded statement per batch; see `getByIds`
             await annIndex?.remove(namespaceKey(namespace), batch);
         }
+
+        await afterDelete?.();
 
         return undefined;
     };

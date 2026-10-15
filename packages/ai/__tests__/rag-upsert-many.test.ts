@@ -210,6 +210,28 @@ describe("defineRag index batching", () => {
         /** Mirrors the context facade: tokened writes queue, run in order, and a failure skips the rest of that token. */
         const deferredVectors = (failId: string | undefined) => {
             const stored = new Map<string, RagVectorUpsertInput>();
+            const events: string[] = [];
+            const texts = new Map<string, string>();
+            const textRag = defineRag({
+                allowSharedNamespace: true,
+                chunk: pipeChunker,
+                index: "docs",
+                textStore: {
+                    getMany: async (ids) => ids.map((id) => texts.get(id)),
+                    put: async (chunks) => {
+                        for (const chunk of chunks) {
+                            texts.set(chunk.id, chunk.text);
+                        }
+                    },
+                    remove: async (ids) => {
+                        events.push("text-removed");
+
+                        for (const id of ids) {
+                            texts.delete(id);
+                        }
+                    },
+                },
+            });
             const queue: (() => Promise<void>)[] = [];
             const failed = new WeakSet<object>();
             let inline = true;
@@ -239,11 +261,14 @@ describe("defineRag index batching", () => {
                 return Promise.resolve();
             };
             const vectors: RagVectors = {
-                deleteByIds: async (_indexName, ids, _namespace, operation) =>
+                deleteByIds: async (_indexName, ids, _namespace, operation, afterDelete) =>
                     run(operation, async () => {
                         for (const id of ids) {
                             stored.delete(id);
                         }
+
+                        events.push("vectors-deleted");
+                        await afterDelete?.();
                     }),
                 getByIds: async (_indexName, ids) => ids.flatMap((id) => (stored.has(id) ? [{ id, metadata: stored.get(id)?.metadata }] : [])),
                 query: async () => {
@@ -273,39 +298,60 @@ describe("defineRag index batching", () => {
                 defer: () => {
                     inline = false;
                 },
+                events,
                 flush,
                 stored,
+                textRag,
+                texts,
                 vectors,
             };
         };
 
-        it("keeps the old trailing chunks and head when a deferred write fails", async () => {
-            expect.assertions(3);
+        it("keeps the old trailing chunks, their text and the head when a deferred write fails", async () => {
+            expect.assertions(5);
 
-            const { defer, flush, stored, vectors } = deferredVectors("doc#1");
+            const { defer, flush, stored, textRag, texts, vectors } = deferredVectors("doc#1");
 
-            await rag(ctxFor(vectors)).index({ id: "doc", text: "a|b|c|d|e" });
+            await textRag(ctxFor(vectors)).index({ id: "doc", text: "a|b|c|d|e" });
             defer();
-            await rag(ctxFor(vectors)).index({ id: "doc", text: "x|y" });
+            await textRag(ctxFor(vectors)).index({ id: "doc", text: "x|y" });
             await flush();
+
+            expect(["doc#2", "doc#3", "doc#4"].map((id) => texts.get(id))).toStrictEqual(["c", "d", "e"]);
 
             expect([...stored.keys()].toSorted((left, right) => left.localeCompare(right))).toStrictEqual(["doc#0", "doc#1", "doc#2", "doc#3", "doc#4"]);
             expect(stored.get("doc#0")?.metadata?.["__ragChunks"]).toBe(5);
             expect(stored.get("doc#1")?.input).toBe("b");
+            expect(texts.size).toBeGreaterThan(0);
         });
 
-        it("still trims the old trailing chunks when every deferred write succeeds", async () => {
-            expect.assertions(2);
+        it("still trims the old trailing chunks and their text, text after vectors, when every deferred write succeeds", async () => {
+            expect.assertions(4);
 
-            const { defer, flush, stored, vectors } = deferredVectors(undefined);
+            const { defer, events, flush, stored, textRag, texts, vectors } = deferredVectors(undefined);
 
-            await rag(ctxFor(vectors)).index({ id: "doc", text: "a|b|c|d|e" });
+            await textRag(ctxFor(vectors)).index({ id: "doc", text: "a|b|c|d|e" });
             defer();
-            await rag(ctxFor(vectors)).index({ id: "doc", text: "x|y" });
+            await textRag(ctxFor(vectors)).index({ id: "doc", text: "x|y" });
             await flush();
+
+            expect(events).toStrictEqual(["vectors-deleted", "text-removed"]);
+            expect([...texts.keys()].toSorted((left, right) => left.localeCompare(right))).toStrictEqual(["doc#0", "doc#1"]);
 
             expect([...stored.keys()].toSorted((left, right) => left.localeCompare(right))).toStrictEqual(["doc#0", "doc#1"]);
             expect(stored.get("doc#0")?.metadata?.["__ragChunks"]).toBe(2);
+        });
+
+        it("keeps the inline order, delete then text removal, when no token is given", async () => {
+            expect.assertions(2);
+
+            const { events, stored, textRag, texts, vectors } = deferredVectors(undefined);
+
+            await textRag(ctxFor(vectors)).index({ id: "doc", text: "a|b" });
+            await textRag(ctxFor(vectors)).remove({ id: "doc" });
+
+            expect(events).toStrictEqual(["vectors-deleted", "text-removed"]);
+            expect(stored.size + texts.size).toBe(0);
         });
     });
 

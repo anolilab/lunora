@@ -760,9 +760,22 @@ const defineRag = (config: RagConfig): ((context: RagContext) => Rag) => {
                 return;
             }
 
-            await store.deleteByIds(ids, namespace, operation);
-            await textStore?.remove?.(ids, { namespace });
-            await config.lexicalStore?.remove?.(ids, { namespace });
+            const removeText = async (): Promise<void> => {
+                await textStore?.remove?.(ids, { namespace });
+                await config.lexicalStore?.remove?.(ids, { namespace });
+            };
+
+            // With a token the text removals ride the (possibly deferred) vector
+            // delete, so a skipped delete never strands vectors without their text;
+            // without one the order is delete then remove, inline.
+            if (operation === undefined) {
+                await store.deleteByIds(ids, namespace);
+                await removeText();
+
+                return;
+            }
+
+            await store.deleteByIds(ids, namespace, operation, removeText);
         };
 
         const index = async (input: IndexInput): Promise<IndexResult> => {
