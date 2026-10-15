@@ -82,6 +82,42 @@ describe("discoverVectorNamespaceAccesses", () => {
         expect(found[0]).toMatchObject({ scope: { kind: "export", name: "indexMany" }, method: "upsertMany" });
     });
 
+    it.each([
+        ["shorthand", `const namespace = args.tenant; await ctx.vectors.upsertMany(idx, [{ namespace, embed, id: "a", input: "x" }]);`],
+        ["spread", `const records = [{ namespace: args.tenant, embed, id: "a", input: "x" }]; await ctx.vectors.upsertMany(idx, [...records]);`],
+        ["map", `await ctx.vectors.upsertMany(idx, args.rows.map((row) => ({ namespace: args.tenant, embed, id: row.id, input: row.text })));`],
+        ["map block", `await ctx.vectors.upsertMany(idx, args.rows.map((row) => { return { namespace: args.tenant, embed, id: row.id, input: row.text }; }));`],
+        ["variable array", `const records = [{ namespace: args.tenant, embed, id: "a", input: "x" }]; await ctx.vectors.upsertMany(idx, records);`],
+        [
+            "variable map",
+            `const records = args.rows.map((row) => ({ namespace: args.tenant, embed, id: row.id })); await ctx.vectors.upsertMany(idx, records);`,
+        ],
+    ])("flags an arg-derived upsertMany namespace (%s)", (_name, body) => {
+        expect.assertions(1);
+
+        write("many.ts", `export const indexMany = mutation(async ({ ctx, args }) => { ${body} });`);
+
+        expect(discoverVectorNamespaceAccesses(project, join(workdir, "lunora"))).toHaveLength(1);
+    });
+
+    it.each([
+        ["shorthand", `const namespace = \`\${ctx.auth.orgId}\`; await ctx.vectors.upsertMany(idx, [{ namespace, embed, id: "a", input: "x" }]);`],
+        ["spread", `const records = [{ namespace: \`\${ctx.auth.orgId}\`, embed, id: "a" }]; await ctx.vectors.upsertMany(idx, [...records]);`],
+        ["map", `await ctx.vectors.upsertMany(idx, args.rows.map((row) => ({ namespace: \`\${ctx.auth.orgId}\`, embed, id: row.id })));`],
+        ["map block", `await ctx.vectors.upsertMany(idx, args.rows.map((row) => { return { namespace: \`\${ctx.auth.orgId}\`, embed, id: row.id }; }));`],
+        ["variable array", `const records = [{ namespace: \`\${ctx.auth.orgId}\`, embed, id: "a" }]; await ctx.vectors.upsertMany(idx, records);`],
+        [
+            "variable map",
+            `const records = args.rows.map((row) => ({ namespace: \`\${ctx.auth.orgId}\`, embed, id: row.id })); await ctx.vectors.upsertMany(idx, records);`,
+        ],
+    ])("ignores a ctx-scoped upsertMany namespace (%s)", (_name, body) => {
+        expect.assertions(1);
+
+        write("many-scoped.ts", `export const indexMany = mutation(async ({ ctx, args }) => { ${body} });`);
+
+        expect(discoverVectorNamespaceAccesses(project, join(workdir, "lunora"))).toHaveLength(0);
+    });
+
     it("ignores an upsertMany whose every element namespace is scoped by ctx", () => {
         expect.assertions(1);
 

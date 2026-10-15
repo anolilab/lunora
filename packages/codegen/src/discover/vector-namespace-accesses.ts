@@ -1,7 +1,7 @@
 import type { CallExpression, Node as TsNode, Project } from "ts-morph";
-import { Node } from "ts-morph";
+import { Node, SyntaxKind } from "ts-morph";
 
-import { isArgumentDerived, isScopedByContext } from "../argument-taint";
+import { isArgumentDerived, isScopedByContext, singleHopInitializer } from "../argument-taint";
 import type { VectorNamespaceAccessIR } from "../ir";
 import { collectCallRows, propertyInitializer } from "./ast";
 import { callSiteScopeOf } from "./attribution";
@@ -37,9 +37,63 @@ const vectorsNamespaceMethod = (node: TsNode): string | undefined => {
     return isContextSurface(node.getExpression(), ["vectors"]) ? method : undefined;
 };
 
-/** The `namespace` initializer of each element of an array-literal argument (none for any other expression). */
-const arrayElementNamespaces = (input: TsNode): (TsNode | undefined)[] =>
-    Node.isArrayLiteralExpression(input) ? input.getElements().map((element) => propertyInitializer(element, "namespace")) : [];
+/** The `namespace` of one record: an explicit initializer or a shorthand `{ namespace }` (the identifier, which the taint check resolves). */
+const recordNamespace = (record: TsNode): TsNode | undefined => {
+    if (!Node.isObjectLiteralExpression(record)) {
+        return undefined;
+    }
+
+    const shorthand = record.getProperty("namespace");
+
+    return Node.isShorthandPropertyAssignment(shorthand) ? shorthand.getNameNode() : propertyInitializer(record, "namespace");
+};
+
+/** The object literals a `.map` callback returns: an arrow expression body, or the `return`s of its own block body. */
+const mapCallbackRecords = (callback: TsNode | undefined): TsNode[] => {
+    if (!callback || !(Node.isArrowFunction(callback) || Node.isFunctionExpression(callback))) {
+        return [];
+    }
+
+    const body = callback.getBody();
+
+    if (!Node.isBlock(body)) {
+        return [Node.isParenthesizedExpression(body) ? body.getExpression() : body];
+    }
+
+    return body
+        .getDescendantsOfKind(SyntaxKind.ReturnStatement)
+        .filter((statement) => statement.getFirstAncestor((ancestor) => Node.isFunctionLikeDeclaration(ancestor)) === callback)
+        .flatMap((statement) => statement.getExpression() ?? []);
+};
+
+/**
+ * The `namespace` nodes of the records an `upsertMany` second argument holds,
+ * traced statically: an array literal (spread elements followed), a `.map(...)`
+ * call (the callback's returned objects), or an identifier bound by ONE local
+ * `const` hop to either. Anything else yields nothing — fail open, as the
+ * single-record methods do for a non-literal input.
+ */
+const recordNamespaces = (input: TsNode, canHop = true): (TsNode | undefined)[] => {
+    if (Node.isIdentifier(input)) {
+        const initializer = canHop ? singleHopInitializer(input) : undefined;
+
+        return initializer ? recordNamespaces(initializer, false) : [];
+    }
+
+    if (Node.isArrayLiteralExpression(input)) {
+        return input
+            .getElements()
+            .flatMap((element) => (Node.isSpreadElement(element) ? recordNamespaces(element.getExpression(), canHop) : [recordNamespace(element)]));
+    }
+
+    const callee = Node.isCallExpression(input) ? input.getExpression() : undefined;
+
+    if (Node.isCallExpression(input) && Node.isPropertyAccessExpression(callee) && callee.getName() === "map") {
+        return mapCallbackRecords(input.getArguments()[0]).map((record) => recordNamespace(record));
+    }
+
+    return [];
+};
 
 /** The IR row for a `ctx.vectors.<method>(indexName, input)` call whose `input.namespace` is arg-derived and unscoped, or `undefined`. */
 const vectorNamespaceAccessInCall = (call: CallExpression, relativePath: string): VectorNamespaceAccessIR | undefined => {
@@ -56,7 +110,7 @@ const vectorNamespaceAccessInCall = (call: CallExpression, relativePath: string)
     }
 
     // `upsertMany` takes an array literal: every element's namespace is checked.
-    const namespaces = method === "upsertMany" ? arrayElementNamespaces(input) : [propertyInitializer(input, "namespace")];
+    const namespaces = method === "upsertMany" ? recordNamespaces(input) : [propertyInitializer(input, "namespace")];
 
     // Arg-derived (directly or through one local `const` hop) *and* not scoped by
     // a server-trusted `ctx.*` value — a namespace like `` `${ctx.auth.orgId}` ``
