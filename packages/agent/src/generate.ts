@@ -134,9 +134,17 @@ const lazyTurn = (agent: AgentDefinition, env: Record<string, unknown>) => {
     let prepared: Promise<{ ai: AiModule; base: ReturnType<typeof prepareAgentTurn> }> | undefined;
 
     return () => {
-        prepared ??= loadAi().then((ai) => {
-            return { ai, base: prepareAgentTurn(ai, agent, env) };
-        });
+        // A rejected preparation (a transient failure in a function-valued `model`, say) is not
+        // memoised: the durable step retries through this seam and must call the factory again.
+        prepared ??= loadAi()
+            .then((ai) => {
+                return { ai, base: prepareAgentTurn(ai, agent, env) };
+            })
+            .catch((error: unknown) => {
+                prepared = undefined;
+
+                throw error;
+            });
 
         return prepared;
     };

@@ -40,4 +40,27 @@ describe("ai root load boundary", () => {
 
         expect(evaluated.count).toBe(1);
     });
+
+    it("retries turn preparation after a transient model factory failure", async () => {
+        const { defineAgent } = await import("../src/define-agent");
+        const { createAgentGenerate } = await import("../src/generate");
+
+        let attempts = 0;
+        const agent = defineAgent({
+            model: () => {
+                attempts += 1;
+
+                if (attempts === 1) {
+                    throw new Error("model factory hiccup");
+                }
+
+                return { specificationVersion: "v2" } as unknown as LanguageModel;
+            },
+        });
+        const generate = createAgentGenerate(agent, {});
+
+        await expect(generate({ messages: [] })).rejects.toThrow("model factory hiccup");
+        await expect(generate({ messages: [] })).resolves.toMatchObject({ text: "ok" });
+        expect(attempts).toBe(2);
+    });
 });
