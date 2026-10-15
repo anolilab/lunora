@@ -1914,29 +1914,33 @@ const countRankBefore = (
 /**
  * The tables a chunked delete cannot trust a page-wide row image for. A table is listed when it is `.global()`
  * (another shard writes the shared rows), or when deleting one of its rows can reach, through relation delete
- * actions followed transitively, a delete trigger or the table itself. Holders whose relation into a reached table
- * is `cascade` or `set null` are followed (`restrict` does not propagate). Conservative: `set null` is followed
- * further than it acts, and a cycle back to the table covers the direct self-relation.
+ * actions followed transitively, the table itself or a trigger that can run. A `cascade` holder is deleted, so its
+ * delete triggers fire; a `set null` holder is patched, so its update triggers fire. `restrict` does not propagate.
+ * Conservative: `set null` is followed further than it acts, and a cycle back to the table covers the direct
+ * self-relation.
  */
 const deriveDeleteRereadTables = (schema: SchemaLike): Set<string> => {
-    const holdersOf = new Map<string, string[]>();
+    const holdersOf = new Map<string, { holder: string; op: "delete" | "update" }[]>();
 
     for (const [holder, definition] of Object.entries(schema.tables)) {
         for (const relation of Object.values(definition.relationMap ?? {})) {
             if (relation.kind === "one" && (relation.onDelete === "cascade" || relation.onDelete === "set null")) {
-                holdersOf.set(relation.table, [...(holdersOf.get(relation.table) ?? []), holder]);
+                holdersOf.set(relation.table, [
+                    ...(holdersOf.get(relation.table) ?? []),
+                    { holder, op: relation.onDelete === "cascade" ? "delete" : "update" },
+                ]);
             }
         }
     }
 
-    // Walk the holders a delete of `start` reaches; true on a delete trigger or a cycle back to `start`.
+    // Walk the holders a delete of `start` reaches; true on a trigger that fires or a cycle back to `start`.
     const reachesHazard = (start: string): boolean => {
         const seen = new Set<string>();
         const queue = [start];
 
         for (let table = queue.pop(); table !== undefined; table = queue.pop()) {
-            for (const holder of holdersOf.get(table) ?? []) {
-                if (holder === start || hasTrigger(schema, holder, "delete")) {
+            for (const { holder, op } of holdersOf.get(table) ?? []) {
+                if (holder === start || hasTrigger(schema, holder, op)) {
                     return true;
                 }
 

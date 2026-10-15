@@ -13,6 +13,7 @@ const rereadTables = (schema: SchemaLike): ReadonlySet<string> | undefined => {
 };
 
 const onDeleteTrigger = { handler: () => undefined, op: "delete", timing: "after" } as const;
+const onUpdateTrigger = { handler: () => undefined, op: "update", timing: "after" } as const;
 const holds = (table: string, onDelete: "cascade" | "restrict" | "set null") => ({ field: "ref", kind: "one", onDelete, references: "_id", table }) as const;
 
 describe("ctx-db deleteRereadTables", () => {
@@ -51,6 +52,24 @@ describe("ctx-db deleteRereadTables", () => {
 
         expect(listed?.has("t")).toBe(true);
         expect(listed?.has("u")).toBe(true);
+    });
+
+    it("lists a table whose set-null reaches a holder with an update trigger, but not one whose cascade does", () => {
+        expect.assertions(2);
+
+        const listed = rereadTables({
+            tables: {
+                // `u` is patched (set null) when a `t` row goes, so its update trigger fires.
+                t: { indexes: [], shape: { ref: { kind: "string" } } },
+                u: { indexes: [], relationMap: { t: holds("t", "set null") }, shape: { ref: { kind: "string" } }, triggerMap: { onEdit: onUpdateTrigger } },
+                // `w` is deleted (cascade) when an `x` row goes: delete triggers fire, update triggers do not.
+                w: { indexes: [], relationMap: { x: holds("x", "cascade") }, shape: { ref: { kind: "string" } }, triggerMap: { onEdit: onUpdateTrigger } },
+                x: { indexes: [], shape: { ref: { kind: "string" } } },
+            },
+        });
+
+        expect(listed?.has("t")).toBe(true);
+        expect(listed?.has("x")).toBe(false);
     });
 
     it("lists a table with its own delete trigger or a .global() table", () => {
