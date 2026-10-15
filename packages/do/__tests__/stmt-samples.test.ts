@@ -185,6 +185,43 @@ describe("statement sample buffer (OBS-04)", () => {
             }
         });
 
+        it("writes one lifetime upsert for dispatches of the same statement in the same latency bucket", async () => {
+            expect.assertions(2);
+
+            const database = timedDatabase();
+
+            try {
+                const realExec = database.sql.exec.bind(database.sql);
+                let lifetimeUpserts = 0;
+
+                database.sql.exec = (query: string, ...params: unknown[]) => {
+                    if (query.startsWith(`INSERT INTO "${QUERY_METRICS_TABLE}" `)) {
+                        lifetimeUpserts += 1;
+                    }
+
+                    return realExec(query, ...params);
+                };
+
+                const shard = new StmtSampleShard(sqliteStateDouble(database), { LUNORA_ADMIN_TOKEN: ADMIN_TOKEN, LUNORA_METRICS_FLUSH_EVERY: "5" });
+
+                shard.attachSpan = false;
+                shard.repeatsOfFirst = 1;
+                clock.latency = 1;
+
+                for (let index = 0; index < 5; index += 1) {
+                    // eslint-disable-next-line no-await-in-loop -- sequential dispatches
+                    await shard.fetch(userRequest("probe:query"));
+                }
+
+                clock.latency = 0;
+
+                expect(lifetimeUpserts).toBe(1);
+                expect(readQueryMetrics(database.sql)).toMatchObject([{ execCount: 5 }]);
+            } finally {
+                database.close();
+            }
+        });
+
         it("drops only the failed statement sample and still writes the rest of the batch", async () => {
             expect.assertions(3);
 

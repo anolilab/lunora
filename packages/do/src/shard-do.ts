@@ -46,6 +46,7 @@ import {
     instrumentDatabase,
     instrumentSqlClient,
     ISSUE_STATE_TABLE,
+    latencyBucketIndex,
     LogBuffer,
     mergeScanAttribution,
     MetricBuffer,
@@ -834,6 +835,11 @@ interface PendingFunctionMetric {
     lastErrorMessage: string | null;
     /** table -> dispatches that full-scanned it. */
     scans: Map<string, number>;
+}
+
+/** A pending statement write: the samples of one statement that fell in one latency bucket. */
+interface PendingStmtSample extends StmtSample {
+    rawSql: string;
 }
 
 interface StmtSample {
@@ -2626,15 +2632,13 @@ abstract class ShardDO {
 
     /**
      * Per-statement samples folded from `currentStmtSamples`, written with
-     * {@link ShardDO.pendingFunctionMetrics}. One entry PER DISPATCH per statement,
-     * never summed across dispatches: `recordQueryMetric` places an entry in the latency
-     * histogram by its average, so summing 19 fast and 1 slow dispatch would read as one
-     * mid-latency batch and flatten the tail percentiles.
+     * {@link ShardDO.pendingFunctionMetrics}. Keyed by statement AND the latency
+     * bucket of each dispatch's own average: `recordQueryMetric` places an entry in the
+     * histogram by its average, so only dispatches in the same bucket may merge (summing 19
+     * fast and 1 slow dispatch would flatten the tail percentiles). The key count also
+     * drives the width-based flush.
      */
-    private pendingStmtSamples = new Map<string, StmtSample[]>();
-
-    /** Total entries across {@link ShardDO.pendingStmtSamples}; drives the width-based flush. */
-    private pendingStmtCount = 0;
+    private pendingStmtSamples = new Map<string, PendingStmtSample>();
 
     /** Dispatches folded since the last flush. */
     private dispatchesSinceFlush = 0;
@@ -8627,15 +8631,20 @@ abstract class ShardDO {
         }
 
         for (const [rawSql, sample] of samples) {
-            const entries = this.pendingStmtSamples.get(rawSql);
+            // Keyed by the dispatch's own latency bucket (the one `recordQueryMetric`
+            // places the entry in), so same-bucket dispatches merge into one write
+            // while a slow dispatch stays in its own bucket.
+            const key = `${String(latencyBucketIndex(sample.totalDurationMs / sample.count))}:${rawSql}`;
+            const pending = this.pendingStmtSamples.get(key);
 
-            if (entries === undefined) {
-                this.pendingStmtSamples.set(rawSql, [{ ...sample }]);
+            if (pending === undefined) {
+                this.pendingStmtSamples.set(key, { ...sample, rawSql });
             } else {
-                entries.push({ ...sample });
+                pending.count += sample.count;
+                pending.rowsRead += sample.rowsRead;
+                pending.rowsWritten += sample.rowsWritten;
+                pending.totalDurationMs += sample.totalDurationMs;
             }
-
-            this.pendingStmtCount += 1;
         }
     }
 
@@ -8661,14 +8670,9 @@ abstract class ShardDO {
         let pending = this.pendingFunctionMetrics.get(functionPath);
 
         // A new path at the cap flushes first so this dispatch (an error included) is
-        // recorded rather than dropped. If that flush fails the restored deltas keep the
-        // map full: keep the cap and drop this path, as the durable twin would refuse it.
+        // recorded rather than dropped.
         if (pending === undefined && this.pendingFunctionMetrics.size >= FUNCTION_METRICS_MAX_PATHS) {
             this.flushPendingMetrics();
-
-            if (this.pendingFunctionMetrics.size >= FUNCTION_METRICS_MAX_PATHS) {
-                return;
-            }
         }
 
         this.pendingStartedAt ??= now;
@@ -8733,19 +8737,19 @@ abstract class ShardDO {
      * N-1 dispatches of counters are lost if the DO is evicted before a flush.
      */
     private maybeFlushMetrics(): void {
-        if (this.dispatchesSinceFlush === 0 && this.pendingStmtCount === 0) {
+        if (this.dispatchesSinceFlush === 0 && this.pendingStmtSamples.size === 0) {
             return;
         }
 
-        if (this.pendingForceFlush || this.dispatchesSinceFlush >= this.metricsFlushEvery() || this.pendingStmtCount >= MAX_STMT_SAMPLES_PER_DISPATCH) {
+        if (this.pendingForceFlush || this.dispatchesSinceFlush >= this.metricsFlushEvery() || this.pendingStmtSamples.size >= MAX_STMT_SAMPLES_PER_DISPATCH) {
             this.flushPendingMetrics();
         }
     }
 
     /**
      * Persist the pending delta: one `recordFunctionMetric` per path and one
-     * `recordQueryMetric` per statement entry (one per dispatch, so the latency
-     * histogram sees each dispatch's own average). The accumulators are swapped out
+     * `recordQueryMetric` per (statement, latency bucket) key, so the
+     * histogram still sees each dispatch's own average. The accumulators are swapped out
      * first, so a write that throws DROPS that path's (or entry's) delta and the rest
      * of the batch is still written. There is deliberately no retry: metrics are
      * best-effort, `recordFunctionMetric` is several statements per path and the host
@@ -8760,7 +8764,6 @@ abstract class ShardDO {
 
         this.pendingFunctionMetrics = new Map();
         this.pendingStmtSamples = new Map();
-        this.pendingStmtCount = 0;
         this.pendingStartedAt = undefined;
         this.pendingLastAt = undefined;
         this.pendingForceFlush = false;
@@ -8805,14 +8808,12 @@ abstract class ShardDO {
 
         const sqlHandle = this.shardHost.sql as unknown as SqlExec;
 
-        for (const [rawSql, entries] of statements) {
-            for (const sample of entries) {
-                try {
-                    recordQueryMetric(sqlHandle, rawSql, sample.totalDurationMs, sample.rowsRead, sample.rowsWritten, ts, sample.count);
-                } catch (error) {
-                    droppedStatements += 1;
-                    firstError ??= error;
-                }
+        for (const sample of statements.values()) {
+            try {
+                recordQueryMetric(sqlHandle, sample.rawSql, sample.totalDurationMs, sample.rowsRead, sample.rowsWritten, ts, sample.count);
+            } catch (error) {
+                droppedStatements += 1;
+                firstError ??= error;
             }
         }
 
@@ -8828,7 +8829,7 @@ abstract class ShardDO {
 
     /** Write any coalesced delta so an admin read of the durable metric tables is never stale. */
     private flushUnwrittenMetrics(): void {
-        if (this.dispatchesSinceFlush > 0 || this.pendingStmtCount > 0) {
+        if (this.dispatchesSinceFlush > 0 || this.pendingStmtSamples.size > 0) {
             this.flushPendingMetrics();
         }
     }
@@ -10732,10 +10733,10 @@ abstract class ShardDO {
         }
 
         if (functionPath === ADMIN_FUNCTIONS.runSql) {
-            return readAdminRunSql(sql, args);
             // The console can query the internal metric tables directly.
             this.flushUnwrittenMetrics();
         }
+        return readAdminRunSql(sql, args);
 
         // The SQL linter + schema-version ledger reads live in their own module
         // and register through a lookup, so this chain does not grow an arm per

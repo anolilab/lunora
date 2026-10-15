@@ -599,6 +599,7 @@ const readQueryMetrics = (sql: SqlExec): QueryStatEntry[] => {
 };
 
 export {
+    latencyBucketIndex,
     normalizeSql,
     pruneQueryBuckets,
     QUERY_BUCKET_RETENTION,

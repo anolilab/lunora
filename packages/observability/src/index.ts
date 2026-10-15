@@ -81,7 +81,7 @@ export { MetricBuffer } from "./metric-buffer";
 export type { MetricHistoryOptions, MetricHistoryPoint, MetricHistoryResult, MetricHistorySeries } from "./metric-history";
 export { readMetricHistory, recordMetricHistory } from "./metric-history";
 export type { QueryInsightBucket, QueryInsightEntry, QueryInsightsResult, QueryStatEntry } from "./query-metrics";
-export { readQueryInsights, readQueryMetrics, recordQueryMetric } from "./query-metrics";
+export { latencyBucketIndex, readQueryInsights, readQueryMetrics, recordQueryMetric } from "./query-metrics";
 export type {
     AppendRequestLogEntry,
     ContextLogLevel,

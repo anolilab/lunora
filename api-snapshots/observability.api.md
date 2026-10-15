@@ -1115,6 +1115,12 @@ const instrumentDatabase: <T extends object>(database: T, deps: DatabaseTelemetr
 const instrumentSqlClient: <T extends SqlClientLike>(client: T, deps: DatabaseTelemetryDeps) => T;
 ```
 
+### `latencyBucketIndex` (const)
+
+```ts
+const latencyBucketIndex: (durationMs: number) => number;
+```
+
 ### `mergeScanAttribution` (const)
 
 ```ts
