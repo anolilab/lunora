@@ -6426,6 +6426,7 @@ interface QueryArgs {
 interface QueryArgs$1 {
     baseWhere?: WhereInput;
     cursor?: null | string;
+    includeDeleted?: boolean;
     limit?: number;
     orderBy?: ReadonlyArray<unknown>;
     relationBaseWhere?: (table: string) => undefined | WhereInput;
