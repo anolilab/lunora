@@ -353,11 +353,19 @@ const requireVectors = (vectors: RagContext["vectors"]): NonNullable<RagContext[
     return vectors;
 };
 
-/** The `ai` root is a ~720 KB barrel: load it on the first embed, once, rather than at module load. */
+/**
+ * The `ai` root is a ~720 KB barrel: load it on the first embed, once, rather
+ * than at module load. A rejected import clears the memo so a later embed can
+ * retry instead of being pinned to the first failure for the isolate's life.
+ */
 let aiRoot: Promise<typeof import("ai")> | undefined;
 
 const loadAi = async (): Promise<typeof import("ai")> => {
-    aiRoot ??= import("ai");
+    aiRoot ??= import("ai").catch((error: unknown) => {
+        aiRoot = undefined;
+
+        throw error;
+    });
 
     return aiRoot;
 };
