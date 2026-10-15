@@ -270,6 +270,10 @@ catalogs:
     "@ai-sdk/provider-utils": 5.0.53
     workers-ai-provider: 4.0.0
     "@ai-sdk/anthropic": 4.0.71
+    # 4.0.87 is the google release pinned to the same `@ai-sdk/provider` 4.0.21 /
+    # `provider-utils` 5.0.53 as `@ai-sdk/openai` 4.0.83 — any other google
+    # version installs a second copy of both.
+    "@ai-sdk/google": 4.0.87
     "@ai-sdk/openai": 4.0.83
   build:
     "@babel/core": ^8.0.6

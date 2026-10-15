@@ -72,6 +72,7 @@
     },
     "dependencies": {
         "@ai-sdk/anthropic": "catalog:ai",
+        "@ai-sdk/google": "catalog:ai",
         "@ai-sdk/openai": "catalog:ai",
         "@ai-sdk/provider-utils": "catalog:ai",
         "@lunora/errors": ">=1.0.0-alpha.51 <2.0.0-0",

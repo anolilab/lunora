@@ -1,7 +1,8 @@
 import { LunoraError } from "@lunora/errors";
-import type { EmbeddingModel, LanguageModel } from "ai";
+import type { EmbeddingModel, ImageModel, LanguageModel } from "ai";
 import type { createWorkersAI } from "workers-ai-provider";
 
+import { toBase64 } from "../../../shared/base64";
 import type { AiGatewayMetadata } from "./gateway";
 import {
     AI_DEFAULT_EMBEDDING_MODEL_ENV,
@@ -12,13 +13,21 @@ import {
     buildAiGatewayMetadataFields,
     readAiGatewayEnvTags,
     readEnv,
+    resolveAiGateway,
     warnIgnoredBindingToken,
 } from "./gateway";
 import instrumentModel from "./telemetry";
 import type {
     AiGatewayOptions,
+    AiImage,
+    AiImageGenerateInput,
+    AiImageGenerateResult,
+    AiMarkdownDocument,
     AiModelOptions,
     AiRunOptions,
+    AiToMarkdownInput,
+    AiToMarkdownOptions,
+    AiToMarkdownResult,
     AiWebSearchOptions,
     AiWebSearchResult,
     EmbeddingModelInput,
@@ -199,7 +208,26 @@ const LOOPBACK_HOSTS = new Set(["127.0.0.1", "[::1]", "localhost"]);
 interface ProxyProvider {
     chat: (modelId: string) => LanguageModel;
     embedding: (modelId: string) => EmbeddingModel;
+    image: (modelId: string) => Promise<ImageModel>;
 }
+
+/**
+ * Why the proxy config would leak its token, or `undefined` when it is safe to
+ * use. Shared by every proxy call (chat, embedding, image) so none can skip it.
+ */
+const proxyRefusal = (proxyURL: string, token: string | undefined): string | undefined => {
+    const url = URL.canParse(proxyURL) ? new URL(proxyURL) : undefined;
+
+    if (url === undefined) {
+        return `${AI_PROXY_URL_ENV} is not a valid URL`;
+    }
+
+    if (token !== undefined && url.protocol !== "https:" && !LOOPBACK_HOSTS.has(url.hostname)) {
+        return `${AI_PROXY_URL_ENV} (${url.origin}) is not HTTPS, so ${AI_PROXY_TOKEN_ENV} would travel in cleartext — use an https:// URL`;
+    }
+
+    return undefined;
+};
 
 /**
  * The self-hosted OpenAI-compatible proxy named by {@link AI_PROXY_URL_ENV}, which
@@ -218,26 +246,21 @@ const resolveProxy = (env: Record<string, unknown> | undefined): ProxyProvider |
     }
 
     const token = readEnv(env, AI_PROXY_TOKEN_ENV);
-    const url = URL.canParse(proxyURL) ? new URL(proxyURL) : undefined;
-    let refusal: string | undefined;
-
-    if (url === undefined) {
-        refusal = `${AI_PROXY_URL_ENV} is not a valid URL`;
-    } else if (token !== undefined && url.protocol !== "https:" && !LOOPBACK_HOSTS.has(url.hostname)) {
-        refusal = `${AI_PROXY_URL_ENV} (${url.origin}) is not HTTPS, so ${AI_PROXY_TOKEN_ENV} would travel in cleartext — use an https:// URL`;
-    }
+    const refusal = proxyRefusal(proxyURL, token);
 
     if (refusal !== undefined) {
         const refuse = (): never => {
             throw new LunoraError("INTERNAL", `@lunora/ai: ${refusal}`);
         };
 
-        return { chat: refuse, embedding: refuse };
+        return { chat: refuse, embedding: refuse, image: refuse };
     }
 
-    let proxy: Promise<ProxyProvider> | undefined;
+    // The OpenAI-compatible provider the proxy builds; each model kind is taken off it below.
+    type OpenAIProvider = ReturnType<typeof import("@ai-sdk/openai").createOpenAI>;
+    let proxy: Promise<OpenAIProvider> | undefined;
 
-    const load = (): Promise<ProxyProvider> => {
+    const load = (): Promise<OpenAIProvider> => {
         proxy ??= loadGatewayProviders().then(
             ({ createOpenAI }) => createOpenAI({ apiKey: token ?? "", baseURL: proxyURL, name: "lunora-proxy" }),
             (error: unknown) => {
@@ -251,8 +274,9 @@ const resolveProxy = (env: Record<string, unknown> | undefined): ProxyProvider |
     };
 
     return {
-        chat: (modelId) => lazyLanguageModel(modelId, "lunora-proxy", async () => load().then((openai) => openai.chat(modelId) as LanguageModelV4)),
-        embedding: (modelId) => lazyEmbeddingModel(modelId, "lunora-proxy", async () => load().then((openai) => openai.embedding(modelId) as EmbeddingModelV4)),
+        chat: (modelId) => lazyLanguageModel(modelId, "lunora-proxy", async () => load().then((openai) => openai.chat(modelId))),
+        embedding: (modelId) => lazyEmbeddingModel(modelId, "lunora-proxy", async () => load().then((openai) => openai.embedding(modelId))),
+        image: async (modelId) => load().then((openai) => openai.image(modelId) as ImageModel),
     };
 };
 
@@ -308,6 +332,156 @@ const resolveGatewayOption = (
     warnIgnoredBindingToken(env);
 
     return metadataFields === undefined ? { id: gatewayId } : { id: gatewayId, metadata: metadataFields };
+};
+
+/**
+ * The AI SDK provider factories the image path needs, loaded on the first
+ * `images.generate` for an `"openai/…"` or `"google/…"` slug. Same lazy,
+ * self-clearing memo as {@link loadGatewayProviders}: a Worker that never
+ * generates images never evaluates them.
+ */
+let imageProviders:
+    Promise<{ createGoogle: typeof import("@ai-sdk/google").createGoogle; createOpenAI: typeof import("@ai-sdk/openai").createOpenAI }> | undefined;
+
+const loadImageProviders = (): NonNullable<typeof imageProviders> => {
+    imageProviders ??= Promise.all([import("@ai-sdk/openai"), import("@ai-sdk/google")]).then(
+        ([openai, google]) => {
+            return { createGoogle: google.createGoogle, createOpenAI: openai.createOpenAI };
+        },
+        (error: unknown) => {
+            // A failed import (a flaky chunk fetch) must not poison the isolate.
+            imageProviders = undefined;
+
+            throw error;
+        },
+    );
+
+    return imageProviders;
+};
+
+/** Most images one `images.generate` call may produce; each is a separate billed call. */
+const AI_IMAGE_MAX_COUNT = 8;
+
+/** Byte cap for a `URL`/raw document handed to `ai.toMarkdown`, so an accidental huge download cannot reach the binding. */
+const AI_MARKDOWN_MAX_BYTES = 20 * 1024 * 1024;
+
+/** The URL's last path segment, or `"document"` — the name the binding echoes back on its result. */
+const documentNameFromUrl = (url: URL): string => {
+    const last = url.pathname.split("/").findLast((segment) => segment.length > 0);
+
+    return last === undefined || last === "" ? "document" : last;
+};
+
+/** Reject a document larger than `maxBytes` before it is handed to the binding. */
+const assertMarkdownSize = (size: number, maxBytes: number): void => {
+    if (size > maxBytes) {
+        throw new LunoraError(
+            "PAYLOAD_TOO_LARGE",
+            `@lunora/ai: toMarkdown document is ${String(size)} bytes, over the ${String(maxBytes)}-byte limit — raise \`maxBytes\` to convert it`,
+        );
+    }
+};
+
+/** Normalise any accepted input to the binding's `{ name, blob }` document. */
+const resolveMarkdownDocument = async (input: AiToMarkdownInput, options: AiToMarkdownOptions | undefined, maxBytes: number): Promise<AiMarkdownDocument> => {
+    if (input instanceof URL) {
+        const response = await fetch(input);
+
+        if (!response.ok) {
+            throw new LunoraError("BAD_REQUEST", `@lunora/ai: toMarkdown could not fetch ${input.href} (HTTP ${String(response.status)})`);
+        }
+
+        // Refuse on the declared length before buffering the body; a response with
+        // no Content-Length is still checked once it is in memory.
+        if (response.headers.has("content-length")) {
+            assertMarkdownSize(Number(response.headers.get("content-length")), maxBytes);
+        }
+
+        const bytes = new Uint8Array(await response.arrayBuffer());
+
+        assertMarkdownSize(bytes.byteLength, maxBytes);
+        const contentType = response.headers.get("content-type");
+
+        return {
+            blob: new Blob([bytes], contentType === null || contentType === "" ? undefined : { type: contentType }),
+            name: options?.name ?? documentNameFromUrl(input),
+        };
+    }
+
+    if (input instanceof Blob) {
+        assertMarkdownSize(input.size, maxBytes);
+
+        return { blob: input, name: options?.name ?? "document" };
+    }
+
+    // Copy into a fresh, ArrayBuffer-backed view: `Blob` accepts
+    // `Uint8Array<ArrayBuffer>`, not the wider `Uint8Array<ArrayBufferLike>` a
+    // caller may hold (e.g. a `SharedArrayBuffer`-backed view).
+    const bytes = input instanceof Uint8Array ? Uint8Array.from(input) : new Uint8Array(input);
+
+    assertMarkdownSize(bytes.byteLength, maxBytes);
+    const mimeType = options?.mimeType;
+
+    return { blob: new Blob([bytes], mimeType === undefined ? undefined : { type: mimeType }), name: options?.name ?? "document" };
+};
+
+const toInteger = (value: string | undefined): number | undefined => {
+    if (value === undefined || value === "") {
+        return undefined;
+    }
+
+    const parsed = Number(value);
+
+    return Number.isInteger(parsed) ? parsed : undefined;
+};
+
+/** `"1024x1024"` → `{ width, height }`, matching the Workers AI image inputs. */
+const parseImageSize = (size: string | undefined): { height?: number; width?: number } => {
+    if (size === undefined) {
+        return {};
+    }
+
+    const [width, height] = size.split("x");
+
+    return { height: toInteger(height), width: toInteger(width) };
+};
+
+/**
+ * Normalise the shapes a Workers AI image model returns from `binding.run`:
+ * base64 in `{ image }`, raw bytes, a `Response`, or a `ReadableStream`. Returns
+ * `undefined` for a shape that carries no image, so the caller throws a directed
+ * error rather than handing back `{ base64: undefined }`.
+ */
+const toAiImage = async (output: unknown): Promise<AiImage | undefined> => {
+    if (typeof output === "string") {
+        return { base64: output, mimeType: "image/png" };
+    }
+
+    if (output instanceof Uint8Array) {
+        return { base64: toBase64(output), mimeType: "image/png" };
+    }
+
+    if (output instanceof ArrayBuffer) {
+        return { base64: toBase64(new Uint8Array(output)), mimeType: "image/png" };
+    }
+
+    if (output instanceof Response) {
+        const bytes = new Uint8Array(await output.arrayBuffer());
+
+        return { base64: toBase64(bytes), mimeType: output.headers.get("content-type") ?? "image/png" };
+    }
+
+    if (output instanceof ReadableStream) {
+        const bytes = new Uint8Array(await new Response(output).arrayBuffer());
+
+        return { base64: toBase64(bytes), mimeType: "image/png" };
+    }
+
+    if (typeof output === "object" && output !== null && "image" in output) {
+        return toAiImage(output.image);
+    }
+
+    return undefined;
 };
 
 /**
@@ -545,7 +719,165 @@ const createAi = (options: LunoraAiOptions): LunoraAi => {
         return body as AiWebSearchResult;
     };
 
-    return { embeddingModel, model, run, websearch, workersai };
+    const toMarkdown = async (input: AiToMarkdownInput, markdownOptions?: AiToMarkdownOptions): Promise<AiToMarkdownResult> => {
+        if (!binding) {
+            return bindingRequired("ai.toMarkdown");
+        }
+
+        if (typeof binding.toMarkdown !== "function") {
+            throw new LunoraError(
+                "NOT_IMPLEMENTED",
+                "@lunora/ai: this Workers runtime's `AI` binding has no toMarkdown() — update wrangler / @cloudflare/vite-plugin to a release that ships the Markdown Conversion API",
+            );
+        }
+
+        const maxBytes = markdownOptions?.maxBytes ?? AI_MARKDOWN_MAX_BYTES;
+        const { blob, name } = await resolveMarkdownDocument(input, markdownOptions, maxBytes);
+        const result = await binding.toMarkdown({ blob, name }, markdownOptions?.conversionOptions);
+        // The binding returns a single result for a single document, but accepts
+        // (and returns) an array, so unwrap either shape.
+        const conversion = Array.isArray(result) ? result[0] : result;
+
+        if (conversion === undefined) {
+            throw new LunoraError("INTERNAL", "@lunora/ai: toMarkdown returned no conversion result");
+        }
+
+        if (conversion.format === "error") {
+            throw new LunoraError("BAD_REQUEST", `@lunora/ai: toMarkdown could not convert "${name}": ${conversion.error ?? "unknown error"}`);
+        }
+
+        if (typeof conversion.data !== "string") {
+            throw new LunoraError("INTERNAL", `@lunora/ai: toMarkdown returned a "${conversion.format}" result with no data`);
+        }
+
+        return {
+            markdown: conversion.data,
+            ...(conversion.mimetype === undefined ? {} : { mimeType: conversion.mimetype }),
+            ...(conversion.pages === undefined ? {} : { pages: conversion.pages }),
+            ...(conversion.tokens === undefined ? {} : { tokens: conversion.tokens }),
+        };
+    };
+
+    const generateWorkersAiImage = async (input: AiImageGenerateInput): Promise<AiImageGenerateResult> => {
+        if (!binding) {
+            return bindingRequired("ai.images.generate");
+        }
+
+        const { height, width } = parseImageSize(input.size);
+        const count = input.count ?? 1;
+        const images: AiImage[] = [];
+
+        // Workers AI image models generate one image per call, so a `count` over
+        // one is a loop rather than a binding option.
+        for (let index = 0; index < count; index += 1) {
+            const payload: Record<string, unknown> = { prompt: input.prompt };
+
+            if (height !== undefined) {
+                payload["height"] = height;
+            }
+
+            if (width !== undefined) {
+                payload["width"] = width;
+            }
+
+            if (input.seed !== undefined) {
+                payload["seed"] = input.seed;
+            }
+
+            // Sequential on purpose: each image is a separate billed Workers AI
+            // call, and firing them in parallel invites the 3040 capacity rejection.
+            // eslint-disable-next-line no-await-in-loop -- sequential by design; see above
+            const image = await toAiImage(await run(input.model, payload));
+
+            if (image === undefined) {
+                throw new LunoraError("INTERNAL", `@lunora/ai: ${input.model} returned no image data`);
+            }
+
+            images.push(image);
+        }
+
+        return { images, model: input.model };
+    };
+
+    const generateProviderImage = async (imageProvider: "google" | "openai", modelId: string, input: AiImageGenerateInput): Promise<AiImageGenerateResult> => {
+        const { createGoogle, createOpenAI } = await loadImageProviders();
+        const imageGateway = resolveAiGateway(env ?? {});
+        const imageProxy = resolveProxy(env);
+        let imageModel;
+
+        if (imageProvider === "openai") {
+            // An OpenAI-compatible proxy (`LUNORA_AI_PROXY_URL`) wins, then the AI
+            // Gateway; with neither, the provider's own env key (if any) applies.
+            // The proxy goes through `resolveProxy` so its HTTPS-for-token rule
+            // covers images too.
+            if (imageProxy !== undefined) {
+                imageModel = await imageProxy.image(modelId);
+            } else if (imageGateway === undefined) {
+                imageModel = createOpenAI().image(modelId);
+            } else {
+                // The SDK appends `/images/generations` to this base, and the gateway
+                // routes `<gateway>/openai/<path>` to OpenAI's `<path>`.
+                imageModel = createOpenAI({ apiKey: "unused", baseURL: `${imageGateway.baseURL}/openai`, headers: imageGateway.headers }).image(modelId);
+            }
+        } else if (imageGateway === undefined) {
+            imageModel = createGoogle().image(modelId);
+        } else {
+            // Google's SDK base is `…/v1beta`; the gateway's Google AI Studio route
+            // mirrors that path, so the version segment must be part of the base.
+            imageModel = createGoogle({ apiKey: "unused", baseURL: `${imageGateway.baseURL}/google-ai-studio/v1beta`, headers: imageGateway.headers }).image(
+                modelId,
+            );
+        }
+
+        const { generateImage } = await import("ai");
+        const result = await generateImage({
+            model: imageModel,
+            prompt: input.prompt,
+            ...(input.count === undefined ? {} : { n: input.count }),
+            ...(input.seed === undefined ? {} : { seed: input.seed }),
+            ...(input.size === undefined ? {} : { size: input.size }),
+        });
+
+        const images = result.images.map((image) => {
+            return { base64: image.base64, mimeType: image.mediaType };
+        });
+
+        return { images, model: input.model };
+    };
+
+    const generateImageForModel = async (input: AiImageGenerateInput): Promise<AiImageGenerateResult> => {
+        const requestedModel = input.model;
+        const count = input.count ?? 1;
+
+        // Every image is a separate billed call, so an unbounded `count` is a cost
+        // amplifier; bound it once here for both the Workers AI and provider paths.
+        if (!Number.isInteger(count) || count < 1 || count > AI_IMAGE_MAX_COUNT) {
+            throw new LunoraError("BAD_REQUEST", `@lunora/ai: count must be an integer from 1 to ${String(AI_IMAGE_MAX_COUNT)}`, { status: 400 });
+        }
+
+        // A `@cf/…` (or `@hf/…`) id is a Workers AI model; everything else is a
+        // `"<provider>/<model>"` slug, of which only openai and google have an
+        // image endpoint wired here.
+        if (requestedModel.startsWith("@")) {
+            return generateWorkersAiImage(input);
+        }
+
+        const slash = requestedModel.indexOf("/");
+        const providerPrefix = slash === -1 ? "" : requestedModel.slice(0, slash);
+        const modelId = slash === -1 ? "" : requestedModel.slice(slash + 1);
+
+        if ((providerPrefix === "openai" || providerPrefix === "google") && modelId.length > 0) {
+            return generateProviderImage(providerPrefix, modelId, input);
+        }
+
+        throw new LunoraError(
+            "AI_UNKNOWN_IMAGE_MODEL",
+            `@lunora/ai: no image provider for "${requestedModel}" — pass a Workers AI image id (@cf/…), or an "openai/<model>" or "google/<model>" slug`,
+            { status: 400, title: "Unknown image model" },
+        );
+    };
+
+    return { embeddingModel, images: { generate: generateImageForModel }, model, run, toMarkdown, websearch, workersai };
 };
 
 export default createAi;

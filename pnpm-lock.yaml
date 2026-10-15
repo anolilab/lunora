@@ -9,6 +9,9 @@ catalogs:
     '@ai-sdk/anthropic':
       specifier: 4.0.71
       version: 4.0.71
+    '@ai-sdk/google':
+      specifier: 4.0.87
+      version: 4.0.87
     '@ai-sdk/openai':
       specifier: 4.0.83
       version: 4.0.83
@@ -2586,6 +2589,9 @@ importers:
       '@ai-sdk/anthropic':
         specifier: catalog:ai
         version: 4.0.71(zod@4.6.5)
+      '@ai-sdk/google':
+        specifier: catalog:ai
+        version: 4.0.87(zod@4.6.5)
       '@ai-sdk/openai':
         specifier: catalog:ai
         version: 4.0.83(zod@4.6.5)
@@ -2603,7 +2609,7 @@ importers:
         version: 7.0.127(zod@4.6.5)
       workers-ai-provider:
         specifier: catalog:ai
-        version: 4.0.0(@ai-sdk/anthropic@4.0.71(zod@4.6.5))(@ai-sdk/openai@4.0.83(zod@4.6.5))(@ai-sdk/provider@4.0.21)(ai@7.0.127(zod@4.6.5))
+        version: 4.0.0(@ai-sdk/anthropic@4.0.71(zod@4.6.5))(@ai-sdk/google@4.0.87(zod@4.6.5))(@ai-sdk/openai@4.0.83(zod@4.6.5))(@ai-sdk/provider@4.0.21)(ai@7.0.127(zod@4.6.5))
     devDependencies:
       '@lunora/search-core':
         specifier: workspace:*
@@ -5875,6 +5881,12 @@ packages:
 
   '@ai-sdk/gateway@4.0.103':
     resolution: {integrity: sha512-nnGTUHzPRQ14jhv9CL4OQrzcRBIFTBMIPKGIi9Z9u/4GtwSRxa/nxUX6np2Iwp5phOzO0a0njj/j9Jolf5AEaA==}
+    engines: {node: '>=22'}
+    peerDependencies:
+      zod: ^3.25.76 || ^4.1.8
+
+  '@ai-sdk/google@4.0.87':
+    resolution: {integrity: sha512-s0tWc+QeSce7O2ZLm+VWSRQy16dGfqEcMIUxEWh+LFvXX3h0TLH8jxCQ2H1qhiBgTta+6A97eHPhBlRFu1xy+g==}
     engines: {node: '>=22'}
     peerDependencies:
       zod: ^3.25.76 || ^4.1.8
@@ -25357,6 +25369,12 @@ snapshots:
       '@ai-sdk/provider': 4.0.21
       '@ai-sdk/provider-utils': 5.0.53(zod@4.6.5)
       '@vercel/oidc': 3.2.0
+      zod: 4.6.5
+
+  '@ai-sdk/google@4.0.87(zod@4.6.5)':
+    dependencies:
+      '@ai-sdk/provider': 4.0.21
+      '@ai-sdk/provider-utils': 5.0.53(zod@4.6.5)
       zod: 4.6.5
 
   '@ai-sdk/openai@4.0.83(zod@4.6.5)':
@@ -48205,12 +48223,13 @@ snapshots:
 
   workerpool@10.0.3: {}
 
-  workers-ai-provider@4.0.0(@ai-sdk/anthropic@4.0.71(zod@4.6.5))(@ai-sdk/openai@4.0.83(zod@4.6.5))(@ai-sdk/provider@4.0.21)(ai@7.0.127(zod@4.6.5)):
+  workers-ai-provider@4.0.0(@ai-sdk/anthropic@4.0.71(zod@4.6.5))(@ai-sdk/google@4.0.87(zod@4.6.5))(@ai-sdk/openai@4.0.83(zod@4.6.5))(@ai-sdk/provider@4.0.21)(ai@7.0.127(zod@4.6.5)):
     dependencies:
       '@ai-sdk/provider': 4.0.21
       ai: 7.0.127(zod@4.6.5)
     optionalDependencies:
       '@ai-sdk/anthropic': 4.0.71(zod@4.6.5)
+      '@ai-sdk/google': 4.0.87(zod@4.6.5)
       '@ai-sdk/openai': 4.0.83(zod@4.6.5)
 
   wrangler@4.149.0(@cloudflare/workers-types@5.20261004.1(patch_hash=4bd971e7c2b6760a24ef737fb6e2cb17b2cf8f50615cff5e2d1786e677436a93))(@types/node@26.6.4):

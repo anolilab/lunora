@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { DEFAULT_MODEL_PRICES, estimateModelCost, lookupModelPrice } from "../src/pricing";
+import { DEFAULT_MODEL_PRICES, estimateImageCost, estimateModelCost, lookupModelPrice } from "../src/pricing";
 
 describe("lookupModelPrice", () => {
     it("finds a Workers AI model by its exact id", () => {
@@ -116,5 +116,41 @@ describe("estimateModelCost", () => {
         // A table covering every model is a table that is wrong about most of
         // them; anything absent returns undefined rather than a guess.
         expect(Object.keys(DEFAULT_MODEL_PRICES).length).toBeLessThan(20);
+    });
+});
+
+describe("estimateImageCost", () => {
+    it("prices an image model per generated image", () => {
+        expect.assertions(1);
+
+        expect(estimateImageCost("@cf/black-forest-labs/flux-1-schnell")).toBeCloseTo(0.000_633_6, 10);
+    });
+
+    it("multiplies by the image count", () => {
+        expect.assertions(1);
+
+        expect(estimateImageCost("gpt-image-1", 3)).toBeCloseTo(0.12, 10);
+    });
+
+    it("strips a provider prefix, like the token estimator", () => {
+        expect.assertions(1);
+
+        expect(estimateImageCost("openai/dall-e-3")).toBeCloseTo(0.04, 10);
+    });
+
+    it("returns undefined for a token-priced model", () => {
+        expect.assertions(1);
+
+        // A chat model carries no `perImage` price, so an image estimate over it
+        // is absent rather than a false zero.
+        expect(estimateImageCost("gpt-5")).toBeUndefined();
+    });
+
+    it("returns undefined for an unpriced model or a non-positive count", () => {
+        expect.assertions(3);
+
+        expect(estimateImageCost("some-image-model-nobody-priced")).toBeUndefined();
+        expect(estimateImageCost("@cf/black-forest-labs/flux-1-schnell", 0)).toBeUndefined();
+        expect(estimateImageCost(undefined)).toBeUndefined();
     });
 });

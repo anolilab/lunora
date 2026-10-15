@@ -21,12 +21,14 @@
  * @experimental
  */
 
-/** What one model costs, in USD per **one million** tokens. */
+/** What one model costs. Token models price per **one million** tokens; image models price per generated image. */
 interface ModelPrice {
-    /** Price per million input (prompt) tokens. */
-    input: number;
+    /** Price per million input (prompt) tokens. Token-billed models only. */
+    input?: number;
     /** Price per million output (completion) tokens. Omit for an embedding model. */
     output?: number;
+    /** Price per generated image, in USD. Image models only. */
+    perImage?: number;
 }
 
 /** Token counts to price. Either may be absent. */
@@ -50,9 +52,10 @@ const DATED_MODEL_ID = /^(.*)-\d{4}-\d{2}-\d{2}$/u;
  * and OpenAI — and everything else returns `undefined` rather than a guess.
  *
  * Generation models carry an `output` price; embedding models do not (they have
- * no completion). A generation model missing from here is why a chat span would
- * carry no cost at all off an AI Gateway, so the ids the docs teach are the ones
- * that have to be in the table.
+ * no completion). Image models carry a `perImage` price instead — the unit an
+ * image call is billed in, not tokens. A generation model missing from here is
+ * why a chat span would carry no cost at all off an AI Gateway, so the ids the
+ * docs teach are the ones that have to be in the table.
  */
 const DEFAULT_MODEL_PRICES: Readonly<Record<string, ModelPrice>> = {
     // Workers AI embedding models. Priced per model, not per family — the four
@@ -69,6 +72,15 @@ const DEFAULT_MODEL_PRICES: Readonly<Record<string, ModelPrice>> = {
     // understate a generation badly.
     "@cf/meta/llama-3.1-8b-instruct": { input: 0.28, output: 0.83 },
     "@cf/meta/llama-3.3-70b-instruct-fp8-fast": { input: 0.29, output: 2.25 },
+
+    // Image models, priced per generated image (`perImage`, USD). Indicative
+    // per-image figures for the default 1024×1024 single-image call: Workers AI
+    // bills flux by 512×512 tile and step, so that entry is those rates for the
+    // default four-tile/four-step shape; the OpenAI ids are their published
+    // per-image list price for a 1024×1024 render.
+    "@cf/black-forest-labs/flux-1-schnell": { perImage: 0.000_633_6 },
+    "dall-e-3": { perImage: 0.04 },
+    "gpt-image-1": { perImage: 0.04 },
 
     // OpenAI embedding models.
     "text-embedding-3-large": { input: 0.13 },
@@ -150,10 +162,41 @@ const estimateModelCost = (modelId: string | undefined, usage: ModelUsage, price
         return undefined;
     }
 
-    const cost = (inputTokens * price.input + outputTokens * (price.output ?? 0)) / TOKENS_PER_UNIT;
+    const cost = (inputTokens * (price.input ?? 0) + outputTokens * (price.output ?? 0)) / TOKENS_PER_UNIT;
+
+    return Number.isFinite(cost) ? cost : undefined;
+};
+
+/**
+ * Estimate the cost of generating `count` images in USD, or `undefined` when the
+ * model is not priced or carries no image price.
+ *
+ * Like {@link estimateModelCost}, returns `undefined` rather than `0` for an
+ * unpriced model, so a missing price shows up as absent instead of folding a
+ * false zero into a total.
+ * @experimental
+ */
+const estimateImageCost = (modelId: string | undefined, count = 1, prices?: Readonly<Record<string, ModelPrice>>): number | undefined => {
+    if (modelId === undefined || modelId.length === 0) {
+        return undefined;
+    }
+
+    const price = lookupModelPrice(modelId, prices);
+
+    if (price?.perImage === undefined) {
+        return undefined;
+    }
+
+    const images = Number.isFinite(count) ? Math.max(0, count) : 0;
+
+    if (images <= 0) {
+        return undefined;
+    }
+
+    const cost = images * price.perImage;
 
     return Number.isFinite(cost) ? cost : undefined;
 };
 
 export type { ModelPrice, ModelUsage };
-export { DEFAULT_MODEL_PRICES, estimateModelCost, lookupModelPrice };
+export { DEFAULT_MODEL_PRICES, estimateImageCost, estimateModelCost, lookupModelPrice };

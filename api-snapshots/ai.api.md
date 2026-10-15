@@ -77,6 +77,26 @@ _Tagged `@experimental` — signature not tracked; churn here does not fail the 
 
 _Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
 
+### `AiImage` (interface)
+
+_Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
+
+### `AiImageGenerateInput` (interface)
+
+_Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
+
+### `AiImageGenerateResult` (interface)
+
+_Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
+
+### `AiMarkdownConversionResult` (interface)
+
+_Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
+
+### `AiMarkdownDocument` (interface)
+
+_Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
+
 ### `AiMetrics` (interface)
 
 _Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
@@ -94,6 +114,18 @@ _Tagged `@experimental` — signature not tracked; churn here does not fail the 
 _Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
 
 ### `AiTelemetry` (interface)
+
+_Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
+
+### `AiToMarkdownInput` (type)
+
+_Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
+
+### `AiToMarkdownOptions` (interface)
+
+_Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
+
+### `AiToMarkdownResult` (interface)
 
 _Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
 
@@ -151,8 +183,9 @@ _Tagged `@experimental` — signature not tracked; churn here does not fail the 
 
 ```ts
 interface ModelPrice {
-    input: number;
+    input?: number;
     output?: number;
+    perImage?: number;
 }
 ```
 
@@ -192,6 +225,10 @@ Re-exported from `ai` — signature tracked at its source.
 ### `embedMany` (function)
 
 Re-exported from `ai` — signature tracked at its source.
+
+### `estimateImageCost` (const)
+
+_Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
 
 ### `estimateModelCost` (const)
 
@@ -245,6 +282,30 @@ Re-exported from `@ai-sdk/provider-utils` — signature tracked at its source.
 
 _Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
 
+### `AiImage` (interface)
+
+_Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
+
+### `AiImageGenerateInput` (interface)
+
+_Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
+
+### `AiImageGenerateResult` (interface)
+
+_Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
+
+### `AiToMarkdownInput` (type)
+
+_Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
+
+### `AiToMarkdownOptions` (interface)
+
+_Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
+
+### `AiToMarkdownResult` (interface)
+
+_Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
+
 ### `AiWebSearchItem` (interface)
 
 _Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
@@ -270,6 +331,10 @@ Re-exported from `@lunora/ai` — signature tracked in that section.
 Re-exported from `@lunora/ai` — signature tracked in that section.
 
 ### `createAi` (const)
+
+_Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
+
+### `estimateImageCost` (const)
 
 _Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
 

@@ -14,11 +14,138 @@ export interface AiBindingLike {
     run: (model: string, inputs: Record<string, unknown>, options?: Record<string, unknown>) => Promise<unknown>;
 
     /**
+     * Markdown Conversion API (beta) — converts a document (PDF, Office file,
+     * HTML, image) to Markdown. Optional because runtimes and test doubles that
+     * predate it have no such method; `ctx.ai.toMarkdown` reports that instead
+     * of a bare `TypeError`. Mirrors `env.AI.toMarkdown(files, options)` at
+     * https://developers.cloudflare.com/workers-ai/features/markdown-conversion/.
+     */
+    toMarkdown?: (
+        files: AiMarkdownDocument | AiMarkdownDocument[],
+        options?: Record<string, unknown>,
+    ) => Promise<AiMarkdownConversionResult | AiMarkdownConversionResult[]>;
+
+    /**
      * Web Search API (beta). Optional because runtimes and test doubles that
      * predate it have no such method; `ctx.ai.websearch` reports that instead of
      * a bare `TypeError`.
      */
     websearch?: (input: Omit<AiWebSearchOptions, "gatewayId"> & { gatewayId: string; query: string }) => Promise<Response>;
+}
+
+/**
+ * One document handed to `ctx.ai.toMarkdown(...)`: the Workers AI
+ * `MarkdownDocument` shape (a name plus a Blob carrying the bytes).
+ * @experimental
+ */
+export interface AiMarkdownDocument {
+    blob: Blob;
+    name: string;
+}
+
+/**
+ * One Workers AI `ConversionResult`. `data` and `tokens` are present only when
+ * `format` is `"markdown"` (or `"text"`); an `"error"` result carries `error`
+ * instead. `pages` is not in the current binding contract — carried here so a
+ * binding that starts reporting it passes through unchanged.
+ * @experimental
+ */
+export interface AiMarkdownConversionResult {
+    data?: string;
+    error?: string;
+    format: "error" | "markdown" | "text";
+    id?: string;
+    /** The detected document mime type (spelled `mimetype` by the binding). */
+    mimetype?: string;
+    name?: string;
+    /** Page count, when the binding reports it. */
+    pages?: number;
+    tokens?: number;
+}
+
+/**
+ * What `ctx.ai.toMarkdown(...)` accepts: a `Blob`, raw bytes, or a `URL` that
+ * is fetched first.
+ * @experimental
+ */
+export type AiToMarkdownInput = ArrayBuffer | Blob | Uint8Array | URL;
+
+/**
+ * Options for `ctx.ai.toMarkdown(...)`.
+ * @experimental
+ */
+export interface AiToMarkdownOptions {
+    /** Conversion options forwarded verbatim to the binding's `toMarkdown(files, options)`. */
+    conversionOptions?: Record<string, unknown>;
+
+    /**
+     * Byte cap for a `URL`/raw-bytes input, guarding against an accidental huge
+     * download. Defaults to 20 MiB. A `Blob` is checked against the same cap.
+     */
+    maxBytes?: number;
+
+    /** MIME type for a raw `ArrayBuffer`/`Uint8Array` input (a `Blob`/`URL` carries its own). */
+    mimeType?: string;
+
+    /** Document name sent to the binding; defaults to the URL's last path segment, else `"document"`. */
+    name?: string;
+}
+
+/**
+ * What `ctx.ai.toMarkdown(...)` resolves to — the first (and only) converted
+ * document, normalised across the binding's single/array return.
+ * @experimental
+ */
+export interface AiToMarkdownResult {
+    markdown: string;
+    /** The detected mime type of the source document, when the binding reports it. */
+    mimeType?: string;
+    /** Page count, when the binding reports it. */
+    pages?: number;
+    /** The binding's estimated token count for the converted Markdown, when reported. */
+    tokens?: number;
+}
+
+/**
+ * One generated image: base64 bytes (`base64`), a URL, or the provider's media
+ * type. Which fields are present depends on the provider.
+ * @experimental
+ */
+export interface AiImage {
+    base64?: string;
+    mimeType?: string;
+    url?: string;
+}
+
+/**
+ * Input for `ctx.ai.images.generate(...)`.
+ * @experimental
+ */
+export interface AiImageGenerateInput {
+    /** How many images to generate. Defaults to 1. */
+    count?: number;
+
+    /**
+     * A model id: a Workers AI image model (`@cf/black-forest-labs/flux-1-schnell`),
+     * or an `"openai/<model>"` / `"google/<model>"` slug routed through the AI
+     * Gateway. Any other slug throws `AI_UNKNOWN_IMAGE_MODEL`.
+     */
+    model: string;
+    prompt: string;
+    /** Seed for reproducible generation, for providers that support it. */
+    seed?: number;
+    /** Image size as `"<width>x<height>"`, e.g. `"1024x1024"`. */
+    size?: `${number}x${number}`;
+}
+
+/**
+ * What `ctx.ai.images.generate(...)` resolves to.
+ * @experimental
+ */
+export interface AiImageGenerateResult {
+    images: AiImage[];
+    /** The model id the caller asked for (the unmodified `input.model`). */
+    model: string;
 }
 
 /**
@@ -293,6 +420,17 @@ export interface LunoraAi {
     embeddingModel: (model?: EmbeddingModelInput) => EmbeddingModel;
 
     /**
+     * Generate images. A Workers AI image model id (`@cf/…`) runs through the
+     * binding (and the AI Gateway when configured); an `"openai/<model>"` or
+     * `"google/<model>"` slug routes to that provider's image endpoint through
+     * the AI Gateway. Any other slug throws `AI_UNKNOWN_IMAGE_MODEL`; a
+     * Workers AI id without a binding throws the same directed error `run` does.
+     */
+    images: {
+        generate: (input: AiImageGenerateInput) => Promise<AiImageGenerateResult>;
+    };
+
+    /**
      * Resolve a {@link LanguageModel}: a `@cf/…` id → Workers AI, a
      * `"<provider>/<model>"` slug or `dynamic/<route>` → Cloudflare AI Gateway
      * over the same binding (Unified Billing or the gateway's stored keys — no
@@ -308,6 +446,14 @@ export interface LunoraAi {
      * supplied.
      */
     run: (model: string, inputs: Record<string, unknown>, options?: AiRunOptions) => Promise<unknown>;
+
+    /**
+     * Convert a document (PDF, Office file, HTML, image) to Markdown through the
+     * binding's Markdown Conversion API (beta). Accepts a `Blob`, raw bytes or a
+     * `URL` (fetched first). Throws if no binding was supplied, or if the
+     * runtime's binding has no `toMarkdown()`.
+     */
+    toMarkdown: (input: AiToMarkdownInput, options?: AiToMarkdownOptions) => Promise<AiToMarkdownResult>;
 
     /**
      * Search the web through the binding's Web Search API (beta) to ground a
