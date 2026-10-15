@@ -8840,8 +8840,15 @@ abstract class ShardDO {
      * dispatches of un-flushed counters.
      */
     private metricsFlushEvery(): number {
-        const raw = ((this.env ?? {}) as { LUNORA_METRICS_FLUSH_EVERY?: string }).LUNORA_METRICS_FLUSH_EVERY;
-        const value = raw === undefined || raw.trim() === "" ? Number.NaN : Number(raw);
+        // A bare number in wrangler config arrives as a number, not a string.
+        const raw = ((this.env ?? {}) as { LUNORA_METRICS_FLUSH_EVERY?: unknown }).LUNORA_METRICS_FLUSH_EVERY;
+        let value = Number.NaN;
+
+        if (typeof raw === "number") {
+            value = raw;
+        } else if (typeof raw === "string" && raw.trim() !== "") {
+            value = Number(raw);
+        }
 
         return Number.isInteger(value) && value >= 1 ? value : 1;
     }

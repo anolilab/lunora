@@ -483,12 +483,12 @@ describe("shardDO persisted metrics", () => {
             }
         }
 
-        const setup = (flushEvery?: string) => {
+        const setup = (flushEvery?: number | string) => {
             clock.now = BASE;
             vi.spyOn(Date, "now").mockImplementation(() => clock.now);
 
             const database = createSqliteExec();
-            const env: Record<string, string> = { LUNORA_ADMIN_TOKEN: ADMIN_TOKEN };
+            const env: Record<string, number | string> = { LUNORA_ADMIN_TOKEN: ADMIN_TOKEN };
 
             if (flushEvery !== undefined) {
                 env.LUNORA_METRICS_FLUSH_EVERY = flushEvery;
@@ -726,6 +726,25 @@ describe("shardDO persisted metrics", () => {
             }
         });
 
+        it.each([3, "3"])("accepts %j as the flush-every value (a bare number in wrangler config arrives as a number)", async (value) => {
+            expect.assertions(2);
+
+            const { database, shard } = setup(value);
+
+            try {
+                await shard.fetch(userRequest("messages:list"));
+                await shard.fetch(userRequest("messages:list"));
+
+                expect(readFunctionMetrics(database.sql)).toEqual([]);
+
+                await shard.fetch(userRequest("messages:list"));
+
+                expect(readFunctionMetrics(database.sql)).toMatchObject([{ calls: 3 }]);
+            } finally {
+                database.close();
+            }
+        });
+
         it.each(["abc", "0", "2.5", "-3", ""])("treats %j as an invalid flush-every value (behaves as 1)", async (value) => {
             expect.assertions(1);
 
@@ -742,12 +761,17 @@ describe("shardDO persisted metrics", () => {
     });
 
     it("parseSampleRate rejects trailing garbage instead of truncating it", () => {
-        expect.assertions(4);
+        expect.assertions(8);
 
         expect(parseSampleRate("0.25garbage")).toBe(1);
         expect(parseSampleRate("")).toBe(1);
         expect(parseSampleRate("0.25")).toBe(0.25);
         expect(parseSampleRate(undefined)).toBe(1);
+        // A bare number in wrangler config arrives as a number.
+        expect(parseSampleRate(0.25)).toBe(0.25);
+        expect(parseSampleRate(5)).toBe(1);
+        expect(parseSampleRate(-1)).toBe(0);
+        expect(parseSampleRate(Number.NaN)).toBe(1);
     });
 
     it("counts only OCC conflicts through fetch — a unique-violation 409 is an error but not a conflict", async () => {
