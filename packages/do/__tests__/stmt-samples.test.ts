@@ -185,17 +185,20 @@ describe("statement sample buffer (OBS-04)", () => {
             }
         });
 
-        it("keeps a failed statement write pending and retries it on the next flush", async () => {
-            expect.assertions(2);
+        it("drops only the failed statement sample and still writes the rest of the batch", async () => {
+            expect.assertions(3);
 
             const database = timedDatabase();
+            const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
 
             try {
                 const realExec = database.sql.exec.bind(database.sql);
-                let failing = true;
+                let failures = 1;
 
                 database.sql.exec = (query: string, ...params: unknown[]) => {
-                    if (failing && query.includes(QUERY_METRICS_TABLE)) {
+                    if (failures > 0 && query.includes(QUERY_METRICS_TABLE)) {
+                        failures -= 1;
+
                         throw new Error("storage hiccup");
                     }
 
@@ -205,16 +208,14 @@ describe("statement sample buffer (OBS-04)", () => {
                 const shard = new StmtSampleShard(sqliteStateDouble(database), { LUNORA_ADMIN_TOKEN: ADMIN_TOKEN });
 
                 shard.attachSpan = false;
-                shard.repeatsOfFirst = 2;
+                // Two raw statement texts (two samples) that normalise to the same row.
+                shard.distinctQueries = 2;
 
                 await shard.fetch(userRequest("probe:query"));
 
-                expect(database.raw(`SELECT name FROM sqlite_master WHERE name = '${QUERY_METRICS_TABLE}'`)).toEqual([]);
-
-                failing = false;
-                await shard.fetch(userRequest("probe:query"));
-
-                expect(readQueryMetrics(database.sql)).toMatchObject([{ execCount: 4 }]);
+                expect(readQueryMetrics(database.sql)).toMatchObject([{ execCount: 1 }]);
+                expect(warn).toHaveBeenCalledTimes(1);
+                expect(warn).toHaveBeenCalledWith("[@lunora/do] metric write failed, dropped 0 function deltas and 1 statement samples: storage hiccup");
             } finally {
                 database.close();
             }

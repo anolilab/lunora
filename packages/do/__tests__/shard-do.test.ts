@@ -663,6 +663,9 @@ describe("shardDO __root__ 1 GB warning", () => {
         ShardDO.resetRootSizeWarning();
     });
 
+    // The fake state has no metrics tables, so the best-effort metric write also warns; only the root-size warning is under test here.
+    const rootWarnings = (warn: { mock: { calls: unknown[][] } }): unknown[][] => warn.mock.calls.filter((call) => String(call[0]).includes("__root__"));
+
     const driveRpc = async (shard: TestShard): Promise<void> => {
         await shard.fetch(
             new Request("https://shard.internal/rpc", {
@@ -684,9 +687,9 @@ describe("shardDO __root__ 1 GB warning", () => {
         await driveRpc(shard);
         await driveRpc(shard);
 
-        expect(warn).toHaveBeenCalledTimes(1);
-        expect(warn.mock.calls[0]?.[0]).toContain("__root__");
-        expect(warn.mock.calls[0]?.[0]).toContain("/concepts/sharding");
+        expect(rootWarnings(warn)).toHaveLength(1);
+        expect(rootWarnings(warn)[0]?.[0]).toContain("__root__");
+        expect(rootWarnings(warn)[0]?.[0]).toContain("/concepts/sharding");
 
         warn.mockRestore();
     });
@@ -700,7 +703,7 @@ describe("shardDO __root__ 1 GB warning", () => {
 
         await driveRpc(shard);
 
-        expect(warn).not.toHaveBeenCalled();
+        expect(rootWarnings(warn)).toHaveLength(0);
 
         warn.mockRestore();
     });
@@ -714,7 +717,7 @@ describe("shardDO __root__ 1 GB warning", () => {
 
         await driveRpc(shard);
 
-        expect(warn).not.toHaveBeenCalled();
+        expect(rootWarnings(warn)).toHaveLength(0);
 
         warn.mockRestore();
     });

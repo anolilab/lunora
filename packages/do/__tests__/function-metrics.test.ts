@@ -667,32 +667,60 @@ describe("shardDO persisted metrics", () => {
             },
         );
 
-        it("keeps a failed write's delta pending and retries it on the next flush", async () => {
-            expect.assertions(3);
+        const failMetricWrites = (database: ReturnType<typeof createSqliteExec>): { failing: boolean } => {
+            const realExec = database.sql.exec.bind(database.sql);
+            const control = { failing: true };
 
-            const { database, shard } = setup("1");
-
-            try {
-                const realExec = database.sql.exec.bind(database.sql);
-                let failing = true;
-
-                database.sql.exec = (query: string, ...params: unknown[]) => {
-                    if (failing && query.includes("__lunora_metrics")) {
+            Object.assign(database.sql, {
+                exec: (query: string, ...params: unknown[]) => {
+                    if (control.failing && query.includes("__lunora_metrics")) {
                         throw new Error("storage hiccup");
                     }
 
                     return realExec(query, ...params);
-                };
+                },
+            });
+
+            return control;
+        };
+
+        it("drops a failed function delta and starts the next write clean, without double counting", async () => {
+            expect.assertions(3);
+
+            const { database, shard } = setup("1");
+            const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+            try {
+                const control = failMetricWrites(database);
 
                 await shard.fetch(userRequest("messages:list"));
 
                 expect(database.raw(`SELECT name FROM sqlite_master WHERE name = '${FUNCTION_METRICS_TABLE}'`)).toEqual([]);
 
-                failing = false;
+                control.failing = false;
                 await shard.fetch(userRequest("messages:list"));
 
-                expect(readFunctionMetrics(database.sql)).toMatchObject([{ calls: 2, errors: 0, path: "messages:list" }]);
-                expect(database.raw(`SELECT calls FROM "${FUNCTION_METRICS_BUCKETS_TABLE}"`)).toEqual([{ calls: 2 }]);
+                expect(readFunctionMetrics(database.sql)).toMatchObject([{ calls: 1, errors: 0, path: "messages:list" }]);
+                expect(warn).toHaveBeenCalledTimes(1);
+            } finally {
+                database.close();
+            }
+        });
+
+        it("warns once per flush with the dropped counts", async () => {
+            expect.assertions(2);
+
+            const { database, shard } = setup("2");
+            const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+            try {
+                failMetricWrites(database);
+
+                await shard.fetch(userRequest("a:first"));
+                await shard.fetch(userRequest("b:second"));
+
+                expect(warn).toHaveBeenCalledTimes(1);
+                expect(warn).toHaveBeenCalledWith("[@lunora/do] metric write failed, dropped 2 function deltas and 0 statement samples: storage hiccup");
             } finally {
                 database.close();
             }

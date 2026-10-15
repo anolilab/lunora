@@ -8746,17 +8746,17 @@ abstract class ShardDO {
      * Persist the pending delta: one `recordFunctionMetric` per path and one
      * `recordQueryMetric` per statement entry (one per dispatch, so the latency
      * histogram sees each dispatch's own average). The accumulators are swapped out
-     * first and a write that throws puts THAT path's (or entry's) whole delta back
-     * into the fresh accumulators for the next flush, so a transient failure does not
-     * lose the batch. `recordFunctionMetric` runs several statements per path and the
-     * host exposes no synchronous transaction, so a failure after a path's first
-     * upsert can double count that path on retry. Never fails the request.
+     * first, so a write that throws DROPS that path's (or entry's) delta and the rest
+     * of the batch is still written. There is deliberately no retry: metrics are
+     * best-effort, `recordFunctionMetric` is several statements per path and the host
+     * exposes no synchronous transaction, so a retry after a partial write would double
+     * count, and a persistent failure would grow the pending set without bound. One
+     * warning per flush reports what was dropped. Never fails the request.
      */
     private flushPendingMetrics(): void {
         const functions = this.pendingFunctionMetrics;
         const statements = this.pendingStmtSamples;
         const ts = this.pendingLastAt ?? Date.now();
-        const startedAt = this.pendingStartedAt;
 
         this.pendingFunctionMetrics = new Map();
         this.pendingStmtSamples = new Map();
@@ -8766,7 +8766,9 @@ abstract class ShardDO {
         this.pendingForceFlush = false;
         this.dispatchesSinceFlush = 0;
 
-        let restored = false;
+        let droppedFunctions = 0;
+        let droppedStatements = 0;
+        let firstError: unknown;
 
         for (const [path, delta] of functions) {
             try {
@@ -8795,9 +8797,9 @@ abstract class ShardDO {
                     }),
                     ts: delta.lastCalledAt,
                 });
-            } catch {
-                this.pendingFunctionMetrics.set(path, delta);
-                restored = true;
+            } catch (error) {
+                droppedFunctions += 1;
+                firstError ??= error;
             }
         }
 
@@ -8807,27 +8809,20 @@ abstract class ShardDO {
             for (const sample of entries) {
                 try {
                     recordQueryMetric(sqlHandle, rawSql, sample.totalDurationMs, sample.rowsRead, sample.rowsWritten, ts, sample.count);
-                } catch {
-                    const pending = this.pendingStmtSamples.get(rawSql);
-
-                    if (pending === undefined) {
-                        this.pendingStmtSamples.set(rawSql, [sample]);
-                    } else {
-                        pending.push(sample);
-                    }
-
-                    this.pendingStmtCount += 1;
-                    restored = true;
+                } catch (error) {
+                    droppedStatements += 1;
+                    firstError ??= error;
                 }
             }
         }
 
-        if (restored) {
-            // Keep the restored deltas under their original minute and make the guarded
-            // flush (and the next dispatch) pick them up.
-            this.pendingStartedAt = startedAt;
-            this.pendingLastAt = ts;
-            this.dispatchesSinceFlush = this.pendingFunctionMetrics.size;
+        if (droppedFunctions > 0 || droppedStatements > 0) {
+            const message = firstError instanceof Error ? firstError.message : String(firstError);
+
+            // eslint-disable-next-line no-console -- one operational warning per flush: metrics are best-effort and a dropped delta must not be silent
+            console.warn(
+                `[@lunora/do] metric write failed, dropped ${String(droppedFunctions)} function deltas and ${String(droppedStatements)} statement samples: ${message}`,
+            );
         }
     }
 
