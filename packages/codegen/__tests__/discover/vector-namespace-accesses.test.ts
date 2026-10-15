@@ -68,6 +68,31 @@ describe("discoverVectorNamespaceAccesses", () => {
         expect(found[0]).toMatchObject({ scope: { kind: "export", name: "indexNow" }, method: "upsertNow" });
     });
 
+    it("flags an upsertMany whose element namespace comes from args", () => {
+        expect.assertions(2);
+
+        write(
+            "index-many.ts",
+            `export const indexMany = mutation(async ({ ctx, args }) => { await ctx.vectors.upsertMany(idx, [{ namespace: \`\${ctx.auth.orgId}\`, embed, id: "a", input: "x" }, { namespace: args.tenant, embed, id: "b", input: "y" }]); });`,
+        );
+
+        const found = discoverVectorNamespaceAccesses(project, join(workdir, "lunora"));
+
+        expect(found).toHaveLength(1);
+        expect(found[0]).toMatchObject({ scope: { kind: "export", name: "indexMany" }, method: "upsertMany" });
+    });
+
+    it("ignores an upsertMany whose every element namespace is scoped by ctx", () => {
+        expect.assertions(1);
+
+        write(
+            "scoped-many.ts",
+            `export const indexMany = mutation(async ({ ctx, args }) => { await ctx.vectors.upsertMany(idx, [{ namespace: \`\${ctx.auth.orgId}\`, embed, id: "a", input: "x" }]); });`,
+        );
+
+        expect(discoverVectorNamespaceAccesses(project, join(workdir, "lunora"))).toHaveLength(0);
+    });
+
     it("flags an args namespace reached through one local const hop", () => {
         expect.assertions(1);
 

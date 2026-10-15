@@ -531,7 +531,7 @@ export interface VectorNamespaceAccessIR {
     file: string;
     /** 1-based line of the `ctx.vectors` call, or `0` when unknown. */
     line: number;
-    /** The `ctx.vectors` method invoked: `query` / `upsert` / `upsertNow`. */
+    /** The `ctx.vectors` method invoked: `query` / `upsert` / `upsertMany` / `upsertNow`. */
     method: string;
     /** Who the site runs on behalf of — see {@link CallSiteScope}. */
     scope: CallSiteScope;

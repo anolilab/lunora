@@ -11,10 +11,10 @@ import { isContextSurface } from "./context-root";
  * The `ctx.vectors` methods whose second argument may carry a `namespace`
  * field — confirmed against the facade `createContextVectors` builds in
  * `@lunora/bindings/vectors`, which is what `ctx.vectors` is. `query`,
- * `upsert` and `upsertNow` each take a single `{ namespace, … }` input object.
- * (`upsertMany` is a method of the raw binding, not of `ctx.vectors`.)
+ * `upsert` and `upsertNow` each take a single `{ namespace, … }` input object;
+ * `upsertMany` takes an array of them.
  */
-const VECTOR_NAMESPACE_METHODS = new Set(["query", "upsert", "upsertNow"]);
+const VECTOR_NAMESPACE_METHODS = new Set(["query", "upsert", "upsertMany", "upsertNow"]);
 
 /**
  * The `ctx.vectors.<method>` namespace-taking method invoked by `node`, or
@@ -37,6 +37,10 @@ const vectorsNamespaceMethod = (node: TsNode): string | undefined => {
     return isContextSurface(node.getExpression(), ["vectors"]) ? method : undefined;
 };
 
+/** The `namespace` initializer of each element of an array-literal argument (none for any other expression). */
+const arrayElementNamespaces = (input: TsNode): (TsNode | undefined)[] =>
+    Node.isArrayLiteralExpression(input) ? input.getElements().map((element) => propertyInitializer(element, "namespace")) : [];
+
 /** The IR row for a `ctx.vectors.<method>(indexName, input)` call whose `input.namespace` is arg-derived and unscoped, or `undefined`. */
 const vectorNamespaceAccessInCall = (call: CallExpression, relativePath: string): VectorNamespaceAccessIR | undefined => {
     const method = vectorsNamespaceMethod(call.getExpression());
@@ -51,12 +55,13 @@ const vectorNamespaceAccessInCall = (call: CallExpression, relativePath: string)
         return undefined;
     }
 
-    const namespace = propertyInitializer(input, "namespace");
+    // `upsertMany` takes an array literal: every element's namespace is checked.
+    const namespaces = method === "upsertMany" ? arrayElementNamespaces(input) : [propertyInitializer(input, "namespace")];
 
     // Arg-derived (directly or through one local `const` hop) *and* not scoped by
     // a server-trusted `ctx.*` value — a namespace like `` `${ctx.auth.orgId}` ``
     // references `ctx` and is treated as scoped, so it is not flagged.
-    if (!namespace || !isArgumentDerived(namespace) || isScopedByContext(namespace)) {
+    if (!namespaces.some((namespace) => namespace && isArgumentDerived(namespace) && !isScopedByContext(namespace))) {
         return undefined;
     }
 
