@@ -106,14 +106,18 @@
         "yaml": "catalog:content"
     },
     "devDependencies": {
+        "@cloudflare/vitest-plugin": "catalog:cloudflare",
+        "@cloudflare/workers-types": "catalog:cloudflare",
         "@lunora/container": "1.0.0-alpha.74",
         "@lunora/dispatch": "workspace:*",
+        "@lunora/shard-engine": "1.0.0-alpha.127",
         "@types/node": "catalog:types",
         "@visulima/packem": "catalog:build",
         "@vitest/coverage-v8": "catalog:test",
         "esbuild": "catalog:build",
         "typescript": "catalog:tsc",
-        "vitest": "catalog:test"
+        "vitest": "catalog:test",
+        "wrangler": "catalog:cloudflare"
     },
     "engines": {
         "node": "^22.15.0 || >=24.11.0"

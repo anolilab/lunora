@@ -221,7 +221,7 @@ class VoiceSessionDO {
             dropExpiredCredentialSocket(server);
 
             // eslint-disable-next-line unicorn/no-null -- Web Response body for a 101 upgrade is `BodyInit | null`; null is the standard "no body" value
-            return new Response(null, { status: 101, webSocket: client } as unknown as ResponseInit);
+            return new Response(null, { status: 101, webSocket: client });
         }
 
         (server as unknown as HibernatableWebSocket).serializeAttachment?.({
@@ -242,7 +242,7 @@ class VoiceSessionDO {
         }
 
         // eslint-disable-next-line unicorn/no-null -- Web Response body for a 101 upgrade is `BodyInit | null`; null is the standard "no body" value
-        return new Response(null, { status: 101, webSocket: client } as unknown as ResponseInit);
+        return new Response(null, { status: 101, webSocket: client });
     }
 
     /** Hibernation message handler — never throws (a thrown handler is fatal to the socket). */
