@@ -10733,6 +10733,8 @@ abstract class ShardDO {
 
         if (functionPath === ADMIN_FUNCTIONS.runSql) {
             return readAdminRunSql(sql, args);
+            // The console can query the internal metric tables directly.
+            this.flushUnwrittenMetrics();
         }
 
         // The SQL linter + schema-version ledger reads live in their own module

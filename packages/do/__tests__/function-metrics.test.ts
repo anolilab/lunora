@@ -745,6 +745,31 @@ describe("shardDO persisted metrics", () => {
             }
         });
 
+        it("lets an authorised SQL console query see the pending calls of the metrics table", async () => {
+            expect.assertions(1);
+
+            const { database, shard } = setup("100");
+
+            try {
+                await shard.fetch(userRequest("messages:list"));
+
+                const response = await shard.fetch(
+                    new Request("https://shard.internal/rpc", {
+                        body: JSON.stringify({
+                            args: { sql: `SELECT path, calls FROM "${FUNCTION_METRICS_TABLE}"` },
+                            functionPath: ADMIN_FUNCTIONS.runSql,
+                        }),
+                        headers: { authorization: `Bearer ${ADMIN_TOKEN}`, "content-type": "application/json" },
+                        method: "POST",
+                    }),
+                );
+
+                expect(JSON.stringify(await response.json())).toContain('"calls":1');
+            } finally {
+                database.close();
+            }
+        });
+
         it.each(["abc", "0", "2.5", "-3", ""])("treats %j as an invalid flush-every value (behaves as 1)", async (value) => {
             expect.assertions(1);
 
