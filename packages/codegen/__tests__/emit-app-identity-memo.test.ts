@@ -140,6 +140,30 @@ describe("emitApp — identity memoisation", () => {
         expect(calls).toBe(2);
     });
 
+    it("does not cache across requests when the credential headers are oversized", async () => {
+        expect.assertions(2);
+
+        let calls = 0;
+        const resolve = await wrap(() => {
+            calls += 1;
+
+            return Promise.resolve({ userId: "u1" });
+        });
+        // One client adding a junk cookie per request must not grow the map without bound.
+        const oversized = `s=a; ${"j".repeat(5000)}=1`;
+
+        await resolve(withCookie(oversized));
+        await resolve(withCookie(oversized));
+
+        expect(calls).toBe(2);
+
+        // A normal-sized credential is still cached across requests.
+        await resolve(withCookie("s=a"));
+        await resolve(withCookie("s=a"));
+
+        expect(calls).toBe(3);
+    });
+
     it.each([
         ["", 60_000],
         ["  ", 60_000],
@@ -237,6 +261,20 @@ describe("emitApp — identity memoisation", () => {
 
             await expect(ttlFor(rolling, {})).resolves.toBe(60_000);
             await expect(ttlFor(undefined, {})).resolves.toBe(60_000);
+        });
+
+        it("falls back to per-request memoisation when the options callback throws", async () => {
+            expect.assertions(1);
+
+            const throwing: Declaration = {
+                options: () => {
+                    throw new Error("boom");
+                },
+            };
+
+            // A 60s fallback would keep a revoked session resolving for a minute under the
+            // strict preset; per-request is the safe default, and construction still succeeds.
+            await expect(ttlFor(throwing, {})).resolves.toBe(0);
         });
 
         it.each([

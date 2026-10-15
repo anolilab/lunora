@@ -642,7 +642,7 @@ class AppBuilder<Env extends object> {
 
                 // `options(env)` is application code. A scheduled, queue or serverQuery event must
                 // not fail to construct — and so never run — because that callback throws, so a
-                // throw falls back to the 60s default window below rather than escaping.
+                // throw is caught rather than escaping.
                 let defaultMs: number;
 
                 try {
@@ -654,7 +654,11 @@ class AppBuilder<Env extends object> {
                     // object without `enabled: true` has NO cookie cache, so the memo stays per-request there.
                     defaultMs = cookieCache === undefined || cookieCache.enabled === true ? Math.min(60_000, cookieCacheSeconds * 1000) : 0;
                 } catch {
-                    defaultMs = 60_000;
+                    // The policy is unreadable. Fall back to PER-REQUEST memoisation, not the 60s
+                    // window: a 60s cross-request cache would let a revoked session keep
+                    // resolving for a minute, which is exactly what the `strict` preset turned
+                    // off. Construction still does not fail, so the event still runs.
+                    defaultMs = 0;
                 }
 
                 memo = memoizeIdentity(options.resolveIdentity, {
@@ -664,7 +668,18 @@ class AppBuilder<Env extends object> {
                     cacheKey: (request: Request) => {
                         const parts = ["authorization", "cookie", "x-api-key"].map((name) => request.headers.get(name) ?? "");
 
-                        return parts.every((part) => part === "") ? undefined : parts.join("\u0000");
+                        if (parts.every((part) => part === "")) {
+                            return undefined;
+                        }
+
+                        const key = parts.join("\u0000");
+
+                        // The map is bounded in ENTRIES, not in key size, so a client with one
+                        // valid session could add a junk cookie per request and grow it without
+                        // bound. Skip the cache for an oversized credential set rather than
+                        // truncating the key, which could collide with a different credential and
+                        // hand back the wrong identity.
+                        return key.length > 4_096 ? undefined : key;
                     },
                     maxEntries: 2_000,
                     ttlMs: Number.isFinite(identityCacheMs) && identityCacheMs >= 0 ? identityCacheMs : defaultMs,
