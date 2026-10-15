@@ -226,6 +226,18 @@ const memoizeIdentity = (resolver: IdentityResolver, options: MemoizeIdentityOpt
                 // An entry never outlives the session it describes: a refreshed session
                 // carries a later expiry, and serving the old identity past its own
                 // expiry would answer TOKEN_EXPIRED for a credential that is valid again.
+                // An anonymous result is never kept across requests: for a request that
+                // carries a credential it is either a lapsed session or a failed lookup
+                // (the resolver cannot tell them apart), and caching it would serve every
+                // retry as anonymous for the whole window. The per-request memo keeps it.
+                if (identity === null) {
+                    if (cache.get(key) === entry) {
+                        cache.delete(key);
+                    }
+
+                    return undefined;
+                }
+
                 const expiry = identityExpiryMs(identity);
 
                 if (expiry !== undefined && expiry < entry.expiresAt) {

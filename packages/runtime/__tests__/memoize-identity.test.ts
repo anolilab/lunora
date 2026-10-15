@@ -124,6 +124,27 @@ describe("memoizeIdentity", () => {
         expect(resolver).toHaveBeenCalledTimes(2);
     });
 
+    it("does not serve a null result for a credential from the cross-request cache", async () => {
+        expect.assertions(3);
+
+        // An auth outage and a lapsed session both resolve null; neither may pin the
+        // credential as anonymous for the window.
+        let healthy = false;
+        const resolver = vi.fn<() => Promise<{ userId: string } | null>>(async () => (healthy ? { userId: "u1" } : null));
+        const memoized = memoizeIdentity(resolver, { ttlMs: 60_000 });
+
+        await expect(memoized(authed(), {})).resolves.toBeNull();
+
+        healthy = true;
+
+        await expect(memoized(authed(), {})).resolves.toStrictEqual({ userId: "u1" });
+
+        await memoized(authed(), {});
+
+        // Two calls: the null was re-resolved, the non-null identity was then served from cache.
+        expect(resolver).toHaveBeenCalledTimes(2);
+    });
+
     it("does not cache a failed verification", async () => {
         expect.assertions(2);
 
