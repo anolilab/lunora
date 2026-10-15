@@ -176,6 +176,14 @@ describe("discoverVectorNamespaceAccesses", () => {
         ],
         ["spread of a local record", `const base = { namespace: args.tenant }; await ctx.vectors.upsertMany(idx, [{ ...base, embed, id: "a" }]);`],
         ["opaque arg-derived spread", `await ctx.vectors.upsertMany(idx, [{ ...args.record, embed, id: "a" }]);`],
+        [
+            "namespace replaced by a later opaque spread",
+            `await ctx.vectors.upsertMany(idx, [{ namespace: ctx.identity.orgId, ...args.record, embed, id: "a" }]);`,
+        ],
+        ["caller-forwarded records array", `await ctx.vectors.upsertMany(idx, args.records);`],
+        ["spread of a caller-forwarded records array", `await ctx.vectors.upsertMany(idx, [...args.records]);`],
+        ["local alias of a caller-forwarded array", `const rows = args.rows; await ctx.vectors.upsertMany(idx, rows);`],
+        ["filtered caller-forwarded records", `await ctx.vectors.upsertMany(idx, args.records.filter((record) => record.ok));`],
     ])("flags an arg-derived upsertMany namespace (%s)", (_name, body) => {
         expect.assertions(1);
 
@@ -203,6 +211,14 @@ describe("discoverVectorNamespaceAccesses", () => {
             `const base = { namespace: ctx.identity.orgId }; await ctx.vectors.upsertMany(idx, [{ ...base, embed, id: "a" }]);`,
         ],
         ["spread of a non-argument value", `await ctx.vectors.upsertMany(idx, [{ ...ctx.defaults, embed, id: "a" }]);`],
+        [
+            "caller namespace overwritten by a later scoped namespace",
+            `await ctx.vectors.upsertMany(idx, [{ ...args.record, namespace: ctx.identity.orgId, embed, id: "a" }]);`,
+        ],
+        [
+            "caller namespace overwritten by a trusted spread",
+            `const trusted = { namespace: ctx.identity.orgId }; await ctx.vectors.upsertMany(idx, [{ namespace: args.tenant, ...trusted, embed, id: "a" }]);`,
+        ],
     ])("ignores a safe upsertMany namespace (%s)", (_name, body) => {
         expect.assertions(1);
 

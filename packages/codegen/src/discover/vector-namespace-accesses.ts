@@ -1,9 +1,20 @@
-import type { CallExpression, Identifier, Node as TsNode, ObjectLiteralExpression, Project, Symbol, ts } from "ts-morph";
+import type {
+    CallExpression,
+    Identifier,
+    Node as TsNode,
+    ObjectLiteralElement,
+    ObjectLiteralExpression,
+    Project,
+    PropertyAssignment,
+    ShorthandPropertyAssignment,
+    Symbol,
+    ts,
+} from "ts-morph";
 import { Node, SyntaxKind } from "ts-morph";
 
 import { isArgumentDerived, isScopedByContext } from "../argument-taint";
 import type { VectorNamespaceAccessIR } from "../ir";
-import { collectCallRows, propertyInitializer } from "./ast";
+import { collectCallRows } from "./ast";
 import { callSiteScopeOf } from "./attribution";
 import { isContextSurface } from "./context-root";
 
@@ -208,32 +219,59 @@ const recordsOf = (expression: TsNode, canHop: boolean): ObjectLiteralExpression
 };
 
 /**
- * The expressions that may supply a record's `namespace`: an explicit initializer,
- * a shorthand `{ namespace }`, and every object spread — followed to its literal
- * (one hop) when statically resolvable, otherwise the spread expression itself as
- * an opaque possible source.
+ * How an object spread affects the `namespace` candidates before it: the sources
+ * it contributes, and whether they replace them. `undefined` when the spread
+ * provably carries no `namespace` (so the earlier candidates survive). A spread
+ * that resolves to records all carrying a `namespace` replaces them; only some
+ * carrying one leaves the earlier candidates possibly effective.
  */
-const namespaceSources = (record: ObjectLiteralExpression, canHop: boolean): TsNode[] => {
-    const sources: TsNode[] = [];
-    const shorthand = record.getProperty("namespace");
-    const explicit = Node.isShorthandPropertyAssignment(shorthand) ? shorthand.getNameNode() : propertyInitializer(record, "namespace");
+const spreadEffect = (spread: TsNode, canHop: boolean): { replaces: boolean; sources: TsNode[] } | undefined => {
+    const resolved = recordsOf(spread, canHop);
 
-    if (explicit !== undefined) {
-        sources.push(explicit);
+    // Unreadable: it may overwrite the namespace with anything.
+    if (resolved.length === 0) {
+        return { replaces: true, sources: [spread] };
     }
 
+    // eslint-disable-next-line @typescript-eslint/no-use-before-define -- mutual recursion with namespaceSources
+    const perRecord = resolved.map((literal) => namespaceSources(literal, false));
+    const sources = perRecord.flat();
+
+    if (sources.length === 0) {
+        return undefined;
+    }
+
+    return { replaces: perRecord.every((inner) => inner.length > 0), sources };
+};
+
+/** True when `property` supplies the `namespace` field, as `namespace: …` or a `{ namespace }` shorthand. */
+const isNamespaceProperty = (property: ObjectLiteralElement): property is PropertyAssignment | ShorthandPropertyAssignment =>
+    (Node.isPropertyAssignment(property) || Node.isShorthandPropertyAssignment(property)) && property.getName() === "namespace";
+
+/** The expression an explicit `namespace: …` supplies; a shorthand `{ namespace }` supplies its name. */
+const explicitNamespaceValue = (property: PropertyAssignment | ShorthandPropertyAssignment): TsNode =>
+    Node.isShorthandPropertyAssignment(property) ? property.getNameNode() : (property.getInitializer() ?? property.getNameNode());
+
+/**
+ * The expressions that may supply a record's `namespace`, walked in runtime
+ * assignment order so a later property wins: an explicit `namespace` (or a
+ * shorthand) replaces every candidate before it, and a spread replaces them when
+ * every record it resolves to carries a `namespace` — while a spread with no
+ * `namespace` leaves the earlier candidates effective. An opaque spread stays as
+ * a possible source, since it may carry anything.
+ */
+const namespaceSources = (record: ObjectLiteralExpression, canHop: boolean): TsNode[] => {
+    let sources: TsNode[] = [];
+
     for (const property of record.getProperties()) {
-        if (!Node.isSpreadAssignment(property)) {
-            continue;
-        }
+        if (Node.isSpreadAssignment(property)) {
+            const effect = spreadEffect(property.getExpression(), canHop);
 
-        const spread = property.getExpression();
-        const resolved = recordsOf(spread, canHop);
-
-        if (resolved.length === 0) {
-            sources.push(spread);
-        } else {
-            sources.push(...resolved.flatMap((literal) => namespaceSources(literal, false)));
+            if (effect !== undefined) {
+                sources = effect.replaces ? effect.sources : [...sources, ...effect.sources];
+            }
+        } else if (isNamespaceProperty(property)) {
+            sources = [explicitNamespaceValue(property)];
         }
     }
 
@@ -287,7 +325,9 @@ const upsertManyCandidates = (input: TsNode, canHop = true, parameters: Paramete
     if (Node.isIdentifier(node)) {
         const initializer = canHop ? initializerOf(node) : undefined;
 
-        return initializer === undefined ? [] : upsertManyCandidates(initializer, false, parameters);
+        // An identifier we cannot follow to a local initializer may still BE the
+        // caller's records array, so hand it to the taint check rather than drop it.
+        return initializer === undefined ? [{ node, parameters }] : upsertManyCandidates(initializer, false, parameters);
     }
 
     if (Node.isArrayLiteralExpression(node)) {
@@ -319,7 +359,9 @@ const upsertManyCandidates = (input: TsNode, canHop = true, parameters: Paramete
         );
     }
 
-    return [];
+    // Anything else (a call result, a property access, a conditional, …) is opaque:
+    // it may be the caller's records, so let the taint check decide.
+    return [{ node, parameters }];
 };
 
 /** The IR row for a `ctx.vectors.<method>(indexName, input)` call whose `input.namespace` is arg-derived and unscoped, or `undefined`. */
