@@ -147,10 +147,11 @@ describe("rls() get() — table discovery cost vs K policy tables", () => {
 });
 
 /**
- * `deleteAll` over 100 rows with 3 policy-gated tables, on the probe-path writer
- * (no `lookupById`, as for `.global()` rows). Each row used to be re-located
- * (1 get + a findFirst probe) before its delete verdict; the verdict now runs on the
- * rows the scoped read returned, so only the 100 deletes remain.
+ * `deleteAll` over 100 rows with 3 policy-gated tables, on the probe-path writer (no
+ * `lookupById`). Two cases: a LOCAL table, where the verdict runs on the rows the scoped read
+ * returned so only the 100 deletes remain, and a table the writer lists in `deleteRereadTables`
+ * (every `.global()` table, and any table a cascade or trigger can reach), where each row is still
+ * re-located (1 get + a findFirst probe) before its verdict.
  */
 const ERASE_ROWS = 100;
 const eraseRows = Array.from({ length: ERASE_ROWS }, (_, index) => {
@@ -187,8 +188,14 @@ const eraseHandler = lunora.mutation
         }),
     );
 
+const rereadEraseWriter: CountingWriter = { ...eraseWriter, deleteRereadTables: new Set(["t0"]) } as CountingWriter;
+
 describe("rls() deleteAll — 100 rows, 3 policy tables", () => {
-    bench("deleteAll 100 rows", async () => {
+    bench("deleteAll 100 rows — local table (verdict on the read page)", async () => {
         await eraseHandler.handler(buildContext(eraseWriter), {});
+    });
+
+    bench("deleteAll 100 rows — re-read table (global / cascade-reachable: re-locate per row)", async () => {
+        await eraseHandler.handler(buildContext(rereadEraseWriter), {});
     });
 });
