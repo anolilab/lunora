@@ -178,6 +178,7 @@ const REQUIRED_ADAPTER: Record<string, string | null> = {
     nuxt: "@lunora/vue",
     "react-router": "@lunora/react",
     "rspack-react": "@lunora/react",
+    saas: "@lunora/react",
     "solid-v2": "@lunora/solid",
     standalone: null,
     sveltekit: "@lunora/svelte",

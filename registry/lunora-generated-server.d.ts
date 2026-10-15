@@ -52,6 +52,26 @@ declare module "#lunora/_generated/server.js" {
     export const v: typeof import("@lunora/server").v;
 
     /**
+     * The data-model types the real `_generated/server.ts` re-exports from its
+     * sibling `_generated/dataModel.ts` (`export type { …, Doc, Id, … }`).
+     *
+     * `Id` is the emitted definition, which is already table-name-generic — the
+     * brand carries the name, nothing narrows per app. `Doc` cannot be: the real
+     * one resolves a table name through the app's own `DataModel`, and this stub
+     * has no `defineSchema` to resolve against. It is therefore the BASE row
+     * shape — exactly what `TableReader`'s `Row` defaults to and what
+     * `DatabaseReader.get` returns here — so an item annotating a handler
+     * `Promise<Doc<"widgets">[]>` type-checks against the base `ctx.db`, and the
+     * per-column narrowing happens in the consumer's project where the schema
+     * exists. The table parameter is accepted and deliberately unused: dropping it
+     * would make every item's `Doc<"table">` a TS2315 here and correct there.
+     */
+    export type Id<TName extends string> = import("@lunora/server").Id<TName>;
+
+    // eslint-disable-next-line @typescript-eslint/no-unused-vars -- see above: the name is part of the real signature and has nothing to narrow on the stub
+    export type Doc<TName extends string> = Record<string, unknown>;
+
+    /**
      * The project's Cloudflare bindings, mirroring what `emit.ts` writes into
      * every real `_generated/server.ts`: an open index signature, because the
      * bindings a project configures in wrangler (R2/KV/D1/vars/secrets/…) are not

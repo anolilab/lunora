@@ -1,0 +1,25 @@
+# Local dev secrets for the worker (copy to `.dev.vars`, which is gitignored).
+#
+#   cp .dev.vars.example .dev.vars   # then fill in
+#
+# In production set each of these with `wrangler secret put <NAME>` instead.
+
+# Required — every request builds better-auth first, and it refuses to start
+# without a secret. Generate one with: openssl rand -base64 32
+BETTER_AUTH_SECRET="replace-with-openssl-rand-base64-32"
+
+# Optional, LOCAL ONLY — pins better-auth's origin to the dev server. Never move
+# it into `wrangler.jsonc` `vars`: an explicit `http://` origin turns off the
+# `Secure` flag on session cookies. Unset in production, better-auth resolves
+# the origin from each request.
+BETTER_AUTH_URL="http://localhost:5173"
+
+# Billing — uncomment once you have a Stripe account. Only payment calls need
+# these: without them the rest of the app runs, and checkout / the billing
+# portal fail with "payments are not configured".
+# STRIPE_SECRET_KEY="sk_test_..."
+# From `stripe listen --forward-to localhost:5173/payment/webhook` in dev.
+# STRIPE_WEBHOOK_SECRET="whsec_..."
+
+# The origin checkout and the billing portal send the customer back to.
+APP_BASE_URL="http://localhost:5173"

@@ -68,6 +68,13 @@ const KNOWN_SCRIPT_EXCEPTIONS = new Map([
             reason: "private, not published — ships raw .ts/.css source with no dist, so there is no build step by design",
         },
     ],
+    [
+        "packages/saas-ui/package.json",
+        {
+            missing: ["build", "build:prod"],
+            reason: "private, not published — ships raw .ts/.svelte/.css source with no dist, so there is no build step by design",
+        },
+    ],
 ]);
 
 /**
