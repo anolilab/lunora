@@ -696,6 +696,28 @@ const compactHistory = async (
     }
 };
 
+/** Shape returned by the `agents:agentHistory` query (see `component.ts`). */
+interface AgentHistoryResult {
+    fallback?: { summary: string; throughSeq: number };
+    messages: AgentMessageRow[];
+    summary?: string;
+}
+
+/**
+ * Identity of the compaction settings that shaped a stored summary. A run whose
+ * settings differ must not apply that summary's cursor — a higher `maxMessages`
+ * keeps messages the old cursor would hide — so `agentHistory` returns the full
+ * history and the loop rebuilds instead. The summariser model is excluded: it
+ * changes the wording of the brief, not which messages the cursor covers.
+ */
+const compactionConfigKey = (compaction: AgentDefinition["compaction"]): string | undefined => {
+    if (compaction === undefined) {
+        return undefined;
+    }
+
+    return `${String(compaction.maxMessages)}:${String(compaction.keepRecent ?? "")}`;
+};
+
 /**
  * Incremental twin of {@link compactHistory} for the durable loop. Reads the
  * thread's stored running summary plus ONLY the messages it does not cover, and
@@ -706,16 +728,10 @@ const compactHistory = async (
  * nothing. Best-effort like {@link compactHistory}: a failed summary keeps the
  * stored brief and the uncovered history.
  */
-interface AgentHistoryResult {
-    fallback?: { summary: string; throughSeq: number };
-    messages: AgentMessageRow[];
-    runs: number;
-    summary?: string;
-}
-
 const compactIncrementally = async (context: TurnContext): Promise<{ history: AgentMessageRow[]; summary: string | undefined }> => {
     const { agent, compact, env, historyRef, instanceId, patchThread, run, threadKey } = context;
-    const stored = (await run(historyRef, { key: threadKey })) as AgentHistoryResult;
+    const configKey = compactionConfigKey(agent.compaction);
+    const stored = (await run(historyRef, { configKey, key: threadKey })) as AgentHistoryResult;
     const { messages, summary: previous } = stored;
     const split = splitForCompaction(messages, agent.compaction);
 
@@ -724,8 +740,8 @@ const compactIncrementally = async (context: TurnContext): Promise<{ history: Ag
     }
 
     // A failed from-scratch rebuild: keep the stored brief plus the messages after
-    // its cursor, and restart the run counter so the next rebuild is
-    // `SUMMARY_REBUILD_EVERY` turns away instead of every turn re-reading and
+    // its cursor, and re-anchor the rebuild interval to that cursor so the next
+    // rebuild is a full span-doubling away instead of every turn re-reading and
     // re-summarising the whole thread.
     const degrade = async (): Promise<{ history: AgentMessageRow[]; summary: string | undefined }> => {
         const { fallback } = stored;
@@ -734,9 +750,9 @@ const compactIncrementally = async (context: TurnContext): Promise<{ history: Ag
             return { history: messages, summary: previous };
         }
 
-        await patchThread({ ifInstanceId: instanceId, summaryRuns: 0 }).catch((error: unknown) => {
+        await patchThread({ ifInstanceId: instanceId, summaryRebuiltSeq: fallback.throughSeq }).catch((error: unknown) => {
             // eslint-disable-next-line no-console -- best-effort checkpoint; the failure must be visible, not swallowed
-            console.warn(`@lunora/agent: could not reset the summary run counter for thread "${threadKey}"`, error);
+            console.warn(`@lunora/agent: could not reset the summary rebuild anchor for thread "${threadKey}"`, error);
         });
 
         return { history: messages.filter((message) => message.seq > fallback.throughSeq), summary: fallback.summary };
@@ -749,6 +765,7 @@ const compactIncrementally = async (context: TurnContext): Promise<{ history: Ag
             env,
             messages: buildModelMessages({ history: split.older, summary: previous }),
             model: agent.compaction?.model ?? agent.model,
+            previousSummary: previous,
         });
     } catch (error) {
         // eslint-disable-next-line no-console -- best-effort summarisation; the failure must be visible, not swallowed
@@ -761,15 +778,19 @@ const compactIncrementally = async (context: TurnContext): Promise<{ history: Ag
         return degrade();
     }
 
+    const through = split.older.at(-1)?.seq;
+
     // Guarded on the run still owning the thread: a replaced run's late write
     // must not roll back a newer run's checkpoint. A failed WRITE does not throw
     // the summary away: this turn still uses it, and the untouched cursor means a
-    // later turn retries the checkpoint.
+    // later turn retries the checkpoint. Only a from-scratch summary (no previous
+    // brief) re-anchors the rebuild interval; an incremental update leaves it alone.
     await patchThread({
         ifInstanceId: instanceId,
         summary,
-        summaryRuns: previous === undefined ? 1 : stored.runs + 1,
-        summaryThroughSeq: split.older.at(-1)?.seq,
+        summaryConfig: configKey,
+        ...(previous === undefined ? { summaryRebuiltSeq: through } : {}),
+        summaryThroughSeq: through,
     }).catch((error: unknown) => {
         // eslint-disable-next-line no-console -- best-effort checkpoint; the failure must be visible, not swallowed
         console.warn(`@lunora/agent: could not persist the summary checkpoint for thread "${threadKey}"`, error);

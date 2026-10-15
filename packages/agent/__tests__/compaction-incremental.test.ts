@@ -50,6 +50,22 @@ const turn = async (runtime: Runtime, compact: AgentCompact, step = new DurableS
     );
 };
 
+/** A runtime wrapper that records how many messages each `agentHistory` read returned. */
+const captureHistory = (runtime: Runtime): { run: typeof runtime.run; sizes: number[] } => {
+    const sizes: number[] = [];
+    const run: typeof runtime.run = async (reference, args) => {
+        const result = await runtime.run(reference, args);
+
+        if (JSON.stringify(reference).includes("agentHistory")) {
+            sizes.push((result as { messages: unknown[] }).messages.length);
+        }
+
+        return result;
+    };
+
+    return { run, sizes };
+};
+
 describe("incremental compaction", () => {
     it("summarises only the newly aged-out messages on the second turn and stores the cursor", async () => {
         const runtime = await seeded(50);
@@ -108,7 +124,7 @@ describe("incremental compaction", () => {
             const thread = runtime.threads.get("thread-1");
 
             if (thread) {
-                Object.assign(thread, { instanceId: "wf-2", summary: "newer", summaryRuns: 1, summaryThroughSeq: 49 });
+                Object.assign(thread, { instanceId: "wf-2", summary: "newer", summaryRebuiltSeq: 44, summaryThroughSeq: 49 });
             }
 
             return "stale";
@@ -116,25 +132,17 @@ describe("incremental compaction", () => {
 
         await turn(runtime, compact);
 
-        expect(runtime.threads.get("thread-1")).toMatchObject({ summary: "newer", summaryRuns: 1, summaryThroughSeq: 49 });
+        expect(runtime.threads.get("thread-1")).toMatchObject({ summary: "newer", summaryRebuiltSeq: 44, summaryThroughSeq: 49 });
     });
 
     it("falls back to the stored brief plus the tail when a rebuild fails, and stops re-reading the thread", async () => {
         const runtime = await seeded(50);
         const thread = runtime.threads.get("thread-1");
 
-        Object.assign(thread ?? {}, { summary: "storedbrief", summaryRuns: 10, summaryThroughSeq: 44 });
+        // A rebuild is due (the anchor sits behind the covered span), and the summariser is down.
+        Object.assign(thread ?? {}, { summary: "storedbrief", summaryConfig: "10:5", summaryRebuiltSeq: 0, summaryThroughSeq: 44 });
 
-        const historySizes: number[] = [];
-        const run: typeof runtime.run = async (reference, args) => {
-            const result = await runtime.run(reference, args);
-
-            if (JSON.stringify(reference).includes("agentHistory")) {
-                historySizes.push((result as { messages: unknown[] }).messages.length);
-            }
-
-            return result;
-        };
+        const { run, sizes: historySizes } = captureHistory(runtime);
         const { generate, prompts } = promptCapture();
         let calls = 0;
         const compact: AgentCompact = async () => {
@@ -152,7 +160,7 @@ describe("incremental compaction", () => {
         expect(prompts[0]).toContain("storedbrief");
         // 51 rows total; the tail after seq 44 is 6 rows, not the whole thread.
         expect(prompts[0]).not.toContain('"m0"');
-        expect(runtime.threads.get("thread-1")).toMatchObject({ summary: "storedbrief", summaryRuns: 0, summaryThroughSeq: 44 });
+        expect(runtime.threads.get("thread-1")).toMatchObject({ summary: "storedbrief", summaryRebuiltSeq: 44, summaryThroughSeq: 44 });
 
         await runTurn("two");
 
@@ -200,5 +208,76 @@ describe("incremental compaction", () => {
         expect(runtime.threads.get("thread-1")?.summary).toBeUndefined();
 
         warn.mockRestore();
+    });
+
+    it("reads the full history when the stored summary was built under different compaction settings", async () => {
+        const runtime = await seeded(50);
+
+        // The stored brief came from a NARROWER `maxMessages` (5), so its cursor hides messages the
+        // current agent (maxMessages 10) would keep. The loop must rebuild rather than apply it.
+        Object.assign(runtime.threads.get("thread-1") ?? {}, { summary: "oldbrief", summaryConfig: "5:2", summaryRebuiltSeq: 45, summaryThroughSeq: 45 });
+
+        const sizes: number[] = [];
+        const compact: AgentCompact = async ({ messages }) => {
+            sizes.push(messages.length);
+
+            return "newbrief";
+        };
+
+        await turn(runtime, compact);
+
+        // Full history (51 rows) reaches the compactor, not just the 5 rows after the stale cursor.
+        expect(sizes[0]).toBeGreaterThan(40);
+        expect(runtime.threads.get("thread-1")).toMatchObject({ summary: "newbrief", summaryConfig: "10:5" });
+    });
+
+    it("passes the previous brief to the compactor so an incremental update merges instead of replacing", async () => {
+        const runtime = await seeded(50);
+        const seen: (string | undefined)[] = [];
+        const compact: AgentCompact = async ({ previousSummary }) => {
+            seen.push(previousSummary);
+
+            return `brief${String(seen.length)}`;
+        };
+
+        await turn(runtime, compact);
+        await appendMore(runtime, 100, 10);
+        await turn(runtime, compact, new DurableStepJournal(), "again");
+
+        // First turn is from scratch (no brief to merge); the second carries the stored one.
+        expect(seen[0]).toBeUndefined();
+        expect(seen[1]).toBe("brief1");
+    });
+
+    it("holds off the from-scratch rebuild until the covered span doubles", async () => {
+        const runtime = await seeded(50);
+        const { run, sizes: historySizes } = captureHistory(runtime);
+        const compact: AgentCompact = async () => "brief";
+
+        // Anchored by a rebuild at seq 44: the next rebuild is due once the cursor reaches 2*44+1 = 89.
+        Object.assign(runtime.threads.get("thread-1") ?? {}, { summary: "brief", summaryConfig: "10:5", summaryRebuiltSeq: 44, summaryThroughSeq: 44 });
+
+        const runTurn = async (input: string): Promise<void> => {
+            await runAgentLoop(
+                loopDefaults(agent, {
+                    compact,
+                    generate: scriptedGenerate([finalTurn("ok")]),
+                    params: { input, threadKey: "thread-1" },
+                    run,
+                    step: new DurableStepJournal(),
+                }),
+            );
+        };
+
+        await runTurn("a");
+
+        // Below the doubled span: only the uncovered tail is read, never the whole thread.
+        expect(historySizes[0]).toBeLessThan(15);
+
+        // Push the cursor to the doubled span; the next turn rebuilds from the whole thread.
+        Object.assign(runtime.threads.get("thread-1") ?? {}, { summaryThroughSeq: 89 });
+        await runTurn("b");
+
+        expect(historySizes[1]).toBeGreaterThanOrEqual(50);
     });
 });

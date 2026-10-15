@@ -1251,6 +1251,13 @@ export type AgentCompact = (input: {
     messages: ModelMessage[];
     /** The compaction model (the config's `model`, else the agent's). */
     model: AgentModelInput;
+
+    /**
+     * The previous brief being folded into, when this is an incremental update.
+     * A seam MUST merge it rather than summarise only the new messages, or facts
+     * from earlier turns are lost until the next from-scratch rebuild.
+     */
+    previousSummary?: string;
 }) => Promise<string>;
 
 /** The one-line summary an episodic-memory run records for later recency recall. */

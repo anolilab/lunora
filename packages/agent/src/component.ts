@@ -31,15 +31,12 @@ const RUN_QUEUE_TABLE: "agent_run_queue" = `${AGENT_EXTENSION_KEY}_${RUN_QUEUE_B
  */
 const MAX_QUEUE_DEPTH = 5;
 
-/** Incremental summary updates before the brief is rebuilt from the whole thread. */
-const SUMMARY_REBUILD_EVERY = 10;
-
 /** What `agentHistory` returns: the uncovered messages plus the summary covering the rest. */
 interface AgentHistory {
     /** Rebuild only: the stored summary and its cursor, for when the from-scratch summary fails. */
     fallback?: { summary: string; throughSeq: number };
     messages: Record<string, unknown>[];
-    runs: number;
+    /** Incremental only: the stored summary the uncovered messages fold into. */
     summary?: string;
 }
 
@@ -188,12 +185,17 @@ const agentExtension: SchemaExtension<
             /**
              * Running compaction brief: a summary of every message with `seq <=
              * summaryThroughSeq`, so a turn reads (and summarises) only what is newer.
-             * `summaryRuns` counts the incremental updates since the last from-scratch
-             * summary (see `SUMMARY_REBUILD_EVERY`). All three are optional, so
+             * `summaryConfig` identifies the compaction settings that produced it, so a
+             * run whose settings differ reads the full history and rebuilds instead of
+             * applying a cursor that would hide messages the new settings would keep.
+             * `summaryRebuiltSeq` is the cursor at the last from-scratch rebuild; a
+             * rebuild is due once the covered span has doubled since then, which keeps
+             * the total rebuild work linear in the thread length. All optional, so
              * pre-existing threads and agents without `compaction` are unaffected.
              */
             summary: v.optional(v.string()),
-            summaryRuns: v.optional(v.number()),
+            summaryConfig: v.optional(v.string()),
+            summaryRebuiltSeq: v.optional(v.number()),
             summaryThroughSeq: v.optional(v.number()),
             title: v.optional(v.string()),
             updatedAt: v.number(),
@@ -666,7 +668,8 @@ export const agentComponent = (): AgentComponent => {
             key: v.optional(v.string()),
             status: v.optional(v.union(v.literal("idle"), v.literal("running"), v.literal("error"), v.literal("cancelled"), v.literal("awaiting_input"))),
             summary: v.optional(v.string()),
-            summaryRuns: v.optional(v.number()),
+            summaryConfig: v.optional(v.string()),
+            summaryRebuiltSeq: v.optional(v.number()),
             summaryThroughSeq: v.optional(v.number()),
             title: v.optional(v.string()),
             usage: v.optional(v.object({ inputTokens: v.optional(v.number()), outputTokens: v.optional(v.number()), totalTokens: v.optional(v.number()) })),
@@ -696,7 +699,8 @@ export const agentComponent = (): AgentComponent => {
                 ...(args.error === undefined ? {} : { error: args.error }),
                 ...(args.status === undefined ? {} : { status: args.status }),
                 ...(args.summary === undefined ? {} : { summary: args.summary }),
-                ...(args.summaryRuns === undefined ? {} : { summaryRuns: args.summaryRuns }),
+                ...(args.summaryConfig === undefined ? {} : { summaryConfig: args.summaryConfig }),
+                ...(args.summaryRebuiltSeq === undefined ? {} : { summaryRebuiltSeq: args.summaryRebuiltSeq }),
                 ...(args.summaryThroughSeq === undefined ? {} : { summaryThroughSeq: args.summaryThroughSeq }),
                 ...(args.title === undefined ? {} : { title: args.title }),
                 // The loop patches a per-run cumulative total; setting it (rather
@@ -709,32 +713,40 @@ export const agentComponent = (): AgentComponent => {
      * The compaction read: the stored running summary plus ONLY the messages it
      * does not yet cover (`seq > summaryThroughSeq`), so a turn's read and
      * summarisation input stay bounded by the uncovered tail instead of growing
-     * with the thread. Every `SUMMARY_REBUILD_EVERY`th incremental update the
-     * whole thread is returned for a from-scratch summary, so a summary of a
-     * summary cannot drift unboundedly; the stored summary and cursor ride along
-     * as `fallback` for when that rebuild fails. Internal: the loop is the only reader.
+     * with the thread. The incremental read is taken only when the stored summary
+     * was built under the caller's current compaction settings (`configKey` — a run
+     * that raised `maxMessages` must not apply a stale cursor that hides messages
+     * it would now keep) AND no from-scratch rebuild is due: a rebuild happens once
+     * the covered span has at least doubled since the last one, which keeps total
+     * rebuild work linear in the thread length rather than re-summarising the whole
+     * thread on a fixed cadence. On either miss the whole thread is returned for a
+     * fresh summary, with the stored summary and cursor riding along as `fallback`
+     * for when that rebuild fails. Internal: the loop is the only reader.
      */
-    const agentHistory = query.input({ key: v.string() }).query(async ({ args, ctx: context }): Promise<AgentHistory> => {
+    const agentHistory = query.input({ configKey: v.optional(v.string()), key: v.string() }).query(async ({ args, ctx: context }): Promise<AgentHistory> => {
         const thread = await context.db
             .query(THREADS_TABLE)
             .withIndex("byKey", (q) => q.eq("key", args.key))
             .first();
         const summary = thread?.["summary"] as string | null | undefined;
         const through = thread?.["summaryThroughSeq"] as number | null | undefined;
-        const runs = (thread?.["summaryRuns"] as number | null | undefined) ?? 0;
-        const incremental = typeof summary === "string" && summary.length > 0 && typeof through === "number" && runs < SUMMARY_REBUILD_EVERY;
+        const rebuiltSeq = thread?.["summaryRebuiltSeq"] as number | null | undefined;
+        const storedConfig = thread?.["summaryConfig"] as string | null | undefined;
+        const hasSummary = typeof summary === "string" && summary.length > 0 && typeof through === "number";
+        const configMatches = args.configKey === undefined || storedConfig === args.configKey;
+        // A summary whose settings changed, or one never anchored by a rebuild under this scheme, rebuilds first.
+        const rebuildDue = typeof rebuiltSeq !== "number" || (typeof through === "number" && through >= 2 * rebuiltSeq + 1);
+        const incremental = hasSummary && configMatches && !rebuildDue;
         const messages = await context.db
             .query(MESSAGES_TABLE)
             .withIndex("byThread", (q) => (incremental ? q.eq("threadKey", args.key).gt("seq", through) : q.eq("threadKey", args.key)))
             .collect();
 
         if (incremental) {
-            return { messages, runs, summary };
+            return { messages, summary };
         }
 
-        return typeof summary === "string" && summary.length > 0 && typeof through === "number"
-            ? { fallback: { summary, throughSeq: through }, messages, runs: 0 }
-            : { messages, runs: 0 };
+        return hasSummary ? { fallback: { summary, throughSeq: through }, messages } : { messages };
     });
 
     /**

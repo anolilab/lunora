@@ -23,7 +23,8 @@ export interface StoredThread {
     messageCount: number;
     status: string;
     summary?: string;
-    summaryRuns?: number;
+    summaryConfig?: string;
+    summaryRebuiltSeq?: number;
     summaryThroughSeq?: number;
     title?: string;
     usage?: { inputTokens?: number; outputTokens?: number; totalTokens?: number };
@@ -183,46 +184,36 @@ export const memoryRuntime = (options?: {
         return [...messages.values()].filter((message) => message.threadKey === key).toSorted((a, b) => a.seq - b.seq);
     };
 
-    /** Mirrors `agentHistory`: the stored summary plus only the messages past `summaryThroughSeq` (rebuilt from scratch every 10th update). */
+    /** Mirrors `agentHistory`: the stored summary plus only the messages past `summaryThroughSeq`, unless the settings changed or a rebuild is due. */
     const history = (args?: Record<string, unknown>): unknown => {
         const key = args?.["key"] as string;
+        const configKey = args?.["configKey"] as string | undefined;
         const thread = threads.get(key);
         const all = listMessages(args) as StoredMessage[];
-        const incremental = thread?.summary !== undefined && thread.summaryThroughSeq !== undefined && (thread.summaryRuns ?? 0) < 10;
+        const hasSummary = thread?.summary !== undefined && thread.summaryThroughSeq !== undefined;
+        const configMatches = configKey === undefined || thread?.summaryConfig === configKey;
+        const rebuildDue = thread?.summaryRebuiltSeq === undefined || (thread?.summaryThroughSeq ?? 0) >= 2 * (thread.summaryRebuiltSeq ?? 0) + 1;
 
-        return incremental
-            ? { messages: all.filter((message) => message.seq > (thread?.summaryThroughSeq ?? -1)), runs: thread?.summaryRuns ?? 0, summary: thread?.summary }
+        return hasSummary && configMatches && !rebuildDue
+            ? { messages: all.filter((message) => message.seq > (thread?.summaryThroughSeq ?? -1)), summary: thread?.summary }
             : {
-                  ...(thread?.summary !== undefined && thread.summaryThroughSeq !== undefined
-                      ? { fallback: { summary: thread.summary, throughSeq: thread.summaryThroughSeq } }
-                      : {}),
+                  ...(hasSummary ? { fallback: { summary: thread.summary, throughSeq: thread.summaryThroughSeq } } : {}),
                   messages: all,
-                  runs: 0,
               };
     };
 
+    /** The thread fields `agentPatchThread` may set; each is copied onto the thread only when defined. */
+    const patchableFields = ["status", "error", "usage", "summary", "summaryConfig", "summaryRebuiltSeq", "summaryThroughSeq"] as const;
+
     const patchThread = (args?: Record<string, unknown>): unknown => {
         const thread = threads.get(args?.["key"] as string);
+        const patch = args ?? {};
 
-        if (thread && (args?.["ifInstanceId"] === undefined || thread.instanceId === (args["ifInstanceId"] as string))) {
-            if (args?.["status"] !== undefined) {
-                thread.status = args["status"] as string;
-            }
-
-            if (args?.["error"] !== undefined) {
-                thread.error = args["error"] as string;
-            }
-
-            if (args?.["usage"] !== undefined) {
-                thread.usage = args["usage"] as StoredThread["usage"];
-            }
-
-            if (args?.["summary"] !== undefined) {
-                thread.summary = args["summary"] as string;
-                thread.summaryRuns = args["summaryRuns"] as number;
-                thread.summaryThroughSeq = args["summaryThroughSeq"] as number;
-            } else if (args?.["summaryRuns"] !== undefined) {
-                thread.summaryRuns = args["summaryRuns"] as number;
+        if (thread && (patch["ifInstanceId"] === undefined || thread.instanceId === (patch["ifInstanceId"] as string))) {
+            for (const key of patchableFields) {
+                if (patch[key] !== undefined) {
+                    (thread as unknown as Record<string, unknown>)[key] = patch[key];
+                }
             }
         }
 
