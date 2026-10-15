@@ -84,9 +84,10 @@ export interface RagVectors {
     deleteByIds: (indexName: string, ids: ReadonlyArray<string>, namespace?: string) => Promise<unknown>;
     getByIds: (indexName: string, ids: ReadonlyArray<string>, namespace?: string) => Promise<ReadonlyArray<RagVectorRecord>>;
     query: (indexName: string, input: RagVectorQueryInput) => Promise<RagVectorMatches>;
-    upsert: (indexName: string, input: RagVectorUpsertInput) => Promise<unknown>;
+    /** `operation` groups the writes of one logical operation: a deferred facade skips the rest once one fails. */
+    upsert: (indexName: string, input: RagVectorUpsertInput, operation?: object) => Promise<unknown>;
     /** Batch write of at most 1000 inputs. Optional: without it `defineRag` writes per chunk via `upsert`. */
-    upsertMany?: (indexName: string, inputs: ReadonlyArray<RagVectorUpsertInput>) => Promise<unknown>;
+    upsertMany?: (indexName: string, inputs: ReadonlyArray<RagVectorUpsertInput>, operation?: object) => Promise<unknown>;
 }
 
 /**

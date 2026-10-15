@@ -205,4 +205,27 @@ describe("defineRag index batching", () => {
         ).rejects.toThrow(/callback failed/u);
         expect(stored.has("doc#0")).toBe(false);
     });
+
+    it("passes one operation token per index() call to every batch and the chunk 0 write", async () => {
+        expect.assertions(3);
+
+        const tokens: (object | undefined)[] = [];
+        const { vectors } = fakeVectors(true);
+        const tracking: RagVectors = {
+            ...vectors,
+            upsertMany: async (_indexName, _inputs, operation) => {
+                tokens.push(operation);
+            },
+        };
+
+        await rag(ctxFor(tracking)).index({ id: "first", text: makeText(CHUNKS) });
+
+        const first = [...tokens];
+
+        await rag(ctxFor(tracking)).index({ id: "second", text: makeText(3) });
+
+        expect(new Set(first).size).toBe(1);
+        expect(first[0]).toBeDefined();
+        expect(tokens.at(-1)).not.toBe(first[0]);
+    });
 });

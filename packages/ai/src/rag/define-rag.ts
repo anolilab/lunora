@@ -96,7 +96,12 @@ const INTERNAL_KEYS = new Set([CHUNK_INDEX_KEY, COUNT_KEY, HASH_KEY, IMPORTANCE_
  * `notify` fires after each chunk's write; chunk #0's comes last.
  * ponytail: batches run sequentially so `notify` keeps index order; add bounded concurrency if a document needs >10k chunks.
  */
-const writeRecords = async (store: RagVectorStore, records: ReadonlyArray<RagVectorUpsertInput>, notify: (chunkIndex: number) => void): Promise<void> => {
+const writeRecords = async (
+    store: RagVectorStore,
+    records: ReadonlyArray<RagVectorUpsertInput>,
+    notify: (chunkIndex: number) => void,
+    operation: object,
+): Promise<void> => {
     if (records.length === 0) {
         return;
     }
@@ -105,10 +110,10 @@ const writeRecords = async (store: RagVectorStore, records: ReadonlyArray<RagVec
 
     if (!store.upsertMany) {
         await concurrentMap(rest, INDEX_CONCURRENCY, async (record, restIndex) => {
-            await store.upsert(record);
+            await store.upsert(record, operation);
             notify(restIndex + 1);
         });
-        await store.upsert(records[0] as RagVectorUpsertInput);
+        await store.upsert(records[0] as RagVectorUpsertInput, operation);
         notify(0);
 
         return;
@@ -118,14 +123,14 @@ const writeRecords = async (store: RagVectorStore, records: ReadonlyArray<RagVec
         const end = Math.min(start + UPSERT_BATCH, rest.length);
 
         // eslint-disable-next-line no-await-in-loop -- sequential by design, see above
-        await store.upsertMany(rest.slice(start, end));
+        await store.upsertMany(rest.slice(start, end), operation);
 
         for (let restIndex = start; restIndex < end; restIndex += 1) {
             notify(restIndex + 1);
         }
     }
 
-    await store.upsertMany([records[0] as RagVectorUpsertInput]);
+    await store.upsertMany([records[0] as RagVectorUpsertInput], operation);
     notify(0);
 };
 
@@ -885,7 +890,8 @@ const defineRag = (config: RagConfig): ((context: RagContext) => Rag) => {
                 input.onChunk?.({ chunkIndex, id: ids[chunkIndex] as string, text: pieces[chunkIndex] as string, total: pieces.length });
             };
 
-            await writeRecords(store, records, notify);
+            // One token per call: a deferred facade skips this call's remaining writes (chunk #0 last) once one fails.
+            await writeRecords(store, records, notify, {});
 
             // A shrinking re-index leaves stale trailing chunks behind — delete
             // them so they cannot keep matching. New chunks are already written,

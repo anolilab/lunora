@@ -2067,8 +2067,8 @@ interface VectorSearchLike {
     deleteByIds: (indexName: string, ids: ReadonlyArray<string>, namespace?: string) => Promise<void>;
     getByIds: (indexName: string, ids: ReadonlyArray<string>, namespace?: string) => Promise<ReadonlyArray<VectorRecordLike>>;
     query: (indexName: string, input: VectorQueryInputLike) => Promise<VectorMatchesLike>;
-    upsert: (indexName: string, input: VectorUpsertInputLike) => Promise<void>;
-    upsertMany?: (indexName: string, inputs: ReadonlyArray<VectorUpsertInputLike>) => Promise<void>;
+    upsert: (indexName: string, input: VectorUpsertInputLike, operation?: object) => Promise<void>;
+    upsertMany?: (indexName: string, inputs: ReadonlyArray<VectorUpsertInputLike>, operation?: object) => Promise<void>;
     upsertNow: (indexName: string, input: VectorUpsertInputLike) => Promise<void>;
 }
 ```

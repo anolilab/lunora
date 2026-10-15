@@ -476,8 +476,8 @@ interface RagVectorStore {
     deleteByIds: (ids: ReadonlyArray<string>, namespace?: string) => Promise<unknown>;
     getByIds: (ids: ReadonlyArray<string>, namespace?: string) => Promise<ReadonlyArray<RagVectorRecord>>;
     query: (input: RagVectorQueryInput) => Promise<RagVectorMatches>;
-    upsert: (input: RagVectorUpsertInput) => Promise<unknown>;
-    upsertMany?: (inputs: ReadonlyArray<RagVectorUpsertInput>) => Promise<unknown>;
+    upsert: (input: RagVectorUpsertInput, operation?: object) => Promise<unknown>;
+    upsertMany?: (inputs: ReadonlyArray<RagVectorUpsertInput>, operation?: object) => Promise<unknown>;
 }
 ```
 

@@ -70,9 +70,10 @@ interface RagVectorStore {
     deleteByIds: (ids: ReadonlyArray<string>, namespace?: string) => Promise<unknown>;
     getByIds: (ids: ReadonlyArray<string>, namespace?: string) => Promise<ReadonlyArray<RagVectorRecord>>;
     query: (input: RagVectorQueryInput) => Promise<RagVectorMatches>;
-    upsert: (input: RagVectorUpsertInput) => Promise<unknown>;
+    /** `operation` is one `index()` call's token, passed to every write of that call. */
+    upsert: (input: RagVectorUpsertInput, operation?: object) => Promise<unknown>;
     /** Batch write of at most 1000 inputs. Optional: without it `defineRag` writes per chunk via `upsert`. */
-    upsertMany?: (inputs: ReadonlyArray<RagVectorUpsertInput>) => Promise<unknown>;
+    upsertMany?: (inputs: ReadonlyArray<RagVectorUpsertInput>, operation?: object) => Promise<unknown>;
 }
 
 /**
@@ -99,13 +100,16 @@ const VECTORIZE_CAPABILITIES: RagVectorStoreCapabilities = {
 const vectorizeStore = (vectors: RagVectors, indexName: string): RagVectorStore => {
     return {
         ...(vectors.upsertMany
-            ? { upsertMany: (inputs: ReadonlyArray<RagVectorUpsertInput>) => vectors.upsertMany?.(indexName, inputs) as Promise<unknown> }
+            ? {
+                  upsertMany: (inputs: ReadonlyArray<RagVectorUpsertInput>, operation?: object) =>
+                      vectors.upsertMany?.(indexName, inputs, operation) as Promise<unknown>,
+              }
             : {}),
         capabilities: VECTORIZE_CAPABILITIES,
         deleteByIds: (ids, namespace) => vectors.deleteByIds(indexName, ids, namespace),
         getByIds: (ids, namespace) => vectors.getByIds(indexName, ids, namespace),
         query: (input) => vectors.query(indexName, input),
-        upsert: (input) => vectors.upsert(indexName, input),
+        upsert: (input, operation) => vectors.upsert(indexName, input, operation),
     };
 };
 
