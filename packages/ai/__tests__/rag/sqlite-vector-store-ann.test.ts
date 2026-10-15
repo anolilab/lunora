@@ -88,11 +88,17 @@ describe("sqliteVectorStore with a vec0 index", () => {
         const vectorFor = (index: number): number[] => [Math.sin(index), Math.cos(index * 1.3), Math.sin(index * 0.7)];
 
         const seedMany = async (store: ReturnType<typeof sqliteVectorStore>): Promise<void> => {
-            await store.upsertMany?.(
-                Array.from({ length: COUNT }, (_, index) => {
-                    return { embed: fixed(vectorFor(index)), id: `v${String(index)}`, input: "v", metadata: { index, tenant: `t${String(index % 10)}` } };
-                }),
-            );
+            // The sqlite store exposes `upsert` only — `upsertMany` is the Vectorize
+            // path's batch primitive, so a `?.()` here would silently seed nothing.
+            for (let index = 0; index < COUNT; index += 1) {
+                // eslint-disable-next-line no-await-in-loop -- sequential seeding of an in-memory store
+                await store.upsert({
+                    embed: fixed(vectorFor(index)),
+                    id: `v${String(index)}`,
+                    input: "v",
+                    metadata: { index, tenant: `t${String(index % 10)}` },
+                });
+            }
         };
 
         it("matches the brute-force top 5 without the maxScan read", async () => {
