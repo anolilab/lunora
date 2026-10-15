@@ -1809,7 +1809,11 @@ describe("rls — batch write path", () => {
                 }
             }
         };
-        database.writer.get = async (id) => (alive.has(id) ? (rows.find((row) => row._id === id) ?? null) : null);
+        database.writer.findFirst = async (_tableName, args) => {
+            const id = (args as { where?: { _id?: string } } | undefined)?.where?._id;
+
+            return id !== undefined && alive.has(id) ? (rows.find((row) => row._id === id) ?? null) : null;
+        };
         database.writer.findMany = async (tableName, args) => {
             const all = await findMany(tableName, args);
 
@@ -1871,6 +1875,49 @@ describe("rls — batch write path", () => {
         const handler = lunora.action.use(rlsForTest<TestContext>([readOwn, deleteAny])).action(async ({ ctx }) => ctx.db.deleteAll("documents"));
 
         // B left the caller's read scope, so it is not erased even though the delete policy allows it.
+        await expect(handler.handler(makeContext(database, "u1"), {})).resolves.toStrictEqual({ deleted: 1 });
+        expect(database.calls.filter((call) => call.method === "delete").map((call) => call.tableOrId)).toStrictEqual(["A"]);
+    });
+
+    it("deleteWhere from an action skips a row a concurrent write moved out of its filter", async () => {
+        expect.assertions(2);
+
+        const rows = [
+            { _id: "A", status: "archived", table: "documents" },
+            { _id: "B", status: "archived", table: "documents" },
+        ];
+        const database = createFakeDatabase(rows);
+        const { findMany } = database.writer;
+
+        // An action: no transaction, so `deleteWhere` re-locates each row.
+        Object.assign(database.writer, { inTransaction: () => false });
+        // The fresh read carries the caller's `where`, merged as `{ AND: [{ _id }, { status }] }`.
+        database.writer.findFirst = async (tableName, args) => {
+            database.calls.push({ args, method: "findFirst", tableOrId: tableName });
+            const where = (args as { where?: { AND?: [{ _id?: string }, { status?: string }] } } | undefined)?.where;
+            const row = rows.find((entry) => entry.table === tableName && entry._id === where?.AND?.[0]?._id);
+            const status = where?.AND?.[1]?.status;
+
+            return row && (status === undefined || row.status === status) ? row : null;
+        };
+        // A concurrent write un-archives B after the page read.
+        database.writer.findMany = async (tableName, args) => {
+            const result = await findMany(tableName, args);
+            const page = result.page.map((row) => {
+                return { ...row };
+            });
+
+            rows[1]!.status = "active";
+
+            return { ...result, page };
+        };
+
+        const deleteAny = definePolicy<TestContext>({ on: "delete", table: "documents", when: () => true });
+        const handler = lunora.action
+            .use(rlsForTest<TestContext>([deleteAny]))
+            .action(async ({ ctx }) => ctx.db.deleteWhere("documents", { status: "archived" }));
+
+        // B no longer matches the filter, so it is not erased even though it was on the page.
         await expect(handler.handler(makeContext(database, "u1"), {})).resolves.toStrictEqual({ deleted: 1 });
         expect(database.calls.filter((call) => call.method === "delete").map((call) => call.tableOrId)).toStrictEqual(["A"]);
     });

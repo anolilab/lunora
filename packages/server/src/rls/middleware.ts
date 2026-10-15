@@ -1199,47 +1199,49 @@ const wrapDatabase = (base: RlsDatabase, raw: RlsDatabase, steps: ReadonlyArray<
      * (the evaluator must see the protected row); a policy-less row is re-located and deleted through the
      * guarded `base`, exactly as the fast path deletes it.
      *
-     * The gated fresh read RE-APPLIES the table's read scope, so a row a concurrent write moved out of the
-     * caller's read-visible set is skipped even when its delete policy would still allow the delete: the read
-     * scope is the erase's candidate set, and `deleteAll`/`deleteWhere` only ever name rows it returned. A
-     * `{ hard: true }` erase relaxes the soft-delete scope (`includeDeleted`) so it can reach — and physically
-     * remove — a row an earlier delete of the page soft-deleted; the read scope still applies.
+     * The fresh read RE-APPLIES the erase's own scope: the caller's `where` (so a row a concurrent write moved
+     * out of a `deleteWhere` filter is skipped) and, for a gated table, the read scope (so a row moved out of the
+     * caller's read-visible set is skipped even when its delete policy would still allow the delete) plus the
+     * relation child filter the page read used. A `{ hard: true }` erase relaxes the soft-delete scope
+     * (`includeDeleted`) so it can reach — and physically remove — a row an earlier delete of the page
+     * soft-deleted; the filters still apply.
      */
-    const deleteLocated = async (id: string, tableName: string, gated: boolean, deleteOptions: undefined | { hard: boolean }): Promise<boolean> => {
-        if (!gated) {
-            const existing = await base.get(id, tableName);
+    const deleteLocated = async (
+        id: string,
+        tableName: string,
+        gated: boolean,
+        deleteOptions: undefined | { hard: boolean },
+        where?: WhereInput,
+    ): Promise<boolean> => {
+        const rowWhere = mergeBaseWhere(where, { _id: id });
+        const scope = deleteOptions?.hard === true ? { includeDeleted: true } : {};
 
-            if (!existing || isSoftDeleted(tableName, existing, deleteOptions)) {
-                return false;
-            }
-
-            await base.delete(id, tableName, deleteOptions);
-
-            return true;
-        }
-
-        // `includeDeleted` only for a hard delete: a soft delete must treat a row an earlier delete of the
-        // page already tombstoned as gone (the writer's delete is a no-op for it), so it is not re-counted.
-        // `relationBaseWhere` mirrors the page read, so a relation-based read policy that matches through a
-        // child the caller can no longer read does not sneak the parent back into the erase.
-        const row = await raw.findFirst(tableName, {
-            baseWhere: readBase(tableName).baseWhere,
-            ...(deleteOptions?.hard === true ? { includeDeleted: true } : {}),
-            limit: 1,
-            relationBaseWhere: relationReadFilter,
-            where: { _id: id },
-        });
+        const row = gated
+            ? await raw.findFirst(tableName, {
+                  baseWhere: readBase(tableName).baseWhere,
+                  ...scope,
+                  limit: 1,
+                  relationBaseWhere: relationReadFilter,
+                  where: rowWhere,
+              })
+            : await base.findFirst(tableName, { ...scope, limit: 1, where: rowWhere });
 
         if (!row || isSoftDeleted(tableName, row, deleteOptions)) {
             return false;
         }
 
-        if (!allowsWrite(tableName, "delete", row)) {
-            // Same table-agnostic message as `gateById`.
-            throw new LunoraError("FORBIDDEN", "delete denied by policy");
+        if (gated) {
+            if (!allowsWrite(tableName, "delete", row)) {
+                // Same table-agnostic message as `gateById`.
+                throw new LunoraError("FORBIDDEN", "delete denied by policy");
+            }
+
+            await raw.delete(id, tableName, deleteOptions);
+
+            return true;
         }
 
-        await raw.delete(id, tableName, deleteOptions);
+        await base.delete(id, tableName, deleteOptions);
 
         return true;
     };
@@ -1255,9 +1257,10 @@ const wrapDatabase = (base: RlsDatabase, raw: RlsDatabase, steps: ReadonlyArray<
      * open; an ACTION deliberately runs outside that boundary (its external I/O cannot be rolled back), and the
      * `.global()` / cascade / trigger tables `DatabaseWriterLike.deleteRereadTables` lists can change under an
      * `await` even inside a mutation. In either case a concurrent write could reassign a later row before its
-     * delete, so each row is re-located through {@link deleteLocated} instead of trusting the image.
+     * delete, so each row is re-located through {@link deleteLocated} instead of trusting the image. `where`, when
+     * given (`deleteWhere`), is the caller's filter — re-applied on the fresh row so a row that left it is skipped.
      */
-    const deleteReadRows = async (tableName: string, rows: ReadonlyArray<Record<string, unknown>>, hard?: boolean): Promise<number> => {
+    const deleteReadRows = async (tableName: string, rows: ReadonlyArray<Record<string, unknown>>, hard?: boolean, where?: WhereInput): Promise<number> => {
         const gated = policyTables.has(tableName);
         const writer = gated ? raw : base;
         const deleteOptions = hard === undefined ? undefined : { hard };
@@ -1270,11 +1273,11 @@ const wrapDatabase = (base: RlsDatabase, raw: RlsDatabase, steps: ReadonlyArray<
             const id = String(row["_id"]);
 
             // The image read before the page began may be stale (see `reread`): locate the row again. A row an
-            // earlier delete of this page already removed (a cascade, a trigger, another shard, a soft delete) is
-            // skipped without touching any writer.
+            // earlier delete of this page already removed (a cascade, a trigger, another shard, a soft delete) or
+            // one that no longer matches the caller's filter is skipped without touching any writer.
             if (reread) {
                 // eslint-disable-next-line no-await-in-loop -- sequential, mirrors looped single deletes
-                if (await deleteLocated(id, tableName, gated, deleteOptions)) {
+                if (await deleteLocated(id, tableName, gated, deleteOptions, where)) {
                     deleted += 1;
                 }
 
@@ -1444,7 +1447,7 @@ const wrapDatabase = (base: RlsDatabase, raw: RlsDatabase, steps: ReadonlyArray<
 
             assertBatchLimit(ids.length, options?.limit, "deleteWhere");
 
-            return { deleted: await deleteReadRows(tableName, resolved.page) };
+            return { deleted: await deleteReadRows(tableName, resolved.page, undefined, where) };
         },
 
         async findFirst(tableName, args) {
