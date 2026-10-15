@@ -1997,6 +1997,30 @@ describe("rls — batch write path", () => {
         expect(filters[0]).toBe(filters[1]);
     });
 
+    it("deleteWhere re-locates a policy-less row with the relation read filter applied", async () => {
+        expect.assertions(2);
+
+        const database = createFakeDatabase([{ _id: "P", table: "plain" }]);
+
+        Object.assign(database.writer, { deleteRereadTables: new Set(["plain"]) });
+
+        let rereadArgs: unknown;
+        database.writer.findFirst = async (_tableName, args) => {
+            rereadArgs = args;
+
+            return { _id: "P", table: "plain" };
+        };
+
+        // `plain` carries no policy; the erase is scoped only by the caller's relational `where`, whose child
+        // hop must still be filtered by `relationReadFilter` on the re-location read.
+        const handler = lunora.action.use(rlsForTest<TestContext>([])).action(async ({ ctx }) => ctx.db.deleteWhere("plain", { parent: { id: "child" } }));
+
+        await handler.handler(makeContext(database, "u1"), {});
+
+        expect((rereadArgs as { relationBaseWhere?: unknown }).relationBaseWhere).toBeTypeOf("function");
+        expect(database.calls.filter((call) => call.method === "delete")).toHaveLength(1);
+    });
+
     it("wipeShard fails closed under rls() instead of erasing only policy-visible rows", async () => {
         expect.assertions(2);
 

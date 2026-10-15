@@ -1224,7 +1224,7 @@ const wrapDatabase = (base: RlsDatabase, raw: RlsDatabase, steps: ReadonlyArray<
                   relationBaseWhere: relationReadFilter,
                   where: rowWhere,
               })
-            : await base.findFirst(tableName, { ...scope, limit: 1, where: rowWhere });
+            : await base.findFirst(tableName, { ...scope, limit: 1, relationBaseWhere: relationReadFilter, where: rowWhere });
 
         if (!row || isSoftDeleted(tableName, row, deleteOptions)) {
             return false;
