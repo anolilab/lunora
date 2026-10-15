@@ -143,6 +143,15 @@ export const packages: PackageInfo[] = [
         slug: "values",
     },
     {
+        accentColor: categoryColors["Core Runtime"]!,
+        category: "Core Runtime",
+        description: "Wire codec and stable keys shared by every Lunora tier",
+        features: [],
+        name: "Wire",
+        npmName: "@lunora/wire",
+        slug: "wire",
+    },
+    {
         accentColor: categoryColors["Platform Hosts"]!,
         category: "Platform Hosts",
         description: "The Cloudflare host: the platform contracts over Durable Object primitives.",

@@ -122,6 +122,7 @@ const TIER_1 = [
     "server",
     "values",
     "errors",
+    "wire",
     "runtime",
     "do",
     "client",

@@ -1,6 +1,5 @@
+import { encodeWire, needsWireEncoding } from "@lunora/wire";
 import { describe, expect, it } from "vitest";
-
-import { encodeWire, needsWireEncoding } from "../../../shared/wire-codec";
 
 /**
  * `encodeDocJson` skips `encodeWire` when `needsWireEncoding` says the value is

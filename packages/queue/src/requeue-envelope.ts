@@ -9,14 +9,13 @@
  * key is delivered as the plain body it is, under the broker's own id. And
  * `ctx.queues` refuses to send the reserved key at all ({@link hasRequeueKey}).
  *
- * The body travels as the JSON text of its wire encoding (`shared/wire-codec`),
+ * The body travels as the JSON text of its wire encoding (`packages/wire/src/wire-codec`),
  * so the MAC covers exact bytes, a `bigint`/`Date`/bytes body survives, and a
  * dead-lettered copy stays readable JSON.
  */
 // eslint-disable-next-line import/no-extraneous-dependencies -- @lunora/dispatch is a devDependency on purpose: packem inlines it into this bundle, so it is not a published runtime dep
 import { signRequeue, verifyRequeue } from "@lunora/dispatch";
-
-import { decodeWire, encodeWire } from "../../../shared/wire-codec";
+import { decodeWire, encodeWire } from "@lunora/wire";
 
 /** The reserved body key a re-enqueued copy carries. */
 const REQUEUED_KEY = "$lunora.requeued$";

@@ -1,7 +1,7 @@
 import type { LunoraErrorCode } from "@lunora/errors";
 import { LunoraError } from "@lunora/errors";
+import { decodeWire } from "@lunora/wire";
 
-import { decodeWire } from "../../../shared/wire-codec";
 import { getRetryAfterMs, TransportError } from "./errors";
 import type { SubscriptionError } from "./subscription";
 import type { ServerErrorMessage } from "./types";

@@ -15,9 +15,9 @@
 import { LunoraError } from "@lunora/errors";
 import type { ValidatorLike } from "@lunora/shard-engine";
 import { BIGINT_KEY_DIGITS, bigintSqlKey, decodeBigintSqlKey, decodeFloat64SqlKey, float64SqlKey } from "@lunora/shard-engine";
+import { decodeWire, encodeWire, needsWireEncoding, WIRE_TAG } from "@lunora/wire";
 
 import { effectiveKind } from "../../../shared/effective-kind";
-import { decodeWire, encodeWire, needsWireEncoding, WIRE_TAG } from "../../../shared/wire-codec";
 
 /**
  * Marks a stored column as wire-encoded. Reuses {@link WIRE_TAG} rather than

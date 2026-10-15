@@ -22,8 +22,8 @@ import { LunoraError } from "@lunora/errors";
 import type { SchemaLike } from "@lunora/shard-engine";
 import { isInternalTableName } from "@lunora/shard-engine";
 import { effectiveColumnKind, sqliteDecode, sqliteEncode } from "@lunora/sql-store";
+import { encodeWire, needsWireEncoding } from "@lunora/wire";
 
-import { encodeWire, needsWireEncoding } from "../../../shared/wire-codec";
 import type { D1Exec } from "./d1-ctx-db";
 import { decodeGlobalRow, runD1GlobalTableMigrations } from "./d1-ctx-db";
 // The one canonical SQL identifier quoter (bundler-inlined via `./dialect` from

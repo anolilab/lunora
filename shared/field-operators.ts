@@ -17,7 +17,7 @@
  * the bundler; keep it dependency-free.
  */
 import { expandFieldPaths, FieldPathError } from "./json-field-path";
-import { isPlainObject } from "./wire-codec";
+import { isPlainObject } from "./is-plain-object";
 
 /** What a column has to be for an operator to apply to it. */
 type OperatorKind = "boolean" | "number";

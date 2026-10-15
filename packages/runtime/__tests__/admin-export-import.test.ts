@@ -867,7 +867,7 @@ describe("backup registry snapshot → admin import", () => {
      * question HERE is the NDJSON framing — `table` and `doc` on every line. That
      * the item's mirror still agrees with the reference is pinned separately, by
      * `packages/cli/__tests__/commands/registry-backup-item.test.ts`, which builds
-     * its expected bytes from `shared/wire-codec`.
+     * its expected bytes from `packages/wire/src/wire-codec`.
      */
     const itemToNdjson = async (): Promise<(table: string, rows: ReadonlyArray<Record<string, unknown>>) => string> => {
         // Spans lines: the expression is an arrow whose body sits on the next one.
@@ -877,7 +877,7 @@ describe("backup registry snapshot → admin import", () => {
             throw new Error("could not locate `toNdjson` in registry/backup/backup.ts");
         }
 
-        const codecPath = resolvePath(dirname(fileURLToPath(import.meta.url)), "..", "..", "..", "shared", "wire-codec.ts");
+        const codecPath = resolvePath(dirname(fileURLToPath(import.meta.url)), "..", "..", "wire", "src", "wire-codec.ts");
         const compiled = transformSync(`import { encodeWire } from ${JSON.stringify(pathToFileURL(codecPath).href)};\nexport const toNdjson = ${match[1]};`, {
             loader: "ts",
         }).code;

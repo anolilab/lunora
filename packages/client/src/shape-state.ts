@@ -1,5 +1,6 @@
+import { decodeWire } from "@lunora/wire";
+
 import { evictOldestEntry } from "../../../shared/evict-oldest";
-import { decodeWire } from "../../../shared/wire-codec";
 import { connectionKey } from "./connection-state";
 import type { SubscriptionErrorCallback, SyncWatermark } from "./subscription";
 import { fanSubscriptionError } from "./subscription";

@@ -1,7 +1,7 @@
 import { v } from "@lunora/values";
+import { encodeWire } from "@lunora/wire";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { encodeWire } from "../../../shared/wire-codec";
 import { defineWorkflowEvent } from "../src/define-event";
 import { defineStep } from "../src/define-step";
 import { createWorkflowRunContext } from "../src/run-context";

@@ -2929,7 +2929,7 @@ export const stamp = query.input({}).query(async (): Promise<Stamp> => ({ at: 1 
 
             // Naming a type publishes every member of it. `Money` is a class, so
             // `encodeWire` throws on the value at the send site
-            // (`shared/wire-codec.ts`) — but `import("../lib/money.js").Envelope`
+            // (`packages/wire/src/wire-codec.ts`) — but `import("../lib/money.js").Envelope`
             // would type `result.at.format()` for every caller, a runtime
             // TypeError with no compile error anywhere. Structural expansion
             // already declined a bare class for exactly this reason; qualifying

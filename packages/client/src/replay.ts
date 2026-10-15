@@ -9,8 +9,8 @@
  */
 import type { LunoraErrorCode } from "@lunora/errors";
 import { LunoraError } from "@lunora/errors";
+import { decodeWire } from "@lunora/wire";
 
-import { decodeWire } from "../../../shared/wire-codec";
 import { isSlotEnvelope } from "./call-wire";
 import { AUTH_REPLAY_ERROR_CODES, getRetryAfterMs, TransportError } from "./errors";
 import type { LunoraClientError, RpcEnvelopeBody } from "./wire-errors";

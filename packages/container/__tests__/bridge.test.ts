@@ -1,6 +1,6 @@
+import { encodeWire } from "@lunora/wire";
 import { describe, expect, it, vi } from "vitest";
 
-import { encodeWire } from "../../../shared/wire-codec";
 import type { FetchLike } from "../src/bridge";
 import { ContainerBridgeError, createContainerBridge } from "../src/bridge";
 

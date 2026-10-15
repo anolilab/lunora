@@ -27,12 +27,12 @@
  */
 import { LunoraError } from "@lunora/errors";
 import { redactArgs } from "@lunora/observability";
+import { stableStringify } from "@lunora/wire";
 
 import type { OtlpResourceAttributes } from "../../../shared/otlp";
 import { mergeHeaders, wrapResourceLogs, wrapResourceMetrics, wrapResourceSpans } from "../../../shared/otlp";
 import { createSignalBatcher } from "../../../shared/otlp-batch";
 import { mergeResourceAttributes } from "../../../shared/otlp-resource";
-import { stableStringify } from "../../../shared/stable-key";
 import type { LogEvent, MetricEvent, ObservabilityEvent, ObservabilitySink, ObservabilitySinkContext, SpanEvent } from "./observability";
 import { otlpLogBody, otlpMetricBody, otlpPost, otlpSend, otlpSpanBody, otlpTraceBody } from "./otlp-export";
 

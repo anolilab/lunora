@@ -1,8 +1,8 @@
 import type { ColumnMetaLike, SchemaLike, ValidatorLike } from "@lunora/shard-engine";
 import { sqliteEncode } from "@lunora/sql-store";
+import { decodeWire } from "@lunora/wire";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import { decodeWire } from "../../../shared/wire-codec";
 import { facetGlobalColumn, listGlobalTables, readGlobalTablePage } from "../src/introspect";
 import { createD1Exec } from "./_helpers/node-sqlite-d1";
 

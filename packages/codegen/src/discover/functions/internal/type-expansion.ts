@@ -283,7 +283,7 @@ const isClassInstance = (type: Type): boolean =>
  * compile error anywhere) applies just as much when the class is a MEMBER of the
  * type being named. Printing `import("./money").Envelope` publishes
  * `at.format()` to every caller for a value that cannot cross the wire at all —
- * `shared/wire-codec.ts` throws on it at the send site.
+ * `packages/wire/src/wire-codec.ts` throws on it at the send site.
  *
  * Keyed on the same script-mode test the global exemption uses, so the built-ins
  * that DO round-trip (`Date`, `URL`, `Map`, `Set`, the typed arrays) are not
@@ -472,7 +472,7 @@ const expandUnreachableType = (type: Type, node: Node, handlerFilePath: string, 
 
     // A CLASS INSTANCE is not reproducible, and expanding it would be worse than
     // declining. Answered before every branch below — including the qualifier —
-    // so no path can publish one. `encodeWire` refuses a class instance outright (`shared/wire-codec.ts`
+    // so no path can publish one. `encodeWire` refuses a class instance outright (`packages/wire/src/wire-codec.ts`
     // — only plain objects and the supported built-ins round-trip), so no such value
     // ever reaches a caller; and the structural expansion would describe one wrongly
     // in three directions at once: methods and getters live on the prototype and are

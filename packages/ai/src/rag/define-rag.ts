@@ -1,11 +1,11 @@
 import { jsonSchema, tool } from "@ai-sdk/provider-utils";
 import { isLunoraError, LunoraError } from "@lunora/errors";
-import type { EmbeddingModel } from "ai";
-
-// Repo-root inlined helper (see shared/stable-key.ts) — the canonical
+// Repo-root inlined helper (see packages/wire/src/stable-key.ts) — the canonical
 // code-point-stable, recursively-sorted encoder, used here to give a source's
 // `metadata` one canonical form to hash (see `sourceIdentity`).
-import { stableStringify } from "../../../../shared/stable-key";
+import { stableStringify } from "@lunora/wire";
+import type { EmbeddingModel } from "ai";
+
 import type { AiMetrics, AiSpan, AiTracer } from "../types";
 import { modelIdOf, recordUsage } from "../usage";
 import fixedWindowChunks from "./chunk";

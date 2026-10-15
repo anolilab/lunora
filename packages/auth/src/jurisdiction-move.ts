@@ -49,10 +49,10 @@
  */
 /* eslint-disable unicorn/no-null -- SQL NULL: a bound parameter or a hashed column value must be `null`, which `undefined` is not */
 import { LunoraError } from "@lunora/errors";
+import { decodeWire, encodeWire } from "@lunora/wire";
 
 import { contentDigest } from "../../../shared/content-digest";
 import { quoteIdentifier } from "../../../shared/quote-identifier";
-import { decodeWire, encodeWire } from "../../../shared/wire-codec";
 import type { DoStorageLike } from "./do-store";
 
 /** The internal route both halves of the move are served on. Not part of `/api/auth/*`. */

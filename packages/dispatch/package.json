@@ -54,7 +54,8 @@
         "fallow:health": "fallow health --score"
     },
     "dependencies": {
-        "@lunora/errors": "workspace:*"
+        "@lunora/errors": "workspace:*",
+        "@lunora/wire": "workspace:*"
     },
     "devDependencies": {
         "@types/node": "catalog:types",

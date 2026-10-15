@@ -1,6 +1,6 @@
+import { encodeWire } from "@lunora/wire";
 import { describe, expect, it } from "vitest";
 
-import { encodeWire } from "../../../shared/wire-codec";
 import { indexReplaySlots, replaySlotVerdict } from "../src/replay";
 
 describe("indexReplaySlots", () => {

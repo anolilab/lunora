@@ -1,5 +1,6 @@
 import type { FunctionReference } from "@lunora/client";
 import { useLunora } from "@lunora/react";
+import { decodeDocument, decodeWire, encodeWire, isPlainObject } from "@lunora/wire";
 import type { OnChangeFn, SortingState } from "@tanstack/react-table";
 import { useEffect, useMemo, useRef, useState } from "react";
 
@@ -7,7 +8,6 @@ import { useEffect, useMemo, useRef, useState } from "react";
 // codec the shard writer stores `__doc__` with, so display and save agree on the
 // encoding rather than studio growing a second, drifting decoder.
 import { drainBulkOp } from "../../../../../../shared/bulk-drain";
-import { decodeDocument, decodeWire, encodeWire, isPlainObject } from "../../../../../../shared/wire-codec";
 import { useAdminQuery } from "../../../hooks/use-admin-query";
 import useDebounced from "../../../hooks/use-debounced";
 import useMirroredRef from "../../../hooks/use-mirrored-ref";

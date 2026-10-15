@@ -1,4 +1,5 @@
-import { encodeArgsOrThrow } from "../../../shared/wire-codec";
+import { encodeArgsOrThrow } from "@lunora/wire";
+
 import { CORRUPT_BLOB, singleBlobStore } from "./single-blob-store";
 import type { PersistedMutation, PersistenceAdapter } from "./types";
 

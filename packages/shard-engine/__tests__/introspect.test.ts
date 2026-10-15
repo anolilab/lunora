@@ -1,6 +1,6 @@
+import { decodeWire } from "@lunora/wire";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import { decodeWire } from "../../../shared/wire-codec";
 import type { SchemaLike, SqlCursor, SqlExec } from "../src/ctx-db";
 import { createShardCtxDb as createShardContextDatabase, runShardMigrations } from "../src/ctx-db";
 import type { FilterClause } from "../src/introspect";

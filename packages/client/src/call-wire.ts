@@ -1,4 +1,5 @@
-import { decodeWire, encodeWire } from "../../../shared/wire-codec";
+import { decodeWire, encodeWire } from "@lunora/wire";
+
 import type { LunoraClientError } from "./wire-errors";
 import { slotError } from "./wire-errors";
 
@@ -10,7 +11,7 @@ import { slotError } from "./wire-errors";
  * with `label` (e.g. `args for 'messages:send'`) turns it into an actionable message
  * while preserving the original via `cause`.
  *
- * The client's broader-payload sibling of `shared/wire-codec.ts`'s
+ * The client's broader-payload sibling of `packages/wire/src/wire-codec.ts`'s
  * `encodeArgsOrThrow`, which the call-envelope producers share: this one also
  * labels a whisper payload and a shape's args, neither of which is a function's
  * `args`, so it keeps its own free-form `label`.

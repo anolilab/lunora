@@ -1,7 +1,7 @@
 import { LunoraError } from "@lunora/errors";
+import { encodeWire } from "@lunora/wire";
 import { describe, expect, it, vi } from "vitest";
 
-import { encodeWire } from "../../../shared/wire-codec";
 import { createDispatchLogger } from "../src/create-dispatch-logger";
 import { createDispatchRunner, isDeterministicDispatchFailure, isDispatchDecline } from "../src/create-dispatch-runner";
 

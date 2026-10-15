@@ -1,7 +1,7 @@
 import { LunoraError } from "@lunora/errors";
+import { decodeWire, encodeArgsOrThrow } from "@lunora/wire";
 
 import { collectPages } from "../../../shared/collect-pages";
-import { decodeWire, encodeArgsOrThrow } from "../../../shared/wire-codec";
 import { assertSchedulerOptions, callDO, getDO } from "./do-client";
 import type { CronTarget, LunoraSchedulerOptions, RunOptions, Scheduler, ScheduleRecord, ScheduleTargetArgs } from "./types";
 import { isWorkflowReference } from "./types";

@@ -26,10 +26,10 @@
  * `compileOrderBySql` there.
  */
 import { LunoraError } from "@lunora/errors";
+import { decodeWire, encodeWire } from "@lunora/wire";
 
 import { validatorAcceptsNull } from "../../../shared/accepts-null";
 import { readFieldPath } from "../../../shared/json-field-path";
-import { decodeWire, encodeWire } from "../../../shared/wire-codec";
 import type { NullPlacement, OrderByInput, OrderKey, SortDirection, ValidatorLike } from "./schema-types";
 import type { WhereInput } from "./where-types";
 import { SEEK_RANGE } from "./where-types";

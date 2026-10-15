@@ -1,6 +1,6 @@
+import { decodeWire } from "@lunora/wire";
 import { describe, expect, it } from "vitest";
 
-import { decodeWire } from "../../../shared/wire-codec";
 import type { ExecutionContextLike, NotifySubscriptionStoreLike } from "../src/create-worker";
 import { createWorker } from "../src/create-worker";
 import type { ShardNamespaceLike } from "../src/resolve-shard";

@@ -91,8 +91,9 @@
  * a missed one. Write handlers to tolerate that.
  */
 
+import { stableStringify } from "@lunora/wire";
+
 import { contentDigest } from "../../../shared/content-digest";
-import { stableStringify } from "../../../shared/stable-key";
 import type { MutationCtx as MutationContext, QueryCtx as QueryContext, RegisteredFunction } from "./types";
 
 /**

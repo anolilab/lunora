@@ -15,8 +15,8 @@
  * same error with no way to retry.
  */
 import { LunoraError, toErrorBody } from "@lunora/errors";
+import { encodeWire } from "@lunora/wire";
 
-import { encodeWire } from "../../../shared/wire-codec";
 import type { SqlExec } from "./ctx-db";
 import type { DurableStreamRun } from "./durable-stream";
 import { appendStreamChunk, claimStreamRun, deleteStreamRun, finishStreamRun, readStreamChunks, readStreamRun, trimStreamRuns } from "./durable-stream";

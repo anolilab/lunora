@@ -14,7 +14,7 @@ targets the same files (see `sdks/README.md`).
     - Worker endpoints / RPC + WS handshake: `packages/runtime/src/create-worker.ts`
     - RPC + WS client: `packages/client/src/lunora-client.ts`
     - Live-subscription state: `packages/client/src/subscription.ts`
-    - Value codec: `shared/wire-codec.ts`; stable key: `shared/wire-key.ts`
+    - Value codec: `packages/wire/src/wire-codec.ts`; stable key: `packages/wire/src/wire-key.ts`
     - HTTP-SSE stream framing: `packages/client/src/http-stream.ts`
     - Ephemeral WS admin token (plan 095): `shared/ws-admin-token.ts`
 

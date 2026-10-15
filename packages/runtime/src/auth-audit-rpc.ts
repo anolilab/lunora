@@ -1,4 +1,5 @@
-import { encodeWire } from "../../../shared/wire-codec";
+import { encodeWire } from "@lunora/wire";
+
 import { LunoraError } from "./errors";
 
 /**

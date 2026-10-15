@@ -35,8 +35,8 @@
  */
 
 import { LunoraError } from "@lunora/errors";
+import { stableWireKey } from "@lunora/wire";
 
-import { stableWireKey } from "../../../shared/wire-key";
 import type { SqlExec } from "./ctx-db";
 import { runSql } from "./do-exec";
 import { CURSOR_PREFIX, encodeCursor } from "./query-args";

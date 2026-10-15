@@ -1,10 +1,10 @@
 import { isLunoraError, LunoraError, toErrorBody } from "@lunora/errors";
 import type { Infer, Validator, ValidatorKind } from "@lunora/values";
 import { ValidationError } from "@lunora/values";
+import { encodeWire } from "@lunora/wire";
 import type { Context } from "hono";
 import { Hono } from "hono";
 
-import { encodeWire } from "../../../shared/wire-codec";
 import applyOutput from "./apply-output";
 import type { EmptyArgs } from "./builder/index";
 import { parseValidatorMap } from "./functions";

@@ -14,12 +14,12 @@
 
 import { LunoraError } from "@lunora/errors";
 import type { ColumnMetaLike, TableDefinitionLike } from "@lunora/shard-engine";
+import { needsWireEncoding } from "@lunora/wire";
 import { SQL, sql } from "drizzle-orm";
 
 import type { RangeOperandType } from "../../../shared/json-field-path";
 import { FieldPathError, isFieldPath, splitFieldPath, SQLITE_JSON_TYPE_NAMES } from "../../../shared/json-field-path";
 import { jsonPathSegment } from "../../../shared/json-path-segment";
-import { needsWireEncoding } from "../../../shared/wire-codec";
 import type { SqlDialect, SqlRunResult } from "./dialect";
 import { effectiveColumnKind, sqliteDecode, sqliteEncode } from "./value-codec";
 

@@ -2556,6 +2556,9 @@ importers:
       '@lunora/shard-engine':
         specifier: workspace:*
         version: link:../shard-engine
+      '@lunora/wire':
+        specifier: workspace:*
+        version: link:../wire
       '@types/node':
         specifier: catalog:types
         version: 26.6.4
@@ -2592,6 +2595,9 @@ importers:
       '@lunora/errors':
         specifier: workspace:*
         version: link:../errors
+      '@lunora/wire':
+        specifier: workspace:*
+        version: link:../wire
       ai:
         specifier: catalog:ai
         version: 7.0.127(zod@4.6.5)
@@ -2635,6 +2641,9 @@ importers:
       '@lunora/ratelimit':
         specifier: workspace:*
         version: link:../ratelimit
+      '@lunora/wire':
+        specifier: workspace:*
+        version: link:../wire
       '@visulima/storage-client':
         specifier: catalog:storage
         version: 1.0.9(@tanstack/react-query@5.102.8(react@19.3.0))(@tanstack/solid-query@5.101.3(solid-js@2.0.0-rc.13))(@tanstack/svelte-query@6.1.37(svelte@5.57.1(@typescript-eslint/types@8.71.0)))(@tanstack/vue-query@5.101.3(vue@3.5.43(typescript@6.0.3)))(react@19.3.0)(solid-js@2.0.0-rc.13)(svelte@5.57.1(@typescript-eslint/types@8.71.0))(vue@3.5.43(typescript@6.0.3))
@@ -2733,6 +2742,9 @@ importers:
       '@lunora/values':
         specifier: workspace:*
         version: link:../values
+      '@lunora/wire':
+        specifier: workspace:*
+        version: link:../wire
       '@visulima/disposable-email-domains':
         specifier: catalog:email
         version: 1.1.25
@@ -3101,6 +3113,9 @@ importers:
       '@lunora/testing':
         specifier: workspace:*
         version: link:../testing
+      '@lunora/wire':
+        specifier: workspace:*
+        version: link:../wire
       '@types/node':
         specifier: catalog:types
         version: 26.6.4
@@ -3137,6 +3152,9 @@ importers:
       '@lunora/errors':
         specifier: workspace:*
         version: link:../errors
+      '@lunora/wire':
+        specifier: workspace:*
+        version: link:../wire
       '@visulima/storage-client':
         specifier: catalog:storage
         version: 1.0.9(@tanstack/react-query@5.102.8(react@19.3.0))(@tanstack/solid-query@5.101.3(solid-js@2.0.0-rc.13))(@tanstack/svelte-query@6.1.37(svelte@5.57.1(@typescript-eslint/types@8.71.0)))(@tanstack/vue-query@5.101.3(vue@3.5.43(typescript@6.0.3)))(react@19.3.0)(solid-js@2.0.0-rc.13)(svelte@5.57.1(@typescript-eslint/types@8.71.0))(vue@3.5.43(typescript@6.0.3))
@@ -3387,6 +3405,9 @@ importers:
       '@lunora/errors':
         specifier: workspace:*
         version: link:../errors
+      '@lunora/wire':
+        specifier: workspace:*
+        version: link:../wire
     devDependencies:
       '@cloudflare/containers':
         specifier: catalog:cloudflare
@@ -3436,6 +3457,9 @@ importers:
       '@lunora/sql-store':
         specifier: workspace:*
         version: link:../sql-store
+      '@lunora/wire':
+        specifier: workspace:*
+        version: link:../wire
       drizzle-orm:
         specifier: catalog:drizzle
         version: 0.45.3(@cloudflare/workers-types@5.20261004.1(patch_hash=4bd971e7c2b6760a24ef737fb6e2cb17b2cf8f50615cff5e2d1786e677436a93))(@electric-sql/pglite@0.5.8)(@opentelemetry/api@1.9.1)(@types/better-sqlite3@9.6.0)(@types/pg@8.23.1)(better-sqlite3@13.0.3)(kysely@0.29.6)(mysql2@3.24.5(@types/node@26.6.4))(pg@8.23.1)(postgres@3.4.9)(sql.js@1.14.1)
@@ -3525,6 +3549,9 @@ importers:
       '@lunora/errors':
         specifier: workspace:*
         version: link:../errors
+      '@lunora/wire':
+        specifier: workspace:*
+        version: link:../wire
     devDependencies:
       '@types/node':
         specifier: catalog:types
@@ -3568,6 +3595,9 @@ importers:
       '@lunora/values':
         specifier: workspace:*
         version: link:../values
+      '@lunora/wire':
+        specifier: workspace:*
+        version: link:../wire
       drizzle-orm:
         specifier: catalog:drizzle
         version: 0.45.3(@cloudflare/workers-types@5.20261004.1(patch_hash=4bd971e7c2b6760a24ef737fb6e2cb17b2cf8f50615cff5e2d1786e677436a93))(@electric-sql/pglite@0.5.8)(@opentelemetry/api@1.9.1)(@types/better-sqlite3@9.6.0)(@types/pg@8.23.1)(better-sqlite3@13.0.3)(kysely@0.29.6)(mysql2@3.24.5(@types/node@26.6.4))(pg@8.23.1)(postgres@3.4.9)(sql.js@1.14.1)
@@ -3668,6 +3698,9 @@ importers:
       '@lunora/errors':
         specifier: workspace:*
         version: link:../errors
+      '@lunora/wire':
+        specifier: workspace:*
+        version: link:../wire
       '@openfeature/server-sdk':
         specifier: catalog:flags
         version: 1.23.0(@openfeature/core@1.12.0)
@@ -3894,6 +3927,9 @@ importers:
       '@lunora/shard-engine':
         specifier: workspace:*
         version: link:../shard-engine
+      '@lunora/wire':
+        specifier: workspace:*
+        version: link:../wire
       '@modelcontextprotocol/sdk':
         specifier: catalog:mcp
         version: 1.32.0(@cfworker/json-schema@4.1.1)(supports-color@10.2.2)(zod@4.6.5)
@@ -4014,6 +4050,9 @@ importers:
       '@lunora/shard-engine':
         specifier: workspace:*
         version: link:../shard-engine
+      '@lunora/wire':
+        specifier: workspace:*
+        version: link:../wire
       '@visulima/redact':
         specifier: catalog:redact
         version: 5.0.0(compromise@14.15.1)
@@ -4325,6 +4364,9 @@ importers:
       '@lunora/server':
         specifier: workspace:*
         version: link:../server
+      '@lunora/wire':
+        specifier: workspace:*
+        version: link:../wire
       fflate:
         specifier: catalog:privacy
         version: 0.8.3
@@ -4353,6 +4395,9 @@ importers:
       '@lunora/platform':
         specifier: workspace:*
         version: link:../platform
+      '@lunora/wire':
+        specifier: workspace:*
+        version: link:../wire
     devDependencies:
       '@cloudflare/vitest-plugin':
         specifier: catalog:cloudflare
@@ -4454,6 +4499,9 @@ importers:
       '@lunora/ratelimit':
         specifier: workspace:*
         version: link:../ratelimit
+      '@lunora/wire':
+        specifier: workspace:*
+        version: link:../wire
       '@visulima/storage-client':
         specifier: catalog:storage
         version: 1.0.9(@tanstack/react-query@5.101.4(react@19.3.0))(@tanstack/solid-query@5.101.3(solid-js@2.0.0-rc.13))(@tanstack/svelte-query@6.1.37(svelte@5.57.1(@typescript-eslint/types@8.71.0)))(@tanstack/vue-query@5.101.3(vue@3.5.43(typescript@6.0.3)))(react@19.3.0)(solid-js@2.0.0-rc.13)(svelte@5.57.1(@typescript-eslint/types@8.71.0))(vue@3.5.43(typescript@6.0.3))
@@ -4567,6 +4615,9 @@ importers:
 
   packages/replica:
     dependencies:
+      '@lunora/wire':
+        specifier: workspace:*
+        version: link:../wire
       '@sqlite.org/sqlite-wasm':
         specifier: '*'
         version: 3.41.2
@@ -4677,6 +4728,9 @@ importers:
       '@lunora/platform':
         specifier: workspace:*
         version: link:../platform
+      '@lunora/wire':
+        specifier: workspace:*
+        version: link:../wire
     devDependencies:
       '@cloudflare/vitest-plugin':
         specifier: catalog:cloudflare
@@ -4732,6 +4786,9 @@ importers:
       '@lunora/platform':
         specifier: workspace:*
         version: link:../platform
+      '@lunora/wire':
+        specifier: workspace:*
+        version: link:../wire
       cron-parser:
         specifier: catalog:tooling
         version: 5.10.1
@@ -4858,6 +4915,9 @@ importers:
       '@lunora/values':
         specifier: workspace:*
         version: link:../values
+      '@lunora/wire':
+        specifier: workspace:*
+        version: link:../wire
       drizzle-orm:
         specifier: catalog:drizzle
         version: 0.45.3(@cloudflare/workers-types@5.20261004.1(patch_hash=4bd971e7c2b6760a24ef737fb6e2cb17b2cf8f50615cff5e2d1786e677436a93))(@electric-sql/pglite@0.5.8)(@opentelemetry/api@1.9.1)(@types/better-sqlite3@9.6.0)(@types/pg@8.23.1)(better-sqlite3@13.0.3)(kysely@0.29.6)(mysql2@3.24.5(@types/node@26.6.4))(pg@8.23.1)(postgres@3.4.9)(sql.js@1.14.1)
@@ -4919,6 +4979,9 @@ importers:
       '@lunora/platform':
         specifier: workspace:*
         version: link:../platform
+      '@lunora/wire':
+        specifier: workspace:*
+        version: link:../wire
       drizzle-orm:
         specifier: catalog:drizzle
         version: 0.45.3(@cloudflare/workers-types@5.20261004.1(patch_hash=4bd971e7c2b6760a24ef737fb6e2cb17b2cf8f50615cff5e2d1786e677436a93))(@electric-sql/pglite@0.5.8)(@opentelemetry/api@1.9.1)(@types/better-sqlite3@9.6.0)(@types/pg@8.23.1)(better-sqlite3@13.0.3)(kysely@0.29.6)(mysql2@3.24.5(@types/node@26.6.4))(pg@8.23.1)(postgres@3.4.9)(sql.js@1.14.1)
@@ -4965,6 +5028,9 @@ importers:
       '@lunora/ratelimit':
         specifier: workspace:*
         version: link:../ratelimit
+      '@lunora/wire':
+        specifier: workspace:*
+        version: link:../wire
       '@visulima/storage-client':
         specifier: catalog:storage
         version: 1.0.9(@tanstack/react-query@5.102.8(react@19.3.0))(@tanstack/solid-query@5.101.3(solid-js@1.9.15))(@tanstack/svelte-query@6.1.37(svelte@5.57.1(@typescript-eslint/types@8.71.0)))(@tanstack/vue-query@5.101.3(vue@3.5.43(typescript@6.0.3)))(react@19.3.0)(solid-js@1.9.15)(svelte@5.57.1(@typescript-eslint/types@8.71.0))(vue@3.5.43(typescript@6.0.3))
@@ -5020,6 +5086,9 @@ importers:
       '@lunora/shard-engine':
         specifier: workspace:*
         version: link:../shard-engine
+      '@lunora/wire':
+        specifier: workspace:*
+        version: link:../wire
       drizzle-orm:
         specifier: catalog:drizzle
         version: 0.45.3(@cloudflare/workers-types@5.20261004.1(patch_hash=4bd971e7c2b6760a24ef737fb6e2cb17b2cf8f50615cff5e2d1786e677436a93))(@electric-sql/pglite@0.5.8)(@opentelemetry/api@1.9.1)(@types/better-sqlite3@9.6.0)(@types/pg@8.23.1)(better-sqlite3@13.0.3)(kysely@0.29.6)(mysql2@3.24.5(@types/node@26.6.4))(pg@8.23.1)(postgres@3.4.9)(sql.js@1.14.1)
@@ -5148,6 +5217,9 @@ importers:
       '@lunora/react':
         specifier: workspace:*
         version: link:../react
+      '@lunora/wire':
+        specifier: workspace:*
+        version: link:../wire
       '@tanstack/react-query':
         specifier: catalog:frontend
         version: 5.101.4(react@19.3.0)
@@ -5275,6 +5347,9 @@ importers:
       '@lunora/ratelimit':
         specifier: workspace:*
         version: link:../ratelimit
+      '@lunora/wire':
+        specifier: workspace:*
+        version: link:../wire
       '@visulima/storage-client':
         specifier: catalog:storage
         version: 1.0.9(@tanstack/react-query@5.102.8(react@19.3.0))(@tanstack/solid-query@5.101.3(solid-js@2.0.0-rc.13))(@tanstack/svelte-query@6.1.37(svelte@5.57.1(@typescript-eslint/types@8.71.0)))(@tanstack/vue-query@5.101.3(vue@3.5.43(typescript@6.0.3)))(react@19.3.0)(solid-js@2.0.0-rc.13)(svelte@5.57.1(@typescript-eslint/types@8.71.0))(vue@3.5.43(typescript@6.0.3))
@@ -5333,6 +5408,9 @@ importers:
       '@lunora/server':
         specifier: workspace:*
         version: link:../server
+      '@lunora/wire':
+        specifier: workspace:*
+        version: link:../wire
       '@playwright/test':
         specifier: ^1.61.1
         version: 1.63.0
@@ -5468,6 +5546,9 @@ importers:
       '@lunora/ratelimit':
         specifier: workspace:*
         version: link:../ratelimit
+      '@lunora/wire':
+        specifier: workspace:*
+        version: link:../wire
       '@visulima/storage-client':
         specifier: catalog:storage
         version: 1.0.9(@tanstack/react-query@5.102.8(react@19.3.0))(@tanstack/solid-query@5.101.3(solid-js@2.0.0-rc.13))(@tanstack/svelte-query@6.1.37(svelte@5.57.1(@typescript-eslint/types@8.71.0)))(@tanstack/vue-query@5.101.3(vue@3.5.43(typescript@6.0.3)))(react@19.3.0)(solid-js@2.0.0-rc.13)(svelte@5.57.1(@typescript-eslint/types@8.71.0))(vue@3.5.43(typescript@6.0.3))
@@ -5500,6 +5581,24 @@ importers:
         specifier: catalog:frontend
         version: 3.5.43(typescript@6.0.3)
 
+  packages/wire:
+    devDependencies:
+      '@types/node':
+        specifier: catalog:types
+        version: 26.6.4
+      '@visulima/packem':
+        specifier: catalog:build
+        version: 2.1.0(362c6d1d7e7728cf868e47db0f47e4d6)
+      esbuild:
+        specifier: catalog:build
+        version: 0.28.2
+      typescript:
+        specifier: 6.0.3
+        version: 6.0.3
+      vitest:
+        specifier: catalog:test
+        version: 4.1.11(@opentelemetry/api@1.9.1)(@types/node@26.6.4)(@vitest/ui@4.1.10)(happy-dom@20.14.5)(jsdom@30.1.2(@noble/hashes@2.2.0))(vite@8.3.2(@types/node@26.6.4)(esbuild@0.28.2)(jiti@2.7.0)(terser@5.51.2)(yaml@2.9.1))
+
   packages/workflow:
     dependencies:
       '@lunora/errors':
@@ -5508,6 +5607,9 @@ importers:
       '@lunora/values':
         specifier: workspace:*
         version: link:../values
+      '@lunora/wire':
+        specifier: workspace:*
+        version: link:../wire
     devDependencies:
       '@cloudflare/vitest-plugin':
         specifier: catalog:cloudflare

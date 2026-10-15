@@ -1,11 +1,11 @@
 import { LunoraError } from "@lunora/errors";
+import { decodeWire } from "@lunora/wire";
 // Aliased: this module already uses `sql` for the workerd `SqlExec`, so the drizzle tag is `dsql`.
 import { sql as dsql } from "drizzle-orm";
 
 import { isInternalTableName } from "../../../shared/internal-table-name";
 import { jsonPathSegment } from "../../../shared/json-path-segment";
 import { quoteIdentifier } from "../../../shared/quote-identifier";
-import { decodeWire } from "../../../shared/wire-codec";
 import type { AuditEntry } from "./audit-log";
 import type { SqlExec } from "./ctx-db";
 import { DOC_ORIGINALS_KEY } from "./do-sql";

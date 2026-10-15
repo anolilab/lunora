@@ -1,7 +1,6 @@
 import { buildPokeFrames, diffGlobalMembership, subscriptionListDeltas } from "@lunora/shard-engine";
+import { decodeWire, encodeWire } from "@lunora/wire";
 import { describe, expect, it } from "vitest";
-
-import { decodeWire, encodeWire } from "../../../shared/wire-codec";
 
 /** Parse a wire frame body and wire-decode it, mirroring the client. */
 const decodeFrame = (frame: string): Record<string, unknown> => decodeWire(JSON.parse(frame)) as Record<string, unknown>;

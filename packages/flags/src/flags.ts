@@ -1,11 +1,11 @@
 import { LunoraError } from "@lunora/errors";
+// Repo-root inlined helper (see packages/wire/src/stable-key.ts) — the canonical
+// code-point-stable, recursively-sorted cache-key encoder, so the flags memo
+// keys match the client/react/do dedup semantics.
+import { stableStringify } from "@lunora/wire";
 import type { Client, EvaluationContext, EvaluationDetails, FlagValue, Logger, Provider } from "@openfeature/server-sdk";
 import { ErrorCode, OpenFeature } from "@openfeature/server-sdk";
 
-// Repo-root inlined helper (see shared/stable-key.ts) — the canonical
-// code-point-stable, recursively-sorted cache-key encoder, so the flags memo
-// keys match the client/react/do dedup semantics.
-import { stableStringify } from "../../../shared/stable-key";
 import type { FlagsDefinition, LunoraFlags } from "./types";
 
 /**
@@ -260,7 +260,7 @@ type FlagType = "boolean" | "number" | "object" | "string";
  * Stable memo key over the evaluation's type, key, default, and context.
  *
  * The context portion is encoded with the repo's canonical `stableStringify`
- * (shared/stable-key.ts) so object keys are sorted at *every* depth: two
+ * (packages/wire/src/stable-key.ts) so object keys are sorted at *every* depth: two
  * logically identical contexts that differ only in (possibly nested) key order
  * — `{ org: { id, plan } }` vs `{ org: { plan, id } }` — collapse to one key, so
  * repeated reads of the same flag hit the provider once and stay internally

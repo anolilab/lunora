@@ -21,8 +21,8 @@
 // eslint-disable-next-line import/no-extraneous-dependencies -- @lunora/dispatch is a devDependency on purpose: packem inlines it into this bundle, so it is not a published runtime dep
 import { createDispatchRunner, isDispatchDecline, retryDeclinedMessage, signRequeue, verifyRequeue } from "@lunora/dispatch";
 import { LunoraError } from "@lunora/errors";
+import { encodeWire } from "@lunora/wire";
 
-import { encodeWire } from "../../../shared/wire-codec";
 import type {
     ArgsOf,
     FunctionReference,

@@ -1,10 +1,10 @@
 import { serialize } from "node:v8";
 
 import type { IndexKeyEntry, KeyRange, MutationDelta, SocketAttachment, SubscriptionEnvelope, TransactionHeadroomTracker } from "@lunora/shard-engine";
+import { encodeWire } from "@lunora/wire";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { encodeIdentityHeader, encodeUserIdHeader } from "../../../shared/identity-header";
-import { encodeWire } from "../../../shared/wire-codec";
 import type { DispatchBookmark, QueryReadScope, ShardDOState, SubscriptionOutcome } from "../src/shard-do";
 import { ROOT_DO_SIZE_WARN_BYTES, ROOT_SHARD_NAME, ShardDO, subscriptionListDeltas } from "../src/shard-do";
 

@@ -41,9 +41,9 @@
 // Type-only: keeps `@lunora/runtime` free of a hard (value) dependency on
 // `@lunora/do` while reusing its canonical writer types (see the alias note).
 import type { CrossShardReadArgs, DatabaseWriterLike, QueryPage } from "@lunora/shard-engine";
+import { decodeWire } from "@lunora/wire";
 
 import { encodeIdentityHeader, encodeUserIdHeader } from "../../../shared/identity-header";
-import { decodeWire } from "../../../shared/wire-codec";
 import { LunoraError } from "./errors";
 
 /**

@@ -1,6 +1,6 @@
 import type { LunoraErrorCodeInput } from "@lunora/errors";
+import { stableWireKey } from "@lunora/wire";
 
-import { stableWireKey } from "../../../shared/wire-key";
 import type { FunctionReference } from "./types";
 
 export type SubscriptionCallback = (data: unknown) => void;

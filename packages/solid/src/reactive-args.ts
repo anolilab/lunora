@@ -1,7 +1,7 @@
+import { stableWireKey } from "@lunora/wire";
 import type { Accessor } from "solid-js";
 import { createMemo } from "solid-js";
 
-import { stableWireKey } from "../../../shared/wire-key";
 import type { Disposer } from "./solid-compat";
 import { trackedEffect } from "./solid-compat";
 

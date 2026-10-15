@@ -1,6 +1,6 @@
+import { decodeWire, encodeWire } from "@lunora/wire";
 import { describe, expect, expectTypeOf, it, vi } from "vitest";
 
-import { decodeWire, encodeWire } from "../../../shared/wire-codec";
 import createScheduler from "../src/create-scheduler";
 import { createCronTrigger } from "../src/cron";
 import type { DurableObjectNamespaceLike, DurableObjectStubLike, FunctionReference, ScheduleRecord, WorkflowReference } from "../src/types";

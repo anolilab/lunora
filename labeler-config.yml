@@ -166,6 +166,9 @@
 "package: vue":
     - changed-files:
           - any-glob-to-any-file: "packages/vue/**/*"
+"package: wire":
+    - changed-files:
+          - any-glob-to-any-file: "packages/wire/**/*"
 "package: workflow":
     - changed-files:
           - any-glob-to-any-file: "packages/workflow/**/*"

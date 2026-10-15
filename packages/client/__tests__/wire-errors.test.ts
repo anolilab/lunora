@@ -1,6 +1,6 @@
+import { encodeWire } from "@lunora/wire";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { encodeWire } from "../../../shared/wire-codec";
 import { TransportError } from "../src/errors";
 import { errorEnvelopeOf, reconstructError, retryAfterHeaderMs, slotError } from "../src/wire-errors";
 

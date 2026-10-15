@@ -82,6 +82,7 @@
         "@lunora/client": "1.0.0-alpha.211",
         "@lunora/errors": ">=1.0.0-alpha.51 <2.0.0-0",
         "@lunora/react": "1.0.0-alpha.223",
+        "@lunora/wire": "workspace:*",
         "@tanstack/react-query": "catalog:frontend",
         "@tanstack/react-router": "catalog:frontend",
         "@tanstack/react-table": "catalog:frontend",

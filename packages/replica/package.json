@@ -73,6 +73,9 @@
         "test:bench": "vitest bench --run --config vitest.bench.config.ts",
         "test:coverage": "vitest run --coverage"
     },
+    "dependencies": {
+        "@lunora/wire": "workspace:*"
+    },
     "devDependencies": {
         "@codspeed/vitest-plugin": "catalog:test",
         "@lunora/server": "1.0.0-alpha.202",

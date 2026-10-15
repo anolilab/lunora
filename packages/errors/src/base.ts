@@ -19,7 +19,7 @@
  * runtime, while staying fully renderer-compatible.
  *
  * All fields are own-enumerable, so they ride the existing wire codec
- * (`shared/wire-codec.ts`) automatically when a `LunoraError` is embedded in a
+ * (`packages/wire/src/wire-codec.ts`) automatically when a `LunoraError` is embedded in a
  * payload, and the runtime/DO mappers copy them into the top-level error envelope
  * for the client, CLI, and Studio to render.
  */

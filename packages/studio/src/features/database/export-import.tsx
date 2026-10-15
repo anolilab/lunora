@@ -1,9 +1,9 @@
 import { LunoraError } from "@lunora/errors";
 import { useLunora } from "@lunora/react";
+import { decodeWire, encodeWire } from "@lunora/wire";
 import type { ChangeEvent, ReactElement } from "react";
 import { useState } from "react";
 
-import { decodeWire, encodeWire } from "../../../../../shared/wire-codec";
 import { ConfirmButton } from "../../components/confirm-button";
 import { ShardInput } from "../../components/shard-input";
 import { Button } from "../../components/ui/button";

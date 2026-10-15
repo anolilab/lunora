@@ -1,4 +1,5 @@
-import { decodeWire, encodeWire } from "../../../../shared/wire-codec";
+import { decodeWire, encodeWire } from "@lunora/wire";
+
 import { GLOBAL_FACET_PATH, GLOBAL_TABLE_PATH, GLOBAL_TABLES_PATH } from "../client-paths";
 import type { LunoraClient } from "../lunora-client";
 import type { GlobalFacetResult, GlobalTableInfo, GlobalTablePage } from "../types";

@@ -1,6 +1,6 @@
+import { decodeWire, encodeWire } from "@lunora/wire";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { decodeWire, encodeWire } from "../../../shared/wire-codec";
 import { createClientQuery } from "../src/client-query-store";
 import { isConflictError } from "../src/errors";
 import type { OptimisticUpdate } from "../src/local-store";

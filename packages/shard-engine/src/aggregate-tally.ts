@@ -11,8 +11,8 @@
  */
 
 import { LunoraError } from "@lunora/errors";
+import { encodeWire } from "@lunora/wire";
 
-import { encodeWire } from "../../../shared/wire-codec";
 import type { AggregateIndexDefinitionLike } from "./schema-types";
 
 /** `Number.MAX_SAFE_INTEGER` as a `bigint` — the largest magnitude the companion's REAL `__value__` column holds exactly. */

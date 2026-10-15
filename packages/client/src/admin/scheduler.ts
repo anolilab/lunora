@@ -1,5 +1,6 @@
+import { decodeWire } from "@lunora/wire";
+
 import { collectPages } from "../../../../shared/collect-pages";
-import { decodeWire } from "../../../../shared/wire-codec";
 import {
     SCHEDULED_CANCEL_PATH,
     SCHEDULED_DEAD_CANCEL_PATH,

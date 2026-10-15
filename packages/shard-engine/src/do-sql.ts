@@ -14,6 +14,7 @@
  */
 
 import { LunoraError } from "@lunora/errors";
+import { decodeWire, encodeWire, needsWireEncoding } from "@lunora/wire";
 import type { Name, SQL } from "drizzle-orm";
 import { sql as dsql } from "drizzle-orm";
 
@@ -23,7 +24,6 @@ import type { RangeOperandType } from "../../../shared/json-field-path";
 import { FieldPathError, isFieldPath, splitFieldPath, SQLITE_JSON_TYPE_NAMES } from "../../../shared/json-field-path";
 import { jsonPathSegment } from "../../../shared/json-path-segment";
 import { quoteIdentifier } from "../../../shared/quote-identifier";
-import { decodeWire, encodeWire, needsWireEncoding } from "../../../shared/wire-codec";
 import type { ColumnMetaLike, SqlExec, TableDefinitionLike } from "./ctx-db";
 import { runDrizzle } from "./do-exec";
 import { serializeSqlValue } from "./serialize-sql";
@@ -76,7 +76,7 @@ const DOC_ORIGINALS_KEY = "__originals__";
  * keeps the round-trip exact, since the projection is a sort key rather than the
  * value.
  *
- * Second, whatever remains goes through `encodeWire` (`shared/wire-codec.ts`),
+ * Second, whatever remains goes through `encodeWire` (`packages/wire/src/wire-codec.ts`),
  * which covers the nested leaves SQL never addresses — a `bigint` inside a
  * `v.object()`, a `v.bytes()` in an array — plus `Date`/`Map`/`Set`.
  *

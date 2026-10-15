@@ -1,7 +1,7 @@
+// Bundler-inlined shared helper (see CLAUDE.md `shared/` rules).
+import { decodeDocument } from "@lunora/wire";
 import type { ReactElement } from "react";
 
-// Bundler-inlined shared helper (see CLAUDE.md `shared/` rules).
-import { decodeDocument } from "../../../../../shared/wire-codec";
 import ErrorAlert from "../../components/error-alert";
 import { Badge } from "../../components/ui/badge";
 import { Card, CardContent } from "../../components/ui/card";

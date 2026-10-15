@@ -76,6 +76,7 @@
         "@lunora/client": "1.0.0-alpha.211",
         "@lunora/errors": ">=1.0.0-alpha.51 <2.0.0-0",
         "@lunora/ratelimit": "1.0.0-alpha.134",
+        "@lunora/wire": "workspace:*",
         "@visulima/storage-client": "catalog:storage"
     },
     "devDependencies": {

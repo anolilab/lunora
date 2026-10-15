@@ -1,10 +1,10 @@
 import type { ArgsOf, FunctionReference, ReturnOf, SubscriptionError, SubscriptionErrorCallback, Unsubscribe } from "@lunora/client";
 import type { Page, PaginationResult, PaginationStatus } from "@lunora/client/pagination";
 import { applyLoadMore, derivePaginationStatus, initialPages, rebalance } from "@lunora/client/pagination";
+import { stableWireKey } from "@lunora/wire";
 import type { Accessor } from "solid-js";
 import { createMemo, createSignal } from "solid-js";
 
-import { stableWireKey } from "../../../shared/wire-key";
 import { useLunora } from "./context";
 import { trackedArgsEffect } from "./reactive-args";
 import { trackedEffect } from "./solid-compat";

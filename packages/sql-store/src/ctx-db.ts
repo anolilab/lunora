@@ -117,11 +117,11 @@ import {
     whereOfFilter,
     WORKERD_SQLITE_LIMITS,
 } from "@lunora/shard-engine";
+import { decodeWire, encodeWire, needsWireEncoding } from "@lunora/wire";
 import { SQL, sql } from "drizzle-orm";
 
 import { evictOldestEntry } from "../../../shared/evict-oldest";
 import { readFieldPath } from "../../../shared/json-field-path";
-import { decodeWire, encodeWire, needsWireEncoding } from "../../../shared/wire-codec";
 import { runSqlGlobalTableMigrations } from "./ctx-db-global-provisioning";
 import { runSqlAggregateMigrations, runSqlRankMigrations } from "./ctx-db-migrations";
 import type { SearchStage } from "./ctx-db-search";

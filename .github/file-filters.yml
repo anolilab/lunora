@@ -183,6 +183,7 @@ generated_files:
     - "packages/shard-engine/**"
     - "packages/sql-store/**"
     - "packages/values/**"
+    - "packages/wire/**"
     - "packages/workflow/**"
     - "shared/**"
     - "examples/**"
@@ -275,8 +276,9 @@ worker_startup:
 sdks:
     - "sdks/**"
     - "protocol/**"
-    - "shared/wire-codec.ts"
-    - "shared/stable-key.ts"
+    - "packages/wire/src/wire-codec.ts"
+    - "shared/is-plain-object.ts"
+    - "packages/wire/src/stable-key.ts"
     # The generator too: a target template hardcodes the runtime's call signatures, so
     # an edit here breaks every generated SDK while every other gate stays green.
     - "packages/codegen/src/sdk/**"
@@ -290,7 +292,7 @@ sdks:
     # The normative codec's base64 and the key composition from `protocol/README.md`
     # §3 — a change to either is a wire change every port must mirror.
     - "shared/base64.ts"
-    - "shared/wire-key.ts"
+    - "packages/wire/src/wire-key.ts"
     # The batch transport's entry shape and its `MAX_BATCH_ENTRIES` cap, which every
     # port mirrors as its own literal. `scripts/check-batch-cap-drift.js` reconciles the
     # values; this listing is what re-runs the ports against the fixtures when the
@@ -398,3 +400,4 @@ celld:
     - "packages/sql-store/**"
     - "packages/storage/**"
     - "packages/workflow/**"
+    - "packages/wire/**"

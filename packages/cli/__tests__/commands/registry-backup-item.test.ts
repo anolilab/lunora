@@ -10,7 +10,7 @@
  * counts. `packages/cli/vitest.config.ts` aliases the three specifiers the item
  * imports so it can be invoked here with a stub `ctx`.
  *
- * The expectations are read from `shared/wire-codec`'s `encodeWire` — the codec
+ * The expectations are read from `packages/wire/src/wire-codec`'s `encodeWire` — the codec
  * the shard admin plane wraps every export in and `lunora backup restore` decodes
  * on `/apply` — so the item's own copy of it cannot drift from the reference
  * without this file going red.
@@ -19,9 +19,9 @@ import { readFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
+import { decodeWire, encodeWire } from "@lunora/wire";
 import { beforeEach, describe, expect, it } from "vitest";
 
-import { decodeWire, encodeWire } from "../../../../shared/wire-codec";
 import { env } from "../fixtures/registry-runtime/cloudflare-workers";
 import { resetStoredObjects, storedObjects } from "../fixtures/registry-runtime/lunora-storage";
 

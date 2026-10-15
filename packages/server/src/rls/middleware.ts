@@ -65,12 +65,12 @@ import { isLunoraError, LunoraError } from "@lunora/errors";
 // `@lunora/shard-engine` then resolves it through pnpm's hoist — which packem
 // fails the build over, by design.
 import { findRelated, whereFilter } from "@lunora/shard-engine";
+import { isPlainObject } from "@lunora/wire";
 
 // `isPlainObject` comes from the wire codec rather than being re-declared here;
 // its prototype check is what keeps a `Date` or a `Map` from passing as an
 // options bag. See `./where-match` for the full story.
 import { previewPatch } from "../../../../shared/field-operators";
-import { isPlainObject } from "../../../../shared/wire-codec";
 import type { Middleware } from "../builder/types";
 import type { QueryPlan } from "../data-model";
 import type { FacadeEntry } from "../facade";

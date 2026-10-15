@@ -24,9 +24,10 @@
  * affected, whether a given row is one of them, and a transform that re-encodes.
  */
 
+import { encodeWire } from "@lunora/wire";
+
 import { quoteIdentifier } from "../../../shared/quote-identifier";
 import { reprojectionMigrationTable } from "../../../shared/reprojection-id";
-import { encodeWire } from "../../../shared/wire-codec";
 import type { SqlExec } from "./ctx-db";
 import type { DataMigrationLike } from "./data-migration";
 import { runSql } from "./do-exec";
@@ -36,7 +37,7 @@ import { mayHoldProjectedValue } from "./sql-projection";
 
 /**
  * The wire codec's sentinel, derived from the codec rather than copied out of
- * it. `shared/wire-codec.ts` does not export the constant and must not be
+ * it. `packages/wire/src/wire-codec.ts` does not export the constant and must not be
  * edited (it is wire-protocol surface), and a hand-copied `"$lunora.wire$"`
  * here would be a second definition free to drift from the first. Encoding a
  * `bigint` yields `[TAG, "bigint", "0"]`, so element 0 IS the sentinel.

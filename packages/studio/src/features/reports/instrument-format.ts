@@ -3,7 +3,8 @@
 // how `traces-panel` keeps its geometry in `trace-geometry`.
 // Bundler-inlined, zero-dep canonical JSON encoder (the same one the server's
 // series identity uses), imported by relative path per CLAUDE.md `shared/` rules.
-import { stableStringify } from "../../../../../shared/stable-key";
+import { stableStringify } from "@lunora/wire";
+
 import type { MetricHistoryPoint, MetricKind, MetricSeries } from "../../lib/admin";
 
 /**

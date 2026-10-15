@@ -15,7 +15,8 @@
  * studio's `basePath` — so the client targets it directly. Keep this in sync
  * with `SEED_ENDPOINT` in `@lunora/config/studio-host`.
  */
-import { decodeWire, isPlainObject } from "../../../../shared/wire-codec";
+import { decodeWire, isPlainObject } from "@lunora/wire";
+
 import type { ColumnMeta } from "./admin";
 import { errorMessage } from "./internal";
 

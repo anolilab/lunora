@@ -1,6 +1,5 @@
 import { assertScheduleDelay, assertScheduleInstant, resolveScheduleId } from "@lunora/scheduler";
-
-import { encodeArgsOrThrow } from "../../../shared/wire-codec";
+import { encodeArgsOrThrow } from "@lunora/wire";
 
 /**
  * `ctx.scheduler.runAfter(0, …)` — documented as "the deterministic equivalent

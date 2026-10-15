@@ -1,5 +1,6 @@
+import { stableWireKey } from "@lunora/wire";
+
 import { fnv1a64Hex } from "../../../shared/fnv1a";
-import { stableWireKey } from "../../../shared/wire-key";
 import type { TableDiff } from "./table-diff";
 
 /**
@@ -48,7 +49,7 @@ import type { TableDiff } from "./table-diff";
  * `applyDiffToDb` happens inside `database.transaction` and discards every
  * well-keyed row in the batch.
  *
- * `stableWireKey` (`shared/wire-key.ts`) is `encodeWire` composed with
+ * `stableWireKey` (`packages/wire/src/wire-key.ts`) is `encodeWire` composed with
  * `stableStringify`, which is exactly the fix: the wire form separates every
  * value the wire can carry, and the stable encoding sorts object keys by UTF-16
  * code unit — locale-independent, so two clients in different locales still

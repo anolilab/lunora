@@ -397,7 +397,7 @@ export interface MessageBatchLike<Body = unknown> {
 /** The wire payload Lunora puts on the queue: a function dispatch. */
 export interface QueueJob {
     /**
-     * The call's arguments in WIRE form (`shared/wire-codec`), so a `bigint`,
+     * The call's arguments in WIRE form (`packages/wire/src/wire-codec`), so a `bigint`,
      * `Date` or bytes survives the queue's own JSON serialisation. The producers
      * encode; the shard's dispatch loop is the single decoder. A custom
      * {@link QueueDispatch} must forward this untouched — decoding it here and

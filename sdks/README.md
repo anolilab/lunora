@@ -991,8 +991,8 @@ leaves the go leg green without having run.
 
 ### Coverage matrix — what the fixtures actually pin
 
-Derived from the reference source (`shared/wire-codec.ts`, `shared/stable-key.ts`,
-`shared/wire-key.ts`, `packages/client/src/lunora-client.ts`) rather than from
+Derived from the reference source (`packages/wire/src/wire-codec.ts`, `packages/wire/src/stable-key.ts`,
+`packages/wire/src/wire-key.ts`, `packages/client/src/lunora-client.ts`) rather than from
 the fixtures, so a behaviour the fixtures forgot shows up as a row with no case
 against it. The test is "would a port that got this WRONG go red", not "is it
 mentioned somewhere" — that distinction is the whole point: `rejected[]` once

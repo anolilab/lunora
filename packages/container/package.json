@@ -75,7 +75,8 @@
     },
     "dependencies": {
         "@cloudflare/sandbox": "catalog:cloudflare",
-        "@lunora/errors": ">=1.0.0-alpha.51 <2.0.0-0"
+        "@lunora/errors": ">=1.0.0-alpha.51 <2.0.0-0",
+        "@lunora/wire": "workspace:*"
     },
     "devDependencies": {
         "@cloudflare/containers": "catalog:cloudflare",

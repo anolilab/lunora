@@ -10,7 +10,7 @@
  * resolver all need the same reading of a path and none depends on another. Inlined by the bundler;
  * keep it dependency-free.
  */
-import { isPlainObject } from "./wire-codec";
+import { isPlainObject } from "./is-plain-object";
 
 /**
  * How many segments a path may have, the column included. Bounds the SQL a path expands to. The TS path type

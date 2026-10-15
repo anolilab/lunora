@@ -1,4 +1,5 @@
-import { decodeWire, encodeWire } from "../../../shared/wire-codec";
+import { decodeWire, encodeWire } from "@lunora/wire";
+
 import type { AsyncStorageLike } from "./async-storage-persistence";
 
 /** What {@link SingleBlobStore.read} returns for a blob that exists but cannot be decoded. */

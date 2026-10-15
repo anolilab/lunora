@@ -1,7 +1,7 @@
+import { decodeWire, encodeWire } from "@lunora/wire";
 import { unzipSync } from "fflate";
 import { describe, expect, it } from "vitest";
 
-import { decodeWire, encodeWire } from "../../../shared/wire-codec";
 import type { PrivacyConfig } from "../src/define";
 import { definePrivacy } from "../src/define";
 import { eu } from "../src/eu";

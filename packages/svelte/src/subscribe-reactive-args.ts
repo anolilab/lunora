@@ -1,6 +1,6 @@
+import { stableWireKey } from "@lunora/wire";
 import type { Readable, Unsubscriber } from "svelte/store";
 
-import { stableWireKey } from "../../../shared/wire-key";
 import { isReadableStore } from "./is-readable-store";
 
 /**

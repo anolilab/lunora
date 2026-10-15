@@ -64,7 +64,8 @@
         "@lunora/bindings": "1.0.0-alpha.113",
         "@lunora/errors": ">=1.0.0-alpha.51 <2.0.0-0",
         "@lunora/observability": "1.0.0-alpha.140",
-        "@lunora/platform": "1.0.0-alpha.64"
+        "@lunora/platform": "1.0.0-alpha.64",
+        "@lunora/wire": "workspace:*"
     },
     "devDependencies": {
         "@cloudflare/vitest-plugin": "catalog:cloudflare",

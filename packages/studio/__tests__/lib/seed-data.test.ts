@@ -1,6 +1,6 @@
+import { encodeWire } from "@lunora/wire";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { encodeWire } from "../../../../shared/wire-codec";
 import { collectUnresolvableFkColumns, requestSeedRows, SEED_ENDPOINT } from "../../src/lib/seed-data";
 
 /** A minimal `Response`-like the seed-data client reads (`.ok` + `.json()` + `.status`). */

@@ -128,6 +128,7 @@ const PACKAGE_OPT_OUT = new Map<string, string>([
     ["testing", "tooling — test harness, installed directly by test suites"],
     ["vite", "tooling — the Vite plugin is its own install, not a runtime re-export"],
     ["vue", "framework adapter — installed per framework, not part of the base surface"],
+    ["wire", "internal codec — a transitive dependency of the packages that use it, not app-facing"],
     ["workflow", "add-on — installed directly when used"],
     ["x402", "optional add-on with heavy provider/chain deps — installed directly"],
 ]);

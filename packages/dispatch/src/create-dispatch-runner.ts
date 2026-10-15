@@ -9,11 +9,11 @@
  * Node-safe (structural types, injectable `fetch`) so it's unit-testable.
  */
 import { isLunoraError, LunoraError } from "@lunora/errors";
+import { decodeWire, encodeArgsOrThrow } from "@lunora/wire";
 
 import { abortDeadline } from "../../../shared/abort-deadline";
 import { DISPATCH_CLAIM_CEILING_MS, DISPATCH_DECLINED_HEADER, DISPATCH_IN_PROGRESS } from "../../../shared/dispatch-claim";
 import { encodeIdentityHeader, encodeUserIdHeader } from "../../../shared/identity-header";
-import { decodeWire, encodeArgsOrThrow } from "../../../shared/wire-codec";
 import type { ArgsOf, DispatchRunFunction, FunctionReference, RunFunctionOptions } from "./types";
 
 /** The reserved worker endpoint that re-dispatches a server-initiated function call to its shard. */

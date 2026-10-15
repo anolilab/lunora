@@ -6,8 +6,9 @@
  * admin gate, option registry, and request helpers through injected deps, so the
  * module imports no runtime values from `create-worker` (only its types).
  */
+import { decodeWire } from "@lunora/wire";
+
 import { EMPTY_ARCHITECTURE } from "../../../shared/architecture-manifest";
-import { decodeWire } from "../../../shared/wire-codec";
 import type { CronJobDispatch, CronJobInfo, FunctionDescriptor, FunctionRegistryLike, GlobalFilterClause, GlobalIntrospector } from "./create-worker";
 import { describeArguments } from "./describe-args";
 import { LunoraError } from "./errors";

@@ -1,7 +1,6 @@
 import type { DestroyRef, Injector } from "@angular/core";
 import { computed, effect, inject, NgZone, PLATFORM_ID, untracked } from "@angular/core";
-
-import { stableWireKey } from "../../../shared/wire-key";
+import { stableWireKey } from "@lunora/wire";
 
 /**
  * Whether a reactive primitive should open its live WebSocket subscription (and

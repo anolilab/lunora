@@ -46,7 +46,8 @@
  * surface (see `ctx-db.ts`).
  */
 
-import { stableWireKey } from "../../../shared/wire-key";
+import { stableWireKey } from "@lunora/wire";
+
 import { depKey, SCAN_DEP } from "./dependency-tracker";
 import { estimateBytes } from "./estimate-bytes";
 import type { IndexKeyEntry, KeyRange } from "./read-write-set";
@@ -544,5 +545,5 @@ const reactiveCacheKey = (functionPath: string, args: Record<string, unknown>, i
 export { ReactiveCache, reactiveCacheKey };
 export type { CacheEntry, ReactiveCacheOptions };
 
-export { stableStringify } from "../../../shared/stable-key";
-export { stableWireKey } from "../../../shared/wire-key";
+export { stableStringify } from "@lunora/wire";
+export { stableWireKey } from "@lunora/wire";

@@ -34,11 +34,11 @@ import {
     runDataMigration,
     runShardMigrations,
 } from "@lunora/shard-engine";
+import { decodeWire, encodeWire } from "@lunora/wire";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { BRANCH_MARKER_REJECTION } from "../../../shared/branch-marker";
 import { drainBulkOp } from "../../../shared/bulk-drain";
-import { decodeWire, encodeWire } from "../../../shared/wire-codec";
 import { adminSocketBinding } from "../../../shared/ws-admin-token";
 import type {
     RunShardApplyCdcArgs,

@@ -1,12 +1,11 @@
 import { LunoraError } from "@lunora/errors";
+import { decodeWire, encodeWire, stableWireKey } from "@lunora/wire";
 
 import { MAX_BATCH_ENTRIES } from "../../../shared/batch-wire";
 import { evictOldestEntry } from "../../../shared/evict-oldest";
 import { encodeExpectedSubjectHeader, EXPECT_SUBJECT_HEADER } from "../../../shared/identity-header";
 import { PAGE_DELTA_CAPABILITY } from "../../../shared/page-result";
 import { onSessionChanged } from "../../../shared/session-change";
-import { decodeWire, encodeWire } from "../../../shared/wire-codec";
-import { stableWireKey } from "../../../shared/wire-key";
 import { fetchArchitecture, fetchOpenApi, fetchOpenRpc, getCronJobs, listFunctions, runCronJob } from "./admin/functions";
 import { facetGlobalColumn, listGlobalTables, readGlobalTablePage } from "./admin/global-tables";
 import type { AdminHost } from "./admin/host";

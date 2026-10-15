@@ -62,9 +62,8 @@
 import { isLunoraError } from "@lunora/errors";
 import type { Id } from "@lunora/values";
 import { v } from "@lunora/values";
+import { decodeWire, encodeWire, stableWireKey } from "@lunora/wire";
 
-import { decodeWire, encodeWire } from "../../../shared/wire-codec";
-import { stableWireKey } from "../../../shared/wire-key";
 import { initLunora } from "./builder/index";
 import type { Component, SchemaExtension } from "./plugin";
 import { defineComponent, defineSchemaExtension } from "./plugin";

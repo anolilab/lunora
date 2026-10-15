@@ -17,9 +17,9 @@ import { join } from "node:path";
 
 import type { BackupStore, QueryCoordinator, ShardNamespaceLike } from "@lunora/runtime";
 import { backupObjectKey, createWorker } from "@lunora/runtime";
+import { decodeWire, encodeWire } from "@lunora/wire";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-import { decodeWire, encodeWire } from "../../../../shared/wire-codec";
 import { runBackupCommand } from "../../src/commands/backup/handler";
 import type { StreamingFetchLike } from "../../src/commands/data-transfer";
 import type { Logger } from "../../src/util/logger";

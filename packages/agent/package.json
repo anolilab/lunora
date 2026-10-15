@@ -112,6 +112,7 @@
         "@lunora/container": "1.0.0-alpha.75",
         "@lunora/dispatch": "workspace:*",
         "@lunora/shard-engine": "1.0.0-alpha.129",
+        "@lunora/wire": "workspace:*",
         "@types/node": "catalog:types",
         "@visulima/packem": "catalog:build",
         "@vitest/coverage-v8": "catalog:test",

@@ -1,6 +1,6 @@
+import { encodeWire } from "@lunora/wire";
 import { bench, describe } from "vitest";
 
-import { encodeWire } from "../../../shared/wire-codec";
 import { subscriptionFrames } from "../src/subscription-delivery";
 
 /**

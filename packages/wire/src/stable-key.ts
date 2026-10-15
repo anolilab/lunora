@@ -65,6 +65,7 @@
  * than handing the whole string to `JSON.stringify`. Emoji keys therefore take
  * the slow path, which is correct and rare.
  */
+// eslint-disable-next-line no-control-regex -- the control range U+0000-U+001F is exactly what JSON requires escaping
 const NEEDS_ESCAPE = /["\\\u0000-\u001F\uD800-\uDFFF]/;
 
 /**
@@ -76,69 +77,25 @@ const NEEDS_ESCAPE = /["\\\u0000-\u001F\uD800-\uDFFF]/;
  */
 const quote = (text: string): string => (NEEDS_ESCAPE.test(text) ? JSON.stringify(text) : `"${text}"`);
 
-const stableStringify = (value: unknown): string => {
-    // Encode `undefined` as `null` (mirrors `JSON.stringify`'s array-element
-    // behavior) so an `undefined` value never collapses an array position. This
-    // branch fires at the top level too; object *fields* set to `undefined` are
-    // handled separately below (skipped, not nulled).
-    if (value === undefined) {
-        return "null";
+/** The bare token for a non-finite number or `-0`, or `undefined` for any other number. */
+const numberToken = (value: number): string | undefined => {
+    if (Number.isNaN(value)) {
+        return "nan";
     }
 
-    // Fail loud on a `bigint`: `JSON.stringify(1n)` throws a cryptic native error,
-    // so surface a clear, actionable one instead. A bigint isn't supported in a
-    // stable JSON key — pass it as a string, or key on the wire form (`stableWireKey`).
-    if (typeof value === "bigint") {
-        throw new TypeError("stableStringify: cannot use a bigint in a stable JSON cache key — pass it as a string, or use stableWireKey");
+    if (value === Infinity) {
+        return "inf";
     }
 
-    // Tag non-finite numbers (and `-0`) as distinct, unquoted tokens instead of
-    // letting the generic `JSON.stringify` fallback below collapse `NaN`/
-    // `Infinity`/`-Infinity` all into the literal string `"null"` — colliding with
-    // real `null` and with each other. A bare unquoted token can never collide
-    // with any `JSON.stringify` output: every JSON string is quoted, and none of
-    // these tokens match `null`/`true`/`false`. Tokens match wire-codec.ts's
-    // `encodeWire` vocabulary for the same three non-finite cases.
-    if (typeof value === "number") {
-        if (Number.isNaN(value)) {
-            return "nan";
-        }
-
-        if (value === Infinity) {
-            return "inf";
-        }
-
-        if (value === -Infinity) {
-            return "-inf";
-        }
-
-        if (Object.is(value, -0)) {
-            return "-0";
-        }
+    if (value === -Infinity) {
+        return "-inf";
     }
 
-    if (typeof value === "string") {
-        return quote(value);
-    }
+    return Object.is(value, -0) ? "-0" : undefined;
+};
 
-    if (value === null || typeof value !== "object") {
-        return JSON.stringify(value);
-    }
-
-    if (Array.isArray(value)) {
-        let out = "[";
-
-        for (let index = 0; index < value.length; index++) {
-            if (index > 0) {
-                out += ",";
-            }
-
-            out += stableStringify(value[index]);
-        }
-
-        return out + "]";
-    }
-
+/** Encode an object that is not an array: plain objects only, sorted by UTF-16 code unit. */
+const stringifyRecord = (value: object, encode: (item: unknown) => string): string => {
     // Reject non-plain objects (`Date`, `ArrayBuffer`, typed arrays, `Map`, `Set`,
     // `RegExp`, class instances). They have no own enumerable string keys, so the
     // record branch below would encode every one of them to `{}` — a SILENT
@@ -156,11 +113,14 @@ const stableStringify = (value: unknown): string => {
     }
 
     const record = value as Record<string, unknown>;
-    // `sort()` with no comparator, not `toSorted(compareKeys)`. The default
-    // comparator sorts strings by UTF-16 code unit — byte-identical to the
-    // `a < b` comparator this replaces (verified by fuzzing both over random
-    // key sets), and it is NOT locale-sensitive; that is `localeCompare`.
-    // Sorting in place is safe because `Object.keys` hands back a fresh array.
+    // No comparator, not `toSorted(compareKeys)`. The default comparator sorts
+    // strings by UTF-16 code unit — byte-identical to the `a < b` comparator it
+    // replaces (verified by fuzzing both over random key sets), and it is NOT
+    // locale-sensitive; that is `localeCompare`. Code-unit order is the cross-language
+    // contract, so the lint's `localeCompare` suggestion would be wrong.
+    // `sort`, not `toSorted`: `Object.keys` already returns a fresh array and the client bundle must
+    // not require `Array.prototype.toSorted`.
+    // eslint-disable-next-line sonarjs/no-alphabetical-sort, unicorn/no-array-sort -- code-unit order (the default comparator) is the key-order contract, and `toSorted` is not available in every client runtime
     const keys = Object.keys(record).sort();
     let out = "{";
     let first = true;
@@ -180,10 +140,61 @@ const stableStringify = (value: unknown): string => {
 
         out += quote(key);
         out += ":";
-        out += stableStringify(raw);
+        out += encode(raw);
     }
 
-    return out + "}";
+    return `${out}}`;
 };
 
-export { stableStringify };
+const stableStringify = (value: unknown): string => {
+    // Encode `undefined` as `null` (mirrors `JSON.stringify`'s array-element
+    // behavior) so an `undefined` value never collapses an array position. This
+    // branch fires at the top level too; object *fields* set to `undefined` are
+    // handled separately (skipped, not nulled).
+    if (value === undefined) {
+        return "null";
+    }
+
+    // Fail loud on a `bigint`: `JSON.stringify(1n)` throws a cryptic native error,
+    // so surface a clear, actionable one instead. A bigint isn't supported in a
+    // stable JSON key — pass it as a string, or key on the wire form (`stableWireKey`).
+    if (typeof value === "bigint") {
+        throw new TypeError("stableStringify: cannot use a bigint in a stable JSON cache key — pass it as a string, or use stableWireKey");
+    }
+
+    // Tag non-finite numbers (and `-0`) as distinct, unquoted tokens instead of
+    // letting the generic `JSON.stringify` fallback below collapse `NaN`/
+    // `Infinity`/`-Infinity` all into the literal string `"null"` — colliding with
+    // real `null` and with each other. A bare unquoted token can never collide
+    // with any `JSON.stringify` output: every JSON string is quoted, and none of
+    // these tokens match `null`/`true`/`false`. Tokens match wire-codec.ts's
+    // `encodeWire` vocabulary for the same three non-finite cases.
+    if (typeof value === "number") {
+        const token = numberToken(value);
+
+        if (token !== undefined) {
+            return token;
+        }
+    }
+
+    if (typeof value === "string") {
+        return quote(value);
+    }
+
+    if (value === null || typeof value !== "object") {
+        return JSON.stringify(value);
+    }
+
+    if (Array.isArray(value)) {
+        // Every index is read, holes included (they encode as `null` like `undefined`), and never
+        // through the array's own iterator or `map`: a custom `Symbol.iterator` must not change the
+        // key, and `map` would skip holes and make `[, 1]` collide with other shapes.
+        const items = Array.from({ length: value.length }, (_, index) => stableStringify((value as unknown[])[index]));
+
+        return `[${items.join(",")}]`;
+    }
+
+    return stringifyRecord(value, stableStringify);
+};
+
+export default stableStringify;

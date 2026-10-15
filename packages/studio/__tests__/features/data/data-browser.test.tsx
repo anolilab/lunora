@@ -1,13 +1,13 @@
 import { LunoraProvider } from "@lunora/react";
+// Bundler-inlined shared helper (see CLAUDE.md `shared/` rules) — the same codec
+// the shard writer stores `__doc__` with, so the test asserts against the real
+// stored form rather than a hand-written copy of it.
+import { encodeWire } from "@lunora/wire";
 import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import type { ReactElement } from "react";
 import { useState } from "react";
 import { describe, expect, it, vi } from "vitest";
 
-// Bundler-inlined shared helper (see CLAUDE.md `shared/` rules) — the same codec
-// the shard writer stores `__doc__` with, so the test asserts against the real
-// stored form rather than a hand-written copy of it.
-import { encodeWire } from "../../../../../shared/wire-codec";
 import type { DataBrowserProps } from "../../../src/features/data/data-browser";
 import { DataBrowser } from "../../../src/features/data/data-browser";
 import useMirroredRef from "../../../src/hooks/use-mirrored-ref";

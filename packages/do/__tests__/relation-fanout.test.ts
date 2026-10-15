@@ -1,8 +1,8 @@
 import type { DatabaseWriterLike, QueryPage, SchemaLike } from "@lunora/shard-engine";
 import { RELATION_FUNCTION_PREFIX } from "@lunora/shard-engine";
+import { decodeWire } from "@lunora/wire";
 import { describe, expect, it, vi } from "vitest";
 
-import { decodeWire } from "../../../shared/wire-codec";
 import { serveRelationFanout } from "../src/relation-fanout";
 import type { ShardDOState } from "../src/shard-do";
 import { ShardDO } from "../src/shard-do";

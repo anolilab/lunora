@@ -61,6 +61,7 @@
         "@lunora/errors": ">=1.0.0-alpha.51 <2.0.0-0",
         "@lunora/fingerprint": "1.0.0-alpha.9",
         "@lunora/shard-engine": "1.0.0-alpha.129",
+        "@lunora/wire": "workspace:*",
         "@visulima/redact": "catalog:redact"
     },
     "devDependencies": {

@@ -1,7 +1,6 @@
 import { isLunoraError, LunoraError } from "@lunora/errors";
+import { decodeWire, encodeWire, WIRE_TAG } from "@lunora/wire";
 import { describe, expect, it } from "vitest";
-
-import { decodeWire, encodeWire, WIRE_TAG } from "../../../shared/wire-codec";
 
 /** JSON round-trip of the encoded form, mirroring what the transport actually does. */
 // eslint-disable-next-line unicorn/prefer-structured-clone -- must exercise the real JSON transport (structuredClone wouldn't serialize, nor throw on bigint), which is exactly what the codec exists to survive

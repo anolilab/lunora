@@ -18,7 +18,7 @@
  * so an unrelated column edit costs nothing at all.
  */
 
-import { stableStringify } from "../../../../shared/stable-key";
+import { stableStringify } from "@lunora/wire";
 
 /**
  * A dispatchable function reference — the `internal.docs.reindex` you pass as

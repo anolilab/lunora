@@ -7,8 +7,8 @@
  */
 import { toErrorBody } from "@lunora/errors";
 import type { DatabaseWriterLike, SchemaLike } from "@lunora/shard-engine";
+import { decodeWire, encodeWire, needsWireEncoding } from "@lunora/wire";
 
-import { decodeWire, encodeWire, needsWireEncoding } from "../../../shared/wire-codec";
 import type { D1Exec } from "./d1-ctx-db";
 import { decodeGlobalRow, runD1GlobalTableMigrations } from "./d1-ctx-db";
 import { quoteIdentifier } from "./dialect";

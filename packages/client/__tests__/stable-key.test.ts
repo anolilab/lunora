@@ -1,9 +1,8 @@
+import { stableStringify } from "@lunora/wire";
 import { describe, expect, it } from "vitest";
 
-import { stableStringify } from "../../../shared/stable-key";
-
 /**
- * The shared cache-key encoder's fail-loud contract (`shared/stable-key.ts`).
+ * The shared cache-key encoder's fail-loud contract (`packages/wire/src/stable-key.ts`).
  * Types a stable JSON key can't faithfully encode must throw a clear error rather
  * than silently collide — `Date`/`ArrayBuffer`/`Map`/`Set`/`RegExp` all have no own
  * enumerable keys and would otherwise encode to `{}`, so two distinct values would

@@ -75,6 +75,7 @@
     },
     "dependencies": {
         "@lunora/errors": ">=1.0.0-alpha.51 <2.0.0-0",
+        "@lunora/wire": "workspace:*",
         "@openfeature/server-sdk": "catalog:flags"
     },
     "devDependencies": {

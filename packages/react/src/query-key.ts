@@ -1,7 +1,6 @@
 import type { FunctionReference } from "@lunora/client";
+import { stableWireKey } from "@lunora/wire";
 import type { QueryKey } from "@tanstack/react-query";
-
-import { stableWireKey } from "../../../shared/wire-key";
 
 /**
  * Pure, transport-free query-key helpers shared by the client hooks
@@ -60,5 +59,5 @@ const serializeQueryKey = (queryKey: QueryKey): string => keyHash(queryKey);
 
 export { keyHash, lunoraQueryKey, lunoraQueryKeyFromArgsKey, serializeQueryKey };
 
-export { stableStringify } from "../../../shared/stable-key";
-export { stableWireKey } from "../../../shared/wire-key";
+export { stableStringify } from "@lunora/wire";
+export { stableWireKey } from "@lunora/wire";

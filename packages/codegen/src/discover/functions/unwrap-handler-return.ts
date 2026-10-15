@@ -198,7 +198,7 @@ const unwrapHandlerReturn = (handler: Node): string => {
     }
 
     // A value `encodeWire` refuses never reaches a caller — it throws at the send
-    // site (`shared/wire-codec.ts`: only plain objects, arrays, and the supported
+    // site (`packages/wire/src/wire-codec.ts`: only plain objects, arrays, and the supported
     // built-ins round-trip). Naming one in the contract types a call that can
     // never complete: `result.at.format()` compiles and is a runtime TypeError,
     // and `private`/`#private` members get published to clients besides.

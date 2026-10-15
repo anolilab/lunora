@@ -24,7 +24,7 @@
  * `shared/` contract.
  */
 
-import { isPlainObject } from "./wire-codec";
+import { isPlainObject } from "./is-plain-object";
 
 /** Identity field every Lunora document row carries. */
 const ID_FIELD = "_id";

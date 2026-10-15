@@ -1,6 +1,6 @@
+import { encodeWire } from "@lunora/wire";
 import { describe, expect, it } from "vitest";
 
-import { encodeWire } from "../../../shared/wire-codec";
 import { resolveDataPayload, UNMERGEABLE_DELTA } from "../src/delta-merge";
 import type { ServerDataMessage } from "../src/types";
 

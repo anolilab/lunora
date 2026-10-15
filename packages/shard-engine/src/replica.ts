@@ -40,9 +40,10 @@
  * being rare, operator-driven events.
  */
 
+import { decodeWire, encodeWire } from "@lunora/wire";
+
 import type { RegionHint } from "../../../shared/region-hint";
 import { parseMinSeq, parseReplicaName } from "../../../shared/replica-name";
-import { decodeWire, encodeWire } from "../../../shared/wire-codec";
 import type { ExportRow } from "./admin-export-import";
 import type { SqlExec } from "./ctx-db";
 import type { CdcChange } from "./ctx-db-cdc";

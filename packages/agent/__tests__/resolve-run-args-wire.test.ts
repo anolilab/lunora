@@ -7,9 +7,9 @@
  * `bigint` throws in `JSON.stringify` before the request leaves, and a `Date`
  * reaches the handler as an ISO string.
  */
+import { decodeWire } from "@lunora/wire";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { decodeWire } from "../../../shared/wire-codec";
 import resolveAgentRun from "../src/resolve-run";
 import type { AgentFunctionReference } from "../src/types";
 

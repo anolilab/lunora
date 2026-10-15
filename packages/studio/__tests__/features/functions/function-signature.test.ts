@@ -1,6 +1,6 @@
+import { decodeWire } from "@lunora/wire";
 import { describe, expect, it } from "vitest";
 
-import { decodeWire } from "../../../../../shared/wire-codec";
 import { argumentsTemplate, formatSignature } from "../../../src/features/functions/function-signature";
 import type { FunctionArgumentDescriptor } from "../../../src/lib/types";
 

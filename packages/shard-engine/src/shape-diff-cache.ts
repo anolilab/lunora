@@ -22,7 +22,8 @@
  * rows from the next poke. Reuse across a flush, never across writes.
  */
 
-import { stableWireKey } from "../../../shared/wire-key";
+import { stableWireKey } from "@lunora/wire";
+
 import type { CdcChangeKey } from "./ctx-db-cdc";
 import type { ResolvedShape, SubscriptionIdentity } from "./types";
 

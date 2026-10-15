@@ -1,6 +1,6 @@
+import { decodeWire } from "@lunora/wire";
 import { describe, expect, it } from "vitest";
 
-import { decodeWire } from "../../../shared/wire-codec";
 import type { ShapeRow } from "../src/ctx-db-shapes";
 import { buildPokeFrames, diffGlobalMembership, encodeRowsPatch, projectColumns } from "../src/shape-global-diff";
 

@@ -45,7 +45,7 @@ deliberate, and mostly a set of go/no-go decisions:
 
 - **Ratify the stability tiers.** Publicly commit each package to a tier so users
   know exactly what the SemVer promise covers:
-    - **Core (full SemVer at 1.0):** `server`, `values`, `errors`, `runtime`, `do`,
+    - **Core (full SemVer at 1.0):** `server`, `values`, `errors`, `wire`, `runtime`, `do`,
       `client`, `codegen`, `cli`, `vite`, `config`, `d1`, `react`, `testing`,
       `platform`, `platform-cloudflare`, `shard-engine`, `observability`, and the
       `lunorash` umbrella.

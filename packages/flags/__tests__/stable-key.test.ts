@@ -1,6 +1,5 @@
+import { stableStringify } from "@lunora/wire";
 import { describe, expect, it } from "vitest";
-
-import { stableStringify } from "../../../shared/stable-key";
 
 /**
  * Plan 355 regression: `stableStringify` used to collapse `undefined`, `null`,

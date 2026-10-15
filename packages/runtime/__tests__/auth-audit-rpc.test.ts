@@ -1,6 +1,6 @@
+import { decodeWire } from "@lunora/wire";
 import { describe, expect, it, vi } from "vitest";
 
-import { decodeWire } from "../../../shared/wire-codec";
 import type { AuthAuditEntry, AuthAuditReader, ExecutionContextLike } from "../src/create-worker";
 import { createWorker, GET_AUTH_AUDIT_LOG_OP } from "../src/create-worker";
 import type { ShardNamespaceLike } from "../src/resolve-shard";

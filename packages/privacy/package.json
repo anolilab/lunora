@@ -70,6 +70,7 @@
         "@cantoo/pdf-lib": "catalog:privacy",
         "@lunora/errors": ">=1.0.0-alpha.51 <2.0.0-0",
         "@lunora/server": "1.0.0-alpha.200",
+        "@lunora/wire": "workspace:*",
         "fflate": "catalog:privacy"
     },
     "devDependencies": {

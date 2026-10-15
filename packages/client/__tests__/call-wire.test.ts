@@ -1,6 +1,6 @@
+import { encodeWire } from "@lunora/wire";
 import { describe, expect, it } from "vitest";
 
-import { encodeWire } from "../../../shared/wire-codec";
 import { demuxBatchResults, encodeCallArgs, isEncodable, isSlotEnvelope } from "../src/call-wire";
 import { TransportError } from "../src/errors";
 

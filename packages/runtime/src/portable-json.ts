@@ -11,8 +11,9 @@
  * left alone they land in the destination as a three-element array.
  */
 
+import { decodeWire, isPlainObject } from "@lunora/wire";
+
 import { toBase64 } from "../../../shared/base64";
-import { decodeWire, isPlainObject } from "../../../shared/wire-codec";
 
 /**
  * Map one decoded value to warehouse-portable JSON.
@@ -60,7 +61,7 @@ const toPortableJson = (value: unknown): unknown => {
             if (key === "__proto__") {
                 // A plain assignment for a literal `__proto__` field fires the
                 // prototype setter instead of creating an own property (see the
-                // same handling in shared/wire-codec) — install it explicitly.
+                // same handling in packages/wire/src/wire-codec) — install it explicitly.
                 Object.defineProperty(result, key, { configurable: true, enumerable: true, value: mapped, writable: true });
             } else {
                 result[key] = mapped;

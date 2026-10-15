@@ -72,6 +72,7 @@
         "@lunora/queue": "1.0.0-alpha.106",
         "@lunora/scheduler": "1.0.0-alpha.126",
         "@lunora/server": "1.0.0-alpha.202",
+        "@lunora/wire": "workspace:*",
         "@visulima/notification": "catalog:notify"
     },
     "devDependencies": {

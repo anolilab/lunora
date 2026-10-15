@@ -18,9 +18,10 @@
  * arbitrarily many measurements into O(1) state, so the readout stays faithful
  * for a hot counter while staying bounded against high-cardinality dimensions.
  */
+import { stableStringify } from "@lunora/wire";
+
 import type { LogFields } from "../../../shared/log-fields";
 import type { MetricEvent, MetricKind } from "../../../shared/metric-event";
-import { stableStringify } from "../../../shared/stable-key";
 
 /** Default number of distinct series retained; least-recently-updated evicted first. */
 const DEFAULT_CAPACITY = 256;

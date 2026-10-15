@@ -9,11 +9,10 @@
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 
+import { decodeWire, encodeWire, stableWireKey } from "@lunora/wire";
 import { describe, expect, it, vi } from "vitest";
 
 import { MAX_BATCH_ENTRIES } from "../../../shared/batch-wire";
-import { decodeWire, encodeWire } from "../../../shared/wire-codec";
-import { stableWireKey } from "../../../shared/wire-key";
 import { LunoraClient } from "../src/lunora-client";
 import { OfflineQueue } from "../src/offline-queue";
 import { isTransientReplayFailure } from "../src/replay";

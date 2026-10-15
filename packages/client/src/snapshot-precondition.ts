@@ -1,4 +1,5 @@
-import { stableWireKey } from "../../../shared/wire-key";
+import { stableWireKey } from "@lunora/wire";
+
 import type { LunoraClient } from "./lunora-client";
 import type { FunctionReference } from "./types";
 

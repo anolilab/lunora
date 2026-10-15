@@ -89,6 +89,7 @@
         "@lunora/scheduler": "1.0.0-alpha.126",
         "@lunora/shard-engine": "1.0.0-alpha.129",
         "@lunora/values": "1.0.0-alpha.65",
+        "@lunora/wire": "workspace:*",
         "drizzle-orm": "catalog:drizzle",
         "hono": "catalog:http"
     },

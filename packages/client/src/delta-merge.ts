@@ -25,8 +25,9 @@
  * would corrupt a live query silently. See that module's header.
  */
 
+import { decodeWire } from "@lunora/wire";
+
 import { ID_FIELD, insertionIndexFor, PAGE_FIELD, rowListOf } from "../../../shared/page-result";
-import { decodeWire } from "../../../shared/wire-codec";
 import type { ServerDataMessage } from "./types";
 
 /**

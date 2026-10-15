@@ -5228,15 +5228,11 @@ const sqliteInList: (reference: SQL, items: ReadonlyArray<unknown>, negated: boo
 
 ### `stableStringify` (const)
 
-```ts
-const stableStringify: (value: unknown) => string;
-```
+Re-exported from `@lunora/wire` — signature tracked at its source.
 
 ### `stableWireKey` (const)
 
-```ts
-const stableWireKey: (value: unknown) => string;
-```
+Re-exported from `@lunora/wire` — signature tracked at its source.
 
 ### `stripReservedPatchFields` (const)
 

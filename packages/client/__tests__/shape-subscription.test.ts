@@ -1,6 +1,6 @@
+import { decodeWire } from "@lunora/wire";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { decodeWire } from "../../../shared/wire-codec";
 import { LunoraClient } from "../src/lunora-client";
 
 /**

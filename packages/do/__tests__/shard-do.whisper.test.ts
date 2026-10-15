@@ -1,6 +1,6 @@
+import { decodeWire, encodeWire } from "@lunora/wire";
 import { describe, expect, it } from "vitest";
 
-import { decodeWire, encodeWire } from "../../../shared/wire-codec";
 import type { ShardDOState } from "../src/shard-do";
 import { ShardDO } from "../src/shard-do";
 

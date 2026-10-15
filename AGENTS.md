@@ -103,7 +103,7 @@ Shared dependency versions live in pnpm catalogs in `pnpm-workspace.yaml`, refer
 
 ### Top-level `shared/` — bundler-inlined source (not a package)
 
-`shared/` holds tiny, dependency-free helpers that several packages need but that must **not** create a runtime dependency edge between them (e.g. `shared/stable-key.ts`, used by `@lunora/client`, `@lunora/react`, `@lunora/do`).
+`shared/` holds tiny, dependency-free helpers that several packages need but that must **not** create a runtime dependency edge between them (e.g. `shared/base64.ts`, used by `@lunora/wire`, `@lunora/dispatch` and others).
 
 - **Not a package.** Consumers import by relative path (`../../../shared/<file>`) and the bundler inlines it into each `dist`. Keep these files genuinely zero-dependency (relative or built-in imports only) or inlining breaks.
 - **Outside per-package ESLint** (Prettier-formatted and type-checked transitively) — follow the no-extension and named-export-only rules by hand.

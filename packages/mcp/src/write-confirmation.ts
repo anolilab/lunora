@@ -62,7 +62,7 @@
  * the verifying instance can read it — but it is not forgeable, because moving
  * it changes what the signature covers.
  *
- * Canonicalization is `shared/stable-key`'s `stableStringify`, the repo's single
+ * Canonicalization is `packages/wire/src/stable-key`'s `stableStringify`, the repo's single
  * stable-JSON encoder (sorted keys at every depth), so argument key order cannot
  * change a digest. Signing and the constant-time verify are
  * `shared/hmac-url`'s — the repo's single HMAC envelope, cached `CryptoKey` and
@@ -72,9 +72,9 @@
  */
 import type { LunoraClient } from "@lunora/client";
 import { LunoraError } from "@lunora/errors";
+import { stableStringify } from "@lunora/wire";
 
 import { fromBase64Url, signCanonical, verifyCanonical } from "../../../shared/hmac-url";
-import { stableStringify } from "../../../shared/stable-key";
 import { errorResult, ok } from "./tool-result";
 import type { ToolResult } from "./tool-types";
 

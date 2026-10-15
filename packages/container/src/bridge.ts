@@ -15,8 +15,7 @@
  */
 
 import { LunoraError } from "@lunora/errors";
-
-import { decodeWire, encodeWire } from "../../../shared/wire-codec";
+import { decodeWire, encodeWire } from "@lunora/wire";
 
 /** The RPC path the Lunora Worker exposes. */
 const RPC_PATH = "/_lunora/rpc";

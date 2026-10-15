@@ -333,7 +333,7 @@ describe("discoverFunctions", () => {
 
             // Detecting the class is right — printed bare it is a TS2304. Expanding
             // it is not. `encodeWire` REFUSES a class instance outright
-            // (`shared/wire-codec.ts`: only plain objects and the supported built-ins
+            // (`packages/wire/src/wire-codec.ts`: only plain objects and the supported built-ins
             // round-trip), so no such value ever reaches a caller; and the structural
             // shape would be wrong in three directions at once — methods and getters
             // live on the prototype and never serialize, `#private` fields never

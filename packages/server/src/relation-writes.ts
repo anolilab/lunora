@@ -21,8 +21,7 @@
  * refusing. An action has no transaction, so there a failure after the first write leaves the earlier ones in place.
  */
 import { LunoraError } from "@lunora/errors";
-
-import { isPlainObject } from "../../../shared/wire-codec";
+import { isPlainObject } from "@lunora/wire";
 
 /**
  * The slice of `@lunora/shard-engine`'s `RelationWriteInfo` this reads. Declared here rather than imported so the

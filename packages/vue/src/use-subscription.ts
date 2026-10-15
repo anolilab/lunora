@@ -1,11 +1,11 @@
 import type { ArgsOf, FunctionReference, ReturnOf } from "@lunora/client";
 import { createQuerySubscription } from "@lunora/client/query";
 import { LunoraError } from "@lunora/errors";
+import { stableWireKey } from "@lunora/wire";
 import type { MaybeRefOrGetter, Ref } from "vue";
 import { onScopeDispose, ref, toValue, watch } from "vue";
 
 import { isBrowser } from "../../../shared/is-browser";
-import { stableWireKey } from "../../../shared/wire-key";
 import { useLunora } from "./lunora-provider";
 import type { UseQueryOptions } from "./types";
 

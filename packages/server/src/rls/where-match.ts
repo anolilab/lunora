@@ -21,9 +21,6 @@
  * harness.
  */
 import { LunoraError } from "@lunora/errors";
-
-import { isFieldPath, rangeOperandType, readFieldPath } from "../../../../shared/json-field-path";
-import { isRelationPredicate } from "../../../../shared/relation-operators";
 // `isPlainObject` comes from the wire codec rather than being re-declared here.
 // The prototype check it carries is load-bearing: a local `typeof === "object"`
 // variant counted a `Date`, a `Uint8Array` or a `Map` as a plain object, so
@@ -34,7 +31,10 @@ import { isRelationPredicate } from "../../../../shared/relation-operators";
 // same predicate for the same reason (a class instance has no own enumerable
 // keys and would silently encode to `{}`). `Array.isArray` is subsumed: an
 // array's prototype is `Array.prototype`, not `Object.prototype`.
-import { isPlainObject } from "../../../../shared/wire-codec";
+import { isPlainObject } from "@lunora/wire";
+
+import { isFieldPath, rangeOperandType, readFieldPath } from "../../../../shared/json-field-path";
+import { isRelationPredicate } from "../../../../shared/relation-operators";
 import type { WhereInput } from "./types";
 
 /** Operator keys the JS evaluator recognises. Mirrors `FieldOperators` from the SQL compiler. */

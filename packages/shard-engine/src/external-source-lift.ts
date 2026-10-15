@@ -13,7 +13,7 @@ import { LunoraError } from "@lunora/errors";
 
 /**
  * Coerce a driver-native value that `stableStringify` can't represent (see
- * `shared/stable-key.ts`) into its JSON-safe form: a `Date` → its ISO string, a
+ * `packages/wire/src/stable-key.ts`) into its JSON-safe form: a `Date` → its ISO string, a
  * `bigint` → its decimal string. Every other value passes through unchanged.
  *
  * node-pg / postgres-js / mysql2 return `timestamp`/`datetime` columns as JS
@@ -23,7 +23,7 @@ import { LunoraError } from "@lunora/errors";
  * canonical `cursor: { column: "updated_at" }` incremental config). This is the
  * single boundary where driver-native types cross into DO SQLite JSON; a new
  * source driver (or a new non-JSON column type) must be normalized here too.
- * `shared/stable-key.ts`'s throw contract is intentionally left unchanged — this
+ * `packages/wire/src/stable-key.ts`'s throw contract is intentionally left unchanged — this
  * normalizes the value *before* it can ever reach that encoder.
  */
 const normalizeSourceValue = (value: unknown): unknown => {

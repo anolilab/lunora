@@ -13,8 +13,8 @@
  * `request.signal`.
  */
 import { LunoraError } from "@lunora/errors";
+import { decodeWire } from "@lunora/wire";
 
-import { decodeWire } from "../../../shared/wire-codec";
 import type { StreamIterable } from "./stream";
 import { createStream } from "./stream";
 import type { HttpStreamArgsOf, HttpStreamChunkOf, HttpStreamRef } from "./types";

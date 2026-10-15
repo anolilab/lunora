@@ -1,6 +1,6 @@
+import { encodeWire } from "@lunora/wire";
 import { describe, expect, it, vi } from "vitest";
 
-import { encodeWire } from "../../../shared/wire-codec";
 import { LunoraClient } from "../src/lunora-client";
 import type { FunctionReference } from "../src/types";
 

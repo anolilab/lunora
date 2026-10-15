@@ -1,6 +1,6 @@
+import { encodeWire } from "@lunora/wire";
 import { describe, expect, it, vi } from "vitest";
 
-import { encodeWire } from "../../../shared/wire-codec";
 import { createServiceClient, RPC_PATH } from "../src/service";
 import type { FunctionReference } from "../src/types";
 

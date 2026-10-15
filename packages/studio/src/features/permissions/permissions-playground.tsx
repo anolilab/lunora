@@ -1,8 +1,8 @@
 import { useLunora } from "@lunora/react";
+import { decodeWire } from "@lunora/wire";
 import type { ChangeEvent, ReactElement } from "react";
 import { useEffect, useRef, useState } from "react";
 
-import { decodeWire } from "../../../../../shared/wire-codec";
 import { ShardInput } from "../../components/shard-input";
 import { Badge } from "../../components/ui/badge";
 import { Button } from "../../components/ui/button";

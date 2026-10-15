@@ -1,6 +1,6 @@
 import { LunoraError } from "@lunora/errors";
+import { encodeArgsOrThrow } from "@lunora/wire";
 
-import { encodeArgsOrThrow } from "../../../shared/wire-codec";
 import { assertSchedulerOptions, callDO, getDO } from "./do-client";
 import type { ArgsOf, EnqueueOptions, FunctionReference, Workpool, WorkpoolOptions } from "./types";
 import assertScheduleDelay from "./validate-delay";

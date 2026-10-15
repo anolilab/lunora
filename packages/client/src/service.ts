@@ -38,8 +38,8 @@
  * never configurable — a knob there would imply it means something.
  */
 import { LunoraError } from "@lunora/errors";
+import { decodeWire, encodeArgsOrThrow } from "@lunora/wire";
 
-import { decodeWire, encodeArgsOrThrow } from "../../../shared/wire-codec";
 import type { ArgsOf, FunctionReference, ReturnOf } from "./types";
 import { errorEnvelopeOf, reconstructError } from "./wire-errors";
 

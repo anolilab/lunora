@@ -47,12 +47,11 @@ import {
     searchTermRange,
     tokenizeSearch,
 } from "@lunora/search-core";
+import { decodeWire, stableWireKey } from "@lunora/wire";
 import type { SQL } from "drizzle-orm";
 // Aliased: this module already uses `sql` for the workerd `SqlExec` (see `runSql`), so the drizzle tag is `dsql`.
 import { sql as dsql } from "drizzle-orm";
 
-import { decodeWire } from "../../../shared/wire-codec";
-import { stableWireKey } from "../../../shared/wire-key";
 import { aggregateSqlFunction, normalizeCountArgument, throwingScheduler } from "./aggregate-sql";
 import { aggregateTableName, encodeAggregateKey, readAggregateValue } from "./aggregate-tally";
 import { CountRlsUnsupportedError, mergeWhere, selectIndexForAggregate, selectIndexForCount, selectIndexForGroupBy } from "./aggregates";

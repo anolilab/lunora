@@ -1,7 +1,7 @@
 import { LunoraError } from "@lunora/errors";
+import { decodeWire } from "@lunora/wire";
 import { describe, expect, it, vi } from "vitest";
 
-import { decodeWire } from "../../../shared/wire-codec";
 import type { AuthJurisdictionMove, ExecutionContextLike } from "../src/create-worker";
 import { COPY_AUTH_TO_JURISDICTION_OP, createWorker, PURGE_UNPINNED_AUTH_OP } from "../src/create-worker";
 import type { ShardNamespaceLike } from "../src/resolve-shard";

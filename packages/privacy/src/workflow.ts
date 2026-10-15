@@ -15,8 +15,8 @@
 import { randomUUID } from "node:crypto";
 
 import { LunoraError } from "@lunora/errors";
+import { decodeWire, encodeWire } from "@lunora/wire";
 
-import { decodeWire, encodeWire } from "../../../shared/wire-codec";
 import type { Dataset } from "./dataset";
 import type { PrivacyConfig } from "./define";
 import type { RowDisposition } from "./erasure";

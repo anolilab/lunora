@@ -2,7 +2,8 @@
  * The export's assembly: one part per dataset written to storage as it is collected, then the
  * archive, its manifest and the summary PDF built from the stored parts.
  */
-import { encodeWire } from "../../../shared/wire-codec";
+import { encodeWire } from "@lunora/wire";
+
 import type { ManifestDataset } from "./archive";
 import { buildArchive, buildManifest, buildSummaryPdf } from "./archive";
 import { articlesFor } from "./articles";

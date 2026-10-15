@@ -13,9 +13,9 @@
  * are unchanged.
  */
 
+import { encodeWire, isPlainObject, needsWireEncoding, stableStringify } from "@lunora/wire";
+
 import { ID_FIELD, insertionIndexFor, PAGE_DELTA_CAPABILITY, PAGE_FIELD } from "../../../shared/page-result";
-import { stableStringify } from "../../../shared/stable-key";
-import { encodeWire, isPlainObject, needsWireEncoding } from "../../../shared/wire-codec";
 import type { MutationDelta } from "./types";
 
 /**

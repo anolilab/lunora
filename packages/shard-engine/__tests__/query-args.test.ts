@@ -1,7 +1,7 @@
+import { encodeWire } from "@lunora/wire";
 import { sql } from "drizzle-orm";
 import { describe, expect, it } from "vitest";
 
-import { encodeWire } from "../../../shared/wire-codec";
 import { renderSql } from "../src/drizzle";
 import { buildSeekWhere, CURSOR_PREFIX, decodeCursor, encodeCursor, normalizeOrderKeys } from "../src/query-args";
 import type { OrderKey } from "../src/schema-types";
