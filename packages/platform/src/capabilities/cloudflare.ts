@@ -119,7 +119,7 @@ const CLOUDFLARE_CAPABILITIES: PlatformCapabilities = {
         },
         ai: {
             level: "native",
-            note: "Workers AI; `<provider>/<model>` and `dynamic/<route>` ids route through AI Gateway over the same binding (Unified Billing for unified-catalog providers, a key stored on the gateway for gateway-path-only ones; `LUNORA_AI_GATEWAY_ID` else the account's `default` gateway). `rejectIfBusy` on `ctx.ai.model` / `ctx.ai.run` is the binding's own option, forwarded as is. `ctx.ai.websearch` is the binding's `websearch()` (Web Search API, beta: Ceramic / Exa / Linkup) on the same gateway, billed to a provider key stored there (the `default` alias unless `byokAlias` names another) or else AI Gateway credits",
+            note: "Workers AI; `<provider>/<model>` and `dynamic/<route>` ids route through AI Gateway over the same binding (Unified Billing for unified-catalog providers, a key stored on the gateway for gateway-path-only ones; `LUNORA_AI_GATEWAY_ID` else the account's `default` gateway). `rejectIfBusy` on `ctx.ai.model` / `ctx.ai.run` is the binding's own option, forwarded as is. `ctx.ai.websearch` is the binding's `websearch()` (Web Search API, beta: Ceramic / Exa / Linkup) on the same gateway, billed to a provider key stored there (the `default` alias unless `byokAlias` names another) or else AI Gateway credits. `ctx.ai.toMarkdown` is the binding's toMarkdown() (Markdown Conversion API), and `ctx.ai.images.generate` runs `@cf/…` image ids through the binding and `openai/` / `google/` slugs through the gateway",
         },
         aiSearch: {
             level: "native",

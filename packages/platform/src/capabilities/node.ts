@@ -168,7 +168,7 @@ const NODE_CAPABILITIES: PlatformCapabilities = {
         },
         ai: {
             level: "emulated",
-            note: "No Workers AI-equivalent binding implemented, so `@cf/…` ids, `ctx.ai.run`, `ctx.ai.websearch` and the `rejectIfBusy` option are unavailable. `<provider>/<model>` slugs route to the OpenAI-compatible proxy named by the LUNORA_AI_PROXY_URL env var (LiteLLM, OpenRouter, a self-hosted one; bearer token in LUNORA_AI_PROXY_TOKEN) over plain fetch instead of AI Gateway, and a bring-your-own AI SDK model passes straight through",
+            note: "No Workers AI-equivalent binding implemented, so `@cf/…` ids, `ctx.ai.run`, `ctx.ai.websearch` and the `rejectIfBusy` option are unavailable. `<provider>/<model>` slugs route to the OpenAI-compatible proxy named by the LUNORA_AI_PROXY_URL env var (LiteLLM, OpenRouter, a self-hosted one; bearer token in LUNORA_AI_PROXY_TOKEN) over plain fetch instead of AI Gateway, and a bring-your-own AI SDK model passes straight through. `ctx.ai.toMarkdown` and `@cf/…` image ids are unavailable (no binding); `ctx.ai.images.generate` takes `openai/<model>` slugs through the proxy, or the provider's own env key without one",
         },
         aiSearch: {
             level: "unsupported",
