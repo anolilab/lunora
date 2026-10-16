@@ -371,7 +371,17 @@ const defineDocumentHistory = (options: DefineDocumentHistoryOptions = {}): Docu
         const serialized = JSON.stringify(encodeWire(redact(row)));
 
         // Each side is capped on its own: a large `previous` should not discard a
-        // small `doc`, which is usually the more useful half.
+        // small `doc`, which is usually the more useful half. A UTF-16 string's UTF-8
+        // length lies in `[length, 3 * length]`, so the cap is decided from those
+        // bounds and the string is only encoded when they straddle it.
+        if (serialized.length > maxSnapshotBytes) {
+            return undefined;
+        }
+
+        if (3 * serialized.length <= maxSnapshotBytes) {
+            return serialized;
+        }
+
         return new TextEncoder().encode(serialized).length > maxSnapshotBytes ? undefined : serialized;
     };
 
