@@ -15041,8 +15041,12 @@ abstract class ShardDO {
             }
 
             // A join still settling delivers nothing: the member sees room traffic only once it committed.
-            // The socket whose own join is queuing these broadcasts receives them: the hold is for other traffic.
-            if (ws !== joiner && (this.pendingRoomJoins.get(ws)?.get(topic) ?? 0) > 0) {
+            // The socket whose own join is queuing these broadcasts receives them, but only while that
+            // is its sole pending join: a rejoin still settling keeps its hold on the broadcasts.
+            const holds = this.pendingRoomJoins.get(ws)?.get(topic) ?? 0;
+            const ownJoinOnly = ws === joiner && holds === 1;
+
+            if (holds > 0 && !ownJoinOnly) {
                 continue;
             }
 

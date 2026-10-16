@@ -7225,7 +7225,8 @@ class LunoraClient {
     private roomSendsAdmitted(shardKey: string | undefined): boolean {
         const conn = this.getConnection(shardKey);
 
-        return conn?.wsState === "open" && conn.identityConfirmed === true && conn.roomsRejoined === true;
+        // A retired socket belongs to a session that was replaced: nothing is admitted on it.
+        return conn?.wsState === "open" && conn.retired !== true && conn.identityConfirmed === true && conn.roomsRejoined === true;
     }
 
     /** Flush the held room sends on `shardKey`, once that socket is admitted. */
