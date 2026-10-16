@@ -825,6 +825,9 @@ class LunoraClient {
     /** Subscribers to aggregate connection-status changes (see `onConnectionStatus`). */
     private readonly statusListeners = new Listeners<ConnectionStatus>();
 
+    /** Room handles' held-send flushers, keyed by the shard connection they send on. */
+    private readonly roomFlushes = new Map<string, Set<() => void>>();
+
     /** Subscribers notified when the server drops a socket for an expired token (see `onTokenExpired`). */
     private readonly tokenExpiredListeners = new Listeners();
 
@@ -1925,12 +1928,19 @@ class LunoraClient {
                 flush();
             }
         });
+        // The shard this handle's room lives on reopens independently of the aggregate status.
+        const flushKey = connectionKey(options.shardKey);
+        const flushers = this.roomFlushes.get(flushKey) ?? new Set<() => void>();
+
+        flushers.add(flush);
+        this.roomFlushes.set(flushKey, flushers);
 
         return {
             close: () => {
                 closed = true;
                 pending.length = 0;
                 stopStatus();
+                flushers.delete(flush);
                 unsubscribe();
             },
             // `true` when the message was sent now or queued for the connection; `false`
@@ -6049,6 +6059,11 @@ class LunoraClient {
                     for (const topic of byTopic.keys()) {
                         sendOn(conn, { topic, type: "whisper_subscribe" });
                     }
+                }
+
+                // Room handles on this shard flush their held sends now that the socket is open.
+                for (const flush of this.roomFlushes.get(connectionKey(shardKey)) ?? []) {
+                    flush();
                 }
 
                 this.flushOfflineQueue(shardKey).catch(() => undefined);
