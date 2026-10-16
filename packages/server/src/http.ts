@@ -531,16 +531,19 @@ const SSE_HEADERS: Record<string, string> = {
  * Read the SSE resume position off a request: the `Last-Event-ID` header a
  * browser `EventSource` replays automatically on reconnect, falling back to a
  * `lastEventId` query parameter for clients that cannot set that header.
- * Returns `undefined` when neither is present (or both are empty), so a handler
- * can treat "no resume position" the same as "resume from the beginning".
+ * The query fallback applies only when the header is absent. A present but empty
+ * header is a cleared position (the server emitted an empty `id:`), so it returns
+ * `undefined` rather than resurrecting a stale query value. Returns `undefined`
+ * when there is no resume position, so a handler can treat it the same as
+ * "resume from the beginning".
  *
  * The handler decides what to replay — the framework only surfaces the value.
  */
 const lastEventId = (request: Request): string | undefined => {
     const header = request.headers.get("last-event-id");
 
-    if (header !== null && header !== "") {
-        return header;
+    if (header !== null) {
+        return header === "" ? undefined : header;
     }
 
     const query = new URL(request.url).searchParams.get("lastEventId");

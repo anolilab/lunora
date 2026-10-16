@@ -376,10 +376,10 @@ describe("lastEventId", () => {
         expect(lastEventId(new Request("https://x/api/logs?lastEventId=99", { headers: { "last-event-id": "42" } }))).toBe("42");
     });
 
-    it("treats an empty header as absent and falls back to the query", () => {
+    it("treats a present but empty header as a cleared position, not the query fallback", () => {
         expect.assertions(1);
 
-        expect(lastEventId(new Request("https://x/api/logs?lastEventId=99", { headers: { "last-event-id": "" } }))).toBe("99");
+        expect(lastEventId(new Request("https://x/api/logs?lastEventId=99", { headers: { "last-event-id": "" } }))).toBeUndefined();
     });
 
     it("is reachable from a stream handler via the request it receives", async () => {
