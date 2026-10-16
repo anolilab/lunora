@@ -53,7 +53,7 @@ export type Doc<T extends keyof DataModel> = DataModel[T];
  */
 export interface IndexNamesByTable {
     documents: "by_owner_created";
-    ratelimit_buckets: "by_key";
+    ratelimit_buckets: "by_ts" | "by_key";
 }
 
 export type IndexName<T extends keyof DataModel> = IndexNamesByTable[T];
