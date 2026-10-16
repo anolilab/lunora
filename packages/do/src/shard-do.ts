@@ -7216,11 +7216,9 @@ abstract class ShardDO {
                 // leave cannot run its `onLeave` ahead of this `onJoin`.
                 const admitted = await this.dispatchRoomEvent(ws, envelope.topic, join ? "join" : "leave");
 
-                // A join whose `onJoin` rejected is not a member: undo it, so the
-                // socket neither holds the topic nor gets relayed frames for it.
+                // A join whose `onJoin` rejected was already undone in the queued handler,
+                // so the socket holds no membership and gets no relayed frames for it.
                 if (join && !admitted) {
-                    this.setWhisperMembership(ws, envelope.topic, false);
-
                     return;
                 }
 
@@ -15002,6 +15000,13 @@ abstract class ShardDO {
         kind: "join" | "leave" | "message",
         message: unknown,
     ): Promise<boolean> {
+        // Membership is checked here, not at receive: a message queued behind a join
+        // must not reach onMessage unless that join committed (and a leave that ran
+        // first has already removed it).
+        if (kind === "message" && !this.isWhisperMember(ws, topic)) {
+            return true;
+        }
+
         const info = this.lifecycleInfo(this.readAttachment(ws));
         // `socket.broadcast` only queues: the frame goes out after the handler's
         // mutation has committed, so members never see a message whose writes were
@@ -15029,6 +15034,12 @@ abstract class ShardDO {
                 message: error instanceof Error ? error.message : String(error),
                 timestamp: Date.now(),
             });
+
+            // A join whose onJoin rejected is not a member. Undo it here, inside the
+            // queued slot, so no later queued event can observe the membership.
+            if (kind === "join") {
+                this.setWhisperMembership(ws, topic, false);
+            }
 
             return false;
         }

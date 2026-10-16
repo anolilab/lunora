@@ -308,4 +308,60 @@ describe("shardDO rooms", () => {
         expect(roomCalls(shard).map((call) => call.args["kind"])).toEqual(["join", "leave"]);
         expect((a.deserializeAttachment() as { whispers?: string[] }).whispers).toBeUndefined();
     });
+
+    it("delivers a message sent behind a join only after that join has committed", async () => {
+        expect.assertions(2);
+
+        const a = new FakeSocket({ subs: {}, userId: "user-a" });
+        let releaseJoin: () => void = () => undefined;
+        const joinGate = new Promise<void>((resolve) => {
+            releaseJoin = resolve;
+        });
+        const order: string[] = [];
+        const shard = makeShard([a], { "room:chat": "rooms:chat" }, [], {
+            "rooms:chat": async (args) => {
+                if (args["kind"] === "join") {
+                    await joinGate;
+                    order.push("join-committed");
+                } else {
+                    order.push(String(args["kind"]));
+                }
+
+                return undefined;
+            },
+        });
+
+        const joined = send(shard, a, { topic: "room:chat", type: "whisper_subscribe" });
+        const messaged = send(shard, a, { data: 1, topic: "room:chat", type: "whisper" });
+
+        releaseJoin();
+        await Promise.all([joined, messaged]);
+
+        expect(order).toEqual(["join-committed", "message"]);
+        expect(roomCalls(shard).map((call) => call.args["kind"])).toEqual(["join", "message"]);
+    });
+
+    it("never dispatches a message from a socket whose join was refused", async () => {
+        expect.assertions(2);
+
+        const a = new FakeSocket({ subs: {}, userId: "user-a" });
+        const shard = makeShard([a], { "room:chat": "rooms:chat" }, [], {
+            "rooms:chat": async (args) => {
+                if (args["kind"] === "join") {
+                    throw new Error("join refused");
+                }
+
+                return undefined;
+            },
+        });
+
+        await Promise.all([
+            send(shard, a, { topic: "room:chat", type: "whisper_subscribe" }),
+            send(shard, a, { data: 1, topic: "room:chat", type: "whisper" }),
+        ]);
+
+        // Only the refused join ran: the message found no membership to deliver under.
+        expect(roomCalls(shard).map((call) => call.args["kind"])).toEqual(["join"]);
+        expect((a.deserializeAttachment() as { whispers?: string[] }).whispers).toBeUndefined();
+    });
 });
