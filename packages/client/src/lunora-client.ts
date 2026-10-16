@@ -828,6 +828,9 @@ class LunoraClient {
     /** Room handles' held-send flushers, keyed by the shard connection they send on. */
     private readonly roomFlushes = new Map<string, Set<() => void>>();
 
+    /** Room handles' pending-send resets, run when the identity changes so queued sends never cross identities. */
+    private readonly roomIdentityResets = new Set<() => void>();
+
     /** Subscribers notified when the server drops a socket for an expired token (see `onTokenExpired`). */
     private readonly tokenExpiredListeners = new Listeners();
 
@@ -1918,6 +1921,9 @@ class LunoraClient {
         // Sends made before the socket is open are held here and flushed, in order, when
         // the connection reports connected. Bounded: past the cap a send is refused.
         const pending: Message[] = [];
+        const reset = (): void => {
+            pending.length = 0;
+        };
         const flush = (): void => {
             while (pending.length > 0) {
                 let sent: boolean;
@@ -1938,31 +1944,36 @@ class LunoraClient {
                 pending.shift();
             }
         };
-        const stopStatus = this.onConnectionStatus((status) => {
-            if (status === "connected") {
-                flush();
-            }
-        });
-        // The shard this handle's room lives on reopens independently of the aggregate status.
+        // Flushed from the shard's own open handler, which runs after the room is rejoined: a
+        // send can never reach the server ahead of its `whisper_subscribe`. The aggregate
+        // connection status is not used, since it can change before that rejoin is sent.
         const flushKey = connectionKey(options.shardKey);
         const flushers = this.roomFlushes.get(flushKey) ?? new Set<() => void>();
 
         flushers.add(flush);
         this.roomFlushes.set(flushKey, flushers);
+        // A change of identity drops what was queued under the previous one.
+        this.roomIdentityResets.add(reset);
 
         return {
             close: () => {
                 closed = true;
                 pending.length = 0;
-                stopStatus();
                 flushers.delete(flush);
+
+                if (flushers.size === 0) {
+                    this.roomFlushes.delete(flushKey);
+                }
+
+                this.roomIdentityResets.delete(reset);
                 unsubscribe();
             },
             // `true` when the message was sent now or queued for the connection; `false`
             // when the handle is closed or the queue is full.
             send: (message: Message) => {
                 // A closed handle, or a closed client (whose sockets never reopen), accepts nothing.
-                if (closed || this.closed) {
+                // Without a WebSocket implementation no socket can ever open, so nothing is queued.
+                if (closed || this.closed || this.WebSocketImpl === undefined) {
                     return false;
                 }
 
@@ -7477,6 +7488,11 @@ class LunoraClient {
      * the socket lets the next frame put them straight back.
      */
     private evictPreviousIdentitySession(): void {
+        // Room sends queued under the previous identity must not be delivered under the new one.
+        for (const reset of this.roomIdentityResets) {
+            reset();
+        }
+
         // Cache-seeded values go back to `hydratedQueryCache`, where the identity
         // gate decides whether they are ever shown again, rather than being
         // dropped outright — `revokeCacheSeededValues` also blanks their state.

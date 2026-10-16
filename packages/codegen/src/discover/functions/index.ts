@@ -215,9 +215,14 @@ const discoverFileFunctions = (source: SourceFile, relativePath: string): Functi
 /**
  * Two `defineRoom`s under one name would share a whisper topic, and the generated
  * room map would keep whichever came last. Caught here, at build time, naming both.
+ *
+ * Two exports of one module under one name are an alias of a single registration
+ * (`export const lobby = chat`), so they are not a clash here; the generated room
+ * map checks that they are one object at load. Across modules the same name is a
+ * clash, since a re-export is not visible to discovery.
  */
 const assertUniqueRoomNames = (functions: ReadonlyArray<FunctionIR>): void => {
-    const origins = new Map<string, string>();
+    const origins = new Map<string, { file: string; origin: string }>();
 
     for (const entry of functions) {
         if (entry.channel?.kind !== "room") {
@@ -226,14 +231,16 @@ const assertUniqueRoomNames = (functions: ReadonlyArray<FunctionIR>): void => {
 
         const prior = origins.get(entry.channel.name);
 
-        if (prior !== undefined) {
+        if (prior !== undefined && prior.file !== entry.filePath) {
             throw new LunoraError(
                 "DUPLICATE_ROOM_NAME",
-                `Duplicate room name "${entry.channel.name}": defined in ${prior} and ${entry.filePath}. Room names must be unique across the project.`,
+                `Duplicate room name "${entry.channel.name}": defined in ${prior.origin} and ${entry.filePath}:${entry.exportName}. Room names must be unique across the project.`,
             );
         }
 
-        origins.set(entry.channel.name, `${entry.filePath}:${entry.exportName}`);
+        if (prior === undefined) {
+            origins.set(entry.channel.name, { file: entry.filePath, origin: `${entry.filePath}:${entry.exportName}` });
+        }
     }
 };
 

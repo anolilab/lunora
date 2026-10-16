@@ -77,4 +77,18 @@ export const chatB = defineRoom({ name: "chat", message: v.object({}), onMessage
 
         expect(() => discover()).toThrow(/Duplicate room name "chat"/u);
     });
+
+    it("accepts one room exported under two names in the same module as an alias", () => {
+        expect.assertions(1);
+
+        writeLunoraSource(
+            "chat.ts",
+            `import { defineRoom, v } from "@lunora/server";
+export const chat = defineRoom({ name: "chat", message: v.object({}), onMessage: () => undefined });
+export const lobby = chat;`,
+        );
+
+        // Both exports are one registration: discovery does not clash on them.
+        expect(() => discover()).not.toThrow();
+    });
 });
