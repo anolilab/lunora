@@ -1668,10 +1668,11 @@ const mergeTopK = (values: ReadonlyArray<unknown>, strategy: { by: string; direc
     const compare = (a: ScoredRow, b: ScoredRow): number => (direction === "asc" ? compareAsc(a.score, b.score) : compareAsc(b.score, a.score));
     const { k } = strategy;
 
-    // A full sort is cheaper when nothing is dropped. The non-integer and
-    // negative cases are unreachable from the wire (validated in create-worker);
-    // they take this path so `slice` keeps its exact historical result for them.
-    if (!Number.isInteger(k) || k < 0 || k >= collected.length) {
+    // A full sort is cheaper when most rows are kept: selectTopK pays an O(k)
+    // splice per row that enters the buffer, so for k near N it is O(N*k). The
+    // non-integer and negative cases are unreachable from the wire (validated in
+    // create-worker); they take this path so `slice` keeps its exact historical result.
+    if (!Number.isInteger(k) || k < 0 || 2 * k >= collected.length) {
         collected.sort(compare);
 
         return collected.slice(0, k).map((entry) => entry.row);
