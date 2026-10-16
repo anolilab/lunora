@@ -309,6 +309,10 @@ class ConcreteSyncShard extends ShardDO {
             return this.raceControl(functionPath);
         }
 
+        if (functionPath === "rooms:notes") {
+            return this.roomNotes(args);
+        }
+
         const writer = this.getWriter();
 
         switch (functionPath) {
@@ -340,6 +344,11 @@ class ConcreteSyncShard extends ShardDO {
     // eslint-disable-next-line class-methods-use-this -- override classifies by `functionPath` alone, no instance state.
     protected override isCustomMutator(functionPath: string): boolean {
         return functionPath === "messages:sendMutator";
+    }
+
+    // eslint-disable-next-line class-methods-use-this -- the room is registered by topic alone, no instance state.
+    protected override roomHandlerPath(topic: string): string | undefined {
+        return topic === "room:notes" ? "rooms:notes" : undefined;
     }
 
     protected override resolveShape(
@@ -414,6 +423,36 @@ class ConcreteSyncShard extends ShardDO {
         });
 
         return this.writer;
+    }
+
+    /**
+     * The `notes` room. A `message` writes a row and echoes it to the room only once the
+     * write has committed (`socket.broadcast` queues until then); a `join` replays every
+     * stored note to the joining socket, straight from SQLite.
+     */
+    private async roomNotes(args: Record<string, unknown>): Promise<unknown> {
+        const writer = this.getWriter();
+        const socket = args["socket"] as { broadcast: (payload: unknown) => void };
+
+        if (args["kind"] === "message") {
+            const message = args["message"] as { _id: string; text: string };
+
+            await writer.insert("messages", { _id: message._id, authorId: "room", channelId: "notes", text: message.text }, { allowExplicitId: true });
+            this.recordChangedTable("messages");
+            socket.broadcast({ echo: message.text });
+        }
+
+        if (args["kind"] === "join") {
+            // Rows are stored as a JSON document in `__doc__`, keyed by `id`.
+            const rows = (this.sql as { exec: (query: string) => { toArray: () => { __doc__: string }[] } })
+                .exec(`SELECT "__doc__" FROM "messages" ORDER BY "id"`)
+                .toArray();
+            const notes = rows.map((row) => JSON.parse(row.__doc__) as { channelId: string; text: string }).filter((doc) => doc.channelId === "notes");
+
+            socket.broadcast({ history: notes.map((doc) => doc.text) });
+        }
+
+        return { ok: true };
     }
 
     private raceControl(functionPath: string): { calls: number; settled: boolean } {
