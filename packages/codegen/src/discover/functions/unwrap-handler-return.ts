@@ -1,3 +1,5 @@
+import { dirname, join } from "node:path";
+
 import type { Diagnostic, Node, SourceFile, ts, Type } from "ts-morph";
 import { DiagnosticCategory, SyntaxKind } from "ts-morph";
 
@@ -127,79 +129,69 @@ const typeErrorWithin = (handler: Node): TypeError | undefined => {
     return { derivative: true, message: cause ? `${first}; caused by: ${messageOf(cause)}` : first };
 };
 
-/**
- * Collapse the SSE `id:` wrapper a `.stream()` handler may yield.
- *
- * `sseEvent({ data, id })` (`@lunora/server`) produces an `SseEvent<data>`
- * envelope, and the pump puts only its INNER `data` on the wire, so the client
- * decodes `data` — never the envelope — and the emitted `HttpStreamRef<Chunk>`
- * must name `data`. A handler may mix the wrapper freely with plain chunks
- * (`SseEvent<T> | T`), which collapses to `T`.
- *
- * Matched by symbol NAME, not an import: codegen carries no dependency on
- * `@lunora/server`, and `SseEvent` appears in no query/mutation return, so this
- * is inert for every other handler kind. A union of genuinely different chunk
- * shapes is returned unchanged.
- */
-const collapseSseEventChunk = (returnType: Type): Type | undefined => {
-    const members = returnType.isUnion() ? returnType.getUnionTypes() : [returnType];
-    const symbols = members.map((member) => member.getSymbol() ?? member.getAliasSymbol());
-    const isSseEventMember = (symbol: (typeof symbols)[number]): boolean => symbol?.getName() === "SseEvent";
+/** The package a source file belongs to, read from the nearest enclosing `package.json`. */
+const packageNameOf = (file: SourceFile): string | undefined => {
+    const fileSystem = file.getProject().getFileSystem();
+    let directory = dirname(file.getFilePath());
 
-    // Nothing to do — and nothing expensive to render — for the overwhelming
-    // majority of handlers, which never name `SseEvent`. Skipping `getText()`
-    // here keeps this off the hot path of every other discovery walk.
-    if (!symbols.some((symbol) => isSseEventMember(symbol))) {
-        return undefined;
+    for (;;) {
+        const manifest = join(directory, "package.json");
+
+        if (fileSystem.fileExistsSync(manifest)) {
+            const { name } = JSON.parse(fileSystem.readFileSync(manifest)) as { name?: unknown };
+
+            return typeof name === "string" ? name : undefined;
+        }
+
+        const parent = dirname(directory);
+
+        if (parent === directory) {
+            return undefined;
+        }
+
+        directory = parent;
     }
-
-    const inner = members.map((member, index) => (isSseEventMember(symbols[index]) ? (member.getTypeArguments()[0] ?? member) : member));
-    const first = inner[0];
-
-    if (first === undefined) {
-        return undefined;
-    }
-
-    const firstText = first.getText();
-    const rest = inner.slice(1);
-
-    return rest.every((member) => member.getText() === firstText) ? first : undefined;
 };
 
 /**
- * Render a handler's resolved return type via ts-morph's type checker. Unwraps
- * the outer `Promise<…>` so the emitted `FunctionReference<Kind, Args, Return>`
- * matches what callers see post-await. Shared by the object-literal `query(...)`
- * path and the builder terminal (`c.query(...)`) path.
- *
- * Returns `"unknown"` when the type checker can't resolve enough context —
- * typical when running against a stand-alone fixture without a tsconfig.
+ * Whether a type is the genuine `@lunora/server` `SseEvent<T>` transport envelope.
+ * Matched by name AND by the package that declares it, so a user's own `SseEvent`
+ * type (local or imported from elsewhere) is left intact: its yields are plain
+ * values on the wire, not wrappers.
  */
-const unwrapHandlerReturn = (handler: Node): string => {
-    const signature = handler.getType().getCallSignatures()[0];
+const isSseEventEnvelope = (member: Type): boolean => {
+    const symbol = member.getSymbol() ?? member.getAliasSymbol();
+    const declaration = symbol?.getName() === "SseEvent" ? symbol.getDeclarations()[0] : undefined;
 
-    if (!signature) {
-        return "unknown";
+    return declaration !== undefined && packageNameOf(declaration.getSourceFile()) === "@lunora/server";
+};
+
+/**
+ * The chunk members a `.stream()` handler yields, with every genuine `SseEvent<T>`
+ * envelope replaced by its inner `T` and unions flattened. `undefined` when the
+ * return type names no genuine envelope, so ordinary yields keep the normal path.
+ * `SseEvent<A | B> | A | B` yields `[A, B, A, B]`; the caller dedupes by rendered text.
+ *
+ * The pump puts only the inner `data` on the wire, so the client must decode
+ * `data`, never the envelope. Ordinary handlers never reach this: only a `.stream()`
+ * terminal calls it (see `unwrapHandlerReturn`'s `streamChunk` flag).
+ */
+const sseChunkMembers = (returnType: Type): Type[] | undefined => {
+    const members = returnType.isUnion() ? returnType.getUnionTypes() : [returnType];
+
+    if (!members.some((member) => isSseEventEnvelope(member))) {
+        return undefined;
     }
 
-    let returnType = signature.getReturnType();
+    return members.flatMap((member) => {
+        const inner = isSseEventEnvelope(member) ? (member.getTypeArguments()[0] ?? member) : member;
 
-    // Unwrap a single layer of `Promise<…>` / `AsyncIterable<…>` /
-    // `AsyncGenerator<…, …, …>`. The runtime awaits / iterates the handler,
-    // so callers should see the inner element type — not the wrapper.
-    const symbol = returnType.getSymbol() ?? returnType.getAliasSymbol();
-    const wrapperName = symbol?.getName();
+        return inner.isUnion() ? inner.getUnionTypes() : [inner];
+    });
+};
 
-    if (wrapperName === "Promise" || wrapperName === "AsyncIterable" || wrapperName === "AsyncIterableIterator" || wrapperName === "AsyncGenerator") {
-        const innerTypeArgument = returnType.getTypeArguments()[0];
-
-        if (innerTypeArgument) {
-            returnType = innerTypeArgument;
-        }
-    }
-
-    returnType = collapseSseEventChunk(returnType) ?? returnType;
-
+/** Render one resolved return type through the shared checks; `"unknown"` when they refuse it. */
+const renderReturnType = (returnType: Type, handler: Node): string => {
     const rendered = returnType.getText(handler);
 
     // `any`/empty fall back to `unknown` so downstream typings stay strict.
@@ -277,6 +269,54 @@ const unwrapHandlerReturn = (handler: Node): string => {
     }
 
     return rendered;
+};
+
+/**
+ * Render a handler's resolved return type via ts-morph's type checker. Unwraps
+ * the outer `Promise<…>` so the emitted `FunctionReference<Kind, Args, Return>`
+ * matches what callers see post-await. Shared by the object-literal `query(...)`
+ * path and the builder terminal (`c.query(...)`) path.
+ *
+ * `streamChunk` renders a `.stream()` terminal's yielded chunk type: genuine
+ * `SseEvent` envelopes collapse to their inner data, and each remaining member is
+ * rendered through the same checks as any other return type. Ordinary handlers
+ * keep their `SseEvent` wrapper, since their runtime result carries it.
+ *
+ * Returns `"unknown"` when the type checker can't resolve enough context —
+ * typical when running against a stand-alone fixture without a tsconfig.
+ */
+const unwrapHandlerReturn = (handler: Node, streamChunk = false): string => {
+    const signature = handler.getType().getCallSignatures()[0];
+
+    if (!signature) {
+        return "unknown";
+    }
+
+    let returnType = signature.getReturnType();
+
+    // Unwrap a single layer of `Promise<…>` / `AsyncIterable<…>` /
+    // `AsyncGenerator<…, …, …>`. The runtime awaits / iterates the handler,
+    // so callers should see the inner element type — not the wrapper.
+    const symbol = returnType.getSymbol() ?? returnType.getAliasSymbol();
+    const wrapperName = symbol?.getName();
+
+    if (wrapperName === "Promise" || wrapperName === "AsyncIterable" || wrapperName === "AsyncIterableIterator" || wrapperName === "AsyncGenerator") {
+        const innerTypeArgument = returnType.getTypeArguments()[0];
+
+        if (innerTypeArgument) {
+            returnType = innerTypeArgument;
+        }
+    }
+
+    const members = streamChunk ? sseChunkMembers(returnType) : undefined;
+
+    if (members === undefined) {
+        return renderReturnType(returnType, handler);
+    }
+
+    const rendered = members.map((member) => renderReturnType(member, handler));
+
+    return rendered.includes("unknown") ? "unknown" : [...new Set(rendered)].join(" | ");
 };
 
 export default unwrapHandlerReturn;

@@ -162,8 +162,10 @@ const walkRouteChain = (terminalCall: CallExpression, terminalStep: string): Rou
  * handler yields. The handler is the terminal call's only argument; its
  * `AsyncGenerator<R, …>` / `AsyncIterable<R>` return type is unwrapped by
  * `unwrapHandlerReturn` (shared with function discovery), so the same
- * degraded-checker fallbacks apply. `"unknown"` when the argument isn't an
- * inline function expression (e.g. a hoisted identifier).
+ * degraded-checker fallbacks apply. The `streamChunk` flag collapses the
+ * `sseEvent` wrapper here only, since ordinary handlers return it intact.
+ * `"unknown"` when the argument isn't an inline function expression (e.g. a
+ * hoisted identifier).
  */
 const chunkTypeFromStreamTerminal = (call: CallExpression): string => {
     const handler = call.getArguments()[0];
@@ -172,7 +174,7 @@ const chunkTypeFromStreamTerminal = (call: CallExpression): string => {
         return "unknown";
     }
 
-    return unwrapHandlerReturn(handler);
+    return unwrapHandlerReturn(handler, true);
 };
 
 /**
