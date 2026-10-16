@@ -522,6 +522,8 @@ describe("reconcile", () => {
                 reportedToProvider: false,
             });
 
+        await store.upsertCustomer({ createdAt: 1, id: "cus_1", provider: "stripe", referenceId: "user_1" });
+        await store.upsertCustomer({ createdAt: 1, id: "cus_2", provider: "stripe", referenceId: "user_2" });
         await record(1, "user_1");
         await record(2, "user_1");
         await record(3, "user_2");
@@ -534,6 +536,55 @@ describe("reconcile", () => {
         ]);
         expect(reported).toStrictEqual(["evt_1", "evt_2", "evt_3"]);
         expect(result.updatedUsage).toBe(3);
+    });
+
+    it("picks up a customer created mid-tick for a later event of the same reference", async () => {
+        expect.assertions(2);
+
+        // Regression: a miss was memoised as `undefined` for the whole tick, so an event
+        // after the customer was created still reported with no customer id.
+        const store = new MemoryPaymentStore();
+        const reported: (string | undefined)[] = [];
+        const adapter = {
+            capabilities: { usageMetering: true },
+            identifier: "stripe",
+            reportUsage: async (input: { customerId?: string; idempotencyKey: string }) => {
+                reported.push(input.customerId);
+
+                if (input.idempotencyKey === "evt_1") {
+                    await store.upsertCustomer({
+                        createdAt: 1,
+                        id: "cus_new",
+                        provider: "stripe",
+                        referenceId: "user_1",
+                    });
+                }
+            },
+        } as unknown as PaymentAdapter;
+
+        await store.recordUsage({
+            createdAt: 1,
+            featureId: "tokens",
+            idempotencyKey: "evt_1",
+            provider: "stripe",
+            quantity: 5,
+            referenceId: "user_1",
+            reportedToProvider: false,
+        });
+        await store.recordUsage({
+            createdAt: 2,
+            featureId: "tokens",
+            idempotencyKey: "evt_2",
+            provider: "stripe",
+            quantity: 5,
+            referenceId: "user_1",
+            reportedToProvider: false,
+        });
+
+        await reconcile({ adapter, store });
+
+        expect(reported).toStrictEqual([undefined, "cus_new"]);
+        await expect(store.listUnreportedUsage("stripe", 10)).resolves.toStrictEqual([]);
     });
 
     it("does not cache a failed customer lookup across ticks", async () => {

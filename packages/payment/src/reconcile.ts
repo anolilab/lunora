@@ -200,9 +200,10 @@ const sweepUnreportedUsage = async (
 
     const pending = await store.listUnreportedUsage(adapter.identifier, limit);
     // Scoped to this tick: a batch often carries several events for one reference,
-    // and each would repeat the same lookup. A failed lookup throws before it is
-    // stored, so it is retried by the next event in this tick and by the next tick.
-    const customers = new Map<string, Customer | undefined>();
+    // and each would repeat the same lookup. Only a found customer is memoised: a miss
+    // (or a failed lookup, which throws before it is stored) is re-read by the next
+    // event in this tick, so a customer created mid-tick is picked up.
+    const customers = new Map<string, Customer>();
     let updated = 0;
     let failed = 0;
 
@@ -210,10 +211,13 @@ const sweepUnreportedUsage = async (
         try {
             let customer = customers.get(event.referenceId);
 
-            if (!customers.has(event.referenceId)) {
+            if (customer === undefined) {
                 // eslint-disable-next-line no-await-in-loop -- a retry sweep against a provider that just failed: serial, not a stampede
                 customer = await store.getCustomerByReference(adapter.identifier, event.referenceId);
-                customers.set(event.referenceId, customer);
+
+                if (customer !== undefined) {
+                    customers.set(event.referenceId, customer);
+                }
             }
 
             // eslint-disable-next-line no-await-in-loop -- see above
