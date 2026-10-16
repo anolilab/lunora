@@ -2915,16 +2915,16 @@ abstract class ShardDO {
      * again would throw "WebSocket has been closed" in the Workers runtime.
      */
     public async webSocketClose(rawSocket: WebSocket, _code: number, _reason: string, _wasClean: boolean): Promise<void> {
-        await this.ensureShardInit();
-
         // Same boundary conversion as `webSocketMessage`: per-socket state is keyed
         // on the handle, so the close path must resolve the same identity or it
         // would tear down nothing.
         const ws = this.runner.socketFor(rawSocket);
 
-        // Marked before the first await: a subscribe or unsubscribe that interleaves with
-        // this close must not change membership the close is about to tear down.
+        // Marked before the first await, including the shard-init one below: a subscribe or
+        // unsubscribe that interleaves with this close must not change membership it tears down.
         this.closingSockets.add(ws);
+
+        await this.ensureShardInit();
 
         // Fire `onDisconnect` lifecycle hooks the instant the socket drops —
         // replaying the identity + context recorded at connect — so presence and
