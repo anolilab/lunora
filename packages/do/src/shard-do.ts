@@ -15017,7 +15017,7 @@ abstract class ShardDO {
      * for `getFanoutMetrics` (plan 075 Phase 1). Pure delivery — no SQLite, no CDC.
      * @returns the number of sockets the frame was sent to
      */
-    private deliverWhisperLocal(topic: string, frame: string, exclude: undefined | ShardSocketLike): number {
+    private deliverWhisperLocal(topic: string, frame: string, exclude: undefined | ShardSocketLike, joiner?: ShardSocketLike): number {
         let scanned = 0;
         let delivered = 0;
 
@@ -15035,7 +15035,8 @@ abstract class ShardDO {
             }
 
             // A join still settling delivers nothing: the member sees room traffic only once it committed.
-            if ((this.pendingRoomJoins.get(ws)?.get(topic) ?? 0) > 0) {
+            // The socket whose own join is queuing these broadcasts receives them: the hold is for other traffic.
+            if (ws !== joiner && (this.pendingRoomJoins.get(ws)?.get(topic) ?? 0) > 0) {
                 continue;
             }
 
@@ -15239,7 +15240,7 @@ abstract class ShardDO {
         // neither drops the payloads queued after it nor fails the handler's mutation.
         for (const payload of pending) {
             try {
-                this.broadcastRoomMessage(topic, payload);
+                this.broadcastRoomMessage(topic, payload, kind === "join" ? ws : undefined);
             } catch (error: unknown) {
                 this.logs.push({
                     functionPath,
@@ -15263,7 +15264,7 @@ abstract class ShardDO {
      * `bigint`/bytes survive the hop and the receiving client's `decodeWire`
      * restores them. Fire-and-forget: `broadcast` is a synchronous callback.
      */
-    private broadcastRoomMessage(topic: string, data: unknown): void {
+    private broadcastRoomMessage(topic: string, data: unknown, joiner?: ShardSocketLike): void {
         // eslint-disable-next-line unicorn/no-null -- an undefined broadcast body is delivered as an explicit JSON `null`, mirroring `broadcastWhisper`
         const dataJson = JSON.stringify(encodeWire(data ?? null));
 
@@ -15281,7 +15282,7 @@ abstract class ShardDO {
 
         const frame = `{"type":"whisper","topic":${JSON.stringify(topic)},"data":${dataJson}}`;
 
-        this.deliverWhisperLocal(topic, frame, undefined);
+        this.deliverWhisperLocal(topic, frame, undefined, joiner);
 
         const { relay } = this;
 

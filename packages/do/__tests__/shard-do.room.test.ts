@@ -540,6 +540,26 @@ describe("shardDO rooms", () => {
         expect(roomCalls(shard).map((call) => call.args["kind"])).toEqual(["join", "leave", "join"]);
     });
 
+    it("delivers the broadcasts a room's onJoin queues to the joining socket itself", async () => {
+        expect.assertions(1);
+
+        const a = new FakeSocket({ subs: {}, userId: "user-a" });
+        const shard = makeShard([a], { "room:chat": "rooms:chat" }, [], {
+            "rooms:chat": (args) => {
+                if (args["kind"] === "join") {
+                    (args["socket"] as { broadcast: (message: unknown) => void }).broadcast({ welcome: true });
+                }
+
+                return undefined;
+            },
+        });
+
+        await send(shard, a, { topic: "room:chat", type: "whisper_subscribe" });
+
+        // A welcome queued by the joining socket's own onJoin reaches that socket, as RoomSocket.broadcast promises.
+        expect(a.frames.filter((frame) => frame.type === "whisper").map((frame) => frame.data)).toEqual([{ welcome: true }]);
+    });
+
     it("keeps a member's room membership across a hibernation wake-up", async () => {
         expect.assertions(2);
 
