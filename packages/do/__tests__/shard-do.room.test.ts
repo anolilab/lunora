@@ -275,4 +275,37 @@ describe("shardDO rooms", () => {
         expect(roomCalls(shard)).toHaveLength(0);
         expect(b.frames).toEqual([{ data: { x: 1 }, from: "user-a", topic: "cursors", type: "whisper" }]);
     });
+
+    it("does not record membership for a join whose onJoin rejects", async () => {
+        expect.assertions(1);
+
+        const a = new FakeSocket({ subs: {}, userId: "user-a" });
+        const shard = makeShard([a], { "room:chat": "rooms:chat" }, [], {
+            "rooms:chat": () => {
+                throw new Error("join refused");
+            },
+        });
+
+        await send(shard, a, { topic: "room:chat", type: "whisper_subscribe" });
+
+        // A join the handler refused is not a member: it is undone, not left on the attachment.
+        expect((a.deserializeAttachment() as { whispers?: string[] }).whispers).toBeUndefined();
+    });
+
+    it("lets a throttled socket leave a room it already joined", async () => {
+        expect.assertions(2);
+
+        const a = new FakeSocket({ subs: {}, userId: "user-a" });
+        const shard = makeShard([a], { "room:chat": "rooms:chat" });
+
+        await send(shard, a, { topic: "room:chat", type: "whisper_subscribe" });
+
+        // Exhaust the admission bucket: every further room event is refused.
+        (shard as unknown as { allowWhisper: () => boolean }).allowWhisper = () => false;
+
+        await send(shard, a, { topic: "room:chat", type: "whisper_unsubscribe" });
+
+        expect(roomCalls(shard).map((call) => call.args["kind"])).toEqual(["join", "leave"]);
+        expect((a.deserializeAttachment() as { whispers?: string[] }).whispers).toBeUndefined();
+    });
 });
