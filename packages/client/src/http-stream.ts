@@ -37,6 +37,12 @@ const SSE_FIELD_SPACE_RE = /^ /u;
 const SSE_RETRY_RE = /^\d+$/u;
 
 /**
+ * Longest delay `setTimeout` honours (2^31 - 1 ms). A larger one fires after about
+ * 1 ms, so an oversized `retry:` is capped here rather than reconnecting at once.
+ */
+const MAX_RETRY_MS = 2_147_483_647;
+
+/**
  * Consecutive transport interruptions a `reconnect: true` stream tolerates
  * before it gives up. The count resets whenever a frame arrives intact, so this
  * bounds an unbroken outage rather than total reconnects over a healthy stream.
@@ -129,12 +135,17 @@ const parseSseFrame = (raw: string): SseFrame => {
         } else if (line.startsWith("data:")) {
             dataLines.push(line.slice("data:".length).replace(SSE_FIELD_SPACE_RE, ""));
         } else if (line.startsWith("id:")) {
-            id = line.slice("id:".length).replace(SSE_FIELD_SPACE_RE, "");
+            const value = line.slice("id:".length).replace(SSE_FIELD_SPACE_RE, "");
+
+            // Per the spec an id containing NUL is ignored, keeping the previous one.
+            if (!value.includes("\0")) {
+                id = value;
+            }
         } else if (line.startsWith("retry:")) {
             const value = line.slice("retry:".length).replace(SSE_FIELD_SPACE_RE, "");
 
-            if (SSE_RETRY_RE.test(value)) {
-                retry = Number(value);
+            if (SSE_RETRY_RE.test(value) && Number.isSafeInteger(Number(value))) {
+                retry = Math.min(Number(value), MAX_RETRY_MS);
             }
         }
         // Comment lines (":…") and any other field are ignored.
@@ -304,38 +315,49 @@ const pumpSseBody = async (body: ReadableStream<Uint8Array>, handle: UntypedHand
         return false;
     };
 
-    for (;;) {
-        // eslint-disable-next-line no-await-in-loop -- SSE frames arrive sequentially on one body; each read depends on the previous one completing.
-        const { done, value } = await reader.read();
+    const releaseReader = (): Promise<void> =>
+        reader.cancel().then(
+            () => undefined,
+            () => undefined,
+        );
 
-        if (done) {
-            break;
+    try {
+        for (;;) {
+            // eslint-disable-next-line no-await-in-loop -- SSE frames arrive sequentially on one body; each read depends on the previous one completing.
+            const { done, value } = await reader.read();
+
+            if (done) {
+                break;
+            }
+
+            // The server writes `\n`-only frames; normalise `\r\n` defensively so a
+            // proxy that rewrites line endings doesn't break frame detection.
+            append(decoder.decode(value, { stream: true }));
+
+            if (drainFrames()) {
+                // Terminal frame seen — release the connection and stop reading.
+                // eslint-disable-next-line no-await-in-loop -- runs at most once: the terminal frame exits the loop via the return below.
+                await releaseReader();
+
+                return true;
+            }
         }
 
-        // The server writes `\n`-only frames; normalise `\r\n` defensively so a
-        // proxy that rewrites line endings doesn't break frame detection.
-        append(decoder.decode(value, { stream: true }));
+        // Flush any bytes the decoder buffered, then drain one last time.
+        // A `\r` still carried here is a lone trailing one, which ends no frame.
+        append(decoder.decode());
 
-        if (drainFrames()) {
-            // Terminal frame seen — release the connection and stop reading.
-            // eslint-disable-next-line no-await-in-loop -- runs at most once: the terminal frame exits the loop via the return below.
-            await reader.cancel().catch(() => {
-                /* the response is being torn down anyway */
-            });
+        // The pump always writes `complete` or `error` before closing, so an EOF
+        // that drains no terminal frame is a transport-level interruption. Whether
+        // that fails the stream or triggers a reconnect is the caller's decision, so
+        // it is reported here as `false` rather than failed.
+        return drainFrames();
+    } catch (error: unknown) {
+        // An observer or dispatch threw mid-body: release the connection, then surface it.
+        await releaseReader();
 
-            return true;
-        }
+        throw error;
     }
-
-    // Flush any bytes the decoder buffered, then drain one last time.
-    // A `\r` still carried here is a lone trailing one, which ends no frame.
-    append(decoder.decode());
-
-    // The pump always writes `complete` or `error` before closing, so an EOF
-    // that drains no terminal frame is a transport-level interruption. Whether
-    // that fails the stream or triggers a reconnect is the caller's decision, so
-    // it is reported here as `false` rather than failed.
-    return drainFrames();
 };
 
 /**
@@ -363,6 +385,21 @@ const sleep = async (ms: number, signal: AbortSignal): Promise<void> => {
 
         signal.addEventListener("abort", onAbort, { once: true });
     });
+};
+
+/**
+ * Request headers for one attempt. A set `lastEventId` replaces any differently
+ * cased `Last-Event-ID` a caller supplied, since header names are case-insensitive
+ * and only the latest resume position may be sent.
+ */
+const attemptHeaders = (extra: Record<string, string> | undefined, lastEventId: string | undefined): Record<string, string> => {
+    const kept = Object.entries(extra ?? {}).filter(([name]) => lastEventId === undefined || name.toLowerCase() !== "last-event-id");
+
+    return {
+        accept: "text/event-stream",
+        ...Object.fromEntries(kept),
+        ...(lastEventId === undefined ? {} : { "last-event-id": lastEventId }),
+    };
 };
 
 /** Map a thrown fetch/read failure to the error a consumer sees; a coded error is preserved as-is. */
@@ -439,6 +476,10 @@ const httpStream = <Ref extends HttpStreamRef>(
         onCancel: () => {
             ac.abort();
         },
+        // A failed handle (e.g. a buffer overflow) stops the request and any reconnect.
+        onFail: () => {
+            ac.abort();
+        },
     });
 
     const reconnectEnabled = options.reconnect ?? false;
@@ -461,15 +502,29 @@ const httpStream = <Ref extends HttpStreamRef>(
         attempt = 0;
     };
 
+    // A user callback that throws fails the stream. Its frame is not delivered, so the
+    // cursor must not advance past it and the error must not read as a transport drop.
+    const callbackFailure: { value?: { error: unknown } } = {};
+
+    const guarded = (callback: () => void): void => {
+        try {
+            callback();
+        } catch (error: unknown) {
+            callbackFailure.value = { error };
+
+            throw error;
+        }
+    };
+
     const observers: SseFrameObservers = {
         onFrame,
         onId: (id) => {
+            guarded(() => options.onEventId?.(id));
             lastEventId = id;
-            options.onEventId?.(id);
         },
         onRetry: (ms) => {
+            guarded(() => options.onRetry?.(ms));
             serverRetryMs = ms;
-            options.onRetry?.(ms);
         },
     };
 
@@ -479,11 +534,7 @@ const httpStream = <Ref extends HttpStreamRef>(
      * non-2xx status, a body-less response, or a consumer cancel.
      */
     const runAttempt = async (): Promise<{ completed: boolean; error: Error } | undefined> => {
-        const headers: Record<string, string> = { accept: "text/event-stream", ...options.headers };
-
-        if (lastEventId !== undefined) {
-            headers["last-event-id"] = lastEventId;
-        }
+        const headers = attemptHeaders(options.headers, lastEventId);
 
         // A bare EOF is a transport interruption; a read/transport throw
         // replaces this with the coded/transport error it carried.
@@ -526,6 +577,16 @@ const httpStream = <Ref extends HttpStreamRef>(
                 return undefined;
             }
 
+            if (callbackFailure.value) {
+                const { error: callbackError } = callbackFailure.value;
+
+                handle.fail(
+                    callbackError instanceof Error ? callbackError : new LunoraError("HTTP_STREAM_CALLBACK", "httpStream: an onEventId/onRetry callback threw"),
+                );
+
+                return undefined;
+            }
+
             return { completed: false, error: toTransportError(error) };
         }
     };
@@ -533,6 +594,13 @@ const httpStream = <Ref extends HttpStreamRef>(
     (async () => {
         try {
             for (;;) {
+                // A failed or cancelled stream (the handle aborts `ac` on fail) must not reopen the request.
+                if (ac.signal.aborted) {
+                    handle.complete();
+
+                    return;
+                }
+
                 // eslint-disable-next-line no-await-in-loop -- reconnects are sequential: each request starts only after the previous one proved interrupted.
                 const outcome = await runAttempt();
 
@@ -554,14 +622,9 @@ const httpStream = <Ref extends HttpStreamRef>(
 
                 attempt += 1;
 
+                // An abort during the delay is caught by the aborted check at the loop top.
                 // eslint-disable-next-line no-await-in-loop -- the delay itself is what spaces consecutive reconnect attempts.
                 await sleep(serverRetryMs ?? reconnectCalculator.next(), ac.signal);
-
-                if (ac.signal.aborted) {
-                    handle.complete();
-
-                    return;
-                }
             }
         } finally {
             detachExternalAbort();

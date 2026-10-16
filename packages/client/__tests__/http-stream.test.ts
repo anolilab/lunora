@@ -378,6 +378,88 @@ describe("httpStream", () => {
         expect(retries).toStrictEqual([1500]);
     });
 
+    it("caps an oversized digit-only `retry:` at the timer limit and ignores one that is not a safe integer", async () => {
+        expect.assertions(1);
+
+        const retries: number[] = [];
+        const { fetchImpl } = fetchReturning([
+            'retry: 99999999999\ndata: {"text":"a"}\n\nretry: 99999999999999999999999\ndata: {"text":"b"}\n\nevent: complete\ndata: {}\n\n',
+        ]);
+
+        await collect(httpStream(tokensRef, {}, { fetch: fetchImpl, onRetry: (ms) => retries.push(ms) }));
+
+        expect(retries).toStrictEqual([2_147_483_647]);
+    });
+
+    it("ignores an `id:` containing NUL and keeps the previous resume position", async () => {
+        expect.assertions(1);
+
+        const ids: string[] = [];
+        const { fetchImpl } = fetchReturning(['id: e1\ndata: {"text":"a"}\n\nid: e\u00002\ndata: {"text":"b"}\n\nevent: complete\ndata: {}\n\n']);
+
+        await collect(httpStream(tokensRef, {}, { fetch: fetchImpl, onEventId: (id) => ids.push(id) }));
+
+        expect(ids).toStrictEqual(["e1"]);
+    });
+
+    it("fails the stream without reconnecting when an onEventId callback throws", async () => {
+        expect.assertions(2);
+
+        const boom = new Error("observer failed");
+        const { calls, fetchImpl } = fetchReturning(['id: e1\ndata: {"text":"a"}\n\nevent: complete\ndata: {}\n\n']);
+
+        const error = await collect(
+            httpStream(
+                tokensRef,
+                {},
+                {
+                    fetch: fetchImpl,
+                    reconnect: true,
+                    onEventId: () => {
+                        throw boom;
+                    },
+                },
+            ),
+        ).catch((error_: unknown) => error_);
+
+        expect(error).toBe(boom);
+        expect(calls).toHaveLength(1);
+    });
+
+    it("sends only the latest Last-Event-ID when the caller supplied a differently cased one", async () => {
+        expect.assertions(2);
+
+        const { calls, fetchImpl } = fetchReturningSequence([
+            () => sseResponse(['id: e1\ndata: {"text":"a"}\n\n']),
+            () => sseResponse(["event: complete\ndata: {}\n\n"]),
+        ]);
+
+        await collect(httpStream(tokensRef, {}, { fetch: fetchImpl, headers: { "Last-Event-ID": "stale" }, reconnect: true }));
+
+        const lastEventKeys = Object.keys((calls[1]?.init?.headers ?? {}) as Record<string, string>).filter((name) => name.toLowerCase() === "last-event-id");
+
+        expect(lastEventKeys).toStrictEqual(["last-event-id"]);
+        expect(headerOf(calls[1]?.init, "last-event-id")).toBe("e1");
+    });
+
+    it("stops reconnecting once the stream has failed on buffer overflow", async () => {
+        expect.assertions(2);
+
+        // Each attempt delivers frames then EOF — the reconnect bait. The overflow must end it.
+        const { calls, fetchImpl } = fetchReturning(['retry: 1\ndata: {"text":"a"}\n\ndata: {"text":"b"}\n\ndata: {"text":"c"}\n\n']);
+
+        const error = await collect(httpStream(tokensRef, {}, { fetch: fetchImpl, maxBuffer: 1, reconnect: true })).catch(
+            (error_: unknown) => error_ as { code?: string },
+        );
+
+        await new Promise((resolve) => {
+            setTimeout(resolve, 25);
+        });
+
+        expect((error as { code?: string }).code).toBe("STREAM_BACKPRESSURE");
+        expect(calls).toHaveLength(1);
+    });
+
     it("does not reconnect by default — a bare EOF still fails once with HTTP_STREAM_INTERRUPTED", async () => {
         expect.assertions(2);
 

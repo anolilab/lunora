@@ -1631,6 +1631,7 @@ const createSnapshotPrecondition: (client: LunoraClient, functionRef: FunctionRe
 const createStream: <T>(options: {
     maxBuffer?: number;
     onCancel: () => void;
+    onFail?: () => void;
 }) => {
     handle: StreamHandle<T>;
     iterable: StreamIterable<T>;
