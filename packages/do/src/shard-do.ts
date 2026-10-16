@@ -15038,7 +15038,7 @@ abstract class ShardDO {
      * for `getFanoutMetrics` (plan 075 Phase 1). Pure delivery — no SQLite, no CDC.
      * @returns the number of sockets the frame was sent to
      */
-    private deliverWhisperLocal(topic: string, frame: string, exclude: undefined | ShardSocketLike, joiner?: ShardSocketLike): number {
+    private deliverWhisperLocal(topic: string, frame: string, exclude: undefined | ShardSocketLike): number {
         let scanned = 0;
         let delivered = 0;
 
@@ -15056,12 +15056,7 @@ abstract class ShardDO {
             }
 
             // A join still settling delivers nothing: the member sees room traffic only once it committed.
-            // The socket whose own join is queuing these broadcasts receives them, but only while that
-            // is its sole pending join: a rejoin still settling keeps its hold on the broadcasts.
-            const holds = this.pendingRoomJoins.get(ws)?.get(topic) ?? 0;
-            const ownJoinOnly = ws === joiner && holds === 1;
-
-            if (holds > 0 && !ownJoinOnly) {
+            if ((this.pendingRoomJoins.get(ws)?.get(topic) ?? 0) > 0) {
                 continue;
             }
 
@@ -15369,9 +15364,11 @@ abstract class ShardDO {
     }
 
     /**
-     * Fan a room handler's `socket.broadcast(message)` out to EVERY socket joined
-     * to the room `topic` — the sender included, since the server handler's
-     * payload is authoritative. Reuses {@link ShardDO.deliverWhisperLocal} for
+     * Fan a room handler's `socket.broadcast(message)` out to every socket joined
+     * to the room `topic`. The sender of a message is included, since the server
+     * handler's payload is authoritative. A join's own broadcasts skip the joining
+     * socket (`joiner`), wherever it is served: it receives them as a member only
+     * after the join. Reuses {@link ShardDO.deliverWhisperLocal} for
      * local fan-out and the relay hub for the cross-DO hop, so a room broadcast
      * reaches members on every DO serving the shard exactly like a client
      * whisper does. The payload is `encodeWire`-tagged before it leaves, so
@@ -15396,12 +15393,15 @@ abstract class ShardDO {
 
         const frame = `{"type":"whisper","topic":${JSON.stringify(topic)},"data":${dataJson}}`;
 
-        this.deliverWhisperLocal(topic, frame, undefined, joiner);
+        this.deliverWhisperLocal(topic, frame, joiner);
 
         const { relay } = this;
 
         if (relay) {
-            relay.forwardWhisper(topic, frame).catch((error: unknown) => {
+            // A relay-hosted joiner is skipped by connection id on the relay that holds it.
+            const exceptConnectionId = joiner === undefined ? undefined : this.readAttachment(joiner).connectionId;
+
+            relay.forwardWhisper(topic, frame, exceptConnectionId).catch((error: unknown) => {
                 // eslint-disable-next-line no-console -- server-side diagnostic for a dropped relayed room broadcast; `broadcast` cannot reject
                 console.error("[@lunora/do] room broadcast relay failed:", error);
             });

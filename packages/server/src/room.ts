@@ -73,7 +73,9 @@ interface RoomSocket<Message = unknown> {
     /**
      * Broadcast a typed `message` to EVERY socket in the room — the sender
      * included, since the server handler is authoritative and its payload (not
-     * the client's raw send) is what members should see. The value is
+     * the client's raw send) is what members should see. A broadcast queued by
+     * `onJoin` goes to the members already in the room, not to the socket that
+     * is joining. The value is
      * wire-encoded before it leaves the DO, so `bigint` / bytes survive.
      *
      * Synchronous and best-effort: local delivery happens inline and the

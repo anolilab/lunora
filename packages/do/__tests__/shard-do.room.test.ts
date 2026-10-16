@@ -595,24 +595,28 @@ describe("shardDO rooms", () => {
         expect(roomCalls(shard).map((call) => call.args["kind"])).toEqual(["join", "leave", "join"]);
     });
 
-    it("delivers the broadcasts a room's onJoin queues to the joining socket itself", async () => {
-        expect.assertions(1);
+    it("does not deliver a join's own broadcast to the joining socket, but does to the members already in the room", async () => {
+        expect.assertions(2);
 
-        const a = new FakeSocket({ subs: {}, userId: "user-a" });
-        const shard = makeShard([a], { "room:chat": "rooms:chat" }, [], {
+        const member = new FakeSocket({ subs: {}, userId: "member" });
+        const joiner = new FakeSocket({ subs: {}, userId: "joiner" });
+        const shard = makeShard([member, joiner], { "room:chat": "rooms:chat" }, [], {
             "rooms:chat": (args) => {
                 if (args["kind"] === "join") {
-                    (args["socket"] as { broadcast: (message: unknown) => void }).broadcast({ welcome: true });
+                    (args["socket"] as { broadcast: (message: unknown) => void }).broadcast({ welcome: (args["socket"] as { userId: string }).userId });
                 }
 
                 return undefined;
             },
         });
 
-        await send(shard, a, { topic: "room:chat", type: "whisper_subscribe" });
+        await send(shard, member, { topic: "room:chat", type: "whisper_subscribe" });
+        await send(shard, joiner, { topic: "room:chat", type: "whisper_subscribe" });
 
-        // A welcome queued by the joining socket's own onJoin reaches that socket, as RoomSocket.broadcast promises.
-        expect(a.frames.filter((frame) => frame.type === "whisper").map((frame) => frame.data)).toEqual([{ welcome: true }]);
+        // The joiner's own welcome is not delivered to it...
+        expect(joiner.frames.filter((frame) => frame.type === "whisper")).toStrictEqual([]);
+        // ...but the member already in the room receives it.
+        expect(member.frames.filter((frame) => frame.type === "whisper").map((frame) => frame.data)).toStrictEqual([{ welcome: "joiner" }]);
     });
 
     it("caps the room events a single socket can queue behind a slow handler", async () => {

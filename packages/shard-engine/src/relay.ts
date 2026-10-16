@@ -169,6 +169,8 @@ interface RelayDetach {
 interface RelayFrame {
     cursor?: number;
     epoch?: string;
+    /** The connection the relay must not deliver this frame to: a room's joiner, for its own join broadcast. */
+    exceptConnectionId?: string;
     frame: string;
     originRelay?: number;
     topic: string;

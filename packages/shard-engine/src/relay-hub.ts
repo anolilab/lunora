@@ -270,7 +270,14 @@ abstract class RelayLink {
                 return noContent();
             }
             case "relay_frame": {
-                this.host.deliverWhisperLocal(message.topic, message.frame, undefined);
+                // The joiner of a room's own join broadcast is held on this relay: skip it by connection id.
+                const { exceptConnectionId } = message;
+                const except =
+                    exceptConnectionId === undefined
+                        ? undefined
+                        : this.host.getWebSockets().find((ws) => this.host.readAttachment(ws).connectionId === exceptConnectionId);
+
+                this.host.deliverWhisperLocal(message.topic, message.frame, except);
                 await this.onWhisperFrame(message);
 
                 return noContent();
@@ -388,7 +395,7 @@ abstract class RelayLink {
     }
 
     /** Forward an opaque whisper frame through the hub (owner → its relays, or relay → its owner). No-op in single-DO mode. */
-    public abstract forwardWhisper(topic: string, frame: string): Promise<void>;
+    public abstract forwardWhisper(topic: string, frame: string, exceptConnectionId?: string): Promise<void>;
 
     /** Owner-side per-flush fan-out (cohort multicast + per-socket proxy); a no-op on a relay (relays never flush their own writes). */
     public abstract onFlush(changed: Set<string>, frameCursor: number): Promise<void>;
@@ -497,7 +504,7 @@ class OwnerRelay extends RelayLink {
         super(host, { ownerKey });
     }
 
-    public override async forwardWhisper(topic: string, frame: string): Promise<void> {
+    public override async forwardWhisper(topic: string, frame: string, exceptConnectionId?: string): Promise<void> {
         if (!this.canAddressSiblings()) {
             return;
         }
@@ -508,7 +515,11 @@ class OwnerRelay extends RelayLink {
             return;
         }
 
-        await Promise.all([...relays].map((index) => this.postRelayMessage(relayName(this.roleId.ownerKey, index), { frame, topic, type: "relay_frame" })));
+        await Promise.all(
+            [...relays].map((index) =>
+                this.postRelayMessage(relayName(this.roleId.ownerKey, index), { exceptConnectionId, frame, topic, type: "relay_frame" }),
+            ),
+        );
     }
 
     public override async onFlush(changed: Set<string>, frameCursor: number): Promise<void> {

@@ -64,27 +64,39 @@ describe("room data recovery (workerd)", () => {
 
         const stub = env.SYNC.get(env.SYNC.idFromName("room-recovery"));
 
+        // A join's own broadcast is not delivered to the joiner, so the history a join sends
+        // reaches a member that was already in the room.
+        const watcher = await open(stub);
+
+        watcher.ws.send(JSON.stringify({ topic: "room:notes", type: "whisper_subscribe" }));
+
         const writer = await open(stub);
 
         writer.ws.send(JSON.stringify({ topic: "room:notes", type: "whisper_subscribe" }));
-        await waitFor(() => payloadsOf(writer, "history").length > 0);
+        await waitFor(() => payloadsOf(watcher, "history").length > 0);
 
-        expect(payloadsOf(writer, "history")).toStrictEqual([[]]);
+        expect(payloadsOf(watcher, "history")).toStrictEqual([[]]);
 
         writer.ws.send(JSON.stringify({ data: { _id: "note-1", text: "hello" }, topic: "room:notes", type: "whisper" }));
         // The echo is queued by the handler and sent only after its write commits.
         await waitFor(() => payloadsOf(writer, "echo").length > 0);
 
         writer.ws.close();
+        watcher.ws.close();
         await evictDurableObject(stub);
+
+        const survivor = await open(stub);
+
+        survivor.ws.send(JSON.stringify({ topic: "room:notes", type: "whisper_subscribe" }));
 
         const reader = await open(stub);
 
         reader.ws.send(JSON.stringify({ topic: "room:notes", type: "whisper_subscribe" }));
-        await waitFor(() => payloadsOf(reader, "history").length > 0);
+        await waitFor(() => payloadsOf(survivor, "history").length > 0);
 
-        expect(payloadsOf(reader, "history")).toStrictEqual([["hello"]]);
+        expect(payloadsOf(survivor, "history")).toStrictEqual([["hello"]]);
 
         reader.ws.close();
+        survivor.ws.close();
     });
 });

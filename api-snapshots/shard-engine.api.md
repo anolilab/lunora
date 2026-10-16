@@ -1527,7 +1527,7 @@ interface OrderKeyConstraints {
 ```ts
 class OwnerRelay extends RelayLink {
     constructor(host: RelayHost, ownerKey: string);
-    forwardWhisper(topic: string, frame: string): Promise<void>;
+    forwardWhisper(topic: string, frame: string, exceptConnectionId?: string): Promise<void>;
     onFlush(changed: Set<string>, frameCursor: number): Promise<void>;
     seedRelayShape(): Promise<"ok" | undefined | {
         code: string;
@@ -2216,6 +2216,7 @@ interface RelayDetach {
 interface RelayFrame {
     cursor?: number;
     epoch?: string;
+    exceptConnectionId?: string;
     frame: string;
     originRelay?: number;
     topic: string;
@@ -5705,7 +5706,7 @@ abstract class RelayLink {
     protected bindingName(): string | undefined;
     protected postRelayMessage(targetName: string, message: OwnerRelayFrame): Promise<void>;
     protected requestRelayMessage(targetName: string, message: OwnerRelayFrame): Promise<Response | undefined>;
-    abstract forwardWhisper(topic: string, frame: string): Promise<void>;
+    abstract forwardWhisper(topic: string, frame: string, exceptConnectionId?: string): Promise<void>;
     abstract onFlush(changed: Set<string>, frameCursor: number): Promise<void>;
     abstract seedRelayShape(ws: ShardSocketLike, subId: string, shape: ShapeSubscriptionQuery, identity: SubscriptionIdentity): Promise<"ok" | undefined | {
         code: string;
