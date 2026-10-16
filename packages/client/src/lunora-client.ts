@@ -1641,6 +1641,9 @@ class LunoraClient {
         this.wsToken = token;
         this.wsTokenGeneration += 1;
 
+        // A send held under the previous credential must not reach the identity that replaced it.
+        this.resetRoomSends();
+
         // Close every open/connecting socket so the reconnect uses the new
         // token. Don't tear down the connection record itself — pending
         // subscriptions/streams need to ride the next socket.
@@ -7553,10 +7556,7 @@ class LunoraClient {
      * the socket lets the next frame put them straight back.
      */
     private evictPreviousIdentitySession(): void {
-        // Room sends queued under the previous identity must not be delivered under the new one.
-        for (const reset of this.roomIdentityResets) {
-            reset();
-        }
+        this.resetRoomSends();
 
         // Cache-seeded values go back to `hydratedQueryCache`, where the identity
         // gate decides whether they are ever shown again, rather than being
@@ -7627,6 +7627,13 @@ class LunoraClient {
 
         if (wasLeader) {
             this.tabCoordinator.promoteImmediately();
+        }
+    }
+
+    /** Drop every room send held before the socket opened: they were made under the identity that is now going away. */
+    private resetRoomSends(): void {
+        for (const reset of this.roomIdentityResets) {
+            reset();
         }
     }
 

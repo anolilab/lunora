@@ -4597,6 +4597,38 @@ describe("lunoraClient", () => {
             room.close();
         });
 
+        it("drops a room send held under the previous credential instead of delivering it to the new identity", () => {
+            expect.assertions(3);
+
+            vi.useFakeTimers();
+
+            const client = new LunoraClient({
+                fetch: vi.fn<typeof fetch>(),
+                url: "https://app.example",
+                WebSocket: createMockWebSocket(),
+            });
+            const room = client.connectRoom<{ text: string }>({ name: "chat" }, { onMessage: () => undefined });
+
+            // Held: the socket for the old credential has not opened yet.
+            expect(room.send({ text: "for old user" })).toBe(true);
+
+            client.setWsToken("new-user-token");
+            // The reconnect that carries the new credential is scheduled after the old socket closes.
+            vi.runOnlyPendingTimers();
+
+            const socket = latestSocket();
+
+            socket.open();
+            socket.receive({ subject: null, type: "identity" });
+
+            // The new identity never receives what the old one was about to send.
+            expect(wireFrames(socket)).not.toContainEqual({ data: { text: "for old user" }, topic: "room:chat", type: "whisper" });
+            expect(wireFrames(socket).filter((frame) => frame.type === "whisper")).toStrictEqual([]);
+
+            room.close();
+            vi.useRealTimers();
+        });
+
         it("does not open a socket on a credential that was replaced while its provider was still pending", async () => {
             expect.assertions(2);
 
