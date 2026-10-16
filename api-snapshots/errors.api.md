@@ -481,6 +481,10 @@ const ERROR_CATALOG: {
         readonly status: 400;
         readonly title: "Storage signed URL not configured";
     };
+    readonly AI_UNKNOWN_IMAGE_MODEL: {
+        readonly status: 400;
+        readonly title: "Unknown image model";
+    };
     readonly RAG_DIMENSION_MISMATCH: {
         readonly hint: readonly [
             "A stored vector and the query embedding have different widths, so they cannot be compared.",
