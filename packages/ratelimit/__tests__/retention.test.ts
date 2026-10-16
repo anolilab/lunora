@@ -82,7 +82,7 @@ describe("memory store sweep", () => {
         expect(store.get("a")).toEqual({ ts: 3, value: 1 });
     });
 
-    it("removes at most `limit` entries and stops at the first live one", async () => {
+    it("removes at most `limit` entries and keeps the live ones", async () => {
         expect.assertions(3);
 
         const store = createMemoryStore();
@@ -232,17 +232,28 @@ describe("differential: sweep never changes a decision", () => {
 });
 
 describe("sweep horizon ownership and clock", () => {
-    it("refuses a second limiter with a different config map on the same swept store", () => {
-        expect.assertions(3);
+    it("keeps another limiter's live entries when both sweep one store", async () => {
+        expect.assertions(2);
 
+        let clock = 0;
+        const now = (): number => clock;
         const store = createMemoryStore();
-        const owner = new RateLimiter({ config: { send: { kind: "fixed window", period: 1000, rate: 1 } }, now: () => 0, store });
+        const login = new RateLimiter({ config: { login: { kind: "fixed window", period: 60_000, rate: 1 } }, now, store });
+        const send = new RateLimiter({ config: { send: { kind: "fixed window", period: 1000, rate: 1 } }, now, store });
 
-        expect(owner).toBeInstanceOf(RateLimiter);
-        expect(() => new RateLimiter({ config: { send: { kind: "fixed window", period: 1000, rate: 1 } }, now: () => 0, store })).not.toThrow();
-        expect(() => new RateLimiter({ config: { login: { kind: "fixed window", period: 60_000, rate: 5 } }, now: () => 0, store })).toThrow(
-            /already used by a RateLimiter with different limits/,
-        );
+        // The login window (retention 3 minutes) is still live when `send` sweeps with its own, shorter horizon.
+        await login.limit("login", { key: "u" });
+
+        for (let index = 0; index < 50; index += 1) {
+            clock += 100;
+            // eslint-disable-next-line no-await-in-loop -- each write triggers a sweep in order
+            await send.limit("send", { key: `k${String(index)}` });
+        }
+
+        const status = await login.check("login", { key: "u" });
+
+        expect(store.get("login:u")).toBeDefined();
+        expect(status.ok).toBe(false);
     });
 
     it("decides from the config as it was at construction, not a later mutation of it", async () => {

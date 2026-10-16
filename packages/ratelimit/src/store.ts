@@ -8,9 +8,8 @@ import type { RateLimitStore, RateLimitValue } from "./types";
  * Durable Object, the instance) — adequate for single-DO limits but not shared
  * across instances. Use {@link createSqlStore} for durable per-DO state.
  *
- * Give each `RateLimiter` its own store. The sweep evicts by that limiter's
- * retention horizon, so a store shared with a limiter that has different configs
- * could evict a live bucket.
+ * A store may be shared by several limiters: each sweep evicts only the keys its
+ * limiter owns, by that limiter's horizon (see `RateLimitStore.sweep`).
  */
 const createMemoryStore = (): RateLimitStore => {
     const map = new Map<string, RateLimitValue>();
@@ -26,22 +25,23 @@ const createMemoryStore = (): RateLimitStore => {
             map.delete(storageKey);
             map.set(storageKey, value);
         },
-        sweep: (olderThanTs, limit) => {
+        sweep: (olderThanTs, limit, owns) => {
             let examined = 0;
 
             for (const [storageKey, value] of map) {
-                if (examined >= limit || value.ts > olderThanTs) {
+                if (examined >= limit) {
                     break;
                 }
 
                 examined += 1;
                 map.delete(storageKey);
 
-                // A reserved debt outlives any age bound (reserves stack), so it is kept.
-                // It moves to the end, so it cannot stop the sweep from reaching the entries
-                // behind it. ponytail: a debt key stays until a consume rewrites it or reset;
-                // add a debt-aware bound if abandoned debts show up in memory profiles.
-                if (value.value < 0) {
+                // An entry is kept when it is a reserved debt (which outlives any age bound,
+                // since reserves stack), or belongs to another limiter sharing this store. A
+                // kept entry moves to the end, so it cannot stop the sweep from reaching the
+                // entries behind it. ponytail: a debt key stays until a consume rewrites it
+                // or reset; add a debt-aware bound if abandoned debts show up in memory profiles.
+                if (value.value < 0 || value.ts > olderThanTs || owns?.(storageKey) === false) {
                     map.set(storageKey, value);
                 }
             }

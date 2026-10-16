@@ -58,18 +58,6 @@ const monotonic = (clock: () => number): (() => number) => {
     };
 };
 
-// The per-name horizon a store is bound to: the sweep evicts by one cutoff for the
-// whole store, so every limiter sharing it must agree on each name's retention.
-const horizonSignature = (config: RateLimitConfigMap): string =>
-    JSON.stringify(
-        Object.keys(config)
-            .toSorted((left, right) => left.localeCompare(right))
-            .map((name) => [name, retentionMs([config[name] as RateLimitConfig])]),
-    );
-
-// Which horizon map each sweeping store is bound to; see the constructor.
-const storeHorizons = new WeakMap<RateLimitStore, string>();
-
 // The caller's normalizer (if any), then the IPv6 /64 collapse — see `normalize`.
 const withIpCollapse = (normalize: ((key: string) => string) | undefined): ((key: string) => string) =>
     normalize ? (key: string): string => ipRateLimitKey(normalize(key)) : ipRateLimitKey;
@@ -109,11 +97,17 @@ class RateLimiter<Names extends string = string> {
 
     private readonly store: RateLimitStore;
 
+    /** Whether a stored key is one of this limiter's names; a sweep only evicts those. */
+    private readonly owns: (storageKey: string) => boolean;
+
     public constructor(options: RateLimiterOptions<Names>) {
         // Snapshot the config: decisions and the eviction horizon must read the same
         // values, and a caller mutating its object after construction must not move
         // the horizon out from under entries the sweep has not yet reached.
         this.config = structuredClone(options.config);
+        // Keys are `encodeURIComponent(name)` plus an optional `:key`, so the part before the first `:` is the name.
+        const names = new Set(Object.keys(this.config).map((name) => encodeURIComponent(name)));
+        this.owns = (storageKey) => names.has(storageKey.split(":")[0] ?? "");
         this.normalize = withIpCollapse(options.normalize);
         // Store every entry in BOTH forms so an entry can be written either way.
         // Storing it verbatim only, and matching the raw request key against
@@ -159,22 +153,6 @@ class RateLimiter<Names extends string = string> {
             if (config.capacity !== undefined && (!Number.isFinite(config.capacity) || config.capacity < 0)) {
                 throw new LunoraError("INTERNAL", `rate limit "${name}": capacity must be a non-negative number`);
             }
-        }
-
-        // A sweep evicts by this limiter's horizon, which is only safe for entries
-        // this limiter wrote. Refuse a store already swept under a different map.
-        if (this.store.sweep !== undefined) {
-            const signature = horizonSignature(this.config);
-            const bound = storeHorizons.get(this.store);
-
-            if (bound !== undefined && bound !== signature) {
-                throw new LunoraError(
-                    "INTERNAL",
-                    "@lunora/ratelimit: this store is already used by a RateLimiter with different limits. A sweep evicts by one horizon per store, so it would evict the other limiter's live entries. Give each config map its own store.",
-                );
-            }
-
-            storeHorizons.set(this.store, signature);
         }
     }
 
@@ -243,14 +221,14 @@ class RateLimiter<Names extends string = string> {
             if (this.store.setIf === undefined) {
                 // eslint-disable-next-line no-await-in-loop -- returns on the first pass; only `setIf` loops
                 await this.store.set(storageKey, value);
-                this.store.sweep?.(now - this.retention, SWEEP_LIMIT);
+                this.store.sweep?.(now - this.retention, SWEEP_LIMIT, this.owns);
 
                 return status;
             }
 
             // eslint-disable-next-line no-await-in-loop -- see above
             if (await this.store.setIf(storageKey, value, prior)) {
-                this.store.sweep?.(now - this.retention, SWEEP_LIMIT);
+                this.store.sweep?.(now - this.retention, SWEEP_LIMIT, this.owns);
 
                 return status;
             }
