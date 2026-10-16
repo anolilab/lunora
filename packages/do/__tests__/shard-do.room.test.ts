@@ -117,6 +117,61 @@ const send = async (shard: RoomShard, ws: FakeSocket, envelope: Record<string, u
 
 const roomCalls = (shard: RoomShard): RoomCall[] => shard.calls.filter((call) => call.functionPath === "rooms:chat");
 
+describe("shardDO room authorisation and teardown", () => {
+    it("refuses a room message once its sender is revoked, even after an earlier message was allowed", async () => {
+        expect.assertions(2);
+
+        let allowed = true;
+        const a = new FakeSocket({ subs: {}, userId: "member" });
+        const shard = makeShard([a], { "room:chat": "rooms:chat" }, ["whisper:authorize"], { "whisper:authorize": () => allowed });
+
+        await send(shard, a, { topic: "room:chat", type: "whisper_subscribe" });
+        await send(shard, a, { data: encodeWire({ text: "first" }), topic: "room:chat", type: "whisper" });
+
+        // Revoked between messages: the earlier allowed verdict must not carry over.
+        allowed = false;
+        await send(shard, a, { data: encodeWire({ text: "after revoke" }), topic: "room:chat", type: "whisper" });
+
+        const messages = roomCalls(shard).filter((call) => call.args["kind"] === "message");
+
+        expect(messages).toHaveLength(1);
+        expect(messages[0]?.args["message"]).toStrictEqual({ text: "first" });
+    });
+
+    it("does not hold a socket's close behind a slow onLeave", async () => {
+        expect.assertions(3);
+
+        let releaseLeave: () => void = () => undefined;
+        const leaveGate = new Promise<unknown>((resolve) => {
+            releaseLeave = () => {
+                resolve(undefined);
+            };
+        });
+        const a = new FakeSocket({ subs: {}, userId: "member", whispers: ["room:chat"] });
+        const shard = makeShard([a], { "room:chat": "rooms:chat" }, [], {
+            "rooms:chat": (event) => (event["kind"] === "leave" ? leaveGate : undefined),
+        });
+
+        const closed = shard.webSocketClose(a as unknown as WebSocket, 1000, "", true).then(() => "closed");
+        const outcome = await Promise.race([
+            closed,
+            new Promise<string>((resolve) => {
+                setTimeout(resolve, 50, "blocked");
+            }),
+        ]);
+
+        // Teardown finished while onLeave is still pending.
+        expect(outcome).toBe("closed");
+
+        releaseLeave();
+        await closed;
+
+        // The leave still ran, behind the close.
+        expect(roomCalls(shard).some((call) => call.args["kind"] === "leave")).toBe(true);
+        expect(roomCalls(shard)).toHaveLength(1);
+    });
+});
+
 describe("shardDO rooms", () => {
     it("dispatches onJoin when a socket joins the room topic", async () => {
         expect.assertions(4);

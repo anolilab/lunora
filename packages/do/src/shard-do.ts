@@ -2443,13 +2443,6 @@ abstract class ShardDO {
     private readonly roomChains = new WeakMap<ShardSocketLike, Promise<void>>();
 
     /**
-     * On the owner: one stand-in socket per relay-hosted connection, keyed `relayIndex:connectionId`.
-     * The room handler runs against it, so its join, leave and message share the owner's per-socket
-     * queue and membership, exactly as a socket the owner holds would. Entries drop on the last leave.
-     */
-    private readonly relayRoomProxies = new Map<string, ShardSocketLike>();
-
-    /**
      * Memoised `onWhisper` verdicts for this socket, keyed `"<action>:<topic>"`
      * (see {@link ShardDO.authorizeWhisper}). In-memory and deliberately so: a
      * cursor stream whispers many times a second and the authorizer is a database
@@ -2991,10 +2984,13 @@ abstract class ShardDO {
                 // A closed socket leaves every room it still holds, so `onLeave` runs
                 // for a dropped tab or network loss too, not only an explicit unsubscribe.
                 // In `finally` so a throwing disconnect hook cannot skip them.
+                // Not awaited: a room's `onLeave` can be slow, and teardown must not wait on it. The
+                // room queues each leave on this socket, so they still run in order behind the close.
                 for (const topic of attachment.whispers ?? []) {
                     if (this.roomHandlerPath(topic) !== undefined) {
-                        // eslint-disable-next-line no-await-in-loop -- each room's leave is its own mutation; they run in order
-                        await this.dispatchRoomEvent(ws, topic, "leave");
+                        const leave = this.dispatchRoomEvent(ws, topic, "leave");
+
+                        this.shardHost.waitUntil?.(leave);
                     }
                 }
             }
@@ -14778,6 +14774,12 @@ abstract class ShardDO {
             return true;
         }
 
+        // A room send is authorised on every message. A verdict remembered for the socket must not
+        // outlive a revocation, so the next message from a revoked member runs the authorizer again.
+        if (action === "send" && this.roomHandlerPath(topic) !== undefined) {
+            return this.runWhisperAuthorizers(paths, ws, topic, action);
+        }
+
         const memoKey = `${action}:${topic}`;
         let memo = this.whisperVerdicts.get(ws);
         const cached = memo?.get(memoKey);
@@ -15446,27 +15448,10 @@ abstract class ShardDO {
             return { admitted: false };
         }
 
-        const key = `${String(event.relayIndex)}:${event.connectionId}`;
-        let proxy = this.relayRoomProxies.get(key);
-
-        if (proxy === undefined) {
-            proxy = relayRoomProxy(event.attachment);
-            this.relayRoomProxies.set(key, proxy);
-        }
-
-        const verdict = await this.runRelayRoomEvent(proxy, event);
-
-        // Only membership keeps a stand-in alive: a refused or finished one is dropped.
-        if ((this.readAttachment(proxy).whispers ?? []).length === 0) {
-            this.relayRoomProxies.delete(key);
-        }
-
-        return verdict;
-    }
-
-    /** Run one relayed room event against its stand-in, once the topic has been checked as a room. */
-    private async runRelayRoomEvent(proxy: ShardSocketLike, event: RelayRoomEvent): Promise<RelayRoomVerdict> {
-        const { topic } = event;
+        // Built per event and kept nowhere: the relay holds the membership and serialises its
+        // socket's events, so the owner has no per-socket state to leave behind when a relay
+        // socket vanishes without a close.
+        const proxy = relayRoomProxy(event.attachment);
 
         if (event.kind === "join") {
             if (!(await this.authorizeWhisper(proxy, topic, "subscribe")) || !this.setWhisperMembership(proxy, topic, true)) {
@@ -15477,14 +15462,14 @@ abstract class ShardDO {
         }
 
         if (event.kind === "leave") {
-            if (this.setWhisperMembership(proxy, topic, false)) {
-                await this.dispatchSettlingJoin(proxy, topic, false, undefined);
-            }
+            await this.dispatchRoomEvent(proxy, topic, "leave");
 
             return { admitted: true };
         }
 
-        if (!this.isWhisperMember(proxy, topic) || !(await this.authorizeWhisper(proxy, topic, "send"))) {
+        // The relay has checked membership; the stand-in records it so the handler's queue check
+        // holds. The authorizer runs again on every message.
+        if (!(await this.authorizeWhisper(proxy, topic, "send")) || !this.setWhisperMembership(proxy, topic, true)) {
             return { admitted: false };
         }
 

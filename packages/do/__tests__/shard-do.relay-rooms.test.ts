@@ -72,6 +72,10 @@ class RoomShard extends ShardDO {
             (args["socket"] as { broadcast: (message: unknown) => void }).broadcast({ echo: args["message"] });
         }
 
+        if (args["kind"] === "join") {
+            (args["socket"] as { broadcast: (message: unknown) => void }).broadcast({ joined: (args["socket"] as { userId: string }).userId });
+        }
+
         return Promise.resolve(undefined);
     }
 
@@ -183,6 +187,35 @@ describe("shardDO rooms on a relay", () => {
 
         expect(message?.args["message"]).toEqual({ text: "hi" });
         expect(socket.frames.filter((frame) => frame.type === "whisper" && frame.topic === TOPIC)).toHaveLength(1);
+    });
+
+    it("does not send a relay-hosted joiner its own join broadcast, but sends it to the other members on that relay", async () => {
+        expect.assertions(2);
+
+        const { relay, relaySockets, socket } = makeRig();
+        const peer = new FakeSocket({ connectionId: "conn-2", subs: {}, userId: "user-b" });
+
+        relaySockets.push(peer);
+        await relay.webSocketMessage(peer as unknown as WebSocket, JSON.stringify({ topic: TOPIC, type: "whisper_subscribe" }));
+        await relay.webSocketMessage(socket as unknown as WebSocket, JSON.stringify({ topic: TOPIC, type: "whisper_subscribe" }));
+        await flush();
+
+        // The joiner's own `{ joined: "user-a" }` broadcast is skipped on its socket...
+        expect(socket.frames.filter((frame) => frame.type === "whisper")).toHaveLength(0);
+        // ...while the member who was already there receives it.
+        expect(peer.frames.filter((frame) => frame.type === "whisper" && frame.topic === TOPIC)).toHaveLength(1);
+    });
+
+    it("keeps no per-socket state on the owner: a relay socket's stand-in is not retained between events", async () => {
+        expect.assertions(1);
+
+        const { owner, send } = makeRig();
+
+        await send({ topic: TOPIC, type: "whisper_subscribe" });
+        await flush();
+
+        // A relay socket can vanish without a close; nothing on the owner may wait for one.
+        expect(Object.keys(owner)).not.toContain("relayRoomProxies");
     });
 
     it("forwards a leave to the owner's onLeave and clears the relay membership", async () => {
