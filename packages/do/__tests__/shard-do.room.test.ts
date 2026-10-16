@@ -497,6 +497,49 @@ describe("shardDO rooms", () => {
         expect(roomCalls(shard).map((call) => call.args["kind"])).toEqual(["join"]);
     });
 
+    it("drops a message sent before a leave and rejoin instead of running it under the new membership", async () => {
+        expect.assertions(1);
+
+        const a = new FakeSocket({ subs: {}, userId: "user-a" });
+        let releaseFirstJoin: () => void = () => undefined;
+        const firstJoinGate = new Promise<void>((resolve) => {
+            releaseFirstJoin = resolve;
+        });
+        let joins = 0;
+        const shard = makeShard([a], { "room:chat": "rooms:chat" }, [], {
+            "rooms:chat": async (args) => {
+                if (args["kind"] === "join") {
+                    joins += 1;
+
+                    if (joins === 1) {
+                        await firstJoinGate;
+                    }
+                }
+
+                return undefined;
+            },
+        });
+        const settle = async (): Promise<void> => {
+            await new Promise<void>((resolve) => {
+                setTimeout(resolve, 0);
+            });
+        };
+
+        const firstJoin = send(shard, a, { topic: "room:chat", type: "whisper_subscribe" });
+        await settle();
+        // Sent under the first membership, queued behind the still-running join.
+        const message = send(shard, a, { data: { n: 1 }, topic: "room:chat", type: "whisper" });
+        await settle();
+        const leave = send(shard, a, { topic: "room:chat", type: "whisper_unsubscribe" });
+        const rejoin = send(shard, a, { topic: "room:chat", type: "whisper_subscribe" });
+
+        releaseFirstJoin();
+        await Promise.all([firstJoin, message, leave, rejoin]);
+
+        // The message ran under a membership that no longer exists, so it is dropped.
+        expect(roomCalls(shard).map((call) => call.args["kind"])).toEqual(["join", "leave", "join"]);
+    });
+
     it("keeps a member's room membership across a hibernation wake-up", async () => {
         expect.assertions(2);
 

@@ -2397,7 +2397,7 @@ abstract class ShardDO {
      * Topics whose join is recorded but whose `onJoin` has not settled. Room broadcasts skip
      * them, so a socket never receives room traffic before its join committed.
      */
-    private readonly pendingRoomJoins = new WeakMap<ShardSocketLike, Set<string>>();
+    private readonly pendingRoomJoins = new WeakMap<ShardSocketLike, Map<string, number>>();
 
     /**
      * Topics whose join was refused. A leave queued behind a refused join pairs with no
@@ -7316,7 +7316,9 @@ abstract class ShardDO {
                 ) {
                     // The same 4 KiB cap an ordinary whisper carries: a room message is
                     // decoded, validated and run as a write, so it must not be unbounded.
-                    await this.dispatchRoomEvent(ws, envelope.topic, "message", envelope.data);
+                    // The membership epoch at receive travels with the message: if the socket
+                    // leaves and rejoins before this runs, the message was sent under the old membership.
+                    await this.dispatchRoomEvent(ws, envelope.topic, "message", envelope.data, this.membershipEpoch(ws, envelope.topic));
                 }
             }
 
@@ -15033,7 +15035,7 @@ abstract class ShardDO {
             }
 
             // A join still settling delivers nothing: the member sees room traffic only once it committed.
-            if (this.pendingRoomJoins.get(ws)?.has(topic) === true) {
+            if ((this.pendingRoomJoins.get(ws)?.get(topic) ?? 0) > 0) {
                 continue;
             }
 
@@ -15117,15 +15119,23 @@ abstract class ShardDO {
             return this.dispatchRoomEvent(ws, topic, "leave");
         }
 
-        const pending = this.pendingRoomJoins.get(ws) ?? new Set<string>();
+        // A count, not a flag: a leave and rejoin can leave two joins settling at once, and the
+        // older one settling must not clear the newer one's hold on the broadcasts.
+        const pending = this.pendingRoomJoins.get(ws) ?? new Map<string, number>();
 
-        pending.add(topic);
         this.pendingRoomJoins.set(ws, pending);
+        pending.set(topic, (pending.get(topic) ?? 0) + 1);
 
         try {
             return await this.dispatchRoomEvent(ws, topic, "join", undefined, joinEpoch);
         } finally {
-            pending.delete(topic);
+            const remaining = (pending.get(topic) ?? 1) - 1;
+
+            if (remaining > 0) {
+                pending.set(topic, remaining);
+            } else {
+                pending.delete(topic);
+            }
         }
     }
 
@@ -15174,9 +15184,9 @@ abstract class ShardDO {
      * sent under to still hold; a leave queued behind a refused join undoes no committed
      * membership, so it must not reach `onLeave`.
      */
-    private skipsQueuedRoomEvent(ws: ShardSocketLike, topic: string, kind: "join" | "leave" | "message"): boolean {
+    private skipsQueuedRoomEvent(ws: ShardSocketLike, topic: string, kind: RoomEventKind, epoch: number | undefined): boolean {
         if (kind === "message") {
-            return !this.isWhisperMember(ws, topic);
+            return !this.isWhisperMember(ws, topic) || this.membershipEpoch(ws, topic) !== epoch;
         }
 
         return kind === "leave" && this.failedRoomJoins.get(ws)?.delete(topic) === true;
@@ -15192,7 +15202,7 @@ abstract class ShardDO {
         joinEpoch: number | undefined,
     ): Promise<boolean> {
         // Checked here, not at receive: a queued event runs only once the events ahead of it have settled.
-        if (this.skipsQueuedRoomEvent(ws, topic, kind)) {
+        if (this.skipsQueuedRoomEvent(ws, topic, kind, joinEpoch)) {
             return true;
         }
 
