@@ -2395,13 +2395,6 @@ const parseEnvelope = async (request: Request): Promise<RpcEnvelope> => {
 /** Per-isolate cache of a shard's relay count (the promotion probe), TTL-bounded so a promoted shard doesn't add a round-trip to every WS upgrade. */
 interface RelayProbeEntry {
     expiresMs: number;
-    hostsRooms: boolean;
-    relayCount: number;
-}
-
-/** What the owner reports about a shard's routing: its relay set, and whether the app declares rooms. */
-interface ShardRouting {
-    hostsRooms: boolean;
     relayCount: number;
 }
 
@@ -2424,12 +2417,12 @@ const RELAY_PROBE_MAX_ENTRIES = 4096;
  * round-trip to every WS upgrade. Fails closed to `0` (owner-served) on any error,
  * so a relay-probe hiccup can never break a connection.
  */
-const probeShardRouting = async (namespace: ShardNamespaceLike, shardKey: string): Promise<ShardRouting> => {
+const probeRelayCount = async (namespace: ShardNamespaceLike, shardKey: string): Promise<number> => {
     const now = Date.now();
     const cached = relayProbeCache.get(shardKey);
 
     if (cached !== undefined && cached.expiresMs > now) {
-        return { hostsRooms: cached.hostsRooms, relayCount: cached.relayCount };
+        return cached.relayCount;
     }
 
     // Drop the stale entry on a read-miss so an expired, never-re-probed key can't
@@ -2438,39 +2431,28 @@ const probeShardRouting = async (namespace: ShardNamespaceLike, shardKey: string
         relayProbeCache.delete(shardKey);
     }
 
-    // Fails closed: any error leaves the shard owner-served with no rooms hosted here.
-    const routing: ShardRouting = { hostsRooms: false, relayCount: 0 };
+    let relayCount = 0;
 
     try {
         const response = await resolveShard(namespace, shardKey).fetch(new Request("https://shard.internal/_lunora/route"));
 
         if (response.ok) {
-            const body: { hostsRooms?: unknown; relayCount?: unknown } = await response.json();
+            const body: { relayCount?: unknown } = await response.json();
 
             if (typeof body.relayCount === "number" && body.relayCount > 0) {
-                routing.relayCount = Math.floor(body.relayCount);
+                relayCount = Math.floor(body.relayCount);
             }
-
-            routing.hostsRooms = body.hostsRooms === true;
         }
     } catch {
-        routing.relayCount = 0;
-        routing.hostsRooms = false;
+        relayCount = 0;
     }
 
     // Bound the cache before inserting so a high-cardinality shard set can't grow
     // the map without limit.
     evictOldestEntry(relayProbeCache, RELAY_PROBE_MAX_ENTRIES);
-    relayProbeCache.set(shardKey, { expiresMs: now + RELAY_PROBE_TTL_MS, hostsRooms: routing.hostsRooms, relayCount: routing.relayCount });
+    relayProbeCache.set(shardKey, { expiresMs: now + RELAY_PROBE_TTL_MS, relayCount });
 
-    return routing;
-};
-
-/** The relay-count half of {@link probeShardRouting}. */
-const probeRelayCount = async (namespace: ShardNamespaceLike, shardKey: string): Promise<number> => {
-    const routing = await probeShardRouting(namespace, shardKey);
-
-    return routing.relayCount;
+    return relayCount;
 };
 
 /**
@@ -4200,12 +4182,7 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
         if (binding !== undefined) {
             upgradeHeaders.set("x-lunora-shard-binding", binding);
 
-            // A shard that declares rooms is served by its owner: a room's handler and state
-            // run on the owner's SQLite, and a relay refuses room traffic. The owner reports
-            // this itself (`hostsRooms`), so no request parameter can move a socket off the
-            // relay set, and a forged hint on an ordinary shard cannot reach the owner.
-            const routing = await probeShardRouting(shardDO, shardKey);
-            const relayCount = routing.hostsRooms ? 0 : routing.relayCount;
+            const relayCount = await probeRelayCount(shardDO, shardKey);
 
             if (relayCount > 0) {
                 // Spread connections across the relay set at random, and hint

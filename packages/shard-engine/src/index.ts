@@ -342,6 +342,8 @@ export type {
     RelayAttach,
     RelayDetach,
     RelayFrame,
+    RelayRoomEvent,
+    RelayRoomVerdict,
     RelayShapePoke,
     RelayShapeSeed,
     RelayShapeSubscribe,

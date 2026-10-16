@@ -22,13 +22,11 @@ const roomFunction: FunctionIR = {
 
 describe("emitShard — roomHandlerPath override", () => {
     it("resolves a room topic through the generated LUNORA_ROOMS map", () => {
-        expect.assertions(4);
+        expect.assertions(3);
 
         const emitted = emitShard({ hasRooms: true, schema: { tables: [], vectorIndexes: [] } });
 
         expect(emitted).toContain("protected override roomHandlerPath(topic: string): string | undefined {");
-        // The owner reports that it hosts rooms, so the runtime keeps room sockets on it.
-        expect(emitted).toContain("protected override declaresRooms(): boolean {");
         // Own properties only: an inherited name such as `toString` is not a room.
         expect(emitted).toContain("return Object.hasOwn(LUNORA_ROOMS, topic) ? LUNORA_ROOMS[topic] : undefined;");
         // The registry is imported from the generated functions module.

@@ -1552,7 +1552,7 @@ class OwnerRelay extends RelayLink {
 ### `OwnerRelayFrame` (type)
 
 ```ts
-type OwnerRelayFrame = RelayAttach | RelayDetach | RelayFrame | RelayShapePoke | RelayShapeSubscribe | RelayShapeUnsubscribe;
+type OwnerRelayFrame = RelayAttach | RelayDetach | RelayFrame | RelayRoomEvent | RelayShapePoke | RelayShapeSubscribe | RelayShapeUnsubscribe;
 ```
 
 ### `PaginationOptions` (interface)
@@ -2244,6 +2244,7 @@ interface RelayHost {
     nextPokeId: () => string;
     readAttachment: (ws: ShardSocketLike) => SocketAttachment;
     recordShapePokeFanout: (iterated: number, delivered: number, elapsedMs: number) => void;
+    relayRoomEvent: (event: RelayRoomEvent) => Promise<RelayRoomVerdict>;
     resolveShape: (name: string, args: Record<string, unknown>, identity?: SubscriptionIdentity) => ResolvedShape | undefined;
     rlsMetadata: () => RlsPoliciesResult;
     shardBinding: () => string | undefined;
@@ -2258,6 +2259,7 @@ interface RelayHost {
 class RelayMember extends RelayLink {
     constructor(host: RelayHost, ownerKey: string, relayIndex: number);
     forwardWhisper(topic: string, frame: string): Promise<void>;
+    forwardRoomEvent(event: Omit<RelayRoomEvent, "relayIndex" | "type">): Promise<boolean>;
     onFlush(): Promise<void>;
     seedRelayShape(ws: ShardSocketLike, subId: string, shape: ShapeSubscriptionQuery, identity: SubscriptionIdentity): Promise<"ok" | {
         code: string;
@@ -2284,6 +2286,28 @@ class RelayMember extends RelayLink {
 interface RelayPokeDelivery {
     delivered: number;
     matched: number;
+}
+```
+
+### `RelayRoomEvent` (interface)
+
+```ts
+interface RelayRoomEvent {
+    attachment: Pick<SocketAttachment, "connectionId" | "context" | "identity" | "ip" | "userId">;
+    connectionId: string;
+    data?: unknown;
+    kind: "join" | "leave" | "message";
+    relayIndex: number;
+    topic: string;
+    type: "relay_room_event";
+}
+```
+
+### `RelayRoomVerdict` (interface)
+
+```ts
+interface RelayRoomVerdict {
+    admitted: boolean;
 }
 ```
 

@@ -2883,7 +2883,7 @@ describe("createWorker — relay-tier routing (plan 075 Phase 2)", () => {
         userId: null | string;
     }
 
-    const routingNamespace = (relayCount: number, forwards: Forward[], hostsRooms = false): ShardNamespaceLike => {
+    const routingNamespace = (relayCount: number, forwards: Forward[]): ShardNamespaceLike => {
         return {
             get: (id) => {
                 const name = (id as { __name: string }).__name;
@@ -2891,7 +2891,7 @@ describe("createWorker — relay-tier routing (plan 075 Phase 2)", () => {
                 return {
                     fetch: async (request: Request) => {
                         if (new URL(request.url).pathname === "/_lunora/route") {
-                            return Response.json({ hostsRooms, relayCount }, { headers: { "content-type": "application/json" } });
+                            return Response.json({ relayCount }, { headers: { "content-type": "application/json" } });
                         }
 
                         forwards.push({
@@ -2988,21 +2988,17 @@ describe("createWorker — relay-tier routing (plan 075 Phase 2)", () => {
         expect(forwards[0]?.name).toMatch(/^promoted-plain::relay::[01]$/u);
     });
 
-    it("keeps every upgrade on the owner for a shard that declares rooms, with or without the hint", async () => {
-        expect.assertions(3);
+    it("routes a shard that declares rooms through its relays too: the relay forwards the room to the owner", async () => {
+        expect.assertions(2);
 
         const forwards: Forward[] = [];
-        const namespace = routingNamespace(2, forwards, true);
+        const namespace = routingNamespace(2, forwards);
         const worker = createWorker({ allowUnauthenticatedShardAccess: true, shardDO: namespace });
-        const hinted = new Request("https://app.example/_lunora/ws?shard=promoted-room&rooms=1", { headers: { Upgrade: "websocket" } });
 
         await worker.fetch(upgrade("promoted-room"), { SHARD: namespace }, fakeContext);
-        await worker.fetch(hinted, { SHARD: namespace }, fakeContext);
 
-        expect(forwards).toHaveLength(2);
-        // The owner decides: a room-declaring shard has no relay routing, whatever the client sends.
-        expect(forwards.map((forward) => forward.name)).toStrictEqual(["promoted-room", "promoted-room"]);
-        expect(forwards[1]?.name).toBe("promoted-room");
+        expect(forwards).toHaveLength(1);
+        expect(forwards[0]?.name).toMatch(/^promoted-room::relay::[01]$/u);
     });
 
     it("stays owner-served when the namespace binding can't be found (relay tier inert)", async () => {

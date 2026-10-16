@@ -20,6 +20,7 @@ import { LunoraError } from "@lunora/errors";
 
 import { stableWireKey } from "./reactive-cache";
 import type { ShapeRowOp } from "./shape-global-diff";
+import type { SocketAttachment } from "./types";
 
 /**
  * The single canonical cohort routing key for a reactive shape `(name, args)`,
@@ -269,8 +270,29 @@ interface RelayShapePoke {
     type: "relay_shape_poke";
 }
 
+/**
+ * A room join, leave or message a relay forwards to the owner, which runs the room
+ * handler as the relay-hosted socket. `attachment` carries the socket's identity
+ * fields (the owner rebuilds its lifecycle info from them); `data` is the client's
+ * wire-encoded message, passed through untouched.
+ */
+interface RelayRoomEvent {
+    attachment: Pick<SocketAttachment, "connectionId" | "context" | "identity" | "ip" | "userId">;
+    connectionId: string;
+    data?: unknown;
+    kind: "join" | "leave" | "message";
+    relayIndex: number;
+    topic: string;
+    type: "relay_room_event";
+}
+
+/** The owner's verdict on a relayed room event. `false` makes the relay undo a join it had set. */
+interface RelayRoomVerdict {
+    admitted: boolean;
+}
+
 /** Internal owner↔relay control messages (plan 075). NOT the public client protocol — the app never sees these. */
-type OwnerRelayFrame = RelayAttach | RelayDetach | RelayFrame | RelayShapePoke | RelayShapeSubscribe | RelayShapeUnsubscribe;
+type OwnerRelayFrame = RelayAttach | RelayDetach | RelayFrame | RelayRoomEvent | RelayShapePoke | RelayShapeSubscribe | RelayShapeUnsubscribe;
 
 export { clampPromotionThresholds, DEFAULT_PROMOTION_THRESHOLDS, nextPromotionState, relayCountFor, relayProxyKey, shapeRoutingKey };
 export type {
@@ -280,6 +302,8 @@ export type {
     RelayAttach,
     RelayDetach,
     RelayFrame,
+    RelayRoomEvent,
+    RelayRoomVerdict,
     RelayShapePoke,
     RelayShapeSeed,
     RelayShapeSubscribe,
