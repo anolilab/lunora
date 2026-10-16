@@ -1,3 +1,4 @@
+import { encodeWire } from "@lunora/wire";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { defineDocumentHistory, DOCUMENT_HISTORY_TABLE } from "../src/document-history";
@@ -587,6 +588,106 @@ describe("defineDocumentHistory — snapshot fidelity", () => {
         const result = await history.functions.listForDocument.handler({ db }, { documentId: "thread_1" });
 
         expect(result[0]?.doc).toStrictEqual({ title: "c" });
+    });
+});
+
+describe("defineDocumentHistory — snapshot size cap", () => {
+    beforeEach(() => {
+        vi.useFakeTimers();
+    });
+
+    afterEach(() => {
+        vi.useRealTimers();
+    });
+
+    // The full-encode measurement the recorder used before it learned to decide from
+    // the string length: the exact UTF-8 byte count of what would be stored. Every
+    // outcome below is checked against it, so the shortcut cannot drift from it.
+    const storedBytes = (doc: Record<string, unknown>): number => new TextEncoder().encode(JSON.stringify(encodeWire(doc))).length;
+
+    const recordDoc = async (maxSnapshotBytes: number, doc: Record<string, unknown>) => {
+        const db = createMemoryDb();
+        const history = defineDocumentHistory({ maxSnapshotBytes });
+        const { handlers } = capture(history.record);
+
+        vi.setSystemTime(1000);
+        await handlers["insert"]?.(triggerContextFor(db), {
+            doc,
+            id: "doc_1",
+            op: "insert",
+            table: "documents",
+        } as never);
+
+        const [entry] = entries(db);
+
+        return entry;
+    };
+
+    it("keeps an ASCII row exactly at the cap and drops it one byte over, guarding the inclusive boundary", async () => {
+        expect.assertions(4);
+
+        const doc = { blob: "x".repeat(200) };
+        const size = storedBytes(doc);
+
+        const atCap = await recordDoc(size, doc);
+        const overCap = await recordDoc(size - 1, doc);
+
+        expect(atCap?.["doc"]).toBe(JSON.stringify(encodeWire(doc)));
+        expect(atCap?.["truncated"]).toBeUndefined();
+        expect(overCap?.["doc"]).toBeUndefined();
+        expect(overCap?.["truncated"]).toBe(true);
+    });
+
+    it("keeps a multi-byte row whose length is under its byte count but whose bytes fit the cap, guarding the encode fallback", async () => {
+        expect.assertions(3);
+
+        // Each CJK code unit is one UTF-16 unit but three UTF-8 bytes, so the string
+        // length understates the stored size and the cheap bounds cannot decide it.
+        const doc = { title: "漢".repeat(40) };
+        const serialized = JSON.stringify(encodeWire(doc));
+        const bytes = storedBytes(doc);
+
+        expect(serialized.length).toBeLessThan(bytes);
+
+        const entry = await recordDoc(bytes, doc);
+
+        expect(entry?.["doc"]).toBe(serialized);
+        expect(entry?.["truncated"]).toBeUndefined();
+    });
+
+    it("drops a multi-byte row whose length fits the cap but whose bytes do not, guarding the encode fallback", async () => {
+        expect.assertions(3);
+
+        const doc = { title: "漢".repeat(40) };
+        const serialized = JSON.stringify(encodeWire(doc));
+        const cap = serialized.length;
+
+        // The cap is at least the string length, so only the byte count can say it is over.
+        expect(storedBytes(doc)).toBeGreaterThan(cap);
+
+        const entry = await recordDoc(cap, doc);
+
+        expect(entry?.["doc"]).toBeUndefined();
+        expect(entry?.["truncated"]).toBe(true);
+    });
+
+    it("drops a row whose string length alone exceeds the cap, guarding the cheap early exit", async () => {
+        expect.assertions(2);
+
+        const doc = { blob: "x".repeat(500) };
+        const entry = await recordDoc(32, doc);
+
+        expect(entry?.["doc"]).toBeUndefined();
+        expect(entry?.["truncated"]).toBe(true);
+    });
+
+    it("keeps a small row whose worst-case byte count is under the cap, guarding the cheap fast path", async () => {
+        expect.assertions(1);
+
+        const doc = { title: "small" };
+        const entry = await recordDoc(10_000, doc);
+
+        expect(entry?.["doc"]).toBe(JSON.stringify(encodeWire(doc)));
     });
 });
 
