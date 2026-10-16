@@ -364,4 +364,58 @@ describe("shardDO rooms", () => {
         expect(roomCalls(shard).map((call) => call.args["kind"])).toEqual(["join"]);
         expect((a.deserializeAttachment() as { whispers?: string[] }).whispers).toBeUndefined();
     });
+
+    it("does not let a failed join erase a rejoin made after it", async () => {
+        expect.assertions(1);
+
+        const a = new FakeSocket({ subs: {}, userId: "user-a" });
+        let releaseFirstJoin: () => void = () => undefined;
+        const firstJoinGate = new Promise<void>((resolve) => {
+            releaseFirstJoin = resolve;
+        });
+        let joins = 0;
+        const shard = makeShard([a], { "room:chat": "rooms:chat" }, [], {
+            "rooms:chat": async (args) => {
+                if (args["kind"] === "join") {
+                    joins += 1;
+
+                    if (joins === 1) {
+                        await firstJoinGate;
+                        throw new Error("first join refused");
+                    }
+                }
+
+                return undefined;
+            },
+        });
+
+        // Join, leave and rejoin while the first join's handler is still in flight.
+        const first = send(shard, a, { topic: "room:chat", type: "whisper_subscribe" });
+        // Let the first join record its membership; its handler stays in flight at the gate.
+        await new Promise<void>((resolve) => {
+            setTimeout(resolve, 0);
+        });
+        const left = send(shard, a, { topic: "room:chat", type: "whisper_unsubscribe" });
+        const rejoined = send(shard, a, { topic: "room:chat", type: "whisper_subscribe" });
+
+        releaseFirstJoin();
+        await Promise.all([first, left, rejoined]);
+
+        // The refused first join undoes only its own membership; the rejoin is still a member.
+        expect((a.deserializeAttachment() as { whispers?: string[] }).whispers).toEqual(["room:chat"]);
+    });
+
+    it("admits a room join even after the socket has spent its message budget", async () => {
+        expect.assertions(1);
+
+        const a = new FakeSocket({ subs: {}, userId: "user-a" });
+        const shard = makeShard([a], { "room:chat": "rooms:chat" });
+
+        // Message traffic has drained the message bucket: joins draw from their own bucket.
+        (shard as unknown as { allowWhisper: () => boolean }).allowWhisper = () => false;
+
+        await send(shard, a, { topic: "room:chat", type: "whisper_subscribe" });
+
+        expect(roomCalls(shard).map((call) => call.args["kind"])).toEqual(["join"]);
+    });
 });

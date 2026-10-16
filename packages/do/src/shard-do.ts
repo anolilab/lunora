@@ -1575,6 +1575,26 @@ const hasRootSpanContent = (entry: DispatchSpanEntry | undefined): boolean =>
     entry !== undefined && (entry.collector !== undefined || nonEmptyTallies(entry).length > 0);
 
 /**
+ * Take one token from a socket's bucket, refilling from elapsed wall-clock time up to
+ * `burst`. `false` when the bucket is empty; the bucket is updated either way.
+ */
+const takeToken = (ws: ShardSocketLike, buckets: WeakMap<ShardSocketLike, { last: number; tokens: number }>, burst: number, perSecond: number): boolean => {
+    const now = Date.now();
+    const bucket = buckets.get(ws) ?? { last: now, tokens: burst };
+    const refilled = Math.min(burst, bucket.tokens + ((now - bucket.last) / 1000) * perSecond);
+
+    if (refilled < 1) {
+        buckets.set(ws, { last: now, tokens: refilled });
+
+        return false;
+    }
+
+    buckets.set(ws, { last: now, tokens: refilled - 1 });
+
+    return true;
+};
+
+/**
  * Base class for shard Durable Objects.
  *
  * Concrete subclasses implement `handleRpc` and may emit deltas via
@@ -2364,6 +2384,15 @@ abstract class ShardDO {
     /** Per-socket whisper-rate token bucket (see {@link ShardDO.WHISPER_RATE_BURST}). In-memory; resets on hibernation. */
     private readonly whisperBuckets = new WeakMap<ShardSocketLike, { last: number; tokens: number }>();
 
+    /** The room-join admission bucket, kept apart from `whisperBuckets` so message traffic cannot starve joins. */
+    private readonly roomJoinBuckets = new WeakMap<ShardSocketLike, { last: number; tokens: number }>();
+
+    /** Per-socket, per-topic membership change counter; see `membershipEpoch`. */
+    private readonly membershipEpochs = new WeakMap<ShardSocketLike, Map<string, number>>();
+
+    /** Sockets whose close is in progress: their room membership is being torn down, so nothing new may join or leave. */
+    private readonly closingSockets = new WeakSet<ShardSocketLike>();
+
     /** Tail of each socket's queued room-handler events; see `dispatchRoomEvent`. */
     private readonly roomChains = new WeakMap<ShardSocketLike, Promise<void>>();
 
@@ -2865,6 +2894,10 @@ abstract class ShardDO {
         // on the handle, so the close path must resolve the same identity or it
         // would tear down nothing.
         const ws = this.runner.socketFor(rawSocket);
+
+        // Marked before the first await: a subscribe or unsubscribe that interleaves with
+        // this close must not change membership the close is about to tear down.
+        this.closingSockets.add(ws);
 
         // Fire `onDisconnect` lifecycle hooks the instant the socket drops —
         // replaying the identity + context recorded at connect — so presence and
@@ -7197,7 +7230,12 @@ abstract class ShardDO {
                 // leave is not throttled: it only runs `onLeave` for a membership a
                 // (throttled) join created, so it cannot be used to flood, and a throttled
                 // socket must still be able to leave.
-                if (join && this.roomHandlerPath(envelope.topic) !== undefined && !this.allowWhisper(ws)) {
+                // A socket whose close is in flight changes no membership: the close tears it down.
+                if (this.closingSockets.has(ws)) {
+                    return;
+                }
+
+                if (join && this.roomHandlerPath(envelope.topic) !== undefined && !this.allowRoomJoin(ws)) {
                     return;
                 }
 
@@ -7208,13 +7246,15 @@ abstract class ShardDO {
                     return;
                 }
 
+                const joinEpoch = join ? this.membershipEpoch(ws, envelope.topic) : undefined;
+
                 // A `defineRoom` topic ALSO dispatches the room's server handler:
                 // `onJoin` after the authorized join is recorded, `onLeave` on
                 // every unsubscribe (never authorization-gated). An ordinary
                 // whisper topic resolves to no room and dispatches nothing. The
                 // dispatch is queued on this socket before any await, so a later
                 // leave cannot run its `onLeave` ahead of this `onJoin`.
-                const admitted = await this.dispatchRoomEvent(ws, envelope.topic, join ? "join" : "leave");
+                const admitted = await this.dispatchRoomEvent(ws, envelope.topic, join ? "join" : "leave", undefined, joinEpoch);
 
                 // A join whose `onJoin` rejected was already undone in the queued handler,
                 // so the socket holds no membership and gets no relayed frames for it.
@@ -14823,6 +14863,11 @@ abstract class ShardDO {
             return false;
         }
 
+        const epochs = this.membershipEpochs.get(ws) ?? new Map<string, number>();
+
+        epochs.set(topic, this.membershipEpoch(ws, topic) + 1);
+        this.membershipEpochs.set(ws, epochs);
+
         return true;
     }
 
@@ -14839,19 +14884,24 @@ abstract class ShardDO {
      * full burst, which is the safe direction (never under-counts into a denial).
      */
     private allowWhisper(ws: ShardSocketLike): boolean {
-        const now = Date.now();
-        const bucket = this.whisperBuckets.get(ws) ?? { last: now, tokens: ShardDO.WHISPER_RATE_BURST };
-        const refilled = Math.min(ShardDO.WHISPER_RATE_BURST, bucket.tokens + ((now - bucket.last) / 1000) * ShardDO.WHISPER_RATE_PER_SEC);
+        return takeToken(ws, this.whisperBuckets, ShardDO.WHISPER_RATE_BURST, ShardDO.WHISPER_RATE_PER_SEC);
+    }
 
-        if (refilled < 1) {
-            this.whisperBuckets.set(ws, { last: now, tokens: refilled });
+    /**
+     * Admission for a room join. Its own bucket, so a socket that has spent its
+     * message budget can still join; a join is not refused by the traffic before it.
+     */
+    private allowRoomJoin(ws: ShardSocketLike): boolean {
+        return takeToken(ws, this.roomJoinBuckets, ShardDO.WHISPER_RATE_BURST, ShardDO.WHISPER_RATE_PER_SEC);
+    }
 
-            return false;
-        }
-
-        this.whisperBuckets.set(ws, { last: now, tokens: refilled - 1 });
-
-        return true;
+    /**
+     * How many membership changes (joins and leaves) this socket has made on `topic`.
+     * A failed join rolls back only if no later change has happened, so it cannot
+     * erase a rejoin that followed it.
+     */
+    private membershipEpoch(ws: ShardSocketLike, topic: string): number {
+        return this.membershipEpochs.get(ws)?.get(topic) ?? 0;
     }
 
     /**
@@ -14971,7 +15021,7 @@ abstract class ShardDO {
      * room), `false` when it threw. Events for one socket run strictly in the order
      * they were dispatched: a leave queued behind a join never overtakes it.
      */
-    private dispatchRoomEvent(ws: ShardSocketLike, topic: string, kind: "join" | "leave" | "message", message?: unknown): Promise<boolean> {
+    private dispatchRoomEvent(ws: ShardSocketLike, topic: string, kind: "join" | "leave" | "message", message?: unknown, joinEpoch?: number): Promise<boolean> {
         const functionPath = this.roomHandlerPath(topic);
 
         if (functionPath === undefined) {
@@ -14979,7 +15029,7 @@ abstract class ShardDO {
         }
 
         const previous = this.roomChains.get(ws) ?? Promise.resolve();
-        const run = previous.then(() => this.runRoomHandler(ws, topic, functionPath, kind, message));
+        const run = previous.then(() => this.runRoomHandler(ws, topic, functionPath, kind, message, joinEpoch));
 
         this.roomChains.set(
             ws,
@@ -14992,6 +15042,16 @@ abstract class ShardDO {
         return run;
     }
 
+    /**
+     * Undo the membership a refused join created. Only if no later change happened:
+     * a leave and a rejoin since then own the current membership, and it stays.
+     */
+    private rollBackJoin(ws: ShardSocketLike, topic: string, joinEpoch: number | undefined): void {
+        if (joinEpoch === this.membershipEpoch(ws, topic)) {
+            this.setWhisperMembership(ws, topic, false);
+        }
+    }
+
     /** Run one room handler event now. See {@link dispatchRoomEvent}, which queues it. */
     private async runRoomHandler(
         ws: ShardSocketLike,
@@ -14999,6 +15059,7 @@ abstract class ShardDO {
         functionPath: string,
         kind: "join" | "leave" | "message",
         message: unknown,
+        joinEpoch: number | undefined,
     ): Promise<boolean> {
         // Membership is checked here, not at receive: a message queued behind a join
         // must not reach onMessage unless that join committed (and a leave that ran
@@ -15038,7 +15099,7 @@ abstract class ShardDO {
             // A join whose onJoin rejected is not a member. Undo it here, inside the
             // queued slot, so no later queued event can observe the membership.
             if (kind === "join") {
-                this.setWhisperMembership(ws, topic, false);
+                this.rollBackJoin(ws, topic, joinEpoch);
             }
 
             return false;
