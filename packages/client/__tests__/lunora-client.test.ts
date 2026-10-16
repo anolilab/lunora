@@ -4607,7 +4607,7 @@ describe("lunoraClient", () => {
 
             cyclic["self"] = cyclic;
 
-            expect(() => room.send(cyclic)).toThrow();
+            expect(() => room.send(cyclic)).toThrow(/circular|cyclic|encode/iu);
 
             client.close();
 
