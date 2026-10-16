@@ -560,6 +560,44 @@ describe("shardDO rooms", () => {
         expect(a.frames.filter((frame) => frame.type === "whisper").map((frame) => frame.data)).toEqual([{ welcome: true }]);
     });
 
+    it("caps the room events a single socket can queue behind a slow handler", async () => {
+        expect.assertions(1);
+
+        const a = new FakeSocket({ subs: {}, userId: "user-a" });
+        let releaseJoin: () => void = () => undefined;
+        const gate = new Promise<void>((resolve) => {
+            releaseJoin = resolve;
+        });
+        const shard = makeShard([a], { "room:chat": "rooms:chat" }, [], {
+            "rooms:chat": async (args) => {
+                if (args["kind"] === "join") {
+                    await gate;
+                }
+
+                return undefined;
+            },
+        });
+
+        // Admit every message, so the queue bound is what limits them, not the message budget.
+        (shard as unknown as { allowWhisper: () => boolean }).allowWhisper = () => true;
+
+        const pending = [send(shard, a, { topic: "room:chat", type: "whisper_subscribe" })];
+        await new Promise<void>((resolve) => {
+            setTimeout(resolve, 0);
+        });
+
+        // Seventy messages behind the slow join: only what fits the queue runs.
+        for (let index = 0; index < 70; index += 1) {
+            pending.push(send(shard, a, { data: index, topic: "room:chat", type: "whisper" }));
+        }
+
+        releaseJoin();
+        await Promise.all(pending);
+
+        // The join plus the messages that fit the 64-event queue; the rest were refused.
+        expect(roomCalls(shard)).toHaveLength(64);
+    });
+
     it("keeps a member's room membership across a hibernation wake-up", async () => {
         expect.assertions(2);
 

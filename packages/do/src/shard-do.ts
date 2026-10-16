@@ -1765,6 +1765,9 @@ abstract class ShardDO {
      */
     protected static readonly MAX_WHISPER_BYTES = 4096;
 
+    /** Room events one socket may have queued at once; past it the next event is refused. */
+    protected static readonly MAX_QUEUED_ROOM_EVENTS = 64;
+
     /**
      * Whisper-rate token bucket: each socket may burst {@link ShardDO.WHISPER_RATE_BURST}
      * whispers, refilling at {@link ShardDO.WHISPER_RATE_PER_SEC}/s. Without this a single
@@ -2404,6 +2407,9 @@ abstract class ShardDO {
      * committed join, so it must not run `onLeave`.
      */
     private readonly failedRoomJoins = new WeakMap<ShardSocketLike, Set<string>>();
+
+    /** Room events queued on each socket and not yet run; bounded by `MAX_QUEUED_ROOM_EVENTS`. */
+    private readonly queuedRoomEvents = new WeakMap<ShardSocketLike, number>();
 
     /** Sockets whose close is in progress: their room membership is being torn down, so nothing new may join or leave. */
     private readonly closingSockets = new WeakSet<ShardSocketLike>();
@@ -15093,16 +15099,40 @@ abstract class ShardDO {
             return Promise.resolve(true);
         }
 
+        // A slow room handler must not let one socket queue events without bound: past the cap the
+        // event is refused. A refused join is undone, so the socket is not a member without an onJoin.
+        const queued = this.queuedRoomEvents.get(ws) ?? 0;
+
+        if (queued >= ShardDO.MAX_QUEUED_ROOM_EVENTS) {
+            this.logs.push({
+                functionPath,
+                level: "error",
+                message: "room event refused: this socket already has the maximum number of room events queued",
+                timestamp: Date.now(),
+            });
+
+            if (kind === "join") {
+                this.rollBackJoin(ws, topic, joinEpoch);
+            }
+
+            return Promise.resolve(false);
+        }
+
+        this.queuedRoomEvents.set(ws, queued + 1);
+
         const previous = this.roomChains.get(ws) ?? Promise.resolve();
         // A failure before the handler runs (an unreadable attachment, say) is refused the
         // same way as a handler error, so a join it was establishing is still undone.
         const run = previous
             .then(() => this.runRoomHandler(ws, topic, functionPath, kind, message, joinEpoch))
             .catch((error: unknown) => this.refuseRoomEvent(ws, topic, functionPath, kind, joinEpoch, error));
+        const settled = (): void => {
+            this.queuedRoomEvents.set(ws, (this.queuedRoomEvents.get(ws) ?? 1) - 1);
+        };
 
         this.roomChains.set(
             ws,
-            run.then(
+            run.finally(settled).then(
                 () => undefined,
                 () => undefined,
             ),

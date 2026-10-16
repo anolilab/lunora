@@ -367,6 +367,7 @@ abstract class ShardDO {
     protected static readonly MAX_WHISPER_TOPICS_PER_SOCKET = 64;
     protected static readonly MAX_WHISPER_VERDICTS_PER_SOCKET = 256;
     protected static readonly MAX_WHISPER_BYTES = 4096;
+    protected static readonly MAX_QUEUED_ROOM_EVENTS = 64;
     protected static readonly WHISPER_RATE_BURST = 50;
     protected static readonly WHISPER_RATE_PER_SEC = 25;
     static resetRootSizeWarning(): void;
