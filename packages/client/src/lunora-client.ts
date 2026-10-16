@@ -492,6 +492,8 @@ class LunoraClient {
     private readonly clientQueryStore: ClientQueryStore;
 
     private wsToken: string | undefined | WsTokenProvider;
+    /** Bumped on every `setWsToken` change: a provider request started under an older value is superseded. */
+    private wsTokenGeneration = 0;
 
     /** Better-auth base path (trailing slash stripped) for the `get-session` lookup. */
     private readonly authBasePath: string;
@@ -1637,6 +1639,7 @@ class LunoraClient {
         }
 
         this.wsToken = token;
+        this.wsTokenGeneration += 1;
 
         // Close every open/connecting socket so the reconnect uses the new
         // token. Don't tear down the connection record itself — pending
@@ -1901,7 +1904,6 @@ class LunoraClient {
         options: { shardKey?: string } = {},
     ): { close: () => void; send: (message: Message) => boolean } {
         const topic = `room:${room.name}`;
-        this.hintRoomSocket(options.shardKey);
         const unsubscribe = this.whisperSubscribe(
             topic,
             (data) => {
@@ -5507,40 +5509,11 @@ class LunoraClient {
         return conn;
     }
 
-    /**
-     * Ask the worker to keep this shard's socket on the owner, because a room runs on the owner's
-     * SQLite and a relay refuses room traffic. A socket already open without the hint is retired
-     * (as {@link bounceShardSockets} does) so its reconnect opens with `rooms=1`.
-     */
-    private hintRoomSocket(shardKey: string | undefined): void {
-        const conn = this.getOrCreateConnection(shardKey);
-
-        if (conn.roomHinted === true) {
-            return;
-        }
-
-        conn.roomHinted = true;
-
-        if (conn.socket) {
-            conn.retired = true;
-
-            try {
-                conn.socket.close();
-            } catch {
-                /* ignore */
-            }
-        }
-    }
-
-    private wsUrlFor(shardKey: string | undefined, token: string | undefined, roomHinted: boolean): string {
+    private wsUrlFor(shardKey: string | undefined, token: string | undefined): string {
         const params: string[] = [];
 
         if (shardKey !== undefined) {
             params.push(`shard=${encodeURIComponent(shardKey)}`);
-        }
-
-        if (roomHinted) {
-            params.push("rooms=1");
         }
 
         if (token !== undefined) {
@@ -5954,6 +5927,7 @@ class LunoraClient {
      * a silent tokenless socket the admin gate would reject.
      */
     private async openSocketWithProvidedToken(conn: ShardConnection, shardKey: string | undefined, provider: WsTokenProvider): Promise<void> {
+        const generation = this.wsTokenGeneration;
         let token: string | undefined;
 
         try {
@@ -5965,6 +5939,18 @@ class LunoraClient {
         }
 
         if (this.closed || this.WebSocketImpl === undefined || conn.wsState !== "connecting" || conn.socket !== undefined) {
+            return;
+        }
+
+        // The credential was replaced while this one was being minted: it is superseded, so the
+        // socket must not open on it. Mint again under the current credential.
+        if (generation !== this.wsTokenGeneration) {
+            if (typeof this.wsToken === "function") {
+                await this.openSocketWithProvidedToken(conn, shardKey, this.wsToken);
+            } else {
+                this.openSocket(conn, shardKey, this.wsToken);
+            }
+
             return;
         }
 
@@ -5995,7 +5981,7 @@ class LunoraClient {
         conn.retired = false;
         /* eslint-enable no-param-reassign */
 
-        openManagedSocket(conn, this.wsUrlFor(shardKey, token, conn.roomHinted === true), this.managedSocketOptions, {
+        openManagedSocket(conn, this.wsUrlFor(shardKey, token), this.managedSocketOptions, {
             onClose: (event) => {
                 // Close code 4001 is the server's `token_expired` signal: notify
                 // listeners so the app can refresh its credential before the

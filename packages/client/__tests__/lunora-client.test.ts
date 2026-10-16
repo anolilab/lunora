@@ -4597,62 +4597,34 @@ describe("lunoraClient", () => {
             room.close();
         });
 
-        it("hints a room's socket with rooms=1 so the worker keeps it on the shard owner", () => {
+        it("does not open a socket on a credential that was replaced while its provider was still pending", async () => {
             expect.assertions(2);
 
+            const resolvers: ((token: string) => void)[] = [];
             const client = new LunoraClient({
                 fetch: vi.fn<typeof fetch>(),
                 url: "https://app.example",
                 WebSocket: createMockWebSocket(),
-            });
-            const room = client.connectRoom<{ text: string }>({ name: "chat" }, { onMessage: () => undefined });
-
-            expect(new URL(latestSocket().url).searchParams.get("rooms")).toBe("1");
-
-            // A plain whisper socket on the same shard stays unhinted.
-            const plain = new LunoraClient({
-                fetch: vi.fn<typeof fetch>(),
-                url: "https://app.example",
-                WebSocket: createMockWebSocket(),
+                wsToken: () =>
+                    new Promise<string>((resolve) => {
+                        resolvers.push(resolve);
+                    }),
             });
 
-            plain.whisperSubscribe("cursors", () => undefined);
+            // Start a connect: its token request is still pending.
+            client.whisperSubscribe("cursors", () => undefined);
 
-            expect(new URL(latestSocket().url).searchParams.has("rooms")).toBe(false);
-
-            room.close();
-        });
-
-        it("retires a socket opened before connectRoom and reconnects it with the room hint", async () => {
-            expect.assertions(3);
-
-            const client = new LunoraClient({
-                fetch: vi.fn<typeof fetch>(),
-                url: "https://app.example",
-                WebSocket: createMockWebSocket(),
+            // The credential changes while that request is in flight, then the stale one resolves.
+            client.setWsToken("fresh-token");
+            resolvers[0]?.("stale-token");
+            await new Promise<void>((resolve) => {
+                setTimeout(resolve, 0);
             });
-            const plain = client.whisperSubscribe("cursors", () => undefined);
-            const first = latestSocket();
 
-            first.open();
+            const socket = latestSocket();
 
-            expect(new URL(first.url).searchParams.has("rooms")).toBe(false);
-
-            // The room joins a shard whose live socket was opened unhinted: that socket is retired.
-            const room = client.connectRoom<{ text: string }>({ name: "chat" }, { onMessage: () => undefined });
-
-            expect(first.readyState).toBe(3);
-
-            // The reconnect carries the hint, and the room's subscription rides it.
-            for (let attempt = 0; attempt < 200 && sockets.length < 2; attempt += 1) {
-                // eslint-disable-next-line no-await-in-loop -- polling the reconnect timer between checks
-                await flushMicrotasks();
-            }
-
-            expect(new URL(latestSocket().url).searchParams.get("rooms")).toBe("1");
-
-            plain();
-            room.close();
+            expect(socket.url).toContain("token=fresh-token");
+            expect(socket.url).not.toContain("stale-token");
         });
 
         it("does not send a room message from a status listener until the shard is admitted, and sends it once", () => {
