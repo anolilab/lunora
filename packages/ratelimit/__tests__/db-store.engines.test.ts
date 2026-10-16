@@ -28,7 +28,10 @@ const table = (global: boolean): SchemaLike => {
     return {
         tables: {
             rateLimits: {
-                indexes: [{ fields: ["key"], name: "by_key" }],
+                indexes: [
+                    { fields: ["key"], name: "by_key" },
+                    { fields: ["ts"], name: "by_ts" },
+                ],
                 shape: { key: column("string"), prev: column("optional", { inner: column("number") }), ts: column("number"), value: column("number") },
                 ...(global ? { shardMode: { kind: "global" as const } } : {}),
             },
@@ -86,6 +89,8 @@ const rowsFor = (database: DatabaseSync, engine: Engine, key: string): number =>
 
     return (database.prepare(query).get(key) as { n: number }).n;
 };
+
+const totalRows = (database: DatabaseSync): number => (database.prepare(`SELECT COUNT(*) AS n FROM "rateLimits"`).get() as { n: number }).n;
 
 describe.each<Engine>(["shard-local", "global (sql-store / D1)"])("createDbStore over the %s writer", (engine) => {
     let database: DatabaseSync;
@@ -149,5 +154,75 @@ describe.each<Engine>(["shard-local", "global (sql-store / D1)"])("createDbStore
 
         await expect(limiter.limit("send", { key: "u1" })).resolves.toMatchObject({ ok: true });
         expect(rowsFor(database, engine, "send:u1")).toBe(1);
+    });
+
+    it("sweep deletes rows at or before the horizon and keeps debts and live rows", async () => {
+        expect.assertions(3);
+
+        const db = await writerFor(engine, database);
+        const store = createDbStore({ db });
+
+        await store.set("login:old", { ts: 100, value: 1 });
+        await store.set("login:edge", { ts: 500, value: 1 });
+        await store.set("login:debt", { ts: 100, value: -5 });
+        await store.set("login:live", { ts: 900, value: 1 });
+
+        await store.sweep?.(500, 32);
+
+        expect(rowsFor(database, engine, "login:old")).toBe(0);
+        expect(rowsFor(database, engine, "login:debt")).toBe(1);
+        expect(rowsFor(database, engine, "login:live")).toBe(1);
+    });
+
+    it("sweep deletes at most the limit per call", async () => {
+        expect.assertions(2);
+
+        const db = await writerFor(engine, database);
+        const store = createDbStore({ db });
+
+        for (const index of [1, 2, 3, 4, 5]) {
+            // eslint-disable-next-line no-await-in-loop -- sequential writes keep the fixture deterministic
+            await store.set(`login:k${String(index)}`, { ts: 100, value: 1 });
+        }
+
+        await store.sweep?.(500, 2);
+
+        expect(totalRows(database)).toBe(3);
+
+        await store.sweep?.(500, 2);
+
+        expect(totalRows(database)).toBe(1);
+    });
+});
+
+describe("sweep through the RLS-enforcing writer a mutation receives (shard-local)", () => {
+    it("deletes expired rows when ctx.db is the production shard writer with enforceRls on", async () => {
+        expect.assertions(2);
+
+        const database = new DatabaseSync(":memory:");
+        const sql = shardExec(database);
+        const schema = table(false);
+
+        runShardMigrations(sql, schema);
+
+        // The same options the in-process runtime builds for a mutation's `ctx.db`, anonymous caller.
+        const db = createShardCtxDb({
+            auth: { identity: null, userId: null },
+            enforceRls: true,
+            inTransaction: () => false,
+            schema,
+            sql,
+        }) as unknown as RateLimitDb;
+        const store = createDbStore({ db });
+
+        await store.set("login:old", { ts: 100, value: 1 });
+        await store.set("login:live", { ts: 900, value: 1 });
+
+        await store.sweep?.(500, 32);
+
+        expect(rowsFor(database, "shard-local", "login:old")).toBe(0);
+        expect(rowsFor(database, "shard-local", "login:live")).toBe(1);
+
+        database.close();
     });
 });

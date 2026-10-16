@@ -249,8 +249,14 @@ export const rateLimits = defineTable({
     ts: v.number(),
     value: v.number(),
     prev: v.optional(v.number()),
-}).index("by_key", ["key"]);
+})
+    .index("by_key", ["key"])
+    .index("by_ts", ["ts"]);
 ```
+
+After each write the limiter deletes up to 32 rows whose `ts` is past the limit's retention, through `by_ts`. A row
+with a negative `value` (a reserved debt) is never deleted. Tables declared before this index was added need it
+added before expiry runs; without it each sweep scans the whole table.
 
 <Callout type="info">
     Every store admits exactly the configured rate under concurrent consumes. `createMemoryStore` and `createSqlStore` are synchronous, and the limiter reads,

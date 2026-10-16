@@ -74,6 +74,14 @@ const runSql = <Row = Record<string, unknown>>(sql: SqlLike, query: string, ...p
  * SQLite-backed store for durable, per-DO rate-limit state. Persists each
  * `(name, key)` pair as one row so limits survive hibernation and eviction.
  *
+ * **Retention:** the limiter calls `sweep` after each write, which deletes up to 32
+ * rows older than its horizon. The index on `ts` covers only rows with a
+ * non-negative `value`, so a reserved debt (never swept) adds nothing to the scan.
+ * The table holds the live keys plus the expired ones not yet swept. One config
+ * map per table: a limiter's horizon comes from its own configs, so a second
+ * limiter with shorter limits on the same table would sweep rows the first still
+ * needs.
+ *
  * **Atomicity:** `exec` is synchronous and the limiter does not yield between a
  * synchronous store's read and its write, so one consume's read, decision and
  * write run as a single JavaScript step. No other call on the same isolate can
@@ -86,10 +94,17 @@ const createSqlStore = (options: SqlStoreOptions): RateLimitStore => {
     const table = options.table ?? "_lunora_rate_limits";
 
     runSql(sql, `CREATE TABLE IF NOT EXISTS "${table}" (k TEXT PRIMARY KEY, value REAL NOT NULL, ts INTEGER NOT NULL, prev REAL)`);
+    // Table shape change: the sweep's range scan on `ts`. Partial on `value >= 0` so a debt row is never indexed.
+    runSql(sql, `CREATE INDEX IF NOT EXISTS "${table}_ts" ON "${table}" (ts) WHERE value >= 0`);
 
     return {
         delete: (storageKey) => {
             runSql(sql, `DELETE FROM "${table}" WHERE k = ?`, storageKey);
+        },
+        // The subquery's `value >= 0` must stay literal so the planner can use the partial index.
+        // The limit is a bound parameter, not inlined.
+        sweep: (olderThanTs, limit) => {
+            runSql(sql, `DELETE FROM "${table}" WHERE k IN (SELECT k FROM "${table}" WHERE ts <= ? AND value >= 0 ORDER BY ts LIMIT ?)`, olderThanTs, limit);
         },
         get: (storageKey) => {
             const rows = runSql<{ prev: number | null; ts: number; value: number }>(sql, `SELECT value, ts, prev FROM "${table}" WHERE k = ?`, storageKey);
@@ -150,6 +165,16 @@ interface RateLimitDatabaseReader {
  */
 interface RateLimitDatabase extends RateLimitDatabaseReader {
     delete: <T extends string>(id: Id<T>) => Promise<void>;
+
+    /**
+     * Used by `sweep` only: rows matching `where`, at most `limit`. Optional in the
+     * type because the public `DatabaseWriter` does not declare it; the framework's
+     * `ctx.db` implements it, and `sweep` throws if an adapter does not.
+     */
+    findMany?: (
+        table: string,
+        args: { limit?: number; orderBy?: Record<string, "asc" | "desc">[]; where?: Record<string, unknown> },
+    ) => Promise<{ page: Record<string, unknown>[] }>;
     insert: <T extends string>(table: T, document: Record<string, unknown>, options?: { clientId?: string }) => Promise<Id<T>>;
     patchIf: <T extends string>(
         table: T,
@@ -211,8 +236,21 @@ const isConflict = (error: unknown): boolean => (error as { code?: unknown } | n
  *     ts: v.number(),
  *     value: v.number(),
  *     prev: v.optional(v.number()),
- * }).index("by_key", ["key"])
+ * })
+ *     .index("by_key", ["key"])
+ *     .index("by_ts", ["ts"])
  * ```
+ *
+ * **Table shape change:** `by_ts` is new. The sweep finds expired rows through it.
+ * A table declared without it still works, but each sweep scans every row. Apps
+ * that already declared the table add the index. The sweep deletes at most 32
+ * expired rows per write; a reserved debt (negative `value`) is never deleted.
+ *
+ * **Ceiling:** on a `.global()` table another shard can rewrite a row between the
+ * sweep's read and its delete, so that row is deleted live and its bucket resets.
+ * A shard-local table is not exposed: the Durable Object's input gate holds across
+ * the sweep's storage operations. One config map per table, as for
+ * {@link createSqlStore}.
  *
  * **Atomic against concurrent consumes.** `setIf` writes only if the row still
  * holds the value `get` returned: an existing row through `ctx.db.patchIf` with
@@ -354,6 +392,22 @@ const createDatabaseStore = (options: DatabaseStoreOptions): RateLimitStore => {
             }
 
             return applied;
+        },
+        sweep: async (olderThanTs, limit) => {
+            if (db.findMany === undefined) {
+                throw new LunoraError("INTERNAL", "@lunora/ratelimit: the sweep needs `findMany` on `db`; pass the framework's `ctx.db`");
+            }
+
+            // Read then delete by id: `deleteWhere` is the same read followed by an
+            // id-based delete, so it does not close the window either. Both are
+            // ceilings on `.global()` (see the JSDoc above).
+            const { page } = await db.findMany(table, {
+                limit,
+                orderBy: [{ ts: "asc" }],
+                where: { ts: { lte: olderThanTs }, value: { gte: 0 } },
+            });
+
+            await Promise.all(page.map(async (row) => db.delete(row["_id"] as Id<string>)));
         },
     };
 };

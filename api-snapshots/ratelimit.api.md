@@ -77,6 +77,13 @@ type RateLimitConfigMap<Names extends string = string> = Record<Names, RateLimit
 ```ts
 interface RateLimitDatabase extends RateLimitDatabaseReader {
     delete: <T extends string>(id: Id<T>) => Promise<void>;
+    findMany?: (table: string, args: {
+        limit?: number;
+        orderBy?: Record<string, "asc" | "desc">[];
+        where?: Record<string, unknown>;
+    }) => Promise<{
+        page: Record<string, unknown>[];
+    }>;
     insert: <T extends string>(table: T, document: Record<string, unknown>, options?: {
         clientId?: string;
     }) => Promise<Id<T>>;
@@ -151,7 +158,7 @@ interface RateLimitStore {
     get: (storageKey: string) => Promise<RateLimitValue | undefined> | RateLimitValue | undefined;
     set: (storageKey: string, value: RateLimitValue) => Promise<void> | void;
     setIf?: (storageKey: string, value: RateLimitValue, prior: RateLimitValue | undefined) => Promise<boolean>;
-    sweep?: (olderThanTs: number, limit: number) => void;
+    sweep?: (olderThanTs: number, limit: number) => Promise<void> | void;
 }
 ```
 

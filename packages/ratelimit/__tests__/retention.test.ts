@@ -76,7 +76,7 @@ describe("memory store sweep", () => {
         await store.set("a", { ts: 1, value: 1 });
         await store.set("b", { ts: 2, value: 1 });
         await store.set("a", { ts: 3, value: 1 });
-        store.sweep?.(2, 10);
+        await store.sweep?.(2, 10);
 
         expect(store.get("b")).toBeUndefined();
         expect(store.get("a")).toEqual({ ts: 3, value: 1 });
@@ -90,7 +90,7 @@ describe("memory store sweep", () => {
         await Promise.all(Array.from({ length: 5 }, async (_, index) => store.set(`k${String(index)}`, { ts: 1, value: 1 })));
 
         await store.set("live", { ts: 100, value: 1 });
-        store.sweep?.(10, 3);
+        await store.sweep?.(10, 3);
 
         expect(store.get("k2")).toBeUndefined();
         expect(store.get("k3")).toEqual({ ts: 1, value: 1 });
@@ -104,7 +104,7 @@ describe("memory store sweep", () => {
 
         await store.set("debt", { ts: 1, value: -4 });
         await store.set("spent", { ts: 1, value: 0 });
-        store.sweep?.(10, 2);
+        await store.sweep?.(10, 2);
 
         expect(store.get("debt")).toEqual({ ts: 1, value: -4 });
         expect(store.get("spent")).toBeUndefined();

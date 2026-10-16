@@ -104,11 +104,14 @@ export interface RateLimitStore {
 
     /**
      * Optional eviction hint, called by the limiter after each successful write.
-     * Examine up to `limit` entries from the store's oldest end and remove those
-     * whose `ts` is at or before `olderThanTs`, except entries with a negative
-     * `value`: a reserved debt is kept, whatever its age. `limit` caps entries
-     * examined, not entries removed. Omit it when the store's rows must persist
-     * (`createDbStore`, `createSqlStore`).
+     * Remove up to `limit` entries whose `ts` is at or before `olderThanTs`, except
+     * entries with a negative `value`: a reserved debt is kept, whatever its age.
+     * The memory store examines up to `limit` entries from its oldest end; the
+     * durable stores delete at most `limit` matching rows. A returned promise is
+     * awaited, so a store whose sweep is I/O (`createDbStore`) finishes it before the
+     * consume returns. The durable stores implement it so a table stays bounded
+     * without a scheduled job; see `createSqlStore` and `createDbStore` for the
+     * table shape and the one-config-map-per-table rule.
      */
-    sweep?: (olderThanTs: number, limit: number) => void;
+    sweep?: (olderThanTs: number, limit: number) => Promise<void> | void;
 }

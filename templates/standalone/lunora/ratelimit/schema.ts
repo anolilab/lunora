@@ -45,6 +45,7 @@ export const ratelimit = definePlugin("ratelimit", {
                 prev: v.optional(v.number()),
             })
                 .index("by_key", ["key"])
+                .index("by_ts", ["ts"])
                 .externallyManaged(),
         },
     }),

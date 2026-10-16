@@ -42,7 +42,21 @@ type StoreKind = "d1" | "kv" | "sql";
 
 /** `where` against a stored row: plain equality, a `null` filter matching an absent field as SQL NULL does. */
 const matchesWhere = (row: Record<string, unknown>, where: Record<string, unknown> = {}): boolean =>
-    Object.entries(where).every(([field, value]) => (value === null ? row[field] === undefined || row[field] === null : row[field] === value));
+    Object.entries(where).every(([field, value]) => {
+        if (value === null) {
+            return row[field] === undefined || row[field] === null;
+        }
+
+        // The `lte`/`gte` range the sweep filters on.
+        if (typeof value === "object") {
+            const range = value as { gte?: number; lte?: number };
+            const actual = row[field] as number;
+
+            return (range.lte === undefined || actual <= range.lte) && (range.gte === undefined || actual >= range.gte);
+        }
+
+        return row[field] === value;
+    });
 
 /**
  * A `ctx.db`-shaped adapter over the DO's KV storage. A row is `row:<id>`, and the
@@ -74,10 +88,19 @@ const kvDatabase = (storage: DurableObjectStorage): RateLimitDb => {
                 throw Object.assign(new Error(`unique constraint violation on "${table}"`), { code: "CONFLICT" });
             }
 
-            await storage.put(rowKey(id), { ...document, _id: id });
+            await storage.put(rowKey(id), { ...document, _id: id, _table: table });
             await storage.put(indexKey(table, document["key"]), id);
 
             return id as Id<typeof table>;
+        },
+        // A scan of every row: fine for a test table, and the sweep asks for at most 32.
+        findMany: async (table, args) => {
+            const listed = await storage.list<Record<string, unknown>>({ prefix: "row:" });
+            const matched = [...listed.values()]
+                .filter((row) => row["_table"] === table && matchesWhere(row, args.where))
+                .toSorted((left, right) => (left["ts"] as number) - (right["ts"] as number));
+
+            return { page: matched.slice(0, args.limit ?? matched.length) };
         },
         patchIf: async (_table, id, args) => {
             const row = await storage.get<Record<string, unknown>>(rowKey(id));
@@ -220,6 +243,30 @@ class RateLimitDO extends DurableObject<Env> {
             .first<{ n: number }>();
 
         return result?.n ?? 0;
+    }
+
+    /** One `limit("login", { key })` on the `sql` store at a chosen clock, so a test can age rows past the horizon. */
+    public async sqlConsumeAt(key: string, now: number): Promise<RateLimitStatus> {
+        return new RateLimiter({ config: CONFIG, now: () => now, store: this.#store("sql") }).limit("login", { key });
+    }
+
+    /** Rows in the SQL store's table. */
+    public sqlRowCount(): number {
+        const [row] = this.ctx.storage.sql.exec<{ n: number }>(`SELECT COUNT(*) AS n FROM "_lunora_rate_limits"`).toArray();
+
+        return row?.n ?? 0;
+    }
+
+    /** The planner's detail lines for the sweep's DELETE, as the store runs it. */
+    public sqlSweepPlan(): string[] {
+        return this.ctx.storage.sql
+            .exec<{ detail: string }>(
+                `EXPLAIN QUERY PLAN DELETE FROM "_lunora_rate_limits" WHERE k IN (SELECT k FROM "_lunora_rate_limits" WHERE ts <= ? AND value >= 0 ORDER BY ts LIMIT ?)`,
+                0,
+                1,
+            )
+            .toArray()
+            .map((row) => row.detail);
     }
 }
 

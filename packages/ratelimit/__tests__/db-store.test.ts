@@ -17,10 +17,23 @@ const createFakeDatabase = (): RateLimitDatabase & { rows: Map<string, Record<st
     const rows = new Map<string, Record<string, unknown>>();
     let counter = 0;
 
+    // Equality, a `null` filter, and the `lte`/`gte` range the sweep uses.
+    const matchesField = (actual: unknown, expected: unknown): boolean => {
+        if (expected === null) {
+            return actual === undefined || actual === null;
+        }
+
+        if (typeof expected === "object") {
+            const range = expected as { gte?: number; lte?: number };
+
+            return (range.lte === undefined || (actual as number) <= range.lte) && (range.gte === undefined || (actual as number) >= range.gte);
+        }
+
+        return actual === expected;
+    };
+
     const matches = (document: Record<string, unknown>, where: Record<string, unknown> = {}): boolean =>
-        Object.entries(where).every(([field, value]) =>
-            value === null ? document[field] === undefined || document[field] === null : document[field] === value,
-        );
+        Object.entries(where).every(([field, value]) => matchesField(document[field], value));
 
     const remove = async <T extends string>(id: Id<T>): Promise<void> => {
         rows.delete(id);
@@ -64,7 +77,16 @@ const createFakeDatabase = (): RateLimitDatabase & { rows: Map<string, Record<st
     const findFirst = async (table: string, args?: { where?: Record<string, unknown> }): Promise<Record<string, unknown> | null> =>
         [...rows.values()].find((document) => document["_table"] === table && matches(document, args?.where)) ?? null;
 
-    return { delete: remove, findFirst, insert, patchIf, rows };
+    // The sweep orders by `ts` ascending, the only order it asks for.
+    const findMany = async (table: string, args: { limit?: number; where?: Record<string, unknown> } = {}): Promise<{ page: Record<string, unknown>[] }> => {
+        const matched = [...rows.values()]
+            .filter((document) => document["_table"] === table && matches(document, args.where))
+            .toSorted((left, right) => (left["ts"] as number) - (right["ts"] as number));
+
+        return { page: matched.slice(0, args.limit ?? matched.length) };
+    };
+
+    return { delete: remove, findFirst, findMany, insert, patchIf, rows };
 };
 
 describe("db store", () => {
@@ -250,6 +272,39 @@ describe("db store", () => {
 
             await expect(limiter.limit("send", { key: "u1" })).rejects.toMatchObject({ code: "INTERNAL", name: "LunoraError" });
             await expect(limiter.reset("send", { key: "u1" })).rejects.toMatchObject({ code: "INTERNAL", name: "LunoraError" });
+        });
+    });
+
+    describe("retention sweep", () => {
+        it("deletes rows at or before the horizon, keeps debts and live rows, and honors the limit", async () => {
+            expect.assertions(4);
+
+            const database = createFakeDatabase();
+            const store = createDatabaseStore({ db: database });
+
+            await store.set("old", { ts: 100, value: 1 });
+            await store.set("debt", { ts: 100, value: -5 });
+            await store.set("live", { ts: 900, value: 1 });
+            await store.set("older", { ts: 50, value: 1 });
+
+            await store.sweep?.(500, 1);
+
+            // Oldest first: `older` (ts 50) goes, and the limit stops the sweep there.
+            await expect(store.get("older")).resolves.toBeUndefined();
+            await expect(store.get("old")).resolves.toEqual({ ts: 100, value: 1 });
+
+            await store.sweep?.(500, 32);
+
+            await expect(store.get("old")).resolves.toBeUndefined();
+            await expect(store.get("debt")).resolves.toEqual({ ts: 100, value: -5 });
+        });
+
+        it("throws an INTERNAL LunoraError when the adapter has no findMany", async () => {
+            expect.assertions(1);
+
+            const store = createDatabaseStore({ db: { ...createFakeDatabase(), findMany: undefined } });
+
+            await expect(store.sweep?.(500, 32)).rejects.toMatchObject({ code: "INTERNAL" });
         });
     });
 });
