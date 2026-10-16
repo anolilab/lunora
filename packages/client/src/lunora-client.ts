@@ -1836,6 +1836,10 @@ class LunoraClient {
      * whisper rate budget. The sender never receives its own whisper. Omitting
      * `data` delivers JSON `null` to receivers (not `undefined`).
      *
+     * Returns `true` when the frame was handed to an open socket, `false` when it
+     * was dropped, so a caller that must not lose a message (one sent right after
+     * connecting, before the socket opens) can detect the drop and retry.
+     *
      * That best-effort drop is for a socket that is momentarily down. A
      * `crossTabSync` FOLLOWER tab has no socket and never will (see
      * {@link LunoraClientOptions.crossTabSync}), so every whisper from it would
@@ -1845,26 +1849,26 @@ class LunoraClient {
      * way, for the same reason: there is no ack frame to report it on. See
      * {@link whisperSubscribe} for the security model.
      */
-    public whisper(topic: string, data?: unknown, options: { shardKey?: string } = {}): void {
+    public whisper(topic: string, data?: unknown, options: { shardKey?: string } = {}): boolean {
         this.assertLeaderOwnedSurface("whisper");
 
         this.ensureSocket(options.shardKey);
 
         const conn = this.getConnection(options.shardKey);
 
-        if (conn) {
-            // Wire-encode before send so `bigint`/bytes payloads survive (raw
-            // `JSON.stringify` would throw on a bigint). The shard relays the
-            // encoded value verbatim and the receiving client `decodeWire`s it —
-            // `encodeWire` is identity for JSON-safe data, so this stays
-            // backward-compatible with older shards/clients. Omitted `data`
-            // becomes an explicit `null` (the documented receiver contract).
-            // eslint-disable-next-line unicorn/no-null -- an omitted whisper body is delivered as an explicit JSON `null`, never `undefined`
-            sendOn(conn, { data: encodeCallArgs(data ?? null, `whisper data for topic '${topic}'`), topic, type: "whisper" });
-        }
+        // Wire-encode before send so `bigint`/bytes payloads survive (raw
+        // `JSON.stringify` would throw on a bigint). The shard relays the
+        // encoded value verbatim and the receiving client `decodeWire`s it —
+        // `encodeWire` is identity for JSON-safe data, so this stays
+        // backward-compatible with older shards/clients. Omitted `data`
+        // becomes an explicit `null` (the documented receiver contract).
+        // eslint-disable-next-line unicorn/no-null -- an omitted whisper body is delivered as an explicit JSON `null`, never `undefined`
+        const sent = conn !== undefined && sendOn(conn, { data: encodeCallArgs(data ?? null, `whisper data for topic '${topic}'`), topic, type: "whisper" });
 
         // A send-only whisper may be all that opened this shard: let it idle out.
         this.releaseIdleShard(options.shardKey);
+
+        return sent;
     }
 
     /**
@@ -1893,7 +1897,7 @@ class LunoraClient {
         name: string,
         handlers: { onMessage: (message: Message, from?: string) => void },
         options: { shardKey?: string } = {},
-    ): { close: () => void; send: (message: Message) => void } {
+    ): { close: () => void; send: (message: Message) => boolean } {
         const topic = `room:${name}`;
         const unsubscribe = this.whisperSubscribe(
             topic,
@@ -1902,12 +1906,16 @@ class LunoraClient {
             },
             options,
         );
+        let closed = false;
 
         return {
-            close: unsubscribe,
-            send: (message: Message) => {
-                this.whisper(topic, message, options);
+            close: () => {
+                closed = true;
+                unsubscribe();
             },
+            // `false` when not sent: the handle is closed, or the shard socket is not
+            // open yet (a send right after connecting). The caller decides whether to retry.
+            send: (message: Message) => !closed && this.whisper(topic, message, options),
         };
     }
 

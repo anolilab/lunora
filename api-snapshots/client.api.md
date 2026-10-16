@@ -427,14 +427,14 @@ class LunoraClient {
     }): Unsubscribe;
     whisper(topic: string, data?: unknown, options?: {
         shardKey?: string;
-    }): void;
+    }): boolean;
     connectRoom<Message>(name: string, handlers: {
         onMessage: (message: Message, from?: string) => void;
     }, options?: {
         shardKey?: string;
     }): {
         close: () => void;
-        send: (message: Message) => void;
+        send: (message: Message) => boolean;
     };
     onTokenExpired(listener: () => void): Unsubscribe;
     connectionStatus(): ConnectionStatus;
