@@ -69,7 +69,7 @@ import type { MutationCtx as MutationContext, RegisteredFunction } from "./types
  * The per-socket handle a room handler receives. Mirrors the identity fields of
  * a connection-lifecycle event and adds the room's own broadcast helper.
  */
-interface RoomSocket {
+interface RoomSocket<Message = unknown> {
     /**
      * Broadcast a typed `message` to EVERY socket in the room — the sender
      * included, since the server handler is authoritative and its payload (not
@@ -79,7 +79,7 @@ interface RoomSocket {
      * Synchronous and best-effort: local delivery happens inline and the
      * cross-DO relay hop is fire-and-forget, matching `broadcastWhisper`.
      */
-    broadcast: (message: unknown) => void;
+    broadcast: (message: Message) => void;
     /** Stable per-socket id, the same one `onConnect` saw. */
     readonly connectionId: string;
     /** App-supplied connection context from the client `connect` envelope. */
@@ -91,13 +91,13 @@ interface RoomSocket {
 }
 
 /** Handler for a socket joining a room. */
-type RoomJoinHandler = (context: MutationContext, socket: RoomSocket) => Promise<void> | void;
+type RoomJoinHandler<Message = unknown> = (context: MutationContext, socket: RoomSocket<Message>) => Promise<void> | void;
 
 /** Handler for a socket leaving a room. */
-type RoomLeaveHandler = (context: MutationContext, socket: RoomSocket) => Promise<void> | void;
+type RoomLeaveHandler<Message = unknown> = (context: MutationContext, socket: RoomSocket<Message>) => Promise<void> | void;
 
 /** Handler for one typed message on a room; `message` is validated against the room's validator. */
-type RoomMessageHandler<Message> = (context: MutationContext, message: Message, socket: RoomSocket) => Promise<void> | void;
+type RoomMessageHandler<Message> = (context: MutationContext, message: Message, socket: RoomSocket<Message>) => Promise<void> | void;
 
 /** Options for {@link defineRoom}. */
 interface DefineRoomOptions<Message extends Validator> {
@@ -106,9 +106,9 @@ interface DefineRoomOptions<Message extends Validator> {
     /** Room name; the wire topic is `room:<name>`. Must be non-empty. */
     name: string;
     /** Fired after a socket's join to the room topic is authorized and recorded. */
-    onJoin?: RoomJoinHandler;
+    onJoin?: RoomJoinHandler<Infer<Message>>;
     /** Fired when a socket leaves the room topic. Never authorization-gated. */
-    onLeave?: RoomLeaveHandler;
+    onLeave?: RoomLeaveHandler<Infer<Message>>;
     /** Fired for each inbound message, with the message parsed against `message`. */
     onMessage: RoomMessageHandler<Infer<Message>>;
 }

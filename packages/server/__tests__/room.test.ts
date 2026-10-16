@@ -1,7 +1,7 @@
 import { v } from "@lunora/values";
 import { describe, expect, it, vi } from "vitest";
 
-import type { RoomJoinHandler, RoomMessageHandler, RoomSocket } from "../src/index";
+import type { RoomJoinHandler, RoomLeaveHandler, RoomMessageHandler, RoomSocket } from "../src/index";
 import { defineRoom } from "../src/index";
 
 const makeSocket = (overrides: Partial<RoomSocket> = {}): RoomSocket => {
@@ -41,7 +41,7 @@ describe("defineRoom", () => {
     it("routes a `join` to onJoin with the socket and no message", async () => {
         expect.assertions(2);
 
-        const onJoin = vi.fn<RoomJoinHandler>();
+        const onJoin = vi.fn<RoomJoinHandler<{ text: string }>>();
         const onMessage = vi.fn<RoomMessageHandler<{ text: string }>>();
         const room = defineRoom({ message: v.object({ text: v.string() }), name: "chat", onJoin, onMessage });
         const socket = makeSocket();
@@ -55,7 +55,7 @@ describe("defineRoom", () => {
     it("routes a `leave` to onLeave", async () => {
         expect.assertions(1);
 
-        const onLeave = vi.fn<RoomJoinHandler>();
+        const onLeave = vi.fn<RoomLeaveHandler<{ text: string }>>();
         const room = defineRoom({ message: v.object({ text: v.string() }), name: "chat", onLeave, onMessage: () => undefined });
         const socket = makeSocket();
 

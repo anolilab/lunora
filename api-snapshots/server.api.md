@@ -421,8 +421,8 @@ interface DefinePresenceOptions {
 interface DefineRoomOptions<Message extends Validator> {
     message: Message;
     name: string;
-    onJoin?: RoomJoinHandler;
-    onLeave?: RoomLeaveHandler;
+    onJoin?: RoomJoinHandler<Infer<Message>>;
+    onLeave?: RoomLeaveHandler<Infer<Message>>;
     onMessage: RoomMessageHandler<Infer<Message>>;
 }
 ```
@@ -2024,19 +2024,19 @@ interface Role {
 ### `RoomJoinHandler` (type)
 
 ```ts
-type RoomJoinHandler = (context: MutationCtx, socket: RoomSocket) => Promise<void> | void;
+type RoomJoinHandler<Message = unknown> = (context: MutationCtx, socket: RoomSocket<Message>) => Promise<void> | void;
 ```
 
 ### `RoomLeaveHandler` (type)
 
 ```ts
-type RoomLeaveHandler = (context: MutationCtx, socket: RoomSocket) => Promise<void> | void;
+type RoomLeaveHandler<Message = unknown> = (context: MutationCtx, socket: RoomSocket<Message>) => Promise<void> | void;
 ```
 
 ### `RoomMessageHandler` (type)
 
 ```ts
-type RoomMessageHandler<Message> = (context: MutationCtx, message: Message, socket: RoomSocket) => Promise<void> | void;
+type RoomMessageHandler<Message> = (context: MutationCtx, message: Message, socket: RoomSocket<Message>) => Promise<void> | void;
 ```
 
 ### `RoomMessageOf` (type)
@@ -2048,8 +2048,8 @@ type RoomMessageOf<Room> = Room extends RegisteredRoom<infer Message> ? Message 
 ### `RoomSocket` (interface)
 
 ```ts
-interface RoomSocket {
-    broadcast: (message: unknown) => void;
+interface RoomSocket<Message = unknown> {
+    broadcast: (message: Message) => void;
     readonly connectionId: string;
     readonly context?: Record<string, unknown>;
     readonly shardKey: string;
