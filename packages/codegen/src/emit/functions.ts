@@ -390,7 +390,7 @@ const emitFunctions = (options: EmitFunctionsOptions): string => {
     // package must also re-export; `room.ts`'s `ROOM_TOPIC_PREFIX` is the source
     // of truth and the two are kept in step by the room codegen test.
     const roomsRegistry = hasRooms
-        ? `\n/**\n * Room registry: the whisper topic of each \`defineRoom\` registration → its\n * function path. The generated ShardDO's \`roomHandlerPath\` override resolves a\n * room topic through this map so a room's typed \`onJoin\`/\`onMessage\`/\`onLeave\`\n * dispatch server-side, reusing the whisper channel for membership and fan-out.\n * Two registrations under one name throw at module load: the map would otherwise\n * silently keep whichever came last.\n */\nexport const LUNORA_ROOMS: Readonly<Record<string, string>> = (() => {\n    const registry: Record<string, string> = {};\n\n    for (const [path, fn] of Object.entries(LUNORA_FUNCTIONS)) {\n        if (fn.channel?.kind !== "room") {\n            continue;\n        }\n\n        const topic = \`room:\${fn.channel.name}\`;\n\n        if (topic in registry) {\n            throw new Error(\`two defineRoom registrations are named "\${fn.channel.name}"; room names must be unique\`);\n        }\n\n        registry[topic] = path;\n    }\n\n    return registry;\n})();\n`
+        ? `\n/**\n * Room registry: the whisper topic of each \`defineRoom\` registration → its\n * function path. The generated ShardDO's \`roomHandlerPath\` override resolves a\n * room topic through this map so a room's typed \`onJoin\`/\`onMessage\`/\`onLeave\`\n * dispatch server-side, reusing the whisper channel for membership and fan-out.\n * Two registrations under one name throw at module load: the map would otherwise\n * silently keep whichever came last.\n */\nexport const LUNORA_ROOMS: Readonly<Record<string, string>> = (() => {\n    const registry: Record<string, string> = {};\n    const owners = new Map<string, unknown>();\n\n    for (const [path, fn] of Object.entries(LUNORA_FUNCTIONS)) {\n        if (fn.channel?.kind !== "room") {\n            continue;\n        }\n\n        const topic = \`room:\${fn.channel.name}\`;\n        const owner = owners.get(topic);\n\n        // The same registration exported under two names (an alias) is one room.\n        if (owner !== undefined && owner !== fn) {\n            throw new Error(\`two defineRoom registrations are named "\${fn.channel.name}"; room names must be unique\`);\n        }\n\n        if (owner === undefined) {\n            owners.set(topic, fn);\n            registry[topic] = path;\n        }\n    }\n\n    return registry;\n})();\n`
         : "";
 
     // Pull in the compiled-args seam only when at least one function compiled —
@@ -443,11 +443,10 @@ export interface RegisteredLunoraFunction {
     handler: ((context: unknown, args: Record<string, unknown>) => Promise<unknown> | unknown) | ((context: unknown, args: Record<string, unknown>, signal?: AbortSignal) => AsyncIterable<unknown>);
     /**
      * The lifecycle moment a hook fires on, when this registration came from
-     * \`onConnect\`/\`onDisconnect\`/\`onShardInit\`/\`onQueryChange\`/\`onWhisper\`/
-     * \`defineRoom\`. Read at dispatch to decide whether the function runs
-     * system-trusted: \`init\` and \`reactor\` have no caller identity, so RLS has
-     * no user to scope to. \`whisper\` and \`room\` do have one — they run under the
-     * asking socket's identity.
+     * \`onConnect\`/\`onDisconnect\`/\`onShardInit\`/\`onQueryChange\`/\`onWhisper\`.
+     * Read at dispatch to decide whether the function runs system-trusted:
+     * \`init\` and \`reactor\` have no caller identity, so RLS has no user to scope
+     * to. \`whisper\` does have one — it runs under the asking socket's identity.
      */
     lifecycle?: "connect" | "disconnect" | "init" | "reactor" | "whisper";
 ${rooms.channelField}    /**

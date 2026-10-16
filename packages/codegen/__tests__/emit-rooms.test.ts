@@ -65,7 +65,7 @@ describe("emitFunctions — LUNORA_ROOMS registry", () => {
         const emitted = emitFunctions({ functions: [roomFunction] });
 
         expect(emitted).toContain("room names must be unique");
-        expect(emitted).toContain("if (topic in registry) {");
+        expect(emitted).toContain("if (owner !== undefined && owner !== fn) {");
     });
 
     it("types each room's message from its own registration", () => {
@@ -77,8 +77,8 @@ describe("emitFunctions — LUNORA_ROOMS registry", () => {
         expect(emitted).toContain('"chat": RoomMessageOf<typeof lunora_rooms_0["chat"]>;');
     });
 
-    it("runs the emitted registry: each room topic maps to its path, and a duplicate throws", () => {
-        expect.assertions(2);
+    it("runs the emitted registry: each room topic maps to its path, an alias is one room, and a clash throws", () => {
+        expect.assertions(3);
 
         // Evaluate the emitted block, not a string match on it: transpile the registry
         // and run it against a stubbed function table.
@@ -97,7 +97,12 @@ describe("emitFunctions — LUNORA_ROOMS registry", () => {
         const room = { channel: { kind: "room", name: "chat" } };
 
         expect(registryOf({ "rooms:chat": room })).toStrictEqual({ "room:chat": "rooms:chat" });
-        expect(() => registryOf({ "rooms:a": room, "rooms:b": room })).toThrow(/room names must be unique/u);
+        // An alias: one registration exported under two names is one room, not a clash.
+        expect(registryOf({ "rooms:chat": room, "rooms:lobby": room })).toStrictEqual({ "room:chat": "rooms:chat" });
+        // Two distinct registrations under one name are a real clash.
+        expect(() => registryOf({ "rooms:a": { channel: { kind: "room", name: "chat" } }, "rooms:b": { channel: { kind: "room", name: "chat" } } })).toThrow(
+            /room names must be unique/u,
+        );
     });
 
     it("runs the emitted api module: the rooms reference addresses each room by its name", () => {

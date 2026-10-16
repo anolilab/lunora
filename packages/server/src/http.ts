@@ -561,17 +561,14 @@ const lastEventId = (request: Request): string | undefined => {
 const SSE_EVENT_BRAND: unique symbol = Symbol.for("@lunora/server/sse-event");
 
 /**
- * The public shape {@link sseEvent} returns and a `.stream()` handler yields to
- * attach an SSE `id:` to one chunk. Structural on purpose: the runtime brand
- * that makes it unambiguous stays internal.
+ * The shape {@link sseEvent} returns and a `.stream()` handler yields to attach an
+ * SSE `id:` to one chunk. The brand is REQUIRED: a plain `{ data, id }` object does
+ * not satisfy it, so a yield typed `SseEvent<T>` is always a frame the pump unwraps,
+ * and the chunk type codegen derives from it is the type that reaches the wire.
  */
 interface SseEvent<R> {
     readonly data: R;
     readonly id: string;
-}
-
-/** Internal: the public frame plus the brand {@link isSseEvent} checks for. */
-interface BrandedSseEvent<R> extends SseEvent<R> {
     readonly [SSE_EVENT_BRAND]: true;
 }
 
@@ -591,13 +588,11 @@ interface BrandedSseEvent<R> extends SseEvent<R> {
  * as a plain yield; the wrapper is transport, not part of the user's contract.
  */
 const sseEvent = <R>(frame: { data: R; id: string }): SseEvent<R> => {
-    const branded: BrandedSseEvent<R> = { [SSE_EVENT_BRAND]: true, data: frame.data, id: frame.id };
-
-    return branded;
+    return { [SSE_EVENT_BRAND]: true, data: frame.data, id: frame.id };
 };
 
-const isSseEvent = (value: unknown): value is BrandedSseEvent<unknown> =>
-    typeof value === "object" && value !== null && (value as Partial<BrandedSseEvent<unknown>>)[SSE_EVENT_BRAND] === true;
+const isSseEvent = (value: unknown): value is SseEvent<unknown> =>
+    typeof value === "object" && value !== null && (value as Partial<SseEvent<unknown>>)[SSE_EVENT_BRAND] === true;
 
 /** A header or SSE field value that cannot break out of its line. */
 const isSafeHeaderValue = (value: string): boolean => !(value.includes("\r") || value.includes("\n") || value.includes("\0"));

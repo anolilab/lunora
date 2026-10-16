@@ -138,7 +138,16 @@ const packageNameOf = (file: SourceFile): string | undefined => {
         const manifest = join(directory, "package.json");
 
         if (fileSystem.fileExistsSync(manifest)) {
-            const { name } = JSON.parse(fileSystem.readFileSync(manifest)) as { name?: unknown };
+            // A malformed or non-object manifest names no package; it must not abort codegen.
+            let parsed: unknown;
+
+            try {
+                parsed = JSON.parse(fileSystem.readFileSync(manifest));
+            } catch {
+                return undefined;
+            }
+
+            const name = typeof parsed === "object" && parsed !== null ? (parsed as { name?: unknown }).name : undefined;
 
             return typeof name === "string" ? name : undefined;
         }

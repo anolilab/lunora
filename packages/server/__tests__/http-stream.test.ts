@@ -344,6 +344,21 @@ describe("httpRoute.stream — sseEvent adds an SSE id", () => {
         expect(events.filter((entry) => entry.event === "message").map((entry) => entry.data)).toEqual([{ kind: "plain" }, { kind: "branded" }]);
     });
 
+    it("sends a plain { data, id } object whole: only sseEvent() opts a chunk into an SSE id", async () => {
+        expect.assertions(2);
+
+        const route = httpRoute.get("/api/plain-envelope").stream(async function* plainEnvelopeGen() {
+            // Shaped like an SseEvent but not built by sseEvent(): an ordinary chunk, with no id.
+            yield { data: { kind: "x" }, id: "not-a-frame" } as never;
+        });
+
+        const response = await dispatch(route, "GET", "/api/plain-envelope", new Request("https://x/api/plain-envelope"));
+        const { events, raw } = await readSse(response);
+
+        expect(events.filter((entry) => entry.event === "message").map((entry) => entry.data)).toEqual([{ data: { kind: "x" }, id: "not-a-frame" }]);
+        expect(raw).not.toContain("id: not-a-frame");
+    });
+
     it("validates a branded chunk's inner data against `.output()` (the wrapper is not the contract)", async () => {
         expect.assertions(2);
 

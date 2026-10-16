@@ -32,11 +32,10 @@ export interface RegisteredLunoraFunction {
     handler: ((context: unknown, args: Record<string, unknown>) => Promise<unknown> | unknown) | ((context: unknown, args: Record<string, unknown>, signal?: AbortSignal) => AsyncIterable<unknown>);
     /**
      * The lifecycle moment a hook fires on, when this registration came from
-     * `onConnect`/`onDisconnect`/`onShardInit`/`onQueryChange`/`onWhisper`/
-     * `defineRoom`. Read at dispatch to decide whether the function runs
-     * system-trusted: `init` and `reactor` have no caller identity, so RLS has
-     * no user to scope to. `whisper` and `room` do have one — they run under the
-     * asking socket's identity.
+     * `onConnect`/`onDisconnect`/`onShardInit`/`onQueryChange`/`onWhisper`.
+     * Read at dispatch to decide whether the function runs system-trusted:
+     * `init` and `reactor` have no caller identity, so RLS has no user to scope
+     * to. `whisper` does have one — it runs under the asking socket's identity.
      */
     lifecycle?: "connect" | "disconnect" | "init" | "reactor" | "whisper";
     /**
