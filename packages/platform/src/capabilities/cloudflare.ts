@@ -19,6 +19,8 @@ const CLOUDFLARE_CAPABILITIES: PlatformCapabilities = {
             note: "D1 with Sessions API. D1 has a documented, expected baseline error rate — Cloudflare's own team calls a handful of transient errors every few hours 'not unexpected' on a healthy database — so read-only statements are retried automatically; writes are not, because every one of those errors is ambiguous about whether the statement applied and D1 has no interactive transactions to resolve it",
         },
         websocketHibernation: { level: "native", note: "DO WebSocket hibernation" },
+        liveStreams: { level: "native", note: "The shard DO streams the SSE response; publishes fan out through the DO and the relay hub" },
+        typedWebSockets: { level: "native", note: "Route and room sockets ride DO WebSocket hibernation" },
         durableStreams: {
             level: "emulated",
             note: "Lunora persists each chunk to the shard's SQLite under a monotonic seq and keeps the producer alive past the socket via waitUntil; the platform has no streaming primitive of its own, and a run whose DO is evicted mid-flight ends as STREAM_INTERRUPTED rather than resuming. From compatibility_date 2026-10-01 (or the durable_object_io_tasks_prevent_eviction flag) that pending waitUntil holds off idle eviction for up to 15 minutes, so a client disconnect no longer interrupts a shorter run, unless durable_object_io_tasks_do_not_prevent_eviction opts out. Deployed Workers apply it by date; a local workerd older than 1.20261001 ignores the date and needs the explicit durable_object_io_tasks_prevent_eviction flag (it rejects the durable_object_io_tasks_do_not_prevent_eviction opt-out at startup)",

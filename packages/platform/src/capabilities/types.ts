@@ -419,6 +419,16 @@ export interface PlatformCapabilities {
         images?: Capability;
         /** Key-value storage (KV / Redis / DynamoDB). */
         keyValueStore?: Capability;
+
+        /**
+         * Live topic streams — `defineLiveStream` and `ctx.live.publish`. The shard
+         * DO serves one long-lived SSE response per connection and fans publishes
+         * out to its subscribers. A host that cannot serve that connect route
+         * rates this `unsupported`, so its matrix row is honest even though no
+         * codegen gate reads it yet.
+         */
+        liveStreams?: Capability;
+
         /** Local SQL execution inside a shard. */
         localSql?: Capability;
 
@@ -595,6 +605,7 @@ export interface PlatformCapabilities {
          * so a host rates it by its SQL contract. Engine-internal and advisory.
          */
         scheduleRateBreaker?: Capability;
+
         /** Secrets management. */
         secrets?: Capability;
 
@@ -624,6 +635,7 @@ export interface PlatformCapabilities {
         shardedState?: Capability;
         /** Geographic placement of a shard (`ShardPlacement.locationHint`). */
         shardPlacement?: Capability;
+
         /** Region-local read replicas of a shard, for one-shot queries. */
         shardReadReplicas?: Capability;
 
@@ -635,8 +647,17 @@ export interface PlatformCapabilities {
          * `defineTopic` export.
          */
         topics?: Capability;
+
+        /**
+         * Typed WebSocket routes and rooms — `defineWebSocket` and `defineRoom`.
+         * Rides hibernated sockets on the shard DO, so a host rates it no higher
+         * than its `websocketHibernation`.
+         */
+        typedWebSockets?: Capability;
+
         /** Vector database (Vectorize / pgvector / Pinecone). */
         vectorStore?: Capability;
+
         /** Hibernated WebSocket subscriptions. */
         websocketHibernation?: Capability;
 

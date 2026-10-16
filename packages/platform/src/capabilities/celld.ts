@@ -228,6 +228,14 @@ const CELLD_CAPABILITIES: PlatformCapabilities = {
             level: "native",
             note: "`acceptWebSocket`/`getWebSockets`/`getTags`/attachments, and a hibernatable socket survives its cell hibernating on the same node. It closes when the cell moves to another owner (a node stop, drain, or rebalance), so the client reconnects — which Lunora's client already does. `acceptWebSocket()` throws once the isolate passes 90% of its V8 heap limit (roughly 50,000 hibernatable clients at the 128 MB default)",
         },
+        typedWebSockets: {
+            level: "native",
+            note: "Rides the hibernatable sockets rated above, so a route or room survives its cell hibernating on the same node and reconnects on a move",
+        },
+        liveStreams: {
+            level: "unsupported",
+            note: "Not exercised by the celld TCK, so the SSE connect route is unverified on this host. Rate `native` once the TCK drives a live connect and publish",
+        },
         workerLoaders: {
             level: "native",
             note: "Dynamic Workers behind the `worker_loaders` key: a loaded script compiles into its own V8 isolate in the loader's process (an isolate boundary, not a process or VM one), gets only the `env` it is handed, loses every ambient connection under `globalOutbound: null`, and has `limits.cpuMs` / `subRequests` enforced. A process holds at most 256 live Dynamic Workers (255 per script generation), and a load past that throws",

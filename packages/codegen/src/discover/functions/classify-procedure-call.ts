@@ -1,5 +1,5 @@
 import type { CallExpression, Identifier, PropertyAccessExpression } from "ts-morph";
-import { Node } from "ts-morph";
+import { Node, SyntaxKind } from "ts-morph";
 
 import { unwrapExpression } from "../ast";
 import { walkBuilderChain, wrappedCallsWhere } from "../builder-chain";
@@ -258,12 +258,28 @@ const classifyBuilderTerminal = (callee: PropertyAccessExpression): ProcedureCla
  * for "is this a Lunora procedure, and is it internal?" — shared by function
  * discovery here and the RLS-coverage feeder.
  */
+
+/**
+ * Whether an identifier is a namespace import of `@lunora/server` (`import * as lunora`).
+ * Import-based, so a local object that happens to have a `defineRoom` method is not one.
+ */
+const isLunoraNamespace = (identifier: Identifier): boolean =>
+    (identifier.getSymbol()?.getDeclarations() ?? []).some(
+        (declaration) =>
+            Node.isNamespaceImport(declaration) &&
+            declaration.getFirstAncestorByKind(SyntaxKind.ImportDeclaration)?.getModuleSpecifierValue() === "@lunora/server",
+    );
+
 const classifyProcedureCall = (call: CallExpression): ProcedureClassification | undefined => {
     const callee = call.getExpression();
 
     if (Node.isPropertyAccessExpression(callee)) {
         // A channel factory reached through a namespace import (`rooms.defineRoom(...)`) is a registration too.
-        const channel = Node.isIdentifier(callee.getExpression()) ? CHANNEL_FACTORIES[callee.getName()] : undefined;
+        const receiver = callee.getExpression();
+        // The name is checked first: resolving the receiver's symbol is type-checker work, which
+        // only a channel factory name is worth paying for.
+        const channel =
+            CHANNEL_FACTORIES[callee.getName()] && Node.isIdentifier(receiver) && isLunoraNamespace(receiver) ? CHANNEL_FACTORIES[callee.getName()] : undefined;
 
         if (channel) {
             return { channel, kind: "mutation", visibility: "internal" };

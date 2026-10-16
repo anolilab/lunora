@@ -59,6 +59,14 @@ const NODE_CAPABILITIES: PlatformCapabilities = {
             level: "emulated",
             note: "Socket registry with attachments/tags persisted to SQLite, and createNodeSocketHost can rehydrate a row into a handle — but restoreSocket is not a SocketHost member and neither createNodePlatform nor createNodeShardRegistry surfaces it, so nothing composed here reassociates a reconnecting client; the conformance host is its only caller. Nothing is ever actually evicted from memory either, so this is durability without hibernation's memory saving and without its rehydration",
         },
+        typedWebSockets: {
+            level: "emulated",
+            note: "Rides the socket registry above: a route or room works while the process runs, but nothing reassociates a reconnecting client, so a room's membership does not survive a restart",
+        },
+        liveStreams: {
+            level: "unsupported",
+            note: "The SSE connect route is not served by this host's shard registry and is not exercised by its conformance suite",
+        },
         durableStreams: {
             level: "unsupported",
             note: "The transcript store is host-neutral (@lunora/shard-engine), but the attach/produce state machine lives in @lunora/do and nothing in this host mounts it. Gate-bearing: codegen refuses an app that declares a durable stream on this target, rather than emitting one that silently behaves as an ephemeral stream",

@@ -297,6 +297,7 @@ const buildDeclarationSurface = (options: DeclarationSurfaceOptions): Declaratio
         containerSandboxTools: containers.some((container) => container.sandbox === true),
         durableStreams: codeSignals.durableStreams,
         globalTables: schema.tables.some((table) => table.shardMode === "global"),
+        typedWebSockets: codeSignals.typedWebSockets,
         queues: queues.length > 0,
         // Read off the schema like `globalTables`: `ctx.db.related` is a core
         // `ctx.db` method with no capability row to notice, and the thing that

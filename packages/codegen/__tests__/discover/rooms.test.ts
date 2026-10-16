@@ -62,6 +62,18 @@ export const chat = lunora.defineRoom({ name: "chat", message: lunora.v.object({
         expect(room?.channel).toStrictEqual({ kind: "room", name: "chat" });
     });
 
+    it("ignores a defineRoom method on an object that is not the @lunora/server import", () => {
+        expect.assertions(1);
+
+        writeLunoraSource(
+            "other.ts",
+            `const kit = { defineRoom: (options: { name: string }) => options };
+export const notARoom = kit.defineRoom({ name: "chat" });`,
+        );
+
+        expect(discover().filter((definition) => definition.channel !== undefined)).toStrictEqual([]);
+    });
+
     it("refuses a computed room name, which codegen could neither type nor deduplicate", () => {
         expect.assertions(1);
 

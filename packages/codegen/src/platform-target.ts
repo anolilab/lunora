@@ -327,6 +327,8 @@ interface PlatformSignals {
     services?: boolean;
     /** A `defineTopic` declaration. */
     topics?: boolean;
+    /** A `defineWebSocket` route or `defineRoom` room — both ride hibernated shard sockets. */
+    typedWebSockets?: boolean;
     /** A `.vectorize()` / `defineVectorIndex` declaration in the schema. */
     vectorStore?: boolean;
     /** A `jsCodeTool` import from `@lunora/agent` in `lunora/`. */
@@ -353,6 +355,7 @@ const PLATFORM_SIGNAL_KEYS = [
     "secrets",
     "services",
     "topics",
+    "typedWebSockets",
     "vectorStore",
     "workerLoaders",
     "workflowRollback",
@@ -375,6 +378,7 @@ const PLATFORM_SIGNAL_LABELS: Readonly<Record<keyof PlatformSignals, string>> = 
     secrets: "the secrets store (`ctx.secrets`)",
     services: "service bindings to sibling Workers (`lunora.config` `services`)",
     topics: "pub/sub topics (`defineTopic` / `defineSubscription`)",
+    typedWebSockets: "typed WebSocket routes and rooms (`defineWebSocket` / `defineRoom`)",
     vectorStore: "vector indexes (`.vectorize()`)",
     workerLoaders: "sandboxed agent scripts (`jsCodeTool`, on Worker Loaders)",
     workflowRollback: "workflow step rollback (`defineStep({ rollback })`)",

@@ -244,6 +244,7 @@ const inferToFixpoint = (options: {
     lunoraDirectory: string;
     migrations: ReadonlyArray<MigrationIR>;
     project: Project;
+    roomsSupported: boolean;
     shapes: ReadonlyArray<ShapeIR>;
     usesSandbox: boolean;
     useUmbrella: boolean;
@@ -257,8 +258,20 @@ const inferToFixpoint = (options: {
     internalContent: string;
     mutators: ReadonlyArray<MutatorIR>;
 } => {
-    const { agents, apiPath, generatedFunctionsPath, internalPath, lunoraDirectory, migrations, project, shapes, usesSandbox, useUmbrella, workflows } =
-        options;
+    const {
+        agents,
+        apiPath,
+        generatedFunctionsPath,
+        internalPath,
+        lunoraDirectory,
+        migrations,
+        project,
+        roomsSupported,
+        shapes,
+        usesSandbox,
+        useUmbrella,
+        workflows,
+    } = options;
 
     // The three discoverers that read an inferred return type through
     // `unwrapHandlerReturn`, and therefore the three that have to be re-run when
@@ -295,9 +308,13 @@ const inferToFixpoint = (options: {
         "http-stream",
     );
 
+    // A target that rejects `typedWebSockets` gets no room surface: its room registrations are not emitted.
     for (let pass = 1; ; pass += 1) {
-        const apiContent = emitApi({ agents, functions, httpRoutes, mutators, useUmbrella, workflows });
-        const functionsContent = emitFunctions({ agents, functions, migrations, mutators, shapes, useUmbrella, usesSandbox });
+        // Recomputed each pass: the inference refines `functions`, and the emit must see that.
+        const emittedFunctions = roomsSupported ? functions : functions.filter((definition) => definition.channel?.kind !== "room");
+
+        const apiContent = emitApi({ agents, functions: emittedFunctions, httpRoutes, mutators, useUmbrella, workflows });
+        const functionsContent = emitFunctions({ agents, functions: emittedFunctions, migrations, mutators, shapes, useUmbrella, usesSandbox });
         const internalContent = emitInternalApi({ functions, useUmbrella });
 
         // Converged, or out of budget — either way this render is the answer, and
@@ -443,11 +460,16 @@ export const runCodegen = (options: CodegenOptions): CodegenResult => {
     // fixpoint below — unlike `discoverHttpRoutes`, which does.
     const shapes = discoverShapes(project, lunoraDirectory);
 
+    // Rooms ride hibernated shard sockets: a target that rejects `typedWebSockets` gets no room
+    // surface. The gate has already reported the rejection as `platform_unsupported_feature`.
+    const roomsSupported = platformGate.signals.typedWebSockets !== false;
+
     const { apiContent, erased, functions, functionsContent, httpRoutes, internalContent, mutators } = inferToFixpoint({
         agents,
         apiPath,
         generatedFunctionsPath,
         internalPath,
+        roomsSupported,
         lunoraDirectory,
         migrations,
         project,
@@ -652,7 +674,7 @@ export const runCodegen = (options: CodegenOptions): CodegenResult => {
         flagKeys,
         hasFlags,
         hasNotify,
-        hasRooms: functions.some((definition) => definition.channel?.kind === "room"),
+        hasRooms: roomsSupported && functions.some((definition) => definition.channel?.kind === "room"),
         // The gate's verdict, exactly as `emitServer`/`emitApp` receive it. The
         // shard emitter recomputed the flag from `schema.vectorIndexes` instead,
         // so the DO kept the whole Vectorize wiring on a host rating

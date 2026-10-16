@@ -20,9 +20,14 @@ interface PlatformCodeSignals {
     durableStreams: boolean;
     /** A `ctx.secrets` read — the Secrets Store facade, which needs a host binding. */
     secrets: boolean;
+    /** A `defineWebSocket` route or `defineRoom` room — both ride hibernated shard sockets. */
+    typedWebSockets: boolean;
     /** A `defineStep` call declaring a `rollback` compensation. */
     workflowRollback: boolean;
 }
+
+/** The declarations that ride hibernated shard sockets, rated by the `typedWebSockets` feature. */
+const SOCKET_DECLARATIONS: ReadonlySet<string> = new Set(["defineRoom", "defineWebSocket"]);
 
 /** The `defineContainer` keys that turn on outbound interception. */
 const EGRESS_POLICY_KEYS = new Set(["allowedHosts", "deniedHosts", "interceptHttps"]);
@@ -139,7 +144,13 @@ const callSignal = (sourceFile: SourceFile, call: CallExpression): keyof Platfor
  * declaration is worse than an over-reported one.
  */
 const discoverPlatformSignals = (project: Project, lunoraDirectory: string): PlatformCodeSignals => {
-    const signals: PlatformCodeSignals = { containerEgressPolicy: false, durableStreams: false, secrets: false, workflowRollback: false };
+    const signals: PlatformCodeSignals = {
+        containerEgressPolicy: false,
+        durableStreams: false,
+        secrets: false,
+        typedWebSockets: false,
+        workflowRollback: false,
+    };
 
     for (const filePath of listLunoraSourceFiles(lunoraDirectory)) {
         const sourceFile = project.getSourceFile(filePath) ?? project.addSourceFileAtPath(filePath);
@@ -159,6 +170,10 @@ const discoverPlatformSignals = (project: Project, lunoraDirectory: string): Pla
 
             if (signal !== undefined) {
                 signals[signal] = true;
+            }
+
+            if (SOCKET_DECLARATIONS.has(calleeName(call))) {
+                signals.typedWebSockets = true;
             }
         }
 

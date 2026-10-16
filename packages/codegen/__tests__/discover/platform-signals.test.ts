@@ -37,7 +37,21 @@ describe("discoverPlatformSignals", () => {
             `import { query } from "@lunora/server";\n\nexport const list = query({ args: {}, handler: async (ctx) => ctx.db.query("users").collect() });\n`,
         );
 
-        expect(signals()).toStrictEqual({ containerEgressPolicy: false, durableStreams: false, secrets: false, workflowRollback: false });
+        expect(signals()).toStrictEqual({
+            containerEgressPolicy: false,
+            durableStreams: false,
+            secrets: false,
+            typedWebSockets: false,
+            workflowRollback: false,
+        });
+    });
+
+    it("flags a socket route or room declaration as typedWebSockets", () => {
+        expect.assertions(1);
+
+        write("chat.ts", `export const chat = defineRoom({ name: "chat" });\n`);
+
+        expect(signals().typedWebSockets).toBe(true);
     });
 
     // A host without step rollback fails the step rather than run it without

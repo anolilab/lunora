@@ -308,6 +308,7 @@ interface PlatformCapabilities {
         identityProxy?: Capability;
         images?: Capability;
         keyValueStore?: Capability;
+        liveStreams?: Capability;
         localSql?: Capability;
         logArchive?: Capability;
         mail?: Capability;
@@ -332,6 +333,7 @@ interface PlatformCapabilities {
         shardPlacement?: Capability;
         shardReadReplicas?: Capability;
         topics?: Capability;
+        typedWebSockets?: Capability;
         vectorStore?: Capability;
         websocketHibernation?: Capability;
         workerLoaders?: Capability;
