@@ -230,3 +230,64 @@ describe("differential: sweep never changes a decision", () => {
         }
     });
 });
+
+describe("sweep horizon ownership and clock", () => {
+    it("refuses a second limiter with a different config map on the same swept store", () => {
+        expect.assertions(3);
+
+        const store = createMemoryStore();
+        const owner = new RateLimiter({ config: { send: { kind: "fixed window", period: 1000, rate: 1 } }, now: () => 0, store });
+
+        expect(owner).toBeInstanceOf(RateLimiter);
+        expect(() => new RateLimiter({ config: { send: { kind: "fixed window", period: 1000, rate: 1 } }, now: () => 0, store })).not.toThrow();
+        expect(() => new RateLimiter({ config: { login: { kind: "fixed window", period: 60_000, rate: 5 } }, now: () => 0, store })).toThrow(
+            /already used by a RateLimiter with different limits/,
+        );
+    });
+
+    it("decides from the config as it was at construction, not a later mutation of it", async () => {
+        expect.assertions(2);
+
+        let clock = 0;
+        const now = (): number => clock;
+        const mutated = { login: { kind: "fixed window" as const, period: 1000, rate: 1 } };
+        const untouched = { login: { kind: "fixed window" as const, period: 1000, rate: 1 } };
+        const limiterA = new RateLimiter({ config: mutated, now, store: createMemoryStore() });
+        const limiterB = new RateLimiter({ config: untouched, now, store: createMemoryStore() });
+
+        await limiterA.limit("login", { key: "u" });
+        await limiterB.limit("login", { key: "u" });
+
+        // Lengthen A's limit after construction. Its horizon must not change, so a
+        // later sweep cannot evict an entry A still needs earlier than B would.
+        mutated.login.period = 100_000;
+
+        clock = 1500;
+        const a = await limiterA.limit("login", { key: "u" });
+        const b = await limiterB.limit("login", { key: "u" });
+
+        expect(a).toEqual(b);
+        expect(a.ok).toBe(true);
+    });
+
+    it("does not revive a spent bucket when the clock rolls back", async () => {
+        expect.assertions(2);
+
+        let clock = 5000;
+        const limiter = new RateLimiter({
+            config: { send: { kind: "fixed window", period: 1000, rate: 1 } },
+            now: () => clock,
+            store: createMemoryStore(),
+        });
+
+        const first = await limiter.limit("send", { key: "u" });
+
+        expect(first.ok).toBe(true);
+
+        clock = 0;
+
+        const replayed = await limiter.limit("send", { key: "u" });
+
+        expect(replayed.ok).toBe(false);
+    });
+});

@@ -43,6 +43,33 @@ const SWEEP_LIMIT = 32;
 
 const isThenable = <T>(value: PromiseLike<T> | T): value is PromiseLike<T> => typeof (value as PromiseLike<T> | undefined)?.then === "function";
 
+/**
+ * A clock that never reads earlier than a previous reading. Decisions and
+ * eviction both use it: a rollback could otherwise make a request look older than
+ * an entry the sweep already dropped, reviving a spent bucket.
+ */
+const monotonic = (clock: () => number): (() => number) => {
+    let last = Number.NEGATIVE_INFINITY;
+
+    return () => {
+        last = Math.max(last, clock());
+
+        return last;
+    };
+};
+
+// The per-name horizon a store is bound to: the sweep evicts by one cutoff for the
+// whole store, so every limiter sharing it must agree on each name's retention.
+const horizonSignature = (config: RateLimitConfigMap): string =>
+    JSON.stringify(
+        Object.keys(config)
+            .toSorted((left, right) => left.localeCompare(right))
+            .map((name) => [name, retentionMs([config[name] as RateLimitConfig])]),
+    );
+
+// Which horizon map each sweeping store is bound to; see the constructor.
+const storeHorizons = new WeakMap<RateLimitStore, string>();
+
 // The caller's normalizer (if any), then the IPv6 /64 collapse — see `normalize`.
 const withIpCollapse = (normalize: ((key: string) => string) | undefined): ((key: string) => string) =>
     normalize ? (key: string): string => ipRateLimitKey(normalize(key)) : ipRateLimitKey;
@@ -83,7 +110,10 @@ class RateLimiter<Names extends string = string> {
     private readonly store: RateLimitStore;
 
     public constructor(options: RateLimiterOptions<Names>) {
-        this.config = options.config;
+        // Snapshot the config: decisions and the eviction horizon must read the same
+        // values, and a caller mutating its object after construction must not move
+        // the horizon out from under entries the sweep has not yet reached.
+        this.config = structuredClone(options.config);
         this.normalize = withIpCollapse(options.normalize);
         // Store every entry in BOTH forms so an entry can be written either way.
         // Storing it verbatim only, and matching the raw request key against
@@ -93,7 +123,7 @@ class RateLimiter<Names extends string = string> {
         // SAME bucket the stored form routes to — so a banned caller sheds the
         // ban by lower-casing their own email.
         this.denyList = new Set([...(options.denyList ?? [])].flatMap((entry) => [entry, this.normalize(entry)]));
-        this.now = options.now ?? Date.now;
+        this.now = monotonic(options.now ?? Date.now);
 
         if (options.store === undefined) {
             // eslint-disable-next-line no-console -- intentional: no injected logger, mirrors @lunora/auth's construction-time warning
@@ -129,6 +159,22 @@ class RateLimiter<Names extends string = string> {
             if (config.capacity !== undefined && (!Number.isFinite(config.capacity) || config.capacity < 0)) {
                 throw new LunoraError("INTERNAL", `rate limit "${name}": capacity must be a non-negative number`);
             }
+        }
+
+        // A sweep evicts by this limiter's horizon, which is only safe for entries
+        // this limiter wrote. Refuse a store already swept under a different map.
+        if (this.store.sweep !== undefined) {
+            const signature = horizonSignature(this.config);
+            const bound = storeHorizons.get(this.store);
+
+            if (bound !== undefined && bound !== signature) {
+                throw new LunoraError(
+                    "INTERNAL",
+                    "@lunora/ratelimit: this store is already used by a RateLimiter with different limits. A sweep evicts by one horizon per store, so it would evict the other limiter's live entries. Give each config map its own store.",
+                );
+            }
+
+            storeHorizons.set(this.store, signature);
         }
     }
 
