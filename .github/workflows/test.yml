@@ -54,13 +54,13 @@
         "if": "needs.files-changed.outputs.packages == 'true'"
         "needs": "files-changed"
         "runs-on": "ubuntu-latest"
-        # 45, not 30. The 22.15 leg runs `test:affected:coverage`, and a change to
+        # 45, not 30. The 22.22 leg runs `test:affected:coverage`, and a change to
         # pnpm-lock.yaml / pnpm-workspace.yaml makes *every* package affected -- so
         # this leg runs the whole suite under v8 coverage. That is ~25 min for
         # @lunora/codegen alone, which left no room for the studio step after it and
         # cancelled the job at 30 min with every test passing.
         #
-        # 90, not 60: by 2026-10 a full-suite 22.15 leg took 37-58 min when it
+        # 90, not 60: by 2026-10 a full-suite 22.22 leg took 37-58 min when it
         # passed, and a leg that also boots extra workerd projects was cancelled at
         # 60 mid-suite with every test so far passing. Affected-only runs are
         # far shorter and unaffected by the ceiling.
@@ -68,7 +68,8 @@
         "strategy":
             "fail-fast": false
             "matrix":
-                # Both legs are the `engines` bounds, deliberately: `^22.15.0 || >=24.11.0`.
+                # The legs are the `engines` floor 22.15 (no FTS5), the Astro-compatible 22.22 pin
+                # (FTS5 present), and 24.11. The floor leg keeps the `^22.15.0` bound tested.
                 #
                 # `fts5` declares whether the leg's `node:sqlite` carries the FTS5 module,
                 # which is a property of the Node build, not of SQLite: it was switched on
@@ -78,6 +79,8 @@
                 "include":
                     - "node_version": "22.15"
                       "fts5": "absent"
+                    - "node_version": "22.22"
+                      "fts5": "present"
                     - "node_version": "24.11"
                       "fts5": "present"
         "steps":
@@ -169,11 +172,11 @@
             # when `CI` was set — so a local run tripped a 10s timeout that read as a
             # hang. The budget is unconditional now (apps/playground/vitest.config.ts)
             # and the suite runs here, on the leg without coverage. It has no
-            # `test:coverage` script, so the 22.15 leg simply has nothing to run for it.
+            # `test:coverage` script, so the 22.22 leg simply has nothing to run for it.
             - "name": "Run affected tests"
               "shell": "bash"
               "run": |
-                  if [ "${{ matrix.node_version }}" = "22.15" ]; then
+                  if [ "${{ matrix.node_version }}" = "22.22" ]; then
                       pnpm run test:affected:coverage
                   else
                       pnpm run test:affected
@@ -191,7 +194,7 @@
                   pnpm --filter "@lunora/studio" run test
 
             - "name": "Upload coverage to Codecov"
-              "if": "matrix.node_version == '22.15' && (github.event_name == 'merge_group' || github.event.pull_request.head.repo.full_name == github.repository)"
+              "if": "matrix.node_version == '22.22' && (github.event_name == 'merge_group' || github.event.pull_request.head.repo.full_name == github.repository)"
               "continue-on-error": true
               "uses": "codecov/codecov-action@0fb7174895f61a3b6b78fc075e0cd60383518dac" # v5.5.5
               "with":
@@ -245,7 +248,7 @@
             - "name": "Setup resources and environment"
               "uses": "anolilab/workflows/step/node@acba5fb15ac98ad23dec1ad233e40e1bb79c1dae" # v19.0.4
               "with":
-                  "node-version": "22.15"
+                  "node-version": "22.22"
                   "cache-prefix": "test-workerd"
                   "install-node-gyp": "true"
                   "skip-playwright": "true"
@@ -329,7 +332,7 @@
             - "name": "Setup resources and environment"
               "uses": "anolilab/workflows/step/node@acba5fb15ac98ad23dec1ad233e40e1bb79c1dae" # v19.0.4
               "with":
-                  "node-version": "22.15"
+                  "node-version": "22.22"
                   "cache-prefix": "test-celld"
                   "install-node-gyp": "true"
                   "skip-playwright": "true"
@@ -397,7 +400,7 @@
             - "name": "Setup resources and environment"
               "uses": "anolilab/workflows/step/node@acba5fb15ac98ad23dec1ad233e40e1bb79c1dae" # v19.0.4
               "with":
-                  "node-version": "22.15"
+                  "node-version": "22.22"
                   "cache-prefix": "test-mysql"
                   "install-node-gyp": "true"
                   "skip-playwright": "true"
@@ -475,7 +478,7 @@
             - "name": "Setup resources and environment"
               "uses": "anolilab/workflows/step/node@acba5fb15ac98ad23dec1ad233e40e1bb79c1dae" # v19.0.4
               "with":
-                  "node-version": "22.15"
+                  "node-version": "22.22"
                   "cache-prefix": "e2e"
                   "install-node-gyp": "true"
                   "skip-playwright": "true"
@@ -541,7 +544,7 @@
             - "name": "Setup resources and environment"
               "uses": "anolilab/workflows/step/node@acba5fb15ac98ad23dec1ad233e40e1bb79c1dae" # v19.0.4
               "with":
-                  "node-version": "22.15"
+                  "node-version": "22.22"
                   "cache-prefix": "templates"
                   "install-node-gyp": "true"
                   "skip-playwright": "true"
@@ -600,7 +603,7 @@
             - "name": "Setup resources and environment"
               "uses": "anolilab/workflows/step/node@acba5fb15ac98ad23dec1ad233e40e1bb79c1dae" # v19.0.4
               "with":
-                  "node-version": "22.15"
+                  "node-version": "22.22"
                   "cache-prefix": "templates-expo"
                   "install-node-gyp": "true"
                   "skip-playwright": "true"
@@ -649,7 +652,7 @@
             - "name": "Setup resources and environment"
               "uses": "anolilab/workflows/step/node@acba5fb15ac98ad23dec1ad233e40e1bb79c1dae" # v19.0.4
               "with":
-                  "node-version": "22.15"
+                  "node-version": "22.22"
                   "cache-prefix": "worker-size"
                   "install-node-gyp": "true"
                   "skip-playwright": "true"
@@ -690,7 +693,7 @@
             - "name": "Setup resources and environment"
               "uses": "anolilab/workflows/step/node@acba5fb15ac98ad23dec1ad233e40e1bb79c1dae" # v19.0.4
               "with":
-                  "node-version": "22.15"
+                  "node-version": "22.22"
                   "cache-prefix": "worker-startup"
                   "install-node-gyp": "true"
                   "skip-playwright": "true"
@@ -926,7 +929,7 @@
             - "name": "Setup node"
               "uses": "anolilab/workflows/step/node@acba5fb15ac98ad23dec1ad233e40e1bb79c1dae" # v19.0.4
               "with":
-                  "node-version": "22.15"
+                  "node-version": "22.22"
                   "cache-prefix": "sdk-generate"
                   "skip-playwright": "true"
                   "enable-nx-cache": "false"
