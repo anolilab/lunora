@@ -48,6 +48,20 @@ export const chat = defineRoom({ name: "chat", message: v.object({ text: v.strin
         expect(room?.lifecycle).toBeUndefined();
     });
 
+    it("reads a room registered through a namespace import, not only a named one", () => {
+        expect.assertions(1);
+
+        writeLunoraSource(
+            "rooms.ts",
+            `import * as lunora from "@lunora/server";
+export const chat = lunora.defineRoom({ name: "chat", message: lunora.v.object({ text: lunora.v.string() }), onMessage: () => undefined });`,
+        );
+
+        const [room] = discover();
+
+        expect(room?.channel).toStrictEqual({ kind: "room", name: "chat" });
+    });
+
     it("refuses a computed room name, which codegen could neither type nor deduplicate", () => {
         expect.assertions(1);
 

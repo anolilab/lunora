@@ -262,6 +262,13 @@ const classifyProcedureCall = (call: CallExpression): ProcedureClassification | 
     const callee = call.getExpression();
 
     if (Node.isPropertyAccessExpression(callee)) {
+        // A channel factory reached through a namespace import (`rooms.defineRoom(...)`) is a registration too.
+        const channel = Node.isIdentifier(callee.getExpression()) ? CHANNEL_FACTORIES[callee.getName()] : undefined;
+
+        if (channel) {
+            return { channel, kind: "mutation", visibility: "internal" };
+        }
+
         return classifyBuilderTerminal(callee);
     }
 
