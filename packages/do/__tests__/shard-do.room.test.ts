@@ -405,6 +405,98 @@ describe("shardDO rooms", () => {
         expect((a.deserializeAttachment() as { whispers?: string[] }).whispers).toEqual(["room:chat"]);
     });
 
+    it("refuses a room message from a socket whose close is in flight", async () => {
+        expect.assertions(1);
+
+        const a = new FakeSocket({ subs: {}, userId: "user-a" });
+        const shard = makeShard([a], { "room:chat": "rooms:chat" });
+
+        await send(shard, a, { topic: "room:chat", type: "whisper_subscribe" });
+        (shard as unknown as { closingSockets: WeakSet<object> }).closingSockets.add(a);
+        await send(shard, a, { data: 1, topic: "room:chat", type: "whisper" });
+
+        expect(roomCalls(shard).map((call) => call.args["kind"])).toEqual(["join"]);
+    });
+
+    it("refuses a room message over the whisper size cap", async () => {
+        expect.assertions(1);
+
+        const a = new FakeSocket({ subs: {}, userId: "user-a" });
+        const shard = makeShard([a], { "room:chat": "rooms:chat" });
+
+        await send(shard, a, { topic: "room:chat", type: "whisper_subscribe" });
+        await send(shard, a, { data: "x".repeat(5000), topic: "room:chat", type: "whisper" });
+
+        expect(roomCalls(shard).map((call) => call.args["kind"])).toEqual(["join"]);
+    });
+
+    it("does not deliver a room broadcast to a socket whose join is still settling", async () => {
+        expect.assertions(1);
+
+        const member = new FakeSocket({ subs: {}, userId: "member" });
+        const joining = new FakeSocket({ subs: {}, userId: "user-a" });
+        let releaseJoin: () => void = () => undefined;
+        const gate = new Promise<void>((resolve) => {
+            releaseJoin = resolve;
+        });
+        const shard = makeShard([member, joining], { "room:chat": "rooms:chat" }, [], {
+            "rooms:chat": async (args) => {
+                if (args["kind"] === "join" && (args["socket"] as { userId: string }).userId === "user-a") {
+                    await gate;
+                    throw new Error("join refused");
+                }
+
+                return undefined;
+            },
+        });
+
+        await send(shard, member, { topic: "room:chat", type: "whisper_subscribe" });
+        const pendingJoin = send(shard, joining, { topic: "room:chat", type: "whisper_subscribe" });
+        await new Promise<void>((resolve) => {
+            setTimeout(resolve, 0);
+        });
+
+        // The member's message is echoed to the room while the other join is still settling.
+        await send(shard, member, { data: { hi: 1 }, topic: "room:chat", type: "whisper" });
+
+        releaseJoin();
+        await pendingJoin;
+
+        expect(joining.frames.filter((frame) => frame.type === "whisper")).toEqual([]);
+    });
+
+    it("runs no onLeave for a leave queued behind a join that was refused", async () => {
+        expect.assertions(1);
+
+        const a = new FakeSocket({ subs: {}, userId: "user-a" });
+        let releaseJoin: () => void = () => undefined;
+        const gate = new Promise<void>((resolve) => {
+            releaseJoin = resolve;
+        });
+        const shard = makeShard([a], { "room:chat": "rooms:chat" }, [], {
+            "rooms:chat": async (args) => {
+                if (args["kind"] === "join") {
+                    await gate;
+                    throw new Error("join refused");
+                }
+
+                return undefined;
+            },
+        });
+
+        const join = send(shard, a, { topic: "room:chat", type: "whisper_subscribe" });
+        await new Promise<void>((resolve) => {
+            setTimeout(resolve, 0);
+        });
+        const leave = send(shard, a, { topic: "room:chat", type: "whisper_unsubscribe" });
+
+        releaseJoin();
+        await Promise.all([join, leave]);
+
+        // The refused join never committed, so its paired leave has nothing to undo: no onLeave.
+        expect(roomCalls(shard).map((call) => call.args["kind"])).toEqual(["join"]);
+    });
+
     it("admits a room join even after the socket has spent its message budget", async () => {
         expect.assertions(1);
 

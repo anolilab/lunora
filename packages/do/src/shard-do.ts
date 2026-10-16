@@ -102,7 +102,6 @@ import type {
     ReadFootprint,
     RelatedPage,
     RelayHost,
-    RelayMember,
     ReplicaOwnerHost,
     ResolvedShape,
     RlsPoliciesResult,
@@ -225,6 +224,7 @@ import {
     recordScheduleOutbox,
     recordShapeProbePass,
     RELATION_FUNCTION_PREFIX,
+    RelayMember,
     runSocketPool,
     SCAN_DEP,
     selectExpiredIds,
@@ -1574,6 +1574,9 @@ const nonEmptyTallies = (entry: DispatchSpanEntry | undefined): [TallySurface, D
 const hasRootSpanContent = (entry: DispatchSpanEntry | undefined): boolean =>
     entry !== undefined && (entry.collector !== undefined || nonEmptyTallies(entry).length > 0);
 
+/** The room handler events a socket's membership change or message dispatches. */
+type RoomEventKind = "join" | "leave" | "message";
+
 /**
  * Take one token from a socket's bucket, refilling from elapsed wall-clock time up to
  * `burst`. `false` when the bucket is empty; the bucket is updated either way.
@@ -2389,6 +2392,18 @@ abstract class ShardDO {
 
     /** Per-socket, per-topic membership change counter; see `membershipEpoch`. */
     private readonly membershipEpochs = new WeakMap<ShardSocketLike, Map<string, number>>();
+
+    /**
+     * Topics whose join is recorded but whose `onJoin` has not settled. Room broadcasts skip
+     * them, so a socket never receives room traffic before its join committed.
+     */
+    private readonly pendingRoomJoins = new WeakMap<ShardSocketLike, Set<string>>();
+
+    /**
+     * Topics whose join was refused. A leave queued behind a refused join pairs with no
+     * committed join, so it must not run `onLeave`.
+     */
+    private readonly failedRoomJoins = new WeakMap<ShardSocketLike, Set<string>>();
 
     /** Sockets whose close is in progress: their room membership is being torn down, so nothing new may join or leave. */
     private readonly closingSockets = new WeakSet<ShardSocketLike>();
@@ -7218,6 +7233,12 @@ abstract class ShardDO {
             if (typeof envelope.topic === "string" && envelope.topic.length > 0) {
                 const join = envelope.type === "whisper_subscribe";
 
+                // A room runs its handler and writes its state on the shard owner only.
+                // A relay DO has its own SQLite, so it refuses room traffic rather than fork room state.
+                if (this.refusesRoomOnRelay(envelope.topic)) {
+                    return;
+                }
+
                 // Only a JOIN is authorized. Leaving a topic is always permitted —
                 // an app that revokes access mid-session must not also strand the
                 // client subscribed to something it can no longer leave.
@@ -7254,7 +7275,7 @@ abstract class ShardDO {
                 // whisper topic resolves to no room and dispatches nothing. The
                 // dispatch is queued on this socket before any await, so a later
                 // leave cannot run its `onLeave` ahead of this `onJoin`.
-                const admitted = await this.dispatchRoomEvent(ws, envelope.topic, join ? "join" : "leave", undefined, joinEpoch);
+                const admitted = await this.dispatchSettlingJoin(ws, envelope.topic, join, joinEpoch);
 
                 // A join whose `onJoin` rejected was already undone in the queued handler,
                 // so the socket holds no membership and gets no relayed frames for it.
@@ -7286,7 +7307,15 @@ abstract class ShardDO {
                 // the `subscribe`/`stream` branches.
                 if (this.roomHandlerPath(envelope.topic) === undefined) {
                     await this.broadcastWhisper(ws, envelope.topic, envelope.data);
-                } else if (this.isWhisperMember(ws, envelope.topic) && this.allowWhisper(ws)) {
+                } else if (
+                    !this.refusesRoomOnRelay(envelope.topic) &&
+                    !this.closingSockets.has(ws) &&
+                    this.isWhisperMember(ws, envelope.topic) &&
+                    this.allowWhisper(ws) &&
+                    this.fitsWhisperCap(envelope.data)
+                ) {
+                    // The same 4 KiB cap an ordinary whisper carries: a room message is
+                    // decoded, validated and run as a write, so it must not be unbounded.
                     await this.dispatchRoomEvent(ws, envelope.topic, "message", envelope.data);
                 }
             }
@@ -14896,6 +14925,34 @@ abstract class ShardDO {
     }
 
     /**
+     * Whether a room topic must be refused on this DO because it is a relay. Logged, so
+     * the refusal is visible; the socket stays on the owner, which owns the room's state.
+     */
+    private refusesRoomOnRelay(topic: string): boolean {
+        if (!(this.relay instanceof RelayMember) || this.roomHandlerPath(topic) === undefined) {
+            return false;
+        }
+
+        this.logs.push({
+            functionPath: topic,
+            level: "error",
+            message: "room traffic reached a relay DO; refused so room state stays on the shard owner",
+            timestamp: Date.now(),
+        });
+
+        return true;
+    }
+
+    /** Whether a client's wire-encoded payload is within the whisper size cap, in UTF-8 bytes. */
+    // eslint-disable-next-line class-methods-use-this -- reads the class-level cap; kept beside the whisper limits it enforces
+    private fitsWhisperCap(data: unknown): boolean {
+        // eslint-disable-next-line unicorn/no-null -- an omitted body is delivered as an explicit JSON `null`, as a whisper is
+        const json = JSON.stringify(data ?? null);
+
+        return new TextEncoder().encode(json).byteLength <= ShardDO.MAX_WHISPER_BYTES;
+    }
+
+    /**
      * How many membership changes (joins and leaves) this socket has made on `topic`.
      * A failed join rolls back only if no later change has happened, so it cannot
      * erase a rejoin that followed it.
@@ -14975,6 +15032,11 @@ abstract class ShardDO {
                 continue;
             }
 
+            // A join still settling delivers nothing: the member sees room traffic only once it committed.
+            if (this.pendingRoomJoins.get(ws)?.has(topic) === true) {
+                continue;
+            }
+
             // Enforce token-expiry on THIS outbound path too. It is not
             // redundant with the other four checks — on the canonical whisper
             // workload (presence, cursors, typing indicators) none of them ever
@@ -15021,7 +15083,7 @@ abstract class ShardDO {
      * room), `false` when it threw. Events for one socket run strictly in the order
      * they were dispatched: a leave queued behind a join never overtakes it.
      */
-    private dispatchRoomEvent(ws: ShardSocketLike, topic: string, kind: "join" | "leave" | "message", message?: unknown, joinEpoch?: number): Promise<boolean> {
+    private dispatchRoomEvent(ws: ShardSocketLike, topic: string, kind: RoomEventKind, message?: unknown, joinEpoch?: number): Promise<boolean> {
         const functionPath = this.roomHandlerPath(topic);
 
         if (functionPath === undefined) {
@@ -15043,6 +15105,27 @@ abstract class ShardDO {
     }
 
     /**
+     * Dispatch one membership change's room handler. A join stays pending (see
+     * `pendingRoomJoins`) until its `onJoin` settles, so broadcasts skip the socket meanwhile.
+     */
+    private async dispatchSettlingJoin(ws: ShardSocketLike, topic: string, join: boolean, joinEpoch: number | undefined): Promise<boolean> {
+        if (!join) {
+            return this.dispatchRoomEvent(ws, topic, "leave");
+        }
+
+        const pending = this.pendingRoomJoins.get(ws) ?? new Set<string>();
+
+        pending.add(topic);
+        this.pendingRoomJoins.set(ws, pending);
+
+        try {
+            return await this.dispatchRoomEvent(ws, topic, "join", undefined, joinEpoch);
+        } finally {
+            pending.delete(topic);
+        }
+    }
+
+    /**
      * Undo the membership a refused join created. Only if no later change happened:
      * a leave and a rejoin since then own the current membership, and it stays.
      */
@@ -15050,6 +15133,19 @@ abstract class ShardDO {
         if (joinEpoch === this.membershipEpoch(ws, topic)) {
             this.setWhisperMembership(ws, topic, false);
         }
+    }
+
+    /**
+     * Whether a queued room event must run nothing. A message needs the membership it was
+     * sent under to still hold; a leave queued behind a refused join undoes no committed
+     * membership, so it must not reach `onLeave`.
+     */
+    private skipsQueuedRoomEvent(ws: ShardSocketLike, topic: string, kind: "join" | "leave" | "message"): boolean {
+        if (kind === "message") {
+            return !this.isWhisperMember(ws, topic);
+        }
+
+        return kind === "leave" && this.failedRoomJoins.get(ws)?.delete(topic) === true;
     }
 
     /** Run one room handler event now. See {@link dispatchRoomEvent}, which queues it. */
@@ -15061,10 +15157,8 @@ abstract class ShardDO {
         message: unknown,
         joinEpoch: number | undefined,
     ): Promise<boolean> {
-        // Membership is checked here, not at receive: a message queued behind a join
-        // must not reach onMessage unless that join committed (and a leave that ran
-        // first has already removed it).
-        if (kind === "message" && !this.isWhisperMember(ws, topic)) {
+        // Checked here, not at receive: a queued event runs only once the events ahead of it have settled.
+        if (this.skipsQueuedRoomEvent(ws, topic, kind)) {
             return true;
         }
 
@@ -15100,9 +15194,18 @@ abstract class ShardDO {
             // queued slot, so no later queued event can observe the membership.
             if (kind === "join") {
                 this.rollBackJoin(ws, topic, joinEpoch);
+                const failed = this.failedRoomJoins.get(ws) ?? new Set<string>();
+
+                failed.add(topic);
+                this.failedRoomJoins.set(ws, failed);
             }
 
             return false;
+        }
+
+        // A join that committed clears any earlier refusal of the same topic.
+        if (kind === "join") {
+            this.failedRoomJoins.get(ws)?.delete(topic);
         }
 
         // A payload that cannot be broadcast (over the cap) is logged on its own, so it
