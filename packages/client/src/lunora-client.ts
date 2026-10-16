@@ -1925,7 +1925,8 @@ class LunoraClient {
             pending.length = 0;
         };
         const flush = (): void => {
-            while (pending.length > 0) {
+            // Nothing is sent until the socket is admitted: confirmed, and rejoined.
+            while (pending.length > 0 && this.roomSendsAdmitted(options.shardKey)) {
                 let sent: boolean;
 
                 try {
@@ -1982,7 +1983,7 @@ class LunoraClient {
 
                 flush();
 
-                if (pending.length === 0 && this.whisper(topic, message, options)) {
+                if (pending.length === 0 && this.roomSendsAdmitted(options.shardKey) && this.whisper(topic, message, options)) {
                     return true;
                 }
 
@@ -6013,6 +6014,9 @@ class LunoraClient {
                 /* eslint-disable no-param-reassign -- mutate the shared ShardConnection state machine in place */
                 conn.wsState = "open";
                 conn.wasEverConnected = true;
+                // A new socket has confirmed no identity and rejoined no room yet.
+                conn.identityConfirmed = false;
+                conn.roomsRejoined = false;
 
                 // A socket opened, so whatever was refusing the upgrade is gone:
                 // stop polling and let the resubscribe handshake below take the
@@ -6094,10 +6098,10 @@ class LunoraClient {
                     }
                 }
 
-                // Room handles on this shard flush their held sends now that the socket is open.
-                for (const flush of this.roomFlushes.get(connectionKey(shardKey)) ?? []) {
-                    flush();
-                }
+                // The rejoins are on the wire: room sends on this socket may now go out, behind them.
+                // eslint-disable-next-line no-param-reassign -- mutate the shared ShardConnection state machine in place
+                conn.roomsRejoined = true;
+                this.releaseRoomSends(shardKey);
 
                 this.flushOfflineQueue(shardKey).catch(() => undefined);
             },
@@ -6489,6 +6493,9 @@ class LunoraClient {
             }
             case "identity": {
                 this.handleIdentityFrame(message, shardKey);
+                // The identity is confirmed only after the handler above has acted on it: an
+                // identity change has already dropped any room sends queued under the old one.
+                this.confirmShardIdentity(shardKey);
 
                 break;
             }
@@ -7209,6 +7216,38 @@ class LunoraClient {
         this.setAuthToken(null, subject);
 
         return true;
+    }
+
+    /**
+     * Whether room sends on `shardKey` may go straight to its socket: the socket is open,
+     * the server has confirmed its identity, and its room rejoins are on the wire.
+     */
+    private roomSendsAdmitted(shardKey: string | undefined): boolean {
+        const conn = this.getConnection(shardKey);
+
+        return conn?.wsState === "open" && conn.identityConfirmed === true && conn.roomsRejoined === true;
+    }
+
+    /** Flush the held room sends on `shardKey`, once that socket is admitted. */
+    private releaseRoomSends(shardKey: string | undefined): void {
+        if (!this.roomSendsAdmitted(shardKey)) {
+            return;
+        }
+
+        for (const flush of this.roomFlushes.get(connectionKey(shardKey)) ?? []) {
+            flush();
+        }
+    }
+
+    /** The server answered this socket's identity: record it, and release the sends that waited on it. */
+    private confirmShardIdentity(shardKey: string | undefined): void {
+        const conn = this.getConnection(shardKey);
+
+        if (conn !== undefined) {
+            conn.identityConfirmed = true;
+        }
+
+        this.releaseRoomSends(shardKey);
     }
 
     /**

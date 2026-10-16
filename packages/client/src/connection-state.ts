@@ -47,6 +47,12 @@ interface ShardConnection {
     identity?: string | null;
 
     /**
+     * The server has answered this socket's `connect` with its identity (the user the
+     * socket was authenticated as). Reset on every new socket: room sends wait for it.
+     */
+    identityConfirmed?: boolean;
+
+    /**
      * The `LunoraClient.identityQuestions` id this connection's CURRENT
      * socket was upgraded under, when the cookie was its only credential (no
      * bearer token held, no `?token=`). `undefined` otherwise: the `identity`
@@ -77,6 +83,7 @@ interface ShardConnection {
 
     /** Stream-start frames buffered while the socket was (re)connecting. Flushed on `open`. */
     pendingStreams?: ClientMessage[];
+
     /** Unsubscribes that couldn't be sent while the socket was down, each tagged with its wire type so a shape sub is torn down as `shape_unsubscribe`, never the legacy `unsubscribe`. */
     pendingUnsubscribes: { id: string; type: "shape_unsubscribe" | "unsubscribe" }[];
     /** HTTP polling fallback for this shard's live queries (see `polling-fallback.ts`). */
@@ -114,6 +121,12 @@ interface ShardConnection {
      * nothing will ever replace.
      */
     retired?: boolean;
+
+    /**
+     * This socket has sent its room rejoins. Reset on every new socket: room sends wait for
+     * it, so a send never reaches the server ahead of its `whisper_subscribe`.
+     */
+    roomsRejoined?: boolean;
     /** `undefined` for the default shard (connects without a `shard` param). */
     readonly shardKey: string | undefined;
     socket: undefined | WebSocket;

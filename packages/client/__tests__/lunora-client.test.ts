@@ -4571,7 +4571,7 @@ describe("lunoraClient", () => {
         });
 
         it("holds a room send made before the socket opens and delivers it on connect", () => {
-            expect.assertions(2);
+            expect.assertions(3);
 
             const client = new LunoraClient({
                 fetch: vi.fn<typeof fetch>(),
@@ -4587,7 +4587,45 @@ describe("lunoraClient", () => {
 
             socket.open();
 
+            // The rejoin is on the wire, but the held send waits for the server's identity answer.
+            expect(wireFrames(socket)).not.toContainEqual({ data: { text: "hi" }, topic: "room:chat", type: "whisper" });
+
+            socket.receive({ subject: null, type: "identity" });
+
             expect(wireFrames(socket)).toContainEqual({ data: { text: "hi" }, topic: "room:chat", type: "whisper" });
+
+            room.close();
+        });
+
+        it("does not send a room message from a status listener until the shard is admitted, and sends it once", () => {
+            expect.assertions(2);
+
+            const client = new LunoraClient({
+                fetch: vi.fn<typeof fetch>(),
+                url: "https://app.example",
+                WebSocket: createMockWebSocket(),
+            });
+            const room = client.connectRoom<{ text: string }>({ name: "chat" }, { onMessage: () => undefined });
+
+            // A status listener that sends the moment the connection reports connected.
+            client.onConnectionStatus((status) => {
+                if (status === "connected") {
+                    room.send({ text: "from-listener" });
+                }
+            });
+
+            const socket = latestSocket();
+
+            socket.open();
+
+            // Connected, but the rejoin is not yet confirmed by the server's identity: not on the wire.
+            expect(wireFrames(socket).filter((frame) => frame.type === "whisper")).toStrictEqual([]);
+
+            socket.receive({ subject: null, type: "identity" });
+
+            expect(wireFrames(socket).filter((frame) => frame.type === "whisper")).toStrictEqual([
+                { data: { text: "from-listener" }, topic: "room:chat", type: "whisper" },
+            ]);
 
             room.close();
         });
