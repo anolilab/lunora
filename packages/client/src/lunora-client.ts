@@ -1965,7 +1965,14 @@ class LunoraClient {
 
                 // Encode now, to the caller: an unencodable payload throws here instead of being
                 // accepted, and the held copy is a snapshot the caller can no longer change.
-                const encoded: unknown = structuredClone(encodeCallArgs(message, `room message for '${topic}'`));
+                const wire: unknown = encodeCallArgs(message, `room message for '${topic}'`);
+                // `structuredClone` is absent on some runtimes (React Native/Hermes). The wire value is
+                // JSON-safe by construction, so a JSON round-trip is an exact copy there.
+                const encoded: unknown =
+                    typeof structuredClone === "function"
+                        ? structuredClone(wire)
+                        : // eslint-disable-next-line unicorn/prefer-structured-clone -- fallback for runtimes without structuredClone; the input is JSON-safe
+                          JSON.parse(JSON.stringify(wire));
 
                 flush();
 

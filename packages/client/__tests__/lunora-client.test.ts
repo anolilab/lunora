@@ -4684,6 +4684,27 @@ describe("lunoraClient", () => {
             room.close();
         });
 
+        it("sends a room message on a runtime without structuredClone (React Native)", () => {
+            expect.assertions(1);
+
+            vi.stubGlobal("structuredClone", undefined);
+
+            try {
+                const client = new LunoraClient({
+                    fetch: vi.fn<typeof fetch>(),
+                    url: "https://app.example",
+                    WebSocket: createMockWebSocket(),
+                });
+                const room = client.connectRoom<{ text: string }>({ name: "chat" }, { onMessage: () => undefined });
+
+                expect(room.send({ text: "no-clone" })).toBe(true);
+
+                room.close();
+            } finally {
+                vi.unstubAllGlobals();
+            }
+        });
+
         it("refuses a room send after the client is closed, and rejects an unencodable payload at send time", () => {
             expect.assertions(2);
 
