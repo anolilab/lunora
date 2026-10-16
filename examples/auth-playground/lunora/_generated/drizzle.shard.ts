@@ -22,5 +22,6 @@ export const ratelimit_buckets = sqliteTable("ratelimit_buckets", {
     ts: real("ts").notNull(),
     prev: real("prev"),
 }, (t) => ({
+    by_ts: index("by_ts").on(t.ts),
     by_key: index("by_key").on(t.key),
 }));

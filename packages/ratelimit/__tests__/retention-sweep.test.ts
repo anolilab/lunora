@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import { retentionMs } from "../src/algorithms";
+import { enforcedCapacity, retentionMs } from "../src/algorithms";
 import { RateLimiter } from "../src/rate-limiter";
 import { createSqlStore } from "../src/store";
 import type { RateLimitConfig, RateLimitStore } from "../src/types";
@@ -19,10 +19,15 @@ const seeded = (seed: number): (() => number) => {
 
 const between = (random: () => number, low: number, high: number): number => low + Math.floor(random() * (high - low + 1));
 
+// The probe below needs refill still incomplete at HALF the retention horizon: an entry idle past that
+// point must still decide differently from a fresh key. The token bucket and carried-capacity fixed
+// window configs have that; a fixed window with no explicit capacity cannot, since its idle state
+// projects to the same value as a fresh key, so it stays as a control.
 const CONFIGS: [string, RateLimitConfig][] = [
-    ["token bucket", { capacity: 5, kind: "token bucket", period: 1000, rate: 2 }],
+    ["token bucket", { capacity: 8, kind: "token bucket", period: 1000, rate: 2 }],
     ["token bucket with a deep capacity", { capacity: 12, kind: "token bucket", period: 500, rate: 1 }],
     ["fixed window", { kind: "fixed window", period: 1000, rate: 3 }],
+    ["fixed window with a carried capacity", { capacity: 4, kind: "fixed window", period: 1000, rate: 1 }],
     ["sliding window", { kind: "sliding window", period: 1000, rate: 4 }],
 ];
 
@@ -62,6 +67,33 @@ describe("sweep does not change decisions (differential, real node:sqlite)", () 
         const decisionsPlain: unknown[] = [];
 
         for (let step = 0; step < 3000; step += 1) {
+            // Probe: drain a fresh key to zero, idle it past HALF the retention (never past the whole
+            // of it), then write another key so the swept store sweeps before the probed key is read.
+            // A shortened horizon deletes the probed row there, and the fresh key decides differently.
+            if (random() < 0.03) {
+                const probed = `probe-${String(step)}`;
+                const cap = enforcedCapacity(config);
+
+                // eslint-disable-next-line no-await-in-loop -- see above
+                decisionsSwept.push(await sweptLimiter.limit("lim", { count: cap, key: probed }));
+                // eslint-disable-next-line no-await-in-loop -- see above
+                decisionsPlain.push(await unsweptLimiter.limit("lim", { count: cap, key: probed }));
+
+                clock.now += between(random, Math.floor(retention / 2) + 1, retention - 1);
+
+                // eslint-disable-next-line no-await-in-loop -- see above
+                decisionsSwept.push(await sweptLimiter.limit("lim", { count: 1, key: `other-${String(step)}` }));
+                // eslint-disable-next-line no-await-in-loop -- see above
+                decisionsPlain.push(await unsweptLimiter.limit("lim", { count: 1, key: `other-${String(step)}` }));
+
+                // eslint-disable-next-line no-await-in-loop -- see above
+                decisionsSwept.push(await sweptLimiter.limit("lim", { count: cap, key: probed }));
+                // eslint-disable-next-line no-await-in-loop -- see above
+                decisionsPlain.push(await unsweptLimiter.limit("lim", { count: cap, key: probed }));
+
+                continue;
+            }
+
             const roll = random();
 
             if (roll < 0.5) {

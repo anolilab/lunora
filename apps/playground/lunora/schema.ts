@@ -40,7 +40,8 @@ export default defineSchema({
         value: v.number(),
     })
         .externallyManaged()
-        .index("by_key", ["key"]),
+        .index("by_key", ["key"])
+        .index("by_ts", ["ts"]),
 
     messages: defineTable({
         channelId: v.id("channels"),
