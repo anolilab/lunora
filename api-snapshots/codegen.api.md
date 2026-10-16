@@ -605,15 +605,7 @@ interface OpenApiEmitInput {
 
 ### `OpenRpcDocument` (interface)
 
-```ts
-interface OpenRpcDocument {
-    info?: {
-        title?: string;
-        version?: string;
-    };
-    methods: ReadonlyArray<OpenRpcMethod>;
-}
-```
+Re-exported from `@lunora/codegen/sdk` — signature tracked in that section.
 
 ### `OpenRpcEmitInput` (interface)
 
@@ -627,21 +619,7 @@ interface OpenRpcEmitInput {
 
 ### `OpenRpcMethod` (interface)
 
-```ts
-interface OpenRpcMethod {
-    name: string;
-    params?: ReadonlyArray<{
-        name: string;
-        schema?: Record<string, unknown>;
-    }>;
-    result?: {
-        name: string;
-        schema?: Record<string, unknown>;
-    };
-    summary?: string;
-    "x-lunora-function-kind"?: string;
-}
-```
+Re-exported from `@lunora/codegen/sdk` — signature tracked in that section.
 
 ### `PROJECT_CONFIG_FILENAMES` (const)
 
@@ -817,9 +795,7 @@ interface RlsRoleIR {
 
 ### `RuntimeVerb` (type)
 
-```ts
-type RuntimeVerb = "action" | "mutation" | "query";
-```
+Re-exported from `@lunora/codegen/sdk` — signature tracked in that section.
 
 ### `SCHEMA_SNAPSHOT_FILENAME` (const)
 
@@ -835,15 +811,11 @@ const SCHEMA_SNAPSHOT_VERSION: 1;
 
 ### `SDK_LANGUAGES` (const)
 
-```ts
-const SDK_LANGUAGES: ReadonlyArray<string>;
-```
+Re-exported from `@lunora/codegen/sdk` — signature tracked in that section.
 
 ### `SDK_TARGETS` (const)
 
-```ts
-const SDK_TARGETS: Readonly<Record<string, SdkTarget>>;
-```
+Re-exported from `@lunora/codegen/sdk` — signature tracked in that section.
 
 ### `SHAPES_FILENAME` (const)
 
@@ -914,69 +886,27 @@ class SchemaSnapshotParseError extends LunoraError {
 
 ### `SdkFiles` (type)
 
-```ts
-type SdkFiles = Record<string, string>;
-```
+Re-exported from `@lunora/codegen/sdk` — signature tracked in that section.
 
 ### `SdkMethod` (interface)
 
-```ts
-interface SdkMethod {
-    argsNullPaths: ModelNullPaths;
-    argsType: string | undefined;
-    functionName: string;
-    functionPath: string;
-    namespace: string;
-    resultType: string | undefined;
-    summary: string;
-    takesArgs: boolean;
-    verb: RuntimeVerb;
-}
-```
+Re-exported from `@lunora/codegen/sdk` — signature tracked in that section.
 
 ### `SdkNamespace` (interface)
 
-```ts
-interface SdkNamespace {
-    methods: ReadonlyArray<SdkMethod>;
-    name: string;
-}
-```
+Re-exported from `@lunora/codegen/sdk` — signature tracked in that section.
 
 ### `SdkRenderInput` (interface)
 
-```ts
-interface SdkRenderInput {
-    models: string;
-    namespaces: ReadonlyArray<SdkNamespace>;
-}
-```
+Re-exported from `@lunora/codegen/sdk` — signature tracked in that section.
 
 ### `SdkResult` (interface)
 
-```ts
-interface SdkResult {
-    files: SdkFiles;
-    undeclared: ReadonlyArray<string>;
-    unrepresentable: ReadonlyArray<string>;
-}
-```
+Re-exported from `@lunora/codegen/sdk` — signature tracked in that section.
 
 ### `SdkTarget` (interface)
 
-```ts
-interface SdkTarget {
-    id: string;
-    quicktype?: {
-        lang: LanguageName;
-        rendererOptions?: Record<string, string>;
-    };
-    render: (input: SdkRenderInput) => Record<string, string>;
-    renderModels?: (document: OpenRpcDocument) => Record<string, string>;
-    requires: ReadonlyArray<string>;
-    vendor: ReadonlyArray<SdkVendorEntry>;
-}
-```
+Re-exported from `@lunora/codegen/sdk` — signature tracked in that section.
 
 ### `ServiceBindingIR` (interface)
 
@@ -1583,9 +1513,7 @@ const formatAdvisories: (findings: ReadonlyArray<Finding>) => string;
 
 ### `generateSdk` (const)
 
-```ts
-const generateSdk: (document: OpenRpcDocument, target: SdkTarget) => Promise<SdkResult>;
-```
+Re-exported from `@lunora/codegen/sdk` — signature tracked in that section.
 
 ### `isD1GlobalTable` (const)
 
@@ -1607,9 +1535,7 @@ const isTestPath: (relativePath: string) => boolean;
 
 ### `isTypedSchema` (const)
 
-```ts
-const isTypedSchema: (schema: Record<string, unknown> | undefined) => boolean;
-```
+Re-exported from `@lunora/codegen/sdk` — signature tracked in that section.
 
 ### `lintSchema` (const)
 
@@ -1746,6 +1672,134 @@ const toAdvisorContext: (options: LintSchemaOptions) => LintContext;
 
 ```ts
 const validatorIrToJsonSchema: (validator: ValidatorIR) => JsonSchema;
+```
+
+## `@lunora/codegen/sdk`
+
+### `OpenRpcDocument` (interface)
+
+```ts
+interface OpenRpcDocument {
+    info?: {
+        title?: string;
+        version?: string;
+    };
+    methods: ReadonlyArray<OpenRpcMethod>;
+}
+```
+
+### `OpenRpcMethod` (interface)
+
+```ts
+interface OpenRpcMethod {
+    name: string;
+    params?: ReadonlyArray<{
+        name: string;
+        schema?: Record<string, unknown>;
+    }>;
+    result?: {
+        name: string;
+        schema?: Record<string, unknown>;
+    };
+    summary?: string;
+    "x-lunora-function-kind"?: string;
+}
+```
+
+### `RuntimeVerb` (type)
+
+```ts
+type RuntimeVerb = "action" | "mutation" | "query";
+```
+
+### `SDK_LANGUAGES` (const)
+
+```ts
+const SDK_LANGUAGES: ReadonlyArray<string>;
+```
+
+### `SDK_TARGETS` (const)
+
+```ts
+const SDK_TARGETS: Readonly<Record<string, SdkTarget>>;
+```
+
+### `SdkFiles` (type)
+
+```ts
+type SdkFiles = Record<string, string>;
+```
+
+### `SdkMethod` (interface)
+
+```ts
+interface SdkMethod {
+    argsNullPaths: ModelNullPaths;
+    argsType: string | undefined;
+    functionName: string;
+    functionPath: string;
+    namespace: string;
+    resultType: string | undefined;
+    summary: string;
+    takesArgs: boolean;
+    verb: RuntimeVerb;
+}
+```
+
+### `SdkNamespace` (interface)
+
+```ts
+interface SdkNamespace {
+    methods: ReadonlyArray<SdkMethod>;
+    name: string;
+}
+```
+
+### `SdkRenderInput` (interface)
+
+```ts
+interface SdkRenderInput {
+    models: string;
+    namespaces: ReadonlyArray<SdkNamespace>;
+}
+```
+
+### `SdkResult` (interface)
+
+```ts
+interface SdkResult {
+    files: SdkFiles;
+    undeclared: ReadonlyArray<string>;
+    unrepresentable: ReadonlyArray<string>;
+}
+```
+
+### `SdkTarget` (interface)
+
+```ts
+interface SdkTarget {
+    id: string;
+    quicktype?: {
+        lang: LanguageName;
+        rendererOptions?: Record<string, string>;
+    };
+    render: (input: SdkRenderInput) => Record<string, string>;
+    renderModels?: (document: OpenRpcDocument) => Record<string, string>;
+    requires: ReadonlyArray<string>;
+    vendor: ReadonlyArray<SdkVendorEntry>;
+}
+```
+
+### `generateSdk` (const)
+
+```ts
+const generateSdk: (document: OpenRpcDocument, target: SdkTarget) => Promise<SdkResult>;
+```
+
+### `isTypedSchema` (const)
+
+```ts
+const isTypedSchema: (schema: Record<string, unknown> | undefined) => boolean;
 ```
 
 ## Referenced internal declarations

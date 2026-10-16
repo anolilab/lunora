@@ -34,7 +34,7 @@ import { writeBindingManifestFile } from "../../util/binding-manifest-file";
 import type { CommandHandler } from "../../util/command";
 import { defineHandler } from "../../util/command";
 import { renderDeploySummary } from "../../util/deploy-summary";
-import { resolveRunnableTargetOrError } from "../../util/deploy-target";
+import { resolveRunnableTargetOrError } from "../../util/deploy-target-resolve";
 import { detectPackageManager, toolchainExecArgs } from "../../util/detect-package-manager";
 import { checkDurableObjectBudget } from "../../util/durable-object-budget";
 import type { ExitCode } from "../../util/exit-code";

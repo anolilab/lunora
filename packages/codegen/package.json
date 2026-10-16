@@ -40,6 +40,10 @@
             "types": "./dist/index.d.ts",
             "import": "./dist/index.mjs"
         },
+        "./sdk": {
+            "types": "./dist/sdk/index.d.ts",
+            "import": "./dist/sdk/index.mjs"
+        },
         "./package.json": "./package.json"
     },
     "publishConfig": {
