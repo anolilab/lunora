@@ -89,9 +89,10 @@ export { LINKED_PROJECT_DIR, LINKED_PROJECT_FILE, readLinkedProject, writeLinked
 export type { LintIgnoreOutcome, LintIgnoreStatus, LintTool } from "./lint-ignores";
 export { applyLintIgnores, detectLintTools, LUNORA_IGNORED_PATHS } from "./lint-ignores";
 export type { FindingLogger } from "./log-badge";
-export { advisoryLine, blockingFindingsMessage, LUNORA_TAG, lunoraLine, reportCodegenFindings } from "./log-badge";
+export { blockingFindingsMessage, reportCodegenFindings } from "./log-badge";
 export type { LunoraFormattedLine, LunoraLineLevel } from "./log-format";
 export { formatLunoraEvent, LUNORA_EVENT_SOURCE } from "./log-format";
+export { advisoryLine, LUNORA_TAG, lunoraLine } from "./log-line";
 export { default as LunoraReporter } from "./lunora-reporter";
 export type { PackageManager, PackageManagerProbe } from "./package-manager";
 export {

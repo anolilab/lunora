@@ -12,7 +12,7 @@
  */
 import { LunoraError } from "@lunora/errors";
 
-import { lunoraLine } from "../log-badge";
+import { lunoraLine } from "../log-line";
 import { validateWranglerProject } from "./wrangler-project";
 
 /** The project coordinates the validator needs. */

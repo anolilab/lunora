@@ -44,6 +44,10 @@
             "types": "./dist/cloudflare/index.d.ts",
             "import": "./dist/cloudflare/index.mjs"
         },
+        "./light": {
+            "types": "./dist/light/index.d.ts",
+            "import": "./dist/light/index.mjs"
+        },
         "./studio-host": {
             "types": "./dist/studio-host/index.d.ts",
             "import": "./dist/studio-host/index.mjs"

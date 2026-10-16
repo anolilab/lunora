@@ -1,4 +1,4 @@
-import { lunoraLine } from "@lunora/config";
+import { lunoraLine } from "@lunora/config/light";
 import type { Plugin } from "vite";
 
 import type { FrameworkDetection } from "./detect-framework";

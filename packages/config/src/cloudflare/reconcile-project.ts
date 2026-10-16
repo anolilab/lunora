@@ -8,7 +8,7 @@
  * fixed twice.
  */
 import { inferLunoraBindings } from "../infer-bindings";
-import { LUNORA_TAG } from "../log-badge";
+import { LUNORA_TAG } from "../log-line";
 import type { ExportGap } from "./reconcile-bindings";
 import { reconcileWranglerBindings } from "./reconcile-bindings";
 import { reconcileWranglerCompatibilityDate } from "./reconcile-compatibility-date";
