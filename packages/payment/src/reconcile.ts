@@ -20,7 +20,7 @@ import type { PaymentObserver } from "./observability";
 import { notifyObserver } from "./observability";
 import type { PaymentStore } from "./store";
 import { overlayProviderSubscription, ownerOf } from "./store";
-import type { PaymentSession, PaymentState, Subscription } from "./types";
+import type { Customer, PaymentSession, PaymentState, Subscription } from "./types";
 
 interface ReconcileInput {
     readonly adapter: PaymentAdapter;
@@ -199,13 +199,26 @@ const sweepUnreportedUsage = async (
     }
 
     const pending = await store.listUnreportedUsage(adapter.identifier, limit);
+    // Scoped to this tick: a batch often carries several events for one reference,
+    // and each would repeat the same lookup. Only a found customer is memoised: a miss
+    // (or a failed lookup, which throws before it is stored) is re-read by the next
+    // event in this tick, so a customer created mid-tick is picked up.
+    const customers = new Map<string, Customer>();
     let updated = 0;
     let failed = 0;
 
     for (const event of pending) {
         try {
-            // eslint-disable-next-line no-await-in-loop -- a retry sweep against a provider that just failed: serial, not a stampede
-            const customer = await store.getCustomerByReference(adapter.identifier, event.referenceId);
+            let customer = customers.get(event.referenceId);
+
+            if (customer === undefined) {
+                // eslint-disable-next-line no-await-in-loop -- a retry sweep against a provider that just failed: serial, not a stampede
+                customer = await store.getCustomerByReference(adapter.identifier, event.referenceId);
+
+                if (customer !== undefined) {
+                    customers.set(event.referenceId, customer);
+                }
+            }
 
             // eslint-disable-next-line no-await-in-loop -- see above
             await reportUsage({

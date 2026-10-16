@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import type { PaymentAdapter } from "../src/adapter";
 import { money } from "../src/money";
@@ -489,5 +489,135 @@ describe("reconcile", () => {
 
         expect(result.failedUsage).toBe(1);
         await expect(store.listUnreportedUsage("stripe", 10)).resolves.toHaveLength(1);
+    });
+
+    it("looks up each reference's customer once per tick, and still reports every event in order", async () => {
+        expect.assertions(3);
+
+        // Regression: the sweep awaited `getCustomerByReference` once per event, so a
+        // batch of events for one reference repeated the same lookup.
+        const store = new MemoryPaymentStore();
+        const lookup = vi.spyOn(store, "getCustomerByReference");
+        const reported: string[] = [];
+        const adapter = {
+            capabilities: { usageMetering: true },
+            getPaymentStatus: async () => {
+                throw new Error("not used");
+            },
+            getSubscriptionStatus: async () => subscription("active"),
+            identifier: "stripe",
+            reportUsage: async (input: { idempotencyKey: string }) => {
+                reported.push(input.idempotencyKey);
+            },
+        } as unknown as PaymentAdapter;
+
+        const record = (createdAt: number, referenceId: string) =>
+            store.recordUsage({
+                createdAt,
+                featureId: "tokens",
+                idempotencyKey: `evt_${String(createdAt)}`,
+                provider: "stripe",
+                quantity: 5,
+                referenceId,
+                reportedToProvider: false,
+            });
+
+        await store.upsertCustomer({ createdAt: 1, id: "cus_1", provider: "stripe", referenceId: "user_1" });
+        await store.upsertCustomer({ createdAt: 1, id: "cus_2", provider: "stripe", referenceId: "user_2" });
+        await record(1, "user_1");
+        await record(2, "user_1");
+        await record(3, "user_2");
+
+        const result = await reconcile({ adapter, store });
+
+        expect(lookup.mock.calls).toStrictEqual([
+            ["stripe", "user_1"],
+            ["stripe", "user_2"],
+        ]);
+        expect(reported).toStrictEqual(["evt_1", "evt_2", "evt_3"]);
+        expect(result.updatedUsage).toBe(3);
+    });
+
+    it("picks up a customer created mid-tick for a later event of the same reference", async () => {
+        expect.assertions(2);
+
+        // Regression: a miss was memoised as `undefined` for the whole tick, so an event
+        // after the customer was created still reported with no customer id.
+        const store = new MemoryPaymentStore();
+        const reported: (string | undefined)[] = [];
+        const adapter = {
+            capabilities: { usageMetering: true },
+            identifier: "stripe",
+            reportUsage: async (input: { customerId?: string; idempotencyKey: string }) => {
+                reported.push(input.customerId);
+
+                if (input.idempotencyKey === "evt_1") {
+                    await store.upsertCustomer({
+                        createdAt: 1,
+                        id: "cus_new",
+                        provider: "stripe",
+                        referenceId: "user_1",
+                    });
+                }
+            },
+        } as unknown as PaymentAdapter;
+
+        await store.recordUsage({
+            createdAt: 1,
+            featureId: "tokens",
+            idempotencyKey: "evt_1",
+            provider: "stripe",
+            quantity: 5,
+            referenceId: "user_1",
+            reportedToProvider: false,
+        });
+        await store.recordUsage({
+            createdAt: 2,
+            featureId: "tokens",
+            idempotencyKey: "evt_2",
+            provider: "stripe",
+            quantity: 5,
+            referenceId: "user_1",
+            reportedToProvider: false,
+        });
+
+        await reconcile({ adapter, store });
+
+        expect(reported).toStrictEqual([undefined, "cus_new"]);
+        await expect(store.listUnreportedUsage("stripe", 10)).resolves.toStrictEqual([]);
+    });
+
+    it("does not cache a failed customer lookup across ticks", async () => {
+        expect.assertions(4);
+
+        // The memo lives for one tick only: a lookup that failed in one tick must be
+        // retried by the next, not replayed from a cache.
+        const store = new MemoryPaymentStore();
+        const lookup = vi.spyOn(store, "getCustomerByReference").mockRejectedValueOnce(new Error("db unavailable"));
+        const adapter = {
+            capabilities: { usageMetering: true },
+            identifier: "stripe",
+            reportUsage: async () => undefined,
+        } as unknown as PaymentAdapter;
+
+        await store.recordUsage({
+            createdAt: 1,
+            featureId: "tokens",
+            idempotencyKey: "evt_1",
+            provider: "stripe",
+            quantity: 5,
+            referenceId: "user_1",
+            reportedToProvider: false,
+        });
+
+        const first = await reconcile({ adapter, store });
+
+        expect(first.failedUsage).toBe(1);
+
+        const second = await reconcile({ adapter, store });
+
+        expect(second.updatedUsage).toBe(1);
+        expect(lookup).toHaveBeenCalledTimes(2);
+        await expect(store.listUnreportedUsage("stripe", 10)).resolves.toStrictEqual([]);
     });
 });

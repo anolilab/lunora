@@ -262,6 +262,54 @@ describe("merge strategies", () => {
         expect(result.data).toEqual([{ x: 1 }, { x: 2 }]);
     });
 
+    it("topK — k close to N returns the same rows as a stable full sort", async () => {
+        expect.assertions(1);
+
+        const registry = createStaticShardRegistry({ messages: ["a"] });
+        const coordinator = createQueryCoordinator({ registry });
+
+        // Heavy ties (score repeats every 37 rows) so tie order is exercised too.
+        const input = Array.from({ length: 2000 }, (_, i) => {
+            return { id: String(i), score: (i * 7) % 37 };
+        });
+        const expected = input.toSorted((a, b) => b.score - a.score).slice(0, 1900);
+
+        const spy = createShardSpy(() => json(input));
+
+        const result = await coordinator.fanOut(
+            spy.namespace,
+            buildRequest({
+                fanOut: { merge: { by: "score", k: 1900, kind: "topK" }, table: "messages" },
+            }),
+        );
+
+        expect(result.data).toEqual(expected);
+    });
+
+    it("topK — ascending-score input with mid-size k matches a stable full sort", async () => {
+        expect.assertions(1);
+
+        const registry = createStaticShardRegistry({ messages: ["a", "b"] });
+        const coordinator = createQueryCoordinator({ registry });
+
+        const ascending = Array.from({ length: 1000 }, (_, i) => {
+            return { id: String(i), score: Math.floor(i / 3) };
+        });
+        const shards: Record<string, unknown[]> = { a: ascending.slice(0, 500), b: ascending.slice(500) };
+        const expected = ascending.toSorted((a, b) => a.score - b.score).slice(0, 300);
+
+        const spy = createShardSpy((shardKey) => json(shards[shardKey] ?? []));
+
+        const result = await coordinator.fanOut(
+            spy.namespace,
+            buildRequest({
+                fanOut: { merge: { by: "score", direction: "asc", k: 300, kind: "topK" }, table: "messages" },
+            }),
+        );
+
+        expect(result.data).toEqual(expected);
+    });
+
     it("topK — orders rows with missing/non-numeric `by` field deterministically (no NaN comparator)", async () => {
         expect.assertions(2);
 

@@ -1,3 +1,14 @@
+## @lunora/payment [1.0.0-alpha.211](https://github.com/anolilab/lunora/compare/@lunora/payment@1.0.0-alpha.210...@lunora/payment@1.0.0-alpha.211) (2026-10-16)
+
+### Performance Improvements
+
+* **payment:** look up each reference's customer once per reconcile tick ([#1221](https://github.com/anolilab/lunora/issues/1221)) ([5b0f658](https://github.com/anolilab/lunora/commit/5b0f6580bb818afaefe1d3b4b1de3984addf8d92))
+
+
+### Dependencies
+
+* **@lunora/server:** upgraded to 1.0.0-alpha.207
+
 ## @lunora/payment [1.0.0-alpha.210](https://github.com/anolilab/lunora/compare/@lunora/payment@1.0.0-alpha.209...@lunora/payment@1.0.0-alpha.210) (2026-10-15)
 
 

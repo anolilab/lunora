@@ -1,7 +1,7 @@
 # Plan 528 — Expire durable rate-limit rows (createDbStore / createSqlStore)
 
 **Baseline:** `433f1859f` (2026-10-16)
-**Status:** W1–W3 implemented on `fix/ratelimit-durable-row-expiry` (PR stacked on #1223); option (a) chosen (see §4)
+**Status:** IN REVIEW — PR #1225 (stacked on #1223)
 
 ## 0. Headline finding
 
@@ -40,6 +40,8 @@ negative `value` must not be swept.
 
 ## 4. Design decisions (owner input needed)
 
+- **Decided (2026-10-16): option (a), a bounded sweep on write.** The lead chose it so the store
+  stays self-contained; option (b) is not built. Original options:
 - **Where the sweep runs.** Options: (a) on write, deleting up to N expired rows through an index
   on `ts`, which keeps the store self-contained but adds a delete to the consume path; (b) a
   scheduled job through `@lunora/scheduler`, which keeps the consume path unchanged but needs the
@@ -47,25 +49,6 @@ negative `value` must not be swept.
 - **Who registers the job** for option (b): the ratelimit plugin, or the app. Decide with the
   owner of `@lunora/scheduler`.
 - **Ceiling to record:** with (b), rows accumulate up to one scheduler interval of churn.
-
-**Decision (owner, recorded in the PR): option (a), a bounded sweep on write.** Each write
-deletes at most 32 expired rows (`SWEEP_LIMIT`, the same bound as the memory store), through an
-index on `ts`. Rows with a negative `value` are never deleted (plan 527's debt rule). Option (b)
-is not built, so no app registration is needed. Why (a): it keeps the store self-contained, and
-the sweep cost is bounded per write. Its cost is one extra read (plus up to 32 deletes) on the
-consume path. The bound is tested; the per-write latency is not measured.
-
-- SQL: a partial index `ON t(ts) WHERE value >= 0`, so debts are never indexed. The sweep is
-  `DELETE ... WHERE k IN (SELECT k ... WHERE ts <= ? AND value >= 0 ORDER BY ts LIMIT ?)`.
-- DB: `findMany` on `ctx.db` (optional in the type, because the public `DatabaseWriter` does not
-  declare it; `sweep` throws if an adapter lacks it), then delete by id.
-- Horizon: the limiter's own `retentionMs` over its configs, the same value the memory store uses.
-- **Ceiling (`.global()` only):** the DB sweep's read and delete are two D1 calls. A consume that
-  rewrites a swept row between them is lost, and its bucket resets. `deleteWhere` is the same
-  read-then-delete, so it does not close the window. A shard-local table is safe: the Durable
-  Object input gate holds across the sweep's storage operations.
-- **Table shape change:** `by_ts` is a new index on `createDbStore` tables. The CLI overlay
-  (`ratelimit_buckets`) and the standalone template declare it.
 
 ## 5. Workstreams
 

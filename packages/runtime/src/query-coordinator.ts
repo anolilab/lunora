@@ -1595,8 +1595,56 @@ const mergeRank = (values: ReadonlyArray<unknown>): RankMergeResult => {
     return { position: before + 1, total };
 };
 
+interface ScoredRow {
+    row: Record<string, unknown>;
+    score: number;
+}
+
+/** Index of the first row in `sorted` that `entry` must rank strictly before. Binary search, O(log k). */
+const insertionPoint = (sorted: ReadonlyArray<ScoredRow>, entry: ScoredRow, compare: (a: ScoredRow, b: ScoredRow) => number): number => {
+    let lo = 0;
+    let hi = sorted.length;
+
+    while (lo < hi) {
+        const mid = Math.floor((lo + hi) / 2);
+        const current = sorted[mid];
+
+        if (current !== undefined && compare(entry, current) < 0) {
+            hi = mid;
+        } else {
+            lo = mid + 1;
+        }
+    }
+
+    return lo;
+};
+
+/**
+ * Keep the k best rows without sorting all of them. `best` stays sorted and
+ * never grows past k. A row lands after every row that already ranks equal to
+ * it, the same tie order the stable full sort produced. Cost: O(N log k)
+ * comparisons, plus an O(k) splice for each row that enters the buffer.
+ */
+const selectTopK = (collected: ReadonlyArray<ScoredRow>, k: number, compare: (a: ScoredRow, b: ScoredRow) => number): ScoredRow[] => {
+    const best: ScoredRow[] = [];
+
+    for (const entry of collected) {
+        const at = insertionPoint(best, entry, compare);
+
+        if (at < k) {
+            best.splice(at, 0, entry);
+
+            if (best.length > k) {
+                best.pop();
+            }
+        }
+    }
+
+    return best;
+};
+
 const mergeTopK = (values: ReadonlyArray<unknown>, strategy: { by: string; direction?: "asc" | "desc"; k: number }): ReadonlyArray<Record<string, unknown>> => {
-    const collected: { row: Record<string, unknown>; score: number }[] = [];
+    const collected: ScoredRow[] = [];
 
     for (const v of values) {
         if (!Array.isArray(v)) {
@@ -1616,10 +1664,21 @@ const mergeTopK = (values: ReadonlyArray<unknown>, strategy: { by: string; direc
     }
 
     const direction = strategy.direction ?? "desc";
+    // Negative when `a` belongs before `b` in the output.
+    const compare = (a: ScoredRow, b: ScoredRow): number => (direction === "asc" ? compareAsc(a.score, b.score) : compareAsc(b.score, a.score));
+    const { k } = strategy;
 
-    collected.sort((a, b) => (direction === "asc" ? compareAsc(a.score, b.score) : compareAsc(b.score, a.score)));
+    // A full sort is cheaper when most rows are kept: selectTopK pays an O(k)
+    // splice per row that enters the buffer, so for k near N it is O(N*k). The
+    // non-integer and negative cases are unreachable from the wire (validated in
+    // create-worker); they take this path so `slice` keeps its exact historical result.
+    if (!Number.isInteger(k) || k < 0 || 2 * k >= collected.length) {
+        collected.sort(compare);
 
-    return collected.slice(0, strategy.k).map((entry) => entry.row);
+        return collected.slice(0, k).map((entry) => entry.row);
+    }
+
+    return selectTopK(collected, k, compare).map((entry) => entry.row);
 };
 
 const mergeShardResults = (values: ReadonlyArray<unknown>, strategy: MergeStrategy): unknown => {

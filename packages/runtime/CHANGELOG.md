@@ -1,3 +1,9 @@
+## @lunora/runtime [1.0.0-alpha.206](https://github.com/anolilab/lunora/compare/@lunora/runtime@1.0.0-alpha.205...@lunora/runtime@1.0.0-alpha.206) (2026-10-16)
+
+### Performance Improvements
+
+* **runtime:** select top-k fan-out rows without sorting the full set ([#1222](https://github.com/anolilab/lunora/issues/1222)) ([054f890](https://github.com/anolilab/lunora/commit/054f890ce3bcb76479bc1cbace1846ad0094667e))
+
 ## @lunora/runtime [1.0.0-alpha.205](https://github.com/anolilab/lunora/compare/@lunora/runtime@1.0.0-alpha.204...@lunora/runtime@1.0.0-alpha.205) (2026-10-15)
 
 ### Performance Improvements
