@@ -607,6 +607,14 @@ const ERROR_CATALOG: {
         readonly status: 500;
         readonly title: "Duplicate queue name";
     };
+    readonly DUPLICATE_ROOM_NAME: {
+        readonly status: 500;
+        readonly title: "Duplicate room name";
+    };
+    readonly ROOM_NAME_NOT_LITERAL: {
+        readonly status: 500;
+        readonly title: "Room name is not a string literal";
+    };
     readonly DUPLICATE_WORKFLOW_CLASS: {
         readonly status: 500;
         readonly title: "Duplicate workflow generated class name";
@@ -842,6 +850,10 @@ const ERROR_CATALOG: {
     readonly HTTP_STREAM_BAD_CHUNK: {
         readonly status: 502;
         readonly title: "Malformed HTTP stream chunk";
+    };
+    readonly HTTP_STREAM_CALLBACK: {
+        readonly status: 500;
+        readonly title: "HTTP stream callback threw";
     };
     readonly HTTP_STREAM_INTERRUPTED: {
         readonly status: 502;

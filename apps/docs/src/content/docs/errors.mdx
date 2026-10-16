@@ -82,7 +82,7 @@ to branch on, see [Error handling](/docs/concepts/error-handling).
 
 ## Error codes
 
-All 167 codes Lunora publishes, generated from the catalog the runtime, CLI, overlay, Studio and client SDK all read.
+All 170 codes Lunora publishes, generated from the catalog the runtime, CLI, overlay, Studio and client SDK all read.
 Every heading is an anchor, so `/docs/errors#conflict` links straight to one.
 
 ### `ADMIN_FORBIDDEN`
@@ -345,6 +345,10 @@ The scheduler could not authenticate to the worker. Check that `LUNORA_SCHEDULER
 
 `500` — Duplicate queue name
 
+### `DUPLICATE_ROOM_NAME`
+
+`500` — Duplicate room name
+
 ### `DUPLICATE_WORKFLOW_CLASS`
 
 `500` — Duplicate workflow generated class name
@@ -424,6 +428,10 @@ The message names each failed shard key and its error. Re-run the export once th
 ### `HTTP_STREAM_BAD_CHUNK`
 
 `502` — Malformed HTTP stream chunk
+
+### `HTTP_STREAM_CALLBACK`
+
+`500` — HTTP stream callback threw
 
 ### `HTTP_STREAM_INTERRUPTED`
 
@@ -632,6 +640,10 @@ This is what changing a RAG index's `embeddingModel` (or a provider's `dimension
 This table is secure-by-default: it has no `.public()` marker and no RLS policy resolved for the caller, so the read fails closed.
 
 Add a read policy with `.rls(...)`, or mark the table `.public()` if it is intentionally world-readable.
+
+### `ROOM_NAME_NOT_LITERAL`
+
+`500` — Room name is not a string literal
 
 ### `RUN_KIND_FORBIDDEN`
 
