@@ -62,6 +62,33 @@ export const chat = lunora.defineRoom({ name: "chat", message: lunora.v.object({
         expect(room?.channel).toStrictEqual({ kind: "room", name: "chat" });
     });
 
+    it("refuses two separate defineRoom calls under one name in the same file", () => {
+        expect.assertions(1);
+
+        writeLunoraSource(
+            "rooms.ts",
+            `import { defineRoom, v } from "@lunora/server";
+export const chatA = defineRoom({ name: "chat", message: v.object({}), onMessage: () => undefined });
+export const chatB = defineRoom({ name: "chat", message: v.object({}), onMessage: () => undefined });`,
+        );
+
+        expect(() => discover()).toThrow(/Duplicate room name "chat"/u);
+    });
+
+    it("reads a room registered through the umbrella package's namespace import", () => {
+        expect.assertions(1);
+
+        writeLunoraSource(
+            "rooms.ts",
+            `import * as lunora from "lunorash/server";
+export const chat = lunora.defineRoom({ name: "chat", message: lunora.v.object({ text: lunora.v.string() }), onMessage: () => undefined });`,
+        );
+
+        const [room] = discover();
+
+        expect(room?.channel).toStrictEqual({ kind: "room", name: "chat" });
+    });
+
     it("ignores a defineRoom method on an object that is not the @lunora/server import", () => {
         expect.assertions(1);
 

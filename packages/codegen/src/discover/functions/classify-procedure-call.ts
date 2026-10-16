@@ -1,6 +1,7 @@
 import type { CallExpression, Identifier, PropertyAccessExpression } from "ts-morph";
 import { Node, SyntaxKind } from "ts-morph";
 
+import { isServerSurfaceModule } from "../../module-specifiers";
 import { unwrapExpression } from "../ast";
 import { walkBuilderChain, wrappedCallsWhere } from "../builder-chain";
 import { isServerImport, resolveCalleeKind } from "../callee";
@@ -267,7 +268,7 @@ const isLunoraNamespace = (identifier: Identifier): boolean =>
     (identifier.getSymbol()?.getDeclarations() ?? []).some(
         (declaration) =>
             Node.isNamespaceImport(declaration) &&
-            declaration.getFirstAncestorByKind(SyntaxKind.ImportDeclaration)?.getModuleSpecifierValue() === "@lunora/server",
+            isServerSurfaceModule(declaration.getFirstAncestorByKind(SyntaxKind.ImportDeclaration)?.getModuleSpecifierValue() ?? ""),
     );
 
 const classifyProcedureCall = (call: CallExpression): ProcedureClassification | undefined => {

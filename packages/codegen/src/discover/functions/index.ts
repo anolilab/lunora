@@ -182,6 +182,9 @@ const defaultExportFunctions = (source: SourceFile, relativePath: string): Funct
  */
 const discoverFileFunctions = (source: SourceFile, relativePath: string): FunctionIR[] => {
     const exportNames = exportNamesByLocalOf(source);
+    // The call each room name was first registered by. Two export names of one call are aliases of
+    // one room; two different calls under one name are a clash, which the emitters cannot represent.
+    const roomCalls = new Map<string, CallExpression>();
     const found = source
         .getVariableStatements()
         .flatMap((statement) => statement.getDeclarations())
@@ -189,7 +192,24 @@ const discoverFileFunctions = (source: SourceFile, relativePath: string): Functi
         .flatMap(([localName, call]) =>
             (exportNames.get(localName) ?? [])
                 .filter((name) => isAddressableExportName(name))
-                .flatMap((name) => functionIrFromCall(call, name, relativePath) ?? []),
+                .flatMap((name) => {
+                    const entry = functionIrFromCall(call, name, relativePath);
+
+                    if (entry?.channel !== undefined) {
+                        const prior = roomCalls.get(entry.channel.name);
+
+                        if (prior !== undefined && prior !== call) {
+                            throw new LunoraError(
+                                "DUPLICATE_ROOM_NAME",
+                                `Duplicate room name "${entry.channel.name}" in ${relativePath}: two defineRoom calls share it. Room names must be unique.`,
+                            );
+                        }
+
+                        roomCalls.set(entry.channel.name, call);
+                    }
+
+                    return entry ? [entry] : [];
+                }),
         );
     const named = new Set(found.map((entry) => entry.exportName));
 
