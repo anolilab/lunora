@@ -37,7 +37,7 @@ import {
     renderThrowingStub,
 } from "./shard-bindings";
 import renderBuildContext from "./shard-context";
-import { DISPATCH_METHODS, DISPATCH_RUN_SOURCE, SUBSCRIPTION_METHODS } from "./shard-dispatch";
+import { DISPATCH_RUN_SOURCE, dispatchMethods, SUBSCRIPTION_METHODS } from "./shard-dispatch";
 import { buildStorageColumns, buildTableColumns, buildTableIndexes, buildTableReferences, buildTtlSweeps } from "./shard-metadata";
 import {
     buildDoTypeImports,
@@ -824,7 +824,7 @@ export const createShardDO = (config: ShardDOConfig = {}): new (state: ShardDOSt
     class extends ShardDOBase {${constructorOverride}
         private migrated = false;
 
-${DISPATCH_METHODS}
+${dispatchMethods(hasRooms)}
 ${relationFanout.override}
 ${SUBSCRIPTION_METHODS}
 ${customMutatorOverride}${shapeResolveOverride}${globalShapeReaderOverride}${externalSourceOverride}
