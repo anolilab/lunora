@@ -2319,9 +2319,9 @@ interface SpanOptions {
 
 ```ts
 interface SseEvent<R> {
-    readonly [SSE_EVENT_BRAND]: true;
     readonly data: R;
     readonly id: string;
+    readonly [SSE_EVENT_BRAND]: true;
 }
 ```
 
