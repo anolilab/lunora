@@ -317,6 +317,16 @@ const availableAt = (config: RateLimitConfig, prior: RateLimitValue | undefined,
 };
 
 /**
+ * Milliseconds after a stored state's `ts` beyond which projecting that state
+ * gives what a fresh key would. Derived from config, so the caller needs no
+ * per-entry expiry. The bound assumes a non-negative stored value: a reserved
+ * debt can be deeper than one capacity, so the caller must not age it out.
+ * Max over configs, because storage keys are `name + key`.
+ */
+const retentionMs = (configs: ReadonlyArray<RateLimitConfig>): number =>
+    Math.max(0, ...configs.map((config) => config.period * (2 + enforcedCapacity(config) / config.rate)));
+
+/**
  * Evaluate a request against a limit's prior state. Pure: it never reads a
  * clock or persists — the caller supplies `now` and writes back `value` when
  * it is not `undefined`.
@@ -334,4 +344,4 @@ const evaluate = (config: RateLimitConfig, prior: RateLimitValue | undefined, op
 };
 
 export type { EvaluateOptions, EvaluateResult };
-export { availableAt, enforcedCapacity, evaluate };
+export { availableAt, enforcedCapacity, evaluate, retentionMs };

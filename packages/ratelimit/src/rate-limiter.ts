@@ -1,7 +1,7 @@
 import { LunoraError } from "@lunora/errors";
 
 import { ipRateLimitKey } from "../../../shared/ip-rate-limit-key";
-import { availableAt, evaluate } from "./algorithms";
+import { availableAt, evaluate, retentionMs } from "./algorithms";
 import RateLimitError from "./error";
 import { createMemoryStore } from "./store";
 import type { RateLimitArgs, RateLimitConfig, RateLimitConfigMap, RateLimitStatus, RateLimitStore } from "./types";
@@ -37,6 +37,9 @@ const storageKeyFor = (name: string, key: string | undefined): string =>
 
 /** Read-decide-write rounds one consume makes before failing closed; see `RateLimiter.decide`. */
 const MAX_DECIDE_ATTEMPTS = 16;
+
+/** Entries one successful write may examine for eviction; bounds the per-call sweep cost. */
+const SWEEP_LIMIT = 32;
 
 const isThenable = <T>(value: PromiseLike<T> | T): value is PromiseLike<T> => typeof (value as PromiseLike<T> | undefined)?.then === "function";
 
@@ -75,6 +78,8 @@ class RateLimiter<Names extends string = string> {
 
     private readonly now: () => number;
 
+    private readonly retention: number;
+
     private readonly store: RateLimitStore;
 
     public constructor(options: RateLimiterOptions<Names>) {
@@ -96,6 +101,7 @@ class RateLimiter<Names extends string = string> {
         }
 
         this.store = options.store ?? createMemoryStore();
+        this.retention = retentionMs(Object.values<RateLimitConfig>(this.config));
 
         for (const [name, config] of Object.entries<RateLimitConfig>(this.config)) {
             // `shards` is gone. Ignoring a leftover one would silently enforce a
@@ -181,7 +187,8 @@ class RateLimiter<Names extends string = string> {
             const read = this.store.get(storageKey);
             // eslint-disable-next-line no-await-in-loop -- a retry must re-read what the lost write replaced
             const prior = isThenable(read) ? await read : read;
-            const { status, value } = evaluate(config, prior, { ...options, now: this.now() });
+            const now = this.now();
+            const { status, value } = evaluate(config, prior, { ...options, now });
 
             if (value === undefined) {
                 return status;
@@ -190,12 +197,15 @@ class RateLimiter<Names extends string = string> {
             if (this.store.setIf === undefined) {
                 // eslint-disable-next-line no-await-in-loop -- returns on the first pass; only `setIf` loops
                 await this.store.set(storageKey, value);
+                this.store.sweep?.(now - this.retention, SWEEP_LIMIT);
 
                 return status;
             }
 
             // eslint-disable-next-line no-await-in-loop -- see above
             if (await this.store.setIf(storageKey, value, prior)) {
+                this.store.sweep?.(now - this.retention, SWEEP_LIMIT);
+
                 return status;
             }
         }

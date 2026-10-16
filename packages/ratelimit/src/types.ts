@@ -101,4 +101,14 @@ export interface RateLimitStore {
      * (`createDbStore`: every call is awaited I/O) must have it.
      */
     setIf?: (storageKey: string, value: RateLimitValue, prior: RateLimitValue | undefined) => Promise<boolean>;
+
+    /**
+     * Optional eviction hint, called by the limiter after each successful write.
+     * Examine up to `limit` entries from the store's oldest end and remove those
+     * whose `ts` is at or before `olderThanTs`, except entries with a negative
+     * `value`: a reserved debt is kept, whatever its age. `limit` caps entries
+     * examined, not entries removed. Omit it when the store's rows must persist
+     * (`createDbStore`, `createSqlStore`).
+     */
+    sweep?: (olderThanTs: number, limit: number) => void;
 }
