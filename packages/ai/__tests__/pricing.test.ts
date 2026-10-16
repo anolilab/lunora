@@ -103,6 +103,12 @@ describe("estimateModelCost", () => {
         expect(estimateModelCost("text-embedding-3-small", { inputTokens: Number.NaN })).toBeUndefined();
     });
 
+    it("returns undefined rather than 0 for an image-only price with token usage", () => {
+        expect.assertions(1);
+
+        expect(estimateModelCost("dall-e-3", { inputTokens: 1000, outputTokens: 1000 })).toBeUndefined();
+    });
+
     it("returns undefined for an absent model id", () => {
         expect.assertions(2);
 

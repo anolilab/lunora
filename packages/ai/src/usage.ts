@@ -1,4 +1,4 @@
-import { estimateModelCost } from "./pricing";
+import { estimateImageCost, estimateModelCost } from "./pricing";
 import type { AiMetrics, AiSpan } from "./types";
 
 /**
@@ -81,5 +81,18 @@ const recordUsage = (modelId: string | undefined, outcome: CallOutcome, span: Ai
     }
 };
 
+/**
+ * Count one image call's estimated cost into the function's durable series. Images
+ * are billed per image, not per token, and no provider reports a cost for them, so
+ * the figure is always an estimate and is tagged as one.
+ */
+const recordImageUsage = (modelId: string, imageCount: number, metrics: AiMetrics | undefined): void => {
+    const cost = estimateImageCost(modelId, imageCount);
+
+    if (cost !== undefined) {
+        metrics?.count("gen_ai.usage.cost", cost, { "gen_ai.request.model": modelId, "lunora.usage.cost.source": "estimated" });
+    }
+};
+
 export type { CallOutcome };
-export { modelIdOf, recordUsage };
+export { modelIdOf, recordImageUsage, recordUsage };

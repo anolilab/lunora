@@ -1,5 +1,5 @@
 import { isLunoraError } from "@lunora/errors";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import createAi from "../src/create-ai";
 import { AI_GATEWAY_ACCOUNT_ID_ENV, AI_GATEWAY_ID_ENV, AI_PROXY_TOKEN_ENV, AI_PROXY_URL_ENV } from "../src/gateway";
@@ -7,7 +7,15 @@ import type { AiBindingLike } from "../src/types";
 
 /** The subset of `generateImage`'s argument the routing tests assert on. */
 interface ImageCall {
-    model: { config: { baseURL?: string; url?: (options: { modelId: string; path: string }) => string }; modelId: string; provider: string };
+    model: {
+        config: {
+            baseURL?: string;
+            fetch?: (input: string, init?: RequestInit) => Promise<Response>;
+            url?: (options: { modelId: string; path: string }) => string;
+        };
+        modelId: string;
+        provider: string;
+    };
     n?: number;
     prompt: string;
     seed?: number;
@@ -33,6 +41,28 @@ describe("ai.images.generate", () => {
     beforeEach(() => {
         generateImage.mockReset();
         generateImage.mockResolvedValue({ images: [{ base64: "AAA", mediaType: "image/png" }] });
+    });
+
+    afterEach(() => {
+        vi.unstubAllGlobals();
+    });
+
+    it("strips the placeholder key from gateway image requests so the gateway's stored key authenticates", async () => {
+        expect.assertions(2);
+
+        const fetchMock = vi.fn<() => Promise<Response>>(async () => new Response("{}"));
+        vi.stubGlobal("fetch", fetchMock);
+
+        await createAi({ env: gatewayEnv() }).images.generate({ model: "openai/dall-e-3", prompt: "x" });
+        const call = generateImage.mock.calls[0]?.[0];
+
+        await call?.model.config.fetch?.("https://gateway.ai.cloudflare.com/v1/acct-123/my-gateway/openai/images/generations", {
+            headers: { Authorization: "Bearer unused" },
+        });
+        const sent = new Headers((fetchMock.mock.calls[0] as unknown as [string, RequestInit])[1].headers);
+
+        expect(sent.has("authorization")).toBe(false);
+        expect(fetchMock).toHaveBeenCalledTimes(1);
     });
 
     it("routes an openai/<model> slug through the AI SDK image model", async () => {
@@ -86,8 +116,84 @@ describe("ai.images.generate", () => {
 
         const result = await createAi({ binding }).images.generate({ model: "@cf/black-forest-labs/flux-1-schnell", prompt: "a fox", size: "512x512" });
 
-        expect(result).toStrictEqual({ images: [{ base64: "YmFzZTY0", mimeType: "image/png" }], model: "@cf/black-forest-labs/flux-1-schnell" });
+        // "YmFzZTY0" is not image data, so no format is claimed for it.
+        expect(result).toStrictEqual({ images: [{ base64: "YmFzZTY0" }], model: "@cf/black-forest-labs/flux-1-schnell" });
         expect(runCalls).toStrictEqual([["@cf/black-forest-labs/flux-1-schnell", { height: 512, prompt: "a fox", width: 512 }, undefined]]);
+    });
+
+    it("sniffs the MIME type from the image bytes instead of labelling every output PNG", async () => {
+        expect.assertions(2);
+
+        // A JPEG's leading bytes, base64-encoded, from a binding that returns a bare string.
+        const binding: AiBindingLike = { run: async () => "/9j/4AAQSkZJRgABAQAAAQABAAD/" };
+        const result = await createAi({ binding }).images.generate({ model: "@cf/black-forest-labs/flux-1-schnell", prompt: "a fox" });
+
+        expect(result.images).toStrictEqual([{ base64: "/9j/4AAQSkZJRgABAQAAAQABAAD/", mimeType: "image/jpeg" }]);
+
+        const png: AiBindingLike = { run: async () => new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]) };
+        const pngResult = await createAi({ binding: png }).images.generate({ model: "@cf/black-forest-labs/flux-1-schnell", prompt: "a fox" });
+
+        expect(pngResult.images[0]?.mimeType).toBe("image/png");
+    });
+
+    it("throws the binding's failure instead of returning its error body as an image", async () => {
+        expect.assertions(2);
+
+        const binding: AiBindingLike = { run: async () => new Response("capacity exceeded", { status: 503 }) };
+        const error: unknown = await createAi({ binding })
+            .images.generate({ model: "@cf/black-forest-labs/flux-1-schnell", prompt: "x" })
+            .catch((error_: unknown) => error_);
+
+        expect(isLunoraError(error) && error.code === "SERVICE_UNAVAILABLE").toBe(true);
+        expect((error as Error).message).toMatch(/HTTP 503: capacity exceeded/);
+    });
+
+    it("rejects a malformed size before any billed call", async () => {
+        expect.assertions(2);
+
+        const error: unknown = await createAi({ env: gatewayEnv() })
+            .images.generate({ model: "openai/dall-e-3", prompt: "x", size: "1024x" as never })
+            .catch((error_: unknown) => error_);
+
+        expect(isLunoraError(error) && error.code === "BAD_REQUEST").toBe(true);
+        expect(generateImage).not.toHaveBeenCalled();
+    });
+
+    it("records an estimated image cost on the function's metrics", async () => {
+        expect.assertions(1);
+
+        const count = vi.fn<(name: string, value?: number, attributes?: Record<string, unknown>) => void>();
+        generateImage.mockResolvedValueOnce({
+            images: [
+                { base64: "AAA", mediaType: "image/png" },
+                { base64: "BBB", mediaType: "image/png" },
+            ],
+        });
+        await createAi({ env: gatewayEnv(), telemetry: { metrics: { count } } }).images.generate({ model: "openai/dall-e-3", prompt: "x", count: 2 });
+
+        expect(count).toHaveBeenCalledWith("gen_ai.usage.cost", 0.08, { "gen_ai.request.model": "openai/dall-e-3", "lunora.usage.cost.source": "estimated" });
+    });
+
+    it("sends the explicit gateway option's id, not only the env one, to the provider", async () => {
+        expect.assertions(1);
+
+        await createAi({ env: { [AI_GATEWAY_ACCOUNT_ID_ENV]: "acct-123" }, gateway: { id: "explicit-gw" } }).images.generate({
+            model: "openai/dall-e-3",
+            prompt: "x",
+        });
+        const call = generateImage.mock.calls[0]?.[0];
+
+        expect(call?.model.config.url?.({ path: "/images/generations", modelId: "dall-e-3" })).toBe(
+            "https://gateway.ai.cloudflare.com/v1/acct-123/explicit-gw/openai/images/generations",
+        );
+    });
+
+    it("routes an openai slug through the proxy with the full slug, as chat does", async () => {
+        expect.assertions(1);
+
+        await createAi({ env: { [AI_PROXY_URL_ENV]: "https://proxy.internal/v1" } }).images.generate({ model: "openai/dall-e-3", prompt: "x" });
+
+        expect(generateImage.mock.calls[0]?.[0].model.modelId).toBe("openai/dall-e-3");
     });
 
     it("generates one Workers AI image per call for a count over one", async () => {
