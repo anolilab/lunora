@@ -1919,7 +1919,22 @@ class LunoraClient {
         // the connection reports connected. Bounded: past the cap a send is refused.
         const pending: Message[] = [];
         const flush = (): void => {
-            while (pending.length > 0 && this.whisper(topic, pending[0], options)) {
+            while (pending.length > 0) {
+                let sent: boolean;
+
+                try {
+                    sent = this.whisper(topic, pending[0], options);
+                } catch {
+                    // An unencodable message is dropped here, so it cannot stall the messages behind it.
+                    pending.shift();
+
+                    continue;
+                }
+
+                if (!sent) {
+                    return;
+                }
+
                 pending.shift();
             }
         };
@@ -1946,9 +1961,13 @@ class LunoraClient {
             // `true` when the message was sent now or queued for the connection; `false`
             // when the handle is closed or the queue is full.
             send: (message: Message) => {
-                if (closed) {
+                // A closed handle, or a closed client (whose sockets never reopen), accepts nothing.
+                if (closed || this.closed) {
                     return false;
                 }
+
+                // Reject an unencodable payload now, to the caller, instead of holding it in the queue.
+                encodeCallArgs(message, `room message for '${topic}'`);
 
                 flush();
 

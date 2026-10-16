@@ -4592,6 +4592,28 @@ describe("lunoraClient", () => {
             room.close();
         });
 
+        it("refuses a room send after the client is closed, and rejects an unencodable payload at send time", () => {
+            expect.assertions(2);
+
+            const client = new LunoraClient({
+                fetch: vi.fn<typeof fetch>(),
+                url: "https://app.example",
+                WebSocket: createMockWebSocket(),
+            });
+            const room = client.connectRoom<unknown>({ name: "chat" }, { onMessage: () => undefined });
+
+            // A cyclic value cannot cross the wire, so it is refused to the caller instead of queued.
+            const cyclic: Record<string, unknown> = {};
+
+            cyclic["self"] = cyclic;
+
+            expect(() => room.send(cyclic)).toThrow();
+
+            client.close();
+
+            expect(room.send({ text: "late" })).toBe(false);
+        });
+
         it("rejoins whisper topics after a reconnect", () => {
             expect.assertions(1);
 
