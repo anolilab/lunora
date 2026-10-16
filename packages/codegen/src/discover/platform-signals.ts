@@ -18,6 +18,8 @@ interface PlatformCodeSignals {
     containerEgressPolicy: boolean;
     /** A `.stream(handler, { durable: … })` registration — a persisted, socket-outliving stream run. */
     durableStreams: boolean;
+    /** A `defineLiveStream` call: a topic SSE stream the shard serves over its subscriber registry. */
+    liveStreams: boolean;
     /** A `ctx.secrets` read — the Secrets Store facade, which needs a host binding. */
     secrets: boolean;
     /** A `defineWebSocket` route or `defineRoom` room — both ride hibernated shard sockets. */
@@ -26,8 +28,12 @@ interface PlatformCodeSignals {
     workflowRollback: boolean;
 }
 
-/** The declarations that ride hibernated shard sockets, rated by the `typedWebSockets` feature. */
-const SOCKET_DECLARATIONS: ReadonlySet<string> = new Set(["defineRoom", "defineWebSocket"]);
+/** The declarations that carry a platform feature: socket routes and rooms ride hibernated shard sockets, live streams the subscriber registry. */
+const DECLARATION_SIGNALS: Readonly<Record<string, "liveStreams" | "typedWebSockets">> = {
+    defineLiveStream: "liveStreams",
+    defineRoom: "typedWebSockets",
+    defineWebSocket: "typedWebSockets",
+};
 
 /** The `defineContainer` keys that turn on outbound interception. */
 const EGRESS_POLICY_KEYS = new Set(["allowedHosts", "deniedHosts", "interceptHttps"]);
@@ -147,6 +153,7 @@ const discoverPlatformSignals = (project: Project, lunoraDirectory: string): Pla
     const signals: PlatformCodeSignals = {
         containerEgressPolicy: false,
         durableStreams: false,
+        liveStreams: false,
         secrets: false,
         typedWebSockets: false,
         workflowRollback: false,
@@ -172,8 +179,10 @@ const discoverPlatformSignals = (project: Project, lunoraDirectory: string): Pla
                 signals[signal] = true;
             }
 
-            if (SOCKET_DECLARATIONS.has(calleeName(call))) {
-                signals.typedWebSockets = true;
+            const declared = DECLARATION_SIGNALS[calleeName(call)];
+
+            if (declared !== undefined) {
+                signals[declared] = true;
             }
         }
 

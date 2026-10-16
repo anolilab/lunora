@@ -40,6 +40,7 @@ describe("discoverPlatformSignals", () => {
         expect(signals()).toStrictEqual({
             containerEgressPolicy: false,
             durableStreams: false,
+            liveStreams: false,
             secrets: false,
             typedWebSockets: false,
             workflowRollback: false,
@@ -52,6 +53,14 @@ describe("discoverPlatformSignals", () => {
         write("chat.ts", `export const chat = defineRoom({ name: "chat" });\n`);
 
         expect(signals().typedWebSockets).toBe(true);
+    });
+
+    it("flags a defineLiveStream declaration as liveStreams", () => {
+        expect.assertions(1);
+
+        write("posts.ts", `export const posts = defineLiveStream({ id: "posts" });\n`);
+
+        expect(signals().liveStreams).toBe(true);
     });
 
     // A host without step rollback fails the step rather than run it without

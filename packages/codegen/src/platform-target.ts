@@ -317,6 +317,8 @@ interface PlatformSignals {
     durableStreams?: boolean;
     /** A `.global()` table. */
     globalTables?: boolean;
+    /** A `defineLiveStream` declaration: a topic SSE stream the shard serves. */
+    liveStreams?: boolean;
     /** A `defineQueue` declaration. */
     queues?: boolean;
     /** At least one `v.id("target")` column — the schema declares a relation graph `ctx.db.related` can walk. */
@@ -350,6 +352,7 @@ const PLATFORM_SIGNAL_KEYS = [
     "crossShardFanout",
     "durableStreams",
     "globalTables",
+    "liveStreams",
     "queues",
     "relationGraph",
     "secrets",
@@ -373,6 +376,7 @@ const PLATFORM_SIGNAL_LABELS: Readonly<Record<keyof PlatformSignals, string>> = 
     crossShardFanout: "cross-shard fan-out queries (a `.shardBy(...)` schema)",
     durableStreams: "durable streams (`.stream(handler, { durable: true })`)",
     globalTables: "global tables (`.global()`)",
+    liveStreams: "live topic streams (`defineLiveStream`)",
     queues: "queues (`defineQueue`)",
     relationGraph: "relation-graph traversal (`ctx.db.related`, derived from `v.id(...)` columns)",
     secrets: "the secrets store (`ctx.secrets`)",

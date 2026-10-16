@@ -581,6 +581,31 @@ describe("app-declarable signals with no capability row", () => {
         expect(result.diagnostics[0]?.message).toContain("durable streams");
     });
 
+    it("diagnoses a defineLiveStream on a host that rates liveStreams unsupported, and not on one that supports it", async () => {
+        expect.assertions(4);
+
+        // `liveStreams` is rated in every matrix; a `defineLiveStream` on a host without it must be refused,
+        // and a supporting host must pass with no diagnostic.
+        const { gateAgainstMatrix } = await import("../src/platform-target");
+        const unsupported: PlatformCapabilities = {
+            features: { liveStreams: { level: "unsupported" } },
+            id: "no-live",
+            name: "No Live",
+        };
+        const supported: PlatformCapabilities = {
+            features: { liveStreams: { level: "native" } },
+            id: "live",
+            name: "Live",
+        };
+
+        const refused = gateAgainstMatrix(ALL_OFF, unsupported, "no-live", { liveStreams: true });
+
+        expect(refused.diagnostics).toHaveLength(1);
+        expect(refused.diagnostics[0]?.name).toBe("platform_unsupported_feature");
+        expect(refused.diagnostics[0]?.message).toContain("live topic streams");
+        expect(gateAgainstMatrix(ALL_OFF, supported, "live", { liveStreams: true }).diagnostics).toStrictEqual([]);
+    });
+
     it("diagnoses a `.commitOrdered()` table the target cannot order", async () => {
         expect.assertions(3);
 
