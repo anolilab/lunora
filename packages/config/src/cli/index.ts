@@ -1,5 +1,5 @@
 /**
- * `@lunora/config/light` — the string, manifest, and package-manager helpers that
+ * `@lunora/config/cli` — the string, manifest, and package-manager helpers that
  * callers reach for on a hot path (the CLI's every invocation, the bundler
  * plugins' load). It does not import `@lunora/codegen` or `ts-morph`, so loading
  * it costs what the helpers cost, not the whole schema toolchain. The root

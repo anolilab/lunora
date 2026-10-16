@@ -6,7 +6,7 @@
  * the ten call sites in the CLI keep importing it by the name they already use;
  * there is one implementation, in `@lunora/config`.
  */
-export type { PackageManager, PackageManagerProbe } from "@lunora/config/light";
+export type { PackageManager, PackageManagerProbe } from "@lunora/config/cli";
 export {
     addArgsFor,
     detectInstalledManagers,
@@ -15,4 +15,4 @@ export {
     installArgsFor,
     runScriptCommand,
     toolchainExecArgs,
-} from "@lunora/config/light";
+} from "@lunora/config/cli";

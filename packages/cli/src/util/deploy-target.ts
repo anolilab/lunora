@@ -11,7 +11,7 @@
  * needs it; see `resolveProjectTarget` in `@lunora/config` for why those two
  * must agree. The resolvers themselves live in `./deploy-target-resolve`.
  */
-import { DEFAULT_DEPLOY_TARGET, deployTargetIds } from "@lunora/config/light";
+import { DEFAULT_DEPLOY_TARGET, deployTargetIds } from "@lunora/config/cli";
 
 /**
  * Human-readable list of registered targets, for help text and errors.

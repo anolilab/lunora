@@ -1,5 +1,5 @@
 import { resolveTargetOrThrow } from "@lunora/config";
-import { isRunnableTarget, runnableTargetIds } from "@lunora/config/light";
+import { isRunnableTarget, runnableTargetIds } from "@lunora/config/cli";
 
 /**
  * Resolve and validate a target, reshaped to the return-an-error idiom the CLI
