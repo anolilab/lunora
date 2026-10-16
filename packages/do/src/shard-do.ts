@@ -2988,7 +2988,8 @@ abstract class ShardDO {
                 // room queues each leave on this socket, so they still run in order behind the close.
                 for (const topic of attachment.whispers ?? []) {
                     if (this.roomHandlerPath(topic) !== undefined) {
-                        const leave = this.dispatchRoomEvent(ws, topic, "leave");
+                        // Carries the identity read now: the queued leave runs after cleanup clears the socket.
+                        const leave = this.dispatchRoomEvent(ws, topic, "leave", undefined, undefined, { ...attachment });
 
                         this.shardHost.waitUntil?.(leave);
                     }
@@ -15106,7 +15107,14 @@ abstract class ShardDO {
      * room), `false` when it threw. Events for one socket run strictly in the order
      * they were dispatched: a leave queued behind a join never overtakes it.
      */
-    private dispatchRoomEvent(ws: ShardSocketLike, topic: string, kind: RoomEventKind, message?: unknown, joinEpoch?: number): Promise<boolean> {
+    private dispatchRoomEvent(
+        ws: ShardSocketLike,
+        topic: string,
+        kind: RoomEventKind,
+        message?: unknown,
+        joinEpoch?: number,
+        identity?: SocketAttachment,
+    ): Promise<boolean> {
         const functionPath = this.roomHandlerPath(topic);
 
         if (functionPath === undefined) {
@@ -15140,7 +15148,7 @@ abstract class ShardDO {
         // A failure before the handler runs (an unreadable attachment, say) is refused the
         // same way as a handler error, so a join it was establishing is still undone.
         const run = previous
-            .then(() => this.runRoomHandler(ws, topic, functionPath, kind, message, joinEpoch))
+            .then(() => this.runRoomHandler(ws, topic, functionPath, kind, message, joinEpoch, identity))
             .catch((error: unknown) => this.refuseRoomEvent(ws, topic, functionPath, kind, joinEpoch, error));
         const settled = (): void => {
             this.queuedRoomEvents.set(ws, (this.queuedRoomEvents.get(ws) ?? 1) - 1);
@@ -15271,8 +15279,9 @@ abstract class ShardDO {
         kind: RoomEventKind,
         message: unknown,
         joinEpoch: number | undefined,
+        identity: SocketAttachment | undefined,
     ): Promise<boolean> {
-        const admitted = await this.forwardRoomEvent(ws, topic, kind, message);
+        const admitted = await this.forwardRoomEvent(ws, topic, kind, message, identity);
 
         if (!admitted) {
             return this.refuseRoomEvent(ws, topic, functionPath, kind, joinEpoch, new LunoraError("INTERNAL", "the shard owner refused the room event"));
@@ -15293,6 +15302,7 @@ abstract class ShardDO {
         kind: "join" | "leave" | "message",
         message: unknown,
         joinEpoch: number | undefined,
+        identity: SocketAttachment | undefined,
     ): Promise<boolean> {
         // Checked here, not at receive: a queued event runs only once the events ahead of it have settled.
         if (this.skipsQueuedRoomEvent(ws, topic, kind, joinEpoch)) {
@@ -15302,10 +15312,10 @@ abstract class ShardDO {
         // A relay holds no room state: the owner runs the handler for this socket, and a
         // refusal there is handled exactly like a local handler failure.
         if (this.relay instanceof RelayMember) {
-            return this.runRelayedRoomEvent(ws, topic, functionPath, kind, message, joinEpoch);
+            return this.runRelayedRoomEvent(ws, topic, functionPath, kind, message, joinEpoch, identity);
         }
 
-        const info = this.lifecycleInfo(this.readAttachment(ws));
+        const info = this.lifecycleInfo(identity ?? this.readAttachment(ws));
         // `socket.broadcast` only queues: the frame goes out after the handler's
         // mutation has committed, so members never see a message whose writes were
         // rolled back.
@@ -15413,8 +15423,14 @@ abstract class ShardDO {
      * owner trusts that identity as it does a relayed shape subscribe. A socket without a
      * connection id cannot be keyed on the owner, so it is refused.
      */
-    private forwardRoomEvent(ws: ShardSocketLike, topic: string, kind: RoomEventKind, message: unknown): Promise<boolean> {
-        const attachment = this.readAttachment(ws);
+    private forwardRoomEvent(
+        ws: ShardSocketLike,
+        topic: string,
+        kind: RoomEventKind,
+        message: unknown,
+        identity: SocketAttachment | undefined,
+    ): Promise<boolean> {
+        const attachment = identity ?? this.readAttachment(ws);
         const { connectionId } = attachment;
 
         if (connectionId === undefined || !(this.relay instanceof RelayMember)) {

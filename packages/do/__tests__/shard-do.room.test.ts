@@ -138,6 +138,36 @@ describe("shardDO room authorisation and teardown", () => {
         expect(messages[0]?.args["message"]).toStrictEqual({ text: "first" });
     });
 
+    it("gives every room leave of a closing socket the identity it had at close, even when the leave runs after cleanup", async () => {
+        expect.assertions(3);
+
+        let releaseFirst: () => void = () => undefined;
+        const firstGate = new Promise<unknown>((resolve) => {
+            releaseFirst = () => {
+                resolve(undefined);
+            };
+        });
+        const a = new FakeSocket({ connectionId: "conn-1", subs: {}, userId: "member", whispers: ["room:chat", "room:two"] });
+        const shard = makeShard([a], { "room:chat": "rooms:chat", "room:two": "rooms:two" }, [], {
+            "rooms:chat": (event) => (event["kind"] === "leave" ? firstGate : undefined),
+        });
+
+        const closed = shard.webSocketClose(a as unknown as WebSocket, 1000, "", true);
+
+        // Cleanup clears the attachment while the first leave is still held.
+        await closed;
+        releaseFirst();
+        await new Promise<void>((resolve) => {
+            setTimeout(resolve, 10);
+        });
+
+        const leaves = shard.calls.filter((call) => call.args["kind"] === "leave").map((call) => call.args["socket"] as Record<string, unknown>);
+
+        expect(leaves).toHaveLength(2);
+        expect(leaves.map((socket) => socket["userId"])).toStrictEqual(["member", "member"]);
+        expect(leaves.map((socket) => socket["connectionId"])).toStrictEqual(["conn-1", "conn-1"]);
+    });
+
     it("does not hold a socket's close behind a slow onLeave", async () => {
         expect.assertions(3);
 

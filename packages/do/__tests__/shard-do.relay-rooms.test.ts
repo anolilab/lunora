@@ -249,7 +249,7 @@ describe("shardDO rooms on a relay", () => {
     });
 
     it("forwards the leave when the relay socket closes while still in the room", async () => {
-        expect.assertions(2);
+        expect.assertions(3);
 
         const { owner, relay, send, socket } = makeRig();
 
@@ -257,6 +257,7 @@ describe("shardDO rooms on a relay", () => {
         await relay.webSocketClose(socket as unknown as WebSocket, 1000, "", true);
 
         expect(owner.calls.filter((call) => call.args["kind"] === "leave")).toHaveLength(1);
+        expect((owner.calls.find((call) => call.args["kind"] === "leave")?.args["socket"] as { connectionId?: string }).connectionId).toBe("conn-1");
         expect(owner.calls.find((call) => call.args["kind"] === "leave")?.functionPath).toBe("rooms:chat");
     });
 });
