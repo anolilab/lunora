@@ -7,6 +7,9 @@ import type { RateLimitStore, RateLimitValue } from "./types";
  * In-memory store. State lives for the lifetime of the process (or, inside a
  * Durable Object, the instance) — adequate for single-DO limits but not shared
  * across instances. Use {@link createSqlStore} for durable per-DO state.
+ *
+ * A store may be shared by several limiters: each sweep evicts only the keys its
+ * limiter owns, by that limiter's horizon (see `RateLimitStore.sweep`).
  */
 const createMemoryStore = (): RateLimitStore => {
     const map = new Map<string, RateLimitValue>();
@@ -17,7 +20,31 @@ const createMemoryStore = (): RateLimitStore => {
         },
         get: (storageKey) => map.get(storageKey),
         set: (storageKey, value) => {
+            // Delete first so a rewritten key moves to the end: insertion order then
+            // tracks write time, and the oldest entries sit at the front for `sweep`.
+            map.delete(storageKey);
             map.set(storageKey, value);
+        },
+        sweep: (olderThanTs, limit, owns) => {
+            let examined = 0;
+
+            for (const [storageKey, value] of map) {
+                if (examined >= limit) {
+                    break;
+                }
+
+                examined += 1;
+                map.delete(storageKey);
+
+                // An entry is kept when it is a reserved debt (which outlives any age bound,
+                // since reserves stack), or belongs to another limiter sharing this store. A
+                // kept entry moves to the end, so it cannot stop the sweep from reaching the
+                // entries behind it. ponytail: a debt key stays until a consume rewrites it
+                // or reset; add a debt-aware bound if abandoned debts show up in memory profiles.
+                if (value.value < 0 || value.ts > olderThanTs || owns?.(storageKey) === false) {
+                    map.set(storageKey, value);
+                }
+            }
         },
     };
 };

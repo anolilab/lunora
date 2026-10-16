@@ -33,7 +33,7 @@ import { writeBindingManifestFile } from "../../util/binding-manifest-file";
 import { startCodegenWatch } from "../../util/codegen-watch";
 import type { CommandHandler } from "../../util/command";
 import { defineHandler } from "../../util/command";
-import { resolveRunnableTargetOrError } from "../../util/deploy-target";
+import { resolveRunnableTargetOrError } from "../../util/deploy-target-resolve";
 import { EXIT_CODE } from "../../util/exit-code";
 import type { Logger } from "../../util/logger";
 import { forceJsonLogging } from "../../util/logger";

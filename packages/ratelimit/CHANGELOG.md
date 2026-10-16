@@ -1,3 +1,16 @@
+## @lunora/ratelimit [1.0.0-alpha.140](https://github.com/anolilab/lunora/compare/@lunora/ratelimit@1.0.0-alpha.139...@lunora/ratelimit@1.0.0-alpha.140) (2026-10-16)
+
+### Bug Fixes
+
+* **ratelimit:** evict memory-store entries past their retention horizon ([#1223](https://github.com/anolilab/lunora/issues/1223)) ([75b0289](https://github.com/anolilab/lunora/commit/75b0289fd4acbe3dfa02824db9146281ccfc934e))
+
+## @lunora/ratelimit [1.0.0-alpha.139](https://github.com/anolilab/lunora/compare/@lunora/ratelimit@1.0.0-alpha.138...@lunora/ratelimit@1.0.0-alpha.139) (2026-10-16)
+
+
+### Dependencies
+
+* **@lunora/server:** upgraded to 1.0.0-alpha.207
+
 ## @lunora/ratelimit [1.0.0-alpha.138](https://github.com/anolilab/lunora/compare/@lunora/ratelimit@1.0.0-alpha.137...@lunora/ratelimit@1.0.0-alpha.138) (2026-10-15)
 
 

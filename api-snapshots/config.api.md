@@ -1815,6 +1815,96 @@ const writeDevVariablesFileAtomically: (path: string, content: string) => void;
 const writeLinkedProject: (projectRoot: string, link: LinkedProject) => string;
 ```
 
+## `@lunora/config/cli`
+
+### `AGENT_RULES_HINT` (const)
+
+Re-exported from `@lunora/config` — signature tracked in that section.
+
+### `DEFAULT_DEPLOY_TARGET` (const)
+
+Re-exported from `@lunora/config` — signature tracked in that section.
+
+### `LUNORA_TAG` (const)
+
+Re-exported from `@lunora/config` — signature tracked in that section.
+
+### `LunoraReporter` (class)
+
+Re-exported from `@lunora/config` — signature tracked in that section.
+
+### `PackageManager` (type)
+
+Re-exported from `@lunora/config` — signature tracked in that section.
+
+### `PackageManagerProbe` (type)
+
+Re-exported from `@lunora/config` — signature tracked in that section.
+
+### `STEP_BADGE_NAMES` (const)
+
+Re-exported from `@lunora/config` — signature tracked in that section.
+
+### `StepBadgeName` (type)
+
+Re-exported from `@lunora/config` — signature tracked in that section.
+
+### `addArgsFor` (const)
+
+Re-exported from `@lunora/config` — signature tracked in that section.
+
+### `claimAgentRulesHint` (const)
+
+Re-exported from `@lunora/config` — signature tracked in that section.
+
+### `deployTargetIds` (const)
+
+Re-exported from `@lunora/config` — signature tracked in that section.
+
+### `detectAgentRules` (const)
+
+Re-exported from `@lunora/config` — signature tracked in that section.
+
+### `detectInstalledManagers` (const)
+
+Re-exported from `@lunora/config` — signature tracked in that section.
+
+### `detectPackageManager` (const)
+
+Re-exported from `@lunora/config` — signature tracked in that section.
+
+### `execArgsFor` (const)
+
+Re-exported from `@lunora/config` — signature tracked in that section.
+
+### `installArgsFor` (const)
+
+Re-exported from `@lunora/config` — signature tracked in that section.
+
+### `isRunnableTarget` (const)
+
+Re-exported from `@lunora/config` — signature tracked in that section.
+
+### `lunoraLine` (const)
+
+Re-exported from `@lunora/config` — signature tracked in that section.
+
+### `readProjectManifest` (const)
+
+Re-exported from `@lunora/config` — signature tracked in that section.
+
+### `runScriptCommand` (const)
+
+Re-exported from `@lunora/config` — signature tracked in that section.
+
+### `runnableTargetIds` (const)
+
+Re-exported from `@lunora/config` — signature tracked in that section.
+
+### `toolchainExecArgs` (const)
+
+Re-exported from `@lunora/config` — signature tracked in that section.
+
 ## `@lunora/config/cloudflare`
 
 ### `AlchemyTranslation` (interface)

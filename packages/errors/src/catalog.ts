@@ -425,6 +425,7 @@ export const ERROR_CATALOG = {
     STORAGE_OBJECT_NOT_FOUND: { status: 404, title: "Storage object not found" },
     STORAGE_UPLOAD_NOT_CONFIGURED: { status: 400, title: "Storage upload not configured" },
     STORAGE_URL_NOT_CONFIGURED: { status: 400, title: "Storage signed URL not configured" },
+    AI_UNKNOWN_IMAGE_MODEL: { status: 400, title: "Unknown image model" },
     RAG_DIMENSION_MISMATCH: {
         hint: [
             "A stored vector and the query embedding have different widths, so they cannot be compared.",

@@ -12,8 +12,8 @@
  * already program against so we don't have to touch every command; the badged
  * step output is reached through the separate `logStep` helper.
  */
-import type { StepBadgeName } from "@lunora/config";
-import { LunoraReporter, STEP_BADGE_NAMES } from "@lunora/config";
+import type { StepBadgeName } from "@lunora/config/cli";
+import { LunoraReporter, STEP_BADGE_NAMES } from "@lunora/config/cli";
 import { JsonReporter } from "@visulima/pail/reporter/json";
 import { createPail } from "@visulima/pail/server";
 

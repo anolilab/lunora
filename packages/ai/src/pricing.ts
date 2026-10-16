@@ -148,7 +148,8 @@ const estimateModelCost = (modelId: string | undefined, usage: ModelUsage, price
 
     const price = lookupModelPrice(modelId, prices);
 
-    if (price === undefined) {
+    // An image-only price has no token rate: zero tokens would price to a false $0.
+    if (price?.input === undefined && price?.output === undefined) {
         return undefined;
     }
 

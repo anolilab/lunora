@@ -17,7 +17,7 @@
  * Dev only. The customizers also run on `vite build`, whose output is the deploy
  * config, so the plugin below records the command first.
  */
-import { lunoraLine } from "@lunora/config";
+import { lunoraLine } from "@lunora/config/cli";
 import { describeWithheldWorkersAi, hasCloudflareCredentials, withheldWorkersAi } from "@lunora/config/cloudflare";
 import type { Plugin } from "vite";
 

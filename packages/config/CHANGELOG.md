@@ -1,3 +1,23 @@
+## @lunora/config [1.0.0-alpha.360](https://github.com/anolilab/lunora/compare/@lunora/config@1.0.0-alpha.359...@lunora/config@1.0.0-alpha.360) (2026-10-16)
+
+### Performance Improvements
+
+* **cli:** load commands on demand and keep ts-morph off the light import path ([#1224](https://github.com/anolilab/lunora/issues/1224)) ([695a17d](https://github.com/anolilab/lunora/commit/695a17d5255c650ff20d8618ff92d06ee729de9a))
+
+
+### Dependencies
+
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.313
+
+## @lunora/config [1.0.0-alpha.359](https://github.com/anolilab/lunora/compare/@lunora/config@1.0.0-alpha.358...@lunora/config@1.0.0-alpha.359) (2026-10-16)
+
+
+### Dependencies
+
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.312
+* **@lunora/seed:** upgraded to 1.0.0-alpha.226
+* **@lunora/studio:** upgraded to 1.0.0-alpha.305
+
 ## @lunora/config [1.0.0-alpha.358](https://github.com/anolilab/lunora/compare/@lunora/config@1.0.0-alpha.357...@lunora/config@1.0.0-alpha.358) (2026-10-15)
 
 

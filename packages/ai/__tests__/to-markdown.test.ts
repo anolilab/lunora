@@ -72,7 +72,7 @@ describe("ai.toMarkdown", () => {
         const binding = markdownBinding();
         const result = await createAi({ binding }).toMarkdown(new URL("https://example.com/docs/report.pdf"));
 
-        expect(fetchMock).toHaveBeenCalledWith(expect.any(URL));
+        expect(fetchMock).toHaveBeenCalledWith(expect.any(URL), { redirect: "manual" });
         expect(result.markdown).toBe("# Hi");
         expect(binding.markdownCalls[0]?.document.name).toBe("report.pdf");
     });
@@ -121,6 +121,71 @@ describe("ai.toMarkdown", () => {
 
         expect(isLunoraError(error) && error.code === "PAYLOAD_TOO_LARGE").toBe(true);
         expect(binding.markdownCalls).toStrictEqual([]);
+    });
+
+    it("refuses a URL without a Content-Length once its streamed bytes pass the cap", async () => {
+        expect.assertions(2);
+
+        const body = new ReadableStream<Uint8Array>({
+            start(controller) {
+                controller.enqueue(new Uint8Array([1, 2, 3]));
+                controller.enqueue(new Uint8Array([4, 5, 6]));
+                controller.close();
+            },
+        });
+
+        vi.stubGlobal(
+            "fetch",
+            vi.fn(async () => new Response(body)),
+        );
+        const binding = markdownBinding();
+        const error: unknown = await createAi({ binding })
+            .toMarkdown(new URL("https://example.test/chunked.pdf"), { maxBytes: 4 })
+            .catch((error_: unknown) => error_);
+
+        expect(isLunoraError(error) && error.code === "PAYLOAD_TOO_LARGE").toBe(true);
+        expect(binding.markdownCalls).toStrictEqual([]);
+    });
+
+    it("refuses a non-numeric or non-positive maxBytes, which would admit any document", async () => {
+        expect.assertions(2);
+
+        const binding = markdownBinding();
+        const nan: unknown = await createAi({ binding })
+            .toMarkdown(new Blob(["x"]), { maxBytes: Number.NaN })
+            .catch((error_: unknown) => error_);
+        const zero: unknown = await createAi({ binding })
+            .toMarkdown(new Blob(["x"]), { maxBytes: 0 })
+            .catch((error_: unknown) => error_);
+
+        expect(isLunoraError(nan) && nan.code === "BAD_REQUEST").toBe(true);
+        expect(isLunoraError(zero) && zero.code === "BAD_REQUEST").toBe(true);
+    });
+
+    it("refuses a URL that names this machine or a private network, without fetching it", async () => {
+        expect.assertions(2);
+
+        const fetchMock = vi.fn<() => Promise<Response>>(async () => new Response("secret"));
+        vi.stubGlobal("fetch", fetchMock);
+        const binding = markdownBinding();
+        const error: unknown = await createAi({ binding })
+            .toMarkdown(new URL("https://169.254.169.254/latest/meta-data"))
+            .catch((error_: unknown) => error_);
+
+        expect(isLunoraError(error) && error.code === "BAD_REQUEST").toBe(true);
+        expect(fetchMock).not.toHaveBeenCalled();
+    });
+
+    it("does not follow a redirect, and says so when one comes back", async () => {
+        expect.assertions(2);
+
+        vi.stubGlobal("fetch", async () => new Response(null, { headers: { location: "https://example.test/final.pdf" }, status: 302 }));
+        const error: unknown = await createAi({ binding: markdownBinding() })
+            .toMarkdown(new URL("https://example.test/short.pdf"))
+            .catch((error_: unknown) => error_);
+
+        expect(isLunoraError(error) && error.code === "BAD_REQUEST").toBe(true);
+        expect((error as Error).message).toMatch(/pass the final URL/);
     });
 
     it("forwards conversion options to the binding", async () => {

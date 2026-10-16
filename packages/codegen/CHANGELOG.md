@@ -1,3 +1,18 @@
+## @lunora/codegen [1.0.0-alpha.313](https://github.com/anolilab/lunora/compare/@lunora/codegen@1.0.0-alpha.312...@lunora/codegen@1.0.0-alpha.313) (2026-10-16)
+
+### Performance Improvements
+
+* **cli:** load commands on demand and keep ts-morph off the light import path ([#1224](https://github.com/anolilab/lunora/issues/1224)) ([695a17d](https://github.com/anolilab/lunora/commit/695a17d5255c650ff20d8618ff92d06ee729de9a))
+
+## @lunora/codegen [1.0.0-alpha.312](https://github.com/anolilab/lunora/compare/@lunora/codegen@1.0.0-alpha.311...@lunora/codegen@1.0.0-alpha.312) (2026-10-16)
+
+
+### Dependencies
+
+* **@lunora/advisor:** upgraded to 1.0.0-alpha.223
+* **@lunora/agent:** upgraded to 1.0.0-alpha.214
+* **@lunora/server:** upgraded to 1.0.0-alpha.207
+
 ## @lunora/codegen [1.0.0-alpha.311](https://github.com/anolilab/lunora/compare/@lunora/codegen@1.0.0-alpha.310...@lunora/codegen@1.0.0-alpha.311) (2026-10-15)
 
 

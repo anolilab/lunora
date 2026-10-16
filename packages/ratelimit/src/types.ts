@@ -101,4 +101,17 @@ export interface RateLimitStore {
      * (`createDbStore`: every call is awaited I/O) must have it.
      */
     setIf?: (storageKey: string, value: RateLimitValue, prior: RateLimitValue | undefined) => Promise<boolean>;
+
+    /**
+     * Optional eviction hint, called by the limiter after each successful write.
+     * Examine up to `limit` entries from the store's oldest end and remove those
+     * whose `ts` is at or before `olderThanTs`, except entries with a negative
+     * `value`: a reserved debt is kept, whatever its age. `limit` caps entries
+     * examined, not entries removed. Omit it when the store's rows must persist.
+     *
+     * `owns` says whether a storage key belongs to the limiter asking for the
+     * sweep. A store shared with another limiter must leave the other limiter's
+     * keys alone: its horizon is not this one's. Absent means every key is owned.
+     */
+    sweep?: (olderThanTs: number, limit: number, owns?: (storageKey: string) => boolean) => void;
 }

@@ -151,6 +151,7 @@ interface RateLimitStore {
     get: (storageKey: string) => Promise<RateLimitValue | undefined> | RateLimitValue | undefined;
     set: (storageKey: string, value: RateLimitValue) => Promise<void> | void;
     setIf?: (storageKey: string, value: RateLimitValue, prior: RateLimitValue | undefined) => Promise<boolean>;
+    sweep?: (olderThanTs: number, limit: number, owns?: (storageKey: string) => boolean) => void;
 }
 ```
 

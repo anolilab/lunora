@@ -1,3 +1,9 @@
+## @lunora/server [1.0.0-alpha.207](https://github.com/anolilab/lunora/compare/@lunora/server@1.0.0-alpha.206...@lunora/server@1.0.0-alpha.207) (2026-10-16)
+
+### Performance Improvements
+
+* **server:** compare history snapshot size without a second encode ([#1220](https://github.com/anolilab/lunora/issues/1220)) ([ee5cc61](https://github.com/anolilab/lunora/commit/ee5cc618ffddcadc29416f6c0562084d3f2ce9c2))
+
 ## @lunora/server [1.0.0-alpha.206](https://github.com/anolilab/lunora/compare/@lunora/server@1.0.0-alpha.205...@lunora/server@1.0.0-alpha.206) (2026-10-15)
 
 
