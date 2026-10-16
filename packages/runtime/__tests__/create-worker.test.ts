@@ -2973,6 +2973,23 @@ describe("createWorker — relay-tier routing (plan 075 Phase 2)", () => {
         expect(forwards[0]?.name).toBe("cold-b"); // owner-served
     });
 
+    it("keeps a room-hinted upgrade on the owner even when the shard is promoted", async () => {
+        expect.assertions(3);
+
+        const forwards: Forward[] = [];
+        const namespace = routingNamespace(2, forwards);
+        const worker = createWorker({ allowUnauthenticatedShardAccess: true, shardDO: namespace });
+        const hinted = new Request("https://app.example/_lunora/ws?shard=promoted-room&rooms=1", { headers: { Upgrade: "websocket" } });
+
+        await worker.fetch(upgrade("promoted-room"), { SHARD: namespace }, fakeContext);
+        await worker.fetch(hinted, { SHARD: namespace }, fakeContext);
+
+        expect(forwards).toHaveLength(2);
+        // The unhinted upgrade may still take a relay; the room-hinted one goes to the owner.
+        expect(forwards[0]?.name).toMatch(/^promoted-room::relay::[01]$/u);
+        expect(forwards[1]?.name).toBe("promoted-room");
+    });
+
     it("stays owner-served when the namespace binding can't be found (relay tier inert)", async () => {
         expect.assertions(2);
 

@@ -123,6 +123,13 @@ interface ShardConnection {
     retired?: boolean;
 
     /**
+     * This shard hosts a `connectRoom` room, so its socket is upgraded with `rooms=1`: the worker
+     * keeps it on the shard owner, where the room's state lives. Never cleared — a shard that has
+     * hosted a room keeps asking for the owner on every reconnect.
+     */
+    roomHinted?: boolean;
+
+    /**
      * This socket has sent its room rejoins. Reset on every new socket: room sends wait for
      * it, so a send never reaches the server ahead of its `whisper_subscribe`.
      */

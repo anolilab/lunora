@@ -4183,7 +4183,12 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
         if (binding !== undefined) {
             upgradeHeaders.set("x-lunora-shard-binding", binding);
 
-            const relayCount = await probeRelayCount(shardDO, shardKey);
+            // A socket that hosts a room is served by the owner: a room's handler and
+            // state run on the owner's SQLite, and a relay refuses room traffic. The
+            // client sets `rooms=1` on the upgrade URL (a browser cannot send a header),
+            // and the owner accepts the socket unchanged. This only picks owner over relay.
+            const hostsRoom = url.searchParams.get("rooms") === "1";
+            const relayCount = hostsRoom ? 0 : await probeRelayCount(shardDO, shardKey);
 
             if (relayCount > 0) {
                 // Spread connections across the relay set at random, and hint

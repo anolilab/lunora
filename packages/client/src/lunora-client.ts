@@ -1910,6 +1910,7 @@ class LunoraClient {
         options: { shardKey?: string } = {},
     ): { close: () => void; send: (message: Message) => boolean } {
         const topic = `room:${room.name}`;
+        this.hintRoomSocket(options.shardKey);
         const unsubscribe = this.whisperSubscribe(
             topic,
             (data) => {
@@ -5523,11 +5524,40 @@ class LunoraClient {
         return conn;
     }
 
-    private wsUrlFor(shardKey: string | undefined, token: string | undefined): string {
+    /**
+     * Ask the worker to keep this shard's socket on the owner, because a room runs on the owner's
+     * SQLite and a relay refuses room traffic. A socket already open without the hint is retired
+     * (as {@link bounceShardSockets} does) so its reconnect opens with `rooms=1`.
+     */
+    private hintRoomSocket(shardKey: string | undefined): void {
+        const conn = this.getOrCreateConnection(shardKey);
+
+        if (conn.roomHinted === true) {
+            return;
+        }
+
+        conn.roomHinted = true;
+
+        if (conn.socket) {
+            conn.retired = true;
+
+            try {
+                conn.socket.close();
+            } catch {
+                /* ignore */
+            }
+        }
+    }
+
+    private wsUrlFor(shardKey: string | undefined, token: string | undefined, roomHinted: boolean): string {
         const params: string[] = [];
 
         if (shardKey !== undefined) {
             params.push(`shard=${encodeURIComponent(shardKey)}`);
+        }
+
+        if (roomHinted) {
+            params.push("rooms=1");
         }
 
         if (token !== undefined) {
@@ -5982,7 +6012,7 @@ class LunoraClient {
         conn.retired = false;
         /* eslint-enable no-param-reassign */
 
-        openManagedSocket(conn, this.wsUrlFor(shardKey, token), this.managedSocketOptions, {
+        openManagedSocket(conn, this.wsUrlFor(shardKey, token, conn.roomHinted === true), this.managedSocketOptions, {
             onClose: (event) => {
                 // Close code 4001 is the server's `token_expired` signal: notify
                 // listeners so the app can refresh its credential before the

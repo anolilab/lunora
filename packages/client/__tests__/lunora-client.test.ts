@@ -4597,6 +4597,64 @@ describe("lunoraClient", () => {
             room.close();
         });
 
+        it("hints a room's socket with rooms=1 so the worker keeps it on the shard owner", () => {
+            expect.assertions(2);
+
+            const client = new LunoraClient({
+                fetch: vi.fn<typeof fetch>(),
+                url: "https://app.example",
+                WebSocket: createMockWebSocket(),
+            });
+            const room = client.connectRoom<{ text: string }>({ name: "chat" }, { onMessage: () => undefined });
+
+            expect(new URL(latestSocket().url).searchParams.get("rooms")).toBe("1");
+
+            // A plain whisper socket on the same shard stays unhinted.
+            const plain = new LunoraClient({
+                fetch: vi.fn<typeof fetch>(),
+                url: "https://app.example",
+                WebSocket: createMockWebSocket(),
+            });
+
+            plain.whisperSubscribe("cursors", () => undefined);
+
+            expect(new URL(latestSocket().url).searchParams.has("rooms")).toBe(false);
+
+            room.close();
+        });
+
+        it("retires a socket opened before connectRoom and reconnects it with the room hint", async () => {
+            expect.assertions(3);
+
+            const client = new LunoraClient({
+                fetch: vi.fn<typeof fetch>(),
+                url: "https://app.example",
+                WebSocket: createMockWebSocket(),
+            });
+            const plain = client.whisperSubscribe("cursors", () => undefined);
+            const first = latestSocket();
+
+            first.open();
+
+            expect(new URL(first.url).searchParams.has("rooms")).toBe(false);
+
+            // The room joins a shard whose live socket was opened unhinted: that socket is retired.
+            const room = client.connectRoom<{ text: string }>({ name: "chat" }, { onMessage: () => undefined });
+
+            expect(first.readyState).toBe(3);
+
+            // The reconnect carries the hint, and the room's subscription rides it.
+            for (let attempt = 0; attempt < 200 && sockets.length < 2; attempt += 1) {
+                // eslint-disable-next-line no-await-in-loop -- polling the reconnect timer between checks
+                await flushMicrotasks();
+            }
+
+            expect(new URL(latestSocket().url).searchParams.get("rooms")).toBe("1");
+
+            plain();
+            room.close();
+        });
+
         it("does not send a room message from a status listener until the shard is admitted, and sends it once", () => {
             expect.assertions(2);
 
