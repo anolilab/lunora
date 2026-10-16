@@ -4570,6 +4570,28 @@ describe("lunoraClient", () => {
             expect(JSON.parse(socket.sent.at(-1)!)).toEqual({ topic: "cursors", type: "whisper_unsubscribe" });
         });
 
+        it("holds a room send made before the socket opens and delivers it on connect", () => {
+            expect.assertions(2);
+
+            const client = new LunoraClient({
+                fetch: vi.fn<typeof fetch>(),
+                url: "https://app.example",
+                WebSocket: createMockWebSocket(),
+            });
+            const room = client.connectRoom<{ text: string }>("chat", { onMessage: () => undefined });
+
+            // Before the socket opens the message is held, not dropped.
+            expect(room.send({ text: "hi" })).toBe(true);
+
+            const socket = latestSocket();
+
+            socket.open();
+
+            expect(wireFrames(socket)).toContainEqual({ data: { text: "hi" }, topic: "room:chat", type: "whisper" });
+
+            room.close();
+        });
+
         it("rejoins whisper topics after a reconnect", () => {
             expect.assertions(1);
 

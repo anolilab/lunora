@@ -446,6 +446,9 @@ type ReplayIdentityVerdict = { credential: ReplayCredential; verdict: "match" } 
  */
 const CLIENT_CAPABILITIES = [PAGE_DELTA_CAPABILITY] as const;
 
+/** Room sends held before the socket opens; past this a `send` is refused rather than queued without bound. */
+const ROOM_PENDING_LIMIT = 100;
+
 /**
  * @internal
  */
@@ -1907,15 +1910,48 @@ class LunoraClient {
             options,
         );
         let closed = false;
+        // Sends made before the socket is open are held here and flushed, in order, when
+        // the connection reports connected. Bounded: past the cap a send is refused.
+        const pending: Message[] = [];
+        const flush = (): void => {
+            while (pending.length > 0 && this.whisper(topic, pending[0], options)) {
+                pending.shift();
+            }
+        };
+        const stopStatus = this.onConnectionStatus((status) => {
+            if (status === "connected") {
+                flush();
+            }
+        });
 
         return {
             close: () => {
                 closed = true;
+                pending.length = 0;
+                stopStatus();
                 unsubscribe();
             },
-            // `false` when not sent: the handle is closed, or the shard socket is not
-            // open yet (a send right after connecting). The caller decides whether to retry.
-            send: (message: Message) => !closed && this.whisper(topic, message, options),
+            // `true` when the message was sent now or queued for the connection; `false`
+            // when the handle is closed or the queue is full.
+            send: (message: Message) => {
+                if (closed) {
+                    return false;
+                }
+
+                flush();
+
+                if (pending.length === 0 && this.whisper(topic, message, options)) {
+                    return true;
+                }
+
+                if (pending.length >= ROOM_PENDING_LIMIT) {
+                    return false;
+                }
+
+                pending.push(message);
+
+                return true;
+            },
         };
     }
 
