@@ -132,7 +132,12 @@ export interface AiImageGenerateInput {
      */
     model: string;
     prompt: string;
-    /** Seed for reproducible generation, for providers that support it. */
+
+    /**
+     * Seed for reproducible generation, for providers that support it. A Workers AI
+     * `count` batch uses `seed + i` for image `i`, so the images differ; provider
+     * models receive the seed as given.
+     */
     seed?: number;
     /** Image size as `"<width>x<height>"`, e.g. `"1024x1024"`. */
     size?: `${number}x${number}`;

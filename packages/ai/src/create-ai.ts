@@ -449,6 +449,27 @@ const assertFetchableUrl = (url: URL): void => {
     }
 };
 
+/** The raw-bytes arm of {@link resolveMarkdownDocument}: an `ArrayBuffer` or `Uint8Array` only. */
+const bytesDocument = (input: AiToMarkdownInput, options: AiToMarkdownOptions | undefined, maxBytes: number): AiMarkdownDocument => {
+    // Anything else is untyped at runtime: `new Uint8Array("abc")` or `new Uint8Array(null)`
+    // would silently become an empty document, so refuse it instead.
+    if (!(input instanceof ArrayBuffer) && !(input instanceof Uint8Array)) {
+        throw new LunoraError("BAD_REQUEST", "@lunora/ai: toMarkdown input must be a URL, Blob, ArrayBuffer or Uint8Array");
+    }
+
+    const view = input instanceof Uint8Array ? input : new Uint8Array(input);
+
+    // Check the size before copying, so an oversized view is never duplicated.
+    assertMarkdownSize(view.byteLength, maxBytes);
+
+    // The copy is a fresh ArrayBuffer-backed view: `Blob` accepts `Uint8Array<ArrayBuffer>`,
+    // not a `SharedArrayBuffer`-backed view a caller may hold.
+    const bytes = new Uint8Array(view);
+    const mimeType = options?.mimeType;
+
+    return { blob: new Blob([bytes], mimeType === undefined ? undefined : { type: mimeType }), name: options?.name ?? "document" };
+};
+
 /** Normalise any accepted input to the binding's `{ name, blob }` document. */
 const resolveMarkdownDocument = async (input: AiToMarkdownInput, options: AiToMarkdownOptions | undefined, maxBytes: number): Promise<AiMarkdownDocument> => {
     if (input instanceof URL) {
@@ -487,15 +508,7 @@ const resolveMarkdownDocument = async (input: AiToMarkdownInput, options: AiToMa
         return { blob: input, name: options?.name ?? "document" };
     }
 
-    // Copy into a fresh, ArrayBuffer-backed view: `Blob` accepts
-    // `Uint8Array<ArrayBuffer>`, not the wider `Uint8Array<ArrayBufferLike>` a
-    // caller may hold (e.g. a `SharedArrayBuffer`-backed view).
-    const bytes = input instanceof Uint8Array ? Uint8Array.from(input) : new Uint8Array(input);
-
-    assertMarkdownSize(bytes.byteLength, maxBytes);
-    const mimeType = options?.mimeType;
-
-    return { blob: new Blob([bytes], mimeType === undefined ? undefined : { type: mimeType }), name: options?.name ?? "document" };
+    return bytesDocument(input, options, maxBytes);
 };
 
 const toInteger = (value: string | undefined): number | undefined => {
@@ -887,11 +900,15 @@ const createAi = (options: LunoraAiOptions): LunoraAi => {
         }
 
         const { height, width } = parseImageSize(input.size);
-        const payload: Record<string, unknown> = {
-            prompt: input.prompt,
-            ...(height === undefined ? {} : { height }),
-            ...(width === undefined ? {} : { width }),
-            ...(input.seed === undefined ? {} : { seed: input.seed }),
+        const payloadFor = (index: number): Record<string, unknown> => {
+            return {
+                prompt: input.prompt,
+                ...(height === undefined ? {} : { height }),
+                ...(width === undefined ? {} : { width }),
+                // One seed for every image would return identical, separately billed images:
+                // offset it per image, so a seeded batch is reproducible and still distinct.
+                ...(input.seed === undefined ? {} : { seed: input.seed + index }),
+            };
         };
 
         // Workers AI image models generate one image per call, so a `count` over
@@ -903,11 +920,15 @@ const createAi = (options: LunoraAiOptions): LunoraAi => {
                 return images;
             }
 
-            const image = await toAiImage(await run(input.model, payload));
+            const image = await toAiImage(await run(input.model, payloadFor(index)));
 
-            if (image === undefined) {
+            if (image === undefined || image.base64 === "") {
                 throw new LunoraError("INTERNAL", `@lunora/ai: ${input.model} returned no image data`);
             }
+
+            // Counted per image as it is billed, so a later failure in the batch
+            // still leaves the images already generated on the usage metric.
+            recordImageUsage(input.model, 1, telemetry?.metrics);
 
             return generateFrom(index + 1, [...images, image]);
         };
@@ -967,6 +988,8 @@ const createAi = (options: LunoraAiOptions): LunoraAi => {
             return { base64: image.base64, mimeType: image.mediaType };
         });
 
+        recordImageUsage(input.model, images.length, telemetry?.metrics);
+
         return { images, model: input.model };
     };
 
@@ -1007,11 +1030,7 @@ const createAi = (options: LunoraAiOptions): LunoraAi => {
         // A `@cf/…` (or `@hf/…`) id is a Workers AI model; everything else is a
         // `"<provider>/<model>"` slug, of which only openai and google have an
         // image endpoint wired here.
-        const generated = await generateForModel(requestedModel, input);
-
-        recordImageUsage(requestedModel, generated.images.length, telemetry?.metrics);
-
-        return generated;
+        return generateForModel(requestedModel, input);
     };
 
     return { embeddingModel, images: { generate: generateImageForModel }, model, run, toMarkdown, websearch, workersai };

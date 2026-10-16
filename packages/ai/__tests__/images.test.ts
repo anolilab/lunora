@@ -214,6 +214,57 @@ describe("ai.images.generate", () => {
         expect(calls).toBe(2);
     });
 
+    it("offsets a seed per image, so a seeded batch is not identical images", async () => {
+        expect.assertions(1);
+
+        const run = vi.fn<(model: string, inputs: Record<string, unknown>) => Promise<unknown>>(async () => {
+            return { image: "YmFzZTY0" };
+        });
+
+        await createAi({ binding: { run } }).images.generate({ model: "@cf/black-forest-labs/flux-1-schnell", count: 3, prompt: "a fox", seed: 7 });
+
+        expect(run.mock.calls.map(([, inputs]) => inputs.seed)).toStrictEqual([7, 8, 9]);
+    });
+
+    it("rejects an empty Workers AI image body instead of returning it as an image", async () => {
+        expect.assertions(1);
+
+        const binding: AiBindingLike = { run: async () => "" };
+        const error: unknown = await createAi({ binding })
+            .images.generate({ model: "@cf/black-forest-labs/flux-1-schnell", prompt: "x" })
+            .catch((error_: unknown) => error_);
+
+        expect(isLunoraError(error) && error.code === "INTERNAL").toBe(true);
+    });
+
+    it("counts the images already generated when a later one in the batch fails", async () => {
+        expect.assertions(2);
+
+        const count = vi.fn<(name: string, value?: number, attributes?: Record<string, unknown>) => void>();
+        let calls = 0;
+        const binding: AiBindingLike = {
+            run: async () => {
+                calls += 1;
+
+                if (calls === 2) {
+                    throw new Error("boom");
+                }
+
+                return { image: "YmFzZTY0" };
+            },
+        };
+
+        const error: unknown = await createAi({ binding, telemetry: { metrics: { count } } })
+            .images.generate({ model: "@cf/black-forest-labs/flux-1-schnell", count: 2, prompt: "x" })
+            .catch((error_: unknown) => error_);
+
+        expect(error).toBeInstanceOf(Error);
+        expect(count).toHaveBeenCalledWith("gen_ai.usage.cost", 0.000_633_6, {
+            "gen_ai.request.model": "@cf/black-forest-labs/flux-1-schnell",
+            "lunora.usage.cost.source": "estimated",
+        });
+    });
+
     it("sends an openai slug to the AI Gateway's /openai route, not a /openai/v1 base", async () => {
         expect.assertions(1);
 
@@ -241,9 +292,7 @@ describe("ai.images.generate", () => {
         expect.assertions(2);
 
         // Plain HTTP is the point: the refusal must fire for a cleartext token URL.
-        // eslint-disable-next-line sonarjs/no-clear-text-protocols -- the test asserts the cleartext refusal
-        const cleartextProxy = "http://proxy.internal/v1";
-        const error: unknown = await createAi({ env: { [AI_PROXY_URL_ENV]: cleartextProxy, [AI_PROXY_TOKEN_ENV]: "secret" } })
+        const error: unknown = await createAi({ env: { [AI_PROXY_URL_ENV]: "http://ai-proxy.test/v1", [AI_PROXY_TOKEN_ENV]: "secret" } })
             .images.generate({ model: "openai/dall-e-3", prompt: "x" })
             .catch((error_: unknown) => error_);
 

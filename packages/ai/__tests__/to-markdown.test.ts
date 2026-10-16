@@ -147,6 +147,18 @@ describe("ai.toMarkdown", () => {
         expect(binding.markdownCalls).toStrictEqual([]);
     });
 
+    it("refuses an untyped input rather than converting it to an empty document", async () => {
+        expect.assertions(2);
+
+        const binding = markdownBinding();
+        const error: unknown = await createAi({ binding })
+            .toMarkdown("not bytes" as unknown as Uint8Array)
+            .catch((error_: unknown) => error_);
+
+        expect(isLunoraError(error) && error.code === "BAD_REQUEST").toBe(true);
+        expect(binding.markdownCalls).toHaveLength(0);
+    });
+
     it("refuses a non-numeric or non-positive maxBytes, which would admit any document", async () => {
         expect.assertions(2);
 
