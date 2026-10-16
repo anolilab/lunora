@@ -497,6 +497,50 @@ describe("shardDO rooms", () => {
         expect(roomCalls(shard).map((call) => call.args["kind"])).toEqual(["join"]);
     });
 
+    it("keeps a member's room membership across a hibernation wake-up", async () => {
+        expect.assertions(2);
+
+        const a = new FakeSocket({ subs: {}, userId: "user-a" });
+        const before = makeShard([a], { "room:chat": "rooms:chat" });
+
+        await send(before, a, { topic: "room:chat", type: "whisper_subscribe" });
+
+        // A fresh instance over the same sockets reads membership back off the attachment alone.
+        const woken = makeShard([a], { "room:chat": "rooms:chat" });
+
+        await send(woken, a, { data: { n: 1 }, topic: "room:chat", type: "whisper" });
+
+        expect(roomCalls(woken).map((call) => call.args["kind"])).toEqual(["message"]);
+        expect(roomCalls(woken)[0]?.args["message"]).toEqual({ n: 1 });
+    });
+
+    it("undoes a join when reading the socket's attachment fails inside the queued handler", async () => {
+        expect.assertions(2);
+
+        const a = new FakeSocket({ subs: {}, userId: "user-a" });
+        const shard = makeShard([a], { "room:chat": "rooms:chat" });
+        const internals = shard as unknown as { lifecycleInfo: (attachment: unknown) => unknown; logs: { entries: () => { message: string }[] } };
+        const lifecycleInfo = internals.lifecycleInfo.bind(shard);
+        let failed = false;
+
+        // The first room-handler dispatch reads the attachment, which fails once.
+        internals.lifecycleInfo = (attachment: unknown) => {
+            if (!failed) {
+                failed = true;
+
+                throw new Error("corrupt attachment");
+            }
+
+            return lifecycleInfo(attachment);
+        };
+
+        await send(shard, a, { topic: "room:chat", type: "whisper_subscribe" });
+
+        // The join it was establishing is undone, and the failure is recorded.
+        expect((a.deserializeAttachment() as { whispers?: string[] }).whispers).toBeUndefined();
+        expect(internals.logs.entries().map((entry) => entry.message)).toContain("corrupt attachment");
+    });
+
     it("admits a room join even after the socket has spent its message budget", async () => {
         expect.assertions(1);
 

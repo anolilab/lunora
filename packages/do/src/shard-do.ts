@@ -15091,7 +15091,11 @@ abstract class ShardDO {
         }
 
         const previous = this.roomChains.get(ws) ?? Promise.resolve();
-        const run = previous.then(() => this.runRoomHandler(ws, topic, functionPath, kind, message, joinEpoch));
+        // A failure before the handler runs (an unreadable attachment, say) is refused the
+        // same way as a handler error, so a join it was establishing is still undone.
+        const run = previous
+            .then(() => this.runRoomHandler(ws, topic, functionPath, kind, message, joinEpoch))
+            .catch((error: unknown) => this.refuseRoomEvent(ws, topic, functionPath, kind, joinEpoch, error));
 
         this.roomChains.set(
             ws,
@@ -15123,6 +15127,36 @@ abstract class ShardDO {
         } finally {
             pending.delete(topic);
         }
+    }
+
+    /**
+     * Refuse a room event that failed or could not run: log it, and if it was a join,
+     * undo the membership it created and remember the refusal for the leave queued behind it.
+     */
+    private refuseRoomEvent(
+        ws: ShardSocketLike,
+        topic: string,
+        functionPath: string,
+        kind: RoomEventKind,
+        joinEpoch: number | undefined,
+        error: unknown,
+    ): false {
+        this.logs.push({
+            functionPath,
+            level: "error",
+            message: error instanceof Error ? error.message : String(error),
+            timestamp: Date.now(),
+        });
+
+        if (kind === "join") {
+            this.rollBackJoin(ws, topic, joinEpoch);
+            const failed = this.failedRoomJoins.get(ws) ?? new Set<string>();
+
+            failed.add(topic);
+            this.failedRoomJoins.set(ws, failed);
+        }
+
+        return false;
     }
 
     /**
@@ -15183,24 +15217,7 @@ abstract class ShardDO {
 
             await this.withRequestIdentity(info.userId, info.identity, info.ip, () => this.withSystemDispatch(() => this.handleRpc(functionPath, args)));
         } catch (error: unknown) {
-            this.logs.push({
-                functionPath,
-                level: "error",
-                message: error instanceof Error ? error.message : String(error),
-                timestamp: Date.now(),
-            });
-
-            // A join whose onJoin rejected is not a member. Undo it here, inside the
-            // queued slot, so no later queued event can observe the membership.
-            if (kind === "join") {
-                this.rollBackJoin(ws, topic, joinEpoch);
-                const failed = this.failedRoomJoins.get(ws) ?? new Set<string>();
-
-                failed.add(topic);
-                this.failedRoomJoins.set(ws, failed);
-            }
-
-            return false;
+            return this.refuseRoomEvent(ws, topic, functionPath, kind, joinEpoch, error);
         }
 
         // A join that committed clears any earlier refusal of the same topic.
