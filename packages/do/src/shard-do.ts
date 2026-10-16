@@ -1574,6 +1574,12 @@ const nonEmptyTallies = (entry: DispatchSpanEntry | undefined): [TallySurface, D
 const hasRootSpanContent = (entry: DispatchSpanEntry | undefined): boolean =>
     entry !== undefined && (entry.collector !== undefined || nonEmptyTallies(entry).length > 0);
 
+/**
+ * Whether a mutation's failure happened after its writes committed. The generated dispatcher
+ * marks such an error `committed`, because the rows it failed to follow up on are already durable.
+ */
+const isCommittedFailure = (error: unknown): boolean => typeof error === "object" && error !== null && (error as { committed?: unknown }).committed === true;
+
 /** The room handler events a socket's membership change or message dispatches. */
 type RoomEventKind = "join" | "leave" | "message";
 
@@ -3148,6 +3154,16 @@ abstract class ShardDO {
     // eslint-disable-next-line class-methods-use-this -- base-class override hook: the codegen subclass returns the generated room map
     protected roomHandlerPath(_topic: string): string | undefined {
         return undefined;
+    }
+
+    /**
+     * Whether the app declares any `defineRoom` room, so this shard hosts room traffic. The
+     * generated subclass overrides it; the runtime reads it from `/_lunora/route` to keep room
+     * sockets on the owner.
+     */
+    // eslint-disable-next-line class-methods-use-this -- base-class override hook: the codegen subclass returns whether the app declares rooms
+    protected declaresRooms(): boolean {
+        return false;
     }
 
     /**
@@ -14579,7 +14595,8 @@ abstract class ShardDO {
         // relays to spread new connections across before a WS upgrade. Internal —
         // reachable only via the runtime's worker-side forward, returns just a count.
         if (url.pathname === "/_lunora/route" && request.method === "GET") {
-            return jsonResponse({ relayCount: this.relay?.relayCount() ?? 0 });
+            // `hostsRooms` is the owner's own fact: the runtime keys socket routing on it, not on anything the client sends.
+            return jsonResponse({ hostsRooms: this.declaresRooms(), relayCount: this.relay?.relayCount() ?? 0 });
         }
 
         // Batch dispatch (plan 088): each entry replays through the single-call
@@ -15179,6 +15196,25 @@ abstract class ShardDO {
     }
 
     /**
+     * Whether a failure is one the room event survives: a post-commit step after durable writes.
+     * It is logged, and the event's broadcasts and membership stand.
+     */
+    private absorbCommittedFailure(functionPath: string, error: unknown): boolean {
+        if (!isCommittedFailure(error)) {
+            return false;
+        }
+
+        this.logs.push({
+            functionPath,
+            level: "error",
+            message: error instanceof Error ? error.message : String(error),
+            timestamp: Date.now(),
+        });
+
+        return true;
+    }
+
+    /**
      * Refuse a room event that failed or could not run: log it, and if it was a join,
      * undo the membership it created and remember the refusal for the leave queued behind it.
      */
@@ -15266,7 +15302,12 @@ abstract class ShardDO {
 
             await this.withRequestIdentity(info.userId, info.identity, info.ip, () => this.withSystemDispatch(() => this.handleRpc(functionPath, args)));
         } catch (error: unknown) {
-            return this.refuseRoomEvent(ws, topic, functionPath, kind, joinEpoch, error);
+            // A failure after the write committed (a deferred schedule that would not enqueue) leaves
+            // the room's writes durable. Members must still hear them and a join keeps its membership,
+            // so only a failure before the commit is refused.
+            if (!this.absorbCommittedFailure(functionPath, error)) {
+                return this.refuseRoomEvent(ws, topic, functionPath, kind, joinEpoch, error);
+            }
         }
 
         // A join that committed clears any earlier refusal of the same topic.

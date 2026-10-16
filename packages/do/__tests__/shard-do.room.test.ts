@@ -598,6 +598,41 @@ describe("shardDO rooms", () => {
         expect(roomCalls(shard)).toHaveLength(64);
     });
 
+    it("delivers a room update whose write committed even when its post-commit step fails", async () => {
+        expect.assertions(2);
+
+        const member = new FakeSocket({ subs: {}, userId: "member" });
+        const sender = new FakeSocket({ subs: {}, userId: "user-a" });
+        // The handler broadcasts after its write, then the post-commit schedule step fails.
+        let committed = true;
+        const shard = makeShard([member, sender], { "room:chat": "rooms:chat" }, [], {
+            "rooms:chat": (args) => {
+                if (args["kind"] === "message") {
+                    (args["socket"] as { broadcast: (message: unknown) => void }).broadcast({ update: 1 });
+
+                    throw committed ? Object.assign(new Error("deferred schedule would not enqueue"), { committed: true }) : new Error("pre-commit failure");
+                }
+
+                return undefined;
+            },
+        });
+
+        await send(shard, member, { topic: "room:chat", type: "whisper_subscribe" });
+        await send(shard, sender, { topic: "room:chat", type: "whisper_subscribe" });
+        await send(shard, sender, { data: "x", topic: "room:chat", type: "whisper" });
+
+        // The write is durable, so members hear it.
+        expect(member.frames.filter((frame) => frame.type === "whisper").map((frame) => frame.data)).toStrictEqual([{ update: 1 }]);
+
+        // A failure before the commit is a rollback: the broadcast is discarded.
+        committed = false;
+        const before = member.frames.length;
+
+        await send(shard, sender, { data: "y", topic: "room:chat", type: "whisper" });
+
+        expect(member.frames).toHaveLength(before);
+    });
+
     it("still runs onLeave for a leave that arrives while the queue is full", async () => {
         expect.assertions(1);
 

@@ -436,6 +436,14 @@ export const createShardDO = (config: ShardDOConfig = {}): new (state: ShardDOSt
             // rows were durably gone and their objects leaked with nothing logged.
             try {
                 await settleSchedules(true);
+            } catch (error) {
+                // The write committed before this failed. Mark the error so the caller can tell
+                // a durable write from a rollback: the rethrow still reaches the caller unchanged.
+                if (typeof error === "object" && error !== null) {
+                    Object.assign(error, { committed: true });
+                }
+
+                throw error;
             } finally {
                 // Then the objects whose rows are now durably gone. Deliberately AFTER
                 // the span, never inside it: an R2 delete cannot roll back, so a delete
