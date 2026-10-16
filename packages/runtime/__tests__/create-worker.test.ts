@@ -2883,7 +2883,7 @@ describe("createWorker — relay-tier routing (plan 075 Phase 2)", () => {
         userId: null | string;
     }
 
-    const routingNamespace = (relayCount: number, forwards: Forward[]): ShardNamespaceLike => {
+    const routingNamespace = (relayCount: number, forwards: Forward[], hostsRooms = false): ShardNamespaceLike => {
         return {
             get: (id) => {
                 const name = (id as { __name: string }).__name;
@@ -2891,7 +2891,7 @@ describe("createWorker — relay-tier routing (plan 075 Phase 2)", () => {
                 return {
                     fetch: async (request: Request) => {
                         if (new URL(request.url).pathname === "/_lunora/route") {
-                            return Response.json({ relayCount }, { headers: { "content-type": "application/json" } });
+                            return Response.json({ hostsRooms, relayCount }, { headers: { "content-type": "application/json" } });
                         }
 
                         forwards.push({
@@ -2973,11 +2973,26 @@ describe("createWorker — relay-tier routing (plan 075 Phase 2)", () => {
         expect(forwards[0]?.name).toBe("cold-b"); // owner-served
     });
 
-    it("keeps a room-hinted upgrade on the owner even when the shard is promoted", async () => {
-        expect.assertions(3);
+    it("ignores a client's rooms=1 hint: a forged hint on an ordinary promoted shard still takes a relay", async () => {
+        expect.assertions(2);
 
         const forwards: Forward[] = [];
         const namespace = routingNamespace(2, forwards);
+        const worker = createWorker({ allowUnauthenticatedShardAccess: true, shardDO: namespace });
+        const forged = new Request("https://app.example/_lunora/ws?shard=promoted-plain&rooms=1", { headers: { Upgrade: "websocket" } });
+
+        await worker.fetch(forged, { SHARD: namespace }, fakeContext);
+
+        // The shard declares no rooms, so the client's hint cannot pull the socket onto the owner.
+        expect(forwards).toHaveLength(1);
+        expect(forwards[0]?.name).toMatch(/^promoted-plain::relay::[01]$/u);
+    });
+
+    it("keeps every upgrade on the owner for a shard that declares rooms, with or without the hint", async () => {
+        expect.assertions(3);
+
+        const forwards: Forward[] = [];
+        const namespace = routingNamespace(2, forwards, true);
         const worker = createWorker({ allowUnauthenticatedShardAccess: true, shardDO: namespace });
         const hinted = new Request("https://app.example/_lunora/ws?shard=promoted-room&rooms=1", { headers: { Upgrade: "websocket" } });
 
@@ -2985,8 +3000,8 @@ describe("createWorker — relay-tier routing (plan 075 Phase 2)", () => {
         await worker.fetch(hinted, { SHARD: namespace }, fakeContext);
 
         expect(forwards).toHaveLength(2);
-        // The unhinted upgrade may still take a relay; the room-hinted one goes to the owner.
-        expect(forwards[0]?.name).toMatch(/^promoted-room::relay::[01]$/u);
+        // The owner decides: a room-declaring shard has no relay routing, whatever the client sends.
+        expect(forwards.map((forward) => forward.name)).toStrictEqual(["promoted-room", "promoted-room"]);
         expect(forwards[1]?.name).toBe("promoted-room");
     });
 
