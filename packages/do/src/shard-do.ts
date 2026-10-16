@@ -15107,7 +15107,9 @@ abstract class ShardDO {
         // event is refused. A refused join is undone, so the socket is not a member without an onJoin.
         const queued = this.queuedRoomEvents.get(ws) ?? 0;
 
-        if (queued >= ShardDO.MAX_QUEUED_ROOM_EVENTS) {
+        // Only a join or a message is refused at the cap. A leave is always queued: refusing it
+        // would leave membership removed with no onLeave ever run.
+        if (kind !== "leave" && queued >= ShardDO.MAX_QUEUED_ROOM_EVENTS) {
             this.logs.push({
                 functionPath,
                 level: "error",
@@ -15150,8 +15152,10 @@ abstract class ShardDO {
      * `pendingRoomJoins`) until its `onJoin` settles, so broadcasts skip the socket meanwhile.
      */
     private async dispatchSettlingJoin(ws: ShardSocketLike, topic: string, join: boolean, joinEpoch: number | undefined): Promise<boolean> {
-        if (!join) {
-            return this.dispatchRoomEvent(ws, topic, "leave");
+        // Only a room join holds broadcasts. An ordinary whisper topic has no handler to settle, so
+        // holding it would silently drop frames for a subscriber that is already a member.
+        if (!join || this.roomHandlerPath(topic) === undefined) {
+            return this.dispatchRoomEvent(ws, topic, join ? "join" : "leave", undefined, joinEpoch);
         }
 
         // A count, not a flag: a leave and rejoin can leave two joins settling at once, and the

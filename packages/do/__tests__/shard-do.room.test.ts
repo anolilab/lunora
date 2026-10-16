@@ -598,6 +598,43 @@ describe("shardDO rooms", () => {
         expect(roomCalls(shard)).toHaveLength(64);
     });
 
+    it("still runs onLeave for a leave that arrives while the queue is full", async () => {
+        expect.assertions(1);
+
+        const a = new FakeSocket({ subs: {}, userId: "user-a" });
+        let releaseJoin: () => void = () => undefined;
+        const gate = new Promise<void>((resolve) => {
+            releaseJoin = resolve;
+        });
+        const shard = makeShard([a], { "room:chat": "rooms:chat" }, [], {
+            "rooms:chat": async (args) => {
+                if (args["kind"] === "join") {
+                    await gate;
+                }
+
+                return undefined;
+            },
+        });
+        (shard as unknown as { allowWhisper: () => boolean }).allowWhisper = () => true;
+
+        const pending = [send(shard, a, { topic: "room:chat", type: "whisper_subscribe" })];
+        await new Promise<void>((resolve) => {
+            setTimeout(resolve, 0);
+        });
+
+        // Fill the queue behind the slow join, then leave.
+        for (let index = 0; index < 70; index += 1) {
+            pending.push(send(shard, a, { data: index, topic: "room:chat", type: "whisper" }));
+        }
+        pending.push(send(shard, a, { topic: "room:chat", type: "whisper_unsubscribe" }));
+
+        releaseJoin();
+        await Promise.all(pending);
+
+        // The leave is queued even at the cap, so the room's onLeave runs.
+        expect(roomCalls(shard).at(-1)?.args["kind"]).toBe("leave");
+    });
+
     it("keeps a member's room membership across a hibernation wake-up", async () => {
         expect.assertions(2);
 
