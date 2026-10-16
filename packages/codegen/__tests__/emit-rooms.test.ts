@@ -26,7 +26,8 @@ describe("emitShard — roomHandlerPath override", () => {
         const emitted = emitShard({ hasRooms: true, schema: { tables: [], vectorIndexes: [] } });
 
         expect(emitted).toContain("protected override roomHandlerPath(topic: string): string | undefined {");
-        expect(emitted).toContain("return LUNORA_ROOMS[topic];");
+        // Own properties only: an inherited name such as `toString` is not a room.
+        expect(emitted).toContain("return Object.hasOwn(LUNORA_ROOMS, topic) ? LUNORA_ROOMS[topic] : undefined;");
         // The registry is imported from the generated functions module.
         expect(emitted).toMatch(/import \{[^}]*LUNORA_ROOMS[^}]*\} from "\.\/functions\.js";/u);
     });

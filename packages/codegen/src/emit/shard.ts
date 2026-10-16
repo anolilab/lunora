@@ -566,7 +566,8 @@ const LUNORA_SCHEMA_SNAPSHOT: { hash: string; json: string } = { hash: ${JSON.st
     // the base's `undefined` default).
     const roomHandlerOverride = hasRooms
         ? `        protected override roomHandlerPath(topic: string): string | undefined {
-            return LUNORA_ROOMS[topic];
+            // Own properties only: a plain object would resolve \`toString\` and the like to inherited functions.
+            return Object.hasOwn(LUNORA_ROOMS, topic) ? LUNORA_ROOMS[topic] : undefined;
         }
 `
         : "";
