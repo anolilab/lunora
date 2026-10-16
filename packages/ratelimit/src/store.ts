@@ -8,9 +8,8 @@ import type { RateLimitStore, RateLimitValue } from "./types";
  * Durable Object, the instance) — adequate for single-DO limits but not shared
  * across instances. Use {@link createSqlStore} for durable per-DO state.
  *
- * Give each `RateLimiter` its own store. The sweep evicts by that limiter's
- * retention horizon, so a store shared with a limiter that has different configs
- * could evict a live bucket.
+ * A store may be shared by several limiters: each sweep evicts only the keys its
+ * limiter owns, by that limiter's horizon (see `RateLimitStore.sweep`).
  */
 const createMemoryStore = (): RateLimitStore => {
     const map = new Map<string, RateLimitValue>();
@@ -26,22 +25,23 @@ const createMemoryStore = (): RateLimitStore => {
             map.delete(storageKey);
             map.set(storageKey, value);
         },
-        sweep: (olderThanTs, limit) => {
+        sweep: (olderThanTs, limit, owns) => {
             let examined = 0;
 
             for (const [storageKey, value] of map) {
-                if (examined >= limit || value.ts > olderThanTs) {
+                if (examined >= limit) {
                     break;
                 }
 
                 examined += 1;
                 map.delete(storageKey);
 
-                // A reserved debt outlives any age bound (reserves stack), so it is kept.
-                // It moves to the end, so it cannot stop the sweep from reaching the entries
-                // behind it. ponytail: a debt key stays until a consume rewrites it or reset;
-                // add a debt-aware bound if abandoned debts show up in memory profiles.
-                if (value.value < 0) {
+                // An entry is kept when it is a reserved debt (which outlives any age bound,
+                // since reserves stack), or belongs to another limiter sharing this store. A
+                // kept entry moves to the end, so it cannot stop the sweep from reaching the
+                // entries behind it. ponytail: a debt key stays until a consume rewrites it
+                // or reset; add a debt-aware bound if abandoned debts show up in memory profiles.
+                if (value.value < 0 || value.ts > olderThanTs || owns?.(storageKey) === false) {
                     map.set(storageKey, value);
                 }
             }
@@ -77,10 +77,11 @@ const runSql = <Row = Record<string, unknown>>(sql: SqlLike, query: string, ...p
  * **Retention:** the limiter calls `sweep` after each write, which deletes up to 32
  * rows older than its horizon. The index on `ts` covers only rows with a
  * non-negative `value`, so a reserved debt (never swept) adds nothing to the scan.
- * The table holds the live keys plus the expired ones not yet swept. One config
- * map per table: a limiter's horizon comes from its own configs, so a second
- * limiter with shorter limits on the same table would sweep rows the first still
- * needs.
+ * The table holds the live keys plus the expired ones not yet swept. Limiters may
+ * share the table: each sweep deletes only the keys its own limiter owns, so a
+ * shorter-window limiter cannot evict a longer-window one's rows. A sweep reads
+ * candidates by `ts` before filtering by owner, so a long run of another limiter's
+ * expired rows can use up the window for a while.
  *
  * **Atomicity:** `exec` is synchronous and the limiter does not yield between a
  * synchronous store's read and its write, so one consume's read, decision and
@@ -101,10 +102,17 @@ const createSqlStore = (options: SqlStoreOptions): RateLimitStore => {
         delete: (storageKey) => {
             runSql(sql, `DELETE FROM "${table}" WHERE k = ?`, storageKey);
         },
-        // The subquery's `value >= 0` must stay literal so the planner can use the partial index.
-        // The limit is a bound parameter, not inlined.
-        sweep: (olderThanTs, limit) => {
-            runSql(sql, `DELETE FROM "${table}" WHERE k IN (SELECT k FROM "${table}" WHERE ts <= ? AND value >= 0 ORDER BY ts LIMIT ?)`, olderThanTs, limit);
+        // The `value >= 0` must stay literal so the planner can use the partial index.
+        // The limit is a bound parameter, not inlined. Ownership is checked in JS, so a
+        // row another limiter wrote is never deleted.
+        sweep: (olderThanTs, limit, owns) => {
+            const candidates = runSql<{ k: string }>(sql, `SELECT k FROM "${table}" WHERE ts <= ? AND value >= 0 ORDER BY ts LIMIT ?`, olderThanTs, limit);
+
+            for (const { k } of candidates) {
+                if (owns?.(k) !== false) {
+                    runSql(sql, `DELETE FROM "${table}" WHERE k = ?`, k);
+                }
+            }
         },
         get: (storageKey) => {
             const rows = runSql<{ prev: number | null; ts: number; value: number }>(sql, `SELECT value, ts, prev FROM "${table}" WHERE k = ?`, storageKey);
@@ -175,6 +183,7 @@ interface RateLimitDatabase extends RateLimitDatabaseReader {
         table: string,
         args: { limit?: number; orderBy?: Record<string, "asc" | "desc">[]; where?: Record<string, unknown> },
     ) => Promise<{ page: Record<string, unknown>[] }>;
+
     insert: <T extends string>(table: T, document: Record<string, unknown>, options?: { clientId?: string }) => Promise<Id<T>>;
     patchIf: <T extends string>(
         table: T,
@@ -245,12 +254,19 @@ const isConflict = (error: unknown): boolean => (error as { code?: unknown } | n
  * A table declared without it still works, but each sweep scans every row. Apps
  * that already declared the table add the index. The sweep deletes at most 32
  * expired rows per write; a reserved debt (negative `value`) is never deleted.
+ * The ORM index cannot be partial, so debts stay in it: many old debts make each
+ * sweep read past them. Reserves are rare, so this is accepted.
  *
- * **Ceiling:** on a `.global()` table another shard can rewrite a row between the
- * sweep's read and its delete, so that row is deleted live and its bucket resets.
- * A shard-local table is not exposed: the Durable Object's input gate holds across
- * the sweep's storage operations. One config map per table, as for
- * {@link createSqlStore}.
+ * **Ceiling:** the sweep deletes only a row whose `ts`, `value` and `prev` still match
+ * what it read, but the framework resolves that match and deletes in two steps.
+ * On a `.global()` table another shard can rewrite the row between them, so the
+ * row is deleted live and its bucket resets. Closing that needs a conditional
+ * delete on `ctx.db`, which does not exist yet. A shard-local table is not exposed:
+ * the Durable Object's input gate holds across the sweep's storage operations.
+ *
+ * **Soft delete:** the sweep deletes with `ctx.db.delete`, which has no hard-delete
+ * option. Declare the table without `.softDelete()`: a tombstoned row keeps its
+ * deterministic id, so the next consume for that key conflicts forever.
  *
  * **Atomic against concurrent consumes.** `setIf` writes only if the row still
  * holds the value `get` returned: an existing row through `ctx.db.patchIf` with
@@ -279,6 +295,9 @@ const createDatabaseStore = (options: DatabaseStoreOptions): RateLimitStore => {
     // write directly instead of repeating the lookup. A lost race or a write
     // drops the entry, so the next get() re-reads.
     const idCache = new Map<string, Id<string> | undefined>();
+
+    // Set once the sweep has found an adapter it cannot use; see `sweep`.
+    let warnedUnsweepable = false;
 
     const find = async (storageKey: string): Promise<Record<string, unknown> | null> => {
         const row = await db.findFirst(table, { where: { [keyField]: storageKey } });
@@ -393,21 +412,40 @@ const createDatabaseStore = (options: DatabaseStoreOptions): RateLimitStore => {
 
             return applied;
         },
-        sweep: async (olderThanTs, limit) => {
+        sweep: async (olderThanTs, limit, owns) => {
             if (db.findMany === undefined) {
-                throw new LunoraError("INTERNAL", "@lunora/ratelimit: the sweep needs `findMany` on `db`; pass the framework's `ctx.db`");
+                // An adapter without a batch read cannot sweep. Say so once, not after every write.
+                if (!warnedUnsweepable) {
+                    warnedUnsweepable = true;
+                    // eslint-disable-next-line no-console -- intentional: the store has no logger; a missing sweep is a one-time configuration notice
+                    console.warn(`@lunora/ratelimit: table "${table}" is not swept: the adapter has no findMany. Pass the framework's ctx.db.`);
+                }
+
+                return;
             }
 
-            // Read then delete by id: `deleteWhere` is the same read followed by an
-            // id-based delete, so it does not close the window either. Both are
-            // ceilings on `.global()` (see the JSDoc above).
             const { page } = await db.findMany(table, {
                 limit,
                 orderBy: [{ ts: "asc" }],
                 where: { ts: { lte: olderThanTs }, value: { gte: 0 } },
             });
 
-            await Promise.all(page.map(async (row) => db.delete(row["_id"] as Id<string>)));
+            const owned = page.filter((row) => owns?.(String(row[keyField])) !== false);
+
+            await Promise.all(
+                owned.map(async (row) => {
+                    // Delete only the row the sweep read: a consume that refreshed it since then
+                    // changed ts, value or prev, so the re-read finds nothing and the row is kept.
+                    // That is still a read followed by a delete, so on `.global()` a refresh
+                    // between the two steps is lost (see the JSDoc ceiling).
+                    // eslint-disable-next-line unicorn/no-null -- an absent `prev` is stored as SQL NULL, and only a null filter matches it
+                    const current = await db.findFirst(table, { where: { _id: row["_id"], prev: row["prev"] ?? null, ts: row["ts"], value: row["value"] } });
+
+                    if (current !== null) {
+                        await db.delete(row["_id"] as Id<string>);
+                    }
+                }),
+            );
         },
     };
 };

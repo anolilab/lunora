@@ -111,7 +111,11 @@ export interface RateLimitStore {
      * awaited, so a store whose sweep is I/O (`createDbStore`) finishes it before the
      * consume returns. The durable stores implement it so a table stays bounded
      * without a scheduled job; see `createSqlStore` and `createDbStore` for the
-     * table shape and the one-config-map-per-table rule.
+     * table shape.
+     *
+     * `owns` says whether a storage key belongs to the limiter asking for the
+     * sweep. A store shared with another limiter must leave the other limiter's
+     * keys alone: its horizon is not this one's. Absent means every key is owned.
      */
-    sweep?: (olderThanTs: number, limit: number) => Promise<void> | void;
+    sweep?: (olderThanTs: number, limit: number, owns?: (storageKey: string) => boolean) => Promise<void> | void;
 }

@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import { availableAt, enforcedCapacity, retentionMs } from "../src/algorithms";
 import { RateLimiter } from "../src/rate-limiter";
@@ -82,7 +82,7 @@ describe("memory store sweep", () => {
         expect(store.get("a")).toEqual({ ts: 3, value: 1 });
     });
 
-    it("removes at most `limit` entries and stops at the first live one", async () => {
+    it("removes at most `limit` entries and keeps the live ones", async () => {
         expect.assertions(3);
 
         const store = createMemoryStore();
@@ -228,5 +228,95 @@ describe("differential: sweep never changes a decision", () => {
             // eslint-disable-next-line no-await-in-loop -- sequences are independent and small
             await expect(diverges(seed, 5000)).resolves.toEqual([]);
         }
+    });
+});
+
+describe("sweep horizon ownership and clock", () => {
+    it("keeps another limiter's live entries when both sweep one store", async () => {
+        expect.assertions(2);
+
+        let clock = 0;
+        const now = (): number => clock;
+        const store = createMemoryStore();
+        const login = new RateLimiter({ config: { login: { kind: "fixed window", period: 60_000, rate: 1 } }, now, store });
+        const send = new RateLimiter({ config: { send: { kind: "fixed window", period: 1000, rate: 1 } }, now, store });
+
+        // The login window (retention 3 minutes) is still live when `send` sweeps with its own, shorter horizon.
+        await login.limit("login", { key: "u" });
+
+        for (let index = 0; index < 50; index += 1) {
+            clock += 100;
+            // eslint-disable-next-line no-await-in-loop -- each write triggers a sweep in order
+            await send.limit("send", { key: `k${String(index)}` });
+        }
+
+        const status = await login.check("login", { key: "u" });
+
+        expect(store.get("login:u")).toBeDefined();
+        expect(status.ok).toBe(false);
+    });
+
+    it("decides from the config as it was at construction, not a later mutation of it", async () => {
+        expect.assertions(2);
+
+        let clock = 0;
+        const now = (): number => clock;
+        const mutated = { login: { kind: "fixed window" as const, period: 1000, rate: 1 } };
+        const untouched = { login: { kind: "fixed window" as const, period: 1000, rate: 1 } };
+        const limiterA = new RateLimiter({ config: mutated, now, store: createMemoryStore() });
+        const limiterB = new RateLimiter({ config: untouched, now, store: createMemoryStore() });
+
+        await limiterA.limit("login", { key: "u" });
+        await limiterB.limit("login", { key: "u" });
+
+        // Lengthen A's limit after construction. Its horizon must not change, so a
+        // later sweep cannot evict an entry A still needs earlier than B would.
+        mutated.login.period = 100_000;
+
+        clock = 1500;
+        const a = await limiterA.limit("login", { key: "u" });
+        const b = await limiterB.limit("login", { key: "u" });
+
+        expect(a).toEqual(b);
+        expect(a.ok).toBe(true);
+    });
+
+    it("does not fail a consume whose write landed when the sweep throws", async () => {
+        expect.assertions(2);
+
+        const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+        const store = {
+            ...createMemoryStore(),
+            sweep: (): void => {
+                throw new Error("boom");
+            },
+        };
+        const limiter = new RateLimiter({ config: { send: { kind: "fixed window", period: 1000, rate: 1 } }, now: () => 0, store });
+
+        await expect(limiter.limit("send", { key: "u" })).resolves.toMatchObject({ ok: true });
+        expect(warn).toHaveBeenCalledTimes(1);
+
+        warn.mockRestore();
+    });
+
+    it("does not revive a spent bucket when the clock rolls back", async () => {
+        expect.assertions(2);
+
+        let clock = 5000;
+        const limiter = new RateLimiter({
+            config: { send: { kind: "fixed window", period: 1000, rate: 1 } },
+            now: () => clock,
+            store: createMemoryStore(),
+        });
+
+        const first = await limiter.limit("send", { key: "u" });
+
+        expect(first.ok).toBe(true);
+
+        clock = 0;
+
+        const replayed = await limiter.limit("send", { key: "u" });
+
+        expect(replayed.ok).toBe(false);
     });
 });

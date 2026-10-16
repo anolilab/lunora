@@ -43,6 +43,21 @@ const SWEEP_LIMIT = 32;
 
 const isThenable = <T>(value: PromiseLike<T> | T): value is PromiseLike<T> => typeof (value as PromiseLike<T> | undefined)?.then === "function";
 
+/**
+ * A clock that never reads earlier than a previous reading. Decisions and
+ * eviction both use it: a rollback could otherwise make a request look older than
+ * an entry the sweep already dropped, reviving a spent bucket.
+ */
+const monotonic = (clock: () => number): (() => number) => {
+    let last = Number.NEGATIVE_INFINITY;
+
+    return () => {
+        last = Math.max(last, clock());
+
+        return last;
+    };
+};
+
 // The caller's normalizer (if any), then the IPv6 /64 collapse — see `normalize`.
 const withIpCollapse = (normalize: ((key: string) => string) | undefined): ((key: string) => string) =>
     normalize ? (key: string): string => ipRateLimitKey(normalize(key)) : ipRateLimitKey;
@@ -82,8 +97,17 @@ class RateLimiter<Names extends string = string> {
 
     private readonly store: RateLimitStore;
 
+    /** Whether a stored key is one of this limiter's names; a sweep only evicts those. */
+    private readonly owns: (storageKey: string) => boolean;
+
     public constructor(options: RateLimiterOptions<Names>) {
-        this.config = options.config;
+        // Snapshot the config: decisions and the eviction horizon must read the same
+        // values, and a caller mutating its object after construction must not move
+        // the horizon out from under entries the sweep has not yet reached.
+        this.config = structuredClone(options.config);
+        // Keys are `encodeURIComponent(name)` plus an optional `:key`, so the part before the first `:` is the name.
+        const names = new Set(Object.keys(this.config).map((name) => encodeURIComponent(name)));
+        this.owns = (storageKey) => names.has(storageKey.split(":")[0] ?? "");
         this.normalize = withIpCollapse(options.normalize);
         // Store every entry in BOTH forms so an entry can be written either way.
         // Storing it verbatim only, and matching the raw request key against
@@ -93,7 +117,7 @@ class RateLimiter<Names extends string = string> {
         // SAME bucket the stored form routes to — so a banned caller sheds the
         // ban by lower-casing their own email.
         this.denyList = new Set([...(options.denyList ?? [])].flatMap((entry) => [entry, this.normalize(entry)]));
-        this.now = options.now ?? Date.now;
+        this.now = monotonic(options.now ?? Date.now);
 
         if (options.store === undefined) {
             // eslint-disable-next-line no-console -- intentional: no injected logger, mirrors @lunora/auth's construction-time warning
@@ -223,10 +247,17 @@ class RateLimiter<Names extends string = string> {
      * window. Only a promise-returning sweep (`createDbStore`) is awaited for I/O.
      */
     private async sweep(now: number): Promise<void> {
-        const swept = this.store.sweep?.(now - this.retention, SWEEP_LIMIT);
+        try {
+            const swept = this.store.sweep?.(now - this.retention, SWEEP_LIMIT, this.owns);
 
-        if (isThenable(swept)) {
-            await swept;
+            if (isThenable(swept)) {
+                await swept;
+            }
+        } catch (error) {
+            // The write has already landed, so a failed cleanup must not fail the consume:
+            // the caller would then roll back a charge that was made, or fail open.
+            // eslint-disable-next-line no-console -- intentional: no injected logger; a skipped sweep only delays eviction
+            console.warn("@lunora/ratelimit: the retention sweep failed; the consume still stands", error);
         }
     }
 
