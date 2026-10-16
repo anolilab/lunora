@@ -3892,6 +3892,9 @@ class LunoraClient {
         this.mutationSettledListeners.clear();
         this.pendingChangeListeners.clear();
         this.whisperHandlers.clear();
+        // Room handles still open keep their held-send closures reachable through these; a closed client drops them.
+        this.roomFlushes.clear();
+        this.roomIdentityResets.clear();
 
         // Shape subscriptions retain user row/error callbacks and replicated
         // rows; poke buffers hold partially-assembled membership. Neither is
