@@ -4688,6 +4688,30 @@ describe("lunoraClient", () => {
             room.close();
         });
 
+        it("sends a room message as it was when accepted, even if the caller mutates it while queued", () => {
+            expect.assertions(1);
+
+            const client = new LunoraClient({
+                fetch: vi.fn<typeof fetch>(),
+                url: "https://app.example",
+                WebSocket: createMockWebSocket(),
+            });
+            const room = client.connectRoom<{ text: string }>({ name: "chat" }, { onMessage: () => undefined });
+            const message = { text: "original" };
+
+            room.send(message);
+            message.text = "mutated";
+
+            const socket = latestSocket();
+
+            socket.open();
+            socket.receive({ subject: null, type: "identity" });
+
+            expect(wireFrames(socket)).toContainEqual({ data: { text: "original" }, topic: "room:chat", type: "whisper" });
+
+            room.close();
+        });
+
         it("refuses a room send after the client is closed, and rejects an unencodable payload at send time", () => {
             expect.assertions(2);
 

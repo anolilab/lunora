@@ -1862,10 +1862,6 @@ class LunoraClient {
     public whisper(topic: string, data?: unknown, options: { shardKey?: string } = {}): boolean {
         this.assertLeaderOwnedSurface("whisper");
 
-        this.ensureSocket(options.shardKey);
-
-        const conn = this.getConnection(options.shardKey);
-
         // Wire-encode before send so `bigint`/bytes payloads survive (raw
         // `JSON.stringify` would throw on a bigint). The shard relays the
         // encoded value verbatim and the receiving client `decodeWire`s it —
@@ -1873,12 +1869,7 @@ class LunoraClient {
         // backward-compatible with older shards/clients. Omitted `data`
         // becomes an explicit `null` (the documented receiver contract).
         // eslint-disable-next-line unicorn/no-null -- an omitted whisper body is delivered as an explicit JSON `null`, never `undefined`
-        const sent = conn !== undefined && sendOn(conn, { data: encodeCallArgs(data ?? null, `whisper data for topic '${topic}'`), topic, type: "whisper" });
-
-        // A send-only whisper may be all that opened this shard: let it idle out.
-        this.releaseIdleShard(options.shardKey);
-
-        return sent;
+        return this.sendEncodedWhisper(topic, encodeCallArgs(data ?? null, `whisper data for topic '${topic}'`), options);
     }
 
     /**
@@ -1921,25 +1912,16 @@ class LunoraClient {
         let closed = false;
         // Sends made before the socket is open are held here and flushed, in order, when
         // the connection reports connected. Bounded: past the cap a send is refused.
-        const pending: Message[] = [];
+        // Held as encoded snapshots, taken at send time: a later mutation of the caller's object
+        // cannot change what goes out, and an unencodable payload was refused to the caller already.
+        const pending: unknown[] = [];
         const reset = (): void => {
             pending.length = 0;
         };
         const flush = (): void => {
             // Nothing is sent until the socket is admitted: confirmed, and rejoined.
             while (pending.length > 0 && this.roomSendsAdmitted(options.shardKey)) {
-                let sent: boolean;
-
-                try {
-                    sent = this.whisper(topic, pending[0], options);
-                } catch {
-                    // An unencodable message is dropped here, so it cannot stall the messages behind it.
-                    pending.shift();
-
-                    continue;
-                }
-
-                if (!sent) {
+                if (!this.sendEncodedWhisper(topic, pending[0], options)) {
                     return;
                 }
 
@@ -1979,12 +1961,13 @@ class LunoraClient {
                     return false;
                 }
 
-                // Reject an unencodable payload now, to the caller, instead of holding it in the queue.
-                encodeCallArgs(message, `room message for '${topic}'`);
+                // Encode now, to the caller: an unencodable payload throws here instead of being
+                // accepted, and the held copy is a snapshot the caller can no longer change.
+                const encoded: unknown = structuredClone(encodeCallArgs(message, `room message for '${topic}'`));
 
                 flush();
 
-                if (pending.length === 0 && this.roomSendsAdmitted(options.shardKey) && this.whisper(topic, message, options)) {
+                if (pending.length === 0 && this.roomSendsAdmitted(options.shardKey) && this.sendEncodedWhisper(topic, encoded, options)) {
                     return true;
                 }
 
@@ -1992,7 +1975,7 @@ class LunoraClient {
                     return false;
                 }
 
-                pending.push(message);
+                pending.push(encoded);
 
                 return true;
             },
@@ -7246,6 +7229,22 @@ class LunoraClient {
         this.setAuthToken(null, subject);
 
         return true;
+    }
+
+    /**
+     * Frame an already-encoded whisper body onto the topic's shard socket. Returns `false`
+     * when the socket is not open, so the caller can hold the body and send it later.
+     */
+    private sendEncodedWhisper(topic: string, encoded: unknown, options: { shardKey?: string }): boolean {
+        this.ensureSocket(options.shardKey);
+
+        const conn = this.getConnection(options.shardKey);
+        const sent = conn !== undefined && sendOn(conn, { data: encoded, topic, type: "whisper" });
+
+        // A send-only whisper may be all that opened this shard: let it idle out.
+        this.releaseIdleShard(options.shardKey);
+
+        return sent;
     }
 
     /**
