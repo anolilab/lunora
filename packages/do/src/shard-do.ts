@@ -15945,6 +15945,10 @@ abstract class ShardDO {
         }
 
         const { action, connectionId, key, subscriptionId } = parsed;
+        // Connection ids are random per DO instance, and the grant lands only in the map or socket
+        // list of the DO that receives the call. The server routes connect and control to the same
+        // shard (`shard` query param and `shardKey` body field both feed `fetchShard`). If a control
+        // call ever reached a different DO, it would find no connection and return 404: it fails closed.
         const subscriber = this.liveSubscribers.get(connectionId);
 
         // A connection answers only to the caller that opened it: a control call naming another
