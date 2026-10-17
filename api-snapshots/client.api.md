@@ -1297,7 +1297,7 @@ interface SchedulerStatus {
 ### `ServerMessage` (type)
 
 ```ts
-type ServerMessage = ServerAckMessage | ServerChunkMessage | ServerCompleteMessage | ServerDataMessage | ServerErrorMessage | ServerIdentityMessage | ServerPokeEndMessage | ServerPokePartMessage | ServerPokeStartMessage | ServerResumeMessage | ServerSettledMessage | ServerWhisperMessage;
+type ServerMessage = ServerAckMessage | ServerChunkMessage | ServerCompleteMessage | ServerDataMessage | ServerErrorMessage | ServerIdentityMessage | ServerLiveMessage | ServerPokeEndMessage | ServerPokePartMessage | ServerPokeStartMessage | ServerResumeMessage | ServerSettledMessage | ServerWhisperMessage;
 ```
 
 ### `ServerPokeEndMessage` (interface)
@@ -2485,6 +2485,17 @@ interface ServerIdentityMessage {
     connectionId?: string;
     subject: null | string;
     type: "identity";
+}
+```
+
+### `ServerLiveMessage` (interface)
+
+```ts
+interface ServerLiveMessage {
+    data: unknown;
+    stream: string;
+    topic: string;
+    type: "live";
 }
 ```
 

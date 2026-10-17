@@ -968,7 +968,7 @@ interface HttpActionContext {
         method?: string;
     }) => Promise<Response>;
     forShard: (shardKey: string) => Pick<HttpActionContext, "runAction" | "runMutation" | "runQuery">;
-    live: {
+    live?: {
         publish: (topic: string, payload: unknown, options: {
             shardKey?: string;
             stream: string;
@@ -2296,6 +2296,7 @@ interface WorkerOptions {
     jurisdiction?: DurableObjectJurisdiction;
     kvIntrospector?: KvIntrospector;
     listSchemaTables?: () => ReadonlyArray<string>;
+    liveStreams?: boolean;
     logArchive?: LogArchiveConfig;
     notifySubscriptionStore?: NotifySubscriptionStoreLike;
     observability?: ObservabilitySink;

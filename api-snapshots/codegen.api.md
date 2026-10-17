@@ -290,6 +290,7 @@ interface EmitAppOptions {
     jurisdiction?: JurisdictionIR;
     jurisdictionPinsAuth?: boolean;
     liveStreams?: boolean;
+    liveStreamsWithheld?: boolean;
     tables: ReadonlyArray<Pick<TableIR, "name" | "shardMode">>;
     useUmbrella: boolean;
     vectorIndexCount?: number;
