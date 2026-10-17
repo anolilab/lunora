@@ -15027,7 +15027,8 @@ abstract class ShardDO {
             return this.handleBatchRpc(request);
         }
 
-        if (request.headers.get("Upgrade") === "websocket") {
+        // `Upgrade` is a case-insensitive token (RFC 9110 §7.8), matching the worker's own check.
+        if (request.headers.get("Upgrade")?.toLowerCase() === "websocket") {
             return this.handleWebSocketUpgrade(request);
         }
 
