@@ -255,5 +255,87 @@ describe("celld conformance run", () => {
                 await draining;
             }
         });
+
+        // The same SSE path, but through the real `ShardDO` live handlers and the
+        // app surface: `defineLiveStream` serves connect and control, and
+        // `ctx.live.publish` reaches the shard's publish route.
+        it("serves connect, subscribe, publish and unsubscribe from the real ShardDO", async () => {
+            expect.assertions(9);
+
+            const connect = await fetch(`${fleet.origin}/live/tck-feed/connect`);
+
+            expect(connect.status).toBe(200);
+
+            const connectionId = connect.headers.get("x-lunora-live-connection") ?? "";
+
+            expect(connectionId).toMatch(/^[0-9a-f-]{36}$/u);
+
+            const reader = (connect.body ?? new ReadableStream<Uint8Array>()).getReader();
+            const decoder = new TextDecoder();
+            let received = "";
+
+            const draining = (async (): Promise<void> => {
+                for (;;) {
+                    // eslint-disable-next-line no-await-in-loop -- each chunk is decoded before the next read
+                    const { done, value } = await reader.read();
+
+                    if (done) {
+                        return;
+                    }
+
+                    received += decoder.decode(value, { stream: true });
+                }
+            })();
+
+            const control = async (body: Record<string, string>): Promise<Response> =>
+                fetch(`${fleet.origin}/live/tck-feed/control`, {
+                    body: JSON.stringify({ ...body, connectionId }),
+                    headers: { "content-type": "application/json" },
+                    method: "POST",
+                });
+
+            const publish = async (topic: string, data: unknown): Promise<Response> =>
+                fetch(`${fleet.origin}/tck-live/publish`, {
+                    body: JSON.stringify({ data, topic }),
+                    headers: { "content-type": "application/json" },
+                    method: "POST",
+                });
+
+            const frameArrived = async (marker: string): Promise<void> => {
+                await pollUntil(
+                    async () => received,
+                    (text) => text.includes(marker),
+                    { deadlineMs: 5000, intervalMs: 25 },
+                );
+            };
+
+            try {
+                const subscribed = await control({ action: "subscribe", subscriptionId: "s1", topic: "tck:a" });
+
+                expect(subscribed.status).toBe(200);
+                await expect(control({ action: "subscribe", subscriptionId: "s2", topic: "tck:b" })).resolves.toHaveProperty("status", 200);
+
+                await expect(publish("tck:a", { n: 1 })).resolves.toHaveProperty("status", 200);
+
+                await frameArrived('event: live\ndata: {"topic":"tck:a","data":{"n":1}}\n\n');
+
+                expect(received).toContain('event: live\ndata: {"topic":"tck:a","data":{"n":1}}\n\n');
+
+                // Unsubscribing s1 must stop tck:a. The sentinel on tck:b arrives
+                // after the late publish on tck:a, so its frame proves the late one
+                // was dispatched and is absent.
+                await expect(control({ action: "unsubscribe", subscriptionId: "s1", topic: "tck:a" })).resolves.toHaveProperty("status", 200);
+
+                await publish("tck:a", { n: 2 });
+                await publish("tck:b", { n: 3 });
+                await frameArrived('data: {"topic":"tck:b","data":{"n":3}}');
+
+                expect(received).not.toContain('"topic":"tck:a","data":{"n":2}');
+                expect(received).toContain('event: live\ndata: {"topic":"tck:b","data":{"n":3}}\n\n');
+            } finally {
+                await reader.cancel();
+                await draining;
+            }
+        });
     });
 });
