@@ -14,14 +14,35 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
 
+/** Upper bound on a request body: the 1 MiB default `@lunora/runtime` gives a request body (`MAX_BODY_BYTES`, not exported). */
+const MAX_REQUEST_BODY_BYTES = 1_048_576;
+
+/** Thrown when a request body exceeds {@link MAX_REQUEST_BODY_BYTES}. The listener answers it with 413. */
+class PayloadTooLargeError extends Error {}
+
 const readBody = async (request: IncomingMessage): Promise<Uint8Array<ArrayBuffer> | undefined> => {
     if (request.method === "GET" || request.method === "HEAD") {
         return undefined;
     }
 
-    const chunks: Buffer[] = [];
+    // A declared oversize body is refused before any of it is read.
+    const declared = Number(request.headers["content-length"]);
 
+    if (Number.isFinite(declared) && declared > MAX_REQUEST_BODY_BYTES) {
+        throw new PayloadTooLargeError(`request body exceeds ${String(MAX_REQUEST_BODY_BYTES)} bytes`);
+    }
+
+    const chunks: Buffer[] = [];
+    let received = 0;
+
+    // A body without a content-length (chunked) is counted as it arrives, so the cap holds either way.
     for await (const chunk of request as AsyncIterable<Buffer>) {
+        received += chunk.byteLength;
+
+        if (received > MAX_REQUEST_BODY_BYTES) {
+            throw new PayloadTooLargeError(`request body exceeds ${String(MAX_REQUEST_BODY_BYTES)} bytes`);
+        }
+
         chunks.push(chunk);
     }
 
@@ -145,7 +166,15 @@ export const createNodeHttpServer = async (options: NodeHttpServerOptions): Prom
             .then((request) => options.fetch(request))
             .then(
                 (response) => writeResponse(response, outgoing),
-                () => {
+                (error: unknown) => {
+                    if (error instanceof PayloadTooLargeError) {
+                        // `connection: close` because the unread rest of the body would otherwise hold the socket open.
+                        outgoing.writeHead(413, { connection: "close", "content-type": "text/plain; charset=utf-8" });
+                        outgoing.end("Payload Too Large");
+
+                        return;
+                    }
+
                     if (!outgoing.headersSent) {
                         outgoing.writeHead(500, { "content-type": "text/plain; charset=utf-8" });
                     }

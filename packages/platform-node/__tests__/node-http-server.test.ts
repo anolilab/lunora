@@ -110,4 +110,43 @@ describe("createNodeHttpServer", () => {
 
         await client;
     });
+
+    it("answers 413 to a declared body over the limit without calling fetch", async () => {
+        expect.hasAssertions();
+
+        const app = vi.fn<() => Response>(() => new Response("ok"));
+        const server = await listen(app);
+
+        const response = await fetch(server.origin, {
+            body: new Uint8Array(1_048_577),
+            method: "POST",
+        });
+
+        expect(response.status).toBe(413);
+        expect(app).not.toHaveBeenCalled();
+    });
+
+    it("answers 413 to a chunked body that grows past the limit", async () => {
+        expect.hasAssertions();
+
+        const app = vi.fn<() => Response>(() => new Response("ok"));
+        const server = await listen(app);
+
+        const chunk = new Uint8Array(65_536);
+        const body = new ReadableStream<Uint8Array>({
+            start(streamController) {
+                // 17 chunks of 64 KiB is 1 MiB + 64 KiB, over the 1 MiB cap, with no content-length to refuse it up front.
+                for (let index = 0; index < 17; index += 1) {
+                    streamController.enqueue(chunk);
+                }
+
+                streamController.close();
+            },
+        });
+
+        const response = await fetch(server.origin, { body, duplex: "half", method: "POST" } as RequestInit);
+
+        expect(response.status).toBe(413);
+        expect(app).not.toHaveBeenCalled();
+    });
 });
