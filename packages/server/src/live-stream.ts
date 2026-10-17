@@ -86,6 +86,8 @@
  * own id if that matters.
  */
 
+import { isLunoraError } from "@lunora/errors";
+
 import { LIVE_CONNECT_PATH, LIVE_CONTROL_PATH } from "../../../shared/live-stream";
 import type { HttpActionCtx as HttpActionContext, LunoraRouteHandler } from "./http";
 import { httpAction } from "./http";
@@ -219,7 +221,25 @@ const defineLiveStream = (config: LiveStreamConfig): LiveStream => {
 
         // The stream is set here, never taken from the body: a subscription is
         // scoped to the stream whose `onSubscribe` granted it (see the module docblock).
-        return context.fetchShard(shardKey, LIVE_CONTROL_PATH, { body: JSON.stringify({ ...body, stream: config.id }), method: "POST" });
+        const forwarded = context.fetchShard(shardKey, LIVE_CONTROL_PATH, { body: JSON.stringify({ ...body, stream: config.id }), method: "POST" });
+
+        if (action !== "subscribe") {
+            return forwarded;
+        }
+
+        // A subscribe naming a shard the caller may not address is refused by the
+        // runtime's shard gate. An `onSubscribe` that swallows that refusal and returns
+        // `true` reaches here, so the refusal must read as the same denial a topic gets:
+        // the reply must not distinguish a refused shard from a denied topic.
+        try {
+            return await forwarded;
+        } catch (error) {
+            if (isLunoraError(error) && error.code === "FORBIDDEN_SHARD") {
+                return forbidden(topic);
+            }
+
+            throw error;
+        }
     });
 
     return { connect, connectPath, control, controlPath, id: config.id };

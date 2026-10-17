@@ -2219,6 +2219,8 @@ describe("createWorker — HTTP actions", () => {
         shard.response = Response.json({ result: encodeWire([{ id: "msg_1" }]) });
 
         const worker = createWorker({
+            // A non-default shard run is gated: the app grants this route's shard explicitly.
+            authorizeShard: () => true,
             httpRouter: honoApp((app) =>
                 app.get("/channels/:id/messages", async (c) => {
                     const channelId = c.req.param("id");
@@ -2237,6 +2239,43 @@ describe("createWorker — HTTP actions", () => {
         await expect(res.json()).resolves.toEqual({ messages: [{ id: "msg_1" }] });
         expect(shard.calls).toHaveLength(1);
         expect(shard.calls[0]!.shardKey).toBe("tenant-42");
+    });
+
+    it("refuses a `ctx.forShard(key).run*` the caller may not address before any system-trusted dispatch", async () => {
+        expect.assertions(4);
+
+        // `forShard` stamps `x-lunora-system`, so it must pass the same
+        // `authorizeShard` gate as the client paths. Without it, a live subscribe
+        // naming a shard ran its `onSubscribe` read under system trust.
+        shard.response = Response.json({ result: encodeWire([{ id: "secret" }]) });
+
+        let denied: unknown;
+        const authorizeShard = vi.fn<() => boolean>(() => false);
+        const worker = createWorker({
+            authorizeShard,
+            httpRouter: honoApp((app) =>
+                app.get("/victim/messages", async (c) => {
+                    try {
+                        await c.var.lunora.forShard("victim-shard").runQuery({ __lunoraRef: "messages:list" }, {});
+                    } catch (error) {
+                        denied = error;
+
+                        return new Response("denied", { status: 403 });
+                    }
+
+                    return new Response("read", { status: 200 });
+                }),
+            ),
+            shardDO: shard.namespace,
+        });
+
+        const res = await worker.fetch(new Request("https://app.example/victim/messages"), {}, fakeContext);
+
+        expect(res.status).toBe(403);
+        expect(denied).toMatchObject({ code: "FORBIDDEN_SHARD" });
+        expect(authorizeShard).toHaveBeenCalledWith(expect.objectContaining({ shardKey: "victim-shard" }));
+        // The gate must short-circuit before the system-trusted shard dispatch.
+        expect(shard.calls).toHaveLength(0);
     });
 
     it("encodes `ctx.run*` args and decodes its result, so bigint / Date / bytes survive the shard hop", async () => {

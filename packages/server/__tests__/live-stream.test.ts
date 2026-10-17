@@ -1,3 +1,4 @@
+import { LunoraError } from "@lunora/errors";
 import { describe, expect, it, vi } from "vitest";
 
 import type { HttpActionCtx as HttpActionContext, LunoraRouteHandler, ShardFetch } from "../src/index";
@@ -133,6 +134,70 @@ describe("defineLiveStream", () => {
         });
 
         expect(onSubscribe).not.toHaveBeenCalled();
+    });
+
+    it("refuses a subscribe naming a shard the caller may not address with the same body as a denied topic", async () => {
+        expect.assertions(4);
+
+        const calls: ShardCall[] = [];
+        // The runtime refuses the shard run before the system-trusted read.
+        const refused = new LunoraError("FORBIDDEN_SHARD", "Forbidden shard", { status: 403 });
+        const runQuery = vi.fn<HttpActionContext["runQuery"]>(() => Promise.reject(refused));
+        const forShard = vi.fn<HttpActionContext["forShard"]>(() => {
+            return { runAction: vi.fn<HttpActionContext["runAction"]>(), runMutation: vi.fn<HttpActionContext["runMutation"]>(), runQuery };
+        });
+        const context = { ...makeContext(calls), forShard } as unknown as HttpActionContext;
+        const stream = defineLiveStream({
+            id: "posts",
+            onSubscribe: async ({ ctx }) => {
+                await ctx.runQuery({ __lunoraRef: "messages:list" } as never, {});
+
+                return true;
+            },
+        });
+
+        const response = await dispatch(stream.control, context, "POST", "/live/posts/control", {
+            action: "subscribe",
+            shardKey: "victim-shard",
+            topic: "post:1",
+        });
+
+        expect(forShard).toHaveBeenCalledWith("victim-shard");
+        expect(response.status).toBe(403);
+        await expect(response.json()).resolves.toEqual({ code: "FORBIDDEN_TOPIC", error: 'subscribe to "post:1" was denied' });
+        expect(calls).toHaveLength(0);
+    });
+
+    it("answers a shard refusal the onSubscribe swallowed with the same denial as a denied topic", async () => {
+        expect.assertions(3);
+
+        const refused = new LunoraError("FORBIDDEN_SHARD", "Forbidden shard", { status: 403 });
+        // The app catches the refused read and returns `true` anyway. The shard
+        // control call is then refused by `fetchShard`, which must not leak `FORBIDDEN_SHARD`.
+        const swallowing = defineLiveStream({ id: "posts", onSubscribe: () => true });
+        const denied = defineLiveStream({ id: "posts", onSubscribe: () => false });
+        const refusingShard: ShardFetch = () => Promise.reject(refused);
+        // The swallowed `onSubscribe` makes no read that refuses, so `forShard` resolves.
+        const forShard = vi.fn<HttpActionContext["forShard"]>(() => {
+            return {
+                runAction: vi.fn<HttpActionContext["runAction"]>(),
+                runMutation: vi.fn<HttpActionContext["runMutation"]>(),
+                runQuery: vi.fn<HttpActionContext["runQuery"]>(),
+            };
+        });
+        const context = {
+            auth: { getIdentity: () => Promise.resolve(null), userId: null },
+            fetchShard: refusingShard,
+            forShard,
+        } as unknown as HttpActionContext;
+        const body = { action: "subscribe", shardKey: "victim-shard", topic: "post:1" };
+
+        const swallowed = await dispatch(swallowing.control, context, "POST", "/live/posts/control", body);
+        const deniedTopic = await dispatch(denied.control, context, "POST", "/live/posts/control", body);
+
+        expect(swallowed.status).toBe(403);
+        expect(deniedTopic.status).toBe(403);
+        await expect(swallowed.json()).resolves.toEqual(await deniedTopic.json());
     });
 
     it("consults onSubscribe for an authenticated caller even when allowAnonymousControl is true", async () => {

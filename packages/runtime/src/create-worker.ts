@@ -4064,6 +4064,15 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
                 // can be reached unauthenticated) — same reasoning, same surface.
                 assertNotReservedRelationPath(functionPath);
 
+                // Every non-default shard a run names is refused here, before the
+                // system-trusted dispatch below can read it. That covers `forShard` from
+                // a webhook or REST route as well as the live subscribe, whose verdict is
+                // built from a client-supplied `shardKey`. The default shard is the app's
+                // own and is not gated.
+                if (shardKey !== defaultShard) {
+                    await assertShardAuthorized(identity, shardKey);
+                }
+
                 // Through the SAME dispatcher the `/_lunora/rpc` and `serverQuery` paths
                 // use, rather than a bare `forwardToShard`: that is what puts this call
                 // in the RPC event stream and under a `traceparent`-parented span, which
