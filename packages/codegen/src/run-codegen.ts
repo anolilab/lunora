@@ -681,6 +681,9 @@ export const runCodegen = (options: CodegenOptions): CodegenResult => {
         // `vectorStore: "unsupported"` — a `generated.shard` byte-identical to
         // the Cloudflare one while the type surface was withheld.
         hasVectors: vectorStoreSupported,
+        // Declared AND not rejected by the gate: a target without live streams gets
+        // no `ctx.live` on its action ctx, and the gate has already reported why.
+        liveStreams: platformGate.signals.liveStreams === true,
         maskMetadata,
         mutators,
         queues,

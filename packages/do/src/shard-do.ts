@@ -6093,6 +6093,66 @@ abstract class ShardDO {
     }
 
     /**
+     * The one validated publish path for a server-side live event. The HTTP route
+     * (`ctx.live.publish` from an HTTP action, forwarded by the Worker) and an
+     * in-shard action (see publishLiveFromAction) both land here, so
+     * the room refusal and the byte cap cannot drift between them. `wireData` is
+     * already wire-encoded.
+     * @throws LunoraError `FORBIDDEN_TOPIC` (403) for a room topic, `PAYLOAD_TOO_LARGE` (413) past the cap
+     * @returns the number of LOCAL SSE connections the frame was written to
+     */
+    protected publishLiveEvent(stream: string, topic: string, wireData: unknown): number {
+        if (topic.startsWith(ROOM_TOPIC_PREFIX)) {
+            throw new LunoraError("FORBIDDEN_TOPIC", "a room topic cannot be published to", { status: 403 });
+        }
+
+        // eslint-disable-next-line unicorn/no-null -- JSON payload: an undefined publish body serializes to null so the frame carries an explicit value
+        const dataJson = JSON.stringify(wireData ?? null);
+
+        // Measured in UTF-8 bytes like the room broadcast: `.length` counts UTF-16 units, so
+        // multibyte text would pass the cap at several times its byte size.
+        const { byteLength } = new TextEncoder().encode(dataJson);
+
+        if (byteLength > ShardDO.MAX_WHISPER_BYTES) {
+            throw new LunoraError("PAYLOAD_TOO_LARGE", `a publish may be at most ${String(ShardDO.MAX_WHISPER_BYTES)} bytes`, { status: 413 });
+        }
+
+        return this.broadcastLiveTopic(stream, topic, dataJson);
+    }
+
+    /**
+     * `ctx.live.publish` from an action that runs on THIS shard — a scheduled job's
+     * action, or any action the shard executes. It is a local call, not an RPC hop:
+     * the action already runs inside the Durable Object that owns the subscribers.
+     *
+     * An absent `shardKey` means this shard. Unlike the HTTP route, which defaults to
+     * the root shard, an action has no request to route from, so it publishes where
+     * it runs. A `shardKey` naming another shard is refused rather than delivered to
+     * zero subscribers: there is no cross-shard live fan-out to forward it through.
+     * @returns the number of LOCAL SSE connections the frame was written to
+     */
+    protected publishLiveFromAction(topic: string, payload: unknown, options: { shardKey?: string; stream: string }): Promise<number> {
+        if (options.shardKey !== undefined && options.shardKey !== this.currentShardKey()) {
+            return Promise.reject(
+                new LunoraError(
+                    "BAD_REQUEST",
+                    `ctx.live.publish from an action runs on shard "${this.currentShardKey()}"; "${options.shardKey}" is another shard. Publish from a route or an action on that shard`,
+                    {
+                        status: 400,
+                    },
+                ),
+            );
+        }
+
+        try {
+            // eslint-disable-next-line unicorn/no-null -- an omitted publish payload is delivered as an explicit JSON null
+            return Promise.resolve(this.publishLiveEvent(options.stream, topic, encodeWire(payload ?? null)));
+        } catch (error) {
+            return Promise.reject(error instanceof Error ? error : new LunoraError("INTERNAL", String(error), { status: 500 }));
+        }
+    }
+
+    /**
      * The `ShardRegistryDO` namespace this shard reports to, and which of its
      * tables are `.shardBy()`. The generated subclass overrides it for a schema
      * with `.shardBy()` tables and answers `undefined` until the app declares
@@ -15884,24 +15944,15 @@ abstract class ShardDO {
             return jsonResponse({ error: { code: "BAD_REQUEST", message: "topic and stream are required" } }, 400);
         }
 
-        if (topic.startsWith(ROOM_TOPIC_PREFIX)) {
-            return jsonResponse({ error: { code: "FORBIDDEN_TOPIC", message: "a room topic cannot be published to" } }, 403);
+        try {
+            return jsonResponse({ delivered: this.publishLiveEvent(stream, topic, body.data) });
+        } catch (error) {
+            if (isLunoraError(error)) {
+                return jsonResponse({ error: { code: error.code, message: error.message } }, error.status);
+            }
+
+            throw error;
         }
-
-        // eslint-disable-next-line unicorn/no-null -- JSON payload: an undefined publish body serializes to null so the frame carries an explicit value
-        const dataJson = JSON.stringify(body.data ?? null);
-
-        // Measured in UTF-8 bytes like the room broadcast: `.length` counts UTF-16 units, so
-        // multibyte text would pass the cap at several times its byte size.
-        const { byteLength } = new TextEncoder().encode(dataJson);
-
-        if (byteLength > ShardDO.MAX_WHISPER_BYTES) {
-            return jsonResponse({ error: { code: "PAYLOAD_TOO_LARGE", message: `a publish may be at most ${String(ShardDO.MAX_WHISPER_BYTES)} bytes` } }, 413);
-        }
-
-        const delivered = this.broadcastLiveTopic(stream, topic, dataJson);
-
-        return jsonResponse({ delivered });
     }
 
     /**

@@ -139,11 +139,11 @@ interface LivePublishOptions {
 
 /**
  * `ctx.live` — publish an arbitrary event to a named topic. The event fans out
- * to the SSE subscribers of `options.stream` on the shard, and to WebSocket
- * whisper members of the topic (and the relay hub when the shard is promoted).
+ * to the SSE subscribers of `options.stream` on the shard. WebSocket whisper
+ * members never receive it (see the live-stream docblock).
  *
- * Reachable from an HTTP-action ctx; the scheduler/queue action contexts do
- * not carry it yet (see the live-stream docblock).
+ * Reachable from an HTTP-action ctx; an action (a scheduled job) publishes
+ * through the same surface in-process (see the live-stream docblock).
  */
 interface LivePublisher {
     /**

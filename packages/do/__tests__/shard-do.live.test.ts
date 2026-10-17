@@ -1,3 +1,4 @@
+import { encodeWire } from "@lunora/wire";
 import { describe, expect, it } from "vitest";
 
 import type { ShardDOState } from "../src/shard-do";
@@ -46,6 +47,11 @@ class LiveShard extends ShardDO {
     // eslint-disable-next-line class-methods-use-this -- abstract stub; the live path never dispatches an RPC
     public override handleRpc(): Promise<unknown> {
         return Promise.resolve({});
+    }
+
+    /** What a scheduled job's or queue consumer's `ctx.live.publish` calls on the shard it runs in. */
+    public publishFromAction(topic: string, payload: unknown, options: { shardKey?: string; stream: string }): Promise<number> {
+        return this.publishLiveFromAction(topic, payload, options);
     }
 }
 
@@ -465,5 +471,87 @@ describe("shardDO live streams", () => {
         const response = await control(shard, { action: "subscribe", stream: "s", connectionId: "nope", subscriptionId: "s1", topic: "t" });
 
         expect(response.status).toBe(404);
+    });
+
+    it("delivers an in-shard action publish to the SSE subscribers of its stream, and returns the count", async () => {
+        expect.assertions(2);
+
+        const shard = makeShard([]);
+        const a = await connect(shard);
+        const reader = new SseReader(a.response);
+
+        await reader.next();
+        await control(shard, { action: "subscribe", stream: "s", connectionId: a.connectionId, subscriptionId: "s1", topic: "feed" });
+
+        const delivered = await shard.publishFromAction("feed", { event: "job_done" }, { stream: "s" });
+
+        expect(delivered).toBe(1);
+        await expect(reader.next()).resolves.toEqual({ data: { data: { event: "job_done" }, topic: "feed" }, event: "live" });
+    });
+
+    it("encodes an action publish exactly as the HTTP route's wire payload, so bigint survives the hop", async () => {
+        expect.assertions(2);
+
+        const viaAction = makeShard([]);
+        const viaHttp = makeShard([]);
+        const actionConn = await connect(viaAction);
+        const httpConn = await connect(viaHttp);
+        const actionReader = new SseReader(actionConn.response);
+        const httpReader = new SseReader(httpConn.response);
+
+        await actionReader.next();
+        await httpReader.next();
+        await control(viaAction, { action: "subscribe", stream: "s", connectionId: actionConn.connectionId, subscriptionId: "s1", topic: "t" });
+        await control(viaHttp, { action: "subscribe", stream: "s", connectionId: httpConn.connectionId, subscriptionId: "s1", topic: "t" });
+
+        await viaAction.publishFromAction("t", { amount: 5n }, { stream: "s" });
+        await publish(viaHttp, { data: encodeWire({ amount: 5n }), stream: "s", topic: "t" });
+
+        const fromAction = await actionReader.next();
+        const fromHttp = await httpReader.next();
+
+        expect(fromAction.data).toEqual(fromHttp.data);
+        expect(fromAction.data).toEqual({ data: encodeWire({ amount: 5n }), topic: "t" });
+    });
+
+    it("keeps an action publish on its own stream: a subscriber of another stream receives nothing", async () => {
+        expect.assertions(2);
+
+        const shard = makeShard([]);
+        const a = await connect(shard);
+        const reader = new SseReader(a.response);
+
+        await reader.next();
+        await control(shard, { action: "subscribe", stream: "public", connectionId: a.connectionId, subscriptionId: "s1", topic: "feed" });
+
+        const elsewhere = await shard.publishFromAction("feed", "private", { stream: "private" });
+        const own = await shard.publishFromAction("feed", "public", { stream: "public" });
+
+        expect(elsewhere).toBe(0);
+        expect(own).toBe(1);
+    });
+
+    it("refuses an action publish to a room topic", async () => {
+        expect.assertions(1);
+
+        const shard = makeShard([]);
+
+        await expect(shard.publishFromAction("room:chat", "forged", { stream: "s" })).rejects.toMatchObject({ code: "FORBIDDEN_TOPIC", status: 403 });
+    });
+
+    it("refuses an oversized action publish rather than dropping it", async () => {
+        expect.assertions(1);
+
+        const shard = makeShard([]);
+
+        await expect(shard.publishFromAction("feed", "x".repeat(8192), { stream: "s" })).rejects.toMatchObject({ code: "PAYLOAD_TOO_LARGE", status: 413 });
+    });
+
+    it("refuses an action publish naming a shard other than the one it runs on", async () => {
+        expect.assertions(1);
+
+        const shard = makeShard([]);
+
+        await expect(shard.publishFromAction("feed", "x", { shardKey: "some-other-shard", stream: "s" })).rejects.toMatchObject({ status: 400 });
     });
 });

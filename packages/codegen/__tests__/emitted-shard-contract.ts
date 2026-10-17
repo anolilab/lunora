@@ -119,6 +119,15 @@ class EmittedShardContract extends ShardDO {
     }
 
     /**
+     * The emitted `ctx.live.publish` (action ctx, `liveStreams` only) awaits this.
+     * It is `protected` so the generated subclass can reach it; the publish itself
+     * stays inside the DO, so no worker hop and no private fan-out state is touched.
+     */
+    protected publishFromActionContract(topic: string, payload: unknown): Promise<number> {
+        return this.publishLiveFromAction(topic, payload, { stream: "s" });
+    }
+
+    /**
      * Mirrors the generated `runMutationTransaction` — the single helper the
      * top-level RPC, `ctx.runMutation` and `runReactor` all dispatch a mutation
      * handler through. It reaches three base members: `isInTransaction` (so a

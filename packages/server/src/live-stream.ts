@@ -74,9 +74,13 @@
  *
  * # Publish reach
  *
- * `ctx.live.publish` is on the HTTP-action context today. The scheduler and
- * queue action contexts do not carry it yet, so a cron job or a queue consumer
- * cannot publish without going through a route or an action that does.
+ * `ctx.live.publish` is on the HTTP-action context and on the action context
+ * (a scheduled job runs as an action inside its shard). An action publishes
+ * in-process to the subscribers of its own shard, so an omitted `shardKey` means
+ * the shard the action runs on, and a `shardKey` naming another shard is refused.
+ * A retried action (an at-least-once scheduler re-fire) publishes again: a
+ * subscriber can see the same event twice, so make the payload idempotent on its
+ * own id if that matters.
  */
 
 import { LIVE_CONNECT_PATH, LIVE_CONTROL_PATH } from "../../../shared/live-stream";
