@@ -102,4 +102,16 @@ describe("connectWebSocket", () => {
 
         expect(lastSocket().closed).toBe(true);
     });
+
+    it("opens nothing once the client is closed", () => {
+        expect.assertions(1);
+
+        const client = makeClient();
+
+        client.close();
+        client.connectWebSocket("/chat", { onMessage: () => undefined });
+
+        // teardown already swept; a socket opened now would never be closed
+        expect(FakeSocket.instances).toHaveLength(0);
+    });
 });

@@ -2143,7 +2143,7 @@ class LunoraClient {
     ): { close: () => void; send: (message: Message) => void } {
         this.assertLeaderOwnedSurface("connectWebSocket");
 
-        if (this.WebSocketImpl === undefined) {
+        if (this.WebSocketImpl === undefined || this.closed) {
             return { close: () => undefined, send: () => undefined };
         }
 
@@ -5651,8 +5651,9 @@ class LunoraClient {
         handlers: { onClose?: () => void; onMessage: (event: MessageEvent) => void; onOpen?: () => void; shardKey?: string },
     ): { close: () => void; resetBackoff: () => void; socket: () => WebSocket | undefined } {
         // The callers all check this before calling, but the helper stays
-        // self-contained: a no-op channel is the honest answer.
-        if (this.WebSocketImpl === undefined) {
+        // self-contained: a no-op channel is the honest answer. A closed client
+        // has already run its teardown sweep, so a channel opened now would never be closed.
+        if (this.WebSocketImpl === undefined || this.closed) {
             return { close: () => undefined, resetBackoff: () => undefined, socket: () => undefined };
         }
 
