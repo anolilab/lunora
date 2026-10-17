@@ -510,6 +510,11 @@ abstract class ShardDO {
     protected scheduleOutboxScheduler(): SchedulerLike | undefined;
     protected pollScheduleOutbox(trace?: TraceRefLike): Promise<number | undefined>;
     protected currentShardKey(): string;
+    protected publishLiveEvent(stream: string, topic: string, wireData: unknown): number;
+    protected publishLiveFromAction(topic: string, payload: unknown, options: {
+        shardKey?: string;
+        stream: string;
+    }): Promise<number>;
     protected shardRegistry(): undefined | {
         namespace: unknown;
         shardedTables: ReadonlySet<string>;

@@ -3044,7 +3044,18 @@ type OtlpSpanKind = "client" | "consumer" | "internal" | "producer" | "server";
 ### `QueueConsumerHandler` (type)
 
 ```ts
-type QueueConsumerHandler = (batch: unknown, env: unknown, context: ExecutionContextLike, trigger: TriggerTrace) => Promise<void>;
+type QueueConsumerHandler = (batch: unknown, env: unknown, context: ExecutionContextLike, trigger: TriggerTrace, live: QueueLivePublisherLike) => Promise<void>;
+```
+
+### `QueueLivePublisherLike` (interface)
+
+```ts
+interface QueueLivePublisherLike {
+    publish: (topic: string, payload: unknown, options: {
+        shardKey?: string;
+        stream: string;
+    }) => Promise<void>;
+}
 ```
 
 ### `R2PutLike` (interface)

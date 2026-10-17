@@ -103,6 +103,12 @@ interface ActionCtx {
     readonly env?: Record<string, unknown>;
     readonly fetch: typeof globalThis.fetch;
     readonly ip?: string;
+    readonly live?: {
+        publish: (topic: string, payload: unknown, options: {
+            shardKey?: string;
+            stream: string;
+        }) => Promise<void>;
+    };
     readonly log: LunoraLogger;
     readonly meta?: Readonly<Record<string, unknown>>;
     readonly metrics: LunoraMetrics;
