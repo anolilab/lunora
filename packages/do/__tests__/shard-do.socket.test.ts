@@ -238,6 +238,69 @@ describe("shardDO socket routes", () => {
         expect(socketCalls(shard).map((call) => call.args["kind"])).toEqual(["close"]);
     });
 
+    it("runs one socket's frames and its close strictly in arrival order", async () => {
+        expect.assertions(3);
+
+        // A message handler that stays open until the test releases it, so a later frame or the
+        // close would overtake it if the socket's events were not queued.
+        class SlowShard extends SocketShard {
+            public readonly release: (() => void)[] = [];
+
+            public readonly started: string[] = [];
+
+            public override handleRpc(_functionPath: string, args: Record<string, unknown>): Promise<unknown> {
+                if (args["kind"] !== "message") {
+                    this.started.push(String(args["kind"]));
+
+                    return Promise.resolve(undefined);
+                }
+
+                this.started.push(`message:${(args["message"] as { text: string }).text}`);
+
+                return new Promise<unknown>((resolve) => {
+                    this.release.push(() => {
+                        resolve(undefined);
+                    });
+                });
+            }
+        }
+
+        const settle = async (): Promise<void> => {
+            await new Promise<void>((resolve) => {
+                setTimeout(resolve, 0);
+            });
+        };
+
+        const a = new FakeSocket({ connectionId: "a", socketPath: "/chat", subs: {}, whispers: [CHAT_TOPIC] });
+        const shard = new SlowShard(
+            {
+                acceptWebSocket() {},
+                getWebSockets: () => [a],
+                storage: { sql: {} },
+            } as unknown as ShardDOState,
+            CHAT_ROUTE,
+        );
+
+        const first = send(shard, a, JSON.stringify(encodeWire({ text: "1" })));
+        const second = send(shard, a, JSON.stringify(encodeWire({ text: "2" })));
+        const closed = shard.webSocketClose(a as unknown as WebSocket, 1000, "done", true);
+
+        await settle();
+
+        // Only the first frame's handler is running; the second frame and the close wait behind it.
+        expect(shard.started).toEqual(["message:1"]);
+
+        shard.release.shift()?.();
+        await settle();
+
+        expect(shard.started).toEqual(["message:1", "message:2"]);
+
+        shard.release.shift()?.();
+        await Promise.all([first, second, closed]);
+
+        expect(shard.started).toEqual(["message:1", "message:2", "close"]);
+    });
+
     it("ignores a whisper frame addressed to a route's reserved topic", async () => {
         expect.assertions(2);
 

@@ -15597,7 +15597,30 @@ abstract class ShardDO {
      * not take the socket (or the shard) down, mirroring the lifecycle-hook and
      * room contracts.
      */
-    private async dispatchSocketEvent(
+    private dispatchSocketEvent(
+        ws: ShardSocketLike,
+        route: { functionPath: string; path: string },
+        kind: "close" | "message" | "open",
+        message?: unknown,
+    ): Promise<void> {
+        // Queued on the same per-socket chain as room events (see `roomChains`): a frame
+        // waits for the one before it, and a close never overtakes a message still running.
+        const previous = this.roomChains.get(ws) ?? Promise.resolve();
+        const run = previous.then(() => this.runSocketEvent(ws, route, kind, message));
+
+        this.roomChains.set(
+            ws,
+            run.then(
+                () => undefined,
+                () => undefined,
+            ),
+        );
+
+        return run;
+    }
+
+    /** Run one route event now. See {@link dispatchSocketEvent}, which queues it. */
+    private async runSocketEvent(
         ws: ShardSocketLike,
         route: { functionPath: string; path: string },
         kind: "close" | "message" | "open",
