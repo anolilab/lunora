@@ -121,6 +121,9 @@ export async function fenceShard(env: Env, shardKey: string, fence: DeliveryPerm
 
 Implement `readCurrentPermit` in your application. `scope` is opaque, nonempty and at most
 256 UTF-8 bytes; `epoch` is a nonnegative safe integer that increases with authority changes.
+Each subscription's permit is kept on the socket's 16 KiB WebSocket attachment (about 270 bytes
+at the maximum scope length), which a socket with many subscriptions shares with their metadata.
+Keep scopes short; a subscription whose permit no longer fits fails with `SUBSCRIPTION_PERSIST_FAILED`.
 Set the same nonempty `LUNORA_RELAY_SECRET` on the installer and shard; pass the target's
 exact shard key. The helper signs a private binding request and waits for acknowledgement.
 Commit policy and durable pending invalidations together, deny stale permits immediately,

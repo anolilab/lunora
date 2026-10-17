@@ -38,7 +38,7 @@ describe("delivery authorization", () => {
         expect(dataFrames(test.socket).map((frame) => frame.type)).toEqual(["data"]);
     });
 
-    it("checks the fence after backpressure drains and keeps the last delivered baseline", async () => {
+    it("withholds a frame held by backpressure once a fence revokes it and keeps the last delivered baseline", async () => {
         expect.hasAssertions();
 
         const test = setup();
