@@ -3418,4 +3418,24 @@ describe("createWorker — live streams and socket paths", () => {
         expect(res.status).toBe(500);
         await expect(res.text()).resolves.toBe("threw");
     });
+
+    it("hands a queue consumer a live publisher that forwards to the shard, so its publish reaches subscribers", async () => {
+        expect.assertions(3);
+
+        const worker = createWorker({
+            queue: async (_batch, _env, _context, _trigger, live) => {
+                await live?.publish("digest:1", { event: "ready" }, { stream: "posts" });
+            },
+            shardDO: shard.namespace,
+        });
+
+        await worker.queue?.({ messages: [], queue: "digest" }, {}, fakeContext);
+
+        const forwarded = shard.calls[0]?.request;
+        const body = (await forwarded?.json()) as { stream: string; topic: string };
+
+        expect(shard.calls).toHaveLength(1);
+        expect(new URL(forwarded?.url ?? "").pathname).toBe("/_lunora/live/publish");
+        expect(body).toMatchObject({ stream: "posts", topic: "digest:1" });
+    });
 });

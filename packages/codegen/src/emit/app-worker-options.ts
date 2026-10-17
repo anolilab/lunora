@@ -419,9 +419,15 @@ const buildBaseWorkerOptions = (options: ResolvedAppOptions): string[] => [
     // app declares push queues in `lunora/queues.ts`. In a dev environment (or with
     // `LUNORA_QUEUE_CAPTURE`), every consumed message is recorded into the studio's
     // Queues log via the root shard's `recordQueueMessage` admin RPC.
+    // `ctx.live.publish` reaches the handler only for an app that declares a live
+    // stream the target serves: the runtime always offers the Worker's shard-forwarding
+    // publisher as the fifth argument, and this forwards it only when `liveStreams` is set.
+    // Otherwise the handler's `ctx.live` is absent, matching a target without live streams.
     ...(options.hasQueue
         ? [
-              `            queue: (batch: unknown, queueEnv: unknown, _context: ExecutionContextLike, trigger: TriggerTrace): Promise<void> =>`,
+              options.liveStreams
+                  ? `            queue: (batch: unknown, queueEnv: unknown, _context: ExecutionContextLike, trigger: TriggerTrace, queueLive: Parameters<typeof dispatchQueueBatch>[2]["live"]): Promise<void> =>`
+                  : `            queue: (batch: unknown, queueEnv: unknown, _context: ExecutionContextLike, trigger: TriggerTrace): Promise<void> =>`,
               `                dispatchQueueBatch(batch as Parameters<typeof dispatchQueueBatch>[0], LUNORA_QUEUE_REGISTRY, {`,
               `                    capture: shouldCaptureQueue(queueEnv as Record<string, unknown>)`,
               `                        ? createQueueCaptureSink(queueEnv as Record<string, unknown>${
@@ -432,6 +438,7 @@ const buildBaseWorkerOptions = (options: ResolvedAppOptions): string[] => [
               // The consumer's `ctx.run` joins the queue invocation's trace instead
               // of minting a fresh one per dispatched function.
               `                    traceparent: trigger.traceparent,`,
+              ...(options.liveStreams ? [`                    live: queueLive,`] : []),
               `                }),`,
           ]
         : []),

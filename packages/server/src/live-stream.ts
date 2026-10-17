@@ -78,7 +78,8 @@
  * (a scheduled job runs as an action inside its shard). An action publishes
  * in-process to the subscribers of its own shard, so an omitted `shardKey` means
  * the shard the action runs on, and a `shardKey` naming another shard is refused.
- * A retried action (an at-least-once scheduler re-fire) publishes again: a
+ * A queue consumer has no shard, so its `ctx.live.publish` is forwarded to the
+ * shard the publish names, like an HTTP action's. A retried action (an at-least-once scheduler re-fire) publishes again: a
  * subscriber can see the same event twice, so make the payload idempotent on its
  * own id if that matters.
  */

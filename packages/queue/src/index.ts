@@ -22,6 +22,7 @@ export type {
     QueueContentType,
     QueueDefinition,
     QueueHandler,
+    QueueLivePublisher,
     QueueLogger,
     QueueMessage,
     QueueMessageBatch,

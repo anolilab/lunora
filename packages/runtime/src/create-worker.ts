@@ -607,7 +607,24 @@ interface TriggerTrace {
  * runtime decoupled from `@lunora/queue`'s structural batch type) along with the
  * invocation's own {@link TriggerTrace}.
  */
-type QueueConsumerHandler = (batch: unknown, env: unknown, context: ExecutionContextLike, trigger: TriggerTrace) => Promise<void>;
+type QueueConsumerHandler = (batch: unknown, env: unknown, context: ExecutionContextLike, trigger: TriggerTrace, live: QueueLivePublisherLike) => Promise<void>;
+
+/**
+ * The publisher a queue consumer's `ctx.live` is. The Worker forwards it to the
+ * shard (a consumer runs in the Worker, not in a shard); codegen passes it on only
+ * for an app whose target serves live streams. Structural, so `@lunora/queue` types
+ * its own copy and this package stays decoupled from it.
+ */
+interface QueueLivePublisherLike {
+    publish: (topic: string, payload: unknown, options: { shardKey?: string; stream: string }) => Promise<void>;
+}
+
+/**
+ * The origin a queue consumer's live publish is addressed to. A queue has no
+ * request, so there is no origin to derive one from; the shard reads only the
+ * pathname, so any fixed internal origin is correct.
+ */
+const QUEUE_LIVE_ORIGIN = "https://queue.lunora.internal";
 
 /**
  * A single code-defined cron job, shaped like an entry of the generated
@@ -3096,6 +3113,47 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
     });
 
     /**
+     * `ctx.live.publish` as the Worker forwards it to a shard: the HTTP action's
+     * context and a queue consumer's both call this, so the authorization, the
+     * wire encoding and the refusal mapping cannot drift between them. `origin` only
+     * supplies the URL the shard reads the pathname from; a queue has no request, so
+     * it passes a fixed internal origin.
+     *
+     * Wire-encode the payload once so bytes/bigint survive the hop; the shard embeds
+     * it verbatim into the SSE frames. A topic with no subscribers is a no-op. A
+     * refused or failed forward throws, so the caller sees the error rather than a
+     * silent drop.
+     */
+    const publishLiveToShard = async (
+        origin: string,
+        topic: string,
+        payload: unknown,
+        publishOptions: { shardKey?: string; stream: string },
+    ): Promise<void> => {
+        const shardKey = publishOptions.shardKey ?? defaultShard;
+
+        // Trusted server code, so the caller's identity is not gated; the
+        // reserved-name refusal still applies (`isAdmin` skips the policy only).
+        // eslint-disable-next-line unicorn/no-null -- the anonymous identity sentinel is `null`, matching the identity contract
+        await assertShardAuthorized(null, shardKey, true);
+
+        const response = await forwardToShard(
+            shardDO,
+            shardKey,
+            new Request(new URL(LIVE_PUBLISH_PATH, origin), {
+                // eslint-disable-next-line unicorn/no-null -- an omitted publish payload is delivered as an explicit JSON null
+                body: JSON.stringify({ data: encodeWire(payload ?? null), stream: publishOptions.stream, topic }),
+                headers: { "content-type": "application/json" },
+                method: "POST",
+            }),
+        );
+
+        if (!response.ok) {
+            throw new LunoraError(`ctx.live.publish to "${topic}" failed with HTTP ${String(response.status)}`, { code: "INTERNAL", status: 500 });
+        }
+    };
+
+    /**
      * Forward a server-initiated function call (a scheduler dispatch or a firing
      * cron job) to its shard: POST `{ functionPath, args }` to the shard's RPC.
      *
@@ -4115,33 +4173,7 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
                 return { runAction: scoped, runMutation: scoped, runQuery: scoped };
             },
             live: {
-                // Wire-encode the payload once so bytes/bigint survive the hop; the
-                // shard embeds it verbatim into the whisper + SSE frames. A topic with
-                // no subscribers is a no-op. A refused or failed forward throws, so the
-                // calling route sees the error rather than a silent drop.
-                publish: async (topic, payload, publishOptions) => {
-                    const shardKey = publishOptions.shardKey ?? defaultShard;
-
-                    // Trusted server code, so the caller's identity is not gated; the
-                    // reserved-name refusal still applies (`isAdmin` skips the policy only).
-                    // eslint-disable-next-line unicorn/no-null -- the anonymous identity sentinel is `null`, matching the identity contract
-                    await assertShardAuthorized(null, shardKey, true);
-
-                    const response = await forwardToShard(
-                        shardDO,
-                        shardKey,
-                        new Request(new URL(LIVE_PUBLISH_PATH, request.url), {
-                            // eslint-disable-next-line unicorn/no-null -- an omitted publish payload is delivered as an explicit JSON null
-                            body: JSON.stringify({ data: encodeWire(payload ?? null), stream: publishOptions.stream, topic }),
-                            headers: { "content-type": "application/json" },
-                            method: "POST",
-                        }),
-                    );
-
-                    if (!response.ok) {
-                        throw new LunoraError(`ctx.live.publish to "${topic}" failed with HTTP ${String(response.status)}`, { code: "INTERNAL", status: 500 });
-                    }
-                },
+                publish: (topic, payload, publishOptions) => publishLiveToShard(request.url, topic, payload, publishOptions),
             },
             runAction: run,
             runMutation: run,
@@ -5804,7 +5836,11 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
             // Named after the queue so a collector groups consumer invocations per
             // queue rather than lumping every batch under one span name.
             await instrumentTrigger(`queue:${queueNameOf(batch)}`, context, async (traceparent) => {
-                await options.queue?.(batch, env, context, { traceparent });
+                const live: QueueLivePublisherLike = {
+                    publish: (topic, payload, publishOptions) => publishLiveToShard(QUEUE_LIVE_ORIGIN, topic, payload, publishOptions),
+                };
+
+                await options.queue?.(batch, env, context, { traceparent }, live);
             });
         },
         async scheduled(controller, env, context) {

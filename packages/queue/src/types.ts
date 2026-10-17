@@ -56,6 +56,16 @@ export type { ArgsOf, FunctionReference, DispatchLogger as QueueLogger, Dispatch
 export interface QueueRunContext {
     /** The worker `env` (bindings + vars). */
     readonly env: Record<string, unknown>;
+
+    /**
+     * `ctx.live.publish` — push an event to the SSE subscribers of a
+     * `defineLiveStream` on the shard the publish names. Present only when the
+     * runtime hands the consumer a publisher (an app that declares a live stream on
+     * a target that serves one); absent otherwise. A consumer runs in the Worker, so
+     * the publish is forwarded to the shard rather than made in-process.
+     */
+    readonly live?: QueueLivePublisher;
+
     /** Queue-name-prefixed logger. */
     readonly log: DispatchLogger;
 
@@ -67,6 +77,14 @@ export interface QueueRunContext {
      * loop, prefer {@link QueueMessage.run}, which pins the call to its message.
      */
     readonly run: DispatchRunFunction;
+}
+
+/**
+ * The publisher a queue consumer's `ctx.live` is. Structural, so the runtime
+ * builds it without importing this package. See {@link QueueRunContext.live}.
+ */
+export interface QueueLivePublisher {
+    publish: (topic: string, payload: unknown, options: { shardKey?: string; stream: string }) => Promise<void>;
 }
 
 /**

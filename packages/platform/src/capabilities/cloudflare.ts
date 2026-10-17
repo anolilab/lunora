@@ -21,7 +21,7 @@ const CLOUDFLARE_CAPABILITIES: PlatformCapabilities = {
         websocketHibernation: { level: "native", note: "DO WebSocket hibernation" },
         liveStreams: {
             level: "native",
-            note: "The shard DO streams the SSE response. `ctx.live.publish` reaches the SSE subscribers of the shard it runs on: from an HTTP action through the Worker's shard forward, and from a scheduled job's action in-process on that same DO (no hop). Local to the shard — there is no cross-shard live fan-out, so a publish naming another shard is refused",
+            note: "The shard DO streams the SSE response. `ctx.live.publish` reaches the SSE subscribers of the shard it names: from an HTTP action or a queue consumer through the Worker's shard forward, and from a scheduled job's action in-process on the DO it runs in (no hop). A queue consumer has no shard of its own, so it always forwards. There is no cross-shard live fan-out, so an action publish naming another shard is refused",
         },
         typedWebSockets: { level: "native", note: "Route and room sockets ride DO WebSocket hibernation" },
         durableStreams: {
