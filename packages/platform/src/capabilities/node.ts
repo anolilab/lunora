@@ -65,7 +65,7 @@ const NODE_CAPABILITIES: PlatformCapabilities = {
         },
         liveStreams: {
             level: "unsupported",
-            note: "The SSE connect route is not served by this host's shard registry and is not exercised by its conformance suite",
+            note: "The SSE connect route is not served by this host's shard registry and is not exercised by its conformance suite. So codegen refuses a declared defineLiveStream here, and omits ctx.live from the action context and from the queue consumer, which is the publish surface an app would otherwise reach with no subscriber able to connect",
         },
         durableStreams: {
             level: "unsupported",

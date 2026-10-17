@@ -234,7 +234,7 @@ const CELLD_CAPABILITIES: PlatformCapabilities = {
         },
         liveStreams: {
             level: "unsupported",
-            note: "Not exercised by the celld TCK, so the SSE connect route is unverified on this host. Rate `native` once the TCK drives a live connect and publish",
+            note: "Not exercised by the celld TCK, so the SSE connect route is unverified on this host. Rate `native` once the TCK drives a live connect and publish. Until then codegen refuses a declared defineLiveStream here and omits ctx.live from the action context and the queue consumer, the same as on node",
         },
         workerLoaders: {
             level: "native",
