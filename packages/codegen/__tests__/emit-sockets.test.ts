@@ -1,3 +1,4 @@
+import { ts } from "ts-morph";
 import { describe, expect, it } from "vitest";
 
 import { emitFunctions, emitShard } from "../src/emit";
@@ -55,6 +56,37 @@ describe("emitFunctions — LUNORA_SOCKETS registry", () => {
         expect(emitted).toContain("auth: fn.auth === true");
         // The lifecycle union carries the new member only when a route exists.
         expect(emitted).toContain('lifecycle?: "connect" | "disconnect" | "init" | "reactor" | "whisper" | "socket";');
+    });
+
+    it("runs the emitted registry: an alias is one route, and two routes on one path throw", () => {
+        expect.assertions(3);
+
+        // Evaluate the emitted block, not a string match on it: transpile the registry
+        // and run it against a stubbed function table, as the room registry test does.
+        const emitted = emitFunctions({ functions: [socketFunction] });
+        const start = emitted.indexOf("export const LUNORA_SOCKETS");
+        const block = emitted.slice(start, emitted.indexOf("})();", start) + "})();".length);
+        const js = ts.transpileModule(block, { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 } }).outputText;
+        const registryOf = (functions: Record<string, unknown>): unknown => {
+            const exported: Record<string, unknown> = {};
+
+            // eslint-disable-next-line @typescript-eslint/no-implied-eval, sonarjs/code-eval -- the test runs the emitted registry it just transpiled
+            new Function("LUNORA_FUNCTIONS", "exports", js)(functions, exported);
+
+            return exported["LUNORA_SOCKETS"];
+        };
+        const route = { auth: true, lifecycle: "socket", socketPath: "/chat" };
+
+        expect(registryOf({ "sockets:chat": route })).toStrictEqual({ "/chat": { auth: true, functionPath: "sockets:chat" } });
+        // An alias: one registration exported under two names is one route, not a clash.
+        expect(registryOf({ "sockets:chat": route, "sockets:lobby": route })).toStrictEqual({ "/chat": { auth: true, functionPath: "sockets:chat" } });
+        // Two distinct registrations on one path are a real clash.
+        expect(() =>
+            registryOf({
+                "sockets:a": { auth: false, lifecycle: "socket", socketPath: "/chat" },
+                "sockets:b": { auth: false, lifecycle: "socket", socketPath: "/chat" },
+            }),
+        ).toThrow(/socket paths must be unique/u);
     });
 
     it("keeps the registry out of a route-free project", () => {
