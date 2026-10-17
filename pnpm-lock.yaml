@@ -3305,6 +3305,9 @@ importers:
       '@lunora/client':
         specifier: workspace:*
         version: link:../client
+      '@lunora/d1':
+        specifier: workspace:*
+        version: link:../d1
       '@lunora/do':
         specifier: workspace:*
         version: link:../do
