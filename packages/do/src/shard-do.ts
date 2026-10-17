@@ -15494,6 +15494,29 @@ abstract class ShardDO {
     }
 
     /**
+     * Whether a socket still belongs to a route topic. The socket must have upgraded on a path that
+     * resolves today to the route the topic names, and a route that requires auth needs a verified user.
+     * Other topics are unaffected.
+     */
+    private socketMayReceiveRouteTopic(attachment: Pick<SocketAttachment, "socketPath" | "userId">, topic: string): boolean {
+        if (!topic.startsWith(SOCKET_TOPIC_PREFIX)) {
+            return true;
+        }
+
+        if (attachment.socketPath === undefined) {
+            return false;
+        }
+
+        const route = this.socketRoute(attachment.socketPath);
+
+        if (route === undefined || `${SOCKET_TOPIC_PREFIX}${route.functionPath}` !== topic) {
+            return false;
+        }
+
+        return !route.auth || attachment.userId !== undefined;
+    }
+
+    /**
      * Deliver an already-serialized whisper `frame` to every local socket joined to
      * `topic`, excluding `exclude` (the sender, or `undefined` for a frame the relay
      * hub forwarded in — its sender lives on another DO). Records the fan-out pass
@@ -15514,6 +15537,12 @@ abstract class ShardDO {
             const attachment = this.readAttachment(ws);
 
             if (attachment.whispers?.includes(topic) !== true) {
+                continue;
+            }
+
+            // A route topic's membership outlives the deployment that granted it. Re-check the socket's
+            // route against the current one, so a route that now requires auth stops feeding an anonymous socket.
+            if (!this.socketMayReceiveRouteTopic(attachment, topic)) {
                 continue;
             }
 
