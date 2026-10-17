@@ -142,20 +142,23 @@ describe("generated strict optional properties", () => {
         }
     });
 
-    it.each(["agent-sandbox", "ai-search", "analytics-sql", "artifacts", "delta-sync", "hyperdrive-shape", "sdk-surface"])(
-        "compiles the generated shard and app for the %s fixture",
-        (fixture) => {
-            expect.assertions(1);
+    // Every fixture app, found on disk so a new fixture is checked without editing this list.
+    const fixtures = readdirSync(join(here, "fixtures"), { withFileTypes: true })
+        .filter((entry) => entry.isDirectory() && !entry.name.startsWith("."))
+        .map((entry) => entry.name)
+        .toSorted((a, b) => a.localeCompare(b));
 
-            const workdir = makeFixtureWorkdir(join(here, "fixtures", fixture));
+    it.each(fixtures)("compiles the generated shard and app for the %s fixture", (fixture) => {
+        expect.assertions(1);
 
-            try {
-                runCodegen({ lint: false, projectRoot: workdir, wranglerQueueProducers: [] });
+        const workdir = makeFixtureWorkdir(join(here, "fixtures", fixture));
 
-                expect(compileGenerated(join(workdir, "lunora"))).toBe("");
-            } finally {
-                rmSync(workdir, { force: true, recursive: true });
-            }
-        },
-    );
+        try {
+            runCodegen({ lint: false, projectRoot: workdir, wranglerQueueProducers: [] });
+
+            expect(compileGenerated(join(workdir, "lunora"))).toBe("");
+        } finally {
+            rmSync(workdir, { force: true, recursive: true });
+        }
+    });
 });
