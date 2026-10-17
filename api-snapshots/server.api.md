@@ -444,6 +444,19 @@ interface DefineStorageRuleInput<Context = unknown> {
 }
 ```
 
+### `DefineWebSocketOptions` (interface)
+
+```ts
+interface DefineWebSocketOptions<Message extends Validator> {
+    auth?: boolean;
+    message: Message;
+    onClose?: WebSocketCloseHandler;
+    onMessage: WebSocketMessageHandler<Infer<Message>>;
+    onOpen?: WebSocketOpenHandler;
+    path: string;
+}
+```
+
 ### `DocumentHistoryComponent` (type)
 
 ```ts
@@ -1040,7 +1053,7 @@ interface LifecycleEvent {
 ### `LifecycleEventKind` (type)
 
 ```ts
-type LifecycleEventKind = "connect" | "disconnect" | "init" | "reactor" | "whisper";
+type LifecycleEventKind = "connect" | "disconnect" | "init" | "reactor" | "socket" | "whisper";
 ```
 
 ### `LifecycleHandler` (type)
@@ -1929,6 +1942,16 @@ interface RegisteredStream<A extends ArgsValidator, R> {
     readonly kind: "stream";
     readonly visibility?: FunctionVisibility;
 }
+```
+
+### `RegisteredWebSocket` (type)
+
+```ts
+type RegisteredWebSocket = RegisteredFunction<Record<string, never>, void, "mutation"> & {
+    readonly auth: boolean;
+    readonly lifecycle: "socket";
+    readonly socketPath: string;
+};
 ```
 
 ### `RegisteredWhisperAuthorizer` (type)
@@ -3132,6 +3155,37 @@ interface VectorizeOptions<Shape extends Record<string, Validator> = Record<stri
 }
 ```
 
+### `WebSocketCloseHandler` (type)
+
+```ts
+type WebSocketCloseHandler = (context: MutationCtx, socket: WebSocketHandle) => Promise<void> | void;
+```
+
+### `WebSocketHandle` (interface)
+
+```ts
+interface WebSocketHandle {
+    broadcast: (message: unknown) => void;
+    readonly connectionId: string;
+    readonly path: string;
+    send: (message: unknown) => void;
+    readonly shardKey: string;
+    readonly userId: null | string;
+}
+```
+
+### `WebSocketMessageHandler` (type)
+
+```ts
+type WebSocketMessageHandler<Message> = (context: MutationCtx, message: Message, socket: WebSocketHandle) => Promise<void> | void;
+```
+
+### `WebSocketOpenHandler` (type)
+
+```ts
+type WebSocketOpenHandler = (context: MutationCtx, socket: WebSocketHandle) => Promise<void> | void;
+```
+
 ### `WeeklySchedule` (interface)
 
 Re-exported from `@lunora/scheduler` — signature tracked at its source.
@@ -3548,6 +3602,12 @@ const defineTable: <Shape extends Record<string, Validator>>(inputShape: Shape) 
 
 ```ts
 const defineVectorIndex: (options: VectorIndexOptions) => VectorIndexDefinition;
+```
+
+### `defineWebSocket` (const)
+
+```ts
+const defineWebSocket: <Message extends Validator>(options: DefineWebSocketOptions<Message>) => RegisteredWebSocket;
 ```
 
 ### `deny` (const)

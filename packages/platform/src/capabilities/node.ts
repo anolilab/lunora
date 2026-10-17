@@ -60,8 +60,8 @@ const NODE_CAPABILITIES: PlatformCapabilities = {
             note: "Socket registry with attachments/tags persisted to SQLite, and createNodeSocketHost can rehydrate a row into a handle — but restoreSocket is not a SocketHost member and neither createNodePlatform nor createNodeShardRegistry surfaces it, so nothing composed here reassociates a reconnecting client; the conformance host is its only caller. Nothing is ever actually evicted from memory either, so this is durability without hibernation's memory saving and without its rehydration",
         },
         typedWebSockets: {
-            level: "emulated",
-            note: "Rides the socket registry above: a route or room works while the process runs, but nothing reassociates a reconnecting client, so a room's membership does not survive a restart",
+            level: "unsupported",
+            note: "The socket registry above has no network path to a client: createNodeHttpServer handles no Upgrade event, so a real client cannot open a room or a defineWebSocket route. Only in-process callers reach them. Codegen omits the room and socket-route surface on this target and emits platform_unsupported_feature. Lifting this needs an upgrade handler in the Node HTTP adapter",
         },
         liveStreams: {
             level: "emulated",

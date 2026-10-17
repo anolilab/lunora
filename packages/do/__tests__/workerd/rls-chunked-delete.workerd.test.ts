@@ -110,14 +110,17 @@ describe("rls chunked deletes on workerd", () => {
         expect.assertions(3);
 
         await withWriter("nodes", async (writer) => {
-            await writer.insert("nodes", { _id: "P", parentId: "root" }, { allowExplicitId: true });
-            await writer.insert("nodes", { _id: "C", parentId: "P" }, { allowExplicitId: true });
+            // The parent must come first in the erase's page under both `_id` and rowid order: a child
+            // visited first is deleted while its parent still exists, which is allowed, so the set-null
+            // never reaches it. `"A"` < `"B"` and `A` is inserted first, so the parent is always first.
+            await writer.insert("nodes", { _id: "A", parentId: "root" }, { allowExplicitId: true });
+            await writer.insert("nodes", { _id: "B", parentId: "A" }, { allowExplicitId: true });
 
             await expect(eraseWith(writer, (db) => db.deleteAll("nodes"))).rejects.toMatchObject({ code: "FORBIDDEN" });
 
-            await expect(writer.get("P")).resolves.toBeNull();
+            await expect(writer.get("A")).resolves.toBeNull();
 
-            const orphan = await writer.get("C");
+            const orphan = await writer.get("B");
 
             expect(orphan?.["parentId"]).toBeNull();
         });

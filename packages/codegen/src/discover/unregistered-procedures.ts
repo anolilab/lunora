@@ -67,6 +67,13 @@ const REGISTRATION_BY_TYPE_NAME = new Map<string, { call: string; file?: string;
     ["RegisteredShape", { call: "defineShape({ … })", file: "shapes" }],
     ["RegisteredStream", { call: "query.input({ … }).stream(handler)" }],
     [
+        "RegisteredWebSocket",
+        {
+            call: "defineWebSocket({ … })",
+            note: "A dropped socket route has no caller to fail — its path is never recognised as an upgrade route, so connections fall through to the app router and the handler never runs.",
+        },
+    ],
+    [
         "RegisteredWhisperAuthorizer",
         {
             call: "onWhisper(handler)",
