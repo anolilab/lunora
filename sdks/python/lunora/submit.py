@@ -61,7 +61,7 @@ if TYPE_CHECKING:  # pragma: no cover - imported for annotations only
 #: idempotency key is expected to succeed later; dropping it would lose a durable
 #: write to a transient condition. Everything else coded is a verdict — replaying
 #: it would only re-trigger the same failure (a poison-message loop).
-TRANSIENT_ERROR_CODES = frozenset({"SHARD_ERROR", "SHARD_UNAVAILABLE"})
+TRANSIENT_ERROR_CODES = frozenset({"DELIVERY_FENCED", "SHARD_ERROR", "SHARD_UNAVAILABLE"})
 
 #: Codes that say "not now" rather than "no". A rate-limited replay is the one
 #: verdict a durable queue must never honour: the write is perfectly valid and

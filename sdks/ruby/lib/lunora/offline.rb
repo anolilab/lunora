@@ -25,7 +25,7 @@ module Lunora
   # idempotency key is expected to succeed later, and dropping the write would
   # lose it to a transient condition. Every other coded error IS a verdict:
   # replaying it would only re-trigger the same failure, a poison-message loop.
-  TRANSIENT_ERROR_CODES = %w[SHARD_ERROR SHARD_UNAVAILABLE].freeze
+  TRANSIENT_ERROR_CODES = %w[DELIVERY_FENCED SHARD_ERROR SHARD_UNAVAILABLE].freeze
 
   # Codes that say "not now" rather than "no". A rate-limited replay is the one
   # verdict a durable queue must never honour: the write is perfectly valid and

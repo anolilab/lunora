@@ -27,7 +27,7 @@ public enum LunoraOfflineCode {
     /// would lose it to a transient condition. Every other coded error IS a
     /// verdict: replaying it would only re-trigger the same failure, a
     /// poison-message loop.
-    public static let transient: Set<String> = ["SHARD_ERROR", "SHARD_UNAVAILABLE"]
+    public static let transient: Set<String> = ["DELIVERY_FENCED", "SHARD_ERROR", "SHARD_UNAVAILABLE"]
 
     /// Codes that say "not now" rather than "no".
     ///

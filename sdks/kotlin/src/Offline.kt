@@ -44,7 +44,7 @@ const val CLIENT_CLOSED: String = "CLIENT_CLOSED"
  * it to a transient condition. Every other coded error IS a verdict: replaying it
  * would only re-trigger the same failure, a poison-message loop.
  */
-val TRANSIENT_ERROR_CODES: Set<String> = setOf("SHARD_ERROR", "SHARD_UNAVAILABLE")
+val TRANSIENT_ERROR_CODES: Set<String> = setOf("DELIVERY_FENCED", "SHARD_ERROR", "SHARD_UNAVAILABLE")
 
 /**
  * The codes that say "not now" rather than "no".

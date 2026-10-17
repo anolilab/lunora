@@ -22,7 +22,7 @@ import (
 // idempotency key is expected to succeed later, and dropping the write would lose
 // it to a transient condition. Every other coded error IS a verdict: replaying it
 // would only re-trigger the same failure, which is a poison-message loop.
-var TransientErrorCodes = map[string]bool{"SHARD_ERROR": true, "SHARD_UNAVAILABLE": true}
+var TransientErrorCodes = map[string]bool{"DELIVERY_FENCED": true, "SHARD_ERROR": true, "SHARD_UNAVAILABLE": true}
 
 // RateLimitErrorCodes are the codes that say "not now" rather than "no".
 //

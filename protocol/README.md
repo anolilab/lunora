@@ -402,9 +402,11 @@ Each slot's `body` is exactly a §4.2 envelope — `{ result }` or `{ error }` �
 a client classifies a slot the way it classifies a whole single-call response.
 Four rules a conforming client MUST follow, because each one is a durable write:
 
-- A slot whose `error.code` is `SHARD_UNAVAILABLE`, `SHARD_ERROR`, `RATE_LIMITED`
-  or `TOO_MANY_REQUESTS` is **transient**: the server reached no verdict on that
-  entry — it could not reach the shard, or a limiter refused to look — so it is
+- A slot whose `error.code` is `SHARD_UNAVAILABLE`, `SHARD_ERROR`, `DELIVERY_FENCED`,
+  `RATE_LIMITED` or `TOO_MANY_REQUESTS` is **transient**: the server reached no verdict on that
+  entry — it could not reach the shard, a limiter refused to look, or its delivery authorization
+  changed before the reply could be released (the write may have committed; the same mutation id
+  replays its stored result) — so it is
   retried rather than reported failed. So is a refused CREDENTIAL —
   `UNAUTHORIZED`, `TOKEN_EXPIRED`, `UNAUTHENTICATED` — which the client HOLDS
   rather than settles: a write queued offline replays with the bearer it held
@@ -461,7 +463,7 @@ terminal, which is the default for every coded error.
 
 | Outcome                             | Codes or condition                                                                                                                                                | Replay behaviour                                                                                                                                                          |
 | ----------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Transient, retry with backoff       | `SHARD_UNAVAILABLE`, `SHARD_ERROR`, `RATE_LIMITED`, `TOO_MANY_REQUESTS`; a `429`/`5xx` with no envelope                                                           | Keep the write queued; honour `retryAfterMs` / `Retry-After` when present, otherwise a bounded jittered backoff                                                           |
+| Transient, retry with backoff       | `SHARD_UNAVAILABLE`, `SHARD_ERROR`, `DELIVERY_FENCED`, `RATE_LIMITED`, `TOO_MANY_REQUESTS`; a `429`/`5xx` with no envelope                                        | Keep the write queued; honour `retryAfterMs` / `Retry-After` when present, otherwise a bounded jittered backoff                                                           |
 | Hold for a credential               | `UNAUTHORIZED`, `TOKEN_EXPIRED`, `UNAUTHENTICATED`                                                                                                                | Hold until a new token is set, then replay under the current token. Never settle                                                                                          |
 | Split and retry                     | `413` on a chunk of more than one entry                                                                                                                           | Split the chunk and resend; do not settle the writes                                                                                                                      |
 | Terminal, the write is dropped      | `CONFLICT` (unique-index breach, or an optimistic-concurrency conflict), `WIRE_DECODE_FAILED`, `PAYLOAD_TOO_LARGE` on a single entry, and every other coded error | Settle rejected with the server's code. The write is not retried. Re-running it with different arguments is the application's job, because the client never rewrites args |
