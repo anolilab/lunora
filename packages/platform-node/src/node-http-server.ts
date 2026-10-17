@@ -14,7 +14,7 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
 
-const readBody = async (request: IncomingMessage): Promise<Buffer | undefined> => {
+const readBody = async (request: IncomingMessage): Promise<Uint8Array<ArrayBuffer> | undefined> => {
     if (request.method === "GET" || request.method === "HEAD") {
         return undefined;
     }
@@ -25,7 +25,16 @@ const readBody = async (request: IncomingMessage): Promise<Buffer | undefined> =
         chunks.push(chunk);
     }
 
-    return Buffer.concat(chunks);
+    // Copied into a fresh `ArrayBuffer`: a `RequestInit` body will not take the `ArrayBufferLike` that `Buffer.concat` is typed with.
+    const body = new Uint8Array(chunks.reduce((total, chunk) => total + chunk.byteLength, 0));
+    let offset = 0;
+
+    for (const chunk of chunks) {
+        body.set(chunk, offset);
+        offset += chunk.byteLength;
+    }
+
+    return body;
 };
 
 const toRequest = async (incoming: IncomingMessage, origin: string): Promise<Request> => {

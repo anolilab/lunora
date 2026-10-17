@@ -47,7 +47,7 @@ const startApp = async () => {
     const registry = createNodeShardRegistry({ onFetch: (request, shard) => shardDoFor(shard).fetch(request) });
     const namespace = createNodeShardNamespace(registry.directory);
     const rootShard = (request: Request, path: string, init: RequestInit = {}): Promise<Response> =>
-        namespace.getByName("__root__").fetch(new Request(new URL(path, request.url), init));
+        registry.directory.getByName("__root__").fetch(new Request(new URL(path, request.url), init));
 
     const worker = createWorker({
         routes: {
