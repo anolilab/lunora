@@ -4036,7 +4036,9 @@ export const ping = query({ args: { id: v.string() }, handler: async (_context, 
             expect(output).toContain('const isGlobal = (schema as unknown as SchemaLike).tables[shape.table]?.shardMode?.kind === "global"');
             // The DO reads the global membership by draining the global backend's findMany.
             expect(output).toContain("protected override async readGlobalShapeRows");
-            expect(output).toContain("await globalDb.findMany(resolved.table, { cursor, where: resolved.effectiveWhere })");
+            expect(output).toContain(
+                "await globalDb.findMany(resolved.table, { cursor, ...(resolved.effectiveWhere === undefined ? {} : { where: resolved.effectiveWhere }) })",
+            );
         });
 
         it("does not emit readGlobalShapeRows when the project has shapes but no `.global()` table", () => {
@@ -4497,7 +4499,7 @@ export const ping = query({ args: { id: v.string() }, handler: async (_context, 
             expect(output).toContain("ROOT_SHARD_NAME, ");
             expect(output).toContain("const vectorShardKey = this.currentShardKey();");
             expect(output).toContain(
-                "onWrite: createVectorSyncHook({ namespace: vectorShardKey === ROOT_SHARD_NAME ? undefined : vectorShardKey, schema: schema as unknown as VectorSchemaLike, vectors }),",
+                "onWrite: createVectorSyncHook({ ...(vectorShardKey === ROOT_SHARD_NAME ? {} : { namespace: vectorShardKey }), schema: schema as unknown as VectorSchemaLike, vectors }),",
             );
             // The read side gets the same sentinel-mapped namespace default,
             // PLUS the set of index names it's actually valid for — the
@@ -4507,7 +4509,7 @@ export const ping = query({ args: { id: v.string() }, handler: async (_context, 
             // which ones are tenant-partitioned (a root-instance call against
             // any other listed index stays namespace-less, unaffected).
             expect(output).toContain(
-                'const vectors = createContextVectors(lunora, { deferAfterCommit: (work) => this.deferAfterCommit(work), namespace: vectorShardKey === ROOT_SHARD_NAME ? undefined : vectorShardKey, shardedIndexNames: ["by_body"] });',
+                'const vectors = createContextVectors(lunora, { deferAfterCommit: (work) => this.deferAfterCommit(work), ...(vectorShardKey === ROOT_SHARD_NAME ? {} : { namespace: vectorShardKey }), shardedIndexNames: ["by_body"] });',
             );
             expect(output).toContain("vectors,");
             expect(output).toContain("...(onWrite === undefined ? {} : { onWrite: (event) => this.deferAfterCommit(() => onWrite(event)) }),");
@@ -4545,10 +4547,10 @@ export const ping = query({ args: { id: v.string() }, handler: async (_context, 
             expect(output).toContain("ROOT_SHARD_NAME, ");
             expect(output).toContain("const vectorShardKey = this.currentShardKey();");
             expect(output).toContain(
-                "onWrite: createVectorSyncHook({ namespace: vectorShardKey === ROOT_SHARD_NAME ? undefined : vectorShardKey, schema: schema as unknown as VectorSchemaLike, vectors }),",
+                "onWrite: createVectorSyncHook({ ...(vectorShardKey === ROOT_SHARD_NAME ? {} : { namespace: vectorShardKey }), schema: schema as unknown as VectorSchemaLike, vectors }),",
             );
             expect(output).toContain(
-                'const vectors = createContextVectors(lunora, { deferAfterCommit: (work) => this.deferAfterCommit(work), namespace: vectorShardKey === ROOT_SHARD_NAME ? undefined : vectorShardKey, shardedIndexNames: ["by_body"] });',
+                'const vectors = createContextVectors(lunora, { deferAfterCommit: (work) => this.deferAfterCommit(work), ...(vectorShardKey === ROOT_SHARD_NAME ? {} : { namespace: vectorShardKey }), shardedIndexNames: ["by_body"] });',
             );
             expect(output).toContain("vectors,");
             expect(output).toContain("...(onWrite === undefined ? {} : { onWrite: (event) => this.deferAfterCommit(() => onWrite(event)) }),");
@@ -4595,7 +4597,7 @@ export const ping = query({ args: { id: v.string() }, handler: async (_context, 
             const output = emitShard({ schema });
 
             expect(output).toContain(
-                'const vectors = createContextVectors(lunora, { deferAfterCommit: (work) => this.deferAfterCommit(work), namespace: vectorShardKey === ROOT_SHARD_NAME ? undefined : vectorShardKey, shardedIndexNames: ["by_body"] });',
+                'const vectors = createContextVectors(lunora, { deferAfterCommit: (work) => this.deferAfterCommit(work), ...(vectorShardKey === ROOT_SHARD_NAME ? {} : { namespace: vectorShardKey }), shardedIndexNames: ["by_body"] });',
             );
         });
 

@@ -1,3 +1,5 @@
+import { optionalSpread } from "./shared";
+
 /**
  * The emitted ShardDO's static dispatch source: the module-level `dispatchRun`
  * (the in-process `ctx.run*` dispatcher), the RPC/mutation-transaction methods
@@ -273,7 +275,7 @@ const SUBSCRIPTION_METHODS = `        protected override async executeSubscripti
             // a deferred re-run interleaves with unrelated dispatches.
             const ranges = footprint.ranges();
 
-            return { ...(ranges === undefined ? {} : { ranges }), result, tables: footprint.tables };
+            return { ${optionalSpread("ranges")}, result, tables: footprint.tables };
         }
 
         protected override executeStream(functionPath: string, args: Record<string, unknown>, identity?: SubscriptionIdentity): null | { durable?: { ttlMs?: number }; iterator: (signal: AbortSignal) => AsyncIterable<unknown> } {

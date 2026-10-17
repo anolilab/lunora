@@ -1,3 +1,5 @@
+import { optionalSpread } from "./shared";
+
 /**
  * The emitted ShardDO's context builder: the `buildCtx` method every dispatch
  * builds its `ctx` with. Split out of `emitShard`; the fragments it splices in
@@ -96,9 +98,9 @@ ${actionOnlyBuild.replaceAll(/^(?=.)/gmu, "    ")}${actionOnlyFields.map((field)
                 const userId = this.getCurrentUserId();
 
                 return {
-                    ...(identity === undefined ? {} : { identity }),
-                    ...(ip === undefined ? {} : { ip }),
-                    ...(userId === undefined ? {} : { userId }),
+                    ${optionalSpread("identity")},
+                    ${optionalSpread("ip")},
+                    ${optionalSpread("userId")},
                 };
             })();
             const { identity, ip, userId } = caller;

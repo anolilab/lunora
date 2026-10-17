@@ -2,6 +2,7 @@
 import type { TableIR } from "../ir";
 import type { ResolvedAppOptions } from "./app-helpers";
 import { hasShardedTables } from "./app-helpers";
+import { optionalSpread } from "./shared";
 
 /**
  * The schema's jurisdiction, pinned onto the DO-backed auth object: it holds
@@ -212,7 +213,7 @@ const buildWorkerOptionLines = (options: ResolvedAppOptions): string[] => [
                 discoveryPaths,
                 internalSecret,${doAuthJurisdictionLine(options)}
                 namespace,
-                ...(objectName === undefined ? {} : { objectName }),
+                ${optionalSpread("objectName")},
             });
 
             options.authHandler = authWiring.authHandler;
@@ -437,11 +438,11 @@ const buildBaseWorkerOptions = (options: ResolvedAppOptions): string[] => [
         ? [
               `            queue: (batch: unknown, queueEnv: unknown, _context: ExecutionContextLike, trigger: TriggerTrace): Promise<void> =>`,
               `                dispatchQueueBatch(batch as Parameters<typeof dispatchQueueBatch>[0], LUNORA_QUEUE_REGISTRY, {`,
-              `                    capture: shouldCaptureQueue(queueEnv as Record<string, unknown>)`,
-              `                        ? createQueueCaptureSink(queueEnv as Record<string, unknown>${
+              `                    ...(shouldCaptureQueue(queueEnv as Record<string, unknown>)`,
+              `                        ? { capture: createQueueCaptureSink(queueEnv as Record<string, unknown>${
                   options.jurisdiction ? `, { jurisdiction: ${JSON.stringify(options.jurisdiction)} }` : ""
-              })`,
-              `                        : undefined,`,
+              }) }`,
+              `                        : {}),`,
               `                    env: queueEnv as Record<string, unknown>,`,
               // The consumer's `ctx.run` joins the queue invocation's trace instead
               // of minting a fresh one per dispatched function.

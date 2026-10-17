@@ -1102,9 +1102,8 @@ export const createShardDO = (config: ShardDOConfig = {}): new (state: ShardDOSt
                 // Omitted when there is no scope so `createShardCtxDb`
                 // keeps its own "degrade a provable slice to a whole-table dep"
                 // fallback rather than reporting into a no-op.
-                ...(options.onReadRange !== undefined
-                    ? { onReadRange: options.onReadRange }
-                    : options.scope === undefined ? {} : { onReadRange: this.getCtxDbReadRangeHook(options.scope) }),
+                ...(options.onReadRange === undefined ? {} : { onReadRange: options.onReadRange }),
+                ...(options.onReadRange === undefined && options.scope !== undefined ? { onReadRange: this.getCtxDbReadRangeHook(options.scope) } : {}),
                 // Vectorize is outside this shard's SQLite and cannot roll back, so
                 // the sync is held until the mutation's transaction has COMMITTED
                 // (`deferAfterCommit`) instead of running inline. Inline, a write
