@@ -3415,7 +3415,7 @@ describe("createWorker — live streams and socket paths", () => {
         const worker = createWorker({
             httpRouter: honoApp((app) =>
                 app.post("/post", async (c) => {
-                    await c.var.lunora.live.publish("post:1", { event: "comment" }, { stream: "posts" });
+                    await c.var.lunora.live?.publish("post:1", { event: "comment" }, { stream: "posts" });
 
                     return new Response("published");
                 }),
@@ -3432,6 +3432,21 @@ describe("createWorker — live streams and socket paths", () => {
         expect(body).toMatchObject({ stream: "posts", topic: "post:1" });
     });
 
+    it("omits ctx.live from the HTTP context when the worker is built with liveStreams: false", async () => {
+        expect.assertions(2);
+
+        const worker = createWorker({
+            httpRouter: honoApp((app) => app.get("/probe", (c) => Response.json({ hasLive: c.var.lunora.live !== undefined }))),
+            liveStreams: false,
+            shardDO: shard.namespace,
+        });
+
+        const res = await worker.fetch(new Request("https://app.example/probe"), {}, fakeContext);
+
+        await expect(res.json()).resolves.toStrictEqual({ hasLive: false });
+        expect(shard.calls).toHaveLength(0);
+    });
+
     it("throws from live.publish when the shard refuses the publish, instead of dropping it silently", async () => {
         expect.assertions(2);
 
@@ -3441,7 +3456,7 @@ describe("createWorker — live streams and socket paths", () => {
             httpRouter: honoApp((app) =>
                 app.post("/post", async (c) => {
                     try {
-                        await c.var.lunora.live.publish("post:1", { big: true }, { stream: "posts" });
+                        await c.var.lunora.live?.publish("post:1", { big: true }, { stream: "posts" });
 
                         return new Response("published");
                     } catch {

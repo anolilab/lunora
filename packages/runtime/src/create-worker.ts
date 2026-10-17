@@ -153,9 +153,10 @@ interface HttpActionContext {
 
     /**
      * Publish an arbitrary event to a live topic on a stream. Structural mirror of
-     * `@lunora/server`'s `LivePublisher`.
+     * `@lunora/server`'s `LivePublisher`. Absent when the worker was built with
+     * `liveStreams: false`, a target that does not serve live streams.
      */
-    live: { publish: (topic: string, payload: unknown, options: { shardKey?: string; stream: string }) => Promise<void> };
+    live?: { publish: (topic: string, payload: unknown, options: { shardKey?: string; stream: string }) => Promise<void> };
 
     runAction: <R>(reference: unknown, args?: Record<string, unknown>) => Promise<R>;
     runMutation: <R>(reference: unknown, args?: Record<string, unknown>) => Promise<R>;
@@ -1224,6 +1225,13 @@ interface WorkerOptions {
      * other DOs of a `.shardBy(...)` one.
      */
     listSchemaTables?: () => ReadonlyArray<string>;
+
+    /**
+     * Whether the target serves live topic streams. Defaults to `true`. `false` leaves
+     * `ctx.live` off the HTTP action context, so a publish is not offered on a target
+     * with no subscriber to reach. Codegen sets it from the target's capability matrix.
+     */
+    liveStreams?: boolean;
 
     /**
      * The durable log archive's read config — the R2 Data Catalog (Iceberg)
@@ -4181,9 +4189,14 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
 
                 return { runAction: scoped, runMutation: scoped, runQuery: scoped };
             },
-            live: {
-                publish: (topic, payload, publishOptions) => publishLiveToShard(request.url, topic, payload, publishOptions),
-            },
+            ...(options.liveStreams === false
+                ? {}
+                : {
+                      live: {
+                          publish: (topic: string, payload: unknown, publishOptions: { shardKey?: string; stream: string }) =>
+                              publishLiveToShard(request.url, topic, payload, publishOptions),
+                      },
+                  }),
             runAction: run,
             runMutation: run,
             runQuery: run,
