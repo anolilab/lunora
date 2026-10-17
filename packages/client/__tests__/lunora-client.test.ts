@@ -5012,6 +5012,36 @@ describe("lunoraClient", () => {
                 client.close();
             });
 
+            it("sends the whisper join and the grant without waiting for a verdict, so a silent denial is not signalled", async () => {
+                expect.assertions(3);
+
+                const fetchMock = vi.fn<typeof fetch>(() => Promise.resolve(Response.json({ ok: true })));
+                const client = new LunoraClient({ fetch: fetchMock, url: "https://app.example", WebSocket: createMockWebSocket() });
+                const received: unknown[] = [];
+
+                client.subscribeLiveTopic({
+                    onEvent: (payload) => {
+                        received.push(payload);
+                    },
+                    stream: "posts",
+                    topic: "post:1",
+                });
+
+                const socket = latestSocket();
+
+                socket.open();
+                socket.receive({ connectionId: "ws-1", subject: null, type: "identity" });
+                await flushMicrotasks();
+
+                // The server never acks the join. The client sends it and posts the grant regardless, and
+                // nothing arrives to say whether the shard admitted the join.
+                expect(wireFrames(socket)).toContainEqual({ topic: "post:1", type: "whisper_subscribe" });
+                expect(liveControlBodies(fetchMock)).toHaveLength(1);
+                expect(received).toStrictEqual([]);
+
+                client.close();
+            });
+
             it("does not let a control POST that never settles block the next grant", async () => {
                 expect.assertions(2);
 

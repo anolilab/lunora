@@ -1886,6 +1886,13 @@ class LunoraClient {
      * the stream's control route (`/live/<stream>/control`) to grant this socket the topic, naming
      * the socket's connection id. A live publish reaches the socket only with both in place.
      *
+     * The join needs the app's `onWhisper` approval, the same as any whisper join. The shard runs
+     * the authorizer with `action: "subscribe"` on the bare topic, and a denied join is silent:
+     * whispers are never acked, so the client cannot tell a denial from a quiet topic. The grant
+     * is still posted, but with no membership the shard relays no `live` frame, so `onEvent` never
+     * fires. An app that streams private data here must declare an `onWhisper` that allows the
+     * topic; without one the join is open to any socket on the shard.
+     *
      * Grants are re-issued on every reconnect, because each socket gets a new connection id.
      * A control call that fails is not retried here, so a denied or failed grant delivers nothing.
      * @returns an unsubscribe function that revokes the grant and leaves the topic
