@@ -1,4 +1,4 @@
-import { OutgoingMessage } from "node:http";
+import { OutgoingMessage, request } from "node:http";
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 
@@ -117,12 +117,18 @@ describe("createNodeHttpServer", () => {
         const app = vi.fn<() => Response>(() => new Response("ok"));
         const server = await listen(app);
 
-        const response = await fetch(server.origin, {
-            body: new Uint8Array(1_048_577),
-            method: "POST",
+        // Headers only: the declared length alone must be refused, so no body is sent. Sending one would race the server's close.
+        const status = await new Promise<number | undefined>((resolve, reject) => {
+            const outgoing = request(server.origin, { headers: { "content-length": "1048577" }, method: "POST" }, (incoming) => {
+                resolve(incoming.statusCode);
+                incoming.resume();
+            });
+
+            outgoing.on("error", reject);
+            outgoing.end();
         });
 
-        expect(response.status).toBe(413);
+        expect(status).toBe(413);
         expect(app).not.toHaveBeenCalled();
     });
 
@@ -148,5 +154,21 @@ describe("createNodeHttpServer", () => {
 
         expect(response.status).toBe(413);
         expect(app).not.toHaveBeenCalled();
+    });
+
+    it("brackets an IPv6 host so the origin is a valid URL", async () => {
+        expect.hasAssertions();
+
+        const server = await createNodeHttpServer({ fetch: () => new Response("ok"), host: "::1", port: 0 });
+
+        servers.push(server);
+
+        const { port } = new URL(server.origin);
+
+        expect(server.origin).toBe(`http://[::1]:${port}`);
+
+        const response = await fetch(server.origin);
+
+        await expect(response.text()).resolves.toBe("ok");
     });
 });

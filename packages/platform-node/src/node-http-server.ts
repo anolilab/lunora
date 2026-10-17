@@ -58,6 +58,9 @@ const readBody = async (request: IncomingMessage): Promise<Uint8Array<ArrayBuffe
     return body;
 };
 
+/** A host as it appears in a URL: an IPv6 literal such as `::1` needs brackets, `[::1]`, or the origin is not a valid URL. */
+const urlHost = (host: string): string => (host.includes(":") && !host.startsWith("[") ? `[${host}]` : host);
+
 const toRequest = async (incoming: IncomingMessage, origin: string): Promise<Request> => {
     const headers = new Headers();
 
@@ -160,7 +163,8 @@ const writeResponse = async (response: Response, outgoing: ServerResponse): Prom
 export const createNodeHttpServer = async (options: NodeHttpServerOptions): Promise<NodeHttpServer> => {
     const host = options.host ?? "127.0.0.1";
     const server = createServer((incoming, outgoing) => {
-        const origin = `http://${incoming.headers.host ?? host}`;
+        // The Host header is already bracketed when the client sent an IPv6 address; the fallback is the bound host.
+        const origin = `http://${incoming.headers.host ?? urlHost(host)}`;
 
         toRequest(incoming, origin)
             .then((request) => options.fetch(request))
@@ -209,7 +213,7 @@ export const createNodeHttpServer = async (options: NodeHttpServerOptions): Prom
                     }
                 });
             }),
-        origin: `http://${host}:${String(port)}`,
+        origin: `http://${urlHost(host)}:${String(port)}`,
     };
 };
 
