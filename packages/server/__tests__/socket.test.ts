@@ -54,6 +54,16 @@ describe("defineWebSocket", () => {
         expect(() => defineWebSocket({ message: v.object({}), onMessage: () => undefined, path: "/chat?room=1" })).toThrow(/plain URL path/u);
     });
 
+    it("rejects a path under the reserved `/_lunora` prefix", () => {
+        expect.assertions(3);
+
+        // The sync socket upgrades at `/_lunora/ws`; a route there would take over every subscription socket.
+        expect(() => defineWebSocket({ message: v.object({}), onMessage: () => undefined, path: "/_lunora/ws" })).toThrow(/reserved `\/_lunora`/u);
+        expect(() => defineWebSocket({ message: v.object({}), onMessage: () => undefined, path: "/_lunora" })).toThrow(/reserved `\/_lunora`/u);
+        // A sibling that merely starts with the same letters is an ordinary app path.
+        expect(() => defineWebSocket({ message: v.object({}), onMessage: () => undefined, path: "/_lunorachat" })).not.toThrow();
+    });
+
     it("routes an `open` to onOpen with the socket and no message", async () => {
         expect.assertions(2);
 

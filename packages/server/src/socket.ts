@@ -155,7 +155,8 @@ type RegisteredWebSocket = RegisteredFunction<Record<string, never>, void, "muta
  * Declare a typed WebSocket endpoint. See the module docblock for the transport
  * it rides, the dispatch model, and the authorization path.
  * @throws {TypeError} when `path` is empty or does not start with `/` — an
- * empty or relative path would be unroutable and could shadow an app route.
+ * empty or relative path would be unroutable and could shadow an app route — or
+ * when it sits under the reserved `/_lunora` prefix.
  */
 const defineWebSocket = <Message extends Validator>(options: DefineWebSocketOptions<Message>): RegisteredWebSocket => {
     const { auth = false, message, onClose, onMessage, onOpen, path } = options;
@@ -165,6 +166,12 @@ const defineWebSocket = <Message extends Validator>(options: DefineWebSocketOpti
     // characters) could never match. Require the path to be its own pathname.
     if (typeof path !== "string" || !path.startsWith("/") || new URL(path, "https://lunora.invalid").pathname !== path) {
         throw new TypeError("defineWebSocket: `path` must be a plain URL path starting with `/` (no `?`, `#`, `..` or unencoded characters)");
+    }
+
+    // `/_lunora` belongs to the framework: the sync socket upgrades at `/_lunora/ws`, and a
+    // route there would take over every subscription socket.
+    if (path === "/_lunora" || path.startsWith("/_lunora/")) {
+        throw new TypeError("defineWebSocket: `path` must not be under the reserved `/_lunora` prefix");
     }
 
     return {
