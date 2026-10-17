@@ -17,7 +17,7 @@ import { fileURLToPath } from "node:url";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 import type { CelldDev } from "./celld-process";
-import { pollUntil, startCelldDev, stopCelldDev } from "./celld-process";
+import { pause, pollUntil, startCelldDev, stopCelldDev } from "./celld-process";
 import type { BindingResult } from "./tck-bindings";
 import type { Factories, LegResult } from "./tck-legs";
 import { collectLegs } from "./tck-legs";
@@ -195,6 +195,64 @@ describe("celld conformance run", () => {
             } finally {
                 alice.socket.close();
                 bob.socket.close();
+            }
+        });
+    });
+
+    describe("live streams over SSE through the node proxy", () => {
+        // Runs the streamed body through celld's node-to-cell proxy: the cell must
+        // hold the response open, deliver a publish to it, and still be serving
+        // after an idle wait.
+        it("delivers a publish to an open SSE body, and keeps the body open after a wait", async () => {
+            expect.assertions(7);
+
+            const response = await fetch(`${fleet.origin}/live`);
+
+            expect(response.status).toBe(200);
+            expect(response.headers.get("content-type")).toMatch(/^text\/event-stream/u);
+            expect(response.body).not.toBeNull();
+
+            const reader = (response.body ?? new ReadableStream<Uint8Array>()).getReader();
+            const decoder = new TextDecoder();
+            let received = "";
+
+            // Drain the body in the background; a closed body ends the pump.
+            const pump = (): Promise<void> =>
+                reader.read().then(({ done, value }) => {
+                    if (done) {
+                        return undefined;
+                    }
+
+                    received += decoder.decode(value, { stream: true });
+
+                    return pump();
+                });
+            const draining = pump();
+
+            const publish = async (payload: string): Promise<{ delivered: number }> => {
+                const reply = await fetch(`${fleet.origin}/live/publish`, { body: payload, method: "POST" });
+
+                return reply.json<{ delivered: number }>();
+            };
+
+            const waitForFrame = async (marker: string): Promise<string> =>
+                pollUntil(
+                    async () => received,
+                    (text) => text.includes(marker),
+                    { deadlineMs: 5000, intervalMs: 25 },
+                );
+
+            try {
+                await expect(publish("first")).resolves.toStrictEqual({ delivered: 1 });
+                await expect(waitForFrame("data: first\n\n")).resolves.toContain("event: live\ndata: first\n\n");
+
+                await pause(1500);
+
+                await expect(publish("second")).resolves.toStrictEqual({ delivered: 1 });
+                await expect(waitForFrame("data: second\n\n")).resolves.toContain("event: live\ndata: second\n\n");
+            } finally {
+                await reader.cancel();
+                await draining;
             }
         });
     });

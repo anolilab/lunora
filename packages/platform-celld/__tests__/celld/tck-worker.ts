@@ -165,6 +165,49 @@ const runLeg = async (suite: SuiteName, index: number): Promise<LegResult> => {
     }
 };
 
+/**
+ * Open SSE subscribers held by the `live` cell. A `/live/publish` fans out to
+ * each one. Module-level, so it lives exactly as long as the cell does.
+ */
+const liveSubscribers = new Set<ReadableStreamDefaultController<Uint8Array>>();
+
+/**
+ * `GET /live`: an SSE body the cell keeps open until the client cancels it.
+ * The subscriber is registered inside `start`, so it is in place before the
+ * response is returned to the node proxy.
+ */
+const liveConnect = (): Response => {
+    const encoder = new TextEncoder();
+    let subscriber: ReadableStreamDefaultController<Uint8Array> | undefined;
+    const body = new ReadableStream<Uint8Array>({
+        cancel() {
+            if (subscriber !== undefined) {
+                liveSubscribers.delete(subscriber);
+            }
+        },
+        start(controller) {
+            subscriber = controller;
+            liveSubscribers.add(controller);
+            controller.enqueue(encoder.encode(": connected\n\n"));
+        },
+    });
+
+    return new Response(body, {
+        headers: { "cache-control": "no-cache, no-transform", "content-type": "text/event-stream; charset=utf-8" },
+    });
+};
+
+/** `POST /live/publish`: one single-line frame to every open subscriber. */
+const livePublish = async (payload: string): Promise<Response> => {
+    const frame = new TextEncoder().encode(`event: live\ndata: ${payload}\n\n`);
+
+    for (const subscriber of liveSubscribers) {
+        subscriber.enqueue(frame);
+    }
+
+    return Response.json({ delivered: liveSubscribers.size });
+};
+
 /** The cell every leg runs in, and the cell `/transport` clients connect to. */
 class TckCell {
     public constructor(
@@ -181,6 +224,14 @@ class TckCell {
 
         if (url.pathname === "/fleet") {
             return this.fleetProbe(request);
+        }
+
+        if (url.pathname === "/live") {
+            return liveConnect();
+        }
+
+        if (url.pathname === "/live/publish") {
+            return livePublish(await request.text());
         }
 
         const suite = url.searchParams.get("suite") as SuiteName;
@@ -267,6 +318,11 @@ export default {
 
         if (url.pathname === "/fleet") {
             return env.TCK.get(env.TCK.idFromName(url.searchParams.get("name") ?? "fleet")).fetch(request);
+        }
+
+        // Both routes name one cell, so a publish reaches the subscribers an open `/live` holds.
+        if (url.pathname === "/live" || url.pathname === "/live/publish") {
+            return env.TCK.get(env.TCK.idFromName("live")).fetch(request);
         }
 
         if (url.pathname.startsWith("/binding/")) {
