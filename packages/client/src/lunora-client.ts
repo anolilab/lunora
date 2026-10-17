@@ -2156,7 +2156,7 @@ class LunoraClient {
             }
         };
 
-        const channel = this.openSupplementarySocket(joinUrl(this.socketBase(), path), {
+        const channel = this.openSupplementarySocket(this.supplementaryUrl(path), {
             onClose: () => {
                 notify(handlers.onClose);
             },
@@ -2866,7 +2866,7 @@ class LunoraClient {
             return () => undefined;
         }
 
-        const channel = this.openSupplementarySocket(joinUrl(this.socketBase(), SCHEDULED_WS_PATH), {
+        const channel = this.openSupplementarySocket(this.supplementaryUrl(SCHEDULED_WS_PATH), {
             onMessage: (event: MessageEvent) => {
                 // `lastFrameAt` is stamped by `openManagedSocket` itself (its
                 // `message` listener) for every caller — nothing to do here
@@ -5785,12 +5785,18 @@ class LunoraClient {
     }
 
     /**
-     * The origin (and any path prefix) the supplementary sockets — route and scheduled —
-     * are reached on: the configured socket URL without its shard path, so a custom
-     * `wsUrl` host or proxy applies to them too.
+     * The URL a supplementary socket — route and scheduled — is reached on: the configured
+     * socket URL with its shard path replaced by `path`. The origin, any path prefix, and
+     * any query the configured URL carries are kept, so a custom `wsUrl` host or proxy
+     * applies to them too and the path never lands inside a query string.
      */
-    private socketBase(): string {
-        return this.wsUrl.endsWith(WS_PATH) ? this.wsUrl.slice(0, -WS_PATH.length) : this.wsUrl;
+    private supplementaryUrl(path: string): string {
+        const url = new URL(this.wsUrl);
+        const prefix = url.pathname.endsWith(WS_PATH) ? url.pathname.slice(0, -WS_PATH.length) : url.pathname;
+
+        url.pathname = joinUrl(prefix, path);
+
+        return url.toString();
     }
 
     private wsUrlFor(shardKey: string | undefined, token: string | undefined, base: string = this.wsUrl): string {

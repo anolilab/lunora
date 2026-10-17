@@ -115,6 +115,16 @@ describe("connectWebSocket", () => {
         expect(FakeSocket.instances).toHaveLength(0);
     });
 
+    it("keeps a configured URL's query and puts the route path before it", () => {
+        expect.assertions(1);
+
+        const client = new LunoraClient({ url: "https://app.example", wsUrl: "wss://app.example/_lunora/ws?tenant=a", WebSocket: WebSocketImpl });
+
+        client.connectWebSocket("/chat", { onMessage: () => undefined });
+
+        expect(lastSocket().url).toBe("wss://app.example/chat?tenant=a");
+    });
+
     it("does not open on a token minted under a credential that was replaced while pending", async () => {
         expect.assertions(2);
 
