@@ -5011,6 +5011,51 @@ describe("lunoraClient", () => {
 
                 client.close();
             });
+
+            it("does not let a control POST that never settles block the next grant", async () => {
+                expect.assertions(2);
+
+                vi.useFakeTimers();
+
+                let controlCalls = 0;
+                const fetchMock = vi.fn<typeof fetch>((input, init) => {
+                    if (input !== LIVE_CONTROL_URL) {
+                        return Promise.resolve(Response.json({ ok: true }));
+                    }
+
+                    controlCalls += 1;
+
+                    // The first control POST stalls: it settles only when its signal aborts, as a real fetch does.
+                    if (controlCalls === 1) {
+                        return new Promise<Response>((_resolve, reject) => {
+                            init?.signal?.addEventListener("abort", () => {
+                                reject(new DOMException("aborted", "AbortError"));
+                            });
+                        });
+                    }
+
+                    return Promise.resolve(Response.json({ ok: true }));
+                });
+                const client = new LunoraClient({ fetch: fetchMock, url: "https://app.example", WebSocket: createMockWebSocket() });
+
+                client.subscribeLiveTopic({ onEvent: () => undefined, stream: "posts", topic: "post:1" });
+                client.subscribeLiveTopic({ onEvent: () => undefined, stream: "posts", topic: "post:2" });
+
+                const socket = latestSocket();
+
+                socket.open();
+                socket.receive({ connectionId: "ws-1", subject: null, type: "identity" });
+                await vi.advanceTimersByTimeAsync(0);
+
+                expect(liveControlBodies(fetchMock).map((body) => body.topic)).toStrictEqual(["post:1"]);
+
+                // Past the control call's timeout, the stalled POST aborts and the second grant goes out.
+                await vi.advanceTimersByTimeAsync(60_000);
+
+                expect(liveControlBodies(fetchMock).map((body) => body.topic)).toStrictEqual(["post:1", "post:2"]);
+
+                client.close();
+            });
         });
     });
 

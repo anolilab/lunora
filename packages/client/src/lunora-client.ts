@@ -451,6 +451,29 @@ const CLIENT_CAPABILITIES = [PAGE_DELTA_CAPABILITY] as const;
 /** Room sends held before the socket opens; past this a `send` is refused rather than queued without bound. */
 const ROOM_PENDING_LIMIT = 100;
 
+/** Longest a live-grant control POST may take, headers and body. Past it the POST is aborted so the chain behind it moves on. */
+const LIVE_CONTROL_TIMEOUT_MS = 10_000;
+
+/**
+ * One live-grant control POST, bounded by {@link LIVE_CONTROL_TIMEOUT_MS}. The clock starts when
+ * the POST is sent, not when it was queued, and covers the body read too: a stalled response
+ * must not hold the chain behind it.
+ */
+const sendLiveControl = async (fetchImpl: typeof fetch, url: string, body: string, headers: Record<string, string>): Promise<void> => {
+    const controller = new AbortController();
+    const timer = setTimeout(() => {
+        controller.abort();
+    }, LIVE_CONTROL_TIMEOUT_MS);
+
+    try {
+        const response = await fetchImpl(url, { body, credentials: "include", headers, method: "POST", signal: controller.signal });
+
+        await response.text();
+    } finally {
+        clearTimeout(timer);
+    }
+};
+
 /**
  * @internal
  */
@@ -6987,8 +7010,7 @@ class LunoraClient {
         const headers = this.rpcRequestHeaders({}, shardKey);
 
         this.liveControlChain = this.liveControlChain
-            .then(() => fetchImpl(joinUrl(this.url, controlPath), { body: payload, credentials: "include", headers, method: "POST" }))
-            .then((response) => response.text())
+            .then(() => sendLiveControl(fetchImpl, joinUrl(this.url, controlPath), payload, headers))
             .catch(() => undefined);
     }
 
