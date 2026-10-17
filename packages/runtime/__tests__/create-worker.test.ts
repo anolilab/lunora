@@ -375,6 +375,38 @@ describe("createWorker", () => {
         expect(new URL(shard.calls[0]!.request.url).pathname).toBe("/chat");
     });
 
+    it("upgrades a declared socket path even when a custom HTTP route shares it", async () => {
+        expect.assertions(2);
+
+        const handler = vi.fn<() => Response>(() => new Response("handled over HTTP"));
+        const worker = createWorker({
+            allowUnauthenticatedShardAccess: true,
+            functions: { "sockets:chat": { args: {}, kind: "mutation", lifecycle: "socket", socketPath: "/chat", visibility: "internal" } },
+            routes: { "GET /chat": handler },
+            shardDO: shard.namespace,
+        });
+
+        await worker.fetch(new Request("https://app.example/chat?shard=channel-7", { headers: { Upgrade: "websocket" } }), {}, fakeContext);
+
+        expect(handler).not.toHaveBeenCalled();
+        expect(shard.calls).toHaveLength(1);
+    });
+
+    it("treats a case-variant Upgrade header as the socket upgrade", async () => {
+        expect.assertions(2);
+
+        const worker = createWorker({
+            allowUnauthenticatedShardAccess: true,
+            functions: { "sockets:chat": { args: {}, kind: "mutation", lifecycle: "socket", socketPath: "/chat", visibility: "internal" } },
+            shardDO: shard.namespace,
+        });
+
+        await worker.fetch(new Request("https://app.example/chat?shard=channel-7", { headers: { Upgrade: "WebSocket" } }), {}, fakeContext);
+
+        expect(shard.calls).toHaveLength(1);
+        expect(new URL(shard.calls[0]!.request.url).pathname).toBe("/chat");
+    });
+
     it("does not treat an undeclared path as a socket route", async () => {
         expect.assertions(2);
 
