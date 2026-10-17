@@ -54,7 +54,7 @@ import {
 import { emitGlobalShapeReaderOverride, emitShapeFragments } from "./shard-shapes";
 import emitExternalSourceFragments from "./shard-sources";
 import emitVectorFragments from "./shard-vectors";
-import { baseSpecifiers, GENERATED_HEADER } from "./shared";
+import { baseSpecifiers, GENERATED_HEADER, optionalSpread } from "./shared";
 
 interface EmitShardOptions {
     advisories?: ReadonlyArray<Finding>;
@@ -498,11 +498,10 @@ const LUNORA_SCHEMA_SNAPSHOT: { hash: string; json: string } = { hash: ${JSON.st
                 // Omitted when there is no scope so \`createShardCtxDb\`
                 // keeps its own "degrade a provable slice to a whole-table dep"
                 // fallback rather than reporting into a no-op.
-                ...(options.onReadRange !== undefined
-                    ? { onReadRange: options.onReadRange }
-                    : options.scope === undefined ? {} : { onReadRange: this.getCtxDbReadRangeHook(options.scope) }),${
-                        hasVectorIndexes
-                            ? `
+                ...(options.onReadRange === undefined ? {} : { onReadRange: options.onReadRange }),
+                ...(options.onReadRange === undefined && options.scope !== undefined ? { onReadRange: this.getCtxDbReadRangeHook(options.scope) } : {}),${
+                    hasVectorIndexes
+                        ? `
                 // Vectorize is outside this shard's SQLite and cannot roll back, so
                 // the sync is held until the mutation's transaction has COMMITTED
                 // (\`deferAfterCommit\`) instead of running inline. Inline, a write
@@ -511,8 +510,8 @@ const LUNORA_SCHEMA_SNAPSHOT: { hash: string; json: string } = { hash: ${JSON.st
                 // left the row with its vector already purged. Outside a
                 // transaction (an action) nothing is open and it runs at once.
                 ...(onWrite === undefined ? {} : { onWrite: (event) => this.deferAfterCommit(() => onWrite(event)) }),`
-                            : ""
-                    }
+                        : ""
+                }
                 scheduler,
                 schema: schema as unknown as SchemaLike,
                 sql: this.sql as SqlExec,
@@ -561,10 +560,10 @@ const LUNORA_SCHEMA_SNAPSHOT: { hash: string; json: string } = { hash: ${JSON.st
         ? `            const bookmark = this.getInboundBookmark();
             const globalRequest = {
                 ...this.globalCdcOptions(config.cdc ?? false),
-                ...(bookmark === undefined ? {} : { bookmark }),
-                ...(identity === undefined ? {} : { identity }),
+                ${optionalSpread("bookmark")},
+                ${optionalSpread("identity")},
                 onBookmark: (bookmarkValue: string | undefined) => { if (options.bookmarks !== undefined) { options.bookmarks.value = bookmarkValue; } },
-                ...(userId === undefined ? {} : { userId }),
+                ${optionalSpread("userId")},
             };\n            const globalDb: DatabaseWriterLike = ${globalDatabaseThunk}?.(env, globalRequest) ?? globalDbStub;\n`
         : "";
 
@@ -646,9 +645,9 @@ ${hasMemoryTables ? "            clearMemoryTables(this.sql as SqlExec, schema a
                 // emitter can know that; a hand-written subclass leaves this unset
                 // and keeps the backstop.
                 ctxDbCacheWired: true,
-                ...(config.maxRelationKeys === undefined ? {} : { maxRelationKeys: config.maxRelationKeys }),
+                ${optionalSpread("maxRelationKeys", "config.maxRelationKeys")},
                 ...(config.reactiveCache ? { reactiveCache: config.reactiveCache === true ? {} : config.reactiveCache } : {}),
-                ...(config.relationExistsPushDown === undefined ? {} : { relationExistsPushDown: config.relationExistsPushDown }),
+                ${optionalSpread("relationExistsPushDown", "config.relationExistsPushDown")},
                 // The same sink \`buildCtx\` resolves, made reachable before any ctx
                 // exists — a trigger that fails first still flushes and fuses.
                 ...(config.observability === undefined ? {} : { telemetrySink: () => config.observability?.((env ?? {}) as Record<string, unknown>) }),

@@ -1,6 +1,7 @@
 /* eslint-disable no-secrets/no-secrets -- emitted builder source: the string fragments are framework API type names (e.g. "SchedulerDeclaration<Env>"), not credentials. */
 import type { ResolvedAppOptions } from "./app-helpers";
 import { hasShardedTables, hasShardExtras, shardExtrasMethods } from "./app-helpers";
+import { optionalSpread } from "./shared";
 
 /** Per-capability declaration interfaces (the shapes the fluent methods accept). */
 const buildDeclarationBlocks = (options: ResolvedAppOptions): string[] => [
@@ -336,9 +337,12 @@ const buildShardFactoryBody = (options: ResolvedAppOptions): string => {
         // `observability` in particular meant every in-handler `ctx.log` / span /
         // metric stayed in the shard's local ring buffer whatever the app configured.
         // Spread rather than assigned so an unset knob keeps the shard's own default.
-        `            ...(this.maxRelationKeysLimit === undefined ? {} : { maxRelationKeys: this.maxRelationKeysLimit }),`,
-        `            ...(this.observabilitySink === undefined ? {} : { observability: this.observabilitySink }),`,
-        `            ...(this.relationExistsPushDownMode === undefined ? {} : { relationExistsPushDown: this.relationExistsPushDownMode }),`,
+        `            ${optionalSpread("maxRelationKeys", "this.maxRelationKeysLimit")},`,
+        `            ${optionalSpread("observability", "this.observabilitySink")},`,
+        `            ${optionalSpread("relationExistsPushDown", "this.relationExistsPushDownMode")},`,
+        // The `userId` guards below use `== null`, not `=== undefined`, on purpose: the request
+        // type allows `userId: string | null`, and `null` must drop the key too. `== null` also
+        // narrows the emitted `request.userId` to `string` for the callee.
         ...(options.hasGlobal
             ? [
                   `            ...(this.globalDeclaration
@@ -438,7 +442,7 @@ const buildShardFactoryBody = (options: ResolvedAppOptions): string => {
                   `            ...(this.shardRegistrySelector ? { shardRegistry: (rawEnv: Record<string, unknown>) => this.shardRegistrySelector?.(rawEnv as Env) } : {}),`,
               ]
             : []),
-        ...(options.hasSourcedTables ? [`            ...(this.sourceClientFactory === undefined ? {} : { sourceClient: this.sourceClientFactory }),`] : []),
+        ...(options.hasSourcedTables ? [`            ${optionalSpread("sourceClient", "this.sourceClientFactory")},`] : []),
         ...(options.hasStorage
             ? [
                   `            ...(this.storageDeclaration ? { storage: (rawEnv: Record<string, unknown>, origin?: string) => this.resolveStorage(rawEnv as Env, origin) } : {}),`,

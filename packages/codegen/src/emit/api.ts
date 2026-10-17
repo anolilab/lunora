@@ -10,6 +10,7 @@ import {
     assertIdentifier,
     baseSpecifiers,
     GENERATED_HEADER,
+    optionalSpread,
     pascalCase,
     renderArgsType,
     renderNamespaceTree,
@@ -725,12 +726,12 @@ ${argsField}
 export const ${shape.exportName}CollectionOptions = (options: ${pascalCase(optionsType)}): LunoraCollectionOptions<${rowType}> =>
     lunoraCollectionOptions<${rowType}>({
         client: options.client,
-        ...(options.checkpoints === undefined ? {} : { checkpoints: options.checkpoints }),
-        ...(options.getKey === undefined ? {} : { getKey: options.getKey }),
-        ...(options.load === undefined ? {} : { load: options.load }),
-        ...(options.onError === undefined ? {} : { onError: options.onError }),
-        ...(options.shardKey === undefined ? {} : { shardKey: options.shardKey }),
-        shape: { args: options.args, name: ${JSON.stringify(shape.exportName)}, ...(options.shardKey === undefined ? {} : { shardKey: options.shardKey }) },
+        ${optionalSpread("checkpoints", "options.checkpoints")},
+        ${optionalSpread("getKey", "options.getKey")},
+        ${optionalSpread("load", "options.load")},
+        ${optionalSpread("onError", "options.onError")},
+        ${optionalSpread("shardKey", "options.shardKey")},
+        shape: { args: options.args, name: ${JSON.stringify(shape.exportName)}, ${optionalSpread("shardKey", "options.shardKey")} },
     });
 
 /** Live collection for the \`${shape.exportName}\` shape, with its sync controls. */

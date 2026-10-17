@@ -2,6 +2,7 @@ import type { AppMethodFacet, CapabilityKey } from "../capabilities";
 import { APP_METHOD_CAPABILITIES } from "../capabilities";
 import type { IdentityIR, JurisdictionIR, TableIR } from "../ir";
 import { isShardByTable } from "../ir";
+import { optionalSpread } from "./shared";
 
 /** Which capability methods the generated `defineApp` builder exposes — one flag per package-backed feature the app actually uses. */
 interface EmitAppOptions {
@@ -210,9 +211,9 @@ const buildStorageHelpers = (hasStorage: boolean): string =>
         return createStorage({
             bucket,
             bucketName,
-            ...(publicBaseUrl === undefined ? {} : { publicBaseUrl }),
-            ...(s3 === undefined ? {} : { s3 }),
-            ...(signingSecret === undefined ? {} : { signingSecret }),
+            ${optionalSpread("publicBaseUrl")},
+            ${optionalSpread("s3")},
+            ${optionalSpread("signingSecret")},
         });
     }
 
@@ -452,7 +453,7 @@ const buildGlobalImporter =
         return importGlobalRows(writer, schema as unknown as D1CtxDbOptions["schema"], {
             exec,
             rows: request.rows.map((row) => ({ doc: row.doc, line: row.line, table: row.table })),
-            ...(request.startLine === undefined ? {} : { startLine: request.startLine }),
+            ${optionalSpread("startLine", "request.startLine")},
         });
     };
 

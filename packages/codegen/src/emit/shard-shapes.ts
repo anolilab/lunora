@@ -1,5 +1,7 @@
 import type { RlsPoliciesResult } from "@lunora/shard-engine";
 
+import { optionalSpread } from "./shared";
+
 /**
  * The emitted ShardDO's local-first sync overrides — `resolveShape`, the
  * custom-mutator watermark guard, the boot-time shape read-policy check — and
@@ -88,7 +90,7 @@ const emitShapeFragments = ({
             // instead of the CDC poke path.
             const isGlobal = (schema as unknown as SchemaLike).tables[shape.table]?.shardMode?.kind === "global";
 
-            return { ...(shape.columns === undefined ? {} : { columns: shape.columns }), effectiveWhere, global: isGlobal, table: shape.table };
+            return { ${optionalSpread("columns", "shape.columns")}, effectiveWhere, global: isGlobal, table: shape.table };
         }
 `
         : "";
@@ -160,7 +162,7 @@ const emitGlobalShapeReaderOverride = (enabled: boolean, globalDatabaseThunk: st
             const bookmark = this.getInboundBookmark();
             const globalRequest = {
                 ...this.globalCdcOptions(config.cdc ?? false),
-                ...(bookmark === undefined ? {} : { bookmark }),
+                ${optionalSpread("bookmark")},
                 ...(identity?.identity === undefined ? {} : { identity: identity.identity }),
                 ...(identity?.userId === undefined ? {} : { userId: identity.userId }),
             };
@@ -176,7 +178,7 @@ const emitGlobalShapeReaderOverride = (enabled: boolean, globalDatabaseThunk: st
             // so bail early and let the caller fail it closed.
             do {
                 // eslint-disable-next-line no-await-in-loop -- sequential page drain to assemble the full membership
-                const page = await globalDb.findMany(resolved.table, { cursor, ...(resolved.effectiveWhere === undefined ? {} : { where: resolved.effectiveWhere }) });
+                const page = await globalDb.findMany(resolved.table, { cursor, ${optionalSpread("where", "resolved.effectiveWhere")} });
 
                 for (const doc of page.page) {
                     rows.push({ doc, id: String((doc as { _id?: unknown })._id) });
@@ -205,7 +207,7 @@ const emitGlobalShapeReaderOverride = (enabled: boolean, globalDatabaseThunk: st
             // emitted \`shard.ts\` uncompilable for every Hyperdrive-global app with
             // a \`defineShape\`. The Hyperdrive factory simply never reads it.
             const bookmark = this.getInboundBookmark();
-            const globalRequest = { ...this.globalCdcOptions(config.cdc ?? false), ...(bookmark === undefined ? {} : { bookmark }) };
+            const globalRequest = { ...this.globalCdcOptions(config.cdc ?? false), ${optionalSpread("bookmark")} };
             const globalDb: DatabaseWriterLike = ${globalDatabaseThunk}?.(env, globalRequest) ?? globalDbStub;
 
             return globalDb.cdcChangedTables?.(sinceSeq, cursorOnly === undefined ? {} : { cursorOnly });

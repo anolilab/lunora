@@ -94,6 +94,13 @@ const assertPropertyIdentifier = (value: string, context: string): void => {
 };
 
 /** Upper-case the first character — turns an emitted value name into its PascalCase type name. */
+
+/**
+ * An emitted object-literal spread that sets `key` only when `value` is defined. A plain
+ * `key: value` would carry an explicit `undefined`, which `exactOptionalPropertyTypes` rejects.
+ */
+const optionalSpread = (key: string, value: string = key): string => `...(${value} === undefined ? {} : { ${key === value ? key : `${key}: ${value}`} })`;
+
 const pascalCase = (value: string): string => value.charAt(0).toUpperCase() + value.slice(1);
 
 /**
@@ -403,6 +410,7 @@ export {
     GENERATED_HEADER,
     IMPORT_PATH_RE,
     isOptionalOnInsert,
+    optionalSpread,
     pascalCase,
     renderArgsType,
     renderInsertInterface,

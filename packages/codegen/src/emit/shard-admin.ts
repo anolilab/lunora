@@ -1,3 +1,5 @@
+import { optionalSpread } from "./shared";
+
 /**
  * The emitted ShardDO's admin/maintenance write methods (data migrations, studio
  * row writes, export/import, rank/relation pages, CDC apply) and the bare writer
@@ -38,7 +40,7 @@ const adminWriterMethod = `        /**
                     this.recordChangedTable(delta.table, delta.indexKeys);
                 },
                 cdc: config.cdc ?? false,
-                ...(headroom === undefined ? {} : { headroom }),
+                ${optionalSpread("headroom")},
                 // Live predicate, same as the user-facing ctx — see \`databaseOptions\`.
                 inTransaction: () => this.isInTransaction(),
                 scheduler,
@@ -71,10 +73,10 @@ const ADMIN_WRITE_METHODS: string = `${adminWriterMethod}
 ${adminWriterPrelude()}
 
             return runDataMigration({
-                ...(args.batchSize === undefined ? {} : { batchSize: args.batchSize }),
-                ...(args.direction === undefined ? {} : { direction: args.direction }),
-                ...(args.dryRun === undefined ? {} : { dryRun: args.dryRun }),
-                ...(args.maxBatches === undefined ? {} : { maxBatches: args.maxBatches }),
+                ${optionalSpread("batchSize", "args.batchSize")},
+                ${optionalSpread("direction", "args.direction")},
+                ${optionalSpread("dryRun", "args.dryRun")},
+                ${optionalSpread("maxBatches", "args.maxBatches")},
                 migration: migration as unknown as DataMigrationLike,
                 // Flush after each batch so live migrationStatus subscribers see
                 // progress mid-run (the base method records the reserved state
@@ -231,10 +233,10 @@ ${adminWriterPrelude()}
             }
 
             return writer.rankPageRows(args.table, args.index, {
-                ...(args.after === undefined ? {} : { after: args.after }),
-                ...(args.cursor === undefined ? {} : { cursor: args.cursor }),
-                ...(args.partitionKey === undefined ? {} : { partitionKey: args.partitionKey }),
-                ...(args.take === undefined ? {} : { take: args.take }),
+                ${optionalSpread("after", "args.after")},
+                ${optionalSpread("cursor", "args.cursor")},
+                ${optionalSpread("partitionKey", "args.partitionKey")},
+                ${optionalSpread("take", "args.take")},
             });
         }
 

@@ -28,7 +28,8 @@ const emitVectorFragments = (
     // namespace-less, same as today. Gated on `hasShardedVectors` so a schema
     // with no `.shardBy()`'d vector table emits the bare call, unchanged.
     const vectorNamespaceField = hasShardedVectors ? "            const vectorShardKey = this.currentShardKey();\n" : "";
-    const vectorNamespaceOption = hasShardedVectors ? "namespace: vectorShardKey === ROOT_SHARD_NAME ? undefined : vectorShardKey, " : "";
+    // Spread, not `namespace: … ? undefined : …`: `exactOptionalPropertyTypes` rejects an explicit `undefined`.
+    const vectorNamespaceOption = hasShardedVectors ? "...(vectorShardKey === ROOT_SHARD_NAME ? {} : { namespace: vectorShardKey }), " : "";
     // Read-side counterpart to `vectorNamespaceOption`: threaded into
     // `createContextVectors` so `ctx.vectors` (query/getByIds/deleteByIds/
     // upsert/upsertNow) defaults to this DO's own namespace too — otherwise
@@ -66,7 +67,7 @@ const emitVectorFragments = (
         "deferAfterCommit: (work) => this.deferAfterCommit(work)",
         ...(hasShardedVectors
             ? [
-                  "namespace: vectorShardKey === ROOT_SHARD_NAME ? undefined : vectorShardKey",
+                  "...(vectorShardKey === ROOT_SHARD_NAME ? {} : { namespace: vectorShardKey })",
                   `shardedIndexNames: [${shardedIndexNames.map((name) => JSON.stringify(name)).join(", ")}]`,
               ]
             : []),
