@@ -61,6 +61,23 @@ describe("discoverFunctions — defineWebSocket", () => {
         expect(emitFunctions({ functions: discover() })).toContain("export const LUNORA_SOCKETS");
     });
 
+    it("discovers a route declared through a namespace import", () => {
+        expect.assertions(2);
+
+        writeFunction(
+            "sockets.ts",
+            `
+            import * as lunora from "@lunora/server";
+            export const chat = lunora.defineWebSocket({ message: lunora.v.object({ text: lunora.v.string() }), onMessage: () => undefined, path: "/chat" });
+        `,
+        );
+
+        const [chat] = discover();
+
+        expect(chat?.lifecycle).toBe("socket");
+        expect(emitFunctions({ functions: discover() })).toContain("export const LUNORA_SOCKETS");
+    });
+
     it("keeps a socket route out of the socket-lifecycle manifest", () => {
         expect.assertions(1);
 

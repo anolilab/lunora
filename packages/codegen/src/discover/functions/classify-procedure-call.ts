@@ -272,19 +272,38 @@ const isLunoraNamespace = (identifier: Identifier): boolean =>
             isServerSurfaceModule(declaration.getFirstAncestorByKind(SyntaxKind.ImportDeclaration)?.getModuleSpecifierValue() ?? ""),
     );
 
+/** Whether a bare name is a channel or lifecycle factory, the two registrations that are not builder terminals. */
+const isRegistrationFactory = (name: string): boolean => Object.hasOwn(CHANNEL_FACTORIES, name) || Object.hasOwn(LIFECYCLE_FACTORIES, name);
+
+/**
+ * The registration a channel or lifecycle factory makes, however the factory was reached (bare identifier
+ * or namespace property). Callers check {@link isRegistrationFactory} first.
+ */
+const registrationOfFactory = (name: string): ProcedureClassification | undefined => {
+    if (Object.hasOwn(CHANNEL_FACTORIES, name)) {
+        return { channel: CHANNEL_FACTORIES[name], kind: "mutation", visibility: "internal" };
+    }
+
+    const lifecycle = Object.hasOwn(LIFECYCLE_FACTORIES, name) ? LIFECYCLE_FACTORIES[name] : undefined;
+
+    // A lifecycle hook is an internal registration tagged with its moment; it lands in LUNORA_FUNCTIONS for
+    // path dispatch and in the lifecycle manifest emit derives from the `lifecycle` tag.
+    return lifecycle ? { kind: lifecycleKind(lifecycle), lifecycle, visibility: "internal" } : undefined;
+};
+
 const classifyProcedureCall = (call: CallExpression): ProcedureClassification | undefined => {
     const callee = call.getExpression();
 
     if (Node.isPropertyAccessExpression(callee)) {
-        // A channel factory reached through a namespace import (`rooms.defineRoom(...)`) is a registration too.
+        // A channel or lifecycle factory reached through a namespace import (`lunora.defineRoom(...)`,
+        // `lunora.defineWebSocket(...)`) is a registration too, found by the same lookup as the identifier form.
         const receiver = callee.getExpression();
-        // The name is checked first: resolving the receiver's symbol is type-checker work, which
-        // only a channel factory name is worth paying for.
-        const channel =
-            CHANNEL_FACTORIES[callee.getName()] && Node.isIdentifier(receiver) && isLunoraNamespace(receiver) ? CHANNEL_FACTORIES[callee.getName()] : undefined;
+        const name = callee.getName();
 
-        if (channel) {
-            return { channel, kind: "mutation", visibility: "internal" };
+        // The name is checked first: resolving the receiver's symbol is type-checker work, which
+        // only a factory name is worth paying for.
+        if (isRegistrationFactory(name) && Node.isIdentifier(receiver) && isLunoraNamespace(receiver)) {
+            return registrationOfFactory(name);
         }
 
         return classifyBuilderTerminal(callee);
@@ -310,22 +329,7 @@ const classifyProcedureCall = (call: CallExpression): ProcedureClassification | 
         return { kind: internalKind, visibility: "internal" };
     }
 
-    const channel = CHANNEL_FACTORIES[exportedName];
-
-    if (channel) {
-        return { channel, kind: "mutation", visibility: "internal" };
-    }
-
-    const lifecycle = LIFECYCLE_FACTORIES[exportedName];
-
-    if (lifecycle) {
-        // A lifecycle hook is an internal registration tagged with its moment;
-        // it lands in LUNORA_FUNCTIONS for path dispatch and in the lifecycle
-        // manifest emit derives from the `lifecycle` tag.
-        return { kind: lifecycleKind(lifecycle), lifecycle, visibility: "internal" };
-    }
-
-    return undefined;
+    return registrationOfFactory(exportedName);
 };
 
 export { classifyProcedureCall };
