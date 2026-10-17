@@ -4831,10 +4831,64 @@ describe("lunoraClient", () => {
                     { action: "subscribe", connectionId: "ws-1", stream: "posts", subscriptionId: "ws-live-1", topic: "post:1" },
                 ]);
 
-                // A `whisper` frame on the topic reaches the handler with its decoded data.
-                socket.receive({ data: { title: "hi" }, topic: "post:1", type: "whisper" });
+                // A `live` frame for the subscribed stream and topic reaches the handler with its decoded data.
+                socket.receive({ data: { title: "hi" }, stream: "posts", topic: "post:1", type: "live" });
 
                 expect(received).toStrictEqual([{ title: "hi" }]);
+
+                client.close();
+            });
+
+            it("ignores a plain peer whisper on the subscribed topic", async () => {
+                expect.assertions(1);
+
+                const fetchMock = vi.fn<typeof fetch>(() => Promise.resolve(Response.json({ ok: true })));
+                const client = new LunoraClient({ fetch: fetchMock, url: "https://app.example", WebSocket: createMockWebSocket() });
+                const received: unknown[] = [];
+
+                client.subscribeLiveTopic({
+                    onEvent: (payload) => {
+                        received.push(payload);
+                    },
+                    stream: "posts",
+                    topic: "post:1",
+                });
+
+                const socket = latestSocket();
+
+                socket.open();
+                socket.receive({ connectionId: "ws-1", subject: null, type: "identity" });
+                await flushMicrotasks();
+                socket.receive({ data: { title: "spoofed" }, from: "user-b", topic: "post:1", type: "whisper" });
+
+                expect(received).toStrictEqual([]);
+
+                client.close();
+            });
+
+            it("ignores a live frame for another stream on the same topic", async () => {
+                expect.assertions(1);
+
+                const fetchMock = vi.fn<typeof fetch>(() => Promise.resolve(Response.json({ ok: true })));
+                const client = new LunoraClient({ fetch: fetchMock, url: "https://app.example", WebSocket: createMockWebSocket() });
+                const received: unknown[] = [];
+
+                client.subscribeLiveTopic({
+                    onEvent: (payload) => {
+                        received.push(payload);
+                    },
+                    stream: "posts",
+                    topic: "post:1",
+                });
+
+                const socket = latestSocket();
+
+                socket.open();
+                socket.receive({ connectionId: "ws-1", subject: null, type: "identity" });
+                await flushMicrotasks();
+                socket.receive({ data: { title: "other" }, stream: "private", topic: "post:1", type: "live" });
+
+                expect(received).toStrictEqual([]);
 
                 client.close();
             });
@@ -4868,7 +4922,7 @@ describe("lunoraClient", () => {
                     topic: "post:1",
                 });
 
-                socket.receive({ data: { title: "after" }, topic: "post:1", type: "whisper" });
+                socket.receive({ data: { title: "after" }, stream: "posts", topic: "post:1", type: "live" });
 
                 expect(received).toStrictEqual([]);
 

@@ -916,6 +916,18 @@ export interface ServerWhisperMessage {
 }
 
 /**
+ * A server live publish to a WebSocket member granted `stream` on `topic`. Server-only:
+ * a peer's whisper never carries this type, so a `live` frame is always the server's.
+ * `data` is the published payload, the same as the SSE `live` event.
+ */
+export interface ServerLiveMessage {
+    data: unknown;
+    stream: string;
+    topic: string;
+    type: "live";
+}
+
+/**
  * The user the shard authenticated this socket as, sent in reply to every
  * `connect` frame. `subject` is the resolved user id, or `null` when the socket
  * is anonymous. A cookie-session client reads it to learn who it is — a
@@ -1021,6 +1033,7 @@ export type ServerMessage =
     | ServerDataMessage
     | ServerErrorMessage
     | ServerIdentityMessage
+    | ServerLiveMessage
     | ServerPokeEndMessage
     | ServerPokePartMessage
     | ServerPokeStartMessage

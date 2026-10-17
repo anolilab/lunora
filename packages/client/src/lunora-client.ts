@@ -193,6 +193,7 @@ import type {
     ServerDataMessage,
     ServerErrorMessage,
     ServerIdentityMessage,
+    ServerLiveMessage,
     ServerMessage,
     ServerPokeEndMessage,
     ServerResumeMessage,
@@ -866,7 +867,7 @@ class LunoraClient {
      * subscription id → the stream and topic. Replayed on every `identity` frame: each socket is a
      * new connection id with no grants, so a bounce would otherwise stop delivery silently.
      */
-    private readonly liveSocketGrants = new Map<string, Map<string, { stream: string; topic: string }>>();
+    private readonly liveSocketGrants = new Map<string, Map<string, { onEvent: (payload: unknown) => void; stream: string; topic: string }>>();
 
     /** Tail of the live-grant control posts. One chain keeps a subscribe and its unsubscribe in order. */
     private liveControlChain: Promise<unknown> = Promise.resolve();
@@ -1862,10 +1863,6 @@ class LunoraClient {
      * the stream's control route (`/live/<stream>/control`) to grant this socket the topic, naming
      * the socket's connection id. A live publish reaches the socket only with both in place.
      *
-     * Ordinary peer whispers on the same topic reach `onEvent` too: a live publish and a peer
-     * whisper share one wire frame. Use a topic no other member broadcasts to, or validate the
-     * payload's shape.
-     *
      * Grants are re-issued on every reconnect, because each socket gets a new connection id.
      * A control call that fails is not retried here, so a denied or failed grant delivers nothing.
      * @returns an unsubscribe function that revokes the grant and leaves the topic
@@ -1878,13 +1875,9 @@ class LunoraClient {
         const subscriptionId = `ws-live-${String(this.nextLiveSocketId)}`;
         const key = connectionKey(shardKey);
         const controlPath = `/live/${stream}/control`;
-        const leaveTopic = this.whisperSubscribe(
-            topic,
-            (data) => {
-                onEvent(data);
-            },
-            { shardKey },
-        );
+        // The membership join only: a live publish arrives as a `live` frame (see `dispatchLive`),
+        // so a peer's whisper on this topic reaches no handler here.
+        const leaveTopic = this.whisperSubscribe(topic, () => undefined, { shardKey });
 
         let grants = this.liveSocketGrants.get(key);
 
@@ -1893,7 +1886,7 @@ class LunoraClient {
             this.liveSocketGrants.set(key, grants);
         }
 
-        grants.set(subscriptionId, { stream, topic });
+        grants.set(subscriptionId, { onEvent, stream, topic });
 
         const connectionId = this.getConnection(shardKey)?.connectionId;
 
@@ -6597,6 +6590,11 @@ class LunoraClient {
 
                 break;
             }
+            case "live": {
+                this.dispatchLive(message, shardKey);
+
+                break;
+            }
             case "pokeEnd": {
                 this.handlePokeEnd(message, shardKey);
 
@@ -6992,6 +6990,33 @@ class LunoraClient {
             .then(() => fetchImpl(joinUrl(this.url, controlPath), { body: payload, headers, method: "POST" }))
             .then((response) => response.text())
             .catch(() => undefined);
+    }
+
+    /**
+     * Route an inbound live publish to the grants on the originating shard whose stream and topic
+     * match. A grant exists only for a subscribed stream and topic, so a frame naming another
+     * stream reaches no handler.
+     */
+    private dispatchLive(message: ServerLiveMessage, shardKey?: string): void {
+        const grants = this.liveSocketGrants.get(connectionKey(shardKey));
+
+        if (!grants) {
+            return;
+        }
+
+        const data = decodeWire(message.data);
+
+        for (const grant of grants.values()) {
+            if (grant.stream !== message.stream || grant.topic !== message.topic) {
+                continue;
+            }
+
+            try {
+                grant.onEvent(data);
+            } catch {
+                /* user callback threw — ignore */
+            }
+        }
     }
 
     /** Route an inbound whisper to the topic's handlers on the originating shard. */
