@@ -1946,7 +1946,8 @@ abstract class ShardDO {
 
     /**
      * Live SSE connections one caller may hold on a shard: one user id, and one client IP
-     * (the `x-lunora-client-ip` the runtime mints). Anonymous callers share the `""` user bucket.
+     * (the `x-lunora-client-ip` the runtime mints). An anonymous caller with an IP counts only
+     * against that IP; one with no IP shares the `""` user bucket.
      */
     protected static readonly MAX_LIVE_CONNECTIONS_PER_CALLER = 32;
 
@@ -15720,11 +15721,14 @@ abstract class ShardDO {
         // is reachable before any topic is authorized.
         const userId = decodeUserIdHeader(request.headers.get("x-lunora-userid")) ?? "";
         const ip = request.headers.get("x-lunora-client-ip") ?? undefined;
+        // An anonymous caller with an IP is bucketed by that IP alone. The shared "" bucket
+        // would let one anonymous client hold every other anonymous client out of live streams.
+        const userBucket = userId === "" && ip !== undefined ? undefined : userId;
         let callerConnections = 0;
         let ipConnections = 0;
 
         for (const existing of this.liveSubscribers.values()) {
-            if (existing.userId === userId) {
+            if (existing.userId === userBucket) {
                 callerConnections += 1;
             }
 
@@ -15733,7 +15737,7 @@ abstract class ShardDO {
             }
         }
 
-        if (callerConnections >= ShardDO.MAX_LIVE_CONNECTIONS_PER_CALLER) {
+        if (userBucket !== undefined && callerConnections >= ShardDO.MAX_LIVE_CONNECTIONS_PER_CALLER) {
             return jsonResponse({ error: { code: "LIVE_CONNECTION_LIMIT", message: "this caller holds the maximum number of live connections" } }, 503);
         }
 

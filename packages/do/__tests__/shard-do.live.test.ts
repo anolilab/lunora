@@ -259,6 +259,29 @@ describe("shardDO live streams", () => {
         await expect(connectFrom("203.0.113.2", "user-other")).resolves.toBe(200);
     });
 
+    it("buckets anonymous callers per client IP, not in one shared anonymous bucket", async () => {
+        expect.assertions(2);
+
+        const shard = makeShard([]);
+        const connectAnonymous = async (ip: string): Promise<number> => {
+            const response = await shard.fetch(new Request("https://x/_lunora/live/connect", { headers: { "x-lunora-client-ip": ip }, method: "GET" }));
+
+            return response.status;
+        };
+
+        // One anonymous client holds its full 32 idle connections.
+        const held: number[] = [];
+
+        for (let index = 0; index < 32; index += 1) {
+            // eslint-disable-next-line no-await-in-loop -- sequential connects keep the count deterministic
+            held.push(await connectAnonymous("203.0.113.1"));
+        }
+
+        expect(held).toEqual(Array.from({ length: 32 }).fill(200));
+        // A second anonymous client, from another IP, is not locked out by the first.
+        await expect(connectAnonymous("203.0.113.2")).resolves.toBe(200);
+    });
+
     it("stops delivering to a connection after its unsubscribe", async () => {
         expect.assertions(1);
 
