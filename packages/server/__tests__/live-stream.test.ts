@@ -16,7 +16,12 @@ const makeContext = (calls: ShardCall[], respond?: (path: string) => Response): 
         return Promise.resolve(respond ? respond(path) : new Response("forwarded"));
     };
 
-    return { fetchShard } as unknown as HttpActionContext;
+    // Anonymous by default; an authenticated caller is built with `asUser`.
+    return { auth: { getIdentity: () => Promise.resolve(null), userId: null }, fetchShard } as unknown as HttpActionContext;
+};
+
+const asUser = (context: HttpActionContext, userId: string): HttpActionContext => {
+    return { ...context, auth: { getIdentity: () => Promise.resolve({ sub: userId }), userId } };
 };
 
 const dispatch = async (route: LunoraRouteHandler, context: HttpActionContext, method: string, path: string, body?: unknown): Promise<Response> => {
@@ -130,22 +135,53 @@ describe("defineLiveStream", () => {
         expect(onSubscribe).not.toHaveBeenCalled();
     });
 
-    it("lets allowAnonymousControl bypass onSubscribe entirely", async () => {
-        expect.assertions(1);
+    it("consults onSubscribe for an authenticated caller even when allowAnonymousControl is true", async () => {
+        expect.assertions(2);
 
         const calls: ShardCall[] = [];
         const onSubscribe = vi.fn<() => boolean>(() => false);
         const stream = defineLiveStream({ allowAnonymousControl: true, id: "posts", onSubscribe });
-        const context = makeContext(calls);
 
-        const response = await dispatch(stream.control, context, "POST", "/live/posts/control", {
+        const response = await dispatch(stream.control, asUser(makeContext(calls), "user-1"), "POST", "/live/posts/control", {
             action: "subscribe",
             connectionId: "c1",
             subscriptionId: "s1",
-            topic: "anything",
+            topic: "private:1",
         });
 
-        expect(response.status).toBe(200);
+        expect(response.status).toBe(403);
+        expect(calls).toHaveLength(0);
+    });
+
+    it("consults onSubscribe for an anonymous caller even when allowAnonymousControl is true", async () => {
+        expect.assertions(2);
+
+        const calls: ShardCall[] = [];
+        const onSubscribe = vi.fn<() => boolean>(() => false);
+        const stream = defineLiveStream({ allowAnonymousControl: true, id: "posts", onSubscribe });
+
+        const response = await dispatch(stream.control, makeContext(calls), "POST", "/live/posts/control", {
+            action: "subscribe",
+            connectionId: "c1",
+            subscriptionId: "s1",
+            topic: "private:1",
+        });
+
+        expect(response.status).toBe(403);
+        expect(onSubscribe).toHaveBeenCalledTimes(1);
+    });
+
+    it("admits only an anonymous caller when allowAnonymousControl is true and onSubscribe is omitted", async () => {
+        expect.assertions(2);
+
+        const stream = defineLiveStream({ allowAnonymousControl: true, id: "posts" });
+        const body = { action: "subscribe", connectionId: "c1", subscriptionId: "s1", topic: "feed" };
+
+        const anonymous = await dispatch(stream.control, makeContext([]), "POST", "/live/posts/control", body);
+        const authenticated = await dispatch(stream.control, asUser(makeContext([]), "user-1"), "POST", "/live/posts/control", body);
+
+        expect(anonymous.status).toBe(200);
+        expect(authenticated.status).toBe(403);
     });
 
     it("denies a handler that returns a truthy value other than a literal true", async () => {

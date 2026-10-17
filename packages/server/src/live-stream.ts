@@ -45,15 +45,18 @@
  * A topic name is attacker-controlled, and an SSE subscription is a live tap on
  * it. So:
  *
- * - With `onSubscribe` **omitted**, every subscribe is DENIED. There is no
+ * - With `onSubscribe` **omitted**, every subscribe is DENIED (an anonymous
+ *   caller is admitted only under `allowAnonymousControl`). There is no
  *   implicit "anyone may follow any topic" — that would make a typo in a route
  *   mount an open event bus.
  * - With `onSubscribe` **provided**, the handler decides per topic. Only a
  *   literal `true` allows; anything else — including a forgotten `return` —
  *   denies, and a handler that **throws** denies.
- * - `allowAnonymousControl: true` skips `onSubscribe` entirely and lets any
- *   caller subscribe to any topic. Set it only for a genuinely public stream
- *   (a status page, a public feed). It is opt-in for exactly the reason above.
+ * - `allowAnonymousControl: true` never bypasses `onSubscribe`. With a handler,
+ *   the handler decides for every caller. Without one, it admits an anonymous
+ *   caller (no identity) to any topic, and an authenticated caller is still
+ *   denied. Set it only for a genuinely public stream (a status page, a public
+ *   feed). It is opt-in for exactly the reason above.
  * - A subscription belongs to the stream that authorized it. A publish names its
  *   stream and reaches only that stream's subscribers, so a public stream cannot
  *   tap a topic a private stream granted.
@@ -89,15 +92,20 @@ type LiveSubscribeHandler = (options: { ctx: HttpActionContext; topic: string })
 /** Config for {@link defineLiveStream}. */
 interface LiveStreamConfig {
     /**
-     * Whether an anonymous (unauthenticated) caller may subscribe to any topic.
-     * Defaults to `false`, in which case {@link LiveStreamConfig.onSubscribe}
-     * decides and — if it is omitted — every subscribe is denied. See the module
-     * docblock for why the default is deny.
+     * Opt-in for a public stream. It never skips {@link LiveStreamConfig.onSubscribe}:
+     * when a handler is present, the handler decides for every caller and this flag
+     * changes nothing. When `onSubscribe` is omitted, `true` admits an ANONYMOUS
+     * caller (no identity) to any topic, and an authenticated caller is still
+     * denied. Defaults to `false`. See the module docblock for why the default is deny.
      */
     allowAnonymousControl?: boolean;
     /** Stable id, used to derive {@link LiveStream.connectPath} / {@link LiveStream.controlPath}. */
     id: string;
-    /** Per-topic authorization. Omitted ⇒ default-deny (unless `allowAnonymousControl` is true). */
+
+    /**
+     * Per-topic authorization, consulted for every subscribe from every caller.
+     * Omitted ⇒ default-deny (unless `allowAnonymousControl` admits anonymous callers).
+     */
     onSubscribe?: LiveSubscribeHandler;
 }
 
@@ -138,12 +146,10 @@ const defineLiveStream = (config: LiveStreamConfig): LiveStream => {
     const controlPath = `/live/${config.id}/control`;
 
     const authorize = async (context: HttpActionContext, topic: string): Promise<boolean> => {
-        if (config.allowAnonymousControl === true) {
-            return true;
-        }
-
+        // No handler: the only thing that can admit a caller is the anonymous opt-in, and only for
+        // a caller with no identity. `onSubscribe`, when present, is consulted for every caller.
         if (!config.onSubscribe) {
-            return false;
+            return config.allowAnonymousControl === true && context.auth.userId === null;
         }
 
         try {
