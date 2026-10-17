@@ -799,18 +799,15 @@ describe("app-declared surfaces, gated end-to-end through runCodegen", () => {
         expect(onNode.generated.shard).toContain("ctx.live = live;");
         expect(onNode.generated.app).toContain("live: queueLive,");
 
-        // celld rates liveStreams unsupported: the gate refuses the declaration,
-        // and neither emitter writes the publisher, so no `ctx.live` reaches a consumer.
+        // celld rates liveStreams native (the celld TCK live leg), so it serves the same declaration.
         writeFileSync(join(workdir, "lunora.config.ts"), `export default { target: "celld" };\n`, "utf8");
 
-        const withheld = codegen();
+        const onCelld = codegen();
 
-        expect(withheld.platformDiagnostics.map((diagnostic) => diagnostic.message).some((message) => message.includes("live topic streams"))).toBe(true);
-        expect(withheld.generated.shard).not.toContain("ctx.live = live;");
-        expect(withheld.generated.app).not.toContain("live: queueLive,");
-        // The HTTP context has no declaration to hang off, so the worker is told the target
-        // withholds live streams outright. A served target keeps the options unchanged.
-        expect(withheld.generated.app).toContain("liveStreams: false,");
+        expect(onCelld.platformDiagnostics).toStrictEqual([]);
+        expect(onCelld.generated.shard).toContain("ctx.live = live;");
+        expect(onCelld.generated.app).toContain("live: queueLive,");
+        expect(onCelld.generated.app).not.toContain("liveStreams: false");
         expect(onNode.generated.app).not.toContain("liveStreams: false");
     });
 
@@ -1044,21 +1041,6 @@ describe("app-declared surfaces, gated end-to-end through runCodegen", () => {
 
     const LIVE_PUBLISH_ACTION = `import { action } from "@lunora/server";\n\nexport const announce = action.action(async ({ ctx }) => {\n    await ctx.live.publish("posts", { id: 1 });\n\n    return null;\n});\n`;
 
-    it("refuses a ctx.live read on a target that withholds live streams, naming ctx.live and the target", () => {
-        expect.assertions(3);
-
-        // celld rates liveStreams unsupported and passes `liveStreams: false` to createWorker, so
-        // `ctx.live` is never set on the action context: the read would throw a TypeError at runtime.
-        writeFileSync(join(workdir, "lunora.config.ts"), `export default { target: "celld" };\n`, "utf8");
-        write("announce.ts", LIVE_PUBLISH_ACTION);
-
-        const result = codegen();
-
-        expect(result.platformDiagnostics.map((diagnostic) => diagnostic.name)).toStrictEqual(["platform_unsupported_feature"]);
-        expect(result.platformDiagnostics[0]?.message).toContain("ctx.live");
-        expect(result.platformDiagnostics[0]?.message).toContain('"celld"');
-    });
-
     it("accepts the same ctx.live read on a target that serves live streams", () => {
         expect.assertions(2);
 
@@ -1073,18 +1055,6 @@ describe("app-declared surfaces, gated end-to-end through runCodegen", () => {
 
         expect(onNode.platformDiagnostics).toStrictEqual([]);
         expect(onCloudflare.platformDiagnostics).toStrictEqual([]);
-    });
-
-    it("leaves an app that never reads ctx.live alone on a target that withholds live streams", () => {
-        expect.assertions(2);
-
-        writeFileSync(join(workdir, "lunora.config.ts"), `export default { target: "celld" };\n`, "utf8");
-        write("announce.ts", `import { action } from "@lunora/server";\n\nexport const ping = action.action(async () => null);\n`);
-
-        const result = codegen();
-
-        expect(result.platformDiagnostics.some((diagnostic) => diagnostic.message.includes("ctx.live"))).toBe(false);
-        expect(result.generated.app).toContain("liveStreams: false,");
     });
 
     it("gates a declared agent on a target that cannot run one", () => {

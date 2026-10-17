@@ -233,8 +233,8 @@ const CELLD_CAPABILITIES: PlatformCapabilities = {
             note: "Rides the hibernatable sockets rated above, so a route or room survives its cell hibernating on the same node and reconnects on a move",
         },
         liveStreams: {
-            level: "unsupported",
-            note: "Not exercised by the celld TCK, so the SSE connect route is unverified on this host. Rate `native` once the TCK drives a live connect and publish. Until then codegen refuses a declared defineLiveStream here, refuses an app that reads ctx.live, omits ctx.live from the action context and the queue consumer, and passes liveStreams: false to createWorker so the HTTP context carries no ctx.live",
+            level: "native",
+            note: "Rated from the celld TCK leg `serves connect, subscribe, publish and unsubscribe from the real ShardDO` (packages/platform-celld/__tests__/celld/celld-tck.test.ts), which runs defineLiveStream connect and control and ctx.live.publish through the shard's own handlers on a live celld binary, and reads the SSE frame back",
         },
         workerLoaders: {
             level: "native",
