@@ -37,6 +37,15 @@ describe("emitApp — ShardDOConfig knobs reachable from the builder", () => {
         expect(output).toContain("...(this.relationExistsPushDownMode === undefined ? {} : { relationExistsPushDown: this.relationExistsPushDownMode }),");
     });
 
+    it("passes the delivery authorization selector to the shard", () => {
+        expect.assertions(2);
+
+        const output = emitApp(baseOptions);
+
+        expect(output).toContain('public deliveryAuthorization(selector: NonNullable<ShardConfig["deliveryAuthorization"]>): this {');
+        expect(output).toContain("...(this.deliveryAuthorizationSelector === undefined ? {} : { deliveryAuthorization: this.deliveryAuthorizationSelector }),");
+    });
+
     it("declares the ShardConfig alias the always-on methods type against, with no capability enabled", () => {
         expect.assertions(1);
 

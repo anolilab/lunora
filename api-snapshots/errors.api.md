@@ -49,6 +49,16 @@ const ERROR_CATALOG: {
         readonly status: 404;
         readonly title: "Not found";
     };
+    readonly DELIVERY_FENCED: {
+        readonly status: 409;
+        readonly title: "Delivery authorization changed";
+        readonly hint: "The operation may have committed. Retry with the same transport key; a committed result from an older authority epoch returns DELIVERY_RECEIPT_FENCED. Do not automatically retry with a new transport key.";
+    };
+    readonly DELIVERY_RECEIPT_FENCED: {
+        readonly status: 409;
+        readonly title: "Committed receipt authorization changed";
+        readonly hint: "The operation committed, but its stored result belongs to an older authority epoch. Do not automatically retry with a new transport ID. Recover through the application's durable operation key under current authorization.";
+    };
     readonly CONFLICT: {
         readonly hint: readonly [
             "Another write changed this row while your mutation was running (optimistic concurrency conflict).",

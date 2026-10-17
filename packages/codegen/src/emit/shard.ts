@@ -646,6 +646,7 @@ ${hasMemoryTables ? "            clearMemoryTables(this.sql as SqlExec, schema a
                 // emitter can know that; a hand-written subclass leaves this unset
                 // and keeps the backstop.
                 ctxDbCacheWired: true,
+                ...(config.deliveryAuthorization === undefined ? {} : { deliveryAuthorization: config.deliveryAuthorization((env ?? {}) as Record<string, unknown>) }),
                 ...(config.maxRelationKeys === undefined ? {} : { maxRelationKeys: config.maxRelationKeys }),
                 ...(config.reactiveCache ? { reactiveCache: config.reactiveCache === true ? {} : config.reactiveCache } : {}),
                 ...(config.relationExistsPushDown === undefined ? {} : { relationExistsPushDown: config.relationExistsPushDown }),
@@ -803,6 +804,8 @@ const LUNORA_STORAGE_RULES = ${renderLazyJsonData(storageRulesData, "StorageRule
 const LUNORA_STUDIO_FEATURES = ${renderLazyJsonData(studioFeaturesData, "StudioFeaturesResult")};
 ${schemaSnapshotConst}${shardRegistryFragments.constant}${flagsOverrides.constant}${workflowsMetadataConst}${queuesMetadataConst}${containerSpecs}${workflowSpecs}${queueSpecs}${topicSpecs}${servicesFragments.specs}${agentSpecs}
 export interface ShardDOConfig {
+    /** Current authority for RPC and ordinary subscription deliveries; other live delivery modes are refused. */
+    deliveryAuthorization?: (env: Record<string, unknown>) => DeliveryAuthorization;
     /** Opt into change-data-capture: records a post-image to \`__cdc_log\` on every write (backs streaming export + replay-PITR). */
     cdc?: boolean;
     /** Ceiling on the join keys one relation-crossing \`where\` predicate may pre-resolve via semijoin before failing closed. Omit for the engine default. */

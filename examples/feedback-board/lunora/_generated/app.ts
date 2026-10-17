@@ -32,6 +32,7 @@ interface ComposedApp extends LunoraWorker {
 class AppBuilder<Env extends object> {
     private adminToken?: Selector<Env, string>;
     private cdcEnabled = false;
+    private deliveryAuthorizationSelector?: ShardConfig["deliveryAuthorization"];
     private reactiveCacheConfig: boolean | { maxBytes?: number; maxEntries?: number } = false;
     private maxRelationKeysLimit?: ShardConfig["maxRelationKeys"];
     private observabilitySink?: ShardConfig["observability"];
@@ -100,6 +101,12 @@ class AppBuilder<Env extends object> {
         return this;
     }
 
+    /** Authorize each RPC/subscription read and fence its eventual delivery against durable authority epochs. */
+    public deliveryAuthorization(selector: NonNullable<ShardConfig["deliveryAuthorization"]>): this {
+        this.deliveryAuthorizationSelector = selector;
+        return this;
+    }
+
     /** Escape hatch — merge raw `WorkerOptions` (anything not yet sugared) over the derived options at build time. The second `derived` argument is a snapshot of the options assembled so far (after `.auth(...)` etc.), so you can compose rather than clobber — e.g. wrap `derived.resolveIdentity` instead of replacing it. */
     public extend(fn: (env: Env, derived: Readonly<WorkerOptions>) => Partial<WorkerOptions>): this {
         this.extendFns.push(fn);
@@ -154,6 +161,7 @@ class AppBuilder<Env extends object> {
             reactiveCache: this.reactiveCacheConfig,
             ...(this.maxRelationKeysLimit === undefined ? {} : { maxRelationKeys: this.maxRelationKeysLimit }),
             ...(this.observabilitySink === undefined ? {} : { observability: this.observabilitySink }),
+            ...(this.deliveryAuthorizationSelector === undefined ? {} : { deliveryAuthorization: this.deliveryAuthorizationSelector }),
             ...(this.relationExistsPushDownMode === undefined ? {} : { relationExistsPushDown: this.relationExistsPushDownMode }),
             ...this.shardExtras,
         });

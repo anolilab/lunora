@@ -226,6 +226,7 @@ import {
     recordScheduleOutbox,
     recordShapeProbePass,
     RELATION_FUNCTION_PREFIX,
+    RELAY_SIGNATURE_HEADER,
     RelayMember,
     runSocketPool,
     SCAN_DEP,
@@ -233,6 +234,7 @@ import {
     selectMatchingIds,
     selectShapeRows,
     ShardRunner,
+    siblingSecretOf,
     stableStringify,
     stableWireKey,
     stubByName,
@@ -245,6 +247,7 @@ import {
     trySendFrame,
     UNVOUCHABLE_DEP,
     VECTOR_BACKFILL_MAX_PAGES,
+    verifySiblingBody,
     writeGlobalShapeSnapshot,
     writeIdempotent,
     writeReactorState,
@@ -252,7 +255,7 @@ import {
     writeShapePokeCursors,
     writeTouchesMemo,
 } from "@lunora/shard-engine";
-import { decodeWire, encodeWire } from "@lunora/wire";
+import { decodeWire, encodeWire, isPlainObject } from "@lunora/wire";
 import type { DrizzleSqliteDODatabase } from "drizzle-orm/durable-sqlite";
 import { drizzle as drizzleDO } from "drizzle-orm/durable-sqlite";
 
@@ -365,6 +368,9 @@ import {
 } from "./alarm-rearm-breaker";
 import { buildBatchEntryRequest } from "./batch";
 import { CdcRetentionRunner } from "./cdc-retention";
+import { deliveryAccessDenied, isDeliveryAccessDenied } from "./delivery-access-denied";
+import type { DeliveryAuthorization, DeliveryAuthorizationRequest, DeliveryPermit } from "./delivery-authorization";
+import { DeliveryFence, validDeliveryPermit } from "./delivery-authorization";
 import type { InFlightClaim } from "./in-flight-claims";
 import { InFlightClaims } from "./in-flight-claims";
 import { ensureScheduleRateTable, readScheduleRateWindow, scheduleRateLimitFrom, writeScheduleRateWindow } from "./schedule-rate-breaker";
@@ -895,6 +901,7 @@ interface RequestScope {
     bookmark: string | undefined;
     clientId: string | undefined;
     clientSeq: number | undefined;
+    deliveryPermit: DeliveryPermit | undefined;
 
     /**
      * The caller's CLAIMS — active org, role, tenant. Distinct from `userId` and
@@ -1062,6 +1069,9 @@ interface ShardDOOptions {
      */
     ctxDbCacheWired?: boolean;
 
+    /** Current authority for ordinary subscriptions and RPC responses. Other live delivery modes are refused. */
+    deliveryAuthorization?: DeliveryAuthorization;
+
     /**
      * Ceiling on the join keys one relation-crossing `where` predicate may pull
      * back via semijoin pre-resolution before failing closed. Reaches
@@ -1111,6 +1121,8 @@ interface ShardDOOptions {
  * inside {@link ShardDO.pushSubscriptionData} would repeat a
  * `__client_watermark` SELECT and an attachment read per subscription.
  */
+type SubscriptionDeliveryPermit = DeliveryPermit & { readonly registration: symbol };
+
 interface SocketDelivery {
     /** This socket's custom-mutator watermark, stamped on every outgoing frame. */
     clientWatermark: number | undefined;
@@ -1905,6 +1917,14 @@ abstract class ShardDO {
      * changelog proved their table had not moved.
      */
     protected globalPoll: GlobalPollCounters = createGlobalPollCounters();
+
+    private readonly deliveryAuthorization: DeliveryAuthorization | undefined;
+    private readonly deliveryFence = new DeliveryFence(() => this.shardHost.sql);
+    private readonly deliveryResponsePermits = new WeakMap<Response, DeliveryPermit>();
+    private readonly deliveryRequestPermits = new WeakMap<Request, DeliveryPermit>();
+    private currentDeliveryPermit: DeliveryPermit | undefined;
+    private transactionRequestScope: RequestScope | undefined;
+    private readonly deliveryRegistrations = new WeakMap<ShardSocketLike, Map<string, symbol>>();
 
     /** ctx-db relation knobs from {@link ShardDOOptions}, handed on by {@link ShardDO.ctxDbTuning}. */
     private readonly ctxDbRelationOptions: Pick<ShardDOOptions, "maxRelationKeys" | "relationExistsPushDown">;
@@ -2756,6 +2776,7 @@ abstract class ShardDO {
     public constructor(state: ShardDOState, env: unknown, options: ShardDOOptions = {}) {
         this.state = state;
         this.env = env;
+        this.deliveryAuthorization = options.deliveryAuthorization;
 
         // Settle the host-tracing probe before the first dispatch, so every
         // dispatch — including the isolate's first — reads it synchronously (the
@@ -2840,7 +2861,7 @@ abstract class ShardDO {
             rlsMetadata: () => this.rlsMetadata(),
         };
 
-        this.relay = createRelayLink(host);
+        this.relay = this.deliveryAuthorization ? undefined : createRelayLink(host);
 
         // Region-local read replicas. Same rule as the relay tier: the role is
         // fixed once from the DO name. The owner half is what SERVES
@@ -2891,14 +2912,35 @@ abstract class ShardDO {
         this.armWebSocketKeepalive();
     }
 
-    /**
-     * Worker-side fetch entry point. Delegates to the host-neutral
-     * {@link ShardRunner}, which forwards to the Cloudflare implementation below.
-     */
     public async fetch(request: Request): Promise<Response> {
         await this.ensureShardInit();
 
-        return this.runner.handleFetch(request);
+        if (!this.deliveryAuthorization) {
+            return this.runner.handleFetch(request);
+        }
+        const url = new URL(request.url);
+        if (url.pathname === "/_lunora/delivery-fence") {
+            return this.installDeliveryFence(request);
+        }
+        if (!this.deliveryRoleSupported()) {
+            if (this.runner.shardKey !== undefined && parseReplicaName(this.runner.shardKey) !== undefined) {
+                return new Response("replica does not support delivery authorization; route to owner", { status: 421 });
+            }
+            return jsonResponse({ error: { code: "NOT_IMPLEMENTED", message: "delivery mode unsupported with delivery authorization" } }, 501);
+        }
+        if (request.headers.get("Upgrade") === "websocket") {
+            return this.runner.handleFetch(request);
+        }
+        if (url.pathname === "/rpc-batch" && request.method === "POST") {
+            return this.runner.handleFetch(request);
+        }
+        if (url.pathname === "/_lunora/route") {
+            return jsonResponse({ relayCount: 0 });
+        }
+        if (url.pathname !== "/rpc" || request.method !== "POST") {
+            return jsonResponse({ error: { code: "NOT_IMPLEMENTED", message: "delivery mode unsupported with delivery authorization" } }, 501);
+        }
+        return this.fetchAuthorizedRpc(request);
     }
 
     /**
@@ -3705,6 +3747,7 @@ abstract class ShardDO {
         // waiting on `runSerialized` cannot install its queue over the one the
         // running transaction is filling. `queued` escapes to the flush below;
         // when the transaction throws we never reach it and the work is dropped.
+        const requestScope = this.captureRequestScope();
         let queued: (() => Promise<void> | void)[] = [];
         // This transaction's link in the shard-wide hook chain. Assigned by
         // `onCommitted` below, which the runner calls before it releases the gate.
@@ -3713,6 +3756,7 @@ abstract class ShardDO {
         const result = await this.runner.runInTransaction(
             async () => {
                 this.transactionDepth = 1;
+                this.transactionRequestScope = requestScope;
                 queued = [];
                 this.afterCommitQueue = queued;
 
@@ -3720,6 +3764,7 @@ abstract class ShardDO {
                     return await handler();
                 } finally {
                     this.transactionDepth = 0;
+                    this.transactionRequestScope = undefined;
                     this.afterCommitQueue = undefined;
                 }
             },
@@ -4871,15 +4916,21 @@ abstract class ShardDO {
             return undefined;
         }
 
+        let cached: { value: unknown } | undefined;
         try {
             const record = readIdempotent(this.sql as SqlExec, namespace, mutationId);
-
-            return record === undefined ? undefined : { value: JSON.parse(record.resultJson) };
-        } catch {
-            // Missing table (pre-migration shard / test stub) or a malformed
-            // cached payload — treat as a miss and let the handler run.
+            cached = record === undefined ? undefined : { value: JSON.parse(record.resultJson) };
+        } catch (error) {
+            if (this.deliveryAuthorization) {
+                throw error;
+            }
+            // Preserve the legacy missing-table fallback outside guarded namespaces.
             return undefined;
         }
+        if (cached !== undefined && this.deliveryAuthorization) {
+            this.deliveryFence.assertReceipt(namespace, mutationId, this.currentDeliveryPermit);
+        }
+        return cached;
     }
 
     /**
@@ -4926,7 +4977,18 @@ abstract class ShardDO {
         const resultJson = JSON.stringify(encodedResult);
 
         try {
+            const previousResult = this.deliveryAuthorization ? readIdempotent(this.sql as SqlExec, namespace, this.currentRequestMutationId) : undefined;
             writeIdempotent(this.sql as SqlExec, namespace, this.currentRequestMutationId, resultJson, now);
+            // An existing row may outlive its receipt if receipt GC committed before
+            // native-row GC failed. Never recertify those old bytes from an equal
+            // result produced by a stale in-flight claim.
+            if (
+                this.deliveryAuthorization &&
+                previousResult === undefined &&
+                readIdempotent(this.sql as SqlExec, namespace, this.currentRequestMutationId)?.resultJson === resultJson
+            ) {
+                this.deliveryFence.recordReceipt(namespace, this.currentRequestMutationId, this.currentDeliveryPermit, now);
+            }
 
             // Throttled GC: drop dedup rows past the retention window at most once
             // per interval per warm instance.
@@ -4940,9 +5002,21 @@ abstract class ShardDO {
                 // and getting more expensive each time. Both siblings
                 // (`durable-stream-runner.trim`, `cdc-retention`) stamp first.
                 this.lastIdempotencyTrimAt = now;
-                trimIdempotent(this.sql as SqlExec, now - IDEMPOTENCY_RETENTION_MS);
+                try {
+                    if (this.deliveryAuthorization) {
+                        this.deliveryFence.trimReceipts(now - IDEMPOTENCY_RETENTION_MS);
+                    }
+                    // Keep the authority marker and native result in lockstep: a
+                    // failed receipt delete must leave the corresponding result row.
+                    trimIdempotent(this.sql as SqlExec, now - IDEMPOTENCY_RETENTION_MS);
+                } catch {
+                    // Retention is best-effort; receipt writes above still fail the mutation atomically.
+                }
             }
-        } catch {
+        } catch (error) {
+            if (this.deliveryAuthorization) {
+                throw error;
+            }
             // Missing dedup table (pre-migration shard / test stub) or a stub
             // `sql` handle — best-effort bookkeeping must never fail a mutation
             // whose writes already committed. The replay just re-runs (the read
@@ -5179,6 +5253,11 @@ abstract class ShardDO {
      * serialized.
      */
     protected commitMutationBookkeeping(result: unknown): void {
+        // An already-running action can resume while this transaction awaits its handler.
+        if (this.transactionRequestScope !== undefined) {
+            this.restoreRequestScope(this.transactionRequestScope);
+        }
+
         this.persistIdempotentResult(encodeDispatchResult(result));
 
         // Strict: a watermark write that throws here rolls the whole mutation back
@@ -5321,6 +5400,10 @@ abstract class ShardDO {
         }
 
         attachment.subs[subId] = query;
+        const previousPermit = attachment.deliveryPermits?.[subId];
+        if (this.deliveryAuthorization && attachment.deliveryPermits !== undefined) {
+            Reflect.deleteProperty(attachment.deliveryPermits, subId);
+        }
 
         try {
             (ws as HibernatableWebSocket).serializeAttachment?.(attachment);
@@ -5336,9 +5419,15 @@ abstract class ShardDO {
                 attachment.subs[subId] = previous;
             }
 
+            if (previousPermit !== undefined && attachment.deliveryPermits !== undefined) {
+                attachment.deliveryPermits[subId] = previousPermit;
+            }
             return "serialize_failed";
         }
 
+        if (this.deliveryAuthorization) {
+            socketMap(this.deliveryRegistrations, ws).set(subId, Symbol("delivery registration"));
+        }
         // Drop the diff baseline. A (re)subscribe asks for the current value, so
         // the seed must go out as a full snapshot; diffed against the old memo it
         // is answered `settled` (or a delta against a value the client just
@@ -5353,6 +5442,10 @@ abstract class ShardDO {
 
         // Capture the current query so we can roll back on serialization failure.
         const captured = attachment.subs[subId];
+        const capturedPermit = attachment.deliveryPermits?.[subId];
+        if (attachment.deliveryPermits !== undefined) {
+            Reflect.deleteProperty(attachment.deliveryPermits, subId);
+        }
 
         // eslint-disable-next-line @typescript-eslint/no-dynamic-delete -- `subs` is a Record keyed by dynamic subscription id; removal is the intended unsubscribe
         delete attachment.subs[subId];
@@ -5367,11 +5460,15 @@ abstract class ShardDO {
             if (captured !== undefined) {
                 attachment.subs[subId] = captured;
             }
+            if (capturedPermit !== undefined && attachment.deliveryPermits !== undefined) {
+                attachment.deliveryPermits[subId] = capturedPermit;
+            }
 
             return;
         }
 
         this.subMemos.get(ws)?.delete(subId);
+        this.deliveryRegistrations.get(ws)?.delete(subId);
     }
 
     /**
@@ -5532,6 +5629,9 @@ abstract class ShardDO {
      * identical, so we build a payload keyed by `subId` lazily.
      */
     protected broadcastDelta(delta: MutationDelta): void {
+        if (this.deliveryAuthorization) {
+            throw new LunoraError("NOT_IMPLEMENTED", "broadcastDelta is unsupported with delivery authorization");
+        }
         const sockets = this.runner.sockets();
         // Pre-stringify the immutable portion. The only per-message variation
         // is `id`, which we splice in below — cheaper than calling
@@ -5584,7 +5684,7 @@ abstract class ShardDO {
 
                 // Delivery is best-effort here (legacy broadcast path has no diff
                 // baseline to protect), so the boolean is intentionally ignored.
-                trySendFrame(ws, `{"type":"delta","id":${JSON.stringify(subId)},"delta":${deltaJson}}`);
+                this.sendFrame(ws, `{"type":"delta","id":${JSON.stringify(subId)},"delta":${deltaJson}}`);
             }
         }
     }
@@ -6112,6 +6212,10 @@ abstract class ShardDO {
         attribution?: QueryAttribution,
         outer?: QueryReadScope,
     ): Promise<R> {
+        // An external authority epoch is not part of the native query-cache key.
+        if (this.deliveryAuthorization) {
+            return run(outer);
+        }
         if (!this.reactiveCache) {
             return run();
         }
@@ -6950,6 +7054,10 @@ abstract class ShardDO {
         // the user's live data (a passive subscriber sends no frames — its
         // keepalive pings auto-respond and never reach here — so inbound checks
         // alone would never fire for the common case).
+        if (this.deliveryAuthorization && !this.deliveryRoleSupported()) {
+            this.sendSubscriptionError(ws, "", "NOT_IMPLEMENTED", "delivery mode unsupported with delivery authorization");
+            return;
+        }
         if (this.isSocketExpired(ws)) {
             this.dropExpiredSocket(ws);
 
@@ -6964,7 +7072,7 @@ abstract class ShardDO {
         const rawSize = typeof message === "string" ? message.length : message.byteLength;
 
         if (rawSize > MAX_WS_FRAME_UNITS) {
-            trySendFrame(ws, JSON.stringify({ message: "frame too large", type: "error" }));
+            this.sendFrame(ws, JSON.stringify({ message: "frame too large", type: "error" }), "control");
 
             return;
         }
@@ -6975,8 +7083,22 @@ abstract class ShardDO {
         try {
             envelope = JSON.parse(text) as SubscriptionEnvelope;
         } catch {
-            trySendFrame(ws, JSON.stringify({ message: "invalid envelope", type: "error" }));
+            this.sendFrame(ws, JSON.stringify({ message: "invalid envelope", type: "error" }), "control");
 
+            return;
+        }
+
+        if (
+            this.deliveryAuthorization &&
+            !(
+                envelope.type === "connect" ||
+                envelope.type === "unsubscribe" ||
+                envelope.type === "shape_unsubscribe" ||
+                envelope.type === "whisper_unsubscribe" ||
+                (envelope.type === "subscribe" && typeof envelope.query?.functionPath === "string")
+            )
+        ) {
+            this.sendSubscriptionError(ws, (envelope as { id?: string }).id ?? "", "NOT_IMPLEMENTED", "delivery mode unsupported with delivery authorization");
             return;
         }
 
@@ -6994,7 +7116,7 @@ abstract class ShardDO {
             // on every `connect`, including a re-sent one: the answer is the
             // socket's, and repeating it costs one small frame.
             // eslint-disable-next-line unicorn/no-null -- `null` is the wire's "no user" value
-            trySendFrame(ws, JSON.stringify({ subject: attachment.userId ?? null, type: "identity" }));
+            this.sendFrame(ws, JSON.stringify({ subject: attachment.userId ?? null, type: "identity" }), "control");
 
             // Idempotent: a socket announces `connect` exactly once. A re-sent
             // (or duplicate) frame must not re-fire `onConnect`, or it would
@@ -7090,7 +7212,7 @@ abstract class ShardDO {
             // user-subscription gate must never be able to read admin data by
             // naming a reserved functionPath.
             if (isAdmin && !(await this.attachmentAdminAuthorized(this.readAttachment(ws)))) {
-                trySendFrame(ws, JSON.stringify({ id: envelope.id, message: "admin subscription requires admin authorization", type: "error" }));
+                this.sendFrame(ws, JSON.stringify({ id: envelope.id, message: "admin subscription requires admin authorization", type: "error" }), "control");
 
                 return;
             }
@@ -7112,7 +7234,7 @@ abstract class ShardDO {
                 // A malformed tagged payload (over-long bigint, over-deep nesting)
                 // must not throw out of `webSocketMessage` — surface a structured
                 // error frame instead, mirroring the persist-failure path.
-                trySendFrame(
+                this.sendFrame(
                     ws,
                     JSON.stringify({
                         code: "BAD_SUBSCRIPTION_ARGS",
@@ -7120,6 +7242,7 @@ abstract class ShardDO {
                         id: envelope.id,
                         type: "error",
                     }),
+                    "control",
                 );
 
                 return;
@@ -7143,12 +7266,12 @@ abstract class ShardDO {
                     },
                 }[status];
 
-                trySendFrame(ws, JSON.stringify({ code, error: { code, message: errorMessage }, id: envelope.id, type: "error" }));
+                this.sendFrame(ws, JSON.stringify({ code, error: { code, message: errorMessage }, id: envelope.id, type: "error" }), "control");
 
                 return;
             }
 
-            trySendFrame(ws, JSON.stringify({ id: envelope.id, type: "ack" }));
+            this.sendFrame(ws, JSON.stringify({ id: envelope.id, type: "ack" }), "control");
 
             // Seed the subscriber with the query's current result so the first
             // value arrives over the same channel as later updates. When the
@@ -7186,7 +7309,7 @@ abstract class ShardDO {
 
         if (envelope.type === "shape_unsubscribe") {
             this.shapeUnsubscribe(ws, envelope.id);
-            trySendFrame(ws, JSON.stringify({ id: envelope.id, type: "ack" }));
+            this.sendFrame(ws, JSON.stringify({ id: envelope.id, type: "ack" }), "control");
 
             return;
         }
@@ -7196,7 +7319,7 @@ abstract class ShardDO {
             // anything matching the admin prefix is rejected up front rather
             // than allowed to slip through executeStream().
             if (envelope.query.functionPath.startsWith(ADMIN_FUNCTION_PREFIX)) {
-                trySendFrame(ws, JSON.stringify({ id: envelope.id, message: "streams must be public", type: "error" }));
+                this.sendFrame(ws, JSON.stringify({ id: envelope.id, message: "streams must be public", type: "error" }), "control");
 
                 return;
             }
@@ -7228,13 +7351,14 @@ abstract class ShardDO {
             try {
                 streamArgs = decodeWire(envelope.query.args ?? {}) as Record<string, unknown>;
             } catch {
-                trySendFrame(
+                this.sendFrame(
                     ws,
                     JSON.stringify({
                         error: { code: "BAD_SUBSCRIPTION_ARGS", message: "stream args failed wire decoding" },
                         id: envelope.id,
                         type: "error",
                     }),
+                    "control",
                 );
 
                 return;
@@ -7367,7 +7491,7 @@ abstract class ShardDO {
             }
 
             this.unsubscribe(ws, envelope.id);
-            trySendFrame(ws, JSON.stringify({ id: envelope.id, type: "ack" }));
+            this.sendFrame(ws, JSON.stringify({ id: envelope.id, type: "ack" }), "control");
         }
     }
 
@@ -7970,6 +8094,220 @@ abstract class ShardDO {
         }
     }
 
+    private deliveryRoleSupported(): boolean {
+        const key = this.runner.shardKey;
+        return key === undefined || (parseRelayName(key) === undefined && parseReplicaName(key) === undefined);
+    }
+
+    private revokeSubscription(ws: ShardSocketLike, subId: string): void {
+        if (!Object.hasOwn(this.readAttachment(ws).subs, subId)) {
+            return;
+        }
+        this.unsubscribe(ws, subId);
+        this.subMemos.get(ws)?.delete(subId);
+        this.deliveryRegistrations.get(ws)?.delete(subId);
+        this.sendSubscriptionError(ws, subId, "FORBIDDEN", "AccessDenied");
+    }
+
+    private sendFrame(ws: ShardSocketLike, frame: string, delivery?: "control" | { permit: SubscriptionDeliveryPermit | undefined; subId: string }): boolean {
+        if (this.deliveryAuthorization && delivery !== "control") {
+            if (delivery === undefined) {
+                return false;
+            }
+            const { permit, subId } = delivery;
+            if (permit === undefined || this.deliveryRegistrations.get(ws)?.get(subId) !== permit.registration) {
+                return false;
+            }
+            if (!this.deliveryRoleSupported() || !this.deliveryFence.allows(permit)) {
+                this.revokeSubscription(ws, subId);
+                return false;
+            }
+        }
+        return trySendFrame(ws, frame);
+    }
+
+    private async authorizeSubscription(
+        ws: ShardSocketLike,
+        subId: string,
+        identity: SubscriptionIdentity,
+        functionPath: string,
+        args: Record<string, unknown>,
+    ): Promise<SubscriptionDeliveryPermit | undefined> {
+        if (!this.deliveryAuthorization) {
+            return undefined;
+        }
+        const query = this.readAttachment(ws).subs[subId];
+        if (query?.functionPath !== functionPath || stableWireKey(query.args ?? {}) !== stableWireKey(args)) {
+            return undefined;
+        }
+        const registrations = socketMap(this.deliveryRegistrations, ws);
+        const registration = registrations.get(subId) ?? Symbol("delivery registration");
+        registrations.set(subId, registration);
+        let permit: DeliveryPermit | undefined;
+        try {
+            permit = await this.authorizeDelivery(identity, functionPath, args, "subscription", { admin: false, system: false });
+        } catch (error) {
+            if (registrations.get(subId) !== registration) {
+                return undefined;
+            }
+            if (this.endSubscriptionOnAuthorityFailure(ws, subId, functionPath, error)) {
+                return undefined;
+            }
+            throw error;
+        }
+        if (registrations.get(subId) !== registration || permit === undefined) {
+            return undefined;
+        }
+        if (!this.deliveryRoleSupported() || !this.deliveryFence.allows(permit)) {
+            throw deliveryAccessDenied();
+        }
+        const attachment = this.readAttachment(ws);
+        if (!Object.hasOwn(attachment.subs, subId)) {
+            return undefined;
+        }
+        const existing = attachment.deliveryPermits?.[subId];
+        if (existing?.scope !== permit.scope || existing.epoch !== permit.epoch) {
+            const next = { ...attachment, deliveryPermits: { ...attachment.deliveryPermits, [subId]: permit } };
+            try {
+                // The host's structured-clone budget includes the permit and decoded query arguments.
+                (ws as HibernatableWebSocket).serializeAttachment?.(next);
+                const memo = this.subMemos.get(ws)?.get(subId);
+                if (memo !== undefined) {
+                    memo.lastJson = UNDELIVERED_BASELINE;
+                }
+            } catch {
+                throw new LunoraError("SUBSCRIPTION_PERSIST_FAILED", `subscription attachment exceeds the ${String(ShardDO.MAX_ATTACHMENT_BYTES)}-byte limit`);
+            }
+        }
+        return { ...permit, registration };
+    }
+
+    private endSubscriptionOnAuthorityFailure(ws: ShardSocketLike, subId: string, functionPath: string, error: unknown): boolean {
+        if (isDeliveryAccessDenied(error)) {
+            this.revokeSubscription(ws, subId);
+            return true;
+        }
+        // Called only around authority resolution; a query throwing the same code keeps its existing recovery behavior.
+        if (!isLunoraError(error) || !["FORBIDDEN", "INTERNAL"].includes(error.code)) {
+            return false;
+        }
+        this.unsubscribe(ws, subId);
+        const { body } = toErrorBody(error, { redactedMessage: "internal error" });
+        this.sendSubscriptionError(ws, subId, body.code, body.message);
+        this.recordSubscriptionRefreshError(functionPath, error, { subId });
+        return true;
+    }
+
+    private async authorizeDelivery(
+        identity: SubscriptionIdentity,
+        functionPath: string,
+        args: Record<string, unknown>,
+        transport: "subscription" | "rpc",
+        flags: Pick<DeliveryAuthorizationRequest, "admin" | "system">,
+    ): Promise<DeliveryPermit | undefined> {
+        if (!this.deliveryAuthorization) {
+            return undefined;
+        }
+        const permit = await this.deliveryAuthorization({ identity, functionPath, args, shardKey: this.runner.shardKey, transport, ...flags });
+        if (permit === undefined) {
+            throw deliveryAccessDenied();
+        }
+        if (!validDeliveryPermit(permit)) {
+            throw new LunoraError("INTERNAL", "delivery authority returned an invalid permit");
+        }
+        if (!this.deliveryFence.allows(permit)) {
+            throw deliveryAccessDenied();
+        }
+        return { scope: permit.scope, epoch: permit.epoch };
+    }
+
+    private async installDeliveryFence(request: Request): Promise<Response> {
+        const raw = await request.text();
+        if (
+            !this.deliveryAuthorization ||
+            request.method !== "POST" ||
+            !siblingSecretOf(this.env) ||
+            !(await verifySiblingBody(this.env, request.headers.get(RELAY_SIGNATURE_HEADER), raw))
+        ) {
+            return new Response("Forbidden", { status: 403 });
+        }
+        let body: unknown;
+        try {
+            body = JSON.parse(raw);
+        } catch {
+            return new Response("Bad request", { status: 400 });
+        }
+        const control = body as { fence?: unknown; shardKey?: unknown; type?: unknown } | null;
+        if (control?.type !== "delivery-fence" || control.shardKey !== this.runner.shardKey || !validDeliveryPermit(control.fence)) {
+            return new Response("Bad request", { status: 400 });
+        }
+        this.deliveryFence.install(control.fence);
+        for (const socket of this.runner.sockets()) {
+            const attachment = this.readAttachment(socket);
+            for (const subId of Object.keys(attachment.subs)) {
+                const permit = attachment.deliveryPermits?.[subId];
+                if (permit !== undefined && !this.deliveryFence.allows(permit)) {
+                    this.revokeSubscription(socket, subId);
+                }
+            }
+        }
+        return new Response(undefined, { status: 204 });
+    }
+
+    private async fetchAuthorizedRpc(request: Request): Promise<Response> {
+        let payload: unknown;
+        try {
+            payload = await request.clone().json();
+        } catch {
+            return jsonResponse({ error: { code: "BAD_REQUEST", message: "invalid JSON body" } }, 400);
+        }
+        if (!isPlainObject(payload) || typeof payload.functionPath !== "string") {
+            return jsonResponse({ error: { code: "BAD_REQUEST", message: "invalid RPC request" } }, 400);
+        }
+        const { functionPath } = payload;
+        const identity: SubscriptionIdentity = {
+            identity: parseIdentityHeader(request.headers.get("x-lunora-identity")),
+            userId: decodeUserIdHeader(request.headers.get("x-lunora-userid")),
+            ip: request.headers.get("x-lunora-client-ip") ?? undefined,
+        };
+        let decodedArgs: unknown;
+        try {
+            decodedArgs = decodeWire(payload.args === undefined ? {} : payload.args);
+        } catch {
+            return jsonResponse({ error: { code: "BAD_REQUEST", message: "invalid wire arguments" } }, 400);
+        }
+        if (!isPlainObject(decodedArgs)) {
+            return jsonResponse({ error: { code: "BAD_REQUEST", message: "invalid wire arguments" } }, 400);
+        }
+        const args = decodedArgs;
+        let permit: DeliveryPermit | undefined;
+        try {
+            permit = await this.authorizeDelivery(identity, functionPath, args, "rpc", {
+                admin: functionPath.startsWith(ADMIN_FUNCTION_PREFIX) && this.isAdminAuthorized(request),
+                system: request.headers.get("x-lunora-system") === "1",
+            });
+        } catch (error) {
+            if (isLunoraError(error)) {
+                return this.errorToResponse(error);
+            }
+            return jsonResponse({ error: { code: "SHARD_UNAVAILABLE", message: "delivery authority unavailable" } }, 503);
+        }
+        if (permit !== undefined) {
+            this.deliveryRequestPermits.set(request, permit);
+        }
+        const response = await this.runner.handleFetch(request);
+        // Fully consume the body before checking: a deferred response stream must not outlive its permit.
+        const body = await response.arrayBuffer();
+        if (!this.deliveryFence.allows(permit)) {
+            return jsonResponse({ error: { code: "DELIVERY_FENCED", message: "Delivery fenced; operation may have committed" } }, 409);
+        }
+        const delivered = new Response(body, response);
+        if (permit !== undefined) {
+            this.deliveryResponsePermits.set(delivered, permit);
+        }
+        return delivered;
+    }
+
     /**
      * Build `ctx.span` — the handle onto the **dispatch's own span**, and with it
      * the wide-event surface.
@@ -8000,6 +8338,7 @@ abstract class ShardDO {
             bookmark: this.currentRequestBookmark,
             clientId: this.currentRequestClientId,
             clientSeq: this.currentRequestClientSeq,
+            deliveryPermit: this.currentDeliveryPermit,
             identity: this.currentRequestIdentity,
             ip: this.currentRequestIp,
             mutationId: this.currentRequestMutationId,
@@ -8027,6 +8366,7 @@ abstract class ShardDO {
         this.currentResponseBookmark = undefined;
         this.currentRequestClientId = scope.clientId;
         this.currentRequestClientSeq = scope.clientSeq;
+        this.currentDeliveryPermit = scope.deliveryPermit;
         this.currentRequestIdentity = scope.identity;
         this.currentRequestIp = scope.ip;
         this.currentRequestOrigin = scope.origin;
@@ -9158,15 +9498,14 @@ abstract class ShardDO {
         }
 
         const results: { body: unknown; errorDetail?: string; id: unknown; status: number }[] = [];
+        const deliveries: { bookmark: string | undefined; permit: DeliveryPermit | undefined }[] = [];
         let latestBookmark: string | undefined;
 
         for (const raw of payload.calls) {
             // eslint-disable-next-line no-await-in-loop -- sequential BY DESIGN: preserves per-client watermark ordering + idempotency across the batch
             const outcome = await this.dispatchBatchEntry(request, raw as BatchEntry);
 
-            if (outcome.bookmark !== undefined) {
-                latestBookmark = outcome.bookmark;
-            }
+            deliveries.push({ bookmark: outcome.bookmark, permit: outcome.permit });
 
             // `errorDetail` is the per-slot form of the single call's
             // `ERROR_DETAIL_HEADER`; the worker reads it and drops it before replying.
@@ -9178,19 +9517,31 @@ abstract class ShardDO {
             });
         }
 
-        return jsonResponse({ results }, 200, bookmarkHeaders(latestBookmark));
+        // Earlier slots can be fenced while later slots await their handlers.
+        const delivered = results.map((result, index) => {
+            const delivery = deliveries[index];
+            if (this.deliveryAuthorization && delivery?.permit !== undefined && !this.deliveryFence.allows(delivery.permit)) {
+                return { id: result.id, status: 409, body: { error: { code: "DELIVERY_FENCED", message: "Delivery fenced; operation may have committed" } } };
+            }
+            if (delivery?.bookmark !== undefined) {
+                latestBookmark = delivery.bookmark;
+            }
+            return result;
+        });
+        return jsonResponse({ results: delivered }, 200, bookmarkHeaders(latestBookmark));
     }
 
     /** Dispatch one batch entry through the single-call `/rpc` path and capture its envelope (plan 088). */
     private async dispatchBatchEntry(
         batchRequest: Request,
         entry: BatchEntry,
-    ): Promise<{ body: unknown; bookmark: string | undefined; errorDetail?: string; id: unknown; status: number }> {
+    ): Promise<{ body: unknown; bookmark: string | undefined; errorDetail?: string; id: unknown; permit?: DeliveryPermit; status: number }> {
         try {
             const response = await this.fetch(buildBatchEntryRequest(batchRequest, entry));
 
             return {
                 body: await response.json(),
+                permit: this.deliveryResponsePermits.get(response),
                 bookmark: response.headers.get("x-d1-bookmark") ?? undefined,
                 errorDetail: response.headers.get(ERROR_DETAIL_HEADER) ?? undefined,
                 id: entry.id,
@@ -11317,6 +11668,9 @@ abstract class ShardDO {
         identity: SubscriptionIdentity,
         cache: Map<string, Promise<SubscriptionOutcome | null>>,
     ): Promise<SubscriptionOutcome | null> {
+        if (this.deliveryAuthorization) {
+            return this.resolveReactiveOutcome(functionPath, args, isAdmin, identity);
+        }
         const key = this.isIdentityIndependent(functionPath)
             ? // eslint-disable-next-line unicorn/no-null -- reactiveCacheKey's identity arg is `null | string`; null = the identity-independent bucket
               reactiveCacheKey(functionPath, args, null)
@@ -11375,10 +11729,18 @@ abstract class ShardDO {
         // captured BEFORE the first await and passed by value, because the
         // iterator is pulled long after this frame was dispatched.
         const attachment = this.readAttachment(ws);
+        if (this.deliveryAuthorization) {
+            this.sendSubscriptionError(ws, id, "NOT_IMPLEMENTED", "delivery mode unsupported with delivery authorization");
+            return;
+        }
         const iterable = this.executeStream(functionPath, args, socketIdentity(attachment));
 
         if (!iterable) {
-            trySendFrame(ws, JSON.stringify({ error: { code: "NOT_FOUND", message: `stream not registered: ${functionPath}` }, id, type: "error" }));
+            this.sendFrame(
+                ws,
+                JSON.stringify({ error: { code: "NOT_FOUND", message: `stream not registered: ${functionPath}` }, id, type: "error" }),
+                "control",
+            );
 
             return;
         }
@@ -11393,13 +11755,14 @@ abstract class ShardDO {
         // `webSocketClose` could reach it), and whichever pump finished first
         // deleted the entry its siblings were still cancelled through.
         if (cancellers.has(id)) {
-            trySendFrame(
+            this.sendFrame(
                 ws,
                 JSON.stringify({
                     error: { code: "STREAM_ID_IN_USE", message: `stream id ${JSON.stringify(id)} is already live on this socket` },
                     id,
                     type: "error",
                 }),
+                "control",
             );
 
             return;
@@ -11410,13 +11773,14 @@ abstract class ShardDO {
         // canceller map, so a flurry of rejections can't push the count
         // past the cap.
         if (cancellers.size >= ShardDO.MAX_STREAMS_PER_SOCKET) {
-            trySendFrame(
+            this.sendFrame(
                 ws,
                 JSON.stringify({
                     error: { code: "TOO_MANY_STREAMS", message: `stream cap of ${String(ShardDO.MAX_STREAMS_PER_SOCKET)} reached on this socket` },
                     id,
                     type: "error",
                 }),
+                "control",
             );
 
             return;
@@ -11431,7 +11795,7 @@ abstract class ShardDO {
         const controller = new AbortController();
 
         cancellers.set(id, controller);
-        trySendFrame(ws, JSON.stringify({ id, type: "ack" }));
+        this.sendFrame(ws, JSON.stringify({ id, type: "ack" }), "control");
 
         try {
             for await (const chunk of iterable.iterator(controller.signal)) {
@@ -11475,13 +11839,14 @@ abstract class ShardDO {
                 console.error("[@lunora/do] unhandled stream error:", error);
             }
 
-            trySendFrame(
+            this.sendFrame(
                 ws,
                 JSON.stringify({
                     error: { code: body.code, message: body.message },
                     id,
                     type: "error",
                 }),
+                "control",
             );
         } finally {
             cancellers.delete(id);
@@ -12044,6 +12409,61 @@ abstract class ShardDO {
             // `Object.keys` for the same reason as `broadcastDelta` — see there.
             const { subs } = attachment;
 
+            const refreshQuery = async (subId: string, functionPath: string, args: Record<string, unknown>, isAdmin: boolean): Promise<void> => {
+                try {
+                    // Re-run under the socket's OWN verified identity (stamped on the
+                    // attachment at upgrade, unforgeable by the client) — passed BY
+                    // VALUE, so this deferred re-run never reads or mutates the shared
+                    // per-request identity fields. Without it an `rls()` / `ctx.auth`
+                    // scoped live query would evaluate anonymous and return zero rows.
+                    // (Admin + reserved flag reads ignore the identity payload.)
+                    let permit: SubscriptionDeliveryPermit | undefined;
+                    if (this.deliveryAuthorization) {
+                        permit = await this.authorizeSubscription(ws, subId, socketIdentity(attachment), functionPath, args);
+                    }
+                    if (this.deliveryAuthorization && permit === undefined) {
+                        return;
+                    }
+                    const memo = this.subMemos.get(ws)?.get(subId);
+                    if (this.deliveryAuthorization && memo?.lastJson !== UNDELIVERED_BASELINE && memoProvesUnchanged(memo, changed, changedKeys)) {
+                        return;
+                    }
+                    const outcome = await this.resolveReactiveOutcomeDeduped(functionPath, args, isAdmin, socketIdentity(attachment), reactiveRunCache);
+
+                    if (!outcome) {
+                        return;
+                    }
+
+                    // Backpressure: a write storm fanning out to a slow consumer
+                    // would otherwise grow this socket's outbound buffer without
+                    // bound (the runtime queues every `ws.send`). Pause this
+                    // socket's fan-out until its buffer drains — the per-socket
+                    // workers run in parallel, so one backed-up socket never
+                    // stalls the others. Mirrors the `handleStream` gate.
+                    await awaitWsDrain(ws);
+
+                    this.pushSubscriptionData(ws, subId, outcome, { cursor: frameCursor, epoch: frameEpoch, generation }, delivery, permit);
+                } catch (error) {
+                    // A throwing subscription must not abort the refresh of its
+                    // siblings, nor fail the mutation that triggered it. The memo
+                    // is left untouched ("unknown deps"), so this subscription
+                    // re-runs on the next flush — but until now that failure was
+                    // silent (DO-01): a subscription whose refresh throws
+                    // DETERMINISTICALLY (a bad handler cast, say) repeated
+                    // unnoticed for the life of the socket with no signal an
+                    // operator could see anywhere. See `recordSubscriptionRefreshError`.
+                    if (isDeliveryAccessDenied(error)) {
+                        this.revokeSubscription(ws, subId);
+                        return;
+                    }
+                    if (this.deliveryAuthorization && isLunoraError(error) && error.code === "SUBSCRIPTION_PERSIST_FAILED") {
+                        this.unsubscribe(ws, subId);
+                        this.sendSubscriptionError(ws, subId, error.code, error.message);
+                    }
+                    this.recordSubscriptionRefreshError(functionPath, error, { subId });
+                }
+            };
+
             for (const subId of Object.keys(subs)) {
                 const query = subs[subId];
 
@@ -12085,53 +12505,12 @@ abstract class ShardDO {
 
                 const memo = this.subMemos.get(ws)?.get(subId);
 
-                if (memoProvesUnchanged(memo, changed, changedKeys)) {
+                if (!this.deliveryAuthorization && memoProvesUnchanged(memo, changed, changedKeys)) {
                     continue;
                 }
 
-                try {
-                    // Re-run under the socket's OWN verified identity (stamped on the
-                    // attachment at upgrade, unforgeable by the client) — passed BY
-                    // VALUE, so this deferred re-run never reads or mutates the shared
-                    // per-request identity fields. Without it an `rls()` / `ctx.auth`
-                    // scoped live query would evaluate anonymous and return zero rows.
-                    // (Admin + reserved flag reads ignore the identity payload.)
-                    // eslint-disable-next-line no-await-in-loop -- subscriptions on a socket re-run sequentially; each shares the single SQLite handle
-                    const outcome = await this.resolveReactiveOutcomeDeduped(
-                        functionPath,
-                        query.args ?? {},
-                        isAdmin,
-                        socketIdentity(attachment),
-                        reactiveRunCache,
-                    );
-
-                    if (!outcome) {
-                        continue;
-                    }
-
-                    // Backpressure: a write storm fanning out to a slow consumer
-                    // would otherwise grow this socket's outbound buffer without
-                    // bound (the runtime queues every `ws.send`). Pause this
-                    // socket's fan-out until its buffer drains — the per-socket
-                    // workers run in parallel, so one backed-up socket never
-                    // stalls the others. Mirrors the `handleStream` gate.
-                    // eslint-disable-next-line no-await-in-loop -- intentional per-socket backpressure: drain before pushing the next subscription's frame
-                    await awaitWsDrain(ws);
-
-                    this.pushSubscriptionData(ws, subId, outcome, { cursor: frameCursor, epoch: frameEpoch, generation }, delivery);
-                } catch (error) {
-                    // A throwing subscription must not abort the refresh of its
-                    // siblings, nor fail the mutation that triggered it. The memo
-                    // is left untouched ("unknown deps"), so this subscription
-                    // re-runs on the next flush — but until now that failure was
-                    // silent (DO-01): a subscription whose refresh throws
-                    // DETERMINISTICALLY (a bad handler cast, say) repeated
-                    // unnoticed for the life of the socket with no signal an
-                    // operator could see anywhere. See `recordSubscriptionRefreshError`.
-                    this.recordSubscriptionRefreshError(functionPath, error, { subId });
-
-                    continue;
-                }
+                // eslint-disable-next-line no-await-in-loop -- subscriptions on one socket share its SQLite connection
+                await refreshQuery(subId, functionPath, query.args ?? {}, isAdmin);
             }
         };
 
@@ -12220,6 +12599,10 @@ abstract class ShardDO {
         const readCursor = this.currentCdcCursor();
         const readEpoch = isAdmin ? undefined : this.currentCdcEpoch();
         const generation = this.writeGeneration;
+        const permit = this.deliveryAuthorization ? await this.authorizeSubscription(ws, subId, socketIdentity(attachment), functionPath, seedArgs) : undefined;
+        if (this.deliveryAuthorization && permit === undefined) {
+            return;
+        }
         const outcome = await this.resolveReactiveOutcome(functionPath, seedArgs, isAdmin, socketIdentity(attachment));
 
         if (!outcome) {
@@ -12227,7 +12610,8 @@ abstract class ShardDO {
         }
 
         const { sinceEpoch, sinceSeq } = query;
-        const resume = isAdmin || sinceSeq === undefined ? undefined : this.evaluateResume(sinceSeq, outcome.tables, sinceEpoch);
+        // CDC cursors cannot prove that the client's value used the current authority epoch.
+        const resume = this.deliveryAuthorization || isAdmin || sinceSeq === undefined ? undefined : this.evaluateResume(sinceSeq, outcome.tables, sinceEpoch);
         // A resume that sealed a forked timeline hands back the NEW epoch, which
         // the client must receive; otherwise the pre-run epoch pairs with the
         // pre-run cursor.
@@ -12237,10 +12621,17 @@ abstract class ShardDO {
             // Keep the per-socket baseline current (so the next change diffs
             // cleanly) but send only the cursor + epoch — the client already
             // holds an equivalent value at `sinceSeq`.
-            this.seedSubscriptionMemo(ws, subId, outcome, generation);
-
+            if (!this.deliveryAuthorization) {
+                this.seedSubscriptionMemo(ws, subId, outcome, generation);
+            }
             try {
-                trySendFrame(ws, `{"type":"resume","id":${JSON.stringify(subId)}${cdcSuffix(resume.cursor ?? 0, epoch)}}`);
+                const delivered = this.sendFrame(ws, `{"type":"resume","id":${JSON.stringify(subId)}${cdcSuffix(resume.cursor ?? 0, epoch)}}`, {
+                    subId,
+                    permit,
+                });
+                if (this.deliveryAuthorization && delivered) {
+                    this.seedSubscriptionMemo(ws, subId, outcome, generation);
+                }
             } catch {
                 /* socket may have closed between the ack and this seed */
             }
@@ -12253,7 +12644,7 @@ abstract class ShardDO {
         // during it. The identity above is deliberately by-value (see there);
         // the delivery facts are not, and reading them stale would drop a
         // `clientId`/capability this socket has since announced.
-        this.pushSubscriptionData(ws, subId, outcome, { cursor: readCursor, epoch, generation }, this.socketDelivery(this.readAttachment(ws)));
+        this.pushSubscriptionData(ws, subId, outcome, { cursor: readCursor, epoch, generation }, this.socketDelivery(this.readAttachment(ws)), permit);
     }
 
     /**
@@ -12310,17 +12701,16 @@ abstract class ShardDO {
         // Both persistence and seeding succeeded — ack last (the client keys pokes
         // by shape id, not the ack, so the seed poke arriving first is fine).
         try {
-            trySendFrame(ws, JSON.stringify({ id: subId, type: "ack" }));
+            this.sendFrame(ws, JSON.stringify({ id: subId, type: "ack" }), "control");
         } catch {
             /* socket may already be closed; never throw out of webSocketMessage */
         }
     }
 
     /** Send a structured `error` frame for a failed `subscribe`/`shape_subscribe`, swallowing a send on an already-closed socket. */
-    // eslint-disable-next-line class-methods-use-this -- groups with the subscribe flows; uses only its args + the socket
     private sendSubscriptionError(ws: ShardSocketLike, subId: string, code: string, message: string): void {
         try {
-            trySendFrame(ws, JSON.stringify({ code, error: { code, message }, id: subId, type: "error" }));
+            this.sendFrame(ws, JSON.stringify({ code, error: { code, message }, id: subId, type: "error" }), "control");
         } catch {
             /* socket may already be closed; never throw out of webSocketMessage */
         }
@@ -12522,6 +12912,9 @@ abstract class ShardDO {
      * changed shape. No-op when no socket holds a shape.
      */
     private async pokeShapeSubscribers(changed: Set<string>, frameCursor: number | undefined, frameEpoch: string | undefined): Promise<void> {
+        if (this.deliveryAuthorization) {
+            return;
+        }
         const sockets = [...this.runner.sockets()];
         const checkpoint = frameCursor ?? this.currentCdcCursor() ?? 0;
         const sql = this.sql as SqlExec;
@@ -13679,6 +14072,7 @@ abstract class ShardDO {
         dispatchStartedAt: number;
         dispatchTrace: TraceAnchor;
     } {
+        this.currentDeliveryPermit = this.deliveryRequestPermits.get(request);
         this.currentRequestBookmark = request.headers.get("x-d1-bookmark") ?? undefined;
         this.currentResponseBookmark = undefined;
         // `decodeUserIdHeader` inverts the runtime's `encodeUserIdHeader`: a
@@ -13783,6 +14177,7 @@ abstract class ShardDO {
 
     /** Clear every per-request field {@link ShardDO.beginDispatch} stamped. */
     private endDispatch(): void {
+        this.currentDeliveryPermit = undefined;
         this.currentRequestTrace = undefined;
         this.currentRequestBookmark = undefined;
         this.currentResponseBookmark = undefined;
@@ -13911,6 +14306,9 @@ abstract class ShardDO {
      * are dropped in passing (mirrors {@link ShardDO.pokeShapeSubscribers}).
      */
     private async pollGlobalShapes(trace?: TraceRefLike): Promise<number> {
+        if (this.deliveryAuthorization) {
+            return 0;
+        }
         const sockets = [...this.runner.sockets()];
         let remaining = 0;
 
@@ -14046,7 +14444,9 @@ abstract class ShardDO {
 
         try {
             for (const frame of frames) {
-                ws.send(frame);
+                if (!this.sendFrame(ws, frame)) {
+                    return false;
+                }
             }
 
             return true;
@@ -14240,8 +14640,8 @@ abstract class ShardDO {
      * #20), the push can go out as one `{type:"delta"}` frame per changed row
      * instead of a full `{type:"data"}` snapshot. Which of the two is sent is
      * `subscriptionFrames`' call, made by rendering both and measuring them —
-     * this method just sends what it is handed. The memo is always advanced to
-     * the new `lastJson`/`tables` regardless of path.
+     * this method just sends what it is handed. A fenced delivery leaves the
+     * previous memo and cursor intact.
      *
      * `cursor` (when supplied) is the `__cdc_log` high-watermark this frame
      * covers; it is appended to the emitted `data`/`delta` JSON so a client can
@@ -14263,17 +14663,13 @@ abstract class ShardDO {
         outcome: SubscriptionOutcome,
         stamp: { cursor: number | undefined; epoch: string | undefined; generation: number },
         delivery: SocketDelivery,
+        permit?: SubscriptionDeliveryPermit,
     ): void {
-        const memos = socketMap(this.subMemos, ws);
-        const existing = memos.get(subId);
-
-        // Newer value wins. A run that began before the write that produced the
-        // current baseline read older state; sending it would roll the client
-        // back to a value a later write already replaced (and stamp a cursor on
-        // it). The baseline's own run already delivered the newer value.
-        if (existing !== undefined && stamp.generation < existing.generation) {
+        if (!this.allowsSubscriptionOutcome(ws, subId, permit, stamp.generation)) {
             return;
         }
+        const memos = socketMap(this.subMemos, ws);
+        const existing = memos.get(subId);
 
         const { cursor, epoch, generation } = stamp;
         const cursorSuffix = cdcSuffix(cursor, epoch);
@@ -14293,6 +14689,13 @@ abstract class ShardDO {
         }
 
         if (existing?.lastJson === json) {
+            // An unchanged result still settles optimistic overlays at this cursor.
+            // Keep its baseline intact when the control frame cannot be delivered.
+            const watermarkField = clientWatermark === undefined ? "" : `,"lastMutationId":${String(clientWatermark)}`;
+            const frame = `{"type":"settled","id":${JSON.stringify(subId)}${watermarkField}${cursorSuffix}}`;
+            if (this.deliveryAuthorization && !this.sendFrame(ws, frame, { subId, permit })) {
+                return;
+            }
             existing.generation = generation;
             existing.tables = outcome.tables;
             // `ranges` legitimately shifts run-to-run even when the result is
@@ -14305,22 +14708,9 @@ abstract class ShardDO {
             // suppressed or not — matches the non-suppressed branch below.
             existing.ranges = outcome.ranges;
 
-            // The result is byte-identical to the last frame, so no data/delta
-            // frame goes out (frame suppression). But a confirmed write whose
-            // authoritative result did NOT change this query still committed at
-            // this cursor, and BOTH overlay mechanisms need the cursor to drop
-            // their pending optimistic state, or it sticks forever with no frame:
-            //   - a `@lunora/db` custom-mutator client (announced a `clientId`)
-            //     advances its checkpoint gate off `lastMutationId`;
-            //   - a plain `useQuery` client with a per-call `optimistic` layer
-            //     drops it once `cursor >= commitCursor`.
-            // So emit a lightweight `settled` frame (carrying the cursor/epoch)
-            // unconditionally, with `lastMutationId` only when this socket has a
-            // watermark. An old client ignores the unknown frame.
-            const watermarkField = clientWatermark === undefined ? "" : `,"lastMutationId":${String(clientWatermark)}`;
-
-            trySendFrame(ws, `{"type":"settled","id":${JSON.stringify(subId)}${watermarkField}${cursorSuffix}}`);
-
+            if (!this.deliveryAuthorization) {
+                this.sendFrame(ws, frame);
+            }
             return;
         }
 
@@ -14361,9 +14751,13 @@ abstract class ShardDO {
         // would diff the NEXT value against one the client never received, silently
         // losing that update until it reconnected. `.map` before `.every` on purpose:
         // every frame is attempted, and only then is the verdict taken. `tables`
-        // always advances so dependency tracking stays accurate even on failure.
-        const delivered = frames.map((frame) => trySendFrame(ws, frame)).every(Boolean);
+        // normally advances so dependency tracking stays accurate even on failure.
+        // An authorization-gated delivery leaves the entire memo unchanged on failure.
+        const delivered = frames.map((frame) => this.sendFrame(ws, frame, { subId, permit })).every(Boolean);
 
+        if (this.deliveryAuthorization && !delivered) {
+            return;
+        }
         memos.set(subId, {
             // Tracks `lastJson`: an undelivered value leaves the baseline, and so
             // its generation, where the last delivered one put it.
@@ -14372,6 +14766,22 @@ abstract class ShardDO {
             ranges: outcome.ranges,
             tables: outcome.tables,
         });
+    }
+
+    private allowsSubscriptionOutcome(ws: ShardSocketLike, subId: string, permit: SubscriptionDeliveryPermit | undefined, generation: number): boolean {
+        if (this.deliveryAuthorization && permit !== undefined && this.deliveryRegistrations.get(ws)?.get(subId) !== permit.registration) {
+            return false;
+        }
+        if (this.deliveryAuthorization && !this.deliveryFence.allows(permit)) {
+            this.revokeSubscription(ws, subId);
+            return false;
+        }
+        // Newer value wins. A run that began before the write that produced the
+        // current baseline read older state; sending it would roll the client
+        // back to a value a later write already replaced (and stamp a cursor on
+        // it). The baseline's own run already delivered the newer value.
+        const existing = this.subMemos.get(ws)?.get(subId);
+        return existing === undefined || generation >= existing.generation;
     }
 
     /**
@@ -14804,7 +15214,11 @@ abstract class ShardDO {
             // the topic or about what the authorizer would have answered.
             const message = `whisper authorization cap of ${String(ShardDO.MAX_WHISPER_VERDICTS_PER_SOCKET)} distinct topics reached on this socket; reconnect to reset it`;
 
-            trySendFrame(ws, JSON.stringify({ code: "TOO_MANY_WHISPER_TOPICS", error: { code: "TOO_MANY_WHISPER_TOPICS", message }, type: "error" }));
+            this.sendFrame(
+                ws,
+                JSON.stringify({ code: "TOO_MANY_WHISPER_TOPICS", error: { code: "TOO_MANY_WHISPER_TOPICS", message }, type: "error" }),
+                "control",
+            );
 
             return false;
         }
@@ -15077,7 +15491,7 @@ abstract class ShardDO {
             }
 
             // Best-effort fan-out; a closed socket is simply skipped.
-            trySendFrame(ws, frame);
+            this.sendFrame(ws, frame);
             delivered += 1;
         }
 

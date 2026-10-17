@@ -52,6 +52,7 @@ class AppBuilder<Env extends object> {
     private adminToken?: Selector<Env, string>;
     private authDeclaration?: AuthDeclaration<Env>;
     private cdcEnabled = false;
+    private deliveryAuthorizationSelector?: ShardConfig["deliveryAuthorization"];
     private reactiveCacheConfig: boolean | { maxBytes?: number; maxEntries?: number } = false;
     private maxRelationKeysLimit?: ShardConfig["maxRelationKeys"];
     private observabilitySink?: ShardConfig["observability"];
@@ -116,6 +117,12 @@ class AppBuilder<Env extends object> {
     public relationExistsPushDown(mode: NonNullable<ShardConfig["relationExistsPushDown"]>): this {
         this.relationExistsPushDownMode = mode;
 
+        return this;
+    }
+
+    /** Authorize each RPC/subscription read and fence its eventual delivery against durable authority epochs. */
+    public deliveryAuthorization(selector: NonNullable<ShardConfig["deliveryAuthorization"]>): this {
+        this.deliveryAuthorizationSelector = selector;
         return this;
     }
 
@@ -190,6 +197,7 @@ class AppBuilder<Env extends object> {
             reactiveCache: this.reactiveCacheConfig,
             ...(this.maxRelationKeysLimit === undefined ? {} : { maxRelationKeys: this.maxRelationKeysLimit }),
             ...(this.observabilitySink === undefined ? {} : { observability: this.observabilitySink }),
+            ...(this.deliveryAuthorizationSelector === undefined ? {} : { deliveryAuthorization: this.deliveryAuthorizationSelector }),
             ...(this.relationExistsPushDownMode === undefined ? {} : { relationExistsPushDown: this.relationExistsPushDownMode }),
         });
 

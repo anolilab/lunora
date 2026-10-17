@@ -81,6 +81,75 @@ hibernation, so a cold shard simply re-runs the query. Only registered
 counters (`hits`, `misses`, `evictions`, `entries`, `bytes`) show up on the
 studio's metrics panel.
 
+## Delivery authorization
+
+Opt in with the generated app builder's `.deliveryAuthorization(env => callback)`.
+The async callback receives
+`{ identity, shardKey, functionPath, args, transport, system, admin }`. `transport` is
+`"rpc" | "subscription"`; `system` and `admin` are booleans.
+Lunora sets `system: true` only for server-initiated RPCs at its trusted binding.
+It sets `admin: true` only when a reserved admin function passes the configured bearer check.
+Subscription callbacks receive `system: false` and `admin: false`. These flags describe
+the request. Your callback decides whether either context receives a permit. Return
+`undefined` to deny or `{ scope, epoch }` from current authority. Queries still own row
+and field filtering.
+
+For RPCs, coded `LunoraError`s keep their status and code. Explicit `INTERNAL` verdicts
+are terminal.
+Unclassified callback throws, including fetch failures reported as `TypeError`, return
+retryable `SHARD_UNAVAILABLE` (503). Invalid returned permits produce terminal `INTERNAL`
+(500). On subscription refresh, `FORBIDDEN` and `INTERNAL` authority failures end the
+registration; other failures retain it and retry on the next write flush.
+An unclassified throw during the first subscription seed ends that seed with
+`SUBSCRIPTION_SEED_FAILED`.
+
+```ts
+import { installDeliveryFence, type DeliveryPermit } from "@lunora/do";
+import { defineApp } from "../../lunora/_generated/app";
+import { readCurrentPermit } from "./authority";
+
+const app = defineApp<Env>()
+    .shard((env) => env.SHARD)
+    .deliveryAuthorization((env) => async (request) => readCurrentPermit(env, request))
+    .build();
+export const ShardDO = app.ShardDO;
+
+export async function fenceShard(env: Env, shardKey: string, fence: DeliveryPermit) {
+    await installDeliveryFence(env.SHARD.getByName(shardKey), { env, shardKey, fence });
+}
+```
+
+Implement `readCurrentPermit` in your application. `scope` is opaque, nonempty and at most
+256 UTF-8 bytes; `epoch` is a nonnegative safe integer that increases with authority changes.
+Set the same nonempty `LUNORA_RELAY_SECRET` on the installer and shard; pass the target's
+exact shard key. The helper signs a private binding request and waits for acknowledgement.
+Commit policy and durable pending invalidations together, deny stale permits immediately,
+and retry every affected shard's fence before acknowledging revocation.
+
+This supports RPCs and ordinary query-backed subscriptions. Guarded shards refuse
+shapes, streams, raw subscriptions, whispers, rooms and relays. The legacy
+`broadcastDelta` path throws `NOT_IMPLEMENTED` rather than delivering deltas. Replicas
+must route to the owner.
+Query caches and shared subscription evaluations are bypassed. Every write flush calls
+the authority callback again for guarded subscriptions. If the permit is unchanged, the
+subscription already has a delivered result and the write leaves its read set untouched,
+Lunora skips the query and sends no `settled` frame. Reconnects send fresh full snapshots.
+
+`DELIVERY_FENCED` means the operation may have committed. Retry with the same native
+transport key to check for its receipt. If authority changed, the shard may return
+terminal `DELIVERY_RECEIPT_FENCED` (409), without the stored result or another execution.
+Receipt replay requires the exact original scope and epoch, including after access is
+regranted: a new epoch can grant different row visibility, so its permit does not authorize
+returning bytes produced under the old one.
+Reconcile that operation against your own durable operation key and state before deciding
+whether to start a new operation. Do not replace the native key just to get past the fence.
+
+Delivery authorization adds receipt markers to native idempotency rows. Rows written
+before opt-in have no marker. Replaying one while its native row is retained returns
+`DELIVERY_RECEIPT_FENCED`; the shard does not migrate or replay its stored result. Native
+rows and receipt markers use the same 24-hour retention window, so enabling delivery
+authorization can fence recent pre-opt-in operations.
+
 ## `SessionDO`
 
 A TTL'd session store in a Durable Object: records expire after

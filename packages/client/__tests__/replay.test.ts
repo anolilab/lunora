@@ -141,6 +141,15 @@ describe("hintless backoff", () => {
         // timer here would only re-run a request that cannot leave the device.
         expect(replayRetryDelayMs(new TypeError("Failed to fetch"), 1)).toBeUndefined();
     });
+
+    it("keeps a delivery-fenced write eligible for same-key recovery", () => {
+        expect.assertions(3);
+
+        expect(isTransientReplayFailure({ code: "DELIVERY_FENCED" })).toBe(true);
+        expect(replayRetryDelayMs({ code: "DELIVERY_FENCED" }, 1, () => 0)).toBe(500);
+        // A real authorization denial on the retry is still a terminal verdict.
+        expect(isTransientReplayFailure({ code: "FORBIDDEN" })).toBe(false);
+    });
 });
 
 describe("batch body budget", () => {

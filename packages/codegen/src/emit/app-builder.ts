@@ -79,6 +79,7 @@ const buildFieldLines = (options: ResolvedAppOptions): string[] => [
     `    private adminToken?: Selector<Env, string>;`,
     ...(options.hasAuth ? [`    private authDeclaration?: AuthDeclaration<Env>;`] : []),
     `    private cdcEnabled = false;`,
+    `    private deliveryAuthorizationSelector?: ShardConfig["deliveryAuthorization"];`,
     `    private reactiveCacheConfig: boolean | { maxBytes?: number; maxEntries?: number } = false;`,
     `    private maxRelationKeysLimit?: ShardConfig["maxRelationKeys"];`,
     `    private observabilitySink?: ShardConfig["observability"];`,
@@ -177,6 +178,11 @@ const buildMethodBlocks = (options: ResolvedAppOptions): string[] => [
     public relationExistsPushDown(mode: NonNullable<ShardConfig["relationExistsPushDown"]>): this {
         this.relationExistsPushDownMode = mode;
 
+        return this;
+    }`,
+    `    /** Authorize each RPC/subscription read and fence its eventual delivery against durable authority epochs. */
+    public deliveryAuthorization(selector: NonNullable<ShardConfig["deliveryAuthorization"]>): this {
+        this.deliveryAuthorizationSelector = selector;
         return this;
     }`,
     ...(options.hasAuth
@@ -338,6 +344,7 @@ const buildShardFactoryBody = (options: ResolvedAppOptions): string => {
         // Spread rather than assigned so an unset knob keeps the shard's own default.
         `            ...(this.maxRelationKeysLimit === undefined ? {} : { maxRelationKeys: this.maxRelationKeysLimit }),`,
         `            ...(this.observabilitySink === undefined ? {} : { observability: this.observabilitySink }),`,
+        `            ...(this.deliveryAuthorizationSelector === undefined ? {} : { deliveryAuthorization: this.deliveryAuthorizationSelector }),`,
         `            ...(this.relationExistsPushDownMode === undefined ? {} : { relationExistsPushDown: this.relationExistsPushDownMode }),`,
         ...(options.hasGlobal
             ? [

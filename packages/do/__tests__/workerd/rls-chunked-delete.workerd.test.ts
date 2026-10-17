@@ -110,8 +110,9 @@ describe("rls chunked deletes on workerd", () => {
         expect.assertions(3);
 
         await withWriter("nodes", async (writer) => {
-            await writer.insert("nodes", { _id: "P", parentId: "root" }, { allowExplicitId: true });
-            await writer.insert("nodes", { _id: "C", parentId: "P" }, { allowExplicitId: true });
+            // Read order is creation time, then ID; a clock tie would delete C before P.
+            await writer.insert("nodes", { _id: "P", _creationTime: 1, parentId: "root" }, { allowExplicitId: true });
+            await writer.insert("nodes", { _id: "C", _creationTime: 2, parentId: "P" }, { allowExplicitId: true });
 
             await expect(eraseWith(writer, (db) => db.deleteAll("nodes"))).rejects.toMatchObject({ code: "FORBIDDEN" });
 

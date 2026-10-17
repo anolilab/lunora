@@ -82,7 +82,7 @@ to branch on, see [Error handling](/docs/concepts/error-handling).
 
 ## Error codes
 
-All 170 codes Lunora publishes, generated from the catalog the runtime, CLI, overlay, Studio and client SDK all read.
+All 172 codes Lunora publishes, generated from the catalog the runtime, CLI, overlay, Studio and client SDK all read.
 Every heading is an anchor, so `/docs/errors#conflict` links straight to one.
 
 ### `ADMIN_FORBIDDEN`
@@ -308,6 +308,18 @@ Re-read the row and retry the mutation with the fresh value. Lunora serializes a
 ### `CURRENCY_MISMATCH`
 
 `400` — Currency mismatch
+
+### `DELIVERY_FENCED`
+
+`409` — Delivery authorization changed
+
+The operation may have committed. Retry with the same transport key; a committed result from an older authority epoch returns DELIVERY_RECEIPT_FENCED. Do not automatically retry with a new transport key.
+
+### `DELIVERY_RECEIPT_FENCED`
+
+`409` — Committed receipt authorization changed
+
+The operation committed, but its stored result belongs to an older authority epoch. Do not automatically retry with a new transport ID. Recover through the application's durable operation key under current authorization.
 
 ### `DISPATCH_IN_PROGRESS`
 

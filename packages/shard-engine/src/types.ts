@@ -257,6 +257,9 @@ export interface SocketAttachment {
      */
     context?: Record<string, unknown>;
 
+    /** Server-stamped authority markers for invalidating subscriptions after hibernation; never access policy. */
+    deliveryPermits?: Record<string, { epoch: number; scope: string }>;
+
     /**
      * Token-expiry (epoch ms) of the credential resolved at upgrade, when the
      * runtime forwarded one (`x-lunora-identity-exp`). The DO drops the socket

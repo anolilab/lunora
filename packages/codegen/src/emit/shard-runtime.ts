@@ -774,6 +774,7 @@ const buildDoTypeImports = (hasVectors: boolean, hasWorkflows: boolean, hasQueue
     "TransactionHeadroomTracker",
     "SchemaLike",
     "ShardDOState",
+    "DeliveryAuthorization",
     "ShardRankPageResult",
     "SqlExec",
     "StorageRulesResult",

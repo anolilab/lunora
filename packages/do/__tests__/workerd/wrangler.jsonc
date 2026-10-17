@@ -12,6 +12,7 @@
     "compatibility_flags": ["nodejs_compat"],
     "durable_objects": {
         "bindings": [
+            { "name": "AUTHORIZED", "class_name": "DeliveryAuthorizationTestDO" },
             { "name": "SHARD", "class_name": "TestShardDO" },
             { "name": "SESSION", "class_name": "TestSessionDO" },
             { "name": "SYNC", "class_name": "TestSyncDO" },
@@ -24,5 +25,6 @@
         { "tag": "v1", "new_sqlite_classes": ["TestShardDO", "TestSessionDO", "TestSyncDO", "TestEchoDO"] },
         { "tag": "v2", "new_sqlite_classes": ["TestCounterDO"] },
         { "tag": "v3", "new_sqlite_classes": ["TestMergedDO"] },
+        { "tag": "v4", "new_sqlite_classes": ["DeliveryAuthorizationTestDO"] },
     ],
 }

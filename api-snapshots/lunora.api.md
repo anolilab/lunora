@@ -2433,6 +2433,18 @@ Re-exported from `@lunora/shard-engine` — signature tracked at its source.
 
 Re-exported from `@lunora/shard-engine` — signature tracked at its source.
 
+### `DeliveryAuthorization` (type)
+
+Re-exported from `@lunora/do` — signature tracked at its source.
+
+### `DeliveryAuthorizationRequest` (interface)
+
+Re-exported from `@lunora/do` — signature tracked at its source.
+
+### `DeliveryPermit` (interface)
+
+Re-exported from `@lunora/do` — signature tracked at its source.
+
 ### `DispatchBookmark` (interface)
 
 Re-exported from `@lunora/do` — signature tracked at its source.
@@ -2780,6 +2792,10 @@ Re-exported from `@lunora/shard-engine` — signature tracked at its source.
 ### `importShardRows` (const)
 
 Re-exported from `@lunora/shard-engine` — signature tracked at its source.
+
+### `installDeliveryFence` (const)
+
+Re-exported from `@lunora/do` — signature tracked at its source.
 
 ### `isSourceDue` (const)
 

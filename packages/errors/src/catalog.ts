@@ -58,6 +58,17 @@ export const ERROR_CATALOG = {
     UNAUTHORIZED: { status: 401, title: "Unauthorized" },
     FORBIDDEN: { status: 403, title: "Forbidden" },
     NOT_FOUND: { status: 404, title: "Not found" },
+    DELIVERY_FENCED: {
+        status: 409,
+        title: "Delivery authorization changed",
+        hint: "The operation may have committed. Retry with the same transport key; a committed result from an older authority epoch returns DELIVERY_RECEIPT_FENCED. Do not automatically retry with a new transport key.",
+    },
+
+    DELIVERY_RECEIPT_FENCED: {
+        status: 409,
+        title: "Committed receipt authorization changed",
+        hint: "The operation committed, but its stored result belongs to an older authority epoch. Do not automatically retry with a new transport ID. Recover through the application's durable operation key under current authorization.",
+    },
 
     CONFLICT: {
         hint: [
