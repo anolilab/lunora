@@ -179,6 +179,39 @@ describe("shardDO socket routes", () => {
         expect(b.frames).toEqual([{ data: { echo: { text: "hi" } }, topic: CHAT_TOPIC, type: "message" }]);
     });
 
+    it("refuses a route broadcast over the byte cap even when its UTF-16 length is under it", async () => {
+        expect.assertions(2);
+
+        // 1400 euro signs are 1400 UTF-16 code units (under the 4096 cap) but 4200 UTF-8 bytes (over it).
+        class OversizeShard extends SocketShard {
+            public override handleRpc(functionPath: string, args: Record<string, unknown>): Promise<unknown> {
+                if (args["kind"] === "message") {
+                    (args["socket"] as { broadcast: (message: unknown) => void }).broadcast({ text: "€".repeat(1400) });
+
+                    return Promise.resolve(undefined);
+                }
+
+                return super.handleRpc(functionPath, args);
+            }
+        }
+
+        const a = new FakeSocket({ connectionId: "a", socketPath: "/chat", subs: {}, whispers: [CHAT_TOPIC] });
+        const b = new FakeSocket({ connectionId: "b", socketPath: "/chat", subs: {}, whispers: [CHAT_TOPIC] });
+        const sockets = [a, b];
+        const state = {
+            acceptWebSocket() {},
+            getWebSockets: () => sockets,
+            storage: { sql: {} },
+        } as unknown as ShardDOState;
+        const shard = new OversizeShard(state, CHAT_ROUTE);
+
+        await send(shard, a, JSON.stringify(encodeWire({ text: "x" })));
+
+        // The oversize frame is dropped for every member, not just the sender.
+        expect(a.frames).toEqual([]);
+        expect(b.frames).toEqual([]);
+    });
+
     it("discards a route broadcast when the handler's mutation fails, so no socket sees rolled-back writes", async () => {
         expect.assertions(2);
 

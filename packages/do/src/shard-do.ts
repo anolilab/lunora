@@ -15693,12 +15693,15 @@ abstract class ShardDO {
     private broadcastSocketMessage(topic: string, data: unknown): void {
         const frame = socketFrame(topic, data);
 
-        // The same cap a room broadcast carries; thrown so the dispatch logs it
-        // against the route instead of fanning out an unbounded frame.
-        if (frame.length > ShardDO.MAX_WHISPER_BYTES) {
+        // The same cap a room broadcast carries, measured in UTF-8 bytes (`.length` counts
+        // UTF-16 units, so multibyte text would slip past it). Thrown so the dispatch logs
+        // it against the route instead of fanning out an unbounded frame.
+        const { byteLength } = new TextEncoder().encode(frame);
+
+        if (byteLength > ShardDO.MAX_WHISPER_BYTES) {
             throw new LunoraError(
                 "PAYLOAD_TOO_LARGE",
-                `route broadcast is ${String(frame.length)} bytes, over the ${String(ShardDO.MAX_WHISPER_BYTES)}-byte limit`,
+                `route broadcast is ${String(byteLength)} bytes, over the ${String(ShardDO.MAX_WHISPER_BYTES)}-byte limit`,
             );
         }
 
