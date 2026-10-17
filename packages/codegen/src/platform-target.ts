@@ -317,6 +317,8 @@ interface PlatformSignals {
     durableStreams?: boolean;
     /** A `.global()` table. */
     globalTables?: boolean;
+    /** A `ctx.live` read in a handler. Judged against {@link PlatformGateResult.liveStreamsWithheld}, not a feature key of its own. */
+    liveContext?: boolean;
     /** A `defineLiveStream` declaration: a topic SSE stream the shard serves. */
     liveStreams?: boolean;
     /** A `defineQueue` declaration. */
@@ -376,6 +378,7 @@ const PLATFORM_SIGNAL_LABELS: Readonly<Record<keyof PlatformSignals, string>> = 
     crossShardFanout: "cross-shard fan-out queries (a `.shardBy(...)` schema)",
     durableStreams: "durable streams (`.stream(handler, { durable: true })`)",
     globalTables: "global tables (`.global()`)",
+    liveContext: "the live publisher (`ctx.live`)",
     liveStreams: "live topic streams (`defineLiveStream`)",
     queues: "queues (`defineQueue`)",
     relationGraph: "relation-graph traversal (`ctx.db.related`, derived from `v.id(...)` columns)",
@@ -448,6 +451,21 @@ const unsupportedSignalDiagnostic = (key: keyof PlatformSignals, matrix: Platfor
         message: `${matrix.name} does not support ${PLATFORM_SIGNAL_LABELS[key]}, which this app declares.`,
         name: "platform_unsupported_feature",
         remediation: `Remove the declaration, or deploy to a target whose capability matrix marks "${key}" as native or emulated.`,
+        target,
+    };
+};
+
+/**
+ * The app reads `ctx.live` and the target withholds live streams, so the
+ * runtime never sets the publisher on the context: the read would throw a
+ * TypeError on first use. Refused here rather than left to fail at runtime.
+ */
+const liveContextWithheldDiagnostic = (matrix: PlatformCapabilities, target: string): PlatformDiagnostic => {
+    return {
+        level: "error",
+        message: `${matrix.name} withholds live streams, so ctx.live is not available on the "${target}" target, but this app reads ctx.live.`,
+        name: "platform_unsupported_feature",
+        remediation: `Remove the ctx.live usage, or deploy to a target whose capability matrix marks "liveStreams" as native or emulated.`,
         target,
     };
 };
@@ -586,8 +604,13 @@ const gateAgainstMatrix = (usage: FeatureUsage, matrix: PlatformCapabilities, ta
     gateSignalPass({ diagnostics, gatedSignals, matrix, reported, signals, target });
 
     const liveLevel = matrix.features.liveStreams?.level;
+    const liveStreamsWithheld = liveLevel === undefined || liveLevel === "unsupported";
 
-    return { diagnostics, liveStreamsWithheld: liveLevel === undefined || liveLevel === "unsupported", signals: gatedSignals, usage: gated };
+    if (signals.liveContext === true && liveStreamsWithheld) {
+        diagnostics.push(liveContextWithheldDiagnostic(matrix, target));
+    }
+
+    return { diagnostics, liveStreamsWithheld, signals: gatedSignals, usage: gated };
 };
 
 /**

@@ -1042,6 +1042,51 @@ describe("app-declared surfaces, gated end-to-end through runCodegen", () => {
         expect(result.platformDiagnostics[0]?.message).toContain("durable");
     });
 
+    const LIVE_PUBLISH_ACTION = `import { action } from "@lunora/server";\n\nexport const announce = action.action(async ({ ctx }) => {\n    await ctx.live.publish("posts", { id: 1 });\n\n    return null;\n});\n`;
+
+    it("refuses a ctx.live read on a target that withholds live streams, naming ctx.live and the target", () => {
+        expect.assertions(3);
+
+        // celld rates liveStreams unsupported and passes `liveStreams: false` to createWorker, so
+        // `ctx.live` is never set on the action context: the read would throw a TypeError at runtime.
+        writeFileSync(join(workdir, "lunora.config.ts"), `export default { target: "celld" };\n`, "utf8");
+        write("announce.ts", LIVE_PUBLISH_ACTION);
+
+        const result = codegen();
+
+        expect(result.platformDiagnostics.map((diagnostic) => diagnostic.name)).toStrictEqual(["platform_unsupported_feature"]);
+        expect(result.platformDiagnostics[0]?.message).toContain("ctx.live");
+        expect(result.platformDiagnostics[0]?.message).toContain('"celld"');
+    });
+
+    it("accepts the same ctx.live read on a target that serves live streams", () => {
+        expect.assertions(2);
+
+        // Node rates liveStreams emulated, so the publisher is wired and the read is supported.
+        write("announce.ts", LIVE_PUBLISH_ACTION);
+
+        const onNode = codegen();
+
+        writeFileSync(join(workdir, "lunora.config.ts"), `export default { target: "cloudflare" };\n`, "utf8");
+
+        const onCloudflare = codegen();
+
+        expect(onNode.platformDiagnostics).toStrictEqual([]);
+        expect(onCloudflare.platformDiagnostics).toStrictEqual([]);
+    });
+
+    it("leaves an app that never reads ctx.live alone on a target that withholds live streams", () => {
+        expect.assertions(2);
+
+        writeFileSync(join(workdir, "lunora.config.ts"), `export default { target: "celld" };\n`, "utf8");
+        write("announce.ts", `import { action } from "@lunora/server";\n\nexport const ping = action.action(async () => null);\n`);
+
+        const result = codegen();
+
+        expect(result.platformDiagnostics.some((diagnostic) => diagnostic.message.includes("ctx.live"))).toBe(false);
+        expect(result.generated.app).toContain("liveStreams: false,");
+    });
+
     it("gates a declared agent on a target that cannot run one", () => {
         expect.assertions(2);
 

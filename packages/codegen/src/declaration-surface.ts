@@ -297,6 +297,7 @@ const buildDeclarationSurface = (options: DeclarationSurfaceOptions): Declaratio
         containerSandboxTools: containers.some((container) => container.sandbox === true),
         durableStreams: codeSignals.durableStreams,
         globalTables: schema.tables.some((table) => table.shardMode === "global"),
+        liveContext: codeSignals.liveContext,
         liveStreams: codeSignals.liveStreams,
         typedWebSockets: codeSignals.typedWebSockets,
         queues: queues.length > 0,
