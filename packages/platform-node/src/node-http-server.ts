@@ -99,8 +99,15 @@ const writeResponse = async (response: Response, outgoing: ServerResponse): Prom
         if (!outgoing.write(next.value)) {
             // eslint-disable-next-line no-await-in-loop -- waiting for the socket to drain is the point
             await new Promise<void>((resolve) => {
-                outgoing.once("drain", resolve);
-                outgoing.once("close", resolve);
+                // Whichever of drain or close fires first ends the wait, and takes the other listener with it.
+                const settle = (): void => {
+                    outgoing.off("drain", settle);
+                    outgoing.off("close", settle);
+                    resolve();
+                };
+
+                outgoing.on("drain", settle);
+                outgoing.on("close", settle);
             });
         }
 
