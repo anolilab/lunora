@@ -60,6 +60,12 @@ const toRequest = async (incoming: IncomingMessage, origin: string): Promise<Req
 };
 
 const writeResponse = async (response: Response, outgoing: ServerResponse): Promise<void> => {
+    // An unhandled 'error' event throws, and a socket write error must not take the process down. Destroying the response is what
+    // fires 'close', which cancels the body and ends any wait for drain below.
+    outgoing.on("error", () => {
+        outgoing.destroy();
+    });
+
     const headers: Record<string, string | string[]> = {};
 
     response.headers.forEach((value, name) => {
