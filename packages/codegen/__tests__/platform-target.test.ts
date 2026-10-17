@@ -551,7 +551,8 @@ describe("capability classification", () => {
 
         const usage: FeatureUsage = { ...ALL_OFF, ...Object.fromEntries(exempt.map((key) => [key, true])) };
 
-        expect(gateAgainstMatrix(usage, EMPTY_MATRIX, "empty")).toStrictEqual({ diagnostics: [], signals: {}, usage });
+        // A matrix that rates no `liveStreams` withholds live streams: the fail-closed arm.
+        expect(gateAgainstMatrix(usage, EMPTY_MATRIX, "empty")).toStrictEqual({ diagnostics: [], liveStreamsWithheld: true, signals: {}, usage });
     });
 });
 
@@ -773,7 +774,7 @@ describe("app-declared surfaces, gated end-to-end through runCodegen", () => {
     });
 
     it("wires ctx.live onto the shard action and the queue consumer only where the target serves live streams", () => {
-        expect.assertions(9);
+        expect.assertions(11);
 
         // The declaration in `lunora/`, the signal the gate hands the emitters, and the
         // surface they write: the shard's action ctx and the push consumer's publisher.
@@ -807,6 +808,10 @@ describe("app-declared surfaces, gated end-to-end through runCodegen", () => {
         expect(withheld.platformDiagnostics.map((diagnostic) => diagnostic.message).some((message) => message.includes("live topic streams"))).toBe(true);
         expect(withheld.generated.shard).not.toContain("ctx.live = live;");
         expect(withheld.generated.app).not.toContain("live: queueLive,");
+        // The HTTP context has no declaration to hang off, so the worker is told the target
+        // withholds live streams outright. A served target keeps the options unchanged.
+        expect(withheld.generated.app).toContain("liveStreams: false,");
+        expect(onNode.generated.app).not.toContain("liveStreams: false");
     });
 
     it("gates a schema-declared vector index the target has no binding for", () => {

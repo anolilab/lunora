@@ -101,6 +101,13 @@ interface EmitAppOptions {
     liveStreams?: boolean;
 
     /**
+     * The target withholds live streams (`PlatformGateResult.liveStreamsWithheld`).
+     * Emitted as `liveStreams: false` on `createWorker`, so the HTTP context carries
+     * no `ctx.live`. Absent or `false` leaves the emitted options unchanged.
+     */
+    liveStreamsWithheld?: boolean;
+
+    /**
      * Every table the schema declares, with its shard mode. Emitted as a literal
      * table map backing `listSchemaTables` and `resolveTableSharding`: export
      * needs a real "every table" list (shard discovery is driven by it), and the

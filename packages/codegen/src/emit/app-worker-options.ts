@@ -447,6 +447,7 @@ const buildBaseWorkerOptions = (options: ResolvedAppOptions): string[] => [
     // emitted options object reads as "not configured" either way.
     `            ...(this.httpRouterApp ? { httpRouter: this.httpRouterApp } : {}),`,
     `            routes: this.routeMap,`,
+    ...(options.liveStreamsWithheld ? [`            liveStreams: false,`] : []),
     `            shardDO: this.shardSelector?.(env) ?? (undefined as unknown as ShardNamespaceLike),`,
 ];
 

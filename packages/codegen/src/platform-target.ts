@@ -416,6 +416,15 @@ interface PlatformGateResult {
     diagnostics: PlatformDiagnostic[];
 
     /**
+     * The target's matrix withholds live streams: it rates `liveStreams` `unsupported`, or
+     * not at all. Read by the emitter, which passes it to `createWorker` so the runtime
+     * omits `ctx.live` from the HTTP context. Unlike `signals.liveStreams`, it does not
+     * depend on the app declaring a `defineLiveStream`: the HTTP context has no such
+     * declaration to hang off. An unknown target is emitted un-gated, so it is not withheld.
+     */
+    liveStreamsWithheld: boolean;
+
+    /**
      * A copy of the {@link PlatformSignals} input with every rejected signal
      * flipped to `false` — declared, but on a target that rates it `unsupported`
      * or does not rate it at all.
@@ -576,7 +585,9 @@ const gateAgainstMatrix = (usage: FeatureUsage, matrix: PlatformCapabilities, ta
     // output. Same fail-closed treatment of an undeclared rating as above.
     gateSignalPass({ diagnostics, gatedSignals, matrix, reported, signals, target });
 
-    return { diagnostics, signals: gatedSignals, usage: gated };
+    const liveLevel = matrix.features.liveStreams?.level;
+
+    return { diagnostics, liveStreamsWithheld: liveLevel === undefined || liveLevel === "unsupported", signals: gatedSignals, usage: gated };
 };
 
 /**
@@ -605,6 +616,7 @@ const gatePlatformFeatures = (usage: FeatureUsage, target: string, signals: Plat
                     target,
                 },
             ],
+            liveStreamsWithheld: false,
             signals: { ...signals },
             usage: { ...usage },
         };
