@@ -114,4 +114,27 @@ describe("connectWebSocket", () => {
         // teardown already swept; a socket opened now would never be closed
         expect(FakeSocket.instances).toHaveLength(0);
     });
+
+    it("does not open on a token minted under a credential that was replaced while pending", async () => {
+        expect.assertions(2);
+
+        let resolveStale!: (token: string) => void;
+        const client = new LunoraClient({
+            url: "https://app.example",
+            WebSocket: WebSocketImpl,
+            wsToken: () =>
+                new Promise<string>((resolve) => {
+                    resolveStale = resolve;
+                }),
+        });
+
+        client.connectWebSocket("/chat", { onMessage: () => undefined });
+        // Rotate while the first provider is still pending.
+        client.setWsToken("fresh");
+        resolveStale("stale");
+        await vi.advanceTimersByTimeAsync(0);
+
+        expect(FakeSocket.instances.some((socket) => socket.url.includes("token=stale"))).toBe(false);
+        expect(FakeSocket.instances.filter((socket) => socket.url.includes("token=fresh"))).toHaveLength(1);
+    });
 });

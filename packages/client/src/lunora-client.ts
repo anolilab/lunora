@@ -5694,12 +5694,22 @@ class LunoraClient {
 
         /** Resolve the provider-shaped token, then open; a failed mint re-arms the reconnect timer. */
         const connectWithProvider = async (provider: WsTokenProvider): Promise<void> => {
+            const generation = this.wsTokenGeneration;
             let token: string | undefined;
 
             try {
                 token = await provider();
             } catch {
                 scheduleReconnect();
+
+                return;
+            }
+
+            // The credential was replaced while this one was minted: it is superseded, so the
+            // channel must not open on it. Mint again under the current credential.
+            if (generation !== this.wsTokenGeneration) {
+                // eslint-disable-next-line @typescript-eslint/no-use-before-define -- re-enters `connect`, declared just below with `openWith` in scope
+                connect();
 
                 return;
             }
