@@ -10,6 +10,8 @@ interface ShardCall {
     shardKey: string | undefined;
 }
 
+type ShardRunners = ReturnType<HttpActionContext["forShard"]>;
+
 const makeContext = (calls: ShardCall[], respond?: (path: string) => Response): HttpActionContext => {
     const fetchShard: ShardFetch = (shardKey, path, init) => {
         calls.push({ init, path, shardKey });
@@ -143,9 +145,14 @@ describe("defineLiveStream", () => {
         // The runtime refuses the shard run before the system-trusted read.
         const refused = new LunoraError("FORBIDDEN_SHARD", "Forbidden shard", { status: 403 });
         const runQuery = vi.fn<HttpActionContext["runQuery"]>(() => Promise.reject(refused));
-        const forShard = vi.fn<HttpActionContext["forShard"]>(() => {
-            return { runAction: vi.fn<HttpActionContext["runAction"]>(), runMutation: vi.fn<HttpActionContext["runMutation"]>(), runQuery };
-        });
+        const forShard = vi.fn<HttpActionContext["forShard"]>(
+            () =>
+                ({
+                    runAction: vi.fn<HttpActionContext["runAction"]>(),
+                    runMutation: vi.fn<HttpActionContext["runMutation"]>(),
+                    runQuery,
+                }) as unknown as ShardRunners,
+        );
         const context = { ...makeContext(calls), forShard } as unknown as HttpActionContext;
         const stream = defineLiveStream({
             id: "posts",
@@ -178,13 +185,14 @@ describe("defineLiveStream", () => {
         const denied = defineLiveStream({ id: "posts", onSubscribe: () => false });
         const refusingShard: ShardFetch = () => Promise.reject(refused);
         // The swallowed `onSubscribe` makes no read that refuses, so `forShard` resolves.
-        const forShard = vi.fn<HttpActionContext["forShard"]>(() => {
-            return {
-                runAction: vi.fn<HttpActionContext["runAction"]>(),
-                runMutation: vi.fn<HttpActionContext["runMutation"]>(),
-                runQuery: vi.fn<HttpActionContext["runQuery"]>(),
-            };
-        });
+        const forShard = vi.fn<HttpActionContext["forShard"]>(
+            () =>
+                ({
+                    runAction: vi.fn<HttpActionContext["runAction"]>(),
+                    runMutation: vi.fn<HttpActionContext["runMutation"]>(),
+                    runQuery: vi.fn<HttpActionContext["runQuery"]>(),
+                }) as unknown as ShardRunners,
+        );
         const context = {
             auth: { getIdentity: () => Promise.resolve(null), userId: null },
             fetchShard: refusingShard,
