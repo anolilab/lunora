@@ -14,6 +14,8 @@ interface Frame {
     code?: string;
     data?: unknown;
     from?: string;
+    message?: string;
+    stream?: string;
     topic?: string;
     type: string;
 }
@@ -244,8 +246,42 @@ describe("shardDO live streams", () => {
 
         await publish(shard, { stream: "s", data: { event: "new_post" }, topic: "feed" });
 
-        // The grant is the stream's own onSubscribe decision, so the member gets the event as a whisper on the topic.
-        expect(socket.frames).toEqual([{ data: { event: "new_post" }, topic: "feed", type: "whisper" }]);
+        // The grant is the stream's own onSubscribe decision, so the member gets the event as a `live` frame naming its stream and topic.
+        expect(socket.frames).toEqual([{ data: { event: "new_post" }, stream: "s", topic: "feed", type: "live" }]);
+    });
+
+    it("delivers a peer whisper on a live topic only as a whisper frame, never as a live frame", async () => {
+        expect.assertions(2);
+
+        const member = new FakeSocket({ connectionId: "ws-a", subs: {}, userId: "user-a" });
+        const peer = new FakeSocket({ subs: {}, userId: "user-b" });
+        const shard = makeShard([member, peer]);
+
+        await joinWhisper(shard, member, "feed");
+        await joinWhisper(shard, peer, "feed");
+        await controlAs(shard, "user-a", { action: "subscribe", connectionId: "ws-a", stream: "s", subscriptionId: "s1", topic: "feed" });
+
+        await shard.webSocketMessage(peer as unknown as WebSocket, JSON.stringify({ data: { event: "spoofed" }, topic: "feed", type: "whisper" }));
+
+        // The peer's whisper reaches the member as a plain `whisper`; the live handler never sees it as a `live` frame.
+        expect(member.frames).toEqual([{ data: { event: "spoofed" }, from: "user-b", topic: "feed", type: "whisper" }]);
+        expect(member.frames.some((frame) => frame.type === "live")).toBe(false);
+    });
+
+    it("refuses a client-sent live frame and delivers it to no other member", async () => {
+        expect.assertions(2);
+
+        const member = new FakeSocket({ connectionId: "ws-a", subs: {}, userId: "user-a" });
+        const forger = new FakeSocket({ subs: {}, userId: "user-b" });
+        const shard = makeShard([member, forger]);
+
+        await joinWhisper(shard, member, "feed");
+        await controlAs(shard, "user-a", { action: "subscribe", connectionId: "ws-a", stream: "s", subscriptionId: "s1", topic: "feed" });
+
+        await shard.webSocketMessage(forger as unknown as WebSocket, JSON.stringify({ data: { event: "forged" }, stream: "s", topic: "feed", type: "live" }));
+
+        expect(member.frames).toEqual([]);
+        expect(forger.frames).toEqual([{ message: "live frames are server-only", type: "error" }]);
     });
 
     it("does not deliver a stream publish to a WebSocket member admitted only for another stream", async () => {

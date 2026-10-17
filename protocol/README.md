@@ -621,18 +621,19 @@ Run `pageDeltaFrames` only once you announce the token.
 
 ### 5.2 Server → client frames
 
-| `type`     | Shape                                                           | Effect                                                                     |
-| ---------- | --------------------------------------------------------------- | -------------------------------------------------------------------------- |
-| `ack`      | `{ type, id }`                                                  | subscription acknowledged                                                  |
-| `data`     | `{ type, id, data: <wire>, cursor?, epoch?, lastMutationId? }`  | deliver `decodeWire(data)` as the new value                                |
-| `delta`    | `{ type, id, delta: <wire>, cursor?, epoch?, lastMutationId? }` | merge delta into server base; the LAST frame of a run carries the cursor   |
-| `resume`   | `{ type, id, cursor?, epoch?, lastMutationId? }`                | nothing changed; keep value, advance cursor                                |
-| `settled`  | `{ type, id, cursor?, epoch?, lastMutationId? }`                | write touched tables, byte-identical result; advance only                  |
-| `error`    | `{ type, id?, error: { code?, message? }, message? }`           | subscription/stream-scoped error (`4001`/`TOKEN_EXPIRED` = token expired)  |
-| `complete` | `{ type, id }`                                                  | subscription/stream closed server-side                                     |
-| `chunk`    | `{ type, id, data: <wire>, seq?, generation? }`                 | one streaming-query chunk (`seq` + run `generation` on a durable run only) |
-| `whisper`  | `{ type, topic, data: <wire>, from? }`                          | ephemeral relay                                                            |
-| `identity` | `{ type, subject: <string \| null> }`                           | the user this socket is authenticated as (`null` = anonymous)              |
+| `type`     | Shape                                                           | Effect                                                                                                         |
+| ---------- | --------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------- |
+| `ack`      | `{ type, id }`                                                  | subscription acknowledged                                                                                      |
+| `data`     | `{ type, id, data: <wire>, cursor?, epoch?, lastMutationId? }`  | deliver `decodeWire(data)` as the new value                                                                    |
+| `delta`    | `{ type, id, delta: <wire>, cursor?, epoch?, lastMutationId? }` | merge delta into server base; the LAST frame of a run carries the cursor                                       |
+| `resume`   | `{ type, id, cursor?, epoch?, lastMutationId? }`                | nothing changed; keep value, advance cursor                                                                    |
+| `settled`  | `{ type, id, cursor?, epoch?, lastMutationId? }`                | write touched tables, byte-identical result; advance only                                                      |
+| `error`    | `{ type, id?, error: { code?, message? }, message? }`           | subscription/stream-scoped error (`4001`/`TOKEN_EXPIRED` = token expired)                                      |
+| `complete` | `{ type, id }`                                                  | subscription/stream closed server-side                                                                         |
+| `chunk`    | `{ type, id, data: <wire>, seq?, generation? }`                 | one streaming-query chunk (`seq` + run `generation` on a durable run only)                                     |
+| `whisper`  | `{ type, topic, data: <wire>, from? }`                          | ephemeral relay                                                                                                |
+| `live`     | `{ type, stream, topic, data: <wire> }`                         | a server live publish to a WebSocket member granted the stream (server-only; a client `live` frame is refused) |
+| `identity` | `{ type, subject: <string \| null> }`                           | the user this socket is authenticated as (`null` = anonymous)                                                  |
 
 `identity` is sent in reply to every `connect` frame (§5.1), including a re-sent
 one. `subject` is the resolved user id the socket was upgraded under, or `null`

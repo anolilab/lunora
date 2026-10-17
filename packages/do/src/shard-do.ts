@@ -7250,6 +7250,16 @@ abstract class ShardDO {
             return;
         }
 
+        // `live` is server-to-client only (see `deliverLiveLocal`). Refuse a client-sent one so a
+        // peer cannot forge a live publish to other members of a topic.
+        const clientFrameType: string = envelope.type;
+
+        if (clientFrameType === "live") {
+            trySendFrame(ws, JSON.stringify({ message: "live frames are server-only", type: "error" }));
+
+            return;
+        }
+
         if (envelope.type === "connect") {
             // One-shot control frame the client sends right after the socket
             // opens: record its connection `context` on the attachment (so it
@@ -16095,10 +16105,11 @@ abstract class ShardDO {
             delivered += 1;
         }
 
-        // Same whisper frame shape the sockets already render, so no client listener changes.
-        const whisperFrame = `{"type":"whisper","topic":${JSON.stringify(topic)},"data":${dataJson}}`;
+        // A `live` frame, not a whisper: a peer's whisper on the same topic is a `whisper` frame, so a
+        // client that follows a live topic can tell a server publish from a peer's spoofed payload.
+        const liveSocketFrame = `{"type":"live","stream":${JSON.stringify(stream)},"topic":${JSON.stringify(topic)},"data":${dataJson}}`;
 
-        return delivered + this.deliverLiveLocal(topic, key, whisperFrame);
+        return delivered + this.deliverLiveLocal(topic, key, liveSocketFrame);
     }
 
     /**
