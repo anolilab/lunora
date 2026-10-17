@@ -122,6 +122,25 @@ describe("connectLiveStream", () => {
         live.close();
     });
 
+    it("keeps the SSE control body to the connection and subscription, with no stream or shard key", async () => {
+        expect.assertions(2);
+
+        const { controls, fetchImpl } = setup();
+        const live = connectLiveStream("https://x/live/posts/connect", { fetch: fetchImpl });
+
+        await live.ready;
+
+        live.subscribe({ id: "s1", onEvent: () => undefined, topic: "feed" });
+
+        await flush();
+
+        // The WebSocket grant fields (`stream`, `shardKey`) must not leak into the SSE control call.
+        expect(Object.keys(controls[0] ?? {})).toStrictEqual(["action", "connectionId", "subscriptionId", "topic"]);
+        expect(controls[0]).toStrictEqual({ action: "subscribe", connectionId: "c1", subscriptionId: "s1", topic: "feed" });
+
+        live.close();
+    });
+
     it("reconnects and re-registers active subscriptions on the new connection", async () => {
         expect.assertions(2);
 

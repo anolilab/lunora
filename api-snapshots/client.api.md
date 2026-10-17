@@ -468,6 +468,12 @@ class LunoraClient {
     whisperSubscribe(topic: string, handler: (data: unknown, from?: string) => void, options?: {
         shardKey?: string;
     }): Unsubscribe;
+    subscribeLiveTopic(options: {
+        onEvent: (payload: unknown) => void;
+        shardKey?: string;
+        stream: string;
+        topic: string;
+    }): Unsubscribe;
     whisper(topic: string, data?: unknown, options?: {
         shardKey?: string;
     }): boolean;
@@ -2476,6 +2482,7 @@ interface ServerErrorMessage {
 
 ```ts
 interface ServerIdentityMessage {
+    connectionId?: string;
     subject: null | string;
     type: "identity";
 }
