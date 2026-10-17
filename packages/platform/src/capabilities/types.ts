@@ -37,7 +37,7 @@
  * `scheduler`, `secrets`, `services`, `topics`, `vectorStore`, `workerLoaders`, `workflowRollback`,
  * `workflowSchedules`, `workflows`.
  *
- * Every other key here — `authJurisdictionMove`, `conditionalWrites`, `edgeRequestMetadata`, `hostTraceFusion`, `httpCache`,
+ * Every other key here — `authJurisdictionMove`, `conditionalWrites`, `deliveryAuthorization`, `edgeRequestMetadata`, `hostTraceFusion`, `httpCache`,
  * `identityProxy`, `localSql`, `logArchive`, `memoryTables`,
  * `objectColumnPaths`, `objectStorageBackups`, `objectStorageCdcArchive`, `pointInTimeRecovery`, `queryExplain`,
  * `serverReactors`,
@@ -320,6 +320,17 @@ export interface PlatformCapabilities {
 
         /** Cross-shard fan-out queries. */
         crossShardFanout?: Capability;
+
+        /**
+         * Delivery authorization: `.deliveryAuthorization(...)` rechecks current
+         * authority before an RPC result or subscription frame is delivered, and
+         * fences replayed receipts behind a durable scope/epoch. Rides hibernated
+         * socket attachments, signed sibling fetch and shard SQLite, so a host rates
+         * it no higher than its `websocketHibernation`. Advisory: an app opts in by
+         * declaring it, but the contracts it needs are all engine-internal, so
+         * there is nothing for codegen to gate on.
+         */
+        deliveryAuthorization?: Capability;
 
         /**
          * Durable streams: a `.stream()` run whose chunks are persisted and

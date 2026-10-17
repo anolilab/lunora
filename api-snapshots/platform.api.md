@@ -299,6 +299,7 @@ interface PlatformCapabilities {
         containerSandboxTools?: Capability;
         cronTriggers?: Capability;
         crossShardFanout?: Capability;
+        deliveryAuthorization?: Capability;
         durableStreams?: Capability;
         edgeRequestMetadata?: Capability;
         globalTables?: Capability;
