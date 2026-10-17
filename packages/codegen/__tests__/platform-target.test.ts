@@ -773,7 +773,7 @@ describe("app-declared surfaces, gated end-to-end through runCodegen", () => {
     });
 
     it("wires ctx.live onto the shard action and the queue consumer only where the target serves live streams", () => {
-        expect.assertions(6);
+        expect.assertions(9);
 
         // The declaration in `lunora/`, the signal the gate hands the emitters, and the
         // surface they write: the shard's action ctx and the push consumer's publisher.
@@ -788,9 +788,19 @@ describe("app-declared surfaces, gated end-to-end through runCodegen", () => {
         expect(served.generated.shard).toContain("ctx.live = live;");
         expect(served.generated.app).toContain("live: queueLive,");
 
-        // The node host rates liveStreams unsupported: the gate refuses the declaration,
-        // and neither emitter writes the publisher, so no `ctx.live` reaches a consumer.
+        // The node host rates liveStreams emulated, so the same declaration is served
+        // there too: the publisher is wired and no diagnostic is raised.
         writeFileSync(join(workdir, "lunora.config.ts"), `export default { target: "node" };\n`, "utf8");
+
+        const onNode = codegen();
+
+        expect(onNode.platformDiagnostics).toStrictEqual([]);
+        expect(onNode.generated.shard).toContain("ctx.live = live;");
+        expect(onNode.generated.app).toContain("live: queueLive,");
+
+        // celld rates liveStreams unsupported: the gate refuses the declaration,
+        // and neither emitter writes the publisher, so no `ctx.live` reaches a consumer.
+        writeFileSync(join(workdir, "lunora.config.ts"), `export default { target: "celld" };\n`, "utf8");
 
         const withheld = codegen();
 
