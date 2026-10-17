@@ -4986,6 +4986,31 @@ describe("lunoraClient", () => {
 
                 client.close();
             });
+
+            it("sends the grant with the same credentials mode as the cookie session request", async () => {
+                expect.assertions(2);
+
+                const fetchMock = vi.fn<typeof fetch>(() => Promise.resolve(Response.json({ ok: true })));
+                const client = new LunoraClient({ fetch: fetchMock, url: "https://app.example", WebSocket: createMockWebSocket() });
+
+                await client.getCurrentUser();
+
+                client.subscribeLiveTopic({ onEvent: () => undefined, stream: "posts", topic: "post:1" });
+
+                const socket = latestSocket();
+
+                socket.open();
+                socket.receive({ connectionId: "ws-1", subject: null, type: "identity" });
+                await flushMicrotasks();
+
+                const sessionCall = fetchMock.mock.calls.find(([url]) => typeof url === "string" && url.endsWith("/get-session"));
+                const grantCall = fetchMock.mock.calls.find(([url]) => url === LIVE_CONTROL_URL);
+
+                expect(sessionCall?.[1]?.credentials).toBe("include");
+                expect(grantCall?.[1]?.credentials).toBe("include");
+
+                client.close();
+            });
         });
     });
 

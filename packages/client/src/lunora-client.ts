@@ -6987,7 +6987,7 @@ class LunoraClient {
         const headers = this.rpcRequestHeaders({}, shardKey);
 
         this.liveControlChain = this.liveControlChain
-            .then(() => fetchImpl(joinUrl(this.url, controlPath), { body: payload, headers, method: "POST" }))
+            .then(() => fetchImpl(joinUrl(this.url, controlPath), { body: payload, credentials: "include", headers, method: "POST" }))
             .then((response) => response.text())
             .catch(() => undefined);
     }
