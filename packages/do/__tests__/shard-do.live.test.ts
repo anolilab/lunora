@@ -436,11 +436,11 @@ describe("shardDO live streams", () => {
         expect(relayed).toEqual([]);
     });
 
-    it("caps one client IP per shard so another IP can still connect", async () => {
+    it("does not cap signed-in users behind one shared IP: each user id gets its own bucket", async () => {
         expect.assertions(2);
 
         const shard = makeShard([]);
-        const connectFrom = async (ip: string, userId: string): Promise<number> => {
+        const connectAs = async (ip: string, userId: string): Promise<number> => {
             const response = await shard.fetch(
                 new Request("https://x/_lunora/live/connect", {
                     headers: { "x-lunora-client-ip": ip, "x-lunora-userid": userId },
@@ -451,16 +451,25 @@ describe("shardDO live streams", () => {
             return response.status;
         };
 
-        // Distinct user ids from one IP: the per-user bucket never fills, so only the IP bucket can refuse.
+        // 33 distinct signed-in users behind one IP (an office NAT): none is refused by the IP.
         const statuses: number[] = [];
 
         for (let index = 0; index < 33; index += 1) {
             // eslint-disable-next-line no-await-in-loop -- sequential connects keep the count deterministic
-            statuses.push(await connectFrom("203.0.113.1", `user-${String(index)}`));
+            statuses.push(await connectAs("203.0.113.1", `user-${String(index)}`));
         }
 
-        expect(statuses).toEqual([...Array.from({ length: 32 }).fill(200), 503]);
-        await expect(connectFrom("203.0.113.2", "user-other")).resolves.toBe(200);
+        expect(statuses).toEqual(Array.from({ length: 33 }).fill(200));
+
+        // One signed-in user is still bounded by their own user-id bucket.
+        const userStatuses: number[] = [];
+
+        for (let index = 0; index < 33; index += 1) {
+            // eslint-disable-next-line no-await-in-loop -- sequential connects keep the count deterministic
+            userStatuses.push(await connectAs("203.0.113.1", "user-0"));
+        }
+
+        expect(userStatuses.at(-1)).toBe(503);
     });
 
     it("buckets anonymous callers per client IP, not in one shared anonymous bucket", async () => {
@@ -473,15 +482,15 @@ describe("shardDO live streams", () => {
             return response.status;
         };
 
-        // One anonymous client holds its full 32 idle connections.
+        // One anonymous client holds its full 32 idle connections; the 33rd is refused by the IP bucket.
         const held: number[] = [];
 
-        for (let index = 0; index < 32; index += 1) {
+        for (let index = 0; index < 33; index += 1) {
             // eslint-disable-next-line no-await-in-loop -- sequential connects keep the count deterministic
             held.push(await connectAnonymous("203.0.113.1"));
         }
 
-        expect(held).toEqual(Array.from({ length: 32 }).fill(200));
+        expect(held).toEqual([...Array.from({ length: 32 }).fill(200), 503]);
         // A second anonymous client, from another IP, is not locked out by the first.
         await expect(connectAnonymous("203.0.113.2")).resolves.toBe(200);
     });

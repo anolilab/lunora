@@ -1507,6 +1507,32 @@ const relayRoomProxy = (identity: RelayRoomEvent["attachment"]): ShardSocketLike
     } as unknown as ShardSocketLike;
 };
 
+/**
+ * Live connections held by the caller opening a new one. `callerConnections` counts the caller's
+ * user-id bucket; `ipConnections` counts anonymous connections from `anonymousIp` only, so a
+ * signed-in connection never uses up an anonymous client's IP allowance.
+ */
+const countLiveConnections = (
+    subscribers: Iterable<LiveSubscriber>,
+    userBucket: string | undefined,
+    anonymousIp: string | undefined,
+): { callerConnections: number; ipConnections: number } => {
+    let callerConnections = 0;
+    let ipConnections = 0;
+
+    for (const existing of subscribers) {
+        if (existing.userId === userBucket) {
+            callerConnections += 1;
+        }
+
+        if (anonymousIp !== undefined && existing.userId === "" && existing.ip === anonymousIp) {
+            ipConnections += 1;
+        }
+    }
+
+    return { callerConnections, ipConnections };
+};
+
 const socketIdentity = (attachment: SocketAttachment): SubscriptionIdentity => {
     return { identity: attachment.identity, ip: attachment.ip, userId: attachment.userId };
 };
@@ -1976,9 +2002,10 @@ abstract class ShardDO {
     protected static readonly MAX_LIVE_CONNECTIONS = 1024;
 
     /**
-     * Live SSE connections one caller may hold on a shard: one user id, and one client IP
-     * (the `x-lunora-client-ip` the runtime mints). An anonymous caller with an IP counts only
-     * against that IP; one with no IP shares the `""` user bucket.
+     * Live SSE connections one caller may hold on a shard: one user id, or, for an anonymous
+     * caller with an IP (the `x-lunora-client-ip` the runtime mints), one client IP. A signed-in
+     * caller is never capped by its IP, so a shared IP cannot lock out its users. An anonymous
+     * caller with no IP shares the `""` user bucket.
      */
     protected static readonly MAX_LIVE_CONNECTIONS_PER_CALLER = 32;
 
@@ -15828,24 +15855,16 @@ abstract class ShardDO {
         // An anonymous caller with an IP is bucketed by that IP alone. The shared "" bucket
         // would let one anonymous client hold every other anonymous client out of live streams.
         const userBucket = userId === "" && ip !== undefined ? undefined : userId;
-        let callerConnections = 0;
-        let ipConnections = 0;
-
-        for (const existing of this.liveSubscribers.values()) {
-            if (existing.userId === userBucket) {
-                callerConnections += 1;
-            }
-
-            if (ip !== undefined && existing.ip === ip) {
-                ipConnections += 1;
-            }
-        }
+        // The IP bucket is for anonymous callers only. Signed-in callers behind a shared IP (an
+        // office, a carrier NAT) are bounded by their user id alone, so one IP cannot cap them.
+        const anonymousIp = userBucket === undefined ? ip : undefined;
+        const { callerConnections, ipConnections } = countLiveConnections(this.liveSubscribers.values(), userBucket, anonymousIp);
 
         if (userBucket !== undefined && callerConnections >= ShardDO.MAX_LIVE_CONNECTIONS_PER_CALLER) {
             return jsonResponse({ error: { code: "LIVE_CONNECTION_LIMIT", message: "this caller holds the maximum number of live connections" } }, 503);
         }
 
-        if (ipConnections >= ShardDO.MAX_LIVE_CONNECTIONS_PER_CALLER) {
+        if (anonymousIp !== undefined && ipConnections >= ShardDO.MAX_LIVE_CONNECTIONS_PER_CALLER) {
             return jsonResponse({ error: { code: "LIVE_CONNECTION_LIMIT", message: "this client holds the maximum number of live connections" } }, 503);
         }
 
