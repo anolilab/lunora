@@ -473,6 +473,34 @@ const WS_KEEPALIVE_PONG = "lunora-pong";
 const ROOM_TOPIC_PREFIX = "room:";
 
 /**
+ * Prefix of the reserved whisper topic a `defineWebSocket` route's sockets join
+ * so `socket.broadcast` reuses the whisper fan-out — local delivery AND the
+ * cross-DO relay — instead of a second broadcast path. Derived from the route's
+ * function path (`__lunora_socket__:<namespace>:<fn>`), so no client-supplied
+ * topic can address a route channel: the whisper envelope handler refuses any
+ * topic under this prefix, and membership is established only at upgrade.
+ */
+const SOCKET_TOPIC_PREFIX = "__lunora_socket__:";
+
+/**
+ * The outbound frame a `defineWebSocket` handler's `send`/`broadcast` writes:
+ * the route's wire-encoded message tagged with the reserved route topic. The
+ * client's `connectWebSocket` decodes it back to the typed message. Module-level
+ * (not a method) because it holds no DO state.
+ */
+const socketFrame = (topic: string, data: unknown): string => {
+    // eslint-disable-next-line unicorn/no-null -- an undefined payload is delivered as an explicit JSON `null`, mirroring `broadcastWhisper`
+    const dataJson = JSON.stringify(encodeWire(data ?? null));
+
+    return `{"type":"message","topic":${JSON.stringify(topic)},"data":${dataJson}}`;
+};
+
+/** Send one already-typed `data` payload to a single route socket. Module-level for the same no-state reason as {@link socketFrame}. */
+const sendSocketFrame = (ws: ShardSocketLike, topic: string, data: unknown): void => {
+    trySendFrame(ws, socketFrame(topic, data));
+};
+
+/**
  * Hard ceiling on a single inbound WS frame — 1Mi UTF-16 code units for a text
  * frame, 1 MiB for a binary one. Every subscription envelope the protocol defines
  * (`connect` / `subscribe` / `unsubscribe` / a mutator push) is kilobytes at most;
@@ -3214,7 +3242,16 @@ abstract class ShardDO {
 
         try {
             try {
-                if (attachment.connectionId !== undefined) {
+                // A `defineWebSocket` route socket fires its own `onClose`; the
+                // shared-socket `onDisconnect` hooks are a different surface and do
+                // not run for it. An ordinary socket keeps the disconnect dispatch.
+                if (attachment.socketPath !== undefined) {
+                    const route = this.socketRoute(attachment.socketPath);
+
+                    if (route !== undefined) {
+                        await this.dispatchSocketEvent(ws, { functionPath: route.functionPath, path: attachment.socketPath }, "close");
+                    }
+                } else if (attachment.connectionId !== undefined) {
                     await this.dispatchLifecycle("disconnect", this.lifecycleInfo(attachment));
                 }
             } finally {
@@ -3414,6 +3451,24 @@ abstract class ShardDO {
      */
     // eslint-disable-next-line class-methods-use-this -- base-class override hook: the codegen subclass returns the generated room map
     protected roomHandlerPath(_topic: string): string | undefined {
+        return undefined;
+    }
+
+    /**
+     * The registered `defineWebSocket` route a socket-upgrade `path` resolves
+     * to — its function path plus whether the route requires a verified session
+     * — or `undefined` when `path` is not a declared route (which is every
+     * ordinary `/_lunora/ws` subscription upgrade). Base default is
+     * `undefined`, so a shard with no routes behaves exactly as before; the
+     * codegen subclass overrides it with the generated `LUNORA_SOCKETS` map.
+     *
+     * A socket route is a TYPED LAYER over the shard's existing socket
+     * transport: this is the one seam that turns a bare upgrade at a custom path
+     * into a server-dispatched channel, so no new Durable Object and no new
+     * token scheme are introduced.
+     */
+    // eslint-disable-next-line class-methods-use-this -- base-class override hook: the codegen subclass returns the generated socket map
+    protected socketRoute(_path: string): { auth: boolean; functionPath: string } | undefined {
         return undefined;
     }
 
@@ -6156,12 +6211,13 @@ abstract class ShardDO {
      * in-shard action (see publishLiveFromAction) both land here, so
      * the room refusal and the byte cap cannot drift between them. `wireData` is
      * already wire-encoded.
-     * @throws LunoraError `FORBIDDEN_TOPIC` (403) for a room topic, `PAYLOAD_TOO_LARGE` (413) past the cap
+     * @throws LunoraError `FORBIDDEN_TOPIC` (403) for a room or route topic, `PAYLOAD_TOO_LARGE` (413) past the cap
      * @returns the number of LOCAL SSE connections the frame was written to
      */
     protected publishLiveEvent(stream: string, topic: string, wireData: unknown): number {
-        if (topic.startsWith(ROOM_TOPIC_PREFIX)) {
-            throw new LunoraError("FORBIDDEN_TOPIC", "a room topic cannot be published to", { status: 403 });
+        // A room or route topic is reserved for its own dispatch; a live publish must not forge into it.
+        if (topic.startsWith(ROOM_TOPIC_PREFIX) || topic.startsWith(SOCKET_TOPIC_PREFIX)) {
+            throw new LunoraError("FORBIDDEN_TOPIC", "a room or route topic cannot be published to", { status: 403 });
         }
 
         // eslint-disable-next-line unicorn/no-null -- JSON payload: an undefined publish body serializes to null so the frame carries an explicit value
@@ -7247,7 +7303,13 @@ abstract class ShardDO {
         // the user's live data (a passive subscriber sends no frames — its
         // keepalive pings auto-respond and never reach here — so inbound checks
         // alone would never fire for the common case).
-        if (this.isSocketExpired(ws)) {
+        //
+        // The attachment is read ONCE here and reused for the route check below,
+        // so a `defineWebSocket` route adds no second `deserializeAttachment` to
+        // the subscription hot path (`isSocketExpired` would have read it again).
+        const inboundAttachment = this.readAttachment(ws);
+
+        if (isIdentityExpired(inboundAttachment.expiresAt)) {
             this.dropExpiredSocket(ws);
 
             return;
@@ -7267,6 +7329,18 @@ abstract class ShardDO {
         }
 
         const text = typeof message === "string" ? message : new TextDecoder().decode(message);
+
+        // A `defineWebSocket` route socket carries typed messages, not
+        // subscription envelopes: every frame is the route's wire-encoded message,
+        // dispatched to its registered handler under the socket's verified
+        // identity. Its route path was stamped on the attachment at upgrade, so a
+        // hibernated socket that wakes here still resolves the handler.
+        if (inboundAttachment.socketPath !== undefined) {
+            await this.handleSocketRouteFrame(ws, inboundAttachment.socketPath, text);
+
+            return;
+        }
+
         let envelope: SubscriptionEnvelope;
 
         try {
@@ -7576,6 +7650,13 @@ abstract class ShardDO {
         }
 
         if (envelope.type === "whisper_subscribe" || envelope.type === "whisper_unsubscribe") {
+            // A `defineWebSocket` route's reserved topic is never joinable by a
+            // client: route membership is established only at upgrade, so a
+            // foreign socket can neither read nor inject on a route channel.
+            if (typeof envelope.topic === "string" && envelope.topic.startsWith(SOCKET_TOPIC_PREFIX)) {
+                return;
+            }
+
             if (typeof envelope.topic === "string" && envelope.topic.length > 0) {
                 const join = envelope.type === "whisper_subscribe";
 
@@ -7634,6 +7715,13 @@ abstract class ShardDO {
         }
 
         if (envelope.type === "whisper") {
+            // A route channel is not reachable through a whisper frame: a route's
+            // messages arrive only on its dedicated socket. Dropping the raw relay
+            // keeps a foreign socket from injecting into a route.
+            if (typeof envelope.topic === "string" && envelope.topic.startsWith(SOCKET_TOPIC_PREFIX)) {
+                return;
+            }
+
             if (typeof envelope.topic === "string" && envelope.topic.length > 0 && (await this.authorizeWhisper(ws, envelope.topic, "send"))) {
                 // A room topic is handled server-side rather than blindly relayed:
                 // the shard decodes the client's typed message, dispatches the
@@ -14973,14 +15061,13 @@ abstract class ShardDO {
             return new Response("Forbidden", { status: 403 });
         }
 
-        // Resolve the admin flag BEFORE accepting the socket: the (async)
-        // sub-token HMAC verify must not sit between `acceptWebSocket` and the
-        // attachment stamp, or an early frame could race an unstamped socket.
-        const admin = await this.isAdminSocket(request);
-
-        const pair = new WebSocketPair();
-        const client = pair[0];
-        const server = pair[1];
+        // A `defineWebSocket` route is an upgrade at a declared custom path; the
+        // ordinary subscription socket upgrades at the reserved `/_lunora/ws`
+        // path and resolves to no route. The route carries the registered
+        // function path the shard dispatches `onOpen`/`onMessage`/`onClose`
+        // through, and whether a verified session is required.
+        const url = new URL(request.url);
+        const route = this.socketRoute(url.pathname);
 
         // Capture the verified identity the runtime forwarded on the upgrade
         // (`resolveIdentity` wired into the WS upgrade) and mint a stable
@@ -14999,12 +15086,36 @@ abstract class ShardDO {
         // bytes against the attachment's 16 KiB ceiling.
         const ip = request.headers.get("x-lunora-client-ip") ?? undefined;
 
+        // A route that requires a verified session refuses an anonymous upgrade
+        // here, after the worker resolved identity and BEFORE the pair is even
+        // allocated — so nothing unauthenticated is ever registered. The default
+        // route allows anonymous sockets, exactly like every other surface.
+        if (route?.auth === true && userId === undefined) {
+            return new Response("Unauthorized", { status: 401 });
+        }
+
+        // Resolve the admin flag BEFORE accepting the socket: the (async)
+        // sub-token HMAC verify must not sit between `acceptWebSocket` and the
+        // attachment stamp, or an early frame could race an unstamped socket.
+        const admin = await this.isAdminSocket(request);
+
+        const pair = new WebSocketPair();
+        const client = pair[0];
+        const server = pair[1];
+
         // Fingerprint of the token that authorized this socket, so a later
         // rotation of `LUNORA_ADMIN_TOKEN` revokes it rather than leaving a
         // socket whose one-shot upgrade check can never be re-run. Only for an
         // admin socket: an ordinary one has nothing to revoke, and the
         // attachment is a scarce 16 KiB budget.
         const adminBinding = admin ? await this.currentAdminBinding() : undefined;
+
+        // A route socket records the URL path it upgraded on so a hibernated
+        // socket that wakes on a frame still resolves its handler, and joins the
+        // route's reserved whisper topic so `socket.broadcast` fans out over the
+        // existing local fan-out + cross-DO relay. Both are set only for a route
+        // socket; the ordinary subscription socket keeps its attachment as-is.
+        const routeTopic = route === undefined ? undefined : `${SOCKET_TOPIC_PREFIX}${route.functionPath}`;
 
         // Stamp admin authorization onto the socket at upgrade so later
         // `__lunora_admin__:*` subscribe envelopes (which carry no credential of
@@ -15021,7 +15132,7 @@ abstract class ShardDO {
         // Accept and stamp are one call for the same reason they were adjacent
         // before: the runtime only tracks attachments for sockets it has accepted,
         // and no frame can arrive against an unstamped socket in between.
-        this.socketHost.accept(server, {
+        const accepted = this.socketHost.accept(server, {
             admin,
             connectionId: crypto.randomUUID(),
             subs: {},
@@ -15029,8 +15140,18 @@ abstract class ShardDO {
             ...(expiresAt === undefined ? {} : { expiresAt }),
             ...(identity === undefined ? {} : { identity }),
             ...(ip === undefined ? {} : { ip }),
+            ...(route === undefined ? {} : { socketPath: url.pathname }),
+            ...(routeTopic === undefined ? {} : { whispers: [routeTopic] }),
             ...(userId === undefined ? {} : { userId }),
         } satisfies SocketAttachment);
+
+        // Fire the route's `onOpen` under the socket's verified identity, exactly
+        // as `onConnect` fires for the subscription socket. A throwing handler is
+        // logged and swallowed (inside `dispatchSocketEvent`), so a broken route
+        // cannot fail the upgrade the client already completed.
+        if (route !== undefined) {
+            await this.dispatchSocketEvent(accepted, { functionPath: route.functionPath, path: url.pathname }, "open");
+        }
 
         // eslint-disable-next-line unicorn/no-null -- Web Response body for a 101 upgrade is `BodyInit | null`; null is the standard "no body" value
         return new Response(null, { status: 101, webSocket: client });
@@ -15424,6 +15545,150 @@ abstract class ShardDO {
         this.fanout.whisper = recordFanoutPass(this.fanout.whisper, scanned, delivered, 0);
 
         return delivered;
+    }
+
+    /**
+     * Decode one inbound frame from a `defineWebSocket` route socket and dispatch
+     * the route's `onMessage`. The frame is the route's wire-encoded message
+     * (mirroring a whisper's `data`), so it is `decodeWire`d back to real values
+     * (`bigint`/`Date`/bytes) before the handler sees it. A frame that is not
+     * valid JSON, or whose path no longer resolves to a route, is dropped — a
+     * malformed frame must not take the socket down.
+     */
+    private async handleSocketRouteFrame(ws: ShardSocketLike, socketPath: string, text: string): Promise<void> {
+        const route = this.socketRoute(socketPath);
+
+        if (route === undefined) {
+            return;
+        }
+
+        // A route's handler runs a mutation per frame, so it takes the whisper
+        // admission a room message does: an unthrottled sender would otherwise
+        // starve every other socket on the shard.
+        if (!this.allowWhisper(ws)) {
+            return;
+        }
+
+        let raw: unknown;
+
+        try {
+            raw = JSON.parse(text);
+        } catch {
+            return;
+        }
+
+        await this.dispatchSocketEvent(ws, { functionPath: route.functionPath, path: socketPath }, "message", raw);
+    }
+
+    /**
+     * Dispatch a `defineWebSocket` lifecycle moment — `open` right after the
+     * upgrade is accepted, `message` for each inbound frame, `close` when the
+     * socket drops.
+     *
+     * The registration is an internal mutation, dispatched through `handleRpc`
+     * under the socket's verified identity + a trusted system dispatch — exactly
+     * as `dispatchRoomEvent` and `dispatchLifecycle` do — so `ctx.auth` is the
+     * connecting user and `ctx.db` is RLS-scoped to them. The `socket` handle's
+     * `send`/`broadcast` close over this DO's socket + the route's reserved
+     * whisper topic, so a handler can reach the one socket or the whole channel
+     * without a per-connection registry.
+     *
+     * A handler that throws is logged and swallowed: a broken route handler must
+     * not take the socket (or the shard) down, mirroring the lifecycle-hook and
+     * room contracts.
+     */
+    private async dispatchSocketEvent(
+        ws: ShardSocketLike,
+        route: { functionPath: string; path: string },
+        kind: "close" | "message" | "open",
+        message?: unknown,
+    ): Promise<void> {
+        const info = this.lifecycleInfo(this.readAttachment(ws));
+        const topic = `${SOCKET_TOPIC_PREFIX}${route.functionPath}`;
+        // `send` and `broadcast` only queue: frames go out after the handler's
+        // mutation has committed, so no client sees a write that was rolled back.
+        const pending: (() => void)[] = [];
+        const socket = {
+            broadcast: (payload: unknown): void => {
+                pending.push(() => {
+                    this.broadcastSocketMessage(topic, payload);
+                });
+            },
+            connectionId: info.event.connectionId,
+            path: route.path,
+            send: (payload: unknown): void => {
+                pending.push(() => {
+                    sendSocketFrame(ws, topic, payload);
+                });
+            },
+            shardKey: info.event.shardKey,
+            userId: info.event.userId,
+        };
+
+        try {
+            // The inbound frame is wire-encoded; decoding it here keeps a malformed
+            // payload inside the logged dispatch instead of throwing out of the socket handler.
+            const args = { kind, socket, ...(kind === "message" ? { message: decodeWire(message) } : {}) };
+
+            await this.withRequestIdentity(info.userId, info.identity, info.ip, () => this.withSystemDispatch(() => this.handleRpc(route.functionPath, args)));
+        } catch (error: unknown) {
+            this.logs.push({
+                functionPath: route.functionPath,
+                level: "error",
+                message: error instanceof Error ? error.message : String(error),
+                timestamp: Date.now(),
+            });
+
+            return;
+        }
+
+        // The mutation has committed, so every queued frame is still owed. One that cannot
+        // be sent (over the cap) is logged on its own rather than dropping the frames after it.
+        for (const emit of pending) {
+            try {
+                emit();
+            } catch (error: unknown) {
+                this.logs.push({
+                    functionPath: route.functionPath,
+                    level: "error",
+                    message: error instanceof Error ? error.message : String(error),
+                    timestamp: Date.now(),
+                });
+            }
+        }
+    }
+
+    /**
+     * Fan a route handler's `socket.broadcast(message)` out to EVERY socket on
+     * the route — the sender included, since the server handler's payload is
+     * authoritative. Reuses {@link ShardDO.deliverWhisperLocal} for local fan-out
+     * (route sockets joined the reserved topic at upgrade) and the relay hub for
+     * the cross-DO hop, so a broadcast reaches the route's sockets on every DO
+     * serving the shard exactly like a room broadcast. Fire-and-forget:
+     * `broadcast` is a synchronous callback.
+     */
+    private broadcastSocketMessage(topic: string, data: unknown): void {
+        const frame = socketFrame(topic, data);
+
+        // The same cap a room broadcast carries; thrown so the dispatch logs it
+        // against the route instead of fanning out an unbounded frame.
+        if (frame.length > ShardDO.MAX_WHISPER_BYTES) {
+            throw new LunoraError(
+                "PAYLOAD_TOO_LARGE",
+                `route broadcast is ${String(frame.length)} bytes, over the ${String(ShardDO.MAX_WHISPER_BYTES)}-byte limit`,
+            );
+        }
+
+        this.deliverWhisperLocal(topic, frame, undefined);
+
+        const { relay } = this;
+
+        if (relay) {
+            relay.forwardWhisper(topic, frame).catch((error: unknown) => {
+                // eslint-disable-next-line no-console -- server-side diagnostic for a dropped relayed route broadcast; `broadcast` cannot reject
+                console.error("[@lunora/do] socket route broadcast relay failed:", error);
+            });
+        }
     }
 
     /**

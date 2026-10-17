@@ -2913,6 +2913,7 @@ interface SocketAttachment {
     liveGrants?: Record<string, string>;
     pageDeltas?: boolean;
     shapes?: Record<string, ShapeSubscriptionQuery>;
+    socketPath?: string;
     subs: Record<string, SubscriptionQuery>;
     userId?: string;
     whispers?: string[];

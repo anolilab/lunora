@@ -26,12 +26,12 @@ const INTERNAL_FACTORIES: Record<string, "action" | "mutation" | "query"> = {
  * manifest: `connect`/`disconnect` are dispatched per socket, `init` once per
  * Durable Object instance before any handler runs, `reactor` after each write
  * flush whose tables the reactor's watched read touched, and `whisper` before a
- * socket joins or broadcasts to a whisper topic. `room` is a `defineRoom`
- * registration, dispatched server-side when a socket joins, leaves, or sends to
- * the room's whisper topic — emit derives the `LUNORA_ROOMS` topic→path map from
- * it.
+ * socket joins or broadcasts to a whisper topic. `socket` is a `defineWebSocket`
+ * registration, dispatched server-side when a socket opens, sends a typed frame,
+ * or closes on the route's path — emit derives the `LUNORA_SOCKETS`
+ * path→registration map from it.
  */
-type LifecycleMoment = "connect" | "disconnect" | "init" | "reactor" | "whisper";
+type LifecycleMoment = "connect" | "disconnect" | "init" | "reactor" | "socket" | "whisper";
 
 const LIFECYCLE_FACTORIES: Record<string, LifecycleMoment> = {
     onConnect: "connect",
@@ -39,6 +39,7 @@ const LIFECYCLE_FACTORIES: Record<string, LifecycleMoment> = {
     onQueryChange: "reactor",
     onShardInit: "init",
     onWhisper: "whisper",
+    defineWebSocket: "socket",
 };
 
 /**

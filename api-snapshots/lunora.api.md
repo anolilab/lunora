@@ -169,6 +169,10 @@ Re-exported from `@lunora/server` — signature tracked at its source.
 
 Re-exported from `@lunora/server` — signature tracked at its source.
 
+### `DefineWebSocketOptions` (interface)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
 ### `DocumentHistoryComponent` (type)
 
 Re-exported from `@lunora/server` — signature tracked at its source.
@@ -717,6 +721,10 @@ Re-exported from `@lunora/server` — signature tracked at its source.
 
 Re-exported from `@lunora/server` — signature tracked at its source.
 
+### `RegisteredWebSocket` (type)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
 ### `RegisteredWhisperAuthorizer` (type)
 
 Re-exported from `@lunora/server` — signature tracked at its source.
@@ -1173,6 +1181,22 @@ Re-exported from `@lunora/server` — signature tracked at its source.
 
 Re-exported from `@lunora/server` — signature tracked at its source.
 
+### `WebSocketCloseHandler` (type)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
+### `WebSocketHandle` (interface)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
+### `WebSocketMessageHandler` (type)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
+### `WebSocketOpenHandler` (type)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
 ### `WeeklySchedule` (interface)
 
 Re-exported from `@lunora/scheduler` — signature tracked at its source.
@@ -1398,6 +1422,10 @@ Re-exported from `@lunora/server` — signature tracked at its source.
 Re-exported from `@lunora/server` — signature tracked at its source.
 
 ### `defineVectorIndex` (const)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
+### `defineWebSocket` (const)
 
 Re-exported from `@lunora/server` — signature tracked at its source.
 
@@ -5267,6 +5295,10 @@ Re-exported from `@lunora/server` — signature tracked at its source.
 
 Re-exported from `@lunora/server` — signature tracked at its source.
 
+### `DefineWebSocketOptions` (interface)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
 ### `DocumentHistoryComponent` (type)
 
 Re-exported from `@lunora/server` — signature tracked at its source.
@@ -5815,6 +5847,10 @@ Re-exported from `@lunora/server` — signature tracked at its source.
 
 Re-exported from `@lunora/server` — signature tracked at its source.
 
+### `RegisteredWebSocket` (type)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
 ### `RegisteredWhisperAuthorizer` (type)
 
 Re-exported from `@lunora/server` — signature tracked at its source.
@@ -6271,6 +6307,22 @@ Re-exported from `@lunora/server` — signature tracked at its source.
 
 Re-exported from `@lunora/server` — signature tracked at its source.
 
+### `WebSocketCloseHandler` (type)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
+### `WebSocketHandle` (interface)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
+### `WebSocketMessageHandler` (type)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
+### `WebSocketOpenHandler` (type)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
 ### `WeeklySchedule` (interface)
 
 Re-exported from `@lunora/scheduler` — signature tracked at its source.
@@ -6496,6 +6548,10 @@ Re-exported from `@lunora/server` — signature tracked at its source.
 Re-exported from `@lunora/server` — signature tracked at its source.
 
 ### `defineVectorIndex` (const)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
+### `defineWebSocket` (const)
 
 Re-exported from `@lunora/server` — signature tracked at its source.
 

@@ -759,11 +759,11 @@ interface RunAction {
  * a watched read's result changed — see `onQueryChange`. `whisper` is per-TOPIC
  * and decides whether a socket may join or broadcast to one — see `onWhisper`
  * and {@link WhisperEvent}; unlike the other four it is a query, and its return
- * value is the verdict. `room` is per-ROOM-MESSAGE and is a mutation: a
- * `defineRoom` registration dispatched when a socket joins, leaves, or sends a
- * typed message to the room's whisper topic.
+ * value is the verdict. `socket` is per-ROUTE-FRAME and is
+ * a mutation: a `defineWebSocket` registration dispatched when a socket opens,
+ * sends a typed frame, or closes on the route's path.
  */
-type LifecycleEventKind = "connect" | "disconnect" | "init" | "reactor" | "whisper";
+type LifecycleEventKind = "connect" | "disconnect" | "init" | "reactor" | "socket" | "whisper";
 
 /**
  * The event a whisper authorizer (`onWhisper`) receives as its second argument.
