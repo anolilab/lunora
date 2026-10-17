@@ -363,7 +363,12 @@ const connectLiveStream = (url: string, options: ConnectLiveStreamOptions = {}):
             // A re-subscribe on an active id joins that registration: one shard-side subscription
             // carries every handler, and each handle releases only its own.
             const entry = active ?? { handlers: new Set<(payload: unknown) => void>(), refs: 0, topic };
-            const listener = onEvent === undefined ? undefined : (payload: unknown) => { onEvent(payload); };
+            const listener =
+                onEvent === undefined
+                    ? undefined
+                    : (payload: unknown) => {
+                          onEvent(payload);
+                      };
 
             entry.refs += 1;
 
