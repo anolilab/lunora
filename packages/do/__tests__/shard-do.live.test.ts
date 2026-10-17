@@ -6,8 +6,8 @@ import { ShardDO } from "../src/shard-do";
 
 /**
  * Live topic streams over the shard DO's SSE + control endpoints. A server
- * publish reaches only the SSE connections subscribed through its stream; it
- * is never fanned to WebSocket whisper members, which have no stream scope.
+ * publish reaches only the subscribers admitted for its stream: SSE connections
+ * subscribed through it, and WebSocket whisper members holding a grant for it.
  */
 
 interface Frame {
@@ -38,6 +38,19 @@ class FakeSocket {
 
     public serializeAttachment(value: unknown): void {
         this.attachment = value;
+    }
+}
+
+/** A socket whose attachment write can be made to fail, as the runtime does past 16 KiB. */
+class AttachmentFullSocket extends FakeSocket {
+    public refuseWrites = false;
+
+    public override serializeAttachment(value: unknown): void {
+        if (this.refuseWrites) {
+            throw new Error("A WebSocket 'attachment' cannot be larger than 16384 bytes.");
+        }
+
+        super.serializeAttachment(value);
     }
 }
 
@@ -163,6 +176,14 @@ const control = async (shard: LiveShard, body: Record<string, unknown>): Promise
 const publish = async (shard: LiveShard, body: Record<string, unknown>): Promise<Response> =>
     shard.fetch(new Request("https://x/_lunora/live/publish", { body: JSON.stringify(body), method: "POST" }));
 
+/** A control call as `userId`, the caller the worker stamps on it. */
+const controlAs = async (shard: LiveShard, userId: string, body: Record<string, unknown>): Promise<Response> =>
+    shard.fetch(new Request("https://x/_lunora/live/control", { body: JSON.stringify(body), headers: { "x-lunora-userid": userId }, method: "POST" }));
+
+const joinWhisper = async (shard: LiveShard, socket: FakeSocket, topic: string): Promise<void> => {
+    await shard.webSocketMessage(socket as unknown as WebSocket, JSON.stringify({ topic, type: "whisper_subscribe" }));
+};
+
 describe("shardDO live streams", () => {
     it("fans a publish out to two SSE subscribers of the topic", async () => {
         expect.assertions(4);
@@ -208,6 +229,147 @@ describe("shardDO live streams", () => {
         // The SSE subscriber that passed the stream's onSubscribe gets the event; the bare-topic whisper member does not.
         await expect(reader.next()).resolves.toEqual({ data: { data: { event: "new_post" }, topic: "feed" }, event: "live" });
         expect(socket.frames).toEqual([]);
+    });
+
+    it("delivers a stream publish to a WebSocket whisper member admitted for that stream and topic", async () => {
+        expect.assertions(2);
+
+        const socket = new FakeSocket({ connectionId: "ws-a", subs: {}, userId: "user-a" });
+        const shard = makeShard([socket]);
+
+        await joinWhisper(shard, socket, "feed");
+        const granted = await controlAs(shard, "user-a", { action: "subscribe", connectionId: "ws-a", stream: "s", subscriptionId: "s1", topic: "feed" });
+
+        expect(granted.status).toBe(200);
+
+        await publish(shard, { stream: "s", data: { event: "new_post" }, topic: "feed" });
+
+        // The grant is the stream's own onSubscribe decision, so the member gets the event as a whisper on the topic.
+        expect(socket.frames).toEqual([{ data: { event: "new_post" }, topic: "feed", type: "whisper" }]);
+    });
+
+    it("does not deliver a stream publish to a WebSocket member admitted only for another stream", async () => {
+        expect.assertions(3);
+
+        const socket = new FakeSocket({ connectionId: "ws-a", subs: {}, userId: "user-a" });
+        const shard = makeShard([socket]);
+
+        await joinWhisper(shard, socket, "feed");
+        const granted = await controlAs(shard, "user-a", { action: "subscribe", connectionId: "ws-a", stream: "other", subscriptionId: "s1", topic: "feed" });
+
+        expect(granted.status).toBe(200);
+
+        const response = await publish(shard, { stream: "s", data: "private", topic: "feed" });
+
+        await expect(response.json()).resolves.toEqual({ delivered: 0 });
+        expect(socket.frames).toEqual([]);
+    });
+
+    it("does not deliver to a WebSocket that holds a grant but never joined the topic as a whisper member", async () => {
+        expect.assertions(2);
+
+        const socket = new FakeSocket({ connectionId: "ws-a", subs: {}, userId: "user-a" });
+        const shard = makeShard([socket]);
+
+        const granted = await controlAs(shard, "user-a", { action: "subscribe", connectionId: "ws-a", stream: "s", subscriptionId: "s1", topic: "feed" });
+
+        expect(granted.status).toBe(200);
+
+        await publish(shard, { stream: "s", data: "x", topic: "feed" });
+
+        expect(socket.frames).toEqual([]);
+    });
+
+    it("refuses a WebSocket grant from a caller other than the socket's owner", async () => {
+        expect.assertions(3);
+
+        const socket = new FakeSocket({ connectionId: "ws-a", subs: {}, userId: "user-a" });
+        const shard = makeShard([socket]);
+
+        await joinWhisper(shard, socket, "feed");
+        // The owner's own grant proves the socket exists, so the intruder's 404 is an ownership refusal.
+        const owner = await controlAs(shard, "user-a", { action: "subscribe", connectionId: "ws-a", stream: "s", subscriptionId: "s1", topic: "feed" });
+        const intruder = await controlAs(shard, "user-b", { action: "subscribe", connectionId: "ws-a", stream: "other", subscriptionId: "s2", topic: "feed" });
+
+        expect(owner.status).toBe(200);
+        expect(intruder.status).toBe(404);
+
+        await publish(shard, { stream: "other", data: "x", topic: "feed" });
+
+        expect(socket.frames).toEqual([]);
+    });
+
+    it("stops delivering to a WebSocket after its unsubscribe", async () => {
+        expect.assertions(3);
+
+        const socket = new FakeSocket({ connectionId: "ws-a", subs: {}, userId: "user-a" });
+        const shard = makeShard([socket]);
+
+        await joinWhisper(shard, socket, "feed");
+        const granted = await controlAs(shard, "user-a", { action: "subscribe", connectionId: "ws-a", stream: "s", subscriptionId: "s1", topic: "feed" });
+        const revoked = await controlAs(shard, "user-a", { action: "unsubscribe", connectionId: "ws-a", stream: "s", subscriptionId: "s1", topic: "feed" });
+
+        expect(granted.status).toBe(200);
+        expect(revoked.status).toBe(200);
+
+        await publish(shard, { stream: "s", data: "x", topic: "feed" });
+
+        expect(socket.frames).toEqual([]);
+    });
+
+    it("refuses a grant the attachment cannot hold, and delivers nothing under it", async () => {
+        expect.assertions(3);
+
+        const socket = new AttachmentFullSocket({ connectionId: "ws-a", subs: {}, userId: "user-a" });
+        const shard = makeShard([socket]);
+
+        await joinWhisper(shard, socket, "feed");
+        socket.refuseWrites = true;
+
+        const refused = await controlAs(shard, "user-a", { action: "subscribe", connectionId: "ws-a", stream: "s", subscriptionId: "s1", topic: "feed" });
+
+        // An acknowledged grant that never persisted would stop delivering silently after the next hibernation.
+        expect(refused.status).toBe(429);
+
+        const response = await publish(shard, { stream: "s", data: "x", topic: "feed" });
+
+        await expect(response.json()).resolves.toEqual({ delivered: 0 });
+        expect(socket.frames).toEqual([]);
+    });
+
+    it("caps the live topics one WebSocket may hold, refusing the next grant", async () => {
+        expect.assertions(1);
+
+        const socket = new FakeSocket({ connectionId: "ws-a", subs: {}, userId: "user-a" });
+        const shard = makeShard([socket]);
+        const statuses: number[] = [];
+
+        // Eight is ShardDO.MAX_LIVE_TOPICS_PER_SOCKET: a grant lives in the 16 KiB attachment, so the cap is far below the SSE one.
+        for (let index = 0; index < 9; index += 1) {
+            // eslint-disable-next-line no-await-in-loop -- sequential grants keep the count deterministic
+            const response = await controlAs(shard, "user-a", {
+                action: "subscribe",
+                connectionId: "ws-a",
+                stream: "s",
+                subscriptionId: `s${String(index)}`,
+                topic: `t${String(index)}`,
+            });
+
+            statuses.push(response.status);
+        }
+
+        expect(statuses).toEqual([...Array.from({ length: 8 }).fill(200), 429]);
+    });
+
+    it("tells a WebSocket its connection id on connect, so the client can request a grant for it", async () => {
+        expect.assertions(1);
+
+        const socket = new FakeSocket({ connectionId: "ws-a", subs: {}, userId: "user-a" });
+        const shard = makeShard([socket]);
+
+        await shard.webSocketMessage(socket as unknown as WebSocket, JSON.stringify({ type: "connect" }));
+
+        expect(socket.frames).toContainEqual({ connectionId: "ws-a", subject: "user-a", type: "identity" });
     });
 
     it("delivers a live publish to SSE readers without a relay hop that could fail it", async () => {

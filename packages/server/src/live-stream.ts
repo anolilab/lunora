@@ -5,9 +5,11 @@
  * (`ctx.live.publish`) and lets a browser follow several of them over ONE
  * Server-Sent Events connection. The subscriber registry is the shard Durable
  * Object, and a live event is delivered only to the SSE subscribers that
- * followed its topic through the publishing stream. WebSocket whisper members
- * never receive one: a whisper join has no stream scope, so it would bypass the
- * stream's `onSubscribe`.
+ * followed its topic through the publishing stream. A WebSocket whisper member
+ * receives one only after the same `onSubscribe` admits it for that stream and
+ * topic: the subscribe is posted to the control route with the socket's
+ * connection id, which the socket learns from its `identity` frame. A whisper
+ * join alone never admits a stream's event.
  *
  * It does NOT replace either existing realtime primitive.
  *

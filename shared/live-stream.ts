@@ -11,9 +11,10 @@
  * A live stream lets server code publish an arbitrary event to a named topic
  * (`ctx.live.publish`) and lets a browser follow several topics over ONE
  * Server-Sent Events connection. The subscriber registry IS the shard Durable
- * Object. A live event also reaches WebSocket whisper members of the same topic
- * (`deliverWhisperLocal` + the relay hub), so both transports observe one stream;
- * SSE connections are local to the DO they connected to.
+ * Object. A live event also reaches a WebSocket whisper member of the same topic
+ * that holds a live grant for the publishing stream (`deliverLiveLocal`). The
+ * grant comes only from the control route, after `onSubscribe`. Both transports
+ * are local to the DO they connected to: the relay hub does not carry live events.
  */
 
 /** Internal shard DO path serving a live SSE connection (`GET`). */
