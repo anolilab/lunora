@@ -52,6 +52,8 @@ interface PolicyScaffoldRequest {
     readonly apiSpec?: CodegenOptions["apiSpec"];
     /** Parsed JSON body of the `POST`. */
     readonly body?: unknown;
+    /** Lazy function mode the host runs codegen with; forwarded to the regeneration. */
+    readonly lazyFunctions?: CodegenOptions["lazyFunctions"];
     /** HTTP method — only `POST` is handled. */
     readonly method: string;
     /** Project root containing the `lunora/` directory. */

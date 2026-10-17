@@ -225,7 +225,7 @@ export const startStudioServer = async (options: StudioServerOptions): Promise<S
             // other, so an edit that regenerated with the default deleted the
             // `openrpc.json` the host's own run had just written. (`schemaDirectory`
             // is moot here — `lunora dev` hardcodes `"lunora"`.)
-            serveJsonHandler(request, response, handle, options.cwd, { apiSpec: options.apiSpec });
+            serveJsonHandler(request, response, handle, options.cwd, { apiSpec: options.apiSpec, lazyFunctions: options.lazyFunctions });
 
             return;
         }
@@ -445,6 +445,8 @@ export interface StudioServerOptions {
     cwd: string;
     /** Loopback host to bind. Defaults to `127.0.0.1` (admin tooling stays local). */
     host?: string;
+    /** Lazy function mode the host runs codegen with, forwarded to local source-edit endpoints. */
+    lazyFunctions?: CodegenOptions["lazyFunctions"];
     /** One-time warning sink for a missing/unbuilt `@lunora/studio`. */
     logger?: { warnOnce?: (message: string) => void };
     /** Port to listen on. */

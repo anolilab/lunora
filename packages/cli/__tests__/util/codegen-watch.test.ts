@@ -62,6 +62,26 @@ describe("startCodegenWatch", () => {
         vi.mocked(runCodegen).mockReturnValue({ platformDiagnostics: [] } as unknown as ReturnType<typeof runCodegen>);
     };
 
+    it("forwards lazy function mode to startup codegen", async () => {
+        expect.assertions(1);
+
+        codegenSucceeds();
+
+        const workdir = projectWithPostCodegen();
+        const { spawner } = createRecordingSpawner();
+        const { logger } = silentLogger();
+        const handle = startCodegenWatch({ lazyFunctions: true, logger, lunoraDirectory: ".", projectRoot: workdir, spawner });
+
+        try {
+            await handle.ready;
+
+            expect(runCodegen).toHaveBeenCalledWith(expect.objectContaining({ lazyFunctions: true }));
+        } finally {
+            await handle.close();
+            rmSync(workdir, { force: true, recursive: true });
+        }
+    });
+
     describe("postcodegen hook", () => {
         it("runs the project's postcodegen after a successful generate", async () => {
             expect.assertions(2);

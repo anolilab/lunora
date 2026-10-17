@@ -112,17 +112,22 @@ thrown out of the hook, which would end a watch session.
 
 ## Options
 
-| Option             | Default         | Purpose                                                                                             |
-| ------------------ | --------------- | --------------------------------------------------------------------------------------------------- |
-| `projectRoot`      | `process.cwd()` | Directory containing `lunora/`                                                                      |
-| `schemaDir`        | `"lunora"`      | Directory containing `schema.ts` + function files                                                   |
-| `apiSpec`          | `"openapi"`     | API spec emitted into `_generated/`: `"openapi"`/`"openrpc"`/`"both"`/`"none"`                      |
-| `target`           | `"cloudflare"`  | Deploy target the emitted `ctx.*` surface is tailored to; defaults to `target` in `lunora.config.*` |
-| `validateWrangler` | `true`          | Validate `wrangler.jsonc` against the bindings the schema implies                                   |
-| `studio`           | `true`          | **Rsbuild only.** Serve Lunora Studio at `/__lunora` (needs `@lunora/studio`)                       |
-| `worker`           | `true`          | **Rsbuild only.** Run `wrangler dev` alongside the dev server                                       |
-| `workerPort`       | `8787`          | **Rsbuild only.** Port the Worker serves on; defaults to the wrangler config's `dev.port`           |
-| `wranglerArgs`     | `[]`            | **Rsbuild only.** Extra arguments appended to `wrangler dev`                                        |
+| Option             | Default         | Purpose                                                                                                                                                                           |
+| ------------------ | --------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `projectRoot`      | `process.cwd()` | Directory containing `lunora/`                                                                                                                                                    |
+| `schemaDir`        | `"lunora"`      | Directory containing `schema.ts` + function files                                                                                                                                 |
+| `apiSpec`          | `"openapi"`     | API spec emitted into `_generated/`: `"openapi"`/`"openrpc"`/`"both"`/`"none"`                                                                                                    |
+| `lazyFunctions`    | `false`         | Emit per-module lazy function imports; `lunora dev --lazy-functions` also opts in during dev; `lunora prepare`/`build`/`deploy` regenerate with their own `--lazy-functions` flag |
+| `target`           | `"cloudflare"`  | Deploy target the emitted `ctx.*` surface is tailored to; defaults to `target` in `lunora.config.*`                                                                               |
+| `validateWrangler` | `true`          | Validate `wrangler.jsonc` against the bindings the schema implies                                                                                                                 |
+| `studio`           | `true`          | **Rsbuild only.** Serve Lunora Studio at `/__lunora` (needs `@lunora/studio`)                                                                                                     |
+| `worker`           | `true`          | **Rsbuild only.** Run `wrangler dev` alongside the dev server                                                                                                                     |
+| `workerPort`       | `8787`          | **Rsbuild only.** Port the Worker serves on; defaults to the wrangler config's `dev.port`                                                                                         |
+| `wranglerArgs`     | `[]`            | **Rsbuild only.** Extra arguments appended to `wrangler dev`                                                                                                                      |
+
+`LUNORA_LAZY_FUNCTIONS=1` or `true` enables lazy imports even when
+`lazyFunctions` is `false`, for both dev and production builds.
+`lunora dev --lazy-functions` sets this variable for its bundler child process.
 
 `LUNORA_CODEGEN=0` skips generation and the wrangler checks **in watch mode
 only**. A production build keeps generating: the ERROR-advisory gate is the only

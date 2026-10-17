@@ -37,6 +37,7 @@ const devCommand: Command = {
     // must reach a `--background` daemon has to be forwarded there explicitly.
     options: [
         { description: `Which API spec(s) codegen emits: ${API_SPEC_HELP} (default openapi)`, name: "api-spec", type: String },
+        { description: "Use per-module lazy imports for codegen (opt-in; default eager)", name: "lazy-functions", type: Boolean },
         {
             description: "Write the binding manifest (plus the dev origin) to <file>, for a supervisor that owns the rest of the graph",
             name: "emit-bindings",
@@ -122,6 +123,7 @@ export type DevOptions = CreateOptions<{
     "emit-bindings": string | undefined;
     "inspector-port": number | undefined;
     json: boolean | undefined;
+    "lazy-functions": boolean | undefined;
     lines: number | undefined;
     local: boolean | undefined;
     port: number | undefined;

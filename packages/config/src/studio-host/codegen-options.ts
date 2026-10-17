@@ -8,6 +8,8 @@ import { CODEGEN_ENV, isCodegenDisabled } from "../codegen-env";
 interface StudioCodegenRequest {
     /** API-spec mode the host runs codegen with (`@lunora/vite`'s `apiSpec` option). */
     readonly apiSpec?: CodegenOptions["apiSpec"];
+    /** Lazy function mode the host runs codegen with. */
+    readonly lazyFunctions?: CodegenOptions["lazyFunctions"];
     /** Project root containing the `lunora/` directory. */
     readonly projectRoot: string;
     /** Override the lunora subdirectory name. Defaults to `"lunora"`. */
@@ -18,12 +20,13 @@ interface StudioCodegenRequest {
  * The `runCodegen` options a studio endpoint regenerates with — the SAME ones
  * the host's own codegen run uses.
  *
- * Both matter. `apiSpec` because codegen writes whichever spec file the mode
+ * These travel together. `apiSpec` because codegen writes whichever spec file the mode
  * names and deletes the other: a studio edit that defaulted to `"openapi"`
  * deleted the `openrpc.json` an `apiSpec: "openrpc"` project had just
  * generated. The wrangler inputs because the plaintext-secret lint reports
  * nothing when it is handed no evidence, and the queue registry loses every
- * per-environment queue name without the producers.
+ * per-environment queue name without the producers. `lazyFunctions` because a
+ * studio edit that regenerated eagerly would undo the host's lazy registry.
  *
  * `target` is deliberately absent: `runCodegen` resolves it from `lunora.config.*`
  * when omitted, which is the same value the host would pass.
@@ -31,6 +34,7 @@ interface StudioCodegenRequest {
 const studioCodegenOptions = (request: StudioCodegenRequest): CodegenOptions => {
     return {
         apiSpec: request.apiSpec,
+        lazyFunctions: request.lazyFunctions,
         lunoraDirectory: request.schemaDirectory ?? "lunora",
         projectRoot: request.projectRoot,
         ...wranglerCodegenInputs(request.projectRoot),

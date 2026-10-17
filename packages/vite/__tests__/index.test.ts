@@ -2,7 +2,7 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "nod
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { lunora, resolveOverlayOption, VERSION } from "../src/index";
 import { lunoraSolutionFinder } from "../src/solution-finders";
@@ -53,10 +53,36 @@ describe("index", () => {
     });
 
     afterEach(() => {
+        vi.unstubAllEnvs();
         rmSync(workdir, { force: true, recursive: true });
     });
 
     describe("lunora()", () => {
+        it.each([
+            [undefined, "", false],
+            [true, "", true],
+            [undefined, "1", true],
+        ])("generates with lazyFunctions=%s and child environment=%s", (lazyFunctions, environment, expected) => {
+            expect.assertions(2);
+
+            vi.stubEnv("LUNORA_LAZY_FUNCTIONS", environment);
+            writeFileSync(
+                join(workdir, "lunora", "messages.ts"),
+                'import { query } from "@lunora/server";\nexport const list = query({ handler: async () => [] });\n',
+                "utf8",
+            );
+
+            const plugin = lunora({ cloudflare: false, overlay: false, projectRoot: workdir, validateWrangler: false, lazyFunctions }).find(
+                (entry) => entry.name === "lunora:codegen",
+            );
+            (plugin?.configResolved as (this: unknown) => void).call(undefined);
+
+            const functions = readFileSync(join(workdir, "lunora", "_generated", "functions.ts"), "utf8");
+
+            expect(functions.includes("export const LUNORA_FUNCTION_MANIFEST")).toBe(expected);
+            expect(functions.includes('import * as lunora_messages_0 from "../messages.js"')).toBe(!expected);
+        });
+
         it("returns an array of plugins including the lunora internals and cloudflare", async () => {
             expect.hasAssertions();
 

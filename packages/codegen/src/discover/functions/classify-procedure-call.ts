@@ -5,6 +5,7 @@ import { isServerSurfaceModule } from "../../module-specifiers";
 import { unwrapExpression } from "../ast";
 import { walkBuilderChain, wrappedCallsWhere } from "../builder-chain";
 import { isServerImport, resolveCalleeKind } from "../callee";
+import staticBuilderChain from "./internal/static-builder-chain";
 
 const FUNCTION_KINDS = new Set(["action", "mutation", "query", "stream"]);
 
@@ -194,7 +195,7 @@ interface ProcedureClassification {
  * Classify a builder-terminal call (`c.use(...).query(handler)`), or `undefined`
  * when the receiver is not a Lunora builder.
  */
-const classifyBuilderTerminal = (callee: PropertyAccessExpression): ProcedureClassification | undefined => {
+const classifyBuilderTerminal = (callee: PropertyAccessExpression, lazyFunctions: boolean): ProcedureClassification | undefined => {
     const method = callee.getName();
 
     if (!FUNCTION_KINDS.has(method)) {
@@ -241,7 +242,9 @@ const classifyBuilderTerminal = (callee: PropertyAccessExpression): ProcedureCla
     // bare-factory path does. This keeps discovery working when dependency
     // types aren't installed (e.g. a freshly-scaffolded project before
     // `pnpm install`, where the `__lunoraProcedure` brand can't resolve).
-    const rootKind = resolveBuilderRootKind(receiver);
+    const staticFactory = lazyFunctions ? staticBuilderChain(receiver).factory : undefined;
+    const staticVisibility = staticFactory?.startsWith("internal") ? "internal" : "public";
+    const rootKind = staticFactory ? staticVisibility : resolveBuilderRootKind(receiver);
 
     if (rootKind) {
         return { kind: method, receiver, visibility: rootKind, ...adminMarkerOf(receiver) };
@@ -271,7 +274,7 @@ const isLunoraNamespace = (identifier: Identifier): boolean =>
             isServerSurfaceModule(declaration.getFirstAncestorByKind(SyntaxKind.ImportDeclaration)?.getModuleSpecifierValue() ?? ""),
     );
 
-const classifyProcedureCall = (call: CallExpression): ProcedureClassification | undefined => {
+const classifyProcedureCall = (call: CallExpression, lazyFunctions = false): ProcedureClassification | undefined => {
     const callee = call.getExpression();
 
     if (Node.isPropertyAccessExpression(callee)) {
@@ -286,7 +289,7 @@ const classifyProcedureCall = (call: CallExpression): ProcedureClassification | 
             return { channel, kind: "mutation", visibility: "internal" };
         }
 
-        return classifyBuilderTerminal(callee);
+        return classifyBuilderTerminal(callee, lazyFunctions);
     }
 
     if (!Node.isIdentifier(callee)) {

@@ -21,6 +21,7 @@ const verifyCommand: Command = {
     options: [
         { description: "Treat breaking schema drift as a warning instead of a failure", name: "allow-schema-drift", type: Boolean },
         { description: `Which API spec(s) to emit: ${API_SPEC_HELP} (default openapi)`, name: "api-spec", type: String },
+        { description: "Use per-module lazy function imports (opt-in; default eager)", name: "lazy-functions", type: Boolean },
         // `verify` is the cheap gate people put in PR CI while `build`/`deploy`
         // run on the deploy job — so it has to validate the view the deploy
         // will. Without this it read the TOP LEVEL for an `--env`-scoped
@@ -72,6 +73,7 @@ export type VerifyOptions = CreateOptions<{
     env: string | undefined;
     format: string | undefined;
     "health-url": string | undefined;
+    "lazy-functions": boolean | undefined;
     "strict-advisories": boolean | undefined;
     target: string | undefined;
     typecheck: boolean | undefined;

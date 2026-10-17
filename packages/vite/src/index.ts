@@ -1,7 +1,7 @@
 import { createRequire } from "node:module";
 
 import { cloudflare } from "@cloudflare/vite-plugin";
-import { isRunnableTarget, resolveTargetOrThrow, runnableTargetIds, targetRunsOwnDevServer } from "@lunora/config";
+import { isLazyFunctionsEnabled, isRunnableTarget, LAZY_FUNCTIONS_ENV, resolveTargetOrThrow, runnableTargetIds, targetRunsOwnDevServer } from "@lunora/config";
 import errorOverlayPlugin from "@visulima/vite-overlay";
 import type { Plugin } from "vite";
 
@@ -99,6 +99,7 @@ const resolveOptions = (options: LunoraPluginOptions | undefined): ResolvedLunor
     return {
         allowUnauthenticatedShardAccess: input.allowUnauthenticatedShardAccess ?? false,
         apiSpec: input.apiSpec ?? "openapi",
+        lazyFunctions: input.lazyFunctions === true || isLazyFunctionsEnabled(process.env[LAZY_FUNCTIONS_ENV]),
         cloudflare: cloudflareOption,
         studio: input.studio ?? true,
         // Derived, never taken from `input`: codegen always writes

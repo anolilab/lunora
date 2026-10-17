@@ -74,8 +74,26 @@ const dispatchRun = async (
     }
 };`;
 
+const dispatchRunSource = (lazyFunctions: boolean): string => {
+    if (!lazyFunctions) {
+        return DISPATCH_RUN_SOURCE;
+    }
+
+    return DISPATCH_RUN_SOURCE.replace(
+        "    try {\n        // A mutation composed from an action",
+        `    try {
+        const loaded = getLoadedFunction(functionPath) ?? await loadFunction(functionPath);
+
+        if (!loaded) {
+            throw new Error(\`unknown function: \${functionPath}\`);
+        }
+
+        // A mutation composed from an action`,
+    ).replaceAll("registered.handler", "loaded.handler");
+};
+
 const DISPATCH_METHODS_TEMPLATE = `        public override async handleRpc(functionPath: string, args: Record<string, unknown>, headroom?: TransactionHeadroomTracker, scope?: QueryReadScope, bookmarks?: DispatchBookmark): Promise<unknown> {
-            const registered = LUNORA_FUNCTIONS[functionPath];
+__PREPARE_FUNCTION__            const registered = LUNORA_FUNCTIONS[functionPath];
 
             // Internal functions are reachable server-side only: via \`ctx.run*\`
             // composition, or a trusted system dispatch (scheduler/cron, marked by
@@ -260,7 +278,7 @@ const SUBSCRIPTION_METHODS = `        protected override async executeSubscripti
                 return null;
             }
 
-            this.ensureMigrated();
+__PREPARE_FUNCTION__            this.ensureMigrated();
 
             const footprint = createReadFootprint();
             // Identity is threaded EXPLICITLY from the (deferred/interleaved)
@@ -313,6 +331,18 @@ const COMMITTED_CATCH = `            } catch (error) {
 `;
 
 /** The dispatch methods for a shard: the committed-marker in the post-commit step only for a rooms app. */
-const dispatchMethods = (hasRooms: boolean): string => DISPATCH_METHODS_TEMPLATE.replace("__COMMITTED_CATCH__", hasRooms ? COMMITTED_CATCH : "");
+const dispatchMethods = (hasRooms: boolean, lazyFunctions = false): string => {
+    const preflightVisibility = lazyFunctions
+        ? '            const registeredBeforeLoad = LUNORA_FUNCTIONS[functionPath];\n\n            if (registeredBeforeLoad?.visibility === "internal" && !this.isSystemDispatch()) {\n                throw new LunoraError("FUNCTION_NOT_FOUND", "function not registered: " + functionPath);\n            }\n\n'
+        : "";
+    const preparation = lazyFunctions
+        ? '            const requestScope = this.captureRequestScope();\n            const preparation = this.prepareFunction(functionPath, "rpc");\n\n            if (preparation !== undefined) {\n                try {\n                    await preparation;\n                } finally {\n                    this.restoreRequestScope(requestScope);\n                }\n            }\n\n'
+        : "";
 
-export { DISPATCH_RUN_SOURCE, dispatchMethods, SUBSCRIPTION_METHODS };
+    return DISPATCH_METHODS_TEMPLATE.replace("__COMMITTED_CATCH__", hasRooms ? COMMITTED_CATCH : "").replace(
+        "__PREPARE_FUNCTION__",
+        `${preflightVisibility}${preparation}`,
+    );
+};
+
+export { DISPATCH_RUN_SOURCE, dispatchMethods, dispatchRunSource, SUBSCRIPTION_METHODS };

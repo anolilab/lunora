@@ -78,8 +78,11 @@ export interface LunoraPluginOptions {
      * the value set is derived from `CodegenOptions` so it can't drift.
      */
     apiSpec?: CodegenOptions["apiSpec"];
+
     /** Pass through to `@cloudflare/vite-plugin`. Pass `false` to opt out. Defaults to `true`. */
     cloudflare?: boolean | CloudflarePluginOptions;
+    /** Emit a per-module lazy function registry; omitted keeps the eager registry. */
+    lazyFunctions?: CodegenOptions["lazyFunctions"];
 
     /**
      * Inject `@visulima/vite-overlay` for runtime errors (dev only). Pass
@@ -134,6 +137,8 @@ export interface ResolvedLunoraPluginOptions {
      * build. Derived, so the import base cannot disagree with the emitter.
      */
     generatedDir: string;
+
+    lazyFunctions: boolean;
     overlay: false | OverlayPluginOptions;
     projectRoot: string;
     schemaDir: string;

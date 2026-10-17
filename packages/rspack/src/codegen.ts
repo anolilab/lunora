@@ -40,6 +40,7 @@ const runCodegenPass = (options: ResolvedLunoraRspackOptions, logger: CodegenLog
 
     const result = runCodegen({
         apiSpec: options.apiSpec,
+        lazyFunctions: options.lazyFunctions,
         lunoraDirectory: options.schemaDir,
         project,
         projectRoot: options.projectRoot,

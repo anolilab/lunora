@@ -1,4 +1,4 @@
-import { isRunnableTarget, resolveTargetOrThrow, runnableTargetIds } from "@lunora/config";
+import { isLazyFunctionsEnabled, isRunnableTarget, LAZY_FUNCTIONS_ENV, resolveTargetOrThrow, runnableTargetIds } from "@lunora/config";
 
 import type { LunoraRspackOptions, ResolvedLunoraRspackOptions } from "./types";
 
@@ -30,6 +30,7 @@ const resolveOptions = (options: LunoraRspackOptions | undefined): ResolvedLunor
 
     return {
         apiSpec: input.apiSpec ?? "openapi",
+        lazyFunctions: input.lazyFunctions === true || isLazyFunctionsEnabled(process.env[LAZY_FUNCTIONS_ENV]),
         projectRoot,
         schemaDir: input.schemaDir ?? "lunora",
         // Same resolution AND validation as the CLI — explicit option, then

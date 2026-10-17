@@ -41,6 +41,8 @@ interface SchemaEditRequest {
     readonly apiSpec?: CodegenOptions["apiSpec"];
     /** Parsed JSON body for a `POST`; ignored for `GET`. */
     readonly body?: unknown;
+    /** Lazy function mode the host runs codegen with; forwarded to the regeneration. */
+    readonly lazyFunctions?: CodegenOptions["lazyFunctions"];
     /** HTTP method (`GET` / `POST`). */
     readonly method: string;
     /** Project root containing the `lunora/` directory. */

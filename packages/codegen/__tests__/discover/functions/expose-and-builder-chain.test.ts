@@ -20,7 +20,7 @@ import {
     returnTypeFromBuilderCall,
     returnTypeFromCall,
 } from "../../../src/discover/functions/internal/builder-chain";
-import { argsFromCall, exposeFromBuilderChain } from "../../../src/discover/functions/internal/expose";
+import { argsFromCall, exposeFromBuilderChain, x402FromBuilderChain } from "../../../src/discover/functions/internal/expose";
 
 let project: Project;
 
@@ -195,6 +195,23 @@ describe("expose.ts", () => {
             expect(exposeFromBuilderChain(receiver(`export const list = query.expose({ cache: sharedCache, rest: true }).query(h);`))).toStrictEqual({
                 rest: true,
             });
+        });
+    });
+
+    describe("paid builder metadata", () => {
+        it("reads a numeric or string literal price without evaluating the module", () => {
+            expect.assertions(2);
+
+            expect(x402FromBuilderChain(receiver(`export const paid = query.x402({ price: 0.05 }).query(h);`))).toStrictEqual({ price: 0.05 });
+            expect(x402FromBuilderChain(receiver(`export const paid = query.x402({ price: "$0.05" }).query(h);`))).toStrictEqual({ price: "$0.05" });
+        });
+
+        it("keeps an unreadable x402 tag distinguishable so lazy codegen can fail closed", () => {
+            expect.assertions(3);
+
+            expect(x402FromBuilderChain(receiver(`export const paid = query.x402({ price: configuredPrice }).query(h);`))).toStrictEqual({});
+            expect(x402FromBuilderChain(receiver(`export const paid = query.x402(config).query(h);`))).toStrictEqual({});
+            expect(x402FromBuilderChain(receiver(`export const free = query.query(h);`))).toBeUndefined();
         });
     });
 });

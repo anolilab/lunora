@@ -30,6 +30,7 @@ import {
     isCodegenDisabled,
     isDevServerReady,
     isRecordedProcessCurrent,
+    LAZY_FUNCTIONS_ENV,
     readDevServerState,
     readLiveDevServerState,
     readProjectDependencyNames,
@@ -516,8 +517,9 @@ const codegenRequested = (options: { codegen?: boolean }): boolean => options.co
  * (#496) is precisely what happens when only one of them remembers a flag — so
  * the answer lives in one function and the next flag is added once.
  */
-const withViteChildEnv = (options: { codegen?: boolean; remote?: boolean }): { env?: Record<string, string> } => {
+const withViteChildEnv = (options: { codegen?: boolean; lazyFunctions?: boolean; remote?: boolean }): { env?: Record<string, string> } => {
     const environment: Record<string, string> = {
+        ...(options.lazyFunctions === true ? { [LAZY_FUNCTIONS_ENV]: "1" } : {}),
         ...(options.remote === true ? { LUNORA_REMOTE: "1" } : {}),
         ...(options.codegen === false ? { [CODEGEN_ENV]: "0" } : {}),
     };

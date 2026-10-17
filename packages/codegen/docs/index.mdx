@@ -18,7 +18,7 @@ typed access to its own queries, mutations, actions, and tables.
 You rarely call this package directly. The [`@lunora/vite`](/docs/packages/vite)
 plugin runs it on every schema change, and the [`lunora codegen`](/docs/packages/cli)
 command runs it once on demand. Both share this same core, so the output is
-identical regardless of how it was produced.
+consistent when they use the same options.
 
 ## What it generates
 
@@ -78,13 +78,20 @@ export default defineConfig({ plugins: [lunora()] });
 ```bash tab="CLI"
 lunora codegen                 # one-shot
 lunora codegen --api-spec both # also emit OpenAPI + OpenRPC
+lunora codegen --lazy-functions # opt into per-module function imports
 ```
 
 </Tabs>
 
 Under `lunora dev`, codegen runs in watch mode: save a function or change the
 schema and the regenerated types are in the module graph before you switch
-windows.
+windows. Pass `lunora dev --lazy-functions` to keep lazy imports enabled across
+startup, watch runs, and Studio edits.
+
+Lazy function imports are opt-in; codegen keeps the eager registry by default.
+Pass `--lazy-functions` to `prepare`, `build`, and `deploy` whenever they
+regenerate the registry, and to `verify` to check the same metadata requirements.
+`deploy --prebuilt` keeps the output from an earlier build without regenerating.
 
 ## Don't edit `_generated/`
 
@@ -146,6 +153,8 @@ Common options:
   `result.advisories` is empty. To keep the advisor but drop its lower levels,
   set `advisor.minSeverity` in `lunora.config.ts` instead (see below).
 - `apiSpec`: `"openapi"` (default), `"openrpc"`, `"both"`, or `"none"`.
+- `lazyFunctions`: set to `true` to emit per-module lazy imports; omitted or
+  `false` keeps the eager registry.
 - `lunoraDirectory`: override the `lunora` subdirectory name.
 
 ## Trimming advisories (`advisor.minSeverity`)

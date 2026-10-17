@@ -19,6 +19,9 @@
 /** Env var that turns codegen off when it spells `0` / `false`. Unset means on. */
 const CODEGEN_ENV = "LUNORA_CODEGEN";
 
+/** Env var that enables lazy function imports for codegen when it spells `1` / `true`. */
+const LAZY_FUNCTIONS_ENV = "LUNORA_LAZY_FUNCTIONS";
+
 /**
  * Whether a {@link CODEGEN_ENV} value spells an explicit "off".
  *
@@ -32,4 +35,11 @@ const isCodegenDisabled = (value: string | undefined): boolean => {
     return normalized === "0" || normalized === "false";
 };
 
-export { CODEGEN_ENV, isCodegenDisabled };
+/** Whether a {@link LAZY_FUNCTIONS_ENV} value explicitly opts into lazy imports. */
+const isLazyFunctionsEnabled = (value: string | undefined): boolean => {
+    const normalized = value?.trim().toLowerCase();
+
+    return normalized === "1" || normalized === "true";
+};
+
+export { CODEGEN_ENV, isCodegenDisabled, isLazyFunctionsEnabled, LAZY_FUNCTIONS_ENV };

@@ -70,6 +70,7 @@ With no options, `lunora()` runs codegen on save, validates `wrangler.jsonc`, in
 lunora({
     schemaDir: "lunora", // dir with schema.ts + function files (generated output lands in <schemaDir>/_generated)
     apiSpec: "openapi", // "openapi" | "openrpc" | "both" | "none"
+    lazyFunctions: true, // optional per-module lazy function imports; lunora prepare/build/deploy regenerate with their own --lazy-functions flag
     target: "cloudflare", // deploy target the emitted ctx.* surface is tailored to
     allowUnauthenticatedShardAccess: false, // composed class-A worker: allow a client-named shard / fan-out with no authorizeShard
     shard: { cdc: true, reactiveCache: true }, // class-A only: shard DO config for the composed entry (class B/C set this in their own worker entry)
@@ -79,6 +80,10 @@ lunora({
     cloudflare: false, // bring your own @cloudflare/vite-plugin
 });
 ```
+
+`LUNORA_LAZY_FUNCTIONS=1` or `true` enables lazy imports even when
+`lazyFunctions` is `false`, for both dev and production builds.
+`lunora dev --lazy-functions` sets this variable for its bundler child process.
 
 `lunora()` returns a flat `Plugin[]`; Vite flattens nested plugin arrays, so `plugins: [lunora()]` works without spreading.
 

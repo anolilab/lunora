@@ -23,18 +23,23 @@ export default defineConfig({
 
 ## Options
 
-| Option                            | Default         | Purpose                                                                                                                    |
-| --------------------------------- | --------------- | -------------------------------------------------------------------------------------------------------------------------- |
-| `schemaDir`                       | `"lunora"`      | Directory containing `schema.ts` + function files                                                                          |
-| `apiSpec`                         | `"openapi"`     | API spec emitted into `_generated/`: `"openapi"`/`"openrpc"`/`"both"`/`"none"`                                             |
-| `target`                          | `"cloudflare"`  | Deploy target the emitted `ctx.*` surface is tailored to; defaults to `target` in `lunora.config.*`                        |
-| `studio`                          | `true`          | Serve the Lunora studio at `/__lunora` during dev, or `false` to skip                                                      |
-| `cloudflare`                      | `true`          | Pass options to `@cloudflare/vite-plugin`, or `false` to skip                                                              |
-| `overlay`                         | `true`          | Inject `@visulima/vite-overlay` for runtime errors; `false` to skip, or an options object to forward                       |
-| `validateWrangler`                | `true`          | Cross-check `wrangler.jsonc` bindings against the schema                                                                   |
-| `allowUnauthenticatedShardAccess` | `false`         | Let the composed class-A worker serve a client-named non-default shard / fan-out without an `authorizeShard` callback      |
-| `shard`                           | `{}`            | Shard DO config baked into the composed class-A entry: `cdc`, `reactiveCache`, `maxRelationKeys`, `relationExistsPushDown` |
-| `projectRoot`                     | `process.cwd()` | Override for monorepo setups                                                                                               |
+| Option                            | Default         | Purpose                                                                                                                                                                           |
+| --------------------------------- | --------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `schemaDir`                       | `"lunora"`      | Directory containing `schema.ts` + function files                                                                                                                                 |
+| `apiSpec`                         | `"openapi"`     | API spec emitted into `_generated/`: `"openapi"`/`"openrpc"`/`"both"`/`"none"`                                                                                                    |
+| `lazyFunctions`                   | `false`         | Emit per-module lazy function imports; `lunora dev --lazy-functions` also opts in during dev; `lunora prepare`/`build`/`deploy` regenerate with their own `--lazy-functions` flag |
+| `target`                          | `"cloudflare"`  | Deploy target the emitted `ctx.*` surface is tailored to; defaults to `target` in `lunora.config.*`                                                                               |
+| `studio`                          | `true`          | Serve the Lunora studio at `/__lunora` during dev, or `false` to skip                                                                                                             |
+| `cloudflare`                      | `true`          | Pass options to `@cloudflare/vite-plugin`, or `false` to skip                                                                                                                     |
+| `overlay`                         | `true`          | Inject `@visulima/vite-overlay` for runtime errors; `false` to skip, or an options object to forward                                                                              |
+| `validateWrangler`                | `true`          | Cross-check `wrangler.jsonc` bindings against the schema                                                                                                                          |
+| `allowUnauthenticatedShardAccess` | `false`         | Let the composed class-A worker serve a client-named non-default shard / fan-out without an `authorizeShard` callback                                                             |
+| `shard`                           | `{}`            | Shard DO config baked into the composed class-A entry: `cdc`, `reactiveCache`, `maxRelationKeys`, `relationExistsPushDown`                                                        |
+| `projectRoot`                     | `process.cwd()` | Override for monorepo setups                                                                                                                                                      |
+
+`LUNORA_LAZY_FUNCTIONS=1` or `true` enables lazy imports even when
+`lazyFunctions` is `false`, for both dev and production builds.
+`lunora dev --lazy-functions` sets this variable for its bundler child process.
 
 Generated files always land in `<schemaDir>/_generated`.
 

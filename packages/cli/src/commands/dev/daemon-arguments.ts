@@ -19,6 +19,10 @@ const daemonArguments = (options: DevOptions, remote: boolean): string[] => {
         args.push("--api-spec", options.apiSpec);
     }
 
+    if (options.lazyFunctions === true) {
+        args.push("--lazy-functions");
+    }
+
     if (options.port !== undefined) {
         args.push("--port", String(options.port));
     }

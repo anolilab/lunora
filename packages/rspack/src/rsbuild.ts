@@ -137,6 +137,7 @@ const mountStudio = (api: RsbuildApiLike, options: ResolvedLunoraRspackOptions):
         server.middlewares.use(
             createStudioMiddleware({
                 apiSpec: options.apiSpec,
+                lazyFunctions: options.lazyFunctions,
                 base,
                 isNonLoopbackBind: isNonLoopbackHost(host),
                 projectRoot: options.projectRoot,

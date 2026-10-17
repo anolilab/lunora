@@ -73,6 +73,13 @@ export interface FunctionIR {
      * `internal` object and is rejected by the DO's external RPC path.
      */
     visibility?: "internal" | "public";
+
+    /**
+     * Literal price from `.x402({ price })`. Lazy registry output needs this
+     * before importing the procedure module so the origin can paywall every
+     * transport synchronously; a missing price means the source was dynamic.
+     */
+    x402?: { price?: number | string };
 }
 
 /**

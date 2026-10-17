@@ -26,6 +26,8 @@ interface CodegenCommandOptions {
     cwd?: string;
     /** Output format: `pretty` (default) or `json`. */
     format?: OutputFormat;
+    /** Opt into per-module lazy function loading; omitted keeps the eager registry. */
+    lazyFunctions?: boolean;
     logger: Logger;
 
     /**
@@ -92,6 +94,7 @@ const runCodegenCommand = (options: CodegenCommandOptions): CodegenCommandResult
 
     const result = runCodegen({
         apiSpec: options.apiSpec,
+        lazyFunctions: options.lazyFunctions,
         projectRoot,
         target,
         ...wranglerCodegenInputs(projectRoot),
@@ -242,6 +245,7 @@ const execute: CommandHandler<CodegenOptions> = defineHandler<CodegenOptions, Co
         apiSpec: parseApiSpec(options.apiSpec),
         cwd,
         format,
+        lazyFunctions: options.lazyFunctions,
         logger,
         strictAdvisories: options.strictAdvisories,
         target: options.target,

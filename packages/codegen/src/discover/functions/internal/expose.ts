@@ -106,6 +106,43 @@ const exposeFromBuilderChain = (receiver: Node): { cache?: ExposeCacheIR; rest?:
     return step ? exposeFromArgument(step.call.getArguments()[0]) : undefined;
 };
 
+/** Read a literal `.x402({ price })` tag without evaluating the procedure module. */
+const x402FromBuilderChain = (receiver: Node): { price?: number | string } | undefined => {
+    const step = builderChainSteps(receiver).find((candidate) => candidate.name === "x402");
+
+    if (!step) {
+        return undefined;
+    }
+
+    const argument = step.call.getArguments()[0];
+
+    if (argument === undefined || !Node.isObjectLiteralExpression(argument)) {
+        return {};
+    }
+
+    const property = findObjectProperty(argument, "price");
+
+    if (property === undefined || !Node.isPropertyAssignment(property)) {
+        return {};
+    }
+
+    const initializer = property.getInitializer();
+
+    if (initializer === undefined) {
+        return {};
+    }
+
+    if (Node.isStringLiteral(initializer)) {
+        return { price: initializer.getLiteralValue() };
+    }
+
+    if (Node.isNumericLiteral(initializer)) {
+        return { price: initializer.getLiteralValue() };
+    }
+
+    return {};
+};
+
 /** Inspect a `query({ args, handler })` call and pull out the args validator map. */
 const argsFromCall = (call: CallExpression): Record<string, ValidatorIR> => {
     const first = call.getArguments()[0];
@@ -132,4 +169,4 @@ const argsFromCall = (call: CallExpression): Record<string, ValidatorIR> => {
     return shape === undefined ? {} : parseObjectShape(shape);
 };
 
-export { argsFromCall, exposeFromBuilderChain };
+export { argsFromCall, exposeFromBuilderChain, x402FromBuilderChain };

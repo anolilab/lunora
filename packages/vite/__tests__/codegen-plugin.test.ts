@@ -95,6 +95,7 @@ const makeOptions = (projectRoot: string): ResolvedLunoraPluginOptions => {
         allowUnauthenticatedShardAccess: false,
         apiSpec: "openapi",
         cloudflare: false,
+        lazyFunctions: false,
         studio: false,
         generatedDir: "lunora/_generated",
         overlay: false,
@@ -122,6 +123,22 @@ describe("codegen-plugin", () => {
     });
 
     describe("codegenPlugin", () => {
+        it("emits lazy function modules when the resolved option opts in", () => {
+            expect.assertions(3);
+
+            writeFixture(workdir);
+
+            const plugin = codegenPlugin({ ...makeOptions(workdir), lazyFunctions: true });
+            (plugin.configResolved as (this: unknown) => void).call(undefined);
+
+            const generatedDirectory = join(workdir, "lunora", "_generated");
+            const functions = readFileSync(join(generatedDirectory, "functions.ts"), "utf8");
+
+            expect(functions).toContain("export const LUNORA_FUNCTION_MANIFEST");
+            expect(functions).not.toContain('import * as lunora_messages_0 from "../messages.js"');
+            expect(existsSync(join(generatedDirectory, "fn", "lunora_messages_0.ts"))).toBe(true);
+        });
+
         it("buildStart runs codegen and emits the three generated files", () => {
             // 9 runtime assertions; the expectTypeOf below is a compile-time check and isn't counted.
             expect.assertions(9);

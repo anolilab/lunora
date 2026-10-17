@@ -32,6 +32,7 @@ const buildCommand: Command = {
             type: Boolean,
         },
         { description: `Which API spec(s) to emit: ${API_SPEC_HELP} (default openapi)`, name: "api-spec", type: String },
+        { description: "Use per-module lazy function imports (opt-in; default eager)", name: "lazy-functions", type: Boolean },
         {
             description: "Write a JSON manifest of the bindings + crons the bundle needs to this path, for an IaC program to consume",
             name: "emit-bindings",
@@ -71,6 +72,7 @@ export type BuildOptions = CreateOptions<{
     "api-spec": string | undefined;
     "emit-bindings": string | undefined;
     format: string | undefined;
+    "lazy-functions": boolean | undefined;
     "out-dir": string | undefined;
     // Declared as `strict-advisories` + `no-strict-advisories`; cerebro exposes
     // both under this one positive camelCase key, `undefined` until a side is

@@ -26,6 +26,7 @@ const deployCommand: Command = {
             type: Boolean,
         },
         { description: `Which API spec(s) to emit: ${API_SPEC_HELP} (default openapi)`, name: "api-spec", type: String },
+        { description: "Use per-module lazy function imports (opt-in; default eager)", name: "lazy-functions", type: Boolean },
         { description: "Validate, bundle, and run pre-deploy gates without publishing (wrangler deploy --dry-run)", name: "dry-run", type: Boolean },
         { description: "Cloudflare environment name", name: "env", type: String },
         OUTPUT_FORMAT_OPTION,
@@ -103,6 +104,7 @@ export type DeployOptions = CreateOptions<{
     env: string | undefined;
     format: string | undefined;
     "health-check": boolean | undefined;
+    "lazy-functions": boolean | undefined;
     migrate: boolean | undefined;
     "migrate-token": string | undefined;
     "migrate-url": string | undefined;

@@ -1,7 +1,7 @@
 import { LunoraError } from "@lunora/errors";
 
 import compileArgsValidator from "../compile-validator";
-import type { AgentIR, FunctionIR, MigrationIR, MutatorIR, ShapeIR } from "../ir";
+import type { AgentIR, FunctionIR, MigrationIR, MutatorIR, ShapeIR, ValidatorIR } from "../ir";
 import { sanitizeNamespace } from "../paths";
 import { renderAgentFunctionRegistry, renderSandboxFunctionRegistry } from "./api";
 import { rebaseRelativeQualifiers, referencedDataModelImports, referenceReturnType, relocateBaseQualifiers } from "./qualifiers";
@@ -15,13 +15,75 @@ import { baseSpecifiers, GENERATED_HEADER, IMPORT_PATH_RE, renderArgsType, rende
  */
 const moduleAlias = (filePath: string, index: number): string => `lunora_${sanitizeNamespace(filePath)}_${String(index)}`;
 
+/** The compact validator facts the admin discovery endpoint can serve without loading user code. */
+const renderArgumentDescriptors = (args: Record<string, ValidatorIR>): string =>
+    JSON.stringify(
+        Object.entries(args)
+            .toSorted(([left], [right]) => left.localeCompare(right))
+            .map(([name, original]) => {
+                const optional = original.kind === "optional";
+                const validator = optional ? (original.inner ?? { kind: "unknown" }) : original;
+                const element = validator.kind === "array" ? validator.inner?.kind : undefined;
+                const table = validator.kind === "id" ? validator.tableName : undefined;
+
+                return {
+                    kind: validator.kind,
+                    name,
+                    optional,
+                    ...(table === undefined ? {} : { table }),
+                    ...(element === undefined || element === "unknown" ? {} : { element }),
+                };
+            }),
+    );
+
+/** The module namespaces codegen assigns, shared by eager imports and lazy shims. */
+const moduleAliasesFor = (
+    functions: ReadonlyArray<FunctionIR>,
+    migrations: ReadonlyArray<MigrationIR>,
+    mutators: ReadonlyArray<MutatorIR>,
+    shapes: ReadonlyArray<ShapeIR>,
+): Map<string, string> => {
+    const aliases = new Map<string, string>();
+    const register = (filePath: string): void => {
+        if (!aliases.has(filePath)) {
+            aliases.set(filePath, moduleAlias(filePath, aliases.size));
+        }
+    };
+
+    for (const definition of functions) {
+        register(definition.filePath);
+    }
+
+    for (const migration of migrations) {
+        register(migration.filePath);
+    }
+
+    for (const mutator of mutators) {
+        register(mutator.filePath);
+    }
+
+    for (const shape of shapes) {
+        register(shape.filePath);
+    }
+
+    return aliases;
+};
+
+/** Keep eager registry imports and lazy shim emission on the same file-path policy. */
+const eagerModulePaths = (migrations: ReadonlyArray<MigrationIR>, mutators: ReadonlyArray<MutatorIR>, shapes: ReadonlyArray<ShapeIR>): ReadonlySet<string> =>
+    new Set([...migrations.map((migration) => migration.filePath), ...mutators.map((mutator) => mutator.filePath), ...shapes.map((shape) => shape.filePath)]);
+
+// Split this generated lookup so no-secrets can keep checking strings without
+// mistaking a framework access for a credential-shaped literal.
+const renderFunctionTableLookup = (table: "LUNORA_FUNCTIONS" | "LUNORA_FUNCTION_MANIFEST"): string => `${table}[functionPath]`;
+
 /**
  * The `callRegistered` helper emitted into `functions.ts` — the shared dispatch
  * shim every `createCaller` leaf routes through. Hoisted to module scope so the
  * emitter body reads as composition rather than a wall of escaped TS.
  */
 const CALL_REGISTERED_HELPER = `const callRegistered = async <R>(context: CallerCtx, functionPath: string, args: Record<string, unknown> | undefined): Promise<R> => {
-    const registered = LUNORA_FUNCTIONS[functionPath];
+    const registered = await loadFunction(functionPath);
 
     if (!registered) {
         throw new LunoraError("FUNCTION_NOT_FOUND", \`function not registered: \${functionPath}\`);
@@ -67,60 +129,60 @@ const renderFunctionRegistry = (
     migrations: ReadonlyArray<MigrationIR>,
     mutators: ReadonlyArray<MutatorIR> = [],
     shapes: ReadonlyArray<ShapeIR> = [],
+    lazyFunctions = false,
 ): {
     dispatchBody: string;
     importBlock: string;
     installBlock: string;
+    manifestBody: string;
     migrationBody: string;
+    moduleLoaders: string;
     mutatorPaths: ReadonlyArray<string>;
     roomMessagesBody: string;
     shapeBody: string;
 } => {
-    const aliasByPath = new Map<string, string>();
-
-    const registerPath = (filePath: string): void => {
-        if (!aliasByPath.has(filePath)) {
-            aliasByPath.set(filePath, moduleAlias(filePath, aliasByPath.size));
-        }
-    };
-
-    for (const definition of functions) {
-        registerPath(definition.filePath);
-    }
-
-    for (const migration of migrations) {
-        registerPath(migration.filePath);
-    }
-
-    // Mutators + shapes live in fixed files (`mutators`/`shapes`) distinct from
-    // any function/migration file, so they pick up fresh aliases LAST — existing
-    // function/migration alias numbering is preserved untouched, keeping the
-    // golden output byte-identical for shape/mutator-free projects.
-    for (const mutator of mutators) {
-        registerPath(mutator.filePath);
-    }
-
-    for (const shape of shapes) {
-        registerPath(shape.filePath);
-    }
+    const aliasByPath = moduleAliasesFor(functions, migrations, mutators, shapes);
+    const eagerPaths = eagerModulePaths(migrations, mutators, shapes);
 
     const importLines = [...aliasByPath.entries()]
+        .filter(([filePath]) => {
+            if (!lazyFunctions || eagerPaths.has(filePath)) {
+                return true;
+            }
+
+            return functions.some((definition) => definition.filePath === filePath && definition.channel?.kind === "room");
+        })
         .map(([filePath, alias]) => {
             if (!IMPORT_PATH_RE.test(filePath)) {
                 throw new LunoraError("INTERNAL", `@lunora/codegen: refusing to emit import for unsafe file path: ${JSON.stringify(filePath)}`);
             }
 
-            return `import * as ${alias} from "../${filePath}.js";`;
+            const typeOnly = lazyFunctions && !eagerPaths.has(filePath);
+
+            return `import ${typeOnly ? "type " : ""}* as ${alias} from "../${filePath}.js";`;
         })
         .join("\n");
 
     // Functions arrive pre-sorted by `${filePath}:${exportName}`, so same-file
     // entries stay contiguous and the alias lookup is always populated.
     const dispatchEntries = functions
-        .map(
-            (definition) =>
-                `    "${sanitizeNamespace(definition.filePath)}:${definition.exportName}": ${aliasByPath.get(definition.filePath) ?? ""}.${definition.exportName} as unknown as RegisteredLunoraFunction,`,
-        )
+        .map((definition) => {
+            if (!lazyFunctions || eagerPaths.has(definition.filePath)) {
+                return `    "${sanitizeNamespace(definition.filePath)}:${definition.exportName}": ${aliasByPath.get(definition.filePath) ?? ""}.${definition.exportName} as unknown as RegisteredLunoraFunction,`;
+            }
+
+            return `    "${sanitizeNamespace(definition.filePath)}:${definition.exportName}": { args: {}, handler: unloadedFunctionHandler, ...${JSON.stringify(
+                {
+                    argumentDescriptors: JSON.parse(renderArgumentDescriptors(definition.args)) as unknown,
+                    kind: definition.kind,
+                    ...(definition.channel ? { channel: definition.channel } : {}),
+                    ...(definition.expose ? { expose: definition.expose } : {}),
+                    ...(definition.lifecycle ? { lifecycle: definition.lifecycle } : {}),
+                    ...(definition.visibility ? { visibility: definition.visibility } : {}),
+                    ...(definition.x402?.price === undefined ? {} : { x402: { price: definition.x402.price } }),
+                },
+            )} } as unknown as RegisteredLunoraFunction,`;
+        })
         .join("\n");
 
     const migrationEntries = migrations
@@ -162,6 +224,7 @@ const renderFunctionRegistry = (
     // so dispatch transparently uses it (and falls back to the interpreted parser
     // for anything the fast path defers). See `./compile-validator`.
     const installLines = functions
+        .filter((definition) => !lazyFunctions || eagerPaths.has(definition.filePath))
         .map((definition) => {
             // Skip argless functions (nothing to accelerate) and lifecycle hooks
             // (no `.args`). Refinements (`.check`) and unmodelled validators are
@@ -192,11 +255,83 @@ const renderFunctionRegistry = (
         )
         .join("\n");
 
+    const manifests = [
+        ...functions.map((definition) => {
+            return {
+                args: definition.args,
+                definition,
+                path: `${sanitizeNamespace(definition.filePath)}:${definition.exportName}`,
+            };
+        }),
+        ...mutators.map((definition) => {
+            return {
+                args: definition.args,
+                definition: {
+                    ...definition,
+                    expose: undefined,
+                    kind: "mutation" as const,
+                    lifecycle: undefined,
+                    visibility: undefined,
+                    x402: undefined,
+                },
+                path: `${sanitizeNamespace(definition.filePath)}:${definition.exportName}`,
+            };
+        }),
+    ];
+    const lazyManifests = lazyFunctions ? manifests.filter(({ definition }) => !eagerPaths.has(definition.filePath)) : [];
+
+    for (const { definition } of manifests) {
+        if (lazyFunctions && definition.x402 && definition.x402.price === undefined) {
+            throw new LunoraError(
+                "INTERNAL",
+                `@lunora/codegen: lazy function registry needs a literal \`.x402({ price })\` value in ${definition.filePath}:${definition.exportName}`,
+            );
+        }
+    }
+
+    const manifestEntries = lazyFunctions
+        ? lazyManifests
+              .map(({ definition, path }) => {
+                  const moduleId = aliasByPath.get(definition.filePath) ?? "";
+                  const channel = "channel" in definition ? definition.channel : undefined;
+                  const staticFields = {
+                      argumentDescriptors: JSON.parse(renderArgumentDescriptors(definition.args)) as unknown,
+                      exportName: definition.exportName,
+                      kind: definition.kind,
+                      moduleId,
+                      ...(channel ? { channel } : {}),
+                      ...(definition.expose ? { expose: definition.expose } : {}),
+                      ...(definition.lifecycle ? { lifecycle: definition.lifecycle } : {}),
+                      ...(definition.visibility ? { visibility: definition.visibility } : {}),
+                      ...(definition.x402?.price === undefined ? {} : { x402: { price: definition.x402.price } }),
+                  };
+
+                  return `    ${JSON.stringify(path)}: ${JSON.stringify(staticFields)},`;
+              })
+              .join("\n")
+        : "";
+    const modulePaths = [...new Set(lazyManifests.map(({ definition }) => definition.filePath))];
+    const moduleLoaders = lazyFunctions
+        ? modulePaths
+              .map((filePath) => {
+                  if (!IMPORT_PATH_RE.test(filePath)) {
+                      throw new LunoraError("INTERNAL", `@lunora/codegen: refusing to emit import for unsafe file path: ${JSON.stringify(filePath)}`);
+                  }
+
+                  const moduleId = aliasByPath.get(filePath) ?? "";
+
+                  return `    ${JSON.stringify(moduleId)}: () => import(${JSON.stringify(`./fn/${moduleId}.js`)}),`;
+              })
+              .join("\n")
+        : "";
+
     return {
         dispatchBody: combinedDispatch.length > 0 ? `\n${combinedDispatch}\n` : "",
         importBlock: importLines.length > 0 ? `${importLines}\n\n` : "",
         installBlock: installLines,
+        manifestBody: manifestEntries.length > 0 ? `\n${manifestEntries}\n` : "",
         migrationBody: migrationEntries.length > 0 ? `\n${migrationEntries}\n` : "",
+        moduleLoaders: moduleLoaders.length > 0 ? `\n${moduleLoaders}\n` : "",
         mutatorPaths,
         roomMessagesBody,
         shapeBody: shapeEntries.length > 0 ? `\n${shapeEntries}\n` : "",
@@ -308,6 +443,7 @@ const renderLifecycleManifest = (
 interface EmitFunctionsOptions {
     agents?: ReadonlyArray<AgentIR>;
     functions: ReadonlyArray<FunctionIR>;
+    lazyFunctions?: boolean;
     migrations?: ReadonlyArray<MigrationIR>;
     mutators?: ReadonlyArray<MutatorIR>;
     shapes?: ReadonlyArray<ShapeIR>;
@@ -337,16 +473,63 @@ const renderRoomFragments = (
     };
 };
 
+/**
+ * Return nothing for room-free apps so their output stays byte-identical. Keep
+ * `room:` literal here; the room codegen test keeps it matched to ROOM_TOPIC_PREFIX
+ * without requiring another server export.
+ */
+const renderRoomRegistry = (hasRooms: boolean, lazyFunctions: boolean, functions: ReadonlyArray<FunctionIR>): string => {
+    if (!hasRooms) {
+        return "";
+    }
+
+    if (lazyFunctions) {
+        return `\n/**\n * Room routes are static metadata so building the worker never evaluates user handlers.\n */\nexport const LUNORA_ROOMS: Readonly<Record<string, string>> = (() => {\n    const registry: Record<string, string> = {};\n    const owners = new Map<string, string>();\n\n    for (const { owner, path, topic } of [\n${functions
+            .filter((definition) => definition.channel?.kind === "room")
+            .map(
+                (definition) =>
+                    `        { owner: ${JSON.stringify(definition.filePath)}, path: ${JSON.stringify(`${sanitizeNamespace(definition.filePath)}:${definition.exportName}`)}, topic: ${JSON.stringify(`room:${definition.channel?.name ?? ""}`)} },`,
+            )
+            .join(
+                "\n",
+            )}\n    ]) {\n        const prior = owners.get(topic);\n\n        if (prior !== undefined && prior !== owner) {\n            throw new Error(\`two defineRoom registrations are named "\${topic.slice("room:".length)}"; room names must be unique\`);\n        }\n\n        if (prior === undefined) {\n            owners.set(topic, owner);\n            registry[topic] = path;\n        }\n    }\n\n    return registry;\n})();\n`;
+    }
+
+    return `\n/**\n * Room registry: the whisper topic of each \`defineRoom\` registration → its\n * function path. The generated ShardDO's \`roomHandlerPath\` override resolves a\n * room topic through this map so a room's typed \`onJoin\`/\`onMessage\`/\`onLeave\`\n * dispatch server-side, reusing the whisper channel for membership and fan-out.\n * Two registrations under one name throw at module load: the map would otherwise\n * silently keep whichever came last.\n */\nexport const LUNORA_ROOMS: Readonly<Record<string, string>> = (() => {\n    const registry: Record<string, string> = {};\n    const owners = new Map<string, unknown>();\n\n    for (const [path, fn] of Object.entries(LUNORA_FUNCTIONS)) {\n        if (fn.channel?.kind !== "room") {\n            continue;\n        }\n\n        const topic = \`room:\${fn.channel.name}\`;\n        const owner = owners.get(topic);\n\n        // The same registration exported under two names (an alias) is one room.\n        if (owner !== undefined && owner !== fn) {\n            throw new Error(\`two defineRoom registrations are named "\${fn.channel.name}"; room names must be unique\`);\n        }\n\n        if (owner === undefined) {\n            owners.set(topic, fn);\n            registry[topic] = path;\n        }\n    }\n\n    return registry;\n})();\n`;
+};
+
+/**
+ * Assemble caller types, implementation and imports. Import only the referenced
+ * Doc/Id aliases; omit callRegistered (and its context parameter) without
+ * functions so generated files avoid noUnusedLocals errors.
+ */
+const renderCallerAssembly = (functions: ReadonlyArray<FunctionIR>, lazyFunctions: boolean) => {
+    const caller = renderCaller(functions);
+    const types = caller.types ? `\n${caller.types}\n` : "";
+    const implementation = caller.implementation ? `\n${caller.implementation}\n` : "";
+    const imports = referencedDataModelImports(caller.types);
+    const dataModelImport = imports.length > 0 ? `import type { ${imports.join(", ")} } from "./dataModel.js";\n` : "";
+    const parameter = functions.length > 0 ? "context" : "_context";
+    let callRegisteredHelper = "";
+
+    if (functions.length > 0) {
+        let helper = CALL_REGISTERED_HELPER;
+
+        if (!lazyFunctions) {
+            helper = helper.replace("await loadFunction(functionPath)", renderFunctionTableLookup("LUNORA_FUNCTIONS"));
+        }
+
+        callRegisteredHelper = `${helper}\n\n`;
+    }
+
+    return { callRegisteredHelper, dataModelImport, implementation, parameter, types };
+};
+
 const emitFunctions = (options: EmitFunctionsOptions): string => {
-    const { agents = [], functions, migrations = [], mutators = [], shapes = [], useUmbrella = false, usesSandbox = false } = options;
-    const hasFunctions = functions.length > 0;
+    const { agents = [], functions, lazyFunctions = false, migrations = [], mutators = [], shapes = [], useUmbrella = false, usesSandbox = false } = options;
     const base = baseSpecifiers(useUmbrella);
-    const { dispatchBody, importBlock, installBlock, migrationBody, mutatorPaths, roomMessagesBody, shapeBody } = renderFunctionRegistry(
-        functions,
-        migrations,
-        mutators,
-        shapes,
-    );
+    const { dispatchBody, importBlock, installBlock, manifestBody, migrationBody, moduleLoaders, mutatorPaths, roomMessagesBody, shapeBody } =
+        renderFunctionRegistry(functions, migrations, mutators, shapes, lazyFunctions);
     // Auto-registered agent runtime + sandbox dispatcher functions (see the
     // render*FunctionRegistry helpers). Both are empty-gated so an unused feature
     // keeps output byte-identical.
@@ -362,6 +545,7 @@ const emitFunctions = (options: EmitFunctionsOptions): string => {
         dispatchBodyWithAgents = dispatchBody.length > 0 ? `${dispatchBody.trimEnd()}\n${autoLines}\n` : `\n${autoLines}\n`;
     }
     const lifecycleHooks = renderLifecycleManifest(functions);
+    const dispatchLookup = lazyFunctions ? "await loadFunction(functionPath)" : renderFunctionTableLookup("LUNORA_FUNCTIONS");
 
     // Replication-shape + custom-mutator registries (local-first sync engine).
     // Both are gated on non-empty so a project without shapes/mutators emits a
@@ -379,19 +563,7 @@ const emitFunctions = (options: EmitFunctionsOptions): string => {
             ? `\n/**\n * Custom-mutator function paths — the \`LUNORA_FUNCTIONS\` keys the generated\n * ShardDO's \`isCustomMutator\` override routes through the client-watermark push\n * protocol (\`x-lunora-client-id\`/\`x-lunora-client-seq\` ordering).\n */\nexport const LUNORA_MUTATOR_PATHS: ReadonlySet<string> = new Set([${mutatorPaths.map((path) => JSON.stringify(path)).join(", ")}]);\n`
             : "";
 
-    // Room registry (`defineRoom`): topic → function path. Gated on a declared
-    // room so a room-free project emits a byte-identical `functions.ts`. The key
-    // is the room's whisper topic (`roomTopic(name)`), the SAME string the client
-    // subscribes/sends on, so the ShardDO's `roomHandlerPath` override resolves a
-    // room topic without a second name convention.
-    //
-    // The `room:` prefix is written literally (NOT imported from `@lunora/server`)
-    // so the generated file does not depend on a server symbol the umbrella
-    // package must also re-export; `room.ts`'s `ROOM_TOPIC_PREFIX` is the source
-    // of truth and the two are kept in step by the room codegen test.
-    const roomsRegistry = hasRooms
-        ? `\n/**\n * Room registry: the whisper topic of each \`defineRoom\` registration → its\n * function path. The generated ShardDO's \`roomHandlerPath\` override resolves a\n * room topic through this map so a room's typed \`onJoin\`/\`onMessage\`/\`onLeave\`\n * dispatch server-side, reusing the whisper channel for membership and fan-out.\n * Two registrations under one name throw at module load: the map would otherwise\n * silently keep whichever came last.\n */\nexport const LUNORA_ROOMS: Readonly<Record<string, string>> = (() => {\n    const registry: Record<string, string> = {};\n    const owners = new Map<string, unknown>();\n\n    for (const [path, fn] of Object.entries(LUNORA_FUNCTIONS)) {\n        if (fn.channel?.kind !== "room") {\n            continue;\n        }\n\n        const topic = \`room:\${fn.channel.name}\`;\n        const owner = owners.get(topic);\n\n        // The same registration exported under two names (an alias) is one room.\n        if (owner !== undefined && owner !== fn) {\n            throw new Error(\`two defineRoom registrations are named "\${fn.channel.name}"; room names must be unique\`);\n        }\n\n        if (owner === undefined) {\n            owners.set(topic, fn);\n            registry[topic] = path;\n        }\n    }\n\n    return registry;\n})();\n`
-        : "";
+    const roomsRegistry = renderRoomRegistry(hasRooms, lazyFunctions, functions);
 
     // Pull in the compiled-args seam only when at least one function compiled —
     // an unused import would trip `noUnusedLocals`.
@@ -401,21 +573,98 @@ const emitFunctions = (options: EmitFunctionsOptions): string => {
             ? `\n/**\n * AOT-compiled argument validators (Worker-safe, no \`eval\`). Each is installed\n * onto its function's live \`.args\` object and consulted by the interpreted\n * parser as a zero-allocation fast path; anything it can't model is deferred.\n */\n${installBlock}\n`
             : "";
 
-    const caller = renderCaller(functions);
-    const callerTypes = caller.types ? `\n${caller.types}\n` : "";
-    const callerImpl = caller.implementation ? `\n${caller.implementation}\n` : "";
+    const caller = renderCallerAssembly(functions, lazyFunctions);
+    const { callRegisteredHelper, dataModelImport, implementation: callerImpl, parameter: callerParameter, types: callerTypes } = caller;
+    const lazyRegistryPrelude = lazyFunctions
+        ? `
+export interface FunctionManifestEntry {
+    argumentDescriptors: ReadonlyArray<{ element?: string; kind: string; name: string; optional: boolean; table?: string }>;
+    channel?: { kind: "room"; name: string };
+    exportName: string;
+    expose?: { cache?: { credentialHeaders?: ReadonlyArray<string>; maxAge?: number; scope?: "private" | "public"; staleWhileRevalidate?: number; tag?: string; vary?: string }; rest?: boolean };
+    kind: "action" | "mutation" | "query" | "stream";
+    lifecycle?: "connect" | "disconnect" | "init" | "reactor" | "whisper";
+    moduleId: string;
+    visibility?: "internal" | "public";
+    x402?: { readonly price: number | string };
+}
 
-    // Pull the `Doc`/`Id` aliases the caller's arg/return types actually
-    // reference into a type-only dataModel import (importing an unused one
-    // trips noUnusedLocals; omitting the import entirely when neither is
-    // referenced keeps the file dependency-light).
-    const callerDataModelImports = referencedDataModelImports(caller.types);
-    const dataModelImport = callerDataModelImports.length > 0 ? `import type { ${callerDataModelImports.join(", ")} } from "./dataModel.js";\n` : "";
+/** Static, codegen-derived facts. Request gates can inspect these without evaluating a user module. */
+export const LUNORA_FUNCTION_MANIFEST: Readonly<Record<string, FunctionManifestEntry>> = {${manifestBody}};
 
-    // `callRegistered` (and thus `context`) is only referenced when at least one
-    // function exists; otherwise it would be an unused local / parameter.
-    const callerParameter = hasFunctions ? "context" : "_context";
-    const callRegisteredHelper = hasFunctions ? `${CALL_REGISTERED_HELPER}\n\n` : "";
+const MODULE_LOADERS: Record<string, () => Promise<Record<string, unknown>>> = {${moduleLoaders}};
+const loadedModules = new Map<string, Promise<Record<string, unknown>>>();
+const resolvedModules = new Map<string, Record<string, unknown>>();
+const unloadedFunctionHandler = (): never => {
+    throw new Error("a lazy function was invoked before it was prepared");
+};
+
+/** Reuse an evaluated module synchronously, so dispatch does not yield after restoring request scope. */
+export const getLoadedFunction = (functionPath: string): RegisteredLunoraFunction | undefined => {
+    const registered = ${renderFunctionTableLookup("LUNORA_FUNCTIONS")};
+    const manifest = ${renderFunctionTableLookup("LUNORA_FUNCTION_MANIFEST")};
+
+    if (!registered || !manifest) {
+        return registered;
+    }
+
+    const module = resolvedModules.get(manifest.moduleId);
+
+    if (module === undefined) {
+        return undefined;
+    }
+
+    const loaded = module[manifest.exportName];
+
+    if (typeof loaded !== "object" || loaded === null) {
+        throw new Error(\`lazy module export for "\${functionPath}" is not a registered function\`);
+    }
+
+    Object.assign(registered, loaded);
+
+    return registered;
+};
+
+/** Load one function's owning module once per isolate, then merge its live builder result into the registry entry. */
+export const loadFunction = async (functionPath: string): Promise<RegisteredLunoraFunction | undefined> => {
+    const registered = getLoadedFunction(functionPath);
+    const manifest = ${renderFunctionTableLookup("LUNORA_FUNCTION_MANIFEST")};
+
+    if (registered || !manifest) {
+        return registered;
+    }
+
+    let pending = loadedModules.get(manifest.moduleId);
+
+    if (pending === undefined) {
+        const loader = MODULE_LOADERS[manifest.moduleId];
+
+        if (loader === undefined) {
+            throw new Error(\`no lazy module loader registered for "\${functionPath}"\`);
+        }
+
+        pending = loader();
+        loadedModules.set(manifest.moduleId, pending);
+    }
+
+    let module: Record<string, unknown>;
+
+    try {
+        module = await pending;
+    } catch (error: unknown) {
+        if (loadedModules.get(manifest.moduleId) === pending) {
+            loadedModules.delete(manifest.moduleId);
+        }
+
+        throw error;
+    }
+
+    resolvedModules.set(manifest.moduleId, module);
+
+    return getLoadedFunction(functionPath);
+};
+`
+        : "";
 
     return relocateBaseQualifiers(
         `${GENERATED_HEADER}${importBlock}${agentRegistry.importLine}${sandboxRegistry.importLine}${compiledArgsImport}${shapeTypeImport}${rooms.typeImport}import { LunoraError } from "${base.server}";\nimport type { ActionCtx, MutationCtx, QueryCtx } from "./server.js";
@@ -465,7 +714,7 @@ ${rooms.channelField}    /**
      */
     x402?: { readonly price: number | string };
 }
-${agentRegistry.prelude}${sandboxRegistry.prelude}
+${agentRegistry.prelude}${sandboxRegistry.prelude}${lazyRegistryPrelude}
 /**
  * Static dispatch table. The key matches the \`__lunoraRef\` the client
  * emits (\`api[namespace][fn].__lunoraRef === "namespace:fn"\`).
@@ -503,7 +752,7 @@ export const LUNORA_LIFECYCLE_HOOKS: {
  * functions are treated as not-found so their existence never leaks to clients.
  */
 export const dispatchLunoraFunction = async (functionPath: string, context: unknown, args: Record<string, unknown>): Promise<unknown> => {
-    const registered = LUNORA_FUNCTIONS[functionPath];
+    const registered = ${dispatchLookup};
 
     if (!registered || registered.visibility === "internal") {
         throw new LunoraError("FUNCTION_NOT_FOUND", \`function not registered: \${functionPath}\`);
@@ -552,4 +801,52 @@ export const LUNORA_MIGRATIONS: Record<string, RegisteredDataMigration> = {${mig
     );
 };
 
+/** Emit one generated shim per user module; importing a shim installs that module's compiled validators once. */
+const emitLazyFunctionModules = (options: EmitFunctionsOptions): Record<string, string> => {
+    if (options.lazyFunctions !== true) {
+        return {};
+    }
+
+    const { functions } = options;
+    const migrations = options.migrations ?? [];
+    const mutators = options.mutators ?? [];
+    const shapes = options.shapes ?? [];
+    const aliases = moduleAliasesFor(functions, migrations, mutators, shapes);
+    const eagerPaths = eagerModulePaths(migrations, mutators, shapes);
+    const filePaths = [...new Set(functions.filter((definition) => !eagerPaths.has(definition.filePath)).map((definition) => definition.filePath))];
+    const base = baseSpecifiers(options.useUmbrella ?? false);
+    const output: Record<string, string> = {};
+
+    for (const filePath of filePaths) {
+        if (!IMPORT_PATH_RE.test(filePath)) {
+            throw new LunoraError("INTERNAL", `@lunora/codegen: refusing to emit import for unsafe file path: ${JSON.stringify(filePath)}`);
+        }
+
+        const moduleId = aliases.get(filePath) ?? "";
+        const sourcePath = `../../${filePath}.js`;
+        const compiledInstalls = functions
+            .filter((definition) => definition.filePath === filePath && !definition.lifecycle && Object.keys(definition.args).length > 0)
+            .flatMap((definition) => {
+                const compiled = compileArgsValidator(definition.args);
+
+                return compiled === undefined ? [] : [`installCompiledValidatorMap(${moduleId}.${definition.exportName}.args, ${compiled});`];
+            });
+        const compiledImport = compiledInstalls.length > 0 ? `import { DEFER_VALIDATION as DEFER, installCompiledValidatorMap } from "${base.values}";\n` : "";
+        const namespaceImport = compiledInstalls.length > 0 ? `import * as ${moduleId} from "${sourcePath}";\n` : "";
+        const installBlock =
+            compiledInstalls.length > 0
+                ? `\n/** Install the precompiled argument parsers before the module is dispatched. */\n${compiledInstalls.join("\n")}\n`
+                : "";
+        const hasDefault =
+            functions.some((definition) => definition.filePath === filePath && definition.exportName === "default") ||
+            migrations.some((migration) => migration.filePath === filePath && migration.exportName === "default");
+        const defaultExport = hasDefault ? `export { default } from "${sourcePath}";\n` : "";
+
+        output[`fn/${moduleId}.ts`] = `${GENERATED_HEADER}${compiledImport}${namespaceImport}${installBlock}export * from "${sourcePath}";\n${defaultExport}`;
+    }
+
+    return output;
+};
+
+export { emitLazyFunctionModules };
 export default emitFunctions;

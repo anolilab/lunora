@@ -136,7 +136,7 @@ const buildIntrospectionAdminRoutes = (deps: IntrospectionAdminRouteDeps): Recor
                     return [];
                 }
 
-                return [{ args: describeArguments(entry.args), kind: entry.kind, path }];
+                return [{ args: [...(entry.argumentDescriptors ?? describeArguments(entry.args))], kind: entry.kind, path }];
             })
             .toSorted((a, b) => a.path.localeCompare(b.path));
 

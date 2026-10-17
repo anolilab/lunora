@@ -1730,6 +1730,25 @@ export default app.extend(() => ({ backupCron: "0 4 * * *" })).build();
             expect(existsSync(join(generatedDirectory, "openapi.ts"))).toBe(true);
         });
 
+        it("writes lazy handler shims while keeping paid and admin metadata in functions.ts", () => {
+            expect.assertions(8);
+
+            const result = runCodegen({ lazyFunctions: true, projectRoot: workdir, wranglerQueueProducers: [] });
+            const generatedDirectory = join(workdir, "lunora", "_generated");
+            const modulePath = "fn/lunora_messages_0.ts";
+
+            expect(existsSync(join(generatedDirectory, modulePath))).toBe(true);
+            expect(result.generated.functionModules[modulePath]).toContain('export * from "../../messages.js";');
+            expect(result.writtenFiles).toContain(modulePath);
+            expect(result.generated.functions).not.toContain('import * as lunora_messages_0 from "../messages.js";');
+            expect(result.generated.functions).toContain("export const LUNORA_FUNCTION_MANIFEST");
+            expect(result.generated.functions).toContain('"argumentDescriptors"');
+            expect(result.generated.shard).toContain(
+                'protected override prepareFunction(functionPath: string, reason: "rpc" | "subscription" | "stream" | "reactor"): Promise<void> | undefined',
+            );
+            expect(result.generated.functions).toContain('"lunora_messages_0": () => import("./fn/lunora_messages_0.js")');
+        });
+
         it("emits openapi.json covering httpRouter routes and RPC functions", () => {
             expect.assertions(9);
 

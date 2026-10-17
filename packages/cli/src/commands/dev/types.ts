@@ -60,6 +60,7 @@ interface DevCommandOptions {
      * fatal, since a named path means something is waiting on it.
      */
     emitBindings?: string;
+
     /** Injection seam for tests — defaults to the real `.dev.vars` scaffolder. */
     ensureEnv?: typeof ensureDevVariables;
     /** Injection seam for tests — defaults to the real `.dev.vars.example` package-aware scaffolder. */
@@ -81,6 +82,9 @@ interface DevCommandOptions {
      * stderr instead of corrupting the stream.
      */
     jsonLogs?: boolean;
+
+    /** Opt into per-module lazy function loading for CLI codegen. */
+    lazyFunctions?: boolean;
 
     /** Pass `--local` to `wrangler dev`: no remote proxy session, so a binding with no local mode (`ai`) cannot stop the session from starting. */
     local?: boolean;

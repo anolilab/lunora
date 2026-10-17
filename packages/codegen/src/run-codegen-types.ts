@@ -33,6 +33,12 @@ export interface CodegenOptions {
     dryRun?: boolean;
 
     /**
+     * Emit a per-module lazy function registry when explicitly set to `true`.
+     * Omitted or `false` keeps the eager registry.
+     */
+    lazyFunctions?: boolean;
+
+    /**
      * Run the static schema advisor (unindexed FKs, …) during codegen.
      * Defaults to `true`. When `false`, `CodegenResult.advisories` is empty.
      * Computed regardless of `dryRun`; codegen never prints them — see
@@ -163,6 +169,8 @@ export interface CodegenResult {
         dataModel: string;
         drizzleGlobal: string;
         drizzleShard: string;
+        /** Per-module `_generated/fn/*.ts` lazy import shims; empty when the eager registry is selected. */
+        functionModules: Record<string, string>;
         functions: string;
         /** `internal.*` references to the internal functions (`_generated/internal.ts`), kept out of `api.ts` so a client bundle never carries them. */
         internal: string;

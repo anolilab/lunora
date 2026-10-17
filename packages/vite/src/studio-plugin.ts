@@ -55,6 +55,7 @@ const studioPlugin = (options: ResolvedLunoraPluginOptions): Plugin => {
             server.middlewares.use(
                 createStudioMiddleware({
                     apiSpec: options.apiSpec,
+                    lazyFunctions: options.lazyFunctions,
                     // Vite serves everything under `base`, and this middleware runs
                     // BEFORE Vite's base middleware strips the prefix — so it has to
                     // match the prefixed path itself, or the announced URL falls

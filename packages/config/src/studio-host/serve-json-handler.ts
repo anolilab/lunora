@@ -28,6 +28,8 @@ const MAX_BODY_BYTES = 1_000_000;
 interface LocalEndpointContext {
     /** API-spec mode the host runs codegen with, so a studio edit regenerates the same spec files. */
     readonly apiSpec?: CodegenOptions["apiSpec"];
+    /** Lazy function mode the host runs codegen with, so a studio edit preserves the generated registry. */
+    readonly lazyFunctions?: CodegenOptions["lazyFunctions"];
     /** Override the lunora subdirectory name. Defaults to `"lunora"`. */
     readonly schemaDirectory?: string;
 }

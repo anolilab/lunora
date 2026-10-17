@@ -120,7 +120,7 @@ const reportMissingSchema = (schemaPath: string, logger: { warn: (message: strin
  * dev. Omit it (build mode) to keep the current log-and-return behaviour.
  */
 const runCodegenSafely = (
-    options: Pick<ResolvedLunoraPluginOptions, "apiSpec" | "projectRoot" | "schemaDir" | "target">,
+    options: Pick<ResolvedLunoraPluginOptions, "apiSpec" | "lazyFunctions" | "projectRoot" | "schemaDir" | "target">,
     logger: { error: (message: string) => void; info?: (message: string) => void; warn: (message: string) => void },
     overlay?: OverlayCallbacks,
     project?: Project,
@@ -136,6 +136,7 @@ const runCodegenSafely = (
     try {
         const result = runCodegen({
             apiSpec: options.apiSpec,
+            lazyFunctions: options.lazyFunctions,
             lunoraDirectory: options.schemaDir,
             project,
             projectRoot: options.projectRoot,

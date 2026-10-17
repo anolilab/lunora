@@ -68,6 +68,8 @@ interface DeployCommandOptions {
     healthSleep?: (ms: number) => Promise<void>;
     /** Set to `false` to disable interactive spinners (test injection). */
     interactive?: boolean;
+    /** Opt into per-module lazy function imports. */
+    lazyFunctions?: boolean;
     logger: Logger;
 
     /**

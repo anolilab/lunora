@@ -37,10 +37,10 @@ lunora mcp serve [--allow-writes]       # the stdio MCP server your editor spawn
 lunora dev [--port n] [--worker-port n] # wrangler worker + studio + codegen watch
             [--inspector-port n]
             [--remote | --local]
-            [--no-studio] [--no-codegen]
+            [--no-studio] [--no-codegen] [--lazy-functions]
             [--tunnel [--allow-mail <email>…]]
 lunora codegen [--api-spec <spec>]      # one-shot codegen
-            [--format <pretty|json>]
+            [--format <pretty|json>] [--lazy-functions]
 lunora run <fn> [--args <json>]         # send a single RPC to a running worker
             [--shard <key>] [--url <u>] [--format json]
             [--as <userId>] [--claims <json>] #   run as an identity (identity-gated apps)
@@ -52,16 +52,19 @@ lunora reset [--all] [--yes]            # clear local Miniflare state
 
 # Deploy
 lunora prepare [--api-spec <spec>]      # every pre-deploy gate, without deploying — for CI
+               [--lazy-functions]
 lunora build [--out-dir <dir>]          # bundle the worker to disk without deploying
+             [--lazy-functions]
 lunora deploy [--env <name>]            # codegen, validate wrangler, then wrangler deploy
               [--migrate --migrate-yes] #   --migrate also needs --migrate-url unless linked
+              [--lazy-functions]
               [--prebuilt]              #   --preview uploads a version (no live traffic)
               [--preview] [--dry-run]   #   --dry-run validates + bundles, never publishes
               [--temporary]             #   --temporary deploys with no account (~60min, then claim)
               [--health-check]          #   --health-check probes /_lunora/health/ready after deploying
 lunora link --url <url> [--env <name>]  # link this checkout to its deployed worker
 lunora verify [--api-spec <spec>]       # dry-run codegen + tsc --noEmit (no files written)
-              [--no-typecheck]
+              [--no-typecheck] [--lazy-functions]
 lunora analyze [--format json]          # wrangler dry-run: bundle size + top modules
 
 # Cloudflare only (refused on a celld or Node project)
@@ -419,6 +422,9 @@ prose is not. New codes are added over time; treat an unknown one as advisory.
 
 ### `lunora dev`
 
+Pass `--lazy-functions` to generate per-module lazy imports at startup and on
+regeneration, including Studio edits. The default is eager generation.
+
 Starts three concurrent processes: `wrangler dev` (Worker), the embedded
 Lunora studio, and codegen in watch mode. All three reload on file changes.
 In a project on `@lunora/vite` it spawns `vite dev` instead: the Vite plugin
@@ -591,6 +597,10 @@ JSON log lines are available to everyone via `lunora dev --json` or
 
 ### `lunora deploy`
 
+Pass `--lazy-functions` to regenerate and deploy a lazy function registry.
+Without it, codegen emits an eager registry even if an earlier dev or codegen
+run used lazy mode. `--prebuilt` skips regeneration and keeps the existing output.
+
 Runs codegen, validates `wrangler.jsonc`, then invokes `wrangler deploy`.
 Pass `--migrate` to apply pending data migrations against the live worker
 immediately after a successful deploy. It also requires `--migrate-yes` (an
@@ -710,6 +720,10 @@ curl -fsS "$url/api/smoke"
 ```
 
 ### `lunora build`
+
+Pass `--lazy-functions` to generate lazy imports for the bundle. Generation is
+eager by default. Use `lunora deploy --prebuilt` to keep that generated registry
+in a later deployment.
 
 Runs the full pre-deploy pipeline (codegen, the schema-drift gate, `wrangler.jsonc`
 validation) and writes the bundled Worker to disk **without publishing**
@@ -944,6 +958,10 @@ tab (Flamegraph).
 
 ### `lunora prepare`
 
+Pass `--lazy-functions` to prepare a lazy function registry. The default is
+eager generation. Keep the flag on a later deploy, or use `deploy --prebuilt`
+to skip regeneration.
+
 Literally the same pipeline as `lunora deploy`, stopped before anything ships —
 one implementation, so what `prepare` accepts is what `deploy` accepts. No Vite
 step, no container image build, no `wrangler` invocation, no network traffic.
@@ -965,6 +983,9 @@ It runs, and fails on, every pre-deploy gate:
 </Callout>
 
 ### `lunora verify`
+
+Pass `--lazy-functions` to check the metadata requirements of the lazy registry
+without writing files. Verification uses eager generation rules by default.
 
 Validates `wrangler.jsonc`, runs a codegen dry-run, and type-checks the
 project with `tsc --noEmit`. Nothing is written to disk. Exits non-zero on
@@ -1056,6 +1077,9 @@ lunora run messages:send --args '{"channelId":"general","text":"hi"}'
 Worker instead of `http://localhost:8787`.
 
 ### `lunora codegen`
+
+Pass `--lazy-functions` to emit per-module lazy imports. The default is eager
+generation; repeat the flag on each command that regenerates the registry.
 
 Runs codegen once and exits, the one-shot form of what `lunora dev` and the
 Vite plugin do in watch mode. It reads `lunora/schema.ts` plus your function

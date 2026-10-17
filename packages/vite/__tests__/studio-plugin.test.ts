@@ -15,6 +15,7 @@ const makeOptions = (overrides: Partial<ResolvedLunoraPluginOptions> = {}): Reso
         allowUnauthenticatedShardAccess: false,
         apiSpec: "openapi",
         cloudflare: false,
+        lazyFunctions: false,
         generatedDir: "lunora/_generated",
         overlay: false,
         projectRoot: process.cwd(),

@@ -348,6 +348,7 @@ export interface SchemaIR {
  * `.expose({ cache: … })` object.
  */
 export interface ExposeCacheIR {
+    credentialHeaders?: ReadonlyArray<string>;
     maxAge?: number;
     scope?: "private" | "public";
     staleWhileRevalidate?: number;

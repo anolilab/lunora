@@ -313,6 +313,9 @@ interface FunctionRegistryEntry {
     /** The function's `v.*` args validator map; read structurally for the signature view. */
     args?: unknown;
 
+    /** Codegen's lazy registry supplies these without loading validators from the handler module. */
+    argumentDescriptors?: Readonly<FunctionDescriptor["args"]>;
+
     /**
      * Opt-in public-surface tag set by the `.expose({ rest: true })` builder
      * modifier (plan 167). Present only on procedures deliberately published over

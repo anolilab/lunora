@@ -15,6 +15,7 @@ const codegenCommand: Command = {
     name: "codegen",
     options: [
         { description: `Which API spec(s) to emit: ${API_SPEC_HELP} (default openapi)`, name: "api-spec", type: String },
+        { description: "Use per-module lazy imports for registered functions (opt-in; default eager)", name: "lazy-functions", type: Boolean },
         OUTPUT_FORMAT_OPTION,
         // Both the positive AND the `no-*` form are declared explicitly (#285).
         // Declaring only `no-strict-advisories` and relying on cerebro to
@@ -55,6 +56,7 @@ export { codegenCommand };
 export type CodegenOptions = CreateOptions<{
     "api-spec": string | undefined;
     format: string | undefined;
+    "lazy-functions": boolean | undefined;
     "strict-advisories": boolean | undefined;
     target: string | undefined;
 }>;

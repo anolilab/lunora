@@ -473,6 +473,7 @@ abstract class ShardDO {
     } | undefined;
     protected persistIdempotentResult(encodedResult: unknown): void;
     protected isCustomMutator(_functionPath: string): boolean;
+    protected prepareFunction(_functionPath: string, _reason: "rpc" | "subscription" | "stream" | "reactor"): void | Promise<void>;
     protected isMutationFunction(_functionPath: string): boolean;
     protected classifyClientMutation(): ClientMutationClass | undefined;
     protected rejectNonNextMutation(functionPath: string, mutatorClass: ClientMutationClass | undefined, dispatchStartedAt: number): Response | undefined;
@@ -549,6 +550,8 @@ abstract class ShardDO {
     protected handleWebSocketMessage(ws: ShardSocketLike, message: string | ArrayBuffer): Promise<void>;
     protected handleFetchCloudflare(request: Request): Promise<Response>;
     protected handleAlarmCloudflare(): Promise<void>;
+    protected captureRequestScope(): RequestScope;
+    protected restoreRequestScope(scope: RequestScope): void;
     protected recordSpan(span: SpanEvent, sink?: TelemetrySink, sampledSnapshot?: boolean): void;
     protected isIdentityIndependent(functionPath: string): boolean;
     protected readShapeCdcKeys(sql: SqlExec, table: string, sinceSeq: number, upTo: number): CdcChangeKey[];
@@ -963,6 +966,27 @@ interface ReactorRunOutcome {
     digest: string;
     ran: boolean;
     tables: ReadonlyArray<string>;
+}
+```
+
+### `RequestScope` (interface)
+
+```ts
+interface RequestScope {
+    baselineSeq: number | undefined;
+    bookmark: string | undefined;
+    clientId: string | undefined;
+    clientSeq: number | undefined;
+    identity: Record<string, unknown> | undefined;
+    ip: string | undefined;
+    mutationId: string | undefined;
+    mutatorClass: ClientMutationClass | undefined;
+    origin: string | undefined;
+    sampleErrors: boolean | undefined;
+    system: boolean;
+    trace: TraceAnchor | undefined;
+    traceparent: string | undefined;
+    userId: string | undefined;
 }
 ```
 

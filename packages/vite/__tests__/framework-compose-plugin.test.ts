@@ -32,6 +32,7 @@ const baseOptions = (overrides: Partial<ResolvedLunoraPluginOptions> = {}): Reso
     return {
         allowUnauthenticatedShardAccess: false,
         apiSpec: "openapi",
+        lazyFunctions: false,
         cloudflare: {},
         generatedDir: "lunora/_generated",
         overlay: false,

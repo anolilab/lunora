@@ -20,6 +20,7 @@ const prepareCommand: Command = {
             type: Boolean,
         },
         { description: `Which API spec(s) to emit: ${API_SPEC_HELP} (default openapi)`, name: "api-spec", type: String },
+        { description: "Use per-module lazy function imports (opt-in; default eager)", name: "lazy-functions", type: Boolean },
         // Both forms declared explicitly, for the reason `lunora deploy` spells
         // out at its identical pair: letting cerebro synthesize the positive
         // flag clones the `no-*` description and gives it a `defaultValue`, so
@@ -49,6 +50,7 @@ export { prepareCommand };
 export type PrepareOptions = CreateOptions<{
     "allow-schema-drift": boolean | undefined;
     "api-spec": string | undefined;
+    "lazy-functions": boolean | undefined;
     "strict-advisories": boolean | undefined;
     target: string | undefined;
     "update-schema-baseline": boolean | undefined;

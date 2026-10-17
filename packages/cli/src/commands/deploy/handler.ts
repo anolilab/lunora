@@ -229,6 +229,7 @@ const runCodegenStep = async (
     interactive: boolean,
     logger: Logger,
     apiSpec: ApiSpec | undefined,
+    lazyFunctions: boolean | undefined,
     target: string,
     spawner: Spawner | undefined,
     jsonOutput: boolean,
@@ -244,7 +245,7 @@ const runCodegenStep = async (
     }
 
     try {
-        const result = runCodegen({ apiSpec, projectRoot: cwd, target, ...wranglerCodegenInputs(cwd) });
+        const result = runCodegen({ apiSpec, lazyFunctions, projectRoot: cwd, target, ...wranglerCodegenInputs(cwd) });
         codegenSpinner?.succeed("codegen complete");
 
         if (!codegenSpinner) {
@@ -567,6 +568,7 @@ const runPreDeployPipeline = async (options: DeployCommandOptions, command: PreD
             interactive,
             options.logger,
             options.apiSpec,
+            options.lazyFunctions,
             target,
             options.spawner,
             options.format === "json",
@@ -963,6 +965,7 @@ const execute: CommandHandler<DeployOptions> = defineHandler<DeployOptions, Depl
     const result = await runDeployCommand({
         allowSchemaDrift: options.allowSchemaDrift === true,
         apiSpec: parseApiSpec(options.apiSpec),
+        lazyFunctions: options.lazyFunctions,
         cwd,
         dryRun: options.dryRun === true,
         env: options.env,

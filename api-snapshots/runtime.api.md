@@ -779,6 +779,7 @@ interface FunctionDescriptor {
 ```ts
 interface FunctionRegistryEntry {
     args?: unknown;
+    argumentDescriptors?: Readonly<FunctionDescriptor["args"]>;
     expose?: RestExposure;
     kind: "action" | "mutation" | "query" | "stream";
     visibility?: "internal" | "public";

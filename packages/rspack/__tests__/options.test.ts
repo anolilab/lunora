@@ -2,7 +2,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { resolveOptions, resolveRunnableTargetOrThrow } from "../src/options";
 
@@ -14,6 +14,7 @@ describe(resolveOptions, () => {
     });
 
     afterEach(() => {
+        vi.unstubAllEnvs();
         rmSync(workdir, { force: true, recursive: true });
     });
 
@@ -22,11 +23,25 @@ describe(resolveOptions, () => {
 
         expect(resolveOptions({ projectRoot: workdir })).toStrictEqual({
             apiSpec: "openapi",
+            lazyFunctions: false,
             projectRoot: workdir,
             schemaDir: "lunora",
             target: "cloudflare",
             validateWrangler: true,
         });
+    });
+
+    it("opts into lazy functions explicitly or through the dev child environment", () => {
+        expect.assertions(3);
+
+        vi.stubEnv("LUNORA_LAZY_FUNCTIONS", "");
+
+        expect(resolveOptions({ projectRoot: workdir }).lazyFunctions).toBe(false);
+        expect(resolveOptions({ lazyFunctions: true, projectRoot: workdir }).lazyFunctions).toBe(true);
+
+        vi.stubEnv("LUNORA_LAZY_FUNCTIONS", "1");
+
+        expect(resolveOptions({ projectRoot: workdir }).lazyFunctions).toBe(true);
     });
 
     it("rejects a target with no command-line toolchain", () => {

@@ -123,6 +123,7 @@ interface DeployCommandOptions {
     healthFetch?: HealthFetch;
     healthSleep?: (ms: number) => Promise<void>;
     interactive?: boolean;
+    lazyFunctions?: boolean;
     logger: Logger;
     migrate?: boolean;
     migrateToken?: string;
@@ -198,6 +199,7 @@ interface DevCommandOptions {
     hasIpv6Loopback?: () => boolean;
     inspectorPort?: number;
     jsonLogs?: boolean;
+    lazyFunctions?: boolean;
     local?: boolean;
     logger: Logger;
     materializeDev?: typeof materializeDevWranglerConfig;
@@ -942,6 +944,7 @@ interface CodegenCommandOptions {
     apiSpec?: ApiSpec;
     cwd?: string;
     format?: OutputFormat;
+    lazyFunctions?: boolean;
     logger: Logger;
     strictAdvisories?: boolean;
     target?: string;
@@ -974,6 +977,7 @@ interface CodegenWatcherOptions {
     apiSpec?: CodegenOptions["apiSpec"];
     debounceMs?: number;
     jsonLogs?: boolean;
+    lazyFunctions?: CodegenOptions["lazyFunctions"];
     logger: Logger;
     lunoraDirectory?: string;
     projectRoot: string;
@@ -1373,6 +1377,7 @@ interface StudioServerOptions {
     apiSpec?: CodegenOptions["apiSpec"];
     cwd: string;
     host?: string;
+    lazyFunctions?: CodegenOptions["lazyFunctions"];
     logger?: {
         warnOnce?: (message: string) => void;
     };

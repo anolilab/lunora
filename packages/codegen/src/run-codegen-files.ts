@@ -74,6 +74,34 @@ export const writeServiceDeclarations = (outputDirectory: string, files: Record<
     }
 };
 
+/** Write a codegen-owned directory and remove stale generated files from the previous render. */
+export const writeGeneratedDirectory = (outputDirectory: string, name: string, files: Record<string, string>): void => {
+    const directory = join(outputDirectory, name);
+
+    if (Object.keys(files).length === 0) {
+        rmSync(directory, { force: true, recursive: true });
+
+        return;
+    }
+
+    if (existsSync(directory)) {
+        for (const entry of readdirSync(directory, { recursive: true, withFileTypes: true })) {
+            const path = join(entry.parentPath, entry.name);
+
+            if (entry.isFile() && files[relative(directory, path)] === undefined) {
+                rmSync(path);
+            }
+        }
+    }
+
+    for (const [path, content] of Object.entries(files)) {
+        const filePath = join(directory, path);
+
+        mkdirSync(dirname(filePath), { recursive: true });
+        writeIfChanged(filePath, content);
+    }
+};
+
 /**
  * Read the `version` field from the `package.json` at `projectRoot`.
  *
@@ -128,7 +156,10 @@ export const projectFileMatches = (project: Project, filePath: string, content: 
  * writes it, or DELETES it when `content` is `""`, so a feature that is no longer in
  * use leaves no stale file behind. `services` writes the service declaration files.
  */
-export type GeneratedFileStep = { content: string; kind: "always" | "optional"; name: string } | { files: Record<string, string>; kind: "services" };
+export type GeneratedFileStep =
+    | { content: string; kind: "always" | "optional"; name: string }
+    | { files: Record<string, string>; kind: "directory"; name: string }
+    | { files: Record<string, string>; kind: "services" };
 
 /**
  * Write the `_generated/` files in the order the steps give, and return the names
@@ -143,17 +174,28 @@ export const writeGeneratedFiles = (outputDirectory: string, steps: ReadonlyArra
     const written: string[] = [];
 
     for (const step of steps) {
-        if (step.kind === "services") {
-            writeServiceDeclarations(outputDirectory, step.files);
-            written.push(...Object.keys(step.files));
-        } else if (step.kind === "always") {
-            writeIfChanged(join(outputDirectory, step.name), step.content);
-            written.push(step.name);
-        } else {
-            writeIfPresent(join(outputDirectory, step.name), step.content);
-
-            if (step.content !== "") {
+        switch (step.kind) {
+            case "always": {
+                writeIfChanged(join(outputDirectory, step.name), step.content);
                 written.push(step.name);
+                break;
+            }
+            case "directory": {
+                writeGeneratedDirectory(outputDirectory, step.name, step.files);
+                written.push(...Object.keys(step.files).map((path) => join(step.name, path)));
+                break;
+            }
+            case "services": {
+                writeServiceDeclarations(outputDirectory, step.files);
+                written.push(...Object.keys(step.files));
+                break;
+            }
+            default: {
+                writeIfPresent(join(outputDirectory, step.name), step.content);
+
+                if (step.content !== "") {
+                    written.push(step.name);
+                }
             }
         }
     }

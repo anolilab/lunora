@@ -205,7 +205,11 @@ const createStudioMiddleware = (options: StudioMiddlewareOptions): ((request: In
         const jsonHandler = JSON_ENDPOINT_HANDLERS[pathname];
 
         if (jsonHandler !== undefined) {
-            serveJsonHandler(request, response, jsonHandler, projectRoot, { apiSpec: options.apiSpec, schemaDirectory: options.schemaDirectory });
+            serveJsonHandler(request, response, jsonHandler, projectRoot, {
+                apiSpec: options.apiSpec,
+                lazyFunctions: options.lazyFunctions,
+                schemaDirectory: options.schemaDirectory,
+            });
 
             return;
         }

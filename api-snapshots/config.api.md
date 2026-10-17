@@ -769,6 +769,12 @@ interface InferredWorkflow extends WorkflowIR {
 }
 ```
 
+### `LAZY_FUNCTIONS_ENV` (const)
+
+```ts
+const LAZY_FUNCTIONS_ENV = "LUNORA_LAZY_FUNCTIONS";
+```
+
 ### `LINKED_PROJECT_DIR` (const)
 
 ```ts
@@ -1442,6 +1448,12 @@ const isDevServerReady: (state: Pick<DevServerState, "readyAt"> | undefined) => 
 
 ```ts
 const isInteractive: () => boolean;
+```
+
+### `isLazyFunctionsEnabled` (const)
+
+```ts
+const isLazyFunctionsEnabled: (value: string | undefined) => boolean;
 ```
 
 ### `isMergedProject` (const)
@@ -2925,6 +2937,7 @@ const ALLOW_FORWARDED_ENV = "LUNORA_STUDIO_ALLOW_FORWARDED";
 ```ts
 interface LocalEndpointContext {
     readonly apiSpec?: CodegenOptions["apiSpec"];
+    readonly lazyFunctions?: CodegenOptions["lazyFunctions"];
     readonly schemaDirectory?: string;
 }
 ```
@@ -2972,6 +2985,7 @@ type PolicyScaffoldBody = DestructivePolicyEdit | ScaffoldPolicyEdit | WirePolic
 interface PolicyScaffoldRequest {
     readonly apiSpec?: CodegenOptions["apiSpec"];
     readonly body?: unknown;
+    readonly lazyFunctions?: CodegenOptions["lazyFunctions"];
     readonly method: string;
     readonly projectRoot: string;
     readonly schemaDirectory?: string;
@@ -3023,6 +3037,7 @@ const STUDIO_STYLE_PATH: string;
 interface SchemaEditRequest {
     readonly apiSpec?: CodegenOptions["apiSpec"];
     readonly body?: unknown;
+    readonly lazyFunctions?: CodegenOptions["lazyFunctions"];
     readonly method: string;
     readonly projectRoot: string;
     readonly schemaDirectory?: string;

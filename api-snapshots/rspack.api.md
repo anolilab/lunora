@@ -28,6 +28,7 @@ interface CompilerLike {
 ```ts
 interface LunoraRspackOptions {
     apiSpec?: CodegenOptions["apiSpec"];
+    lazyFunctions?: CodegenOptions["lazyFunctions"];
     projectRoot?: string;
     schemaDir?: string;
     target?: string;
@@ -204,6 +205,7 @@ type ProxyArrayEntry = Record<string, unknown> & {
 ```ts
 interface ResolvedLunoraRspackOptions {
     apiSpec: NonNullable<CodegenOptions["apiSpec"]>;
+    lazyFunctions: boolean;
     projectRoot: string;
     schemaDir: string;
     target: string;

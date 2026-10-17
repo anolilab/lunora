@@ -98,6 +98,7 @@ class CodegenDiagnosticError extends LunoraError {
 interface CodegenOptions {
     apiSpec?: "both" | "none" | "openapi" | "openrpc";
     dryRun?: boolean;
+    lazyFunctions?: boolean;
     lint?: boolean;
     lunoraDirectory?: string;
     project?: Project;
@@ -129,6 +130,7 @@ interface CodegenResult {
         dataModel: string;
         drizzleGlobal: string;
         drizzleShard: string;
+        functionModules: Record<string, string>;
         functions: string;
         internal: string;
         openApi: string;
@@ -361,6 +363,9 @@ interface FunctionIR {
     output?: ValidatorIR;
     returnType: string;
     visibility?: "internal" | "public";
+    x402?: {
+        price?: number | string;
+    };
 }
 ```
 
@@ -1208,7 +1213,9 @@ const discoverFlags: (project: Project, lunoraDirectory: string) => FlagsIR | un
 ### `discoverFunctions` (const)
 
 ```ts
-const discoverFunctions: (project: Project, lunoraDirectory: string) => FunctionIR[];
+const discoverFunctions: (project: Project, lunoraDirectory: string, options?: {
+    lazyFunctions?: boolean;
+}) => FunctionIR[];
 ```
 
 ### `discoverHttpRoutes` (const)
@@ -1436,7 +1443,7 @@ const emitServer: ({ agents, capabilities, containers, env, hasVectors, hasFlags
 ### `emitShard` (const)
 
 ```ts
-const emitShard: ({ advisories, advisorProcedures, agents, capabilities, containers, env, flagKeys, hasFlags, hasNotify, hasRooms, hasVectors, maskMetadata, mutators, queues, rlsMetadata, schema, schemaSnapshot, shapes, storageRules, studioFeatures, services, topics, useUmbrella, workflows }: EmitShardOptions) => string;
+const emitShard: ({ advisories, advisorProcedures, agents, capabilities, containers, env, flagKeys, hasFlags, hasNotify, hasRooms, lazyFunctions, hasVectors, maskMetadata, mutators, queues, rlsMetadata, schema, schemaSnapshot, shapes, storageRules, studioFeatures, services, topics, useUmbrella, workflows }: EmitShardOptions) => string;
 ```
 
 ### `emitVectors` (const)
@@ -2484,6 +2491,7 @@ interface EmitApiOptions {
 interface EmitFunctionsOptions {
     agents?: ReadonlyArray<AgentIR>;
     functions: ReadonlyArray<FunctionIR>;
+    lazyFunctions?: boolean;
     migrations?: ReadonlyArray<MigrationIR>;
     mutators?: ReadonlyArray<MutatorIR>;
     shapes?: ReadonlyArray<ShapeIR>;
@@ -2532,6 +2540,7 @@ interface EmitShardOptions {
     hasNotify?: boolean;
     hasRooms?: boolean;
     hasVectors?: boolean;
+    lazyFunctions?: boolean;
     maskMetadata?: MaskMetadataIR;
     mutators?: ReadonlyArray<MutatorIR>;
     queues?: ReadonlyArray<QueueIR>;
@@ -2560,6 +2569,7 @@ interface EnvIR {
 
 ```ts
 interface ExposeCacheIR {
+    credentialHeaders?: ReadonlyArray<string>;
     maxAge?: number;
     scope?: "private" | "public";
     staleWhileRevalidate?: number;

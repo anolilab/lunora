@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { createServer as createHttpServer, request as httpRequest } from "node:http";
 import { connect, createServer } from "node:net";
@@ -617,8 +617,8 @@ describe("startStudioServer", () => {
         }
     });
 
-    it("forwards the host's apiSpec into a schema edit, so the edit does not delete the project's openrpc.json", async () => {
-        expect.assertions(2);
+    it("preserves the host's API spec and lazy registry after a schema edit", async () => {
+        expect.assertions(5);
 
         // Codegen writes the spec its mode names and REMOVES the other, so a studio
         // edit that reached codegen with no `apiSpec` defaulted to "openapi" and
@@ -641,7 +641,13 @@ export default defineSchema({
         );
 
         const port = await getFreePort();
-        const studio = await startStudioServer({ apiSpec: "openrpc", cwd: projectRoot, port, workerOrigin: "http://localhost:8787" });
+        writeFileSync(
+            join(projectRoot, "lunora", "todos.ts"),
+            'import { query } from "./_generated/server";\nexport const list = query({ handler: async () => [] });\n',
+            "utf8",
+        );
+
+        const studio = await startStudioServer({ apiSpec: "openrpc", lazyFunctions: true, cwd: projectRoot, port, workerOrigin: "http://localhost:8787" });
 
         try {
             const response = await postStudioJson(port, "/__lunora/schema-edit", `127.0.0.1:${String(port)}`, {
@@ -653,6 +659,12 @@ export default defineSchema({
 
             expect(response.statusCode).toBe(200);
             expect(existsSync(join(projectRoot, "lunora", "_generated", "openrpc.json"))).toBe(true);
+
+            const registry = readFileSync(join(projectRoot, "lunora", "_generated", "functions.ts"), "utf8");
+
+            expect(registry).toContain("export const LUNORA_FUNCTION_MANIFEST");
+            expect(registry).toContain("todos:list");
+            expect(existsSync(join(projectRoot, "lunora", "_generated", "fn", "lunora_todos_0.ts"))).toBe(true);
         } finally {
             await studio.close();
             rmSync(projectRoot, { force: true, recursive: true });

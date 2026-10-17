@@ -95,6 +95,9 @@ class StreamShard extends ShardDO {
     /** When set, `handleRpc` parks on this promise, holding a dispatch open across an interleaved stream frame. */
     public rpcGate: Promise<void> | undefined;
 
+    /** A deferred module load for exercising stream cancellation before the pump exists. */
+    public prepare: ((functionPath: string) => void | Promise<void>) | undefined;
+
     public override async handleRpc(): Promise<unknown> {
         await this.rpcGate;
 
@@ -116,6 +119,10 @@ class StreamShard extends ShardDO {
 
     protected override isPaidFunction(functionPath: string): boolean {
         return this.paidPaths.has(functionPath);
+    }
+
+    protected override prepareFunction(functionPath: string): void | Promise<void> {
+        return this.prepare?.(functionPath);
     }
 
     /**
@@ -304,6 +311,85 @@ describe("shardDO streaming queries", () => {
         // Cancel acked, no "complete" frame for the aborted stream.
         expect(types).toContain("ack");
         expect(types).not.toContain("complete");
+    });
+
+    it("does not start a stream unsubscribed while its lazy module is loading", async () => {
+        expect.assertions(2);
+
+        const shard = new StreamShard(state, {});
+        let releasePreparation: (() => void) | undefined;
+        let signalPreparationStarted: (() => void) | undefined;
+        const preparationStarted = new Promise<void>((resolve) => {
+            signalPreparationStarted = resolve;
+        });
+        const preparation = new Promise<void>((resolve) => {
+            releasePreparation = resolve;
+        });
+        let iteratorStarted = false;
+
+        shard.prepare = async () => {
+            signalPreparationStarted?.();
+            await preparation;
+        };
+        shard.registered.set("metrics:pending", async function* pending() {
+            iteratorStarted = true;
+            yield "never";
+        });
+
+        const ws = createFakeWebSocket();
+
+        shard.registerSocket(ws, { subs: {} });
+        await shard.driveMessage(ws, { id: "pending", query: { functionPath: "metrics:pending" }, type: "stream" });
+        await preparationStarted;
+
+        // The active reservation makes a duplicate id visible even before a
+        // stream iterator or ack exists.
+        await shard.driveMessage(ws, { id: "pending", query: { functionPath: "metrics:pending" }, type: "stream" });
+        await shard.driveMessage(ws, { id: "pending", type: "unsubscribe" });
+        releasePreparation?.();
+        await Promise.resolve();
+        await Promise.resolve();
+
+        expect(iteratorStarted).toBe(false);
+        expect(parseFrames(ws).filter((frame) => frame.type === "error")).toContainEqual(
+            expect.objectContaining({ error: expect.objectContaining({ code: "STREAM_ID_IN_USE" }), type: "error" }),
+        );
+    });
+
+    it("does not resurrect a pending stream after its socket closes", async () => {
+        expect.assertions(1);
+
+        const shard = new StreamShard(state, {});
+        let releasePreparation: (() => void) | undefined;
+        let signalPreparationStarted: (() => void) | undefined;
+        const preparationStarted = new Promise<void>((resolve) => {
+            signalPreparationStarted = resolve;
+        });
+        const preparation = new Promise<void>((resolve) => {
+            releasePreparation = resolve;
+        });
+        let iteratorStarted = false;
+
+        shard.prepare = async () => {
+            signalPreparationStarted?.();
+            await preparation;
+        };
+        shard.registered.set("metrics:pending", async function* pending() {
+            iteratorStarted = true;
+            yield "never";
+        });
+
+        const ws = createFakeWebSocket();
+
+        shard.registerSocket(ws, { subs: {} });
+        await shard.driveMessage(ws, { id: "pending", query: { functionPath: "metrics:pending" }, type: "stream" });
+        await preparationStarted;
+        await shard.driveClose(ws);
+        releasePreparation?.();
+        await Promise.resolve();
+        await Promise.resolve();
+
+        expect(iteratorStarted).toBe(false);
     });
 
     it("returns NOT_FOUND error when the function isn't a registered stream", async () => {
