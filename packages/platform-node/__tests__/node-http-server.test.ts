@@ -63,4 +63,51 @@ describe("createNodeHttpServer", () => {
 
         await pending;
     });
+
+    it("cancels the body of a response that arrives after the client disconnected", async () => {
+        expect.hasAssertions();
+
+        let cancelled = false;
+        const pendingFetch: { resolve?: (response: Response) => void } = {};
+
+        const server = await listen(
+            () =>
+                new Promise<Response>((resolve) => {
+                    pendingFetch.resolve = resolve;
+                }),
+        );
+
+        const controller = new AbortController();
+        const client = fetch(server.origin, { signal: controller.signal }).catch(() => undefined);
+
+        await vi.waitFor(() => {
+            expect(pendingFetch.resolve).toBeDefined();
+        });
+
+        // Disconnect while fetch is still pending: the close has already happened when the response shows up.
+        controller.abort();
+        await new Promise<void>((resolve) => {
+            setTimeout(resolve, 100);
+        });
+
+        pendingFetch.resolve?.(
+            new Response(
+                new ReadableStream<Uint8Array>({
+                    cancel() {
+                        cancelled = true;
+                    },
+                    pull(): void {},
+                    start(streamController) {
+                        streamController.enqueue(new TextEncoder().encode("late"));
+                    },
+                }),
+            ),
+        );
+
+        await vi.waitFor(() => {
+            expect(cancelled).toBe(true);
+        });
+
+        await client;
+    });
 });

@@ -59,12 +59,23 @@ const toRequest = async (incoming: IncomingMessage, origin: string): Promise<Req
     });
 };
 
+// A helper rather than an inline `outgoing.destroyed` check: TypeScript would narrow that property after an early return and then flag the loop's later re-check as always truthy.
+const isDisconnected = (outgoing: ServerResponse): boolean => outgoing.destroyed;
+
 const writeResponse = async (response: Response, outgoing: ServerResponse): Promise<void> => {
     // An unhandled 'error' event throws, and a socket write error must not take the process down. Destroying the response is what
     // fires 'close', which cancels the body and ends any wait for drain below.
     outgoing.on("error", () => {
         outgoing.destroy();
     });
+
+    // A client that disconnected while fetch was pending fired 'close' before the listener below existed, so nothing else will free
+    // the body. Cancel it now, which is what releases the shard's subscriber slot.
+    if (isDisconnected(outgoing)) {
+        await response.body?.cancel().catch(() => undefined);
+
+        return;
+    }
 
     const headers: Record<string, string | string[]> = {};
 
