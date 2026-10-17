@@ -27,6 +27,8 @@ export {
 } from "./errors";
 export type { HttpStreamOptions } from "./http-stream";
 export { httpStream } from "./http-stream";
+export type { ConnectLiveStreamOptions, LiveStream, LiveStreamEvent, LiveStreamSubscribeOptions } from "./live-stream";
+export { connectLiveStream } from "./live-stream";
 export type { OptimisticLocalStore, OptimisticUpdate } from "./local-store";
 export { createLocalStore } from "./local-store";
 export type {

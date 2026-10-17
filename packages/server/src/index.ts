@@ -39,9 +39,13 @@ export type {
     HttpRouteHandlerOptions,
     HttpRunners,
     HttpStreamHandlerOptions,
+    LivePublisher,
+    LivePublishOptions,
     LunoraHttpApp,
     LunoraHttpEnv,
     LunoraRouteHandler,
+    ShardFetch,
+    ShardFetchInit,
     SseEvent,
 } from "./http";
 export { httpAction, httpRoute, httpRouter, isSafeHeaderValue, lastEventId, sseEvent } from "./http";
@@ -54,6 +58,8 @@ export type { LifecycleHandler, ShardInitHandler } from "./lifecycle";
 export { onConnect, onDisconnect, onShardInit } from "./lifecycle";
 export type { DefineListArgsConfig, ListArgsSpec, ListArgsValidators, ListArgsValue, ListFilterOperators, ListOrderByEntry, ListWhere } from "./list-args";
 export { clampLimit, DEFAULT_LIMIT, DEFAULT_MAX_LIMIT, defineListArgs } from "./list-args";
+export type { LiveStream, LiveStreamConfig, LiveSubscribeHandler } from "./live-stream";
+export { defineLiveStream } from "./live-stream";
 export type { MaskColumns, MaskContext, MaskFn, MaskOptions, MaskPolicies, MaskRegistry, MaskStrategy } from "./mask/index";
 export { buildMaskRegistry, mask } from "./mask/index";
 export type { MigrationCtx, MigrationDefinition, MigrationDocument, MigrationReader, MigrationTransform, RegisteredMigration } from "./migration";

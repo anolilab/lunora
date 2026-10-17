@@ -265,6 +265,15 @@ import { describeError, encodeErrorDetail, ERROR_DETAIL_HEADER, findLoggedError,
 import { evictOldestEntry } from "../../../shared/evict-oldest";
 import { decodeIdentityExpiryHeader, decodeUserIdHeader, dropExpiredCredentialSocket, isIdentityExpired } from "../../../shared/identity-header";
 import { jsonResponse } from "../../../shared/json-response";
+import {
+    encodeLiveFrame,
+    LIVE_CONNECT_PATH,
+    LIVE_CONNECTION_HEADER,
+    LIVE_CONTROL_PATH,
+    LIVE_PUBLISH_PATH,
+    LIVE_SSE_HEADERS,
+    liveSubscriptionKey,
+} from "../../../shared/live-stream";
 import type { LogSinkContext } from "../../../shared/log-event";
 import type { LogFields } from "../../../shared/log-fields";
 import type { MetricEvent } from "../../../shared/metric-event";
@@ -454,6 +463,14 @@ const decodeAdminArgs = (rawArgs: Record<string, unknown>): Record<string, unkno
 const WS_KEEPALIVE_PING = "lunora-ping";
 /** Canned reply the runtime returns for {@link WS_KEEPALIVE_PING}; never reaches a message handler. */
 const WS_KEEPALIVE_PONG = "lunora-pong";
+
+/**
+ * The whisper-topic prefix a `defineRoom` lives under. Mirrors `@lunora/server`'s
+ * room prefix (this package does not import the server). A server publish may
+ * not name a room topic: the room's members trust a frame there as its handler's
+ * output.
+ */
+const ROOM_TOPIC_PREFIX = "room:";
 
 /**
  * Hard ceiling on a single inbound WS frame — 1Mi UTF-16 code units for a text
@@ -1490,6 +1507,32 @@ const relayRoomProxy = (identity: RelayRoomEvent["attachment"]): ShardSocketLike
     } as unknown as ShardSocketLike;
 };
 
+/**
+ * Live connections held by the caller opening a new one. `callerConnections` counts the caller's
+ * user-id bucket; `ipConnections` counts anonymous connections from `anonymousIp` only, so a
+ * signed-in connection never uses up an anonymous client's IP allowance.
+ */
+const countLiveConnections = (
+    subscribers: Iterable<LiveSubscriber>,
+    userBucket: string | undefined,
+    anonymousIp: string | undefined,
+): { callerConnections: number; ipConnections: number } => {
+    let callerConnections = 0;
+    let ipConnections = 0;
+
+    for (const existing of subscribers) {
+        if (existing.userId === userBucket) {
+            callerConnections += 1;
+        }
+
+        if (anonymousIp !== undefined && existing.userId === "" && existing.ip === anonymousIp) {
+            ipConnections += 1;
+        }
+    }
+
+    return { callerConnections, ipConnections };
+};
+
 const socketIdentity = (attachment: SocketAttachment): SubscriptionIdentity => {
     return { identity: attachment.identity, ip: attachment.ip, userId: attachment.userId };
 };
@@ -1620,6 +1663,147 @@ const takeToken = (ws: ShardSocketLike, buckets: WeakMap<ShardSocketLike, { last
     buckets.set(ws, { last: now, tokens: refilled - 1 });
 
     return true;
+};
+
+/**
+ * One live-topic SSE connection held by the shard. The `enqueue` callback is
+ * captured by the connect handler and driven by
+ * {@link ShardDO.broadcastLiveTopic}; `subscriptions` maps the caller's
+ * subscription id to its topic, so a re-subscribe is idempotent and two
+ * subscriptions can share a topic without one unsubscribe evicting the other.
+ */
+interface LiveSubscriber {
+    /** Ends the SSE response; used when the identity behind the connection expires. */
+    close: () => void;
+    enqueue: (chunk: Uint8Array) => void;
+    /** Epoch ms after which the connection's credential has lapsed, if it carries one. */
+    expiresAt?: number;
+    /** The client IP the runtime minted for this connection, when it had one; keys the per-client limit. */
+    ip?: string;
+    subscriptions: Map<string, string>;
+    /** The caller's user id, or `""` for an anonymous connection; keys the per-caller limit. */
+    userId: string;
+}
+
+/** A validated live control request, or the 400/404 response that refuses it. */
+type LiveControlRead = { response: Response } | { action: unknown; connectionId: string; key: string; subscriptionId: string };
+
+/**
+ * Longest topic or subscription id a live control call may name. Both are held in the
+ * shard's memory for the life of the connection, so an unbounded name is a memory lever.
+ */
+const MAX_LIVE_CONTROL_KEY_LENGTH = 256;
+
+/**
+ * Read and validate a live subscribe/unsubscribe body. The connection lookup is
+ * left to the caller; an absent id comes back as `""`, which matches no connection.
+ */
+const readLiveControl = async (request: Request): Promise<LiveControlRead> => {
+    let body: { action?: unknown; connectionId?: unknown; stream?: unknown; subscriptionId?: unknown; topic?: unknown };
+
+    try {
+        body = await request.json();
+    } catch {
+        return { response: jsonResponse({ error: { code: "BAD_REQUEST", message: "invalid JSON body" } }, 400) };
+    }
+
+    const topic = typeof body.topic === "string" && body.topic.length > 0 ? body.topic : undefined;
+
+    if (topic === undefined) {
+        return { response: jsonResponse({ error: { code: "BAD_REQUEST", message: "topic is required" } }, 400) };
+    }
+
+    const stream = typeof body.stream === "string" && body.stream.length > 0 ? body.stream : undefined;
+
+    if (stream === undefined) {
+        return { response: jsonResponse({ error: { code: "BAD_REQUEST", message: "stream is required" } }, 400) };
+    }
+
+    const subscriptionId = typeof body.subscriptionId === "string" && body.subscriptionId.length > 0 ? body.subscriptionId : undefined;
+
+    if (subscriptionId === undefined) {
+        return { response: jsonResponse({ error: { code: "BAD_REQUEST", message: "subscriptionId is required" } }, 400) };
+    }
+
+    if (topic.length > MAX_LIVE_CONTROL_KEY_LENGTH || subscriptionId.length > MAX_LIVE_CONTROL_KEY_LENGTH) {
+        return {
+            response: jsonResponse(
+                { error: { code: "BAD_REQUEST", message: `topic and subscriptionId may be at most ${String(MAX_LIVE_CONTROL_KEY_LENGTH)} characters` } },
+                400,
+            ),
+        };
+    }
+
+    return {
+        action: body.action,
+        connectionId: typeof body.connectionId === "string" ? body.connectionId : "",
+        key: liveSubscriptionKey(stream, topic),
+        subscriptionId,
+    };
+};
+
+/**
+ * Why a live subscribe is refused, or `undefined` when it may be granted. Checks the
+ * connection's credential and the caller's own, the id/topic binding, and the topic cap.
+ */
+const refuseLiveSubscribe = (
+    subscriber: Pick<LiveSubscriber, "expiresAt" | "subscriptions">,
+    subscriptionId: string,
+    key: string,
+    callerExpiry: number | undefined,
+    maxTopics: number,
+): Response | undefined => {
+    const now = Date.now();
+
+    if ((subscriber.expiresAt !== undefined && subscriber.expiresAt <= now) || (callerExpiry !== undefined && callerExpiry <= now)) {
+        return jsonResponse({ error: { code: "TOKEN_EXPIRED", message: "the credential for this live connection has expired" } }, 401);
+    }
+
+    // A subscription id names one (stream, topic) on this connection. Re-using it for a
+    // different one would silently replace another stream's grant, so refuse it.
+    const existingKey = subscriber.subscriptions.get(subscriptionId);
+
+    if (existingKey !== undefined && existingKey !== key) {
+        return jsonResponse({ error: { code: "CONFLICT", message: "subscriptionId is already in use for another topic" } }, 409);
+    }
+
+    if (!subscriber.subscriptions.has(subscriptionId) && subscriber.subscriptions.size >= maxTopics) {
+        return jsonResponse(
+            {
+                error: {
+                    code: "TOO_MANY_LIVE_TOPICS",
+                    message: `a live connection may follow at most ${String(maxTopics)} topics`,
+                },
+            },
+            429,
+        );
+    }
+
+    return undefined;
+};
+
+/**
+ * Persist a WebSocket's live grants on its attachment. Refuses, rather than acknowledging, when
+ * the runtime will not hold the attachment: an acknowledged grant that never persisted would
+ * stop delivering silently after the next hibernation.
+ */
+const persistLiveGrants = (ws: ShardSocketLike, attachment: SocketAttachment, grants: Record<string, string>): Response => {
+    const next: SocketAttachment = { ...attachment, liveGrants: grants };
+
+    if (Object.keys(grants).length === 0) {
+        delete next.liveGrants;
+    }
+
+    try {
+        (ws as HibernatableWebSocket).serializeAttachment?.(next);
+    } catch {
+        return jsonResponse(
+            { error: { code: "TOO_MANY_LIVE_TOPICS", message: "this socket's live subscriptions no longer fit its attachment; unsubscribe a topic" } },
+            429,
+        );
+    }
+
+    return jsonResponse({ ok: true });
 };
 
 /**
@@ -1792,6 +1976,44 @@ abstract class ShardDO {
 
     /** Room events one socket may have queued at once; past it the next event is refused. */
     protected static readonly MAX_QUEUED_ROOM_EVENTS = 64;
+
+    /**
+     * Per-connection cap on live SSE topics. A live connection is one SSE stream
+     * multiplexing many topics, so this bounds how many a single browser can
+     * follow before the connection is refused a further join. Like the whisper
+     * membership cap, an over-cap join is refused rather than evicting an earlier
+     * one.
+     */
+    protected static readonly MAX_LIVE_TOPICS_PER_CONNECTION = 64;
+
+    /**
+     * Per-WebSocket cap on live grants. A grant is a `liveGrants` entry in the 16 KiB
+     * hibernation attachment (subscription id and stream-scoped topic key), so this sits far
+     * below {@link ShardDO.MAX_LIVE_TOPICS_PER_CONNECTION}. A grant past it is refused.
+     */
+    protected static readonly MAX_LIVE_TOPICS_PER_SOCKET = 8;
+
+    /**
+     * Ceiling on live SSE connections one shard DO holds. Each open connection is
+     * a pinned stream the publish scan visits, and the connect route is reachable
+     * before any topic is authorized, so an unbounded count is a memory and CPU
+     * denial of service.
+     */
+    protected static readonly MAX_LIVE_CONNECTIONS = 1024;
+
+    /**
+     * Live SSE connections one caller may hold on a shard: one user id, or, for an anonymous
+     * caller with an IP (the `x-lunora-client-ip` the runtime mints), one client IP. A signed-in
+     * caller is never capped by its IP, so a shared IP cannot lock out its users. An anonymous
+     * caller with no IP shares the `""` user bucket.
+     */
+    protected static readonly MAX_LIVE_CONNECTIONS_PER_CALLER = 32;
+
+    /**
+     * Bytes a live SSE connection may hold queued unread. A reader that falls this far behind
+     * is dropped rather than letting its response queue grow with every publish.
+     */
+    protected static readonly MAX_LIVE_QUEUED_BYTES: number = 256 * 1024;
 
     /**
      * Whisper-rate token bucket: each socket may burst {@link ShardDO.WHISPER_RATE_BURST}
@@ -2457,6 +2679,21 @@ abstract class ShardDO {
      * the pair as taken rather than all passing an unchanged size check.
      */
     private readonly whisperVerdicts = new WeakMap<ShardSocketLike, Map<string, Promise<boolean> | boolean>>();
+
+    /**
+     * Live-topic SSE subscribers, keyed by the server-minted connection id
+     * returned on the connect response (`LIVE_CONNECTION_HEADER`). Each entry
+     * holds the topic set the connection is subscribed to and the stream
+     * controller frames are written into.
+     *
+     * In-memory on purpose and unlike whisper membership this is NOT on a
+     * hibernation attachment: an SSE response is an in-flight DO request, so the
+     * subscriber cannot outlive the instance that owns the stream — losing the
+     * map means the stream is gone too. That is also the hot-shard ceiling: the
+     * registry is a single shard object per shard key, so a very busy topic is a
+     * hot object; shard by `?shard=<key>` when throughput matters.
+     */
+    private readonly liveSubscribers = new Map<string, LiveSubscriber>();
 
     /**
      * Per-socket {@link AbortController} map keyed by stream id, used to
@@ -5914,6 +6151,66 @@ abstract class ShardDO {
     }
 
     /**
+     * The one validated publish path for a server-side live event. The HTTP route
+     * (`ctx.live.publish` from an HTTP action, forwarded by the Worker) and an
+     * in-shard action (see publishLiveFromAction) both land here, so
+     * the room refusal and the byte cap cannot drift between them. `wireData` is
+     * already wire-encoded.
+     * @throws LunoraError `FORBIDDEN_TOPIC` (403) for a room topic, `PAYLOAD_TOO_LARGE` (413) past the cap
+     * @returns the number of LOCAL SSE connections the frame was written to
+     */
+    protected publishLiveEvent(stream: string, topic: string, wireData: unknown): number {
+        if (topic.startsWith(ROOM_TOPIC_PREFIX)) {
+            throw new LunoraError("FORBIDDEN_TOPIC", "a room topic cannot be published to", { status: 403 });
+        }
+
+        // eslint-disable-next-line unicorn/no-null -- JSON payload: an undefined publish body serializes to null so the frame carries an explicit value
+        const dataJson = JSON.stringify(wireData ?? null);
+
+        // Measured in UTF-8 bytes like the room broadcast: `.length` counts UTF-16 units, so
+        // multibyte text would pass the cap at several times its byte size.
+        const { byteLength } = new TextEncoder().encode(dataJson);
+
+        if (byteLength > ShardDO.MAX_WHISPER_BYTES) {
+            throw new LunoraError("PAYLOAD_TOO_LARGE", `a publish may be at most ${String(ShardDO.MAX_WHISPER_BYTES)} bytes`, { status: 413 });
+        }
+
+        return this.broadcastLiveTopic(stream, topic, dataJson);
+    }
+
+    /**
+     * `ctx.live.publish` from an action that runs on THIS shard — a scheduled job's
+     * action, or any action the shard executes. It is a local call, not an RPC hop:
+     * the action already runs inside the Durable Object that owns the subscribers.
+     *
+     * An absent `shardKey` means this shard. Unlike the HTTP route, which defaults to
+     * the root shard, an action has no request to route from, so it publishes where
+     * it runs. A `shardKey` naming another shard is refused rather than delivered to
+     * zero subscribers: there is no cross-shard live fan-out to forward it through.
+     * @returns the number of LOCAL SSE connections the frame was written to
+     */
+    protected publishLiveFromAction(topic: string, payload: unknown, options: { shardKey?: string; stream: string }): Promise<number> {
+        if (options.shardKey !== undefined && options.shardKey !== this.currentShardKey()) {
+            return Promise.reject(
+                new LunoraError(
+                    "BAD_REQUEST",
+                    `ctx.live.publish from an action runs on shard "${this.currentShardKey()}"; "${options.shardKey}" is another shard. Publish from a route or an action on that shard`,
+                    {
+                        status: 400,
+                    },
+                ),
+            );
+        }
+
+        try {
+            // eslint-disable-next-line unicorn/no-null -- an omitted publish payload is delivered as an explicit JSON null
+            return Promise.resolve(this.publishLiveEvent(options.stream, topic, encodeWire(payload ?? null)));
+        } catch (error) {
+            return Promise.reject(error instanceof Error ? error : new LunoraError("INTERNAL", String(error), { status: 500 }));
+        }
+    }
+
+    /**
      * The `ShardRegistryDO` namespace this shard reports to, and which of its
      * tables are `.shardBy()`. The generated subclass overrides it for a schema
      * with `.shardBy()` tables and answers `undefined` until the app declares
@@ -6980,6 +7277,16 @@ abstract class ShardDO {
             return;
         }
 
+        // `live` is server-to-client only (see `deliverLiveLocal`). Refuse a client-sent one so a
+        // peer cannot forge a live publish to other members of a topic.
+        const clientFrameType: string = envelope.type;
+
+        if (clientFrameType === "live") {
+            trySendFrame(ws, JSON.stringify({ message: "live frames are server-only", type: "error" }));
+
+            return;
+        }
+
         if (envelope.type === "connect") {
             // One-shot control frame the client sends right after the socket
             // opens: record its connection `context` on the attachment (so it
@@ -6993,8 +7300,11 @@ abstract class ShardDO {
             // different user's sign-in from the session it already shows. Sent
             // on every `connect`, including a re-sent one: the answer is the
             // socket's, and repeating it costs one small frame.
+
+            // The connection id rides here so the client can name this socket in a live
+            // subscribe (`POST` to the stream's control route); the frame goes only to this socket.
             // eslint-disable-next-line unicorn/no-null -- `null` is the wire's "no user" value
-            trySendFrame(ws, JSON.stringify({ subject: attachment.userId ?? null, type: "identity" }));
+            trySendFrame(ws, JSON.stringify({ connectionId: attachment.connectionId, subject: attachment.userId ?? null, type: "identity" }));
 
             // Idempotent: a socket announces `connect` exactly once. A re-sent
             // (or duplicate) frame must not re-fire `onConnect`, or it would
@@ -14583,6 +14893,23 @@ abstract class ShardDO {
      * `fetch` then dispatches.
      * @returns the routed response, or `undefined` when this is an RPC request
      */
+    /** The three live-stream endpoints, or `undefined` when the request is not one of them. */
+    private async routeLive(url: URL, request: Request): Promise<Response | undefined> {
+        if (url.pathname === LIVE_CONNECT_PATH && request.method === "GET") {
+            return this.handleLiveConnect(request);
+        }
+
+        if (url.pathname === LIVE_CONTROL_PATH && request.method === "POST") {
+            return this.handleLiveControl(request);
+        }
+
+        if (url.pathname === LIVE_PUBLISH_PATH && request.method === "POST") {
+            return this.handleLivePublish(request);
+        }
+
+        return undefined;
+    }
+
     private async routeNonRpc(url: URL, request: Request): Promise<Response | undefined> {
         if (url.pathname === "/_lunora/relay" && request.method === "POST") {
             // The relay tier is inert on an unnamed (single-DO) DO — nothing forwards
@@ -14614,6 +14941,19 @@ abstract class ShardDO {
 
         if (request.headers.get("Upgrade") === "websocket") {
             return this.handleWebSocketUpgrade(request);
+        }
+
+        // Live topic streams: an SSE connection the runtime forwards here, and
+        // the control channel (subscribe / unsubscribe / publish) scoped to one
+        // connection id. Reachable only through the runtime's shard forward — a
+        // DO is never directly addressable — so the endpoints trust their caller
+        // for *authorization*: the `defineLiveStream` primitive runs the app's
+        // `onSubscribe` in the worker before it forwards. This side owns the
+        // subscriber registry and the fan-out, not the policy.
+        const live = await this.routeLive(url, request);
+
+        if (live !== undefined) {
+            return live;
         }
 
         return undefined;
@@ -15490,6 +15830,343 @@ abstract class ShardDO {
         }
 
         return { admitted: await this.dispatchRoomEvent(proxy, topic, "message", event.data, this.membershipEpoch(proxy, topic)) };
+    }
+
+    /**
+     * Open a live SSE connection. The stream is registered in
+     * {@link ShardDO.liveSubscribers} under a fresh connection id, which is
+     * returned in the `LIVE_CONNECTION_HEADER` response header so the client can
+     * scope later control calls to THIS connection.
+     *
+     * Opening a connection grants nothing: each topic is authorized on its own
+     * subscribe through the worker's `defineLiveStream`.
+     */
+    private handleLiveConnect(request: Request): Response {
+        if (this.liveSubscribers.size >= ShardDO.MAX_LIVE_CONNECTIONS) {
+            return jsonResponse({ error: { code: "LIVE_CONNECTION_LIMIT", message: "this shard holds the maximum number of live connections" } }, 503);
+        }
+
+        // One caller may not fill the shard: a per-caller bucket (anonymous callers share one)
+        // keeps a single client from locking every other reader out of live streams. The
+        // client IP is a second bucket, because a user id is free to mint and the connect route
+        // is reachable before any topic is authorized.
+        const userId = decodeUserIdHeader(request.headers.get("x-lunora-userid")) ?? "";
+        const ip = request.headers.get("x-lunora-client-ip") ?? undefined;
+        // An anonymous caller with an IP is bucketed by that IP alone. The shared "" bucket
+        // would let one anonymous client hold every other anonymous client out of live streams.
+        const userBucket = userId === "" && ip !== undefined ? undefined : userId;
+        // The IP bucket is for anonymous callers only. Signed-in callers behind a shared IP (an
+        // office, a carrier NAT) are bounded by their user id alone, so one IP cannot cap them.
+        const anonymousIp = userBucket === undefined ? ip : undefined;
+        const { callerConnections, ipConnections } = countLiveConnections(this.liveSubscribers.values(), userBucket, anonymousIp);
+
+        if (userBucket !== undefined && callerConnections >= ShardDO.MAX_LIVE_CONNECTIONS_PER_CALLER) {
+            return jsonResponse({ error: { code: "LIVE_CONNECTION_LIMIT", message: "this caller holds the maximum number of live connections" } }, 503);
+        }
+
+        if (anonymousIp !== undefined && ipConnections >= ShardDO.MAX_LIVE_CONNECTIONS_PER_CALLER) {
+            return jsonResponse({ error: { code: "LIVE_CONNECTION_LIMIT", message: "this client holds the maximum number of live connections" } }, 503);
+        }
+
+        const expiresAt = decodeIdentityExpiryHeader(request.headers.get("x-lunora-identity-exp"));
+        const encoder = new TextEncoder();
+        const connectionId = crypto.randomUUID();
+        const subscriber: LiveSubscriber = {
+            close: () => {
+                /* replaced below once the stream controller exists */
+            },
+            enqueue: () => {
+                /* replaced below once the stream controller exists */
+            },
+            ...(expiresAt === undefined ? {} : { expiresAt }),
+            ...(ip === undefined ? {} : { ip }),
+            subscriptions: new Map<string, string>(),
+            userId,
+        };
+
+        const stream = new ReadableStream<Uint8Array>(
+            {
+                cancel: () => {
+                    // The client dropped the stream (a browser tab closed, a network
+                    // drop). Deregister so a later publish stops scanning it.
+                    this.liveSubscribers.delete(connectionId);
+                },
+                start: (controller) => {
+                    subscriber.close = () => {
+                        try {
+                            controller.close();
+                        } catch {
+                            // Already closed by a concurrent disconnect.
+                        }
+                    };
+                    subscriber.enqueue = (chunk) => {
+                        // A reader that stopped draining while publishes continue would grow the queue
+                        // without bound. Past the byte bound, end the stream and deregister it: the
+                        // client reconnects and re-registers its subscriptions.
+                        if (controller.desiredSize !== null && controller.desiredSize < chunk.byteLength) {
+                            this.liveSubscribers.delete(connectionId);
+                            subscriber.close();
+
+                            return;
+                        }
+
+                        try {
+                            controller.enqueue(chunk);
+                        } catch {
+                            // Stream already closed by a concurrent disconnect.
+                        }
+                    };
+                    // An initial comment flushes the response headers (including the
+                    // connection id) to the client immediately rather than on the
+                    // first publish, so `connectLiveStream` can start subscribing.
+                    controller.enqueue(encoder.encode(":ok\n\n"));
+                },
+            },
+            { highWaterMark: ShardDO.MAX_LIVE_QUEUED_BYTES, size: (chunk) => chunk.byteLength },
+        );
+
+        this.liveSubscribers.set(connectionId, subscriber);
+
+        return new Response(stream, { headers: { ...LIVE_SSE_HEADERS, [LIVE_CONNECTION_HEADER]: connectionId } });
+    }
+
+    /**
+     * Subscribe or unsubscribe on a live connection. Both are scoped to the
+     * connection named in the body, and the worker's `defineLiveStream` has
+     * already authorized the topic (see {@link ShardDO.handleLiveConnect}). The
+     * subscription is keyed by the stream that granted it, so a topic authorized
+     * by one stream is never delivered to a subscriber of another.
+     */
+    private async handleLiveControl(request: Request): Promise<Response> {
+        const parsed = await readLiveControl(request);
+
+        if ("response" in parsed) {
+            return parsed.response;
+        }
+
+        const { action, connectionId, key, subscriptionId } = parsed;
+        // Connection ids are random per DO instance, and the grant lands only in the map or socket
+        // list of the DO that receives the call. The server routes connect and control to the same
+        // shard (`shard` query param and `shardKey` body field both feed `fetchShard`). If a control
+        // call ever reached a different DO, it would find no connection and return 404: it fails closed.
+        const subscriber = this.liveSubscribers.get(connectionId);
+
+        // A connection answers only to the caller that opened it: a control call naming another
+        // caller's connection id is refused as if the connection did not exist.
+        const callerId = decodeUserIdHeader(request.headers.get("x-lunora-userid")) ?? "";
+
+        if (subscriber === undefined) {
+            return this.handleLiveSocketControl(request, { action, callerId, connectionId, key, subscriptionId });
+        }
+
+        if (subscriber.userId !== callerId) {
+            return jsonResponse({ error: { code: "LIVE_CONNECTION_NOT_FOUND", message: "no such live connection" } }, 404);
+        }
+
+        if (action === "subscribe") {
+            const refusal = refuseLiveSubscribe(
+                subscriber,
+                subscriptionId,
+                key,
+                decodeIdentityExpiryHeader(request.headers.get("x-lunora-identity-exp")),
+                ShardDO.MAX_LIVE_TOPICS_PER_CONNECTION,
+            );
+
+            if (refusal !== undefined) {
+                return refusal;
+            }
+
+            subscriber.subscriptions.set(subscriptionId, key);
+
+            return jsonResponse({ ok: true });
+        }
+
+        if (action === "unsubscribe") {
+            // Only the stream and topic that granted the subscription may remove it: a control
+            // call through another stream's route must not cancel it.
+            if (subscriber.subscriptions.get(subscriptionId) === key) {
+                subscriber.subscriptions.delete(subscriptionId);
+            }
+
+            return jsonResponse({ ok: true });
+        }
+
+        return jsonResponse({ error: { code: "BAD_REQUEST", message: "action must be subscribe or unsubscribe" } }, 400);
+    }
+
+    /**
+     * Subscribe or unsubscribe a live grant on a WebSocket. The control route reaches this only
+     * when no SSE connection holds `connectionId`, and the worker has already run `onSubscribe`
+     * for the call. The grant is written to the socket's hibernation attachment so it survives
+     * a hibernation; an in-memory grant would be silently lost on wake.
+     *
+     * ponytail: the socket is found by a scan of this DO's sockets. Control calls are rare and a
+     * shard holds a bounded socket count; index the connection id if this ever shows in a profile.
+     */
+    private handleLiveSocketControl(
+        request: Request,
+        call: { action: unknown; callerId: string; connectionId: string; key: string; subscriptionId: string },
+    ): Response {
+        const { action, callerId, connectionId, key, subscriptionId } = call;
+        const ws = this.runner.sockets().find((candidate) => this.readAttachment(candidate).connectionId === connectionId);
+
+        // Same owner rule as an SSE connection: another caller's socket is refused as absent.
+        if (ws === undefined || (this.readAttachment(ws).userId ?? "") !== callerId) {
+            return jsonResponse({ error: { code: "LIVE_CONNECTION_NOT_FOUND", message: "no such live connection" } }, 404);
+        }
+
+        const attachment = this.readAttachment(ws);
+        const grants = attachment.liveGrants ?? {};
+
+        if (action === "subscribe") {
+            const refusal = refuseLiveSubscribe(
+                { expiresAt: attachment.expiresAt, subscriptions: new Map(Object.entries(grants)) },
+                subscriptionId,
+                key,
+                decodeIdentityExpiryHeader(request.headers.get("x-lunora-identity-exp")),
+                ShardDO.MAX_LIVE_TOPICS_PER_SOCKET,
+            );
+
+            if (refusal !== undefined) {
+                return refusal;
+            }
+
+            return persistLiveGrants(ws, attachment, { ...grants, [subscriptionId]: key });
+        }
+
+        if (action === "unsubscribe") {
+            // As for SSE, only the stream and topic that granted the subscription may remove it.
+            if (grants[subscriptionId] !== key) {
+                return jsonResponse({ ok: true });
+            }
+
+            return persistLiveGrants(ws, attachment, Object.fromEntries(Object.entries(grants).filter(([id]) => id !== subscriptionId)));
+        }
+
+        return jsonResponse({ error: { code: "BAD_REQUEST", message: "action must be subscribe or unsubscribe" } }, 400);
+    }
+
+    /**
+     * Server-side publish: the worker's `ctx.live.publish` lands here, on an
+     * endpoint no browser can reach through `defineLiveStream`'s control route.
+     * Fans the event out via {@link ShardDO.broadcastLiveTopic}.
+     */
+    private async handleLivePublish(request: Request): Promise<Response> {
+        let body: { data?: unknown; stream?: unknown; topic?: unknown };
+
+        try {
+            body = await request.json();
+        } catch {
+            return jsonResponse({ error: { code: "BAD_REQUEST", message: "invalid JSON body" } }, 400);
+        }
+
+        const topic = typeof body.topic === "string" ? body.topic : undefined;
+        const stream = typeof body.stream === "string" && body.stream.length > 0 ? body.stream : undefined;
+
+        if (topic === undefined || topic.length === 0 || stream === undefined) {
+            return jsonResponse({ error: { code: "BAD_REQUEST", message: "topic and stream are required" } }, 400);
+        }
+
+        try {
+            return jsonResponse({ delivered: this.publishLiveEvent(stream, topic, body.data) });
+        } catch (error) {
+            if (isLunoraError(error)) {
+                return jsonResponse({ error: { code: error.code, message: error.message } }, error.status);
+            }
+
+            throw error;
+        }
+    }
+
+    /**
+     * Fan a server-published event out to every live subscriber of `topic` on `stream` on
+     * THIS DO (see {@link liveSubscriptionKey}): the SSE connections that subscribed through
+     * that stream, and the WebSocket whisper members that were granted it (see
+     * {@link ShardDO.deliverLiveLocal}). A grant only exists because the worker's
+     * `onSubscribe` admitted the caller for this stream and topic, so the bare-topic whisper
+     * channel carries no event a member was not admitted for. SSE connections and WebSocket
+     * sockets are local to the DO they connected to; the relay hub does not carry live events.
+     *
+     * `dataJson` is the already-serialized, wire-encoded payload (the producer
+     * encodes once so a `bigint`/`Uint8Array` survives the hop). The caller has
+     * checked the size bound.
+     * @returns the number of LOCAL SSE connections and WebSocket members the frame was written to
+     */
+    private broadcastLiveTopic(stream: string, topic: string, dataJson: string): number {
+        const liveFrame = encodeLiveFrame(topic, dataJson);
+        const key = liveSubscriptionKey(stream, topic);
+        const bytes = new TextEncoder().encode(liveFrame);
+        let delivered = 0;
+
+        const now = Date.now();
+
+        for (const [connectionId, subscriber] of this.liveSubscribers) {
+            // A credential that has lapsed gets no further events: end its stream so the
+            // client reconnects (and re-authenticates) rather than keep receiving private data.
+            if (subscriber.expiresAt !== undefined && subscriber.expiresAt <= now) {
+                this.liveSubscribers.delete(connectionId);
+                subscriber.close();
+
+                continue;
+            }
+
+            let subscribes = false;
+
+            for (const subscribedKey of subscriber.subscriptions.values()) {
+                if (subscribedKey === key) {
+                    subscribes = true;
+
+                    break;
+                }
+            }
+
+            if (!subscribes) {
+                continue;
+            }
+
+            subscriber.enqueue(bytes);
+            delivered += 1;
+        }
+
+        // A `live` frame, not a whisper: a peer's whisper on the same topic is a `whisper` frame, so a
+        // client that follows a live topic can tell a server publish from a peer's spoofed payload.
+        const liveSocketFrame = `{"type":"live","stream":${JSON.stringify(stream)},"topic":${JSON.stringify(topic)},"data":${dataJson}}`;
+
+        return delivered + this.deliverLiveLocal(topic, key, liveSocketFrame);
+    }
+
+    /**
+     * Deliver a live publish to the WebSocket whisper members of `topic` on this DO that hold the
+     * live grant `key`. Both must hold: membership alone does not admit a stream's event, and a
+     * grant alone does not join the socket to the topic's whisper channel. Expiry and the pending
+     * room-join skip match {@link ShardDO.deliverWhisperLocal}.
+     * @returns the number of sockets the frame was sent to
+     */
+    private deliverLiveLocal(topic: string, key: string, frame: string): number {
+        let delivered = 0;
+
+        for (const ws of this.runner.sockets()) {
+            const attachment = this.readAttachment(ws);
+
+            if (attachment.whispers?.includes(topic) !== true || !Object.values(attachment.liveGrants ?? {}).includes(key)) {
+                continue;
+            }
+
+            if ((this.pendingRoomJoins.get(ws)?.get(topic) ?? 0) > 0) {
+                continue;
+            }
+
+            if (isIdentityExpired(attachment.expiresAt)) {
+                this.dropExpiredSocket(ws);
+
+                continue;
+            }
+
+            trySendFrame(ws, frame);
+            delivered += 1;
+        }
+
+        return delivered;
     }
 
     // eslint-disable-next-line class-methods-use-this -- cohesive DO instance method grouped with the hibernation/attachment helpers; reads only the socket

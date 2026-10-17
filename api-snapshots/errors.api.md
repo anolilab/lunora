@@ -669,6 +669,10 @@ const ERROR_CATALOG: {
         readonly status: 403;
         readonly title: "Shard access forbidden";
     };
+    readonly FORBIDDEN_TOPIC: {
+        readonly status: 403;
+        readonly title: "Live topic publish forbidden";
+    };
     readonly GLOBAL_NOT_CONFIGURED: {
         readonly status: 400;
         readonly title: "Global table import not configured";
@@ -745,6 +749,14 @@ const ERROR_CATALOG: {
         readonly status: 404;
         readonly title: "Session expired";
     };
+    readonly LIVE_CONNECTION_LIMIT: {
+        readonly status: 503;
+        readonly title: "Live connection limit reached";
+    };
+    readonly LIVE_CONNECTION_NOT_FOUND: {
+        readonly status: 404;
+        readonly title: "Live connection not found";
+    };
     readonly NESTED_TRANSACTION: {
         readonly internal: true;
         readonly status: 500;
@@ -791,6 +803,10 @@ const ERROR_CATALOG: {
         ];
         readonly status: 401;
         readonly title: "Authentication token expired";
+    };
+    readonly TOO_MANY_LIVE_TOPICS: {
+        readonly status: 429;
+        readonly title: "Too many live topics";
     };
     readonly TOO_MANY_STREAMS: {
         readonly status: 429;

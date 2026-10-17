@@ -64,8 +64,8 @@ const NODE_CAPABILITIES: PlatformCapabilities = {
             note: "Rides the socket registry above: a route or room works while the process runs, but nothing reassociates a reconnecting client, so a room's membership does not survive a restart",
         },
         liveStreams: {
-            level: "unsupported",
-            note: "The SSE connect route is not served by this host's shard registry and is not exercised by its conformance suite",
+            level: "emulated",
+            note: "Served in this process, by the same ShardDO live handlers Cloudflare runs: connect, subscribe and publish reach the shard through the in-process registry, and createNodeHttpServer streams the SSE body back unbuffered, so a frame reaches the client as it is published. A client that disconnects cancels the body, which drops the subscriber. ctx.live.publish from an HTTP action reaches the subscribers of the shard it names. The embedder composes it: createWorker over createNodeShardNamespace(registry.directory), with one ShardDO kept per shard for the life of the process, since a ShardDO built per request loses its subscribers. A queue consumer's ctx.live exists only where the batch goes through the worker's queue handler; createNodePlatform's onQueueBatch supplies none. A scheduled job's publish takes the same in-process path but is not exercised on this host. Emulated, not native, because the subscriber registry lives in one process: there is no cross-process fan-out, and no keepalive comment frame is sent, so a reverse proxy that idles out a silent stream will close it and the client reconnects",
         },
         durableStreams: {
             level: "unsupported",

@@ -17,6 +17,12 @@ const isLiveStatus = (status: ConnectionStatus): boolean => status === "connecte
  */
 interface ShardConnection {
     /**
+     * The server-minted id of this socket, from its `identity` frame. Names the socket to the
+     * live-stream control route. Reset on every new socket, like `identityConfirmed`.
+     */
+    connectionId?: string;
+
+    /**
      * Fail-fast timer armed while the socket is `connecting`; cleared on `open`.
      * If the handshake doesn't complete within `connectTimeoutMs` (a hung proxy /
      * cold worker that never upgrades) it force-closes the socket and routes
@@ -24,6 +30,7 @@ interface ShardConnection {
      * channel silently stuck on the browser's much longer default WS timeout.
      */
     connectTimer: ReturnType<typeof setTimeout> | undefined;
+
     /** Active keepalive interval while the socket is open; cleared on disconnect/close. */
     heartbeatTimer: ReturnType<typeof setInterval> | undefined;
 

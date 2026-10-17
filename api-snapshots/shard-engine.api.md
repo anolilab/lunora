@@ -2910,6 +2910,7 @@ interface SocketAttachment {
     expiresAt?: number;
     identity?: Record<string, unknown>;
     ip?: string;
+    liveGrants?: Record<string, string>;
     pageDeltas?: boolean;
     shapes?: Record<string, ShapeSubscriptionQuery>;
     subs: Record<string, SubscriptionQuery>;

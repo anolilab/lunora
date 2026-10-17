@@ -12,9 +12,13 @@
             { "name": "TCK", "class_name": "TckCell" },
             { "name": "ECHO", "class_name": "EchoCell" },
             { "name": "VECTORS", "class_name": "VectorCell" },
+            { "name": "LIVE_SHARD", "class_name": "TckShard" },
         ],
     },
-    "migrations": [{ "tag": "v1", "new_sqlite_classes": ["TckCell", "EchoCell", "VectorCell"] }],
+    "migrations": [
+        { "tag": "v1", "new_sqlite_classes": ["TckCell", "EchoCell", "VectorCell"] },
+        { "tag": "v2", "new_sqlite_classes": ["TckShard"] },
+    ],
     // The binding-backed checks (tck-bindings.ts). The queue's consumer is this
     // same worker, which also exports `fetch` — the topology a Lunora app has.
     "d1_databases": [{ "binding": "DB", "database_name": "tck", "database_id": "tck" }],

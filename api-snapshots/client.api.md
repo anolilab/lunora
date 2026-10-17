@@ -202,6 +202,18 @@ interface ClientShapeUnsubscribeMessage {
 }
 ```
 
+### `ConnectLiveStreamOptions` (interface)
+
+```ts
+interface ConnectLiveStreamOptions {
+    fetch?: typeof fetch;
+    headers?: Record<string, string>;
+    maxDelayMs?: number;
+    retryDelay?: number;
+    withCredentials?: boolean;
+}
+```
+
 ### `ConnectionStatus` (type)
 
 ```ts
@@ -388,6 +400,37 @@ Re-exported from `@lunora/runtime` — signature tracked at its source.
 
 Re-exported from `@lunora/runtime` — signature tracked at its source.
 
+### `LiveStream` (interface)
+
+```ts
+interface LiveStream {
+    close: () => void;
+    readonly connectionId: string | undefined;
+    onEvent: (handler: (event: LiveStreamEvent) => void) => () => void;
+    readonly ready: Promise<void>;
+    subscribe: (options: LiveStreamSubscribeOptions) => () => void;
+}
+```
+
+### `LiveStreamEvent` (interface)
+
+```ts
+interface LiveStreamEvent {
+    payload: unknown;
+    topic: string;
+}
+```
+
+### `LiveStreamSubscribeOptions` (interface)
+
+```ts
+interface LiveStreamSubscribeOptions {
+    id?: string;
+    onEvent?: (payload: unknown) => void;
+    topic: string;
+}
+```
+
 ### `LunoraClient` (class)
 
 ```ts
@@ -424,6 +467,12 @@ class LunoraClient {
     }): Unsubscribe;
     whisperSubscribe(topic: string, handler: (data: unknown, from?: string) => void, options?: {
         shardKey?: string;
+    }): Unsubscribe;
+    subscribeLiveTopic(options: {
+        onEvent: (payload: unknown) => void;
+        shardKey?: string;
+        stream: string;
+        topic: string;
     }): Unsubscribe;
     whisper(topic: string, data?: unknown, options?: {
         shardKey?: string;
@@ -1248,7 +1297,7 @@ interface SchedulerStatus {
 ### `ServerMessage` (type)
 
 ```ts
-type ServerMessage = ServerAckMessage | ServerChunkMessage | ServerCompleteMessage | ServerDataMessage | ServerErrorMessage | ServerIdentityMessage | ServerPokeEndMessage | ServerPokePartMessage | ServerPokeStartMessage | ServerResumeMessage | ServerSettledMessage | ServerWhisperMessage;
+type ServerMessage = ServerAckMessage | ServerChunkMessage | ServerCompleteMessage | ServerDataMessage | ServerErrorMessage | ServerIdentityMessage | ServerLiveMessage | ServerPokeEndMessage | ServerPokePartMessage | ServerPokeStartMessage | ServerResumeMessage | ServerSettledMessage | ServerWhisperMessage;
 ```
 
 ### `ServerPokeEndMessage` (interface)
@@ -1553,6 +1602,12 @@ type WsTokenProvider = () => Promise<string | undefined> | string | undefined;
 
 ```ts
 const applyDelta: (current: unknown, delta: MutationDelta) => Record<string, unknown> | undefined | unknown[];
+```
+
+### `connectLiveStream` (const)
+
+```ts
+const connectLiveStream: (url: string, options?: ConnectLiveStreamOptions) => LiveStream;
 ```
 
 ### `createAsyncStoragePersistence` (const)
@@ -2427,8 +2482,20 @@ interface ServerErrorMessage {
 
 ```ts
 interface ServerIdentityMessage {
+    connectionId?: string;
     subject: null | string;
     type: "identity";
+}
+```
+
+### `ServerLiveMessage` (interface)
+
+```ts
+interface ServerLiveMessage {
+    data: unknown;
+    stream: string;
+    topic: string;
+    type: "live";
 }
 ```
 

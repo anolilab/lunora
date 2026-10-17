@@ -587,7 +587,13 @@ const enforceWebSocketOrigin = (request: Request, resolved: ResolvedSecurity): R
  * bookmark by; `x-lunora-edge-cache` is the REST edge-cache hit indicator, which
  * the docs tell callers to read and a browser could not otherwise see.
  */
-const DEFAULT_CORS_EXPOSED_HEADERS = ["X-D1-Bookmark", "X-Lunora-Edge-Cache", "X-Lunora-Shard-Key"];
+const DEFAULT_CORS_EXPOSED_HEADERS = [
+    "X-D1-Bookmark",
+    "X-Lunora-Edge-Cache",
+    // A live connect's id: a cross-origin `connectLiveStream` scopes every control call to it.
+    "X-Lunora-Live-Connection",
+    "X-Lunora-Shard-Key",
+];
 
 /** Build the `Access-Control-Allow-*` headers for an allowed cross-origin request. */
 const corsResponseHeaders = (origin: string, cors: ResolvedCors): Headers => {

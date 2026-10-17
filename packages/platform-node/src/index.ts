@@ -28,7 +28,11 @@
  *
  * **Still missing:** a dev server. There is no `lunora dev --target node`, and
  * nothing here owns a timer, so queue delivery is driven by an explicit
- * `poll()`. Also absent are the Cloudflare product bindings with no local
+ * `poll()`. What exists is the listener a dev server would sit on:
+ * `createNodeHttpServer` serves an app worker's `fetch` over `node:http`,
+ * streaming the response body, and `createNodeShardNamespace` presents the
+ * registry as the `shardDO` namespace that worker routes to. Also absent are
+ * the Cloudflare product bindings with no local
  * equivalent — Vectorize, Workers AI, Browser Rendering, Containers, Analytics
  * Engine, Pipelines, Secrets Store, Hyperdrive.
  *
@@ -44,6 +48,8 @@ export type { NodeDispatchInvocation, NodeDispatchRouteOptions } from "./node-di
 export { createNodeDispatchRoute, NODE_SCHEDULER_DISPATCH_PATH } from "./node-dispatch-route";
 export type { NodeGlobalContextDatabaseOptions, NodeGlobalStore, NodeGlobalStoreOptions } from "./node-global-store";
 export { createNodeGlobalStore, createNodeSqlExec } from "./node-global-store";
+export type { NodeHttpServer, NodeHttpServerOptions } from "./node-http-server";
+export { createNodeHttpServer } from "./node-http-server";
 export { createNodeShardKvStore } from "./node-kv-store";
 export type { NodePlatform, NodePlatformDispatchOptions, NodePlatformOptions } from "./node-platform";
 export { createNodePlatform } from "./node-platform";
@@ -57,6 +63,7 @@ export type { NodeSchedulerHost, NodeSchedulerHostOptions } from "./node-schedul
 export { createNodeSchedulerHost } from "./node-scheduler-host";
 export type { NodeShardHostOptions } from "./node-shard-host";
 export { createNodeShardHost } from "./node-shard-host";
+export { createNodeShardNamespace } from "./node-shard-namespace";
 export type { NodeShard, NodeShardRegistry, NodeShardRegistryOptions } from "./node-shard-registry";
 export { createNodeShardRegistry } from "./node-shard-registry";
 export type { NodeShardState } from "./node-shard-state";

@@ -2219,6 +2219,8 @@ describe("createWorker — HTTP actions", () => {
         shard.response = Response.json({ result: encodeWire([{ id: "msg_1" }]) });
 
         const worker = createWorker({
+            // A non-default shard run is gated: the app grants this route's shard explicitly.
+            authorizeShard: () => true,
             httpRouter: honoApp((app) =>
                 app.get("/channels/:id/messages", async (c) => {
                     const channelId = c.req.param("id");
@@ -2237,6 +2239,43 @@ describe("createWorker — HTTP actions", () => {
         await expect(res.json()).resolves.toEqual({ messages: [{ id: "msg_1" }] });
         expect(shard.calls).toHaveLength(1);
         expect(shard.calls[0]!.shardKey).toBe("tenant-42");
+    });
+
+    it("refuses a `ctx.forShard(key).run*` the caller may not address before any system-trusted dispatch", async () => {
+        expect.assertions(4);
+
+        // `forShard` stamps `x-lunora-system`, so it must pass the same
+        // `authorizeShard` gate as the client paths. Without it, a live subscribe
+        // naming a shard ran its `onSubscribe` read under system trust.
+        shard.response = Response.json({ result: encodeWire([{ id: "secret" }]) });
+
+        let denied: unknown;
+        const authorizeShard = vi.fn<() => boolean>(() => false);
+        const worker = createWorker({
+            authorizeShard,
+            httpRouter: honoApp((app) =>
+                app.get("/victim/messages", async (c) => {
+                    try {
+                        await c.var.lunora.forShard("victim-shard").runQuery({ __lunoraRef: "messages:list" }, {});
+                    } catch (error) {
+                        denied = error;
+
+                        return new Response("denied", { status: 403 });
+                    }
+
+                    return new Response("read", { status: 200 });
+                }),
+            ),
+            shardDO: shard.namespace,
+        });
+
+        const res = await worker.fetch(new Request("https://app.example/victim/messages"), {}, fakeContext);
+
+        expect(res.status).toBe(403);
+        expect(denied).toMatchObject({ code: "FORBIDDEN_SHARD" });
+        expect(authorizeShard).toHaveBeenCalledWith(expect.objectContaining({ shardKey: "victim-shard" }));
+        // The gate must short-circuit before the system-trusted shard dispatch.
+        expect(shard.calls).toHaveLength(0);
     });
 
     it("encodes `ctx.run*` args and decodes its result, so bigint / Date / bytes survive the shard hop", async () => {
@@ -3309,5 +3348,148 @@ describe("createWorker — auth discovery fallback (plan 461 B)", () => {
 
         expect(res.status).toBe(404);
         await expect(res.text()).resolves.toBe("app 404 page");
+    });
+});
+
+describe("createWorker — live streams and socket paths", () => {
+    let shard: ShardSpy;
+
+    beforeEach(() => {
+        shard = createShardSpy();
+    });
+
+    it("refuses a client-named shard whose key carries a reserved relay infix, before any forward", async () => {
+        expect.assertions(2);
+
+        const worker = createWorker({
+            httpRouter: honoApp((app) =>
+                app.get("/probe", async (c) => {
+                    try {
+                        await c.var.lunora.fetchShard("acme::relay::0", "/_lunora/live/connect", { method: "GET" });
+
+                        return new Response("forwarded");
+                    } catch {
+                        return new Response("refused", { status: 403 });
+                    }
+                }),
+            ),
+            shardDO: shard.namespace,
+        });
+
+        const res = await worker.fetch(new Request("https://app.example/probe"), {}, fakeContext);
+
+        await expect(res.text()).resolves.toBe("refused");
+        expect(shard.calls).toHaveLength(0);
+    });
+
+    it("strips a caller's x-lunora-* header from a shard forward, so an anonymous caller cannot forge identity", async () => {
+        expect.assertions(2);
+
+        const worker = createWorker({
+            httpRouter: honoApp((app) =>
+                app.get("/probe", async (c) => {
+                    await c.var.lunora.fetchShard("acme", "/_lunora/live/connect", {
+                        headers: { "x-lunora-userid": "forged-admin", "x-lunora-system": "1", accept: "text/event-stream" },
+                        method: "GET",
+                    });
+
+                    return new Response("ok");
+                }),
+            ),
+            allowUnauthenticatedShardAccess: true,
+            shardDO: shard.namespace,
+        });
+
+        await worker.fetch(new Request("https://app.example/probe"), {}, fakeContext);
+
+        const forwarded = shard.calls[0]?.request;
+
+        // The forged identity never reaches the shard; an ordinary header still does.
+        expect(forwarded?.headers.get("x-lunora-userid")).toBeNull();
+        expect(forwarded?.headers.get("accept")).toBe("text/event-stream");
+    });
+
+    it("forwards a live publish to the internal publish endpoint with its stream", async () => {
+        expect.assertions(3);
+
+        const worker = createWorker({
+            httpRouter: honoApp((app) =>
+                app.post("/post", async (c) => {
+                    await c.var.lunora.live?.publish("post:1", { event: "comment" }, { stream: "posts" });
+
+                    return new Response("published");
+                }),
+            ),
+            shardDO: shard.namespace,
+        });
+
+        const res = await worker.fetch(new Request("https://app.example/post", { method: "POST" }), {}, fakeContext);
+        const forwarded = shard.calls[0]?.request;
+        const body = (await forwarded?.json()) as { stream: string; topic: string };
+
+        expect(res.status).toBe(200);
+        expect(new URL(forwarded?.url ?? "").pathname).toBe("/_lunora/live/publish");
+        expect(body).toMatchObject({ stream: "posts", topic: "post:1" });
+    });
+
+    it("omits ctx.live from the HTTP context when the worker is built with liveStreams: false", async () => {
+        expect.assertions(2);
+
+        const worker = createWorker({
+            httpRouter: honoApp((app) => app.get("/probe", (c) => Response.json({ hasLive: c.var.lunora.live !== undefined }))),
+            liveStreams: false,
+            shardDO: shard.namespace,
+        });
+
+        const res = await worker.fetch(new Request("https://app.example/probe"), {}, fakeContext);
+
+        await expect(res.json()).resolves.toStrictEqual({ hasLive: false });
+        expect(shard.calls).toHaveLength(0);
+    });
+
+    it("throws from live.publish when the shard refuses the publish, instead of dropping it silently", async () => {
+        expect.assertions(2);
+
+        shard.response = Response.json({ error: { code: "PAYLOAD_TOO_LARGE" } }, { status: 413 });
+
+        const worker = createWorker({
+            httpRouter: honoApp((app) =>
+                app.post("/post", async (c) => {
+                    try {
+                        await c.var.lunora.live?.publish("post:1", { big: true }, { stream: "posts" });
+
+                        return new Response("published");
+                    } catch {
+                        return new Response("threw", { status: 500 });
+                    }
+                }),
+            ),
+            shardDO: shard.namespace,
+        });
+
+        const res = await worker.fetch(new Request("https://app.example/post", { method: "POST" }), {}, fakeContext);
+
+        expect(res.status).toBe(500);
+        await expect(res.text()).resolves.toBe("threw");
+    });
+
+    it("hands a queue consumer a live publisher that forwards to the shard, so its publish reaches subscribers", async () => {
+        expect.assertions(3);
+
+        const worker = createWorker({
+            queue: async (_batch, _env, _context, _trigger, live) => {
+                await live?.publish("digest:1", { event: "ready" }, { stream: "posts" });
+            },
+            shardDO: shard.namespace,
+        });
+
+        await worker.queue?.({ messages: [], queue: "digest" }, {}, fakeContext);
+
+        const forwarded = shard.calls[0]?.request;
+        const body = (await forwarded?.json()) as { stream: string; topic: string };
+
+        expect(shard.calls).toHaveLength(1);
+        expect(new URL(forwarded?.url ?? "").pathname).toBe("/_lunora/live/publish");
+        expect(body).toMatchObject({ stream: "posts", topic: "digest:1" });
     });
 });

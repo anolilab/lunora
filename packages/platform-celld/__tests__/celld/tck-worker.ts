@@ -20,8 +20,12 @@
  * so this run covers the celld adapters AND their assembly, against celld's
  * own SQLite, alarms and hibernation API rather than a double.
  */
+import { ShardDO } from "@lunora/do";
 import type { ConformanceHost } from "@lunora/platform/conformance";
 import { createShardDirectory } from "@lunora/platform-cloudflare";
+import type { ShardNamespaceLike } from "@lunora/runtime";
+import { createWorker } from "@lunora/runtime";
+import { defineLiveStream, httpAction, httpRouter } from "@lunora/server";
 import type { EngineHostFactory } from "@lunora/shard-engine/conformance";
 
 import { createCelldShardPlatform } from "../../src/celld-platform";
@@ -31,7 +35,37 @@ import { createLegExpect } from "./tck-expect";
 import type { Factories, LegContext, LegResult, SuiteName } from "./tck-legs";
 import { collectLegs, describeFailure, LegSkipped } from "./tck-legs";
 
-type Env = BindingEnv & { ECHO: unknown; TCK: DurableObjectNamespace };
+type Env = BindingEnv & { ECHO: unknown; LIVE_SHARD: ShardNamespaceLike; TCK: DurableObjectNamespace };
+
+/**
+ * The live stream an app declares with `defineLiveStream`. It admits only the
+ * `tck:` topics, so the leg can show a topic it did not subscribe to is never
+ * delivered. Its connect and control routes are the shard's own handlers.
+ */
+const feed = defineLiveStream({
+    id: "tck-feed",
+    onSubscribe: ({ topic }) => topic.startsWith("tck:"),
+});
+
+/** The worker's HTTP routes for the real live path: the stream plus a publish action. */
+const buildLiveApp = () => {
+    const app = httpRouter();
+
+    app.get(feed.connectPath, feed.connect);
+    app.post(feed.controlPath, feed.control);
+    app.post(
+        "/tck-live/publish",
+        httpAction(async (ctx, request) => {
+            const body: { data: unknown; topic: string } = await request.json();
+
+            await ctx.live.publish(body.topic, body.data, { stream: feed.id });
+
+            return Response.json({ published: true });
+        }),
+    );
+
+    return app;
+};
 
 /** The cell the running leg executes in; set around each body. */
 let current: { env: Env; pairs: WebSocket[]; state: DurableObjectState } | undefined;
@@ -165,6 +199,49 @@ const runLeg = async (suite: SuiteName, index: number): Promise<LegResult> => {
     }
 };
 
+/**
+ * Open SSE subscribers held by the `live` cell. A `/live/publish` fans out to
+ * each one. Module-level, so it lives exactly as long as the cell does.
+ */
+const liveSubscribers = new Set<ReadableStreamDefaultController<Uint8Array>>();
+
+/**
+ * `GET /live`: an SSE body the cell keeps open until the client cancels it.
+ * The subscriber is registered inside `start`, so it is in place before the
+ * response is returned to the node proxy.
+ */
+const liveConnect = (): Response => {
+    const encoder = new TextEncoder();
+    let subscriber: ReadableStreamDefaultController<Uint8Array> | undefined;
+    const body = new ReadableStream<Uint8Array>({
+        cancel() {
+            if (subscriber !== undefined) {
+                liveSubscribers.delete(subscriber);
+            }
+        },
+        start(controller) {
+            subscriber = controller;
+            liveSubscribers.add(controller);
+            controller.enqueue(encoder.encode(": connected\n\n"));
+        },
+    });
+
+    return new Response(body, {
+        headers: { "cache-control": "no-cache, no-transform", "content-type": "text/event-stream; charset=utf-8" },
+    });
+};
+
+/** `POST /live/publish`: one single-line frame to every open subscriber. */
+const livePublish = async (payload: string): Promise<Response> => {
+    const frame = new TextEncoder().encode(`event: live\ndata: ${payload}\n\n`);
+
+    for (const subscriber of liveSubscribers) {
+        subscriber.enqueue(frame);
+    }
+
+    return Response.json({ delivered: liveSubscribers.size });
+};
+
 /** The cell every leg runs in, and the cell `/transport` clients connect to. */
 class TckCell {
     public constructor(
@@ -181,6 +258,14 @@ class TckCell {
 
         if (url.pathname === "/fleet") {
             return this.fleetProbe(request);
+        }
+
+        if (url.pathname === "/live") {
+            return liveConnect();
+        }
+
+        if (url.pathname === "/live/publish") {
+            return livePublish(await request.text());
         }
 
         const suite = url.searchParams.get("suite") as SuiteName;
@@ -252,14 +337,33 @@ class EchoCell {
     }
 }
 
-export { EchoCell, TckCell };
+/**
+ * The shard the live stream runs on: `ShardDO` itself, the class an app's
+ * generated shard extends. Only the RPC table is stubbed, since the live routes
+ * never dispatch through it.
+ */
+class TckShard extends ShardDO {
+    // eslint-disable-next-line class-methods-use-this -- a dispatch stub has no instance state to reach for
+    public handleRpc(functionPath: string): Promise<unknown> {
+        return Promise.resolve({ functionPath });
+    }
+}
+
+export { EchoCell, TckCell, TckShard };
 export { TckWorkflow, VectorCell } from "./tck-bindings";
 
 // A Workers entry module: the runtime reads the handlers off the default export
 // and each Durable Object class by name, so this file has to mix both.
 export default {
-    async fetch(request: Request, env: Env): Promise<Response> {
+    async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
         const url = new URL(request.url);
+
+        // The live stream and its publish action go through `createWorker`, so
+        // `ctx.live.publish` and the stream routes reach `TckShard` the way a
+        // Lunora app's worker reaches its shard.
+        if (url.pathname.startsWith("/live/tck-feed/") || url.pathname === "/tck-live/publish") {
+            return createWorker({ httpRouter: buildLiveApp(), shardDO: env.LIVE_SHARD }).fetch(request, env, ctx);
+        }
 
         if (url.pathname === "/transport") {
             return env.TCK.get(env.TCK.idFromName("transport")).fetch(request);
@@ -267,6 +371,11 @@ export default {
 
         if (url.pathname === "/fleet") {
             return env.TCK.get(env.TCK.idFromName(url.searchParams.get("name") ?? "fleet")).fetch(request);
+        }
+
+        // Both routes name one cell, so a publish reaches the subscribers an open `/live` holds.
+        if (url.pathname === "/live" || url.pathname === "/live/publish") {
+            return env.TCK.get(env.TCK.idFromName("live")).fetch(request);
         }
 
         if (url.pathname.startsWith("/binding/")) {

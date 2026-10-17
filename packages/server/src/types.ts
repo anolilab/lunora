@@ -2642,6 +2642,23 @@ interface ActionCtx {
      */
     readonly ip?: string;
 
+    /**
+     * `ctx.live.publish(topic, payload, { stream })` — push an event to the SSE
+     * subscribers of a `defineLiveStream` on THIS shard. Present on the shard
+     * (Cloudflare) target only when the app declares a live stream; absent on a
+     * target that rates `liveStreams` `unsupported`, where codegen reports why.
+     * A scheduled job's action publishes this way too. Absent for a query or
+     * mutation: a publish is a side effect, so only an action may make one.
+     *
+     * Delivery is local to the shard: an omitted `shardKey` means the shard the
+     * action runs on, and a `shardKey` naming another shard rejects rather than
+     * reaching zero subscribers silently. The docblock on `defineLiveStream` has the
+     * full routing rules.
+     */
+    readonly live?: {
+        publish: (topic: string, payload: unknown, options: { shardKey?: string; stream: string }) => Promise<void>;
+    };
+
     /** Structured, function-attributed logger; see {@link LunoraLogger}. */
     readonly log: LunoraLogger;
 

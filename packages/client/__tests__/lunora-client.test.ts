@@ -4789,6 +4789,304 @@ describe("lunoraClient", () => {
 
             client.close();
         });
+
+        describe("subscribeLiveTopic over a WebSocket", () => {
+            const LIVE_CONTROL_URL = "https://app.example/live/posts/control";
+
+            const liveControlBodies = (fetchMock: ReturnType<typeof vi.fn<typeof fetch>>) =>
+                fetchMock.mock.calls
+                    .filter(([url]) => url === LIVE_CONTROL_URL)
+                    .map(([, init]) => JSON.parse(typeof init?.body === "string" ? init.body : "null") as Record<string, unknown>);
+
+            it("joins the bare topic, then grants the socket by its connection id from the identity frame", async () => {
+                expect.assertions(4);
+
+                const fetchMock = vi.fn<typeof fetch>(() => Promise.resolve(Response.json({ ok: true })));
+                const client = new LunoraClient({ fetch: fetchMock, url: "https://app.example", WebSocket: createMockWebSocket() });
+                const received: unknown[] = [];
+
+                client.subscribeLiveTopic({
+                    onEvent: (payload) => {
+                        received.push(payload);
+                    },
+                    stream: "posts",
+                    topic: "post:1",
+                });
+
+                const socket = latestSocket();
+
+                socket.open();
+
+                // Step 2: the bare-topic whisper join goes out on connect.
+                expect(wireFrames(socket)).toContainEqual({ topic: "post:1", type: "whisper_subscribe" });
+
+                // No grant is posted until the socket names itself.
+                expect(liveControlBodies(fetchMock)).toStrictEqual([]);
+
+                socket.receive({ connectionId: "ws-1", subject: null, type: "identity" });
+                await flushMicrotasks();
+
+                // Step 3: the control route receives the socket's id, the stream and the topic.
+                expect(liveControlBodies(fetchMock)).toStrictEqual([
+                    { action: "subscribe", connectionId: "ws-1", stream: "posts", subscriptionId: "ws-live-1", topic: "post:1" },
+                ]);
+
+                // A `live` frame for the subscribed stream and topic reaches the handler with its decoded data.
+                socket.receive({ data: { title: "hi" }, stream: "posts", topic: "post:1", type: "live" });
+
+                expect(received).toStrictEqual([{ title: "hi" }]);
+
+                client.close();
+            });
+
+            it("ignores a plain peer whisper on the subscribed topic", async () => {
+                expect.assertions(1);
+
+                const fetchMock = vi.fn<typeof fetch>(() => Promise.resolve(Response.json({ ok: true })));
+                const client = new LunoraClient({ fetch: fetchMock, url: "https://app.example", WebSocket: createMockWebSocket() });
+                const received: unknown[] = [];
+
+                client.subscribeLiveTopic({
+                    onEvent: (payload) => {
+                        received.push(payload);
+                    },
+                    stream: "posts",
+                    topic: "post:1",
+                });
+
+                const socket = latestSocket();
+
+                socket.open();
+                socket.receive({ connectionId: "ws-1", subject: null, type: "identity" });
+                await flushMicrotasks();
+                socket.receive({ data: { title: "spoofed" }, from: "user-b", topic: "post:1", type: "whisper" });
+
+                expect(received).toStrictEqual([]);
+
+                client.close();
+            });
+
+            it("ignores a live frame for another stream on the same topic", async () => {
+                expect.assertions(1);
+
+                const fetchMock = vi.fn<typeof fetch>(() => Promise.resolve(Response.json({ ok: true })));
+                const client = new LunoraClient({ fetch: fetchMock, url: "https://app.example", WebSocket: createMockWebSocket() });
+                const received: unknown[] = [];
+
+                client.subscribeLiveTopic({
+                    onEvent: (payload) => {
+                        received.push(payload);
+                    },
+                    stream: "posts",
+                    topic: "post:1",
+                });
+
+                const socket = latestSocket();
+
+                socket.open();
+                socket.receive({ connectionId: "ws-1", subject: null, type: "identity" });
+                await flushMicrotasks();
+                socket.receive({ data: { title: "other" }, stream: "private", topic: "post:1", type: "live" });
+
+                expect(received).toStrictEqual([]);
+
+                client.close();
+            });
+
+            it("unsubscribe leaves the topic, revokes the grant, and stops delivery", async () => {
+                expect.assertions(3);
+
+                const fetchMock = vi.fn<typeof fetch>(() => Promise.resolve(Response.json({ ok: true })));
+                const client = new LunoraClient({ fetch: fetchMock, url: "https://app.example", WebSocket: createMockWebSocket() });
+                const received: unknown[] = [];
+                const unsubscribe = client.subscribeLiveTopic({
+                    onEvent: (payload) => {
+                        received.push(payload);
+                    },
+                    stream: "posts",
+                    topic: "post:1",
+                });
+                const socket = latestSocket();
+
+                socket.open();
+                socket.receive({ connectionId: "ws-1", subject: null, type: "identity" });
+                unsubscribe();
+                await flushMicrotasks();
+
+                expect(wireFrames(socket)).toContainEqual({ topic: "post:1", type: "whisper_unsubscribe" });
+                expect(liveControlBodies(fetchMock).at(-1)).toStrictEqual({
+                    action: "unsubscribe",
+                    connectionId: "ws-1",
+                    stream: "posts",
+                    subscriptionId: "ws-live-1",
+                    topic: "post:1",
+                });
+
+                socket.receive({ data: { title: "after" }, stream: "posts", topic: "post:1", type: "live" });
+
+                expect(received).toStrictEqual([]);
+
+                client.close();
+            });
+
+            it("re-grants on the new connection id after a reconnect", async () => {
+                expect.assertions(2);
+
+                vi.useFakeTimers();
+
+                const fetchMock = vi.fn<typeof fetch>(() => Promise.resolve(Response.json({ ok: true })));
+                const client = new LunoraClient({ fetch: fetchMock, url: "https://app.example", WebSocket: createMockWebSocket() });
+
+                client.subscribeLiveTopic({ onEvent: () => undefined, stream: "posts", topic: "post:1" });
+
+                const first = latestSocket();
+
+                first.open();
+                first.receive({ connectionId: "ws-1", subject: null, type: "identity" });
+                first.triggerClose();
+                vi.runOnlyPendingTimers();
+
+                const second = latestSocket();
+
+                second.open();
+                second.receive({ connectionId: "ws-2", subject: null, type: "identity" });
+                // Fake timers also stub `setTimeout`, so drain the grant chain with the timer clock.
+                await vi.advanceTimersByTimeAsync(0);
+
+                expect(liveControlBodies(fetchMock).map((body) => body.connectionId)).toStrictEqual(["ws-1", "ws-2"]);
+                expect(liveControlBodies(fetchMock).at(-1)).toStrictEqual({
+                    action: "subscribe",
+                    connectionId: "ws-2",
+                    stream: "posts",
+                    subscriptionId: "ws-live-1",
+                    topic: "post:1",
+                });
+
+                client.close();
+            });
+
+            it("names the shard in the control body and on the socket when a shardKey is given", async () => {
+                expect.assertions(2);
+
+                const fetchMock = vi.fn<typeof fetch>(() => Promise.resolve(Response.json({ ok: true })));
+                const client = new LunoraClient({ fetch: fetchMock, url: "https://app.example", WebSocket: createMockWebSocket() });
+
+                client.subscribeLiveTopic({ onEvent: () => undefined, shardKey: "s1", stream: "posts", topic: "post:1" });
+
+                const socket = latestSocket();
+
+                socket.open();
+                socket.receive({ connectionId: "ws-1", subject: null, type: "identity" });
+                await flushMicrotasks();
+
+                expect(socket.url).toContain("shard=s1");
+                expect(liveControlBodies(fetchMock)).toStrictEqual([
+                    { action: "subscribe", connectionId: "ws-1", shardKey: "s1", stream: "posts", subscriptionId: "ws-live-1", topic: "post:1" },
+                ]);
+
+                client.close();
+            });
+
+            it("sends the grant with the same credentials mode as the cookie session request", async () => {
+                expect.assertions(2);
+
+                const fetchMock = vi.fn<typeof fetch>(() => Promise.resolve(Response.json({ ok: true })));
+                const client = new LunoraClient({ fetch: fetchMock, url: "https://app.example", WebSocket: createMockWebSocket() });
+
+                await client.getCurrentUser();
+
+                client.subscribeLiveTopic({ onEvent: () => undefined, stream: "posts", topic: "post:1" });
+
+                const socket = latestSocket();
+
+                socket.open();
+                socket.receive({ connectionId: "ws-1", subject: null, type: "identity" });
+                await flushMicrotasks();
+
+                const sessionCall = fetchMock.mock.calls.find(([url]) => typeof url === "string" && url.endsWith("/get-session"));
+                const grantCall = fetchMock.mock.calls.find(([url]) => url === LIVE_CONTROL_URL);
+
+                expect(sessionCall?.[1]?.credentials).toBe("include");
+                expect(grantCall?.[1]?.credentials).toBe("include");
+
+                client.close();
+            });
+
+            it("sends the whisper join and the grant without waiting for a verdict, so a silent denial is not signalled", async () => {
+                expect.assertions(3);
+
+                const fetchMock = vi.fn<typeof fetch>(() => Promise.resolve(Response.json({ ok: true })));
+                const client = new LunoraClient({ fetch: fetchMock, url: "https://app.example", WebSocket: createMockWebSocket() });
+                const received: unknown[] = [];
+
+                client.subscribeLiveTopic({
+                    onEvent: (payload) => {
+                        received.push(payload);
+                    },
+                    stream: "posts",
+                    topic: "post:1",
+                });
+
+                const socket = latestSocket();
+
+                socket.open();
+                socket.receive({ connectionId: "ws-1", subject: null, type: "identity" });
+                await flushMicrotasks();
+
+                // The server never acks the join. The client sends it and posts the grant regardless, and
+                // nothing arrives to say whether the shard admitted the join.
+                expect(wireFrames(socket)).toContainEqual({ topic: "post:1", type: "whisper_subscribe" });
+                expect(liveControlBodies(fetchMock)).toHaveLength(1);
+                expect(received).toStrictEqual([]);
+
+                client.close();
+            });
+
+            it("does not let a control POST that never settles block the next grant", async () => {
+                expect.assertions(2);
+
+                vi.useFakeTimers();
+
+                let controlCalls = 0;
+                const fetchMock = vi.fn<typeof fetch>((input, init) => {
+                    if (input !== LIVE_CONTROL_URL) {
+                        return Promise.resolve(Response.json({ ok: true }));
+                    }
+
+                    controlCalls += 1;
+
+                    // The first control POST stalls: it settles only when its signal aborts, as a real fetch does.
+                    if (controlCalls === 1) {
+                        return new Promise<Response>((_resolve, reject) => {
+                            init?.signal?.addEventListener("abort", () => {
+                                reject(new DOMException("aborted", "AbortError"));
+                            });
+                        });
+                    }
+
+                    return Promise.resolve(Response.json({ ok: true }));
+                });
+                const client = new LunoraClient({ fetch: fetchMock, url: "https://app.example", WebSocket: createMockWebSocket() });
+
+                client.subscribeLiveTopic({ onEvent: () => undefined, stream: "posts", topic: "post:1" });
+                client.subscribeLiveTopic({ onEvent: () => undefined, stream: "posts", topic: "post:2" });
+
+                const socket = latestSocket();
+
+                socket.open();
+                socket.receive({ connectionId: "ws-1", subject: null, type: "identity" });
+                await vi.advanceTimersByTimeAsync(0);
+
+                expect(liveControlBodies(fetchMock).map((body) => body.topic)).toStrictEqual(["post:1"]);
+
+                // Past the control call's timeout, the stalled POST aborts and the second grant goes out.
+                await vi.advanceTimersByTimeAsync(60_000);
+
+                expect(liveControlBodies(fetchMock).map((body) => body.topic)).toStrictEqual(["post:1", "post:2"]);
+
+                client.close();
+            });
+        });
     });
 
     describe("lunoraClient — token expiry & resume epoch", () => {

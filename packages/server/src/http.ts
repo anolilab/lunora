@@ -49,6 +49,14 @@ type HttpRunners = Pick<ActionContext, "runAction" | "runMutation" | "runQuery">
 // eslint-disable-next-line unicorn/prevent-abbreviations -- public API name re-exported by src/index.ts; renaming would break consumers
 type HttpActionCtx = {
     /**
+     * Forward a server-to-server request to a shard Durable Object carrying the
+     * caller's resolved identity headers — the seam the live-stream primitive
+     * (`defineLiveStream`) uses to reach the shard's subscriber registry. See
+     * {@link ShardFetch}.
+     */
+    readonly fetchShard: ShardFetch;
+
+    /**
      * The same `run*` trio bound to `shardKey`, mirroring
      * `createShardClient(...).forShard(key)`:
      *
@@ -61,6 +69,10 @@ type HttpActionCtx = {
      * DO — silently, with no way to say otherwise.
      */
     readonly forShard: (shardKey: string) => HttpRunners;
+
+    /** Publish an arbitrary event to a live topic. See {@link LivePublisher}. */
+    readonly live: LivePublisher;
+
     readonly scheduler?: ActionContext["scheduler"];
     readonly storage?: ActionContext["storage"];
 
@@ -84,6 +96,64 @@ type HttpActionCtx = {
 
 /** A raw handler wrapped by {@link httpAction}. Receives the raw request, returns the raw response. */
 type HttpActionHandler = (context: HttpActionCtx, request: Request) => Promise<Response> | Response;
+
+/** Init for {@link ShardFetch} — the fields the live-stream primitive needs. */
+interface ShardFetchInit {
+    /** Request body (already serialized). */
+    body?: string;
+    /** Extra headers merged over the forwarded identity headers. */
+    headers?: Record<string, string>;
+    /** HTTP method; defaults to `GET`. */
+    method?: string;
+}
+
+/**
+ * Forward a server-to-server request to a shard Durable Object, carrying the
+ * caller's resolved identity headers. This is the seam the live-stream
+ * primitive uses to reach the shard's subscriber registry: a worker-side
+ * `.stream()` handler cannot itself hold a connection-scoped subscription (the
+ * registry must be the single-actor DO), so the SSE stream is served by the DO
+ * and this is how the route reaches it.
+ *
+ * Not a general-purpose escape hatch: like `ctx.run*` it dispatches as trusted
+ * worker code, so a handler must have already run whatever authorization it
+ * requires before forwarding. An internal call has no client-reachable path of
+ * its own — the DO is never directly addressable.
+ *
+ * `shardKey === undefined` targets the app's default shard.
+ */
+type ShardFetch = (shardKey: string | undefined, path: string, init?: ShardFetchInit) => Promise<Response>;
+
+/** Where a {@link LivePublisher.publish} goes. */
+interface LivePublishOptions {
+    /** The shard to publish on. Defaults to the ctx's default shard. */
+    shardKey?: string;
+
+    /**
+     * The `id` of the `defineLiveStream` whose subscribers see the event. A
+     * subscriber follows a topic through the stream that authorized it, so a
+     * publish reaches only that stream's subscribers.
+     */
+    stream: string;
+}
+
+/**
+ * `ctx.live` — publish an arbitrary event to a named topic. The event fans out
+ * to the SSE subscribers of `options.stream` on the shard. WebSocket whisper
+ * members never receive it (see the live-stream docblock).
+ *
+ * Reachable from an HTTP-action ctx; an action (a scheduled job) publishes
+ * through the same surface in-process (see the live-stream docblock).
+ */
+interface LivePublisher {
+    /**
+     * Publish `payload` to `topic` on `options.stream`. Best-effort — a topic
+     * with no subscribers is a no-op. Rejects when the shard refuses the publish
+     * (an oversized payload, or a room or route topic), so a silent drop is not
+     * possible.
+     */
+    publish: (topic: string, payload: unknown, options: LivePublishOptions) => Promise<void>;
+}
 
 /**
  * The hono {@link https://hono.dev | Hono} environment used by {@link httpRouter}.
@@ -852,8 +922,12 @@ export type {
     HttpRouteHandlerOptions,
     HttpRunners,
     HttpStreamHandlerOptions,
+    LivePublisher,
+    LivePublishOptions,
     LunoraHttpApp,
     LunoraHttpEnv,
     LunoraRouteHandler,
+    ShardFetch,
+    ShardFetchInit,
     SseEvent,
 };

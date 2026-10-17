@@ -17,7 +17,7 @@ import { fileURLToPath } from "node:url";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 import type { CelldDev } from "./celld-process";
-import { pollUntil, startCelldDev, stopCelldDev } from "./celld-process";
+import { pause, pollUntil, startCelldDev, stopCelldDev } from "./celld-process";
 import type { BindingResult } from "./tck-bindings";
 import type { Factories, LegResult } from "./tck-legs";
 import { collectLegs } from "./tck-legs";
@@ -195,6 +195,146 @@ describe("celld conformance run", () => {
             } finally {
                 alice.socket.close();
                 bob.socket.close();
+            }
+        });
+    });
+
+    describe("live streams over SSE through the node proxy", () => {
+        // Runs the streamed body through celld's node-to-cell proxy: the cell must
+        // hold the response open, deliver a publish to it, and still be serving
+        // after an idle wait.
+        it("delivers a publish to an open SSE body, and keeps the body open after a wait", async () => {
+            expect.assertions(7);
+
+            const response = await fetch(`${fleet.origin}/live`);
+
+            expect(response.status).toBe(200);
+            expect(response.headers.get("content-type")).toMatch(/^text\/event-stream/u);
+            expect(response.body).not.toBeNull();
+
+            const reader = (response.body ?? new ReadableStream<Uint8Array>()).getReader();
+            const decoder = new TextDecoder();
+            let received = "";
+
+            // Drain the body in the background; a closed body ends the pump.
+            const pump = (): Promise<void> =>
+                reader.read().then(({ done, value }) => {
+                    if (done) {
+                        return undefined;
+                    }
+
+                    received += decoder.decode(value, { stream: true });
+
+                    return pump();
+                });
+            const draining = pump();
+
+            const publish = async (payload: string): Promise<{ delivered: number }> => {
+                const reply = await fetch(`${fleet.origin}/live/publish`, { body: payload, method: "POST" });
+
+                return reply.json<{ delivered: number }>();
+            };
+
+            const waitForFrame = async (marker: string): Promise<string> =>
+                pollUntil(
+                    async () => received,
+                    (text) => text.includes(marker),
+                    { deadlineMs: 5000, intervalMs: 25 },
+                );
+
+            try {
+                await expect(publish("first")).resolves.toStrictEqual({ delivered: 1 });
+                await expect(waitForFrame("data: first\n\n")).resolves.toContain("event: live\ndata: first\n\n");
+
+                await pause(1500);
+
+                await expect(publish("second")).resolves.toStrictEqual({ delivered: 1 });
+                await expect(waitForFrame("data: second\n\n")).resolves.toContain("event: live\ndata: second\n\n");
+            } finally {
+                await reader.cancel();
+                await draining;
+            }
+        });
+
+        // The same SSE path, but through the real `ShardDO` live handlers and the
+        // app surface: `defineLiveStream` serves connect and control, and
+        // `ctx.live.publish` reaches the shard's publish route.
+        it("serves connect, subscribe, publish and unsubscribe from the real ShardDO", async () => {
+            expect.assertions(9);
+
+            const connect = await fetch(`${fleet.origin}/live/tck-feed/connect`);
+
+            expect(connect.status).toBe(200);
+
+            const connectionId = connect.headers.get("x-lunora-live-connection") ?? "";
+
+            expect(connectionId).toMatch(/^[0-9a-f-]{36}$/u);
+
+            const reader = (connect.body ?? new ReadableStream<Uint8Array>()).getReader();
+            const decoder = new TextDecoder();
+            let received = "";
+
+            const draining = (async (): Promise<void> => {
+                for (;;) {
+                    // eslint-disable-next-line no-await-in-loop -- each chunk is decoded before the next read
+                    const { done, value } = await reader.read();
+
+                    if (done) {
+                        return;
+                    }
+
+                    received += decoder.decode(value, { stream: true });
+                }
+            })();
+
+            const control = async (body: Record<string, string>): Promise<Response> =>
+                fetch(`${fleet.origin}/live/tck-feed/control`, {
+                    body: JSON.stringify({ ...body, connectionId }),
+                    headers: { "content-type": "application/json" },
+                    method: "POST",
+                });
+
+            const publish = async (topic: string, data: unknown): Promise<Response> =>
+                fetch(`${fleet.origin}/tck-live/publish`, {
+                    body: JSON.stringify({ data, topic }),
+                    headers: { "content-type": "application/json" },
+                    method: "POST",
+                });
+
+            const frameArrived = async (marker: string): Promise<void> => {
+                await pollUntil(
+                    async () => received,
+                    (text) => text.includes(marker),
+                    { deadlineMs: 5000, intervalMs: 25 },
+                );
+            };
+
+            try {
+                const subscribed = await control({ action: "subscribe", subscriptionId: "s1", topic: "tck:a" });
+
+                expect(subscribed.status).toBe(200);
+                await expect(control({ action: "subscribe", subscriptionId: "s2", topic: "tck:b" })).resolves.toHaveProperty("status", 200);
+
+                await expect(publish("tck:a", { n: 1 })).resolves.toHaveProperty("status", 200);
+
+                await frameArrived('event: live\ndata: {"topic":"tck:a","data":{"n":1}}\n\n');
+
+                expect(received).toContain('event: live\ndata: {"topic":"tck:a","data":{"n":1}}\n\n');
+
+                // Unsubscribing s1 must stop tck:a. The sentinel on tck:b arrives
+                // after the late publish on tck:a, so its frame proves the late one
+                // was dispatched and is absent.
+                await expect(control({ action: "unsubscribe", subscriptionId: "s1", topic: "tck:a" })).resolves.toHaveProperty("status", 200);
+
+                await publish("tck:a", { n: 2 });
+                await publish("tck:b", { n: 3 });
+                await frameArrived('data: {"topic":"tck:b","data":{"n":3}}');
+
+                expect(received).not.toContain('"topic":"tck:a","data":{"n":2}');
+                expect(received).toContain('event: live\ndata: {"topic":"tck:b","data":{"n":3}}\n\n');
+            } finally {
+                await reader.cancel();
+                await draining;
             }
         });
     });
