@@ -1652,6 +1652,8 @@ interface LiveSubscriber {
     enqueue: (chunk: Uint8Array) => void;
     /** Epoch ms after which the connection's credential has lapsed, if it carries one. */
     expiresAt?: number;
+    /** The client IP the runtime minted for this connection, when it had one; keys the per-client limit. */
+    ip?: string;
     subscriptions: Map<string, string>;
     /** The caller's user id, or `""` for an anonymous connection; keys the per-caller limit. */
     userId: string;
@@ -1942,7 +1944,10 @@ abstract class ShardDO {
      */
     protected static readonly MAX_LIVE_CONNECTIONS = 1024;
 
-    /** Live SSE connections one caller (one user id, or all anonymous callers together) may hold on a shard. */
+    /**
+     * Live SSE connections one caller may hold on a shard: one user id, and one client IP
+     * (the `x-lunora-client-ip` the runtime mints). Anonymous callers share the `""` user bucket.
+     */
     protected static readonly MAX_LIVE_CONNECTIONS_PER_CALLER = 32;
 
     /**
@@ -15710,18 +15715,30 @@ abstract class ShardDO {
         }
 
         // One caller may not fill the shard: a per-caller bucket (anonymous callers share one)
-        // keeps a single client from locking every other reader out of live streams.
+        // keeps a single client from locking every other reader out of live streams. The
+        // client IP is a second bucket, because a user id is free to mint and the connect route
+        // is reachable before any topic is authorized.
         const userId = decodeUserIdHeader(request.headers.get("x-lunora-userid")) ?? "";
+        const ip = request.headers.get("x-lunora-client-ip") ?? undefined;
         let callerConnections = 0;
+        let ipConnections = 0;
 
         for (const existing of this.liveSubscribers.values()) {
             if (existing.userId === userId) {
                 callerConnections += 1;
             }
+
+            if (ip !== undefined && existing.ip === ip) {
+                ipConnections += 1;
+            }
         }
 
         if (callerConnections >= ShardDO.MAX_LIVE_CONNECTIONS_PER_CALLER) {
             return jsonResponse({ error: { code: "LIVE_CONNECTION_LIMIT", message: "this caller holds the maximum number of live connections" } }, 503);
+        }
+
+        if (ipConnections >= ShardDO.MAX_LIVE_CONNECTIONS_PER_CALLER) {
+            return jsonResponse({ error: { code: "LIVE_CONNECTION_LIMIT", message: "this client holds the maximum number of live connections" } }, 503);
         }
 
         const expiresAt = decodeIdentityExpiryHeader(request.headers.get("x-lunora-identity-exp"));
@@ -15735,6 +15752,7 @@ abstract class ShardDO {
                 /* replaced below once the stream controller exists */
             },
             ...(expiresAt === undefined ? {} : { expiresAt }),
+            ...(ip === undefined ? {} : { ip }),
             subscriptions: new Map<string, string>(),
             userId,
         };

@@ -232,6 +232,33 @@ describe("shardDO live streams", () => {
         expect(relayed).toEqual([]);
     });
 
+    it("caps one client IP per shard so another IP can still connect", async () => {
+        expect.assertions(2);
+
+        const shard = makeShard([]);
+        const connectFrom = async (ip: string, userId: string): Promise<number> => {
+            const response = await shard.fetch(
+                new Request("https://x/_lunora/live/connect", {
+                    headers: { "x-lunora-client-ip": ip, "x-lunora-userid": userId },
+                    method: "GET",
+                }),
+            );
+
+            return response.status;
+        };
+
+        // Distinct user ids from one IP: the per-user bucket never fills, so only the IP bucket can refuse.
+        const statuses: number[] = [];
+
+        for (let index = 0; index < 33; index += 1) {
+            // eslint-disable-next-line no-await-in-loop -- sequential connects keep the count deterministic
+            statuses.push(await connectFrom("203.0.113.1", `user-${String(index)}`));
+        }
+
+        expect(statuses).toEqual([...Array.from({ length: 32 }).fill(200), 503]);
+        await expect(connectFrom("203.0.113.2", "user-other")).resolves.toBe(200);
+    });
+
     it("stops delivering to a connection after its unsubscribe", async () => {
         expect.assertions(1);
 
