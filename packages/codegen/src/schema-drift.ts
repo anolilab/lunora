@@ -142,6 +142,7 @@ const objectFieldsOf = (shape: Record<string, ValidatorIR>): Record<string, Fiel
  */
 const STRUCTURAL_DETAIL: Record<string, (validator: ValidatorIR) => Partial<FieldSnapshot>> = {
     array: (validator) => (validator.inner ? { of: fieldSnapshotOf(validator.inner) } : {}),
+    from: (validator) => (validator.tsType === undefined ? {} : { output: validator.tsType }),
     id: (validator) => (validator.tableName === undefined ? {} : { ref: validator.tableName }),
     literal: (validator) => (validator.literalValue === undefined ? {} : { literal: validator.literalValue }),
     object: (validator) => (validator.shape ? { fields: objectFieldsOf(validator.shape) } : {}),

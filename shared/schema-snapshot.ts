@@ -56,6 +56,12 @@ interface FieldSnapshot {
     nullable?: boolean;
     /** `v.array(inner)` element / `v.record(…, value)` value shape. */
     of?: FieldSnapshot;
+    /**
+     * `v.from(schema)` — the wrapped schema's inferred OUTPUT type as TS source, the
+     * type the column is stored and read as. Absent when it could not be resolved,
+     * and on baselines written before it was recorded; see {@link comparableFromOutput}.
+     */
+    output?: string;
     /** True when declared `v.optional(...)` — accepts `undefined` / absent on insert. */
     optional: boolean;
     /** `v.id("table")` — the referenced table. */
@@ -492,6 +498,9 @@ const describeShape = (field: FieldSnapshot): string => {
         case "array": {
             return `array(${field.of ? describeShape(field.of) : "?"})`;
         }
+        case "from": {
+            return field.output === undefined ? "from" : `from(${field.output})`;
+        }
         case "id": {
             return `id(${field.ref ?? "?"})`;
         }
@@ -524,6 +533,23 @@ const safeFieldChange = (tableName: string, type: DriftChange["type"], summary: 
 };
 
 /**
+ * Both sides of a `v.from()` comparison, with the recorded output type dropped
+ * from each unless BOTH sides recorded one.
+ *
+ * A baseline written before the output type was snapshotted, or built where the
+ * type checker could not resolve it, simply does not know the type. Diffing it
+ * against a snapshot that does would report every `v.from()` column as changed on
+ * the first run after an upgrade — a drift nothing in the schema caused.
+ */
+const comparableFromOutput = (old: FieldSnapshot, field: FieldSnapshot): [FieldSnapshot, FieldSnapshot] =>
+    old.kind === "from" && field.kind === "from" && (old.output === undefined || field.output === undefined)
+        ? [
+              { ...old, output: undefined },
+              { ...field, output: undefined },
+          ]
+        : [old, field];
+
+/**
  * Classify a change to the field's value SHAPE: its kind, its `v.id` target, its
  * element/member/property shapes, its literal value.
  *
@@ -532,7 +558,9 @@ const safeFieldChange = (tableName: string, type: DriftChange["type"], summary: 
  * changed array element type (which moves the storage projection), a swapped
  * union member, a different literal.
  */
-const diffFieldShape = (tableName: string, name: string, old: FieldSnapshot, field: FieldSnapshot, deep: boolean): DriftChange | undefined => {
+const diffFieldShape = (tableName: string, name: string, oldField: FieldSnapshot, newField: FieldSnapshot, deep: boolean): DriftChange | undefined => {
+    const [old, field] = comparableFromOutput(oldField, newField);
+
     if (old.kind === field.kind && (!deep || shapeForm(old) === shapeForm(field))) {
         return undefined;
     }

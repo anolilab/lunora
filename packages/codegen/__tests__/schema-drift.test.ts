@@ -625,6 +625,29 @@ describe("schema-drift", () => {
             expect([hashMoved, serializationMoved]).toStrictEqual([true, true]);
         });
 
+        it("sees a `v.from()` schema whose inferred output type changed", () => {
+            expect.assertions(4);
+
+            const { changes, hashMoved } = compare({ score: { kind: "from", tsType: "string" } }, { score: { kind: "from", tsType: "number" } });
+
+            expect(changes).toHaveLength(1);
+            expect(changes[0]).toMatchObject({ remediation: "backfill", severity: "breaking", type: "changedFieldShape" });
+            expect(changes[0]?.summary).toContain("from(string) → from(number)");
+            expect(hashMoved).toBe(true);
+        });
+
+        it("does not report drift when only one side could resolve a `v.from()` output type", () => {
+            expect.assertions(2);
+
+            // A baseline written before the output type was recorded, or one built
+            // where the type checker could not resolve it, says nothing about it.
+            const { changes: gained } = compare({ score: { kind: "from" } }, { score: { kind: "from", tsType: "number" } });
+            const { changes: lost } = compare({ score: { kind: "from", tsType: "number" } }, { score: { kind: "from" } });
+
+            expect(gained).toStrictEqual([]);
+            expect(lost).toStrictEqual([]);
+        });
+
         it("sees an array element type change (it moves the storage projection)", () => {
             expect.assertions(3);
 
