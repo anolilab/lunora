@@ -1,3 +1,34 @@
+## @lunora/codegen [1.0.0-alpha.322](https://github.com/anolilab/lunora/compare/@lunora/codegen@1.0.0-alpha.321...@lunora/codegen@1.0.0-alpha.322) (2026-10-18)
+
+### ⚠ BREAKING CHANGES
+
+* **server:** createNodeHttpServer rejects a non-loopback host without an
+origin option, and no longer caps request bodies at 1 MiB.
+
+Co-authored-by: Claude Opus 5.5 <noreply@anthropic.com>
+
+### Features
+
+* **server:** live topic streams over one SSE connection ([#1218](https://github.com/anolilab/lunora/issues/1218)) ([59056ea](https://github.com/anolilab/lunora/commit/59056ea6c5d23de1bd5633a7da3ac680eb622344))
+
+
+### Dependencies
+
+* **@lunora/advisor:** upgraded to 1.0.0-alpha.231
+* **@lunora/agent:** upgraded to 1.0.0-alpha.223
+* **@lunora/container:** upgraded to 1.0.0-alpha.80
+* **@lunora/errors:** upgraded to 1.0.0-alpha.60
+* **@lunora/platform:** upgraded to 1.0.0-alpha.68
+* **@lunora/queue:** upgraded to 1.0.0-alpha.113
+* **@lunora/scheduler:** upgraded to 1.0.0-alpha.135
+* **@lunora/values:** upgraded to 1.0.0-alpha.70
+* **@lunora/workflow:** upgraded to 1.0.0-alpha.82
+* **@lunora/bindings:** upgraded to 1.0.0-alpha.120
+* **@lunora/do:** upgraded to 1.0.0-alpha.225
+* **@lunora/payment:** upgraded to 1.0.0-alpha.218
+* **@lunora/server:** upgraded to 1.0.0-alpha.215
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.138
+
 ## @lunora/codegen [1.0.0-alpha.321](https://github.com/anolilab/lunora/compare/@lunora/codegen@1.0.0-alpha.320...@lunora/codegen@1.0.0-alpha.321) (2026-10-18)
 
 ### Bug Fixes

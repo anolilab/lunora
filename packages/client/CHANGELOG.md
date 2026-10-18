@@ -1,3 +1,24 @@
+## @lunora/client [1.0.0-alpha.222](https://github.com/anolilab/lunora/compare/@lunora/client@1.0.0-alpha.221...@lunora/client@1.0.0-alpha.222) (2026-10-18)
+
+### ⚠ BREAKING CHANGES
+
+* **server:** createNodeHttpServer rejects a non-loopback host without an
+origin option, and no longer caps request bodies at 1 MiB.
+
+Co-authored-by: Claude Opus 5.5 <noreply@anthropic.com>
+
+### Features
+
+* **server:** live topic streams over one SSE connection ([#1218](https://github.com/anolilab/lunora/issues/1218)) ([59056ea](https://github.com/anolilab/lunora/commit/59056ea6c5d23de1bd5633a7da3ac680eb622344))
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.60
+* **@lunora/do:** upgraded to 1.0.0-alpha.225
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.215
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.138
+
 ## @lunora/client [1.0.0-alpha.221](https://github.com/anolilab/lunora/compare/@lunora/client@1.0.0-alpha.220...@lunora/client@1.0.0-alpha.221) (2026-10-18)
 
 
