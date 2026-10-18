@@ -120,21 +120,48 @@ const APP_FACTORY = "defineApp";
 /** The `lunora.config` hook whose function receives the generated `defineApp()` builder. */
 const APP_HOOK_KEY = "app";
 
+/** True when the config hands the binding `name` to its `app` key: `app: name`, or the shorthand `{ app }`. */
+const isNamedAppHook = (configFile: SourceFile, name: string): boolean =>
+    configFile
+        .getDescendantsOfKind(SyntaxKind.PropertyAssignment)
+        .some((property) => propertyKeyName(property) === APP_HOOK_KEY && property.getInitializer()?.getText() === name) ||
+    (name === APP_HOOK_KEY &&
+        configFile.getDescendantsOfKind(SyntaxKind.ShorthandPropertyAssignment).some((property) => propertyKeyName(property) === APP_HOOK_KEY));
+
 /**
  * True when `node` is a `lunora.config` `app` hook function, `app: (app) => …`.
  * Only the project's config file carries the hook: an `app` key on any object
  * under `lunora/` is not the generated builder's hook.
  */
 const isAppHookFunction = (node: Node | undefined): boolean => {
-    const owner = node?.getParent();
+    if (node === undefined || !PROJECT_CONFIG_FILENAMES.includes(node.getSourceFile().getBaseName())) {
+        return false;
+    }
 
-    return (
-        node !== undefined &&
-        PROJECT_CONFIG_FILENAMES.includes(node.getSourceFile().getBaseName()) &&
-        (Node.isArrowFunction(node) || Node.isFunctionExpression(node)) &&
-        Node.isPropertyAssignment(owner) &&
-        propertyKeyName(owner) === APP_HOOK_KEY
-    );
+    // Method shorthand: `app(builder) { … }`.
+    if (Node.isMethodDeclaration(node)) {
+        return Node.isObjectLiteralExpression(node.getParent()) && propertyKeyName(node) === APP_HOOK_KEY;
+    }
+
+    if (!(Node.isArrowFunction(node) || Node.isFunctionExpression(node) || Node.isFunctionDeclaration(node))) {
+        return false;
+    }
+
+    const owner = node.getParent();
+
+    if (Node.isPropertyAssignment(owner)) {
+        return propertyKeyName(owner) === APP_HOOK_KEY;
+    }
+
+    // Extracted: `const configure = (app) => …` or `function configure(app) {…}`,
+    // handed to the key as `app: configure` or `{ app }`.
+    if (Node.isVariableDeclaration(owner)) {
+        return isNamedAppHook(node.getSourceFile(), owner.getName());
+    }
+
+    const declared = Node.isFunctionDeclaration(node) ? node.getName() : undefined;
+
+    return declared !== undefined && isNamedAppHook(node.getSourceFile(), declared);
 };
 
 /**

@@ -93,6 +93,54 @@ describe("discoverPlatformSignals", () => {
         expect(signals().deliveryAuthorization).toBe(false);
     });
 
+    it("flags a `.deliveryAuthorization(...)` call in an app hook extracted to a named function", () => {
+        expect.assertions(2);
+
+        // The hook is a binding handed to the `app` key, not written inline.
+        const configFile = join(workdir, "lunora.config.ts");
+        const hook = `const configure = (app: { deliveryAuthorization: (selector: () => unknown) => unknown }) => app.deliveryAuthorization(() => undefined);\n`;
+
+        writeFileSync(configFile, `${hook}export default {\n    target: "node",\n    app: configure,\n};\n`, "utf8");
+
+        expect(discoverPlatformSignals(project, join(workdir, "lunora"), configFile).deliveryAuthorization).toBe(true);
+
+        writeFileSync(
+            configFile,
+            `const app = (builder: { deliveryAuthorization: (selector: () => unknown) => unknown }) => builder.deliveryAuthorization(() => undefined);\nexport default {\n    target: "node",\n    app,\n};\n`,
+            "utf8",
+        );
+
+        expect(discoverPlatformSignals(project, join(workdir, "lunora"), configFile).deliveryAuthorization).toBe(true);
+    });
+
+    it("flags a `.deliveryAuthorization(...)` call in a function-declaration app hook", () => {
+        expect.assertions(1);
+
+        const configFile = join(workdir, "lunora.config.ts");
+
+        writeFileSync(
+            configFile,
+            `function configure(app: { deliveryAuthorization: (selector: () => unknown) => unknown }) {\n    return app.deliveryAuthorization(() => undefined);\n}\n\nexport default {\n    target: "node",\n    app: configure,\n};\n`,
+            "utf8",
+        );
+
+        expect(discoverPlatformSignals(project, join(workdir, "lunora"), configFile).deliveryAuthorization).toBe(true);
+    });
+
+    it("flags a `.deliveryAuthorization(...)` call in a method-shorthand app hook", () => {
+        expect.assertions(1);
+
+        const configFile = join(workdir, "lunora.config.ts");
+
+        writeFileSync(
+            configFile,
+            `export default {\n    target: "node",\n    app(app: { deliveryAuthorization: (selector: () => unknown) => unknown }) {\n        return app.deliveryAuthorization(() => undefined);\n    },\n};\n`,
+            "utf8",
+        );
+
+        expect(discoverPlatformSignals(project, join(workdir, "lunora"), configFile).deliveryAuthorization).toBe(true);
+    });
+
     it("flags `.deliveryAuthorization(...)` chained directly from the defineApp() factory, or on a local bound to it", () => {
         expect.assertions(2);
 
