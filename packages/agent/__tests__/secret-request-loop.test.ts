@@ -359,7 +359,11 @@ describe("requestSecretTool — the loop pauses and resumes", () => {
         const used: string[] = [];
         const agent = secretAgent(used);
         const { host, journal, runtime } = await setup();
-        const generate = scriptedGenerate([toolTurn("call_1", "requestKey", {}), toolTurn("call_2", "charge", { secretRef: "call_1" }), finalTurn("done")]);
+        const generate = scriptedGenerate([
+            toolTurn("call_1", "requestKey", { label: "API key" }),
+            toolTurn("call_2", "charge", { secretRef: "call_1" }),
+            finalTurn("done"),
+        ]);
 
         await pauseAt(agent, journal, runtime, generate);
         await host.supply("call_1", SECRET);
@@ -380,7 +384,7 @@ describe("requestSecretTool — the loop pauses and resumes", () => {
         const agent = secretAgent(used);
         const { host, journal, runtime } = await setup();
         const generate = scriptedGenerate([
-            toolTurn("call_1", "requestKey", {}),
+            toolTurn("call_1", "requestKey", { label: "API key" }),
             toolTurn("call_2", "charge", { secretRef: "call_1" }),
             finalTurn("could not charge"),
         ]);
@@ -407,7 +411,7 @@ describe("requestSecretTool — the loop pauses and resumes", () => {
         const agent = secretAgent(used);
         const { host, journal, runtime } = await setup();
         const generate = scriptedGenerate([
-            toolTurn("call_1", "requestKey", {}),
+            toolTurn("call_1", "requestKey", { label: "API key" }),
             toolTurn("call_2", "other", { secretRef: "call_1" }),
             toolTurn("call_3", "charge", { secretRef: "call_1" }),
             finalTurn("done"),
@@ -435,7 +439,7 @@ describe("requestSecretTool — the loop pauses and resumes", () => {
         const used: string[] = [];
         const agent = secretAgent(used);
         const { host, journal, runtime } = await setup();
-        const generate = scriptedGenerate([toolTurn("call_1", "requestKey", {}), finalTurn("no key")]);
+        const generate = scriptedGenerate([toolTurn("call_1", "requestKey", { label: "API key" }), finalTurn("no key")]);
 
         await pauseAt(agent, journal, runtime, generate);
         await host.decline("call_1");
@@ -457,7 +461,7 @@ describe("requestSecretTool — the loop pauses and resumes", () => {
 
         journal.timeoutWaits.add("secret:call_1");
 
-        const generate = scriptedGenerate([toolTurn("call_1", "requestKey", {}), finalTurn("no key")]);
+        const generate = scriptedGenerate([toolTurn("call_1", "requestKey", { label: "API key" }), finalTurn("no key")]);
         const result = await runAgentLoop(loopDefaults(agent, { generate, run: runtime.run, step: journal }));
 
         expect(result).toStrictEqual({ stopped: "final", text: "no key", turns: 2 });
@@ -472,7 +476,11 @@ describe("requestSecretTool — the loop pauses and resumes", () => {
         const used: string[] = [];
         const agent = secretAgent(used);
         const { host, journal, runtime } = await setup();
-        const generate = scriptedGenerate([toolTurn("call_1", "requestKey", {}), toolTurn("call_2", "charge", { secretRef: "call_1" }), finalTurn("done")]);
+        const generate = scriptedGenerate([
+            toolTurn("call_1", "requestKey", { label: "API key" }),
+            toolTurn("call_2", "charge", { secretRef: "call_1" }),
+            finalTurn("done"),
+        ]);
 
         await pauseAt(agent, journal, runtime, generate);
         await host.supply("call_1", SECRET);
@@ -492,7 +500,7 @@ describe("requestSecretTool — the loop pauses and resumes", () => {
 
         const agent = secretAgent([]);
         const { host, journal, runtime } = await setup();
-        const generate = scriptedGenerate([toolTurn("call_1", "requestKey", {}), finalTurn("no key")]);
+        const generate = scriptedGenerate([toolTurn("call_1", "requestKey", { label: "API key" }), finalTurn("no key")]);
 
         await pauseAt(agent, journal, runtime, generate);
         journal.timeoutWaits.add("secret:call_1");
@@ -779,5 +787,48 @@ describe("a request is settled only by the run that opened it", () => {
 
         expect(settled).toStrictEqual({ status: "expired" });
         expect(host.rows.get("agent_secret_requests")?.[0]).toMatchObject({ instanceId: "wf-2", status: "pending" });
+    });
+});
+
+describe("the label a secret request carries to its owner", () => {
+    it("records the label the model gave on the request row and on its marker", async () => {
+        expect.assertions(2);
+
+        const agent = secretAgent([]);
+        const { host, journal, runtime } = await setup();
+        const generate = scriptedGenerate([toolTurn("call_1", "requestKey", { label: "Stripe live key" }), finalTurn("done")]);
+
+        await pauseAt(agent, journal, runtime, generate);
+
+        expect(host.rows.get("agent_secret_requests")?.[0]?.["label"]).toBe("Stripe live key");
+        expect([...runtime.messages.values()].find((message) => message.status === "awaiting_secret")?.content).toBe(
+            'Awaiting a secret for tool "requestKey": Stripe live key',
+        );
+    });
+
+    it("trims and bounds the label, and keeps it as text", async () => {
+        expect.assertions(1);
+
+        const agent = secretAgent([]);
+        const { host, journal, runtime } = await setup();
+        const generate = scriptedGenerate([toolTurn("call_1", "requestKey", { label: `  <b>${"k".repeat(400)}</b>  ` }), finalTurn("done")]);
+
+        await pauseAt(agent, journal, runtime, generate);
+
+        expect(host.rows.get("agent_secret_requests")?.[0]?.["label"]).toBe(`<b>${"k".repeat(197)}`);
+    });
+
+    it("refuses a blank label as a tool error, without pausing the run", async () => {
+        expect.assertions(3);
+
+        const agent = secretAgent([]);
+        const { journal, runtime } = await setup();
+        const generate = scriptedGenerate([toolTurn("call_1", "requestKey", { label: "   " }), finalTurn("no key")]);
+
+        const result = await runAgentLoop(loopDefaults(agent, { generate, run: runtime.run, step: journal }));
+
+        expect(result).toStrictEqual({ stopped: "final", text: "no key", turns: 2 });
+        expect(journal.waitedNames).toStrictEqual([]);
+        expect([...runtime.messages.values()].find((message) => message.toolCallId === "call_1")?.content).toContain('invalid input for tool "requestKey"');
     });
 });

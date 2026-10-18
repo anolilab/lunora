@@ -353,7 +353,7 @@ const syntheticAgentApiFunctions = (agents: ReadonlyArray<AgentIR>, functions: R
             filePath: "agents",
             kind: "query",
             returnType:
-                '{ createdAt: number; expiresAt: number; status: "consumed" | "declined" | "expired" | "pending" | "supplied"; toolCallId: string; toolName: string }[]',
+                '{ createdAt: number; expiresAt: number; label?: string; status: "consumed" | "declined" | "expired" | "pending" | "supplied"; toolCallId: string; toolName: string }[]',
         },
         {
             args: { key: { kind: "string" } },

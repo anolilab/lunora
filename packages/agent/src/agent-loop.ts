@@ -10,7 +10,7 @@ import { buildModelMessages } from "./model-messages";
 import { agentClassName } from "./naming";
 import { toFunctionReference } from "./paths";
 import isPositiveInteger from "./positive-integer";
-import { SecretUnavailableError } from "./secret-request-tool";
+import { secretLabelOf, SecretUnavailableError } from "./secret-request-tool";
 import { flushTelemetry, traceToolExecution } from "./telemetry/tool-execution";
 import { capToolOutputText } from "./tool-output";
 import type {
@@ -444,7 +444,7 @@ const SECRET_OUTCOME_REASON: Record<Exclude<SecretOutcome, "supplied">, string> 
  * Only the status is journaled. The host ref stays in the row, and the model is handed
  * the request id as its `secretRef`.
  */
-const awaitSecret = async (turnContext: TurnContext, call: AgentToolCall, consumerTool: string): Promise<SecretOutcome> => {
+const awaitSecret = async (turnContext: TurnContext, call: AgentToolCall, consumerTool: string, label: string): Promise<SecretOutcome> => {
     const { agent, deleteMessage, instanceId, openSecretRef, patchThread, persist, run, settleSecretRef, step, threadKey } = turnContext;
     const markerKey = `${instanceId}:secret:${call.id}`;
     const timeoutMs = approvalTimeoutMs(agent.approvalTimeout);
@@ -454,6 +454,7 @@ const awaitSecret = async (turnContext: TurnContext, call: AgentToolCall, consum
             consumerTool,
             expiresAt: Date.now() + timeoutMs,
             instanceId,
+            label,
             threadKey,
             toolCallId: call.id,
             toolName: call.name,
@@ -461,7 +462,7 @@ const awaitSecret = async (turnContext: TurnContext, call: AgentToolCall, consum
     });
 
     await persist({
-        content: `Awaiting a secret for tool "${call.name}".`,
+        content: `Awaiting a secret for tool "${call.name}": ${label}`,
         messageKey: markerKey,
         role: "tool",
         status: "awaiting_secret",
@@ -529,6 +530,44 @@ const readToolOutcome = (memo: unknown): ToolOutcome => {
     return { ok: memo };
 };
 
+/**
+ * A `requestSecretTool` call, run as its own step rather than inside `runToolCall`: pause
+ * for the owner, then record the request id or why none came. Outside `step.do` for the
+ * same reason an approval wait is: the pause must not be memoized as a tool output.
+ */
+const runSecretRequestCall = async (turnContext: TurnContext, call: AgentToolCall, consumerTool: string): Promise<void> => {
+    const { instanceId, persist } = turnContext;
+    const messageKey = `${instanceId}:tool:${call.id}`;
+    const stepName = `tool:${call.name}:${call.id}`;
+    const label = secretLabelOf(call.input);
+
+    // The owner decides from this label, so a request without one is refused, as a bad argument is.
+    if (label === undefined) {
+        await persist({
+            content: `Error: invalid input for tool "${call.name}" — it was not run. \`label\` must be a non-empty string saying what the secret is for.`,
+            messageKey,
+            role: "tool",
+            stepName,
+            toolCallId: call.id,
+            toolName: call.name,
+        });
+
+        return;
+    }
+
+    const outcome = await awaitSecret(turnContext, call, consumerTool, label);
+
+    await persist({
+        // The request id is the handle: the consuming tool resolves it inside the thread.
+        content: outcome === "supplied" ? JSON.stringify({ secretRef: call.id }) : `Error: tool "${call.name}" was not run: ${SECRET_OUTCOME_REASON[outcome]}.`,
+        messageKey,
+        role: "tool",
+        stepName,
+        toolCallId: call.id,
+        toolName: call.name,
+    });
+};
+
 const runToolCall = async (turnContext: TurnContext, call: AgentToolCall): Promise<void> => {
     const { agent, approvalGrantedRef, depth, env, exports, getState, instanceId, onTokenDelta, owner, persist, run, setState, step, threadKey, tools } =
         turnContext;
@@ -569,18 +608,7 @@ const runToolCall = async (turnContext: TurnContext, call: AgentToolCall): Promi
     // for the same reason an approval wait is: the pause must not be memoized as a
     // tool output.
     if (tool.secretRequest !== undefined) {
-        const outcome = await awaitSecret(turnContext, call, tool.secretRequest.consumer);
-
-        await persist({
-            // The request id is the handle: the consuming tool resolves it inside the thread.
-            content:
-                outcome === "supplied" ? JSON.stringify({ secretRef: call.id }) : `Error: tool "${call.name}" was not run: ${SECRET_OUTCOME_REASON[outcome]}.`,
-            messageKey,
-            role: "tool",
-            stepName,
-            toolCallId: call.id,
-            toolName: call.name,
-        });
+        await runSecretRequestCall(turnContext, call, tool.secretRequest.consumer);
 
         return;
     }

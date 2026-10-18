@@ -522,7 +522,7 @@ describe("auto-registered agent runtime functions", () => {
         );
         expect(content).toContain('agentDeclineSecret: FunctionReference<"mutation", { threadKey: string; toolCallId: string }, { resolved: boolean }>;');
         expect(content).toContain(
-            'agentSecretRequests: FunctionReference<"query", { threadKey: string }, { createdAt: number; expiresAt: number; status: "consumed" | "declined" | "expired" | "pending" | "supplied"; toolCallId: string; toolName: string }[]>;',
+            'agentSecretRequests: FunctionReference<"query", { threadKey: string }, { createdAt: number; expiresAt: number; label?: string; status: "consumed" | "declined" | "expired" | "pending" | "supplied"; toolCallId: string; toolName: string }[]>;',
         );
         // The internal thread-write mutations never surface on the api objects.
         expect(content).not.toContain("agentAppendMessage");

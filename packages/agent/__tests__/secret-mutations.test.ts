@@ -81,7 +81,7 @@ const call = async (fn: unknown, context: unknown, args: Record<string, unknown>
  * `call_1` whose consumer is `charge`. The request row and the marker are written
  * the way the loop writes them.
  */
-const stagedThread = async (owner: string | undefined, store?: SecretValueHost, caller: Caller = fakeAgents()) => {
+const stagedThread = async (owner: string | undefined, store?: SecretValueHost, caller: Caller = fakeAgents(), label?: string) => {
     const { functions } = agentComponent();
     const { database, rows } = fakeDatabase();
     const ctx = { agentSecrets: store, agents: caller.agents, auth: { userId: owner }, db: database };
@@ -91,6 +91,7 @@ const stagedThread = async (owner: string | undefined, store?: SecretValueHost, 
         consumerTool: "charge",
         expiresAt: Date.now() + DEADLINE_MS,
         instanceId: "wf-1",
+        ...(label === undefined ? {} : { label }),
         threadKey: "t-1",
         toolCallId: "call_1",
         toolName: "requestKey",
@@ -665,6 +666,23 @@ describe("secret request component", () => {
             expect(JSON.stringify(listed)).not.toContain(ref);
             expect(JSON.stringify(listed)).not.toContain(SECRET);
             expect(JSON.stringify(listed)).not.toContain("ref");
+        });
+
+        it("lists the label the model gave the request, so the owner can see what is asked for", async () => {
+            expect.assertions(1);
+
+            const { ctx, functions } = await stagedThread("user-a", undefined, fakeAgents(), "Stripe live secret key");
+
+            await expect(call(functions.agentSecretRequests, ctx, { threadKey: "t-1" })).resolves.toStrictEqual([
+                {
+                    createdAt: NOW,
+                    expiresAt: NOW + DEADLINE_MS,
+                    label: "Stripe live secret key",
+                    status: "pending",
+                    toolCallId: "call_1",
+                    toolName: "requestKey",
+                },
+            ]);
         });
 
         it("refuses an anonymous caller, an ownerless thread, and another owner", async () => {

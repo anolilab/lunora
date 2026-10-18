@@ -317,6 +317,12 @@ const agentExtension: SchemaExtension<
             instanceId: v.string(),
             /** The host's ref, set by the supply and cleared when a later run reuses the row. Sensitive: never listed, logged or returned. */
             ref: v.optional(v.string().nullable()),
+
+            /**
+             * What the model says the secret is for, shown to the owner by `agentSecretRequests`. Absent on rows written
+             * before it existed, and on a row whose run gave no label to keep.
+             */
+            label: v.optional(v.string().nullable()),
             status: v.union(v.literal("pending"), v.literal("supplied"), v.literal("declined"), v.literal("expired"), v.literal("consumed")),
             threadKey: v.string(),
             toolCallId: v.string(),
@@ -1423,6 +1429,7 @@ export const agentComponent = (): AgentComponent => {
                 consumerTool: v.string(),
                 expiresAt: v.number(),
                 instanceId: v.string(),
+                label: v.optional(v.string()),
                 threadKey: v.string(),
                 toolCallId: v.string(),
                 toolName: v.string(),
@@ -1437,6 +1444,8 @@ export const agentComponent = (): AgentComponent => {
                         createdAt: now,
                         expiresAt: args.expiresAt,
                         instanceId: args.instanceId,
+                        // eslint-disable-next-line unicorn/no-null -- `null` is the stored form of "no label"; the column is nullable
+                        label: args.label ?? null,
                         status: "pending",
                         threadKey: args.threadKey,
                         toolCallId: args.toolCallId,
@@ -1462,6 +1471,8 @@ export const agentComponent = (): AgentComponent => {
                     consumerTool: args.consumerTool,
                     createdAt: now,
                     expiresAt: args.expiresAt,
+                    // eslint-disable-next-line unicorn/no-null -- `null` is how `ctx.db.patch` clears a nullable column; `undefined` is rejected
+                    label: args.label ?? null,
                     // eslint-disable-next-line unicorn/no-null -- `null` is how `ctx.db.patch` clears a nullable column; `undefined` is rejected
                     ref: null,
                     instanceId: args.instanceId,
@@ -1568,29 +1579,36 @@ export const agentComponent = (): AgentComponent => {
      */
     const agentSecretRequests = query
         .input({ threadKey: v.string() })
-        .query(async ({ args, ctx: context }): Promise<{ createdAt: number; expiresAt: number; status: string; toolCallId: string; toolName: string }[]> => {
-            const thread = await context.db
-                .query(THREADS_TABLE)
-                .withIndex("byKey", (q) => q.eq("key", args.threadKey))
-                .first();
+        .query(
+            async ({
+                args,
+                ctx: context,
+            }): Promise<{ createdAt: number; expiresAt: number; label?: string; status: string; toolCallId: string; toolName: string }[]> => {
+                const thread = await context.db
+                    .query(THREADS_TABLE)
+                    .withIndex("byKey", (q) => q.eq("key", args.threadKey))
+                    .first();
 
-            ownedSecretThread(thread, context.auth, "list its secret requests");
+                ownedSecretThread(thread, context.auth, "list its secret requests");
 
-            const requests = await context.db
-                .query(REQUESTS_TABLE)
-                .withIndex("byThreadCall", (q) => q.eq("threadKey", args.threadKey))
-                .collect();
+                const requests = await context.db
+                    .query(REQUESTS_TABLE)
+                    .withIndex("byThreadCall", (q) => q.eq("threadKey", args.threadKey))
+                    .collect();
 
-            return requests.map((request) => {
-                return {
-                    createdAt: request["createdAt"] as number,
-                    expiresAt: request["expiresAt"] as number,
-                    status: request["status"] as string,
-                    toolCallId: request["toolCallId"] as string,
-                    toolName: request["toolName"] as string,
-                };
-            });
-        });
+                return requests.map((request) => {
+                    return {
+                        createdAt: request["createdAt"] as number,
+                        expiresAt: request["expiresAt"] as number,
+                        // Absent (not `null`) when there is no label, so a row from before the column reads the same as one with none.
+                        ...(typeof request["label"] === "string" ? { label: request["label"] } : {}),
+                        status: request["status"] as string,
+                        toolCallId: request["toolCallId"] as string,
+                        toolName: request["toolName"] as string,
+                    };
+                });
+            },
+        );
 
     /**
      * Whether a thread-scoped approval grant exists for `toolName` on this thread.

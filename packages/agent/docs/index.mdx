@@ -339,7 +339,11 @@ or a supply on a thread paused before the request table existed, is a `CONFLICT`
 and stores nothing.
 
 `agents:agentSecretRequests({ threadKey })` lists a thread's requests for the
-owner, with status, tool name and deadline. It never returns the ref or the value.
+owner, with status, tool name, deadline and the `label` the model gave the request
+(what the secret is for; absent on requests recorded before labels). It never
+returns the ref or the value. The label is model-written text, trimmed and cut to
+200 characters, and a blank label is refused as a tool error without pausing the
+run. Render it as text, never as markup.
 The framework chat hooks still derive the pending request from the
 `awaiting_secret` message, and they do not read this list.
 
