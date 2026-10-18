@@ -305,7 +305,9 @@ platform's Secret values section.
 The model receives only `{ "secretRef": "…" }` from the request and passes that
 ref to the consuming tool. Nothing else it sees, and nothing in the thread, holds
 the value. `withSecret` takes the value inside its own durable step, returns only
-what the callback returns, and then discards the value as a second step.
+what the callback returns, and then discards the value as a second step. A
+callback result that carries the value (an echoed token, a header built from it)
+is refused: the call fails with a `LunoraError` and the result is not journalled.
 
 **Guarantees.** The value is absent from the message rows, the workflow journal,
 the wake-up event, the supply mutation's return and the request log's redacted
