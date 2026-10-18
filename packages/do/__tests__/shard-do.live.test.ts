@@ -525,7 +525,22 @@ describe("shardDO live streams", () => {
 
         expect(socket.closed).toStrictEqual({ code: 1013, reason: "relay is not yet registered with its owner" });
         expect(withoutAck(socket).some((frame) => frame.type === "identity")).toBe(false);
-        expect(socket.frames.some((frame) => frame["connectionId"] === "ws-a")).toBe(false);
+        expect(JSON.stringify(socket.frames)).not.toContain("ws-a");
+    });
+
+    it("leaves a WebSocket that already holds subscriptions open when its relay attach fails", async () => {
+        expect.assertions(2);
+
+        // A server-initiated close skips the teardown `webSocketClose` runs, so an established socket is not closed here.
+        const socket = new FakeSocket({ connectionId: "ws-a", subs: { s1: { args: {}, name: "posts" } }, userId: "user-a" });
+        const shard = makeShard([socket]);
+
+        Reflect.set(shard, "relay", { announce: () => Promise.resolve(false) });
+
+        await shard.webSocketMessage(socket as unknown as WebSocket, JSON.stringify({ type: "connect" }));
+
+        expect(socket.closed).toBeUndefined();
+        expect(withoutAck(socket)).toContainEqual({ connectionId: "ws-a", subject: "user-a", type: "identity", whisperAck: true });
     });
 
     it("delivers a live publish to SSE readers without a relay hop that could fail it", async () => {

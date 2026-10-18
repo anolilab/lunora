@@ -7539,10 +7539,19 @@ abstract class ShardDO {
             // socket in a live subscribe as soon as it has the connection id, and the owner can only
             // forward that grant to a relay it already knows. A no-op on an owner.
             //
-            // A failed attach must not leave the socket advertised with a connection id the owner cannot
+            // A failed attach must not leave a fresh socket advertised with a connection id the owner cannot
             // route a grant to, and nothing else would re-attach it. Closing with 1013 (try again later)
             // makes the client reconnect, and the next connect announces again.
-            if ((await this.relay?.announce()) === false) {
+            // ponytail: a socket that already holds subscriptions, grants or whisper joins is left open. A server-initiated close
+            // skips the teardown `webSocketClose` runs, so closing it here would leak that state; running that teardown from here is
+            // the upgrade path.
+            const holdsState =
+                Object.keys(attachment.subs).length > 0 ||
+                Object.keys(attachment.shapes ?? {}).length > 0 ||
+                Object.keys(attachment.liveGrants ?? {}).length > 0 ||
+                (attachment.whispers ?? []).length > 0;
+
+            if ((await this.relay?.announce()) === false && !holdsState) {
                 ws.close?.(1013, "relay is not yet registered with its owner");
 
                 return;
