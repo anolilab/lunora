@@ -1,7 +1,9 @@
+import { existsSync, readFileSync } from "node:fs";
+
 import { lunora } from "@lunora/vite";
 import { defineConfig, loadEnv } from "vite";
 
-import { describeDevPorts, devPortsFor } from "../../shared/dev-ports";
+import { describeDevPorts, devPortsFor, staleDevOrigin } from "../../shared/dev-ports";
 
 // In the e2e harness we keep the single embedded worker (prod parity) but make
 // its Miniflare storage ephemeral (`persistState: false`) so each run starts
@@ -16,9 +18,14 @@ export default defineConfig(({ command, mode }) => {
         // eslint-disable-next-line no-console -- dev-server startup line, read by humans and agents
         console.info(`[playground] ${describeDevPorts(ports)}`);
 
-        if (ports.offset !== 0) {
+        const devVars = existsSync(".dev.vars") ? readFileSync(".dev.vars", "utf8") : "";
+        const stale = ports.offset === 0 ? undefined : staleDevOrigin(devVars, ports.playground);
+
+        if (stale !== undefined) {
             // eslint-disable-next-line no-console -- dev-server startup line, read by humans and agents
-            console.info(`[playground] set LUNORA_ORIGIN_URL="http://localhost:${String(ports.playground)}" in .dev.vars (scheduled jobs call back to it)`);
+            console.warn(
+                `[playground] .dev.vars sets LUNORA_ORIGIN_URL="${stale}" but this checkout serves :${String(ports.playground)}; scheduled jobs would call back to the wrong server. Set it to http://localhost:${String(ports.playground)}.`,
+            );
         }
     }
 

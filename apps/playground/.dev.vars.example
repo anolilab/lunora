@@ -9,6 +9,7 @@
 # Required — the worker throws "AUTH_SECRET is required" without it.
 AUTH_SECRET="replace-with-openssl-rand-hex-32"
 
+# Base URL better-auth resolves callback URLs against. Point at the Vite dev
 # origin serving the worker (default below). Adjust if you hit a different port.
 AUTH_URL="http://localhost:5173"
 

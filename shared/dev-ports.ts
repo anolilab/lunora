@@ -163,3 +163,27 @@ export const devPortsFor = (env: DevEnv = process.env, start: string = process.c
 /** One line for a dev server's startup log, so a human or agent reads the ports instead of guessing them. */
 export const describeDevPorts = (ports: DevPorts): string =>
     `dev ports: playground :${String(ports.playground)}, studio :${String(ports.studio)} (offset ${String(ports.offset)}, ${ports.source})`;
+
+/**
+ * The `LUNORA_ORIGIN_URL` a `.dev.vars` file sets when it is a loopback URL on a port other than
+ * `port`, else `undefined`. The scheduler dispatches its callbacks to that variable and cannot be
+ * steered at runtime, so a worktree whose copy still names another checkout's port sends its
+ * scheduled jobs to that checkout instead of failing.
+ */
+export const staleDevOrigin = (devVars: string, port: number): string | undefined => {
+    const match = /^\s*LUNORA_ORIGIN_URL\s*=\s*["']?([^"'\s#]+)/mu.exec(devVars);
+
+    if (match === null) {
+        return undefined;
+    }
+
+    const value = match[1] as string;
+
+    try {
+        const url = new URL(value);
+
+        return ["localhost", "127.0.0.1", "[::1]"].includes(url.hostname) && url.port !== String(port) ? value : undefined;
+    } catch {
+        return undefined;
+    }
+};
