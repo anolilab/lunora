@@ -1,3 +1,19 @@
+## @lunora/server [1.0.0-alpha.216](https://github.com/anolilab/lunora/compare/@lunora/server@1.0.0-alpha.215...@lunora/server@1.0.0-alpha.216) (2026-10-18)
+
+### Bug Fixes
+
+* harden live stream delivery on the server and node host ([#1247](https://github.com/anolilab/lunora/issues/1247)) ([0074c55](https://github.com/anolilab/lunora/commit/0074c55e1a7910f89b6d4b2b4275b4dbe8113edf))
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.61
+* **@lunora/scheduler:** upgraded to 1.0.0-alpha.136
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.139
+* **@lunora/values:** upgraded to 1.0.0-alpha.71
+* **@lunora/observability:** upgraded to 1.0.0-alpha.150
+* **@lunora/storage:** upgraded to 1.0.0-alpha.141
+
 ## @lunora/server [1.0.0-alpha.215](https://github.com/anolilab/lunora/compare/@lunora/server@1.0.0-alpha.214...@lunora/server@1.0.0-alpha.215) (2026-10-18)
 
 ### ⚠ BREAKING CHANGES
