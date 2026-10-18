@@ -88,10 +88,10 @@ describe("v.sensitive — received echo is withheld", () => {
                     return { issues: [{ message: "value 'hunter2' is not a valid key" }] };
                 },
                 vendor: "test",
-                version: 1,
+                version: 1 as const,
             },
         };
-        const error = rejection(() => v.sensitive(v.from(schema as never)).parse("hunter2"));
+        const error = rejection(() => v.sensitive(v.from(schema)).parse("hunter2"));
 
         expect(error.message).not.toContain("hunter2");
         expect(error.received).toBe("string");
@@ -115,6 +115,192 @@ describe("v.sensitive — received echo is withheld", () => {
         const error = rejection(() => v.object({ count: v.number(), secret: v.sensitive(v.string()) }).parse({ count: "seven", secret: "x" }));
 
         expect(error.received).toBe('string "seven"');
+    });
+});
+
+describe("v.sensitive — caller-chosen key names inside a secret-bearing shape", () => {
+    it("withholds undeclared key names when a nested field is sensitive", () => {
+        expect.assertions(3);
+
+        // The parent object fails before its children parse, so the marked child never
+        // sets `redact` for this check: the shape itself must carry the rule.
+        const shape = v.object({ token: v.sensitive(v.string()) });
+        const error = rejection(() => shape.parse({ token: "actual-secret", "actual-secret": 1 }, { rejectUnknownKeys: true }));
+
+        expect(error.message).not.toContain("actual-secret");
+        expect(error.received).toBe("[redacted]");
+        expect(error.message).toContain("object has 1 undeclared key(s)");
+    });
+
+    it("still names undeclared keys on an object with no sensitive descendant", () => {
+        expect.assertions(2);
+
+        const error = rejection(() => v.object({ token: v.string() }).parse({ token: "x", "stray-field": 1 }, { rejectUnknownKeys: true }));
+
+        expect(error.message).toContain("stray-field");
+        expect(error.received).toBe("stray-field");
+    });
+
+    it("keeps caller record keys out of the path when the value under them is sensitive", () => {
+        expect.assertions(3);
+
+        const error = rejection(() => v.record(v.string(), v.sensitive(v.number())).parse({ "hunter2-key": "not-a-number" }));
+
+        expect(error.path).toStrictEqual(["<key>"]);
+        expect(error.message).not.toContain("hunter2-key");
+        expect(error.message).toBe("Expected number at <key>, received string");
+    });
+
+    it("keeps a record key out of the path when the record reaches a sensitive field through its value", () => {
+        expect.assertions(2);
+
+        const shape = v.object({
+            inventory: v.record(v.string(), v.object({ count: v.number(), token: v.sensitive(v.string()) })),
+        });
+        const error = rejection(() => shape.parse({ inventory: { "hunter2-key": { count: "x", token: "t" } } }));
+
+        expect(error.path).toStrictEqual(["inventory", "<key>", "count"]);
+        expect(error.message).not.toContain("hunter2-key");
+    });
+
+    it("keeps a sensitive record key out of the path and the received echo when the key fails", () => {
+        expect.assertions(3);
+
+        const error = rejection(() => v.record(v.sensitive(v.literal("ok")), v.number()).parse({ "hunter2-key": 1 }));
+
+        expect(error.path).toStrictEqual(["<key>"]);
+        expect(error.message).not.toContain("hunter2-key");
+        expect(error.received).toBe("string");
+    });
+
+    it("withholds a caller key's literal from its own diagnostic when only the record's value is sensitive", () => {
+        expect.assertions(2);
+
+        const error = rejection(() => v.record(v.literal("ok"), v.sensitive(v.number())).parse({ "hunter2-key": 1 }));
+
+        expect(error.message).not.toContain("hunter2-key");
+        expect(error.received).toBe("string");
+    });
+
+    it("keeps the control: a record with no sensitive part still names its keys in the path", () => {
+        expect.assertions(2);
+
+        const error = rejection(() => v.record(v.string(), v.number()).parse({ "plain-key": "x" }));
+
+        expect(error.path).toStrictEqual(["plain-key"]);
+        expect(error.message).toBe('Expected number at plain-key, received string "x"');
+    });
+
+    it("keeps a union branch's undeclared key and record key out of the closest-branch summary", () => {
+        expect.assertions(2);
+
+        const objectBranch = v.union(v.object({ token: v.sensitive(v.string()) }), v.number());
+        const recordBranch = v.union(v.record(v.string(), v.sensitive(v.number())), v.boolean());
+
+        const undeclared = rejection(() => objectBranch.parse({ token: "t", "hunter2-key": 1 }, { rejectUnknownKeys: true }));
+        const keyed = rejection(() => recordBranch.parse({ "hunter2-key": "x" }));
+
+        expect(undeclared.message).not.toContain("hunter2-key");
+        expect(keyed.message).not.toContain("hunter2-key");
+    });
+});
+
+describe("v.sensitive — a container's own value inside a secret-bearing shape", () => {
+    it("withholds a primitive that lands where an object was expected", () => {
+        expect.assertions(2);
+
+        const error = rejection(() => v.object({ token: v.sensitive(v.string()) }).parse("actual-secret"));
+
+        expect(error.message).not.toContain("actual-secret");
+        expect(error.received).toBe("string");
+    });
+
+    it("keeps the literal on a primitive where an object has no sensitive field", () => {
+        expect.assertions(1);
+
+        expect(rejection(() => v.object({ token: v.string() }).parse("plain")).received).toBe('string "plain"');
+    });
+
+    it("withholds a primitive that lands where an array was expected inside a secret-bearing shape", () => {
+        expect.assertions(2);
+
+        const error = rejection(() => v.array(v.object({ token: v.sensitive(v.string()) })).parse("actual-secret"));
+
+        expect(error.message).not.toContain("actual-secret");
+        expect(error.received).toBe("string");
+    });
+
+    it("keeps the literal on a primitive where an array has no sensitive item", () => {
+        expect.assertions(1);
+
+        expect(rejection(() => v.array(v.string()).parse("plain")).received).toBe('string "plain"');
+    });
+
+    it("withholds a primitive that lands where a record was expected", () => {
+        expect.assertions(2);
+
+        const error = rejection(() => v.record(v.string(), v.sensitive(v.number())).parse("actual-secret"));
+
+        expect(error.message).not.toContain("actual-secret");
+        expect(error.received).toBe("string");
+    });
+
+    it("keeps the literal on a primitive where a record has no sensitive part", () => {
+        expect.assertions(1);
+
+        expect(rejection(() => v.record(v.string(), v.number()).parse("plain")).received).toBe('string "plain"');
+    });
+
+    it("withholds a union's constructor-name echo when a member holds a sensitive field", () => {
+        expect.assertions(2);
+
+        const hostile = { constructor: { name: "hunter2" }, token: 1 };
+        const error = rejection(() => v.union(v.object({ token: v.sensitive(v.string()) }), v.number()).parse(hostile));
+
+        expect(error.message).not.toContain("hunter2");
+        expect(error.received).toBe("object");
+    });
+
+    it("keeps a union's constructor-name echo when no member holds a sensitive field", () => {
+        expect.assertions(1);
+
+        const hostile = { constructor: { name: "hunter2" }, token: 1 };
+
+        expect(rejection(() => v.union(v.object({ token: v.string() }), v.number()).parse(hostile)).received).toBe("object hunter2");
+    });
+
+    it("withholds a third-party issue path that carries a caller key when the validator is marked", () => {
+        expect.assertions(2);
+
+        const schema = {
+            "~standard": {
+                validate: () => {
+                    return { issues: [{ message: "unexpected key", path: ["actual-secret"] }] };
+                },
+                vendor: "test",
+                version: 1 as const,
+            },
+        };
+        const error = rejection(() => v.sensitive(v.from(schema)).parse({ "actual-secret": 1 }));
+
+        expect(error.path).toStrictEqual(["<key>"]);
+        expect(error.message).not.toContain("actual-secret");
+    });
+
+    it("keeps a third-party issue path on an unmarked validator", () => {
+        expect.assertions(1);
+
+        const schema = {
+            "~standard": {
+                validate: () => {
+                    return { issues: [{ message: "unexpected key", path: ["stray-field"] }] };
+                },
+                vendor: "test",
+                version: 1 as const,
+            },
+        };
+
+        expect(rejection(() => v.from(schema).parse({ "stray-field": 1 })).path).toStrictEqual(["stray-field"]);
     });
 });
 
