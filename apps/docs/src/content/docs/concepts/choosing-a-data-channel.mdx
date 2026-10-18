@@ -99,6 +99,13 @@ export const commentAdded = internalAction.input({ postId: v.id("posts"), commen
 });
 ```
 
+This example reaches subscribers on the **default shard**, which is every subscriber
+in an app that does not use `.shardBy(...)`. A scheduled action runs on the shard
+its job was scheduled with, or on the default shard when none was given, and the
+public `ctx.scheduler.runAfter` takes no `shardKey`. In a sharded app, publish from
+an HTTP action with `{ shardKey }` instead; see
+[Live topic streams](/docs/concepts/live-streams).
+
 If the page already shows the comments through a `useQuery`, you do not need the
 event at all: the query updates by itself. Publish only for pages that follow a
 post without that query.
@@ -111,10 +118,10 @@ post without that query.
   names, and a scheduled or action publish reaches the shard it runs on (the
   `shardKey` the job was scheduled with, or the default shard). There is no
   fan-out across Durable Objects.
-- **Sharded apps.** The scheduled action publishes on the shard it runs on, which
-  may not be the shard your subscribers connected to. In an app that uses
-  `.shardBy(...)`, check [Live topic streams](/docs/concepts/live-streams) for which
-  shard a scheduled job runs on before you rely on this pattern.
+- **Sharded apps.** A scheduled action publishes on the shard it runs on, which is
+  the default shard unless the job was scheduled with a `shardKey`, and the public
+  scheduler has no such option. Subscribers connected to another shard do not hear
+  it. Publish from an HTTP action with `{ shardKey }` in a sharded app.
 - **Untyped.** The topic is a string and the payload is `unknown`. Validate the
   payload where you use it.
 - **You mount the routes.** `defineLiveStream` returns handlers; you mount them on
