@@ -1,3 +1,14 @@
+## @lunora/workflow [1.0.0-alpha.85](https://github.com/anolilab/lunora/compare/@lunora/workflow@1.0.0-alpha.84...@lunora/workflow@1.0.0-alpha.85) (2026-10-18)
+
+### Features
+
+* **workflow:** add restart action and rollingBack status ([#1249](https://github.com/anolilab/lunora/issues/1249)) ([01ec235](https://github.com/anolilab/lunora/commit/01ec2353b2d3cad8d26e32aff70fd42dd5590c96))
+
+
+### Dependencies
+
+* **@lunora/server:** upgraded to 1.0.0-alpha.219
+
 ## @lunora/workflow [1.0.0-alpha.84](https://github.com/anolilab/lunora/compare/@lunora/workflow@1.0.0-alpha.83...@lunora/workflow@1.0.0-alpha.84) (2026-10-18)
 
 
