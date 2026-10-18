@@ -35,7 +35,7 @@
  */
 import type { ConformanceHost } from "@lunora/platform/conformance";
 import { defineHostContractSuite } from "@lunora/platform/conformance/suite";
-import { createShardDirectory, createShardPlatform } from "@lunora/platform-cloudflare";
+import { createSecretValueHost, createShardDirectory, createShardPlatform } from "@lunora/platform-cloudflare";
 import { env, runInDurableObject } from "cloudflare:test";
 import type { TestContext } from "vitest";
 import { describe, expect, it } from "vitest";
@@ -65,6 +65,10 @@ const createCloudflareHost = (): ConformanceHost => {
 
     const platform = createShardPlatform(state);
 
+    // A fully fake clock per host, started at real time. Real elapsed time must
+    // not leak in: the expiry legs move the clock only through `advanceClock`.
+    let secretClock = Date.now();
+
     return {
         cleanup: () => {
             // Leave no armed alarm behind: the suite's alarm test schedules one
@@ -91,7 +95,13 @@ const createCloudflareHost = (): ConformanceHost => {
         // the `isolatesByDispatch` note on `ConformanceHost` for what that
         // costs the isolation leg and what still covers it.
         isolatesByDispatch: true,
+        advanceClock: (ms) => {
+            secretClock += ms;
+        },
         kv: platform.kv,
+        // Rebuilt over the same storage with an injectable clock: the composition
+        // root's own instance reads `Date.now`, which the expiry legs cannot move.
+        secretValues: createSecretValueHost(state.storage, { now: () => secretClock }),
         shard: platform.shard,
         socket: platform.sockets,
     };

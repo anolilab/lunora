@@ -20,6 +20,6 @@
  * provider API except through a contract.
  */
 
-export { createShardAlarms, createShardDirectory, createShardHost, createShardKvStore, createSocketHost } from "./cloudflare-host";
+export { createSecretValueHost, createShardAlarms, createShardDirectory, createShardHost, createShardKvStore, createSocketHost } from "./cloudflare-host";
 export type { ShardPlatform, WorkerPlatform, WorkerPlatformOptions } from "./platform";
 export { createShardPlatform, createWorkerPlatform } from "./platform";

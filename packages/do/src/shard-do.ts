@@ -68,8 +68,8 @@ import {
     SpanBuffer,
     upsertIssueState,
 } from "@lunora/observability";
-import type { ShardHost, SocketHost } from "@lunora/platform";
-import { createShardHost, createSocketHost } from "@lunora/platform-cloudflare";
+import type { SecretValueHost, ShardHost, SocketHost } from "@lunora/platform";
+import { createSecretValueHost, createShardHost, createSocketHost } from "@lunora/platform-cloudflare";
 import type {
     AdvisorProcedure,
     AdvisoryFinding,
@@ -2257,6 +2257,13 @@ abstract class ShardDO {
      */
     protected globalPoll: GlobalPollCounters = createGlobalPollCounters();
 
+    /**
+     * Human-supplied secret values for durable steps, over the same
+     * `state.storage` as {@link ShardDO.shardHost}. Protected so an agent-layer
+     * subclass can reach it; nothing in this class calls it.
+     */
+    protected readonly secretValues: SecretValueHost;
+
     private readonly deliveryAuthorization: DeliveryAuthorization | undefined;
     private readonly deliveryFence = new DeliveryFence(() => this.shardHost.sql);
     private readonly deliveryResponsePermits = new WeakMap<Response, DeliveryPermit>();
@@ -3187,6 +3194,7 @@ abstract class ShardDO {
         // tests and public API stay stable.
         this.shardHost = createShardHost(state as never);
         this.socketHost = createSocketHost(state as never);
+        this.secretValues = createSecretValueHost(state.storage as never);
         this.runner = new ShardRunner(this.shardHost, this.socketHost, {
             handlers: {
                 handleAlarm: () => this.handleAlarmCloudflare(),
