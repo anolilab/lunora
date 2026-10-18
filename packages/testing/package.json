@@ -73,7 +73,8 @@
         "@lunora/scheduler": "1.0.0-alpha.141",
         "@lunora/server": "1.0.0-alpha.224",
         "@lunora/wire": "1.0.0-alpha.1",
-        "@visulima/notification": "catalog:notify"
+        "@visulima/notification": "catalog:notify",
+        "ai": "catalog:ai"
     },
     "devDependencies": {
         "@lunora/observability": "1.0.0-alpha.157",

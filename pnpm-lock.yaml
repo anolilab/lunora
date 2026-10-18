@@ -5477,6 +5477,9 @@ importers:
       '@visulima/notification':
         specifier: catalog:notify
         version: 1.2.0(6691b4649286111316d827f0a35e0d3d)
+      ai:
+        specifier: catalog:ai
+        version: 7.0.127(zod@4.6.5)
     devDependencies:
       '@lunora/observability':
         specifier: workspace:*
