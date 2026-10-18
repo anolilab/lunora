@@ -136,6 +136,15 @@ public final class Submit {
          */
         public Supplier<Boolean> precondition;
 
+        /**
+         * Never queued, persisted or replayed. Where a normal write would be queued, submit throws
+         * an {@link OfflineException} coded {@link Offline#OFFLINE_NOT_QUEUED} before any
+         * optimistic layer is installed, so the arguments never reach the queue or the persistence
+         * adapter. It does not wait for a queue flush or queue behind pending writes, so it may
+         * overtake them. For a credential or a one-time token.
+         */
+        public boolean onlineOnly;
+
         /** Reports the eventual verdict on a queued write. */
         public Consumer<MutationSettled> onSettled;
 
@@ -164,6 +173,12 @@ public final class Submit {
 
         public SubmitOptions precondition(Supplier<Boolean> precondition) {
             this.precondition = precondition;
+
+            return this;
+        }
+
+        public SubmitOptions onlineOnly(boolean onlineOnly) {
+            this.onlineOnly = onlineOnly;
 
             return this;
         }
@@ -204,6 +219,21 @@ public final class Submit {
                 throw new OfflineException(Offline.CLIENT_CLOSED, "client is closed");
             }
 
+            queueIt =
+                    client.sender == null
+                            && (client.wasEverConnected
+                                    || client.offlineQueue.queueBeforeFirstConnect);
+
+            // Refused before any layer is installed, so no overlay outlives the call.
+            if (queueIt && options.onlineOnly) {
+                throw new OfflineException(
+                        Offline.OFFLINE_NOT_QUEUED,
+                        "'"
+                                + options.functionPath
+                                + "' is online-only and the connection is not live, so it was not"
+                                + " queued");
+            }
+
             for (PendingLayer layer : pending) {
                 Optimistic.Handle handle =
                         Optimistic.installLayer(
@@ -212,11 +242,6 @@ public final class Submit {
                 confirms.add(handle::confirm);
                 rollbacks.add(handle::rollback);
             }
-
-            queueIt =
-                    client.sender == null
-                            && (client.wasEverConnected
-                                    || client.offlineQueue.queueBeforeFirstConnect);
 
             if (queueIt) {
                 evicted = enqueueWrite(client, options, writeId, confirms, rollbacks);
