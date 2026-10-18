@@ -1,6 +1,6 @@
 import type { FunctionReference } from "@lunora/client";
 import { LunoraClient } from "@lunora/client";
-import { onlineManager } from "@tanstack/react-query";
+import { onlineManager, QueryClient } from "@tanstack/react-query";
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import type { ReactElement } from "react";
 import { describe, expect, it, vi } from "vitest";
@@ -433,6 +433,49 @@ describe("useMutation", () => {
                 onlineManager.setOnline(true);
                 client.close();
             }
+        });
+
+        it("drops a sensitive call's arguments from the mutation cache once the hook unmounts, where a normal call keeps them", async () => {
+            expect.hasAssertions();
+
+            /** Run one write through the hook, unmount it, and hand back the cache that held the call. */
+            const writeAndUnmount = async (reference: FunctionReference): Promise<QueryClient> => {
+                const queryClient = new QueryClient();
+                const mock = createMockClient();
+
+                mock.mutation.mockResolvedValue({ ok: true });
+
+                let send: () => Promise<unknown> = async () => undefined;
+                const Writer = (): ReactElement => {
+                    const { mutate } = useMutation(reference);
+
+                    send = () => mutate({ apiKey: "sk-test-1234" });
+
+                    return <div />;
+                };
+                const view = render(
+                    <LunoraProvider client={mock.asClient} queryClient={queryClient}>
+                        <Writer />
+                    </LunoraProvider>,
+                );
+
+                await act(async () => {
+                    await send();
+                });
+                view.unmount();
+
+                return queryClient;
+            };
+
+            const normal = await writeAndUnmount(makeRef("accounts:note"));
+            const sensitive = await writeAndUnmount(makeSensitiveRef("accounts:linkApiKey"));
+
+            // Default garbage-collection time: the settled call, with its arguments, stays cached.
+            expect(normal.getMutationCache().getAll()).toHaveLength(1);
+
+            await waitFor(() => {
+                expect(sensitive.getMutationCache().getAll()).toHaveLength(0);
+            });
         });
 
         it("rejects an explicit online-only write on a normal reference instead of holding it until online", async () => {
