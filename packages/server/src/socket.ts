@@ -25,10 +25,9 @@
  *         socket.broadcast({ text: message.text });
  *     },
  * });
- *
- * // lunch.ts — re-export the routes you want codegen to wire.
- * export { chatSocket } from "./sockets";
  * ```
+ *
+ * Codegen discovers an exported `defineWebSocket` declaration under `lunora/` directly; no re-export is needed.
  *
  * The client opens the SAME path with `client.connectWebSocket("/chat", { … })`.
  *
