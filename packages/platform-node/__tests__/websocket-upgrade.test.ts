@@ -461,6 +461,34 @@ describe("node upgrade lifecycle", () => {
         await server.close();
     });
 
+    it("relays at most the refusal body limit of an endless refusal, then cancels it", async () => {
+        expect.assertions(2);
+
+        let cancelled = false;
+        const server = await createNodeHttpServer({
+            fetch: () => {
+                // A refusal whose body never ends: it must not be buffered whole.
+                const body = new ReadableStream<Uint8Array>({
+                    cancel() {
+                        cancelled = true;
+                    },
+                    pull(controller) {
+                        controller.enqueue(new Uint8Array(16_384));
+                    },
+                });
+
+                return Promise.resolve(new Response(body, { status: 401 }));
+            },
+        });
+
+        const refusal = await rawUpgrade(server, "/private");
+
+        await server.close();
+
+        expect(refusal).toMatch(/content-length: 65536/u);
+        expect(cancelled).toBe(true);
+    });
+
     it("cancels a streaming refusal body once the client has gone", async () => {
         expect.assertions(1);
 

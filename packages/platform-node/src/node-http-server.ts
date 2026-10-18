@@ -253,17 +253,33 @@ const writeResponse = async (response: Response, outgoing: ServerResponse): Prom
     outgoing.end();
 };
 
-/** Every chunk of a body, read one at a time so the caller can cancel the reader midway. */
-const readChunks = async (reader: ReadableStreamDefaultReader<Uint8Array>, chunks: Uint8Array[]): Promise<Uint8Array[]> => {
+// ponytail: how much of a refused upgrade's body is relayed. A refusal is a short status message; a worker that streams more is cut off
+// here rather than buffered whole per pending connection. Raise it if a legitimate refusal page outgrows it.
+const REFUSAL_BODY_LIMIT_BYTES = 65_536;
+
+/**
+ * A body's chunks, read one at a time so the caller can cancel the reader midway, up to {@link REFUSAL_BODY_LIMIT_BYTES}. Past that the
+ * reader is cancelled and the body truncated.
+ */
+const readChunks = async (reader: ReadableStreamDefaultReader<Uint8Array>, chunks: Uint8Array[], total = 0): Promise<Uint8Array[]> => {
     const next = await reader.read();
 
     if (next.done) {
         return chunks;
     }
 
+    const room = REFUSAL_BODY_LIMIT_BYTES - total;
+
+    if (next.value.byteLength >= room) {
+        chunks.push(next.value.subarray(0, room));
+        await reader.cancel().catch(() => undefined);
+
+        return chunks;
+    }
+
     chunks.push(next.value);
 
-    return readChunks(reader, chunks);
+    return readChunks(reader, chunks, total + next.value.byteLength);
 };
 
 /**
