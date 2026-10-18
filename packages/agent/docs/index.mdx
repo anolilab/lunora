@@ -1370,8 +1370,11 @@ const result = await harness.run(
 **Provider errors in a stream retry like any model failure.** An `error` part in the
 stream, whether it follows text or arrives first, fails the turn the same way a
 rejected stream does: the `llm:turn:N` step throws, the host retries it under its
-normal policy, and nothing from the failed attempt (partial text, tool calls,
-usage) is persisted. A stream that closes without its `finish` part is failed the
+normal policy, and nothing from the failed attempt (partial text, tool calls) is
+persisted. Its billed tokens are the one exception: when the failure reaches the run,
+they are added to the thread's usage, though only within the same invocation. A
+replayed failure loses them, and a failed attempt's tokens are not carried into the
+total of a later successful retry. A stream that closes without its `finish` part is failed the
 same way. So is a `finish` whose reason is `error`, the provider's report that it cut
 the generation short (Workers AI reports a stream truncated mid-answer this way); a
 non-streaming turn with that reason fails too. Every other finish reason, `other`
