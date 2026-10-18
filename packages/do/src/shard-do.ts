@@ -2390,6 +2390,7 @@ abstract class ShardDO {
      * socket left off.
      */
     private readonly shapeMemos = new WeakMap<ShardSocketLike, Map<string, ShapeMemo>>();
+    private retainedShapesNeedCleanup = true;
 
     /**
      * Per-socket, per-**global**-shape membership snapshot: maps each global
@@ -13033,7 +13034,13 @@ abstract class ShardDO {
 
     /** Attachments can retain unsupported subscriptions when a deployment enables delivery authorization. */
     private rejectRetainedShapesAndRooms(): number {
-        let remaining = this.rejectRetainedRooms();
+        const roomsRemaining = this.rejectRetainedRooms();
+
+        if (!this.retainedShapesNeedCleanup) {
+            return roomsRemaining;
+        }
+
+        let shapesRemaining = 0;
 
         for (const ws of this.runner.sockets()) {
             for (const subId of Object.keys(this.readAttachment(ws).shapes ?? {})) {
@@ -13042,10 +13049,12 @@ abstract class ShardDO {
             }
 
             // Failed attachment writes retain the registration; keep the alarm retry alive.
-            remaining += Object.keys(this.readAttachment(ws).shapes ?? {}).length;
+            shapesRemaining += Object.keys(this.readAttachment(ws).shapes ?? {}).length;
         }
 
-        return remaining;
+        this.retainedShapesNeedCleanup = shapesRemaining > 0;
+
+        return roomsRemaining + shapesRemaining;
     }
 
     /**
