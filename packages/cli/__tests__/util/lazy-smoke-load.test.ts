@@ -75,11 +75,15 @@ describe(runLazySmokeLoad, () => {
     it("hints at a circular import when a bundled module calls an import that is undefined", async () => {
         expect.assertions(2);
 
-        respondWith({ checked: 1, failures: [{ functionPath: "nested/undef:ping", message: "(void 0) is not a function" }] });
+        mkdirSync(join(cwd, "lunora", "billing"), { recursive: true });
+        writeFileSync(join(cwd, "lunora", "billing", "invoices.ts"), "");
+        respondWith({ checked: 1, failures: [{ functionPath: "billing_invoices:ping", message: "(void 0) is not a function" }] });
 
         const error = await run();
 
-        expect(error).toContain("  nested/undef (ping): (void 0) is not a function\n      hint: an import is undefined while this module evaluates");
+        expect(error).toContain(
+            "  lunora/billing/invoices.ts (ping): (void 0) is not a function\n      hint: an import is undefined while this module evaluates",
+        );
         expect(error).not.toContain("boom");
     });
 
@@ -219,5 +223,15 @@ describe(runLazySmokeLoad, () => {
             await expect(run()).resolves.toBeUndefined();
             expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining("unexpected response (HTTP 200)"));
         });
+    });
+
+    it("names an index module by its directory's namespace", async () => {
+        expect.assertions(1);
+
+        mkdirSync(join(cwd, "lunora", "ratelimit"), { recursive: true });
+        writeFileSync(join(cwd, "lunora", "ratelimit", "index.ts"), "");
+        respondWith({ checked: 1, failures: [{ functionPath: "ratelimit:consume", message: "boom" }] });
+
+        await expect(run()).resolves.toContain("  lunora/ratelimit/index.ts (consume): boom");
     });
 });

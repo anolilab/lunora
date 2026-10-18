@@ -1,5 +1,5 @@
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { join, resolve } from "node:path";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { extname, join, resolve, sep } from "node:path";
 
 import type { DriverToolchain } from "@lunora/config";
 import { resolveSchemaDirectory, startDevProcess } from "@lunora/config";
@@ -7,6 +7,7 @@ import { detectPackageManager, toolchainExecArgs } from "@lunora/config/cli";
 import type { WranglerConfig } from "@lunora/config/cloudflare";
 import { findWranglerFile, mergeWranglerEnvironment, readWranglerJsonc } from "@lunora/config/cloudflare";
 
+import { sanitizeNamespace } from "../../../../shared/dispatch-namespace";
 import { findAvailablePort } from "./free-port";
 import type { Logger } from "./logger";
 
@@ -20,7 +21,7 @@ const SMOKE_TIMEOUT_MS = 120_000;
 const MAX_LISTED_MODULES = 10;
 
 /** Extensions a function module can have; the first one that exists names the file in the error. */
-const MODULE_EXTENSIONS = [".ts", ".tsx", ".mts", ".js", ".mjs"];
+const MODULE_EXTENSIONS = new Set([".js", ".mjs", ".mts", ".ts", ".tsx"]);
 
 /**
  * What a bundled module that reads an import before it is ready looks like. The bundler hoists a
@@ -51,9 +52,28 @@ const isModuleFailure = (value: unknown): value is ModuleFailure =>
     typeof (value as ModuleFailure).functionPath === "string" &&
     typeof (value as ModuleFailure).message === "string";
 
+/**
+ * Function paths carry the dispatch namespace, not the file: `billing/invoices.ts` is `billing_invoices` and
+ * `ratelimit/index.ts` is `ratelimit`. Map each namespace back to its source file the way codegen derives it.
+ */
+const functionFilesByNamespace = (cwd: string): Map<string, string> => {
+    const schemaDirectory = resolveSchemaDirectory(cwd);
+    const files = new Map<string, string>();
+
+    for (const relative of readdirSync(join(cwd, schemaDirectory), { recursive: true, encoding: "utf8" })) {
+        const extension = extname(relative);
+
+        if (MODULE_EXTENSIONS.has(extension) && !relative.split(sep).some((part) => part === "_generated" || part === "node_modules")) {
+            files.set(sanitizeNamespace(relative.slice(0, -extension.length).split(sep).join("/")), join(schemaDirectory, relative));
+        }
+    }
+
+    return files;
+};
+
 /** `lunora/posts.ts (list, add): message`, one block per failing module, so a module with ten functions is one entry. */
 const formatFailures = (cwd: string, failures: ReadonlyArray<ModuleFailure>): string[] => {
-    const schemaDirectory = resolveSchemaDirectory(cwd);
+    const files = functionFilesByNamespace(cwd);
     const modules = new Map<string, { exports: string[]; message: string; namespace: string }>();
 
     for (const { functionPath, message } of failures) {
@@ -67,12 +87,11 @@ const formatFailures = (cwd: string, failures: ReadonlyArray<ModuleFailure>): st
     }
 
     return [...modules.values()].map(({ exports, message, namespace }) => {
-        const found = MODULE_EXTENSIONS.map((extension) => join(schemaDirectory, `${namespace}${extension}`)).find((file) => existsSync(join(cwd, file)));
         const hint = UNDEFINED_IMPORT_SYMPTOM.test(message)
             ? "\n      hint: an import is undefined while this module evaluates — look for a circular import or an export that does not exist"
             : "";
 
-        return `  ${found ?? namespace} (${exports.join(", ")}): ${message}${hint}`;
+        return `  ${files.get(namespace) ?? namespace} (${exports.join(", ")}): ${message}${hint}`;
     });
 };
 
