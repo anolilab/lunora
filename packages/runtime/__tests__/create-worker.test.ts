@@ -3493,6 +3493,29 @@ describe("createWorker — live streams and socket paths", () => {
         expect(body).toMatchObject({ stream: "posts", topic: "digest:1" });
     });
 
+    it("refuses a direct queue consumer's publish on a worker built with liveStreams: false, before any forward", async () => {
+        expect.assertions(2);
+
+        // A direct `queue` callback is handed the publisher as its fifth argument. With live streams off it must not reach a shard.
+        let thrown: unknown;
+        const worker = createWorker({
+            liveStreams: false,
+            queue: async (_batch, _env, _context, _trigger, live) => {
+                try {
+                    await live.publish("digest:1", { event: "ready" }, { stream: "posts" });
+                } catch (error) {
+                    thrown = error;
+                }
+            },
+            shardDO: shard.namespace,
+        });
+
+        await worker.queue?.({ messages: [], queue: "digest" }, {}, fakeContext);
+
+        expect(thrown).toBeInstanceOf(Error);
+        expect(shard.calls).toHaveLength(0);
+    });
+
     it("refuses an HTTP action publish to a non-default shard the caller may not address, before any forward", async () => {
         expect.assertions(3);
 

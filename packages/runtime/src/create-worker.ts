@@ -5923,9 +5923,21 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
             await instrumentTrigger(`queue:${queueNameOf(batch)}`, context, async (traceparent) => {
                 // The consumer's publish is `"trusted"`: no caller is checked against the `shardKey` it names. A `shardKey` taken from a
                 // client-supplied message body must be checked by the consumer before it is passed, or any message can publish into any shard.
-                const live: QueueLivePublisherLike = {
-                    publish: (topic, payload, publishOptions) => publishLiveToShard(QUEUE_LIVE_ORIGIN, topic, payload, publishOptions, "trusted"),
-                };
+                // With live streams off the argument keeps its shape, but every publish is refused before it reaches a shard.
+                const live: QueueLivePublisherLike =
+                    options.liveStreams === false
+                        ? {
+                              publish: () =>
+                                  Promise.reject(
+                                      new LunoraError("ctx.live.publish is unavailable: this worker does not serve live streams", {
+                                          code: "LIVE_STREAMS_UNSUPPORTED",
+                                          status: 501,
+                                      }),
+                                  ),
+                          }
+                        : {
+                              publish: (topic, payload, publishOptions) => publishLiveToShard(QUEUE_LIVE_ORIGIN, topic, payload, publishOptions, "trusted"),
+                          };
 
                 await options.queue?.(batch, env, context, { traceparent }, live, options.queueFetchImpl);
             });
