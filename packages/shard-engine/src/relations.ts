@@ -45,6 +45,7 @@ import type {
     ResolveWithOptions,
     TableDefinitionLike,
     ThroughRelationDefinitionLike,
+    ValidatorLike,
 } from "./schema-types";
 import { FAN_OUT_BUDGET } from "./schema-types";
 import type { WhereInput } from "./where-types";
@@ -735,6 +736,31 @@ const applyOnDelete = async (options: ApplyOnDeleteOptions): Promise<void> => {
 };
 
 /**
+ * Whether a column is a `v.from(schema)` column, bare or under `v.optional(...)`
+ * (a nullable keeps the inner kind). Those are the only columns whose `parse()`
+ * is not idempotent: a transform (`z.string().transform(Number)`) changes the
+ * value, so its output is not valid input to the same schema.
+ */
+const isFromColumn = (validator: ValidatorLike): boolean =>
+    validator.kind === "from" || (validator.kind === "optional" && validator._meta?.inner?.kind === "from");
+
+interface RowValidatorOptions {
+    /**
+     * Parse `v.from` columns only for these fields; the rest are skipped. A patch
+     * passes the keys it sets, because the others in the merged row are already
+     * stored output and must not be fed through their transform again.
+     */
+    only?: ReadonlySet<string>;
+
+    /**
+     * The document is a replay of an already-stored row (an import, a CDC apply, a
+     * data-migration rewrite — the writes made under `allowExplicitId`), so its
+     * `v.from` columns hold output, not input, and are neither parsed nor adopted.
+     */
+    trusted?: boolean;
+}
+
+/**
  * Run each declared column's `validator.parse()` against the matching field on
  * `document`. Fires user refinements (e.g. `v.number().check(n => n >= 0)`)
  * at write time so an invariant violation surfaces as a `ValidationError`
@@ -747,18 +773,38 @@ const applyOnDelete = async (options: ApplyOnDeleteOptions): Promise<void> => {
  * unknown fields pass through untouched — they're part of the JSON-blob shape
  * but not part of the schema's declared columns.
  *
+ * Returns the document to store. It is the argument itself unless a `v.from`
+ * column was parsed, in which case it is a copy carrying that column's parsed
+ * OUTPUT — reads are typed as the output, so that is what must be stored. Every
+ * other column keeps storing what the caller supplied: their parsers are
+ * idempotent, and adopting a normalised result (`v.bytes()` turning a view into
+ * an `ArrayBuffer`) would change how a column is stored, not just validate it.
+ *
  * Lives here (alongside `applyOnDelete`) rather than in each backend's
  * `ctx-db.ts` so DO + D1 share one implementation instead of two drift-prone
  * copies. The signature is intentionally `validator.parse?` so the unit-test
  * fakes (which never carry a runtime parser) keep working.
  */
-const runRowValidators = (definition: TableDefinitionLike, document: Record<string, unknown>, tolerateStoredNull = false): void => {
+const runRowValidators = (
+    definition: TableDefinitionLike,
+    document: Record<string, unknown>,
+    tolerateStoredNull = false,
+    options: RowValidatorOptions = {},
+): Record<string, unknown> => {
+    let parsed: Record<string, unknown> | undefined;
+
     for (const [field, validator] of Object.entries(definition.shape)) {
         if (!(field in document)) {
             continue;
         }
 
         if (typeof validator.parse !== "function") {
+            continue;
+        }
+
+        const fromColumn = isFromColumn(validator);
+
+        if (fromColumn && (options.trusted === true || (options.only !== undefined && !options.only.has(field)))) {
             continue;
         }
 
@@ -785,8 +831,15 @@ const runRowValidators = (definition: TableDefinitionLike, document: Record<stri
 
         // Re-parse the field; the validator's own ValidationError carries the
         // refinement message and propagates up to the caller unchanged.
-        validator.parse(document[field]);
+        const result = validator.parse(document[field]);
+
+        if (fromColumn) {
+            parsed ??= { ...document };
+            parsed[field] = result;
+        }
     }
+
+    return parsed ?? document;
 };
 
 export { applyOnDelete, distinctValues, fanOutScalarCounts, MAX_LINK_ROWS, relationHooks, resolveWith, runRowValidators };

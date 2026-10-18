@@ -5159,7 +5159,7 @@ const runReadonlySql: (sql: SqlExec, query: string) => SqlConsoleResult;
 ### `runRowValidators` (const)
 
 ```ts
-const runRowValidators: (definition: TableDefinitionLike, document: Record<string, unknown>, tolerateStoredNull?: boolean) => void;
+const runRowValidators: (definition: TableDefinitionLike, document: Record<string, unknown>, tolerateStoredNull?: boolean, options?: RowValidatorOptions) => Record<string, unknown>;
 ```
 
 ### `runShardMigrations` (const)
@@ -5828,6 +5828,15 @@ interface ResolveContext {
 
 ```ts
 type RowPredicate = (document: Record<string, unknown>) => boolean;
+```
+
+### `RowValidatorOptions` (interface)
+
+```ts
+interface RowValidatorOptions {
+    only?: ReadonlySet<string>;
+    trusted?: boolean;
+}
 ```
 
 ### `SchemaVersionRow` (interface)

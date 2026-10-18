@@ -3831,11 +3831,13 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
                 throw new LunoraError("INTERNAL", `unknown table: ${tableName}`);
             }
 
-            const withDefaults = applyInsertDefaults(definition, document, auth);
-
             // Refinements declared via `.check(predicate)` fire here on the
-            // post-default row so a defaulted value still passes its checks.
-            runRowValidators(definition, withDefaults);
+            // post-default row so a defaulted value still passes its checks. A
+            // `v.from` column is stored as its parsed output, which is what reads
+            // are typed as; a trusted replay already holds that output.
+            const withDefaults = runRowValidators(definition, applyInsertDefaults(definition, document, auth), false, {
+                trusted: insertOptions?.allowExplicitId === true,
+            });
 
             // A client-chosen id is honored two ways: a validated `clientId`
             // (public, UUID-shaped — keys an optimistic row before the server
@@ -4143,17 +4145,21 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
             // Atomic field operators (`{ increment: 1 }`, …) resolve against the row just
             // read; the DO runs one mutation at a time, so no other write can land between.
             const effectivePatch = resolvePatch(tableDefinition, patch, existing);
-            const merged = { ...existing, ...stripReservedPatchFields(effectivePatch), ...commitSeqFields(tableName), _id: id };
+            const mergedRow = { ...existing, ...stripReservedPatchFields(effectivePatch), ...commitSeqFields(tableName), _id: id };
 
-            applyOnUpdate(tableDefinition, effectivePatch, merged, auth);
+            applyOnUpdate(tableDefinition, effectivePatch, mergedRow, auth);
 
             // The caller's authorization verdict, taken on the row this write actually produces.
-            assertPatchAllowed(patchOptions, existing, merged);
+            assertPatchAllowed(patchOptions, existing, mergedRow);
 
             // Run column refinements on the merged row so a patch that flips a
             // field to an invalid value (e.g. negative amount) is rejected
             // before SQLite sees it.
-            runRowValidators(tableDefinition, merged, true);
+            //
+            // A `v.from` column is parsed only when the patch sets it: the rest of
+            // `merged` is stored output, which its own transform would reject or
+            // transform a second time.
+            const merged = runRowValidators(tableDefinition, mergedRow, true, { only: new Set(Object.keys(effectivePatch)) });
 
             if (hasMatchingTrigger(tableName, "before", "update")) {
                 await fireTriggers("before", "update", { doc: { ...merged }, id, op: "update", previous: existing, table: tableName });
@@ -4649,13 +4655,15 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
             // `clock()` is the last resort, for a row with no readable stored
             // timestamp; the `??` chain keeps it unevaluated on the normal paths.
             const creationTime = replayed ?? stored ?? clock();
-            const replaced: Record<string, unknown> = { ...document, ...commitSeqFields(tableName), _creationTime: creationTime, _id: id };
+            const replacement: Record<string, unknown> = { ...document, ...commitSeqFields(tableName), _creationTime: creationTime, _id: id };
 
-            applyOnUpdate(tableDefinition, document, replaced, auth);
+            applyOnUpdate(tableDefinition, document, replacement, auth);
 
             // Refinement checks fire on the post-onUpdate row so a defaulted
-            // field still has to satisfy its `.check()` predicate.
-            runRowValidators(tableDefinition, replaced);
+            // field still has to satisfy its `.check()` predicate. A `v.from` column
+            // is stored as its parsed output, except on a trusted replay, whose
+            // document already holds it.
+            const replaced = runRowValidators(tableDefinition, replacement, false, { trusted: replaceOptions?.allowExplicitId === true });
 
             if (hasMatchingTrigger(tableName, "before", "update")) {
                 await fireTriggers("before", "update", { doc: { ...replaced }, id, op: "update", previous, table: tableName });

@@ -5055,6 +5055,9 @@ importers:
       '@lunora/search-core':
         specifier: workspace:*
         version: link:../search-core
+      '@lunora/values':
+        specifier: workspace:*
+        version: link:../values
       '@types/node':
         specifier: catalog:types
         version: 26.6.4
