@@ -75,6 +75,7 @@ import {
     liveStreamsDeliveryAuthorizationDiagnostic,
     readTargetDiagnostics,
     resolveCodegenTarget,
+    socketRoutesDeliveryAuthorizationDiagnostic,
     vectorizeDimensionDiagnostics,
 } from "./platform-target";
 import schemaDeclaresRelationGraph from "./relation-graph";
@@ -386,6 +387,7 @@ const buildDeclarationSurface = (options: DeclarationSurfaceOptions): Declaratio
                 ...platformGate.diagnostics,
                 ...vectorizeDimensionDiagnostics(target, schema.vectorIndexes),
                 ...(codeSignals.liveStreams && codeSignals.deliveryAuthorization ? [liveStreamsDeliveryAuthorizationDiagnostic(target)] : []),
+                ...(codeSignals.socketRoutes && codeSignals.deliveryAuthorization ? [socketRoutesDeliveryAuthorizationDiagnostic(target)] : []),
             ],
         },
         queues,
