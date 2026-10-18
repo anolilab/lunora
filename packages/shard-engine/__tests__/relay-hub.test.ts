@@ -1,8 +1,8 @@
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { SqlExec } from "../src/ctx-db";
 import type { RelayHost } from "../src/relay-hub";
-import { createRelayLink, OwnerRelay } from "../src/relay-hub";
+import { createRelayLink, OwnerRelay, RelayMember } from "../src/relay-hub";
 import type { ShardSocketLike, SocketAttachment, SubscriptionIdentity } from "../src/types";
 import createSqliteExec from "./_helpers/node-sqlite";
 
@@ -31,6 +31,8 @@ interface RelayDouble {
     /** The status this relay answers a forwarded live control call with; `404` when it holds no socket for it. Defaults to `204`. */
     liveStatus?: number;
     posts: Record<string, unknown>[];
+    /** `true` to accept a forwarded request and never answer it. */
+    stalled?: boolean;
 }
 
 const ownerFor = (
@@ -59,6 +61,13 @@ const ownerFor = (
                 const message = JSON.parse(init?.body ?? "{}") as Record<string, unknown>;
 
                 relay.posts.push(message);
+
+                // A stalled relay accepts the request and never answers, as an unresponsive sibling does.
+                if (relay.stalled === true) {
+                    return new Promise<Response>(() => {
+                        // Never settles: the relay is stalled.
+                    });
+                }
 
                 const status = message["type"] === "relay_live_control" ? (relay.liveStatus ?? 204) : 204;
 
@@ -1019,6 +1028,64 @@ describe("relay hub", () => {
             expect(relayAt(relays, 1).posts.map((post) => post["type"])).toStrictEqual(["relay_live_control"]);
         });
 
+        it("does not record a relay as a grant holder when it refused the grant", async () => {
+            expect.assertions(2);
+
+            // A 403 is a refusal: the relay stored no grant, so a publish must not be forwarded to it.
+            const relays = new Map<number, RelayDouble>([[0, { down: false, liveStatus: 403, posts: [] }]]);
+            const owner = ownerOf(relays);
+
+            await attach(owner, 0);
+            await grant(owner);
+            await owner.forwardLiveFrame("feed", "k1", "{}");
+
+            expect(liveFramesIn(relayAt(relays, 0))).toHaveLength(0);
+            expect(relayAt(relays, 0).posts.map((post) => post["type"])).toStrictEqual(["relay_live_control"]);
+        });
+
+        it("resolves a grant on the first relay that answers, without waiting for a stalled one", async () => {
+            expect.assertions(1);
+
+            const relays = new Map<number, RelayDouble>([
+                [0, { down: false, stalled: true, posts: [] }],
+                [1, { down: false, posts: [] }],
+            ]);
+            const owner = ownerOf(relays);
+
+            await attach(owner, 0);
+            await attach(owner, 1);
+
+            const response = await owner.forwardLiveControl({
+                action: "subscribe",
+                callerId: "u1",
+                connectionId: "c-alice",
+                key: "k1",
+                subscriptionId: "s1",
+            });
+
+            expect(response?.status).toBe(204);
+        });
+
+        it("treats every relay as absent once its deadline passes, rather than waiting on it", async () => {
+            expect.assertions(1);
+
+            const relays = new Map<number, RelayDouble>([[0, { down: false, stalled: true, posts: [] }]]);
+            const owner = ownerOf(relays);
+
+            await attach(owner, 0);
+            vi.useFakeTimers();
+
+            try {
+                const pending = owner.forwardLiveControl({ action: "subscribe", callerId: "u1", connectionId: "c-alice", key: "k1", subscriptionId: "s1" });
+
+                await vi.advanceTimersByTimeAsync(2000);
+
+                await expect(pending).resolves.toBeUndefined();
+            } finally {
+                vi.useRealTimers();
+            }
+        });
+
         it("still forwards to a grant holder after the owner wakes, because the holder set is durable", async () => {
             expect.assertions(1);
 
@@ -1055,6 +1122,43 @@ describe("relay hub", () => {
             await owner.forwardLiveFrame("feed", "k1", "{}");
 
             expect(liveFramesIn(relayAt(relays, 0))).toHaveLength(0);
+        });
+    });
+
+    describe("relay announce", () => {
+        /** A relay whose attach to its owner answers `status`; the owner's answer is all `announce` can see. */
+        const announcingRelay = (status: number): RelayMember => {
+            const owner = { fetch: () => Promise.resolve(new Response(undefined, { status })) };
+            const host = {
+                doName: () => `${OWNER_KEY}::relay::0`,
+                env: () => {
+                    return { SHARD: { get: () => owner, getByName: () => owner, idFromName: (id: string) => id } };
+                },
+                shardBinding: () => "SHARD",
+                shardJurisdiction: () => undefined,
+            } as unknown as RelayHost;
+            const link = createRelayLink(host);
+
+            if (!(link instanceof RelayMember)) {
+                throw new TypeError("expected a relay member for a `::relay::` DO name");
+            }
+
+            return link;
+        };
+
+        it("reports a failed attach, so the connect handler does not advertise the socket as grant-ready", async () => {
+            expect.assertions(1);
+
+            await expect(announcingRelay(503).announce()).resolves.toBe(false);
+        });
+
+        it("reports a successful attach, and a later announce is a no-op that still reports success", async () => {
+            expect.assertions(2);
+
+            const relay = announcingRelay(200);
+
+            await expect(relay.announce()).resolves.toBe(true);
+            await expect(relay.announce()).resolves.toBe(true);
         });
     });
 });
