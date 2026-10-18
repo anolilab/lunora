@@ -27,15 +27,16 @@ const platform = createShardPlatform(state);
 
 ## What it provides
 
-| Factory                | Contract         | Backed by                                                           |
-| ---------------------- | ---------------- | ------------------------------------------------------------------- |
-| `createShardHost`      | `ShardHost`      | `state.storage.sql`, `blockConcurrencyWhile`, `storage.transaction` |
-| `createSocketHost`     | `SocketHost`     | `state.acceptWebSocket` + hibernation, `state.getWebSockets(tag)`   |
-| `createShardAlarms`    | alarm surface    | `storage.setAlarm` / `getAlarm` / `deleteAlarm`                     |
-| `createShardKvStore`   | `ShardKvStore`   | `storage.list` with prefix scan                                     |
-| `createShardDirectory` | `ShardDirectory` | `idFromName` / `get`, with jurisdiction pinning                     |
-| `createShardPlatform`  | all of the above | one call, for a DO constructor                                      |
-| `createWorkerPlatform` | worker-tier host | the fetch/scheduled/queue entry, outside a shard                    |
+| Factory                 | Contract          | Backed by                                                                                  |
+| ----------------------- | ----------------- | ------------------------------------------------------------------------------------------ |
+| `createShardHost`       | `ShardHost`       | `state.storage.sql`, `blockConcurrencyWhile`, `storage.transaction`                        |
+| `createSocketHost`      | `SocketHost`      | `state.acceptWebSocket` + hibernation, `state.getWebSockets(tag)`                          |
+| `createShardAlarms`     | alarm surface     | `storage.setAlarm` / `getAlarm` / `deleteAlarm`                                            |
+| `createShardKvStore`    | `ShardKvStore`    | `storage.list` with prefix scan; hides the reserved secret-value namespace                 |
+| `createSecretValueHost` | `SecretValueHost` | `storage.put` / `get` / `delete` under a reserved prefix; `storage.transaction` for `take` |
+| `createShardDirectory`  | `ShardDirectory`  | `idFromName` / `get`, with jurisdiction pinning                                            |
+| `createShardPlatform`   | all of the above  | one call, for a DO constructor                                                             |
+| `createWorkerPlatform`  | worker-tier host  | the fetch/scheduled/queue entry, outside a shard                                           |
 
 ## Two things it does deliberately
 
