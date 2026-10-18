@@ -61,6 +61,10 @@ const roomNameOf = (call: CallExpression): string => {
     return initializer.getLiteralValue();
 };
 
+/** Whether `path` is its own URL pathname and outside the reserved `/_lunora` prefix (the `defineWebSocket` rule). */
+const isPlainRoutePath = (path: string): boolean =>
+    path.startsWith("/") && new URL(path, "https://lunora.invalid").pathname === path && path !== "/_lunora" && !path.startsWith("/_lunora/");
+
 /**
  * The literal `path` and `auth` of a `defineWebSocket({ … })` call. The path is the URL the worker upgrades and the
  * key of the `LUNORA_SOCKETS` map, so codegen reads it at build time, as it does a room name.
@@ -86,6 +90,17 @@ const socketRouteOf = (call: CallExpression): { auth: boolean; path: string } =>
         );
     }
 
+    const routePath = pathValue.getLiteralValue();
+
+    // The same rule `defineWebSocket` applies at load: a path the worker's pathname match could never reach, or one under
+    // the framework prefix, would otherwise be emitted as a registry key that no upgrade resolves.
+    if (!isPlainRoutePath(routePath)) {
+        throw new LunoraError(
+            "SOCKET_PATH_INVALID",
+            `defineWebSocket path "${routePath}" must be a plain URL path starting with "/" (no "?", "#", ".." or unencoded characters) and not under "/_lunora".`,
+        );
+    }
+
     const hidden = options
         .getProperties()
         .some((property) => Node.isSpreadAssignment(property) || (Node.isPropertyAssignment(property) && Node.isComputedPropertyName(property.getNameNode())));
@@ -100,7 +115,7 @@ const socketRouteOf = (call: CallExpression): { auth: boolean; path: string } =>
     const authProperty = options.getProperty("auth");
 
     if (authProperty === undefined) {
-        return { auth: false, path: pathValue.getLiteralValue() };
+        return { auth: false, path: routePath };
     }
 
     const authValue = Node.isPropertyAssignment(authProperty) ? authProperty.getInitializer() : undefined;
@@ -112,7 +127,7 @@ const socketRouteOf = (call: CallExpression): { auth: boolean; path: string } =>
         );
     }
 
-    return { auth: Node.isTrueLiteral(authValue), path: pathValue.getLiteralValue() };
+    return { auth: Node.isTrueLiteral(authValue), path: routePath };
 };
 
 const discoverBuilderTerminal = (call: CallExpression, receiver: Node, classified: ProcedureClassification, lazyFunctions: boolean): DiscoveredFunction => {
@@ -174,7 +189,9 @@ const discoverFromCall = (call: CallExpression, lazyFunctions: boolean): Discove
             kind: classified.kind,
             lifecycle: classified.lifecycle,
             returnType: "void",
-            ...(classified.lifecycle === "socket" ? { socket: socketRouteOf(call) } : {}),
+            ...(classified.lifecycle === "socket"
+                ? { socket: { ...socketRouteOf(call), origin: `${call.getSourceFile().getFilePath()}@${String(call.getStart())}` } }
+                : {}),
             visibility: classified.visibility,
         };
     }

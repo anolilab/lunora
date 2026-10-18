@@ -92,10 +92,52 @@ describe("discoverFunctions — defineWebSocket", () => {
 
         const [chat, lobby] = discover(true);
 
-        expect(chat?.socket).toStrictEqual({ auth: true, path: "/chat" });
+        expect(chat?.socket).toMatchObject({ auth: true, path: "/chat" });
         // `auth` is optional and defaults to an anonymous route.
-        expect(lobby?.socket).toStrictEqual({ auth: false, path: "/lobby" });
+        expect(lobby?.socket).toMatchObject({ auth: false, path: "/lobby" });
         expect(emitFunctions({ functions: discover(true), lazyFunctions: true })).toContain('"/chat": { auth: true, functionPath: "sockets:chat" }');
+    });
+
+    it("refuses a route path the worker could never match, as defineWebSocket does at load", () => {
+        expect.assertions(2);
+
+        writeFunction(
+            "sockets.ts",
+            `
+            import { defineWebSocket, v } from "@lunora/server";
+            export const chat = defineWebSocket({ message: v.object({}), onMessage: () => undefined, path: "/chat?room=1" });
+        `,
+        );
+
+        expect(() => discover(true)).toThrow(/plain URL path/u);
+
+        writeFunction(
+            "sockets.ts",
+            `
+            import { defineWebSocket, v } from "@lunora/server";
+            export const chat = defineWebSocket({ message: v.object({}), onMessage: () => undefined, path: "/_lunora/chat" });
+        `,
+        );
+
+        expect(() => discover(true)).toThrow(/plain URL path/u);
+    });
+
+    it("reads one defineWebSocket exported under two names as one route with one origin", () => {
+        expect.assertions(2);
+
+        writeFunction(
+            "sockets.ts",
+            `
+            import { defineWebSocket, v } from "@lunora/server";
+            const chat = defineWebSocket({ message: v.object({}), onMessage: () => undefined, path: "/chat" });
+            export { chat, chat as lobby };
+        `,
+        );
+
+        const [first, second] = discover(true);
+
+        expect(first?.socket?.origin).toBeDefined();
+        expect(second?.socket?.origin).toBe(first?.socket?.origin);
     });
 
     it("refuses a route whose path is not a string literal", () => {

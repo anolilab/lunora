@@ -112,6 +112,31 @@ describe("emitFunctions — LUNORA_SOCKETS registry", () => {
         expect(emitted).toContain('lifecycle?: "connect" | "disconnect" | "init" | "reactor" | "whisper" | "socket";');
     });
 
+    it("accepts a lazy route exported under two names, and carries its path onto the worker's stubs", () => {
+        expect.assertions(3);
+
+        const origin = "sockets.ts@1";
+        const emitted = emitFunctions({
+            functions: [
+                { ...socketFunction, socket: { auth: false, origin, path: "/chat" } },
+                { ...socketFunction, exportName: "lobbySocket", socket: { auth: false, origin, path: "/chat" } },
+            ],
+            lazyFunctions: true,
+        });
+        const start = emitted.indexOf("export const LUNORA_SOCKETS");
+        const block = emitted.slice(start, emitted.indexOf("};", start) + "};".length);
+        const js = ts.transpileModule(block, { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 } }).outputText;
+        const exported: Record<string, unknown> = {};
+
+        // eslint-disable-next-line @typescript-eslint/no-implied-eval, sonarjs/code-eval -- the test runs the emitted registry it just transpiled
+        new Function("exports", js)(exported);
+
+        expect(exported["LUNORA_SOCKETS"]).toStrictEqual({ "/chat": { auth: false, functionPath: "sockets:chatSocket" } });
+        // The worker finds the route on the stub, without evaluating the module.
+        expect(emitted).toContain('"socketPath":"/chat"');
+        expect(emitted).toContain('"auth":false');
+    });
+
     it("refuses two lazy routes on one path at codegen time", () => {
         expect.assertions(1);
 

@@ -533,6 +533,7 @@ export const ERROR_CATALOG = {
     ROOM_NAME_NOT_LITERAL: { status: 500, title: "Room name is not a string literal" },
     DUPLICATE_SOCKET_PATH: { status: 500, title: "Duplicate socket route path" },
     SOCKET_AUTH_NOT_LITERAL: { status: 500, title: "Socket route auth is not a literal boolean" },
+    SOCKET_PATH_INVALID: { status: 500, title: "Socket route path is not a plain URL path" },
     SOCKET_PATH_NOT_LITERAL: { status: 500, title: "Socket route path is not a string literal" },
     DUPLICATE_WORKFLOW_CLASS: { status: 500, title: "Duplicate workflow generated class name" },
     MIGRATION_ID_NOT_STATIC: { status: 500, title: "Migration id is not statically analyzable" },

@@ -180,6 +180,8 @@ const renderFunctionRegistry = (
                     ...(definition.lifecycle ? { lifecycle: definition.lifecycle } : {}),
                     ...(definition.visibility ? { visibility: definition.visibility } : {}),
                     ...(definition.x402?.price === undefined ? {} : { x402: { price: definition.x402.price } }),
+                    // The worker reads a route's path off the stub to know which upgrades reach the shard.
+                    ...(definition.socket === undefined ? {} : { auth: definition.socket.auth, socketPath: definition.socket.path }),
                 },
             )} } satisfies RegisteredLunoraFunction & Pick<FunctionManifestEntry, "argumentDescriptors" | "channel" | "expose">,`;
         })
@@ -456,7 +458,7 @@ const renderLifecycleManifest = (
  * find no route; the map is emitted directly, and building the worker never evaluates a route's module.
  */
 const renderLazySocketRegistry = (functions: ReadonlyArray<FunctionIR>): string => {
-    const owners = new Map<string, string>();
+    const owners = new Map<string, { functionPath: string; origin: string | undefined }>();
     const entries: string[] = [];
 
     for (const definition of functions) {
@@ -464,18 +466,23 @@ const renderLazySocketRegistry = (functions: ReadonlyArray<FunctionIR>): string 
             continue;
         }
 
-        const { auth, path } = definition.socket;
+        const { auth, origin, path } = definition.socket;
         const functionPath = `${sanitizeNamespace(definition.filePath)}:${definition.exportName}`;
         const prior = owners.get(path);
+
+        // Two export names of one `defineWebSocket` call are an alias of one route, as in eager mode.
+        if (prior?.origin !== undefined && prior.origin === origin) {
+            continue;
+        }
 
         if (prior !== undefined) {
             throw new LunoraError(
                 "DUPLICATE_SOCKET_PATH",
-                `two defineWebSocket routes serve "${path}" (${prior} and ${functionPath}); socket paths must be unique.`,
+                `two defineWebSocket routes serve "${path}" (${prior.functionPath} and ${functionPath}); socket paths must be unique.`,
             );
         }
 
-        owners.set(path, functionPath);
+        owners.set(path, { functionPath, origin });
         entries.push(`    ${JSON.stringify(path)}: { auth: ${String(auth)}, functionPath: ${JSON.stringify(functionPath)} },`);
     }
 
