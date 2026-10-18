@@ -715,10 +715,26 @@ Future<void> caseOnlineOnlyRefusedWhenDisconnected() async {
   covers('offline_online_only_refused_when_disconnected');
   final store = MemoryPersistence();
   final poster = Poster(result: 'null');
-  final client = LunoraClient(url: 'https://app.example', post: poster.call, offlineQueue: OfflineQueue(persistence: store, queueBeforeFirstConnect: true));
+  final client = LunoraClient(url: 'https://app.example', post: poster.call, offlineQueue: OfflineQueue(persistence: store, queueBeforeFirstConnect: true))
+    ..attachSocket((_) {})
+    ..setConnected(true)
+    ..setConnected(false);
+
+  // A subscription on the write's own path and args, primed with a server value, so
+  // an overlay the write applied would be displayed.
+  final args = <String, Object?>{'token': _onlineOnlySecret};
+  final seen = <Object?>[];
+
+  client.subscribe('auth:setPassword', args: args, onData: seen.add);
+  pushData(client, 'sub_1', <Object?>['a'], cursor: 1);
 
   try {
-    await client.mutation('auth:setPassword', args: <String, Object?>{'token': _onlineOnlySecret}, onlineOnly: true);
+    await client.mutation(
+      'auth:setPassword',
+      args: args,
+      onlineOnly: true,
+      optimistic: (current) => <Object?>[...(current! as List<Object?>), 'c'],
+    );
     failures.add('an online-only write must be refused while disconnected');
   } on LunoraApiException catch (error) {
     equals(error.code, offlineNotQueued, 'the refusal names why');
@@ -727,6 +743,7 @@ Future<void> caseOnlineOnlyRefusedWhenDisconnected() async {
   equals(client.pendingWrites, 0, 'nothing is queued');
   equals(store.records.length, 0, 'the persistence adapter never sees the write');
   equals(poster.paths.length, 0, 'and a refused write never reaches the wire');
+  check(seen.every((value) => canonical(value) != canonical(<Object?>['a', 'c'])), "a refused write's overlay is never displayed");
 }
 
 /// With the socket up an online-only write is sent normally and commits.
