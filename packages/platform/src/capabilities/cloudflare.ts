@@ -182,7 +182,7 @@ const CLOUDFLARE_CAPABILITIES: PlatformCapabilities = {
         secrets: { level: "native", note: "Secrets Store" },
         secretValues: {
             level: "native",
-            note: "Held in the shard's own Durable Object key-value storage under a reserved key prefix, so the value stays inside the shard and is not a separate service. Cloudflare encrypts all Durable Object data at rest (AES-256, keys managed by Cloudflare). The value is not readable through the shard's SQL surface: the key-value table appears in the schema listing, but reads of its key and value columns are refused by the SQLite authorizer. The reserved prefix is filtered out of `ShardKvStore`, so the key-value contract cannot list or read it. Point-in-time recovery covers key-value `put()` data for 30 days, so a restore to a bookmark earlier than a `discard` brings the discarded value back, and it also reverts the claimant binding",
+            note: "Held in the shard's own Durable Object key-value storage under a reserved key prefix, so the value stays inside the shard. Sealed with AES-256-GCM under the `LUNORA_SECRET_VALUE_KEY` Worker secret before it is stored, so the stored record is `{ keyId, iv, ciphertext }`. The reserved prefix is hidden from `ShardKvStore`. Point-in-time recovery covers key-value put() data for the last 30 days, so a restore to an earlier bookmark returns the sealed record, and it opens while the sealing key is still configured: erasure is `discard` plus rotating the key out",
         },
         services: {
             level: "native",

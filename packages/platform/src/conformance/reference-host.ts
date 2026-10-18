@@ -8,6 +8,7 @@ import type {
     ScheduleOptions,
     SchedulerHost,
     SecretValueHost,
+    SecretValueStore,
     ShardDirectory,
     ShardHost,
     ShardJurisdiction,
@@ -17,7 +18,13 @@ import type {
     SocketHandle,
     SocketHost,
 } from "../index";
-import { assertSecretValueSize, clampSecretValueTtl } from "../index";
+import { clampSecretValueTtl, encryptingSecretValueHost } from "../index";
+
+/**
+ * A fresh base64 AES-256 key for a test host. Generated per host rather than
+ * written as a literal, so no key material sits in the source.
+ */
+const createSecretValueTestKey = (): string => btoa(String.fromCodePoint(...crypto.getRandomValues(new Uint8Array(32))));
 
 /**
  * A conformance host bundles all four platform contracts so a single factory
@@ -162,6 +169,25 @@ interface ConformanceHost {
      * silently.
      */
     secretValues?: SecretValueHost;
+
+    /**
+     * The raw store beneath `secretValues`, plus read and write access to its
+     * records. The legs that prove what is at rest (no plaintext in storage, a
+     * tampered or moved record reads as absent, rotation) need it. Optional, like
+     * `secretValues`: a host that cannot expose its records omits it, and those
+     * legs skip rather than assert against a surface they cannot see.
+     */
+    secretValueStore?: {
+        /** Every record the store holds, serialized: the plaintext scan reads this. */
+        dump: () => Promise<string>;
+        /** The scope and sealed value of one record, or `undefined` when absent. */
+        peek: (ref: string) => Promise<{ scope: string; value: string } | undefined>;
+        /** Overwrite fields of one record in place. The tamper legs use this. */
+        poke: (ref: string, fields: { scope?: string; value?: string }) => Promise<void>;
+        /** The raw store `secretValues` wraps, so a leg can build its own encrypting host over it. */
+        store: SecretValueStore;
+    };
+
     /** The shard execution slot under test. */
     shard: ShardHost;
 
@@ -689,11 +715,11 @@ const createReferenceHost = (): ReferenceHost => {
     type SecretRecord = { claimant?: string; expiresAt: number; scope: string; value: string };
     const secretKey = (ref: string): string => `${SECRET_KEY_PREFIX}${ref}`;
 
-    const secretValues: SecretValueHost = {
+    // The raw layer beneath the encryption wrapper: it mints the ref, stores
+    // whatever `seal` returns, and applies the claimant, scope and expiry rules.
+    const secretStore: SecretValueStore = {
         discard: async (ref) => kvData.delete(secretKey(ref)),
-        put: async (value, options) => {
-            assertSecretValueSize(value);
-
+        put: async (seal, options) => {
             // Sweep expired records on every put, so a value that is never taken
             // does not outlive its TTL indefinitely.
             const at = now();
@@ -707,7 +733,7 @@ const createReferenceHost = (): ReferenceHost => {
             const expiresAt = at + clampSecretValueTtl(options.ttlMs);
             const ref = `${String(expiresAt).padStart(15, "0")}.${randomUUID()}`;
 
-            kvData.set(secretKey(ref), { expiresAt, scope: options.scope, value } satisfies SecretRecord);
+            kvData.set(secretKey(ref), { expiresAt, scope: options.scope, value: await seal(ref) } satisfies SecretRecord);
 
             return ref;
         },
@@ -735,6 +761,21 @@ const createReferenceHost = (): ReferenceHost => {
 
             return record.claimant === options.claimant ? record.value : undefined;
         },
+    };
+
+    const secretValues = encryptingSecretValueHost(secretStore, { key: createSecretValueTestKey() });
+
+    const secretValueStore: NonNullable<ConformanceHost["secretValueStore"]> = {
+        dump: async () => JSON.stringify([...kvData].filter(([key]) => isSecretKey(key))),
+        peek: async (ref) => {
+            const record = kvData.get(secretKey(ref)) as SecretRecord | undefined;
+
+            return record === undefined ? undefined : { scope: record.scope, value: record.value };
+        },
+        poke: async (ref, fields) => {
+            Object.assign(kvData.get(secretKey(ref)) as SecretRecord, fields);
+        },
+        store: secretStore,
     };
 
     type ReferenceJob = {
@@ -899,6 +940,7 @@ const createReferenceHost = (): ReferenceHost => {
         },
         kv,
         secretValues,
+        secretValueStore,
         // Text frames only: every Lunora wire frame is JSON, and returning
         // binary as a lossy string would let a corrupted frame read as a
         // delivered one.
@@ -954,3 +996,5 @@ interface ReferenceHost extends ConformanceHost {
 
 export { createReferenceHost };
 export type { ConformanceHost, ConformanceHostFactory, ReferenceHost };
+
+export { createSecretValueTestKey };

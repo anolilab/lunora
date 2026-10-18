@@ -622,12 +622,40 @@ interface SecretValueHost {
 }
 ```
 
+### `SecretValueKeyError` (class)
+
+```ts
+class SecretValueKeyError extends Error {
+    readonly code = "SECRET_VALUE_KEY_UNAVAILABLE";
+    constructor(reason: "missing" | "malformed");
+}
+```
+
+### `SecretValueKeyOptions` (interface)
+
+```ts
+interface SecretValueKeyOptions {
+    key: string | undefined;
+    previousKey?: string;
+}
+```
+
 ### `SecretValuePutOptions` (interface)
 
 ```ts
 interface SecretValuePutOptions {
     scope: string;
     ttlMs: number;
+}
+```
+
+### `SecretValueStore` (interface)
+
+```ts
+interface SecretValueStore {
+    discard: (ref: string) => Promise<boolean>;
+    put: (seal: (ref: string) => Promise<string>, options: SecretValuePutOptions) => Promise<string>;
+    take: (ref: string, options: SecretValueTakeOptions) => Promise<string | undefined>;
 }
 ```
 
@@ -914,6 +942,12 @@ const assertSecretValueSize: (value: string) => void;
 const clampSecretValueTtl: (ttlMs: number) => number;
 ```
 
+### `encryptingSecretValueHost` (const)
+
+```ts
+const encryptingSecretValueHost: (raw: SecretValueStore, options: SecretValueKeyOptions) => SecretValueHost;
+```
+
 ### `resolveShard` (const)
 
 ```ts
@@ -940,6 +974,18 @@ interface ConformanceHost {
     restoreSocket?: (id: string, attachment: unknown) => SocketHandle;
     scheduler?: SchedulerHost;
     secretValues?: SecretValueHost;
+    secretValueStore?: {
+        dump: () => Promise<string>;
+        peek: (ref: string) => Promise<{
+            scope: string;
+            value: string;
+        } | undefined>;
+        poke: (ref: string, fields: {
+            scope?: string;
+            value?: string;
+        }) => Promise<void>;
+        store: SecretValueStore;
+    };
     shard: ShardHost;
     simulateDeadLetter?: (id: string) => Promise<boolean>;
     simulateRecycle?: () => void;
