@@ -1,3 +1,4 @@
+import { createDispatchRunner } from "@lunora/dispatch";
 import type { SecretValueHost } from "@lunora/platform";
 import { createReferenceHost } from "@lunora/platform/conformance";
 import { jsonSchema } from "ai";
@@ -653,5 +654,101 @@ describe("withSecret — two secrets in one call", () => {
 
         expect(keyLength).toBe("alpha-key-123".length);
         expect(signingLength).toBe("beta-signing-secret-xyz".length);
+    });
+});
+
+/** A consumer whose callback runs `use`, so a test chooses how the callback fails. */
+const consumerAgent = (use: (secret: string) => string, telemetry?: AgentDefinition["telemetry"]): AgentDefinition =>
+    defineAgent({
+        model: "@cf/meta/llama-3.3-70b-instruct-fp8-fast",
+        telemetry,
+        tools: {
+            charge: defineAgentTool({
+                description: "Charge the card with a stored key.",
+                execute: (input, context) => withSecret(context, (input as { secretRef: string }).secretRef, use),
+                inputSchema: jsonSchema({ properties: { secretRef: { type: "string" } }, required: ["secretRef"], type: "object" }) as never,
+            }),
+            requestKey: requestSecretTool({ consumer: "charge", description: "Ask the user for their payment API key." }),
+        },
+    });
+
+describe("withSecret — a callback that throws never exposes the value", () => {
+    it("hands telemetry and the caller a failure with the value redacted", async () => {
+        expect.assertions(3);
+
+        const ended: unknown[] = [];
+        const agent = consumerAgent(
+            () => {
+                throw new Error(`the gateway rejected ${SECRET}`);
+            },
+            {
+                integrations: {
+                    onToolExecutionEnd: (event) => {
+                        ended.push(event);
+                    },
+                },
+            },
+        );
+        const { host, journal, runtime } = await setup();
+        const generate = scriptedGenerate([
+            toolTurn("call_1", "requestKey", { label: "API key" }),
+            toolTurn("call_2", "charge", { secretRef: "call_1" }),
+            finalTurn("done"),
+        ]);
+
+        await pauseAt(agent, journal, runtime, generate);
+        await host.supply("call_1", SECRET);
+
+        const failure: unknown = await runAgentLoop(loopDefaults(agent, { generate, run: runtime.run, step: journal })).then(
+            () => undefined,
+            (error: unknown) => error,
+        );
+
+        expect(failure).toBeInstanceOf(Error);
+        expect(serialized([(failure as Error).message, (failure as Error).stack])).not.toContain(SECRET);
+
+        // Telemetry gets the error object itself, which JSON would flatten to `{}`, so its message is read directly.
+        const [event] = ended as { toolOutput: { error: Error } }[];
+
+        expect(event?.toolOutput.error.message).toBe("the gateway rejected [redacted]");
+    });
+
+    it("persists a deterministic failure's message without the value", async () => {
+        expect.assertions(2);
+
+        // A dispatch rejection built the way production builds it, so it carries the brand
+        // `isDeterministicDispatchFailure` keys on and the loop records its message.
+        const dispatch = createDispatchRunner({
+            env: { LUNORA_ADMIN_TOKEN: "tok", LUNORA_ORIGIN_URL: "https://app.example.com/" },
+            fetchImpl: async () => Response.json({ error: { code: "BAD_REQUEST", message: `the key ${SECRET} was refused` } }, { status: 400 }),
+            label: "@lunora/agent",
+        });
+        const deterministic = defineAgent({
+            model: "@cf/meta/llama-3.3-70b-instruct-fp8-fast",
+            tools: {
+                charge: defineAgentTool({
+                    description: "Charge the card with a stored key.",
+                    execute: (input, context) =>
+                        withSecret(context, (input as { secretRef: string }).secretRef, () => dispatch({ __lunoraRef: "billing:charge" } as never)),
+                    inputSchema: jsonSchema({ properties: { secretRef: { type: "string" } }, required: ["secretRef"], type: "object" }) as never,
+                }),
+                requestKey: requestSecretTool({ consumer: "charge", description: "Ask the user for their payment API key." }),
+            },
+        });
+        const { host, journal, runtime } = await setup();
+        const generate = scriptedGenerate([
+            toolTurn("call_1", "requestKey", { label: "API key" }),
+            toolTurn("call_2", "charge", { secretRef: "call_1" }),
+            finalTurn("refused"),
+        ]);
+
+        await pauseAt(deterministic, journal, runtime, generate);
+        await host.supply("call_1", SECRET);
+        await runAgentLoop(loopDefaults(deterministic, { generate, run: runtime.run, step: journal }));
+
+        const row = [...runtime.messages.values()].find((message) => message.toolCallId === "call_2" && message.role === "tool");
+
+        expect(row?.content).toContain("the key [redacted] was refused");
+        expect(row?.content).not.toContain(SECRET);
     });
 });
