@@ -71,6 +71,7 @@ bash sdks/run-all.sh              # 8 non-JS SDK conformance suites (lint-all.sh
 - **The tree and the stash are shared.** Other sessions edit the same checkout and push to the same branches. Stage explicit paths — never `git add -A` / `git commit -a` — and never use bare `git stash` / `git stash pop`; the stack is shared across worktrees, so you can pop someone else's work.
 - **The shell's working directory persists between calls.** A `cd` in one call silently relocates the next, and an edit or a "passing" check can land in the wrong worktree. Use absolute paths, or prefix each call with `cd <worktree> &&`.
 - **A test must fail without the fix.** Before trusting a new test, revert the fix (or break the code under test) and watch it go red. Tests have passed for the wrong reason repeatedly: a fixture too small to trigger the planner, a `mockRestore` in `finally` that clears the very calls being asserted, a presence check where a count was needed.
+- **Dev ports are per checkout.** The playground (`:5173`) and studio (`:5174`) ports come from `shared/dev-ports.ts`: a linked git worktree gets an offset from its path. Read the ports from the startup line (`dev ports: playground :N, studio :M`); never hard-code them. `LUNORA_DEV_PORT_OFFSET=0` forces the legacy pair.
 
 ## Conventions
 

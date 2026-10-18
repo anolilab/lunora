@@ -69,7 +69,7 @@ WebSocket within ~10 ms locally.
 
 ## Studio demo walkthrough
 
-The admin UI is served alongside the app at **<http://localhost:5173/__lunora>**.
+The admin UI is served alongside the app at **<http://localhost:5173/__lunora>** in the main checkout (other worktrees print their own port at startup).
 `demoRecords` is the table it is meant to be opened against — seed it first, or
 the data browser has nothing to draw:
 

@@ -11,12 +11,12 @@ worker. Reach for this app when you want to **host** the studio separately
 ## Run
 
 ```bash
-# Defaults to the playground worker on :5173. Point it at a different local
+# Defaults to the playground worker on this checkout's playground port (:5173 in the main checkout; the startup line prints it). Point it at a different local
 # worker with LUNORA_DEV_PROXY (vite proxies HTTP + WebSocket to it).
 LUNORA_DEV_PROXY=http://localhost:5173 pnpm --filter @lunora/studio-app dev
 ```
 
-Then open http://localhost:5174 and paste your `LUNORA_ADMIN_TOKEN` into the
+Then open the studio URL it prints (http://localhost:5174 in the main checkout) and paste your `LUNORA_ADMIN_TOKEN` into the
 header field (or pre-fill it in dev with `VITE_LUNORA_ADMIN_TOKEN`).
 
 In the **dev server** the studio always talks to its own origin and vite's
@@ -38,11 +38,11 @@ be omitted).
 
 ## Configuration
 
-| Env var                   | Purpose                                                                                   |
-| ------------------------- | ----------------------------------------------------------------------------------------- |
-| `LUNORA_DEV_PROXY`        | Dev-server only: the worker the `/_lunora` proxy forwards to. Defaults to `:5173`.        |
-| `VITE_LUNORA_URL`         | **Static/prod build only** (ignored in dev): worker base URL. Defaults to current origin. |
-| `VITE_LUNORA_ADMIN_TOKEN` | Pre-fills the admin token (dev only — never bake into prod).                              |
+| Env var                   | Purpose                                                                                                                                   |
+| ------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------- |
+| `LUNORA_DEV_PROXY`        | Dev-server only: the worker the `/_lunora` proxy forwards to. Defaults to this checkout's playground port (`:5173` in the main checkout). |
+| `VITE_LUNORA_URL`         | **Static/prod build only** (ignored in dev): worker base URL. Defaults to current origin.                                                 |
+| `VITE_LUNORA_ADMIN_TOKEN` | Pre-fills the admin token (dev only — never bake into prod).                                                                              |
 
 The worker must be built with `adminToken` set and the matching admin endpoints
 configured (see `@lunora/studio`'s README).

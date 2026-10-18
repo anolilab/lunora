@@ -39,7 +39,7 @@ rather than being dropped from the project list.
 ## How the harness boots
 
 `globalSetup.ts` starts the playground exactly like `pnpm dev`: one `vite
---port 5173 --strictPort` whose embedded `@cloudflare/vite-plugin` worker
+--port <playground port> --strictPort` whose embedded `@cloudflare/vite-plugin` worker
 (Miniflare under the hood) is the **single** backend for auth, RPC, WebSockets,
 R2, and the `/test/*` helpers — all on one D1, same origin. There is no second
 standalone worker (a separate one would have its own D1 and split auth state
@@ -63,7 +63,7 @@ Boot reliability (each item below was an observed failure mode):
   wrangler/Miniflare init can exceed a minute on constrained runners.
 - If the child exits during boot, setup fails immediately with its output
   rather than polling a dead port for the whole budget.
-- Port 5173 is probed **before** spawning: a stale server (leaked child of a
+- The playground port (5173 in the main checkout, derived per worktree) is probed **before** spawning: a stale server (leaked child of a
   crashed run, a dev's `pnpm dev`) fails the run with an explicit conflict
   error instead of silently testing against unknown state. Set
   `LUNORA_E2E_EXTERNAL=true` to intentionally target an already-running
@@ -77,7 +77,7 @@ Boot reliability (each item below was an observed failure mode):
 `globalTeardown.ts` kills the whole process **group** (pnpm → node → vite →
 workerd; SIGTERM, then SIGKILL after 5 s), waits for the real `exit` event,
 and restores the developer's `.dev.vars`. The group kill matters: signalling
-only the direct child used to orphan workerd, which kept :5173 bound and broke
+only the direct child used to orphan workerd, which kept the playground port bound and broke
 the next run's boot.
 
 ## Running variants
