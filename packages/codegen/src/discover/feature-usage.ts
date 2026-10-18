@@ -195,6 +195,13 @@ interface SourceCapabilitySignals {
      * counts them, since a lazily loaded package needs its binding just the same.
      */
     dynamicImports: ReadonlySet<string>;
+
+    /**
+     * Whether the file value-imports `requestSecretTool` from `@lunora/agent` — the
+     * signal that wires the secret store ({@link declaresRequestSecretTool}).
+     */
+    requestSecretTool: boolean;
+
     /** The `@lunora/agent` sandbox tools the file value-imports — the same reading as `discoverSandboxUsage`. */
     sandboxTools: Readonly<SandboxUsage>;
 
@@ -205,6 +212,26 @@ interface SourceCapabilitySignals {
      */
     valueImports: ReadonlySet<string>;
 }
+
+/** The package the agent tools are imported from. */
+const AGENT_MODULE_SPECIFIER = "@lunora/agent";
+
+/** The agent tool that asks a human for a secret value. */
+const REQUEST_SECRET_TOOL = "requestSecretTool";
+
+/**
+ * Whether an import declaration value-imports `requestSecretTool` from
+ * `@lunora/agent`. A type-only import does not count: only a value import wires
+ * the tool into an agent. The one rule codegen's secret-store gate and
+ * `@lunora/config`'s binding inference both read.
+ */
+const declaresRequestSecretTool = (declaration: ImportDeclaration): boolean => {
+    if (declaration.getModuleSpecifierValue() !== AGENT_MODULE_SPECIFIER || declaration.isTypeOnly()) {
+        return false;
+    }
+
+    return declaration.getNamedImports().some((named) => !named.isTypeOnly() && named.getNameNode().getText() === REQUEST_SECRET_TOOL);
+};
 
 /**
  * The capability signals of one source file: its value-import and re-export
@@ -228,6 +255,7 @@ const sourceCapabilitySignals = (sourceFile: SourceFile): SourceCapabilitySignal
     return {
         contextReads: contextPropertiesRead(sourceFile),
         dynamicImports: dynamicImportSpecifiers(sourceFile),
+        requestSecretTool: imports.some((declaration) => declaresRequestSecretTool(declaration)),
         sandboxTools,
         valueImports: new Set(
             [...imports, ...sourceFile.getExportDeclarations()].flatMap((declaration) => {
@@ -245,8 +273,11 @@ const foldCapabilitySignals = (signals: Iterable<SourceCapabilitySignals>): Sour
     const dynamicImports = new Set<string>();
     const sandboxTools = noSandboxUsage();
     const valueImports = new Set<string>();
+    let requestSecretTool = false;
 
     for (const file of signals) {
+        requestSecretTool ||= file.requestSecretTool;
+
         for (const name of file.contextReads) {
             contextReads.add(name);
         }
@@ -264,7 +295,7 @@ const foldCapabilitySignals = (signals: Iterable<SourceCapabilitySignals>): Sour
         }
     }
 
-    return { contextReads, dynamicImports, sandboxTools, valueImports };
+    return { contextReads, dynamicImports, requestSecretTool, sandboxTools, valueImports };
 };
 
 /**
@@ -314,5 +345,13 @@ const discoverFeatureUsage = (project: Project, lunoraDirectory: string): Featur
     return Object.fromEntries(CAPABILITIES.map(({ key }) => [key, used.has(key)] as const)) as FeatureUsage;
 };
 
-export { capabilitiesUsedBy, contextPropertiesRead, discoverFeatureUsage, foldCapabilitySignals, mayReadCapabilityContext, sourceCapabilitySignals };
+export {
+    capabilitiesUsedBy,
+    contextPropertiesRead,
+    declaresRequestSecretTool,
+    discoverFeatureUsage,
+    foldCapabilitySignals,
+    mayReadCapabilityContext,
+    sourceCapabilitySignals,
+};
 export type { FeatureUsage, SourceCapabilitySignals };

@@ -50,6 +50,54 @@ compiles fine and fails in production:
   `WeakMap` memos can then key on either and diverge. Wrapping is permitted, but
   the host that does it pays for it.
 
+## Secret values
+
+`SecretValueHost` holds a human-supplied value between `put` and a one-claimant
+`take`. A host never stores the plaintext: the raw layer (`SecretValueStore`)
+mints the ref and asks `seal(ref)` for the bytes to write, and
+`encryptingSecretValueHost(store, { key, previousKey })` supplies those bytes as
+AES-256-GCM ciphertext. The ref and the scope are bound as additional
+authenticated data, so a record moved to another ref, or read under another
+scope, does not open. The stored record is `{ keyId, iv, ciphertext }`. The
+`keyId` is the first 8 bytes of SHA-256 over the key, and the IV is fresh for
+every `put`.
+
+- **Setup.** The key is base64 of exactly 32 bytes, bound as a Worker secret
+  (`LUNORA_SECRET_VALUE_KEY`). Generate it with `openssl rand -base64 32`. It
+  never goes in `vars` or `wrangler.jsonc`, and it never goes in storage.
+- **Fails closed.** A missing or malformed key makes `put` and `take` throw
+  `SecretValueKeyError`. Nothing falls back to storing plaintext.
+- **Unreadable records read as absent.** A tampered record, one moved to another
+  ref or scope, or one sealed under a key that is no longer configured, makes
+  `take` return `undefined`. It never throws with the plaintext in the error.
+- **Rotation.** Set `LUNORA_SECRET_VALUE_KEY_PREVIOUS` to the current key and
+  `LUNORA_SECRET_VALUE_KEY` to a new one, then deploy. New values seal under the
+  new key, and `take` opens values under either. Wait until every value sealed
+  under the old key has expired: `put` caps a lifetime at 24 hours
+  (`SECRET_VALUE_MAX_TTL_MS`). Then unset `LUNORA_SECRET_VALUE_KEY_PREVIOUS` and
+  deploy.
+
+**What point-in-time recovery does.** On Cloudflare Durable Objects, PITR
+restores SQL data and key-value `put()` data to any point in the past 30 days.
+The sealed secret records are key-value data, so they are included. The
+documented way to start a restore is the object's own code: call
+`onNextSessionRestoreBookmark` with a bookmark, then `ctx.abort()`. The docs
+describe no other trigger, and this page does not claim there is none. PITR is
+not available under local dev.
+
+**What that means for erasure.** Encryption alone does not defeat a restore. A
+restored record is still ciphertext, but it opens while the key that sealed it
+is still configured. So erasure needs two steps: `discard` the value, and rotate
+the key out (drop it from `LUNORA_SECRET_VALUE_KEY_PREVIOUS` and every other
+binding). Until the old key is gone, a restore to a bookmark before the discard
+can bring a value back readable. Cloudflare documents Worker secrets as managed
+per Worker, and its rollback page does not say what a rollback does to them, so
+this page does not claim how a rollback treats a secret.
+
+**Not claimed.** This page does not say that a restored record is unreadable on
+its own, that Cloudflare keeps Worker secrets out of backups, or who can read
+retained history.
+
 ## Capabilities
 
 `PlatformCapabilities` rates each feature `"native" | "emulated" | "unsupported"`.

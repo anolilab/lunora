@@ -5,6 +5,7 @@ import { join } from "node:path";
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+import { MINTABLE_SECRET_KEYS } from "../src/package-secrets-registry";
 import type { ScaffoldPlan } from "../src/scaffold-dev-variables";
 import {
     ensureDevVariables,
@@ -777,5 +778,18 @@ describe("fillDevSecrets", () => {
         expect(second.status).toBe("unchanged");
         // The second run must not regenerate (and so must not change) the values.
         expect(readFileSync(join(dir, ".dev.vars"), "utf8")).toBe(afterFirst);
+    });
+});
+
+describe("the secret-value key is never minted", () => {
+    it("leaves its base64 placeholder in place, because hex would decode to the wrong length", () => {
+        expect.assertions(3);
+
+        const existing = 'LUNORA_SECRET_VALUE_KEY="<your-base64-32-byte-key>"\n';
+        const plan = planDevSecretsFill({ existingContent: existing, randomHex: () => "f".repeat(64) });
+
+        expect(MINTABLE_SECRET_KEYS.has("LUNORA_SECRET_VALUE_KEY")).toBe(false);
+        expect(plan.filledKeys).not.toContain("LUNORA_SECRET_VALUE_KEY");
+        expect(plan.content).toContain('LUNORA_SECRET_VALUE_KEY="<your-base64-32-byte-key>"');
     });
 });
