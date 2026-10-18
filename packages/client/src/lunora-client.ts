@@ -140,7 +140,7 @@ import {
     unreadableSlotError,
     utf8ByteLength,
 } from "./replay";
-import withinRpcDeadline from "./rpc-deadline";
+import { raceAbort, withinRpcDeadline } from "./rpc-deadline";
 import type { PokeBuffer, ShapeCallback, ShapeSubscriptionState } from "./shape-state";
 import { commitPokeSlice, emitShapeRows, failUndecodableShapes, PokeAssembler } from "./shape-state";
 import createSnapshotPrecondition from "./snapshot-precondition";
@@ -333,6 +333,14 @@ interface MutationSettledEvent {
 interface ActionCallOptions {
     /** Route the call to a specific shard. */
     shardKey?: string;
+
+    /**
+     * Abort the call. The request is cancelled and the promise rejects with the
+     * signal's reason (an `AbortError` by default). The server may already have
+     * started — or finished — the action, which is not transactional, so an abort
+     * releases the caller; it does not undo the work.
+     */
+    signal?: AbortSignal;
 }
 
 /**
@@ -422,6 +430,15 @@ interface MutationCallOptions<TCurrent = unknown, TValue = unknown, TArgs = unkn
      */
     replayCredential?: ReplayCredential;
     shardKey?: string;
+
+    /**
+     * Stop waiting for the mutation. The promise rejects with the signal's reason
+     * (an `AbortError` by default), and nothing is sent when the signal is already
+     * aborted. A write already on the wire or in the offline queue is NOT
+     * retracted: it still commits or replays on its own, and its optimistic patch
+     * is settled by that outcome — an abort releases the caller, not the write.
+     */
+    signal?: AbortSignal;
 }
 
 declare const replayCredentialBrand: unique symbol;
@@ -2562,8 +2579,8 @@ class LunoraClient {
      * (enabled) render of a live query behind hydration, so the user sees
      * cached data instead of an undefined flash before the socket round-trip.
      */
-    public whenReady(): Promise<void> {
-        return this.readyPromise;
+    public async whenReady(options: { signal?: AbortSignal } = {}): Promise<void> {
+        return raceAbort(this.readyPromise, options.signal);
     }
 
     /**
@@ -2637,10 +2654,17 @@ class LunoraClient {
 
     // --- RPC ---------------------------------------------------------------
 
-    public async query<F extends FunctionReference>(function_: F, args: ArgsOf<F>, options: { shardKey?: string } = {}): Promise<ReturnOf<F>> {
+    public async query<F extends FunctionReference>(
+        function_: F,
+        args: ArgsOf<F>,
+        options: { shardKey?: string; signal?: AbortSignal } = {},
+    ): Promise<ReturnOf<F>> {
         this.assertOpen();
 
-        return (await this.rpc(function_.__lunoraRef, args as Record<string, unknown>, options.shardKey, { attachBookmark: true })) as ReturnOf<F>;
+        return (await this.rpc(function_.__lunoraRef, args as Record<string, unknown>, options.shardKey, {
+            attachBookmark: true,
+            signal: options.signal,
+        })) as ReturnOf<F>;
     }
 
     /**
@@ -2695,7 +2719,10 @@ class LunoraClient {
         args: ArgsOf<F>,
         options: MutationCallOptions<unknown, unknown, ArgsOf<F>> = {},
     ): Promise<ReturnOf<F>> {
-        const { value } = await this.runMutation(function_, args, options);
+        // Checked before anything starts: an aborted call applies no optimistic patch and sends nothing.
+        options.signal?.throwIfAborted();
+
+        const { value } = await raceAbort(this.runMutation(function_, args, options), options.signal);
 
         return value;
     }
@@ -2727,6 +2754,7 @@ class LunoraClient {
         return (await this.rpc(function_.__lunoraRef, args as Record<string, unknown>, options.shardKey, {
             attachBookmark: true,
             captureBookmark: true,
+            signal: options.signal,
             unbounded: true,
         })) as ReturnOf<F>;
     }
@@ -3660,9 +3688,14 @@ class LunoraClient {
         function_: F,
         args: ArgsOf<F>,
         callback: (data: ReturnOf<F>) => void,
-        options: { onCheckpoint?: (watermark: SyncWatermark) => void; onError?: SubscriptionErrorCallback; shardKey?: string } = {},
+        options: { onCheckpoint?: (watermark: SyncWatermark) => void; onError?: SubscriptionErrorCallback; shardKey?: string; signal?: AbortSignal } = {},
     ): Unsubscribe {
         this.assertOpen();
+
+        // Aborted before it started: nothing is registered.
+        if (options.signal?.aborted) {
+            return () => undefined;
+        }
 
         // NOT guarded by `assertLeaderOwnedSurface`, unlike the other
         // socket-backed surfaces: a follower's `subscribe` is exactly how the
@@ -3749,8 +3782,16 @@ class LunoraClient {
         this.sendSubscribeIfOpen(state);
 
         const subscriptionState = state;
+        let unsubscribed = false;
 
-        return () => {
+        const unsubscribe = (): void => {
+            // Once: the signal and a hand-called unsubscribe must not both tear the registration down.
+            if (unsubscribed) {
+                return;
+            }
+
+            unsubscribed = true;
+            options.signal?.removeEventListener("abort", unsubscribe);
             subscriptionState.callbacks.delete(subscriptionCallback);
 
             if (errorCallback) {
@@ -3768,6 +3809,10 @@ class LunoraClient {
                 this.releaseIdleShard(subscriptionState.shardKey);
             }
         };
+
+        options.signal?.addEventListener("abort", unsubscribe, { once: true });
+
+        return unsubscribe;
     }
 
     /**
@@ -6095,6 +6140,8 @@ class LunoraClient {
             onCommitCursor?: (commitCursor: number | undefined) => void;
             /** Invoked on a successful response with the server's echoed custom-mutator watermark (if any). */
             onMutationAck?: (lastMutationId: number | undefined) => void;
+            /** Cancels the request when it aborts; see `ActionCallOptions.signal`. */
+            signal?: AbortSignal;
             /** Exempts the call from {@link LunoraClientOptions.rpcTimeoutMs} (an action may legitimately run long). */
             unbounded?: boolean;
         } = {},
@@ -6113,7 +6160,7 @@ class LunoraClient {
         // response holds the shard's whole write chain just as a stalled connect does.
         const { body, readable, response } = await withinRpcDeadline<{ body: RpcEnvelopeBody; readable: boolean; response: Response }>(
             flags.unbounded ? 0 : this.rpcTimeoutMs,
-            undefined,
+            flags.signal,
             async (signal) => {
                 // `encodeWire` tags leaves plain JSON can't carry (`bigint`,
                 // `ArrayBuffer`/typed arrays, `NaN`/±Infinity); a pure-JSON `args`

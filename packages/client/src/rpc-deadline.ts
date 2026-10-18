@@ -68,4 +68,40 @@ const withinRpcDeadline = async <T>(timeoutMs: number, signal: AbortSignal | und
     }
 };
 
-export default withinRpcDeadline;
+/**
+ * Settle with `promise`, or reject with the signal's reason the moment `signal`
+ * aborts — whichever comes first. This releases a CALLER, not the work: whatever
+ * `promise` stands for keeps running and settles on its own. That is the
+ * contract for a write, which may already be on the wire or in the queue and is
+ * never retracted by an abort.
+ */
+const raceAbort = async <T>(promise: Promise<T>, signal: AbortSignal | undefined): Promise<T> => {
+    if (signal === undefined) {
+        return promise;
+    }
+
+    if (signal.aborted) {
+        // The work was already started by the caller; its eventual rejection is not ours to surface.
+        promise.catch(() => undefined);
+
+        throw abortReason(signal);
+    }
+
+    let onAbort: () => void = () => undefined;
+    const aborted = new Promise<never>((_resolve, reject) => {
+        onAbort = (): void => {
+            reject(abortReason(signal));
+        };
+        signal.addEventListener("abort", onAbort, { once: true });
+    });
+
+    promise.catch(() => undefined);
+
+    try {
+        return await Promise.race([promise, aborted]);
+    } finally {
+        signal.removeEventListener("abort", onAbort);
+    }
+};
+
+export { raceAbort, withinRpcDeadline };
