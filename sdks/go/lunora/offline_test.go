@@ -1656,3 +1656,94 @@ func TestBatchEntryCapMatchesProtocol(t *testing.T) {
 		t.Fatalf("MaxBatchEntries = %d, want %d", MaxBatchEntries, int(want))
 	}
 }
+
+// An online-only write is never queued, persisted or replayed. The secret stands
+// in for a credential: nothing that reaches the persistence adapter may hold it.
+const onlineOnlySecret = "sentinel-secret-7731"
+
+func onlineOnlyClient(store *memoryStore, bodies *[][]byte) *Client {
+	client := NewClient("https://app.example", func(_ string, _ map[string]string, body []byte) (int, []byte, error) {
+		*bodies = append(*bodies, body)
+
+		return 200, []byte(`{"commitCursor":3,"result":{"ok":true}}`), nil
+	})
+	client.SetOfflineQueue(NewOfflineQueue(OfflineQueueOptions{Persistence: store, QueueBeforeFirstConnect: true}))
+
+	return client
+}
+
+func TestOnlineOnlyWriteIsRefusedWhenDisconnectedAndNeverPersisted(t *testing.T) {
+	covers("offline_online_only_refused_when_disconnected")
+
+	store := &memoryStore{}
+
+	var bodies [][]byte
+
+	client := onlineOnlyClient(store, &bodies)
+
+	_, err := client.Submit(SubmitOptions{Args: map[string]any{"token": onlineOnlySecret}, FunctionPath: "auth:setPassword", OnlineOnly: true})
+
+	var refused OfflineError
+	if !errors.As(err, &refused) || refused.Code != CodeOfflineNotQueued {
+		t.Fatalf("err: got %v, want code %s", err, CodeOfflineNotQueued)
+	}
+
+	if client.PendingMutationCount() != 0 || len(store.appended) != 0 {
+		t.Fatalf("pending=%d appended=%d, want 0 and 0", client.PendingMutationCount(), len(store.appended))
+	}
+
+	if payload, _ := json.Marshal(store.records); strings.Contains(string(payload), onlineOnlySecret) {
+		t.Fatalf("persistence holds the arguments: %s", payload)
+	}
+
+	if len(bodies) != 0 {
+		t.Fatalf("a refused write reached the wire: %d requests", len(bodies))
+	}
+}
+
+func TestOnlineOnlyWriteIsSentWhenConnected(t *testing.T) {
+	covers("offline_online_only_sends_when_connected")
+
+	store := &memoryStore{}
+
+	var bodies [][]byte
+
+	client := onlineOnlyClient(store, &bodies)
+	client.AttachSocket(func(map[string]any) error { return nil })
+
+	outcome, err := client.Submit(SubmitOptions{Args: map[string]any{"token": onlineOnlySecret}, FunctionPath: "auth:setPassword", OnlineOnly: true})
+	if err != nil {
+		t.Fatalf("submit: %v", err)
+	}
+
+	if outcome.Status != MutationCommitted || len(bodies) != 1 || !strings.Contains(string(bodies[0]), onlineOnlySecret) {
+		t.Fatalf("status=%s requests=%d, want committed with the args on the wire", outcome.Status, len(bodies))
+	}
+
+	if len(store.appended) != 0 {
+		t.Fatalf("a sent write was persisted: %d records", len(store.appended))
+	}
+}
+
+func TestANormalWriteStillQueuesWhenDisconnected(t *testing.T) {
+	covers("offline_online_only_leaves_normal_writes_queued")
+
+	store := &memoryStore{}
+
+	var bodies [][]byte
+
+	client := onlineOnlyClient(store, &bodies)
+
+	outcome, err := client.Submit(SubmitOptions{Args: map[string]any{"text": "hi"}, FunctionPath: "messages:send"})
+	if err != nil {
+		t.Fatalf("submit: %v", err)
+	}
+
+	if outcome.Status != MutationQueued || client.PendingMutationCount() != 1 || len(store.appended) != 1 {
+		t.Fatalf("status=%s pending=%d appended=%d, want queued, 1 and 1", outcome.Status, client.PendingMutationCount(), len(store.appended))
+	}
+
+	if len(bodies) != 0 {
+		t.Fatalf("a queued write reached the wire: %d requests", len(bodies))
+	}
+}
