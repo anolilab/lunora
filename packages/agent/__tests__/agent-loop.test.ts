@@ -68,6 +68,23 @@ class DurableStepJournal {
 
     private readonly resolvedWaits = new Map<string, { payload: unknown }>();
 
+    private readonly armObservers = new Set<() => void>();
+
+    /** Resolves once the run has parked on the wait `name` for the `times`th time. */
+    public armed(name: string, times = 1): Promise<void> {
+        return new Promise<void>((resolve) => {
+            const observe = (): void => {
+                if (this.waitedNames.filter((waited) => waited === name).length >= times) {
+                    this.armObservers.delete(observe);
+                    resolve();
+                }
+            };
+
+            this.armObservers.add(observe);
+            observe();
+        });
+    }
+
     /** Record a completed step as a PREVIOUS deploy would have written it, so a replay reads that shape back. */
     public seed(name: string, output: unknown): void {
         this.entries.set(name, { output });
@@ -116,6 +133,10 @@ class DurableStepJournal {
 
         this.waitedNames.push(name);
 
+        for (const observe of this.armObservers) {
+            observe();
+        }
+
         // Hibernate: this invocation never gets past here (see the doc above).
         return new Promise<{ payload: T; type: string }>(() => {});
     }
@@ -129,6 +150,21 @@ const flushMicrotasks = async (): Promise<void> => {
     await new Promise((resolve) => {
         setTimeout(resolve, 0);
     });
+};
+
+/**
+ * Wait until a run that is expected to park on the wait `name` (its `times`th
+ * park) has done so. A run that is meant to hibernate never settles, so it is
+ * left pending; if it settles or rejects first, that outcome is the failure and
+ * is raised here instead of leaving the caller's assertions to pass vacuously.
+ */
+const parkedOn = async (run: Promise<unknown>, journal: DurableStepJournal, name: string, times = 1): Promise<void> => {
+    await Promise.race([
+        journal.armed(name, times),
+        run.then(() => {
+            throw new Error(`run settled before parking on ${name}`);
+        }),
+    ]);
 };
 
 /**
@@ -2182,8 +2218,9 @@ describe("thread-scoped approval grants", () => {
         const first = new DurableStepJournal();
         const pausedGenerate = scriptedGenerate([toolTurn("call_1", "charge", {}, "charging…"), finalTurn("done")]);
 
-        runAgentLoop(loopDefaults(agent, { generate: pausedGenerate, run: runtime.run, step: first })).catch(() => {});
-        await flushMicrotasks();
+        const paused = runAgentLoop(loopDefaults(agent, { generate: pausedGenerate, run: runtime.run, step: first }));
+
+        await parkedOn(paused, first, "approval:call_1");
 
         runtime.grants.add("thread-1:charge");
         first.events.set("approval:call_1", { decision: "approve", scope: "thread" });
@@ -2245,8 +2282,9 @@ describe("thread-scoped approval grants", () => {
         const journal = new DurableStepJournal();
         const generate = scriptedGenerate([toolTurn("call_1", "charge", {}, "charging…"), finalTurn("done")]);
 
-        runAgentLoop(loopDefaults(agent, { generate, run: runtime.run, step: journal })).catch(() => {});
-        await flushMicrotasks();
+        const paused = runAgentLoop(loopDefaults(agent, { generate, run: runtime.run, step: journal }));
+
+        await parkedOn(paused, journal, "approval:call_1");
 
         expect(journal.waitedNames).toStrictEqual(["approval:call_1"]);
 
@@ -2254,8 +2292,9 @@ describe("thread-scoped approval grants", () => {
         runtime.grants.add("thread-1:charge");
 
         // Replaying the paused instance still hibernates on its own approval.
-        runAgentLoop(loopDefaults(agent, { generate, run: runtime.run, step: journal })).catch(() => {});
-        await flushMicrotasks();
+        const replay = runAgentLoop(loopDefaults(agent, { generate, run: runtime.run, step: journal }));
+
+        await parkedOn(replay, journal, "approval:call_1", 2);
 
         expect(runs.count).toBe(0);
         expect(journal.waitedNames).toStrictEqual(["approval:call_1", "approval:call_1"]);
@@ -2279,15 +2318,16 @@ describe("thread-scoped approval grants", () => {
         // The next call is gated again: it pauses rather than running.
         const gated = new DurableStepJournal();
 
-        runAgentLoop(
+        const gatedRun = runAgentLoop(
             loopDefaults(agent, {
                 generate: scriptedGenerate([toolTurn("call_2", "charge", {}), finalTurn("done")]),
                 instanceId: "wf-2",
                 run: runtime.run,
                 step: gated,
             }),
-        ).catch(() => {});
-        await flushMicrotasks();
+        );
+
+        await parkedOn(gatedRun, gated, "approval:call_2");
 
         expect(gated.waitedNames).toStrictEqual(["approval:call_2"]);
         expect(runs.count).toBe(1);
