@@ -215,6 +215,58 @@ const createAgentGenerate = (agent: AgentDefinition, env: Record<string, unknown
 };
 
 /**
+ * The error an in-band `error` stream part fails the turn with. An `Error` is
+ * rethrown as-is, exactly as a rejected stream would be; any other carried value
+ * is wrapped so the durable step still fails with an `Error` that keeps the
+ * original as its `cause`.
+ */
+const toStreamError = (error: unknown): Error => {
+    if (error instanceof Error) {
+        return error;
+    }
+
+    return new Error(`model stream failed: ${String(error)}`, { cause: error });
+};
+
+/**
+ * Wrap the turn's model so a provider stream that closes without its `finish`
+ * part fails in-band. The AI SDK keeps the partial output of such a stream and
+ * reports it as a finished turn (`finishReason: "other"`) — the same shape a
+ * provider that legitimately ends with `other` produces, so only the provider
+ * stream itself tells the two apart.
+ */
+const failUnfinishedStream = (ai: AiModule, model: Exclude<LanguageModel, string>) =>
+    ai.wrapLanguageModel({
+        middleware: {
+            wrapStream: async ({ doStream }) => {
+                const { stream, ...rest } = await doStream();
+                let finished = false;
+
+                return {
+                    ...rest,
+                    stream: stream.pipeThrough(
+                        new TransformStream({
+                            flush: (controller) => {
+                                if (!finished) {
+                                    controller.enqueue({ error: new Error("model stream ended without a finish part"), type: "error" });
+                                }
+                            },
+                            transform: (part, controller) => {
+                                if (part.type === "finish") {
+                                    finished = true;
+                                }
+
+                                controller.enqueue(part);
+                            },
+                        }),
+                    ),
+                };
+            },
+        },
+        model,
+    });
+
+/**
  * The streaming counterpart of {@link createAgentGenerate} over AI SDK
  * `streamText`. It tees each text delta to `onDelta` as the model produces it,
  * then resolves the SAME {@link AgentGenerate} result the non-streaming seam
@@ -233,17 +285,28 @@ const createStreamGenerate = (agent: AgentDefinition, env: Record<string, unknow
 
     return async (options, onDelta) => {
         const { ai, base } = await getBase();
-        const result = ai.streamText(buildTurnRequest(base, options));
+        const request = buildTurnRequest(base, options);
+        // `resolveAgentModel` always yields a model object; the string arm only narrows the AI SDK union.
+        const model = typeof request.model === "string" ? request.model : failUnfinishedStream(ai, request.model);
+        const result = ai.streamText({ ...request, model });
 
-        // Drain the delta stream first, teeing each chunk to the live sink. This
+        // Drain the full part stream, teeing each text delta to the live sink. This
         // both feeds the live channel and drives the call to completion, so the
-        // settled promises below resolve to the final turn.
+        // settled promises below resolve to the final turn. `textStream` is not
+        // used: it drops `error` parts, so a provider error that arrives in-band
+        // after text would resolve as a successful, truncated turn.
         let streamed = "";
 
         try {
-            for await (const delta of result.textStream) {
-                streamed += delta;
-                onDelta(delta);
+            for await (const part of result.stream) {
+                if (part.type === "error") {
+                    throw toStreamError(part.error);
+                }
+
+                if (part.type === "text-delta") {
+                    streamed += part.text;
+                    onDelta(part.text);
+                }
             }
         } catch (error) {
             // Any failure that is not a barge-in abort is re-thrown below.

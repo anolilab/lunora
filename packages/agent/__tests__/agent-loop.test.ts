@@ -5,7 +5,7 @@ import { describe, expect, it, vi } from "vitest";
 
 import { runAgentLoop } from "../src/agent-loop";
 import { defineAgent, defineAgentTool } from "../src/define-agent";
-import { createAgentGenerate } from "../src/generate";
+import { createAgentGenerate, createStreamGenerate } from "../src/generate";
 import { DEFAULT_AGENT_FUNCTION_PATHS } from "../src/paths";
 import { MAX_TOOL_OUTPUT_CHARS } from "../src/tool-output";
 import type {
@@ -18,6 +18,7 @@ import type {
     AgentLiveEvent,
     AgentRunFunction,
     AgentStepFinishInfo,
+    AgentStepLike,
     AgentStreamGenerate,
     AgentTokenDelta,
     AgentTokenSink,
@@ -2143,5 +2144,107 @@ describe("thread-scoped approval grants", () => {
 
         expect(gated.waitedNames).toStrictEqual(["approval:call_2"]);
         expect(runs.count).toBe(1);
+    });
+});
+
+/** One provider stream part as a model's `doStream` emits it. */
+type ModelStreamPart = Awaited<ReturnType<InstanceType<typeof MockLanguageModelV4>["doStream"]>>["stream"] extends ReadableStream<infer Part> ? Part : never;
+
+/** The provider's closing `finish` part, with a fixed usage. */
+const stopPart = (): ModelStreamPart => {
+    return {
+        finishReason: { raw: "stop", unified: "stop" },
+        type: "finish",
+        usage: {
+            inputTokens: { cacheRead: undefined, cacheWrite: undefined, noCache: 1, total: 1 },
+            outputTokens: { reasoning: undefined, text: 1, total: 1 },
+        },
+    };
+};
+
+/** A mock model whose successive `doStream` calls each play one array of provider parts. */
+const streamingModel = (turns: ReadonlyArray<ReadonlyArray<ModelStreamPart>>): MockLanguageModelV4 => {
+    const remaining = [...turns];
+
+    return new MockLanguageModelV4({
+        doStream: () => {
+            const parts = remaining.shift() ?? [];
+
+            return Promise.resolve({
+                stream: new ReadableStream<ModelStreamPart>({
+                    start: (controller) => {
+                        for (const part of parts) {
+                            controller.enqueue(part);
+                        }
+
+                        controller.close();
+                    },
+                }),
+            });
+        },
+    });
+};
+
+/** Retry each durable step up to `attempts` times, as the workflow host does for a thrown step. */
+const retryingStep = (journal: DurableStepJournal, attempts: number): AgentStepLike => {
+    const attempt = async <T>(name: string, callback: () => Promise<T>, left: number): Promise<T> => {
+        try {
+            return await journal.do(name, callback);
+        } catch (error) {
+            if (left <= 1) {
+                throw error;
+            }
+
+            return attempt(name, callback, left - 1);
+        }
+    };
+
+    return {
+        do: <T>(name: string, callback: () => Promise<T>): Promise<T> => attempt(name, callback, attempts),
+        waitForEvent: (name, options) => journal.waitForEvent(name, options),
+    };
+};
+
+describe("a turn whose stream fails in-band and is retried", () => {
+    it("persists only the retried answer and never the failed attempt's prefix", async () => {
+        expect.hasAssertions();
+
+        const model = streamingModel([
+            [
+                { id: "t0", type: "text-start" },
+                { delta: "Partial ", id: "t0", type: "text-delta" },
+                { error: new Error("upstream reset"), type: "error" },
+                stopPart(),
+            ],
+            [{ id: "t1", type: "text-start" }, { delta: "Retried answer.", id: "t1", type: "text-delta" }, { id: "t1", type: "text-end" }, stopPart()],
+        ]);
+        const agent = defineAgent({ model: "test-model" });
+        const runtime = memoryRuntime();
+        const journal = new DurableStepJournal();
+
+        const deltas: AgentTokenDelta[] = [];
+        const result = await runAgentLoop(
+            loopDefaults(agent, {
+                onTokenDelta: captureTokenDeltas(deltas),
+                run: runtime.run,
+                step: retryingStep(journal, 2),
+                streamGenerate: createStreamGenerate({ ...agent, model }, {}),
+            }),
+        );
+
+        expect(result).toStrictEqual({
+            stopped: "final",
+            text: "Retried answer.",
+            turns: 1,
+            usage: { inputTokens: 1, outputTokens: 1, totalTokens: 2 },
+        });
+
+        // The failed attempt was not memoised: the turn's body ran twice.
+        expect(journal.invoked.filter((name) => name === "llm:turn:0")).toHaveLength(2);
+        expect(model.doStreamCalls).toHaveLength(2);
+
+        const assistant = [...runtime.messages.values()].filter((message) => message.role === "assistant");
+
+        expect(assistant.map((message) => message.content)).toStrictEqual(["Retried answer."]);
     });
 });

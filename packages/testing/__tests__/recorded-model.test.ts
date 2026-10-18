@@ -144,6 +144,130 @@ describe("recordedModel through the production streaming seam", () => {
         expect(harness.thread("t1")?.error).toContain("upstream reset");
     });
 
+    it("fails the turn on an in-band error part after partial text and persists none of the attempt", async () => {
+        expect.hasAssertions();
+
+        const agent = defineAgent({ model: "test-model" });
+        // The provider reports the failure as a stream part, not a rejected stream,
+        // and still closes the turn with a finish part.
+        const model = recordedModel([
+            {
+                parts: [
+                    { id: "t0", type: "text-start" },
+                    { delta: "Partial ", id: "t0", type: "text-delta" },
+                    { error: new Error("upstream reset"), type: "error" },
+                    stop(),
+                ],
+            },
+        ]);
+
+        const deltas: string[] = [];
+        const harness = agentHarness(agent, {});
+
+        await expect(
+            harness.run(
+                { input: "hello", threadKey: "t1" },
+                {
+                    model,
+                    onTokenDelta: (delta) => {
+                        deltas.push(delta.text);
+                    },
+                },
+            ),
+        ).rejects.toThrow("upstream reset");
+
+        // The thread records the failure, and the truncated prefix is not an answer.
+        expect(deltas).toStrictEqual(["Partial "]);
+        expect(harness.thread("t1")?.status).toBe("error");
+        expect(harness.messages("t1").map((message) => message.role)).toStrictEqual(["user"]);
+    });
+
+    it("fails the turn on an in-band error part that arrives before any text", async () => {
+        expect.hasAssertions();
+
+        const agent = defineAgent({ model: "test-model" });
+        const model = recordedModel([{ parts: [{ error: new Error("rate limited"), type: "error" }, stop()] }]);
+        const harness = agentHarness(agent, {});
+
+        await expect(harness.run({ input: "hello", threadKey: "t1" }, { model })).rejects.toThrow("rate limited");
+
+        expect(harness.thread("t1")?.status).toBe("error");
+        expect(harness.messages("t1").map((message) => message.role)).toStrictEqual(["user"]);
+    });
+
+    it("normalises a non-Error in-band error value into an Error that carries it as cause", async () => {
+        expect.hasAssertions();
+
+        const agent = defineAgent({ model: "test-model" });
+        const model = recordedModel([
+            {
+                parts: [
+                    { id: "t0", type: "text-start" },
+                    { delta: "Partial ", id: "t0", type: "text-delta" },
+                    { error: "upstream said no", type: "error" },
+                    stop(),
+                ],
+            },
+        ]);
+        const harness = agentHarness(agent, {});
+
+        const failure = await harness.run({ input: "hello", threadKey: "t1" }, { model }).then(
+            () => undefined,
+            (error: unknown) => error,
+        );
+
+        expect(failure).toBeInstanceOf(Error);
+        expect((failure as Error).message).toContain("upstream said no");
+        expect((failure as Error).cause).toBe("upstream said no");
+        expect(harness.messages("t1").map((message) => message.role)).toStrictEqual(["user"]);
+    });
+
+    it("fails the turn when the stream ends after partial text without a finish part", async () => {
+        expect.hasAssertions();
+
+        const agent = defineAgent({ model: "test-model" });
+        // The connection closes cleanly mid-answer: no error part, no finish part.
+        const model = recordedModel([
+            {
+                parts: [
+                    { id: "t0", type: "text-start" },
+                    { delta: "Partial ", id: "t0", type: "text-delta" },
+                    { id: "t0", type: "text-end" },
+                ],
+            },
+        ]);
+        const harness = agentHarness(agent, {});
+
+        await expect(harness.run({ input: "hello", threadKey: "t1" }, { model })).rejects.toThrow("model stream ended without a finish part");
+
+        expect(harness.thread("t1")?.status).toBe("error");
+        expect(harness.messages("t1").map((message) => message.role)).toStrictEqual(["user"]);
+    });
+
+    it("keeps a provider's own `other` finish, with no raw reason, as a successful turn", async () => {
+        expect.hasAssertions();
+
+        const agent = defineAgent({ model: "test-model" });
+        // The provider sends a finish part, but with an `other` reason and no raw
+        // reason: the SDK reports the same `other` for an unfinished stream, so the
+        // guard must key on the finish part itself, not the reason.
+        const model = recordedModel([
+            {
+                parts: [
+                    { id: "t0", type: "text-start" },
+                    { delta: "Done.", id: "t0", type: "text-delta" },
+                    { id: "t0", type: "text-end" },
+                    { finishReason: { raw: undefined, unified: "other" }, type: "finish", usage: usage(2, 1) },
+                ],
+            },
+        ]);
+        const harness = agentHarness(agent, {});
+        const result = await harness.run({ input: "hello", threadKey: "t1" }, { model });
+
+        expect(result).toMatchObject({ stopped: "final", text: "Done." });
+        expect(harness.messages("t1").map((message) => message.content)).toStrictEqual(["hello", "Done."]);
+    });
+
     it("picks up usage that arrives only on the finish part", async () => {
         expect.hasAssertions();
 
