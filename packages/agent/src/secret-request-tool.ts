@@ -69,6 +69,29 @@ const requestSecretTool = (options: { description: string }): AgentToolDefinitio
 };
 
 /**
+ * Whether a value's serialized form carries the secret, including the JSON-escaped
+ * spelling of it (a quote or backslash in the secret is escaped inside a string).
+ * A value that cannot be serialized cannot be persisted as a step output either,
+ * so it is not treated as a leak.
+ */
+const containsSecret = (value: unknown, secret: string): boolean => {
+    // These have no JSON form at all, so they cannot be journalled as a step output either.
+    if (secret.length === 0 || value === undefined || typeof value === "function" || typeof value === "symbol") {
+        return false;
+    }
+
+    let serialized: string;
+
+    try {
+        serialized = JSON.stringify(value);
+    } catch {
+        return false;
+    }
+
+    return serialized.includes(secret) || serialized.includes(JSON.stringify(secret).slice(1, -1));
+};
+
+/**
  * Read a human-supplied secret inside a tool step, hand it to `use`, and return
  * only what `use` returns. The value never leaves the callback: it is not a step
  * output, not a tool result and not a message. The read is its own durable step
@@ -78,8 +101,9 @@ const requestSecretTool = (options: { description: string }): AgentToolDefinitio
  * Call it from inside a tool's `execute`. The discard runs as a separate durable
  * step after `use` succeeds. If `use` keeps failing, the value stays until its TTL
  * expires, which is the backstop for a crash between the take and the discard.
- * `use` must not return, log, or throw the value; `traceToolExecution` records the
- * tool's input and output.
+ * `use` must not log or throw the value, and a result that carries it is refused
+ * (the call fails with `LunoraError`) rather than journalled; `traceToolExecution`
+ * records the tool's input and output.
  * @throws {SecretUnavailableError} when the ref is expired, unknown, already bound to another call, or from another thread
  * @experimental
  */
@@ -95,7 +119,16 @@ const withSecret = async <Result>(context: AgentToolContext, secretRef: string, 
             return { unavailable: true } as const;
         }
 
-        return { result: await use(secret) } as const;
+        const result = await use(secret);
+
+        // The step's return value is what the durable journal keeps. A callback that
+        // returns the credential (an echoed token, a signed header) would write it
+        // there, so the result is withheld and the call fails instead.
+        if (containsSecret(result, secret)) {
+            return { leaked: true } as const;
+        }
+
+        return { result } as const;
     });
 
     await context.step.do(`secret:discard:${context.idempotencyKey}:${secretRef}`, async () => {
@@ -104,6 +137,10 @@ const withSecret = async <Result>(context: AgentToolContext, secretRef: string, 
 
     if ("unavailable" in consumed) {
         throw new SecretUnavailableError();
+    }
+
+    if ("leaked" in consumed) {
+        throw new LunoraError("INTERNAL", "@lunora/agent: withSecret's callback returned the secret, so its result was not recorded");
     }
 
     return consumed.result;

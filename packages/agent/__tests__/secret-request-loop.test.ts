@@ -365,6 +365,39 @@ describe("withSecret — the consuming step", () => {
     });
 });
 
+describe("withSecret — a result that carries the secret", () => {
+    it("refuses to journal a callback result that echoes the secret, and fails the call", async () => {
+        expect.assertions(2);
+
+        const { host, take, discard } = secretHost();
+        const ref = await host.secretValues.put(SECRET, { scope: "thread-1", ttlMs: 60_000 });
+        const journalled: unknown[] = [];
+        const step = {
+            do: async (_name: string, callback: () => Promise<unknown>) => {
+                const output = await callback();
+
+                journalled.push(output);
+
+                return output;
+            },
+        };
+        const context = {
+            idempotencyKey: "tool:echo:call_1",
+            run: (reference: { __lunoraRef: string }, args?: Record<string, unknown>) =>
+                Promise.resolve(reference["__lunoraRef"] === "agents:agentTakeSecret" ? take(args) : discard(args)),
+            step,
+            threadKey: "thread-1",
+        } as unknown as AgentToolContext;
+
+        await expect(
+            withSecret(context, ref, (secret) => {
+                return { header: `Bearer ${secret}` };
+            }),
+        ).rejects.toThrow("withSecret's callback returned the secret");
+        expect(JSON.stringify(journalled)).not.toContain(SECRET);
+    });
+});
+
 describe("withSecret — two secrets in one call", () => {
     it("runs each callback with its own value, because each ref names its own durable step", async () => {
         expect.assertions(2);
