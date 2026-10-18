@@ -1,4 +1,6 @@
+import { once } from "node:events";
 import { OutgoingMessage } from "node:http";
+import type { Socket } from "node:net";
 import { connect } from "node:net";
 
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -206,6 +208,112 @@ describe("createNodeHttpServer", () => {
 
         expect(response.status).toBe(413);
         await expect(response.text()).resolves.toBe("too large");
+    });
+
+    describe("a body refused over its cap", () => {
+        /** Reads a streamed body up to a 64 KiB cap, then cancels it and answers 413, as the worker's body readers do. */
+        const rejectOverCap = async (incoming: Request): Promise<Response> => {
+            const reader = incoming.body?.getReader();
+            let total = 0;
+
+            while (reader) {
+                // eslint-disable-next-line no-await-in-loop -- sequential by design, each chunk counts toward the cap
+                const { done, value } = await reader.read();
+
+                if (done) {
+                    break;
+                }
+
+                total += value.byteLength;
+
+                if (total > 65_536) {
+                    // eslint-disable-next-line no-await-in-loop -- one-shot cleanup before answering
+                    await reader.cancel();
+
+                    return new Response("too large", { status: 413 });
+                }
+            }
+
+            return new Response("ok");
+        };
+
+        /** A raw connection that sends a request declaring a 1 GB body, so the upload can be left open for as long as the test needs. */
+        const openUpload = async (server: NodeHttpServer): Promise<{ received: () => string; socket: Socket }> => {
+            const socket = connect({ host: "127.0.0.1", port: Number(new URL(server.origin).port) });
+            let received = "";
+
+            socket.on("data", (data: Buffer) => {
+                received += data.toString();
+            });
+            socket.on("error", () => undefined);
+            await once(socket, "connect");
+            socket.write("POST / HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Length: 1000000000\r\n\r\n");
+
+            return { received: () => received, socket };
+        };
+
+        /** Resolves once the chunk is flushed, or at once if the socket was destroyed first: the write callback fires either way. */
+        const writeChunk = (socket: Socket, chunk: Buffer): Promise<void> =>
+            new Promise<void>((resolve) => {
+                socket.write(chunk, () => {
+                    resolve();
+                });
+            });
+
+        it("cuts off a never-ending upload after the byte ceiling, once the 413 is out", async () => {
+            expect.hasAssertions();
+
+            const server = await listen(rejectOverCap);
+            const { received, socket } = await openUpload(server);
+            let open = true;
+
+            socket.once("close", () => {
+                open = false;
+            });
+
+            // A client that never stops uploading. The loop is bounded so a server that never cuts it off fails rather than hangs.
+            const chunk = Buffer.alloc(65_536);
+
+            for (let sent = 0; open && sent < 512; sent += 1) {
+                // eslint-disable-next-line no-await-in-loop -- each chunk is written after the previous one is flushed
+                await writeChunk(socket, chunk);
+            }
+
+            await vi.waitFor(() => {
+                expect(open).toBe(false);
+            });
+
+            expect(received()).toContain("413");
+        });
+
+        it("cuts off a stalled upload after the time ceiling, once the 413 is out", async () => {
+            expect.hasAssertions();
+
+            vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+
+            try {
+                const server = await listen(rejectOverCap);
+                const { received, socket } = await openUpload(server);
+                let open = true;
+
+                socket.once("close", () => {
+                    open = false;
+                });
+
+                // Enough to pass the cap, then nothing more: the body never ends and never reaches the byte ceiling.
+                await writeChunk(socket, Buffer.alloc(131_072));
+                await vi.waitFor(() => {
+                    expect(received()).toContain("413");
+                });
+
+                await vi.advanceTimersByTimeAsync(60_000);
+                await vi.waitFor(() => {
+                    expect(open).toBe(false);
+                });
+            } finally {
+                vi.useRealTimers();
+            }
+        });
     });
 
     it("brackets an IPv6 host so the origin is a valid URL", async () => {

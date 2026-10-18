@@ -31,6 +31,13 @@ const publicOrigin = (value: string): string => {
 
 const LOOPBACK_HOST = /^(?:127\.\d+\.\d+\.\d+|::1|localhost)$/;
 
+// ponytail: how much of a refused body is read past the cancel before its socket is destroyed. A ceiling, not a guess at a client's size:
+// raise it if a legitimate client needs more of its body read to receive the 413.
+const REFUSED_BODY_DRAIN_BYTES = 1_048_576;
+
+// ponytail: how long a refused body may keep streaming after the cancel. Same trade-off as REFUSED_BODY_DRAIN_BYTES.
+const REFUSED_BODY_DRAIN_MS = 5000;
+
 /**
  * The request body as a web stream, pulled chunk by chunk. Not `Readable.toWeb`, which the supported Node range does not yet ship.
  * Cancelling the stream discards the rest of the body rather than destroying the socket: the worker answers a cancelled over-cap body
@@ -47,12 +54,43 @@ const bodyStream = (incoming: IncomingMessage, outgoing: ServerResponse): Readab
                 return;
             }
 
-            // ponytail: the rest of the body is read and dropped without a ceiling, so a slow-drip upload holds its socket until it ends;
-            // a byte cap that closes the connection is the upgrade path if that matters.
+            // The body is read and dropped only up to a byte or time ceiling. Hitting one marks the drain over, and the socket is
+            // destroyed once the 413 has finished, so the response is never cut short. A body that ends first keeps its socket.
+            let drained = 0;
+            let overCeiling = false;
+
+            const ceilingHit = (): void => {
+                overCeiling = true;
+
+                if (outgoing.writableFinished) {
+                    incoming.destroy();
+                }
+            };
+            const timer = setTimeout(ceilingHit, REFUSED_BODY_DRAIN_MS);
+
+            outgoing.once("finish", () => {
+                if (overCeiling) {
+                    incoming.destroy();
+                }
+            });
+            incoming.once("close", () => {
+                clearTimeout(timer);
+            });
+
             incoming.removeAllListeners("readable");
             incoming.on("readable", () => {
-                while (incoming.read() !== null) {
-                    // Discarded: the body was refused, so its bytes are only read to keep the connection usable.
+                let chunk = incoming.read() as Buffer | null;
+
+                while (chunk !== null) {
+                    drained += chunk.byteLength;
+
+                    if (drained > REFUSED_BODY_DRAIN_BYTES) {
+                        ceilingHit();
+
+                        return;
+                    }
+
+                    chunk = incoming.read() as Buffer | null;
                 }
             });
         },
