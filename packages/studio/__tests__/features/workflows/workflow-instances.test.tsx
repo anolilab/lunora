@@ -101,6 +101,54 @@ describe("workflowInstanceHistory", () => {
         expect(loadInstances.mock.calls.length).toBeGreaterThanOrEqual(2);
     });
 
+    it("restarts an instance through the lifecycle handler", async () => {
+        expect.hasAssertions();
+
+        const runAction = vi.fn<(args: { action: WorkflowInstanceAction; id: string; name: string }) => Promise<{ status: WorkflowInstanceStatus }>>(
+            async () => {
+                return { status: "queued" as WorkflowInstanceStatus };
+            },
+        );
+        render(withProvider(createMockClient(), <WorkflowInstanceHistory loadInstances={async () => INSTANCES} runAction={runAction} workflowName="orders" />));
+
+        fireEvent.click(await screen.findByTestId("workflow-instance-restart-i1"));
+
+        // The first click only asks for confirmation.
+        expect(runAction).not.toHaveBeenCalled();
+
+        fireEvent.click(screen.getByTestId("workflow-instance-restart-i1-confirm"));
+
+        await waitFor(() => {
+            expect(runAction).toHaveBeenCalledWith({ action: "restart", id: "i1", name: "orders" });
+        });
+    });
+
+    it("drops an armed restart confirmation when the workflow changes", async () => {
+        expect.assertions(2);
+
+        const runAction = vi.fn<(args: { action: WorkflowInstanceAction; id: string; name: string }) => Promise<{ status: WorkflowInstanceStatus }>>(
+            async () => {
+                return { status: "queued" as WorkflowInstanceStatus };
+            },
+        );
+        const view = (workflowName: string) =>
+            withProvider(
+                createMockClient(),
+                <WorkflowInstanceHistory loadInstances={async () => INSTANCES} runAction={runAction} workflowName={workflowName} />,
+            );
+        const { rerender } = render(view("orders"));
+
+        fireEvent.click(await screen.findByTestId("workflow-instance-restart-i1"));
+
+        expect(screen.getByTestId("workflow-instance-restart-i1-confirm")).toBeDefined();
+
+        rerender(view("billing"));
+
+        await waitFor(() => {
+            expect(screen.queryByTestId("workflow-instance-restart-i1-confirm")).toBeNull();
+        });
+    });
+
     it("is read-only (no action buttons) when given a custom loader without a handler", async () => {
         expect.assertions(1);
 

@@ -3572,7 +3572,7 @@ interface WithInput {
 ### `WorkflowInstanceState` (type)
 
 ```ts
-type WorkflowInstanceState = "complete" | "errored" | "paused" | "queued" | "running" | "terminated" | "unknown" | "waiting" | "waitingForPause";
+type WorkflowInstanceState = "complete" | "errored" | "paused" | "queued" | "rollingBack" | "running" | "terminated" | "unknown" | "waiting" | "waitingForPause";
 ```
 
 ### `WorkflowInstanceStatusResult` (interface)
