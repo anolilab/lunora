@@ -1713,9 +1713,16 @@ class RelayMember extends RelayLink {
         this.relayAnnounced = false;
         // An attach still in flight answers for a registration the owner has just dropped: the next socket starts its own attach.
         this.announceGeneration += 1;
+
+        const inflightAttach = this.pendingAnnounce;
+
         this.pendingAnnounce = undefined;
 
-        const detach = this.postRelayMessage(this.roleId.ownerKey, { relayIndex: this.roleId.relayIndex as number, type: "relay_detach" })
+        // The detach goes out only after that attach has been answered, so it can never reach the owner first and leave a relay
+        // with no sockets registered as active. It is tracked from the start, so an attach begun meanwhile waits behind it.
+        const detach = (inflightAttach ?? Promise.resolve(true))
+            .catch(() => false)
+            .then(async () => this.postRelayMessage(this.roleId.ownerKey, { relayIndex: this.roleId.relayIndex as number, type: "relay_detach" }))
             .catch(() => undefined)
             .finally(() => {
                 if (this.pendingDetach === detach) {

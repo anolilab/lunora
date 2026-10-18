@@ -1234,10 +1234,18 @@ describe("relay hub", () => {
 
             const first = link.announce();
 
-            // The last socket closes: the owner drops the relay, then the held attach answers OK.
-            await link.announceDrain({} as ShardSocketLike);
+            // The last socket closes while the attach is held; the drain's detach waits for the attach's answer.
+            await vi.waitFor(() => {
+                if (answers.length !== 1) {
+                    throw new Error("the first attach has not been sent yet");
+                }
+            });
+
+            const drained = link.announceDrain({} as ShardSocketLike);
+
             answers[0]!(new Response());
             await first;
+            await drained;
 
             // The next socket must attach again rather than trust a latch the drain already cleared.
             const second = link.announce();
@@ -1254,6 +1262,61 @@ describe("relay hub", () => {
 
             await expect(second).resolves.toBe(true);
             await expect(link.announce()).resolves.toBe(true);
+        });
+
+        it("sends a drain's detach only after an attach already in flight has been answered", async () => {
+            expect.assertions(2);
+
+            const sent: string[] = [];
+            const attach: { answer?: (response: Response) => void } = {};
+            const owner = {
+                fetch: (_url: string, init?: RequestInit) => {
+                    const type = frameType(init);
+
+                    sent.push(type);
+
+                    if (type === "relay_attach") {
+                        return new Promise<Response>((resolve) => {
+                            attach.answer = resolve;
+                        });
+                    }
+
+                    return Promise.resolve(new Response());
+                },
+            };
+            const link = memberOf({
+                doName: () => `${OWNER_KEY}::relay::0`,
+                env: () => {
+                    return { SHARD: { get: () => owner, getByName: () => owner, idFromName: (id: string) => id } };
+                },
+                getWebSockets: () => [],
+                shardBinding: () => "SHARD",
+                shardJurisdiction: () => undefined,
+                sql: () => database.sql,
+            } as unknown as RelayHost);
+
+            const attached = link.announce();
+
+            await vi.waitFor(() => {
+                if (!sent.includes("relay_attach")) {
+                    throw new Error("the attach has not been sent yet");
+                }
+            });
+
+            // The last socket closes while the attach is still unanswered.
+            const drained = link.announceDrain({} as ShardSocketLike);
+
+            await new Promise((resolve) => {
+                setImmediate(resolve);
+            });
+
+            expect(sent).toStrictEqual(["relay_attach"]);
+
+            attach.answer?.(new Response());
+            await attached;
+            await drained;
+
+            expect(sent).toStrictEqual(["relay_attach", "relay_detach"]);
         });
 
         it("sends an attach that follows a drain only after the owner has answered the drain's detach", async () => {
