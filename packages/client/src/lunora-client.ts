@@ -907,12 +907,21 @@ class LunoraClient {
 
     /**
      * Live-topic grants this client asked for over a WebSocket, keyed `connectionKey(shardKey)` →
-     * subscription id → the stream and topic. Replayed on every `identity` frame: each socket is a
-     * new connection id with no grants, so a bounce would otherwise stop delivery silently.
+     * subscription id → the stream and topic, and `release`, which leaves the topic's whisper membership once. Replayed on every
+     * `identity` frame: each socket is a new connection id with no grants, so a bounce would otherwise stop delivery silently.
      */
     private readonly liveSocketGrants = new Map<
         string,
-        Map<string, { onError?: (error: { status: number; topic: string }) => void; onEvent: (payload: unknown) => void; stream: string; topic: string }>
+        Map<
+            string,
+            {
+                onError?: (error: { status: number; topic: string }) => void;
+                onEvent: (payload: unknown) => void;
+                release: () => void;
+                stream: string;
+                topic: string;
+            }
+        >
     >();
 
     /** Tail of the live-grant control posts. One chain keeps a subscribe and its unsubscribe in order. */
@@ -1950,6 +1959,15 @@ class LunoraClient {
         // so a peer's whisper on this topic reaches no handler here.
         const leaveTopic = this.whisperSubscribe(topic, () => undefined, { shardKey });
 
+        // Leaves the membership at most once, whether the grant is refused or its handle is released.
+        let membership: (() => void) | undefined = leaveTopic;
+        const release = (): void => {
+            const leave = membership;
+
+            membership = undefined;
+            leave?.();
+        };
+
         let grants = this.liveSocketGrants.get(key);
 
         if (grants === undefined) {
@@ -1957,7 +1975,7 @@ class LunoraClient {
             this.liveSocketGrants.set(key, grants);
         }
 
-        grants.set(subscriptionId, { onError, onEvent, stream, topic });
+        grants.set(subscriptionId, { onError, onEvent, release, stream, topic });
 
         const connectionId = this.getConnection(shardKey)?.connectionId;
 
@@ -1988,7 +2006,7 @@ class LunoraClient {
                 this.postLiveControl(controlPath, shardKey, { action: "unsubscribe", connectionId: liveConnectionId, stream, subscriptionId, topic });
             }
 
-            leaveTopic();
+            release();
         };
     }
 
@@ -7203,6 +7221,8 @@ class LunoraClient {
             this.liveSocketGrants.delete(key);
         }
 
+        // A refused grant is final, so its join goes too: an idle socket with a no-op membership would otherwise stay open.
+        grant.release();
         grant.onError?.({ status, topic: grant.topic });
     }
 

@@ -5271,6 +5271,51 @@ describe("lunoraClient", () => {
                 client.close();
             });
 
+            it("leaves a refused topic's whisper membership once, so an idle socket is not held open by it", async () => {
+                expect.assertions(3);
+
+                const fetchMock = vi.fn<typeof fetch>((_input, init) => {
+                    const body = JSON.parse(typeof init?.body === "string" ? init.body : "null") as Record<string, unknown>;
+
+                    return Promise.resolve(Response.json({ ok: false }, { status: body.subscriptionId === "ws-live-1" ? 403 : 200 }));
+                });
+                const client = new LunoraClient({ fetch: fetchMock, url: "https://app.example", WebSocket: createMockWebSocket() });
+                const errors: unknown[] = [];
+
+                const unsubscribe = client.subscribeLiveTopic({
+                    onError: (error) => errors.push(error),
+                    onEvent: () => undefined,
+                    stream: "posts",
+                    topic: "post:1",
+                });
+
+                const socket = latestSocket();
+
+                socket.open();
+                socket.receive({ connectionId: "ws-1", subject: null, type: "identity" });
+                ackJoin(socket, "post:1");
+
+                await vi.waitFor(() => {
+                    if (errors.length === 0) {
+                        throw new Error("refusal not reported yet");
+                    }
+                });
+
+                const leavesSent = (): unknown[] =>
+                    socket.sent.map((frame) => JSON.parse(frame) as Record<string, unknown>).filter((frame) => frame["type"] === "whisper_unsubscribe");
+
+                // The refusal alone releases the join, before the caller ever releases its handle.
+                expect(leavesSent()).toStrictEqual([{ topic: "post:1", type: "whisper_unsubscribe" }]);
+                expect(errors).toStrictEqual([{ status: 403, topic: "post:1" }]);
+
+                // The handle's later release does not leave the topic a second time.
+                unsubscribe();
+
+                expect(leavesSent()).toHaveLength(1);
+
+                client.close();
+            });
+
             it("keeps a grant the shard failed transiently, and does not report it", async () => {
                 expect.assertions(3);
 
