@@ -4,13 +4,14 @@ import { emitApp } from "../src/emit-app";
 import baseOptions from "./emit-app-options";
 
 describe("emitApp — delivery authorization", () => {
-    /* eslint-disable no-secrets/no-secrets -- false positive: `NonNullable<ShardConfig["…"]>` is emitted TypeScript asserted below, not a credential. */
     it("emits the builder method and its createShardDO plumbing by default", () => {
         expect.assertions(2);
 
         const output = emitApp(baseOptions);
 
-        expect(output).toContain('public deliveryAuthorization(selector: (env: Env) => ReturnType<NonNullable<ShardConfig["deliveryAuthorization"]>>): this {');
+        expect(output).toMatch(
+            /public deliveryAuthorization\(selector: \(env: Env\) => ReturnType<NonNullable<ShardConfig\["deliveryAuthorization"\]>>\): this \{/,
+        );
         expect(output).toContain("...(this.deliveryAuthorizationSelector === undefined ? {} : { deliveryAuthorization: this.deliveryAuthorizationSelector }),");
     });
 
@@ -23,5 +24,4 @@ describe("emitApp — delivery authorization", () => {
         expect(output).not.toContain("public deliveryAuthorization(");
         expect(output).not.toContain("deliveryAuthorization: this.");
     });
-    /* eslint-enable no-secrets/no-secrets */
 });
