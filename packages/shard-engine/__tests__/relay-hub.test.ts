@@ -1758,6 +1758,31 @@ describe("relay hub", () => {
             expect(relayAt(relays, 0).posts.filter((post) => post["type"] === "relay_frame")).toHaveLength(1);
         });
 
+        it("keeps a relay whose attach lands while its idle answer is in flight", async () => {
+            expect.assertions(1);
+
+            let release: () => void = () => undefined;
+            const gate = new Promise<void>((resolve) => {
+                release = resolve;
+            });
+            const relays = new Map<number, RelayDouble>([[0, { down: false, frameStatus: 410, gate, posts: [] }]]);
+            const { owner } = ownerFor(database.sql, relays);
+
+            await deliver(owner, JSON.stringify({ relayIndex: 0, seq: 1_000_000, type: "relay_attach" }));
+
+            const forwarded = owner.forwardWhisper("feed", "{}");
+
+            // A socket attaches on the relay before its idle answer to that frame arrives.
+            await deliver(owner, JSON.stringify({ relayIndex: 0, seq: 2_000_000, type: "relay_attach" }));
+            release();
+            await forwarded;
+
+            relayAt(relays, 0).frameStatus = 204;
+            await owner.forwardWhisper("feed", "{}");
+
+            expect(relayAt(relays, 0).posts.filter((post) => post["type"] === "relay_frame")).toHaveLength(2);
+        });
+
         it("answers a forwarded frame as idle once a relay has no sockets", async () => {
             expect.assertions(1);
 

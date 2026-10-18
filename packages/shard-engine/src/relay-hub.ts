@@ -1401,9 +1401,12 @@ class OwnerRelay extends RelayLink {
      * late or out-of-sequence attach can leave such a relay registered, and nothing else would ever remove it.
      */
     private async forwardToRelay(index: number, message: RelayFrame | RelayLiveFrame): Promise<void> {
+        // An attach that lands while this frame is in flight raises the mark: the relay's idle answer is then stale, and dropping it
+        // would unregister a relay that has a socket again.
+        const markBefore = this.relaySeqMark(index);
         const response = await this.requestRelayMessage(relayName(this.roleId.ownerKey, index), message);
 
-        if (response?.status === RELAY_IDLE_STATUS) {
+        if (response?.status === RELAY_IDLE_STATUS && this.relaySeqMark(index) === markBefore) {
             this.removeRelayFromSet(index);
         }
     }
