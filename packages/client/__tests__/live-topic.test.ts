@@ -1,6 +1,16 @@
+import { encodeWire } from "@lunora/wire";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { subscribeLiveTopic } from "../src/live-topic";
+
+/** The request URL as a string, whichever form `fetch` was called with. */
+const urlOf = (input: RequestInfo | URL): string => {
+    if (typeof input === "string") {
+        return input;
+    }
+
+    return input instanceof URL ? input.href : input.url;
+};
 
 const stubFetch = () => {
     const connects: string[] = [];
@@ -9,7 +19,7 @@ const stubFetch = () => {
     vi.stubGlobal(
         "fetch",
         vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
-            const url = String(input);
+            const url = urlOf(input);
 
             if (/\/connect(?:\?|$)/u.test(url)) {
                 connects.push(url);
@@ -19,7 +29,9 @@ const stubFetch = () => {
                     aborted[index] = true;
                 });
 
-                return Promise.resolve(new Response(new ReadableStream<Uint8Array>(), { headers: { "x-lunora-live-connection": `c${String(connects.length)}` } }));
+                return Promise.resolve(
+                    new Response(new ReadableStream<Uint8Array>(), { headers: { "x-lunora-live-connection": `c${String(connects.length)}` } }),
+                );
             }
 
             return Promise.resolve(new Response(undefined, { status: 204 }));
@@ -29,13 +41,15 @@ const stubFetch = () => {
     return { aborted, connects };
 };
 
-afterEach(() => {
-    vi.unstubAllGlobals();
-    vi.useRealTimers();
-});
-
 describe(subscribeLiveTopic, () => {
+    afterEach(() => {
+        vi.unstubAllGlobals();
+        vi.useRealTimers();
+    });
+
     it("follows several topics over one connection and closes after the last unsubscribe", async () => {
+        expect.hasAssertions();
+
         vi.useFakeTimers();
 
         const { aborted, connects } = stubFetch();
@@ -44,19 +58,24 @@ describe(subscribeLiveTopic, () => {
         const offComments = subscribeLiveTopic({ topic: "comments:1", url });
 
         await vi.advanceTimersByTimeAsync(0);
+
         expect(connects).toHaveLength(1);
 
         offPost();
         await vi.advanceTimersByTimeAsync(5);
+
         expect(aborted[0]).toBe(false);
 
         offComments();
         offComments();
         await vi.advanceTimersByTimeAsync(5);
+
         expect(aborted[0]).toBe(true);
     });
 
     it("keeps the connection when a subscriber leaves and another arrives in the same tick", async () => {
+        expect.hasAssertions();
+
         vi.useFakeTimers();
 
         const { aborted, connects } = stubFetch();
@@ -66,6 +85,7 @@ describe(subscribeLiveTopic, () => {
         const off = subscribeLiveTopic({ topic: "a", url });
 
         await vi.advanceTimersByTimeAsync(5);
+
         expect(connects).toHaveLength(1);
         expect(aborted[0]).toBe(false);
 
@@ -73,7 +93,58 @@ describe(subscribeLiveTopic, () => {
         await vi.advanceTimersByTimeAsync(5);
     });
 
+    it("delivers each event once to every subscriber of a topic, over one shard-side subscription", async () => {
+        expect.hasAssertions();
+
+        const controls: { action?: string; topic?: string }[] = [];
+        let push: ((text: string) => void) | undefined;
+
+        vi.stubGlobal(
+            "fetch",
+            vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+                if (/\/connect(?:\?|$)/u.test(urlOf(input))) {
+                    const stream = new ReadableStream<Uint8Array>({
+                        start: (controller) => {
+                            push = (text) => {
+                                controller.enqueue(new TextEncoder().encode(text));
+                            };
+                        },
+                    });
+
+                    return Promise.resolve(new Response(stream, { headers: { "x-lunora-live-connection": "c1" } }));
+                }
+
+                controls.push(JSON.parse(typeof init?.body === "string" ? init.body : "{}") as { action?: string; topic?: string });
+
+                return Promise.resolve(Response.json({ ok: true }));
+            }),
+        );
+
+        const first: unknown[] = [];
+        const second: unknown[] = [];
+        const url = "/live/once/connect";
+        const offFirst = subscribeLiveTopic({ onEvent: (payload) => first.push(payload), topic: "post:1", url });
+        const offSecond = subscribeLiveTopic({ onEvent: (payload) => second.push(payload), topic: "post:1", url });
+
+        await vi.waitFor(() => {
+            expect(controls.filter((call) => call.action === "subscribe")).toHaveLength(1);
+        });
+
+        push?.(`event: live\ndata: ${JSON.stringify({ data: encodeWire({ n: 1 }), topic: "post:1" })}\n\n`);
+
+        await vi.waitFor(() => {
+            expect(first).toStrictEqual([{ n: 1 }]);
+        });
+
+        expect(second).toStrictEqual([{ n: 1 }]);
+
+        offFirst();
+        offSecond();
+    });
+
     it("does not share a connection between differently configured subscribers", async () => {
+        expect.hasAssertions();
+
         vi.useFakeTimers();
 
         const { connects } = stubFetch();
@@ -82,6 +153,7 @@ describe(subscribeLiveTopic, () => {
         const offCreds = subscribeLiveTopic({ topic: "a", url, withCredentials: true });
 
         await vi.advanceTimersByTimeAsync(0);
+
         expect(connects).toHaveLength(2);
 
         offPlain();

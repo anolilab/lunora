@@ -37,7 +37,13 @@ const shared = new Map<string, SharedStream>();
 
 /** Connections are shared only when they would be configured identically. */
 const keyFor = (options: SubscribeLiveTopicOptions): string =>
-    JSON.stringify([options.url, options.withCredentials === true, options.retryDelay, options.maxDelayMs, Object.entries(options.headers ?? {}).toSorted()]);
+    JSON.stringify([
+        options.url,
+        options.withCredentials === true,
+        options.retryDelay,
+        options.maxDelayMs,
+        Object.entries(options.headers ?? {}).toSorted(([a], [b]) => a.localeCompare(b)),
+    ]);
 
 /**
  * Follow `topic` on the shared connection for `url`.
@@ -48,9 +54,9 @@ const subscribeLiveTopic = (options: SubscribeLiveTopicOptions): (() => void) =>
     let entry = shared.get(key);
 
     if (entry === undefined) {
-        const { onError: _onError, onEvent: _onEvent, topic: _topic, url, ...connectOptions } = options;
+        const { headers, maxDelayMs, retryDelay, withCredentials } = options;
 
-        entry = { closeTimer: undefined, refs: 0, stream: connectLiveStream(url, connectOptions) };
+        entry = { closeTimer: undefined, refs: 0, stream: connectLiveStream(options.url, { headers, maxDelayMs, retryDelay, withCredentials }) };
         shared.set(key, entry);
     }
 
@@ -59,7 +65,9 @@ const subscribeLiveTopic = (options: SubscribeLiveTopicOptions): (() => void) =>
     entry.refs += 1;
 
     const held = entry;
-    const unsubscribe = held.stream.subscribe({ onError: options.onError, onEvent: options.onEvent, topic: options.topic });
+    // A topic-derived id joins same-topic subscribers into ONE shard-side subscription (the client
+    // merges handlers per id), instead of one per mounted hook against the shard's subscription limit.
+    const unsubscribe = held.stream.subscribe({ id: `topic:${options.topic}`, onError: options.onError, onEvent: options.onEvent, topic: options.topic });
     let released = false;
 
     return () => {
