@@ -268,6 +268,60 @@ describe("recordedModel through the production streaming seam", () => {
         expect(harness.messages("t1").map((message) => message.content)).toStrictEqual(["hello", "Done."]);
     });
 
+    it.each([
+        ["a truncated stream", "stream-truncated"],
+        ["an error finish", "error"],
+    ])("fails the turn on a finish with an error reason (%s) and persists none of the attempt", async (_label, raw) => {
+        expect.hasAssertions();
+
+        const agent = defineAgent({ model: "test-model" });
+        // Workers AI reports a generation it cut short as a finish part, not as a
+        // rejected stream, so the turn's text arrives before the failure.
+        const model = recordedModel([
+            {
+                parts: [
+                    { id: "t0", type: "text-start" },
+                    { delta: "Partial ", id: "t0", type: "text-delta" },
+                    { id: "t0", type: "text-end" },
+                    { finishReason: { raw, unified: "error" }, type: "finish", usage: usage(2, 1) },
+                ],
+            },
+        ]);
+        const harness = agentHarness(agent, {});
+
+        await expect(harness.run({ input: "hello", threadKey: "t1" }, { model })).rejects.toThrow(`provider reason: ${raw}`);
+
+        expect(harness.thread("t1")?.status).toBe("error");
+        expect(harness.messages("t1").map((message) => message.role)).toStrictEqual(["user"]);
+    });
+
+    it.each([
+        ["stop", "stop"],
+        ["length", "length"],
+        ["tool-calls", "tool_calls"],
+        ["other", "other"],
+    ] as const)("keeps a finish with the %s reason as a successful turn", async (unified, raw) => {
+        expect.hasAssertions();
+
+        const agent = defineAgent({ model: "test-model" });
+        const model = recordedModel([
+            {
+                parts: [
+                    { id: "t0", type: "text-start" },
+                    { delta: "Done.", id: "t0", type: "text-delta" },
+                    { id: "t0", type: "text-end" },
+                    { finishReason: { raw, unified }, type: "finish", usage: usage(2, 1) },
+                ],
+            },
+        ]);
+        const harness = agentHarness(agent, {});
+
+        await harness.run({ input: "hello", threadKey: "t1" }, { model });
+
+        expect(harness.thread("t1")?.status).toBe("idle");
+        expect(harness.messages("t1").map((message) => message.content)).toStrictEqual(["hello", "Done."]);
+    });
+
     it("picks up usage that arrives only on the finish part", async () => {
         expect.hasAssertions();
 

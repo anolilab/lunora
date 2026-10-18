@@ -1,5 +1,5 @@
 import { createDispatchRunner } from "@lunora/dispatch";
-import { hasToolCall, jsonSchema } from "ai";
+import { hasToolCall, jsonSchema, simulateReadableStream } from "ai";
 import { MockLanguageModelV4 } from "ai/test";
 import { describe, expect, it, vi } from "vitest";
 
@@ -35,6 +35,9 @@ const TRANSIENT_WAIT_FAILURE_PATTERN = /temporarily unavailable/u;
  * progress arm (exercised by the reportProgress test) so `deltas` stays
  * token-typed.
  */
+/** One provider stream part as the mock model's `doStream` emits it. */
+type ProviderStreamPart = Awaited<ReturnType<MockLanguageModelV4["doStream"]>>["stream"] extends ReadableStream<infer Part> ? Part : never;
+
 const captureTokenDeltas =
     (deltas: AgentTokenDelta[]): AgentTokenSink =>
     (event) => {
@@ -1699,6 +1702,90 @@ describe(runAgentLoop, () => {
         expect(deltas).toStrictEqual([]);
         expect(stream.state.calls).toBe(1);
         expect(journal.invoked.filter((name) => name === "llm:turn:0")).toHaveLength(1);
+    });
+
+    it("persists only the retried answer when a provider finished the attempt before it with an error reason", async () => {
+        expect.hasAssertions();
+
+        const agent = defineAgent({ model: "test-model" });
+        const runtime = memoryRuntime();
+        const journal = new DurableStepJournal();
+        const deltas: AgentTokenDelta[] = [];
+        const onTokenDelta = captureTokenDeltas(deltas);
+
+        // Attempt one is cut short by the provider and reports it on its finish part;
+        // attempt two, the durable step's retry, completes.
+        const usage = {
+            inputTokens: { cacheRead: undefined, cacheWrite: undefined, noCache: 2, total: 2 },
+            outputTokens: { reasoning: undefined, text: 1, total: 1 },
+        };
+        const attempts: ProviderStreamPart[][] = [
+            [
+                { id: "t0", type: "text-start" },
+                { delta: "Partial ", id: "t0", type: "text-delta" },
+                { id: "t0", type: "text-end" },
+                { finishReason: { raw: "stream-truncated", unified: "error" }, type: "finish", usage },
+            ],
+            [
+                { id: "t1", type: "text-start" },
+                { delta: "Whole answer.", id: "t1", type: "text-delta" },
+                { id: "t1", type: "text-end" },
+                { finishReason: { raw: "stop", unified: "stop" }, type: "finish", usage },
+            ],
+        ];
+        let call = 0;
+        const model = new MockLanguageModelV4({
+            doStream: () => {
+                const parts = attempts[call] ?? [];
+
+                call += 1;
+
+                return Promise.resolve({ stream: simulateReadableStream({ chunks: parts }) });
+            },
+        });
+        const streamGenerate = createStreamGenerate({ ...agent, model }, {});
+
+        await expect(runAgentLoop(loopDefaults(agent, { onTokenDelta, run: runtime.run, step: journal, streamGenerate }))).rejects.toThrow(
+            "provider reason: stream-truncated",
+        );
+
+        // The failed attempt persisted nothing but the user turn.
+        expect(runtime.threads.get("thread-1")?.status).toBe("error");
+        expect([...runtime.messages.values()].map((message) => message.role)).toStrictEqual(["user"]);
+
+        // The retry replays the same journal: the failed step runs again and its answer is the one kept.
+        const result = await runAgentLoop(loopDefaults(agent, { onTokenDelta, run: runtime.run, step: journal, streamGenerate }));
+
+        expect(result).toStrictEqual({ stopped: "final", text: "Whole answer.", turns: 1, usage: { inputTokens: 2, outputTokens: 1, totalTokens: 3 } });
+        expect(call).toBe(2);
+        expect(journal.invoked.filter((name) => name === "llm:turn:0")).toHaveLength(2);
+
+        const assistant = [...runtime.messages.values()].filter((message) => message.role === "assistant");
+
+        expect(assistant.map((message) => message.content)).toStrictEqual(["Whole answer."]);
+        expect(runtime.threads.get("thread-1")?.status).toBe("idle");
+        // The retry re-streams from the start, so a live consumer sees the prefix again before the whole answer.
+        expect(deltas.map((delta) => delta.text)).toStrictEqual(["Partial ", "Whole answer."]);
+    });
+
+    it("fails a non-streaming turn whose finish reason is error instead of returning its text", async () => {
+        expect.hasAssertions();
+
+        const agent = defineAgent({ model: "test-model" });
+        const model = new MockLanguageModelV4({
+            doGenerate: () =>
+                Promise.resolve({
+                    content: [{ text: "Partial", type: "text" }],
+                    finishReason: { raw: "error", unified: "error" },
+                    usage: {
+                        inputTokens: { cacheRead: undefined, cacheWrite: undefined, noCache: 2, total: 2 },
+                        outputTokens: { reasoning: undefined, text: 1, total: 1 },
+                    },
+                    warnings: [],
+                }),
+        });
+
+        await expect(createAgentGenerate({ ...agent, model }, {})({ messages: [{ content: "hi", role: "user" }] })).rejects.toThrow("provider reason: error");
     });
 
     it("takes the byte-identical non-streaming path when no token sink is present", async () => {
