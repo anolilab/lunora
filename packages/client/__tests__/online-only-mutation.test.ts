@@ -1,0 +1,305 @@
+import { describe, expect, it, vi } from "vitest";
+
+import { LunoraClient } from "../src/lunora-client";
+import { createInMemoryPersistence } from "../src/persistence";
+import type { FunctionReference } from "../src/types";
+
+/**
+ * `mutation(…, { onlineOnly: true })`: a write that is never queued, persisted or
+ * replayed. While its connection is not live it is refused at once with
+ * `OFFLINE_NOT_QUEUED`, and its args never reach the persistence adapter. A normal
+ * write in the same state still queues — the guard against an over-broad gate.
+ */
+
+const fnRef = (reference: string): FunctionReference => {
+    return { __lunoraRef: reference };
+};
+
+const settle = async (): Promise<void> => {
+    for (let index = 0; index < 8; index += 1) {
+        // eslint-disable-next-line no-await-in-loop -- intentional sequential drain of promise ticks
+        await new Promise((resolve) => {
+            setTimeout(resolve, 0);
+        });
+    }
+};
+
+interface MockSocket {
+    open: () => void;
+    triggerClose: () => void;
+}
+
+const createMockWebSocket = (sockets: MockSocket[]): typeof WebSocket => {
+    class WS {
+        public readyState = 0;
+
+        public readonly sent: string[] = [];
+
+        private readonly listeners = new Map<string, ((event?: unknown) => void)[]>();
+
+        public constructor() {
+            sockets.push({
+                open: () => {
+                    this.readyState = 1;
+                    this.emit("open");
+                },
+                triggerClose: () => {
+                    this.readyState = 3;
+                    this.emit("close");
+                },
+            });
+        }
+
+        public addEventListener(type: string, listener: (event?: unknown) => void): void {
+            const existing = this.listeners.get(type) ?? [];
+
+            existing.push(listener);
+            this.listeners.set(type, existing);
+        }
+
+        public close(): void {
+            this.readyState = 3;
+        }
+
+        public removeEventListener(type: string): void {
+            this.listeners.delete(type);
+        }
+
+        public send(raw: string): void {
+            // Writes under test ride HTTP; recorded only so a stray frame is visible.
+            this.sent.push(raw);
+        }
+
+        private emit(type: string): void {
+            for (const listener of this.listeners.get(type) ?? []) {
+                listener();
+            }
+        }
+    }
+
+    return WS as unknown as typeof WebSocket;
+};
+
+/** Every write marker the server saw, in the order the requests reached it. */
+const MARKERS = /OLDER|NEWER|LIVE/g;
+
+const createServer = (): { fetch: typeof fetch; observed: string[] } => {
+    const observed: string[] = [];
+
+    const fetchImpl = vi.fn<(url: string, init?: RequestInit) => Promise<Response>>(async (url, init) => {
+        // The session probe the hold path re-issues — keep it failing so the
+        // subject stays unconfirmed and the queued write stays held.
+        if (url.includes("get-session")) {
+            return Response.json({ error: "nope" }, { status: 401 });
+        }
+
+        const raw = typeof init?.body === "string" ? init.body : "{}";
+
+        for (const match of raw.matchAll(MARKERS)) {
+            observed.push(match[0]);
+        }
+
+        return Response.json({ result: { ok: true } }, { status: 200 });
+    });
+
+    return { fetch: fetchImpl as unknown as typeof fetch, observed };
+};
+
+const outcomeOf = (promise: Promise<unknown>): Promise<string> =>
+    promise.then(
+        () => "committed",
+        (error: unknown) => `rejected:${String((error as { code?: string }).code)}`,
+    );
+
+describe("online-only mutation", () => {
+    it("sends normally while the connection is live", async () => {
+        expect.hasAssertions();
+
+        const sockets: MockSocket[] = [];
+        const server = createServer();
+        const persistence = createInMemoryPersistence();
+        const append = vi.spyOn(persistence, "append");
+        const client = new LunoraClient({
+            fetch: server.fetch,
+            heartbeatIntervalMs: 0,
+            persistence,
+            url: "http://app.test",
+            WebSocket: createMockWebSocket(sockets),
+        });
+
+        client.subscribe(fnRef("todos.list"), {}, () => {});
+        sockets.at(-1)?.open();
+        await settle();
+
+        await expect(client.mutation(fnRef("todos.set"), { text: "LIVE" }, { onlineOnly: true })).resolves.toStrictEqual({ ok: true });
+
+        expect(server.observed).toStrictEqual(["LIVE"]);
+        expect(append).not.toHaveBeenCalled();
+        expect(client.pendingCount()).toBe(0);
+
+        client.close();
+    });
+
+    it("refuses at once while disconnected, and never hands its args to the queue or the adapter", async () => {
+        expect.hasAssertions();
+
+        const sockets: MockSocket[] = [];
+        const server = createServer();
+        const persistence = createInMemoryPersistence();
+        const append = vi.spyOn(persistence, "append");
+        const client = new LunoraClient({
+            fetch: server.fetch,
+            heartbeatIntervalMs: 0,
+            persistence,
+            url: "http://app.test",
+            WebSocket: createMockWebSocket(sockets),
+        });
+
+        client.subscribe(fnRef("todos.list"), {}, () => {});
+        sockets.at(-1)?.open();
+        await settle();
+        sockets.at(-1)?.triggerClose();
+        await settle();
+
+        const refused = client.mutation(fnRef("todos.set"), { text: "LIVE" }, { onlineOnly: true });
+
+        await expect(refused).rejects.toMatchObject({ code: "OFFLINE_NOT_QUEUED" });
+
+        await settle();
+
+        expect(server.observed).toStrictEqual([]);
+        expect(append).not.toHaveBeenCalled();
+        await expect(persistence.load()).resolves.toStrictEqual([]);
+        expect(client.pendingCount()).toBe(0);
+
+        client.close();
+    });
+
+    it("is not queued behind a backlog: it goes out while an older write is held", async () => {
+        expect.hasAssertions();
+
+        const sockets: MockSocket[] = [];
+        const server = createServer();
+        const persistence = createInMemoryPersistence();
+        const append = vi.spyOn(persistence, "append");
+        const client = new LunoraClient({
+            fetch: server.fetch,
+            heartbeatIntervalMs: 0,
+            offlineQueue: { queueBeforeFirstConnect: true },
+            persistence,
+            url: "http://app.test",
+            WebSocket: createMockWebSocket(sockets),
+        });
+
+        // A write queued under `user-1`, then held: the JWT is refreshed without a
+        // subject, so the replay verdict is "hold" and the backlog stays queued
+        // while the socket is open. That is the state the FIFO gate reads.
+        client.setAuthToken("jwt-1", "user-1");
+        client.subscribe(fnRef("todos.list"), {}, () => {});
+
+        const older = outcomeOf(client.mutation(fnRef("todos.set"), { text: "OLDER" }));
+
+        await settle();
+        client.setAuthToken("jwt-2");
+        sockets.at(-1)?.open();
+        await settle();
+
+        expect(client.pendingCount()).toBe(1);
+        expect(append).toHaveBeenCalledTimes(1);
+
+        const live = client.mutation(fnRef("todos.set"), { text: "LIVE" }, { onlineOnly: true });
+
+        await settle();
+
+        // Asserted before the call settles, so a regression that queues it fails
+        // on these assertions rather than on a timeout.
+        expect(server.observed).toStrictEqual(["LIVE"]);
+        expect(client.pendingCount()).toBe(1);
+        expect(append).toHaveBeenCalledTimes(1);
+        await expect(live).resolves.toStrictEqual({ ok: true });
+
+        // The backlog is untouched: the older write stays queued and is never sent.
+        client.setAuthToken("jwt-2", "user-1");
+        await settle();
+
+        expect(server.observed).toStrictEqual(["LIVE", "OLDER"]);
+
+        await expect(older).resolves.toBe("committed");
+
+        client.close();
+    });
+
+    it("still queues a normal write while disconnected", async () => {
+        expect.hasAssertions();
+
+        const sockets: MockSocket[] = [];
+        const server = createServer();
+        const persistence = createInMemoryPersistence();
+        const append = vi.spyOn(persistence, "append");
+        const client = new LunoraClient({
+            fetch: server.fetch,
+            heartbeatIntervalMs: 0,
+            persistence,
+            url: "http://app.test",
+            WebSocket: createMockWebSocket(sockets),
+        });
+
+        client.subscribe(fnRef("todos.list"), {}, () => {});
+        sockets.at(-1)?.open();
+        await settle();
+        sockets.at(-1)?.triggerClose();
+        await settle();
+
+        const queued = outcomeOf(client.mutation(fnRef("todos.set"), { text: "NEWER" }));
+
+        await settle();
+
+        expect(client.pendingCount()).toBe(1);
+        expect(append).toHaveBeenCalledTimes(1);
+        expect(server.observed).toStrictEqual([]);
+
+        client.close();
+
+        await expect(queued).resolves.toMatch(/^rejected:/u);
+    });
+
+    it("still queues a normal write behind a backlog", async () => {
+        expect.hasAssertions();
+
+        const sockets: MockSocket[] = [];
+        const server = createServer();
+        const persistence = createInMemoryPersistence();
+        const append = vi.spyOn(persistence, "append");
+        const client = new LunoraClient({
+            fetch: server.fetch,
+            heartbeatIntervalMs: 0,
+            offlineQueue: { queueBeforeFirstConnect: true },
+            persistence,
+            url: "http://app.test",
+            WebSocket: createMockWebSocket(sockets),
+        });
+
+        client.setAuthToken("jwt-1", "user-1");
+        client.subscribe(fnRef("todos.list"), {}, () => {});
+
+        const older = outcomeOf(client.mutation(fnRef("todos.set"), { text: "OLDER" }));
+
+        await settle();
+        client.setAuthToken("jwt-2");
+        sockets.at(-1)?.open();
+        await settle();
+
+        const newer = outcomeOf(client.mutation(fnRef("todos.set"), { text: "NEWER" }));
+
+        await settle();
+
+        expect(client.pendingCount()).toBe(2);
+        expect(append).toHaveBeenCalledTimes(2);
+        expect(server.observed).toStrictEqual([]);
+
+        client.close();
+
+        await expect(older).resolves.toMatch(/^rejected:/u);
+        await expect(newer).resolves.toMatch(/^rejected:/u);
+    });
+});

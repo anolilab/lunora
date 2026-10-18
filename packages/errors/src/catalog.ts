@@ -169,6 +169,13 @@ export const ERROR_CATALOG = {
     /** A connection asked for more concurrent subscriptions than the shard allows. */
     TOO_MANY_SUBSCRIPTIONS: { status: 429, title: "Too many subscriptions" },
     OFFLINE_IDENTITY_CHANGED: { status: 409, title: "Offline identity changed" },
+
+    /**
+     * A mutation sent with `onlineOnly: true` found its connection not live, so it
+     * was refused rather than queued. Nothing was persisted or replayed: to retry,
+     * the caller issues the call again once the connection is back.
+     */
+    OFFLINE_NOT_QUEUED: { status: 503, title: "Offline, write not queued" },
     /** A replayed write named, in `x-lunora-expect-subject`, a different user than the request resolved to. */
     IDENTITY_MISMATCH: {
         hint: [
