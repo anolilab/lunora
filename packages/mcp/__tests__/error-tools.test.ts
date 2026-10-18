@@ -42,7 +42,7 @@ describe("error tool definitions", () => {
         expect.assertions(4);
 
         expect(ERROR_TOOL_DEFINITIONS.map((tool) => tool.name)).toStrictEqual(["lunora_explain_error"]);
-        expect(ERROR_TOOL_DEFINITIONS.every((tool) => tool.annotations?.readOnlyHint === true)).toBe(true);
+        expect(ERROR_TOOL_DEFINITIONS.every((tool) => tool.annotations.readOnlyHint)).toBe(true);
         expect(ERROR_TOOL_DEFINITIONS.every((tool) => tool.outputSchema?.type === "object")).toBe(true);
         // Static data: unlike every other tool here, nothing reaches past this process.
         expect(ERROR_TOOL_DEFINITIONS.every((tool) => tool.annotations?.openWorldHint === false)).toBe(true);
