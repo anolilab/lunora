@@ -344,7 +344,7 @@ describe("secret request component", () => {
             await call(functions.agentSupplySecret, ctx, { secret: SECRET, threadKey: "t-1", toolCallId: "call_1" });
 
             // The wait timed out after the supply committed: settle reports the supply, not the timeout.
-            await expect(call(functions.agentSettleSecretRequest, ctx, { threadKey: "t-1", toolCallId: "call_1" })).resolves.toStrictEqual({
+            await expect(call(functions.agentSettleSecretRequest, ctx, { instanceId: "wf-1", threadKey: "t-1", toolCallId: "call_1" })).resolves.toStrictEqual({
                 status: "supplied",
             });
             await expect(
@@ -359,7 +359,7 @@ describe("secret request component", () => {
             const { store, puts } = spyStore();
             const { caller, ctx, functions, rows } = await stagedThread("user-a", store);
 
-            await expect(call(functions.agentSettleSecretRequest, ctx, { threadKey: "t-1", toolCallId: "call_1" })).resolves.toStrictEqual({
+            await expect(call(functions.agentSettleSecretRequest, ctx, { instanceId: "wf-1", threadKey: "t-1", toolCallId: "call_1" })).resolves.toStrictEqual({
                 status: "expired",
             });
             await expect(call(functions.agentSupplySecret, ctx, { secret: SECRET, threadKey: "t-1", toolCallId: "call_1" })).rejects.toMatchObject({
@@ -377,12 +377,14 @@ describe("secret request component", () => {
 
             const { ctx, functions } = await stagedThread("user-a");
 
-            await call(functions.agentSettleSecretRequest, ctx, { threadKey: "t-1", toolCallId: "call_1" });
+            await call(functions.agentSettleSecretRequest, ctx, { instanceId: "wf-1", threadKey: "t-1", toolCallId: "call_1" });
 
-            await expect(call(functions.agentSettleSecretRequest, ctx, { threadKey: "t-1", toolCallId: "call_1" })).resolves.toStrictEqual({
+            await expect(call(functions.agentSettleSecretRequest, ctx, { instanceId: "wf-1", threadKey: "t-1", toolCallId: "call_1" })).resolves.toStrictEqual({
                 status: "expired",
             });
-            await expect(call(functions.agentSettleSecretRequest, ctx, { threadKey: "t-1", toolCallId: "call_missing" })).resolves.toStrictEqual({
+            await expect(
+                call(functions.agentSettleSecretRequest, ctx, { instanceId: "wf-1", threadKey: "t-1", toolCallId: "call_missing" }),
+            ).resolves.toStrictEqual({
                 status: "expired",
             });
         });

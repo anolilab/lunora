@@ -484,7 +484,8 @@ const awaitSecret = async (turnContext: TurnContext, call: AgentToolCall, consum
 
     const { status } = await step.do(
         `secret:settle:${call.id}`,
-        async (): Promise<{ status: SecretOutcome }> => (await run(settleSecretRef, { threadKey, toolCallId: call.id })) as { status: SecretOutcome },
+        async (): Promise<{ status: SecretOutcome }> =>
+            (await run(settleSecretRef, { instanceId, threadKey, toolCallId: call.id })) as { status: SecretOutcome },
     );
 
     // Retired on every outcome, as the approval marker is: a client offers its
