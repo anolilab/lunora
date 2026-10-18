@@ -194,24 +194,29 @@ const FAILED_TURN_USAGE = Symbol("lunoraFailedTurnUsage");
  * count sits under `total`, with its breakdown beside it.
  */
 interface ProviderUsage {
-    inputTokens: { cacheRead?: number; cacheWrite?: number; total?: number };
-    outputTokens: { reasoning?: number; total?: number };
+    inputTokens?: { cacheRead?: number; cacheWrite?: number; total?: number };
+    outputTokens?: { reasoning?: number; total?: number };
 }
 
-/** The loop's usage from a provider's usage, the same projection the SDK applies to a finished turn. */
+/**
+ * The loop's usage from a provider's usage, the same projection the SDK applies to a finished turn.
+ * An error finish may report one bucket or none: a bucket it left out is `undefined`, never a crash,
+ * because the provider's failure is what the caller has to see.
+ */
 const providerUsageOf = (usage: ProviderUsage | undefined): AgentUsage | undefined => {
     if (usage === undefined) {
         return undefined;
     }
 
-    const { inputTokens, outputTokens } = usage;
-    const total = inputTokens.total === undefined || outputTokens.total === undefined ? undefined : inputTokens.total + outputTokens.total;
+    const input = usage.inputTokens?.total;
+    const output = usage.outputTokens?.total;
+    const total = input === undefined || output === undefined ? undefined : input + output;
 
     return summarizeUsage({
-        inputTokens: inputTokens.total,
-        inputTokenDetails: { cacheReadTokens: inputTokens.cacheRead, cacheWriteTokens: inputTokens.cacheWrite },
-        outputTokens: outputTokens.total,
-        outputTokenDetails: { reasoningTokens: outputTokens.reasoning },
+        inputTokens: input,
+        inputTokenDetails: { cacheReadTokens: usage.inputTokens?.cacheRead, cacheWriteTokens: usage.inputTokens?.cacheWrite },
+        outputTokens: output,
+        outputTokenDetails: { reasoningTokens: usage.outputTokens?.reasoning },
         totalTokens: total,
     });
 };
