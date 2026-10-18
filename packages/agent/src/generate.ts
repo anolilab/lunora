@@ -186,16 +186,64 @@ const toStreamError = (error: unknown): Error => {
     return new Error(`model stream failed: ${String(error)}`, { cause: error });
 };
 
+/** Key under which a failed turn's error carries the usage the provider billed for it. */
+const FAILED_TURN_USAGE = Symbol("lunoraFailedTurnUsage");
+
+/**
+ * A provider's usage as a middleware receives it, before the AI SDK flattens it: each
+ * count sits under `total`, with its breakdown beside it.
+ */
+interface ProviderUsage {
+    inputTokens: { cacheRead?: number; cacheWrite?: number; total?: number };
+    outputTokens: { reasoning?: number; total?: number };
+}
+
+/** The loop's usage from a provider's usage, the same projection the SDK applies to a finished turn. */
+const providerUsageOf = (usage: ProviderUsage | undefined): AgentUsage | undefined => {
+    if (usage === undefined) {
+        return undefined;
+    }
+
+    const { inputTokens, outputTokens } = usage;
+    const total = inputTokens.total === undefined || outputTokens.total === undefined ? undefined : inputTokens.total + outputTokens.total;
+
+    return summarizeUsage({
+        inputTokens: inputTokens.total,
+        inputTokenDetails: { cacheReadTokens: inputTokens.cacheRead, cacheWriteTokens: inputTokens.cacheWrite },
+        outputTokens: outputTokens.total,
+        outputTokenDetails: { reasoningTokens: outputTokens.reasoning },
+        totalTokens: total,
+    });
+};
+
 /**
  * The error a provider's `error` finish reason fails the turn with. The provider's
  * raw reason rides in the message when it has one, and the whole finish reason is
- * kept as `cause` so a log reader sees exactly what the provider reported.
+ * kept as `cause` so a log reader sees exactly what the provider reported. The usage
+ * the provider reported on that finish is kept too: the attempt was billed whether or
+ * not it produced an answer, so the loop counts it (see {@link usageOfFailedTurn}).
  */
-const finishErrorOf = (finishReason: { raw: string | undefined; unified: string }): Error =>
-    new Error(
+const finishErrorOf = (finishReason: { raw: string | undefined; unified: string }, usage: ProviderUsage | undefined): Error => {
+    const error: Error & { [FAILED_TURN_USAGE]?: AgentUsage } = new Error(
         finishReason.raw === undefined ? "model finished with an error reason" : `model finished with an error reason (provider reason: ${finishReason.raw})`,
         { cause: finishReason },
     );
+    const billed = providerUsageOf(usage);
+
+    if (billed !== undefined) {
+        error[FAILED_TURN_USAGE] = billed;
+    }
+
+    return error;
+};
+
+/**
+ * The usage a failed model turn was billed before it failed, or `undefined` when the
+ * error did not come from a turn or the provider reported none. A turn that is retried
+ * by its durable step is counted once, by the attempt whose error reaches the loop.
+ */
+const usageOfFailedTurn = (error: unknown): AgentUsage | undefined =>
+    (typeof error === "object" && error !== null ? (error as { [FAILED_TURN_USAGE]?: AgentUsage })[FAILED_TURN_USAGE] : undefined);
 
 /**
  * Wrap the turn's model so a provider turn that did not complete fails in-band.
@@ -214,7 +262,7 @@ const failIncompleteTurn = (ai: AiModule, model: Exclude<LanguageModel, string>)
                 const result = await doGenerate();
 
                 if (result.finishReason.unified === "error") {
-                    throw finishErrorOf(result.finishReason);
+                    throw finishErrorOf(result.finishReason, result.usage);
                 }
 
                 return result;
@@ -239,7 +287,7 @@ const failIncompleteTurn = (ai: AiModule, model: Exclude<LanguageModel, string>)
                                     // Swap the finish for an in-band error so the consumer fails the turn
                                     // through the same path as any other error part.
                                     if (part.finishReason.unified === "error") {
-                                        controller.enqueue({ error: finishErrorOf(part.finishReason), type: "error" });
+                                        controller.enqueue({ error: finishErrorOf(part.finishReason, part.usage), type: "error" });
 
                                         return;
                                     }
@@ -507,4 +555,4 @@ const createCompact =
         return text.trim();
     };
 
-export { createAgentGenerate, createCompact, createEpisodeExtract, createGraphExtract, createStreamGenerate, resolveAgentModel };
+export { createAgentGenerate, createCompact, createEpisodeExtract, createGraphExtract, createStreamGenerate, resolveAgentModel, usageOfFailedTurn };
