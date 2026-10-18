@@ -17,6 +17,51 @@ const STATUS_FILTERS: WorkflowInstanceStatus[] = ["queued", "running", "rollingB
 /** The lifecycle mutations exposed as per-instance buttons (the REST `PATCH .../status` set). */
 const ACTIONS: WorkflowInstanceAction[] = ["pause", "resume", "restart", "terminate"];
 
+interface InstanceActionsProps {
+    readonly busy: boolean;
+    readonly id: string;
+    readonly onAct: (action: WorkflowInstanceAction) => void;
+}
+
+/** The per-instance lifecycle buttons. Restart re-runs every step from the start (side-effecting steps run again), so it asks for confirmation first. */
+const InstanceActions = ({ busy, id, onAct }: InstanceActionsProps): ReactElement => {
+    const t = useT();
+
+    return (
+        <>
+            {ACTIONS.map((action) =>
+                action === "restart" ? (
+                    <ConfirmButton
+                        confirmLabel={t("Restart?")}
+                        disabled={busy}
+                        key={action}
+                        onConfirm={() => {
+                            onAct(action);
+                        }}
+                        testId={`workflow-instance-${action}-${id}`}
+                    >
+                        {t(action)}
+                    </ConfirmButton>
+                ) : (
+                    <Button
+                        data-testid={`workflow-instance-${action}-${id}`}
+                        disabled={busy}
+                        key={action}
+                        onClick={() => {
+                            onAct(action);
+                        }}
+                        size="sm"
+                        type="button"
+                        variant="ghost"
+                    >
+                        {t(action)}
+                    </Button>
+                ),
+            )}
+        </>
+    );
+};
+
 interface WorkflowInstanceHistoryProps {
     /** Load one instance's full detail (steps). Defaults to `client.getWorkflowInstance`. */
     readonly loadDetail?: (args: { id: string; name: string }) => Promise<WorkflowInstanceDetail>;
@@ -285,37 +330,17 @@ export const WorkflowInstanceHistory = ({ loadDetail, loadInstances, readOnly, r
                                                 >
                                                     {t("Steps")}
                                                 </Button>
-                                                {actionImpl !== undefined &&
-                                                    ACTIONS.map((action) =>
-                                                        action === "restart" ? (
-                                                            // Restart re-runs every step from the start, so side-effecting steps run again.
-                                                            <ConfirmButton
-                                                                confirmLabel={t("Restart?")}
-                                                                disabled={busyId === instance.id}
-                                                                key={action}
-                                                                onConfirm={() => {
-                                                                    fireAndForget(act(instance.id, action));
-                                                                }}
-                                                                testId={`workflow-instance-${action}-${instance.id}`}
-                                                            >
-                                                                {t(action)}
-                                                            </ConfirmButton>
-                                                        ) : (
-                                                            <Button
-                                                                data-testid={`workflow-instance-${action}-${instance.id}`}
-                                                                disabled={busyId === instance.id}
-                                                                key={action}
-                                                                onClick={() => {
-                                                                    fireAndForget(act(instance.id, action));
-                                                                }}
-                                                                size="sm"
-                                                                type="button"
-                                                                variant="ghost"
-                                                            >
-                                                                {t(action)}
-                                                            </Button>
-                                                        ),
-                                                    )}
+                                                {actionImpl !== undefined && (
+                                                    // Keyed by workflow so an armed restart confirmation never survives a workflow switch.
+                                                    <InstanceActions
+                                                        busy={busyId === instance.id}
+                                                        id={instance.id}
+                                                        key={workflowName}
+                                                        onAct={(action) => {
+                                                            fireAndForget(act(instance.id, action));
+                                                        }}
+                                                    />
+                                                )}
                                             </div>
                                         </TableCell>
                                     </TableRow>
