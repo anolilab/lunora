@@ -280,6 +280,23 @@ interface ClientDebugSnapshot {
 }
 
 /**
+ * Whether the client is actually caught up, which `connectionStatus()` alone cannot
+ * say: it reads `"connected"` as soon as any socket is open, though a subscription
+ * on it may not have been acknowledged yet (it has no data) and writes may still be
+ * waiting in the offline queue. See {@link LunoraClient.syncStatus}.
+ */
+interface SyncStatus {
+    /** The aggregate socket status, as {@link LunoraClient.connectionStatus} reports it. */
+    connection: ConnectionStatus;
+    /** Live queries and shapes the server has not answered yet on the current connection. */
+    pendingSubscriptions: number;
+    /** Writes waiting in the built-in offline queue (not the `@lunora/db` outbox). */
+    pendingWrites: number;
+    /** `true` only on a live connection with every subscription answered and no write queued. */
+    synced: boolean;
+}
+
+/**
  * Terminal verdict for a mutation that passed through the offline queue,
  * delivered to {@link LunoraClient.onMutationSettled}.
  *
@@ -922,6 +939,11 @@ class LunoraClient {
     /** Subscribers to the offline-queue pending-count (see `onPendingChange`). */
     private readonly pendingChangeListeners = new Listeners<number>();
 
+    private readonly syncStatusListeners = new Listeners<SyncStatus>();
+
+    /** The last value `syncStatusListeners` was told, to emit only on a real change. */
+    private lastSyncStatus: SyncStatus | undefined;
+
     /**
      * Whisper-topic handlers, keyed by `connectionKey(shardKey)` → topic → set
      * of callbacks. Membership doubles as the resubscribe set replayed on every
@@ -1121,6 +1143,7 @@ class LunoraClient {
             },
             onSizeChange: (size) => {
                 this.pendingChangeListeners.emit(size);
+                this.emitSyncStatus();
             },
             persistence: this.persistence,
             version: options.persistenceVersion,
@@ -2369,6 +2392,54 @@ class LunoraClient {
         const unsubscribe = this.statusListeners.add(listener);
 
         listener(this.computeStatus());
+
+        return unsubscribe;
+    }
+
+    /**
+     * Whether the client is caught up: a live connection, every subscription
+     * answered by the server, and no write waiting in the offline queue. Use this
+     * rather than `connectionStatus() === "connected"` for a "synced" indicator —
+     * that reads `"connected"` the moment a socket opens, while subscriptions still
+     * have no data and queued writes are still waiting to go out.
+     *
+     * Over the HTTP polling fallback, and on a cross-tab follower (neither sees
+     * server acknowledgements), a subscription counts as answered once it has
+     * received its first value.
+     */
+    public syncStatus(): SyncStatus {
+        const connection = this.computeStatus();
+        // Neither the polling fallback nor a follower tab sees a server `ack`; a delivered value is the evidence there is.
+        const ackless = connection === "polling" || (this.tabCoordinator !== undefined && !this.tabCoordinator.isLeader());
+        let pendingSubscriptions = 0;
+
+        for (const state of this.subscriptions.all()) {
+            if (!(state.acked || (ackless && state.serverBase !== undefined))) {
+                pendingSubscriptions += 1;
+            }
+        }
+
+        for (const state of this.shapeSubscriptions.values()) {
+            if (state.serverCursor === undefined) {
+                pendingSubscriptions += 1;
+            }
+        }
+
+        const pendingWrites = this.offlineQueue.size;
+
+        return { connection, pendingSubscriptions, pendingWrites, synced: isLiveStatus(connection) && pendingSubscriptions === 0 && pendingWrites === 0 };
+    }
+
+    /**
+     * Subscribe to {@link syncStatus} changes. Invokes `listener` immediately with
+     * the current value, then whenever the connection status, the number of
+     * unanswered subscriptions or the offline-queue depth changes. Returns an
+     * unsubscribe function.
+     */
+    public onSyncStatus(listener: (status: SyncStatus) => void): Unsubscribe {
+        const unsubscribe = this.syncStatusListeners.add(listener);
+
+        listener(this.syncStatus());
 
         return unsubscribe;
     }
@@ -3750,6 +3821,7 @@ class LunoraClient {
                 ...(cached?.serverEpoch === undefined ? {} : { serverEpoch: cached.serverEpoch }),
             };
             this.subscriptions.add(state);
+            this.emitSyncStatus();
 
             if (cached !== undefined) {
                 this.cacheSeededQueries.set(key, cached);
@@ -3808,6 +3880,7 @@ class LunoraClient {
                 this.returnCacheSeed(SubscriptionRegistry.keyOf(subscriptionState));
                 this.subscriptions.remove(subscriptionState);
                 this.releaseIdleShard(subscriptionState.shardKey);
+                this.emitSyncStatus();
             }
         };
 
@@ -4151,6 +4224,7 @@ class LunoraClient {
         this.identityChangeListeners.clear();
         this.mutationSettledListeners.clear();
         this.pendingChangeListeners.clear();
+        this.syncStatusListeners.clear();
         this.whisperHandlers.clear();
         this.liveSocketGrants.clear();
         // Room handles still open keep their held-send closures reachable through these; a closed client drops them.
@@ -5602,9 +5676,30 @@ class LunoraClient {
         }
     }
 
+    /** Recompute {@link syncStatus} and notify its listeners if any field changed. */
+    private emitSyncStatus(): void {
+        const next = this.syncStatus();
+        const last = this.lastSyncStatus;
+
+        if (
+            last?.connection === next.connection &&
+            last.pendingSubscriptions === next.pendingSubscriptions &&
+            last.pendingWrites === next.pendingWrites &&
+            last.synced === next.synced
+        ) {
+            return;
+        }
+
+        this.lastSyncStatus = next;
+        this.syncStatusListeners.emit(next);
+    }
+
     /** Recompute the aggregate status and notify listeners if it changed. */
     private emitConnectionStatus(): void {
         const next = this.computeStatus();
+
+        // A reconnect un-acks subscriptions without necessarily moving the aggregate status.
+        this.emitSyncStatus();
 
         if (next === this.lastStatus) {
             return;
@@ -7075,6 +7170,7 @@ class LunoraClient {
 
                 if (state) {
                     state.acked = true;
+                    this.emitSyncStatus();
                 }
 
                 return;
@@ -7471,6 +7567,7 @@ class LunoraClient {
     private ackAndAdvanceCursor(state: SubscriptionState, cursor: number | undefined, epoch: string | undefined): void {
         /* eslint-disable no-param-reassign -- advance the shared subscription state in place (same pattern as the optimistic-update path above) */
         state.acked = true;
+        this.emitSyncStatus();
 
         if ((cursor !== undefined && cursor !== state.serverCursor) || (epoch !== undefined && epoch !== state.serverEpoch)) {
             if (cursor !== undefined) {
@@ -9567,4 +9664,5 @@ export type {
     MutationSettledEvent,
     ReplayCredential,
     ReplayIdentityVerdict,
+    SyncStatus,
 };
