@@ -348,6 +348,16 @@ who knows its key. A second supply, a supply after a decline or after a timeout,
 or a supply on a thread paused before the request table existed, is a `CONFLICT`
 and stores nothing.
 
+**When the wake-up is lost.** A supply is committed when `agentSupplySecret`
+returns, whether or not the wake-up that tells the paused run reached it. A wake-up
+that fails after the supply committed is not rethrown, and the owner is not asked to
+retry, because the retry would be a `CONFLICT`. If the wake-up truly never arrived,
+the run does not notice until its wait ends at the deadline, where the loop reads
+the row and honours the supply. The stored value is kept for the longer of 15
+minutes and the time left to that deadline, up to the host's 24-hour ceiling, so
+with an `approvalTimeout` of more than a day a wake-up that is truly lost can find
+the value expired. Keep the timeout for secret requests under a day if that matters.
+
 `agents:agentSecretRequests({ threadKey })` lists a thread's requests for the
 owner, with status, tool name, deadline and the `label` the model gave the request
 (what the secret is for; absent on requests recorded before labels). It never
