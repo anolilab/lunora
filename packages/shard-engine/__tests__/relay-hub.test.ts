@@ -1344,6 +1344,37 @@ describe("relay hub", () => {
         });
     });
 
+    it("keeps at most a bounded number of live control records per connection", async () => {
+        expect.assertions(1);
+
+        const member = memberOf({
+            doName: () => `${OWNER_KEY}::relay::0`,
+            env: () => {
+                return {};
+            },
+            getWebSockets: () => [],
+            liveControl: () => Promise.resolve(new Response(undefined, { status: 200 })),
+            readAttachment: () => {
+                return {};
+            },
+            shardBinding: () => "SHARD",
+            shardJurisdiction: () => undefined,
+            sql: () => database.sql,
+        } as unknown as RelayHost);
+
+        // A long-lived socket that subscribes and unsubscribes 200 distinct subscriptions.
+        for (let index = 0; index < 200; index += 1) {
+            const control = { action: "unsubscribe", callerId: "u1", connectionId: "c1", key: "k1", seq: index + 1, subscriptionId: `s${String(index)}` };
+
+            // eslint-disable-next-line no-await-in-loop -- each call is applied in order, as the owner sends them
+            await deliver(member, JSON.stringify({ control, type: "relay_live_control" }));
+        }
+
+        const records = (member as unknown as { liveControlSeqs: Map<string, Map<string, number>> }).liveControlSeqs.get("c1");
+
+        expect(records?.size).toBe(64);
+    });
+
     describe("relay announce", () => {
         const announcingRelay = (status: number): RelayMember => {
             const owner = { fetch: () => Promise.resolve(new Response(undefined, { status })) };

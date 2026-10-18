@@ -256,6 +256,15 @@ const jsonRelayResponse = (body: unknown): Response => Response.json(body, { hea
 // eslint-disable-next-line unicorn/no-null -- 204 No Content has no body; null is the standard "no body" value
 const noContent = (): Response => new Response(null, { status: 204 });
 
+/**
+ * How many subscriptions per connection a relay keeps a live control sequence for. A long-lived socket that subscribes and unsubscribes
+ * repeatedly would otherwise keep one entry per subscription it ever had. Only the newest matter: the race the sequence guards against is
+ * a late frame within seconds of the one that superseded it.
+ * ponytail: a count cap, not a time cap; a burst of more than this many distinct subscriptions inside that window loses ordering on the
+ * oldest. Raise it, or expire entries by age, if a client legitimately churns that fast.
+ */
+const LIVE_CONTROL_SEQS_PER_CONNECTION = 64;
+
 /** Status a relay answers a forwarded frame with when it holds no sockets, so the owner stops fanning out to it. */
 const RELAY_IDLE_STATUS = 410;
 
@@ -2062,7 +2071,17 @@ class RelayMember extends RelayLink {
             return Response.json({ error: { code: "LIVE_CONTROL_SUPERSEDED", message: "a later live control call already applied" } }, { status: 409 });
         }
 
+        // Re-inserted, so the map stays ordered oldest call first and the cap below evicts the stalest entry.
+        subscriptions.delete(subscriptionId);
         subscriptions.set(subscriptionId, seq);
+
+        if (subscriptions.size > LIVE_CONTROL_SEQS_PER_CONNECTION) {
+            const [oldest] = subscriptions.keys();
+
+            if (oldest !== undefined) {
+                subscriptions.delete(oldest);
+            }
+        }
 
         const response = await this.host.liveControl(control);
 
