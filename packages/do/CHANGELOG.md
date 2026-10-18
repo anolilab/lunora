@@ -1,3 +1,15 @@
+## @lunora/do [1.0.0-alpha.228](https://github.com/anolilab/lunora/compare/@lunora/do@1.0.0-alpha.227...@lunora/do@1.0.0-alpha.228) (2026-10-18)
+
+### Bug Fixes
+
+* **shard-engine:** sequence relay attach, detach and live control ([#1248](https://github.com/anolilab/lunora/issues/1248)) ([46da031](https://github.com/anolilab/lunora/commit/46da031cd6a5b917f644b3a454fe5f755f68c284))
+
+
+### Dependencies
+
+* **@lunora/observability:** upgraded to 1.0.0-alpha.152
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.141
+
 ## @lunora/do [1.0.0-alpha.227](https://github.com/anolilab/lunora/compare/@lunora/do@1.0.0-alpha.226...@lunora/do@1.0.0-alpha.227) (2026-10-18)
 
 ### ⚠ BREAKING CHANGES
