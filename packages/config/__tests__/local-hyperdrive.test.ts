@@ -226,6 +226,27 @@ describe("local hyperdrive", () => {
             expect(existsSync(lock)).toBe(false);
         });
 
+        it("tries again for a binding an earlier attempt could only give the refusing address, once PGlite is there", async () => {
+            expect.assertions(3);
+
+            writeWrangler([{ binding: "DB", id: "a" }]);
+
+            const env: NodeJS.ProcessEnv = {};
+            const missing = await startLocalHyperdrive({ env, load: async () => undefined, onWarning: () => {}, projectRoot: root });
+
+            expect(env[`${VAR}DB`]).toBe(UNAVAILABLE);
+
+            // The developer installs PGlite and the dev server restarts in the same process; the variable is still set.
+            const { runtime } = fakeRuntime();
+            const retried = await startLocalHyperdrive({ env, load: async () => runtime, projectRoot: root });
+
+            expect(retried?.bindings).toStrictEqual(["DB"]);
+            expect(env[`${VAR}DB`]).toBe("postgres://local/DB");
+
+            await retried?.stop();
+            await missing?.stop();
+        });
+
         it("rolls back the servers already started when a later one fails", async () => {
             expect.assertions(3);
 

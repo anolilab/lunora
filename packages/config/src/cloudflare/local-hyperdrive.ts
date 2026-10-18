@@ -55,10 +55,19 @@ interface LocalHyperdrive {
     stop: () => Promise<void>;
 }
 
+/** An address nothing listens on: port 1 refuses the connection at once. */
+const UNAVAILABLE_CONNECTION_STRING = "postgres://postgres:postgres@127.0.0.1:1/postgres"; // gitleaks:allow -- a placeholder that connects to nothing
+
 /** Whether wrangler would find a local database for `binding` without help. */
 const hasLocalDatabase = (binding: string, entry: { localConnectionString?: unknown }, env: NodeJS.ProcessEnv): boolean =>
     (typeof entry.localConnectionString === "string" && entry.localConnectionString !== "") ||
-    LOCAL_CONNECTION_STRING_PREFIXES.some((prefix) => (env[`${prefix}${binding}`] ?? "") !== "");
+    // The refusing address is what an earlier attempt left when it could not serve a database, not one the developer supplied:
+    // a later attempt (a Vite restart after installing PGlite, or the other process letting go of the lock) may try again.
+    LOCAL_CONNECTION_STRING_PREFIXES.some((prefix) => {
+        const value = env[`${prefix}${binding}`] ?? "";
+
+        return value !== "" && value !== UNAVAILABLE_CONNECTION_STRING;
+    });
 
 /** The Hyperdrive bindings in `wrangler.jsonc` that nothing local backs yet. */
 const bindingsNeedingDatabase = (
@@ -176,9 +185,6 @@ const isMysqlOnly = (projectRoot: string): boolean => {
         return false;
     }
 };
-
-/** An address nothing listens on: port 1 refuses the connection at once. */
-const UNAVAILABLE_CONNECTION_STRING = "postgres://postgres:postgres@127.0.0.1:1/postgres"; // gitleaks:allow -- a placeholder that connects to nothing
 
 /** Locks this process holds, so a second starter here sees a live owner instead of a pid it takes for stale. */
 const heldHere = new Set<string>();
