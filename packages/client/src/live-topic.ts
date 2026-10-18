@@ -65,9 +65,10 @@ const subscribeLiveTopic = (options: SubscribeLiveTopicOptions): (() => void) =>
     entry.refs += 1;
 
     const held = entry;
-    // A topic-derived id joins same-topic subscribers into ONE shard-side subscription (the client
-    // merges handlers per id), instead of one per mounted hook against the shard's subscription limit.
-    const unsubscribe = held.stream.subscribe({ id: `topic:${options.topic}`, onError: options.onError, onEvent: options.onEvent, topic: options.topic });
+    // The topic itself is the id: it joins same-topic subscribers into ONE shard-side subscription (the
+    // client merges handlers per id), instead of one per mounted hook against the shard's subscription
+    // limit. A prefix would push a 256-character topic past the shard's 256-character id limit.
+    const unsubscribe = held.stream.subscribe({ id: options.topic, onError: options.onError, onEvent: options.onEvent, topic: options.topic });
     let released = false;
 
     return () => {

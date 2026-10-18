@@ -68,6 +68,7 @@ const useLiveTopic = (options: UseLiveTopicOptions): UseLiveTopicResult => {
                     },
                     onEvent: (payload) => {
                         lastEvent.value = payload;
+                        error.value = undefined;
                         options.onEvent?.(payload);
                     },
                 });

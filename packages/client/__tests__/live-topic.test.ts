@@ -142,6 +142,38 @@ describe(subscribeLiveTopic, () => {
         offSecond();
     });
 
+    it("registers a 256-character topic under an id the shard accepts", async () => {
+        expect.hasAssertions();
+
+        const controls: { subscriptionId?: string; topic?: string }[] = [];
+
+        vi.stubGlobal(
+            "fetch",
+            vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+                if (/\/connect(?:\?|$)/u.test(urlOf(input))) {
+                    return Promise.resolve(new Response(new ReadableStream<Uint8Array>(), { headers: { "x-lunora-live-connection": "c1" } }));
+                }
+
+                controls.push(JSON.parse(typeof init?.body === "string" ? init.body : "{}") as { subscriptionId?: string; topic?: string });
+
+                return Promise.resolve(Response.json({ ok: true }));
+            }),
+        );
+
+        const topic = `t${"x".repeat(255)}`;
+        const off = subscribeLiveTopic({ topic, url: "/live/long/connect" });
+
+        await vi.waitFor(() => {
+            expect(controls).toHaveLength(1);
+        });
+
+        // The shard refuses an id over 256 characters with a 400.
+        expect(controls[0]?.topic).toHaveLength(256);
+        expect(controls[0]?.subscriptionId?.length).toBeLessThanOrEqual(256);
+
+        off();
+    });
+
     it("does not share a connection between differently configured subscribers", async () => {
         expect.hasAssertions();
 

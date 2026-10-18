@@ -157,6 +157,21 @@ describe(useLiveTopic, () => {
         expect(onError).toHaveBeenCalledWith(refusal);
     });
 
+    it("clears a refusal once a payload arrives", () => {
+        expect.hasAssertions();
+
+        const { result } = mount({ topic: "a", url: URL });
+
+        subscriptionAt(0).options.onError?.({ status: 403, subscriptionId: "sub-1", topic: "a" });
+
+        expect(result.error.value).toBeDefined();
+
+        subscriptionAt(0).options.onEvent?.({ id: 1 });
+
+        expect(result.error.value).toBeUndefined();
+        expect(result.lastEvent.value).toStrictEqual({ id: 1 });
+    });
+
     it("does nothing during SSR: no subscription, and the refs stay at their initial values", () => {
         expect.hasAssertions();
 
