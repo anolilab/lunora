@@ -1,3 +1,12 @@
+## @lunora/hyperdrive [1.0.0-alpha.185](https://github.com/anolilab/lunora/compare/@lunora/hyperdrive@1.0.0-alpha.184...@lunora/hyperdrive@1.0.0-alpha.185) (2026-10-18)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.61
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.139
+* **@lunora/sql-store:** upgraded to 1.0.0-alpha.189
+
 ## @lunora/hyperdrive [1.0.0-alpha.184](https://github.com/anolilab/lunora/compare/@lunora/hyperdrive@1.0.0-alpha.183...@lunora/hyperdrive@1.0.0-alpha.184) (2026-10-18)
 
 
