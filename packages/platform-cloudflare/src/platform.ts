@@ -117,11 +117,11 @@ export interface WorkerPlatformOptions {
  * `@cloudflare/workers-types` onto callers that are already holding the runtime
  * object; the adapters narrow it internally.
  *
- * `env` carries the Worker secrets the secret-value host seals under. Pass `{}`
+ * `env` carries the Worker secrets the secret-value host seals under. Leave it out
  * for a shard that holds no key: the host then refuses every put and take rather
  * than store plaintext.
  */
-export const createShardPlatform = (state: unknown, env: unknown): ShardPlatform => {
+export const createShardPlatform = (state: unknown, env: unknown = {}): ShardPlatform => {
     const durableState = state as Parameters<typeof createShardHost>[0];
 
     return {
