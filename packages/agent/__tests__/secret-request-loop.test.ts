@@ -29,6 +29,12 @@ const VALUE_TTL_MS = 15 * 60 * 1000;
  * freezes the instance), and `timeoutWaits` makes a named wait fail the way an
  * elapsed host timeout does. Records every wait's options and resolved payload.
  */
+/** A wait's armed milestone: `promise` settles when the run parks on the wait, `fire` settles it. */
+interface Armed {
+    fire: () => void;
+    promise: Promise<void>;
+}
+
 class WaitJournal implements AgentStepLike {
     public readonly invoked: string[] = [];
 
@@ -43,6 +49,13 @@ class WaitJournal implements AgentStepLike {
     public readonly waitedNames: string[] = [];
 
     private readonly entries = new Map<string, { output: unknown }>();
+
+    private readonly armedWaits = new Map<string, Armed>();
+
+    /** Resolves once the run has armed a wait of this name, the point at which it is parked on it. */
+    public armed(name: string): Promise<void> {
+        return this.armedSignal(name).promise;
+    }
 
     public async do<T>(name: string, callback: () => Promise<T>): Promise<T> {
         const existing = this.entries.get(name);
@@ -74,6 +87,7 @@ class WaitJournal implements AgentStepLike {
 
         if (!this.events.has(name)) {
             this.waitedNames.push(name);
+            this.armedSignal(name).fire();
 
             return new Promise<{ payload: T; type: string }>(() => {});
         }
@@ -89,16 +103,27 @@ class WaitJournal implements AgentStepLike {
     public persisted(): string {
         return JSON.stringify([...this.entries.values()].map((entry) => entry.output));
     }
-}
 
-const flushMicrotasks = async (): Promise<void> => {
-    await new Promise((resolve) => {
-        setTimeout(resolve, 0);
-    });
-    await new Promise((resolve) => {
-        setTimeout(resolve, 0);
-    });
-};
+    private armedSignal(name: string): Armed {
+        const existing = this.armedWaits.get(name);
+
+        if (existing !== undefined) {
+            return existing;
+        }
+
+        let fire: () => void = () => {};
+        const promise = new Promise<void>((resolve) => {
+            fire = () => {
+                resolve();
+            };
+        });
+        const signal: Armed = { fire, promise };
+
+        this.armedWaits.set(name, signal);
+
+        return signal;
+    }
+}
 
 type Handler = { handler: (context: unknown, args: never) => unknown };
 
@@ -252,7 +277,10 @@ const secretAgent = (used: string[]): AgentDefinition =>
         },
     });
 
-/** Run the paused request to its wait. The paused invocation never settles, so it is left pending. */
+/**
+ * Run the paused request (`call_1`) to its wait. The paused invocation never settles, so it is
+ * left pending; the wait being armed is the milestone that the marker and the request row are written.
+ */
 const pauseAt = async (
     agent: AgentDefinition,
     journal: WaitJournal,
@@ -264,7 +292,7 @@ const pauseAt = async (
     paused.catch(() => {
         /* the paused invocation never settles */
     });
-    await flushMicrotasks();
+    await journal.armed("secret:call_1");
 };
 
 describe("requestSecretTool — the loop pauses and resumes", () => {
