@@ -66,7 +66,9 @@ const localAiBinding = (options: CloudflarePluginOptions, localOptions: LocalAiO
             // A copy: a plain-object customizer is the user's own object, and the
             // delete below must not stick to it for the rest of the process.
             const result = fromUser === undefined ? undefined : { ...fromUser };
-            const withheld = serving ? withheldBindings({ ai: config.ai ?? result?.ai, artifacts: config.artifacts ?? result?.artifacts }, hasCredentials) : [];
+            // Both sides count: an empty array on the base config must not hide a binding the customizer returns.
+            const artifacts = [...(config.artifacts ?? []), ...(result?.artifacts ?? [])];
+            const withheld = serving ? withheldBindings({ ai: config.ai ?? result?.ai, artifacts }, hasCredentials) : [];
 
             for (const entry of withheld) {
                 // In place by design: the plugin merges the returned object with `defu`,

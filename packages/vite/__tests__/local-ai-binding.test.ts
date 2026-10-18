@@ -66,6 +66,26 @@ describe("localAiBinding", () => {
         expect(warnings[0]).toContain("ctx.artifacts");
     });
 
+    it("drops an artifacts binding the user's customizer returns even when the base config has an empty array", () => {
+        expect.assertions(3);
+
+        const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+        const options = {
+            config: (): Partial<WorkerConfig> => {
+                return { artifacts: [{ binding: "REPOS" }] };
+            },
+        };
+        const plugin = localAiBinding(options, { hasCredentials: () => false });
+
+        runConfigHook(plugin, "serve");
+
+        const worker = resolveWorker(options, { artifacts: [], name: "app" });
+
+        expect(worker.artifacts).toBeUndefined();
+        expect(worker.name).toBe("app");
+        expect(warn.mock.calls.map((call) => String(call[0])).join(" ")).toContain("REPOS");
+    });
+
     it("keeps the artifacts binding for a build, whose output is the deploy config", () => {
         expect.assertions(1);
 
