@@ -137,6 +137,12 @@ type SubmitOptions struct {
 	// Precondition is re-evaluated just before a QUEUED write replays; false
 	// drops it rather than replaying a write that can only fail.
 	Precondition func() bool
+	// OnlineOnly is never queued, persisted or replayed. Where a normal write
+	// would be queued, Submit returns an OfflineError coded CodeOfflineNotQueued
+	// and the arguments never reach the queue or the persistence adapter. It does
+	// not wait for a queue flush or queue behind pending writes, so it may
+	// overtake them. For a credential or a one-time token.
+	OnlineOnly bool
 	// OnSettled reports the eventual verdict on a queued write.
 	OnSettled func(MutationSettled)
 }
@@ -235,6 +241,15 @@ func (c *Client) Submit(options SubmitOptions) (MutationOutcome, error) {
 
 	queue := c.offline
 	queueIt := c.send == nil && (c.wasEverConnected || queue.QueueBeforeFirstConnect())
+
+	// Refused with the layers rolled back, which is what a closed client does
+	// above. The layers were installed before the lock, so they cannot be skipped.
+	if queueIt && options.OnlineOnly {
+		c.mu.Unlock()
+		c.settleLayers(nil, rollbacks, nil)
+
+		return MutationOutcome{}, OfflineError{Code: CodeOfflineNotQueued, Message: "'" + options.FunctionPath + "' is online-only and the connection is not live, so it was not queued"}
+	}
 
 	var evicted []Discarded
 
