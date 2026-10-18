@@ -113,6 +113,8 @@ const normalizeDepth = (depth: number | undefined): number => (isPositiveInteger
 /** Everything one turn (and its tool calls) needs, prepared once per run. */
 interface TurnContext {
     agent: AgentDefinition;
+    /** Dispatch ref of `agents:agentApprovalGranted` — whether a tool is granted for the thread (read inside the gate's step). */
+    approvalGrantedRef: ReturnType<typeof toFunctionReference>;
     /** History-compaction seam, when the runtime provided one (else `undefined`). */
     compact: AgentCompact | undefined;
     /** Patch this run's thread by key (status/error/usage/…). */
@@ -148,10 +150,15 @@ interface TurnContext {
     tools: Record<string, AnyAgentTool>;
 }
 
-/** The decision a client sends to resolve a human-in-the-loop tool approval. */
+/**
+ * The decision a client sends to resolve a human-in-the-loop tool approval.
+ * `scope: "thread"` rides an `approve` that also granted the tool for the rest of
+ * the thread; the grant itself is written by `agentResolveApproval`, not here.
+ */
 interface ApprovalDecision {
     decision: "approve" | "reject";
     note?: string;
+    scope?: "thread";
 }
 
 /** JSON-encode a tool's non-string output; `undefined` encodes as "null". */
@@ -216,13 +223,18 @@ const addUsage = (base: AgentUsage | undefined, next: AgentUsage | undefined): A
 };
 
 /**
- * Resolve a tool's `needsApproval` gate against the (replay-stable) model
- * input. The `true`/`false`/`undefined` forms are compile-time constants —
- * replay re-derives them identically for free, so they stay outside any
- * durable step. The FUNCTION form can read `getState`/`run` and so can be
- * non-deterministic or (if misused) side-effecting; it is memoized in its own
- * durable step (`gateStepName`, distinct from the tool's own step — see
- * `runToolCall`) so it now resolves exactly ONCE per call, not once per replay.
+ * Resolve a tool's `needsApproval` gate against the (replay-stable) model input.
+ * Only the absent/`false` forms are compile-time constants; a gated tool — the
+ * `true` form or the FUNCTION form — resolves inside its own durable step
+ * (`gateStepName`, distinct from the tool's own step — see `runToolCall`), so the
+ * decision is memoized and never re-derived on a replay.
+ *
+ * The thread's approval grant is read INSIDE that step, before the gate itself:
+ * a granted tool resolves to `false` (no pause), and that `false` is memoized
+ * with the step. A grant made after this call's gate resolved therefore never
+ * changes it, and a revoke never reaches back into a run already in flight.
+ * The memo stays a plain boolean, so a run parked across a deploy reads it back
+ * unchanged.
  */
 const resolveNeedsApproval = async (
     tool: AnyAgentTool,
@@ -230,6 +242,7 @@ const resolveNeedsApproval = async (
     step: AgentStepLike,
     gateStepName: string,
     context: AgentApprovalContext,
+    isGranted: () => Promise<boolean>,
 ): Promise<boolean> => {
     const { needsApproval } = tool;
 
@@ -237,11 +250,13 @@ const resolveNeedsApproval = async (
         return false;
     }
 
-    if (needsApproval === true) {
-        return true;
-    }
+    return step.do(gateStepName, async () => {
+        if (await isGranted()) {
+            return false;
+        }
 
-    return step.do(gateStepName, async () => needsApproval(input, context));
+        return needsApproval === true || needsApproval(input, context);
+    });
 };
 
 /**
@@ -352,7 +367,11 @@ const awaitApproval = async (turnContext: TurnContext, call: AgentToolCall): Pro
             type: `agent-approval:${call.id}`,
         })
         .then((event): ApprovalDecision => {
-            return { decision: event.payload.decision, ...(event.payload.note === undefined ? {} : { note: event.payload.note }) };
+            return {
+                decision: event.payload.decision,
+                ...(event.payload.note === undefined ? {} : { note: event.payload.note }),
+                ...(event.payload.scope === undefined ? {} : { scope: event.payload.scope }),
+            };
         })
         .catch((error: unknown): ApprovalDecision => {
             // ONLY an elapsed timeout becomes a decision. Without it the run
@@ -422,7 +441,8 @@ const readToolOutcome = (memo: unknown): ToolOutcome => {
 };
 
 const runToolCall = async (turnContext: TurnContext, call: AgentToolCall): Promise<void> => {
-    const { agent, depth, env, exports, getState, instanceId, onTokenDelta, owner, persist, run, setState, step, threadKey, tools } = turnContext;
+    const { agent, approvalGrantedRef, depth, env, exports, getState, instanceId, onTokenDelta, owner, persist, run, setState, step, threadKey, tools } =
+        turnContext;
     const stepName = `tool:${call.name}:${call.id}`;
     const tool: AnyAgentTool | undefined = tools[call.name];
     const messageKey = `${instanceId}:tool:${call.id}`;
@@ -480,9 +500,11 @@ const runToolCall = async (turnContext: TurnContext, call: AgentToolCall): Promi
     // rejects it. A rejection skips the tool and records why, so the next LLM
     // turn can recover instead of stalling.
     let status: "approved" | undefined;
+    let approvalScope: "thread" | undefined;
+    const isGranted = async (): Promise<boolean> => (await run(approvalGrantedRef, { key: threadKey, toolName: call.name })) === true;
 
-    if (await resolveNeedsApproval(tool, call.input, step, gateStepName, gateContext)) {
-        const { decision, note } = await awaitApproval(turnContext, call);
+    if (await resolveNeedsApproval(tool, call.input, step, gateStepName, gateContext, isGranted)) {
+        const { decision, note, scope } = await awaitApproval(turnContext, call);
 
         if (decision === "reject") {
             const reason = note === undefined ? "" : ` Reason: ${note}`;
@@ -501,7 +523,15 @@ const runToolCall = async (turnContext: TurnContext, call: AgentToolCall): Promi
         }
 
         status = "approved";
+        approvalScope = scope;
     }
+
+    // The approval outcome as the tool-result row carries it: `status` for the
+    // approve/reject lifecycle, `approvalScope` when the approval was for the thread.
+    const approvalFields = {
+        ...(status === undefined ? {} : { status }),
+        ...(approvalScope === undefined ? {} : { approvalScope }),
+    };
 
     // The `invalid` branch above only fires for a tool whose `inputSchema`
     // carries a `validate` — a bare `jsonSchema()` (every batteries-included
@@ -550,7 +580,7 @@ const runToolCall = async (turnContext: TurnContext, call: AgentToolCall): Promi
             messageKey,
             role: "tool",
             stepName,
-            ...(status === undefined ? {} : { status }),
+            ...approvalFields,
             toolCallId: call.id,
             toolName: call.name,
         });
@@ -569,7 +599,7 @@ const runToolCall = async (turnContext: TurnContext, call: AgentToolCall): Promi
         messageKey,
         role: "tool",
         stepName,
-        ...(status === undefined ? {} : { status }),
+        ...approvalFields,
         toolCallId: call.id,
         toolName: call.name,
     });
@@ -1418,6 +1448,7 @@ const runAgentLoop = async (options: AgentLoopOptions): Promise<AgentRunResult> 
     const stopConditions = normalizeStopWhen(agent.stopWhen);
 
     const appendMessage = toFunctionReference(paths.appendMessage);
+    const approvalGrantedRef = toFunctionReference(paths.approvalGranted);
     const completeRun = toFunctionReference(paths.completeRun);
     const ensureThread = toFunctionReference(paths.ensureThread);
     const listMessages = toFunctionReference(paths.listMessages);
@@ -1519,6 +1550,7 @@ const runAgentLoop = async (options: AgentLoopOptions): Promise<AgentRunResult> 
 
     const turnContext: TurnContext = {
         agent,
+        approvalGrantedRef,
         compact,
         depth: normalizeDepth(params.depth),
         env,

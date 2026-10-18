@@ -1079,6 +1079,12 @@ export interface AgentFunctionPaths {
     appendMessage: string;
 
     /**
+     * The internal `agents:agentApprovalGranted` query the loop dispatches from
+     * inside a tool's approval-gate step: whether the tool is granted for the thread.
+     */
+    approvalGranted: string;
+
+    /**
      * The internal `agents:agentCompleteRun` mutation the loop dispatches at the
      * end of a run: it writes the terminal status AND hands the thread to the
      * next queued run in the same mutation.
@@ -1134,6 +1140,8 @@ export type AgentMessageStatus = "approved" | "awaiting_approval" | "rejected";
  * @experimental
  */
 export interface AgentMessageRow {
+    /** On an approved tool result: `"thread"` when the approval also granted the tool for the rest of the thread. */
+    approvalScope?: "thread";
     content: string;
     role: "assistant" | "system" | "tool" | "user";
     seq: number;

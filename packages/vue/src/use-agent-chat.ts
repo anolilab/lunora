@@ -81,7 +81,7 @@ type AgentMessagesReference = FunctionReference<"query", { key: string; limit?: 
 /** The `agents:agentResolveApproval` reference — resolves a human-in-the-loop tool approval. */
 type AgentApprovalReference = FunctionReference<
     "mutation",
-    { decision: "approve" | "reject"; instanceId: string; note?: string; threadKey: string; toolCallId: string },
+    { decision: "approve" | "approve_for_thread" | "reject"; instanceId: string; note?: string; threadKey: string; toolCallId: string },
     { resolved: boolean }
 >;
 
