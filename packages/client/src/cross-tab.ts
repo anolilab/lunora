@@ -165,6 +165,14 @@ class TabCoordinator {
     /** Timestamp of the most recent leader heartbeat. */
     private lastHeartbeat: number = 0;
 
+    /**
+     * Snapshots waiting for the end of the current tick, latest per key. A
+     * `subscription-data` frame is a full snapshot, so a burst for one key within
+     * a tick only needs its last frame posted — each post structured-clones the
+     * whole value for every tab on the channel.
+     */
+    private readonly pendingData = new Map<string, WsLeaderMessage>();
+
     private heartbeatTimer: ReturnType<typeof setInterval> | undefined = undefined;
     private leaderCheckTimer: ReturnType<typeof setInterval> | undefined = undefined;
 
@@ -354,7 +362,13 @@ class TabCoordinator {
             return;
         }
 
-        this.broadcast({
+        if (this.pendingData.size === 0) {
+            queueMicrotask(() => {
+                this.flushPendingData();
+            });
+        }
+
+        this.pendingData.set(key, {
             type: "subscription-data",
             tabId: this.tabId,
             key,
@@ -440,8 +454,32 @@ class TabCoordinator {
     // -----------------------------------------------------------------------
 
     private broadcast(message: TabCoordinatorMessage): void {
+        // Anything else posted for a key goes out BEHIND that key's pending snapshot:
+        // a `settled` frame that advanced the cursor ahead of the value it describes
+        // would leave a follower holding a resume position with nothing cached behind it.
+        this.flushPendingData();
+
         // bc.postMessage is synchronous in modern browsers.
         this.bc?.postMessage(message);
+    }
+
+    /** Post the snapshots queued this tick — unless leadership was lost meanwhile, when the new leader's own snapshots supersede them. */
+    private flushPendingData(): void {
+        if (this.pendingData.size === 0) {
+            return;
+        }
+
+        const frames = [...this.pendingData.values()];
+
+        this.pendingData.clear();
+
+        if (!this.leader) {
+            return;
+        }
+
+        for (const frame of frames) {
+            this.bc?.postMessage(frame);
+        }
     }
 
     private handleMessage(message: TabCoordinatorMessage): void {
