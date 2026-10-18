@@ -14,6 +14,7 @@ here is a public-API change and must be reviewed as one (SemVer applies).
 ```ts
 interface ShardPlatform {
     kv: ShardKvStore;
+    secretValues: SecretValueHost;
     shard: ShardHost;
     sockets: SocketHost;
 }
@@ -35,6 +36,14 @@ interface WorkerPlatform {
 interface WorkerPlatformOptions {
     scheduler?: SchedulerHost;
 }
+```
+
+### `createSecretValueHost` (const)
+
+```ts
+const createSecretValueHost: (storage: SecretStorageLike, options?: {
+    now?: () => number;
+}) => SecretValueHost;
 ```
 
 ### `createShardAlarms` (const)
@@ -102,8 +111,21 @@ interface KvStorageLike {
     delete: (key: string) => Promise<boolean | number>;
     get: <T = unknown>(key: string) => Promise<T | undefined>;
     list?: <T = unknown>(options?: {
+        limit?: number;
         prefix?: string;
     }) => Promise<Map<string, T>>;
     put: (key: string, value: unknown) => Promise<void>;
+}
+```
+
+### `SecretStorageLike` (interface)
+
+```ts
+interface SecretStorageLike extends KvStorageLike {
+    list: <T = unknown>(options?: {
+        limit?: number;
+        prefix?: string;
+    }) => Promise<Map<string, T>>;
+    transaction: <T>(closure: (txn: KvStorageLike) => Promise<T>) => Promise<T>;
 }
 ```
