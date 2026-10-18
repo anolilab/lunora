@@ -140,6 +140,7 @@ change that adds or removes a capability.
 | Durable offline queue         | ✅²    | ✅²  | ✅²  | ✅²  | ✅²   | ✅²  | ✅²    | ✅²  |
 | Per-shard drain               | ✅     | ✅   | ✅   | ✅   | ✅    | ✅   | ✅     | ✅   |
 | Batched offline replay        | ✅     | ✅   | ✅   | ✅   | ✅    | ✅   | ✅     | ✅   |
+| Online-only writes            | ✅     | ✅   | ✅   | ✅   | ✅    | ✅   | ✅     | ✅   |
 | Rate-limit backoff            | ✅⁵    | ✅⁵  | ✅⁵  | ✅⁵  | ✅⁵   | ✅⁵  | ✅⁵    | ✅⁵  |
 | Re-flush on a new token       | ✅⁹    | ➖⁹  | ➖⁹  | ➖⁹  | ➖⁹   | ➖⁹  | ➖⁹    | ✅⁹  |
 | Unset identity = token digest | ✅¹⁰   | ✅¹⁰ | ✅¹⁰ | ✅¹⁰ | ✅¹⁰  | ✅¹⁰ | ✅¹⁰   | ✅¹⁰ |
@@ -613,6 +614,8 @@ before it replays; an identity change refuses one; and a flush classifies each
 reply — success confirms the overlay, a coded verdict is terminal, a transient
 failure re-queues that write and every unreplayed one, in order.
 
+**An online-only write is never queued.** The option (`onlineOnly` in the spelling each port uses) makes a write refuse with `OFFLINE_NOT_QUEUED` at the point a normal write would be queued: before any optimistic layer is applied, and before its arguments reach the queue, the persistence adapter or disk. It is the write path for a credential or a one-time token. It does not wait for a flush or queue behind pending writes, so it may overtake a queued write to the same document, the same caveat `@lunora/client`'s `onlineOnly` carries. The queueing entry point gains the option: `submit` in every port except dart, whose `mutation` is the queueing call. The direct `mutation` of the other seven never queues, so it has nothing to refuse and takes no option.
+
 **A durable record holds the WIRE form of its args.** The native form carries the
 codec's own wrappers, and every real adapter serialises — a file, a SQLite text
 column, a preferences store — so a queued write with a `bigint`, `bytes`, `Date`
@@ -1078,6 +1081,7 @@ Every row below is either pinned by a named case or listed under
 | any `413` splits a batch; a lone refused write settles | `offline_flush_batch_splits_on_envelopeless_413`                                                                                                         |
 | a committed, undecodable result settles, never retries | `offline_flush_undecodable_result_settles_committed`                                                                                                     |
 | an empty shard key is the default shard on every path  | `offline_flush_empty_shard_key_routes_to_default`                                                                                                        |
+| an online-only write is refused offline, never queued  | `offline_online_only_refused_when_disconnected`, `offline_online_only_sends_when_connected`, `offline_online_only_leaves_normal_writes_queued`           |
 | a poke with an undecodable row is refused whole        | `shape_poke_with_undecodable_row_is_refused_whole`                                                                                                       |
 | a malformed frame never raises out of the handler      | `malformed_frames_are_ignored_without_raising`                                                                                                           |
 | a 2xx body that is not an object is the SDK's error    | `rpc_unreadable_success_body_raises_sdk_error`                                                                                                           |
