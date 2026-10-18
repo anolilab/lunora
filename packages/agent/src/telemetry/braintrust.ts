@@ -1,3 +1,4 @@
+import { usageStatus } from "@lunora/ai/create";
 import type { Telemetry } from "ai";
 
 import type { CommonOptions } from "./common";
@@ -5,6 +6,37 @@ import { contentText, describeError, readField, summarizeUsage, toolInputOf } fr
 import { createInFlightCalls } from "./in-flight-calls";
 
 const stringOr = (value: unknown, fallback: string): string => (typeof value === "string" && value.length > 0 ? value : fallback);
+
+/**
+ * Braintrust's LLM-span metric name for each usage field, so token counts roll up in
+ * its own dashboards rather than landing as opaque metadata. The cache and reasoning
+ * names are the ones Braintrust's own normalizers write. `prompt_tokens` is the full
+ * input count, cache included, which matches the AI SDK's `inputTokens` and keeps
+ * `tokens` equal to the provider's total.
+ */
+const BRAINTRUST_METRIC = {
+    cacheReadTokens: "prompt_cached_tokens",
+    cacheWriteTokens: "prompt_cache_creation_tokens",
+    inputTokens: "prompt_tokens",
+    outputTokens: "completion_tokens",
+    reasoningTokens: "completion_reasoning_tokens",
+    totalTokens: "tokens",
+} as const;
+
+/** A call's usage as Braintrust metrics. A bucket the call did not report is omitted, never sent as zero. */
+const braintrustMetrics = (usage: Record<string, number>): Record<string, number> => {
+    const metrics: Record<string, number> = {};
+
+    for (const [key, name] of Object.entries(BRAINTRUST_METRIC)) {
+        const value = usage[key];
+
+        if (value !== undefined) {
+            metrics[name] = value;
+        }
+    }
+
+    return metrics;
+};
 
 /**
  * The span handle a {@link BraintrustLike.traced} callback receives.
@@ -89,15 +121,13 @@ export const braintrustTelemetry = (options: BraintrustTelemetryOptions): Teleme
             // been normalized. On a stream that is after its `finish` part; the value
             // `execute()` resolves with carries no usage at all.
             const usage = summarizeUsage(readField(event, "usage") ?? readField(call.result, "usage"));
+            const status = usageStatus(usage);
 
-            if (usage) {
-                // Braintrust's LLM-span metric names, so token counts and cost roll up
-                // in its own dashboards rather than landing as opaque metadata.
-                fields.metrics = {
-                    completion_tokens: usage.outputTokens,
-                    prompt_tokens: usage.inputTokens,
-                    tokens: usage.totalTokens,
-                };
+            // Stamped on every call, so an unreported usage shows as `unavailable` rather than as a missing key.
+            fields.metadata = { "lunora.usage.status": status };
+
+            if (usage !== undefined && status !== "unavailable") {
+                fields.metrics = braintrustMetrics(usage);
             }
 
             if (!ok) {

@@ -4,7 +4,7 @@ import { describe, expect, it, vi } from "vitest";
 
 import type { BraintrustLike, BraintrustSpan } from "../../src/telemetry/braintrust";
 import { braintrustTelemetry } from "../../src/telemetry/braintrust";
-import { drain, generatingModel, settle, streamingModel, withTelemetry } from "./model-fixtures";
+import { drain, generatingModel, reportedUsage, settle, streamingModel, withTelemetry } from "./model-fixtures";
 
 /**
  * The ai@7 `Telemetry` event shapes are broad and churn across patch releases;
@@ -126,6 +126,86 @@ describe(braintrustTelemetry, () => {
         // the raw resolved value sees as no usage at all.
         expect(merged(calls[0] as TracedCall).metrics).toStrictEqual({ completion_tokens: 3, prompt_tokens: 12, tokens: 15 });
         expect(calls[0]?.endedAt).toBeDefined();
+    });
+
+    it("logs cache and reasoning buckets under Braintrust's metric names, without counting reasoning twice", async () => {
+        expect.assertions(2);
+
+        const { calls, logger } = fakeBraintrust();
+
+        await generateText({
+            model: generatingModel({ usage: reportedUsage({ cacheRead: 5, cacheWrite: 2, input: 12, output: 3, reasoning: 1 }) }),
+            prompt: "hi",
+            telemetry: withTelemetry(braintrustTelemetry({ logger })),
+        });
+
+        await settle();
+
+        // Reasoning (1) is inside the output count (3), so `tokens` stays prompt + completion.
+        expect(merged(calls[0] as TracedCall).metrics).toStrictEqual({
+            completion_reasoning_tokens: 1,
+            completion_tokens: 3,
+            prompt_cache_creation_tokens: 2,
+            prompt_cached_tokens: 5,
+            prompt_tokens: 12,
+            tokens: 15,
+        });
+        expect(merged(calls[0] as TracedCall).metadata).toStrictEqual({ "lunora.usage.status": "complete" });
+    });
+
+    it("omits a cache or reasoning bucket the provider did not report, or reported as zero", async () => {
+        expect.assertions(1);
+
+        const { calls, logger } = fakeBraintrust();
+
+        await generateText({
+            model: generatingModel({ usage: reportedUsage({ cacheRead: 0, input: 12, output: 3 }) }),
+            prompt: "hi",
+            telemetry: withTelemetry(braintrustTelemetry({ logger })),
+        });
+
+        await settle();
+
+        expect(merged(calls[0] as TracedCall).metrics).toStrictEqual({ completion_tokens: 3, prompt_tokens: 12, tokens: 15 });
+    });
+
+    it("logs no metrics for a call whose usage is unavailable, and says so in metadata", async () => {
+        expect.assertions(2);
+
+        const { calls, logger } = fakeBraintrust();
+
+        await generateText({
+            model: generatingModel({ usage: reportedUsage({}) }),
+            prompt: "hi",
+            telemetry: withTelemetry(braintrustTelemetry({ logger })),
+        });
+
+        await settle();
+
+        expect(merged(calls[0] as TracedCall)).not.toHaveProperty("metrics");
+        expect(merged(calls[0] as TracedCall).metadata).toStrictEqual({ "lunora.usage.status": "unavailable" });
+    });
+
+    it("does not log a bare total as metrics: a total with no split is not a reported usage", async () => {
+        expect.assertions(2);
+
+        // Driven by hand, not through `generateText`: the SDK never hands over a total
+        // without its split, so only a direct end event can exercise this gate.
+        const { calls, logger } = fakeBraintrust();
+        const telemetry = braintrustTelemetry({ logger });
+
+        await telemetry.executeLanguageModelCall?.({
+            callId: "call-1",
+            execute: async () => {
+                return {};
+            },
+        });
+        telemetry.onLanguageModelCallEnd?.({ callId: "call-1", usage: { totalTokens: 15 } } as never);
+
+        await settle();
+
+        expect(merged(calls[0] as TracedCall)).not.toHaveProperty("metrics");
+        expect(merged(calls[0] as TracedCall).metadata).toStrictEqual({ "lunora.usage.status": "unavailable" });
     });
 
     it("returns execute()'s value to the caller without waiting for the span to close", async () => {
