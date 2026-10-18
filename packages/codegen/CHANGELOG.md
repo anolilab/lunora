@@ -1,3 +1,9 @@
+## @lunora/codegen [1.0.0-alpha.323](https://github.com/anolilab/lunora/compare/@lunora/codegen@1.0.0-alpha.322...@lunora/codegen@1.0.0-alpha.323) (2026-10-18)
+
+### Bug Fixes
+
+* **codegen:** gate deliveryAuthorization by target ([#1245](https://github.com/anolilab/lunora/issues/1245)) ([8a8410c](https://github.com/anolilab/lunora/commit/8a8410c5cfaee3f7df1df2fc5a4c3ae80b639141))
+
 ## @lunora/codegen [1.0.0-alpha.322](https://github.com/anolilab/lunora/compare/@lunora/codegen@1.0.0-alpha.321...@lunora/codegen@1.0.0-alpha.322) (2026-10-18)
 
 ### ⚠ BREAKING CHANGES
