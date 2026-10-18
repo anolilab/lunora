@@ -33,13 +33,24 @@ interface AgentApi {
 }
 ```
 
+### `AgentApprovalGrant` (interface)
+
+```ts
+interface AgentApprovalGrant {
+    createdAt: number;
+    toolName: string;
+}
+```
+
 ### `AgentChatApi` (interface)
 
 ```ts
 interface AgentChatApi {
     agents: {
+        agentApprovalGrants: AgentApprovalGrantsReference;
         agentMessages: AgentMessagesReference$1;
         agentResolveApproval: AgentApprovalReference;
+        agentRevokeApprovalGrant: AgentRevokeApprovalGrantReference;
         agentThread: AgentThreadReference;
     };
 }
@@ -49,10 +60,13 @@ interface AgentChatApi {
 
 ```ts
 interface AgentChatHandle {
+    approvalGrants: Readable<ReadonlyArray<AgentApprovalGrant>>;
     approve: (toolCallId: string, note?: string) => Promise<void>;
+    approveForThread: (toolCallId: string, note?: string) => Promise<void>;
     cancel: () => Promise<void>;
     messages: Readable<ReadonlyArray<AgentChatMessage>>;
     reject: (toolCallId: string, note?: string) => Promise<void>;
+    revokeGrant: (toolName: string) => Promise<void>;
     send: (input: string, args?: Record<string, unknown>) => Promise<void>;
     status: Readable<AgentThreadStatus | undefined>;
     streamingText: Readable<string>;
@@ -937,6 +951,14 @@ Not exported, and reachable only through a signature above. Their members
 are part of that signature's meaning, so a change here is a change to the
 public API and is gated as one. Listed once per package, sorted by name.
 
+### `AgentApprovalGrantsReference` (type)
+
+```ts
+type AgentApprovalGrantsReference = FunctionReference<"query", {
+    key: string;
+}, ReadonlyArray<AgentApprovalGrant>>;
+```
+
 ### `AgentApprovalReference` (type)
 
 ```ts
@@ -975,6 +997,17 @@ type AgentMessagesReference$1 = FunctionReference<"query", {
     key: string;
     limit?: number;
 }, ReadonlyArray<Record<string, unknown>>>;
+```
+
+### `AgentRevokeApprovalGrantReference` (type)
+
+```ts
+type AgentRevokeApprovalGrantReference = FunctionReference<"mutation", {
+    threadKey: string;
+    toolName: string;
+}, {
+    revoked: boolean;
+}>;
 ```
 
 ### `AgentThreadReference` (type)

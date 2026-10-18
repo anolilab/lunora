@@ -3889,6 +3889,14 @@ Re-exported from `@lunora/platform` — signature tracked at its source.
 
 Re-exported from `@lunora/platform` — signature tracked at its source.
 
+### `SECRET_VALUE_MAX_BYTES` (const)
+
+Re-exported from `@lunora/platform` — signature tracked at its source.
+
+### `SECRET_VALUE_MAX_TTL_MS` (const)
+
+Re-exported from `@lunora/platform` — signature tracked at its source.
+
 ### `ScheduleOptions` (interface)
 
 Re-exported from `@lunora/platform` — signature tracked at its source.
@@ -3902,6 +3910,22 @@ Re-exported from `@lunora/platform` — signature tracked at its source.
 Re-exported from `@lunora/platform` — signature tracked at its source.
 
 ### `SchedulerHost` (interface)
+
+Re-exported from `@lunora/platform` — signature tracked at its source.
+
+### `SecretValueHost` (interface)
+
+Re-exported from `@lunora/platform` — signature tracked at its source.
+
+### `SecretValuePutOptions` (interface)
+
+Re-exported from `@lunora/platform` — signature tracked at its source.
+
+### `SecretValueTakeOptions` (interface)
+
+Re-exported from `@lunora/platform` — signature tracked at its source.
+
+### `SecretValueTooLargeError` (class)
 
 Re-exported from `@lunora/platform` — signature tracked at its source.
 
@@ -4006,6 +4030,14 @@ Re-exported from `@lunora/platform` — signature tracked at its source.
 Re-exported from `@lunora/platform` — signature tracked at its source.
 
 ### `VectorizeVector` (interface)
+
+Re-exported from `@lunora/platform` — signature tracked at its source.
+
+### `assertSecretValueSize` (const)
+
+Re-exported from `@lunora/platform` — signature tracked at its source.
+
+### `clampSecretValueTtl` (const)
 
 Re-exported from `@lunora/platform` — signature tracked at its source.
 
