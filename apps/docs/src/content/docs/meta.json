@@ -15,6 +15,7 @@
         "concepts/queries-mutations",
         "concepts/function-context",
         "concepts/realtime",
+        "concepts/live-streams",
         "concepts/reactors",
         "concepts/offline-first",
         "concepts/local-first",

@@ -1,0 +1,178 @@
+---
+title: Live topic streams
+description: Publish events to named topics from the server and follow many of them over one SSE connection.
+related:
+    - to: /docs/concepts/realtime
+    - to: /docs/concepts/sharding
+    - to: /docs/concepts/http-endpoints
+    - to: /docs/concepts/scheduling
+    - to: /docs/frameworks/react-native
+---
+
+A live query pushes the result of a query. A live topic stream pushes an event
+that is not a row and has no query behind it: "a comment was posted", "the build
+finished". Declare the stream once with `defineLiveStream`, publish to a topic
+from server code, and let the browser follow any number of topics over one
+Server-Sent Events connection.
+
+## Declare the stream
+
+```ts
+// lunora/live.ts
+import { defineLiveStream } from "@lunora/server";
+
+export const posts = defineLiveStream({
+    id: "posts",
+    onSubscribe: async ({ ctx, topic }) => {
+        const [kind, postId] = topic.split(":");
+
+        return kind === "post" && (await ctx.runQuery(api.posts.canRead, { postId }));
+    },
+});
+```
+
+`defineLiveStream` returns `connectPath` (`/live/posts/connect`), `controlPath`
+(`/live/posts/control`), and the two route handlers. Codegen does not mount them.
+Mount them on the HTTP router you pass to `createWorker`, next to your other
+[HTTP endpoints](/docs/concepts/http-endpoints):
+
+```ts
+app.get(posts.connectPath, posts.connect);
+app.post(posts.controlPath, posts.control);
+```
+
+## Publish
+
+Publish with `ctx.live.publish(topic, payload, { stream })`. The `stream` is the
+`id` of the stream whose subscribers should see the event. A subscriber follows a
+topic through the stream that authorized it, so a publish reaches only that
+stream's subscribers.
+
+```ts
+// An HTTP action
+await ctx.live.publish(`post:${postId}`, { event: "comment_added", commentId }, { stream: "posts" });
+```
+
+The three publishing contexts differ in where the event goes:
+
+| Publisher                                  | Where the event is delivered                                                                                                                                                                                       |
+| ------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| HTTP action                                | The shard named by `shardKey`, or the default (root) shard. A caller that may not address the named shard is refused.                                                                                              |
+| Queue consumer                             | Forwarded to the shard named by `shardKey`, or the default shard. The publish is not checked against a caller, so do not take a `shardKey` from a message body without checking it yourself.                       |
+| Action, including a scheduled job's action | The shard the action runs on. A scheduled job runs on the `shardKey` it was scheduled with. A `shardKey` naming another shard is refused with `BAD_REQUEST`, because nothing forwards a live event between shards. |
+
+On the action context, `ctx.live` is typed optional, since the same type serves
+every target. Codegen refuses the build, with `platform_unsupported_feature`, when a
+handler reads `ctx.live` on a target that withholds live streams.
+
+A topic is at most 256 characters. A payload is at most 4096 bytes once it is
+JSON-encoded. A topic starting with `room:` or `__lunora_socket__:` is reserved and
+refused with `FORBIDDEN_TOPIC`. A refused publish rejects, so the caller sees the
+error. A publish to a topic nobody follows does nothing.
+
+A retried action publishes again, so a subscriber can see the same event twice.
+Put an id in the payload if duplicates matter.
+
+## Follow a topic in the browser
+
+`connectLiveStream` opens one connection and returns a handle. Call `subscribe`
+once per topic:
+
+```ts
+import { connectLiveStream } from "@lunora/client";
+
+const live = connectLiveStream("/live/posts/connect", { withCredentials: true });
+
+const off = live.subscribe({
+    onError: ({ status }) => console.warn(`subscribe refused: ${status}`),
+    onEvent: (payload) => render(payload),
+    topic: "post:123",
+});
+
+// later
+off();
+live.close();
+```
+
+`subscribeLiveTopic` is the shared form. It keeps one connection per URL, credentials
+setting, retry settings, and header set, opens it for the first subscriber, and closes
+it after the last one unsubscribes:
+
+```ts
+import { subscribeLiveTopic } from "@lunora/client";
+
+const unsubscribe = subscribeLiveTopic({
+    onEvent: (payload) => render(payload),
+    topic: "post:123",
+    url: "/live/posts/connect",
+});
+```
+
+To pick a shard, put it in the connect URL: `/live/posts/connect?shard=<key>`. The
+control calls carry the same shard, so the subscription lands on the connection's
+shard.
+
+### Framework hooks
+
+Each framework adapter provides a hook that follows one topic. The hooks are being
+built alongside this page, and they wrap `subscribeLiveTopic`. Each returns
+`{ lastEvent, error }`:
+
+| Framework       | Hook              |
+| --------------- | ----------------- |
+| React, Vue      | `useLiveTopic`    |
+| Solid           | `createLiveTopic` |
+| Svelte, Angular | `liveTopic`       |
+
+## Authorization
+
+Read this before you ship a stream.
+
+- **Without `onSubscribe`, every subscribe is denied.** The only exception is
+  `allowAnonymousControl: true`, which admits a caller with no identity to any topic.
+  An authenticated caller is still denied. Use it only for a genuinely public stream.
+- **With `onSubscribe`, the handler decides for every caller, per topic.** Only a
+  literal `true` allows. Any other return value denies, and so does a throw.
+  `allowAnonymousControl` does not bypass the handler.
+- **A subscription is authorized once.** It is not re-checked while the connection
+  stays open. A credential with an expiry ends the stream at that expiry.
+- **Delivery authorization is not compatible.** An app that declares a live stream
+  and calls `.deliveryAuthorization(...)` is refused at codegen, because the shard
+  answers every `/_lunora/live/*` route with 501 in that mode.
+
+## Where delivery stops
+
+Subscribers are held in the Durable Object they connected to. That is the boundary
+of a live event.
+
+- **All streams and topics on a shard share one Durable Object.** Every publish scans
+  that object's subscribers, so a busy topic is a hot object. When throughput matters,
+  shard by key. Connect with `?shard=<key>` and publish with `{ shardKey }`, so the
+  publishers and subscribers of a topic land on the same object. See
+  [sharding](/docs/concepts/sharding).
+- **There is no cross-shard fan-out.** A publish to a shard reaches only the
+  subscribers connected to that shard. A publisher that names the wrong shard reaches
+  no subscriber.
+- **A scheduled job reaches only its own shard.** Its publish runs in-process on the
+  shard the job runs on. It cannot reach subscribers on another shard.
+
+## Platform support
+
+Codegen treats `native` and `emulated` the same, with no diagnostic between them. It
+omits `ctx.live` on a target that rates live streams `unsupported`.
+
+| Target                       | `liveStreams` | Notes                                                                                                                                                                                                          |
+| ---------------------------- | ------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Cloudflare (Durable Objects) | native        | The shard streams the SSE response. Quiet streams get keepalive comments.                                                                                                                                      |
+| celld                        | native        | Verified by the celld conformance run, which connects, subscribes, publishes and reads the frame back.                                                                                                         |
+| Node                         | emulated      | Served in one process, so there is no cross-process fan-out. No keepalive comment is sent, so a reverse proxy that closes idle streams will drop one. A scheduled job's publish is not exercised on this host. |
+
+The matrix is `PlatformCapabilities` in `@lunora/platform`, the `liveStreams` entry.
+
+## React Native
+
+`connectLiveStream` takes a `fetch` option, so you can pass a streaming fetch such
+as `expo/fetch`. `subscribeLiveTopic` does not take `fetch`, so it uses the global
+`fetch`. If you need a streaming fetch on React Native, use `connectLiveStream`
+directly. If events arrive in bursts or not at all, the response body may be
+buffered. A streaming fetch such as `expo/fetch` avoids that.
