@@ -605,6 +605,21 @@ interface UseInfiniteQueryResult<T> {
 }
 ```
 
+### `UseLiveTopicOptions` (type)
+
+```ts
+type UseLiveTopicOptions = SubscribeLiveTopicOptions;
+```
+
+### `UseLiveTopicResult` (interface)
+
+```ts
+interface UseLiveTopicResult {
+    error: LiveStreamSubscribeError | undefined;
+    lastEvent: unknown;
+}
+```
+
 ### `UseMultipartUploadOptions` (interface)
 
 Re-exported from `@visulima/storage-client` — signature tracked at its source.
@@ -980,6 +995,12 @@ const useImpersonate: () => UseImpersonateResult;
 
 ```ts
 const useInfiniteQuery: <F extends FunctionReference>(function_: F, args: "skip" | PaginatedArgs<F>, options: UseInfiniteQueryOptions) => UseInfiniteQueryResult<PageItemOf<F>>;
+```
+
+### `useLiveTopic` (const)
+
+```ts
+const useLiveTopic: (options: UseLiveTopicOptions) => UseLiveTopicResult;
 ```
 
 ### `useLunora` (const)

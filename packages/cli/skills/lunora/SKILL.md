@@ -42,7 +42,9 @@ Scaffolded projects gitignore `lunora/_generated/`; never hand-edit it.
 - New project, or adding Lunora to an existing app: `lunora-quickstart`
 - Writing or reviewing schema + functions (the core authoring rules):
   `lunora-functions`
-- Wiring live data into a client (hooks, optimistic updates): `lunora-realtime`
+- Wiring live data into a client (hooks, optimistic updates), or choosing
+  between a live query, stream, live topic, whisper, room and socket (including
+  pushing a server event to the browser): `lunora-realtime`
 - Authentication (email/password, OAuth, magic link, OTP): `lunora-setup-auth`
 - Transactional email: `lunora-setup-mail`
 - R2 file storage (signed upload/download): `lunora-setup-storage`

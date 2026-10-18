@@ -345,6 +345,15 @@ type ListPresentReference = FunctionReference<"query", {
 }>;
 ```
 
+### `LiveTopicState` (interface)
+
+```ts
+interface LiveTopicState {
+    error: LiveStreamSubscribeError | undefined;
+    lastEvent: unknown;
+}
+```
+
 ### `LunoraClient` (class)
 
 Re-exported from `@lunora/client` — signature tracked at its source.
@@ -699,6 +708,12 @@ const hydratePreloaded: <T>(preloaded: Preloaded<T>, client?: LunoraClient, opti
 function infiniteQuery<F extends FunctionReference>(function_: F, args: "skip" | PaginatedArgs<F>, options: InfiniteQueryOptions): InfiniteQueryHandle<PageItemOf<F>>;
 
 function infiniteQuery<F extends FunctionReference>(client: LunoraClient, function_: F, args: "skip" | PaginatedArgs<F>, options: InfiniteQueryOptions): InfiniteQueryHandle<PageItemOf<F>>;
+```
+
+### `liveTopic` (const)
+
+```ts
+const liveTopic: (options: SubscribeLiveTopicOptions | Readable<SubscribeLiveTopicOptions>) => Readable<LiveTopicState>;
 ```
 
 ### `mutation` (function)
