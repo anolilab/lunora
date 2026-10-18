@@ -1,5 +1,6 @@
 import type { LiveStreamSubscribeError, SubscribeLiveTopicOptions } from "@lunora/client";
 import { subscribeLiveTopic } from "@lunora/client";
+import { stableWireKey } from "@lunora/wire";
 import type { MaybeRefOrGetter, ShallowRef } from "vue";
 import { shallowRef, toValue, watch } from "vue";
 
@@ -54,7 +55,7 @@ const useLiveTopic = (options: UseLiveTopicOptions): UseLiveTopicResult => {
 
     if (isBrowser()) {
         const stop = watch(
-            () => JSON.stringify(resolveConnection(options)),
+            () => stableWireKey(resolveConnection(options)),
             (_connectionKey, _previousKey, onCleanup) => {
                 // A new topic or connection starts with no value and no error from the last one.
                 lastEvent.value = undefined;

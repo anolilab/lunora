@@ -2,6 +2,7 @@
 
 import type { LiveStreamSubscribeError, SubscribeLiveTopicOptions } from "@lunora/client";
 import { subscribeLiveTopic } from "@lunora/client";
+import { stableWireKey } from "@lunora/wire";
 import { useEffect, useRef, useState } from "react";
 
 /** Options for {@link useLiveTopic}: the `subscribeLiveTopic` options, with the callbacks read through a ref. */
@@ -35,9 +36,11 @@ interface LiveTopicState {
  * its initial values there.
  */
 const useLiveTopic = (options: UseLiveTopicOptions): UseLiveTopicResult => {
-    // Anything that changes which stream is opened lands in `connectionKey`; the
-    // callbacks are left out (JSON drops them) so their identity never matters.
-    const connectionKey = JSON.stringify({ ...options, onError: undefined, onEvent: undefined });
+    // Anything that changes which stream is opened lands in `connectionKey`; the callbacks are left
+    // out so their identity never matters, and `stableWireKey` ignores property order, so the same
+    // headers in a new order do not resubscribe.
+    const { headers, maxDelayMs, retryDelay, topic, url, withCredentials } = options;
+    const connectionKey = stableWireKey({ headers, maxDelayMs, retryDelay, topic, url, withCredentials });
 
     const [state, setState] = useState<LiveTopicState>();
     const current = state?.key === connectionKey ? state : undefined;
@@ -75,7 +78,7 @@ const useLiveTopic = (options: UseLiveTopicOptions): UseLiveTopicResult => {
             // returns to this topic before the next event arrives.
             setState(undefined);
         };
-        // react-doctor-disable-next-line react-doctor/exhaustive-deps -- intentional: the subscription re-opens on `connectionKey`, a serialization of every connection field (url, topic, credentials, retry tuning, headers). The field values are read from `latestRef`, so a caller passing a fresh `headers` literal with the same content does not resubscribe. The callbacks are read through `latestRef` too, so their identity never resubscribes.
+        // react-doctor-disable-next-line react-doctor/exhaustive-deps -- intentional: the subscription re-opens on `connectionKey`, a key over every connection field (url, topic, credentials, retry tuning, headers). The field values are read from `latestRef`, so a caller passing a fresh `headers` literal with the same content does not resubscribe. The callbacks are read through `latestRef` too, so their identity never resubscribes.
     }, [connectionKey]);
 
     return { error: current?.error, lastEvent: current?.lastEvent };

@@ -122,6 +122,18 @@ describe(useLiveTopic, () => {
         expect(subscribeLiveTopic).toHaveBeenCalledTimes(1);
     });
 
+    it("does not resubscribe when the same headers arrive in a different order", () => {
+        expect.hasAssertions();
+
+        const { rerender } = renderHook(({ headers }) => useLiveTopic({ headers, topic: "a", url: URL }), {
+            initialProps: { headers: { a: "1", b: "2" } },
+        });
+
+        rerender({ headers: { b: "2", a: "1" } });
+
+        expect(subscribeLiveTopic).toHaveBeenCalledTimes(1);
+    });
+
     it("exposes the last delivered payload as lastEvent", () => {
         expect.hasAssertions();
 

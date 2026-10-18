@@ -126,6 +126,18 @@ describe(useLiveTopic, () => {
         expect(secondOnEvent).toHaveBeenCalledWith({ n: 1 });
     });
 
+    it("does not resubscribe when the same headers arrive in a different order", async () => {
+        expect.hasAssertions();
+
+        const options = reactive<Parameters<typeof useLiveTopic>[0]>({ headers: { a: "1", b: "2" }, topic: "a", url: URL });
+
+        mount(options);
+        options.headers = { b: "2", a: "1" };
+        await nextTick();
+
+        expect(subscribeLiveTopic).toHaveBeenCalledTimes(1);
+    });
+
     it("exposes the last delivered payload as lastEvent", () => {
         expect.hasAssertions();
 
