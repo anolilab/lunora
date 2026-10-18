@@ -15,15 +15,6 @@ const fnRef = (reference: string): FunctionReference => {
     return { __lunoraRef: reference };
 };
 
-const settle = async (): Promise<void> => {
-    for (let index = 0; index < 8; index += 1) {
-        // eslint-disable-next-line no-await-in-loop -- intentional sequential drain of promise ticks
-        await new Promise((resolve) => {
-            setTimeout(resolve, 0);
-        });
-    }
-};
-
 interface MockSocket {
     open: () => void;
     triggerClose: () => void;
@@ -105,10 +96,9 @@ const createClient = (outbox: OutboxSink, sockets: MockSocket[]): { client: Luno
     return { client, fetchSpy };
 };
 
-const connect = async (client: LunoraClient, sockets: MockSocket[]): Promise<void> => {
+const connect = (client: LunoraClient, sockets: MockSocket[]): void => {
     client.subscribe(fnRef("todos.list"), {}, () => {});
     sockets.at(-1)?.open();
-    await settle();
 };
 
 describe("online-only mutation with a durable outbox", () => {
@@ -119,9 +109,8 @@ describe("online-only mutation with a durable outbox", () => {
         const { enqueued, sink } = createOutbox(false);
         const { client, fetchSpy } = createClient(sink, sockets);
 
-        await connect(client, sockets);
+        connect(client, sockets);
         sockets.at(-1)?.triggerClose();
-        await settle();
 
         await expect(client.mutation(fnRef("todos.set"), { text: "KEY" }, { onlineOnly: true })).rejects.toMatchObject({ code: "OFFLINE_NOT_QUEUED" });
 
@@ -138,7 +127,7 @@ describe("online-only mutation with a durable outbox", () => {
         const { enqueued, sink } = createOutbox(true);
         const { client, fetchSpy } = createClient(sink, sockets);
 
-        await connect(client, sockets);
+        connect(client, sockets);
 
         await expect(client.mutation(fnRef("todos.set"), { text: "KEY" }, { onlineOnly: true })).resolves.toStrictEqual({ ok: true });
 
@@ -159,9 +148,8 @@ describe("online-only mutation with a durable outbox", () => {
         const { enqueued, sink } = createOutbox(false);
         const { client } = createClient(sink, sockets);
 
-        await connect(client, sockets);
+        connect(client, sockets);
         sockets.at(-1)?.triggerClose();
-        await settle();
 
         await client.mutation(fnRef("todos.set"), { text: "NORMAL" });
 

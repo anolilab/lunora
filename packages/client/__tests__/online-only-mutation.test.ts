@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 
 import { LunoraClient } from "../src/lunora-client";
 import { createInMemoryPersistence } from "../src/persistence";
-import type { FunctionReference } from "../src/types";
+import type { FunctionReference, PersistenceAdapter } from "../src/types";
 
 /**
  * `mutation(…, { onlineOnly: true })`: a write that is never queued, persisted or
@@ -15,13 +15,28 @@ const fnRef = (reference: string): FunctionReference => {
     return { __lunoraRef: reference };
 };
 
-const settle = async (): Promise<void> => {
-    for (let index = 0; index < 8; index += 1) {
-        // eslint-disable-next-line no-await-in-loop -- intentional sequential drain of promise ticks
-        await new Promise((resolve) => {
-            setTimeout(resolve, 0);
-        });
-    }
+/**
+ * Spies the adapter's `append` and returns a promise that settles once `count` writes are
+ * in it. A queued write is in the queue from that moment, so it is the milestone to await.
+ */
+const spyAppend = (persistence: PersistenceAdapter, count: number) => {
+    const original = persistence.append;
+    let persistedCount = 0;
+    let markPersisted: () => void = () => {};
+    const persisted = new Promise<void>((resolve) => {
+        markPersisted = resolve;
+    });
+    const append = vi.spyOn(persistence, "append").mockImplementation(async (mutation) => {
+        await original(mutation);
+
+        persistedCount += 1;
+
+        if (persistedCount === count) {
+            markPersisted();
+        }
+    });
+
+    return { append, persisted };
 };
 
 interface MockSocket {
@@ -220,7 +235,6 @@ describe("online-only mutation", () => {
 
         client.subscribe(fnRef("todos.list"), {}, () => {});
         sockets.at(-1)?.open();
-        await settle();
 
         await expect(client.mutation(fnRef("todos.set"), { text: "LIVE" }, { onlineOnly: true })).resolves.toStrictEqual({ ok: true });
 
@@ -248,15 +262,11 @@ describe("online-only mutation", () => {
 
         client.subscribe(fnRef("todos.list"), {}, () => {});
         sockets.at(-1)?.open();
-        await settle();
         sockets.at(-1)?.triggerClose();
-        await settle();
 
         const refused = client.mutation(fnRef("todos.set"), { text: "LIVE" }, { onlineOnly: true });
 
         await expect(refused).rejects.toMatchObject({ code: "OFFLINE_NOT_QUEUED" });
-
-        await settle();
 
         expect(server.observed).toStrictEqual([]);
         expect(append).not.toHaveBeenCalled();
@@ -272,7 +282,7 @@ describe("online-only mutation", () => {
         const sockets: MockSocket[] = [];
         const server = createServer();
         const persistence = createInMemoryPersistence();
-        const append = vi.spyOn(persistence, "append");
+        const { append, persisted } = spyAppend(persistence, 1);
         const client = new LunoraClient({
             fetch: server.fetch,
             heartbeatIntervalMs: 0,
@@ -290,32 +300,25 @@ describe("online-only mutation", () => {
 
         const older = outcomeOf(client.mutation(fnRef("todos.set"), { text: "OLDER" }));
 
-        await settle();
         client.setAuthToken("jwt-2");
         sockets.at(-1)?.open();
-        await settle();
-
-        expect(client.pendingCount()).toBe(1);
-        expect(append).toHaveBeenCalledTimes(1);
+        await persisted;
 
         const live = client.mutation(fnRef("todos.set"), { text: "LIVE" }, { onlineOnly: true });
 
-        await settle();
+        // The write's own commit is the milestone: it went out while the backlog stayed queued.
+        await expect(live).resolves.toStrictEqual({ ok: true });
 
-        // Asserted before the call settles, so a regression that queues it fails
-        // on these assertions rather than on a timeout.
         expect(server.observed).toStrictEqual(["LIVE"]);
         expect(client.pendingCount()).toBe(1);
         expect(append).toHaveBeenCalledTimes(1);
-        await expect(live).resolves.toStrictEqual({ ok: true });
 
-        // The backlog is untouched: the older write stays queued and is never sent.
+        // The backlog is untouched: the older write stays queued until its subject is back,
+        // then commits.
         client.setAuthToken("jwt-2", "user-1");
-        await settle();
-
-        expect(server.observed).toStrictEqual(["LIVE", "OLDER"]);
 
         await expect(older).resolves.toBe("committed");
+        expect(server.observed).toStrictEqual(["LIVE", "OLDER"]);
 
         client.close();
     });
@@ -326,7 +329,7 @@ describe("online-only mutation", () => {
         const sockets: MockSocket[] = [];
         const server = createServer();
         const persistence = createInMemoryPersistence();
-        const append = vi.spyOn(persistence, "append");
+        const { append, persisted } = spyAppend(persistence, 1);
         const client = new LunoraClient({
             fetch: server.fetch,
             heartbeatIntervalMs: 0,
@@ -337,13 +340,11 @@ describe("online-only mutation", () => {
 
         client.subscribe(fnRef("todos.list"), {}, () => {});
         sockets.at(-1)?.open();
-        await settle();
         sockets.at(-1)?.triggerClose();
-        await settle();
 
         const queued = outcomeOf(client.mutation(fnRef("todos.set"), { text: "NEWER" }));
 
-        await settle();
+        await persisted;
 
         expect(client.pendingCount()).toBe(1);
         expect(append).toHaveBeenCalledTimes(1);
@@ -360,7 +361,7 @@ describe("online-only mutation", () => {
         const sockets: MockSocket[] = [];
         const server = createServer();
         const persistence = createInMemoryPersistence();
-        const append = vi.spyOn(persistence, "append");
+        const { append, persisted } = spyAppend(persistence, 2);
         const client = new LunoraClient({
             fetch: server.fetch,
             heartbeatIntervalMs: 0,
@@ -375,14 +376,12 @@ describe("online-only mutation", () => {
 
         const older = outcomeOf(client.mutation(fnRef("todos.set"), { text: "OLDER" }));
 
-        await settle();
         client.setAuthToken("jwt-2");
         sockets.at(-1)?.open();
-        await settle();
 
         const newer = outcomeOf(client.mutation(fnRef("todos.set"), { text: "NEWER" }));
 
-        await settle();
+        await persisted;
 
         expect(client.pendingCount()).toBe(2);
         expect(append).toHaveBeenCalledTimes(2);
