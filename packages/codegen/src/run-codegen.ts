@@ -710,6 +710,9 @@ export const runCodegen = (options: CodegenOptions): CodegenResult => {
         hasFlags,
         hasNotify,
         hasRooms: roomsSupported && functions.some((definition) => definition.channel?.kind === "room"),
+        // The gate's verdict on the app-declared `requestSecretTool` import. `true` only
+        // when the import exists AND the target rates `secretValues` supported.
+        hasSecretValues: platformGate.signals.secretValues === true,
         lazyFunctions,
         // The gate's verdict, exactly as `emitServer`/`emitApp` receive it. The
         // shard emitter recomputed the flag from `schema.vectorIndexes` instead,
