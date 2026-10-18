@@ -655,7 +655,7 @@ interface SecretValuePutOptions {
 interface SecretValueStore {
     discard: (ref: string) => Promise<boolean>;
     put: (seal: (ref: string) => Promise<string>, options: SecretValuePutOptions) => Promise<string>;
-    take: (ref: string, options: SecretValueTakeOptions) => Promise<string | undefined>;
+    take: (ref: string, options: SecretValueTakeOptions, open: (stored: string) => Promise<string | undefined>) => Promise<string | undefined>;
 }
 ```
 

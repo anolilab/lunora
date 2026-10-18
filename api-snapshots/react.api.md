@@ -655,6 +655,7 @@ Re-exported from `@visulima/storage-client` — signature tracked at its source.
 
 ```ts
 interface UseMutationCallOptions<TCurrent = unknown, TValue = unknown, TArgs = unknown> {
+    onlineOnly?: boolean;
     optimistic?: (current: TCurrent | undefined) => TValue;
     optimisticUpdate?: OptimisticUpdate<TArgs>;
     shardKey?: string;
@@ -1544,7 +1545,7 @@ interface AuthGateProps {
 ### `CallOptions` (type)
 
 ```ts
-type CallOptions<F extends FunctionReference> = UseMutationCallOptions<unknown, unknown, ArgsOf<F>>;
+type CallOptions<F extends FunctionReference> = OnlineOnlyOption<F> & UseMutationCallOptions<unknown, unknown, ArgsOf<F>>;
 ```
 
 ### `CreateMicrophone` (type)
