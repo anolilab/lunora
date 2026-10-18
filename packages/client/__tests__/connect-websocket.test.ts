@@ -134,6 +134,16 @@ describe("connectWebSocket", () => {
         expect(lastSocket().url).toBe("/socket/chat");
     });
 
+    it("keeps the host of a protocol-relative socket url", () => {
+        expect.assertions(1);
+
+        const client = new LunoraClient({ url: "/api", wsUrl: "//edge.example/_lunora/ws", WebSocket: WebSocketImpl });
+
+        client.connectWebSocket("/chat", { onMessage: () => undefined });
+
+        expect(lastSocket().url).toBe("//edge.example/chat");
+    });
+
     it("ignores a frame from a socket that a credential rotation bounced, so its frames never reach the old route", () => {
         expect.assertions(1);
 

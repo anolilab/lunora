@@ -41,9 +41,17 @@ const SAME_ORIGIN_BASE = "http://same-origin.invalid";
 /** Parse a socket URL that may be absolute or relative to the page. */
 const parseSocketUrl = (value: string): URL => new URL(value, SAME_ORIGIN_BASE);
 
-/** The URL back in the form it was given: absolute stays absolute, a relative URL stays relative. */
+/** The URL back in the form it was given: absolute stays absolute, protocol-relative keeps its host, a relative URL stays relative. */
 const ABSOLUTE_URL = /^[a-z][a-z\d+.-]*:/iu;
 
-const serializeSocketUrl = (url: URL, original: string): string => (ABSOLUTE_URL.test(original) ? url.toString() : `${url.pathname}${url.search}${url.hash}`);
+const serializeSocketUrl = (url: URL, original: string): string => {
+    if (ABSOLUTE_URL.test(original)) {
+        return url.toString();
+    }
+
+    const path = `${url.pathname}${url.search}${url.hash}`;
+
+    return original.startsWith("//") ? `//${url.host}${path}` : path;
+};
 
 export { bucketQuery, deriveWsUrl, joinUrl, parseSocketUrl, serializeSocketUrl, withQuery };
