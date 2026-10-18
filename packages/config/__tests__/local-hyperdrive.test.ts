@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -236,6 +236,25 @@ describe("local hyperdrive", () => {
 
             expect(local?.bindings).toStrictEqual(["DB"]);
             expect(existsSync(lock)).toBe(false);
+        });
+
+        it("leaves no temporary lock file behind, whether the lock was taken or already held", async () => {
+            expect.assertions(2);
+
+            writeWrangler([{ binding: "DB", id: "a" }]);
+
+            const directory = join(root, ".wrangler", "state", "lunora-pglite");
+            const { runtime } = fakeRuntime();
+            const local = await startLocalHyperdrive({ env: {}, load: async () => runtime, projectRoot: root });
+
+            expect(readdirSync(directory).filter((name) => name.startsWith("DB.lock."))).toStrictEqual([]);
+
+            await local?.stop();
+
+            writeFileSync(join(directory, "DB.lock"), String(process.ppid), "utf8");
+            await startLocalHyperdrive({ env: {}, load: async () => runtime, onWarning: () => {}, projectRoot: root });
+
+            expect(readdirSync(directory).filter((name) => name.startsWith("DB.lock."))).toStrictEqual([]);
         });
 
         it("releases the lock when the server fails to start", async () => {

@@ -559,15 +559,73 @@ describe("hyperdrive on deploy", () => {
     });
 
     describe(provisionDeployHyperdrive, () => {
-        it.each([
-            ["a dry run, which must leave the account alone", "deploy", "cloudflare", true],
-            ["a target that is not Cloudflare", "deploy", "celld", false],
-        ] as const)("creates nothing for %s", async (_label, command, target, dryRun) => {
+        it("creates nothing for a target that is not Cloudflare", async () => {
             expect.assertions(1);
 
             writeWrangler({ hyperdrive: [{ binding: "HYPERDRIVE", id: HYPERDRIVE_PLACEHOLDER_ID }] });
 
-            await expect(provisionDeployHyperdrive(root, { dryRun, logger: recordingLogger().logger }, command, target)).resolves.toBeUndefined();
+            await expect(provisionDeployHyperdrive(root, { logger: recordingLogger().logger }, "deploy", "celld")).resolves.toBeUndefined();
+        });
+
+        it("has a dry run report a missing connection string, as the real deploy would, without any API call", async () => {
+            expect.assertions(3);
+
+            writeWrangler({ hyperdrive: [{ binding: "HYPERDRIVE", id: HYPERDRIVE_PLACEHOLDER_ID }] });
+            vi.stubEnv(URL_VARIABLE, "");
+
+            const fetchStub = vi.fn<typeof globalThis.fetch>();
+
+            vi.stubGlobal("fetch", fetchStub);
+
+            const result = await provisionDeployHyperdrive(root, { dryRun: true, logger: recordingLogger().logger }, "deploy", "cloudflare");
+
+            expect(result).toContain("LUNORA_HYPERDRIVE_URL");
+            expect(fetchStub).not.toHaveBeenCalled();
+            expect(readWrangler().hyperdrive[0]?.id).toBe(HYPERDRIVE_PLACEHOLDER_ID);
+
+            vi.unstubAllGlobals();
+            vi.unstubAllEnvs();
+        });
+
+        it("makes no API call or file change on a dry run that has everything a real deploy needs", async () => {
+            expect.assertions(3);
+
+            writeWrangler({ hyperdrive: [{ binding: "HYPERDRIVE", id: HYPERDRIVE_PLACEHOLDER_ID }] });
+            vi.stubEnv(URL_VARIABLE, "postgres://u:p@h/db");
+            vi.stubEnv("CLOUDFLARE_API_TOKEN", "token");
+            vi.stubEnv("CLOUDFLARE_ACCOUNT_ID", "acc");
+
+            const fetchStub = hyperdriveApi([]);
+
+            vi.stubGlobal("fetch", fetchStub);
+
+            const result = await provisionDeployHyperdrive(root, { dryRun: true, logger: recordingLogger().logger }, "deploy", "cloudflare");
+
+            expect(result).toBeUndefined();
+            expect(fetchStub).not.toHaveBeenCalled();
+            expect(readWrangler().hyperdrive[0]?.id).toBe(HYPERDRIVE_PLACEHOLDER_ID);
+
+            vi.unstubAllGlobals();
+            vi.unstubAllEnvs();
+        });
+
+        it("lets a dry run through, creating nothing, once the connection string and credentials are there", async () => {
+            expect.assertions(3);
+
+            writeWrangler({ hyperdrive: [{ binding: "HYPERDRIVE", id: HYPERDRIVE_PLACEHOLDER_ID }] });
+
+            const api = hyperdriveApi([]);
+            const result = await provisionHyperdrive({
+                cwd: root,
+                dryRun: true,
+                environment: { ...CREDENTIALS, [URL_VARIABLE]: "postgres://u:p@h/db" },
+                fetch: api,
+                logger: recordingLogger().logger,
+            });
+
+            expect(result).toBeUndefined();
+            expect(api).not.toHaveBeenCalled();
+            expect(readWrangler().hyperdrive[0]?.id).toBe(HYPERDRIVE_PLACEHOLDER_ID);
         });
 
         it("blocks prepare while the placeholder is there, without creating anything", async () => {

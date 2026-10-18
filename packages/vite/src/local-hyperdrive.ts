@@ -88,8 +88,7 @@ const localHyperdrive = ({ projectRoot, start = startLocalHyperdrive }: LocalHyp
             const session = sessionFor(projectRoot);
 
             const previous = session.pending;
-
-            session.pending = (async () => {
+            const attempt = (async () => {
                 await previous;
 
                 const local = await start({
@@ -107,7 +106,10 @@ const localHyperdrive = ({ projectRoot, start = startLocalHyperdrive }: LocalHyp
                 }
             })();
 
-            await session.pending;
+            // Later attempts queue behind this one whether it succeeds or not; only this caller sees its error.
+            session.pending = attempt.catch((): undefined => undefined);
+
+            await attempt;
         },
         buildEnd() {
             // Middleware-mode close (no httpServer to listen on); a no-op in classic dev mode and for a build.

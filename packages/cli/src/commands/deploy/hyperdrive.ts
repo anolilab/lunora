@@ -40,6 +40,8 @@ interface HyperdriveWrangler {
 
 interface ProvisionHyperdriveOptions {
     cwd: string;
+    /** Check everything a real deploy would, and make no API call or file change. */
+    dryRun?: boolean;
     /** Defaults to `process.env`. */
     environment?: CloudflareEnvironment & Record<string, string | undefined>;
     fetch?: typeof globalThis.fetch;
@@ -379,6 +381,10 @@ const provisionHyperdrive = async (options: ProvisionHyperdriveOptions): Promise
         }
     }
 
+    if (options.dryRun === true) {
+        return undefined;
+    }
+
     for (const [position, { binding, index }] of entries.entries()) {
         const origin = origins[position]?.origin;
 
@@ -460,7 +466,8 @@ const provisionDeployHyperdrive = async (
         return blockTemporary(cwd, options);
     }
 
-    return options.dryRun === true ? undefined : provisionHyperdrive({ cwd, logger: options.logger, wranglerEnvironment: options.env });
+    // A dry run checks what a real deploy needs, so it reports a missing connection string or token, but creates nothing.
+    return provisionHyperdrive({ cwd, dryRun: options.dryRun, logger: options.logger, wranglerEnvironment: options.env });
 };
 
 export type { ProvisionHyperdriveOptions };

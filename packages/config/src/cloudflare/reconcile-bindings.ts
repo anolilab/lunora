@@ -237,45 +237,6 @@ const reconcileD1 = (text: string, parsed: WranglerShape): ReconcileStep => {
 };
 
 /**
- * Whether reconcile may add the KV and Hyperdrive bindings: their resources are created by
- * wrangler and `lunora deploy`, which only a Cloudflare target runs. An omitted target is
- * the default, Cloudflare.
- */
-const createsCloudflareResources = (target: string | undefined): boolean => target === undefined || target === "cloudflare";
-
-/**
- * Add a `HYPERDRIVE` binding when the project binds none, carrying the placeholder id. It makes
- * `ctx.sql` work in dev at once (an embedded Postgres), and `lunora deploy` creates the
- * Hyperdrive config from the connection string it is given. Pure.
- */
-const reconcileHyperdrive = (text: string, parsed: WranglerShape, target: string | undefined): ReconcileStep => {
-    if (!createsCloudflareResources(target) || (parsed.hyperdrive?.length ?? 0) > 0) {
-        return { added: [], text };
-    }
-
-    return {
-        added: ["HYPERDRIVE (Hyperdrive, created on deploy)"],
-        text: applyModify(text, ["hyperdrive"], [{ binding: "HYPERDRIVE", id: HYPERDRIVE_PLACEHOLDER_ID }]),
-    };
-};
-
-/**
- * Add an id-less `KV` namespace binding when the project binds none. Wrangler
- * creates the namespace on the first deploy and writes its id back, so nothing
- * here mints it. A project that already binds a namespace (under any name) is
- * left alone: `createKv()` is handed whichever binding the app chose. Not run
- * for a jurisdiction-pinned schema: a namespace wrangler creates is unrestricted
- * and cannot be moved, so that app creates it itself. Pure.
- */
-const reconcileKv = (text: string, parsed: WranglerShape, jurisdiction: InferredBindings["jurisdiction"], target: string | undefined): ReconcileStep => {
-    if (!createsCloudflareResources(target) || jurisdiction !== undefined || (parsed.kv_namespaces?.length ?? 0) > 0) {
-        return { added: [], text };
-    }
-
-    return { added: ["KV (Workers KV, created on deploy)"], text: applyModify(text, ["kv_namespaces"], [{ binding: "KV" }]) };
-};
-
-/**
  * The self-describing single-`{ binding }` sections reconcile auto-writes:
  * wrangler key → the binding name it writes and the label it reports. They share
  * one shape — the binding name is the whole config, with no remote id to mint —
@@ -380,6 +341,61 @@ const bindingNameOwner = (parsed: WranglerShape, name: string): string | undefin
     }
 
     return undefined;
+};
+
+/** The warning for a binding reconcile would add under a name another section already uses. */
+const nameTakenWarning = (key: string, name: string, owner: string): string =>
+    `${key}: not adding "${name}" — the name is already bound by \`${owner}\` in wrangler.jsonc. Add a ${key} entry under another binding name and point the matching \`defineApp()\` override at it.`;
+
+/**
+ * Whether reconcile may add the KV and Hyperdrive bindings: their resources are created by
+ * wrangler and `lunora deploy`, which only a Cloudflare target runs. An omitted target is
+ * the default, Cloudflare.
+ */
+const createsCloudflareResources = (target: string | undefined): boolean => target === undefined || target === "cloudflare";
+
+/**
+ * Add a `HYPERDRIVE` binding when the project binds none, carrying the placeholder id. It makes
+ * `ctx.sql` work in dev at once (an embedded Postgres), and `lunora deploy` creates the
+ * Hyperdrive config from the connection string it is given. Pure.
+ */
+const reconcileHyperdrive = (text: string, parsed: WranglerShape, target: string | undefined): ReconcileStep => {
+    if (!createsCloudflareResources(target) || (parsed.hyperdrive?.length ?? 0) > 0) {
+        return { added: [], text };
+    }
+
+    const owner = bindingNameOwner(parsed, "HYPERDRIVE");
+
+    if (owner !== undefined) {
+        return { added: [], text, warnings: [nameTakenWarning("hyperdrive", "HYPERDRIVE", owner)] };
+    }
+
+    return {
+        added: ["HYPERDRIVE (Hyperdrive, created on deploy)"],
+        text: applyModify(text, ["hyperdrive"], [{ binding: "HYPERDRIVE", id: HYPERDRIVE_PLACEHOLDER_ID }]),
+    };
+};
+
+/**
+ * Add an id-less `KV` namespace binding when the project binds none. Wrangler
+ * creates the namespace on the first deploy and writes its id back, so nothing
+ * here mints it. A project that already binds a namespace (under any name) is
+ * left alone: `createKv()` is handed whichever binding the app chose. Not run
+ * for a jurisdiction-pinned schema: a namespace wrangler creates is unrestricted
+ * and cannot be moved, so that app creates it itself. Pure.
+ */
+const reconcileKv = (text: string, parsed: WranglerShape, jurisdiction: InferredBindings["jurisdiction"], target: string | undefined): ReconcileStep => {
+    if (!createsCloudflareResources(target) || jurisdiction !== undefined || (parsed.kv_namespaces?.length ?? 0) > 0) {
+        return { added: [], text };
+    }
+
+    const owner = bindingNameOwner(parsed, "KV");
+
+    if (owner !== undefined) {
+        return { added: [], text, warnings: [nameTakenWarning("kv_namespaces", "KV", owner)] };
+    }
+
+    return { added: ["KV (Workers KV, created on deploy)"], text: applyModify(text, ["kv_namespaces"], [{ binding: "KV" }]) };
 };
 
 /**

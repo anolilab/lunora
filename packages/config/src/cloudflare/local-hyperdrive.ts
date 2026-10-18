@@ -17,7 +17,8 @@
  * `@electric-sql/pglite` and `@electric-sql/pglite-socket` are optional peers,
  * loaded on demand: an app without Hyperdrive never pays for them.
  */
-import { closeSync, mkdirSync, openSync, readFileSync, rmSync, writeSync } from "node:fs";
+import { randomUUID } from "node:crypto";
+import { linkSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 
 import join from "../path";
 import { findWranglerFile, readWranglerJsonc } from "./wrangler-path";
@@ -127,41 +128,64 @@ const isProcessAlive = (pid: number): boolean => {
 /** What taking a data directory's lock came to: the release to call on stop, or the process that holds it. */
 type DirectoryLock = { holder: number } | { release: () => void };
 
+/** The pid a lock file names, or `undefined` when it is gone or not a pid. */
+const readHolder = (lockPath: string): number | undefined => {
+    try {
+        const holder = Number.parseInt(readFileSync(lockPath, "utf8"), 10);
+
+        return Number.isInteger(holder) ? holder : undefined;
+    } catch {
+        return undefined;
+    }
+};
+
 /**
  * Take the lock beside a data directory. Two engines on one PGlite directory would corrupt it, and
- * `vite dev` has no `.lunora/dev.json` claim to prevent that the way `lunora dev` does. A lock left by
- * a process that has gone is taken over.
+ * `vite dev` has no `.lunora/dev.json` claim to prevent that the way `lunora dev` does.
+ *
+ * The pid is written to a private file and hard-linked into place, which fails atomically if the lock
+ * exists, so a lock is never seen half-written and a contender can't mistake an acquisition in
+ * progress for a stale one. A lock whose process has gone is taken over.
  */
 const lockDirectory = (lockPath: string): DirectoryLock => {
-    for (let attempt = 0; attempt < 2; attempt += 1) {
-        try {
-            const descriptor = openSync(lockPath, "wx");
+    const mine = `${lockPath}.${String(process.pid)}.${randomUUID()}`;
 
-            writeSync(descriptor, String(process.pid));
-            closeSync(descriptor);
+    writeFileSync(mine, String(process.pid), "utf8");
 
-            return {
-                release: () => {
-                    rmSync(lockPath, { force: true });
-                },
-            };
-        } catch (error) {
-            if ((error as NodeJS.ErrnoException).code !== "EEXIST") {
-                throw error;
+    try {
+        for (let attempt = 0; attempt < 3; attempt += 1) {
+            try {
+                linkSync(mine, lockPath);
+
+                return {
+                    release: () => {
+                        rmSync(lockPath, { force: true });
+                    },
+                };
+            } catch (error) {
+                if ((error as NodeJS.ErrnoException).code !== "EEXIST") {
+                    throw error;
+                }
             }
 
-            const holder = Number.parseInt(readFileSync(lockPath, "utf8"), 10);
+            const holder = readHolder(lockPath);
 
-            // Our own pid is a lock this process never released (a restart); a dead one is stale.
-            if (Number.isInteger(holder) && holder !== process.pid && isProcessAlive(holder)) {
+            // Our own pid is a lock this process never released (a restart); a dead one is stale. A lock that
+            // vanished while it was read is simply taken on the next attempt.
+            if (holder !== undefined && holder !== process.pid && isProcessAlive(holder)) {
                 return { holder };
             }
 
-            rmSync(lockPath, { force: true });
+            // Removed only if it still names the process it did a moment ago, so a lock taken in between survives.
+            if (readHolder(lockPath) === holder) {
+                rmSync(lockPath, { force: true });
+            }
         }
-    }
 
-    return { holder: -1 };
+        return { holder: readHolder(lockPath) ?? -1 };
+    } finally {
+        rmSync(mine, { force: true });
+    }
 };
 
 /** The real PGlite, or `undefined` when either package is not installed. */

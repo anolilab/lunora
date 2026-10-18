@@ -901,6 +901,32 @@ describe("reconcileWranglerBindings", () => {
         expect(result.warnings.join(" ")).toMatch(/no kv_namespaces binding exists[\s\S]*no hyperdrive binding exists/u);
     });
 
+    it.each([
+        ["KV", { usesKv: true }, '"vars": { "KV": "x" }', "kv_namespaces"],
+        ["HYPERDRIVE", { usesHyperdrive: true }, '"vars": { "HYPERDRIVE": "x" }', "hyperdrive"],
+    ])("leaves the config alone and warns when the name %s is already bound by another section", (name, inferred, bound, key) => {
+        expect.assertions(3);
+
+        writeFileSync(
+            join(root, "wrangler.jsonc"),
+            `{
+    "name": "lunora-app",
+    "compatibility_date": "2026-04-07",
+    "durable_objects": { "bindings": [{ "name": "SHARD", "class_name": "ShardDO" }] },
+    "migrations": [{ "tag": "v1", "new_sqlite_classes": ["ShardDO"] }],
+    ${bound},
+}
+`,
+            "utf8",
+        );
+
+        const result = reconcileWranglerBindings(root, baseInferred(inferred));
+
+        expect(readConfig()[key as "hyperdrive"]).toBeUndefined();
+        expect(result.added.join(" ")).not.toContain(`${name} (`);
+        expect(result.warnings.join(" ")).toContain(`not adding "${name}"`);
+    });
+
     it("keeps the hint for a jurisdiction-pinned schema, because a namespace wrangler creates is unrestricted", () => {
         expect.assertions(3);
 

@@ -291,6 +291,27 @@ describe(localHyperdrive, () => {
         expect(stopped).toStrictEqual([]);
     });
 
+    it("retries after a failed startup, instead of failing every later config resolution", async () => {
+        expect.assertions(3);
+
+        let calls = 0;
+        const start = vi.fn<Start>(async () => {
+            calls += 1;
+
+            if (calls === 1) {
+                throw new Error("could not read wrangler.jsonc");
+            }
+
+            return { bindings: ["HYPERDRIVE"], stop: async () => {} };
+        });
+        const plugin = localHyperdrive({ projectRoot: "/project/retry", start });
+
+        await expect(runConfigHook(plugin, "serve")).rejects.toThrow("could not read wrangler.jsonc");
+        await expect(runConfigHook(plugin, "serve")).resolves.toBeUndefined();
+
+        expect(start).toHaveBeenCalledTimes(2);
+    });
+
     it("starts a fresh database for a later session once the first one's were stopped", async () => {
         expect.assertions(1);
 
