@@ -217,7 +217,7 @@ const ERROR_CATALOG: {
         readonly title: "Offline identity changed";
     };
     readonly OFFLINE_NOT_QUEUED: {
-        readonly hint: "A mutation sent with `onlineOnly: true` found its connection down or reconnecting (the shard had connected before), so it was refused instead of queued. Nothing was persisted or replayed; issue the call again once the connection is back. See [keeping a write off the queue](/docs/concepts/offline-first#keeping-a-write-off-the-queue).";
+        readonly hint: "A mutation sent with `onlineOnly: true` found its connection down or reconnecting (the shard had connected before), or, on a shard that has never connected, its request failed on the wire. It was refused instead of queued. Nothing was persisted or replayed; issue the call again once the connection is back. See [keeping a write off the queue](/docs/concepts/offline-first#keeping-a-write-off-the-queue).";
         readonly status: 503;
         readonly title: "Offline, write not queued";
     };
