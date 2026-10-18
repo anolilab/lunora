@@ -196,6 +196,198 @@ describe("hyperdrive on deploy", () => {
             expect(api.mock.calls[0]?.[0]).toBe("https://api.cloudflare.com/client/v4/accounts/staging-account/hyperdrive/configs");
         });
 
+        it("provisions only the named environment's own array, never a top-level placeholder it does not inherit", async () => {
+            expect.assertions(3);
+
+            writeWrangler({ env: { staging: {} }, hyperdrive: [{ binding: "HYPERDRIVE", id: HYPERDRIVE_PLACEHOLDER_ID }] });
+
+            const api = hyperdriveApi([]);
+
+            await expect(
+                provisionHyperdrive({
+                    cwd: root,
+                    environment: { ...CREDENTIALS, [URL_VARIABLE]: "postgres://u:p@h/db" },
+                    fetch: api,
+                    logger: recordingLogger().logger,
+                    wranglerEnvironment: "staging",
+                }),
+            ).resolves.toBeUndefined();
+            expect(api).not.toHaveBeenCalled();
+            expect(readWrangler().hyperdrive[0]?.id).toBe(HYPERDRIVE_PLACEHOLDER_ID);
+        });
+
+        it("names the config after the environment's Worker, so staging and production never share one", async () => {
+            expect.assertions(2);
+
+            writeWrangler({
+                env: {
+                    prod: { hyperdrive: [{ binding: "HYPERDRIVE", id: HYPERDRIVE_PLACEHOLDER_ID }] },
+                    staging: { hyperdrive: [{ binding: "HYPERDRIVE", id: HYPERDRIVE_PLACEHOLDER_ID }] },
+                },
+                name: "app",
+            });
+
+            const names: string[] = [];
+
+            for (const wranglerEnvironment of ["staging", "prod"]) {
+                const api = hyperdriveApi([]);
+
+                // eslint-disable-next-line no-await-in-loop -- sequential on purpose: the second deploy must not see the first's file edit
+                await provisionHyperdrive({
+                    cwd: root,
+                    environment: { ...CREDENTIALS, [URL_VARIABLE]: "postgres://u:p@h/db" },
+                    fetch: api,
+                    logger: recordingLogger().logger,
+                    wranglerEnvironment,
+                });
+
+                names.push((JSON.parse(api.mock.calls.find(([, init]) => init?.method === "POST")?.[1]?.body as string) as { name: string }).name);
+            }
+
+            expect(names).toStrictEqual(["app-staging-hyperdrive", "app-prod-hyperdrive"]);
+            expect(new Set(names).size).toBe(2);
+        });
+
+        it("refuses to reuse a config of the same name that reaches another database", async () => {
+            expect.assertions(3);
+
+            writeWrangler({ hyperdrive: [{ binding: "HYPERDRIVE", id: HYPERDRIVE_PLACEHOLDER_ID }], name: "app" });
+
+            const api = vi.fn<typeof globalThis.fetch>(async () =>
+                Response.json({
+                    errors: [],
+                    result: [{ id: "other-id", name: "app-hyperdrive", origin: { database: "db", host: "someone-else.example.com", port: 5432, user: "u" } }],
+                    success: true,
+                }),
+            );
+            const result = await provisionHyperdrive({
+                cwd: root,
+                environment: { ...CREDENTIALS, [URL_VARIABLE]: "postgres://u:p@mine.example.com/db" },
+                fetch: api,
+                logger: recordingLogger().logger,
+            });
+
+            expect(result).toContain("different origin (host differ)");
+            expect(readWrangler().hyperdrive[0]?.id).toBe(HYPERDRIVE_PLACEHOLDER_ID);
+            expect(api.mock.calls.some(([, init]) => init?.method === "POST")).toBe(false);
+        });
+
+        it("sends the engine's default port when the connection string has none", async () => {
+            expect.assertions(2);
+
+            writeWrangler({ hyperdrive: [{ binding: "HYPERDRIVE", id: HYPERDRIVE_PLACEHOLDER_ID }] });
+
+            const postgres = hyperdriveApi([]);
+
+            await provisionHyperdrive({
+                cwd: root,
+                environment: { ...CREDENTIALS, [URL_VARIABLE]: "postgres://u:p@neon.example.com/db" },
+                fetch: postgres,
+                logger: recordingLogger().logger,
+            });
+
+            writeWrangler({ hyperdrive: [{ binding: "HYPERDRIVE", id: HYPERDRIVE_PLACEHOLDER_ID }] });
+
+            const mysql = hyperdriveApi([]);
+
+            await provisionHyperdrive({
+                cwd: root,
+                environment: { ...CREDENTIALS, [URL_VARIABLE]: "mysql://u:p@db.example.com/db" },
+                fetch: mysql,
+                logger: recordingLogger().logger,
+            });
+
+            const port = (api: typeof postgres): unknown =>
+                (JSON.parse(api.mock.calls.find(([, init]) => init?.method === "POST")?.[1]?.body as string) as { origin: { port: number } }).origin.port;
+
+            expect(port(postgres)).toBe(5432);
+            expect(port(mysql)).toBe(3306);
+        });
+
+        it("keeps two long Worker names that share a prefix apart, inside the 32-character limit", async () => {
+            expect.assertions(3);
+
+            const names: string[] = [];
+
+            for (const name of ["a-very-long-worker-name-for-the-billing-service", "a-very-long-worker-name-for-the-billing-api"]) {
+                writeWrangler({ hyperdrive: [{ binding: "HYPERDRIVE", id: HYPERDRIVE_PLACEHOLDER_ID }], name });
+
+                const api = hyperdriveApi([]);
+
+                // eslint-disable-next-line no-await-in-loop -- sequential on purpose: one file, rewritten between runs
+                await provisionHyperdrive({
+                    cwd: root,
+                    environment: { ...CREDENTIALS, [URL_VARIABLE]: "postgres://u:p@h/db" },
+                    fetch: api,
+                    logger: recordingLogger().logger,
+                });
+
+                names.push((JSON.parse(api.mock.calls.find(([, init]) => init?.method === "POST")?.[1]?.body as string) as { name: string }).name);
+            }
+
+            expect(names.every((name) => name.length <= 32)).toBe(true);
+            expect(new Set(names).size).toBe(2);
+            expect(names.every((name) => /^[a-z0-9-]+$/u.test(name))).toBe(true);
+        });
+
+        it("checks every binding before creating any, so a later gap leaves no config behind", async () => {
+            expect.assertions(2);
+
+            writeWrangler({
+                hyperdrive: [
+                    { binding: "HYPERDRIVE", id: HYPERDRIVE_PLACEHOLDER_ID },
+                    { binding: "ANALYTICS", id: HYPERDRIVE_PLACEHOLDER_ID },
+                ],
+            });
+
+            const api = hyperdriveApi([]);
+            const result = await provisionHyperdrive({
+                cwd: root,
+                environment: { ...CREDENTIALS, [URL_VARIABLE]: "postgres://u:p@h/db" },
+                fetch: api,
+                logger: recordingLogger().logger,
+            });
+
+            expect(result).toContain("LUNORA_ANALYTICS_URL");
+            expect(api).not.toHaveBeenCalled();
+        });
+
+        it("records the first binding's id even when a later one's creation fails", async () => {
+            expect.assertions(3);
+
+            writeWrangler({
+                hyperdrive: [
+                    { binding: "HYPERDRIVE", id: HYPERDRIVE_PLACEHOLDER_ID },
+                    { binding: "ANALYTICS", id: HYPERDRIVE_PLACEHOLDER_ID },
+                ],
+                name: "app",
+            });
+
+            let posts = 0;
+            const api = vi.fn<typeof globalThis.fetch>(async (_url, init) => {
+                if (init?.method !== "POST") {
+                    return Response.json({ errors: [], result: [], success: true });
+                }
+
+                posts += 1;
+
+                return posts === 1
+                    ? Response.json({ errors: [], result: { id: "first-id" }, success: true })
+                    : Response.json({ errors: [{ code: 2008, message: "Invalid origin host" }], success: false }, { status: 400 });
+            });
+            const result = await provisionHyperdrive({
+                cwd: root,
+                environment: { ...CREDENTIALS, [URL_VARIABLE]: "postgres://u:p@h/db", LUNORA_ANALYTICS_URL: "postgres://u:p@bad/db" },
+                fetch: api,
+                logger: recordingLogger().logger,
+            });
+
+            expect(readWrangler().hyperdrive.map((entry) => entry.id)).toStrictEqual(["first-id", HYPERDRIVE_PLACEHOLDER_ID]);
+            // Cloudflare's own reason is shown; the request, with its password, is not.
+            expect(result).toContain("Invalid origin host");
+            expect(result).not.toContain("u:p");
+        });
+
         it("reads and writes the --env block's own array, since hyperdrive does not inherit", async () => {
             expect.assertions(2);
 

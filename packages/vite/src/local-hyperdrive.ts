@@ -8,15 +8,20 @@
  * worker's bindings. `lunora dev` starts the same database itself, and the Vite
  * child it spawns inherits the variable, so this plugin then finds nothing to do.
  *
- * Started once per process and kept: `restartServer` resolves the new config
- * before it closes the old server, so tying the database to a server would stop
- * it under the one that replaces it. The process exiting takes it down, and
- * Postgres replays its WAL on the next start.
+ * Every config resolution asks again, and the starter only serves bindings that
+ * still have no database, so a binding added after the first start gets one on
+ * the next reload. The databases belong to the project, not to one server:
+ * `restartServer` resolves the new config before it closes the old server, so a
+ * server closing only starts a short countdown, and the databases stop when no
+ * server has come back by the end of it.
  */
 import { lunoraLine } from "@lunora/config/cli";
 import type { LocalHyperdrive } from "@lunora/config/cloudflare";
 import { startLocalHyperdrive } from "@lunora/config/cloudflare";
 import type { Plugin } from "vite";
+
+/** How long after the last server closes before the databases stop, so a restart keeps them. */
+const STOP_GRACE_MS = 5000;
 
 interface LocalHyperdriveOptions {
     projectRoot: string;
@@ -24,8 +29,47 @@ interface LocalHyperdriveOptions {
     start?: typeof startLocalHyperdrive;
 }
 
-/** The database already started for each project root in this process. */
-const started = new Map<string, Promise<LocalHyperdrive | undefined>>();
+/** What a project has running in this process. */
+interface Session {
+    databases: LocalHyperdrive[];
+    /** Startups run one after another, so two config resolutions never start the same binding twice. */
+    pending: Promise<void>;
+    servers: number;
+    stopTimer?: ReturnType<typeof setTimeout>;
+}
+
+const sessions = new Map<string, Session>();
+
+const sessionFor = (projectRoot: string): Session => {
+    const existing = sessions.get(projectRoot);
+
+    if (existing !== undefined) {
+        return existing;
+    }
+
+    const created: Session = { databases: [], pending: Promise.resolve(), servers: 0 };
+
+    sessions.set(projectRoot, created);
+
+    return created;
+};
+
+const stopAll = async (session: Session): Promise<void> => {
+    const databases = session.databases.splice(0);
+
+    await Promise.allSettled(databases.map(async (database) => database.stop()));
+};
+
+/** Stop the databases after the grace period. Unref'd: the countdown must not keep a finished process alive. */
+const scheduleStop = (session: Session): ReturnType<typeof setTimeout> => {
+    const timer = setTimeout(() => {
+        stopAll(session).catch((): undefined => undefined);
+    }, STOP_GRACE_MS);
+
+    timer.unref();
+
+    return timer;
+};
 
 const localHyperdrive = ({ projectRoot, start = startLocalHyperdrive }: LocalHyperdriveOptions): Plugin => {
     return {
@@ -34,30 +78,45 @@ const localHyperdrive = ({ projectRoot, start = startLocalHyperdrive }: LocalHyp
                 return;
             }
 
-            const existing = started.get(projectRoot);
+            const session = sessionFor(projectRoot);
 
-            if (existing !== undefined) {
-                await existing;
+            const previous = session.pending;
 
-                return;
-            }
+            session.pending = (async () => {
+                await previous;
 
-            const pending = start({
-                onWarning: (message) => {
-                    // eslint-disable-next-line no-console -- the dev server's logger isn't available while the Cloudflare plugin resolves its config.
-                    console.warn(lunoraLine(message));
-                },
-                projectRoot,
+                const local = await start({
+                    onWarning: (message) => {
+                        // eslint-disable-next-line no-console -- the dev server's logger isn't available while the Cloudflare plugin resolves its config.
+                        console.warn(lunoraLine(message));
+                    },
+                    projectRoot,
+                });
+
+                if (local !== undefined) {
+                    session.databases.push(local);
+                    // eslint-disable-next-line no-console -- see above.
+                    console.info(lunoraLine(`Hyperdrive ${local.bindings.join(", ")}: embedded Postgres (PGlite), data in .wrangler/state/lunora-pglite.`));
+                }
+            })();
+
+            await session.pending;
+        },
+        configureServer(server) {
+            const session = sessionFor(projectRoot);
+
+            session.servers += 1;
+            clearTimeout(session.stopTimer);
+
+            server.httpServer?.once("close", () => {
+                session.servers -= 1;
+
+                if (session.servers > 0) {
+                    return;
+                }
+
+                session.stopTimer = scheduleStop(session);
             });
-
-            started.set(projectRoot, pending);
-
-            const local = await pending;
-
-            if (local !== undefined) {
-                // eslint-disable-next-line no-console -- see above.
-                console.info(lunoraLine(`Hyperdrive ${local.bindings.join(", ")}: embedded Postgres (PGlite), data in .wrangler/state/lunora-pglite.`));
-            }
         },
         enforce: "pre",
         name: "lunora:local-hyperdrive",

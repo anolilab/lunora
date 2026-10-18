@@ -548,6 +548,81 @@ describe("lunora deploy", () => {
                 expect(recording.calls).toHaveLength(0);
             });
 
+            /** A fetch where the namespace is absent until a POST creates it; `posts` records the creations. */
+            const absentUntilCreated = () => {
+                const posts: string[] = [];
+                const fetchStub = vi.fn<typeof globalThis.fetch>(async (_url, init) => {
+                    if (init?.method === "POST") {
+                        posts.push(init.body as string);
+
+                        return Response.json({ result: { jurisdiction: "eu", namespace: "repos" }, success: true });
+                    }
+
+                    return posts.length > 0
+                        ? Response.json({ result: { jurisdiction: "eu", namespace: "repos" }, success: true })
+                        : Response.json({ errors: [{ code: 404, message: "not found" }], success: false }, { status: 404 });
+                });
+
+                return { fetchStub, posts };
+            };
+
+            it("creates a missing pinned namespace once, even when two bindings name it", async () => {
+                expect.assertions(3);
+
+                seedPinnedArtifacts();
+                writeFileSync(
+                    join(workdir, "wrangler.jsonc"),
+                    JSON.stringify({
+                        ...(JSON.parse(VALID_WRANGLER) as Record<string, unknown>),
+                        artifacts: [
+                            { binding: "ARTIFACTS", namespace: "repos" },
+                            { binding: "MIRROR", namespace: "repos" },
+                        ],
+                    }),
+                    "utf8",
+                );
+                vi.stubEnv("CLOUDFLARE_API_TOKEN", "token");
+                vi.stubEnv("CLOUDFLARE_ACCOUNT_ID", "acc");
+
+                const { fetchStub, posts } = absentUntilCreated();
+
+                vi.stubGlobal("fetch", fetchStub);
+
+                const result = await runDeployCommand({
+                    cwd: workdir,
+                    logger: silentLogger().logger,
+                    secretLister: noRemoteSecrets,
+                    spawner: createRecordingSpawner().spawner,
+                });
+
+                expect(result.code).toBe(0);
+                expect(posts).toHaveLength(1);
+                expect(JSON.parse(posts[0] ?? "{}")).toStrictEqual({ jurisdiction: "eu", namespace: "repos" });
+            });
+
+            it("creates nothing on a dry run, and reports the namespace as missing instead", async () => {
+                expect.assertions(2);
+
+                seedPinnedArtifacts();
+                vi.stubEnv("CLOUDFLARE_API_TOKEN", "token");
+                vi.stubEnv("CLOUDFLARE_ACCOUNT_ID", "acc");
+
+                const { fetchStub, posts } = absentUntilCreated();
+
+                vi.stubGlobal("fetch", fetchStub);
+
+                const result = await runDeployCommand({
+                    cwd: workdir,
+                    dryRun: true,
+                    logger: silentLogger().logger,
+                    secretLister: noRemoteSecrets,
+                    spawner: createRecordingSpawner().spawner,
+                });
+
+                expect(posts).toStrictEqual([]);
+                expect(result.error).toContain("does not exist");
+            });
+
             it("warns and deploys when there is no API token to check with", async () => {
                 expect.assertions(3);
 

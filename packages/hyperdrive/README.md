@@ -83,7 +83,7 @@ Importing `@lunora/hyperdrive` (or reading `ctx.sql`) is enough: `lunora dev` an
     LUNORA_HYPERDRIVE_URL="postgres://user:pass@host:5432/db" lunora deploy # gitleaks:allow -- placeholder, not a real secret
     ```
 
-    The variable is `LUNORA_<BINDING>_URL`. Lunora creates a config named after your Worker and the binding (or reuses one with that name) and writes its `id` into `wrangler.jsonc`. The connection string is only sent to Cloudflare, never written to a file or logged.
+    The variable is `LUNORA_<BINDING>_URL`. Lunora creates a config named after the deployed Worker (so `--env staging` gets its own) and the binding, or reuses one with that name that reaches the same database, and writes its `id` into `wrangler.jsonc`. A same-named config for another database stops the deploy. The connection string is only sent to Cloudflare, never written to a file or logged.
 
 Prefer to manage it yourself? Run `wrangler hyperdrive create my-db --connection-string=...` and put the `id` in the binding; Lunora then leaves it alone.
 

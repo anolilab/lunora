@@ -783,7 +783,9 @@ const checkArtifactsNamespaces = async (
     }
 
     const accountId = (environment === undefined ? undefined : parsed.env?.[environment]?.account_id) ?? parsed.account_id;
-    const checks = await Promise.all(entries.map(async (entry) => checkArtifactsJurisdiction({ ...entry, accountId, create, jurisdiction })));
+    // One check per namespace: two bindings on a missing namespace would both see it absent and race to create it.
+    const namespaces = [...new Map(entries.map((entry) => [entry.namespace, entry])).values()];
+    const checks = await Promise.all(namespaces.map(async (entry) => checkArtifactsJurisdiction({ ...entry, accountId, create, jurisdiction })));
     const failures: string[] = [];
 
     for (const check of checks) {

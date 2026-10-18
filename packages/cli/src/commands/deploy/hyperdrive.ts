@@ -10,6 +10,7 @@
  * string stays in the environment: it is sent to Cloudflare and never logged,
  * written, or put on a command line.
  */
+import { createHash } from "node:crypto";
 import { readFileSync, writeFileSync } from "node:fs";
 
 import { applyModify, findWranglerFile, HYPERDRIVE_PLACEHOLDER_ID, readWranglerJsonc } from "@lunora/config/cloudflare";
@@ -26,10 +27,13 @@ const NAME_LIMIT = 32;
 
 const REQUEST_TIMEOUT_MS = 15_000;
 
+const POSTGRES_PORT = 5432;
+const MYSQL_PORT = 3306;
+
 /** The slice of a hand-written `wrangler.jsonc` this reads; every field is untrusted. */
 interface HyperdriveWrangler {
     account_id?: unknown;
-    env?: Record<string, { account_id?: unknown; hyperdrive?: unknown } | undefined>;
+    env?: Record<string, { account_id?: unknown; hyperdrive?: unknown; name?: unknown } | undefined>;
     hyperdrive?: unknown;
     name?: unknown;
 }
@@ -53,12 +57,30 @@ const TRAILING_DASH = /-$/u;
 /** The environment variable a binding's connection string is read from. */
 const connectionStringVariable = (binding: string): string => `LUNORA_${binding.replaceAll(NON_VARIABLE_CHARACTER, "_").toUpperCase()}_URL`;
 
-/** The config name for a binding: the Worker's name and the binding, lowercased to Cloudflare's alphabet. */
-const configName = (workerName: unknown, binding: string): string => {
-    const worker = typeof workerName === "string" && workerName !== "" ? workerName : "lunora";
+/** Characters of the hash that closes a shortened name, with its dash. */
+const HASH_SUFFIX = 7;
 
-    return `${worker}-${binding}`.toLowerCase().replaceAll(NON_NAME_CHARACTER, "-").slice(0, NAME_LIMIT).replace(TRAILING_DASH, "");
+/**
+ * The config name for a binding: the deployed Worker's name and the binding, in Cloudflare's alphabet.
+ * Past the 32-character limit the front is cut and a short hash of the whole identity closes it, so two
+ * long names that share a prefix still get names of their own.
+ */
+const configName = (workerName: string, binding: string): string => {
+    const identity = `${workerName}-${binding}`.toLowerCase().replaceAll(NON_NAME_CHARACTER, "-");
+
+    if (identity.length <= NAME_LIMIT) {
+        return identity;
+    }
+
+    const hash = createHash("sha256")
+        .update(identity)
+        .digest("hex")
+        .slice(0, HASH_SUFFIX - 1);
+
+    return `${identity.slice(0, NAME_LIMIT - HASH_SUFFIX).replace(TRAILING_DASH, "")}-${hash}`;
 };
+
+const defaultPort = (scheme: string): number => (scheme === "mysql" ? MYSQL_PORT : POSTGRES_PORT);
 
 /** The `origin` Cloudflare wants, from a `postgres://` or `mysql://` URL, or `undefined` when it is not one. */
 const parseOrigin = (value: string): Record<string, number | string> | undefined => {
@@ -81,7 +103,7 @@ const parseOrigin = (value: string): Record<string, number | string> | undefined
         database,
         host: url.hostname,
         password: decodeURIComponent(url.password),
-        ...(url.port === "" ? {} : { port: Number(url.port) }),
+        port: url.port === "" ? defaultPort(scheme) : Number(url.port),
         scheme,
         user: decodeURIComponent(url.username),
     };
@@ -95,25 +117,66 @@ const placeholderEntries = (hyperdrive: unknown): { binding: string; index: numb
         return typeof binding === "string" && id === HYPERDRIVE_PLACEHOLDER_ID ? [{ binding, index }] : [];
     });
 
-/** The id of the config called `name`, creating it when there is none. Throws on an API failure. */
+/** What Cloudflare said went wrong, from its error envelope, without echoing the request. */
+const describeFailure = (outcome: { status: number; text: string }): string => {
+    let reasons = "";
+
+    try {
+        const { errors } = JSON.parse(outcome.text) as { errors?: { message?: unknown }[] };
+
+        reasons = (errors ?? [])
+            .flatMap((error) => (typeof error.message === "string" ? [error.message] : []))
+            .slice(0, 2)
+            .join("; ");
+    } catch {
+        // Not JSON (a gateway page): the status is all there is.
+    }
+
+    return reasons === "" ? `HTTP ${String(outcome.status)}` : `HTTP ${String(outcome.status)}: ${reasons}`;
+};
+
+/** A listed origin field as text, or `undefined` when the listing leaves it out. */
+const asText = (value: unknown): string | undefined => (typeof value === "string" || typeof value === "number" ? value.toString() : undefined);
+
+/** The fields of an existing config's origin that say which database it reaches. */
+const ORIGIN_IDENTITY = ["host", "port", "database", "user"] as const;
+
+/**
+ * The id of the config called `name`, creating it when there is none. A config of that name that
+ * reaches another database is not reused: its id would point the binding at the wrong one.
+ * Throws on an API failure or a mismatch.
+ */
 const configId = async (request: Request, name: string, origin: Record<string, number | string>): Promise<{ id: string; reused: boolean }> => {
     const listed = await request("/hyperdrive/configs");
 
     if (!listed.ok) {
-        throw new Error(`listing Hyperdrive configs failed (HTTP ${String(listed.status)})`);
+        throw new Error(`listing Hyperdrive configs failed (${describeFailure(listed)})`);
     }
 
-    const configs = Array.isArray(listed.body.result) ? (listed.body.result as { id?: unknown; name?: unknown }[]) : [];
-    const existing = configs.find((entry) => entry.name === name)?.id;
+    const configs = Array.isArray(listed.body.result) ? (listed.body.result as { id?: unknown; name?: unknown; origin?: Record<string, unknown> }[]) : [];
+    const existing = configs.find((entry) => entry.name === name);
 
-    if (typeof existing === "string") {
-        return { id: existing, reused: true };
+    if (typeof existing?.id === "string") {
+        // Fields the listing leaves out cannot disagree; the password is never listed.
+        const differs = ORIGIN_IDENTITY.filter((field) => {
+            const listedValue = asText(existing.origin?.[field]);
+
+            return listedValue !== undefined && listedValue !== asText(origin[field]);
+        });
+
+        if (differs.length > 0) {
+            throw new Error(
+                `a Hyperdrive config named "${name}" already exists for a different origin (${differs.join(", ")} differ). Delete it, or rename the Worker, so the binding does not reach the wrong database.`,
+            );
+        }
+
+        return { id: existing.id, reused: true };
     }
 
     const created = await request("/hyperdrive/configs", { body: JSON.stringify({ name, origin }), method: "POST" });
 
     if (!created.ok) {
-        throw new Error(`creating it failed (HTTP ${String(created.status)})`);
+        throw new Error(`creating it failed (${describeFailure(created)})`);
     }
 
     const { id } = (typeof created.body.result === "object" && created.body.result !== null ? created.body.result : {}) as { id?: unknown };
@@ -146,7 +209,7 @@ interface BindingSetup {
     /** The JSON path of the array holding the binding. */
     path: string[];
     token: string;
-    workerName: unknown;
+    workerName: string;
     wranglerPath: string;
 }
 
@@ -171,19 +234,29 @@ const setUpBinding = async (setup: BindingSetup, text: string): Promise<string> 
     return applyModify(text, [...setup.path, setup.index, "id"], id);
 };
 
-/**
- * Replace every placeholder Hyperdrive id in `wrangler.jsonc` with a real config's.
- * Returns the error that blocks the deploy, or `undefined` when nothing is left to do.
- */
 /** What `wrangler.jsonc` holds for Hyperdrive in the environment being deployed. */
 interface PlaceholderScan {
     accountId: unknown;
     entries: { binding: string; index: number }[];
     /** The JSON path of the array the entries sit in. */
     path: string[];
-    workerName: unknown;
+    /** The name the Worker is deployed under, which the config names are built from. */
+    workerName: string;
     wranglerPath: string;
 }
+
+/** The Worker's deployed name: an environment's own `name`, else wrangler's `<name>-<env>`. */
+const deployedName = (parsed: HyperdriveWrangler, wranglerEnvironment: string | undefined): string => {
+    const base = typeof parsed.name === "string" && parsed.name !== "" ? parsed.name : "lunora";
+
+    if (wranglerEnvironment === undefined) {
+        return base;
+    }
+
+    const own = parsed.env?.[wranglerEnvironment]?.name;
+
+    return typeof own === "string" && own !== "" ? own : `${base}-${wranglerEnvironment}`;
+};
 
 const scanPlaceholders = (cwd: string, wranglerEnvironment: string | undefined): PlaceholderScan | undefined => {
     const wranglerPath = findWranglerFile(cwd);
@@ -193,17 +266,18 @@ const scanPlaceholders = (cwd: string, wranglerEnvironment: string | undefined):
         return undefined;
     }
 
-    // `hyperdrive` does not inherit into an environment, so its own array is the one to read and write.
+    // `hyperdrive` does not inherit into an environment: a named deploy reads and writes only that
+    // block's array. A top-level placeholder is not what the environment's Worker is deployed with.
     const scope = wranglerEnvironment === undefined ? undefined : parsed.env?.[wranglerEnvironment];
-    const entries = placeholderEntries(scope?.hyperdrive ?? parsed.hyperdrive);
+    const entries = placeholderEntries(wranglerEnvironment === undefined ? parsed.hyperdrive : scope?.hyperdrive);
 
     return entries.length === 0
         ? undefined
         : {
               accountId: scope?.account_id ?? parsed.account_id,
               entries,
-              path: scope?.hyperdrive === undefined ? ["hyperdrive"] : ["env", wranglerEnvironment ?? "", "hyperdrive"],
-              workerName: parsed.name,
+              path: wranglerEnvironment === undefined ? ["hyperdrive"] : ["env", wranglerEnvironment, "hyperdrive"],
+              workerName: deployedName(parsed, wranglerEnvironment),
               wranglerPath,
           };
 };
@@ -222,24 +296,17 @@ const provisionHyperdrive = async (options: ProvisionHyperdriveOptions): Promise
     const { entries, path, wranglerPath } = scan;
     const environment = options.environment ?? process.env;
     const { accountId, token } = resolveCloudflareCredentials(environment, scan.accountId);
-    let text = readFileSync(wranglerPath, "utf8");
+    const origins = entries.map(({ binding }) => {
+        return { binding, origin: parseOrigin(environment[connectionStringVariable(binding)] ?? "") };
+    });
 
-    for (const { binding, index } of entries) {
-        const origin = parseOrigin(environment[connectionStringVariable(binding)] ?? "");
+    // Everything a binding needs is checked before the first API call, so a later binding's missing
+    // connection string cannot leave an earlier one's config created and its id unrecorded.
+    for (const { binding, origin } of origins) {
         const blocked = blocker(binding, origin, token !== undefined && accountId !== undefined);
 
-        try {
-            if (blocked !== undefined || origin === undefined || token === undefined || accountId === undefined) {
-                throw new Error(blocked ?? "missing credentials");
-            }
-
-            // eslint-disable-next-line no-await-in-loop -- one config at a time keeps the log in binding order
-            text = await setUpBinding(
-                { accountId, binding, fetch: options.fetch, index, logger: options.logger, origin, path, token, workerName: scan.workerName, wranglerPath },
-                text,
-            );
-        } catch (error) {
-            const message = `deploy blocked: ${error instanceof Error ? error.message : String(error)}`;
+        if (blocked !== undefined) {
+            const message = `deploy blocked: ${blocked}`;
 
             options.logger.error(message);
 
@@ -247,7 +314,30 @@ const provisionHyperdrive = async (options: ProvisionHyperdriveOptions): Promise
         }
     }
 
-    writeFileSync(wranglerPath, text, "utf8");
+    for (const [position, { binding, index }] of entries.entries()) {
+        const origin = origins[position]?.origin;
+
+        if (origin === undefined || token === undefined || accountId === undefined) {
+            continue;
+        }
+
+        try {
+            // Written after each binding: a config that exists in the account is recorded at once.
+            // eslint-disable-next-line no-await-in-loop -- one config at a time keeps the log in binding order
+            const text = await setUpBinding(
+                { accountId, binding, fetch: options.fetch, index, logger: options.logger, origin, path, token, workerName: scan.workerName, wranglerPath },
+                readFileSync(wranglerPath, "utf8"),
+            );
+
+            writeFileSync(wranglerPath, text, "utf8");
+        } catch (error) {
+            const message = `deploy blocked: the "${binding}" Hyperdrive config could not be set up: ${error instanceof Error ? error.message : String(error)}`;
+
+            options.logger.error(message);
+
+            return message;
+        }
+    }
 
     return undefined;
 };
