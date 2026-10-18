@@ -3384,6 +3384,12 @@ abstract class ShardDO {
         // would tear down nothing.
         const ws = this.runner.socketFor(rawSocket);
 
+        // A socket is torn down once. An expired-credential drop runs this itself because the runtime does not
+        // deliver a close for a close the server started; if it ever does, that second call must not repeat the hooks.
+        if (this.closingSockets.has(ws)) {
+            return;
+        }
+
         // Marked before the first await, including the shard-init one below: a subscribe or
         // unsubscribe that interleaves with this close must not change membership it tears down.
         this.closingSockets.add(ws);
@@ -16038,17 +16044,17 @@ abstract class ShardDO {
      * client-facing wire shape from one place.
      */
     private dropExpiredSocket(ws: ShardSocketLike): void {
-        // The close this drop starts is not delivered back to `webSocketClose`, so a route socket's `onClose` runs here.
-        // Queued before the close, it is the same per-socket event `dispatchCloseHooks` would have queued.
-        const route = this.routeOfSocket(this.readAttachment(ws));
+        // The close this drop starts is not delivered back to `webSocketClose` (the runtime dispatches that event
+        // for a peer's close, not a server-initiated one), so the whole teardown runs here instead: the route's
+        // `onClose` or the connection's `onDisconnect`, the room leaves, the per-socket memos and the durable
+        // shape-poke rows. Started before the close, so it reads the attachment first. `webSocketClose` runs at most
+        // once per socket, so a runtime that does deliver a close finds nothing left to repeat.
+        const teardown = this.webSocketClose(ws as unknown as WebSocket, 4001, "token_expired", true).catch((error: unknown) => {
+            // eslint-disable-next-line no-console -- server-side diagnostic: the socket is already closed, so there is nothing to propagate a teardown failure to
+            console.error("[@lunora/do] expired-socket teardown failed:", error);
+        });
 
-        if (route !== undefined && !this.routeCloseSent.has(ws)) {
-            this.routeCloseSent.add(ws);
-            const closed = this.dispatchSocketEvent(ws, { functionPath: route.functionPath, path: route.path }, "close").catch(() => undefined);
-
-            this.shardHost.waitUntil?.(closed);
-        }
-
+        this.shardHost.waitUntil?.(teardown);
         dropExpiredCredentialSocket(ws);
     }
 
