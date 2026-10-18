@@ -14,8 +14,16 @@
  * as logged in, and every candidate directory wrangler might resolve on any
  * platform is searched. A false "logged in" only keeps today's behaviour; a false
  * "logged out" would switch Workers AI off for a user who has it.
+ *
+ * A login file alone can be stale (a keychain-backed `.enc` whose keyring entry is
+ * gone or whose ciphertext is invalid), so when the project has its own wrangler it
+ * is asked: `wrangler whoami --json` prints `{"loggedIn":false}` from local state
+ * alone, before any network call. Only that exact answer counts as logged out;
+ * being offline, a timeout, or a missing wrangler all still count as logged in.
  */
+import { spawnSync } from "node:child_process";
 import { readdirSync, readFileSync } from "node:fs";
+import { createRequire } from "node:module";
 import { homedir } from "node:os";
 
 import join from "../path";
@@ -43,6 +51,12 @@ const EXPORT_PREFIX = /^export\s+/u;
 /** A `.env` file's line break. */
 const LINE_BREAK = /\r?\n/u;
 
+/** What `wrangler whoami --json` prints when no usable login exists. */
+const LOGGED_OUT = /"loggedIn"\s*:\s*false/u;
+
+/** Projects whose login `wrangler whoami` already confirmed, so one dev start asks once. */
+const confirmedLogins = new Set<string>();
+
 /** A value wrapped in matching single or double quotes. */
 const QUOTED_VALUE = /^(["'])(.*)\1$/u;
 
@@ -69,6 +83,45 @@ const hasEntries = (directory: string): boolean => {
     } catch {
         return false;
     }
+};
+
+/**
+ * Whether the project's own wrangler says its on-disk login is unusable. Everything
+ * short of that exact answer (no wrangler installed, a timeout, no network) is
+ * `false`, so this can only ever switch Workers AI off for a login that is dead.
+ * A confirmed login is remembered; a dead one is asked again, so a fresh
+ * `wrangler login` is picked up without restarting.
+ */
+const wranglerSaysLoggedOut = (projectRoot: string, env: Record<string, string | undefined>): boolean => {
+    if (confirmedLogins.has(projectRoot)) {
+        return false;
+    }
+
+    let script: string;
+
+    try {
+        const manifest = createRequire(join(projectRoot, "package.json")).resolve("wrangler/package.json");
+
+        script = join(manifest, "..", "bin", "wrangler.js");
+    } catch {
+        return false;
+    }
+
+    const { stdout } = spawnSync(process.execPath, [script, "whoami", "--json"], {
+        cwd: projectRoot,
+        encoding: "utf8",
+        env: { ...env, WRANGLER_SEND_METRICS: "false" },
+        stdio: ["ignore", "pipe", "ignore"],
+        timeout: 10_000,
+    });
+
+    if (LOGGED_OUT.test(stdout)) {
+        return true;
+    }
+
+    confirmedLogins.add(projectRoot);
+
+    return false;
 };
 
 /**
@@ -125,7 +178,9 @@ const hasCloudflareCredentials = (probe: CloudflareCredentialProbe = {}): boolea
         return true;
     }
 
-    return wranglerConfigBases(env, probe.home ?? homedir()).some((base) => hasEntries(join(base, ".wrangler", "config")));
+    const hasLoginFile = wranglerConfigBases(env, probe.home ?? homedir()).some((base) => hasEntries(join(base, ".wrangler", "config")));
+
+    return hasLoginFile && (probe.projectRoot === undefined || !wranglerSaysLoggedOut(probe.projectRoot, env));
 };
 
 export type { CloudflareCredentialProbe };
