@@ -178,6 +178,7 @@ import {
     diffGlobalMembership,
     DurableStreamRunner,
     envOptionalPositiveInt,
+    envPositiveInt,
     FLAGS_FUNCTION_PREFIX,
     forgetScheduleOutbox,
     gateReplicaDispatch,
@@ -1355,6 +1356,23 @@ const parseMaxPages = (args: Record<string, unknown>, op: string, ceiling: numbe
 };
 
 const UNDELIVERED_BASELINE = "<undelivered>";
+
+/**
+ * Largest subscription result (its wire-encoded JSON, in UTF-16 code units — within
+ * three of the UTF-8 byte count) one frame may carry. A result past it is refused with
+ * `SUBSCRIPTION_RESULT_TOO_LARGE` instead of being sent: the frame, the encoded copy and
+ * the diff baseline all live in the isolate's memory at once. Per-deployment via
+ * `LUNORA_SUBSCRIPTION_MAX_RESULT_BYTES`.
+ */
+const DEFAULT_SUBSCRIPTION_MAX_RESULT_BYTES = 8 * 1024 * 1024;
+
+/**
+ * Most diff-baseline text one socket's subscriptions may hold between them. Past it a
+ * subscription keeps no baseline ({@link UNDELIVERED_BASELINE}) and its next result is
+ * re-sent in full, which costs bandwidth but not memory. Per-deployment via
+ * `LUNORA_SUBSCRIPTION_MEMO_MAX_BYTES`.
+ */
+const DEFAULT_SUBSCRIPTION_MEMO_MAX_BYTES = 32 * 1024 * 1024;
 
 /** Refusal text for a delivery mode that cannot be fenced while delivery authorization is enabled. */
 const DELIVERY_MODE_UNSUPPORTED = "delivery mode unsupported with delivery authorization";
@@ -15409,6 +15427,39 @@ abstract class ShardDO {
         }
     }
 
+    /** Refuse a result too large to send as one frame. */
+    private assertResultWithinLimit(json: string): void {
+        const limit = envPositiveInt(this.env, "LUNORA_SUBSCRIPTION_MAX_RESULT_BYTES", DEFAULT_SUBSCRIPTION_MAX_RESULT_BYTES);
+
+        if (json.length > limit) {
+            throw new LunoraError(
+                "SUBSCRIPTION_RESULT_TOO_LARGE",
+                `subscription result is ${String(json.length)} bytes, over the ${String(limit)}-byte limit; narrow or paginate the query`,
+                { status: 413 },
+            );
+        }
+    }
+
+    /**
+     * The diff baseline to remember for `subId`: `json` while this socket's baselines
+     * stay within {@link DEFAULT_SUBSCRIPTION_MEMO_MAX_BYTES}, else
+     * {@link UNDELIVERED_BASELINE} — only the baseline is dropped, so the subscription
+     * keeps its dependency tracking (and its skip of unrelated writes) and just re-sends
+     * its next result in full. Summed on demand over a socket's few memos (the
+     * per-socket subscription cap), so there is nothing to keep in step.
+     */
+    private boundedBaseline(memos: Map<string, SubscriptionMemo>, subId: string, json: string): string {
+        let held = json.length;
+
+        for (const [id, memo] of memos) {
+            if (id !== subId && memo.lastJson !== UNDELIVERED_BASELINE) {
+                held += memo.lastJson.length;
+            }
+        }
+
+        return held > envPositiveInt(this.env, "LUNORA_SUBSCRIPTION_MEMO_MAX_BYTES", DEFAULT_SUBSCRIPTION_MEMO_MAX_BYTES) ? UNDELIVERED_BASELINE : json;
+    }
+
     /**
      * Record `outcome` as this socket's diff baseline for `subId` without
      * sending a frame. Used by the resume fast-path, where the client keeps its
@@ -15426,7 +15477,7 @@ abstract class ShardDO {
         memos.set(subId, {
             generation,
             // eslint-disable-next-line unicorn/no-null -- mirrors pushSubscriptionData: an undefined result serializes to JSON null so the baseline matches the wire form
-            lastJson: JSON.stringify(encodeWire(outcome.result ?? null)),
+            lastJson: this.boundedBaseline(memos, subId, JSON.stringify(encodeWire(outcome.result ?? null))),
             ranges: outcome.ranges,
             tables: outcome.tables,
         });
@@ -15488,6 +15539,8 @@ abstract class ShardDO {
             json = JSON.stringify(encodeWire(outcome.result ?? null));
             this.encodedOutcomes.set(outcome, json);
         }
+
+        this.assertResultWithinLimit(json);
 
         if (existing?.lastJson === json) {
             // An unchanged result still settles optimistic overlays at this cursor.
@@ -15567,7 +15620,7 @@ abstract class ShardDO {
             // Tracks `lastJson`: an undelivered value leaves the baseline, and so
             // its generation, where the last delivered one put it.
             generation: delivered ? generation : (existing?.generation ?? generation),
-            lastJson: delivered ? json : (existing?.lastJson ?? UNDELIVERED_BASELINE),
+            lastJson: delivered ? this.boundedBaseline(memos, subId, json) : (existing?.lastJson ?? UNDELIVERED_BASELINE),
             ranges: outcome.ranges,
             tables: outcome.tables,
         });
