@@ -28,6 +28,7 @@ import { decodeWire } from "@lunora/wire";
 import { createReconnect } from "./reconnect";
 import type { StreamIterable } from "./stream";
 import { createStream } from "./stream";
+import readOrIdle from "./stream-idle";
 import type { HttpStreamArgsOf, HttpStreamChunkOf, HttpStreamRef } from "./types";
 
 /** One optional space after an SSE field's colon (`data: x` vs `data:x`) — spec-stripped. */
@@ -63,6 +64,16 @@ interface HttpStreamOptions {
     fetch?: typeof fetch;
     /** Extra request headers (e.g. `authorization`). `accept: text/event-stream` is always sent. */
     headers?: Record<string, string>;
+
+    /**
+     * Treat a connection that delivers nothing — no chunk, no keepalive comment —
+     * for this many milliseconds as dead: it is cancelled, then reconnected with
+     * {@link HttpStreamOptions.reconnect} or failed with `STREAM_IDLE`. Off by
+     * default, because a route may be silent for as long as its handler works
+     * (a model thinking); set it to a few multiples of the route's keepalive
+     * interval when the route sends one.
+     */
+    idleTimeoutMs?: number;
 
     /**
      * Seed the first request's `Last-Event-ID` header, resuming a stream from a
@@ -261,7 +272,7 @@ interface SseFrameObservers {
  * interruption the caller may retry. Runs inside the async pump — all thrown
  * read errors are routed to the consumer by the caller's catch.
  */
-const pumpSseBody = async (body: ReadableStream<Uint8Array>, handle: UntypedHandle, observers: SseFrameObservers): Promise<boolean> => {
+const pumpSseBody = async (body: ReadableStream<Uint8Array>, handle: UntypedHandle, observers: SseFrameObservers, idleTimeoutMs = 0): Promise<boolean> => {
     const reader = body.getReader();
     const decoder = new TextDecoder();
 
@@ -324,7 +335,7 @@ const pumpSseBody = async (body: ReadableStream<Uint8Array>, handle: UntypedHand
     try {
         for (;;) {
             // eslint-disable-next-line no-await-in-loop -- SSE frames arrive sequentially on one body; each read depends on the previous one completing.
-            const { done, value } = await reader.read();
+            const { done, value } = await readOrIdle(reader, idleTimeoutMs);
 
             if (done) {
                 break;
@@ -565,7 +576,7 @@ const httpStream = <Ref extends HttpStreamRef>(
                 return undefined;
             }
 
-            const completed = await pumpSseBody(response.body, handle as UntypedHandle, observers);
+            const completed = await pumpSseBody(response.body, handle as UntypedHandle, observers, options.idleTimeoutMs);
 
             return { completed, error: interrupted };
         } catch (error: unknown) {
