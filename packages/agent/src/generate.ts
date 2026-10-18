@@ -3,6 +3,7 @@ import { LunoraError } from "@lunora/errors";
 import type { LanguageModel, LanguageModelUsage, ModelMessage, Tool } from "ai";
 
 import resolveAgentAi from "./agent-ai";
+import { summarizeUsage } from "./telemetry/common";
 import type {
     AgentCompact,
     AgentDefinition,
@@ -17,24 +18,12 @@ import type {
     AgentUsage,
 } from "./types";
 
-/** Project AI SDK's `LanguageModelUsage` onto the loop's `AgentUsage` (defined fields only). */
-const toAgentUsage = (usage: LanguageModelUsage | undefined): AgentUsage | undefined => {
-    if (!usage) {
-        return undefined;
-    }
-
-    const result: AgentUsage = {};
-
-    for (const key of ["inputTokens", "outputTokens", "totalTokens"] as const) {
-        const value = usage[key];
-
-        if (value !== undefined) {
-            result[key] = value;
-        }
-    }
-
-    return Object.keys(result).length > 0 ? result : undefined;
-};
+/**
+ * Project AI SDK's `LanguageModelUsage` onto the loop's `AgentUsage`. The breakdowns
+ * come from the `*TokenDetails` objects through the projection the telemetry bridges
+ * use, so a persisted total and a span agree on every bucket.
+ */
+const toAgentUsage = (usage: LanguageModelUsage | undefined): AgentUsage | undefined => summarizeUsage(usage);
 
 /**
  * Normalize a provider's tool-call list onto the loop's {@link AgentToolCall} shape.
