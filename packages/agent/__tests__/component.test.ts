@@ -7,6 +7,7 @@ const UNKNOWN_THREAD_PATTERN = /unknown thread/u;
 const ANOTHER_OWNER_PATTERN = /another owner/u;
 const IN_FLIGHT_PATTERN = /already has a run in flight/u;
 const NOT_ALLOWED_PATTERN = /not allowed to resolve approvals/u;
+const LASTING_APPROVAL_PATTERN = /only the thread's owner can grant a lasting approval/u;
 const NOT_ALLOWED_TO_REVOKE_PATTERN = /not allowed to revoke approvals/u;
 const NO_PENDING_APPROVAL_PATTERN = /no pending approval for tool call "call_1"/u;
 const NO_PRODUCER_PATTERN = /no ctx\.agents/u;
@@ -977,6 +978,29 @@ describe("approval resolution", () => {
 
         expect(sent).toStrictEqual([]);
         await expect(callMutation(functions.agentApprovalGrants, ctx, { key: "t-1" })).resolves.toStrictEqual([]);
+    });
+
+    it("approve_for_thread on an ownerless thread is refused for an anonymous caller: no grant, no wake-up, while a plain approve still works", async () => {
+        const { functions } = agentComponent();
+        const anonymous = fakeDatabase();
+        const { agents, sent } = fakeAgents();
+        const ctx = { ...anonymous.ctx, agents };
+
+        await callMutation(functions.agentEnsureThread, ctx, { agent: "support", instanceId: "wf-1", key: "t-1" });
+        await stageMarker(ctx, "charge");
+
+        await expect(
+            callMutation(functions.agentResolveApproval, ctx, { decision: "approve_for_thread", instanceId: "wf-1", threadKey: "t-1", toolCallId: "call_1" }),
+        ).rejects.toThrow(LASTING_APPROVAL_PATTERN);
+
+        expect(sent).toStrictEqual([]);
+        await expect(callMutation(functions.agentApprovalGrants, ctx, { key: "t-1" })).resolves.toStrictEqual([]);
+
+        // The one-off decision is unchanged for an ownerless thread.
+        await expect(
+            callMutation(functions.agentResolveApproval, ctx, { decision: "approve", instanceId: "wf-1", threadKey: "t-1", toolCallId: "call_1" }),
+        ).resolves.toStrictEqual({ resolved: true });
+        expect(sent).toHaveLength(1);
     });
 
     it("hides and refuses grants to a foreign caller: an empty list and a FORBIDDEN revoke", async () => {

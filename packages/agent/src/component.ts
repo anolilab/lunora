@@ -1270,7 +1270,8 @@ export const agentComponent = (): AgentComponent => {
      * tool (see `grantApprovalForThread`), so later calls to it in this thread
      * skip the gate. The grant is written here, before the event is sent, so it
      * is committed with the decision and the run never sees a decision whose
-     * grant was lost.
+     * grant was lost. Only the thread's verified owner may record a grant; on an
+     * ownerless thread `"approve"` and `"reject"` still work for any caller.
      */
     const agentResolveApproval = mutation
         .input({
@@ -1311,6 +1312,10 @@ export const agentComponent = (): AgentComponent => {
             }
 
             if (args.decision === "approve_for_thread") {
+                // A lasting grant outlives this call, so it takes a verified owner: an ownerless
+                // thread is readable by anyone who knows its key, which is fine for a one-off
+                // approve or reject but not for skipping the gate on every later call.
+                ownedSecretThread(thread, context.auth, "grant a lasting approval for a tool");
                 await grantApprovalForThread(context.db, args.threadKey, args.instanceId, args.toolCallId);
             }
 
