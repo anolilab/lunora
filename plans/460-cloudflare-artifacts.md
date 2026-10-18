@@ -95,12 +95,15 @@ Lunora has **config-level** support only. Nothing reads the binding at runtime.
   detection, the `Capabilities` type, merging and the hint text. The
   "hint (un-mintable)" vs "self-describing" split is documented at `:86-92`.
   Artifacts has since moved to the written side. Reconcile writes
-  `{ binding: "ARTIFACTS", namespace: <worker name> }` for a Cloudflare target. It is
-  remote-only (a logged-out `wrangler dev` dies at "Failed to start the remote proxy
-  session"), so a logged-out dev session leaves it out like `ai`
-  (`withheldBindings` in `dev-config.ts`). A schema that pins a jurisdiction gets its
-  namespace created in that jurisdiction by `lunora deploy`, which refuses to go on when it
-  can't check or create it, because a namespace made by the first repo is unrestricted.
+  `{ binding: "ARTIFACTS", namespace: <worker name> }` for a Cloudflare target, except for a
+  schema that pins a jurisdiction: the first `create()` against a missing namespace makes it
+  unrestricted for good and a logged-in dev session makes that call, so that app creates the
+  namespace itself (the hint says how) and adds the binding. The binding is remote-only (a
+  logged-out `wrangler dev` dies at "Failed to start the remote proxy session"), so a logged-out
+  dev session leaves it out like `ai` (`withheldBindings` in `dev-config.ts`). Once a pinned
+  schema's binding exists, `lunora deploy` creates the namespace in that jurisdiction, and
+  refuses to go on when it can't check or create it. A dry run only warns when it cannot check,
+  and `--temporary` (a throwaway account) makes no lookup.
 - **`binding-manifest.ts` / `validate-bindings.ts` already handle `artifacts`.**
   Don't add a second validation path. Extend these. Uncommitted work in this
   checkout (2026-10-02) threads the schema's jurisdiction into

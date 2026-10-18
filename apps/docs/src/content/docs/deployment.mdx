@@ -292,11 +292,13 @@ have not declared your own:
 - `ctx.artifacts` gets `artifacts: [{ "binding": "ARTIFACTS", "namespace": "<worker name>" }]`.
   Artifacts only runs remotely, so a `lunora dev` or `vite dev` session without a Cloudflare
   login leaves the binding out (and `ctx.artifacts` throws if something calls it) instead of
-  failing to start. When the schema pins a `.jurisdiction("…")`, `lunora deploy` creates a
-  missing namespace in that jurisdiction first, because one created by the first repo is
-  unrestricted and cannot be changed. That needs `CLOUDFLARE_API_TOKEN` and
-  `CLOUDFLARE_ACCOUNT_ID`; without them, or when the namespace is in another jurisdiction,
-  the deploy stops rather than go on.
+  failing to start. A schema that pins a `.jurisdiction("…")` is told to create the namespace
+  itself (the warning has the REST call) and add the binding, because the first `create()` against
+  a missing namespace makes it unrestricted for good, and a logged-in dev session would make that
+  call. Once the binding names a namespace, `lunora deploy` creates it in that jurisdiction when it
+  is missing, and stops when it is in another. That needs `CLOUDFLARE_API_TOKEN` and
+  `CLOUDFLARE_ACCOUNT_ID`. A dry run says what it would create and only warns when it cannot check,
+  and `--temporary`, which deploys to a throwaway account, checks nothing and says so.
 
 No step applies the SQL that `lunora migrate generate` emits — see
 [Migrations](/docs/concepts/migrations). Data migrations run **after** the
