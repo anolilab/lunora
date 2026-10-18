@@ -361,6 +361,10 @@ The scheduler could not authenticate to the worker. Check that `LUNORA_SCHEDULER
 
 `500` — Duplicate room name
 
+### `DUPLICATE_SOCKET_PATH`
+
+`500` — Duplicate socket route path
+
 ### `DUPLICATE_WORKFLOW_CLASS`
 
 `500` — Duplicate workflow generated class name
@@ -728,6 +732,14 @@ Add a read policy with `.rls(...)`, or mark the table `.public()` if it is inten
 ### `SHARD_UNAVAILABLE`
 
 `503` — Shard unavailable
+
+### `SOCKET_AUTH_NOT_LITERAL`
+
+`500` — Socket route auth is not a literal boolean
+
+### `SOCKET_PATH_NOT_LITERAL`
+
+`500` — Socket route path is not a string literal
 
 ### `SOCKET_TAG_BUDGET_EXCEEDED`
 

@@ -364,6 +364,10 @@ interface FunctionIR {
     lifecycle?: "connect" | "disconnect" | "init" | "reactor" | "socket" | "whisper";
     output?: ValidatorIR;
     returnType: string;
+    socket?: {
+        auth: boolean;
+        path: string;
+    };
     visibility?: "internal" | "public";
     x402?: {
         price?: number | string;

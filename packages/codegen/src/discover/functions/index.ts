@@ -28,6 +28,8 @@ interface DiscoveredFunction {
     /** The `.output(validator)` declaration, when the chain has one. */
     output?: ValidatorIR;
     returnType: string;
+    /** A `defineWebSocket` route: its literal path and auth requirement (see `socketRouteOf`). */
+    socket?: { auth: boolean; path: string };
     visibility: "internal" | "public";
     x402?: { price?: number | string };
 }
@@ -57,6 +59,60 @@ const roomNameOf = (call: CallExpression): string => {
     }
 
     return initializer.getLiteralValue();
+};
+
+/**
+ * The literal `path` and `auth` of a `defineWebSocket({ … })` call. The path is the URL the worker upgrades and the
+ * key of the `LUNORA_SOCKETS` map, so codegen reads it at build time, as it does a room name.
+ *
+ * `auth` fails closed. Only an absent `auth` property means `false`; a literal `true`/`false` is read; anything else
+ * (shorthand, a variable, a spread that could hide it, a computed key) is refused, because a guess that fell to `false`
+ * would open an `auth: true` route to anonymous sockets.
+ */
+const socketRouteOf = (call: CallExpression): { auth: boolean; path: string } => {
+    const options = call.getArguments()[0];
+
+    if (!Node.isObjectLiteralExpression(options)) {
+        throw new LunoraError("SOCKET_PATH_NOT_LITERAL", "defineWebSocket needs an object-literal options argument so codegen can read its `path` and `auth`.");
+    }
+
+    const path = options.getProperty("path");
+    const pathValue = Node.isPropertyAssignment(path) ? path.getInitializer() : undefined;
+
+    if (!pathValue || !Node.isStringLiteral(pathValue)) {
+        throw new LunoraError(
+            "SOCKET_PATH_NOT_LITERAL",
+            'defineWebSocket needs a string-literal `path` (e.g. `defineWebSocket({ path: "/chat", … })`) so codegen can route its upgrade.',
+        );
+    }
+
+    const hidden = options
+        .getProperties()
+        .some((property) => Node.isSpreadAssignment(property) || (Node.isPropertyAssignment(property) && Node.isComputedPropertyName(property.getNameNode())));
+
+    if (hidden) {
+        throw new LunoraError(
+            "SOCKET_AUTH_NOT_LITERAL",
+            "defineWebSocket cannot spread its options or use a computed key: codegen must read `auth` as a literal `auth: true` or `auth: false`.",
+        );
+    }
+
+    const authProperty = options.getProperty("auth");
+
+    if (authProperty === undefined) {
+        return { auth: false, path: pathValue.getLiteralValue() };
+    }
+
+    const authValue = Node.isPropertyAssignment(authProperty) ? authProperty.getInitializer() : undefined;
+
+    if (authValue === undefined || !(Node.isTrueLiteral(authValue) || Node.isFalseLiteral(authValue))) {
+        throw new LunoraError(
+            "SOCKET_AUTH_NOT_LITERAL",
+            "defineWebSocket needs a literal `auth: true` or `auth: false`, so codegen can read whether the route requires a session. A shorthand or a variable is not read.",
+        );
+    }
+
+    return { auth: Node.isTrueLiteral(authValue), path: pathValue.getLiteralValue() };
 };
 
 const discoverBuilderTerminal = (call: CallExpression, receiver: Node, classified: ProcedureClassification, lazyFunctions: boolean): DiscoveredFunction => {
@@ -113,7 +169,14 @@ const discoverFromCall = (call: CallExpression, lazyFunctions: boolean): Discove
     // `{ args, handler }` literal — their args are framework-fixed (empty) and
     // their return is void, so skip the object-literal extraction.
     if (classified.lifecycle) {
-        return { args: {}, kind: classified.kind, lifecycle: classified.lifecycle, returnType: "void", visibility: classified.visibility };
+        return {
+            args: {},
+            kind: classified.kind,
+            lifecycle: classified.lifecycle,
+            returnType: "void",
+            ...(classified.lifecycle === "socket" ? { socket: socketRouteOf(call) } : {}),
+            visibility: classified.visibility,
+        };
     }
 
     return {
@@ -145,6 +208,7 @@ const functionIrFromCall = (call: CallExpression, exportName: string, relativePa
         ...(discovered.x402 ? { x402: discovered.x402 } : {}),
         ...(discovered.lifecycle ? { lifecycle: discovered.lifecycle } : {}),
         ...(discovered.channel ? { channel: discovered.channel } : {}),
+        ...(discovered.socket ? { socket: discovered.socket } : {}),
     };
 };
 

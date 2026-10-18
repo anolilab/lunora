@@ -449,11 +449,46 @@ const renderLifecycleManifest = (
  * stays within budget; all three vanish for a route-free project, keeping its
  * output byte-identical.
  */
-const renderSocketFragments = (functions: ReadonlyArray<FunctionIR>): { fields: string; lifecycleMember: string; registry: string } => {
+
+/**
+ * The lazy-mode `LUNORA_SOCKETS`: a static path→registration map built from each route's discovered literal `path`
+ * and `auth`. In lazy mode `LUNORA_FUNCTIONS` holds only stubs for the route modules, so the eager walk over it would
+ * find no route; the map is emitted directly, and building the worker never evaluates a route's module.
+ */
+const renderLazySocketRegistry = (functions: ReadonlyArray<FunctionIR>): string => {
+    const owners = new Map<string, string>();
+    const entries: string[] = [];
+
+    for (const definition of functions) {
+        if (definition.lifecycle !== "socket" || definition.socket === undefined) {
+            continue;
+        }
+
+        const { auth, path } = definition.socket;
+        const functionPath = `${sanitizeNamespace(definition.filePath)}:${definition.exportName}`;
+        const prior = owners.get(path);
+
+        if (prior !== undefined) {
+            throw new LunoraError(
+                "DUPLICATE_SOCKET_PATH",
+                `two defineWebSocket routes serve "${path}" (${prior} and ${functionPath}); socket paths must be unique.`,
+            );
+        }
+
+        owners.set(path, functionPath);
+        entries.push(`    ${JSON.stringify(path)}: { auth: ${String(auth)}, functionPath: ${JSON.stringify(functionPath)} },`);
+    }
+
+    return `\n/**\n * Socket registry: the URL path of each \`defineWebSocket\` route → its function path + auth requirement.\n * Static, so building the worker never evaluates a route's module. The generated ShardDO's \`socketRoute\` override\n * resolves an upgraded socket through this map.\n */\nexport const LUNORA_SOCKETS: Readonly<Record<string, { auth: boolean; functionPath: string }>> = {\n${entries.join("\n")}\n};\n`;
+};
+
+const renderSocketFragments = (functions: ReadonlyArray<FunctionIR>, lazyFunctions: boolean): { fields: string; lifecycleMember: string; registry: string } => {
     const hasSockets = functions.some((definition) => definition.lifecycle === "socket");
-    const registry = hasSockets
-        ? `\n/**\n * Socket registry: the URL path of each \`defineWebSocket\` route → its function\n * path + auth requirement. The generated ShardDO's \`socketRoute\` override\n * resolves an upgraded socket through this map so a route's typed\n * \`onOpen\`/\`onMessage\`/\`onClose\` dispatch server-side under the socket's\n * verified identity. Two routes on one path throw at module load rather than letting\n * the map silently keep whichever came last.\n */\nexport const LUNORA_SOCKETS: Readonly<Record<string, { auth: boolean; functionPath: string }>> = (() => {\n    const registry: Record<string, { auth: boolean; functionPath: string }> = {};\n    const owners = new Map<string, unknown>();\n\n    for (const [path, fn] of Object.entries(LUNORA_FUNCTIONS)) {\n        if (fn.lifecycle !== "socket" || typeof fn.socketPath !== "string") {\n            continue;\n        }\n\n        const owner = owners.get(fn.socketPath);\n\n        // The same registration exported under two names (an alias) is one route.\n        if (owner !== undefined && owner !== fn) {\n            throw new Error(\`two defineWebSocket routes serve "\${fn.socketPath}"; socket paths must be unique\`);\n        }\n\n        if (owner === undefined) {\n            owners.set(fn.socketPath, fn);\n            registry[fn.socketPath] = { auth: fn.auth === true, functionPath: path };\n        }\n    }\n\n    return registry;\n})();\n`
-        : "";
+    const eagerRegistry =
+        hasSockets && !lazyFunctions
+            ? `\n/**\n * Socket registry: the URL path of each \`defineWebSocket\` route → its function\n * path + auth requirement. The generated ShardDO's \`socketRoute\` override\n * resolves an upgraded socket through this map so a route's typed\n * \`onOpen\`/\`onMessage\`/\`onClose\` dispatch server-side under the socket's\n * verified identity. Two routes on one path throw at module load rather than letting\n * the map silently keep whichever came last.\n */\nexport const LUNORA_SOCKETS: Readonly<Record<string, { auth: boolean; functionPath: string }>> = (() => {\n    const registry: Record<string, { auth: boolean; functionPath: string }> = {};\n    const owners = new Map<string, unknown>();\n\n    for (const [path, fn] of Object.entries(LUNORA_FUNCTIONS)) {\n        if (fn.lifecycle !== "socket" || typeof fn.socketPath !== "string") {\n            continue;\n        }\n\n        const owner = owners.get(fn.socketPath);\n\n        // The same registration exported under two names (an alias) is one route.\n        if (owner !== undefined && owner !== fn) {\n            throw new Error(\`two defineWebSocket routes serve "\${fn.socketPath}"; socket paths must be unique\`);\n        }\n\n        if (owner === undefined) {\n            owners.set(fn.socketPath, fn);\n            registry[fn.socketPath] = { auth: fn.auth === true, functionPath: path };\n        }\n    }\n\n    return registry;\n})();\n`
+            : "";
+    const registry = hasSockets && lazyFunctions ? renderLazySocketRegistry(functions) : eagerRegistry;
     const lifecycleMember = hasSockets ? ` | "socket"` : "";
     const fields = hasSockets
         ? `
@@ -608,7 +643,7 @@ const emitFunctions = (options: EmitFunctionsOptions): string => {
     // The `defineWebSocket`-only fragments (registry + interface fields),
     // computed by a helper so this emitter's branching stays within budget and
     // gated so a route-free project's output is byte-identical.
-    const { fields: socketFields, lifecycleMember: socketLifecycleMember, registry: socketsRegistry } = renderSocketFragments(functions);
+    const { fields: socketFields, lifecycleMember: socketLifecycleMember, registry: socketsRegistry } = renderSocketFragments(functions, lazyFunctions);
 
     // Pull in the compiled-args seam only when at least one function compiled —
     // an unused import would trip `noUnusedLocals`.
@@ -628,7 +663,7 @@ export interface FunctionManifestEntry {
     exportName: string;
     expose?: { cache?: { credentialHeaders?: ReadonlyArray<string>; maxAge?: number; scope?: "private" | "public"; staleWhileRevalidate?: number; tag?: string; vary?: string }; rest?: boolean };
     kind: "action" | "mutation" | "query" | "stream";
-    lifecycle?: "connect" | "disconnect" | "init" | "reactor" | "whisper";
+    lifecycle?: "connect" | "disconnect" | "init" | "reactor" | "whisper"${socketLifecycleMember};
     moduleId: string;
     visibility?: "internal" | "public";
     x402?: { readonly price: number | string };

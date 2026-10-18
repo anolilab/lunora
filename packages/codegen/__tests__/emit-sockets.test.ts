@@ -89,6 +89,43 @@ describe("emitFunctions — LUNORA_SOCKETS registry", () => {
         ).toThrow(/socket paths must be unique/u);
     });
 
+    it("emits a static registry in lazy mode, with each route's literal path and auth", () => {
+        expect.assertions(3);
+
+        // Lazy mode holds the route only as a stub in LUNORA_FUNCTIONS, so the registry is read from the discovered
+        // literal `path`/`auth`, not walked from the table. Evaluate the emitted literal to check what it maps to.
+        const emitted = emitFunctions({
+            functions: [{ ...socketFunction, socket: { auth: true, path: "/chat" } }],
+            lazyFunctions: true,
+        });
+        const start = emitted.indexOf("export const LUNORA_SOCKETS");
+        const block = emitted.slice(start, emitted.indexOf("};", start) + "};".length);
+        const js = ts.transpileModule(block, { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 } }).outputText;
+        const exported: Record<string, unknown> = {};
+
+        // eslint-disable-next-line @typescript-eslint/no-implied-eval, sonarjs/code-eval -- the test runs the emitted registry it just transpiled
+        new Function("exports", js)(exported);
+
+        expect(exported["LUNORA_SOCKETS"]).toStrictEqual({ "/chat": { auth: true, functionPath: "sockets:chatSocket" } });
+        // The lazy registry does not depend on the route module, so the stubbed table is never read.
+        expect(emitted).not.toContain("fn.socketPath");
+        expect(emitted).toContain('lifecycle?: "connect" | "disconnect" | "init" | "reactor" | "whisper" | "socket";');
+    });
+
+    it("refuses two lazy routes on one path at codegen time", () => {
+        expect.assertions(1);
+
+        expect(() =>
+            emitFunctions({
+                functions: [
+                    { ...socketFunction, socket: { auth: false, path: "/chat" } },
+                    { ...socketFunction, exportName: "lobbySocket", socket: { auth: false, path: "/chat" } },
+                ],
+                lazyFunctions: true,
+            }),
+        ).toThrow(/socket paths must be unique/u);
+    });
+
     it("keeps the registry out of a route-free project", () => {
         expect.assertions(2);
 

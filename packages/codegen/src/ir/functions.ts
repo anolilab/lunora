@@ -70,6 +70,12 @@ export interface FunctionIR {
     returnType: string;
 
     /**
+     * A `defineWebSocket` route: the literal URL `path` it serves and whether it requires a session (`auth`). Read at
+     * build time so the lazy `LUNORA_SOCKETS` map can be emitted without evaluating the route's module.
+     */
+    socket?: { auth: boolean; path: string };
+
+    /**
      * Call surface the function is exposed on. Absent (or `"public"`) means it
      * lands in the generated `api`; `"internal"` routes it to the separate
      * `internal` object and is rejected by the DO's external RPC path.
