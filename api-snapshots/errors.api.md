@@ -633,6 +633,10 @@ const ERROR_CATALOG: {
         readonly status: 500;
         readonly title: "Socket route auth is not a literal boolean";
     };
+    readonly SOCKET_PATH_INVALID: {
+        readonly status: 500;
+        readonly title: "Socket route path is not a plain URL path";
+    };
     readonly SOCKET_PATH_NOT_LITERAL: {
         readonly status: 500;
         readonly title: "Socket route path is not a string literal";

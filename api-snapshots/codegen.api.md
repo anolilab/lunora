@@ -367,6 +367,7 @@ interface FunctionIR {
     returnType: string;
     socket?: {
         auth: boolean;
+        origin?: string;
         path: string;
     };
     visibility?: "internal" | "public";
