@@ -134,6 +134,38 @@ describe("connectWebSocket", () => {
         expect(lastSocket().url).toBe("/socket/chat");
     });
 
+    it("keeps the replacement socket open when a credential rotation bounces one still connecting", async () => {
+        expect.assertions(2);
+
+        const client = new LunoraClient({ connectTimeoutMs: 10_000, heartbeatIntervalMs: 0, url: "https://app.example", WebSocket: WebSocketImpl });
+
+        client.connectWebSocket("/chat", { onMessage: () => undefined });
+
+        const first = lastSocket();
+
+        // Bounced before its handshake completes: its connect timeout is still armed.
+        client.setWsToken("rotated");
+
+        let elapsed = 0;
+
+        while (lastSocket() === first && elapsed < 9000) {
+            // eslint-disable-next-line no-await-in-loop -- step the backoff until the replacement opens
+            await vi.advanceTimersByTimeAsync(50);
+            elapsed += 50;
+        }
+
+        const replacement = lastSocket();
+
+        expect(replacement).not.toBe(first);
+
+        // The abandoned attempt's deadline passes first; the replacement then opens before its own, and outlives it.
+        await vi.advanceTimersByTimeAsync(10_000 - elapsed + 10);
+        replacement.fire("open");
+        await vi.advanceTimersByTimeAsync(20_000);
+
+        expect(replacement.closed).toBe(false);
+    });
+
     it("contains a throwing onMessage as a route handler failure", () => {
         expect.assertions(2);
 

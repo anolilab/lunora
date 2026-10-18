@@ -1885,6 +1885,20 @@ const persistLiveGrants = (ws: ShardSocketLike, attachment: SocketAttachment, gr
  * `broadcastDelta`. Subscriptions are stored on each WebSocket via
  * `serializeAttachment` so they survive hibernation.
  */
+
+/**
+ * A route handler's `socket.send`/`broadcast` payload as it was at the call. The frame goes out only after the
+ * handler commits, so a handler that mutates the object afterwards must not change what was sent. A value the
+ * structured clone cannot copy is kept as is; the wire encoder reports it when the frame is built.
+ */
+const snapshotPayload = (payload: unknown): unknown => {
+    try {
+        return structuredClone(payload);
+    } catch {
+        return payload;
+    }
+};
+
 abstract class ShardDO {
     /**
      * Per-socket cap on concurrent stream iterators. Each in-flight stream
@@ -16502,15 +16516,19 @@ abstract class ShardDO {
         const pending: (() => void)[] = [];
         const socket = {
             broadcast: (payload: unknown): void => {
+                const sent = snapshotPayload(payload);
+
                 pending.push(() => {
-                    this.broadcastSocketMessage(topic, payload);
+                    this.broadcastSocketMessage(topic, sent);
                 });
             },
             connectionId: info.event.connectionId,
             path: route.path,
             send: (payload: unknown): void => {
+                const sent = snapshotPayload(payload);
+
                 pending.push(() => {
-                    sendSocketFrame(ws, topic, payload);
+                    sendSocketFrame(ws, topic, sent);
                 });
             },
             shardKey: info.event.shardKey,

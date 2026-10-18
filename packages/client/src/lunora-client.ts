@@ -5823,6 +5823,13 @@ class LunoraClient {
             // Detach first: the identity guard in `openManagedSocket` then drops this socket's late frames, and its
             // close event no longer arms the reconnect, so the reconnect is armed here under the current credential.
             conn.socket = undefined;
+
+            // The abandoned attempt's connect timeout would otherwise fire later and clear the replacement's handle.
+            if (conn.connectTimer !== undefined) {
+                clearTimeout(conn.connectTimer);
+                conn.connectTimer = undefined;
+            }
+
             stopHeartbeat(conn);
             socket.close();
             handlers.onClose?.();

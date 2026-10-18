@@ -181,6 +181,33 @@ describe("shardDO socket routes", () => {
         expect(b.frames).toEqual([{ data: { echo: { text: "hi" } }, topic: CHAT_TOPIC, type: "message" }]);
     });
 
+    it("sends a route payload as it was at the call, not as the handler later left it", async () => {
+        expect.assertions(1);
+
+        class MutatingShard extends SocketShard {
+            public override handleRpc(functionPath: string, args: Record<string, unknown>): Promise<unknown> {
+                this.calls.push({ args, functionPath });
+
+                if (args["kind"] === "message") {
+                    const payload = { count: 1 };
+
+                    (args["socket"] as { send: (message: unknown) => void }).send(payload);
+                    payload.count = 2;
+                }
+
+                return Promise.resolve(undefined);
+            }
+        }
+
+        const a = new FakeSocket({ connectionId: "a", socketFunction: "sockets:chat", socketPath: "/chat", subs: {}, whispers: [CHAT_TOPIC] });
+        const state = { acceptWebSocket: () => undefined, getWebSockets: () => [a], storage: { sql: {} } } as unknown as ShardDOState;
+        const shard = new MutatingShard(state, CHAT_ROUTE);
+
+        await send(shard, a, JSON.stringify(encodeWire({ text: "hi" })));
+
+        expect(a.frames).toEqual([{ data: { count: 1 }, topic: CHAT_TOPIC, type: "message" }]);
+    });
+
     it("refuses a frame from an anonymous socket once its route requires auth", async () => {
         expect.assertions(3);
 
