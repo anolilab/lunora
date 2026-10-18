@@ -941,8 +941,16 @@ class TestOnlineOnlyWrites < Minitest::Test
     store = MemoryStore.new
     client, posts = disconnected(store)
 
+    # A subscription on the write's own path and args, primed with a server value,
+    # so an overlay the write applied would be displayed.
+    seen = []
+    client.attach_socket(->(_frame) {})
+    client.subscribe("auth:setPassword", { "token" => SECRET }, ->(value) { seen << value })
+    client.handle_frame(JSON.generate({ "cursor" => 1, "data" => %w[a], "id" => "sub_1", "type" => "data" }))
+    client.detach_socket
+
     error = assert_raises(Lunora::OfflineError) do
-      client.submit("auth:setPassword", { "token" => SECRET }, online_only: true)
+      client.submit("auth:setPassword", { "token" => SECRET }, online_only: true, optimistic: ->(current) { (current || []) + ["c"] })
     end
 
     assert_equal Lunora::OFFLINE_NOT_QUEUED, error.code
@@ -950,6 +958,7 @@ class TestOnlineOnlyWrites < Minitest::Test
     assert_empty store.appended
     refute_includes JSON.generate(store.records), SECRET
     assert_empty posts
+    refute_includes seen, %w[a c], "a refused write's overlay is never displayed"
   end
 
   def test_an_online_only_write_is_sent_when_connected
