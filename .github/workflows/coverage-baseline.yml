@@ -47,9 +47,7 @@
                   "fetch-depth": "0"
 
             # 22.22 to match the leg that uploads from `test.yml`, so the base and the
-            # PR reports are produced by the same runtime. That leg's `node:sqlite` has
-            # no FTS5 (added in 22.16.0), so the FTS5 suites skip in both — the base is
-            # comparable to what a PR uploads rather than richer than it.
+            # PR reports are produced by the same runtime.
             - "name": "Setup resources and environment"
               "uses": "anolilab/workflows/step/node@acba5fb15ac98ad23dec1ad233e40e1bb79c1dae" # v19.0.4
               "with":
