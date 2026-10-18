@@ -86,6 +86,25 @@ describe("localAiBinding", () => {
         expect(warn.mock.calls.map((call) => String(call[0])).join(" ")).toContain("REPOS");
     });
 
+    it("reads a malformed artifacts value as no binding, for a dev server and for a build alike, instead of throwing", () => {
+        expect.assertions(2);
+
+        vi.spyOn(console, "warn").mockImplementation(() => {});
+
+        for (const command of ["serve", "build"] as const) {
+            const options = {
+                config: (): Partial<WorkerConfig> => {
+                    return { artifacts: { binding: "REPOS" } as never };
+                },
+            };
+            const plugin = localAiBinding(options, { hasCredentials: () => false });
+
+            runConfigHook(plugin, command);
+
+            expect(() => resolveWorker(options, { artifacts: { binding: "ARTIFACTS" } as never, name: "app" })).not.toThrow();
+        }
+    });
+
     it("keeps the artifacts binding for a build, whose output is the deploy config", () => {
         expect.assertions(1);
 

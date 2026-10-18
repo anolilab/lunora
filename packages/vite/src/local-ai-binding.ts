@@ -38,6 +38,10 @@ interface LocalAiOptions {
     projectRoot?: string;
 }
 
+/** The entries of an `artifacts` value, or none when it is not an array. */
+const listOf = (value: unknown): NonNullable<WorkerConfigLike["artifacts"]> =>
+    Array.isArray(value) ? (value as NonNullable<WorkerConfigLike["artifacts"]>) : [];
+
 /** Customizers this module already wrapped, so a second `config` pass doesn't nest them. */
 const wrapped = new WeakSet<object>();
 
@@ -67,7 +71,8 @@ const localAiBinding = (options: CloudflarePluginOptions, localOptions: LocalAiO
             // delete below must not stick to it for the rest of the process.
             const result = fromUser === undefined ? undefined : { ...fromUser };
             // Both sides count: an empty array on the base config must not hide a binding the customizer returns.
-            const artifacts = [...(config.artifacts ?? []), ...(result?.artifacts ?? [])];
+            // Read only for a dev server, and only arrays: a malformed value is the config validator's to report.
+            const artifacts = serving ? [...listOf(config.artifacts), ...listOf(result?.artifacts)] : [];
             const withheld = serving ? withheldBindings({ ai: config.ai ?? result?.ai, artifacts }, hasCredentials) : [];
 
             for (const entry of withheld) {
