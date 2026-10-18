@@ -90,6 +90,7 @@ export type {
     KvValueResult,
     LunoraClientOptions,
     OfflineQueueOptions,
+    OnlineOnlyOption,
     OutboxMutation,
     OutboxSink,
     PersistedMutation,

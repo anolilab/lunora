@@ -43,8 +43,9 @@ class SecretUnavailableError extends Error {
  * });
  * ```
  *
- * The value transits the supply mutation's arguments (named `secret`, which the
- * request log masks). Only the opaque ref is recorded in the run's history.
+ * The value transits the supply mutation's arguments, which are marked
+ * `v.sensitive`: the request log masks them. Only the opaque ref is recorded in
+ * the run's history.
  * @experimental
  */
 const requestSecretTool = (options: { description: string }): AgentToolDefinition<SecretRequestInput, { secretRef: string }> => {
