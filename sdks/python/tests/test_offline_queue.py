@@ -19,6 +19,8 @@ from lunora.client import LunoraClient
 from lunora.errors import LunoraError
 from lunora.offline import (
     ABSENT_IDENTITY,
+    OFFLINE_NOT_QUEUED,
+    OfflineError,
     OfflineQueue,
     QueuedMutation,
     is_stale_version,
@@ -1019,6 +1021,66 @@ class TestFlushIntegration(unittest.TestCase):
         """
         covers("batch_entry_cap_matches_protocol")
         self.assertEqual(MAX_BATCH_ENTRIES, FIXTURES["batchReplay"]["maxEntries"])
+
+
+class TestOnlineOnlyWrites(unittest.TestCase):
+    """An ``online_only`` write is never queued, persisted or replayed.
+
+    The sentinel is a credential-shaped argument: the assertions are that it never
+    reaches the persistence adapter, which is what a durable queue would put on disk.
+    """
+
+    SECRET = "sentinel-secret-7731"
+
+    def _disconnected(self, store):
+        posts = []
+
+        def post(_url, _headers, body):
+            posts.append(body)
+            return 200, {"commitCursor": 3, "result": {"ok": True}}
+
+        client = LunoraClient("https://app.example", http_post=post)
+        client.offline_queue = OfflineQueue(persistence=store, queue_before_first_connect=True)
+        return client, posts
+
+    def test_an_online_only_write_is_refused_when_disconnected_and_never_persisted(self):
+        covers("offline_online_only_refused_when_disconnected")
+        store = _Store()
+        client, posts = self._disconnected(store)
+
+        with self.assertRaises(OfflineError) as refused:
+            asyncio.run(client.submit(SubmitOptions(args={"token": self.SECRET}, function_path="auth:setPassword", online_only=True)))
+
+        self.assertEqual(refused.exception.code, OFFLINE_NOT_QUEUED)
+        self.assertEqual(client.pending_mutation_count, 0)
+        self.assertEqual(store.appended, [])
+        self.assertNotIn(self.SECRET, json.dumps(store.records))
+        self.assertEqual(posts, [])
+
+    def test_an_online_only_write_is_sent_when_connected(self):
+        covers("offline_online_only_sends_when_connected")
+        store = _Store()
+        client, posts = self._disconnected(store)
+        client.attach_socket(lambda _frame: None)
+
+        outcome = asyncio.run(client.submit(SubmitOptions(args={"token": self.SECRET}, function_path="auth:setPassword", online_only=True)))
+
+        self.assertEqual(outcome.status, "committed")
+        self.assertEqual(len(posts), 1)
+        self.assertIn(self.SECRET.encode(), posts[0])
+        self.assertEqual(store.appended, [])
+
+    def test_a_normal_write_still_queues_when_disconnected_beside_an_online_only_one(self):
+        covers("offline_online_only_leaves_normal_writes_queued")
+        store = _Store()
+        client, posts = self._disconnected(store)
+
+        outcome = asyncio.run(client.submit(SubmitOptions(args={"text": "hi"}, function_path="messages:send")))
+
+        self.assertEqual(outcome.status, "queued")
+        self.assertEqual(client.pending_mutation_count, 1)
+        self.assertEqual(len(store.appended), 1)
+        self.assertEqual(posts, [])
 
 
 if __name__ == "__main__":  # pragma: no cover
