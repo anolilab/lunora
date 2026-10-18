@@ -498,6 +498,10 @@ export const createTracer = (deps: TracerDeps): ContextTracer => {
                 scope,
             );
 
+            // Held from here until the span is recorded: the body can outlive the
+            // dispatch that opened it, and the record must still be scrubbed.
+            const releaseScope = scope.hold();
+
             // The recorded span (our `SpanBuffer`/`otlpSink`) is produced here
             // IDENTICALLY whether or not the CF bridge is active. An optional
             // `hostSpan` only receives a MIRROR of the finished span's attributes —
@@ -610,6 +614,8 @@ export const createTracer = (deps: TracerDeps): ContextTracer => {
                             // Best-effort — the CF mirror is additive telemetry.
                         }
                     }
+
+                    releaseScope();
                 }
             };
 
@@ -749,6 +755,9 @@ export const createTracedFetch = (deps: TracedFetchDeps, base: ContextFetch): Co
         // seeded `let ok = true` was a dead write CodeQL rightly flagged.
         let error: SpanEvent["error"];
         let status: number | undefined;
+        // Held until the span is recorded, as in `createTracer`: the response can
+        // arrive after the dispatch has settled.
+        const releaseScope = scope.hold();
 
         try {
             const response = await base(request);
@@ -797,6 +806,8 @@ export const createTracedFetch = (deps: TracedFetchDeps, base: ContextFetch): Co
             } catch {
                 // Best-effort — see createTracer.
             }
+
+            releaseScope();
         }
     };
 };

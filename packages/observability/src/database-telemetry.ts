@@ -326,6 +326,8 @@ const observeCall = async (
     const startTs = Date.now();
     let failure: unknown;
     let result: unknown;
+    // Held until the span is recorded: the call can settle after the dispatch has.
+    const releaseScope = (deps.scope ?? NO_SENSITIVE_SCOPE).hold();
 
     try {
         result = await run();
@@ -362,6 +364,8 @@ const observeCall = async (
         } catch {
             // Best-effort throughout.
         }
+
+        releaseScope();
     }
 };
 

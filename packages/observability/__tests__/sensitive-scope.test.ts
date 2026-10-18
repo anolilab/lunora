@@ -321,6 +321,42 @@ describe("ctx.trace under a sensitive scope", () => {
         expect(JSON.stringify(recorded)).not.toContain(SECRET);
     });
 
+    it("scrubs a span that is still open when the invocation settles, and releases the values once it is recorded", async () => {
+        expect.assertions(5);
+
+        const scope = createSensitiveScope([SECRET]);
+        const { recorded, trace } = setupTracer({ scope });
+
+        let open!: () => void;
+        const gate = new Promise<void>((resolve) => {
+            open = resolve;
+        });
+
+        const pending = trace(
+            "charge",
+            async (_inner, span) => {
+                await gate;
+                span.setAttribute("value", SECRET);
+                span.addEvent(`sent ${SECRET}`, { value: SECRET });
+                throw new Error(`rejected ${SECRET}`);
+            },
+            { label: "primary" },
+        );
+
+        // The dispatch settles while the handler's span is still open.
+        scope.clear();
+        open();
+
+        await expect(pending).rejects.toThrow(`rejected ${SECRET}`);
+
+        const [span] = recorded;
+
+        expect(span?.attributes).toEqual({ label: "primary", value: SENSITIVE_ARG_MASK });
+        expect(span?.error?.message).toBe(`rejected ${SENSITIVE_ARG_MASK}`);
+        expect(JSON.stringify(recorded)).not.toContain(SECRET);
+        expect(scope.text(SECRET)).toBe(SECRET);
+    });
+
     it("leaves a span untouched when no scope is given", async () => {
         expect.assertions(1);
 
@@ -357,6 +393,41 @@ describe("outbound fetch and the dispatch root span under a sensitive scope", ()
         expect(JSON.stringify(recorded)).not.toContain(SECRET);
     });
 
+    it("scrubs a fetch span that completes after the invocation settled", async () => {
+        expect.assertions(2);
+
+        const scope = createSensitiveScope([SECRET]);
+        const recorded: SpanEvent[] = [];
+        let respond!: () => void;
+        const response = new Promise<Response>((resolve) => {
+            respond = () => {
+                resolve(new Response(null, { status: 204 }));
+            };
+        });
+        const fetch = createTracedFetch(
+            {
+                anchor,
+                functionPath: "vault:store",
+                record: (span) => {
+                    recorded.push(span);
+                },
+                scope,
+                shardKey: "shard-1",
+                userId: () => undefined,
+            },
+            () => response,
+        );
+
+        const pending = fetch(`https://api.example.test/keys/${SECRET}`);
+
+        scope.clear();
+        respond();
+        await pending;
+
+        expect(recorded[0]?.attributes?.["url.full"]).toBe(`https://api.example.test/keys/${SENSITIVE_ARG_MASK}`);
+        expect(JSON.stringify(recorded)).not.toContain(SECRET);
+    });
+
     it("scrubs the root span's failure message", () => {
         expect.assertions(2);
 
@@ -378,6 +449,43 @@ describe("outbound fetch and the dispatch root span under a sensitive scope", ()
 
 describe("ctx.db error messages under a sensitive scope", () => {
     // A driver's message quotes the row it rejected (a unique-key violation names the key).
+    it("scrubs a call that fails after the invocation settled", async () => {
+        expect.assertions(2);
+
+        const scope = createSensitiveScope([SECRET]);
+        const recorded: SpanEvent[] = [];
+        let fail!: (error: Error) => void;
+        const database = {
+            insert: vi.fn<(table: string, document: Record<string, unknown>) => Promise<never>>(
+                () =>
+                    new Promise<never>((_resolve, reject) => {
+                        fail = reject;
+                    }),
+            ),
+        };
+        const instrumented = instrumentDatabase(database, {
+            anchor,
+            captureRaw: false,
+            functionPath: "vault:store",
+            mode: "spans",
+            record: (span) => {
+                recorded.push(span);
+            },
+            scope,
+            shardKey: "shard-1",
+            tally: createDatabaseTally(),
+            userId: () => undefined,
+        });
+
+        const pending = instrumented.insert("keys", { value: SECRET });
+
+        scope.clear();
+        fail(new Error(`duplicate key (email)=(${SECRET}) already exists`));
+
+        await expect(pending).rejects.toThrow(SECRET);
+        expect(JSON.stringify(recorded)).not.toContain(SECRET);
+    });
+
     it.each([false, true])("scrubs a marked value a driver error quotes, with captureRaw=%s", async (captureRaw) => {
         expect.assertions(2);
 
