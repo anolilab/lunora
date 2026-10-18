@@ -1223,7 +1223,7 @@ export { SupportAgentWorkflow } from "../../lunora/_generated/agents.js";
             const parsed = parse.mock.calls.map(([fileName]) => fileName);
 
             // Only the file that may read a ctx helper reaches the parser.
-            expect(parsed.filter((fileName) => fileName.startsWith("/scan/"))).toStrictEqual(["/scan/upload.tsx"]);
+            expect(parsed.map((fileName) => fileName.slice(fileName.lastIndexOf("/") + 1))).toStrictEqual(["upload.tsx"]);
             expect(result.usesKv).toBe(true);
         } finally {
             parse.mockRestore();
@@ -1374,6 +1374,32 @@ export { SupportAgentWorkflow } from "../../lunora/_generated/agents.js";
 
         expect(typeOnly.usesRequestSecretTool).toBe(false);
         expect(secretSourcesFromBindings(typeOnly)).not.toContain("@lunora/agent:requestSecretTool");
+    });
+
+    it("keys the secret-value key to requestSecretTool reached through a barrel or a namespace import", async () => {
+        expect.assertions(2);
+
+        write("wrangler.jsonc", WRANGLER);
+        write("src/server/index.ts", ENTRY_SHARD_ONLY);
+        write("lunora/tools.ts", `export { requestSecretTool } from "@lunora/agent";`);
+        write(
+            "lunora/agent.ts",
+            `import { defineAgent } from "@lunora/agent";\nimport { requestSecretTool } from "./tools";\nexport const support = defineAgent({ model: "m", tools: { ask: requestSecretTool({ consumer: "charge", description: "API key" }) } });`,
+        );
+
+        const barrel = await inferLunoraBindings({ projectRoot: root });
+
+        expect(barrel.usesRequestSecretTool).toBe(true);
+
+        write("lunora/tools.ts", "");
+        write(
+            "lunora/agent.ts",
+            `import * as agent from "@lunora/agent";\nexport const ask = agent.requestSecretTool({ consumer: "charge", description: "API key" });`,
+        );
+
+        const namespace = await inferLunoraBindings({ projectRoot: root });
+
+        expect(namespace.usesRequestSecretTool).toBe(true);
     });
 
     it("scaffolds only the webPush secrets when defineNotify gets a readable variable config (webPush-only, #1039)", async () => {

@@ -373,14 +373,17 @@ interface InferredBindings {
  */
 type Capabilities = Pick<InferredBindings, CapabilityFlag | "needsD1" | "usesRequestSecretTool" | "usesWorkerLoader">;
 
-/** Creates the in-memory project a scan parses its files into — one per {@link inferLunoraBindings} run, built on first use. */
+/**
+ * Creates the project a scan parses its files into — one per {@link inferLunoraBindings} run, built on first use. It reads
+ * the app from disk, so a file's relative re-export (a barrel of the secret tool) resolves against the app's own files.
+ */
 type ScanProject = () => Project;
 
 const createScanProject = (): ScanProject => {
     let project: Project | undefined;
 
     return () => {
-        project ??= new Project({ compilerOptions: { allowJs: true }, useInMemoryFileSystem: true });
+        project ??= new Project({ compilerOptions: { allowJs: true }, skipAddingFilesFromTsConfig: true });
 
         return project;
     };
@@ -397,7 +400,7 @@ const createScanProject = (): ScanProject => {
  */
 const parseSourceSignals = (code: string, fileName: string, scanProject: ScanProject): SourceCapabilitySignals => {
     const project = scanProject();
-    const sourceFile = project.createSourceFile(`/scan/${fileName.slice(fileName.lastIndexOf("/") + 1)}`, code, { overwrite: true });
+    const sourceFile = project.createSourceFile(fileName, code, { overwrite: true });
     const signals = sourceCapabilitySignals(sourceFile);
 
     project.removeSourceFile(sourceFile);
