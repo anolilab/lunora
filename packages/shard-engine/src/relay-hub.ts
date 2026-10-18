@@ -1426,24 +1426,26 @@ class OwnerRelay extends RelayLink {
      * {@link RELAY_LIVE_CONTROL_TIMEOUT_MS}. An OK answer means the relay stored the grant, so it is recorded as a grant holder here.
      */
     private async liveControlAnswer(index: number, control: LiveSocketControlCall): Promise<Response | undefined> {
+        // The relay keeps working past the deadline and may store the grant after it. Recording on the request itself, not on the
+        // race below, means that late OK still makes the relay a holder, so later publishes and unsubscribes reach it.
+        const answer = this.requestRelayMessage(relayName(this.roleId.ownerKey, index), { control, type: "relay_live_control" }).then((response) => {
+            if (response?.ok === true) {
+                this.recordLiveGrantRelay(index);
+            }
+
+            return response;
+        });
+
         let timer: ReturnType<typeof setTimeout> | undefined;
         const deadline = new Promise<undefined>((resolve) => {
             timer = setTimeout(() => {
                 resolve(undefined);
             }, RELAY_LIVE_CONTROL_TIMEOUT_MS);
         });
-        const response = await Promise.race([
-            this.requestRelayMessage(relayName(this.roleId.ownerKey, index), { control, type: "relay_live_control" }),
-            deadline,
-        ]).finally(() => {
+
+        return Promise.race([answer, deadline]).finally(() => {
             clearTimeout(timer);
         });
-
-        if (response?.ok === true) {
-            this.recordLiveGrantRelay(index);
-        }
-
-        return response;
     }
 }
 

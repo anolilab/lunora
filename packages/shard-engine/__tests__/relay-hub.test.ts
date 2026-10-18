@@ -28,6 +28,8 @@ const SCOPED_SHAPE = { args: {}, name: "my-orders" };
 interface RelayDouble {
     /** `true` once this relay should start rejecting (the transient cross-DO failure `requestRelayMessage` swallows). */
     down: boolean;
+    /** When set, every answer waits for this to settle, so a test can answer after the owner's deadline has passed. */
+    gate?: Promise<void>;
     /** The status this relay answers a forwarded live control call with; `404` when it holds no socket for it. Defaults to `204`. */
     liveStatus?: number;
     posts: Record<string, unknown>[];
@@ -71,7 +73,7 @@ const ownerFor = (
 
                 const status = message["type"] === "relay_live_control" ? (relay.liveStatus ?? 204) : 204;
 
-                return Promise.resolve(new Response(undefined, { status }));
+                return (relay.gate ?? Promise.resolve()).then(() => new Response(undefined, { status }));
             },
         };
     };
@@ -1084,6 +1086,41 @@ describe("relay hub", () => {
             } finally {
                 vi.useRealTimers();
             }
+        });
+
+        it("records a relay whose grant answer lands after the deadline, so its later publishes reach it", async () => {
+            // `vi.waitFor` retries its assertion, so the count is not fixed.
+            expect.hasAssertions();
+
+            let releaseAnswer: () => void = () => undefined;
+            const gate = new Promise<void>((resolve) => {
+                releaseAnswer = resolve;
+            });
+            const relays = new Map<number, RelayDouble>([[0, { down: false, gate, posts: [] }]]);
+            const owner = ownerOf(relays);
+
+            await attach(owner, 0);
+            vi.useFakeTimers();
+
+            try {
+                const pending = owner.forwardLiveControl({ action: "subscribe", callerId: "u1", connectionId: "c-alice", key: "k1", subscriptionId: "s1" });
+
+                await vi.advanceTimersByTimeAsync(2000);
+
+                await expect(pending).resolves.toBeUndefined();
+
+                // The relay stores the grant only now, after the owner has already reported a miss.
+                releaseAnswer();
+                await vi.waitFor(() => {
+                    expect(database.raw("SELECT idx FROM __lunora_relay_grants")).toHaveLength(1);
+                });
+            } finally {
+                vi.useRealTimers();
+            }
+
+            await owner.forwardLiveFrame("feed", "k1", "{}");
+
+            expect(liveFramesIn(relayAt(relays, 0))).toHaveLength(1);
         });
 
         it("still forwards to a grant holder after the owner wakes, because the holder set is durable", async () => {
