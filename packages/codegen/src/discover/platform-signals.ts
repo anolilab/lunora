@@ -1,7 +1,7 @@
 import type { CallExpression, Project, SourceFile } from "ts-morph";
 import { Node, SyntaxKind } from "ts-morph";
 
-import { listLunoraSourceFiles, propertyKeyName, unwrapExpression } from "./ast";
+import { chainRootOf, listLunoraSourceFiles, propertyKeyName, unwrapExpression } from "./ast";
 import { contextPropertiesRead } from "./feature-usage";
 
 /**
@@ -30,11 +30,11 @@ interface PlatformCodeSignals {
     workflowRollback: boolean;
 }
 
-/** The declarations that carry a platform feature: socket routes and rooms ride hibernated shard sockets, live streams the subscriber registry. */
-const DECLARATION_SIGNALS: Readonly<Record<string, "deliveryAuthorization" | "liveStreams" | "typedWebSockets">> = {
-    // The app builder's method, not a declaration: it turns on the delivery
-    // authorization that a host without it cannot serve.
-    deliveryAuthorization: "deliveryAuthorization",
+/**
+ * The declarations that carry a platform feature: socket routes and rooms ride hibernated shard sockets, live streams the subscriber registry.
+ * `.deliveryAuthorization(...)` is not here: it is a method on the app builder, so it is matched by receiver in {@link isAppBuilderReceiver}.
+ */
+const DECLARATION_SIGNALS: Readonly<Record<string, "liveStreams" | "typedWebSockets">> = {
     defineLiveStream: "liveStreams",
     defineRoom: "typedWebSockets",
     defineWebSocket: "typedWebSockets",
@@ -111,6 +111,68 @@ const calleeName = (call: CallExpression): string => {
     return Node.isPropertyAccessExpression(callee) ? callee.getName() : callee.getText();
 };
 
+/** The app builder's factory: `defineApp().ai(…).deliveryAuthorization(…)` is a builder chain rooted here. */
+const APP_FACTORY = "defineApp";
+
+/** The `lunora.config` hook whose function receives the generated `defineApp()` builder. */
+const APP_HOOK_KEY = "app";
+
+/** True when `node` is a `lunora.config` `app` hook function, `app: (app) => …`. */
+const isAppHookFunction = (node: Node | undefined): boolean => {
+    const owner = node?.getParent();
+
+    return (
+        node !== undefined &&
+        (Node.isArrowFunction(node) || Node.isFunctionExpression(node)) &&
+        Node.isPropertyAssignment(owner) &&
+        propertyKeyName(owner) === APP_HOOK_KEY
+    );
+};
+
+/**
+ * True when `receiver` denotes the app builder: a chain rooted at `defineApp()`,
+ * a local variable initialised from one, or the parameter of an `app` hook.
+ * Resolution is by name within the file, the same convention
+ * {@link resolveObjectLiteral} uses, so it can only over-report a same-named
+ * binding elsewhere, never match an unrelated object's method.
+ */
+const isAppBuilderReceiver = (sourceFile: SourceFile, receiver: Node | undefined, seen: Set<string> = new Set()): boolean => {
+    const root = chainRootOf(receiver);
+
+    if (root === undefined || !Node.isIdentifier(root)) {
+        return false;
+    }
+
+    const name = root.getText();
+
+    if (name === APP_FACTORY) {
+        return true;
+    }
+
+    if (seen.has(name)) {
+        return false;
+    }
+
+    seen.add(name);
+
+    const bound = sourceFile
+        .getDescendantsOfKind(SyntaxKind.VariableDeclaration)
+        .filter((declaration) => declaration.getName() === name)
+        .some((declaration) => isAppBuilderReceiver(sourceFile, declaration.getInitializer(), seen));
+
+    return (
+        bound ||
+        sourceFile.getDescendantsOfKind(SyntaxKind.Parameter).some((parameter) => parameter.getName() === name && isAppHookFunction(parameter.getParent()))
+    );
+};
+
+/** True when `call` is `<app builder>.deliveryAuthorization(…)`. A bare call of that name, or a method on any other object, is not. */
+const isDeliveryAuthorizationCall = (sourceFile: SourceFile, call: CallExpression): boolean => {
+    const callee = call.getExpression();
+
+    return Node.isPropertyAccessExpression(callee) && callee.getName() === "deliveryAuthorization" && isAppBuilderReceiver(sourceFile, callee.getExpression());
+};
+
 /** The option keys that make each signal call a declaration. */
 const SIGNAL_CALLS: ReadonlyMap<string, { keys: ReadonlySet<string>; signal: Exclude<keyof PlatformCodeSignals, "secrets"> }> = new Map([
     ["defineContainer", { keys: EGRESS_POLICY_KEYS, signal: "containerEgressPolicy" }],
@@ -134,6 +196,10 @@ const callSignal = (sourceFile: SourceFile, call: CallExpression): keyof Platfor
 
     return call.getArguments().some((argument) => declaresKey(resolveObjectLiteral(sourceFile, argument), match.keys)) ? match.signal : undefined;
 };
+
+/** The signal a call declares by name, or by receiver for the app builder's `.deliveryAuthorization(...)`. */
+const declarationSignal = (sourceFile: SourceFile, call: CallExpression): keyof PlatformCodeSignals | undefined =>
+    DECLARATION_SIGNALS[calleeName(call)] ?? (isDeliveryAuthorizationCall(sourceFile, call) ? "deliveryAuthorization" : undefined);
 
 /**
  * Discover the AST-only platform signals in one pass over the `lunora/`
@@ -179,16 +245,10 @@ const discoverPlatformSignals = (project: Project, lunoraDirectory: string): Pla
         }
 
         for (const call of sourceFile.getDescendantsOfKind(SyntaxKind.CallExpression)) {
-            const signal = callSignal(sourceFile, call);
+            const signal = callSignal(sourceFile, call) ?? declarationSignal(sourceFile, call);
 
             if (signal !== undefined) {
                 signals[signal] = true;
-            }
-
-            const declared = DECLARATION_SIGNALS[calleeName(call)];
-
-            if (declared !== undefined) {
-                signals[declared] = true;
             }
         }
 

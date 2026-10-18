@@ -61,10 +61,44 @@ describe("discoverPlatformSignals", () => {
 
         write(
             "app.ts",
-            `export const authorize = (app: { deliveryAuthorization: (selector: () => unknown) => unknown }) => app.deliveryAuthorization(() => undefined);\n`,
+            `export const lunoraConfig = { app: (app: { deliveryAuthorization: (selector: () => unknown) => unknown }) => app.deliveryAuthorization(() => undefined) };\n`,
         );
 
         expect(signals().deliveryAuthorization).toBe(true);
+    });
+
+    it("flags `.deliveryAuthorization(...)` chained directly from the defineApp() factory, or on a local bound to it", () => {
+        expect.assertions(2);
+
+        write("worker.ts", `export const worker = defineApp().deliveryAuthorization(() => undefined);\n`);
+
+        expect(signals().deliveryAuthorization).toBe(true);
+
+        write("worker.ts", `const app = defineApp();\n\nexport const worker = app.deliveryAuthorization(() => undefined);\n`);
+        project = new Project({ skipAddingFilesFromTsConfig: true, useInMemoryFileSystem: false });
+
+        expect(signals().deliveryAuthorization).toBe(true);
+    });
+
+    it("does not flag a `deliveryAuthorization` method on an unrelated object", () => {
+        expect.assertions(1);
+
+        // Matched by name alone, this produced a node/celld platform diagnostic
+        // for any object with that method anywhere under lunora/.
+        write(
+            "auth.ts",
+            `const myObject = { deliveryAuthorization: (value: unknown) => value };\n\nexport const verdict = myObject.deliveryAuthorization(1);\n`,
+        );
+
+        expect(signals().deliveryAuthorization).toBe(false);
+    });
+
+    it("does not flag a bare function call named deliveryAuthorization", () => {
+        expect.assertions(1);
+
+        write("auth.ts", `function deliveryAuthorization(value: unknown) {\n    return value;\n}\n\nexport const verdict = deliveryAuthorization(1);\n`);
+
+        expect(signals().deliveryAuthorization).toBe(false);
     });
 
     it("does not flag an app builder chain that never calls deliveryAuthorization", () => {

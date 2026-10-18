@@ -818,7 +818,7 @@ describe("app-declared surfaces, gated end-to-end through runCodegen", () => {
         // diagnostic is raised for an app that never uses it (checked below).
         write(
             "delivery.ts",
-            `export const authorize = (app: { deliveryAuthorization: (selector: () => unknown) => unknown }) => app.deliveryAuthorization(() => undefined);\n`,
+            `export const lunoraConfig = { app: (app: { deliveryAuthorization: (selector: () => unknown) => unknown }) => app.deliveryAuthorization(() => undefined) };\n`,
         );
 
         writeFileSync(join(workdir, "lunora.config.ts"), `export default { target: "node" };\n`, "utf8");
@@ -841,6 +841,22 @@ describe("app-declared surfaces, gated end-to-end through runCodegen", () => {
 
         expect(cloudflare.platformDiagnostics).toStrictEqual([]);
         expect(cloudflare.generated.app).toContain("public deliveryAuthorization(");
+    });
+
+    it("ignores a deliveryAuthorization method on an unrelated object or a bare call, on node", () => {
+        expect.assertions(2);
+
+        // Only a call on the app builder declares the feature; a same-named
+        // method or helper elsewhere under lunora/ must not gate the build.
+        write(
+            "auth.ts",
+            `const myObject = { deliveryAuthorization: (value: unknown) => value };\n\nexport const verdict = myObject.deliveryAuthorization(1);\n\nfunction deliveryAuthorization(value: unknown) {\n    return value;\n}\n\nexport const other = deliveryAuthorization(2);\n`,
+        );
+
+        const result = codegen();
+
+        expect(result.platformDiagnostics).toStrictEqual([]);
+        expect(result.generated.app).not.toContain("public deliveryAuthorization(");
     });
 
     it("omits the node builder method for an app that never calls it, without a diagnostic", () => {
