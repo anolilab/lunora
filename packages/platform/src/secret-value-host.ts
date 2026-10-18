@@ -141,6 +141,13 @@ export interface SecretValueStore {
     /** Mint a ref, store `await seal(ref)` under it, and return the ref. */
     put: (seal: (ref: string) => Promise<string>, options: SecretValuePutOptions) => Promise<string>;
 
-    /** Apply the claimant, scope and expiry rules of {@link SecretValueHost.take} and return the stored bytes. */
-    take: (ref: string, options: SecretValueTakeOptions) => Promise<string | undefined>;
+    /**
+     * Apply the scope and expiry rules of {@link SecretValueHost.take}, then
+     * return `await open(stored)` for the record under `ref`. The claimant is
+     * bound only when `open` returns a value: a record that does not open stays
+     * unbound, so a take that cannot authenticate the bytes does not spend the ref.
+     * `open` runs inside the store's read-check-bind, so two takes cannot both
+     * bind the ref.
+     */
+    take: (ref: string, options: SecretValueTakeOptions, open: (stored: string) => Promise<string | undefined>) => Promise<string | undefined>;
 }

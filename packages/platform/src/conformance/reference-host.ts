@@ -737,7 +737,7 @@ const createReferenceHost = (): ReferenceHost => {
 
             return ref;
         },
-        take: async (ref, options) => {
+        take: async (ref, options, open) => {
             const key = secretKey(ref);
             const record = kvData.get(key) as SecretRecord | undefined;
 
@@ -755,11 +755,23 @@ const createReferenceHost = (): ReferenceHost => {
                 return undefined;
             }
 
-            // The first take binds the ref; a retry by that same claimant still
-            // reads it, and anyone else is refused.
-            record.claimant ??= options.claimant;
+            if (record.claimant !== undefined && record.claimant !== options.claimant) {
+                return undefined;
+            }
 
-            return record.claimant === options.claimant ? record.value : undefined;
+            const value = await open(record.value);
+
+            // `open` awaits, so re-check the record and the claim before binding: a
+            // discard or a rival take that landed meanwhile must not be overwritten.
+            if (value === undefined || kvData.get(key) !== record || (record.claimant ?? options.claimant) !== options.claimant) {
+                return undefined;
+            }
+
+            // The first take that opens the record binds it; a retry by that same
+            // claimant still reads it, and anyone else is refused.
+            record.claimant = options.claimant;
+
+            return value;
         },
     };
 

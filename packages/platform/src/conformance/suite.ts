@@ -1194,6 +1194,53 @@ const defineHostContractSuite = (name: string, factory: ConformanceHostFactory, 
                 });
             });
 
+            it("binds the claimant only on a take that opens the record", async (context) => {
+                await withHost(async (host) => {
+                    const { secretValues, secretValueStore } = host;
+
+                    if (secretValues === undefined || secretValueStore === undefined) {
+                        context.skip(`${name} does not expose its raw secret store`);
+
+                        return;
+                    }
+
+                    expect.assertions(3);
+
+                    const wrongKey = encryptingSecretValueHost(secretValueStore.store, { key: createSecretValueTestKey() });
+                    const ref = await secretValues.put("bound-later", TTL);
+
+                    expect(await wrongKey.take(ref, { claimant: "step-wrong", scope: SCOPE })).toBeUndefined();
+                    expect(await secretValues.take(ref, { claimant: "step-a", scope: SCOPE })).toBe("bound-later");
+                    expect(await secretValues.take(ref, { claimant: "step-wrong", scope: SCOPE })).toBeUndefined();
+                });
+            });
+
+            it("leaves a tampered record unbound until a take opens it", async (context) => {
+                await withHost(async (host) => {
+                    const { secretValues, secretValueStore } = host;
+
+                    if (secretValues === undefined || secretValueStore === undefined) {
+                        context.skip(`${name} does not expose its raw secret store`);
+
+                        return;
+                    }
+
+                    expect.assertions(3);
+
+                    const ref = await secretValues.put("restore-me", TTL);
+                    const original = await secretValueStore.peek(ref);
+                    const sealed = await sealedFields(secretValueStore, ref);
+                    const flipped = `${sealed.ciphertext.startsWith("A") ? "B" : "A"}${sealed.ciphertext.slice(1)}`;
+
+                    await secretValueStore.poke(ref, { value: JSON.stringify({ ...sealed, ciphertext: flipped }) });
+                    expect(await secretValues.take(ref, { claimant: "step-wrong", scope: SCOPE })).toBeUndefined();
+
+                    await secretValueStore.poke(ref, { value: original?.value });
+                    expect(await secretValues.take(ref, { claimant: "step-a", scope: SCOPE })).toBe("restore-me");
+                    expect(await secretValues.take(ref, { claimant: "step-wrong", scope: SCOPE })).toBeUndefined();
+                });
+            });
+
             it("gives every put of the same value a fresh nonce", async (context) => {
                 await withHost(async (host) => {
                     const { secretValues, secretValueStore } = host;
