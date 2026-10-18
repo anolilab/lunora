@@ -1,7 +1,7 @@
 # Plan 334 — Runtime determinism for query/mutation bodies
 
 - **Category**: correctness (silent nondeterminism in a replayable path)
-- **Status**: DESIGN — a global-swap implementation was built, proven unsound under concurrency, and reverted
+- **Status**: PARTIAL — step 3 (`ctx.fetch` refused in query/mutation) landed; steps 1, 2 and 4 remain open. A global-swap implementation was built, proven unsound under concurrency, and reverted
 - **Related**: `nondeterministic_query_mutation` advisor lint, `ctx.now`
 
 ## The gap
@@ -63,6 +63,11 @@ Per-context injection, not global mutation:
    codegen change: the emitted `buildCtx` already knows the dispatch mode, so it
    can install a throwing `fetch` for the non-action modes without touching
    `globalThis`. Note it is a breaking change for any mutation using `ctx.fetch`.
+   _Landed_: `refuseFetch` in `packages/codegen/src/emit/shard-context.ts` throws
+   `FORBIDDEN` for `query` and `mutation` ctx, and a query view composed from an
+   action gets it too. Known gap: a mutation reached by `ctx.runMutation` from an
+   action runs on the action's ctx, so its `ctx.fetch` still works. Closing it needs
+   a mutation view like `queryContext()`.
 4. An `AsyncLocalStorage`-backed scope would cover ambient calls soundly, but
    `node:async_hooks` availability on workerd (and its cost per dispatch) needs
    measuring before that is promised.
