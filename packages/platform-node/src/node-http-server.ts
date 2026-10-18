@@ -10,9 +10,15 @@
  * tells the shard to drop the subscriber, so it is not optional plumbing.
  */
 
+import { once } from "node:events";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
+import type { Duplex } from "node:stream";
+
+import { WebSocketServer } from "ws";
+
+import { takeUpgradeClient } from "./node-socket-pair";
 
 /** A host as it appears in a URL: an IPv6 literal such as `::1` needs brackets, `[::1]`, or the origin is not a valid URL. */
 const urlHost = (host: string): string => (host.includes(":") && !host.startsWith("[") ? `[${host}]` : host);
@@ -145,7 +151,8 @@ const requestUrl = (target: string | undefined, origin: string): URL => {
 
 // The body is streamed through, not buffered: the worker's own per-route body caps (`@lunora/runtime`) decide what is refused, so a
 // route with a larger budget than the framework default is not cut off here.
-const toRequest = (incoming: IncomingMessage, outgoing: ServerResponse, origin: string, signal: AbortSignal): Request => {
+// `outgoing` is the response a refused body's drain watches. An upgrade has none, and a WebSocket handshake is a GET with no body.
+const toRequest = (incoming: IncomingMessage, origin: string, signal: AbortSignal, outgoing?: ServerResponse): Request => {
     const headers = new Headers();
 
     for (const [name, value] of Object.entries(incoming.headers)) {
@@ -162,7 +169,7 @@ const toRequest = (incoming: IncomingMessage, outgoing: ServerResponse, origin: 
     // `duplex` is required by the Fetch spec for a streamed request body; it is not in the DOM `RequestInit` type.
     const init: RequestInit & { duplex?: "half" } = { headers, method, signal };
 
-    if (method !== "GET" && method !== "HEAD") {
+    if (method !== "GET" && method !== "HEAD" && outgoing !== undefined) {
         init.body = bodyStream(incoming, outgoing);
         init.duplex = "half";
     }
@@ -246,6 +253,80 @@ const writeResponse = async (response: Response, outgoing: ServerResponse): Prom
     outgoing.end();
 };
 
+// ponytail: how much of a refused upgrade's body is relayed. A refusal is a short status message; a worker that streams more is cut off
+// here rather than buffered whole per pending connection. Raise it if a legitimate refusal page outgrows it.
+const REFUSAL_BODY_LIMIT_BYTES = 65_536;
+
+/**
+ * A body's chunks, read one at a time so the caller can cancel the reader midway, up to {@link REFUSAL_BODY_LIMIT_BYTES}. Past that the
+ * reader is cancelled and the body truncated.
+ */
+const readChunks = async (reader: ReadableStreamDefaultReader<Uint8Array>, chunks: Uint8Array[], total = 0): Promise<Uint8Array[]> => {
+    const next = await reader.read();
+
+    if (next.done) {
+        return chunks;
+    }
+
+    const room = REFUSAL_BODY_LIMIT_BYTES - total;
+
+    if (next.value.byteLength >= room) {
+        chunks.push(next.value.subarray(0, room));
+        await reader.cancel().catch(() => undefined);
+
+        return chunks;
+    }
+
+    chunks.push(next.value);
+
+    return readChunks(reader, chunks, total + next.value.byteLength);
+};
+
+/**
+ * Answer a refused upgrade with the response the worker chose: its status, its
+ * headers, and its body. The socket is closed afterwards, because a refused
+ * handshake has no connection to keep.
+ */
+const writeRefusal = async (response: Response, socket: Duplex): Promise<void> => {
+    const reader = response.body?.getReader();
+    // A client that has gone will never read the refusal, so its body is cancelled rather than read to the end.
+    const cancel = (): void => {
+        reader?.cancel().catch(() => undefined);
+    };
+
+    if (socket.destroyed) {
+        cancel();
+
+        return;
+    }
+
+    socket.once("close", cancel);
+
+    const chunks = reader === undefined ? [] : await readChunks(reader, []);
+
+    socket.off("close", cancel);
+
+    // A client that left mid-read has nothing to receive the refusal.
+    if (!socket.writable) {
+        return;
+    }
+
+    const body = Buffer.concat(chunks);
+    const lines = [
+        `HTTP/1.1 ${String(response.status)} ${response.statusText || "Refused"}`,
+        "connection: close",
+        `content-length: ${String(body.byteLength)}`,
+    ];
+
+    response.headers.forEach((value, name) => {
+        if (name !== "content-length" && name !== "connection") {
+            lines.push(`${name}: ${value}`);
+        }
+    });
+
+    socket.end(Buffer.concat([Buffer.from(`${lines.join("\r\n")}\r\n\r\n`), body]));
+};
+
 /** Serve `options.fetch` over `node:http`. Resolves once the server is listening. */
 export const createNodeHttpServer = async (options: NodeHttpServerOptions): Promise<NodeHttpServer> => {
     const host = options.host ?? "127.0.0.1";
@@ -261,11 +342,17 @@ export const createNodeHttpServer = async (options: NodeHttpServerOptions): Prom
         );
     }
 
+    // `noServer`: the HTTP listener owns the upgrade, so the worker's own checks run before any handshake is written.
+    const webSockets = new WebSocketServer({ noServer: true });
+    // Raw sockets whose upgrade is still awaiting the worker. They are not in `webSockets.clients` yet, so `close` reaches them here.
+    const pendingUpgrades = new Set<Duplex>();
     const server = createServer();
+    // The origin every request URL is built on, for plain requests and upgrades alike. The client's Host header is never read:
+    // the configured public origin, or else the bound address.
+    const requestOrigin = (): string => configured ?? `http://${urlHost(host)}:${String((server.address() as AddressInfo).port)}`;
 
     server.on("request", (incoming, outgoing) => {
-        // The origin every request URL is built on. The client's Host header is never read: the configured public origin, or else the bound address.
-        const origin = configured ?? `http://${urlHost(host)}:${String((server.address() as AddressInfo).port)}`;
+        const origin = requestOrigin();
         const abort = new AbortController();
 
         // A client that disconnects before the response is complete will never read it, so the handler's signal fires
@@ -280,7 +367,7 @@ export const createNodeHttpServer = async (options: NodeHttpServerOptions): Prom
         let request: Request;
 
         try {
-            request = toRequest(incoming, outgoing, origin, abort.signal);
+            request = toRequest(incoming, origin, abort.signal, outgoing);
         } catch {
             outgoing.writeHead(400, { "content-type": "text/plain; charset=utf-8" });
             outgoing.end("Bad Request");
@@ -305,6 +392,58 @@ export const createNodeHttpServer = async (options: NodeHttpServerOptions): Prom
             });
     });
 
+    const upgrade = async (incoming: IncomingMessage, socket: Duplex, head: Buffer): Promise<void> => {
+        // A client that drops the socket before the handshake completes gets no answer: abort the request so the shard stops.
+        const abort = new AbortController();
+        // The shard can accept the server end while `fetch` is still running a route's `onOpen`, so a close during the fetch is
+        // remembered and acted on once the client end is known.
+        // An object, not a `let`: the close fires during the awaited fetch, which control-flow narrowing cannot see.
+        const socketState = { closed: false };
+
+        pendingUpgrades.add(socket);
+        // The socket has no other 'error' listener until `ws` attaches one. A reset during the fetch, or while a refusal is
+        // written, would otherwise be an unhandled 'error' that ends the process. The close that follows does the cleanup.
+        socket.on("error", () => {
+            socket.destroy();
+        });
+        socket.once("close", () => {
+            socketState.closed = true;
+            pendingUpgrades.delete(socket);
+            abort.abort();
+        });
+
+        const response = await options.fetch(toRequest(incoming, requestOrigin(), abort.signal));
+        const client = takeUpgradeClient(response);
+
+        if (client === undefined) {
+            // Not an accepted upgrade: the worker refused it (401, 403, 426, 404), so that response is the answer.
+            await writeRefusal(response, socket);
+
+            return;
+        }
+
+        // The shard has accepted the server end. If the socket has gone, or goes before the handshake does, the shard must hear the close.
+        if (socketState.closed) {
+            client.abandon();
+
+            return;
+        }
+
+        socket.once("close", () => {
+            client.abandon();
+        });
+
+        webSockets.handleUpgrade(incoming, socket, head, (ws) => {
+            client.attach(ws);
+        });
+    };
+
+    server.on("upgrade", (incoming, socket, head) => {
+        upgrade(incoming, socket, head).catch(() => {
+            socket.destroy();
+        });
+    });
+
     await new Promise<void>((resolve, reject) => {
         server.once("error", reject);
         server.listen(options.port ?? 0, host, () => {
@@ -316,9 +455,25 @@ export const createNodeHttpServer = async (options: NodeHttpServerOptions): Prom
     const { port } = server.address() as AddressInfo;
 
     return {
-        close: () =>
-            new Promise<void>((resolve, reject) => {
-                server.closeAllConnections();
+        close: async () => {
+            // Each socket's close event is what starts the shard's close handler, so `close` settles only after
+            // every one has fired: a caller that then closes the registry finds those handlers already tracked.
+            const socketsClosed = [...webSockets.clients].map(async (ws) => once(ws, "close"));
+
+            // Upgraded sockets are not HTTP connections, so `closeAllConnections` does not reach them.
+            for (const ws of webSockets.clients) {
+                ws.terminate();
+            }
+
+            // A pending upgrade's fetch may never settle, so its raw socket is destroyed rather than waited for.
+            for (const socket of pendingUpgrades) {
+                socket.destroy();
+            }
+
+            webSockets.close();
+            server.closeAllConnections();
+
+            await new Promise<void>((resolve, reject) => {
                 server.close((error) => {
                     if (error === undefined) {
                         resolve();
@@ -326,7 +481,9 @@ export const createNodeHttpServer = async (options: NodeHttpServerOptions): Prom
                         reject(error);
                     }
                 });
-            }),
+            });
+            await Promise.all(socketsClosed);
+        },
         origin: `http://${urlHost(host)}:${String(port)}`,
     };
 };

@@ -394,6 +394,7 @@ catalogs:
     "@types/dockerode": ^4.0.1
     "@types/node": 26.6.4
     "@types/semver": ^7.8.0
+    "@types/ws": ^8.18.2
   cloudflare:
     # Exact-pinned for the same reason as @cloudflare/workers-types below: the patch
     # in `patchedDependencies` is version-pinned, so a caret would break the install.
@@ -456,6 +457,9 @@ catalogs:
     # @lunora/platform-node (the Node host's durable storage).
     "@types/better-sqlite3": ^9.6.0
     "better-sqlite3": ^13.0.3
+    # WebSocket upgrades on the Node host (`@lunora/platform-node`). Pinned at the
+    # patched 8.21 line the `ws@>=8.0.0 <8.21.0` override above already resolves to.
+    ws: ^8.21.0
     # Cron expression parsing shared by @lunora/scheduler and
     # @lunora/platform-node's scheduler host. `@visulima/cron-parser` is a
     # zero-dependency ESM parser with a `cloudflare` dialect, so one parser

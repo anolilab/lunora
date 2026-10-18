@@ -625,6 +625,22 @@ const ERROR_CATALOG: {
         readonly status: 500;
         readonly title: "Room name is not a string literal";
     };
+    readonly DUPLICATE_SOCKET_PATH: {
+        readonly status: 500;
+        readonly title: "Duplicate socket route path";
+    };
+    readonly SOCKET_AUTH_NOT_LITERAL: {
+        readonly status: 500;
+        readonly title: "Socket route auth is not a literal boolean";
+    };
+    readonly SOCKET_PATH_INVALID: {
+        readonly status: 500;
+        readonly title: "Socket route path is not a plain URL path";
+    };
+    readonly SOCKET_PATH_NOT_LITERAL: {
+        readonly status: 500;
+        readonly title: "Socket route path is not a string literal";
+    };
     readonly DUPLICATE_WORKFLOW_CLASS: {
         readonly status: 500;
         readonly title: "Duplicate workflow generated class name";

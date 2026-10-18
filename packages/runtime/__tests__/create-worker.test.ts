@@ -355,6 +355,86 @@ describe("createWorker", () => {
         expect(shard.calls[0]!.shardKey).toBe("channel-7");
     });
 
+    it("forwards a declared defineWebSocket route upgrade to the shard", async () => {
+        expect.assertions(3);
+
+        // The route path is read off the generated `LUNORA_FUNCTIONS` registry
+        // the worker already carries (its live registration objects), so a
+        // declared path upgrades and forwards exactly like `/_lunora/ws`, with
+        // the request path preserved for the DO to resolve the route from.
+        const worker = createWorker({
+            allowUnauthenticatedShardAccess: true,
+            functions: { "sockets:chat": { args: {}, kind: "mutation", lifecycle: "socket", socketPath: "/chat", visibility: "internal" } },
+            shardDO: shard.namespace,
+        });
+
+        await worker.fetch(new Request("https://app.example/chat?shard=channel-7", { headers: { Upgrade: "websocket" } }), {}, fakeContext);
+
+        expect(shard.calls).toHaveLength(1);
+        expect(shard.calls[0]!.shardKey).toBe("channel-7");
+        expect(new URL(shard.calls[0]!.request.url).pathname).toBe("/chat");
+    });
+
+    it("upgrades a declared socket path even when a custom HTTP route shares it", async () => {
+        expect.assertions(2);
+
+        const handler = vi.fn<() => Response>(() => new Response("handled over HTTP"));
+        const worker = createWorker({
+            allowUnauthenticatedShardAccess: true,
+            functions: { "sockets:chat": { args: {}, kind: "mutation", lifecycle: "socket", socketPath: "/chat", visibility: "internal" } },
+            routes: { "GET /chat": handler },
+            shardDO: shard.namespace,
+        });
+
+        await worker.fetch(new Request("https://app.example/chat?shard=channel-7", { headers: { Upgrade: "websocket" } }), {}, fakeContext);
+
+        expect(handler).not.toHaveBeenCalled();
+        expect(shard.calls).toHaveLength(1);
+    });
+
+    it("lets a POST carrying an Upgrade header reach the same-path HTTP route", async () => {
+        expect.assertions(2);
+
+        const handler = vi.fn<() => Response>(() => new Response("posted", { status: 200 }));
+        const worker = createWorker({
+            allowUnauthenticatedShardAccess: true,
+            functions: { "sockets:chat": { args: {}, kind: "mutation", lifecycle: "socket", socketPath: "/chat", visibility: "internal" } },
+            routes: { "POST /chat": handler },
+            shardDO: shard.namespace,
+        });
+
+        await worker.fetch(new Request("https://app.example/chat", { headers: { Upgrade: "websocket" }, method: "POST" }), {}, fakeContext);
+
+        expect(handler).toHaveBeenCalledTimes(1);
+        expect(shard.calls).toHaveLength(0);
+    });
+
+    it("treats a case-variant Upgrade header as the socket upgrade", async () => {
+        expect.assertions(2);
+
+        const worker = createWorker({
+            allowUnauthenticatedShardAccess: true,
+            functions: { "sockets:chat": { args: {}, kind: "mutation", lifecycle: "socket", socketPath: "/chat", visibility: "internal" } },
+            shardDO: shard.namespace,
+        });
+
+        await worker.fetch(new Request("https://app.example/chat?shard=channel-7", { headers: { Upgrade: "WebSocket" } }), {}, fakeContext);
+
+        expect(shard.calls).toHaveLength(1);
+        expect(new URL(shard.calls[0]!.request.url).pathname).toBe("/chat");
+    });
+
+    it("does not treat an undeclared path as a socket route", async () => {
+        expect.assertions(2);
+
+        const worker = createWorker({ allowUnauthenticatedShardAccess: true, shardDO: shard.namespace });
+
+        const res = await worker.fetch(new Request("https://app.example/chat", { headers: { Upgrade: "websocket" } }), {}, fakeContext);
+
+        expect(res.status).toBe(404);
+        expect(shard.calls).toHaveLength(0);
+    });
+
     it("strips client-supplied identity headers from /_lunora/ws upgrades (anonymous spoof)", async () => {
         expect.assertions(3);
 
@@ -2966,6 +3046,33 @@ describe("createWorker — relay-tier routing (plan 075 Phase 2)", () => {
         expect(forwards[0]?.binding).toBe("SHARD"); // told the DO its namespace binding
     });
 
+    it("keeps a defineWebSocket route upgrade on the owner, since its handler writes through the shard that accepted it", async () => {
+        expect.assertions(2);
+
+        const forwards: Forward[] = [];
+        const namespace = routingNamespace(2, forwards);
+        const route = {
+            args: {},
+            auth: false,
+            handler: () => undefined,
+            kind: "mutation",
+            lifecycle: "socket",
+            socketPath: "/chat",
+            visibility: "internal",
+        };
+        const worker = createWorker({ allowUnauthenticatedShardAccess: true, functions: { "sockets:chat": route } as never, shardDO: namespace });
+
+        await worker.fetch(
+            new Request("https://app.example/chat?shard=promoted-route", { headers: { Upgrade: "websocket" } }),
+            { SHARD: namespace },
+            fakeContext,
+        );
+
+        // The owner serves the route; no relay is probed or chosen for it.
+        expect(forwards).toHaveLength(1);
+        expect(forwards[0]?.name).toBe("promoted-route");
+    });
+
     it("spreads connections across the relay set and hints the client's region", async () => {
         expect.assertions(3);
 
@@ -3503,6 +3610,23 @@ describe("createWorker — live streams and socket paths", () => {
         expect(shard.calls).toHaveLength(1);
         expect(new URL(forwarded?.url ?? "").pathname).toBe("/_lunora/live/publish");
         expect(body).toMatchObject({ stream: "posts", topic: "digest:1" });
+    });
+
+    it("lets a plain GET to a socket route's path reach the app router instead of failing with 426", async () => {
+        expect.assertions(2);
+
+        const worker = createWorker({
+            functions: {
+                "sockets:chat": { lifecycle: "socket", socketPath: "/chat" },
+            } as unknown as NonNullable<Parameters<typeof createWorker>[0]>["functions"],
+            httpRouter: honoApp((app) => app.get("/chat", () => new Response("the chat page", { status: 200 }))),
+            shardDO: shard.namespace,
+        });
+
+        const res = await worker.fetch(new Request("https://app.example/chat"), {}, fakeContext);
+
+        expect(res.status).toBe(200);
+        await expect(res.text()).resolves.toBe("the chat page");
     });
 
     it("refuses a direct queue consumer's publish on a worker built with liveStreams: false, before any forward", async () => {

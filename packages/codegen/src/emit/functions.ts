@@ -180,6 +180,8 @@ const renderFunctionRegistry = (
                     ...(definition.lifecycle ? { lifecycle: definition.lifecycle } : {}),
                     ...(definition.visibility ? { visibility: definition.visibility } : {}),
                     ...(definition.x402?.price === undefined ? {} : { x402: { price: definition.x402.price } }),
+                    // The worker reads a route's path off the stub to know which upgrades reach the shard.
+                    ...(definition.socket === undefined ? {} : { auth: definition.socket.auth, socketPath: definition.socket.path }),
                 },
             )} } satisfies RegisteredLunoraFunction & Pick<FunctionManifestEntry, "argumentDescriptors" | "channel" | "expose">,`;
         })
@@ -428,9 +430,10 @@ const renderLifecycleManifest = (
 
     for (const definition of functions) {
         // A `room` registration is dispatched through the dedicated
-        // `LUNORA_ROOMS` map, not the socket-lifecycle manifest, so it is
-        // excluded here (the emitted manifest keeps its five socket moments).
-        if (!definition.lifecycle) {
+        // `LUNORA_ROOMS` map and a `socket` route through `LUNORA_SOCKETS`, not
+        // the socket-lifecycle manifest, so both are excluded here (the emitted
+        // manifest keeps its five socket moments).
+        if (!definition.lifecycle || definition.lifecycle === "socket") {
             continue;
         }
 
@@ -438,6 +441,78 @@ const renderLifecycleManifest = (
     }
 
     return manifest;
+};
+
+/**
+ * The `defineWebSocket`-only fragments of the emitted `functions.ts`: the
+ * `LUNORA_SOCKETS` registry, the extra `"socket"` member of the
+ * `RegisteredLunoraFunction.lifecycle` union, and its `socketPath`/`auth`
+ * fields. Split out of {@link emitFunctions} so the emitter's own branching
+ * stays within budget; all three vanish for a route-free project, keeping its
+ * output byte-identical.
+ */
+
+/**
+ * The lazy-mode `LUNORA_SOCKETS`: a static path→registration map built from each route's discovered literal `path`
+ * and `auth`. In lazy mode `LUNORA_FUNCTIONS` holds only stubs for the route modules, so the eager walk over it would
+ * find no route; the map is emitted directly, and building the worker never evaluates a route's module.
+ */
+const renderLazySocketRegistry = (functions: ReadonlyArray<FunctionIR>): string => {
+    const owners = new Map<string, { functionPath: string; origin: string | undefined }>();
+    const entries: string[] = [];
+
+    for (const definition of functions) {
+        if (definition.lifecycle !== "socket" || definition.socket === undefined) {
+            continue;
+        }
+
+        const { auth, origin, path } = definition.socket;
+        const functionPath = `${sanitizeNamespace(definition.filePath)}:${definition.exportName}`;
+        const prior = owners.get(path);
+
+        // Two export names of one `defineWebSocket` call are an alias of one route, as in eager mode.
+        if (prior?.origin !== undefined && prior.origin === origin) {
+            continue;
+        }
+
+        if (prior !== undefined) {
+            throw new LunoraError(
+                "DUPLICATE_SOCKET_PATH",
+                `two defineWebSocket routes serve "${path}" (${prior.functionPath} and ${functionPath}); socket paths must be unique.`,
+            );
+        }
+
+        owners.set(path, { functionPath, origin });
+        entries.push(`    ${JSON.stringify(path)}: { auth: ${String(auth)}, functionPath: ${JSON.stringify(functionPath)} },`);
+    }
+
+    return `\n/**\n * Socket registry: the URL path of each \`defineWebSocket\` route → its function path + auth requirement.\n * Static, so building the worker never evaluates a route's module. The generated ShardDO's \`socketRoute\` override\n * resolves an upgraded socket through this map.\n */\nexport const LUNORA_SOCKETS: Readonly<Record<string, { auth: boolean; functionPath: string }>> = {\n${entries.join("\n")}\n};\n`;
+};
+
+const renderSocketFragments = (functions: ReadonlyArray<FunctionIR>, lazyFunctions: boolean): { fields: string; lifecycleMember: string; registry: string } => {
+    const hasSockets = functions.some((definition) => definition.lifecycle === "socket");
+    const eagerRegistry =
+        hasSockets && !lazyFunctions
+            ? `\n/**\n * Socket registry: the URL path of each \`defineWebSocket\` route → its function\n * path + auth requirement. The generated ShardDO's \`socketRoute\` override\n * resolves an upgraded socket through this map so a route's typed\n * \`onOpen\`/\`onMessage\`/\`onClose\` dispatch server-side under the socket's\n * verified identity. Two routes on one path throw at module load rather than letting\n * the map silently keep whichever came last.\n */\nexport const LUNORA_SOCKETS: Readonly<Record<string, { auth: boolean; functionPath: string }>> = (() => {\n    const registry: Record<string, { auth: boolean; functionPath: string }> = {};\n    const owners = new Map<string, unknown>();\n\n    for (const [path, fn] of Object.entries(LUNORA_FUNCTIONS)) {\n        if (fn.lifecycle !== "socket" || typeof fn.socketPath !== "string") {\n            continue;\n        }\n\n        const owner = owners.get(fn.socketPath);\n\n        // The same registration exported under two names (an alias) is one route.\n        if (owner !== undefined && owner !== fn) {\n            throw new Error(\`two defineWebSocket routes serve "\${fn.socketPath}"; socket paths must be unique\`);\n        }\n\n        if (owner === undefined) {\n            owners.set(fn.socketPath, fn);\n            registry[fn.socketPath] = { auth: fn.auth === true, functionPath: path };\n        }\n    }\n\n    return registry;\n})();\n`
+            : "";
+    const registry = hasSockets && lazyFunctions ? renderLazySocketRegistry(functions) : eagerRegistry;
+    const lifecycleMember = hasSockets ? ` | "socket"` : "";
+    const fields = hasSockets
+        ? `
+    /**
+     * Set on a \`defineWebSocket\` registration: the URL path the route serves.
+     * The generated \`LUNORA_SOCKETS\` map keys it on this path so the ShardDO
+     * resolves an upgraded socket to this registration.
+     */
+    socketPath?: string;
+    /**
+     * Set on a \`defineWebSocket\` registration: whether the route refuses an
+     * anonymous upgrade. Read into \`LUNORA_SOCKETS\` alongside \`socketPath\`.
+     */
+    auth?: boolean;`
+        : "";
+
+    return { fields, lifecycleMember, registry };
 };
 
 interface EmitFunctionsOptions {
@@ -572,6 +647,11 @@ const emitFunctions = (options: EmitFunctionsOptions): string => {
 
     const roomsRegistry = renderRoomRegistry(hasRooms, lazyFunctions, functions);
 
+    // The `defineWebSocket`-only fragments (registry + interface fields),
+    // computed by a helper so this emitter's branching stays within budget and
+    // gated so a route-free project's output is byte-identical.
+    const { fields: socketFields, lifecycleMember: socketLifecycleMember, registry: socketsRegistry } = renderSocketFragments(functions, lazyFunctions);
+
     // Pull in the compiled-args seam only when at least one function compiled —
     // an unused import would trip `noUnusedLocals`.
     const compiledArgsImport = installBlock.length > 0 ? `import { DEFER_VALIDATION as DEFER, installCompiledValidatorMap } from "${base.values}";\n` : "";
@@ -590,7 +670,7 @@ export interface FunctionManifestEntry {
     exportName: string;
     expose?: { cache?: { credentialHeaders?: ReadonlyArray<string>; maxAge?: number; scope?: "private" | "public"; staleWhileRevalidate?: number; tag?: string; vary?: string }; rest?: boolean };
     kind: "action" | "mutation" | "query" | "stream";
-    lifecycle?: "connect" | "disconnect" | "init" | "reactor" | "whisper";
+    lifecycle?: "connect" | "disconnect" | "init" | "reactor" | "whisper"${socketLifecycleMember};
     moduleId: string;
     visibility?: "internal" | "public";
     x402?: { readonly price: number | string };
@@ -701,7 +781,7 @@ export interface RegisteredLunoraFunction {
      * \`init\` and \`reactor\` have no caller identity, so RLS has no user to scope
      * to. \`whisper\` does have one — it runs under the asking socket's identity.
      */
-    lifecycle?: "connect" | "disconnect" | "init" | "reactor" | "whisper";
+    lifecycle?: "connect" | "disconnect" | "init" | "reactor" | "whisper"${socketLifecycleMember};${socketFields}
 ${rooms.channelField}    /**
      * Hoisted by the builder when the \`.use()\` chain carries a step with a
      * per-dispatch effect — \`rateLimit(...)\` consuming budget, a single-use
@@ -724,7 +804,7 @@ ${agentRegistry.prelude}${sandboxRegistry.prelude}${lazyRegistryPrelude}
  * emits (\`api[namespace][fn].__lunoraRef === "namespace:fn"\`).
  */
 export const LUNORA_FUNCTIONS: Record<string, RegisteredLunoraFunction> = {${dispatchBodyWithAgents}};
-${compiledArgsInstall}${shapeRegistry}${mutatorPathsRegistry}${roomsRegistry}${rooms.messagesBlock}
+${compiledArgsInstall}${shapeRegistry}${mutatorPathsRegistry}${roomsRegistry}${rooms.messagesBlock}${socketsRegistry}
 /**
  * Lifecycle manifest: the function paths the generated ShardDO dispatches when a
  * client's WebSocket connects (\`connect\`) or disconnects (\`disconnect\`), once

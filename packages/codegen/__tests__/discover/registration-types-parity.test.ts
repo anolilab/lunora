@@ -89,6 +89,7 @@ describe("registration-type parity (anti-drift lock for the dropped-registration
             "RegisteredRoom",
             "RegisteredShape",
             "RegisteredStream",
+            "RegisteredWebSocket",
             "RegisteredWhisperAuthorizer",
         ]);
         expect(declared.filter((name) => !source.includes(`"${name}"`))).toStrictEqual([]);

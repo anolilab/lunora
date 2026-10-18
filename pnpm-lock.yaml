@@ -631,6 +631,9 @@ catalogs:
     ts-morph:
       specifier: ^28.0.0
       version: 28.0.0
+    ws:
+      specifier: ^8.21.0
+      version: 8.21.3
   types:
     '@standard-schema/spec':
       specifier: 1.1.0
@@ -644,6 +647,9 @@ catalogs:
     '@types/semver':
       specifier: ^7.8.0
       version: 7.8.0
+    '@types/ws':
+      specifier: ^8.18.2
+      version: 8.18.2
   ui:
     '@base-ui/react':
       specifier: 1.8.0
@@ -4327,6 +4333,9 @@ importers:
       pprof-format:
         specifier: catalog:tooling
         version: 2.3.1
+      ws:
+        specifier: catalog:tooling
+        version: 8.21.3
     devDependencies:
       '@codspeed/vitest-plugin':
         specifier: catalog:test
@@ -4349,6 +4358,9 @@ importers:
       '@types/node':
         specifier: catalog:types
         version: 26.6.4
+      '@types/ws':
+        specifier: catalog:types
+        version: 8.18.2
       '@visulima/packem':
         specifier: catalog:build
         version: 2.1.0(28f6a3ec7cce81770de3c6c66ec5ddac)
@@ -13679,6 +13691,9 @@ packages:
 
   '@types/ws@8.18.1':
     resolution: {integrity: sha512-ThVF6DCVhA8kUGy+aazFQ4kXQ7E1Ty7A3ypFOe0IcJV8O/M511G99AW24irKrW56Wt44yG9+ij8FaqoBGkuBXg==}
+
+  '@types/ws@8.18.2':
+    resolution: {integrity: sha512-67MQl+fpWKVTT1NYdnmo3U4sc/xPo/zQBncVnI74qmQa0z/b+1g6iYqNmGCPbxO+zz2aklb08a0oHfegiVd0/w==}
 
   '@types/yargs-parser@21.0.3':
     resolution: {integrity: sha512-I4q9QU9MQv4oEOz4tAHJtNz1cwuLxn2F3xcc2iV5WdqLPpUnj30aUuxt1mAxYTG+oe8CZMV/+6rU4S4gRDzqtQ==}
@@ -34905,6 +34920,10 @@ snapshots:
   '@types/whatwg-mimetype@3.0.2': {}
 
   '@types/ws@8.18.1':
+    dependencies:
+      '@types/node': 26.6.4
+
+  '@types/ws@8.18.2':
     dependencies:
       '@types/node': 26.6.4
 
