@@ -1,3 +1,15 @@
+## @lunora/vue [1.0.0-alpha.268](https://github.com/anolilab/lunora/compare/@lunora/vue@1.0.0-alpha.267...@lunora/vue@1.0.0-alpha.268) (2026-10-18)
+
+### Features
+
+* **client:** share one live stream connection and add live topic bindings ([#1252](https://github.com/anolilab/lunora/issues/1252)) ([d108d5a](https://github.com/anolilab/lunora/commit/d108d5af5fa7f8dc099d7a30c42deeeb956fdebe))
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.228
+* **@lunora/ratelimit:** upgraded to 1.0.0-alpha.151
+
 ## @lunora/vue [1.0.0-alpha.267](https://github.com/anolilab/lunora/compare/@lunora/vue@1.0.0-alpha.266...@lunora/vue@1.0.0-alpha.267) (2026-10-18)
 
 
