@@ -152,6 +152,10 @@ export const onFollowerSubscriptionData = (
     }
 
     host.dropCacheSeed(key);
+
+    // A follower sees no `ack`: the first value is the evidence its subscription was answered.
+    const firstValue = state.serverBase === undefined;
+
     commitDataFrame(state, data, cursor === undefined ? {} : { cursor, epoch });
 
     if (cursor !== undefined) {
@@ -159,6 +163,10 @@ export const onFollowerSubscriptionData = (
     }
 
     refoldSubscription(state, data);
+
+    if (firstValue) {
+        host.emitConnectionStatus();
+    }
 };
 
 /** The leader reported an error for `key`. Fan it to this tab's subscribers. */

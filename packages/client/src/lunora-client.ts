@@ -7464,7 +7464,15 @@ class LunoraClient {
         // Drop the cache seed before the value moves, then commit the payload and its
         // position. The watermark and the checkpoint fan-out follow the commit.
         this.dropCacheSeed(SubscriptionRegistry.keyOf(state));
+
+        // Over the polling fallback a first value is the only evidence a subscription was answered.
+        const firstValue = state.serverBase === undefined;
+
         commitDataFrame(state, payload, { cursor: message.cursor, epoch: message.epoch });
+
+        if (firstValue) {
+            this.emitSyncStatus();
+        }
 
         if (message.lastMutationId !== undefined) {
             advanceWatermark(state, message.lastMutationId);

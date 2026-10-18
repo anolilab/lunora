@@ -3,6 +3,9 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { SyncStatus } from "../src/lunora-client";
 import { LunoraClient } from "../src/lunora-client";
 import { createInMemoryPersistence } from "../src/persistence";
+import type { SubscriptionState } from "../src/subscription";
+import type { TabLeadershipHost } from "../src/tab-leadership";
+import { onFollowerSubscriptionData } from "../src/tab-leadership";
 import { createSocketHarness, fnRef, jsonResponse, settle } from "./lib/harness";
 
 const createClient = (options: { offline?: boolean } = {}) => {
@@ -98,6 +101,35 @@ describe("sync status", () => {
 
         expect(seen.at(-1)?.synced).toBe(true);
         expect(seen.some((status) => !status.synced && status.connection === "connected")).toBe(true);
+
+        client.close();
+    });
+
+    it("tells a follower tab's listeners when its first value arrives, since it sees no acknowledgement", () => {
+        expect.assertions(1);
+
+        const state = { callbacks: new Set(), optimisticLayers: [], serverBase: undefined } as unknown as SubscriptionState;
+        const emitConnectionStatus = vi.fn<() => void>();
+        const host = {
+            dropCacheSeed: () => undefined,
+            emitConnectionStatus,
+            identityFingerprint: () => null,
+            subscription: () => state,
+        } as unknown as TabLeadershipHost;
+
+        onFollowerSubscriptionData(host, "key", { n: 1 }, undefined, undefined, undefined);
+        // Later frames change no answered-count, so they do not re-announce.
+        onFollowerSubscriptionData(host, "key", { n: 2 }, undefined, undefined, undefined);
+
+        expect(emitConnectionStatus).toHaveBeenCalledTimes(1);
+    });
+
+    it("hands back the same ready promise to callers that pass no signal", () => {
+        expect.assertions(1);
+
+        const { client } = createClient();
+
+        expect(client.whenReady()).toBe(client.whenReady());
 
         client.close();
     });
