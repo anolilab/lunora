@@ -811,7 +811,8 @@ export interface ReactorsResult {
  * Lifecycle state of a workflow instance, hand-mirroring `@lunora/do`'s
  * `WorkflowInstanceState` (itself mirrored from `@lunora/workflow`).
  */
-export type WorkflowInstanceState = "complete" | "errored" | "paused" | "queued" | "running" | "terminated" | "unknown" | "waiting" | "waitingForPause";
+export type WorkflowInstanceState =
+    "complete" | "errored" | "paused" | "queued" | "rollingBack" | "running" | "terminated" | "unknown" | "waiting" | "waitingForPause";
 
 /** Payload of a `__lunora_admin__:createWorkflowInstance` call: the new instance id and its initial status. */
 export interface CreateWorkflowInstanceResult {

@@ -1,3 +1,13 @@
+## @lunora/shard-engine [1.0.0-alpha.142](https://github.com/anolilab/lunora/compare/@lunora/shard-engine@1.0.0-alpha.141...@lunora/shard-engine@1.0.0-alpha.142) (2026-10-18)
+
+### Features
+
+* **workflow:** add restart action and rollingBack status ([#1249](https://github.com/anolilab/lunora/issues/1249)) ([01ec235](https://github.com/anolilab/lunora/commit/01ec2353b2d3cad8d26e32aff70fd42dd5590c96))
+
+### Bug Fixes
+
+* keep route lifecycle work alive and bound relay control records ([#1250](https://github.com/anolilab/lunora/issues/1250)) ([890e382](https://github.com/anolilab/lunora/commit/890e3821fd9adb896e99ae18184c724661b71092))
+
 ## @lunora/shard-engine [1.0.0-alpha.141](https://github.com/anolilab/lunora/compare/@lunora/shard-engine@1.0.0-alpha.140...@lunora/shard-engine@1.0.0-alpha.141) (2026-10-18)
 
 ### Bug Fixes

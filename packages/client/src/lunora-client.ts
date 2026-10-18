@@ -2921,7 +2921,7 @@ class LunoraClient {
         return getWorkflowInstance(this.adminHost, options);
     }
 
-    /** Pause / resume / terminate a workflow instance (`/_lunora/admin/workflows/status`). Needs an Edit-scoped Cloudflare token. */
+    /** Pause / resume / restart / terminate a workflow instance (`/_lunora/admin/workflows/status`). Needs an Edit-scoped Cloudflare token. */
     public async setWorkflowInstanceStatus(options: { action: WorkflowInstanceAction; id: string; name: string }): Promise<{ status: WorkflowInstanceStatus }> {
         return setWorkflowInstanceStatus(this.adminHost, options);
     }

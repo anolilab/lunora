@@ -122,6 +122,17 @@ describe("createWorkflowsRestClient", () => {
         expect(page).toMatchObject({ page: 3, perPage: 7, totalCount: undefined });
     });
 
+    it("keeps a `rollingBack` status instead of coercing it to `unknown`", async () => {
+        expect.assertions(1);
+
+        const { fetch } = fakeFetch(200, { result: [{ id: "a", status: "rollingBack" }], success: true });
+        const client = createWorkflowsRestClient({ accountId: "acc", apiToken: "tok", fetch });
+
+        const page = await client.listInstances({ workflowName: "wf" });
+
+        expect(page.instances[0]?.status).toBe("rollingBack");
+    });
+
     it("coerces an unrecognized status to `unknown`", async () => {
         expect.assertions(1);
 
