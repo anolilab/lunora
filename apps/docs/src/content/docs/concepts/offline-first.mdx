@@ -369,11 +369,12 @@ await client.mutation(api.accounts.linkApiKey, { apiKey }, { onlineOnly: true })
   the same shard. When it is sent it can overtake them, so it may commit before an
   older queued write to the same document. Use it only for a write that does not
   depend on that order.
-- **Failed on the wire:** on a shard that is polling or was idle-closed, a request
-  that the network drops before a response is refused with `OFFLINE_NOT_QUEUED`,
-  and the transport failure is its `cause`. The server may already have applied the
-  write, so handle it as you would any failed request. On a shard with an open
-  socket, a failed request rejects with its transport error, as a normal write does.
+- **Failed on the wire:** on a shard with no open socket (polling, idle-closed, or
+  not yet connected), a request that the network drops before a response is refused
+  with `OFFLINE_NOT_QUEUED`, and the transport failure is its `cause`. The server may
+  already have applied the write, so handle it as you would any failed request. On a
+  shard with an open socket, a failed request rejects with its transport error, as a
+  normal write does.
 
 Use it for a credential a person typed in, or a one-time token such as an invite
 code or a verification code.
