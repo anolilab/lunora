@@ -4681,9 +4681,10 @@ class LunoraClient {
                 replay?.stamp,
             );
 
-        // An online-only write cannot reach this line with `socketDown` or
-        // `midReconnect` set: the early refusal above read the same state, and
-        // nothing awaits between the two.
+        // The early refusal ran before the optimistic updates above, and those are
+        // user code that can drop the shard, so the gate is read again here.
+        this.refuseOnlineOnlyWhenDown(function_.__lunoraRef, options, optimisticRollbacks);
+
         if (socketDown || midReconnect || queuedAhead) {
             return enqueue();
         }
@@ -4742,9 +4743,15 @@ class LunoraClient {
     /**
      * Refuses an `onlineOnly` write whose shard's connection is down or reconnecting,
      * the states in which a normal write is queued. Reads the gate synchronously, so
-     * the refusal is immediate and nothing downstream has been touched.
+     * the refusal is immediate. Called again after the optimistic updates have been
+     * applied, which is user code and may have dropped the shard: `optimisticRollbacks`
+     * unwinds those layers before the refusal.
      */
-    private refuseOnlineOnlyWhenDown(functionPath: string, options: Pick<MutationCallOptions, "onlineOnly" | "shardKey">): void {
+    private refuseOnlineOnlyWhenDown(
+        functionPath: string,
+        options: Pick<MutationCallOptions, "onlineOnly" | "shardKey">,
+        optimisticRollbacks: (() => void)[] = [],
+    ): void {
         if (!options.onlineOnly) {
             return;
         }
@@ -4752,6 +4759,8 @@ class LunoraClient {
         const gate = this.writeQueueGate(options.shardKey);
 
         if (gate.socketDown || gate.midReconnect) {
+            rollbackOptimistic(optimisticRollbacks);
+
             throw offlineNotQueuedError(functionPath);
         }
     }
