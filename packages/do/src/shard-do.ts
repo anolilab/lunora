@@ -2375,7 +2375,6 @@ abstract class ShardDO {
      * socket left off.
      */
     private readonly shapeMemos = new WeakMap<ShardSocketLike, Map<string, ShapeMemo>>();
-    private retainedShapesNeedCleanup = true;
 
     /**
      * Per-socket, per-**global**-shape membership snapshot: maps each global
@@ -2457,7 +2456,14 @@ abstract class ShardDO {
      * them, so a socket never receives room traffic before its join committed.
      */
     private readonly pendingRoomJoins = new WeakMap<ShardSocketLike, Map<string, number>>();
+
+    /**
+     * Cleared once a complete sweep finds no retained shapes (or rooms) left on any socket. Delivery
+     * authorization refuses new ones at the envelope gate, so nothing re-arms a flag within an
+     * instance; a new instance starts true and sweeps once.
+     */
     private retainedRoomsNeedCleanup = true;
+    private retainedShapesNeedCleanup = true;
 
     /**
      * Topics whose join was refused. A leave queued behind a refused join pairs with no
@@ -12926,13 +12932,16 @@ abstract class ShardDO {
 
     /** Attachments can retain unsupported subscriptions when a deployment enables delivery authorization. */
     private rejectRetainedShapesAndRooms(): number {
-        const roomsRemaining = this.rejectRetainedRooms();
+        return this.rejectRetainedRooms() + this.rejectRetainedShapes();
+    }
 
-        if (!this.retainedShapesNeedCleanup) {
-            return roomsRemaining;
+    /** Retiring an unsupported shape refuses it and drops the registration; a failed attachment write keeps it counted. */
+    private rejectRetainedShapes(): number {
+        if (!this.deliveryAuthorization || !this.retainedShapesNeedCleanup) {
+            return 0;
         }
 
-        let shapesRemaining = 0;
+        let remaining = 0;
 
         for (const ws of this.runner.sockets()) {
             for (const subId of Object.keys(this.readAttachment(ws).shapes ?? {})) {
@@ -12941,12 +12950,12 @@ abstract class ShardDO {
             }
 
             // Failed attachment writes retain the registration; keep the alarm retry alive.
-            shapesRemaining += Object.keys(this.readAttachment(ws).shapes ?? {}).length;
+            remaining += Object.keys(this.readAttachment(ws).shapes ?? {}).length;
         }
 
-        this.retainedShapesNeedCleanup = shapesRemaining > 0;
+        this.retainedShapesNeedCleanup = remaining > 0;
 
-        return roomsRemaining + shapesRemaining;
+        return remaining;
     }
 
     /**
