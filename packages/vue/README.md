@@ -85,6 +85,7 @@ const { mutate, pending } = useMutation(api.messages.send);
 | `useInfiniteQuery`    | `useInfiniteQuery`    | Infinite-scroll variant of `usePaginatedQuery`.                                   |
 | `useAuth`             | `useAuth`             | Reactive auth: readonly `token`/`user`/`status` refs plus `setToken`.             |
 | `usePresence`         | `usePresence`         | Collaborative-awareness — heartbeat + live present-members `ShallowRef`.          |
+| `useLiveTopic`        | `useLiveTopic`        | Follow one `defineLiveStream` topic as `lastEvent` / `error` refs.                |
 | `useFlag`             | `useFlag`             | Live OpenFeature flag as a readonly `Ref` — holds `default` until resolved.       |
 | `useFlags`            | `useFlags`            | Batch variant — a readonly `Ref` of one value per key in the defaults map.        |
 | `useRateLimit`        | `useRateLimit`        | Client-side rate-limit mirror — `ok`, `disabled`, `retryAfter` as ComputedRefs.   |
@@ -92,6 +93,8 @@ const { mutate, pending } = useMutation(api.messages.send);
 | `hydratePreloaded`    | `usePreloadedQuery`   | Seed a query synchronously from an SSR `Preloaded` token, then go live.           |
 | `useAgentToolEvents`  | `useAgentToolEvents`  | One agent thread's tool lifecycle as a `ComputedRef` of discriminated events.     |
 | `useVoiceAgent`       | `useVoiceAgent`       | Full-duplex voice call — refs for status/transcript/level, `startCall`/`endCall`. |
+
+`useLiveTopic(options)` takes the `subscribeLiveTopic` options. Each connection field may be a plain value, a ref, or a getter, so a reactive `topic` resubscribes when it changes. `onEvent` and `onError` are plain functions and never trigger a resubscribe. The SSE connection is shared by `url`, and it opens nothing during SSR.
 
 `useVoiceAgent` opens nothing until `startCall()` — that call is what requests the microphone, so it must run from a user gesture. `endCall()` releases the socket, the mic tracks and the Web Audio graph, and `onScopeDispose` runs it for you on unmount.
 
