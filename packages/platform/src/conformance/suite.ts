@@ -1,3 +1,4 @@
+import type { CapabilityLevel, SecretValueHost } from "../index";
 import {
     encryptingSecretValueHost,
     resolveShard,
@@ -42,6 +43,21 @@ type VitestApi = {
 /** The message every host raises once `disposeTerminally` has run. */
 const PLATFORM_CLOSED = /platform closed/u;
 
+/** A host rated supported for `secretValues`, narrowed to the surfaces its legs use. */
+type SecretValueConformanceHost = ConformanceHost & {
+    advanceClock: NonNullable<ConformanceHost["advanceClock"]>;
+    secretValues: SecretValueHost;
+    secretValueStore: NonNullable<ConformanceHost["secretValueStore"]>;
+};
+
+/**
+ * The matrix rating for `secretValues`, or `undefined` when the matrix leaves
+ * the key undeclared (codegen fails closed on that too). A host with no matrix
+ * is the reference harness, held to `native`.
+ */
+const secretValuesRating = (host: ConformanceHost): CapabilityLevel | undefined =>
+    host.capabilities === undefined ? "native" : host.capabilities.features.secretValues?.level;
+
 /** Yield the turn for `ms`, hoisted so legs nested inside a host closure stay flat. */
 const sleep = (ms: number): Promise<void> =>
     new Promise((resolve) => {
@@ -76,6 +92,37 @@ const defineHostContractSuite = (name: string, factory: ConformanceHostFactory, 
                 host.cleanup?.();
             }
         };
+
+        /**
+         * Run a secret-value leg against the host, held to the matrix rating.
+         *
+         * Rated `unsupported`, the host has no store to exercise, so the leg
+         * asserts that absence and passes; it does not skip. Rated `native` or
+         * `emulated`, the host must offer the store, its clock and its raw
+         * records. One that does not fails here, so a dropped surface turns the
+         * suite red instead of skipping every leg that needs it. An undeclared
+         * rating fails too.
+         */
+        const withSecretValues = (run: (host: SecretValueConformanceHost) => Promise<void>): Promise<void> =>
+            withHost(async (host) => {
+                const rating = secretValuesRating(host);
+
+                if (rating === "unsupported") {
+                    expect(host.secretValues, `${name} is rated unsupported for secretValues`).toBeUndefined();
+
+                    return;
+                }
+
+                const { advanceClock, secretValues, secretValueStore } = host;
+
+                if (rating === undefined || advanceClock === undefined || secretValues === undefined || secretValueStore === undefined) {
+                    throw new Error(
+                        `${name} is rated ${String(rating)} for secretValues but does not offer SecretValueHost, advanceClock and secretValueStore`,
+                    );
+                }
+
+                await run({ ...host, advanceClock, secretValueStore, secretValues });
+            });
 
         describe("ShardHost", () => {
             it("serializes mutations so no two closures interleave", async () => {
@@ -964,19 +1011,28 @@ const defineHostContractSuite = (name: string, factory: ConformanceHostFactory, 
             return JSON.parse(record.value) as { ciphertext: string; iv: string; keyId: string };
         };
 
-        // The secret-value contract. Its legs are skipped, not failed, when a host
-        // does not offer it: a host with no agents has no secret store to test.
+        // The secret-value contract. Which legs run is decided by the host's
+        // `capabilities` rating (see `withSecretValues`), never by a skip: a host
+        // with no agents is rated unsupported and must offer none of the surfaces.
         describe("SecretValueHost", () => {
             const SCOPE = "run-1";
 
-            it("round-trips a value to its first claimant", async (context) => {
+            it("matches the capability matrix's rating for secretValues", async () => {
+                expect.assertions(4);
+
                 await withHost(async (host) => {
-                    if (host.secretValues === undefined) {
-                        context.skip(`${name} does not implement SecretValueHost`);
+                    const rating = secretValuesRating(host);
+                    const offered = rating !== undefined && rating !== "unsupported";
 
-                        return;
-                    }
+                    expect(rating === undefined, `${name} leaves secretValues undeclared in its capability matrix`).toBe(false);
+                    expect(host.secretValues !== undefined, "secretValues is offered").toBe(offered);
+                    expect(host.advanceClock !== undefined, "advanceClock is offered").toBe(offered);
+                    expect(host.secretValueStore !== undefined, "secretValueStore is offered").toBe(offered);
+                });
+            });
 
+            it("round-trips a value to its first claimant", async () => {
+                await withSecretValues(async (host) => {
                     expect.assertions(1);
 
                     const ref = await host.secretValues.put("hunter2", { scope: SCOPE, ttlMs: 60_000 });
@@ -985,14 +1041,8 @@ const defineHostContractSuite = (name: string, factory: ConformanceHostFactory, 
                 });
             });
 
-            it("refuses a second claimant and lets the first re-take (a retried step)", async (context) => {
-                await withHost(async (host) => {
-                    if (host.secretValues === undefined) {
-                        context.skip(`${name} does not implement SecretValueHost`);
-
-                        return;
-                    }
-
+            it("refuses a second claimant and lets the first re-take (a retried step)", async () => {
+                await withSecretValues(async (host) => {
                     expect.assertions(3);
 
                     const ref = await host.secretValues.put("v", { scope: SCOPE, ttlMs: 60_000 });
@@ -1003,14 +1053,8 @@ const defineHostContractSuite = (name: string, factory: ConformanceHostFactory, 
                 });
             });
 
-            it("reads undefined for a wrong scope without consuming the value", async (context) => {
-                await withHost(async (host) => {
-                    if (host.secretValues === undefined) {
-                        context.skip(`${name} does not implement SecretValueHost`);
-
-                        return;
-                    }
-
+            it("reads undefined for a wrong scope without consuming the value", async () => {
+                await withSecretValues(async (host) => {
                     expect.assertions(2);
 
                     const ref = await host.secretValues.put("v", { scope: SCOPE, ttlMs: 60_000 });
@@ -1020,14 +1064,8 @@ const defineHostContractSuite = (name: string, factory: ConformanceHostFactory, 
                 });
             });
 
-            it("reads undefined after discard, and discard is idempotent", async (context) => {
-                await withHost(async (host) => {
-                    if (host.secretValues === undefined) {
-                        context.skip(`${name} does not implement SecretValueHost`);
-
-                        return;
-                    }
-
+            it("reads undefined after discard, and discard is idempotent", async () => {
+                await withSecretValues(async (host) => {
                     expect.assertions(3);
 
                     const ref = await host.secretValues.put("v", { scope: SCOPE, ttlMs: 60_000 });
@@ -1038,20 +1076,8 @@ const defineHostContractSuite = (name: string, factory: ConformanceHostFactory, 
                 });
             });
 
-            it("refuses a value past its TTL and clamps an oversized TTL", async (context) => {
-                await withHost(async (host) => {
-                    if (host.secretValues === undefined) {
-                        context.skip(`${name} does not implement SecretValueHost`);
-
-                        return;
-                    }
-
-                    if (host.advanceClock === undefined) {
-                        context.skip(`${name} does not expose an injectable clock, so expiry is not driven`);
-
-                        return;
-                    }
-
+            it("refuses a value past its TTL and clamps an oversized TTL", async () => {
+                await withSecretValues(async (host) => {
                     expect.assertions(4);
 
                     const advance = host.advanceClock;
@@ -1073,14 +1099,8 @@ const defineHostContractSuite = (name: string, factory: ConformanceHostFactory, 
                 });
             });
 
-            it("rejects a value over the byte limit, counting UTF-8 bytes", async (context) => {
-                await withHost(async (host) => {
-                    if (host.secretValues === undefined) {
-                        context.skip(`${name} does not implement SecretValueHost`);
-
-                        return;
-                    }
-
+            it("rejects a value over the byte limit, counting UTF-8 bytes", async () => {
+                await withSecretValues(async (host) => {
                     expect.assertions(3);
 
                     await expect(host.secretValues.put("x".repeat(SECRET_VALUE_MAX_BYTES), { scope: SCOPE, ttlMs: 60_000 })).resolves.toBeTypeOf("string");
@@ -1094,14 +1114,8 @@ const defineHostContractSuite = (name: string, factory: ConformanceHostFactory, 
                 });
             });
 
-            it("exposes no enumerating or reading member beyond put, take and discard", async (context) => {
-                await withHost(async (host) => {
-                    if (host.secretValues === undefined) {
-                        context.skip(`${name} does not implement SecretValueHost`);
-
-                        return;
-                    }
-
+            it("exposes no enumerating or reading member beyond put, take and discard", async () => {
+                await withSecretValues(async (host) => {
                     expect.assertions(1);
 
                     expect(Object.keys(host.secretValues).toSorted((x, y) => x.localeCompare(y))).toStrictEqual(["discard", "put", "take"]);
@@ -1109,9 +1123,11 @@ const defineHostContractSuite = (name: string, factory: ConformanceHostFactory, 
             });
 
             it("keeps secret values out of ShardKvStore's listing and reads", async (context) => {
-                await withHost(async (host) => {
-                    if (host.secretValues === undefined || host.kv === undefined) {
-                        context.skip(`${name} does not implement both SecretValueHost and ShardKvStore`);
+                await withSecretValues(async (host) => {
+                    // The ShardKvStore gap, reported by its own block; a host
+                    // without a KV store has no listing to keep secrets out of.
+                    if (host.kv === undefined) {
+                        context.skip(`${name} does not implement ShardKvStore`);
 
                         return;
                     }
@@ -1138,15 +1154,9 @@ const defineHostContractSuite = (name: string, factory: ConformanceHostFactory, 
             const PLAINTEXT = "plaintext-sentinel-4c1d";
             const TTL = { scope: SCOPE, ttlMs: 60_000 };
 
-            it("never holds the plaintext in the raw store", async (context) => {
-                await withHost(async (host) => {
+            it("never holds the plaintext in the raw store", async () => {
+                await withSecretValues(async (host) => {
                     const { secretValues, secretValueStore } = host;
-
-                    if (secretValues === undefined || secretValueStore === undefined) {
-                        context.skip(`${name} does not expose its raw secret store`);
-
-                        return;
-                    }
 
                     expect.assertions(2);
 
@@ -1158,15 +1168,9 @@ const defineHostContractSuite = (name: string, factory: ConformanceHostFactory, 
                 });
             });
 
-            it("reads a tampered, moved or re-scoped record as undefined", async (context) => {
-                await withHost(async (host) => {
+            it("reads a tampered, moved or re-scoped record as undefined", async () => {
+                await withSecretValues(async (host) => {
                     const { secretValues, secretValueStore } = host;
-
-                    if (secretValues === undefined || secretValueStore === undefined) {
-                        context.skip(`${name} does not expose its raw secret store`);
-
-                        return;
-                    }
 
                     expect.assertions(3);
 
@@ -1194,15 +1198,9 @@ const defineHostContractSuite = (name: string, factory: ConformanceHostFactory, 
                 });
             });
 
-            it("binds the claimant only on a take that opens the record", async (context) => {
-                await withHost(async (host) => {
+            it("binds the claimant only on a take that opens the record", async () => {
+                await withSecretValues(async (host) => {
                     const { secretValues, secretValueStore } = host;
-
-                    if (secretValues === undefined || secretValueStore === undefined) {
-                        context.skip(`${name} does not expose its raw secret store`);
-
-                        return;
-                    }
 
                     expect.assertions(3);
 
@@ -1215,15 +1213,9 @@ const defineHostContractSuite = (name: string, factory: ConformanceHostFactory, 
                 });
             });
 
-            it("leaves a tampered record unbound until a take opens it", async (context) => {
-                await withHost(async (host) => {
+            it("leaves a tampered record unbound until a take opens it", async () => {
+                await withSecretValues(async (host) => {
                     const { secretValues, secretValueStore } = host;
-
-                    if (secretValues === undefined || secretValueStore === undefined) {
-                        context.skip(`${name} does not expose its raw secret store`);
-
-                        return;
-                    }
 
                     expect.assertions(3);
 
@@ -1241,15 +1233,9 @@ const defineHostContractSuite = (name: string, factory: ConformanceHostFactory, 
                 });
             });
 
-            it("gives every put of the same value a fresh nonce", async (context) => {
-                await withHost(async (host) => {
+            it("gives every put of the same value a fresh nonce", async () => {
+                await withSecretValues(async (host) => {
                     const { secretValues, secretValueStore } = host;
-
-                    if (secretValues === undefined || secretValueStore === undefined) {
-                        context.skip(`${name} does not expose its raw secret store`);
-
-                        return;
-                    }
 
                     expect.assertions(2);
 
@@ -1264,15 +1250,9 @@ const defineHostContractSuite = (name: string, factory: ConformanceHostFactory, 
                 });
             });
 
-            it("opens a value sealed under the previous key until that key is dropped", async (context) => {
-                await withHost(async (host) => {
+            it("opens a value sealed under the previous key until that key is dropped", async () => {
+                await withSecretValues(async (host) => {
                     const { secretValueStore } = host;
-
-                    if (secretValueStore === undefined) {
-                        context.skip(`${name} does not expose its raw secret store`);
-
-                        return;
-                    }
 
                     expect.assertions(4);
 
@@ -1299,15 +1279,9 @@ const defineHostContractSuite = (name: string, factory: ConformanceHostFactory, 
                 });
             });
 
-            it("refuses put and take with SecretValueKeyError when the key is missing or malformed, and takes nothing", async (context) => {
-                await withHost(async (host) => {
+            it("refuses put and take with SecretValueKeyError when the key is missing or malformed, and takes nothing", async () => {
+                await withSecretValues(async (host) => {
                     const { secretValues, secretValueStore } = host;
-
-                    if (secretValues === undefined || secretValueStore === undefined) {
-                        context.skip(`${name} does not expose its raw secret store`);
-
-                        return;
-                    }
 
                     const cases: { key: string | undefined; previousKey?: string }[] = [
                         { key: undefined },

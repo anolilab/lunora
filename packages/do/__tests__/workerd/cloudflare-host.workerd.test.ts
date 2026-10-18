@@ -33,6 +33,7 @@
  * the input gate, so a same-event read shares the open `storage.transaction`
  * and a second event is never delivered to be read from.
  */
+import { CLOUDFLARE_CAPABILITIES } from "@lunora/platform";
 import type { ConformanceHost } from "@lunora/platform/conformance";
 import { defineHostContractSuite } from "@lunora/platform/conformance/suite";
 import { createSecretValueHost, createSecretValueStore, createShardDirectory, createShardPlatform } from "@lunora/platform-cloudflare";
@@ -98,6 +99,7 @@ const createCloudflareHost = (): ConformanceHost => {
         // the `isolatesByDispatch` note on `ConformanceHost` for what that
         // costs the isolation leg and what still covers it.
         isolatesByDispatch: true,
+        capabilities: CLOUDFLARE_CAPABILITIES,
         advanceClock: (ms) => {
             secretClock += ms;
         },
