@@ -71,9 +71,8 @@ const localAiBinding = (options: CloudflarePluginOptions, localOptions: LocalAiO
             for (const entry of withheld) {
                 // In place by design: the plugin merges the returned object with `defu`,
                 // which keeps any key the base config still has.
-                // eslint-disable-next-line no-param-reassign
-                delete config[entry.kind];
-                delete result?.[entry.kind];
+                Reflect.deleteProperty(config, entry.kind);
+                Reflect.deleteProperty(result ?? {}, entry.kind);
                 // eslint-disable-next-line no-console -- the dev server's logger isn't available while the Cloudflare plugin resolves its config.
                 console.warn(lunoraLine(describeWithheld(entry)));
             }
