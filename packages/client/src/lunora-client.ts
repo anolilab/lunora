@@ -9573,7 +9573,9 @@ class LunoraClient {
         const middle = Math.ceil(items.length / 2);
         const first = await this.replayBatched(items.slice(0, middle), shardKey, authToken);
 
-        if (first.stop) {
+        // A retried write in the first half holds the second back too, as between chunks:
+        // sending on would let writes issued behind it commit first.
+        if (first.stop || first.requeue.length > 0) {
             return { requeue: [...first.requeue, ...items.slice(middle)], stop: true };
         }
 
