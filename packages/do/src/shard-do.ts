@@ -3276,6 +3276,11 @@ abstract class ShardDO {
             return jsonResponse({ error: { code: "NOT_IMPLEMENTED", message: DELIVERY_MODE_UNSUPPORTED } }, 501);
         }
         if (request.headers.get("Upgrade") === "websocket") {
+            // A `defineWebSocket` route runs its mutations per frame, which delivery authorization does not cover: its
+            // broadcasts would be dropped while the handler still ran. Refused, as the other unsupported modes are.
+            if (this.socketRoute(url.pathname) !== undefined) {
+                return jsonResponse({ error: { code: "NOT_IMPLEMENTED", message: DELIVERY_MODE_UNSUPPORTED } }, 501);
+            }
             return this.runner.handleFetch(request);
         }
         if (url.pathname === "/rpc-batch" && request.method === "POST") {
@@ -16398,6 +16403,13 @@ abstract class ShardDO {
         kind: "close" | "message" | "open",
         message?: unknown,
     ): Promise<void> {
+        // With delivery authorization on, a route runs no mutation: its upgrade is refused, and a route socket that
+        // predates the mode is dropped here. That includes its close, which would otherwise run the route's `onClose`
+        // mutation; a close is only kept for the ordinary case below.
+        if (this.deliveryAuthorization) {
+            return Promise.resolve();
+        }
+
         // A slow route handler must not let one socket queue frames without bound: past the cap a
         // frame is refused. An open or a close is always queued, so the handler sees the lifecycle.
         const queued = this.queuedSocketEvents.get(ws) ?? 0;

@@ -421,6 +421,34 @@ describe("shardDO socket routes", () => {
         expect(a.frames).toEqual([]);
     });
 
+    it("refuses a route upgrade under delivery authorization and runs no route mutation", async () => {
+        expect.assertions(2);
+
+        const shard = new SocketShard({ acceptWebSocket() {}, getWebSockets: () => [], storage: { sql: {} } }, CHAT_ROUTE, {
+            deliveryAuthorization: () => Promise.resolve(undefined),
+        });
+        const response = await shard.fetch(new Request("https://shard.internal/chat", { headers: { Upgrade: "websocket", "x-lunora-userid": "user-1" } }));
+
+        expect(response.status).toBe(501);
+        expect(socketCalls(shard)).toHaveLength(0);
+    });
+
+    it("drops a route frame under delivery authorization instead of running its mutation", async () => {
+        expect.assertions(2);
+
+        // A route socket that predates the mode: its frame must not run the route's handler or broadcast.
+        const a = new FakeSocket({ connectionId: "a", socketPath: "/chat", subs: {}, userId: "user-a", whispers: [CHAT_TOPIC] });
+        const sockets = [a];
+        const shard = new SocketShard({ acceptWebSocket() {}, getWebSockets: () => sockets, storage: { sql: {} } } as unknown as ShardDOState, CHAT_ROUTE, {
+            deliveryAuthorization: () => Promise.resolve(undefined),
+        });
+
+        await send(shard, a, JSON.stringify(encodeWire({ text: "x" })));
+
+        expect(socketCalls(shard)).toHaveLength(0);
+        expect(a.frames).toEqual([]);
+    });
+
     it("ignores a whisper frame addressed to a route's reserved topic", async () => {
         expect.assertions(2);
 
