@@ -1185,6 +1185,14 @@ const result = await harness.run(
   released. The recorded stream does not watch the signal, so release the gate after
   aborting.
 
+**Provider errors in a stream retry like any model failure.** An `error` part in the
+stream, whether it follows text or arrives first, fails the turn the same way a
+rejected stream does: the `llm:turn:N` step throws, the host retries it under its
+normal policy, and nothing from the failed attempt (partial text, tool calls,
+usage) is persisted. A stream that closes without its `finish` part is failed the
+same way. A retried turn re-streams its deltas from the start, so a live consumer
+must reset accumulated text per turn (see `AgentTokenSink`).
+
 ## See also
 
 - [@lunora/ai](/docs/packages/ai): the model surface (`ctx.ai`) + `defineRag`
