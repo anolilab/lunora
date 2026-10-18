@@ -1,3 +1,9 @@
+## @lunora/hyperdrive [1.0.0-alpha.188](https://github.com/anolilab/lunora/compare/@lunora/hyperdrive@1.0.0-alpha.187...@lunora/hyperdrive@1.0.0-alpha.188) (2026-10-18)
+
+### Features
+
+* **cli:** provision KV and Hyperdrive bindings, and serve Hyperdrive from PGlite in dev ([#1242](https://github.com/anolilab/lunora/issues/1242)) ([1b38891](https://github.com/anolilab/lunora/commit/1b388917c15564a88693f41d204d458bfaf0d1b0))
+
 ## @lunora/hyperdrive [1.0.0-alpha.187](https://github.com/anolilab/lunora/compare/@lunora/hyperdrive@1.0.0-alpha.186...@lunora/hyperdrive@1.0.0-alpha.187) (2026-10-18)
 
 
