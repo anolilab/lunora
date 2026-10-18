@@ -34,6 +34,7 @@ from .errors import PAYLOAD_TOO_LARGE, LunoraError, decode_failed, envelope_erro
 from .offline import (
     CLIENT_CLOSED,
     OFFLINE_IDENTITY_CHANGED,
+    OFFLINE_NOT_QUEUED,
     OFFLINE_WRITE_UNENCODABLE,
     OfflineError,
     QueuedMutation,
@@ -219,6 +220,13 @@ class SubmitOptions:
     #: Re-evaluated just before a QUEUED write replays; ``False`` drops it rather
     #: than replaying a write that can only fail.
     precondition: Optional[Callable[[], bool]] = None
+    #: Never queued, persisted or replayed. Where a normal write would be queued,
+    #: this raises ``OfflineError`` with ``OFFLINE_NOT_QUEUED`` before any
+    #: optimistic layer is installed, so the arguments never reach the queue, the
+    #: persistence adapter or disk. It does not wait for a queue flush or queue
+    #: behind pending writes, so it may overtake them. For a credential or a
+    #: one-time token.
+    online_only: bool = False
     #: Reports the eventual verdict on a queued write.
     on_settled: Optional[Callable[[MutationSettled], None]] = None
 
@@ -318,8 +326,13 @@ async def submit_write(client: LunoraClient, options: SubmitOptions) -> Mutation
         if client._closed:
             raise OfflineError(CLIENT_CLOSED, "client is closed")
 
-        confirms, rollbacks = _install_layers(client, options, overrides, deferred)
         queue_it = client._send is None and (client._was_ever_connected or client.offline_queue.queue_before_first_connect)
+
+        # Refused before anything is installed, so no overlay outlives the call.
+        if queue_it and options.online_only:
+            raise OfflineError(OFFLINE_NOT_QUEUED, f"'{options.function_path}' is online-only and the connection is not live, so it was not queued")
+
+        confirms, rollbacks = _install_layers(client, options, overrides, deferred)
 
         if queue_it:
             entry = _build_entry(client, options, write_id, confirms, rollbacks)
