@@ -110,6 +110,7 @@ export {
     redactArgs,
     REQUEST_LOG_TABLE,
     SENSITIVE_ARG_MASK,
+    sensitiveNames,
     sensitiveValues,
 } from "./request-log";
 export type { SecurityAuditResult, SecurityFinding, SecurityFindingKind, SecurityFindingLevel } from "./security-audit";

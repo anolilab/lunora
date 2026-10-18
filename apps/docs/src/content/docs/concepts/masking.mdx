@@ -134,6 +134,9 @@ CVV or a three-digit PIN) is replaced wherever it appears as a whole word or num
 so `invalid code 123` loses the `123` but `1234` is left alone. A value of one or
 two characters is replaced only when it is the whole string, because a single digit
 replaced inside text would erase every standalone digit from the line.
+A marked value is also masked when it is used as a field or attribute name. A property
+name of a marked object is masked as a whole name, and two names that mask to the same
+placeholder are kept apart with a `#2`, `#3` suffix rather than one overwriting the other.
 A span, fetch or database call still in flight when the call returns is scrubbed when it
 is recorded, and the value is forgotten then. Nothing else outside the call keeps it.
 

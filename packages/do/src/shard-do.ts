@@ -68,6 +68,7 @@ import {
     redactArgs,
     REQUEST_LOG_TABLE,
     resolveTraceAnchor,
+    sensitiveNames,
     sensitiveValues,
     SpanBuffer,
     upsertIssueState,
@@ -480,8 +481,8 @@ const NO_SENSITIVE_ARGS: ReadonlySet<string> = new Set<string>();
  * name it without depending on observability (see {@link ShardDO.openSensitiveScope}).
  */
 interface SensitiveScope {
-    /** Admit more values into the invocation (a composed call's marked arguments). */
-    add: (values: ReadonlyArray<string>) => void;
+    /** Admit more values and marked property names into the invocation (a composed call's marked arguments). */
+    add: (values: ReadonlyArray<string>, names?: ReadonlyArray<string>) => void;
     /** Mark the dispatch settled; the values outlive it only while a record opened under the scope is still held. */
     clear: () => void;
     /** Scrub a field bag; `undefined` passes through. */
@@ -5820,7 +5821,9 @@ abstract class ShardDO {
      * the scope and clears it once the dispatch's records are written.
      */
     protected openSensitiveScope(functionPath: string, args: Record<string, unknown>): SensitiveScope {
-        return createSensitiveScope(sensitiveValues(args, this.sensitiveArgNames(functionPath)));
+        const sensitive = this.sensitiveArgNames(functionPath);
+
+        return createSensitiveScope(sensitiveValues(args, sensitive), sensitiveNames(args, sensitive));
     }
 
     /**
@@ -5829,7 +5832,9 @@ abstract class ShardDO {
      * are scrubbed from its records too, not only the caller's.
      */
     protected admitSensitiveArgs(scope: SensitiveScope | undefined, functionPath: string, args: Record<string, unknown>): void {
-        scope?.add(sensitiveValues(args, this.sensitiveArgNames(functionPath)));
+        const sensitive = this.sensitiveArgNames(functionPath);
+
+        scope?.add(sensitiveValues(args, sensitive), sensitiveNames(args, sensitive));
     }
 
     /**

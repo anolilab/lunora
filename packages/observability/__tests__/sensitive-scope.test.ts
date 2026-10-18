@@ -4,7 +4,7 @@ import type { SpanEvent } from "../../../shared/span-event";
 import type { TracerDeps } from "../src/context-telemetry";
 import { createSpanCollector, createTracedFetch, createTracer, dispatchRootSpan } from "../src/context-telemetry";
 import { createDatabaseTally, instrumentDatabase } from "../src/database-telemetry";
-import { createSensitiveScope, NO_SENSITIVE_SCOPE, SENSITIVE_ARG_MASK, sensitiveValues } from "../src/request-log";
+import { createSensitiveScope, NO_SENSITIVE_SCOPE, SENSITIVE_ARG_MASK, sensitiveNames, sensitiveValues } from "../src/request-log";
 
 /**
  * A `v.sensitive` value is scrubbed by what it IS, not what the attribute is called:
@@ -208,6 +208,54 @@ describe("createSensitiveScope", () => {
 
         expect(second.text("second-secret-value")).toBe(SENSITIVE_ARG_MASK);
         expect(NO_SENSITIVE_SCOPE.text(SECRET)).toBe(SECRET);
+    });
+});
+
+describe("field names under a sensitive scope", () => {
+    it("masks a marked string used as a log field name, and keeps an unmarked sibling key", () => {
+        expect.assertions(1);
+
+        expect(createSensitiveScope([SECRET]).fields({ [SECRET]: "a", label: "primary" })).toEqual({
+            [SENSITIVE_ARG_MASK]: "a",
+            label: "primary",
+        });
+    });
+
+    it("masks a marked string used as a span attribute name, and keeps an unmarked sibling key", () => {
+        expect.assertions(1);
+
+        const { collected, handle } = createSpanCollector(ids, false, createSensitiveScope([SECRET]));
+
+        handle.setAttributes({ [SECRET]: "a", label: "primary" });
+
+        expect(collected.attributes).toEqual({ [SENSITIVE_ARG_MASK]: "a", label: "primary" });
+    });
+
+    it("gives two keys that both mask to the placeholder distinct names, and loses neither", () => {
+        expect.assertions(2);
+
+        const scrubbed = createSensitiveScope(["first-secret-value", "second-secret-value"]).fields({
+            "first-secret-value": 1,
+            "second-secret-value": 2,
+        });
+
+        expect(Object.keys(scrubbed)).toEqual([SENSITIVE_ARG_MASK, `${SENSITIVE_ARG_MASK}#2`]);
+        expect(Object.values(scrubbed)).toEqual([1, 2]);
+    });
+
+    it("masks a property name of a marked object as a whole field name, and leaves free text alone", () => {
+        expect.assertions(3);
+
+        const names = sensitiveNames({ creds: { "ops-mailbox": 1, nested: { value: 2 } } }, new Set(["creds"]));
+        const scope = createSensitiveScope([], names);
+
+        expect(scope.fields({ "ops-mailbox": 1, "x-ops-mailbox-y": 2, label: "primary" })).toEqual({
+            [SENSITIVE_ARG_MASK]: 1,
+            "x-ops-mailbox-y": 2,
+            label: "primary",
+        });
+        expect(scope.text("ops-mailbox rejected")).toBe("ops-mailbox rejected");
+        expect(names).not.toContain("creds");
     });
 });
 
