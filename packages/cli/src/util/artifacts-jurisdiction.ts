@@ -55,21 +55,44 @@ interface ArtifactsJurisdictionOptions {
 const createCall = (accountId: string, namespace: string, jurisdiction: string): string =>
     `POST https://api.cloudflare.com/client/v4/accounts/${accountId}/artifacts/namespaces with body { "namespace": "${namespace}", "jurisdiction": "${jurisdiction}" }`;
 
+/** Cloudflare's status and the first of its own error messages, for a request it refused. */
+const failureReason = (outcome: { status: number; text: string }): string => {
+    let messages = "";
+
+    try {
+        const { errors } = JSON.parse(outcome.text) as { errors?: { message?: unknown }[] };
+
+        messages = (errors ?? [])
+            .flatMap((error) => (typeof error.message === "string" ? [error.message] : []))
+            .slice(0, 2)
+            .join("; ");
+    } catch {
+        // Not JSON (a gateway page): the status is all there is.
+    }
+
+    return messages === "" ? `HTTP ${String(outcome.status)}` : `HTTP ${String(outcome.status)}: ${messages}`;
+};
+
 /**
  * Create the namespace in the schema's jurisdiction. Done here because the first
  * repo `create()` would make it unrestricted, which cannot be changed afterwards.
  */
-const createNamespace = async (options: ArtifactsJurisdictionOptions, accountId: string, apiToken: string): Promise<boolean> => {
+const createNamespace = async (options: ArtifactsJurisdictionOptions, accountId: string, apiToken: string): Promise<{ reason?: string }> => {
     const { jurisdiction, namespace } = options;
-    const outcome = await cloudflareRestRequest({
-        accountId,
-        apiToken,
-        ...(options.fetch === undefined ? {} : { fetch: options.fetch }),
-        init: { body: JSON.stringify({ jurisdiction, namespace }), method: "POST", signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS) },
-        path: "/artifacts/namespaces",
-    }).catch((): undefined => undefined);
 
-    return outcome?.ok === true;
+    try {
+        const outcome = await cloudflareRestRequest({
+            accountId,
+            apiToken,
+            ...(options.fetch === undefined ? {} : { fetch: options.fetch }),
+            init: { body: JSON.stringify({ jurisdiction, namespace }), method: "POST", signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS) },
+            path: "/artifacts/namespaces",
+        });
+
+        return outcome.ok ? {} : { reason: failureReason(outcome) };
+    } catch (error) {
+        return { reason: error instanceof Error ? error.message : String(error) };
+    }
 };
 
 /** The jurisdiction the namespace reports now, or `undefined` when it can't be read. */
@@ -101,9 +124,15 @@ const mismatch = (accountId: string, subject: string, jurisdiction: string, actu
 const createMissing = async (options: ArtifactsJurisdictionOptions, accountId: string, token: string, subject: string): Promise<ArtifactsJurisdictionCheck> => {
     const { jurisdiction, namespace } = options;
 
+    let reason: string | undefined;
+
     if (options.create === true) {
         // A POST that errors or times out may still have created it (or another deploy may have), so a failed one is followed by a look.
-        if (await createNamespace(options, accountId, token)) {
+        const created = await createNamespace(options, accountId, token);
+
+        reason = created.reason;
+
+        if (reason === undefined) {
             return { message: `created ${subject} in the "${jurisdiction}" jurisdiction, as the schema pins.`, verdict: "ok" };
         }
 
@@ -122,9 +151,12 @@ const createMissing = async (options: ArtifactsJurisdictionOptions, accountId: s
         return { message: `${subject} does not exist yet; it will be created in the "${jurisdiction}" jurisdiction just before the deploy.`, verdict: "ok" };
     }
 
+    const reasonSuffix = reason === undefined ? "" : ` (${reason})`;
+    const notCreated = options.create === true ? ` and could not be created${reasonSuffix}` : "";
+
     return {
         fix: `Create it before the first repo: ${createCall(accountId, namespace, jurisdiction)}.`,
-        message: `${subject} does not exist${options.create === true ? " and could not be created" : ""}, and the first repo create() would make it unrestricted — the schema pins data to "${jurisdiction}".`,
+        message: `${subject} does not exist${notCreated}, and the first repo create() would make it unrestricted — the schema pins data to "${jurisdiction}".`,
         verdict: "missing",
     };
 };

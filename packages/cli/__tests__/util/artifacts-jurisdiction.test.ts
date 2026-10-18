@@ -116,6 +116,20 @@ describe(checkArtifactsJurisdiction, () => {
         expect(result.message).toContain('is in the "unrestricted" jurisdiction');
     });
 
+    it("says why the creation was refused when the namespace is still not there", async () => {
+        expect.assertions(2);
+
+        const api = vi.fn<typeof globalThis.fetch>(async (_url, init) =>
+            init?.method === "POST"
+                ? Response.json({ errors: [{ code: 10_000, message: "token lacks Artifacts: Edit" }], success: false }, { status: 403 })
+                : Response.json({ errors: [{ code: 404, message: "not found" }], success: false }, { status: 404 }),
+        );
+        const result = await check(api, "eu", credentials, true);
+
+        expect(result.verdict).toBe("missing");
+        expect(result.message).toContain("could not be created (HTTP 403: token lacks Artifacts: Edit)");
+    });
+
     it("still reports a missing namespace when the second look cannot find it either", async () => {
         expect.assertions(1);
 
