@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type { EventLogEntry } from "../src/event-log";
 import { EventLog } from "../src/event-log";
@@ -744,5 +744,50 @@ describe(EventsSync, () => {
         // The parked fetch plus the walk's terminating one — the second
         // `sync()` still started no cycle of its own.
         expect(fetchCalls).toBe(2);
+    });
+});
+
+describe("fetch timeout", () => {
+    afterEach(() => {
+        vi.useRealTimers();
+    });
+
+    it("ends a cycle whose fetch never answers, so later syncs are not stuck behind it", async () => {
+        expect.assertions(4);
+
+        vi.useFakeTimers();
+
+        const { mirror } = createMockMirror();
+        const onError = vi.fn<(error: unknown) => void>();
+        let calls = 0;
+        const sync = new EventsSync({
+            applyEvents: () => undefined,
+            fetchEventsSince: async () => {
+                calls += 1;
+
+                return new Promise<ReadonlyArray<EventLogEntry>>(() => {
+                    /* a transport that never answers */
+                });
+            },
+            fetchTimeoutMs: 100,
+            getTableDiffs: () => [],
+            mirror,
+            onError,
+        });
+        const first = sync.sync();
+
+        await vi.advanceTimersByTimeAsync(150);
+
+        await expect(first).resolves.toBe(0);
+        expect(onError).toHaveBeenCalledTimes(1);
+
+        const second = sync.sync();
+
+        await vi.advanceTimersByTimeAsync(150);
+        await second;
+
+        // The second cycle started its own fetch instead of awaiting the dead one.
+        expect(calls).toBe(2);
+        expect(onError).toHaveBeenCalledTimes(2);
     });
 });

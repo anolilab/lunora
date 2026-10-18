@@ -116,6 +116,17 @@ export interface EventsSyncOptions {
     fetchEventsSince: (sinceSeq: number) => Promise<ReadonlyArray<EventLogEntry>>;
 
     /**
+     * Longest a single `fetchEventsSince` call may take, in milliseconds. A
+     * transport that never answers would otherwise hold the poll cycle open
+     * forever, and every later `sync()` and timer tick awaits that cycle. On
+     * timeout the cycle ends through `onError`, the watermark stays where it
+     * was, and the next poll fetches again; an answer that arrives late is
+     * discarded. `0` disables the bound.
+     * @default 30000
+     */
+    fetchTimeoutMs?: number;
+
+    /**
      * Produce {@link TableDiff | TableDiffs} from the current derived state.
      *
      * Called after every batch of events has been applied. The consumer
@@ -277,6 +288,31 @@ export class EventsSync {
         return promise;
     }
 
+    /** `fetchEventsSince`, failing with a timeout error when the transport does not answer in `fetchTimeoutMs`. */
+    async #fetchWithinTimeout(sinceSeq: number): Promise<ReadonlyArray<EventLogEntry>> {
+        const timeoutMs = this.#options.fetchTimeoutMs ?? 30_000;
+        const pending = this.#options.fetchEventsSince(sinceSeq);
+
+        if (timeoutMs <= 0) {
+            return pending;
+        }
+
+        let timer: ReturnType<typeof setTimeout> | undefined;
+        const timeout = new Promise<never>((_resolve, reject) => {
+            timer = setTimeout(() => {
+                reject(new Error(`EventsSync: fetchEventsSince timed out after ${timeoutMs.toString()}ms`));
+            }, timeoutMs);
+        });
+
+        try {
+            return await Promise.race([pending, timeout]);
+        } finally {
+            clearTimeout(timer);
+            // The fetch may still settle later; its outcome is not ours to surface.
+            pending.catch(() => undefined);
+        }
+    }
+
     /**
      * One poll cycle: drive every batch available since the watermark through
      * the pipeline — `applyEvents` → `getTableDiffs` → mirror fan-out →
@@ -325,7 +361,7 @@ export class EventsSync {
         try {
             for (let batches = 0; batches < MAX_BATCHES_PER_CYCLE; batches += 1) {
                 // eslint-disable-next-line no-await-in-loop -- each batch is fetched from the watermark the previous one advanced, so the round-trips are inherently sequential
-                const events = await this.#options.fetchEventsSince(this.#watermark);
+                const events = await this.#fetchWithinTimeout(this.#watermark);
 
                 if (events.length === 0) {
                     return total;
