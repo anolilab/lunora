@@ -81,7 +81,7 @@ const createShardKvStore: (storage: KvStorageLike) => ShardKvStore;
 ### `createShardPlatform` (const)
 
 ```ts
-const createShardPlatform: (state: unknown, env: unknown) => ShardPlatform;
+const createShardPlatform: (state: unknown, env?: unknown) => ShardPlatform;
 ```
 
 ### `createSocketHost` (const)
