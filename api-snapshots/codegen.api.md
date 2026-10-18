@@ -277,6 +277,7 @@ interface EmitAppOptions {
     }>;
     hasAccess: boolean;
     hasAuth: boolean;
+    hasDeliveryAuthorization?: boolean;
     hasFramework: boolean;
     hasGlobal: boolean;
     hasHyperdriveGlobal: boolean;

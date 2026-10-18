@@ -27,6 +27,14 @@ interface EmitAppOptions {
     hasAccess: boolean;
     /** App depends on `@lunora/auth` → emit `.auth()` + the lazy build/migrate dance. */
     hasAuth: boolean;
+
+    /**
+     * `false` withholds the `.deliveryAuthorization(...)` builder method and its
+     * `createShardDO` config plumbing — the verdict of the platform gate for the
+     * target's matrix, not the app's usage. Absent means emitted, as before the
+     * gate existed.
+     */
+    hasDeliveryAuthorization?: boolean;
     /** App depends on a worker-composition framework adapter (`@lunora/astro`/`@lunora/svelte`/`@lunora/vue`), or hand-composes one in `src/worker.ts` → emit `.buildFrameworkWorker(host)`. */
     hasFramework: boolean;
     /** Schema declares **D1-backed** `.global()` tables → emit `.global()` (D1 ctx-db + studio introspector + cross-shard relations). */
