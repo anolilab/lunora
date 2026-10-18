@@ -1304,7 +1304,7 @@ const UNDELIVERED_BASELINE = "<undelivered>";
 const DELIVERY_MODE_UNSUPPORTED = "delivery mode unsupported with delivery authorization";
 
 /** Error envelope for a response the fence withheld; the operation may already have committed. */
-const DELIVERY_FENCED_ERROR = { code: "DELIVERY_FENCED", message: "Delivery fenced; operation may have committed" } as const;
+const DELIVERY_FENCED_ERROR = Object.freeze({ code: "DELIVERY_FENCED", message: "Delivery fenced; operation may have committed" });
 
 /**
  * Threshold at which a `__root__` DO triggers the size warning. 1 GiB —
