@@ -129,8 +129,11 @@ wide event, `ctx.fetch` spans, `ctx.metrics` attributes, `ctx.db` failure
 messages and the dispatch's root span. A composed call (`ctx.runQuery`,
 `ctx.runMutation`, `ctx.runAction`) runs inside the same call, so the callee's
 own marked arguments are scrubbed as well. A value of four or more characters is
-replaced wherever it appears in a recorded string; a shorter one is replaced only
-when it is the whole string, so a short value does not corrupt unrelated text.
+replaced wherever it appears in a recorded string. A value of three characters (a
+CVV or a three-digit PIN) is replaced wherever it appears as a whole word or number,
+so `invalid code 123` loses the `123` but `1234` is left alone. A value of one or
+two characters is replaced only when it is the whole string, because a single digit
+replaced inside text would erase every standalone digit from the line.
 Nothing outside the call keeps the value, and the scrub ends when the call does.
 
 The scrub does not yet cover a live subscription's re-runs: their records carry

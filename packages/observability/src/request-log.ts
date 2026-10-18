@@ -331,12 +331,24 @@ const maskSensitiveArgs = (args: Record<string, unknown>, sensitive: ReadonlySet
 const MAX_SENSITIVE_DEPTH = 8;
 
 /**
- * The shortest marked value replaced INSIDE free text. A one- to three-character
- * value (a digit, a flag, `ok`) occurs by chance in ordinary text, and replacing it
- * corrupts the line it sits in. Such a value is still masked when it is the whole
- * text of a message or field, so a short secret never reaches a sink unmasked.
+ * The shortest marked value replaced as a substring of free text. A substring this
+ * short occurs by chance inside ordinary words and numbers, so it is only ever
+ * replaced as a whole token ({@link SENSITIVE_TOKEN_MIN_LENGTH}).
  */
 const SENSITIVE_SUBSTRING_MIN_LENGTH = 4;
+
+/**
+ * The shortest marked value replaced as a whole token inside free text (a CVV or a
+ * three-digit PIN is the case this exists for). Below it a value is masked only when
+ * it is the whole text: a numeric leaf of a marked object collects its decimal form
+ * (`{ count: 3 }` yields `"3"`), and whole-token masking of one digit would erase
+ * every standalone digit from the invocation's log lines.
+ */
+const SENSITIVE_TOKEN_MIN_LENGTH = 3;
+
+/** Matches `secret` as a whole token: no letter or digit on either side. */
+const sensitiveTokenPattern = (secret: string): RegExp =>
+    new RegExp(String.raw`(?<![\p{L}\p{N}])${secret.replaceAll(/[.*+?^${}()|[\]\\]/gu, String.raw`\$&`)}(?![\p{L}\p{N}])`, "gu");
 
 /**
  * The text forms of the named arguments of one dispatch: the string leaves of each
@@ -394,9 +406,10 @@ const sensitiveValues = (args: Record<string, unknown>, sensitive: ReadonlySet<s
 
 /**
  * Replace each sensitive value found in free text with {@link SENSITIVE_ARG_MASK}.
- * A whole-text match is masked at any length; inside longer text only values of
- * {@link SENSITIVE_SUBSTRING_MIN_LENGTH} characters or more are replaced. Longest
- * first, so a value that contains another is masked whole.
+ * A whole-text match is masked at any length. Inside longer text a value of
+ * {@link SENSITIVE_SUBSTRING_MIN_LENGTH} characters or more is replaced wherever it
+ * occurs; one of {@link SENSITIVE_TOKEN_MIN_LENGTH} or more only as a whole token;
+ * shorter ones not at all. Longest first, so a value that contains another is masked whole.
  */
 const scrubSensitiveText = (text: string, secrets: ReadonlyArray<string>): string => {
     if (secrets.includes(text)) {
@@ -408,6 +421,8 @@ const scrubSensitiveText = (text: string, secrets: ReadonlyArray<string>): strin
     for (const secret of secrets.toSorted((a, b) => b.length - a.length)) {
         if (secret.length >= SENSITIVE_SUBSTRING_MIN_LENGTH) {
             scrubbed = scrubbed.replaceAll(secret, SENSITIVE_ARG_MASK);
+        } else if (secret.length >= SENSITIVE_TOKEN_MIN_LENGTH && scrubbed.includes(secret)) {
+            scrubbed = scrubbed.replaceAll(sensitiveTokenPattern(secret), SENSITIVE_ARG_MASK);
         }
     }
 

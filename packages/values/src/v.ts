@@ -1255,7 +1255,9 @@ const optional = <V extends Validator>(inner: V): ColumnValidator<Infer<V> | und
  * (see {@link ParseContext.redact}); the JSON Schema node is `writeOnly`, with
  * `format: "password"` on a plain string; and the request log, the MCP proposal
  * and the offline queue treat the argument as a secret (see
- * {@link containsSensitive}).
+ * {@link containsSensitive}). In a recorded string the value is masked wherever it
+ * appears if it is four or more characters, as a whole word or number if it is
+ * three, and only as the whole string if it is shorter.
  *
  * A marker is a meta flag on the same kind rather than a kind of its own, so
  * every `switch (kind)` and `kind === "optional"` test keeps its meaning and
