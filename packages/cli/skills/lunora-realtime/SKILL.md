@@ -28,8 +28,9 @@ shards. Reach past it only for the rest.
 | A dedicated socket at your own path                | `defineWebSocket` + `client.connectWebSocket(path)`    |
 | Who is online                                      | `usePresence`                                          |
 
-Live topics are the untyped one: the topic is a string and the payload is
-`unknown`. Full guide: the "Choosing a data channel" docs page.
+Live topics are typed from their declaration: each topic's key and payload are
+validators on the stream, and codegen emits `_generated/live.ts` with a typed
+reference per topic. Full guide: the "Choosing a data channel" docs page.
 
 ## When Not to Use
 
@@ -194,9 +195,14 @@ TanStack-style alternative.
 ## Live Topics
 
 For an event with no query behind it ("a comment was posted"), the server
-publishes to a named topic and the browser follows topics over one shared SSE
-connection (shared when the connection options match). Declare the stream once, mount its two handlers on the HTTP router,
-and follow topics with the adapter's hook (all return `{ lastEvent, error }`):
+publishes to a declared topic and the browser follows topics over one shared SSE
+connection (shared when the connection options match). Declare the stream and its
+topics once (`defineLiveStream({ id, topics: { post: { key: { postId: v.id("posts") },
+payload: v.object({...}) } }, onSubscribe })`), mount its two handlers on the HTTP
+router, and follow topics with the adapter's hook (all return `{ lastEvent, error }`).
+`onSubscribe` receives the parsed `{ ctx, topic, key, raw }`; do not split a string.
+A subscribe for an undeclared name, wrong arity or a non-canonical spelling is denied
+before `onSubscribe` runs. Codegen writes `_generated/live.ts`:
 
 | Package                | Primitive                 |
 | ---------------------- | ------------------------- |
@@ -207,14 +213,24 @@ and follow topics with the adapter's hook (all return `{ lastEvent, error }`):
 | `@lunora/react-native` | re-exports `useLiveTopic` |
 
 ```tsx
-const { lastEvent, error } = useLiveTopic({ url: "/live/posts/connect", topic: `post:${postId}`, onEvent: (payload) => refresh(payload) });
+import { live } from "../lunora/_generated/live";
+
+// the route comes from the client in <LunoraProvider>; lastEvent / onEvent are typed by the payload
+const { lastEvent, error } = useLiveTopic(live.posts.post({ postId }), { onEvent: (payload) => refresh(payload) });
 ```
+
+Svelte's `liveTopic` and Angular's `liveTopic` read the client when called: call
+them during component init (Angular: or pass `client` and `destroyRef`). Pass
+`shardKey` in the options to follow a `.shardBy` shard.
 
 - Several hooks with the same URL, credentials, headers, `retryDelay`, `maxDelayMs` and
   `sessionKey` share a single connection; the last to unmount closes it. On a
   cookie-authenticated stream pass `sessionKey` (the user id), or the connection
   outlives a sign-out and keeps the previous user's topics.
-- Publish from server code with `ctx.live.publish(topic, payload, { stream })`.
+- Publish from server code with `ctx.live.publish(live.posts.post({ postId }), payload)`:
+  the ref names the stream, the payload is typed, and the shard refuses a payload the
+  topic's validator rejects (`BAD_REQUEST`). Topic names and key fields are plain
+  identifiers, key validators are string-valued, and a topic named `room` is refused.
   `ctx.live` exists only on actions, HTTP actions, queue consumers and scheduled
   actions, NOT on a query or mutation. It is always present on an HTTP action
   but typed optional on an `action` and a queue consumer, so write

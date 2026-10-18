@@ -42,9 +42,15 @@
  * app.get(posts.connectPath, posts.connect);
  * app.post(posts.controlPath, posts.control);
  *
- * // publish from any HTTP action, on the stream whose subscribers should see it
- * await ctx.live.publish("post:123", { event: "comment_added", commentId }, { stream: posts.id });
+ * // publish from any HTTP action: the reference names the stream and the topic, and types the payload
+ * import { live } from "./_generated/live";
+ * await ctx.live.publish(live.posts.post({ postId }), { event: "comment_added", commentId });
  * ```
+ *
+ * Codegen reads the stream from its literals (`id`, topic names, key fields in order) and
+ * writes `_generated/live.ts`, whose references carry no server code and so can be handed to
+ * a framework hook in the browser. A publish is checked against the declaration: a payload the
+ * topic's validator rejects, or a topic the stream never declared, rejects with `BAD_REQUEST`.
  *
  * # Authorization defaults to DENY, loudly
  *
@@ -69,8 +75,8 @@
  *   caller (no identity) to any topic, and an authenticated caller is still
  *   denied. Set it only for a genuinely public stream (a status page, a public
  *   feed). It is opt-in for exactly the reason above.
- * - A subscription belongs to the stream that authorized it. A publish names its
- *   stream and reaches only that stream's subscribers, so a public stream cannot
+ * - A subscription belongs to the stream that authorized it. A publish's reference
+ *   names its stream and reaches only that stream's subscribers, so a public stream cannot
  *   tap a topic a private stream granted.
  *
  * # The subscriber registry is a single hot object
