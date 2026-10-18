@@ -10,6 +10,30 @@ interface SecretRequestInput {
 }
 
 /**
+ * The longest label a request keeps. The owner reads it and a model can write any length,
+ * so it is cut here rather than stored whole.
+ */
+const SECRET_LABEL_MAX_LENGTH = 200;
+
+/**
+ * The label a model gave a `requestSecretTool` call: trimmed, cut to
+ * {@link SECRET_LABEL_MAX_LENGTH} code points, or `undefined` when it is missing or blank.
+ * The label is model-authored text a person reads. It is stored and returned as plain
+ * text, never as markup, so a client must render it as text.
+ */
+const secretLabelOf = (input: unknown): string | undefined => {
+    const label = typeof input === "object" && input !== null ? (input as { label?: unknown }).label : undefined;
+
+    if (typeof label !== "string" || label.trim().length === 0) {
+        return undefined;
+    }
+
+    // Split by code point on purpose: a cut must never leave half of a surrogate pair.
+    // eslint-disable-next-line @typescript-eslint/no-misused-spread -- code points are the unit wanted here
+    return [...label.trim()].slice(0, SECRET_LABEL_MAX_LENGTH).join("");
+};
+
+/**
  * Thrown by {@link withSecret} when the value is no longer takeable. The loop
  * records it as a deterministic tool failure, so the model can recover rather
  * than the durable step retrying a read that can never succeed.
@@ -239,4 +263,4 @@ const withSecret = async <Result>(context: AgentToolContext, secretRef: string, 
 };
 
 export type { SecretRequestInput };
-export { requestSecretTool, SecretUnavailableError, withSecret };
+export { requestSecretTool, secretLabelOf, SecretUnavailableError, withSecret };
