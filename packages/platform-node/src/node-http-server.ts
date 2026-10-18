@@ -77,7 +77,14 @@ const bodyStream = (incoming: IncomingMessage, outgoing: ServerResponse): Readab
 
                 if (outgoing.writableFinished) {
                     incoming.destroy();
+
+                    return;
                 }
+
+                // The response is still owed, so the socket stays, but nothing more of the body is read: an upload past the ceiling
+                // is held back by the transport instead of being consumed for as long as the handler takes.
+                incoming.removeAllListeners("readable");
+                incoming.pause();
             };
             const timer = setTimeout(ceilingHit, REFUSED_BODY_DRAIN_MS);
             const stopTimer = (): void => {

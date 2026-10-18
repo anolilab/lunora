@@ -286,6 +286,46 @@ describe("createNodeHttpServer", () => {
             expect(received()).toContain("413");
         });
 
+        it("stops reading a refused upload past the byte ceiling while the handler has not answered", async () => {
+            expect.hasAssertions();
+
+            // The handler cancels the body over its cap, then never answers.
+            const server = await listen(async (request) => {
+                const reader = request.body?.getReader();
+
+                await reader?.read();
+                await reader?.cancel();
+
+                return new Promise<Response>(() => {
+                    // Never settles.
+                });
+            });
+            const { socket } = await openUpload(server);
+            const chunk = Buffer.alloc(65_536);
+            let flushed = 0;
+
+            // Write until the transport pushes back. A server still reading flushes all 64 MiB; one that stopped stalls near the ceiling.
+            for (let sent = 0; sent < 1024; sent += 1) {
+                // eslint-disable-next-line no-await-in-loop -- each chunk is written after the previous one is flushed, or the wait times out
+                const done = await Promise.race([
+                    writeChunk(socket, chunk).then(() => true),
+                    new Promise<boolean>((resolve) => {
+                        setTimeout(resolve, 200, false);
+                    }),
+                ]);
+
+                if (!done) {
+                    break;
+                }
+
+                flushed += chunk.byteLength;
+            }
+
+            socket.destroy();
+
+            expect(flushed).toBeLessThan(32 * 1_048_576);
+        });
+
         it("keeps a keep-alive socket whose refused body had already fully arrived", async () => {
             expect.hasAssertions();
 
