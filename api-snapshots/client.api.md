@@ -14,6 +14,7 @@ here is a public-API change and must be reviewed as one (SemVer applies).
 ```ts
 interface ActionCallOptions {
     shardKey?: string;
+    signal?: AbortSignal;
 }
 ```
 
@@ -208,6 +209,7 @@ interface ClientShapeUnsubscribeMessage {
 interface ConnectLiveStreamOptions {
     fetch?: typeof fetch;
     headers?: Record<string, string>;
+    idleTimeoutMs?: number;
     maxDelayMs?: number;
     retryDelay?: number;
     withCredentials?: boolean;
@@ -340,6 +342,7 @@ interface HttpStreamOptions {
     baseUrl?: string;
     fetch?: typeof fetch;
     headers?: Record<string, string>;
+    idleTimeoutMs?: number;
     lastEventId?: string;
     maxBuffer?: number;
     onEventId?: (id: string) => void;
@@ -532,6 +535,8 @@ class LunoraClient {
     onTokenExpired(listener: () => void): Unsubscribe;
     connectionStatus(): ConnectionStatus;
     onConnectionStatus(listener: (status: ConnectionStatus) => void): Unsubscribe;
+    syncStatus(): SyncStatus;
+    onSyncStatus(listener: (status: SyncStatus) => void): Unsubscribe;
     pendingCount(): number;
     debug(): ClientDebugSnapshot;
     onPendingChange(listener: (pending: number) => void): Unsubscribe;
@@ -542,7 +547,9 @@ class LunoraClient {
     subscribeClientQuery(ref: ClientQueryRef, callback: (value: unknown) => void): Unsubscribe;
     resetClientQuery(ref: ClientQueryRef): void;
     snapshotPrecondition(functionRef: FunctionReference, args: Record<string, unknown>, shardKey?: string): () => boolean;
-    whenReady(): Promise<void>;
+    whenReady(options?: {
+        signal?: AbortSignal;
+    }): Promise<void>;
     get isReady(): boolean;
     peekHydratedQuery(functionPath: string, args: Record<string, unknown>, shardKey?: string): unknown;
     peekHydratedQueryByKey(functionPath: string, argsKey: string, shardKey?: string): unknown;
@@ -552,6 +559,7 @@ class LunoraClient {
     };
     query<F extends FunctionReference>(function_: F, args: ArgsOf<F>, options?: {
         shardKey?: string;
+        signal?: AbortSignal;
     }): Promise<ReturnOf<F>>;
     batch(calls: ReadonlyArray<{
         args?: Record<string, unknown>;
@@ -869,6 +877,7 @@ class LunoraClient {
         onCheckpoint?: (watermark: SyncWatermark) => void;
         onError?: SubscriptionErrorCallback;
         shardKey?: string;
+        signal?: AbortSignal;
     }): Unsubscribe;
     subscribeShape(shape: {
         args?: Record<string, unknown>;
@@ -926,6 +935,7 @@ interface LunoraClientOptions {
     };
     queryCache?: QueryCacheAdapter | false;
     reconnect?: ReconnectOptions;
+    rpcTimeoutMs?: number;
     url: string;
     WebSocket?: typeof WebSocket;
     wsToken?: string | WsTokenProvider;
@@ -948,6 +958,7 @@ interface MutationCallOptions<TCurrent = unknown, TValue = unknown, TArgs = unkn
     replayBaseline?: null | number;
     replayCredential?: ReplayCredential;
     shardKey?: string;
+    signal?: AbortSignal;
 }
 ```
 
@@ -1010,6 +1021,8 @@ class OfflineQueue {
     constructor(options?: OfflineQueueOptions, deps?: OfflineQueueDeps);
     get size(): number;
     enqueue<T>(entry: QueuedMutation<T>): void;
+    discard(id: string): void;
+    flushUnpersisted(): void;
     hydrate(): Promise<(string | undefined)[]>;
     restampIdentity(from: string | null, to: string | null): void;
     hasPending(predicate: (item: QueuedMutation) => boolean): boolean;
@@ -1027,6 +1040,11 @@ interface OfflineQueueOptions {
     maxItems?: number;
     onPersistenceError?: (context: PersistenceErrorContext) => void;
     queueBeforeFirstConnect?: boolean;
+    replayRetry?: {
+        baseDelayMs?: number;
+        maxDelayMs?: number;
+        maxShardErrorAttempts?: number;
+    };
 }
 ```
 
@@ -1162,6 +1180,7 @@ interface QueryCacheAdapter {
 
 ```ts
 interface QueuedMutation<T = unknown> {
+    readonly ambiguousSend?: boolean;
     readonly args: Record<string, unknown>;
     readonly baselineSeq?: number;
     clientId?: string;
@@ -1517,6 +1536,17 @@ interface SubscriptionState {
     serverEpoch?: string;
     readonly shardKey?: string;
     readonly wireArgs: Record<string, unknown>;
+}
+```
+
+### `SyncStatus` (interface)
+
+```ts
+interface SyncStatus {
+    connection: ConnectionStatus;
+    pendingSubscriptions: number;
+    pendingWrites: number;
+    synced: boolean;
 }
 ```
 
