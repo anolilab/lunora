@@ -2001,3 +2001,147 @@ describe("a failing run-completion dispatch", () => {
         expect(flush).toHaveBeenCalledTimes(2);
     });
 });
+
+describe("thread-scoped approval grants", () => {
+    /** A `charge` tool gated on approval; `runs.count` counts real executions. */
+    const chargeAgent = () => {
+        const runs = { count: 0 };
+        const agent = defineAgent({
+            model: "@cf/meta/llama-3.3-70b-instruct-fp8-fast",
+            tools: {
+                charge: defineAgentTool({
+                    description: "Charge the card.",
+                    execute: () => {
+                        runs.count += 1;
+
+                        return "charged";
+                    },
+                    inputSchema: { jsonSchema: { type: "object" } } as never,
+                    needsApproval: true,
+                }),
+            },
+        });
+
+        return { agent, runs };
+    };
+
+    it("a grant made for the thread skips the gate for a later call to the same tool", async () => {
+        const { agent, runs } = chargeAgent();
+        const runtime = memoryRuntime();
+
+        // Call 1 pauses; the client approves for the thread. `agentResolveApproval`
+        // writes the grant and wakes the run — modelled here by the same two steps.
+        const first = new DurableStepJournal();
+        const pausedGenerate = scriptedGenerate([toolTurn("call_1", "charge", {}, "charging…"), finalTurn("done")]);
+
+        runAgentLoop(loopDefaults(agent, { generate: pausedGenerate, run: runtime.run, step: first })).catch(() => {});
+        await flushMicrotasks();
+
+        runtime.grants.add("thread-1:charge");
+        first.events.set("approval:call_1", { decision: "approve", scope: "thread" });
+
+        await runAgentLoop(loopDefaults(agent, { generate: pausedGenerate, run: runtime.run, step: first }));
+
+        expect(runs.count).toBe(1);
+        expect([...runtime.messages.values()].find((message) => message.toolCallId === "call_1" && message.role === "tool")).toMatchObject({
+            approvalScope: "thread",
+            status: "approved",
+        });
+
+        // Call 2 — a new instance on the same thread — never reaches the gate.
+        const second = new DurableStepJournal();
+        const secondGenerate = scriptedGenerate([toolTurn("call_2", "charge", {}, "again…"), finalTurn("done again")]);
+
+        const result = await runAgentLoop(loopDefaults(agent, { generate: secondGenerate, instanceId: "wf-2", run: runtime.run, step: second }));
+
+        expect(result).toStrictEqual({ stopped: "final", text: "done again", turns: 2 });
+        expect(runs.count).toBe(2);
+        expect(second.waitedNames).toStrictEqual([]);
+        expect(runtime.messages.has("thread-1:wf-2:approval:call_2")).toBe(false);
+
+        const secondResult = [...runtime.messages.values()].find((message) => message.toolCallId === "call_2" && message.role === "tool");
+
+        expect(secondResult?.status).toBeUndefined();
+        expect(secondResult?.approvalScope).toBeUndefined();
+    });
+
+    it("a replay after a crash keeps the memoized gate decision when the grant is revoked in between", async () => {
+        const { agent, runs } = chargeAgent();
+        const runtime = memoryRuntime();
+        const journal = new DurableStepJournal();
+
+        // The grant is in place, the tool runs, then the process dies before the
+        // next model turn.
+        runtime.grants.add("thread-1:charge");
+        const crashing = scriptedGenerate([toolTurn("call_9", "charge", {})]);
+
+        await expect(runAgentLoop(loopDefaults(agent, { generate: crashing, run: runtime.run, step: journal }))).rejects.toThrow("scripted generate exhausted");
+        expect(runs.count).toBe(1);
+
+        // The grant is revoked before the replay. The replay must NOT re-decide the
+        // gate: its memoized `false` stands, so the completed tool is not re-gated.
+        runtime.grants.delete("thread-1:charge");
+
+        const resumed = scriptedGenerate([finalTurn("done")]);
+        const result = await runAgentLoop(loopDefaults(agent, { generate: resumed, run: runtime.run, step: journal }));
+
+        expect(result).toStrictEqual({ stopped: "final", text: "done", turns: 2 });
+        expect(runs.count).toBe(1);
+        expect(journal.invoked.filter((name) => name === "tool:approval-gate:call_9")).toHaveLength(1);
+        expect(journal.waitedNames).toStrictEqual([]);
+    });
+
+    it("a grant made while a call is already paused does not release that call", async () => {
+        const { agent, runs } = chargeAgent();
+        const runtime = memoryRuntime();
+        const journal = new DurableStepJournal();
+        const generate = scriptedGenerate([toolTurn("call_1", "charge", {}, "charging…"), finalTurn("done")]);
+
+        runAgentLoop(loopDefaults(agent, { generate, run: runtime.run, step: journal })).catch(() => {});
+        await flushMicrotasks();
+
+        expect(journal.waitedNames).toStrictEqual(["approval:call_1"]);
+
+        // Another call's approve-for-thread lands while this one waits.
+        runtime.grants.add("thread-1:charge");
+
+        // Replaying the paused instance still hibernates on its own approval.
+        runAgentLoop(loopDefaults(agent, { generate, run: runtime.run, step: journal })).catch(() => {});
+        await flushMicrotasks();
+
+        expect(runs.count).toBe(0);
+        expect(journal.waitedNames).toStrictEqual(["approval:call_1", "approval:call_1"]);
+    });
+
+    it("revoking a grant restores the gate for the next call", async () => {
+        const { agent, runs } = chargeAgent();
+        const runtime = memoryRuntime();
+
+        runtime.grants.add("thread-1:charge");
+        const granted = new DurableStepJournal();
+
+        await runAgentLoop(
+            loopDefaults(agent, { generate: scriptedGenerate([toolTurn("call_1", "charge", {}), finalTurn("done")]), run: runtime.run, step: granted }),
+        );
+
+        expect(runs.count).toBe(1);
+
+        runtime.grants.delete("thread-1:charge");
+
+        // The next call is gated again: it pauses rather than running.
+        const gated = new DurableStepJournal();
+
+        runAgentLoop(
+            loopDefaults(agent, {
+                generate: scriptedGenerate([toolTurn("call_2", "charge", {}), finalTurn("done")]),
+                instanceId: "wf-2",
+                run: runtime.run,
+                step: gated,
+            }),
+        ).catch(() => {});
+        await flushMicrotasks();
+
+        expect(gated.waitedNames).toStrictEqual(["approval:call_2"]);
+        expect(runs.count).toBe(1);
+    });
+});

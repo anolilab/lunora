@@ -1389,7 +1389,7 @@ interface AdminAuthQueryOptions {
 
 ```ts
 type AgentApprovalReference = FunctionReference<"mutation", {
-    decision: "approve" | "reject";
+    decision: "approve" | "approve_for_thread" | "reject";
     instanceId: string;
     note?: string;
     threadKey: string;

@@ -13,11 +13,13 @@ import type { EnsureThreadOutcome } from "./types";
 const THREADS_BARE_TABLE = "threads";
 const MESSAGES_BARE_TABLE = "messages";
 const RUN_QUEUE_BARE_TABLE = "run_queue";
+const GRANTS_BARE_TABLE = "approval_grants";
 
 /** The physical (merged) table names the runtime functions read/write. */
 const THREADS_TABLE: "agent_threads" = `${AGENT_EXTENSION_KEY}_${THREADS_BARE_TABLE}`;
 const MESSAGES_TABLE: "agent_messages" = `${AGENT_EXTENSION_KEY}_${MESSAGES_BARE_TABLE}`;
 const RUN_QUEUE_TABLE: "agent_run_queue" = `${AGENT_EXTENSION_KEY}_${RUN_QUEUE_BARE_TABLE}`;
+const GRANTS_TABLE: "agent_approval_grants" = `${AGENT_EXTENSION_KEY}_${GRANTS_BARE_TABLE}`;
 
 /**
  * How many runs may park behind the one in flight under
@@ -71,13 +73,24 @@ const ABANDONED_RUN_MS = 13 * 60 * 60 * 1000;
  */
 const agentExtension: SchemaExtension<
     Record<
-        keyof typeof episodeTables | keyof typeof graphTables | typeof MESSAGES_BARE_TABLE | typeof RUN_QUEUE_BARE_TABLE | typeof THREADS_BARE_TABLE,
+        | keyof typeof episodeTables
+        | keyof typeof graphTables
+        | typeof GRANTS_BARE_TABLE
+        | typeof MESSAGES_BARE_TABLE
+        | typeof RUN_QUEUE_BARE_TABLE
+        | typeof THREADS_BARE_TABLE,
         TableDefinition
     >,
     typeof AGENT_EXTENSION_KEY
 > = defineSchemaExtension(AGENT_EXTENSION_KEY, {
     tables: {
         [MESSAGES_BARE_TABLE]: defineTable({
+            /**
+             * On the tool-result row of an approved call: `"thread"` when the
+             * approver granted the tool for the rest of the thread (see
+             * {@link GRANTS_BARE_TABLE}), absent for a one-off approval.
+             */
+            approvalScope: v.optional(v.literal("thread")),
             content: v.string(),
             createdAt: v.number(),
             messageKey: v.string(),
@@ -243,6 +256,23 @@ const agentExtension: SchemaExtension<
             // See the threads table for why the agent tables are `.public()`.
             .public(),
 
+        /**
+         * Thread-scoped approval grants: a tool named here skips its
+         * `needsApproval` gate for every later call in the thread. Written only by
+         * `agentResolveApproval` (an `approve` for the thread) and removed only by
+         * `agentRevokeApprovalGrant`; the gate reads it inside its own durable step,
+         * so a grant made after a call's gate resolved never changes that call.
+         */
+        [GRANTS_BARE_TABLE]: defineTable({
+            createdAt: v.number(),
+            threadKey: v.string(),
+            toolName: v.string(),
+        })
+            // One grant per tool per thread; unique makes a repeated approve a no-op.
+            .index("byThreadTool", ["threadKey", "toolName"], { unique: true })
+            // See the threads table for why the agent tables are `.public()`.
+            .public(),
+
         // The owner-scoped graph-memory tables (`agent_entities`/`agent_edges`)
         // live in graph-component.ts alongside the functions that read/write
         // them; spread in here so the app still merges one `agentExtension`.
@@ -265,6 +295,34 @@ const { mutation, query } = initLunora.dataModel().create();
  * reader nothing about what the type actually is.
  */
 type QueueDatabase = DatabaseWriter;
+
+/**
+ * Record a thread-scoped approval grant for the tool of the call awaiting approval
+ * right now. The tool name comes from the stored marker row, never from the
+ * client, so an approve cannot grant a tool the paused run did not ask for. With
+ * no pending marker (already decided, timed out, or a stale instance) there is
+ * nothing to grant, and the decision is refused before the run is woken.
+ */
+const grantApprovalForThread = async (database: QueueDatabase, threadKey: string, instanceId: string, toolCallId: string): Promise<void> => {
+    const marker = await database
+        .query(MESSAGES_TABLE)
+        .withIndex("byMessageKey", (q) => q.eq("threadKey", threadKey).eq("messageKey", `${instanceId}:approval:${toolCallId}`))
+        .first();
+
+    if (marker?.["status"] !== "awaiting_approval") {
+        throw new LunoraError("CONFLICT", `@lunora/agent: no pending approval for tool call "${toolCallId}" to grant for thread "${threadKey}"`);
+    }
+
+    const toolName = marker["toolName"] as string;
+    const existing = await database
+        .query(GRANTS_TABLE)
+        .withIndex("byThreadTool", (q) => q.eq("threadKey", threadKey).eq("toolName", toolName))
+        .first();
+
+    if (!existing) {
+        await database.insert(GRANTS_TABLE, { createdAt: Date.now(), threadKey, toolName });
+    }
+};
 
 /**
  * Park a run behind the one currently in flight (`onConcurrentRun: "queue"`).
@@ -425,6 +483,8 @@ export interface AgentComponent {
     extension: SchemaExtension;
     functions: {
         agentAppendMessage: AgentRegisteredFunction;
+        agentApprovalGranted: AgentRegisteredFunction;
+        agentApprovalGrants: AgentRegisteredFunction;
         agentCompleteRun: AgentRegisteredFunction;
         agentDeleteMessage: AgentRegisteredFunction;
         agentEnsureThread: AgentRegisteredFunction;
@@ -436,6 +496,7 @@ export interface AgentComponent {
         agentMessages: AgentRegisteredFunction;
         agentPatchThread: AgentRegisteredFunction;
         agentResolveApproval: AgentRegisteredFunction;
+        agentRevokeApprovalGrant: AgentRegisteredFunction;
         agentRun: AgentRegisteredFunction;
         agentSetState: AgentRegisteredFunction;
         agentState: AgentRegisteredFunction;
@@ -564,6 +625,7 @@ export const agentComponent = (): AgentComponent => {
 
     const agentAppendMessage = mutation
         .input({
+            approvalScope: v.optional(v.literal("thread")),
             content: v.string(),
             messageKey: v.string(),
             role: v.union(v.literal("user"), v.literal("assistant"), v.literal("tool"), v.literal("system")),
@@ -605,6 +667,7 @@ export const agentComponent = (): AgentComponent => {
                 role: args.role,
                 seq,
                 threadKey: args.threadKey,
+                ...(args.approvalScope === undefined ? {} : { approvalScope: args.approvalScope }),
                 ...(args.status === undefined ? {} : { status: args.status }),
                 ...(args.stepName === undefined ? {} : { stepName: args.stepName }),
                 ...(args.toolCallId === undefined ? {} : { toolCallId: args.toolCallId }),
@@ -1031,10 +1094,16 @@ export const agentComponent = (): AgentComponent => {
      * (`agent-approval:<id>`) — the SAME format `agent-loop.ts`'s
      * `awaitApproval` matches on — so a decision meant for one pending tool
      * call cannot resolve a different one on the same instance.
+     *
+     * `"approve_for_thread"` is an approve that also records a grant for the
+     * tool (see `grantApprovalForThread`), so later calls to it in this thread
+     * skip the gate. The grant is written here, before the event is sent, so it
+     * is committed with the decision and the run never sees a decision whose
+     * grant was lost.
      */
     const agentResolveApproval = mutation
         .input({
-            decision: v.union(v.literal("approve"), v.literal("reject")),
+            decision: v.union(v.literal("approve"), v.literal("approve_for_thread"), v.literal("reject")),
             instanceId: v.string(),
             note: v.optional(v.string()),
             threadKey: v.string(),
@@ -1070,13 +1139,96 @@ export const agentComponent = (): AgentComponent => {
                 );
             }
 
+            if (args.decision === "approve_for_thread") {
+                await grantApprovalForThread(context.db, args.threadKey, args.instanceId, args.toolCallId);
+            }
+
             await handle.sendEvent(args.instanceId, {
-                payload: { decision: args.decision, toolCallId: args.toolCallId, ...(args.note === undefined ? {} : { note: args.note }) },
+                payload: {
+                    decision: args.decision === "reject" ? "reject" : "approve",
+                    toolCallId: args.toolCallId,
+                    ...(args.decision === "approve_for_thread" ? { scope: "thread" } : {}),
+                    ...(args.note === undefined ? {} : { note: args.note }),
+                },
                 // Scoped per tool call — see the doc comment above.
                 type: `agent-approval:${args.toolCallId}`,
             });
 
             return { resolved: true };
+        });
+
+    /**
+     * Whether a thread-scoped approval grant exists for `toolName` on this thread.
+     * INTERNAL: the loop reads it from inside a tool's approval-gate step, so the
+     * gate's replay-stable decision is memoized with the read itself. Not owner-
+     * gated, because the workflow dispatching it carries no caller identity.
+     */
+    const agentApprovalGranted = asInternal(
+        query.input({ key: v.string(), toolName: v.string() }).query(async ({ args, ctx: context }): Promise<boolean> => {
+            const grant = await context.db
+                .query(GRANTS_TABLE)
+                .withIndex("byThreadTool", (q) => q.eq("threadKey", args.key).eq("toolName", args.toolName))
+                .first();
+
+            return grant !== null;
+        }),
+    );
+
+    /**
+     * The thread's approval grants — the tools approved for the rest of the thread.
+     * PUBLIC and owner-gated like the other reads: an unknown or forbidden thread
+     * lists nothing, so key-guessing leaks nothing.
+     */
+    const agentApprovalGrants = query.input({ key: v.string() }).query(async ({ args, ctx: context }): Promise<{ createdAt: number; toolName: string }[]> => {
+        const thread = await context.db
+            .query(THREADS_TABLE)
+            .withIndex("byKey", (q) => q.eq("key", args.key))
+            .first();
+
+        if (readableThread(thread, context.auth) === undefined) {
+            return [];
+        }
+
+        const grants = await context.db
+            .query(GRANTS_TABLE)
+            .withIndex("byThreadTool", (q) => q.eq("threadKey", args.key))
+            .collect();
+
+        return grants.map((grant) => {
+            return { createdAt: grant["createdAt"] as number, toolName: grant["toolName"] as string };
+        });
+    });
+
+    /**
+     * Revoke a thread-scoped approval grant, so the tool's gate applies again to
+     * every later call in the thread. PUBLIC and owner-gated. A call whose gate
+     * already resolved keeps its decision (the gate is memoized in its step), so a
+     * revoke never reaches back into a run that is in flight.
+     */
+    const agentRevokeApprovalGrant = mutation
+        .input({ threadKey: v.string(), toolName: v.string() })
+        .mutation(async ({ args, ctx: context }): Promise<{ revoked: boolean }> => {
+            const thread = await context.db
+                .query(THREADS_TABLE)
+                .withIndex("byKey", (q) => q.eq("key", args.threadKey))
+                .first();
+
+            if (readableThread(thread, context.auth) === undefined) {
+                throw new LunoraError("FORBIDDEN", `@lunora/agent: not allowed to revoke approvals on thread "${args.threadKey}"`);
+            }
+
+            const grant = await context.db
+                .query(GRANTS_TABLE)
+                .withIndex("byThreadTool", (q) => q.eq("threadKey", args.threadKey).eq("toolName", args.toolName))
+                .first();
+
+            if (!grant) {
+                return { revoked: false };
+            }
+
+            await context.db.delete(grant["_id"] as never);
+
+            return { revoked: true };
         });
 
     /**
@@ -1214,6 +1366,8 @@ export const agentComponent = (): AgentComponent => {
     return {
         extension: agentExtension,
         functions: {
+            agentApprovalGranted,
+            agentApprovalGrants,
             agentAppendMessage: asInternal(agentAppendMessage),
             agentCompleteRun: asInternal(agentCompleteRun),
             agentEnsureThread: asInternal(agentEnsureThread),
@@ -1226,6 +1380,7 @@ export const agentComponent = (): AgentComponent => {
             agentDeleteMessage: asInternal(agentDeleteMessage),
             agentPatchThread: asInternal(agentPatchThread),
             agentResolveApproval,
+            agentRevokeApprovalGrant,
             agentRun,
             agentSetState: asInternal(agentSetState),
             agentState,
