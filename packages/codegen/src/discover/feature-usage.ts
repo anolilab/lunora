@@ -1,4 +1,4 @@
-import type { ExportDeclaration, ImportDeclaration, Project, SourceFile } from "ts-morph";
+import type { ExportDeclaration, ExportSpecifier, Expression, ImportDeclaration, ImportSpecifier, Project, SourceFile } from "ts-morph";
 import { Node, SyntaxKind } from "ts-morph";
 
 import type { CapabilityKey } from "../capabilities";
@@ -228,7 +228,7 @@ interface SourceCapabilitySignals {
 
     /**
      * Whether the file value-imports `requestSecretTool` from `@lunora/agent` — the
-     * signal that wires the secret store ({@link declaresRequestSecretTool}).
+     * signal that wires the secret store ({@link fileWiresRequestSecretTool}).
      */
     requestSecretTool: boolean;
 
@@ -249,19 +249,162 @@ const AGENT_MODULE_SPECIFIER = "@lunora/agent";
 /** The agent tool that asks a human for a secret value. */
 const REQUEST_SECRET_TOOL = "requestSecretTool";
 
-/**
- * Whether an import declaration value-imports `requestSecretTool` from
- * `@lunora/agent`. A type-only import does not count: only a value import wires
- * the tool into an agent. The one rule codegen's secret-store gate and
- * `@lunora/config`'s binding inference both read.
- */
-const declaresRequestSecretTool = (declaration: ImportDeclaration): boolean => {
-    if (declaration.getModuleSpecifierValue() !== AGENT_MODULE_SPECIFIER || declaration.isTypeOnly()) {
-        return false;
+/** Whether a module specifier is a relative path, so a file of this app rather than a package. */
+const isRelativeSpecifier = (specifier: string): boolean => specifier.startsWith("./") || specifier.startsWith("../");
+
+/** The name an import or export specifier makes visible: its alias when it has one. */
+const visibleNameOf = (entry: ImportSpecifier | ExportSpecifier): string => entry.getAliasNode()?.getText() ?? entry.getNameNode().getText();
+
+/** Whether an expression is the tool itself, or a call of it, under one of the `bound` local names. */
+const isToolReference = (expression: Expression | undefined, bound: ReadonlySet<string>): boolean => {
+    const callee = expression !== undefined && Node.isCallExpression(expression) ? expression.getExpression() : expression;
+
+    return callee !== undefined && Node.isIdentifier(callee) && bound.has(callee.getText());
+};
+
+/** The local names a file binds to the agent's `requestSecretTool` by a value import, under any alias. */
+const boundToolNames = (file: SourceFile): Set<string> => {
+    const bound = new Set<string>();
+
+    for (const declaration of file.getImportDeclarations()) {
+        if (declaration.getModuleSpecifierValue() !== AGENT_MODULE_SPECIFIER || declaration.isTypeOnly()) {
+            continue;
+        }
+
+        for (const named of declaration.getNamedImports()) {
+            if (!named.isTypeOnly() && named.getNameNode().getText() === REQUEST_SECRET_TOOL) {
+                bound.add(visibleNameOf(named));
+            }
+        }
     }
 
-    return declaration.getNamedImports().some((named) => !named.isTypeOnly() && named.getNameNode().getText() === REQUEST_SECRET_TOOL);
+    return bound;
 };
+
+/**
+ * The names a re-export makes visible, given the names `forwarded` carries through it: every
+ * one for `export *`, otherwise the listed ones under their aliases.
+ */
+const namesReexported = (declaration: ExportDeclaration, forwarded: ReadonlySet<string>): string[] => {
+    if (!declaration.hasNamedExports()) {
+        return [...forwarded];
+    }
+
+    return declaration
+        .getNamedExports()
+        .filter((entry) => !entry.isTypeOnly() && forwarded.has(entry.getNameNode().getText()))
+        .map((entry) => visibleNameOf(entry));
+};
+
+/**
+ * The names a re-export carries through it. A local `export { ask }` carries the bound names;
+ * the agent carries the tool; a relative module carries what `resolve` finds in it.
+ */
+const forwardedThrough = (declaration: ExportDeclaration, bound: ReadonlySet<string>, resolve: (target: SourceFile) => Set<string>): ReadonlySet<string> => {
+    const specifier = declaration.getModuleSpecifierValue();
+
+    if (specifier === undefined) {
+        return bound;
+    }
+
+    if (specifier === AGENT_MODULE_SPECIFIER) {
+        return new Set([REQUEST_SECRET_TOOL]);
+    }
+
+    const target = isRelativeSpecifier(specifier) ? declaration.getModuleSpecifierSourceFile() : undefined;
+
+    return target === undefined ? new Set<string>() : resolve(target);
+};
+
+/**
+ * The names under which `file` exports `requestSecretTool` from `@lunora/agent`: its own
+ * name or an alias, or a value it binds to the tool (`export const x = requestSecretTool({...})`).
+ * A relative re-export is followed, so a barrel that only forwards the tool counts; `seen`
+ * breaks cycles.
+ */
+const requestSecretToolExportsOf = (file: SourceFile, seen: Set<SourceFile>): Set<string> => {
+    const exported = new Set<string>();
+
+    if (seen.has(file)) {
+        return exported;
+    }
+
+    seen.add(file);
+
+    const bound = boundToolNames(file);
+
+    for (const declaration of file.getExportDeclarations()) {
+        if (declaration.isTypeOnly()) {
+            continue;
+        }
+
+        const forwarded = forwardedThrough(declaration, bound, (target) => requestSecretToolExportsOf(target, seen));
+
+        for (const name of namesReexported(declaration, forwarded)) {
+            exported.add(name);
+        }
+    }
+
+    for (const statement of file.getVariableStatements()) {
+        if (!statement.isExported()) {
+            continue;
+        }
+
+        for (const declared of statement.getDeclarations()) {
+            if (isToolReference(declared.getInitializer(), bound)) {
+                exported.add(declared.getName());
+            }
+        }
+    }
+
+    return exported;
+};
+
+/** The names an import declaration brings in from the secret tool: the agent's, or a relative module's re-exports. */
+const importedToolNames = (declaration: ImportDeclaration, importer: SourceFile): Set<string> => {
+    const specifier = declaration.getModuleSpecifierValue();
+
+    if (specifier === AGENT_MODULE_SPECIFIER) {
+        return new Set([REQUEST_SECRET_TOOL]);
+    }
+
+    const target = isRelativeSpecifier(specifier) ? declaration.getModuleSpecifierSourceFile() : undefined;
+
+    return target === undefined ? new Set<string>() : requestSecretToolExportsOf(target, new Set([importer]));
+};
+
+/** Whether `file` reads a member of the namespace `namespace` whose name is one of `names` (`ns.requestKey`). */
+const readsNamespaceMember = (file: SourceFile, namespace: string, names: ReadonlySet<string>): boolean =>
+    file
+        .getDescendantsOfKind(SyntaxKind.PropertyAccessExpression)
+        .some((access) => access.getExpression().getText() === namespace && names.has(access.getName()));
+
+/**
+ * Whether a source file value-imports `requestSecretTool` from `@lunora/agent`, by a
+ * named import, a namespace import that reads it, or an import of a relative module that
+ * exports it (a barrel, or a tool defined in another module of the app). A type-only
+ * import does not count: only a value import wires the tool into an agent. The one rule
+ * codegen's secret-store gate and `@lunora/config`'s binding inference both read.
+ */
+const fileWiresRequestSecretTool = (file: SourceFile): boolean =>
+    file.getImportDeclarations().some((declaration) => {
+        if (declaration.isTypeOnly()) {
+            return false;
+        }
+
+        const names = importedToolNames(declaration, file);
+
+        if (names.size === 0) {
+            return false;
+        }
+
+        const namespace = declaration.getNamespaceImport();
+
+        return (
+            declaration.getNamedImports().some((named) => !named.isTypeOnly() && names.has(named.getNameNode().getText())) ||
+            (namespace !== undefined && readsNamespaceMember(file, namespace.getText(), names))
+        );
+    });
 
 /**
  * The capability signals of one source file: its value-import and re-export
@@ -285,7 +428,7 @@ const sourceCapabilitySignals = (sourceFile: SourceFile): SourceCapabilitySignal
     return {
         contextReads: contextPropertiesRead(sourceFile),
         dynamicImports: dynamicImportSpecifiers(sourceFile),
-        requestSecretTool: imports.some((declaration) => declaresRequestSecretTool(declaration)),
+        requestSecretTool: fileWiresRequestSecretTool(sourceFile),
         sandboxTools,
         valueImports: new Set(
             [...imports, ...sourceFile.getExportDeclarations()].flatMap((declaration) => {
@@ -378,8 +521,8 @@ const discoverFeatureUsage = (project: Project, lunoraDirectory: string): Featur
 export {
     capabilitiesUsedBy,
     contextPropertiesRead,
-    declaresRequestSecretTool,
     discoverFeatureUsage,
+    fileWiresRequestSecretTool,
     foldCapabilitySignals,
     mayReadCapabilityContext,
     sourceCapabilitySignals,

@@ -15,6 +15,10 @@ const writeAgents = (source: string): void => {
     writeFileSync(join(workdir, "agents.ts"), source);
 };
 
+const writeFile = (name: string, source: string): void => {
+    writeFileSync(join(workdir, name), source);
+};
+
 describe("discover/secret-value-tool", () => {
     beforeEach(() => {
         workdir = mkdtempSync(join(tmpdir(), "lunora-secret-value-disco-"));
@@ -52,6 +56,115 @@ describe("discover/secret-value-tool", () => {
         writeAgents(`
             import type { requestSecretTool } from "@lunora/agent";
             export type Tool = typeof requestSecretTool;
+        `);
+
+        expect(discoverSecretValueToolUsage(newProject(), workdir)).toBe(false);
+    });
+
+    it("detects a namespace import of the agent package that calls requestSecretTool", () => {
+        expect.assertions(1);
+
+        writeAgents(`
+            import * as agent from "@lunora/agent";
+            export const support = agent.defineAgent({ model: "m", tools: { ask: agent.requestSecretTool({ consumer: "charge", description: "d" }) } });
+        `);
+
+        expect(discoverSecretValueToolUsage(newProject(), workdir)).toBe(true);
+    });
+
+    it("ignores a namespace import of the agent package that never reads requestSecretTool", () => {
+        expect.assertions(1);
+
+        writeAgents(`
+            import * as agent from "@lunora/agent";
+            export const support = agent.defineAgent({ model: "m", tools: {} });
+        `);
+
+        expect(discoverSecretValueToolUsage(newProject(), workdir)).toBe(false);
+    });
+
+    it("detects a tool imported through a barrel that re-exports it from the agent package", () => {
+        expect.assertions(1);
+
+        writeFile("tools.ts", `export { requestSecretTool } from "@lunora/agent";`);
+        writeAgents(`
+            import { requestSecretTool } from "./tools";
+            export const support = { ask: requestSecretTool({ consumer: "charge", description: "d" }) };
+        `);
+
+        expect(discoverSecretValueToolUsage(newProject(), workdir)).toBe(true);
+    });
+
+    it("detects a tool re-exported under an alias, imported by its alias", () => {
+        expect.assertions(1);
+
+        writeFile("tools.ts", `export { requestSecretTool as askForKey } from "@lunora/agent";`);
+        writeAgents(`
+            import { askForKey } from "./tools";
+            export const support = { ask: askForKey({ consumer: "charge", description: "d" }) };
+        `);
+
+        expect(discoverSecretValueToolUsage(newProject(), workdir)).toBe(true);
+    });
+
+    it("detects a tool a barrel re-exports with export *", () => {
+        expect.assertions(1);
+
+        writeFile("tools.ts", `export * from "@lunora/agent";`);
+        writeAgents(`
+            import { requestSecretTool } from "./tools";
+            export const support = { ask: requestSecretTool({ consumer: "charge", description: "d" }) };
+        `);
+
+        expect(discoverSecretValueToolUsage(newProject(), workdir)).toBe(true);
+    });
+
+    it("detects a tool defined in another module and imported as a value", () => {
+        expect.assertions(1);
+
+        writeFile(
+            "tools.ts",
+            `import { requestSecretTool } from "@lunora/agent";\nexport const requestKey = requestSecretTool({ consumer: "charge", description: "d" });`,
+        );
+        writeAgents(`
+            import { requestKey } from "./tools";
+            export const support = { ask: requestKey };
+        `);
+
+        expect(discoverSecretValueToolUsage(newProject(), workdir)).toBe(true);
+    });
+
+    it("ignores a barrel that re-exports other names from the agent package", () => {
+        expect.assertions(1);
+
+        writeFile("tools.ts", `export { defineAgent } from "@lunora/agent";`);
+        writeAgents(`
+            import { defineAgent } from "./tools";
+            export const support = defineAgent({ model: "m", tools: {} });
+        `);
+
+        expect(discoverSecretValueToolUsage(newProject(), workdir)).toBe(false);
+    });
+
+    it("ignores a barrel that re-exports the name from another package", () => {
+        expect.assertions(1);
+
+        writeFile("tools.ts", `export { requestSecretTool } from "some-other-package";`);
+        writeAgents(`
+            import { requestSecretTool } from "./tools";
+            export const support = { ask: requestSecretTool };
+        `);
+
+        expect(discoverSecretValueToolUsage(newProject(), workdir)).toBe(false);
+    });
+
+    it("ignores a type-only re-export of the name", () => {
+        expect.assertions(1);
+
+        writeFile("tools.ts", `export type { requestSecretTool } from "@lunora/agent";`);
+        writeAgents(`
+            import { requestSecretTool } from "./tools";
+            export const support = { ask: requestSecretTool };
         `);
 
         expect(discoverSecretValueToolUsage(newProject(), workdir)).toBe(false);
