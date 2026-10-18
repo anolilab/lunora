@@ -352,10 +352,25 @@ const sensitiveTokenPattern = (secret: string): RegExp =>
 
 /**
  * The text forms of the named arguments of one dispatch: the string leaves of each
- * marked value, the decimal form of a number or boolean, and the JSON form of an
- * object. A free-text sink (an error message, a span attribute) must not echo any of
- * them back, and no key-name rule catches a handler quoting the argument it rejected.
+ * marked value, the JSON-escaped spelling of each of those leaves, the decimal form of
+ * a number or boolean, and the JSON form of an object. A free-text sink (an error
+ * message, a span attribute) must not echo any of them back, and no key-name rule
+ * catches a handler quoting the argument it rejected.
  */
+
+/**
+ * The spellings a non-empty string is searched for under: the raw text, and its
+ * JSON-escaped form when JSON changes it. A handler that logs `JSON.stringify(args)`
+ * quotes the escaped form (a quote, backslash or control character becomes an escape),
+ * never the raw one. Below the substring minimum only the raw text is kept: escaping
+ * can lengthen a short value past the threshold (`""` becomes four characters), which
+ * would search ordinary text for it at a looser rule than the value itself.
+ */
+const stringSpellings = (text: string): string[] => {
+    const escaped = JSON.stringify(text).slice(1, -1);
+
+    return escaped === text || text.length < SENSITIVE_SUBSTRING_MIN_LENGTH ? [text] : [text, escaped];
+};
 
 /**
  * Push every string and number leaf under `root`, however deep, onto `found`. Iterative,
@@ -370,7 +385,7 @@ const collectSecretLeaves = (root: unknown, found: string[]): void => {
 
         if (typeof value === "string") {
             if (value.length > 0) {
-                found.push(value);
+                found.push(...stringSpellings(value));
             }
         } else if (typeof value === "number" || typeof value === "boolean" || typeof value === "bigint") {
             found.push(String(value));

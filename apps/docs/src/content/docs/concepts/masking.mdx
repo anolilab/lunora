@@ -134,6 +134,9 @@ CVV or a three-digit PIN) is replaced wherever it appears as a whole word or num
 so `invalid code 123` loses the `123` but `1234` is left alone. A value of one or
 two characters is replaced only when it is the whole string, because a single digit
 replaced inside text would erase every standalone digit from the line.
+A value of four or more characters is also matched in its JSON-escaped spelling (a newline
+written as `\n`, a quote as `\"`), because a handler that logs `JSON.stringify(args)` never
+writes the raw form. A shorter value is not, so escaping cannot push it into a looser rule.
 A marked value is also masked when it is used as a field or attribute name. A property
 name of a marked object is masked as a whole name, and two names that mask to the same
 placeholder are kept apart with a `#2`, `#3` suffix rather than one overwriting the other.

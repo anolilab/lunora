@@ -14,6 +14,9 @@ import { createSensitiveScope, NO_SENSITIVE_SCOPE, SENSITIVE_ARG_MASK, sensitive
  */
 
 const SECRET = "marked-secret-value";
+/** A marked value with a newline, a quote, a backslash and a tab: each one changes under JSON. */
+const TRICKY = 'line one\n"quoted"\tand \\ back';
+const TRICKY_ESCAPED = JSON.stringify(TRICKY).slice(1, -1);
 const anchor = { rootSpanId: "root0000root0000", traceId: "trace00000000000000000000000000" };
 const ids = { spanId: "span0000span0000", traceId: "trace00000000000000000000000000" };
 
@@ -259,6 +262,72 @@ describe("field names under a sensitive scope", () => {
     });
 });
 
+describe("escaped spellings under a sensitive scope", () => {
+    const scopeFor = (value: unknown, label = "value") => createSensitiveScope(sensitiveValues({ [label]: value }, new Set([label])));
+
+    it("masks a marked string's JSON-escaped spelling inside serialized arguments", () => {
+        expect.assertions(1);
+
+        // The marked object carries one more key, so the logged JSON is not its whole JSON:
+        // only the escaped leaf can match.
+        const logged = JSON.stringify({ label: "primary", value: { token: TRICKY } });
+
+        expect(scopeFor({ token: TRICKY, note: "n" }).text(logged)).toBe(JSON.stringify({ label: "primary", value: { token: SENSITIVE_ARG_MASK } }));
+    });
+
+    it("masks the escaped spelling of a marked top-level string", () => {
+        expect.assertions(1);
+
+        expect(scopeFor(TRICKY).text(`got "${TRICKY_ESCAPED}" from the caller`)).toBe(`got "${SENSITIVE_ARG_MASK}" from the caller`);
+    });
+
+    it("leaves an unmarked sibling that JSON also escapes untouched", () => {
+        expect.assertions(1);
+
+        const logged = JSON.stringify({ label: 'a "quoted"\n label', value: { token: TRICKY } });
+
+        expect(scopeFor({ token: TRICKY, note: "n" }).text(logged)).toBe(JSON.stringify({ label: 'a "quoted"\n label', value: { token: SENSITIVE_ARG_MASK } }));
+    });
+
+    it("masks the escaped spelling of a marked value past the depth limit", () => {
+        expect.assertions(1);
+
+        const logged = JSON.stringify(nest(10, { token: TRICKY }));
+
+        expect(scopeFor(nest(10, { token: TRICKY, note: "n" })).text(logged)).toBe(JSON.stringify(nest(10, { token: SENSITIVE_ARG_MASK })));
+    });
+
+    it("masks the escaped spelling in a structured field value", () => {
+        expect.assertions(1);
+
+        expect(scopeFor(TRICKY).fields({ label: "primary", payload: `sent ${TRICKY_ESCAPED}` })).toStrictEqual({
+            label: "primary",
+            payload: `sent ${SENSITIVE_ARG_MASK}`,
+        });
+    });
+
+    it("does not search ordinary text for a short value's escaped spelling", () => {
+        expect.assertions(2);
+
+        // `""` is two characters, so the raw value is never searched for inside text. Its
+        // escaped spelling `\"\"` is four characters: registering it would mask an unmarked
+        // sibling that quotes the same sequence, so a short value gets no escaped spelling.
+        const scope = scopeFor('""');
+        const sibling = JSON.stringify({ label: 'say "" twice', value: "x" });
+
+        expect(scope.text(sibling)).toBe(sibling);
+        expect(sensitiveValues({ value: '""' }, new Set(["value"]))).toStrictEqual(['""']);
+    });
+
+    it("does not mask ordinary text that only resembles a short value's escaped spelling", () => {
+        expect.assertions(1);
+
+        // A newline escapes to `\n`, two characters: below both substring thresholds, so
+        // prose that quotes the literal sequence is kept, as it would be for any short value.
+        expect(scopeFor("\n").text(String.raw`use \n to break a line`)).toBe(String.raw`use \n to break a line`);
+    });
+});
+
 describe("sensitiveValues", () => {
     it("collects only the marked arguments, in their string, number and JSON forms", () => {
         expect.assertions(2);
@@ -273,6 +342,28 @@ describe("sensitiveValues", () => {
         expect.assertions(1);
 
         expect(sensitiveValues({ value: nest(10, { token: SECRET }) }, new Set(["value"]))).toContain(SECRET);
+    });
+
+    it("collects the JSON-escaped spelling of a string leaf that JSON escapes", () => {
+        expect.assertions(2);
+
+        expect(sensitiveValues({ value: { token: TRICKY } }, new Set(["value"]))).toEqual(expect.arrayContaining([TRICKY, TRICKY_ESCAPED]));
+        expect(sensitiveValues({ value: TRICKY }, new Set(["value"]))).toEqual(expect.arrayContaining([TRICKY, TRICKY_ESCAPED]));
+    });
+
+    it("registers a second spelling only when JSON actually changes the value", () => {
+        expect.assertions(2);
+
+        const found = sensitiveValues({ value: { token: SECRET } }, new Set(["value"]));
+
+        expect(found).toHaveLength(2);
+        expect(found).toEqual(expect.arrayContaining([SECRET, JSON.stringify({ token: SECRET })]));
+    });
+
+    it("collects the JSON-escaped spelling of a marked value nested past the depth limit", () => {
+        expect.assertions(1);
+
+        expect(sensitiveValues({ value: nest(10, { token: TRICKY }) }, new Set(["value"]))).toContain(TRICKY_ESCAPED);
     });
 });
 
