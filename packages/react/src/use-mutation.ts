@@ -1,7 +1,7 @@
 "use client";
 
 import type { ArgsOf, FunctionReference, OnlineOnlyOption, OptimisticUpdate, ReturnOf } from "@lunora/client";
-import { onlineManager, useMutation as useTanStackMutation } from "@tanstack/react-query";
+import { onlineManager, useMutation as useTanStackMutation, useQueryClient } from "@tanstack/react-query";
 import { useCallback, useRef, useState } from "react";
 
 import { useLunora } from "./lunora-provider";
@@ -86,6 +86,7 @@ const whenOnline = async (): Promise<void> =>
  */
 const useMutation = <F extends FunctionReference>(function_: F): MutationHook<F> => {
     const client = useLunora();
+    const queryClient = useQueryClient();
     const sensitive = (function_ as { sensitive?: unknown }).sensitive === true;
 
     // Local, ref-counted pending across overlapping calls of this hook instance.
@@ -127,9 +128,20 @@ const useMutation = <F extends FunctionReference>(function_: F): MutationHook<F>
             pendingCountRef.current += 1;
             setPending(true);
         },
-        onSettled: () => {
+        onSettled: (_data, _error, variables) => {
             pendingCountRef.current -= 1;
             setPending(pendingCountRef.current > 0);
+
+            // `gcTime` is fixed per hook, so a per-call `onlineOnly` on an ordinary reference
+            // cannot get the zero garbage-collection time a sensitive reference has. Drop its
+            // entry, and the arguments it holds, from the mutation cache as soon as it settles.
+            if (!sensitive && variables.options?.onlineOnly === true) {
+                const cache = queryClient.getMutationCache();
+
+                for (const entry of cache.findAll({ predicate: (candidate) => candidate.state.variables === variables })) {
+                    cache.remove(entry);
+                }
+            }
         },
     });
 
