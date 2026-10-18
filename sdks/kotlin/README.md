@@ -114,7 +114,7 @@ carries the delay the envelope named, and the next flush is a no-op until it has
 passed.
 
 A lone write and a batched one are classified by ONE rule: a coded error envelope
-by its code alone, whatever the HTTP status (`SHARD_ERROR`, `SHARD_UNAVAILABLE`,
+by its code alone, whatever the HTTP status (`SHARD_ERROR`, `SHARD_UNAVAILABLE`, `DELIVERY_FENCED`,
 `RATE_LIMITED`, `TOO_MANY_REQUESTS` and the refused-credential codes
 `UNAUTHORIZED`, `TOKEN_EXPIRED` and `UNAUTHENTICATED` re-queue; every other code,
 a coded 5xx and a server-sent `WIRE_DECODE_FAILED` included, is terminal), and a

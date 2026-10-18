@@ -37,7 +37,7 @@
  * `scheduler`, `secrets`, `services`, `topics`, `vectorStore`, `workerLoaders`, `workflowRollback`,
  * `workflowSchedules`, `workflows`.
  *
- * Every other key here — `authJurisdictionMove`, `conditionalWrites`, `edgeRequestMetadata`, `hostTraceFusion`, `httpCache`,
+ * Every other key here — `authJurisdictionMove`, `conditionalWrites`, `deliveryAuthorization`, `edgeRequestMetadata`, `hostTraceFusion`, `httpCache`,
  * `identityProxy`, `localSql`, `logArchive`, `memoryTables`,
  * `objectColumnPaths`, `objectStorageBackups`, `objectStorageCdcArchive`, `pointInTimeRecovery`, `queryExplain`,
  * `serverReactors`,
@@ -320,6 +320,19 @@ export interface PlatformCapabilities {
 
         /** Cross-shard fan-out queries. */
         crossShardFanout?: Capability;
+
+        /**
+         * Delivery authorization: `.deliveryAuthorization(...)` rechecks current
+         * authority before an RPC result or subscription frame is delivered, and
+         * fences replayed receipts behind a durable scope/epoch. Rides hibernated
+         * socket attachments, signed sibling fetch and shard SQLite, so a host rates
+         * it no higher than its `websocketHibernation`. Advisory for now, not by
+         * nature: an app opts in by declaring it, so a host rating it `unsupported`
+         * should get a `platform_unsupported_feature` diagnostic rather than the
+         * emitted builder method. No `PlatformSignals` entry exists yet, so until one
+         * does that host emits the surface silently.
+         */
+        deliveryAuthorization?: Capability;
 
         /**
          * Durable streams: a `.stream()` run whose chunks are persisted and

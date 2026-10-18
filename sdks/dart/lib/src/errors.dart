@@ -75,7 +75,7 @@ const String offlineWriteUnencodable = 'OFFLINE_WRITE_UNENCODABLE';
 /// and the distinction is load-bearing: a replay treats every OTHER coded error
 /// as terminal, so without this list a shard that was briefly unreachable would
 /// permanently reject a durable write the server never even saw.
-const Set<String> transientBatchErrorCodes = <String>{'SHARD_ERROR', 'SHARD_UNAVAILABLE'};
+const Set<String> transientBatchErrorCodes = <String>{'DELIVERY_FENCED', 'SHARD_ERROR', 'SHARD_UNAVAILABLE'};
 
 /// Codes that say "not now" rather than "no".
 ///

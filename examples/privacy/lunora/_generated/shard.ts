@@ -114,10 +114,10 @@ const LUNORA_WORKFLOWS: ReadonlyArray<WorkflowBindingSpec> = [
 ];
 
 export interface ShardDOConfig {
-    /** Current authority for RPC and ordinary subscription deliveries; other live delivery modes are refused. */
-    deliveryAuthorization?: (env: Record<string, unknown>) => DeliveryAuthorization;
     /** Opt into change-data-capture: records a post-image to `__cdc_log` on every write (backs streaming export + replay-PITR). */
     cdc?: boolean;
+    /** Current authority for RPC and ordinary subscription deliveries; other live delivery modes are refused. */
+    deliveryAuthorization?: (env: Record<string, unknown>) => DeliveryAuthorization;
     /** Ceiling on the join keys one relation-crossing `where` predicate may pre-resolve via semijoin before failing closed. Omit for the engine default. */
     maxRelationKeys?: number;
     /** Enable the per-shard reactive query cache: `true` for the defaults, or an options object to tune the caps. Query results are memoized by `(functionPath, args, identity)` and invalidated by the ctx-db write hooks before the subscription broadcast, so subscribers never observe a pre-write value. Omitted (or `false`) keeps every dispatch re-running its handler. */

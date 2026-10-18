@@ -112,7 +112,7 @@ client also holds the next flush off until that delay passes.
 
 A replay failure is classified the same way whether the write went out alone or
 in a batch: a coded error envelope by its code alone, whatever the HTTP status —
-only `SHARD_ERROR`, `SHARD_UNAVAILABLE`, `RATE_LIMITED`, `TOO_MANY_REQUESTS` and
+only `SHARD_ERROR`, `SHARD_UNAVAILABLE`, `DELIVERY_FENCED`, `RATE_LIMITED`, `TOO_MANY_REQUESTS` and
 the refused-credential codes `UNAUTHORIZED`, `TOKEN_EXPIRED` and
 `UNAUTHENTICATED` (held until a token refresh, never settled — set the fresh
 `client.authToken(token)` and call `flushOfflineQueue` yourself: this client

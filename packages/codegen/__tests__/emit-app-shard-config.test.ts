@@ -42,7 +42,7 @@ describe("emitApp — ShardDOConfig knobs reachable from the builder", () => {
 
         const output = emitApp(baseOptions);
 
-        expect(output).toContain('public deliveryAuthorization(selector: NonNullable<ShardConfig["deliveryAuthorization"]>): this {');
+        expect(output).toContain('public deliveryAuthorization(selector: (env: Env) => ReturnType<NonNullable<ShardConfig["deliveryAuthorization"]>>): this {');
         expect(output).toContain("...(this.deliveryAuthorizationSelector === undefined ? {} : { deliveryAuthorization: this.deliveryAuthorizationSelector }),");
     });
 

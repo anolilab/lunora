@@ -1,10 +1,9 @@
 import { serialize } from "node:v8";
 
 import type { SocketAttachment, SubscriptionIdentity } from "@lunora/shard-engine";
-import { readCdcEpoch, runShardMigrations } from "@lunora/shard-engine";
+import { readCdcEpoch, runShardMigrations, signSiblingBody } from "@lunora/shard-engine";
 import { vi } from "vitest";
 
-import { signSiblingBody } from "../../../shard-engine/src/sibling-channel";
 import type { DeliveryAuthorization, DeliveryPermit } from "../../src/delivery-authorization";
 import type { ShardDOState, SubscriptionOutcome } from "../../src/shard-do";
 import { ShardDO } from "../../src/shard-do";

@@ -131,7 +131,7 @@ a _restored_ queue, which has no caller left to tell — reaches the queue's
 
 How a replay reads the reply is one rule for a lone write and a batch alike: a
 coded envelope is the server's verdict whatever its HTTP status (so a coded 5xx
-is terminal), and only the transient codes (`SHARD_UNAVAILABLE`, `SHARD_ERROR`,
+is terminal), and only the transient codes (`SHARD_UNAVAILABLE`, `SHARD_ERROR`, `DELIVERY_FENCED`,
 `RATE_LIMITED`, `TOO_MANY_REQUESTS`) re-queue; a reply with no envelope re-queues,
 except a `413`, which splits a batch and settles a lone write
 `PAYLOAD_TOO_LARGE`. A refused credential (`UNAUTHORIZED`, `TOKEN_EXPIRED`,

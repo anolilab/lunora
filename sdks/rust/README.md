@@ -115,7 +115,7 @@ has no caller left to tell — reaches `client.on_mutation_settled`.
 
 One rule classifies a failed replay, whether the write went out alone or in a
 batch: a CODED envelope is classified by its code alone, whatever the HTTP
-status — `SHARD_UNAVAILABLE`, `SHARD_ERROR`, `RATE_LIMITED`,
+status — `SHARD_UNAVAILABLE`, `SHARD_ERROR`, `DELIVERY_FENCED`, `RATE_LIMITED`,
 `TOO_MANY_REQUESTS` and the refused credentials `UNAUTHORIZED`, `TOKEN_EXPIRED`
 and `UNAUTHENTICATED` (held for the next token: this client never flushes on its
 own, so call `flush_offline_queue` after `set_auth_token`, as on a reconnect; the

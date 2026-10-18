@@ -181,8 +181,9 @@ const buildMethodBlocks = (options: ResolvedAppOptions): string[] => [
         return this;
     }`,
     `    /** Authorize each RPC/subscription read and fence its eventual delivery against durable authority epochs. */
-    public deliveryAuthorization(selector: NonNullable<ShardConfig["deliveryAuthorization"]>): this {
-        this.deliveryAuthorizationSelector = selector;
+    public deliveryAuthorization(selector: (env: Env) => ReturnType<NonNullable<ShardConfig["deliveryAuthorization"]>>): this {
+        this.deliveryAuthorizationSelector = selector as NonNullable<ShardConfig["deliveryAuthorization"]>;
+
         return this;
     }`,
     ...(options.hasAuth

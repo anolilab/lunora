@@ -90,7 +90,7 @@ public final class Offline {
      * failure, a poison-message loop.
      */
     public static final Set<String> TRANSIENT_ERROR_CODES =
-            Set.of("SHARD_ERROR", "SHARD_UNAVAILABLE");
+            Set.of("DELIVERY_FENCED", "SHARD_ERROR", "SHARD_UNAVAILABLE");
 
     /**
      * Codes that say "not now" rather than "no".

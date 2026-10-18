@@ -65,7 +65,7 @@ pub const CODE_WIRE_DECODE_FAILED: &str = "WIRE_DECODE_FAILED";
 /// idempotency key is expected to succeed later, and dropping the write would
 /// lose it to a transient condition. Every other coded error IS a verdict:
 /// replaying it would only re-trigger the same failure, a poison-message loop.
-pub const TRANSIENT_ERROR_CODES: [&str; 2] = ["SHARD_ERROR", "SHARD_UNAVAILABLE"];
+pub const TRANSIENT_ERROR_CODES: [&str; 3] = ["DELIVERY_FENCED", "SHARD_ERROR", "SHARD_UNAVAILABLE"];
 
 /// The coded errors that say "not now" rather than "no".
 ///

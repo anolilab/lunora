@@ -1300,6 +1300,12 @@ const parseMaxPages = (args: Record<string, unknown>, op: string, ceiling: numbe
 
 const UNDELIVERED_BASELINE = "<undelivered>";
 
+/** Refusal text for a delivery mode that cannot be fenced while delivery authorization is enabled. */
+const DELIVERY_MODE_UNSUPPORTED = "delivery mode unsupported with delivery authorization";
+
+/** Error envelope for a response the fence withheld; the operation may already have committed. */
+const DELIVERY_FENCED_ERROR = Object.freeze({ code: "DELIVERY_FENCED", message: "Delivery fenced; operation may have committed" });
+
 /**
  * Threshold at which a `__root__` DO triggers the size warning. 1 GiB —
  * exactly 10% of the 10 GiB per-DO SQLite ceiling, leaving plenty of runway
@@ -2945,6 +2951,12 @@ abstract class ShardDO {
         this.armWebSocketKeepalive();
     }
 
+    /**
+     * Worker-side fetch entry point. Delegates to the host-neutral
+     * {@link ShardRunner}, which forwards to the Cloudflare implementation below.
+     * With delivery authorization enabled it first serves the signed fence install
+     * and guarded RPC paths itself, and refuses the delivery modes it cannot fence.
+     */
     public async fetch(request: Request): Promise<Response> {
         await this.ensureShardInit();
 
@@ -2959,7 +2971,7 @@ abstract class ShardDO {
             if (this.runner.shardKey !== undefined && parseReplicaName(this.runner.shardKey) !== undefined) {
                 return new Response("replica does not support delivery authorization; route to owner", { status: 421 });
             }
-            return jsonResponse({ error: { code: "NOT_IMPLEMENTED", message: "delivery mode unsupported with delivery authorization" } }, 501);
+            return jsonResponse({ error: { code: "NOT_IMPLEMENTED", message: DELIVERY_MODE_UNSUPPORTED } }, 501);
         }
         if (request.headers.get("Upgrade") === "websocket") {
             return this.runner.handleFetch(request);
@@ -2971,7 +2983,7 @@ abstract class ShardDO {
             return jsonResponse({ relayCount: 0 });
         }
         if (url.pathname !== "/rpc" || request.method !== "POST") {
-            return jsonResponse({ error: { code: "NOT_IMPLEMENTED", message: "delivery mode unsupported with delivery authorization" } }, 501);
+            return jsonResponse({ error: { code: "NOT_IMPLEMENTED", message: DELIVERY_MODE_UNSUPPORTED } }, 501);
         }
         return this.fetchAuthorizedRpc(request);
     }
@@ -7109,7 +7121,7 @@ abstract class ShardDO {
         // keepalive pings auto-respond and never reach here — so inbound checks
         // alone would never fire for the common case).
         if (this.deliveryAuthorization && !this.deliveryRoleSupported()) {
-            this.sendSubscriptionError(ws, "", "NOT_IMPLEMENTED", "delivery mode unsupported with delivery authorization");
+            this.sendSubscriptionError(ws, "", "NOT_IMPLEMENTED", DELIVERY_MODE_UNSUPPORTED);
             return;
         }
         if (this.isSocketExpired(ws)) {
@@ -7156,7 +7168,7 @@ abstract class ShardDO {
                 (envelope.type === "subscribe" && typeof envelope.query?.functionPath === "string")
             )
         ) {
-            this.sendSubscriptionError(ws, (envelope as { id?: string }).id ?? "", "NOT_IMPLEMENTED", "delivery mode unsupported with delivery authorization");
+            this.sendSubscriptionError(ws, (envelope as { id?: string }).id ?? "", "NOT_IMPLEMENTED", DELIVERY_MODE_UNSUPPORTED);
             return;
         }
 
@@ -8442,7 +8454,7 @@ abstract class ShardDO {
         // Fully consume the body before checking: a deferred response stream must not outlive its permit.
         const body = await response.arrayBuffer();
         if (!this.deliveryFence.allows(permit)) {
-            return jsonResponse({ error: { code: "DELIVERY_FENCED", message: "Delivery fenced; operation may have committed" } }, 409);
+            return jsonResponse({ error: DELIVERY_FENCED_ERROR }, 409);
         }
         const delivered = new Response(body, response);
         if (permit !== undefined) {
@@ -9593,7 +9605,7 @@ abstract class ShardDO {
         const delivered = results.map((result, index) => {
             const delivery = deliveries[index];
             if (this.deliveryAuthorization && delivery?.permit !== undefined && !this.deliveryFence.allows(delivery.permit)) {
-                return { id: result.id, status: 409, body: { error: { code: "DELIVERY_FENCED", message: "Delivery fenced; operation may have committed" } } };
+                return { id: result.id, status: 409, body: { error: DELIVERY_FENCED_ERROR } };
             }
             if (delivery?.bookmark !== undefined) {
                 latestBookmark = delivery.bookmark;
@@ -11802,7 +11814,7 @@ abstract class ShardDO {
         // iterator is pulled long after this frame was dispatched.
         const attachment = this.readAttachment(ws);
         if (this.deliveryAuthorization) {
-            this.sendSubscriptionError(ws, id, "NOT_IMPLEMENTED", "delivery mode unsupported with delivery authorization");
+            this.sendSubscriptionError(ws, id, "NOT_IMPLEMENTED", DELIVERY_MODE_UNSUPPORTED);
             return;
         }
 
@@ -12766,20 +12778,17 @@ abstract class ShardDO {
         const epoch = isAdmin ? undefined : (resume?.epoch ?? readEpoch);
 
         if (resume?.resumable) {
+            // Never reached under delivery authorization: `resume` is forced to
+            // `undefined` above, so a guarded socket always takes the permit-checked
+            // path below. Do not let this branch send or seed without that check.
+            //
             // Keep the per-socket baseline current (so the next change diffs
             // cleanly) but send only the cursor + epoch — the client already
             // holds an equivalent value at `sinceSeq`.
-            if (!this.deliveryAuthorization) {
-                this.seedSubscriptionMemo(ws, subId, outcome, generation);
-            }
+            this.seedSubscriptionMemo(ws, subId, outcome, generation);
+
             try {
-                const delivered = this.sendFrame(ws, `{"type":"resume","id":${JSON.stringify(subId)}${cdcSuffix(resume.cursor ?? 0, epoch)}}`, {
-                    subId,
-                    permit,
-                });
-                if (this.deliveryAuthorization && delivered) {
-                    this.seedSubscriptionMemo(ws, subId, outcome, generation);
-                }
+                trySendFrame(ws, `{"type":"resume","id":${JSON.stringify(subId)}${cdcSuffix(resume.cursor ?? 0, epoch)}}`);
             } catch {
                 /* socket may have closed between the ack and this seed */
             }
@@ -13063,7 +13072,7 @@ abstract class ShardDO {
 
         for (const ws of this.runner.sockets()) {
             for (const subId of Object.keys(this.readAttachment(ws).shapes ?? {})) {
-                this.sendSubscriptionError(ws, subId, "NOT_IMPLEMENTED", "delivery mode unsupported with delivery authorization");
+                this.sendSubscriptionError(ws, subId, "NOT_IMPLEMENTED", DELIVERY_MODE_UNSUPPORTED);
                 this.shapeUnsubscribe(ws, subId);
             }
 
@@ -14871,6 +14880,7 @@ abstract class ShardDO {
             if (!this.sendSubscriptionSettlement(ws, subId, stamp, delivery, permit) && this.deliveryAuthorization) {
                 return;
             }
+
             existing.generation = generation;
             existing.retryData = false;
             existing.tables = outcome.tables;
@@ -15533,7 +15543,7 @@ abstract class ShardDO {
         let remaining = 0;
         for (const ws of sockets) {
             for (const topic of this.readAttachment(ws).whispers ?? []) {
-                const message = "delivery mode unsupported with delivery authorization";
+                const message = DELIVERY_MODE_UNSUPPORTED;
                 this.sendFrame(ws, JSON.stringify({ type: "error", code: "NOT_IMPLEMENTED", error: { code: "NOT_IMPLEMENTED", message }, topic }), "control");
                 if (this.setWhisperMembership(ws, topic, false)) {
                     this.whisperVerdicts.get(ws)?.delete(`subscribe:${topic}`);

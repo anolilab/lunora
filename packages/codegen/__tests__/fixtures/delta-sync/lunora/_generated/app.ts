@@ -115,8 +115,9 @@ class AppBuilder<Env extends object> {
     }
 
     /** Authorize each RPC/subscription read and fence its eventual delivery against durable authority epochs. */
-    public deliveryAuthorization(selector: NonNullable<ShardConfig["deliveryAuthorization"]>): this {
-        this.deliveryAuthorizationSelector = selector;
+    public deliveryAuthorization(selector: (env: Env) => ReturnType<NonNullable<ShardConfig["deliveryAuthorization"]>>): this {
+        this.deliveryAuthorizationSelector = selector as NonNullable<ShardConfig["deliveryAuthorization"]>;
+
         return this;
     }
 
