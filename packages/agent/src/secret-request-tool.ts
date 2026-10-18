@@ -58,9 +58,11 @@ class SecretUnavailableError extends Error {
  * `secretRef` to any tool, but only the declared consumer's {@link withSecret} call
  * takes it, so a prompt-injected model cannot route the value elsewhere.
  *
- * Codegen detects a value import of this name from `@lunora/agent` and wires the
- * secret store; without it the supply mutation refuses. Requires a host that rates
- * `secretValues` as supported.
+ * Codegen wires the secret store when a source in `lunora/` value-imports this tool
+ * from `@lunora/agent`: by a named import, a namespace import that reads it, or a
+ * relative barrel that re-exports it. Without that wiring the supply mutation refuses,
+ * and the refusal names the missing import. Requires a host that rates `secretValues`
+ * as supported.
  *
  * ```ts
  * import { defineAgent, requestSecretTool } from "@lunora/agent";
