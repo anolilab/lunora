@@ -115,6 +115,15 @@ const otlpTraceBody = (event: ObservabilityEvent, endMs: number): unknown => {
         );
     }
 
+    // The enricher's bag follows the shared wire contract (`encodeSignalAttributes`):
+    // a caller key overrides a reserved key of the same name, never a duplicate KeyValue.
+    if (event.attributes !== undefined) {
+        const caller = encodeAttributes(Object.fromEntries(Object.entries(event.attributes).map(([key, value]) => [key, coerceFieldValue(value)])));
+        const overridden = new Set(caller.map((attribute) => attribute.key));
+
+        attributes.splice(0, attributes.length, ...attributes.filter((attribute) => !overridden.has(attribute.key)), ...caller);
+    }
+
     const span: Record<string, unknown> = {
         attributes,
         endTimeUnixNano: otlpUnixNano(endMs),

@@ -17,6 +17,7 @@ import { redactCredentials } from "@lunora/observability";
 
 import { toPlainOperatorContext } from "../../../shared/error-detail";
 import type { ContextLogLevel, LogEvent, LogSinkContext } from "../../../shared/log-event";
+import type { LogFields } from "../../../shared/log-fields";
 import type { MetricEvent } from "../../../shared/metric-event";
 import type { TraceSamplingConfig, TraceSamplingDecision } from "../../../shared/sampling";
 import { resolveTraceSampling, shouldExportTrace } from "../../../shared/sampling";
@@ -64,6 +65,13 @@ const rpcEventForSink = (event: ObservabilityEvent): ObservabilityEvent => {
  * per-shard failure count.
  */
 export interface ObservabilityEvent {
+    /**
+     * Extra attributes for this dispatch, e.g. derived by an `enrichSink` enricher.
+     * `otlpSink` exports them as span attributes. Precedence follows the shared OTLP
+     * contract: a key here overrides a reserved attribute of the same name.
+     */
+    attributes?: LogFields;
+
     /** Wall-clock duration of the dispatch, in milliseconds. */
     durationMs: number;
 

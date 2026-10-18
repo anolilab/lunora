@@ -1361,6 +1361,7 @@ interface NotifySubscriptionStoreLike {
 
 ```ts
 interface ObservabilityEvent {
+    attributes?: LogFields;
     durationMs: number;
     error?: {
         code: string;
@@ -2111,6 +2112,33 @@ interface ShardingInfo {
 }
 ```
 
+### `SinkEnricher` (type)
+
+```ts
+type SinkEnricher = (event: SinkEvent, signal: SinkSignalKind) => LogFields | undefined;
+```
+
+### `SinkEvent` (type)
+
+```ts
+type SinkEvent = LogEvent | MetricEvent | ObservabilityEvent | SpanEvent;
+```
+
+### `SinkRouteOptions` (interface)
+
+```ts
+interface SinkRouteOptions {
+    exclude?: string[];
+    include?: string[];
+}
+```
+
+### `SinkSignalKind` (type)
+
+```ts
+type SinkSignalKind = "log" | "metric" | "rpc" | "span";
+```
+
 ### `SpanEvent` (interface)
 
 ```ts
@@ -2549,6 +2577,18 @@ const emitRpcEvent: (sink: ObservabilitySink | undefined, event: ObservabilityEv
 
 ```ts
 const enforceOrigin: (request: Request, resolved: ResolvedSecurity) => Response | undefined;
+```
+
+### `enrichSink` (const)
+
+```ts
+const enrichSink: (sink: ObservabilitySink, enrich: SinkEnricher) => ObservabilitySink;
+```
+
+### `filterSink` (const)
+
+```ts
+const filterSink: (sink: ObservabilitySink, options: SinkRouteOptions) => ObservabilitySink;
 ```
 
 ### `handleCorsPreflight` (const)

@@ -4901,6 +4901,22 @@ Re-exported from `@lunora/runtime` — signature tracked at its source.
 
 Re-exported from `@lunora/runtime` — signature tracked at its source.
 
+### `SinkEnricher` (type)
+
+Re-exported from `@lunora/runtime` — signature tracked at its source.
+
+### `SinkEvent` (type)
+
+Re-exported from `@lunora/runtime` — signature tracked at its source.
+
+### `SinkRouteOptions` (interface)
+
+Re-exported from `@lunora/runtime` — signature tracked at its source.
+
+### `SinkSignalKind` (type)
+
+Re-exported from `@lunora/runtime` — signature tracked at its source.
+
 ### `SpanEvent` (interface)
 
 Re-exported from `@lunora/runtime` — signature tracked at its source.
@@ -5086,6 +5102,14 @@ Re-exported from `@lunora/runtime` — signature tracked at its source.
 Re-exported from `@lunora/runtime` — signature tracked at its source.
 
 ### `enforceOrigin` (const)
+
+Re-exported from `@lunora/runtime` — signature tracked at its source.
+
+### `enrichSink` (const)
+
+Re-exported from `@lunora/runtime` — signature tracked at its source.
+
+### `filterSink` (const)
 
 Re-exported from `@lunora/runtime` — signature tracked at its source.
 

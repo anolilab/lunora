@@ -71,6 +71,37 @@ Set `transformLog` (or point the sink at a trusted endpoint) before upgrading if
 your handlers log user data. `otlpSink` doesn't have this expansion.
 :::
 
+### Enrich and route
+
+`enrichSink(sink, enrich)` adds derived attributes to every event a sink
+receives. `filterSink(sink, { include, exclude })` keeps only the signals whose
+function path matches. Both wrap any sink and return a sink, so they compose with
+`combineSinks` and with each other. Pass the same wrapped object to
+`createWorker` and `createShardDO` and both halves of telemetry are covered: the
+RPC event from the worker, and `ctx.log`, `ctx.trace` and `ctx.metrics` from the
+shard.
+
+```ts
+const routed = filterSink(
+    enrichSink(otlpSink({ endpoint: env.LUNORA_OTLP_ENDPOINT, token: env.LUNORA_OTLP_TOKEN }), (event, signal) => ({
+        signal,
+        tenant: event.shardKey,
+    })),
+    { exclude: ["admin:*"], include: ["messages:*", "alarm:*"] },
+);
+```
+
+- The enricher receives the event and its signal (`"log"`, `"metric"`, `"span"`
+  or `"rpc"`). Its values land in the log `fields` or the `attributes` of the
+  other signals.
+- In a pattern, `*` matches any run of characters, including `:` and `/`.
+  `exclude` wins over `include`. An absent or empty `include` matches every path.
+- Platform signals carry synthetic paths such as `alarm:rearm`,
+  `scheduler:outbox`, `ttl:sweep` and `container:<name>`. An `include` list drops
+  them unless one of its patterns names them.
+- Enriched values are normalized and redacted the same way logged fields are. An
+  enricher that throws leaves the event unchanged.
+
 ### `otlpSink`
 
 ```ts
