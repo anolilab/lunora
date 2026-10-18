@@ -1930,9 +1930,9 @@ interface FanoutTopicStat {
  * `getMetrics`/`getFunctionStats`.
  *
  * `socketsIterated` is the O(subscribers) loop cost the relay tier targets;
- * `socketsDelivered` is how many of those iterated sockets actually received a
- * frame (the rest were visited but had no matching shape, or were the whisper
- * sender). `totalMs`/`maxMs` are **coarse** wall-clock for the asynchronous
+ * `socketsDelivered` is how many sends were successfully handed to those
+ * iterated sockets (the rest were visited but had no matching shape, or were the
+ * whisper sender). `totalMs`/`maxMs` are **coarse** wall-clock for the asynchronous
  * shape-poke path only: a Durable Object's clock advances only across I/O, so
  * treat them as directional, not exact. They stay `0` for the synchronous
  * whisper path, which performs no awaited I/O to time.
@@ -1946,9 +1946,11 @@ interface FanoutPathCounters {
     peakSocketsIterated: number;
 
     /**
-     * Successful frame handoffs to sockets, summed across every pass. Both the
-     * shape-poke and whisper paths count only sends that completed without
-     * throwing. This does not confirm receipt by the client.
+     * Successful sends to sockets, summed across every pass: one per whisper, and
+     * one per shape poke (a poke is several frames, counted once, and only when
+     * every frame's `sendFrame` reported success). That is a handoff, not a
+     * receipt by the client. A relay counts one per socket-and-shape pair, so its
+     * total can exceed its sockets.
      */
     socketsDelivered: number;
     /** Sockets visited, summed across every pass — the O(subscribers) iteration cost. */
