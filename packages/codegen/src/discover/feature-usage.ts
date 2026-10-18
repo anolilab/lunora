@@ -70,8 +70,16 @@ const contextPropertiesRead = (sourceFile: SourceFile): Set<string> => {
     const contextNames = new Set<string>();
 
     // A plain `ctx` parameter (`async (ctx) => …`) is a context, but it is not a binding pattern, so the walk below cannot see it. Count the
-    // bare spelling only where the file binds one as a parameter; a `const ctx = {}` that is no handler's context must not read as one.
-    if (sourceFile.getDescendantsOfKind(SyntaxKind.Parameter).some((parameter) => parameter.getName() === CONTEXT_PROPERTY)) {
+    // bare spelling only where the file binds one as a parameter, or aliases a parameter to it (`(context) => { const ctx = context; … }`);
+    // a `const ctx = {}` that is no handler's context must not read as one.
+    const parameterNames = new Set(sourceFile.getDescendantsOfKind(SyntaxKind.Parameter).map((parameter) => parameter.getName()));
+    const aliasesParameter = sourceFile.getDescendantsOfKind(SyntaxKind.VariableDeclaration).some((declaration) => {
+        const initializer = declaration.getInitializer();
+
+        return declaration.getName() === CONTEXT_PROPERTY && Node.isIdentifier(initializer) && parameterNames.has(initializer.getText());
+    });
+
+    if (parameterNames.has(CONTEXT_PROPERTY) || aliasesParameter) {
         contextNames.add(CONTEXT_PROPERTY);
     }
 

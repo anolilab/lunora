@@ -432,6 +432,17 @@ describe("discoverPlatformSignals", () => {
         expect(signals().liveContext).toBe(false);
     });
 
+    it("detects a ctx.live read through a renamed context parameter aliased to `ctx`", () => {
+        expect.assertions(1);
+
+        write(
+            "announce.ts",
+            `import { action } from "@lunora/server";\n\nexport const announce = action({ args: {}, handler: async (context) => {\n    const ctx = context;\n\n    return ctx.live.publish("posts", {});\n} });\n`,
+        );
+
+        expect(signals().liveContext).toBe(true);
+    });
+
     it("detects a ctx.live read through a plain `ctx` parameter", () => {
         expect.assertions(1);
 
