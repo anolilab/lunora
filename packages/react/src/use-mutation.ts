@@ -1,13 +1,13 @@
 "use client";
 
-import type { ArgsOf, FunctionReference, OptimisticUpdate, ReturnOf } from "@lunora/client";
+import type { ArgsOf, FunctionReference, OnlineOnlyOption, OptimisticUpdate, ReturnOf } from "@lunora/client";
 import { onlineManager, useMutation as useTanStackMutation } from "@tanstack/react-query";
 import { useCallback, useRef, useState } from "react";
 
 import { useLunora } from "./lunora-provider";
 import type { UseMutationCallOptions } from "./types";
 
-type CallOptions<F extends FunctionReference> = UseMutationCallOptions<unknown, unknown, ArgsOf<F>>;
+type CallOptions<F extends FunctionReference> = OnlineOnlyOption<F> & UseMutationCallOptions<unknown, unknown, ArgsOf<F>>;
 type MutateVariables<F extends FunctionReference> = { args: ArgsOf<F>; options?: CallOptions<F> };
 
 interface MutationHook<F extends FunctionReference> {
@@ -77,10 +77,14 @@ const whenOnline = async (): Promise<void> =>
  * which queues it (the offline queue or a durable outbox) and paints the
  * optimistic update. A write it cannot queue (before the shard's first connect,
  * or with no WebSocket) waits until the browser is online again, then sends.
- * TanStack never retries; the queue owns replays.
+ * TanStack never retries; the queue owns replays. An online-only write (`onlineOnly:
+ * true`, or any call to a function with a `v.sensitive` argument) is not held for a
+ * later send: it reaches `client.mutation` at once and rejects with
+ * `OFFLINE_NOT_QUEUED` if the network is down.
  */
 const useMutation = <F extends FunctionReference>(function_: F): MutationHook<F> => {
     const client = useLunora();
+    const sensitive = (function_ as { sensitive?: unknown }).sensitive === true;
 
     // Local, ref-counted pending across overlapping calls of this hook instance.
     const pendingCountRef = useRef(0);
@@ -89,8 +93,12 @@ const useMutation = <F extends FunctionReference>(function_: F): MutationHook<F>
     const mutation = useTanStackMutation<ReturnOf<F>, Error, MutateVariables<F>>({
         mutationFn: async ({ args, options }) => {
             // A write the client cannot queue would fail at once offline. Hold it
-            // until the network is back instead, as TanStack's default did.
-            if (!client.canQueueOffline(options?.shardKey)) {
+            // until the network is back instead, as TanStack's default did. An
+            // online-only write is not held: it goes straight to `client.mutation`,
+            // which refuses it when the network is down.
+            const onlineOnly = sensitive || options?.onlineOnly === true;
+
+            if (!onlineOnly && !client.canQueueOffline(options?.shardKey)) {
                 await whenOnline();
             }
 
@@ -129,8 +137,10 @@ const useMutation = <F extends FunctionReference>(function_: F): MutationHook<F>
         (update: OptimisticUpdate<ArgsOf<F>>): MutationHook<F> => {
             // Bound update is the default; a per-call `optimisticUpdate` in
             // `options` overrides it (spread last wins).
+            // The spread of a conditional intersection does not narrow back to `CallOptions<F>`;
+            // the caller's options were already checked against it at `mutate`'s signature.
             const boundMutate = (args: ArgsOf<F>, options?: CallOptions<F>): Promise<ReturnOf<F>> =>
-                mutateAsync({ args, options: { optimisticUpdate: update, ...options } });
+                mutateAsync({ args, options: { optimisticUpdate: update, ...options } as CallOptions<F> });
 
             return { data, error, isError, mutate: boundMutate, pending, reset, withOptimisticUpdate };
         },

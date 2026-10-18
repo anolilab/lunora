@@ -6,6 +6,7 @@ import type { ReactElement } from "react";
 import { describe, expect, it, vi } from "vitest";
 
 import { LunoraProvider } from "../src/lunora-provider";
+import type { MutationHook } from "../src/use-mutation";
 import { useMutation } from "../src/use-mutation";
 import useQuery from "../src/use-query";
 import { createMockClient } from "./mock-client";
@@ -15,6 +16,9 @@ import { createMockWebSocket } from "./mock-socket";
 const makeRef = (ref: string): FunctionReference => {
     return { __lunoraRef: ref };
 };
+
+/** A reference to a function with a `v.sensitive` argument, as codegen emits it. */
+const makeSensitiveRef = (ref: string): FunctionReference => ({ __lunoraRef: ref, sensitive: true }) as FunctionReference;
 
 interface HarnessProps {
     onCall: (call: () => Promise<unknown>, pending: () => boolean) => void;
@@ -356,5 +360,120 @@ describe("useMutation", () => {
             onlineManager.setOnline(true);
             client.close();
         }
+    });
+
+    describe("online-only writes", () => {
+        interface ColdWriter {
+            client: LunoraClient;
+            fetchMock: ReturnType<typeof vi.fn<typeof fetch>>;
+            send: () => Promise<unknown>;
+        }
+
+        /**
+         * Renders a writer over a client that has never connected and whose network
+         * is down: every `fetch` attempt rejects, and no WebSocket ever opens. `send`
+         * starts one call and returns its promise, so a test awaits the settled call.
+         */
+        const renderColdWriter = (reference: FunctionReference, options?: { onlineOnly?: boolean }): ColdWriter => {
+            const fetchMock = vi.fn<typeof fetch>(async () => {
+                throw new TypeError("Failed to fetch");
+            });
+            const client = new LunoraClient({ fetch: fetchMock, url: "https://app.example", WebSocket: createMockWebSocket([]) });
+            let sendCall: (() => Promise<unknown>) | undefined;
+
+            const Writer = (): ReactElement => {
+                const { mutate } = useMutation(reference);
+
+                sendCall = () => mutate({ apiKey: "sk_live_secret" }, options);
+
+                return <div />;
+            };
+
+            render(
+                <LunoraProvider client={client}>
+                    <Writer />
+                </LunoraProvider>,
+            );
+
+            return {
+                client,
+                fetchMock,
+                send: () => {
+                    let attempt: Promise<unknown> = Promise.resolve();
+
+                    act(() => {
+                        attempt = sendCall?.() ?? Promise.resolve();
+                    });
+
+                    return attempt;
+                },
+            };
+        };
+
+        it("rejects a sensitive write made before the client ever connected, and never sends it once online", async () => {
+            expect.assertions(2);
+
+            const { client, fetchMock, send } = renderColdWriter(makeSensitiveRef("accounts:linkApiKey"));
+
+            try {
+                await act(async () => {
+                    onlineManager.setOnline(false);
+                    await Promise.resolve();
+                });
+
+                await expect(send()).rejects.toMatchObject({ code: "OFFLINE_NOT_QUEUED" });
+
+                await act(async () => {
+                    onlineManager.setOnline(true);
+                });
+
+                // The one attempt made while offline; the write is not replayed once online.
+                expect(fetchMock).toHaveBeenCalledTimes(1);
+            } finally {
+                onlineManager.setOnline(true);
+                client.close();
+            }
+        });
+
+        it("rejects an explicit online-only write on a normal reference instead of holding it until online", async () => {
+            expect.assertions(2);
+
+            const { client, fetchMock, send } = renderColdWriter(makeRef("posts:create"), { onlineOnly: true });
+
+            try {
+                await act(async () => {
+                    onlineManager.setOnline(false);
+                    await Promise.resolve();
+                });
+
+                await expect(send()).rejects.toMatchObject({ code: "OFFLINE_NOT_QUEUED" });
+
+                await act(async () => {
+                    onlineManager.setOnline(true);
+                });
+
+                expect(fetchMock).toHaveBeenCalledTimes(1);
+            } finally {
+                onlineManager.setOnline(true);
+                client.close();
+            }
+        });
+
+        it("types onlineOnly per reference: `false` is refused on a sensitive one", () => {
+            // Type-level only: the checks compile in the function below, which only
+            // has to be defined for `tsc` to read it.
+            expect.assertions(1);
+
+            type SensitiveReference = FunctionReference & { readonly sensitive: true };
+            const typeChecks = (plainMutate: MutationHook<FunctionReference>["mutate"], sensitiveMutate: MutationHook<SensitiveReference>["mutate"]): void => {
+                plainMutate({}, { onlineOnly: false }).catch(() => undefined);
+                plainMutate({}, { onlineOnly: true }).catch(() => undefined);
+                sensitiveMutate({}, { onlineOnly: true }).catch(() => undefined);
+                // @ts-expect-error -- a sensitive write is always online-only; `onlineOnly: false` is a type error
+                sensitiveMutate({}, { onlineOnly: false }).catch(() => undefined);
+            };
+
+            expect(typeChecks).toBeTypeOf("function");
+        });
     });
 });
