@@ -293,6 +293,15 @@ export const billing = defineAgent({
 });
 ```
 
+Setup: the value is sealed under the Worker secret `LUNORA_SECRET_VALUE_KEY`
+(base64 of 32 bytes, from `openssl rand -base64 32`). Without it the pause cannot
+store the value: `put` refuses with `SecretValueKeyError`. `lunora deploy` treats
+the missing key as a required secret, aborting when it runs non-interactively,
+and `lunora env doctor` reports it as an error: `missing` before `.dev.vars` has the key, `unset` while it still holds the placeholder. `lunora dev` seeds
+`.dev.vars.example` with the key, so the check starts after the first dev run. Rotation,
+and what point-in-time recovery does to a discarded value, are in the
+platform's Secret values section.
+
 The model receives only `{ "secretRef": "…" }` from the request and passes that
 ref to the consuming tool. Nothing else it sees, and nothing in the thread, holds
 the value. `withSecret` takes the value inside its own durable step, returns only

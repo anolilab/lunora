@@ -960,6 +960,7 @@ interface ShapeIR {
 interface SourceCapabilitySignals {
     contextReads: ReadonlySet<string>;
     dynamicImports: ReadonlySet<string>;
+    requestSecretTool: boolean;
     sandboxTools: Readonly<SandboxUsage>;
     valueImports: ReadonlySet<string>;
 }
