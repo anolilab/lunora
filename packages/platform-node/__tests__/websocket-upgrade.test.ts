@@ -1,5 +1,5 @@
 import { ShardDO } from "@lunora/do";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type { NodeHttpServer } from "../src/node-http-server";
 import { createNodeHttpServer } from "../src/node-http-server";
@@ -291,5 +291,48 @@ describe("node websocket upgrades", () => {
         const refusal = await rawUpgrade(server, "/private");
 
         expect(refusal).toMatch(/^HTTP\/1\.1 401/u);
+    });
+});
+
+describe("bindShardSockets", () => {
+    it("logs a synchronous throw from webSocketMessage the same way as a rejection", async () => {
+        expect.assertions(2);
+
+        let onMessage: ((socket: unknown, data: string) => void) | undefined;
+        const inbound = {
+            onClose: () => undefined,
+            onMessage: (handler: (socket: unknown, data: string) => void) => {
+                onMessage = handler;
+            },
+        };
+        const syncThrow = new Error("sync throw");
+        const shard = {
+            webSocketClose: () => Promise.resolve(),
+            webSocketMessage: (): Promise<void> => {
+                throw syncThrow;
+            },
+        };
+        const logged: unknown[][] = [];
+        const log = vi.spyOn(console, "error").mockImplementation((...args: unknown[]) => {
+            logged.push(args);
+        });
+
+        try {
+            bindShardSockets(shard, inbound as never);
+
+            // A synchronous throw must not escape the listener: it has to reach the same log as a rejection.
+            expect(() => onMessage?.({}, "frame")).not.toThrow();
+
+            // `vi.waitFor` retries the callback until it stops throwing; an `expect` inside would count each retry.
+            await vi.waitFor(() => {
+                if (logged.length !== 1) {
+                    throw new Error("the failure was not logged yet");
+                }
+            });
+
+            expect(logged[0]).toStrictEqual(["[lunora] webSocketMessage threw:", syncThrow]);
+        } finally {
+            log.mockRestore();
+        }
     });
 });

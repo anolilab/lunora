@@ -149,9 +149,17 @@ export interface ShardSocketHooks {
  * instance, at the same point it builds the shard.
  */
 export const bindShardSockets = (shard: ShardSocketHooks, inbound: Pick<NodeShard["inbound"], "onClose" | "onMessage">): void => {
+    // An async function runs its body synchronously up to the first `await`, so the hook is still called now, and a
+    // synchronous throw from it becomes a rejection that reaches the same handler as an async failure.
+    const deliverMessage = async (socket: unknown, data: string | ArrayBuffer): Promise<void> => {
+        await shard.webSocketMessage(socket, data);
+    };
+
     inbound.onMessage((socket, data) => {
         // A handler error must not take the process down, and the Cloudflare runtime logs the same failure for a Durable Object.
-        Promise.resolve(shard.webSocketMessage(socket, data)).catch((error: unknown) => {
+        // The executor runs synchronously, so the hook is still called now; a synchronous throw from it becomes a rejection
+        // and reaches the same log line as an async failure.
+        deliverMessage(socket, data).catch((error: unknown) => {
             // eslint-disable-next-line no-console -- the frame is dropped, so the failure is only visible here
             console.error("[lunora] webSocketMessage threw:", error);
         });
