@@ -1,3 +1,22 @@
+## @lunora/platform-node [1.0.0-alpha.155](https://github.com/anolilab/lunora/compare/@lunora/platform-node@1.0.0-alpha.154...@lunora/platform-node@1.0.0-alpha.155) (2026-10-18)
+
+### Bug Fixes
+
+* **do:** address review of delivery authorization ([#1235](https://github.com/anolilab/lunora/issues/1235)) ([#1238](https://github.com/anolilab/lunora/issues/1238)) ([d73863b](https://github.com/anolilab/lunora/commit/d73863bd1e442675a751453284d5498ec4383a87))
+
+
+### Dependencies
+
+* **@lunora/d1:** upgraded to 1.0.0-alpha.186
+* **@lunora/platform:** upgraded to 1.0.0-alpha.67
+* **@lunora/queue:** upgraded to 1.0.0-alpha.112
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.214
+* **@lunora/sql-store:** upgraded to 1.0.0-alpha.187
+* **@lunora/do:** upgraded to 1.0.0-alpha.224
+* **@lunora/platform-cloudflare:** upgraded to 1.0.0-alpha.94
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.137
+* **@lunora/storage:** upgraded to 1.0.0-alpha.139
+
 ## @lunora/platform-node [1.0.0-alpha.154](https://github.com/anolilab/lunora/compare/@lunora/platform-node@1.0.0-alpha.153...@lunora/platform-node@1.0.0-alpha.154) (2026-10-18)
 
 
