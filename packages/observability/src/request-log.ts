@@ -511,10 +511,22 @@ interface SensitiveScope {
      * A no-op once the scope is cleared.
      */
     add: (values: ReadonlyArray<string>) => void;
-    /** Forget the values. Called once the invocation's records are written. */
+
+    /**
+     * Mark the dispatch settled. The values are forgotten once no `hold` is
+     * outstanding, so a record still open when the dispatch returns is scrubbed.
+     */
     clear: () => void;
+
     /** Scrub a field bag; `undefined` passes through. */
     fields: <T extends Record<string, unknown> | undefined>(bag: T) => T;
+
+    /**
+     * Keep the values for a record opened under this scope and not yet written.
+     * Returns the release, which is idempotent. A record opened while the scope is
+     * live is scrubbed from the values as they stand then.
+     */
+    hold: () => () => void;
     /** Scrub a free-text string. */
     text: (text: string) => string;
     /** Scrub one structured value. */
@@ -528,17 +540,39 @@ interface SensitiveScope {
  */
 const createSensitiveScope = (values: ReadonlyArray<string>): SensitiveScope => {
     let secrets: ReadonlyArray<string> = [...new Set(values)];
-    let cleared = false;
+    let settled = false;
+    let holds = 0;
+
+    // A span or fetch that outlives its handler still has to scrub what it writes
+    // before it is buffered, so the values drop only when nothing is waiting on them.
+    const forgetIfIdle = (): void => {
+        if (settled && holds === 0) {
+            secrets = [];
+        }
+    };
 
     return {
         add(more) {
-            if (!cleared && more.length > 0) {
+            if (!settled && more.length > 0) {
                 secrets = [...new Set([...secrets, ...more])];
             }
         },
         clear() {
-            cleared = true;
-            secrets = [];
+            settled = true;
+            forgetIfIdle();
+        },
+        hold() {
+            holds += 1;
+
+            let released = false;
+
+            return () => {
+                if (!released) {
+                    released = true;
+                    holds -= 1;
+                    forgetIfIdle();
+                }
+            };
         },
         fields: <T extends Record<string, unknown> | undefined>(bag: T): T =>
             bag === undefined || secrets.length === 0 ? bag : (scrubValue(bag, secrets, 0) as T),

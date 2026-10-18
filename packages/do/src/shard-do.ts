@@ -494,10 +494,12 @@ const NO_SENSITIVE_ARGS: ReadonlySet<string> = new Set<string>();
 interface SensitiveScope {
     /** Admit more values into the invocation (a composed call's marked arguments). */
     add: (values: ReadonlyArray<string>) => void;
-    /** Forget the values. Called once the invocation's records are written. */
+    /** Mark the dispatch settled; the values outlive it only while a record opened under the scope is still held. */
     clear: () => void;
     /** Scrub a field bag; `undefined` passes through. */
     fields: <T extends Record<string, unknown> | undefined>(bag: T) => T;
+    /** Keep the values for a record opened under the scope and not yet written. Returns the release. */
+    hold: () => () => void;
     /** Scrub a free-text string. */
     text: (text: string) => string;
     /** Scrub one structured value. */
@@ -8810,8 +8812,9 @@ abstract class ShardDO {
                 this.inFlightClaims.release(heldClaim);
             }
 
-            // Every record this dispatch makes is written by now. A span a handler
-            // leaves open past this point is not scrubbed: the values are gone.
+            // Every record this dispatch makes is written by now, except a span or
+            // fetch a handler left open: the scope keeps the values until that
+            // record is written (see `SensitiveScope.hold`).
             sensitive?.clear();
             this.endDispatch();
         }
