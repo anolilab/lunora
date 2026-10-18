@@ -116,7 +116,11 @@ the durable loop:
   final answer; the typed value is surfaced on `result.output`.
 - **`onStepFinish`**: a callback after each turn (observability/side channels).
 - **`usage`**: token usage is accumulated across turns and surfaced on the
-  run result and persisted onto the thread.
+  run result and persisted onto the thread. Beside the input, output and total
+  counts it carries `cacheReadTokens`, `cacheWriteTokens` and `reasoningTokens`
+  when the provider reports them. Those are subsets of the totals and are never
+  added on top. A bucket no turn reported is absent, and a thread written before
+  these fields existed reads as absent too, not as zero.
 - **`telemetry`**: an ai@7 `TelemetryOptions` handed to every turn; set
   `telemetry.integrations` to trace turns and tool calls.
   The [`@lunora/agent/telemetry`](#telemetry-integrations) subpath ships

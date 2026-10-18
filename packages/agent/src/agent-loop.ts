@@ -202,7 +202,14 @@ const isStopConditionMet = async (conditions: ReadonlyArray<StopCondition<ToolSe
     return results.some(Boolean);
 };
 
-/** Accumulate a turn's usage into the running total (defined fields only; a field absent on both sides stays absent). */
+/** Every field of {@link AgentUsage}, each summed across turns. The breakdowns sum like the totals; each stays a subset of its total. */
+const USAGE_KEYS = ["inputTokens", "outputTokens", "totalTokens", "cacheReadTokens", "cacheWriteTokens", "reasoningTokens"] as const;
+
+/**
+ * Accumulate a turn's usage into the running total. A field absent on both sides stays
+ * absent, so a provider that never reports a cache or reasoning bucket never shows one.
+ * A row or a memoized step written before a field existed is absent there, not zero.
+ */
 const addUsage = (base: AgentUsage | undefined, next: AgentUsage | undefined): AgentUsage | undefined => {
     if (next === undefined) {
         return base;
@@ -214,7 +221,7 @@ const addUsage = (base: AgentUsage | undefined, next: AgentUsage | undefined): A
 
     const result: AgentUsage = {};
 
-    for (const key of ["inputTokens", "outputTokens", "totalTokens"] as const) {
+    for (const key of USAGE_KEYS) {
         if (base[key] !== undefined || next[key] !== undefined) {
             result[key] = (base[key] ?? 0) + (next[key] ?? 0);
         }

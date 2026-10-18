@@ -28,7 +28,14 @@ export interface StoredThread {
     summaryRebuiltSeq?: number;
     summaryThroughSeq?: number;
     title?: string;
-    usage?: { inputTokens?: number; outputTokens?: number; totalTokens?: number };
+    usage?: {
+        cacheReadTokens?: number;
+        cacheWriteTokens?: number;
+        inputTokens?: number;
+        outputTokens?: number;
+        reasoningTokens?: number;
+        totalTokens?: number;
+    };
 }
 
 /**

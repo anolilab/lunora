@@ -378,14 +378,24 @@ export interface AgentMemorySource extends AgentMemoryOptions {
 }
 
 /**
- * Cumulative or per-turn token usage — AI SDK `LanguageModelUsage` field names.
+ * Cumulative or per-turn token usage — AI SDK `LanguageModelUsage` field names, plus
+ * the cache and reasoning breakdowns. The breakdowns are subsets of the totals they
+ * sit under (`cacheReadTokens` and `cacheWriteTokens` are part of `inputTokens`,
+ * `reasoningTokens` is part of `outputTokens`), so they are never added on top.
+ * Each is omitted when the provider reported none.
  * @experimental
  */
 export interface AgentUsage {
-    /** Prompt (input) tokens. */
+    /** Input tokens served from the provider's prompt cache. */
+    cacheReadTokens?: number;
+    /** Input tokens written to the provider's prompt cache. */
+    cacheWriteTokens?: number;
+    /** Prompt (input) tokens, including any cache-read and cache-write tokens. */
     inputTokens?: number;
-    /** Completion (output) tokens. */
+    /** Completion (output) tokens, including any reasoning tokens. */
     outputTokens?: number;
+    /** Output tokens spent on hidden reasoning. */
+    reasoningTokens?: number;
     /** Input + output tokens. */
     totalTokens?: number;
 }
