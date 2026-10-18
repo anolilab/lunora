@@ -244,6 +244,38 @@ describe("shardDO socket routes", () => {
         expect(b.frames).toEqual([]);
     });
 
+    it("still sends a route's queued frames when the handler fails after its writes committed", async () => {
+        expect.assertions(2);
+
+        // The writes are durable, so the broadcast announcing them must still reach every route socket.
+        class CommittedFailureShard extends SocketShard {
+            public override handleRpc(functionPath: string, args: Record<string, unknown>): Promise<unknown> {
+                if (args["kind"] === "message") {
+                    (args["socket"] as { broadcast: (message: unknown) => void }).broadcast({ committed: true });
+
+                    return Promise.reject(Object.assign(new Error("deferred step failed"), { committed: true }));
+                }
+
+                return super.handleRpc(functionPath, args);
+            }
+        }
+
+        const a = new FakeSocket({ connectionId: "a", socketPath: "/chat", subs: {}, whispers: [CHAT_TOPIC] });
+        const b = new FakeSocket({ connectionId: "b", socketPath: "/chat", subs: {}, whispers: [CHAT_TOPIC] });
+        const sockets = [a, b];
+        const state = {
+            acceptWebSocket() {},
+            getWebSockets: () => sockets,
+            storage: { sql: {} },
+        } as unknown as ShardDOState;
+        const shard = new CommittedFailureShard(state, CHAT_ROUTE);
+
+        await send(shard, a, JSON.stringify(encodeWire({ text: "x" })));
+
+        expect(a.frames).toHaveLength(1);
+        expect(b.frames).toHaveLength(1);
+    });
+
     it("throttles a route's frames from one socket past its admission burst", async () => {
         expect.assertions(1);
 

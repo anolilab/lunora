@@ -16460,14 +16460,19 @@ abstract class ShardDO {
 
             await this.withRequestIdentity(info.userId, info.identity, info.ip, () => this.withSystemDispatch(() => this.handleRpc(route.functionPath, args)));
         } catch (error: unknown) {
-            this.logs.push({
-                functionPath: route.functionPath,
-                level: "error",
-                message: error instanceof Error ? error.message : String(error),
-                timestamp: Date.now(),
-            });
+            // A failure after the handler's writes committed (a deferred step that would not run) leaves those
+            // writes durable, so the frames announcing them are still owed, as for a room. Only a failure before
+            // the commit drops them.
+            if (!this.absorbCommittedFailure(route.functionPath, error)) {
+                this.logs.push({
+                    functionPath: route.functionPath,
+                    level: "error",
+                    message: error instanceof Error ? error.message : String(error),
+                    timestamp: Date.now(),
+                });
 
-            return;
+                return;
+            }
         }
 
         // The mutation has committed, so every queued frame is still owed. One that cannot
