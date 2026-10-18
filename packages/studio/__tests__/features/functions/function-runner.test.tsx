@@ -497,6 +497,50 @@ describe("functionRunner with a v.sensitive argument", () => {
         expect(screen.getByTestId("error").textContent).toContain("«sensitive»");
     });
 
+    it("masks a sensitive value nested in an object or array, and a sensitive number, in a failed run's message", async () => {
+        expect.assertions(5);
+
+        const NESTED = "p@ss-nested-9";
+        const mock = createMockClient({
+            mutation: () => {
+                throw new Error(`bad credentials ${NESTED}, listed x-listed-secret, code 4821, cvv 123 on order 41230`);
+            },
+        });
+        const functionsWithNested: FunctionDescriptor[] = [
+            {
+                args: [
+                    { kind: "string", name: "label", optional: false },
+                    { kind: "object", name: "credentials", optional: false, sensitive: true },
+                    { kind: "number", name: "pin", optional: false, sensitive: true },
+                    { kind: "number", name: "cvv", optional: false, sensitive: true },
+                ],
+                kind: "mutation",
+                path: "vault:store",
+            },
+        ];
+
+        render(
+            <LunoraProvider client={mock.asClient}>
+                <FunctionRunner functions={functionsWithNested} />
+            </LunoraProvider>,
+        );
+
+        typeArgs(JSON.stringify({ credentials: { items: ["x-listed-secret"], password: NESTED }, cvv: 123, label: "primary", pin: 4821 }));
+        fireEvent.click(screen.getByTestId("run-button"));
+
+        await screen.findByTestId("fn-history");
+
+        const shown = screen.getByTestId("error").textContent ?? "";
+
+        expect(shown).not.toContain(NESTED);
+        expect(shown).not.toContain("x-listed-secret");
+        expect(shown).not.toContain("4821");
+        // A short sensitive number is masked as a whole token only: `123` goes, but the
+        // unrelated `41230` that merely contains it is left readable.
+        expect(shown).toContain("cvv «sensitive» on order 41230");
+        expect(shown).toContain("«sensitive»");
+    });
+
     it("does not reload a sensitive run's args from history, and says why", async () => {
         expect.assertions(2);
 

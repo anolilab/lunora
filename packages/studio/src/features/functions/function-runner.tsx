@@ -63,24 +63,58 @@ const historyArgsText = (argsText: string, sensitive: ReadonlyArray<string>): st
     }
 };
 
+/** Below this length a value is masked only as a whole token, so a short PIN does not mangle ordinary words. */
+const SUBSTRING_MASK_MIN_LENGTH = 4;
+
+const MAX_LEAF_DEPTH = 32;
+
+/**
+ * Every string and number under a sensitive argument's value, as the text an error
+ * might quote it in. Booleans carry no secret and would mangle ordinary text, so they
+ * are left out.
+ */
+const leavesOf = (value: unknown, into: string[] = [], depth = 0): string[] => {
+    if (typeof value === "string") {
+        if (value.length > 0) {
+            into.push(value);
+        }
+    } else if (typeof value === "number" || typeof value === "bigint") {
+        into.push(String(value));
+    } else if (typeof value === "object" && value !== null && depth < MAX_LEAF_DEPTH) {
+        for (const child of Object.values(value)) {
+            leavesOf(child, into, depth + 1);
+        }
+    }
+
+    return into;
+};
+
+const maskLeaf = (text: string, leaf: string): string => {
+    if (leaf.length >= SUBSTRING_MASK_MIN_LENGTH) {
+        return text.replaceAll(leaf, SENSITIVE_PLACEHOLDER);
+    }
+
+    const escaped = leaf.replaceAll(/[$()*+.?[\\\]^{|}]/gu, String.raw`\$&`);
+
+    return text.replaceAll(new RegExp(`(?<![A-Za-z0-9])${escaped}(?![A-Za-z0-9])`, "gu"), SENSITIVE_PLACEHOLDER);
+};
+
 /**
  * A run's error text with every sensitive value taken out, for a handler that quotes
- * the argument it rejected. Longest first, so a value containing another is masked whole.
+ * the argument it rejected: nested object and array members included, and numbers as
+ * well as strings. Longest first, so a value containing another is masked whole.
  */
 const scrubSensitiveValues = (message: string, parsedArgs: unknown, sensitive: ReadonlyArray<string>): string => {
     if (sensitive.length === 0 || typeof parsedArgs !== "object" || parsedArgs === null) {
         return message;
     }
 
-    const secrets = sensitive
-        .map((name) => (parsedArgs as Record<string, unknown>)[name])
-        .filter((value): value is string => typeof value === "string" && value.length > 0)
-        .toSorted((a, b) => b.length - a.length);
+    const leaves = sensitive.flatMap((name) => leavesOf((parsedArgs as Record<string, unknown>)[name])).toSorted((a, b) => b.length - a.length);
 
     let scrubbed = message;
 
-    for (const secret of secrets) {
-        scrubbed = scrubbed.replaceAll(secret, SENSITIVE_PLACEHOLDER);
+    for (const leaf of leaves) {
+        scrubbed = maskLeaf(scrubbed, leaf);
     }
 
     return scrubbed;
