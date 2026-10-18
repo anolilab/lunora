@@ -103,6 +103,12 @@ interface ActionCtx {
     readonly env?: Record<string, unknown>;
     readonly fetch: typeof globalThis.fetch;
     readonly ip?: string;
+    readonly live?: {
+        publish: (topic: string, payload: unknown, options: {
+            shardKey?: string;
+            stream: string;
+        }) => Promise<void>;
+    };
     readonly log: LunoraLogger;
     readonly meta?: Readonly<Record<string, unknown>>;
     readonly metrics: LunoraMetrics;
@@ -438,6 +444,19 @@ interface DefineStorageRuleInput<Context = unknown> {
 }
 ```
 
+### `DefineWebSocketOptions` (interface)
+
+```ts
+interface DefineWebSocketOptions<Message extends Validator> {
+    auth?: boolean;
+    message: Message;
+    onClose?: WebSocketCloseHandler;
+    onMessage: WebSocketMessageHandler<Infer<Message>>;
+    onOpen?: WebSocketOpenHandler;
+    path: string;
+}
+```
+
 ### `DocumentHistoryComponent` (type)
 
 ```ts
@@ -726,7 +745,9 @@ interface GeoPointInput {
 
 ```ts
 type HttpActionCtx = {
+    readonly fetchShard: ShardFetch;
     readonly forShard: (shardKey: string) => HttpRunners;
+    readonly live: LivePublisher;
     readonly scheduler?: ActionCtx["scheduler"];
     readonly storage?: ActionCtx["storage"];
     readonly waitUntil?: (promise: Promise<unknown>) => void;
@@ -1032,7 +1053,7 @@ interface LifecycleEvent {
 ### `LifecycleEventKind` (type)
 
 ```ts
-type LifecycleEventKind = "connect" | "disconnect" | "init" | "reactor" | "whisper";
+type LifecycleEventKind = "connect" | "disconnect" | "init" | "reactor" | "socket" | "whisper";
 ```
 
 ### `LifecycleHandler` (type)
@@ -1093,6 +1114,54 @@ interface ListOrderByEntry<O extends string> {
 type ListWhere<F> = {
     [K in keyof F]?: Infer<NonNullable<F[K]>> | ListFilterOperators<Infer<NonNullable<F[K]>>>;
 };
+```
+
+### `LivePublishOptions` (interface)
+
+```ts
+interface LivePublishOptions {
+    shardKey?: string;
+    stream: string;
+}
+```
+
+### `LivePublisher` (interface)
+
+```ts
+interface LivePublisher {
+    publish: (topic: string, payload: unknown, options: LivePublishOptions) => Promise<void>;
+}
+```
+
+### `LiveStream` (interface)
+
+```ts
+interface LiveStream {
+    connect: LunoraRouteHandler;
+    connectPath: string;
+    control: LunoraRouteHandler;
+    controlPath: string;
+    id: string;
+}
+```
+
+### `LiveStreamConfig` (interface)
+
+```ts
+interface LiveStreamConfig {
+    allowAnonymousControl?: boolean;
+    id: string;
+    onSubscribe?: LiveSubscribeHandler;
+}
+```
+
+### `LiveSubscribeHandler` (type)
+
+```ts
+type LiveSubscribeHandler = (options: {
+    ctx: HttpActionCtx;
+    topic: string;
+}) => boolean | Promise<boolean>;
 ```
 
 ### `LogFields` (type)
@@ -1875,6 +1944,16 @@ interface RegisteredStream<A extends ArgsValidator, R> {
 }
 ```
 
+### `RegisteredWebSocket` (type)
+
+```ts
+type RegisteredWebSocket = RegisteredFunction<Record<string, never>, void, "mutation"> & {
+    readonly auth: boolean;
+    readonly lifecycle: "socket";
+    readonly socketPath: string;
+};
+```
+
 ### `RegisteredWhisperAuthorizer` (type)
 
 ```ts
@@ -2215,6 +2294,22 @@ interface ShapeReadWhereRequest {
     readonly table: string;
     readonly tablePublic: boolean;
     readonly userId: null | string;
+}
+```
+
+### `ShardFetch` (type)
+
+```ts
+type ShardFetch = (shardKey: string | undefined, path: string, init?: ShardFetchInit) => Promise<Response>;
+```
+
+### `ShardFetchInit` (interface)
+
+```ts
+interface ShardFetchInit {
+    body?: string;
+    headers?: Record<string, string>;
+    method?: string;
 }
 ```
 
@@ -3060,6 +3155,37 @@ interface VectorizeOptions<Shape extends Record<string, Validator> = Record<stri
 }
 ```
 
+### `WebSocketCloseHandler` (type)
+
+```ts
+type WebSocketCloseHandler = (context: MutationCtx, socket: WebSocketHandle) => Promise<void> | void;
+```
+
+### `WebSocketHandle` (interface)
+
+```ts
+interface WebSocketHandle {
+    broadcast: (message: unknown) => void;
+    readonly connectionId: string;
+    readonly path: string;
+    send: (message: unknown) => void;
+    readonly shardKey: string;
+    readonly userId: null | string;
+}
+```
+
+### `WebSocketMessageHandler` (type)
+
+```ts
+type WebSocketMessageHandler<Message> = (context: MutationCtx, message: Message, socket: WebSocketHandle) => Promise<void> | void;
+```
+
+### `WebSocketOpenHandler` (type)
+
+```ts
+type WebSocketOpenHandler = (context: MutationCtx, socket: WebSocketHandle) => Promise<void> | void;
+```
+
 ### `WeeklySchedule` (interface)
 
 Re-exported from `@lunora/scheduler` — signature tracked at its source.
@@ -3361,6 +3487,12 @@ const defineIdentityGuard: <Guard extends (...args: never[]) => void>(guard: Gua
 const defineListArgs: <TDocument>() => <F extends ListFilterShape<TDocument>, O extends keyof TDocument & string>(config: DefineListArgsConfig<F, O>) => ListArgsSpec<TDocument, F, O>;
 ```
 
+### `defineLiveStream` (const)
+
+```ts
+const defineLiveStream: (config: LiveStreamConfig) => LiveStream;
+```
+
 ### `defineMigration` (const)
 
 ```ts
@@ -3470,6 +3602,12 @@ const defineTable: <Shape extends Record<string, Validator>>(inputShape: Shape) 
 
 ```ts
 const defineVectorIndex: (options: VectorIndexOptions) => VectorIndexDefinition;
+```
+
+### `defineWebSocket` (const)
+
+```ts
+const defineWebSocket: <Message extends Validator>(options: DefineWebSocketOptions<Message>) => RegisteredWebSocket;
 ```
 
 ### `deny` (const)

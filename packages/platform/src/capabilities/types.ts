@@ -437,8 +437,8 @@ export interface PlatformCapabilities {
          * Live topic streams — `defineLiveStream` and `ctx.live.publish`. The shard
          * DO serves one long-lived SSE response per connection and fans publishes
          * out to its subscribers. A host that cannot serve that connect route
-         * rates this `unsupported`, so its matrix row is honest even though no
-         * codegen gate reads it yet.
+         * rates this `unsupported`: codegen then refuses a declared `defineLiveStream`
+         * and withholds `ctx.live` from the worker's HTTP context.
          */
         liveStreams?: Capability;
 

@@ -70,7 +70,15 @@ import type {
 } from "./ir";
 import { isShardByTable } from "./ir";
 import type { PlatformGateResult } from "./platform-target";
-import { gatePlatformFeatures, readTargetDiagnostics, resolveCodegenTarget, vectorizeDimensionDiagnostics } from "./platform-target";
+import {
+    gatePlatformFeatures,
+    liveStreamsDeliveryAuthorizationDiagnostic,
+    readTargetDiagnostics,
+    resolveCodegenTarget,
+    socketRoutesDeliveryAuthorizationDiagnostic,
+    vectorizeDimensionDiagnostics,
+} from "./platform-target";
+import { findProjectConfigFile } from "./project-config-path";
 import schemaDeclaresRelationGraph from "./relation-graph";
 
 /**
@@ -263,7 +271,7 @@ const buildDeclarationSurface = (options: DeclarationSurfaceOptions): Declaratio
     // consulted by nothing, so e.g. a durable stream on `target: "node"` emitted
     // its full surface and silently behaved as ephemeral, and a declared cron
     // built green on a host where no runtime dispatches one.
-    const codeSignals = discoverPlatformSignals(project, lunoraDirectory);
+    const codeSignals = discoverPlatformSignals(project, lunoraDirectory, findProjectConfigFile(projectRoot));
     const sandboxUsage = discoverSandboxUsage(project, lunoraDirectory);
     const usage = discoverFeatureUsage(project, lunoraDirectory);
 
@@ -295,8 +303,10 @@ const buildDeclarationSurface = (options: DeclarationSurfaceOptions): Declaratio
         // already lifts statically, so no separate AST signal is needed.
         containerRuntimeScheduling: containers.some((container) => container.schedulingPolicy === "durable_object"),
         containerSandboxTools: containers.some((container) => container.sandbox === true),
+        deliveryAuthorization: codeSignals.deliveryAuthorization,
         durableStreams: codeSignals.durableStreams,
         globalTables: schema.tables.some((table) => table.shardMode === "global"),
+        liveContext: codeSignals.liveContext,
         liveStreams: codeSignals.liveStreams,
         typedWebSockets: codeSignals.typedWebSockets,
         queues: queues.length > 0,
@@ -378,6 +388,8 @@ const buildDeclarationSurface = (options: DeclarationSurfaceOptions): Declaratio
                 ...readTargetDiagnostics(projectRoot, options.target),
                 ...platformGate.diagnostics,
                 ...vectorizeDimensionDiagnostics(target, schema.vectorIndexes),
+                ...(codeSignals.liveStreams && codeSignals.deliveryAuthorization ? [liveStreamsDeliveryAuthorizationDiagnostic(target)] : []),
+                ...(codeSignals.socketRoutes && codeSignals.deliveryAuthorization ? [socketRoutesDeliveryAuthorizationDiagnostic(target)] : []),
             ],
         },
         queues,

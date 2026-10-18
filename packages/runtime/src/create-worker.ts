@@ -18,6 +18,7 @@ import {
     EXPECT_SUBJECT_HEADER,
     isIdentityExpired,
 } from "../../../shared/identity-header";
+import { LIVE_PUBLISH_PATH } from "../../../shared/live-stream";
 import { ORIGIN_PAYWALL_APPLIED, ORIGIN_PAYWALL_HEADER } from "../../../shared/origin-paywall";
 import { buildTraceparent, otlpRandomHex } from "../../../shared/otlp";
 import { CF_RAY_HEADER, parseRayId } from "../../../shared/ray-id";
@@ -129,6 +130,15 @@ interface HttpActionContext {
     fetch: typeof globalThis.fetch;
 
     /**
+     * Forward a server-to-server request to a shard DO, carrying the caller's
+     * resolved identity headers. Structural mirror of `@lunora/server`'s
+     * `ShardFetch` — kept structural so the runtime stays free of a
+     * `@lunora/server` dependency. The live-stream primitive uses it to reach
+     * the shard's SSE + subscriber-registry endpoints.
+     */
+    fetchShard: (shardKey: string | undefined, path: string, init?: { body?: string; headers?: Record<string, string>; method?: string }) => Promise<Response>;
+
+    /**
      * The same `run*` trio bound to a named shard, mirroring
      * `createShardClient(...).forShard(key)`.
      *
@@ -140,6 +150,14 @@ interface HttpActionContext {
      * (usually none) with no error and no way to say otherwise.
      */
     forShard: (shardKey: string) => Pick<HttpActionContext, "runAction" | "runMutation" | "runQuery">;
+
+    /**
+     * Publish an arbitrary event to a live topic on a stream. Structural mirror of
+     * `@lunora/server`'s `LivePublisher`. Present on every worker; built with
+     * `liveStreams: false` (a target that does not serve live streams), its `publish` rejects.
+     */
+    live?: { publish: (topic: string, payload: unknown, options: { shardKey?: string; stream: string }) => Promise<void> };
+
     runAction: <R>(reference: unknown, args?: Record<string, unknown>) => Promise<R>;
     runMutation: <R>(reference: unknown, args?: Record<string, unknown>) => Promise<R>;
     runQuery: <R>(reference: unknown, args?: Record<string, unknown>) => Promise<R>;
@@ -336,6 +354,22 @@ interface FunctionRegistryEntry {
      * callers pass the generated `LUNORA_FUNCTIONS` map without a cast.
      */
     kind: "action" | "mutation" | "query" | "stream";
+
+    /**
+     * The lifecycle moment a registration fires on, when it is a lifecycle hook,
+     * a `defineRoom` registration, or a `defineWebSocket` route. Present on the
+     * generated `LUNORA_FUNCTIONS` values (they are the live runtime objects);
+     * the worker reads `"socket"` entries to recognise a route's path as a
+     * WebSocket-upgrade endpoint rather than an unknown app route.
+     */
+    lifecycle?: "connect" | "disconnect" | "init" | "reactor" | "room" | "socket" | "whisper";
+
+    /**
+     * Set on a `defineWebSocket` route: the URL path it serves. The worker
+     * forwards an upgrade at this path to the shard Durable Object, which
+     * resolves the registration through its generated socket map.
+     */
+    socketPath?: string;
     visibility?: "internal" | "public";
 
     /**
@@ -593,7 +627,82 @@ interface TriggerTrace {
  * runtime decoupled from `@lunora/queue`'s structural batch type) along with the
  * invocation's own {@link TriggerTrace}.
  */
-type QueueConsumerHandler = (batch: unknown, env: unknown, context: ExecutionContextLike, trigger: TriggerTrace) => Promise<void>;
+type QueueConsumerHandler = (
+    batch: unknown,
+    env: unknown,
+    context: ExecutionContextLike,
+    trigger: TriggerTrace,
+    live: QueueLivePublisherLike,
+    fetchImpl: typeof fetch | undefined,
+) => Promise<void>;
+
+/**
+ * The publisher a queue consumer's `ctx.live` is. The Worker forwards it to the
+ * shard (a consumer runs in the Worker, not in a shard); codegen passes it on only
+ * for an app whose target serves live streams. Structural, so `@lunora/queue` types
+ * its own copy and this package stays decoupled from it.
+ */
+interface QueueLivePublisherLike {
+    publish: (topic: string, payload: unknown, options: { shardKey?: string; stream: string }) => Promise<void>;
+}
+
+/**
+ * The origin a queue consumer's live publish is addressed to. A queue has no
+ * request, so there is no origin to derive one from; the shard reads only the
+ * pathname, so any fixed internal origin is correct.
+ */
+const QUEUE_LIVE_ORIGIN = "https://queue.lunora.internal";
+
+/**
+ * The publisher a worker built with `liveStreams: false` hands out where a working one would go. The shape is kept, so a handler that
+ * calls `publish` still type-checks and runs, and the call rejects with a clear error instead of forwarding to a shard this target does
+ * not serve.
+ */
+const unsupportedLivePublisher = (): { publish: () => Promise<never> } => {
+    return {
+        publish: () =>
+            Promise.reject(
+                new LunoraError("ctx.live.publish is unavailable: this worker does not serve live streams", {
+                    code: "LIVE_STREAMS_UNSUPPORTED",
+                    status: 501,
+                }),
+            ),
+    };
+};
+
+/**
+ * The error a shard's live publish route refused with. The shard answers
+ * `{ error: { code, message } }` at the status it chose (`FORBIDDEN_TOPIC` 403,
+ * `BAD_REQUEST` 400, `PAYLOAD_TOO_LARGE` 413), so the Worker rethrows that code,
+ * message and status rather than flattening them to `INTERNAL`. A body that is
+ * not the shard's error shape keeps `INTERNAL`, but at the HTTP status when that
+ * is an error (a platform 413 or 429 HTML page), else 500.
+ */
+const shardPublishRefusal = async (response: Response, topic: string): Promise<LunoraError> => {
+    const fallback = new LunoraError(`ctx.live.publish to "${topic}" failed with HTTP ${String(response.status)}`, {
+        code: "INTERNAL",
+        status: response.status >= 400 ? response.status : 500,
+    });
+
+    let body: { error?: { code?: unknown; message?: unknown } } | null;
+
+    try {
+        body = await response.json();
+    } catch {
+        return fallback;
+    }
+
+    const error = body?.error;
+
+    if (typeof error?.code !== "string" || response.status < 400) {
+        return fallback;
+    }
+
+    return new LunoraError(typeof error.message === "string" ? error.message : `ctx.live.publish to "${topic}" was refused`, {
+        code: error.code,
+        status: response.status,
+    });
+};
 
 /**
  * A single code-defined cron job, shaped like an entry of the generated
@@ -1195,6 +1304,14 @@ interface WorkerOptions {
     listSchemaTables?: () => ReadonlyArray<string>;
 
     /**
+     * Whether the target serves live topic streams. Defaults to `true`. `false` keeps
+     * `ctx.live` on the HTTP action context and on a direct queue consumer, but its `publish`
+     * rejects with `LIVE_STREAMS_UNSUPPORTED`, so no publish reaches a shard with no subscriber
+     * to reach. Codegen sets it from the target's capability matrix.
+     */
+    liveStreams?: boolean;
+
+    /**
      * The durable log archive's read config — the R2 Data Catalog (Iceberg)
      * table `pipelineLogSink` writes to, so the studio Logs panel's Archive feed
      * (and the `/_lunora/admin/logs/archive` route) can read it back via R2 SQL.
@@ -1284,6 +1401,14 @@ interface WorkerOptions {
      * stays decoupled from the queue package. Omitted when no push queues exist.
      */
     queue?: QueueConsumerHandler;
+
+    /**
+     * The `fetch` a queue consumer's `ctx.run` / `message.run` dispatches through.
+     * Omitted, the dispatcher uses global `fetch` against `LUNORA_ORIGIN_URL`, which
+     * is right on Cloudflare. A host with no origin to answer that URL (Node) passes
+     * its own dispatch here, e.g. `platform.dispatch` wrapped as a `fetch`.
+     */
+    queueFetchImpl?: typeof fetch;
 
     /**
      * Queue-batch handler. WfP namespaced Workers can't be
@@ -2510,6 +2635,12 @@ const setIdentityHeaders = (headers: Headers, forwardedHeaders: Record<string, s
 };
 
 /**
+ * `Upgrade` is a case-insensitive token (RFC 9110 §7.8), so `WebSocket` and
+ * `websocket` name the same upgrade. Every socket path checks through here.
+ */
+const isWebSocketUpgrade = (request: Request): boolean => request.headers.get("Upgrade")?.toLowerCase() === "websocket";
+
+/**
  * Clone an upgrade request's headers with EVERY client-supplied `x-lunora-*`
  * header stripped, then the server-minted identity trio re-set.
  *
@@ -3080,6 +3211,58 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
         shardDO,
         shardedTables: () => (options.listSchemaTables?.() ?? []).filter((table) => options.resolveTableSharding?.(table)?.mode.kind === "shardBy"),
     });
+
+    /**
+     * `ctx.live.publish` as the Worker forwards it to a shard: the HTTP action's
+     * context and a queue consumer's both call this, so the wire encoding and the
+     * refusal mapping cannot drift between them. `origin` only supplies the URL the
+     * shard reads the pathname from; a queue has no request, so it passes a fixed
+     * internal origin.
+     *
+     * `caller` decides the shard authorization. An HTTP action names its shard from
+     * the request, so it passes the resolved caller identity and is gated exactly as
+     * `fetchShard` / `forShard` gate the same shard (the default shard is exempt, as
+     * there). A queue consumer or scheduled job passes `"trusted"`: it runs as worker
+     * code with no HTTP caller, its shard comes from app code rather than a client,
+     * and the scheduler dispatch path is trusted for the same reason (see
+     * {@link dispatchToShard}). The reserved-name refusal applies to every caller.
+     *
+     * Wire-encode the payload once so bytes/bigint survive the hop; the shard embeds
+     * it verbatim into the SSE frames. A topic with no subscribers is a no-op. A
+     * refused or failed forward throws, so the caller sees the error rather than a
+     * silent drop.
+     */
+    const publishLiveToShard = async (
+        origin: string,
+        topic: string,
+        payload: unknown,
+        publishOptions: { shardKey?: string; stream: string },
+        caller: "trusted" | { identity: ResolvedIdentity | null },
+    ): Promise<void> => {
+        const shardKey = publishOptions.shardKey ?? defaultShard;
+
+        if (caller === "trusted") {
+            // eslint-disable-next-line unicorn/no-null -- the anonymous identity sentinel is `null`, matching the identity contract
+            await assertShardAuthorized(null, shardKey, true);
+        } else if (shardKey !== defaultShard) {
+            await assertShardAuthorized(caller.identity, shardKey);
+        }
+
+        const response = await forwardToShard(
+            shardDO,
+            shardKey,
+            new Request(new URL(LIVE_PUBLISH_PATH, origin), {
+                // eslint-disable-next-line unicorn/no-null -- an omitted publish payload is delivered as an explicit JSON null
+                body: JSON.stringify({ data: encodeWire(payload ?? null), stream: publishOptions.stream, topic }),
+                headers: { "content-type": "application/json" },
+                method: "POST",
+            }),
+        );
+
+        if (!response.ok) {
+            throw await shardPublishRefusal(response, topic);
+        }
+    };
 
     /**
      * Forward a server-initiated function call (a scheduler dispatch or a firing
@@ -3972,7 +4155,7 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
         // sign-in page, webhooks — before any route matched, so a refusal would
         // lock a user with a stale cookie out of the very page that refreshes it.
         // A route that needs a caller answers its own 401 off `auth.userId`.
-        const { claims, headers, userId } = withoutLapsedCredential(await forwardContext(request, env, publicResolveIdentity));
+        const { claims, headers, identity, userId } = withoutLapsedCredential(await forwardContext(request, env, publicResolveIdentity));
 
         const sinkContext = buildSinkContext(env, request, (promise) => context.waitUntil?.(promise));
 
@@ -3991,6 +4174,15 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
                 // `targetFields` refuses a bare `"ns:fn"` string because an HTTP action
                 // can be reached unauthenticated) — same reasoning, same surface.
                 assertNotReservedRelationPath(functionPath);
+
+                // Every non-default shard a run names is refused here, before the
+                // system-trusted dispatch below can read it. That covers `forShard` from
+                // a webhook or REST route as well as the live subscribe, whose verdict is
+                // built from a client-supplied `shardKey`. The default shard is the app's
+                // own and is not gated.
+                if (shardKey !== defaultShard) {
+                    await assertShardAuthorized(identity, shardKey);
+                }
 
                 // Through the SAME dispatcher the `/_lunora/rpc` and `serverQuery` paths
                 // use, rather than a bare `forwardToShard`: that is what puts this call
@@ -4048,6 +4240,45 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
 
         const run = runOn(defaultShard);
 
+        // Forward a server-to-server request to a shard DO under the caller's
+        // resolved identity headers. The live-stream primitive (`defineLiveStream`)
+        // uses this to reach the shard's subscriber registry: the SSE stream is
+        // served by the DO, so the worker-side route forwards to it rather than
+        // holding a connection-scoped subscription it could not keep.
+        const fetchShard: HttpActionContext["fetchShard"] = async (shardKey, path, init = {}) => {
+            // A shard the caller names is client-addressable (`?shard=` on a live
+            // connect), so it passes the same gate the REST path applies. The
+            // default shard is the app's own and is not gated here.
+            if (shardKey !== undefined && shardKey !== defaultShard) {
+                await assertShardAuthorized(identity, shardKey);
+            }
+
+            const forwardedHeaders = new Headers();
+
+            // Only the caller's ordinary headers pass. Every `x-lunora-*` header is the
+            // runtime's to set: an anonymous caller must not be able to forge identity
+            // through a header the resolved context does not carry.
+            for (const [name, value] of Object.entries(init.headers ?? {})) {
+                if (!name.toLowerCase().startsWith("x-lunora-")) {
+                    forwardedHeaders.set(name, value);
+                }
+            }
+
+            for (const [name, value] of Object.entries(headers)) {
+                forwardedHeaders.set(name, value);
+            }
+
+            return forwardToShard(
+                shardDO,
+                shardKey ?? defaultShard,
+                new Request(new URL(path, request.url), {
+                    headers: forwardedHeaders,
+                    method: init.method ?? "GET",
+                    ...(init.body === undefined ? {} : { body: init.body }),
+                }),
+            );
+        };
+
         return {
             auth: {
                 getIdentity: () => Promise.resolve(claims),
@@ -4055,11 +4286,19 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
             },
             cache: context.cache,
             fetch: globalThis.fetch.bind(globalThis),
+            fetchShard,
             forShard: (shardKey: string) => {
                 const scoped = runOn(shardKey);
 
                 return { runAction: scoped, runMutation: scoped, runQuery: scoped };
             },
+            live:
+                options.liveStreams === false
+                    ? unsupportedLivePublisher()
+                    : {
+                          publish: (topic: string, payload: unknown, publishOptions: { shardKey?: string; stream: string }) =>
+                              publishLiveToShard(request.url, topic, payload, publishOptions, { identity }),
+                      },
             runAction: run,
             runMutation: run,
             runQuery: run,
@@ -4120,8 +4359,20 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
         }
     };
 
+    // The declared `defineWebSocket` route paths, read off the generated
+    // `LUNORA_FUNCTIONS` registry the worker already carries. An upgrade at one
+    // of these paths is the SAME forward as `/_lunora/ws`: the shard DO resolves
+    // the route from the request path. Derived here (not threaded as a new
+    // option) so a route-free worker's construction is unchanged, and resolving
+    // it once keeps the per-request check a single Set lookup.
+    const socketRoutePaths = new Set(
+        Object.values(options.functions ?? {}).flatMap((registered) =>
+            registered.lifecycle === "socket" && typeof registered.socketPath === "string" ? [registered.socketPath] : [],
+        ),
+    );
+
     const handleWebSocketUpgrade = async (request: Request, env: unknown, url: URL): Promise<Response> => {
-        if (request.headers.get("Upgrade") !== "websocket") {
+        if (!isWebSocketUpgrade(request)) {
             throw new LunoraError("WebSocket upgrade header missing", { code: "BAD_REQUEST", status: 426 });
         }
 
@@ -4185,7 +4436,9 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
         if (binding !== undefined) {
             upgradeHeaders.set("x-lunora-shard-binding", binding);
 
-            const relayCount = await probeRelayCount(shardDO, shardKey);
+            // A route socket runs its handler on the shard that accepted it, so a relay would write through its own
+            // storage. A route upgrade therefore stays on the owner; only the shared subscription socket spreads to relays.
+            const relayCount = socketRoutePaths.has(url.pathname) ? 0 : await probeRelayCount(shardDO, shardKey);
 
             if (relayCount > 0) {
                 // Spread connections across the relay set at random, and hint
@@ -4226,7 +4479,7 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
             return new Response("Not found", { status: 404 });
         }
 
-        if (request.headers.get("Upgrade") !== "websocket") {
+        if (!isWebSocketUpgrade(request)) {
             return new Response("Expected a WebSocket upgrade", { headers: { allow: "GET" }, status: 426 });
         }
 
@@ -5594,6 +5847,18 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
             return authResponse;
         }
 
+        // A declared `defineWebSocket` route upgrades and forwards to the shard
+        // DO, exactly like `/_lunora/ws` — the DO resolves the registration from
+        // the request path. Checked ahead of the custom HTTP routes so a custom
+        // handler at the same path never intercepts the upgrade, and ahead of the
+        // app router so a declared route wins over an SSR page. Only an actual
+        // upgrade is the route's: a plain GET or POST to the same path falls
+        // through to the router rather than failing with a 426. The handshake is
+        // always a GET (RFC 6455 §4.1), so a POST carrying the header is not one.
+        if (socketRoutePaths.has(url.pathname) && request.method === "GET" && isWebSocketUpgrade(request)) {
+            return handleWebSocketUpgrade(request, env, url);
+        }
+
         // Auth providers register routes as `"METHOD path"` (e.g. `"GET /auth/signin"`).
         // We also accept legacy pathname-only keys for ad-hoc handlers. Guard the
         // whole lookup behind `customRoutes` (resolved once at construction) so the
@@ -5721,7 +5986,16 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
             // Named after the queue so a collector groups consumer invocations per
             // queue rather than lumping every batch under one span name.
             await instrumentTrigger(`queue:${queueNameOf(batch)}`, context, async (traceparent) => {
-                await options.queue?.(batch, env, context, { traceparent });
+                // The consumer's publish is `"trusted"`: no caller is checked against the `shardKey` it names. A `shardKey` taken from a
+                // client-supplied message body must be checked by the consumer before it is passed, or any message can publish into any shard.
+                const live: QueueLivePublisherLike =
+                    options.liveStreams === false
+                        ? unsupportedLivePublisher()
+                        : {
+                              publish: (topic, payload, publishOptions) => publishLiveToShard(QUEUE_LIVE_ORIGIN, topic, payload, publishOptions, "trusted"),
+                          };
+
+                await options.queue?.(batch, env, context, { traceparent }, live, options.queueFetchImpl);
             });
         },
         async scheduled(controller, env, context) {

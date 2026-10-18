@@ -1327,6 +1327,20 @@ interface LifecycleEvent {
 }
 ```
 
+### `LiveSocketControlCall` (interface)
+
+```ts
+interface LiveSocketControlCall {
+    action: unknown;
+    callerId: string;
+    connectionId: string;
+    identityExpiry?: number;
+    key: string;
+    seq?: number;
+    subscriptionId: string;
+}
+```
+
 ### `MAIL_RETENTION` (const)
 
 ```ts
@@ -1528,20 +1542,24 @@ interface OrderKeyConstraints {
 class OwnerRelay extends RelayLink {
     constructor(host: RelayHost, ownerKey: string);
     forwardWhisper(topic: string, frame: string, exceptConnectionId?: string): Promise<void>;
+    forwardLiveControl(call: LiveSocketControlCall): Promise<Response | undefined>;
+    forwardLiveFrame(topic: string, key: string, frame: string): Promise<void>;
     onFlush(changed: Set<string>, frameCursor: number): Promise<void>;
     seedRelayShape(): Promise<"ok" | undefined | {
         code: string;
         message: string;
     }>;
-    announce(): Promise<void>;
+    announce(): Promise<boolean>;
     announceDrain(): Promise<void>;
     releaseRelayShapes(): Promise<void>;
     relayCount(): number;
     minShapeCursor(): number | undefined;
     isShapeRelayUniform(name: string, args: Record<string, unknown>): boolean;
     protected onShapeUnsubscribe(message: RelayShapeUnsubscribe): void;
-    protected onAttach(index: number): void;
-    protected onDetach(index: number): void;
+    protected onAttach(index: number, seq: number | undefined): boolean;
+    protected onDetach(index: number, seq: number | undefined): boolean;
+    protected refusesAsIdle(): boolean;
+    protected onLiveControl(control: LiveSocketControlCall): Promise<Response>;
     protected onWhisperFrame(message: RelayFrame): Promise<void>;
     protected onShapeSubscribe(message: RelayShapeSubscribe): RelayShapeSeed;
     protected onShapePoke(): RelayPokeDelivery;
@@ -1552,7 +1570,7 @@ class OwnerRelay extends RelayLink {
 ### `OwnerRelayFrame` (type)
 
 ```ts
-type OwnerRelayFrame = RelayAttach | RelayDetach | RelayFrame | RelayRoomEvent | RelayShapePoke | RelayShapeSubscribe | RelayShapeUnsubscribe;
+type OwnerRelayFrame = RelayAttach | RelayDetach | RelayFrame | RelayLiveControl | RelayLiveFrame | RelayRoomEvent | RelayShapePoke | RelayShapeSubscribe | RelayShapeUnsubscribe;
 ```
 
 ### `PaginationOptions` (interface)
@@ -2203,6 +2221,7 @@ type RelationWriteMap = Readonly<Record<string, Readonly<Record<string, Relation
 ```ts
 interface RelayAttach {
     relayIndex: number;
+    seq?: number;
     type: "relay_attach";
 }
 ```
@@ -2212,6 +2231,7 @@ interface RelayAttach {
 ```ts
 interface RelayDetach {
     relayIndex: number;
+    seq?: number;
     type: "relay_detach";
 }
 ```
@@ -2243,10 +2263,12 @@ interface RelayHost {
         rowsPatch: ShapeRowOp[];
     };
     currentCdcEpoch: () => string | undefined;
+    deliverLiveLocal: (topic: string, key: string, frame: string) => number;
     deliverWhisperLocal: (topic: string, frame: string, exclude: undefined | ShardSocketLike) => number;
     doName: () => string | undefined;
     env: () => unknown;
     getWebSockets: () => ShardSocketLike[];
+    liveControl: (control: LiveSocketControlCall) => Promise<Response>;
     maskMetadata: () => MaskPoliciesResult;
     nextPokeId: () => string;
     readAttachment: (ws: ShardSocketLike) => SocketAttachment;
@@ -2272,14 +2294,16 @@ class RelayMember extends RelayLink {
         code: string;
         message: string;
     }>;
-    announce(): Promise<void>;
+    announce(): Promise<boolean>;
     announceDrain(closing: ShardSocketLike): Promise<void>;
     releaseRelayShapes(ws: ShardSocketLike, subId?: string): Promise<void>;
     relayCount(): number;
     isShapeRelayUniform(): boolean;
     minShapeCursor(): number | undefined;
-    protected onAttach(): void;
-    protected onDetach(): void;
+    protected onAttach(): boolean;
+    protected refusesAsIdle(): boolean;
+    protected onDetach(): boolean;
+    protected onLiveControl(control: LiveSocketControlCall): Promise<Response>;
     protected onWhisperFrame(): Promise<void>;
     protected onShapeSubscribe(): RelayShapeSeed;
     protected onShapeUnsubscribe(): void;
@@ -2920,8 +2944,11 @@ interface SocketAttachment {
     expiresAt?: number;
     identity?: Record<string, unknown>;
     ip?: string;
+    liveGrants?: Record<string, string>;
     pageDeltas?: boolean;
     shapes?: Record<string, ShapeSubscriptionQuery>;
+    socketFunction?: string;
+    socketPath?: string;
     subs: Record<string, SubscriptionQuery>;
     userId?: string;
     whispers?: string[];
@@ -5732,6 +5759,7 @@ abstract class RelayLink {
     protected canAddressSiblings(): boolean;
     protected siblingStub(targetName: string): SiblingStub | undefined;
     protected bindingName(): string | undefined;
+    protected nextRelaySeq(): number;
     protected postRelayMessage(targetName: string, message: OwnerRelayFrame): Promise<void>;
     protected requestRelayMessage(targetName: string, message: OwnerRelayFrame): Promise<Response | undefined>;
     abstract forwardWhisper(topic: string, frame: string, exceptConnectionId?: string): Promise<void>;
@@ -5740,18 +5768,40 @@ abstract class RelayLink {
         code: string;
         message: string;
     }>;
-    abstract announce(): Promise<void>;
+    abstract announce(): Promise<boolean>;
     abstract announceDrain(closing: ShardSocketLike): Promise<void>;
     abstract releaseRelayShapes(ws: ShardSocketLike, subId?: string): Promise<void>;
     abstract relayCount(): number;
     abstract isShapeRelayUniform(name: string, args: Record<string, unknown>): boolean;
     abstract minShapeCursor(): number | undefined;
-    protected abstract onAttach(index: number): void;
-    protected abstract onDetach(index: number): void;
+    protected abstract onAttach(index: number, seq: number | undefined): boolean;
+    protected abstract onDetach(index: number, seq: number | undefined): boolean;
+    protected abstract onLiveControl(control: LiveSocketControlCall): Promise<Response>;
     protected abstract onWhisperFrame(message: RelayFrame): Promise<void>;
+    protected abstract refusesAsIdle(): boolean;
     protected abstract onShapeSubscribe(message: RelayShapeSubscribe): RelayShapeSeed;
     protected abstract onShapeUnsubscribe(message: RelayShapeUnsubscribe): void;
     protected abstract onShapePoke(poke: RelayShapePoke): RelayPokeDelivery;
+}
+```
+
+### `RelayLiveControl` (interface)
+
+```ts
+interface RelayLiveControl {
+    control: LiveSocketControlCall;
+    type: "relay_live_control";
+}
+```
+
+### `RelayLiveFrame` (interface)
+
+```ts
+interface RelayLiveFrame {
+    frame: string;
+    key: string;
+    topic: string;
+    type: "relay_live_frame";
 }
 ```
 

@@ -355,6 +355,86 @@ describe("createWorker", () => {
         expect(shard.calls[0]!.shardKey).toBe("channel-7");
     });
 
+    it("forwards a declared defineWebSocket route upgrade to the shard", async () => {
+        expect.assertions(3);
+
+        // The route path is read off the generated `LUNORA_FUNCTIONS` registry
+        // the worker already carries (its live registration objects), so a
+        // declared path upgrades and forwards exactly like `/_lunora/ws`, with
+        // the request path preserved for the DO to resolve the route from.
+        const worker = createWorker({
+            allowUnauthenticatedShardAccess: true,
+            functions: { "sockets:chat": { args: {}, kind: "mutation", lifecycle: "socket", socketPath: "/chat", visibility: "internal" } },
+            shardDO: shard.namespace,
+        });
+
+        await worker.fetch(new Request("https://app.example/chat?shard=channel-7", { headers: { Upgrade: "websocket" } }), {}, fakeContext);
+
+        expect(shard.calls).toHaveLength(1);
+        expect(shard.calls[0]!.shardKey).toBe("channel-7");
+        expect(new URL(shard.calls[0]!.request.url).pathname).toBe("/chat");
+    });
+
+    it("upgrades a declared socket path even when a custom HTTP route shares it", async () => {
+        expect.assertions(2);
+
+        const handler = vi.fn<() => Response>(() => new Response("handled over HTTP"));
+        const worker = createWorker({
+            allowUnauthenticatedShardAccess: true,
+            functions: { "sockets:chat": { args: {}, kind: "mutation", lifecycle: "socket", socketPath: "/chat", visibility: "internal" } },
+            routes: { "GET /chat": handler },
+            shardDO: shard.namespace,
+        });
+
+        await worker.fetch(new Request("https://app.example/chat?shard=channel-7", { headers: { Upgrade: "websocket" } }), {}, fakeContext);
+
+        expect(handler).not.toHaveBeenCalled();
+        expect(shard.calls).toHaveLength(1);
+    });
+
+    it("lets a POST carrying an Upgrade header reach the same-path HTTP route", async () => {
+        expect.assertions(2);
+
+        const handler = vi.fn<() => Response>(() => new Response("posted", { status: 200 }));
+        const worker = createWorker({
+            allowUnauthenticatedShardAccess: true,
+            functions: { "sockets:chat": { args: {}, kind: "mutation", lifecycle: "socket", socketPath: "/chat", visibility: "internal" } },
+            routes: { "POST /chat": handler },
+            shardDO: shard.namespace,
+        });
+
+        await worker.fetch(new Request("https://app.example/chat", { headers: { Upgrade: "websocket" }, method: "POST" }), {}, fakeContext);
+
+        expect(handler).toHaveBeenCalledTimes(1);
+        expect(shard.calls).toHaveLength(0);
+    });
+
+    it("treats a case-variant Upgrade header as the socket upgrade", async () => {
+        expect.assertions(2);
+
+        const worker = createWorker({
+            allowUnauthenticatedShardAccess: true,
+            functions: { "sockets:chat": { args: {}, kind: "mutation", lifecycle: "socket", socketPath: "/chat", visibility: "internal" } },
+            shardDO: shard.namespace,
+        });
+
+        await worker.fetch(new Request("https://app.example/chat?shard=channel-7", { headers: { Upgrade: "WebSocket" } }), {}, fakeContext);
+
+        expect(shard.calls).toHaveLength(1);
+        expect(new URL(shard.calls[0]!.request.url).pathname).toBe("/chat");
+    });
+
+    it("does not treat an undeclared path as a socket route", async () => {
+        expect.assertions(2);
+
+        const worker = createWorker({ allowUnauthenticatedShardAccess: true, shardDO: shard.namespace });
+
+        const res = await worker.fetch(new Request("https://app.example/chat", { headers: { Upgrade: "websocket" } }), {}, fakeContext);
+
+        expect(res.status).toBe(404);
+        expect(shard.calls).toHaveLength(0);
+    });
+
     it("strips client-supplied identity headers from /_lunora/ws upgrades (anonymous spoof)", async () => {
         expect.assertions(3);
 
@@ -2219,6 +2299,8 @@ describe("createWorker — HTTP actions", () => {
         shard.response = Response.json({ result: encodeWire([{ id: "msg_1" }]) });
 
         const worker = createWorker({
+            // A non-default shard run is gated: the app grants this route's shard explicitly.
+            authorizeShard: () => true,
             httpRouter: honoApp((app) =>
                 app.get("/channels/:id/messages", async (c) => {
                     const channelId = c.req.param("id");
@@ -2237,6 +2319,43 @@ describe("createWorker — HTTP actions", () => {
         await expect(res.json()).resolves.toEqual({ messages: [{ id: "msg_1" }] });
         expect(shard.calls).toHaveLength(1);
         expect(shard.calls[0]!.shardKey).toBe("tenant-42");
+    });
+
+    it("refuses a `ctx.forShard(key).run*` the caller may not address before any system-trusted dispatch", async () => {
+        expect.assertions(4);
+
+        // `forShard` stamps `x-lunora-system`, so it must pass the same
+        // `authorizeShard` gate as the client paths. Without it, a live subscribe
+        // naming a shard ran its `onSubscribe` read under system trust.
+        shard.response = Response.json({ result: encodeWire([{ id: "secret" }]) });
+
+        let denied: unknown;
+        const authorizeShard = vi.fn<() => boolean>(() => false);
+        const worker = createWorker({
+            authorizeShard,
+            httpRouter: honoApp((app) =>
+                app.get("/victim/messages", async (c) => {
+                    try {
+                        await c.var.lunora.forShard("victim-shard").runQuery({ __lunoraRef: "messages:list" }, {});
+                    } catch (error) {
+                        denied = error;
+
+                        return new Response("denied", { status: 403 });
+                    }
+
+                    return new Response("read", { status: 200 });
+                }),
+            ),
+            shardDO: shard.namespace,
+        });
+
+        const res = await worker.fetch(new Request("https://app.example/victim/messages"), {}, fakeContext);
+
+        expect(res.status).toBe(403);
+        expect(denied).toMatchObject({ code: "FORBIDDEN_SHARD" });
+        expect(authorizeShard).toHaveBeenCalledWith(expect.objectContaining({ shardKey: "victim-shard" }));
+        // The gate must short-circuit before the system-trusted shard dispatch.
+        expect(shard.calls).toHaveLength(0);
     });
 
     it("encodes `ctx.run*` args and decodes its result, so bigint / Date / bytes survive the shard hop", async () => {
@@ -2927,6 +3046,33 @@ describe("createWorker — relay-tier routing (plan 075 Phase 2)", () => {
         expect(forwards[0]?.binding).toBe("SHARD"); // told the DO its namespace binding
     });
 
+    it("keeps a defineWebSocket route upgrade on the owner, since its handler writes through the shard that accepted it", async () => {
+        expect.assertions(2);
+
+        const forwards: Forward[] = [];
+        const namespace = routingNamespace(2, forwards);
+        const route = {
+            args: {},
+            auth: false,
+            handler: () => undefined,
+            kind: "mutation",
+            lifecycle: "socket",
+            socketPath: "/chat",
+            visibility: "internal",
+        };
+        const worker = createWorker({ allowUnauthenticatedShardAccess: true, functions: { "sockets:chat": route } as never, shardDO: namespace });
+
+        await worker.fetch(
+            new Request("https://app.example/chat?shard=promoted-route", { headers: { Upgrade: "websocket" } }),
+            { SHARD: namespace },
+            fakeContext,
+        );
+
+        // The owner serves the route; no relay is probed or chosen for it.
+        expect(forwards).toHaveLength(1);
+        expect(forwards[0]?.name).toBe("promoted-route");
+    });
+
     it("spreads connections across the relay set and hints the client's region", async () => {
         expect.assertions(3);
 
@@ -3309,5 +3455,361 @@ describe("createWorker — auth discovery fallback (plan 461 B)", () => {
 
         expect(res.status).toBe(404);
         await expect(res.text()).resolves.toBe("app 404 page");
+    });
+});
+
+describe("createWorker — live streams and socket paths", () => {
+    let shard: ShardSpy;
+
+    beforeEach(() => {
+        shard = createShardSpy();
+    });
+
+    it("refuses a client-named shard whose key carries a reserved relay infix, before any forward", async () => {
+        expect.assertions(2);
+
+        const worker = createWorker({
+            httpRouter: honoApp((app) =>
+                app.get("/probe", async (c) => {
+                    try {
+                        await c.var.lunora.fetchShard("acme::relay::0", "/_lunora/live/connect", { method: "GET" });
+
+                        return new Response("forwarded");
+                    } catch {
+                        return new Response("refused", { status: 403 });
+                    }
+                }),
+            ),
+            shardDO: shard.namespace,
+        });
+
+        const res = await worker.fetch(new Request("https://app.example/probe"), {}, fakeContext);
+
+        await expect(res.text()).resolves.toBe("refused");
+        expect(shard.calls).toHaveLength(0);
+    });
+
+    it("strips a caller's x-lunora-* header from a shard forward, so an anonymous caller cannot forge identity", async () => {
+        expect.assertions(2);
+
+        const worker = createWorker({
+            httpRouter: honoApp((app) =>
+                app.get("/probe", async (c) => {
+                    await c.var.lunora.fetchShard("acme", "/_lunora/live/connect", {
+                        headers: { "x-lunora-userid": "forged-admin", "x-lunora-system": "1", accept: "text/event-stream" },
+                        method: "GET",
+                    });
+
+                    return new Response("ok");
+                }),
+            ),
+            allowUnauthenticatedShardAccess: true,
+            shardDO: shard.namespace,
+        });
+
+        await worker.fetch(new Request("https://app.example/probe"), {}, fakeContext);
+
+        const forwarded = shard.calls[0]?.request;
+
+        // The forged identity never reaches the shard; an ordinary header still does.
+        expect(forwarded?.headers.get("x-lunora-userid")).toBeNull();
+        expect(forwarded?.headers.get("accept")).toBe("text/event-stream");
+    });
+
+    it("forwards a live publish to the internal publish endpoint with its stream", async () => {
+        expect.assertions(3);
+
+        const worker = createWorker({
+            httpRouter: honoApp((app) =>
+                app.post("/post", async (c) => {
+                    await c.var.lunora.live?.publish("post:1", { event: "comment" }, { stream: "posts" });
+
+                    return new Response("published");
+                }),
+            ),
+            shardDO: shard.namespace,
+        });
+
+        const res = await worker.fetch(new Request("https://app.example/post", { method: "POST" }), {}, fakeContext);
+        const forwarded = shard.calls[0]?.request;
+        const body = (await forwarded?.json()) as { stream: string; topic: string };
+
+        expect(res.status).toBe(200);
+        expect(new URL(forwarded?.url ?? "").pathname).toBe("/_lunora/live/publish");
+        expect(body).toMatchObject({ stream: "posts", topic: "post:1" });
+    });
+
+    it("refuses ctx.live.publish from the HTTP context when the worker is built with liveStreams: false", async () => {
+        expect.assertions(3);
+
+        // The publisher stays on the context, so a typed handler still runs; its publish rejects before any forward reaches a shard.
+        const worker = createWorker({
+            httpRouter: honoApp((app) =>
+                app.post("/publish", async (c) => {
+                    try {
+                        await c.var.lunora.live?.publish("post:1", { event: "x" }, { stream: "posts" });
+
+                        return new Response("published");
+                    } catch (error) {
+                        return Response.json({ code: (error as { code?: unknown }).code }, { status: 501 });
+                    }
+                }),
+            ),
+            liveStreams: false,
+            shardDO: shard.namespace,
+        });
+
+        const res = await worker.fetch(new Request("https://app.example/publish", { method: "POST" }), {}, fakeContext);
+
+        expect(res.status).toBe(501);
+        await expect(res.json()).resolves.toStrictEqual({ code: "LIVE_STREAMS_UNSUPPORTED" });
+        expect(shard.calls).toHaveLength(0);
+    });
+
+    it("throws from live.publish when the shard refuses the publish, instead of dropping it silently", async () => {
+        expect.assertions(2);
+
+        shard.response = Response.json({ error: { code: "PAYLOAD_TOO_LARGE" } }, { status: 413 });
+
+        const worker = createWorker({
+            httpRouter: honoApp((app) =>
+                app.post("/post", async (c) => {
+                    try {
+                        await c.var.lunora.live?.publish("post:1", { big: true }, { stream: "posts" });
+
+                        return new Response("published");
+                    } catch {
+                        return new Response("threw", { status: 500 });
+                    }
+                }),
+            ),
+            shardDO: shard.namespace,
+        });
+
+        const res = await worker.fetch(new Request("https://app.example/post", { method: "POST" }), {}, fakeContext);
+
+        expect(res.status).toBe(500);
+        await expect(res.text()).resolves.toBe("threw");
+    });
+
+    it("hands a queue consumer a live publisher that forwards to the shard, so its publish reaches subscribers", async () => {
+        expect.assertions(3);
+
+        const worker = createWorker({
+            queue: async (_batch, _env, _context, _trigger, live) => {
+                await live?.publish("digest:1", { event: "ready" }, { stream: "posts" });
+            },
+            shardDO: shard.namespace,
+        });
+
+        await worker.queue?.({ messages: [], queue: "digest" }, {}, fakeContext);
+
+        const forwarded = shard.calls[0]?.request;
+        const body = (await forwarded?.json()) as { stream: string; topic: string };
+
+        expect(shard.calls).toHaveLength(1);
+        expect(new URL(forwarded?.url ?? "").pathname).toBe("/_lunora/live/publish");
+        expect(body).toMatchObject({ stream: "posts", topic: "digest:1" });
+    });
+
+    it("lets a plain GET to a socket route's path reach the app router instead of failing with 426", async () => {
+        expect.assertions(2);
+
+        const worker = createWorker({
+            functions: {
+                "sockets:chat": { lifecycle: "socket", socketPath: "/chat" },
+            } as unknown as NonNullable<Parameters<typeof createWorker>[0]>["functions"],
+            httpRouter: honoApp((app) => app.get("/chat", () => new Response("the chat page", { status: 200 }))),
+            shardDO: shard.namespace,
+        });
+
+        const res = await worker.fetch(new Request("https://app.example/chat"), {}, fakeContext);
+
+        expect(res.status).toBe(200);
+        await expect(res.text()).resolves.toBe("the chat page");
+    });
+
+    it("refuses a direct queue consumer's publish on a worker built with liveStreams: false, before any forward", async () => {
+        expect.assertions(2);
+
+        // A direct `queue` callback is handed the publisher as its fifth argument. With live streams off it must not reach a shard.
+        let thrown: unknown;
+        const worker = createWorker({
+            liveStreams: false,
+            queue: async (_batch, _env, _context, _trigger, live) => {
+                try {
+                    await live.publish("digest:1", { event: "ready" }, { stream: "posts" });
+                } catch (error) {
+                    thrown = error;
+                }
+            },
+            shardDO: shard.namespace,
+        });
+
+        await worker.queue?.({ messages: [], queue: "digest" }, {}, fakeContext);
+
+        expect(thrown).toBeInstanceOf(Error);
+        expect(shard.calls).toHaveLength(0);
+    });
+
+    it("refuses an HTTP action publish to a non-default shard the caller may not address, before any forward", async () => {
+        expect.assertions(3);
+
+        // `ctx.live.publish` names its shard from the request, so it must pass the
+        // same `authorizeShard` gate `fetchShard` / `forShard` apply to that shard.
+        // Without it a tenant's HTTP route could publish into another tenant's shard.
+        let thrown: unknown;
+        const worker = createWorker({
+            authorizeShard: () => false,
+            httpRouter: honoApp((app) =>
+                app.post("/publish", async (c) => {
+                    try {
+                        await c.var.lunora.live?.publish("post:1", { event: "x" }, { shardKey: "victim-shard", stream: "posts" });
+                    } catch (error) {
+                        thrown = error;
+
+                        return new Response("refused", { status: 403 });
+                    }
+
+                    return new Response("published");
+                }),
+            ),
+            shardDO: shard.namespace,
+        });
+
+        const res = await worker.fetch(new Request("https://app.example/publish", { method: "POST" }), {}, fakeContext);
+
+        expect(res.status).toBe(403);
+        expect(thrown).toMatchObject({ code: "FORBIDDEN_SHARD", status: 403 });
+        expect(shard.calls).toHaveLength(0);
+    });
+
+    it("forwards an HTTP action publish to a non-default shard the caller may address", async () => {
+        expect.assertions(3);
+
+        const authorizeShard = vi.fn<(input: { shardKey: string }) => boolean>(({ shardKey }) => shardKey === "tenant-42");
+        const worker = createWorker({
+            authorizeShard,
+            httpRouter: honoApp((app) =>
+                app.post("/publish", async (c) => {
+                    await c.var.lunora.live?.publish("post:1", { event: "x" }, { shardKey: "tenant-42", stream: "posts" });
+
+                    return new Response("published");
+                }),
+            ),
+            shardDO: shard.namespace,
+        });
+
+        const res = await worker.fetch(new Request("https://app.example/publish", { method: "POST" }), {}, fakeContext);
+
+        expect(res.status).toBe(200);
+        expect(authorizeShard).toHaveBeenCalledWith(expect.objectContaining({ shardKey: "tenant-42" }));
+        expect(shard.calls[0]?.shardKey).toBe("tenant-42");
+    });
+
+    it("does not gate an HTTP action publish to the default shard, matching fetchShard", async () => {
+        expect.assertions(2);
+
+        const authorizeShard = vi.fn<() => boolean>(() => false);
+        const worker = createWorker({
+            authorizeShard,
+            httpRouter: honoApp((app) =>
+                app.post("/publish", async (c) => {
+                    await c.var.lunora.live?.publish("post:1", { event: "x" }, { shardKey: "__root__", stream: "posts" });
+
+                    return new Response("published");
+                }),
+            ),
+            shardDO: shard.namespace,
+        });
+
+        const res = await worker.fetch(new Request("https://app.example/publish", { method: "POST" }), {}, fakeContext);
+
+        expect(res.status).toBe(200);
+        expect(authorizeShard).not.toHaveBeenCalled();
+    });
+
+    it("does not subject a queue consumer's publish to the caller check, even to a shard the policy denies", async () => {
+        expect.assertions(2);
+
+        // Queue consumers are worker code with no HTTP caller: the shard is app-named,
+        // so the per-caller `authorizeShard` policy does not apply to them.
+        const authorizeShard = vi.fn<() => boolean>(() => false);
+        const worker = createWorker({
+            authorizeShard,
+            queue: async (_batch, _env, _context, _trigger, live) => {
+                await live?.publish("digest:1", { event: "ready" }, { shardKey: "tenant-42", stream: "posts" });
+            },
+            shardDO: shard.namespace,
+        });
+
+        await worker.queue?.({ messages: [], queue: "digest" }, {}, fakeContext);
+
+        expect(shard.calls).toHaveLength(1);
+        expect(authorizeShard).not.toHaveBeenCalled();
+    });
+
+    it.each([
+        { code: "FORBIDDEN_TOPIC", message: "a room topic cannot be published to", status: 403 },
+        { code: "PAYLOAD_TOO_LARGE", message: "a publish may be at most 1048576 bytes", status: 413 },
+        { code: "BAD_REQUEST", message: "topic may be at most 512 characters", status: 400 },
+    ])("rethrows the shard's $code refusal with its code, message and $status status", async ({ code, message, status }) => {
+        expect.assertions(2);
+
+        // The shard answers its own refusal as `{ error: { code, message } }` at its own status.
+        // Flattening it to INTERNAL 500 made a room-topic 403 read as a server fault.
+        shard.response = Response.json({ error: { code, message } }, { status });
+
+        let thrown: unknown;
+        const worker = createWorker({
+            httpRouter: honoApp((app) =>
+                app.post("/post", async (c) => {
+                    try {
+                        await c.var.lunora.live?.publish("post:1", { big: true }, { stream: "posts" });
+                    } catch (error) {
+                        thrown = error;
+                    }
+
+                    return new Response("done");
+                }),
+            ),
+            shardDO: shard.namespace,
+        });
+
+        await worker.fetch(new Request("https://app.example/post", { method: "POST" }), {}, fakeContext);
+
+        expect(thrown).toMatchObject({ code, message, status });
+        expect(thrown).toBeInstanceOf(LunoraError);
+    });
+
+    it.each([
+        { status: 429, body: "<html>rate limited by the platform</html>" },
+        { status: 502, body: "<html>upstream gateway down</html>" },
+    ])("keeps INTERNAL but uses the HTTP $status when the shard's refusal body cannot be parsed", async ({ status, body }) => {
+        expect.assertions(2);
+
+        // A platform HTML page is not the shard's error shape, but its status still says what went wrong.
+        shard.response = new Response(body, { status });
+
+        let thrown: unknown;
+        const worker = createWorker({
+            httpRouter: honoApp((app) =>
+                app.post("/post", async (c) => {
+                    try {
+                        await c.var.lunora.live?.publish("post:1", { big: true }, { stream: "posts" });
+                    } catch (error) {
+                        thrown = error;
+                    }
+
+                    return new Response("done");
+                }),
+            ),
+            shardDO: shard.namespace,
+        });
+
+        await worker.fetch(new Request("https://app.example/post", { method: "POST" }), {}, fakeContext);
+
+        expect(thrown).toMatchObject({ code: "INTERNAL", status });
+        expect(thrown).toBeInstanceOf(LunoraError);
     });
 });

@@ -68,7 +68,7 @@ import { emitApp } from "./emit-app";
 import { isD1GlobalTable, isHyperdriveGlobalTable } from "./global-backend";
 import type { AgentIR, FunctionIR, HttpRouteIR, MaskMetadataIR, MigrationIR, MutatorIR, ShapeIR, WorkflowIR } from "./ir";
 import { setStandardTypeResolver } from "./parse-validator";
-import { resolveCodegenTarget } from "./platform-target";
+import { platformFeatureAvailable, resolveCodegenTarget } from "./platform-target";
 import { readMergeDurableObjects } from "./project-config-file";
 import { projectFileMatches, syncProjectFile, writeGeneratedFiles, writeIfChanged } from "./run-codegen-files";
 import type { CodegenOptions, CodegenResult } from "./run-codegen-types";
@@ -316,7 +316,10 @@ const inferToFixpoint = (options: {
     // A target that rejects `typedWebSockets` gets no room surface: its room registrations are not emitted.
     for (let pass = 1; ; pass += 1) {
         // Recomputed each pass: the inference refines `functions`, and the emit must see that.
-        const emittedFunctions = roomsSupported ? functions : functions.filter((definition) => definition.channel?.kind !== "room");
+        const emittedFunctions = roomsSupported
+            ? functions
+            : functions.filter((definition) => definition.channel?.kind !== "room" && definition.lifecycle !== "socket");
+
         const apiContent = emitApi({ agents, functions: emittedFunctions, httpRoutes, mutators, useUmbrella, workflows });
         const functionsOptions = {
             agents,
@@ -488,8 +491,8 @@ export const runCodegen = (options: CodegenOptions): CodegenResult => {
     // fixpoint below — unlike `discoverHttpRoutes`, which does.
     const shapes = discoverShapes(project, lunoraDirectory);
 
-    // Rooms ride hibernated shard sockets: a target that rejects `typedWebSockets` gets no room
-    // surface. The gate has already reported the rejection as `platform_unsupported_feature`.
+    // Rooms and socket routes ride hibernated shard sockets: a target that rejects `typedWebSockets`
+    // gets neither surface. The gate has already reported the rejection as `platform_unsupported_feature`.
     const roomsSupported = platformGate.signals.typedWebSockets !== false;
     const { apiContent, erased, functions, functionModulesContent, functionsContent, httpRoutes, internalContent, mutators } = inferToFixpoint({
         agents,
@@ -628,6 +631,9 @@ export const runCodegen = (options: CodegenOptions): CodegenResult => {
     // that three-state comparison out per call site is what let one of them —
     // the studio nav — keep advertising the feature the other two withheld.
     const vectorStoreSupported = platformGate.signals.vectorStore !== false;
+    // Judged on the matrix, not the usage: the builder method is emitted whether
+    // or not the app calls it, so a host that cannot back it withholds it anyway.
+    const deliveryAuthorizationSupported = platformFeatureAvailable(resolveCodegenTarget(options.projectRoot, options.target), "deliveryAuthorization");
 
     // Which optional features the studio should show a nav page for.
     // `buildStudioFeatures` OR's the code-usage flags with the schema/project
@@ -703,6 +709,7 @@ export const runCodegen = (options: CodegenOptions): CodegenResult => {
         hasFlags,
         hasNotify,
         hasRooms: roomsSupported && functions.some((definition) => definition.channel?.kind === "room"),
+        hasSockets: roomsSupported && functions.some((definition) => definition.lifecycle === "socket"),
         lazyFunctions,
         // The gate's verdict, exactly as `emitServer`/`emitApp` receive it. The
         // shard emitter recomputed the flag from `schema.vectorIndexes` instead,
@@ -710,6 +717,9 @@ export const runCodegen = (options: CodegenOptions): CodegenResult => {
         // `vectorStore: "unsupported"` — a `generated.shard` byte-identical to
         // the Cloudflare one while the type surface was withheld.
         hasVectors: vectorStoreSupported,
+        // Declared AND not rejected by the gate: a target without live streams gets
+        // no `ctx.live` on its action ctx, and the gate has already reported why.
+        liveStreams: platformGate.signals.liveStreams === true,
         maskMetadata,
         mutators,
         queues,
@@ -796,6 +806,9 @@ export const runCodegen = (options: CodegenOptions): CodegenResult => {
         hasKvIntrospector: studioFeatures.kv,
         hasNotify,
         hasQueue: queues.some((queue) => queue.mode === "push"),
+        // Declared AND not rejected by the gate, as on the shard's action ctx.
+        liveStreams: platformGate.signals.liveStreams === true,
+        liveStreamsWithheld: platformGate.liveStreamsWithheld,
         hasScheduler: studioFeatures.scheduler,
         // The same schema signal `emitShard` gates the shard config's source-client
         // field and the ingest poll on, so the builder method and the config field
@@ -806,6 +819,7 @@ export const runCodegen = (options: CodegenOptions): CodegenResult => {
         // take it: the emitter AND's it with the declaration itself. This call
         // site used to pass the CONJUNCTION under the same prop name, so the one
         // flag meant two different things depending on which emitter read it.
+        hasDeliveryAuthorization: deliveryAuthorizationSupported,
         hasVectors: vectorStoreSupported,
         hasWorkflow: workflows.length > 0,
         // The single `defineIdentity(...)` contract (Plan 080). Wires

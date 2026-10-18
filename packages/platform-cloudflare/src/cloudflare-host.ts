@@ -430,7 +430,20 @@ const assertWithinTagBudget = (tags: ReadonlyArray<string> | undefined): void =>
  * lie the engine could route on. Per the `SocketHost` contract, omitting both
  * tells callers to re-accept instead.
  */
+
+/**
+ * Pair and upgrade-response hooks a non-Cloudflare state can supply. Node's state adapter supplies both, because
+ * a Node process has no `WebSocketPair` global and its `Response` cannot carry status 101. A Cloudflare state
+ * supplies neither, so the runtime's own pair and response are used.
+ */
+interface SocketPairSource {
+    openSocketPair?: () => { client: unknown; server: unknown };
+    upgradeResponse?: (client: unknown) => Response;
+}
+
 const createSocketHost = (state: DurableObjectState): SocketHost => {
+    const pairSource = state as DurableObjectState & SocketPairSource;
+
     /**
      * Sockets this host has already determined are not its own.
      *
@@ -472,6 +485,23 @@ const createSocketHost = (state: DurableObjectState): SocketHost => {
     };
 
     return {
+        newPair: () => {
+            if (pairSource.openSocketPair !== undefined) {
+                return pairSource.openSocketPair();
+            }
+
+            const pair = new WebSocketPair();
+
+            return { client: pair[0], server: pair[1] };
+        },
+        upgradeResponse: (client) => {
+            if (pairSource.upgradeResponse !== undefined) {
+                return pairSource.upgradeResponse(client);
+            }
+
+            // eslint-disable-next-line unicorn/no-null -- a 101 switching-protocols response has no body
+            return new Response(null, { status: 101, webSocket: client as NonNullable<ResponseInit["webSocket"]> });
+        },
         accept: (socket, attachment, tags) => {
             assertWithinTagBudget(tags);
 

@@ -77,6 +77,9 @@ interface EmitShardOptions {
     /** The project declares at least one `defineRoom` — wires the `LUNORA_ROOMS` topic→path resolution in the `roomHandlerPath` override. */
     hasRooms?: boolean;
 
+    /** The project declares at least one `defineWebSocket` route — wires the `LUNORA_SOCKETS` path→registration resolution in the `socketRoute` override. */
+    hasSockets?: boolean;
+
     /**
      * The target platform supports a vector store. `false` withholds the whole
      * Vectorize wiring — the `@lunora/bindings/vectors` imports, the
@@ -88,12 +91,20 @@ interface EmitShardOptions {
 
     /** User function handlers are imported through generated per-module loaders. */
     lazyFunctions?: boolean;
+
+    /**
+     * The app declares a `defineLiveStream` that the target serves (post platform
+     * gate) — wires `ctx.live.publish` onto the action ctx, so an action running on
+     * this shard (a scheduled job) publishes to its own stream subscribers.
+     */
+    liveStreams?: boolean;
     maskMetadata?: MaskMetadataIR;
     /** Custom mutators declared via `defineMutator` in `lunora/mutators.ts` — wires the `isCustomMutator` push-protocol override. */
     mutators?: ReadonlyArray<MutatorIR>;
     /** Queues declared via `defineQueue` / `defineSubscription` exports in `lunora/queues.ts` — wires the typed `ctx.queues` producers. */
     queues?: ReadonlyArray<QueueIR>;
     rlsMetadata?: RlsMetadataIR;
+
     schema: SchemaIR;
 
     /**
@@ -129,8 +140,10 @@ const emitShard = ({
     hasFlags = false,
     hasNotify = false,
     hasRooms = false,
+    hasSockets = false,
     lazyFunctions = false,
     hasVectors = true,
+    liveStreams = false,
     maskMetadata,
     mutators = [],
     queues = [],
@@ -384,7 +397,7 @@ const LUNORA_SCHEMA_SNAPSHOT: { hash: string; json: string } = { hash: ${JSON.st
         `import schema from "../schema.js";`,
         // Local-first sync registries are pulled in alongside the function table
         // only when the project declares them, so the import list stays minimal.
-        `import { ${["LUNORA_FUNCTIONS", "LUNORA_LIFECYCLE_HOOKS", "LUNORA_MIGRATIONS", ...(lazyFunctions ? ["getLoadedFunction", "loadFunction"] : []), ...(hasMutators ? ["LUNORA_MUTATOR_PATHS"] : []), ...(hasRooms ? ["LUNORA_ROOMS"] : []), ...(hasShapes ? ["LUNORA_SHAPES"] : [])].join(", ")} } from "./functions.js";`,
+        `import { ${["LUNORA_FUNCTIONS", "LUNORA_LIFECYCLE_HOOKS", "LUNORA_MIGRATIONS", ...(lazyFunctions ? ["getLoadedFunction", "loadFunction"] : []), ...(hasMutators ? ["LUNORA_MUTATOR_PATHS"] : []), ...(hasRooms ? ["LUNORA_ROOMS"] : []), ...(hasSockets ? ["LUNORA_SOCKETS"] : []), ...(hasShapes ? ["LUNORA_SHAPES"] : [])].join(", ")} } from "./functions.js";`,
     );
 
     const vectorsConfigField = hasVectorIndexes ? `\n    vectors?: (env: Record<string, unknown>) => Record<string, VectorizeIndexLike>;` : "";
@@ -585,6 +598,16 @@ const LUNORA_SCHEMA_SNAPSHOT: { hash: string; json: string } = { hash: ${JSON.st
 `
         : "";
 
+    // `defineWebSocket` → the base's `socketRoute` seam. Gated on a declared
+    // route so a socket-free project's ShardDO subclass is byte-identical (it
+    // inherits the base's `undefined` default).
+    const socketRouteOverride = hasSockets
+        ? `        protected override socketRoute(path: string): { auth: boolean; functionPath: string } | undefined {
+            return LUNORA_SOCKETS[path];
+        }
+`
+        : "";
+
     const { externalSourceOverride, sourceBootstrap, sourceClientCacheConst } = emitExternalSourceFragments(hasSourcedTables);
 
     // Once-per-instance init: empty every `.memory()` table, then fire the
@@ -763,8 +786,21 @@ ${schema.tables
     // runtime match). Each helper's ctx field is named after its local, so one
     // list drives both the attach here and the strip from a composed query's view
     // of an action ctx.
-    const actionOnlyFields = [...capabilityWiring.actionFields, ...(services.length > 0 ? ["services"] : [])];
-    const actionOnlyBuild = `${capabilityWiring.actionBuild}${servicesFragments.build}`;
+    // `ctx.live.publish` is action-only: an action that runs on this shard hands the
+    // event to the shard's own SSE subscribers in-process. Queries and mutations
+    // never publish (non-deterministic fan-out), and an absent `shardKey` means this
+    // shard — see the base class live publish method.
+    const liveBuild = liveStreams
+        ? `
+            const live = {
+                publish: async (topic: string, payload: unknown, publishOptions: { shardKey?: string; stream: string }): Promise<void> => {
+                    await this.publishLiveFromAction(topic, payload, publishOptions);
+                },
+            };
+`
+        : "";
+    const actionOnlyFields = [...capabilityWiring.actionFields, ...(services.length > 0 ? ["services"] : []), ...(liveStreams ? ["live"] : [])];
+    const actionOnlyBuild = `${capabilityWiring.actionBuild}${servicesFragments.build}${liveBuild}`;
 
     return `${GENERATED_HEADER}${importLines.join("\n")}
 
@@ -866,7 +902,7 @@ ${customMutatorOverride}${shapeResolveOverride}${globalShapeReaderOverride}${ext
         protected override lifecycleHookPaths(event: "connect" | "disconnect" | "init" | "reactor" | "whisper"): readonly string[] {
             return LUNORA_LIFECYCLE_HOOKS[event];
         }
-${roomHandlerOverride}${shardRegistryFragments.override}${shardInitOverride}
+${roomHandlerOverride}${socketRouteOverride}${shardRegistryFragments.override}${shardInitOverride}
         // One \`onQueryChange\` dispatch. Mirrors \`executeSubscription\` — the
         // socket-terminated half of the same reactivity — and differs only in who
         // consumes the result: the base's \`dispatchReactors\` stores the digest as

@@ -292,6 +292,12 @@ class TestEchoDO extends DurableObject<Env> {
  * echoes the applied `lastMutationId` on the response.
  */
 class ConcreteSyncShard extends ShardDO {
+    /** Every `sockets:wake` dispatch — the wake-up test reads a route frame's arrival here. */
+    public readonly wakeCalls: string[] = [];
+
+    /** Whether `/chat-wake` requires a verified user; the route-gate test flips it to simulate a redeploy. */
+    public wakeRouteAuth = false;
+
     private migrated = false;
 
     /**
@@ -307,6 +313,12 @@ class ConcreteSyncShard extends ShardDO {
     private writer: DatabaseWriterLike | undefined;
 
     public override async handleRpc(functionPath: string, args: Record<string, unknown>): Promise<unknown> {
+        if (functionPath === "sockets:wake") {
+            this.wakeCalls.push(JSON.stringify(args));
+
+            return null;
+        }
+
         if (functionPath.startsWith("race:")) {
             return this.raceControl(functionPath);
         }
@@ -341,6 +353,11 @@ class ConcreteSyncShard extends ShardDO {
         this.recordChangedTable("messages");
 
         return { id: args["_id"], ok: true };
+    }
+
+    /** `/chat-wake` is a `defineWebSocket` route; the wake-up test drives its frames. */
+    protected override socketRoute(path: string): { auth: boolean; functionPath: string } | undefined {
+        return path === "/chat-wake" ? { auth: this.wakeRouteAuth, functionPath: "sockets:wake" } : super.socketRoute(path);
     }
 
     // eslint-disable-next-line class-methods-use-this -- override classifies by `functionPath` alone, no instance state.
@@ -488,6 +505,21 @@ class TestSyncDO extends DurableObject<Env> {
 
     public override webSocketClose(ws: WebSocket, code: number, reason: string, wasClean: boolean): Promise<void> {
         return this.shard.webSocketClose(ws, code, reason, wasClean);
+    }
+
+    /** Route-handler dispatches seen by this instance (see `sockets:wake`). */
+    public async wakeCalls(): Promise<string[]> {
+        return this.shard.wakeCalls;
+    }
+
+    /** Set `/chat-wake`'s auth requirement, as a redeploy that flips the route would. */
+    public setWakeRouteAuth(auth: boolean): void {
+        this.shard.wakeRouteAuth = auth;
+    }
+
+    /** Whether a socket that upgraded on `socketPath` still receives `topic` (see `socketMayReceiveRouteTopic`). */
+    public routeTopicGate(socketPath: string, userId: string | undefined, topic: string): boolean {
+        return this.shard["socketMayReceiveRouteTopic"]({ socketPath, userId }, topic);
     }
 
     /**

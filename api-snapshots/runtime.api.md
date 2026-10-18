@@ -782,6 +782,8 @@ interface FunctionRegistryEntry {
     argumentDescriptors?: Readonly<FunctionDescriptor["args"]>;
     expose?: RestExposure;
     kind: "action" | "mutation" | "query" | "stream";
+    lifecycle?: "connect" | "disconnect" | "init" | "reactor" | "room" | "socket" | "whisper";
+    socketPath?: string;
     visibility?: "internal" | "public";
     x402?: {
         readonly price: number | string;
@@ -963,7 +965,18 @@ interface HttpActionContext {
         }) => Promise<unknown>;
     };
     fetch: typeof globalThis.fetch;
+    fetchShard: (shardKey: string | undefined, path: string, init?: {
+        body?: string;
+        headers?: Record<string, string>;
+        method?: string;
+    }) => Promise<Response>;
     forShard: (shardKey: string) => Pick<HttpActionContext, "runAction" | "runMutation" | "runQuery">;
+    live?: {
+        publish: (topic: string, payload: unknown, options: {
+            shardKey?: string;
+            stream: string;
+        }) => Promise<void>;
+    };
     runAction: <R>(reference: unknown, args?: Record<string, unknown>) => Promise<R>;
     runMutation: <R>(reference: unknown, args?: Record<string, unknown>) => Promise<R>;
     runQuery: <R>(reference: unknown, args?: Record<string, unknown>) => Promise<R>;
@@ -2286,6 +2299,7 @@ interface WorkerOptions {
     jurisdiction?: DurableObjectJurisdiction;
     kvIntrospector?: KvIntrospector;
     listSchemaTables?: () => ReadonlyArray<string>;
+    liveStreams?: boolean;
     logArchive?: LogArchiveConfig;
     notifySubscriptionStore?: NotifySubscriptionStoreLike;
     observability?: ObservabilitySink;
@@ -2294,6 +2308,7 @@ interface WorkerOptions {
     passThroughOnException?: boolean;
     queryCoordinator?: QueryCoordinator;
     queue?: QueueConsumerHandler;
+    queueFetchImpl?: typeof fetch;
     queueHandler?: QueueForwardHandler;
     replicaReads?: boolean;
     resolveIdentity?: (request: Request, env: unknown, context?: ExecutionContextLike) => Promise<ResolvedIdentity | null> | ResolvedIdentity | null;
@@ -3034,7 +3049,18 @@ type OtlpSpanKind = "client" | "consumer" | "internal" | "producer" | "server";
 ### `QueueConsumerHandler` (type)
 
 ```ts
-type QueueConsumerHandler = (batch: unknown, env: unknown, context: ExecutionContextLike, trigger: TriggerTrace) => Promise<void>;
+type QueueConsumerHandler = (batch: unknown, env: unknown, context: ExecutionContextLike, trigger: TriggerTrace, live: QueueLivePublisherLike, fetchImpl: typeof fetch | undefined) => Promise<void>;
+```
+
+### `QueueLivePublisherLike` (interface)
+
+```ts
+interface QueueLivePublisherLike {
+    publish: (topic: string, payload: unknown, options: {
+        shardKey?: string;
+        stream: string;
+    }) => Promise<void>;
+}
 ```
 
 ### `R2PutLike` (interface)

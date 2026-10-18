@@ -759,11 +759,11 @@ interface RunAction {
  * a watched read's result changed — see `onQueryChange`. `whisper` is per-TOPIC
  * and decides whether a socket may join or broadcast to one — see `onWhisper`
  * and {@link WhisperEvent}; unlike the other four it is a query, and its return
- * value is the verdict. `room` is per-ROOM-MESSAGE and is a mutation: a
- * `defineRoom` registration dispatched when a socket joins, leaves, or sends a
- * typed message to the room's whisper topic.
+ * value is the verdict. `socket` is per-ROUTE-FRAME and is
+ * a mutation: a `defineWebSocket` registration dispatched when a socket opens,
+ * sends a typed frame, or closes on the route's path.
  */
-type LifecycleEventKind = "connect" | "disconnect" | "init" | "reactor" | "whisper";
+type LifecycleEventKind = "connect" | "disconnect" | "init" | "reactor" | "socket" | "whisper";
 
 /**
  * The event a whisper authorizer (`onWhisper`) receives as its second argument.
@@ -2641,6 +2641,23 @@ interface ActionCtx {
      * host populates it and why every other one deliberately does not.
      */
     readonly ip?: string;
+
+    /**
+     * `ctx.live.publish(topic, payload, { stream })` — push an event to the SSE
+     * subscribers of a `defineLiveStream` on THIS shard. Present on the shard
+     * (Cloudflare) target only when the app declares a live stream; absent on a
+     * target that rates `liveStreams` `unsupported`, where codegen reports why.
+     * A scheduled job's action publishes this way too. Absent for a query or
+     * mutation: a publish is a side effect, so only an action may make one.
+     *
+     * Delivery is local to the shard: an omitted `shardKey` means the shard the
+     * action runs on, and a `shardKey` naming another shard rejects rather than
+     * reaching zero subscribers silently. The docblock on `defineLiveStream` has the
+     * full routing rules.
+     */
+    readonly live?: {
+        publish: (topic: string, payload: unknown, options: { shardKey?: string; stream: string }) => Promise<void>;
+    };
 
     /** Structured, function-attributed logger; see {@link LunoraLogger}. */
     readonly log: LunoraLogger;

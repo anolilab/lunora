@@ -397,6 +397,14 @@ abstract class ShardDO {
     protected static readonly MAX_WHISPER_VERDICTS_PER_SOCKET = 256;
     protected static readonly MAX_WHISPER_BYTES = 4096;
     protected static readonly MAX_QUEUED_ROOM_EVENTS = 64;
+    protected static readonly MAX_QUEUED_SOCKET_EVENTS = 64;
+    protected static readonly MAX_LIVE_TOPICS_PER_CONNECTION = 64;
+    protected static readonly MAX_LIVE_TOPICS_PER_SOCKET = 8;
+    protected static readonly MAX_LIVE_CONNECTIONS = 1024;
+    protected static readonly LIVE_KEEPALIVE_MS = 25e3;
+    protected static readonly MAX_LIVE_CONNECTIONS_PER_CALLER = 32;
+    protected static readonly MAX_LIVE_CONNECTIONS_ANONYMOUS_SHARED = 256;
+    protected static readonly MAX_LIVE_QUEUED_BYTES: number;
     protected static readonly WHISPER_RATE_BURST = 50;
     protected static readonly WHISPER_RATE_PER_SEC = 25;
     static resetRootSizeWarning(): void;
@@ -415,6 +423,10 @@ abstract class ShardDO {
     abstract handleRpc(functionPath: string, args: Record<string, unknown>, headroom?: TransactionHeadroomTracker, scope?: QueryReadScope, bookmarks?: DispatchBookmark): Promise<unknown>;
     protected lifecycleHookPaths(_event: "connect" | "disconnect" | "init" | "reactor" | "whisper"): ReadonlyArray<string>;
     protected roomHandlerPath(_topic: string): string | undefined;
+    protected socketRoute(_path: string): {
+        auth: boolean;
+        functionPath: string;
+    } | undefined;
     protected dispatchLifecycle(event: "connect" | "disconnect", info: LifecycleDispatchInfo): Promise<void>;
     protected dispatchReactors(changed: Set<string>, runs: Map<string, number>): Promise<void>;
     protected runReactor(_path: string, _previousDigest?: string): Promise<ReactorRunOutcome | undefined>;
@@ -537,6 +549,11 @@ abstract class ShardDO {
     protected scheduleOutboxScheduler(): SchedulerLike | undefined;
     protected pollScheduleOutbox(trace?: TraceRefLike): Promise<number | undefined>;
     protected currentShardKey(): string;
+    protected publishLiveEvent(stream: string, topic: string, wireData: unknown): number;
+    protected publishLiveFromAction(topic: string, payload: unknown, options: {
+        shardKey?: string;
+        stream: string;
+    }): Promise<number>;
     protected shardRegistry(): undefined | {
         namespace: unknown;
         shardedTables: ReadonlySet<string>;
@@ -578,7 +595,7 @@ abstract class ShardDO {
     protected makeDispatchSpan(anchor: TraceAnchor, sink?: TelemetrySink): SpanHandle;
     protected makeMetrics(functionPath: string, sink?: TelemetrySink): ContextMetrics;
     protected recordMetric(event: MetricEvent, sink?: TelemetrySink): void;
-    protected handleWebSocketMessage(ws: ShardSocketLike, message: string | ArrayBuffer): Promise<void>;
+    protected handleWebSocketMessage(ws: ShardSocketLike, message: string | ArrayBuffer, deliveredAfterClose?: boolean): Promise<void>;
     protected handleFetchCloudflare(request: Request): Promise<Response>;
     protected handleAlarmCloudflare(): Promise<void>;
     protected captureRequestScope(): RequestScope;

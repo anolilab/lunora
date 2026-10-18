@@ -144,15 +144,24 @@ const relayCountFor = (subscribers: number, perRelayCapacity: number, maxRelays:
     return Math.min(needed, Math.max(0, maxRelays));
 };
 
-/** A relay announces (on its first attached subscriber) that it is serving a fan-out key, so the owner adds it to the relay set it forwards to. */
+/**
+ * A relay announces (on its first attached subscriber) that it is serving a fan-out key, so the owner adds it to the relay set it forwards to.
+ * `seq` raises the owner's mark for that relay, which a later, older detach is checked against; an attach itself always applies.
+ * Absent on a frame sent before sequencing.
+ */
 interface RelayAttach {
     relayIndex: number;
+    seq?: number;
     type: "relay_attach";
 }
 
-/** A relay announces it has drained to zero sockets and is detaching, so the owner stops forwarding to it. */
+/**
+ * A relay announces it has drained to zero sockets and is detaching, so the owner stops forwarding to it. `seq` is ordered like {@link RelayAttach}: a
+ * detach that lands after a newer attach is ignored, so it cannot unregister a relay that has live sockets again.
+ */
 interface RelayDetach {
     relayIndex: number;
+    seq?: number;
     type: "relay_detach";
 }
 
@@ -293,17 +302,50 @@ interface RelayRoomVerdict {
     admitted: boolean;
 }
 
+/**
+ * A live subscribe/unsubscribe the owner could not place on a local socket, forwarded so the
+ * relay holding `connectionId` applies it. The owner has already run the worker's `onSubscribe`
+ * for the call, so the relay only repeats the socket ownership and grant checks.
+ */
+interface LiveSocketControlCall {
+    action: unknown;
+    callerId: string;
+    connectionId: string;
+    identityExpiry?: number;
+    key: string;
+    /** Stamped by the owner when it forwards the call; a later call on the same subscription supersedes an earlier one. Absent on a call sent before sequencing. */
+    seq?: number;
+    subscriptionId: string;
+}
+
+interface RelayLiveControl {
+    control: LiveSocketControlCall;
+    type: "relay_live_control";
+}
+
+/** A server-published live event the relay delivers to its WebSocket members holding the grant `key`. */
+interface RelayLiveFrame {
+    frame: string;
+    key: string;
+    topic: string;
+    type: "relay_live_frame";
+}
+
 /** Internal owner↔relay control messages (plan 075). NOT the public client protocol — the app never sees these. */
-type OwnerRelayFrame = RelayAttach | RelayDetach | RelayFrame | RelayRoomEvent | RelayShapePoke | RelayShapeSubscribe | RelayShapeUnsubscribe;
+type OwnerRelayFrame =
+    RelayAttach | RelayDetach | RelayFrame | RelayLiveControl | RelayLiveFrame | RelayRoomEvent | RelayShapePoke | RelayShapeSubscribe | RelayShapeUnsubscribe;
 
 export { clampPromotionThresholds, DEFAULT_PROMOTION_THRESHOLDS, nextPromotionState, relayCountFor, relayProxyKey, shapeRoutingKey };
 export type {
+    LiveSocketControlCall,
     OwnerRelayFrame,
     PromotionState,
     PromotionThresholds,
     RelayAttach,
     RelayDetach,
     RelayFrame,
+    RelayLiveControl,
+    RelayLiveFrame,
     RelayRoomEvent,
     RelayRoomVerdict,
     RelayShapePoke,

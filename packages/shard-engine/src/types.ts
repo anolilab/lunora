@@ -295,6 +295,15 @@ export interface SocketAttachment {
     ip?: string;
 
     /**
+     * Live-stream grants held by this WebSocket: subscription id to the
+     * `liveSubscriptionKey(stream, topic)` the worker's `onSubscribe` admitted.
+     * A live publish reaches the socket only when it is also a whisper member of
+     * the topic and holds the grant for the publishing stream. Persisted so the
+     * grant survives hibernation; absent until a live subscribe is granted.
+     */
+    liveGrants?: Record<string, string>;
+
+    /**
      * `true` when the socket's `connect` envelope announced the `pageDelta`
      * capability — i.e. this client can merge a row delta into the `page` of a
      * paginated result, so the server may diff one instead of re-sending it.
@@ -315,6 +324,23 @@ export interface SocketAttachment {
      * Absent until the socket sends its first `shape_subscribe`.
      */
     shapes?: Record<string, ShapeSubscriptionQuery>;
+
+    /**
+     * Set with {@link SocketAttachment.socketPath}: the registered function path of the route that accepted the
+     * socket. A route is bound to this function rather than to its path, so a deployment that reassigns the path
+     * does not hand an open socket to a different handler. Absent on a route socket that predates it, which fails closed.
+     */
+    socketFunction?: string;
+
+    /**
+     * Set on a socket accepted for a `defineWebSocket` route: the URL path the
+     * route serves (e.g. `/chat`). Its presence marks a socket whose inbound
+     * frames are typed messages for that route rather than subscription
+     * envelopes, and it lets a hibernated socket that wakes on a frame resolve
+     * its handler + broadcast channel again without a per-connection registry.
+     * Absent on every ordinary subscription socket.
+     */
+    socketPath?: string;
     subs: Record<string, SubscriptionQuery>;
 
     /**

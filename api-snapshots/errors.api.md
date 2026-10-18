@@ -625,6 +625,22 @@ const ERROR_CATALOG: {
         readonly status: 500;
         readonly title: "Room name is not a string literal";
     };
+    readonly DUPLICATE_SOCKET_PATH: {
+        readonly status: 500;
+        readonly title: "Duplicate socket route path";
+    };
+    readonly SOCKET_AUTH_NOT_LITERAL: {
+        readonly status: 500;
+        readonly title: "Socket route auth is not a literal boolean";
+    };
+    readonly SOCKET_PATH_INVALID: {
+        readonly status: 500;
+        readonly title: "Socket route path is not a plain URL path";
+    };
+    readonly SOCKET_PATH_NOT_LITERAL: {
+        readonly status: 500;
+        readonly title: "Socket route path is not a string literal";
+    };
     readonly DUPLICATE_WORKFLOW_CLASS: {
         readonly status: 500;
         readonly title: "Duplicate workflow generated class name";
@@ -678,6 +694,10 @@ const ERROR_CATALOG: {
     readonly FORBIDDEN_SHARD: {
         readonly status: 403;
         readonly title: "Shard access forbidden";
+    };
+    readonly FORBIDDEN_TOPIC: {
+        readonly status: 403;
+        readonly title: "Live topic publish forbidden";
     };
     readonly GLOBAL_NOT_CONFIGURED: {
         readonly status: 400;
@@ -755,6 +775,18 @@ const ERROR_CATALOG: {
         readonly status: 404;
         readonly title: "Session expired";
     };
+    readonly LIVE_CONNECTION_LIMIT: {
+        readonly status: 503;
+        readonly title: "Live connection limit reached";
+    };
+    readonly LIVE_CONNECTION_NOT_FOUND: {
+        readonly status: 404;
+        readonly title: "Live connection not found";
+    };
+    readonly LIVE_STREAMS_UNSUPPORTED: {
+        readonly status: 501;
+        readonly title: "Live streams are not served by this worker";
+    };
     readonly NESTED_TRANSACTION: {
         readonly internal: true;
         readonly status: 500;
@@ -801,6 +833,10 @@ const ERROR_CATALOG: {
         ];
         readonly status: 401;
         readonly title: "Authentication token expired";
+    };
+    readonly TOO_MANY_LIVE_TOPICS: {
+        readonly status: 429;
+        readonly title: "Too many live topics";
     };
     readonly TOO_MANY_STREAMS: {
         readonly status: 429;

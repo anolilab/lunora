@@ -531,6 +531,10 @@ export const ERROR_CATALOG = {
     DUPLICATE_QUEUE_NAME: { status: 500, title: "Duplicate queue name" },
     DUPLICATE_ROOM_NAME: { status: 500, title: "Duplicate room name" },
     ROOM_NAME_NOT_LITERAL: { status: 500, title: "Room name is not a string literal" },
+    DUPLICATE_SOCKET_PATH: { status: 500, title: "Duplicate socket route path" },
+    SOCKET_AUTH_NOT_LITERAL: { status: 500, title: "Socket route auth is not a literal boolean" },
+    SOCKET_PATH_INVALID: { status: 500, title: "Socket route path is not a plain URL path" },
+    SOCKET_PATH_NOT_LITERAL: { status: 500, title: "Socket route path is not a string literal" },
     DUPLICATE_WORKFLOW_CLASS: { status: 500, title: "Duplicate workflow generated class name" },
     MIGRATION_ID_NOT_STATIC: { status: 500, title: "Migration id is not statically analyzable" },
     NAMESPACE_COLLISION: { status: 500, title: "Function namespace collision" },
@@ -583,6 +587,7 @@ export const ERROR_CATALOG = {
     GLOBAL_SEARCH_SCORES_UNSUPPORTED: { status: 400, title: "collectWithScores() is unsupported on a global table" },
     FORBIDDEN_ORIGIN: { status: 403, title: "Origin forbidden" },
     FORBIDDEN_SHARD: { status: 403, title: "Shard access forbidden" },
+    FORBIDDEN_TOPIC: { status: 403, title: "Live topic publish forbidden" },
     GLOBAL_NOT_CONFIGURED: { status: 400, title: "Global table import not configured" },
     INVALID_INPUT: { status: 400, title: "Invalid input" },
     /** A caller-supplied `RunOptions.id` that is not a safe key segment. NOT internal: the message is fixed guidance about the caller's own argument, and withholding it would leave them guessing at a 400. */
@@ -677,6 +682,9 @@ export const ERROR_CATALOG = {
     /** A resume below the compacted prefix: the keys survive but their post-images do not, so only a payload consumer (streaming export, replay-PITR, a read replica) is refused. */
     CDC_PAYLOAD_COMPACTED: { status: 409, title: "CDC payloads compacted" },
     EXPIRED: { status: 404, title: "Session expired" },
+    LIVE_CONNECTION_LIMIT: { status: 503, title: "Live connection limit reached" },
+    LIVE_CONNECTION_NOT_FOUND: { status: 404, title: "Live connection not found" },
+    LIVE_STREAMS_UNSUPPORTED: { status: 501, title: "Live streams are not served by this worker" },
     NESTED_TRANSACTION: { internal: true, status: 500, title: "Nested transaction" },
     OUT_OF_ORDER: { status: 409, title: "Out-of-order mutation" },
     SHAPE_GLOBAL_TOO_LARGE: { status: 413, title: "Global shape too large" },
@@ -695,6 +703,7 @@ export const ERROR_CATALOG = {
         status: 401,
         title: "Authentication token expired",
     },
+    TOO_MANY_LIVE_TOPICS: { status: 429, title: "Too many live topics" },
     TOO_MANY_STREAMS: { status: 429, title: "Too many streams" },
 
     /**

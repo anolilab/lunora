@@ -1,3 +1,24 @@
+## @lunora/container [1.0.0-alpha.82](https://github.com/anolilab/lunora/compare/@lunora/container@1.0.0-alpha.81...@lunora/container@1.0.0-alpha.82) (2026-10-18)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.62
+
+## @lunora/container [1.0.0-alpha.81](https://github.com/anolilab/lunora/compare/@lunora/container@1.0.0-alpha.80...@lunora/container@1.0.0-alpha.81) (2026-10-18)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.61
+
+## @lunora/container [1.0.0-alpha.80](https://github.com/anolilab/lunora/compare/@lunora/container@1.0.0-alpha.79...@lunora/container@1.0.0-alpha.80) (2026-10-18)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.60
+
 ## @lunora/container [1.0.0-alpha.79](https://github.com/anolilab/lunora/compare/@lunora/container@1.0.0-alpha.78...@lunora/container@1.0.0-alpha.79) (2026-10-18)
 
 

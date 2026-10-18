@@ -207,7 +207,12 @@ const openManagedSocket = (
             console.error("[lunora] connection open handler threw", error);
         }
 
-        startHeartbeat(conn, heartbeatIntervalMs, disconnect);
+        // `onOpen` may have torn this connection down (a route handle closed from its own
+        // open callback). Only a socket still owned by the connection gets a heartbeat,
+        // so a timer never outlives the socket it watches.
+        if (conn.socket === socket) {
+            startHeartbeat(conn, heartbeatIntervalMs, disconnect);
+        }
     });
 
     socket.addEventListener("message", (event: MessageEvent): void => {

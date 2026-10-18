@@ -1,3 +1,70 @@
+## @lunora/platform-celld [1.0.0-alpha.20](https://github.com/anolilab/lunora/compare/@lunora/platform-celld@1.0.0-alpha.19...@lunora/platform-celld@1.0.0-alpha.20) (2026-10-18)
+
+
+### Dependencies
+
+* **@lunora/platform:** upgraded to 1.0.0-alpha.69
+* **@lunora/platform-cloudflare:** upgraded to 1.0.0-alpha.97
+* **@lunora/agent:** upgraded to 1.0.0-alpha.225
+* **@lunora/ai:** upgraded to 1.0.0-alpha.136
+* **@lunora/bindings:** upgraded to 1.0.0-alpha.122
+* **@lunora/container:** upgraded to 1.0.0-alpha.82
+* **@lunora/d1:** upgraded to 1.0.0-alpha.189
+* **@lunora/do:** upgraded to 1.0.0-alpha.227
+* **@lunora/queue:** upgraded to 1.0.0-alpha.115
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.217
+* **@lunora/server:** upgraded to 1.0.0-alpha.217
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.140
+* **@lunora/storage:** upgraded to 1.0.0-alpha.142
+
+## @lunora/platform-celld [1.0.0-alpha.19](https://github.com/anolilab/lunora/compare/@lunora/platform-celld@1.0.0-alpha.18...@lunora/platform-celld@1.0.0-alpha.19) (2026-10-18)
+
+
+### Dependencies
+
+* **@lunora/platform-cloudflare:** upgraded to 1.0.0-alpha.96
+* **@lunora/agent:** upgraded to 1.0.0-alpha.224
+* **@lunora/ai:** upgraded to 1.0.0-alpha.135
+* **@lunora/bindings:** upgraded to 1.0.0-alpha.121
+* **@lunora/container:** upgraded to 1.0.0-alpha.81
+* **@lunora/d1:** upgraded to 1.0.0-alpha.188
+* **@lunora/do:** upgraded to 1.0.0-alpha.226
+* **@lunora/queue:** upgraded to 1.0.0-alpha.114
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.216
+* **@lunora/server:** upgraded to 1.0.0-alpha.216
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.139
+* **@lunora/storage:** upgraded to 1.0.0-alpha.141
+
+## @lunora/platform-celld [1.0.0-alpha.18](https://github.com/anolilab/lunora/compare/@lunora/platform-celld@1.0.0-alpha.17...@lunora/platform-celld@1.0.0-alpha.18) (2026-10-18)
+
+### ⚠ BREAKING CHANGES
+
+* **server:** createNodeHttpServer rejects a non-loopback host without an
+origin option, and no longer caps request bodies at 1 MiB.
+
+Co-authored-by: Claude Opus 5.5 <noreply@anthropic.com>
+
+### Features
+
+* **server:** live topic streams over one SSE connection ([#1218](https://github.com/anolilab/lunora/issues/1218)) ([59056ea](https://github.com/anolilab/lunora/commit/59056ea6c5d23de1bd5633a7da3ac680eb622344))
+
+
+### Dependencies
+
+* **@lunora/platform:** upgraded to 1.0.0-alpha.68
+* **@lunora/platform-cloudflare:** upgraded to 1.0.0-alpha.95
+* **@lunora/agent:** upgraded to 1.0.0-alpha.223
+* **@lunora/ai:** upgraded to 1.0.0-alpha.134
+* **@lunora/bindings:** upgraded to 1.0.0-alpha.120
+* **@lunora/container:** upgraded to 1.0.0-alpha.80
+* **@lunora/d1:** upgraded to 1.0.0-alpha.187
+* **@lunora/do:** upgraded to 1.0.0-alpha.225
+* **@lunora/queue:** upgraded to 1.0.0-alpha.113
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.215
+* **@lunora/server:** upgraded to 1.0.0-alpha.215
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.138
+* **@lunora/storage:** upgraded to 1.0.0-alpha.140
+
 ## @lunora/platform-celld [1.0.0-alpha.17](https://github.com/anolilab/lunora/compare/@lunora/platform-celld@1.0.0-alpha.16...@lunora/platform-celld@1.0.0-alpha.17) (2026-10-18)
 
 

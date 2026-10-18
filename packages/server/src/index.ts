@@ -39,9 +39,13 @@ export type {
     HttpRouteHandlerOptions,
     HttpRunners,
     HttpStreamHandlerOptions,
+    LivePublisher,
+    LivePublishOptions,
     LunoraHttpApp,
     LunoraHttpEnv,
     LunoraRouteHandler,
+    ShardFetch,
+    ShardFetchInit,
     SseEvent,
 } from "./http";
 export { httpAction, httpRoute, httpRouter, isSafeHeaderValue, lastEventId, sseEvent } from "./http";
@@ -54,6 +58,8 @@ export type { LifecycleHandler, ShardInitHandler } from "./lifecycle";
 export { onConnect, onDisconnect, onShardInit } from "./lifecycle";
 export type { DefineListArgsConfig, ListArgsSpec, ListArgsValidators, ListArgsValue, ListFilterOperators, ListOrderByEntry, ListWhere } from "./list-args";
 export { clampLimit, DEFAULT_LIMIT, DEFAULT_MAX_LIMIT, defineListArgs } from "./list-args";
+export type { LiveStream, LiveStreamConfig, LiveSubscribeHandler } from "./live-stream";
+export { defineLiveStream } from "./live-stream";
 export type { MaskColumns, MaskContext, MaskFn, MaskOptions, MaskPolicies, MaskRegistry, MaskStrategy } from "./mask/index";
 export { buildMaskRegistry, mask } from "./mask/index";
 export type { MigrationCtx, MigrationDefinition, MigrationDocument, MigrationReader, MigrationTransform, RegisteredMigration } from "./migration";
@@ -124,6 +130,15 @@ export type { ServiceBindingSpec, ServiceFetcher, ServiceRpc } from "./services"
 export { createServices } from "./services";
 export type { RegisteredShape, ShapeDefinition } from "./shapes";
 export { defineShape } from "./shapes";
+export type {
+    DefineWebSocketOptions,
+    RegisteredWebSocket,
+    WebSocketCloseHandler,
+    WebSocketHandle,
+    WebSocketMessageHandler,
+    WebSocketOpenHandler,
+} from "./socket";
+export { defineWebSocket } from "./socket";
 export type { DefineStorageRuleInput, StorageOperation, StorageRule, StorageRuleContext, StorageRuleDecision, StorageRulesOptions } from "./storage/index";
 export { defineStorageRule, defineStorageRules, storageRules } from "./storage/index";
 export type {

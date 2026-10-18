@@ -22,7 +22,16 @@ import { LunoraError, toErrorBody } from "@lunora/errors";
 
 import { openRequeue, sealRequeue } from "./requeue-envelope";
 import { createQueueRunContext } from "./run-context";
-import type { MessageBatchLike, MessageLike, QueueBindingLike, QueueDefinition, QueueMessage, QueueMessageBatch, QueueRetryOptions } from "./types";
+import type {
+    MessageBatchLike,
+    MessageLike,
+    QueueBindingLike,
+    QueueDefinition,
+    QueueLivePublisher,
+    QueueMessage,
+    QueueMessageBatch,
+    QueueRetryOptions,
+} from "./types";
 
 /** One declared queue, keyed for batch routing by its stable wrangler name. */
 interface QueueRegistryEntry {
@@ -124,6 +133,8 @@ interface DispatchOptions {
     env: Record<string, unknown>;
     /** Injectable fetch for the `ctx.run` dispatcher (tests). */
     fetchImpl?: typeof fetch;
+    /** The runtime's shard-forwarding live publisher, handed to the handler as `ctx.live`. */
+    live?: QueueLivePublisher;
 
     /**
      * W3C `traceparent` of the consumer invocation's own trace, supplied by the
@@ -638,6 +649,7 @@ const dispatchQueueBatch = async (batch: MessageBatchLike, registry: QueueRegist
         exportName: entry.exportName,
         fetchImpl: options.fetchImpl,
         ...(options.traceparent === undefined ? {} : { traceparent: options.traceparent }),
+        live: options.live,
     });
     // Always instrumented, capture sink or not: the wrapper is what gives each
     // message its pinned `run`, and poison-message isolation is a DELIVERY
