@@ -35,6 +35,38 @@ import {
 /** R2 bucket binding that receives changelog segments. Absent ⇒ archiving is off. */
 const CDC_ARCHIVE_BINDING = "LUNORA_CDC_ARCHIVE";
 
+const CDC_LOG_RETENTION_KEY = "LUNORA_CDC_LOG_RETENTION";
+
+/**
+ * Changelog rows a shard keeps when `LUNORA_CDC_LOG_RETENTION` is not set.
+ *
+ * An unbounded log is a slow leak: every write appends a row and nothing removes
+ * one, so a busy shard's SQLite grows until it hits the storage ceiling. A million rows is generous — at a write a second that is
+ * eleven days of history — and a consumer that falls further behind is told to
+ * re-seed from a snapshot (`CDC_LOG_TRIMMED`), never handed a silent gap. The sweep
+ * still never crosses the in-shard consumers' floor.
+ */
+const DEFAULT_CDC_LOG_RETENTION_ROWS = 1_000_000;
+
+/**
+ * The row window the sweep keeps: `LUNORA_CDC_LOG_RETENTION` when set to a whole
+ * positive integer, `off` to opt out and keep the log unbounded, otherwise
+ * {@link DEFAULT_CDC_LOG_RETENTION_ROWS}.
+ *
+ * A malformed value reads as the default rather than as a tighter window — the
+ * strict whole-string parse is what stops `10k` becoming "keep 10 rows".
+ * @returns the row count to keep, or `undefined` when row retention is switched off
+ */
+const resolveCdcLogRetention = (environment: unknown): number | undefined => {
+    const raw = (environment as Record<string, unknown> | undefined)?.[CDC_LOG_RETENTION_KEY];
+
+    if (typeof raw === "string" && raw.trim().toLowerCase() === "off") {
+        return undefined;
+    }
+
+    return envOptionalPositiveInt(environment, CDC_LOG_RETENTION_KEY) ?? DEFAULT_CDC_LOG_RETENTION_ROWS;
+};
+
 /**
  * Minimum spacing between retention sweeps. The sweep is amortized onto a write
  * dispatch rather than a timer, so this is what keeps it off the per-mutation
@@ -155,11 +187,13 @@ class CdcRetentionRunner {
      * Bound the changelog to the configured windows, archiving anything
      * destructible first when a bucket is bound.
      *
-     * Two independent, opt-in windows. `LUNORA_CDC_PAYLOAD_RETENTION` strips
+     * Two independent windows. `LUNORA_CDC_PAYLOAD_RETENTION` (opt-in) strips
      * post-images past N rows, keeping every key — a client below that floor
      * still gets an exact key-level delta and reads the values from the tables.
      * `LUNORA_CDC_LOG_RETENTION` deletes rows outright past N, which is the
-     * level that destroys information and the one the archive exists for.
+     * level that destroys information and the one the archive exists for. It
+     * defaults to {@link DEFAULT_CDC_LOG_RETENTION_ROWS} so the log is bounded
+     * out of the box, and `off` restores the unbounded log.
      *
      * Both levels are enforced on the READ paths, not merely intended here —
      * `evaluateResume` and `computeOpLogShapeSeed` gate on `minCdcSeq`, and
@@ -168,15 +202,17 @@ class CdcRetentionRunner {
      * handed the surviving tail with an advanced cursor has no way to notice a
      * range went missing, so every path that can serve one has to refuse.
      *
-     * **Both are opt-in, and that is a deliberate answer rather than caution.**
+     * **The window is a statement about out-of-shard consumers.**
      * The log's in-shard consumers record durable cursors this sweep can read
      * ({@link CdcRetentionHost.retentionFloor}), but its out-of-shard consumers
      * do not: a warehouse connector holds an opaque cursor token issued by the
      * Worker, and nothing in this shard knows where it is. Trimming to a floor
-     * computed only from what SQLite can see would silently drop rows a
-     * connector had not read — so a deployment that wants retention states the
-     * window it can afford, and gets a sweep that additionally never crosses the
-     * in-shard floor. A shard that configures neither behaves exactly as before.
+     * computed only from what SQLite can see drops rows such a connector may
+     * not have read — which is why the read paths refuse a cursor below the
+     * floor (`CDC_LOG_TRIMMED`) rather than serving a silent gap, and why the
+     * window is the operator's to size: raise `LUNORA_CDC_LOG_RETENTION` for a
+     * consumer that can lag further, or bind an archive bucket to keep what the
+     * trim removes. The sweep additionally never crosses the in-shard floor.
      *
      * Best-effort throughout: a stub `sql` handle or a shard without CDC is a
      * no-op, and a failure here must never surface on a write path whose data
@@ -203,7 +239,7 @@ class CdcRetentionRunner {
         // ignored. `envOptionalPositiveInt` requires the whole string to be an
         // integer and treats anything else as unset, i.e. as off.
         const environment = this.host.env();
-        const keepRows = envOptionalPositiveInt(environment, "LUNORA_CDC_LOG_RETENTION");
+        const keepRows = resolveCdcLogRetention(environment);
         const keepPayloads = envOptionalPositiveInt(environment, "LUNORA_CDC_PAYLOAD_RETENTION");
 
         if (keepRows === undefined && keepPayloads === undefined) {
@@ -221,7 +257,9 @@ class CdcRetentionRunner {
         try {
             const bucket = cdcArchiveBucket(environment);
 
-            // Archiving is gated on ROW retention, not on a bucket alone.
+            // Archiving is gated on ROW retention, not on a bucket alone. (Row
+            // retention defaults on, so in practice binding a bucket is the
+            // switch; only an explicit `LUNORA_CDC_LOG_RETENTION=off` leaves it unarchived.)
             //
             // What the archive undoes is the trim. Compaction keeps the key and
             // drops the payload, and the SHAPE paths degrade gracefully to a
@@ -485,4 +523,4 @@ class CdcRetentionRunner {
     }
 }
 
-export { cdcArchiveBucket, CdcRetentionRunner };
+export { cdcArchiveBucket, CdcRetentionRunner, DEFAULT_CDC_LOG_RETENTION_ROWS, resolveCdcLogRetention };
