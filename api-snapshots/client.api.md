@@ -1538,7 +1538,7 @@ Re-exported from `@lunora/runtime` — signature tracked at its source.
 ### `WorkflowInstanceAction` (type)
 
 ```ts
-type WorkflowInstanceAction = "pause" | "resume" | "terminate";
+type WorkflowInstanceAction = "pause" | "restart" | "resume" | "terminate";
 ```
 
 ### `WorkflowInstanceDetail` (interface)
@@ -1567,7 +1567,7 @@ interface WorkflowInstancePage {
 ### `WorkflowInstanceStatus` (type)
 
 ```ts
-type WorkflowInstanceStatus = "complete" | "errored" | "paused" | "queued" | "running" | "terminated" | "unknown" | "waiting" | "waitingForPause";
+type WorkflowInstanceStatus = "complete" | "errored" | "paused" | "queued" | "rollingBack" | "running" | "terminated" | "unknown" | "waiting" | "waitingForPause";
 ```
 
 ### `WorkflowInstanceSummary` (interface)

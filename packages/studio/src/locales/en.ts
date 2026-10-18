@@ -1280,6 +1280,7 @@ const MESSAGE_IDS = [
     "This instance has no recorded steps yet.",
     "pause",
     "resume",
+    "restart",
     "terminate",
     // Query insights (metrics panel — slow-query leaderboard).
     ">100ms avg execution",

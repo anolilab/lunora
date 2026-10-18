@@ -101,6 +101,23 @@ describe("workflowInstanceHistory", () => {
         expect(loadInstances.mock.calls.length).toBeGreaterThanOrEqual(2);
     });
 
+    it("restarts an instance through the lifecycle handler", async () => {
+        expect.hasAssertions();
+
+        const runAction = vi.fn<(args: { action: WorkflowInstanceAction; id: string; name: string }) => Promise<{ status: WorkflowInstanceStatus }>>(
+            async () => {
+                return { status: "queued" as WorkflowInstanceStatus };
+            },
+        );
+        render(withProvider(createMockClient(), <WorkflowInstanceHistory loadInstances={async () => INSTANCES} runAction={runAction} workflowName="orders" />));
+
+        fireEvent.click(await screen.findByTestId("workflow-instance-restart-i1"));
+
+        await waitFor(() => {
+            expect(runAction).toHaveBeenCalledWith({ action: "restart", id: "i1", name: "orders" });
+        });
+    });
+
     it("is read-only (no action buttons) when given a custom loader without a handler", async () => {
         expect.assertions(1);
 

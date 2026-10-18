@@ -2586,6 +2586,7 @@ const MESSAGE_IDS: readonly [
     "This instance has no recorded steps yet.",
     "pause",
     "resume",
+    "restart",
     "terminate",
     ">100ms avg execution",
     "50–100ms avg execution",

@@ -35,6 +35,7 @@ const KNOWN_STATUSES = {
     errored: true,
     paused: true,
     queued: true,
+    rollingBack: true,
     running: true,
     terminated: true,
     unknown: true,
@@ -89,7 +90,7 @@ const toStep = (raw: Record<string, unknown>): WorkflowStepDetail => {
 };
 
 /** The lifecycle mutations the REST API exposes via `PATCH .../instances/{id}`. */
-export type WorkflowInstanceAction = "pause" | "resume" | "terminate";
+export type WorkflowInstanceAction = "pause" | "restart" | "resume" | "terminate";
 
 /** Configuration for a {@link WorkflowsRestClient}. */
 export interface WorkflowsRestConfig {
@@ -238,7 +239,7 @@ export const createWorkflowsRestClient = (config: WorkflowsRestConfig): Workflow
             // not on the instance itself — Cloudflare's API reference:
             // PATCH /accounts/{account_id}/workflows/{workflow_name}/instances/{instance_id}/status
             // (https://developers.cloudflare.com/api/resources/workflows/subresources/instances/subresources/status/methods/edit/).
-            // The instance path has no PATCH handler, so pausing/resuming/terminating
+            // The instance path has no PATCH handler, so pausing/resuming/restarting/terminating
             // from the studio reached an endpoint that could never act on it.
             const body = await request(`/${encodeURIComponent(workflowName)}/instances/${encodeURIComponent(instanceId)}/status`, {
                 body: JSON.stringify({ status: action }),

@@ -358,7 +358,7 @@ type WorkflowHandler<Params = Record<string, unknown>, Output = unknown> = (cont
 ### `WorkflowInstanceAction` (type)
 
 ```ts
-type WorkflowInstanceAction = "pause" | "resume" | "terminate";
+type WorkflowInstanceAction = "pause" | "restart" | "resume" | "terminate";
 ```
 
 ### `WorkflowInstanceDetail` (interface)
@@ -417,7 +417,7 @@ interface WorkflowInstancePage {
 ### `WorkflowInstanceStatus` (type)
 
 ```ts
-type WorkflowInstanceStatus = "complete" | "errored" | "paused" | "queued" | "running" | "terminated" | "unknown" | "waiting" | "waitingForPause";
+type WorkflowInstanceStatus = "complete" | "errored" | "paused" | "queued" | "rollingBack" | "running" | "terminated" | "unknown" | "waiting" | "waitingForPause";
 ```
 
 ### `WorkflowInstanceSubscribeOptionsLike` (interface)
