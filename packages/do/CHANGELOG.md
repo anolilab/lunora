@@ -1,3 +1,19 @@
+## @lunora/do [1.0.0-alpha.224](https://github.com/anolilab/lunora/compare/@lunora/do@1.0.0-alpha.223...@lunora/do@1.0.0-alpha.224) (2026-10-18)
+
+### Bug Fixes
+
+* **do:** address review of delivery authorization ([#1235](https://github.com/anolilab/lunora/issues/1235)) ([#1238](https://github.com/anolilab/lunora/issues/1238)) ([d73863b](https://github.com/anolilab/lunora/commit/d73863bd1e442675a751453284d5498ec4383a87))
+* **do:** address review of the retired shape scan ([#1240](https://github.com/anolilab/lunora/issues/1240)) ([#1244](https://github.com/anolilab/lunora/issues/1244)) ([62fcfad](https://github.com/anolilab/lunora/commit/62fcfadfcca02f41c17f1e29a37d6faff5efaaed))
+
+
+### Dependencies
+
+* **@lunora/observability:** upgraded to 1.0.0-alpha.148
+* **@lunora/platform:** upgraded to 1.0.0-alpha.67
+* **@lunora/platform-cloudflare:** upgraded to 1.0.0-alpha.94
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.137
+* **@lunora/bindings:** upgraded to 1.0.0-alpha.119
+
 ## @lunora/do [1.0.0-alpha.223](https://github.com/anolilab/lunora/compare/@lunora/do@1.0.0-alpha.222...@lunora/do@1.0.0-alpha.223) (2026-10-18)
 
 ### Bug Fixes
