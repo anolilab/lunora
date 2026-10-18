@@ -309,7 +309,9 @@ the model passes it to the consuming tool. `withSecret` takes the value inside i
 own durable step, returns only what the callback returns, and discards the value
 as a second step, but only after a take that succeeded. A callback result that
 carries the value (an echoed token, a header built from it) is refused: the call
-fails with a `LunoraError` and the result is not journalled.
+fails with a `LunoraError` and the result is not journalled. A callback that throws
+an error carrying the value is redacted before the error propagates, so the step's
+retry, the failure the loop records and telemetry never see the value.
 
 Each pause writes a request row, which is the authority for the request: pending,
 supplied, declined, expired or consumed. Supply, decline, expiry and consumption
