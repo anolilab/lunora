@@ -19,7 +19,7 @@ pnpm install
 pnpm --filter @lunora-example/realtime-cursors dev
 ```
 
-The dev server listens on <http://localhost:5174>. Append `#<room>` to the
+The dev server listens on the port it prints (<http://localhost:5174> in the main checkout). Append `#<room>` to the
 URL to enter a different room (defaults to `lobby`).
 
 ## Key snippets

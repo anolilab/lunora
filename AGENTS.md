@@ -67,6 +67,7 @@ bash sdks/run-all.sh              # 8 non-JS SDK conformance suites (lint-all.sh
 - **Never `pnpm -r run test`.** Every package's vitest in parallel fails a different arbitrary set each run (resource contention, not real failures). Use `pnpm run test`, `test:affected`, or one `--filter`.
 - **Never text-merge `pnpm-lock.yaml`.** Discard a conflicted lockfile and regenerate (`pnpm install --lockfile-only`). CI builds `refs/pull/N/merge`, not your branch head, so a hand-resolved lockfile fails there and nowhere else.
 - **Prettier before ESLint** when fixing by hand. The reverse lets Prettier reformat lines ESLint just fixed and reintroduce the violations.
+- **Dev ports are per checkout.** The playground (`:5173`) and studio (`:5174`) ports come from `shared/dev-ports.ts`: a linked git worktree gets an offset from its path. Read the ports from the startup line (`dev ports: playground :N, studio :M`); never hard-code them. `LUNORA_DEV_PORT_OFFSET=0` forces the legacy pair.
 
 ## Conventions
 

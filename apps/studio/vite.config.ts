@@ -5,6 +5,8 @@ import tailwindcss from "@tailwindcss/vite";
 import react, { reactCompilerPreset } from "@vitejs/plugin-react";
 import { defineConfig, loadEnv } from "vite";
 
+import { describeDevPorts, devPortsFor } from "../../shared/dev-ports";
+
 const fromHere = (relative: string): string => fileURLToPath(new URL(relative, import.meta.url));
 
 // Plain SPA: the studio talks to a remote Lunora worker over HTTP, so this
@@ -21,11 +23,20 @@ const fromHere = (relative: string): string => fileURLToPath(new URL(relative, i
 // can't reintroduce the old read/navigate loop. `panicThreshold: "none"` (skip
 // uncompilable components, never fail the build) is therefore the right call —
 // nothing here breaks if a component ships uncompiled.
-export default defineConfig(({ mode }) => {
+export default defineConfig(({ command, mode }) => {
     // Read env from the shell AND `.env`/`.env.local` (the `""` prefix loads all
     // keys, not just `VITE_*`). `process.env` alone misses `.env` files because
     // Vite evaluates this config before loading them — hence `loadEnv`.
     const env = loadEnv(mode, process.cwd(), "");
+
+    // This checkout's dev port pair (see shared/dev-ports.ts): the studio's own
+    // port and the playground port its proxy targets by default.
+    const ports = devPortsFor(env);
+
+    if (command === "serve") {
+        // eslint-disable-next-line no-console -- dev-server startup line, read by humans and agents
+        console.info(`[studio] ${describeDevPorts(ports)}`);
+    }
 
     // The local Lunora worker the studio's same-origin `/_lunora/*` calls (HTTP +
     // the live WebSocket) are proxied to. One knob: override with `LUNORA_DEV_PROXY`
@@ -33,7 +44,7 @@ export default defineConfig(({ mode }) => {
     // always uses its OWN origin (see `main.tsx`), and this proxy forwards to the
     // worker — so the browser only ever talks to one origin (no cross-origin
     // CORS/WS, which can storm the socket pool against a cold worker).
-    const workerUrl = env["LUNORA_DEV_PROXY"] ?? "http://localhost:5173";
+    const workerUrl = env["LUNORA_DEV_PROXY"] ?? `http://localhost:${String(ports.playground)}`;
 
     return {
         plugins: [react(), babel({ presets: [reactCompilerPreset({ panicThreshold: "none" })] }), tailwindcss()],
@@ -48,7 +59,8 @@ export default defineConfig(({ mode }) => {
             },
         },
         server: {
-            port: 5174,
+            port: ports.studio,
+            strictPort: true,
             // Always proxy the studio's same-origin `/_lunora/*` calls (HTTP + the
             // live WebSocket) to the local worker, so the standalone studio works out
             // of the box (point at a different worker with `LUNORA_DEV_PROXY`). Keeping

@@ -51,7 +51,7 @@ pnpm install
 pnpm --filter @lunora-example/<name> dev
 ```
 
-Then open <http://localhost:5173>. Examples that need a D1 database, an R2
+Then open the URL the dev server prints (<http://localhost:5173> in the main checkout). Examples that need a D1 database, an R2
 bucket, or a secret say so in their own README — everything else runs offline in
 Miniflare.
 

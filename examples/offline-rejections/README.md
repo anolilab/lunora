@@ -29,7 +29,7 @@ pnpm install
 pnpm --filter @lunora-example/offline-rejections dev
 ```
 
-Vite + Wrangler in Miniflare; open <http://localhost:5173>.
+Vite + Wrangler in Miniflare; open the URL the dev server prints (<http://localhost:5173> in the main checkout).
 
 ## Try it
 

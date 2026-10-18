@@ -20,7 +20,7 @@ pnpm install
 pnpm --filter @lunora-example/todo-app dev
 ```
 
-That spins up Vite + Wrangler in Miniflare; open <http://localhost:5173>.
+That spins up Vite + Wrangler in Miniflare; open the URL the dev server prints (<http://localhost:5173> in the main checkout).
 
 ## Key snippets
 

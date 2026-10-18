@@ -42,7 +42,7 @@ pnpm install
 pnpm --filter @lunora-example/feedback-board dev
 ```
 
-Open <http://localhost:5173>.
+Open the URL the dev server prints (<http://localhost:5173> in the main checkout).
 
 Everything works offline in Miniflare **except** the ✨ Summarise button:
 `wrangler dev` proxies the `AI` binding to Cloudflare, so that one path needs an
