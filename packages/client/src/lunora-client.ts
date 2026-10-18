@@ -346,6 +346,23 @@ interface MutationCallOptions<TCurrent = unknown, TValue = unknown, TArgs = unkn
     mutationId?: string;
 
     /**
+     * Never queue, persist or replay this write. When the shard's connection is
+     * down or reconnecting — the states in which a normal write is queued — the
+     * call rejects at once with `OFFLINE_NOT_QUEUED`, and its args never reach the
+     * offline queue, the persistence adapter or the outbox. Use it for a write whose
+     * arguments must not sit on disk: a credential a person typed in, a one-time
+     * token.
+     *
+     * Ordering: an online-only call neither waits for a queue flush nor queues
+     * behind writes already queued for its shard. When it is sent it can overtake
+     * them, so it may land on the server before an older queued write to the same
+     * document. Optimistic layers are in-memory and are not applied to a refused call.
+     *
+     * Omit for normal calls, which queue as usual.
+     */
+    onlineOnly?: boolean;
+
+    /**
      * Single-query shortcut: the transform is layered onto the subscription
      * registered under **this write's own** `(functionPath, args, shardKey)`, and
      * nothing else. A client cannot know which queries a write affects, so the
@@ -449,6 +466,15 @@ const CLIENT_CAPABILITIES = [PAGE_DELTA_CAPABILITY] as const;
 
 /** Room sends held before the socket opens; past this a `send` is refused rather than queued without bound. */
 const ROOM_PENDING_LIMIT = 100;
+
+/**
+ * The refusal of an `onlineOnly` mutation whose connection is not live. `cause`
+ * is set when the request was attempted and failed on the wire.
+ */
+const offlineNotQueuedError = (functionPath: string, cause?: unknown): LunoraError =>
+    new LunoraError("OFFLINE_NOT_QUEUED", `'${functionPath}' is online-only and the connection is not live, so it was not queued`, {
+        cause,
+    });
 
 /**
  * @internal
@@ -2355,7 +2381,8 @@ class LunoraClient {
      * (`wasEverConnected`), so the registry / resubscribe handshake has run.
      * Mutations issued before the very first WS connect to a shard fail fast.
      * Opt into queueing-before-first-connect via
-     * `OfflineQueueOptions.queueBeforeFirstConnect`.
+     * `OfflineQueueOptions.queueBeforeFirstConnect`. Pass `onlineOnly: true` to
+     * refuse a write instead of queueing it — see {@link MutationCallOptions.onlineOnly}.
      *
      * **Return-value caveat — the queued paths do not carry the server's result.**
      * The declared `Promise<ReturnOf<F>>` only holds when the write goes straight
@@ -4345,6 +4372,10 @@ class LunoraClient {
         // their write was composed. See `OutboxMutation.baselineSeq`.
         const composedBaselineSeq = options.replayBaseline === undefined ? this.baselineCursorFor(options.shardKey) : (options.replayBaseline ?? undefined);
 
+        // Before any optimistic layer is applied and before anything can reach the
+        // queue or a persistence adapter.
+        this.refuseOnlineOnlyWhenDown(function_.__lunoraRef, options);
+
         // Apply optimistic updates to any subscriber listening on this fn. Both
         // APIs ride the same rebaseable, cursor-gated layer engine: the per-call
         // `optimistic` transform patches the matching (fn, args, shard)
@@ -4371,31 +4402,18 @@ class LunoraClient {
         // Undefined (no replay running) is the overwhelmingly common case and
         // costs nothing; the gate is re-read AFTER the wait so a socket that
         // dropped again in the meantime queues this write instead of sending it.
-        const replaying = this.offlineFlushes.get(connectionKey(options.shardKey));
+        // An online-only write does not wait for the flush: it is sent or refused
+        // now, never queued behind it (see `MutationCallOptions.onlineOnly`).
+        const replaying = options.onlineOnly ? undefined : this.offlineFlushes.get(connectionKey(options.shardKey));
 
         if (replaying !== undefined) {
             await replaying;
         }
 
-        // Queue while offline (only mutations — queries fail fast). We also
-        // queue when we're mid-reconnect (wsState === "connecting") provided
-        // we've been connected before — otherwise the mutation would race
-        // the resubscribe. State is scoped to the mutation's own shard so a
-        // dropped shard only queues writes destined for it. A follower tab
-        // has no `ShardConnection` of its own — `connectionGateState` derives
-        // the same triple from the mirrored leader status instead.
-        const { hasSocket, idleClosed, polling, wasEverConnected, wsState } = this.connectionGateState(options.shardKey);
-        const { queueBeforeFirstConnect } = this.offlineQueue;
-        const connectedGate = wasEverConnected || queueBeforeFirstConnect;
-        const shouldQueueOffline = this.WebSocketImpl !== undefined && connectedGate;
-        // While polling reaches the origin, a reconnect attempt is always armed
-        // behind it, so `wsState` reads `"connecting"` or `"idle"` for as long as
-        // the upgrade is refused. HTTP works, so neither may queue the write. A
-        // shard whose idle socket was closed is tried over HTTP first too: it is
-        // not offline, it just has no socket (see `connectionGateState`).
-        const httpFirst = polling || idleClosed;
-        const midReconnect = wsState === "connecting" && connectedGate && !httpFirst;
-        const socketDown = wsState !== "open" && !hasSocket && shouldQueueOffline && !httpFirst;
+        // Queue while offline (only mutations — queries fail fast). The gate is
+        // read after the wait above, so a socket that dropped meanwhile queues
+        // this write instead of sending it.
+        const { httpFirst, midReconnect, shouldQueueOffline, socketDown } = this.writeQueueGate(options.shardKey);
 
         // Second half of the ordering barrier above, for the case the barrier
         // cannot cover: a queued write can be HELD at flush time (its identity
@@ -4415,7 +4433,8 @@ class LunoraClient {
         // With a durable outbox this is process-wide, not per shard: the sink
         // reports only its total depth. Over-inclusion costs a write a trip
         // through the outbox, under its own `mutationId`, which is safe.
-        const queuedAhead = shouldQueueOffline && options.replayBaseline === undefined && this.hasPendingWriteAhead(options.shardKey);
+        // An online-only write is never queued behind the backlog: it goes out now.
+        const queuedAhead = !options.onlineOnly && shouldQueueOffline && options.replayBaseline === undefined && this.hasPendingWriteAhead(options.shardKey);
 
         const enqueue = async (): Promise<{ committed: boolean; value: ReturnOf<F> }> =>
             this.enqueueOfflineMutation(
@@ -4431,6 +4450,9 @@ class LunoraClient {
                 replay?.stamp,
             );
 
+        // An online-only write cannot reach this line with `socketDown` or
+        // `midReconnect` set: the early refusal above read the same state, and
+        // nothing awaits between the two.
         if (socketDown || midReconnect || queuedAhead) {
             return enqueue();
         }
@@ -4463,14 +4485,57 @@ class LunoraClient {
             // network is down. Queue it under the same key, as it would have been
             // had the drop been noticed first. A `TypeError` from an arg the codec cannot
             // encode is not a network failure, hence the re-check.
-            if (httpFirst && shouldQueueOffline && error instanceof TypeError && isEncodable(argsRecord)) {
+            const networkDown = httpFirst && shouldQueueOffline && error instanceof TypeError && isEncodable(argsRecord);
+
+            if (networkDown && !options.onlineOnly) {
                 return enqueue();
             }
 
             this.settleFailedDirectWrite(error, commitCursor, optimisticConfirms, optimisticRollbacks, replay?.flags.authToken);
 
-            throw error;
+            // An online-only write that would have been queued is refused with the
+            // typed error; the transport failure rides along as its `cause`.
+            throw networkDown ? offlineNotQueuedError(function_.__lunoraRef, error) : error;
         }
+    }
+
+    /**
+     * Refuses an `onlineOnly` write whose shard's connection is down or reconnecting,
+     * the states in which a normal write is queued. Reads the gate synchronously, so
+     * the refusal is immediate and nothing downstream has been touched.
+     */
+    private refuseOnlineOnlyWhenDown(functionPath: string, options: Pick<MutationCallOptions, "onlineOnly" | "shardKey">): void {
+        if (!options.onlineOnly) {
+            return;
+        }
+
+        const gate = this.writeQueueGate(options.shardKey);
+
+        if (gate.socketDown || gate.midReconnect) {
+            throw offlineNotQueuedError(functionPath);
+        }
+    }
+
+    /**
+     * Whether a write on `shardKey` would be queued if it failed right now, and
+     * which gate would queue it. A follower tab has no `ShardConnection` of its own —
+     * `connectionGateState` derives the same triple from the mirrored leader status.
+     */
+    private writeQueueGate(shardKey: string | undefined): { httpFirst: boolean; midReconnect: boolean; shouldQueueOffline: boolean; socketDown: boolean } {
+        const { hasSocket, idleClosed, polling, wasEverConnected, wsState } = this.connectionGateState(shardKey);
+        const { queueBeforeFirstConnect } = this.offlineQueue;
+        const connectedGate = wasEverConnected || queueBeforeFirstConnect;
+        const shouldQueueOffline = this.WebSocketImpl !== undefined && connectedGate;
+        // While polling reaches the origin, a reconnect attempt is always armed
+        // behind it, so `wsState` reads `"connecting"` or `"idle"` for as long as
+        // the upgrade is refused. HTTP works, so neither may queue the write. A
+        // shard whose idle socket was closed is tried over HTTP first too: it is
+        // not offline, it just has no socket (see `connectionGateState`).
+        const httpFirst = polling || idleClosed;
+        const midReconnect = wsState === "connecting" && connectedGate && !httpFirst;
+        const socketDown = wsState !== "open" && !hasSocket && shouldQueueOffline && !httpFirst;
+
+        return { httpFirst, midReconnect, shouldQueueOffline, socketDown };
     }
 
     /**

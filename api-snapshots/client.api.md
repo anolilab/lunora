@@ -849,6 +849,7 @@ Re-exported from `@lunora/errors` — signature tracked at its source.
 ```ts
 interface MutationCallOptions<TCurrent = unknown, TValue = unknown, TArgs = unknown> {
     mutationId?: string;
+    onlineOnly?: boolean;
     optimistic?: (current: TCurrent | undefined) => TValue;
     optimisticUpdate?: OptimisticUpdate<TArgs>;
     precondition?: () => boolean;
