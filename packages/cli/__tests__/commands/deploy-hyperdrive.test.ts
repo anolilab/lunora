@@ -573,6 +573,36 @@ describe("hyperdrive on deploy", () => {
             expect(result).not.toContain("postgres://");
         });
 
+        it("keeps a password with a quote and a backslash out of a failure that echoes the request or the URL", async () => {
+            expect.assertions(4);
+
+            writeWrangler({ hyperdrive: [{ binding: "HYPERDRIVE", id: HYPERDRIVE_PLACEHOLDER_ID }], name: "app" });
+
+            const password = String.raw`pa"ss\word`;
+            const echoing = vi.fn<typeof globalThis.fetch>(async (_url, init) =>
+                init?.method === "POST"
+                    ? Response.json(
+                          {
+                              errors: [{ code: 1, message: `rejected ${init.body as string} (${encodeURIComponent(password)})` }],
+                              success: false,
+                          },
+                          { status: 400 },
+                      )
+                    : Response.json({ errors: [], result: [], success: true }),
+            );
+            const result = await provisionHyperdrive({
+                cwd: root,
+                environment: { ...CREDENTIALS, [URL_VARIABLE]: `postgres://u:${encodeURIComponent(password)}@h/db` },
+                fetch: echoing,
+                logger: recordingLogger().logger,
+            });
+
+            expect(result).toContain("rejected");
+            expect(result).not.toContain(password);
+            expect(result).not.toContain(JSON.stringify(password).slice(1, -1));
+            expect(result).not.toContain(encodeURIComponent(password));
+        });
+
         it("keeps two long Worker names that share a prefix apart, inside the 32-character limit", async () => {
             expect.assertions(3);
 

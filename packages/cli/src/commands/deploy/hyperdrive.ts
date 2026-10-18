@@ -145,7 +145,13 @@ const parseOrigin = (value: string): Record<string, number | string> | undefined
 /** An API error can echo what was submitted: the password and any URL are removed before it is shown. */
 const redact = (reason: string, origin: Record<string, number | string> | undefined): string => {
     const password = typeof origin?.password === "string" ? origin.password : "";
-    const withoutPassword = password === "" ? reason : reason.replaceAll(password, "<redacted>");
+    // An error that quotes the submitted request carries the password JSON-escaped, one that quotes the URL carries it percent-encoded.
+    const spellings = password === "" ? [] : [password, JSON.stringify(password).slice(1, -1), encodeURIComponent(password)];
+    let withoutPassword = reason;
+
+    for (const spelling of spellings) {
+        withoutPassword = withoutPassword.replaceAll(spelling, "<redacted>");
+    }
 
     return withoutPassword
         .split(" ")
