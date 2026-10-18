@@ -29,6 +29,15 @@ interface ActionHandle<F extends FunctionReference> {
 }
 ```
 
+### `AgentApprovalGrant` (interface)
+
+```ts
+interface AgentApprovalGrant {
+    createdAt: number;
+    toolName: string;
+}
+```
+
 ### `AgentChatMessage` (interface)
 
 ```ts
@@ -159,8 +168,10 @@ interface CreateAgentApi {
 ```ts
 interface CreateAgentChatApi {
     agents: {
+        agentApprovalGrants: AgentApprovalGrantsReference;
         agentMessages: AgentMessagesReference$1;
         agentResolveApproval: AgentApprovalReference;
+        agentRevokeApprovalGrant: AgentRevokeApprovalGrantReference;
         agentThread: AgentThreadReference;
     };
 }
@@ -185,11 +196,14 @@ interface CreateAgentChatOptions {
 
 ```ts
 interface CreateAgentChatResult {
+    approvalGrants: Accessor<ReadonlyArray<AgentApprovalGrant>>;
     approve: (toolCallId: string, note?: string) => Promise<void>;
+    approveForThread: (toolCallId: string, note?: string) => Promise<void>;
     cancel: () => Promise<void>;
     error: Accessor<Error | undefined>;
     messages: Accessor<ReadonlyArray<AgentChatMessage>>;
     reject: (toolCallId: string, note?: string) => Promise<void>;
+    revokeGrant: (toolName: string) => Promise<void>;
     send: (input: string, args?: Record<string, unknown>) => Promise<void>;
     status: Accessor<AgentThreadStatus | undefined>;
     streamingText: Accessor<string>;
@@ -934,6 +948,14 @@ Not exported, and reachable only through a signature above. Their members
 are part of that signature's meaning, so a change here is a change to the
 public API and is gated as one. Listed once per package, sorted by name.
 
+### `AgentApprovalGrantsReference` (type)
+
+```ts
+type AgentApprovalGrantsReference = FunctionReference<"query", {
+    key: string;
+}, ReadonlyArray<AgentApprovalGrant>>;
+```
+
 ### `AgentApprovalReference` (type)
 
 ```ts
@@ -972,6 +994,17 @@ type AgentMessagesReference$1 = FunctionReference<"query", {
     key: string;
     limit?: number;
 }, ReadonlyArray<Record<string, unknown>>>;
+```
+
+### `AgentRevokeApprovalGrantReference` (type)
+
+```ts
+type AgentRevokeApprovalGrantReference = FunctionReference<"mutation", {
+    threadKey: string;
+    toolName: string;
+}, {
+    revoked: boolean;
+}>;
 ```
 
 ### `AgentThreadReference` (type)
