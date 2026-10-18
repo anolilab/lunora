@@ -153,6 +153,17 @@ describe("lazy function registry", () => {
         expect(() => emitFunctions({ functions: [makeFunction("list", { filePath: injectedPath })], lazyFunctions: true })).toThrow(/unsafe file path/u);
     });
 
+    it("never evicts a failed module from the loader cache", () => {
+        expect.assertions(2);
+
+        // Node caches a module that threw, so an end-to-end run cannot tell a retry from a rethrow;
+        // pin the registry itself: a failed load stays in the cache and every call rethrows it.
+        const emitted = emitFunctions({ functions: [makeFunction("list")], lazyFunctions: true });
+
+        expect(emitted).not.toContain("loadedModules.delete(");
+        expect(emitted).toContain("loadedModules.set(manifest.moduleId, pending);");
+    });
+
     it("keeps eager output unchanged unless lazy mode is selected", () => {
         expect.assertions(3);
 
