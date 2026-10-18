@@ -775,6 +775,16 @@ const artifactsModeFor = (options: Pick<DeployCommandOptions, "dryRun" | "tempor
 type ArtifactsCheckMode = "create" | "defer" | "preview" | "report";
 
 /**
+ * One refused namespace check as a line. An unchecked namespace stops the deploy too: the first
+ * repo create() would make it unrestricted, and nothing afterwards can say whether it already was.
+ */
+const describeArtifactsFailure = (check: Awaited<ReturnType<typeof checkArtifactsJurisdiction>>): string => {
+    const line = check.fix === undefined ? check.message : `${check.message} ${check.fix}`;
+
+    return check.verdict === "unchecked" ? `${line} The deploy stops until it can be checked, as a namespace made by the first repo is unrestricted.` : line;
+};
+
+/**
  * Log each namespace check's outcome; returns the lines of the ones that stop the deploy. A dry run or build
  * needs no token to bundle, so a namespace it cannot check is a warning there and stops a real deploy.
  */
@@ -803,16 +813,6 @@ const reportArtifactsChecks = (
     }
 
     return failures;
-};
-
-/**
- * One refused namespace check as a line. An unchecked namespace stops the deploy too: the first
- * repo create() would make it unrestricted, and nothing afterwards can say whether it already was.
- */
-const describeArtifactsFailure = (check: Awaited<ReturnType<typeof checkArtifactsJurisdiction>>): string => {
-    const line = check.fix === undefined ? check.message : `${check.message} ${check.fix}`;
-
-    return check.verdict === "unchecked" ? `${line} The deploy stops until it can be checked, as a namespace made by the first repo is unrestricted.` : line;
 };
 
 /**
