@@ -20,6 +20,9 @@ import type { LocalHyperdrive } from "@lunora/config/cloudflare";
 import { startLocalHyperdrive } from "@lunora/config/cloudflare";
 import type { Plugin } from "vite";
 
+import type { PendingCloseMap } from "./server-close";
+import { registerDevServerClose, runPendingClose } from "./server-close";
+
 /** How long after the last server closes before the databases stop, so a restart keeps them. */
 const STOP_GRACE_MS = 5000;
 
@@ -72,6 +75,9 @@ const scheduleStop = (session: Session): ReturnType<typeof setTimeout> => {
 };
 
 const localHyperdrive = ({ projectRoot, start = startLocalHyperdrive }: LocalHyperdriveOptions): Plugin => {
+    // Close callbacks of middleware-mode servers, which have no httpServer to listen on.
+    const pendingMiddlewareCloses: PendingCloseMap = new Map();
+
     return {
         async config(_config, env) {
             if (env.command !== "serve" || env.isPreview === true) {
@@ -102,20 +108,29 @@ const localHyperdrive = ({ projectRoot, start = startLocalHyperdrive }: LocalHyp
 
             await session.pending;
         },
+        buildEnd() {
+            // Middleware-mode close (no httpServer to listen on); a no-op in classic dev mode and for a build.
+            runPendingClose(pendingMiddlewareCloses, this.environment);
+        },
         configureServer(server) {
             const session = sessionFor(projectRoot);
+            let closed = false;
 
             session.servers += 1;
             clearTimeout(session.stopTimer);
 
-            server.httpServer?.once("close", () => {
-                session.servers -= 1;
-
-                if (session.servers > 0) {
+            registerDevServerClose(server, pendingMiddlewareCloses, () => {
+                // Idempotent: some hosts deliver both close signals for one server.
+                if (closed) {
                     return;
                 }
 
-                session.stopTimer = scheduleStop(session);
+                closed = true;
+                session.servers -= 1;
+
+                if (session.servers === 0) {
+                    session.stopTimer = scheduleStop(session);
+                }
             });
         },
         enforce: "pre",

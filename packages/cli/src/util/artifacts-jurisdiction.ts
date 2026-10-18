@@ -70,11 +70,26 @@ const createNamespace = async (options: ArtifactsJurisdictionOptions, accountId:
     return outcome?.ok === true;
 };
 
+/** The jurisdiction the namespace reports now, or `undefined` when it can't be read. */
+const jurisdictionOf = async (options: ArtifactsJurisdictionOptions, accountId: string, apiToken: string): Promise<unknown> => {
+    const outcome = await cloudflareRestRequest({
+        accountId,
+        apiToken,
+        ...(options.fetch === undefined ? {} : { fetch: options.fetch }),
+        init: { signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS) },
+        path: `/artifacts/namespaces/${encodeURIComponent(options.namespace)}`,
+    }).catch((): undefined => undefined);
+    const result = outcome?.ok === true ? outcome.body.result : undefined;
+
+    return typeof result === "object" && result !== null && "jurisdiction" in result ? result.jurisdiction : undefined;
+};
+
 /** The namespace is absent: create it in the schema's jurisdiction when asked to, or say how to. */
 const createMissing = async (options: ArtifactsJurisdictionOptions, accountId: string, token: string, subject: string): Promise<ArtifactsJurisdictionCheck> => {
     const { jurisdiction, namespace } = options;
 
-    if (options.create === true && (await createNamespace(options, accountId, token))) {
+    // A POST that errors or times out may still have created it, so a failed one is followed by a look.
+    if (options.create === true && ((await createNamespace(options, accountId, token)) || (await jurisdictionOf(options, accountId, token)) === jurisdiction)) {
         return { message: `created ${subject} in the "${jurisdiction}" jurisdiction, as the schema pins.`, verdict: "ok" };
     }
 

@@ -88,7 +88,7 @@ describe("hyperdrive on deploy", () => {
 
             writeWrangler({ hyperdrive: [{ binding: "HYPERDRIVE", id: HYPERDRIVE_PLACEHOLDER_ID }], name: "app" });
 
-            const api = hyperdriveApi([{ id: "existing-id", name: "app-hyperdrive" }]);
+            const api = hyperdriveApi([{ id: "existing-id", name: "app-hyperdrive", origin: { database: "db", host: "h", port: 5432, user: "u" } } as never]);
 
             await provisionHyperdrive({
                 cwd: root,
@@ -267,9 +267,43 @@ describe("hyperdrive on deploy", () => {
                 logger: recordingLogger().logger,
             });
 
-            expect(result).toContain("different origin (host differ)");
+            expect(result).toContain("different origin, or one that can't be confirmed (host)");
             expect(readWrangler().hyperdrive[0]?.id).toBe(HYPERDRIVE_PLACEHOLDER_ID);
             expect(api.mock.calls.some(([, init]) => init?.method === "POST")).toBe(false);
+        });
+
+        it("does not reuse a config whose origin the listing leaves out, since it can't be confirmed", async () => {
+            expect.assertions(2);
+
+            writeWrangler({ hyperdrive: [{ binding: "HYPERDRIVE", id: HYPERDRIVE_PLACEHOLDER_ID }], name: "app" });
+
+            const api = hyperdriveApi([{ id: "unknown-origin", name: "app-hyperdrive" }]);
+            const result = await provisionHyperdrive({
+                cwd: root,
+                environment: { ...CREDENTIALS, [URL_VARIABLE]: "postgres://u:p@h/db" },
+                fetch: api,
+                logger: recordingLogger().logger,
+            });
+
+            expect(result).toContain("can't be confirmed");
+            expect(readWrangler().hyperdrive[0]?.id).toBe(HYPERDRIVE_PLACEHOLDER_ID);
+        });
+
+        it("blocks, rather than throws, on a connection string with invalid percent-encoding", async () => {
+            expect.assertions(2);
+
+            writeWrangler({ hyperdrive: [{ binding: "HYPERDRIVE", id: HYPERDRIVE_PLACEHOLDER_ID }] });
+
+            const api = hyperdriveApi([]);
+            const result = await provisionHyperdrive({
+                cwd: root,
+                environment: { ...CREDENTIALS, [URL_VARIABLE]: "postgres://u:100%@h/db" },
+                fetch: api,
+                logger: recordingLogger().logger,
+            });
+
+            expect(result).toContain("LUNORA_HYPERDRIVE_URL");
+            expect(api).not.toHaveBeenCalled();
         });
 
         it("sends the engine's default port when the connection string has none", async () => {
@@ -438,6 +472,27 @@ describe("hyperdrive on deploy", () => {
             writeWrangler({ hyperdrive: [{ binding: "HYPERDRIVE", id: "real-id" }] });
 
             await expect(provisionDeployHyperdrive(root, { logger: recordingLogger().logger }, "prepare", "cloudflare")).resolves.toBeUndefined();
+        });
+
+        it("blocks a --temporary deploy while a Hyperdrive config would have to be made in the real account", async () => {
+            expect.assertions(2);
+
+            writeWrangler({ hyperdrive: [{ binding: "HYPERDRIVE", id: HYPERDRIVE_PLACEHOLDER_ID }] });
+
+            const result = await provisionDeployHyperdrive(root, { logger: recordingLogger().logger, temporary: true }, "deploy", "cloudflare");
+
+            expect(result).toContain("--temporary");
+            expect(readWrangler().hyperdrive[0]?.id).toBe(HYPERDRIVE_PLACEHOLDER_ID);
+        });
+
+        it("lets a --temporary deploy through when no Hyperdrive config is needed", async () => {
+            expect.assertions(1);
+
+            writeWrangler({ hyperdrive: [{ binding: "HYPERDRIVE", id: "real-id" }] });
+
+            await expect(
+                provisionDeployHyperdrive(root, { logger: recordingLogger().logger, temporary: true }, "deploy", "cloudflare"),
+            ).resolves.toBeUndefined();
         });
 
         it("blocks a real Cloudflare deploy that has a placeholder and no connection string", async () => {

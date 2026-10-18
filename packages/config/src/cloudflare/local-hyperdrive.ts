@@ -70,6 +70,49 @@ const bindingsNeedingDatabase = (projectRoot: string, env: NodeJS.ProcessEnv): s
     );
 };
 
+/** The slice of PGlite and its socket server that {@link serveDatabase} drives, so a test can stand in for them. */
+interface PgliteParts {
+    PGlite: { create: (options: { dataDir: string; extensions?: Record<string, unknown> }) => Promise<{ close: () => Promise<void> }> };
+    PGLiteSocketServer: new (options: { db: never; host: string; maxConnections: number; port: number }) => {
+        getServerConn: () => string;
+        start: () => Promise<void>;
+        stop: () => Promise<void>;
+    };
+    vector?: unknown;
+}
+
+/**
+ * Open a persistent PGlite in `dataDirectory` and serve it on a free loopback port. A server that
+ * fails to start closes the database it opened, because the caller gets no handle to do it with.
+ */
+const serveDatabase = async (
+    { PGlite, PGLiteSocketServer, vector }: PgliteParts,
+    dataDirectory: string,
+): Promise<{ connectionString: string; stop: () => Promise<void> }> => {
+    const database = await PGlite.create({ dataDir: dataDirectory, ...(vector === undefined ? {} : { extensions: { vector } }) });
+    // Port 0 lets the OS pick a free one; a pool opens several connections, which PGlite's single-connection default would refuse.
+    const server = new PGLiteSocketServer({ db: database as never, host: "127.0.0.1", maxConnections: 16, port: 0 });
+
+    try {
+        await server.start();
+    } catch (error) {
+        await Promise.allSettled([server.stop(), database.close()]);
+
+        throw error;
+    }
+
+    const [host = "127.0.0.1", port = "5432"] = server.getServerConn().split(":");
+
+    return {
+        // PGlite authenticates as "trust", so these credentials are placeholders.
+        connectionString: `postgres://postgres:postgres@${host}:${port}/postgres`, // gitleaks:allow
+        stop: async () => {
+            await server.stop();
+            await database.close();
+        },
+    };
+};
+
 /** The real PGlite, or `undefined` when either package is not installed. */
 const loadPglite = async (): Promise<PgliteRuntime | undefined> => {
     try {
@@ -80,26 +123,7 @@ const loadPglite = async (): Promise<PgliteRuntime | undefined> => {
             (): undefined => undefined,
         );
 
-        return {
-            createServer: async (dataDirectory) => {
-                const database = await PGlite.create({ dataDir: dataDirectory, ...(vector === undefined ? {} : { extensions: { vector } }) });
-                // Port 0 lets the OS pick a free one; a pool opens several connections, which PGlite's single-connection default would refuse.
-                const server = new PGLiteSocketServer({ db: database, host: "127.0.0.1", maxConnections: 16, port: 0 });
-
-                await server.start();
-
-                const [host = "127.0.0.1", port = "5432"] = server.getServerConn().split(":");
-
-                return {
-                    // PGlite authenticates as "trust", so these credentials are placeholders.
-                    connectionString: `postgres://postgres:postgres@${host}:${port}/postgres`, // gitleaks:allow
-                    stop: async () => {
-                        await server.stop();
-                        await database.close();
-                    },
-                };
-            },
-        };
+        return { createServer: async (dataDirectory) => serveDatabase({ PGlite, PGLiteSocketServer, vector }, dataDirectory) };
     } catch {
         return undefined;
     }
@@ -169,5 +193,5 @@ const startLocalHyperdrive = async (options: StartLocalHyperdriveOptions): Promi
     };
 };
 
-export type { LocalHyperdrive, PgliteRuntime, StartLocalHyperdriveOptions };
-export { bindingsNeedingDatabase, startLocalHyperdrive };
+export type { LocalHyperdrive, PgliteParts, PgliteRuntime, StartLocalHyperdriveOptions };
+export { bindingsNeedingDatabase, serveDatabase, startLocalHyperdrive };

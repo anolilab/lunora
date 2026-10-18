@@ -3305,6 +3305,7 @@ public API and is gated as one. Listed once per package, sorted by name.
 ```ts
 interface BindingEntry {
     binding?: string;
+    id?: unknown;
     remote?: boolean;
 }
 ```

@@ -150,6 +150,36 @@ describe(localHyperdrive, () => {
         expect(stopped).toStrictEqual(["HYPERDRIVE"]);
     });
 
+    it("stops the databases when a middleware-mode server, which has no httpServer, closes", async () => {
+        expect.assertions(2);
+
+        vi.useFakeTimers();
+
+        const { start, stopped } = starter(["HYPERDRIVE"]);
+        const plugin = localHyperdrive({ projectRoot: "/project/middleware", start });
+        const environment = {};
+
+        await runConfigHook(plugin, "serve");
+
+        const configure = plugin.configureServer;
+        const run = typeof configure === "function" ? configure : configure?.handler;
+
+        await Promise.resolve(run?.call({} as never, { environments: { client: environment }, httpServer: null } as never));
+        await vi.advanceTimersByTimeAsync(10_000);
+
+        expect(stopped).toStrictEqual([]);
+
+        const end = plugin.buildEnd;
+        const runEnd = typeof end === "function" ? end : end?.handler;
+
+        await Promise.resolve(runEnd?.call({ environment } as never));
+        // A second delivery of the same close is a no-op.
+        await Promise.resolve(runEnd?.call({ environment } as never));
+        await vi.advanceTimersByTimeAsync(10_000);
+
+        expect(stopped).toStrictEqual(["HYPERDRIVE"]);
+    });
+
     it("keeps the databases across a restart, where the new server comes up before the old one's countdown ends", async () => {
         expect.assertions(1);
 

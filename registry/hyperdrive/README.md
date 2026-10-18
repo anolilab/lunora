@@ -26,7 +26,7 @@ lunora codegen
 
 ## Prerequisites
 
-1. **Create a Hyperdrive database** in the Cloudflare dashboard: **Workers & Pages → Hyperdrive → Create**. Point it at your Postgres or MySQL instance.
+1. **A Postgres or MySQL instance** reachable from Cloudflare. `lunora deploy` creates the Hyperdrive config for it (see below); creating one in the dashboard (**Workers & Pages → Hyperdrive → Create**) is the manual alternative.
 2. The **`HYPERDRIVE` binding** is added to `wrangler.jsonc` by this item, with a placeholder `id` (`<replace-with-hyperdrive-create-id>`). `lunora dev` serves it from an embedded Postgres, and `lunora deploy` creates the config when `LUNORA_HYPERDRIVE_URL` holds your connection string. Or replace the placeholder with the id the dashboard (or `wrangler hyperdrive create`) hands back — wrangler requires both `binding` and `id`.
 
 ## How it works

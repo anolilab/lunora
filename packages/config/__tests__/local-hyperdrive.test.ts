@@ -4,8 +4,8 @@ import { join } from "node:path";
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import type { PgliteRuntime } from "../src/cloudflare/local-hyperdrive";
-import { bindingsNeedingDatabase, startLocalHyperdrive } from "../src/cloudflare/local-hyperdrive";
+import type { PgliteParts, PgliteRuntime } from "../src/cloudflare/local-hyperdrive";
+import { bindingsNeedingDatabase, serveDatabase, startLocalHyperdrive } from "../src/cloudflare/local-hyperdrive";
 
 const VAR = "CLOUDFLARE_HYPERDRIVE_LOCAL_CONNECTION_STRING_";
 
@@ -208,6 +208,54 @@ describe("local hyperdrive", () => {
             } finally {
                 await local?.stop();
             }
+        });
+    });
+
+    describe(serveDatabase, () => {
+        const parts = (start: () => Promise<void>, close: () => Promise<void>, stop: () => Promise<void>): PgliteParts => {
+            return {
+                PGLiteSocketServer: function PGLiteSocketServer() {
+                    return { getServerConn: () => "127.0.0.1:5999", start, stop };
+                } as unknown as PgliteParts["PGLiteSocketServer"],
+                PGlite: {
+                    create: async () => {
+                        return { close };
+                    },
+                },
+            };
+        };
+
+        it("closes the database it opened, and rethrows, when the socket cannot start", async () => {
+            expect.assertions(3);
+
+            const close = vi.fn<() => Promise<void>>(async () => {});
+            const stop = vi.fn<() => Promise<void>>(async () => {});
+            const start = async (): Promise<void> => {
+                throw new Error("EADDRINUSE");
+            };
+
+            await expect(serveDatabase(parts(start, close, stop), join(root, "data"))).rejects.toThrow("EADDRINUSE");
+
+            expect(close).toHaveBeenCalledTimes(1);
+            expect(stop).toHaveBeenCalledTimes(1);
+        });
+
+        it("returns a loopback connection string whose stop closes both the socket and the database", async () => {
+            expect.assertions(3);
+
+            const close = vi.fn<() => Promise<void>>(async () => {});
+            const stop = vi.fn<() => Promise<void>>(async () => {});
+            const served = await serveDatabase(
+                parts(async () => {}, close, stop),
+                join(root, "data"),
+            );
+
+            expect(served.connectionString).toBe("postgres://postgres:postgres@127.0.0.1:5999/postgres"); // gitleaks:allow -- a placeholder URL on a test double, not a real secret
+
+            await served.stop();
+
+            expect(stop).toHaveBeenCalledTimes(1);
+            expect(close).toHaveBeenCalledTimes(1);
         });
     });
 });

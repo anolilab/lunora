@@ -75,6 +75,45 @@ describe(checkArtifactsJurisdiction, () => {
         });
     });
 
+    it("accepts a namespace whose creation response was lost, once a second look shows the right jurisdiction", async () => {
+        expect.assertions(2);
+
+        let created = false;
+        const api = vi.fn<typeof globalThis.fetch>(async (_url, init) => {
+            if (init?.method === "POST") {
+                created = true;
+
+                throw new TypeError("socket hang up");
+            }
+
+            return created
+                ? Response.json({ result: { jurisdiction: "eu", namespace: "repos" }, success: true })
+                : Response.json({ errors: [{ code: 404, message: "not found" }], success: false }, { status: 404 });
+        });
+
+        await expect(check(api, "eu", credentials, true)).resolves.toMatchObject({ verdict: "ok" });
+        expect(api).toHaveBeenCalledTimes(3);
+    });
+
+    it("still stops when the second look shows another jurisdiction after a failed creation", async () => {
+        expect.assertions(1);
+
+        let reads = 0;
+        const api = vi.fn<typeof globalThis.fetch>(async (_url, init) => {
+            if (init?.method === "POST") {
+                return Response.json({ errors: [{ code: 1, message: "conflict" }], success: false }, { status: 409 });
+            }
+
+            reads += 1;
+
+            return reads > 1
+                ? Response.json({ result: { jurisdiction: "unrestricted", namespace: "repos" }, success: true })
+                : Response.json({ errors: [{ code: 404, message: "not found" }], success: false }, { status: 404 });
+        });
+
+        await expect(check(api, "eu", credentials, true)).resolves.toMatchObject({ verdict: "missing" });
+    });
+
     it("creates nothing unless asked to, so doctor and a dry run stay read-only", async () => {
         expect.assertions(2);
 

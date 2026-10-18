@@ -166,8 +166,9 @@ How `.source()` behaves:
 
 1. **`ctx.sql` in a query/mutation.** It's action-only. Move the SQL into an action.
 2. **Expecting `ctx.sql` writes to update subscriptions.** They don't. Use Step 5.
-3. **Placeholder or empty `id` at deploy.** The deploy stops until
-   `LUNORA_<BINDING>_URL` is set (Lunora then creates the config) or the `id` is pasted in.
+3. **Placeholder `id` at deploy.** The deploy stops until `LUNORA_<BINDING>_URL` is set
+   (Lunora then creates the config) or the real `id` is pasted in. An empty `id` is not
+   provisioned: wrangler rejects it, so remove the entry and let Lunora add it again.
 4. **Wrong placeholders.** Use `$1` for `postgres`/`pg` and `?` for `mysql2`.
 5. **Unscoped `.source()` under `.shardBy()`.** Without `tenantBy`, every tenant's
    rows are copied into each shard. `defineSchema` throws, and the

@@ -84,29 +84,27 @@ const defaultPort = (scheme: string): number => (scheme === "mysql" ? MYSQL_PORT
 
 /** The `origin` Cloudflare wants, from a `postgres://` or `mysql://` URL, or `undefined` when it is not one. */
 const parseOrigin = (value: string): Record<string, number | string> | undefined => {
-    let url: URL;
-
     try {
-        url = new URL(value);
+        const url = new URL(value);
+        const scheme = url.protocol.slice(0, -1);
+        const database = decodeURIComponent(url.pathname.slice(1));
+
+        if (!["mysql", "postgres", "postgresql"].includes(scheme) || url.hostname === "" || database === "") {
+            return undefined;
+        }
+
+        return {
+            database,
+            host: url.hostname,
+            password: decodeURIComponent(url.password),
+            port: url.port === "" ? defaultPort(scheme) : Number(url.port),
+            scheme,
+            user: decodeURIComponent(url.username),
+        };
     } catch {
+        // Not a URL, or invalid percent-encoding in it: the caller reports it as unusable.
         return undefined;
     }
-
-    const scheme = url.protocol.slice(0, -1);
-    const database = decodeURIComponent(url.pathname.slice(1));
-
-    if (!["mysql", "postgres", "postgresql"].includes(scheme) || url.hostname === "" || database === "") {
-        return undefined;
-    }
-
-    return {
-        database,
-        host: url.hostname,
-        password: decodeURIComponent(url.password),
-        port: url.port === "" ? defaultPort(scheme) : Number(url.port),
-        scheme,
-        user: decodeURIComponent(url.username),
-    };
 };
 
 /** The bindings still carrying the placeholder id, with their position in the array. */
@@ -135,7 +133,7 @@ const describeFailure = (outcome: { status: number; text: string }): string => {
     return reasons === "" ? `HTTP ${String(outcome.status)}` : `HTTP ${String(outcome.status)}: ${reasons}`;
 };
 
-/** A listed origin field as text, or `undefined` when the listing leaves it out. */
+/** A field as text, or `undefined` when it is absent. */
 const asText = (value: unknown): string | undefined => (typeof value === "string" || typeof value === "number" ? value.toString() : undefined);
 
 /** The fields of an existing config's origin that say which database it reaches. */
@@ -157,16 +155,13 @@ const configId = async (request: Request, name: string, origin: Record<string, n
     const existing = configs.find((entry) => entry.name === name);
 
     if (typeof existing?.id === "string") {
-        // Fields the listing leaves out cannot disagree; the password is never listed.
-        const differs = ORIGIN_IDENTITY.filter((field) => {
-            const listedValue = asText(existing.origin?.[field]);
-
-            return listedValue !== undefined && listedValue !== asText(origin[field]);
-        });
+        // Every field must be listed and equal: a config whose origin can't be confirmed is not reused.
+        // The password is never listed.
+        const differs = ORIGIN_IDENTITY.filter((field) => asText(existing.origin?.[field]) !== asText(origin[field]));
 
         if (differs.length > 0) {
             throw new Error(
-                `a Hyperdrive config named "${name}" already exists for a different origin (${differs.join(", ")} differ). Delete it, or rename the Worker, so the binding does not reach the wrong database.`,
+                `a Hyperdrive config named "${name}" already exists for a different origin, or one that can't be confirmed (${differs.join(", ")}). Delete it, or rename the Worker, so the binding does not reach the wrong database.`,
             );
         }
 
@@ -357,6 +352,21 @@ const blockPlaceholder = (cwd: string, options: Pick<DeployCommandOptions, "env"
     return message;
 };
 
+/** A temporary deploy uploads to a throwaway account, where a config made in your real one does not exist. */
+const blockTemporary = (cwd: string, options: Pick<DeployCommandOptions, "env" | "logger">): string | undefined => {
+    const binding = scanPlaceholders(cwd, options.env)?.entries[0]?.binding;
+
+    if (binding === undefined) {
+        return undefined;
+    }
+
+    const message = `deploy blocked: the "${binding}" Hyperdrive binding has no config, and a --temporary deploy cannot create one: it would be made in your account while the Worker goes to a temporary one. Deploy without --temporary, or remove the binding for this run.`;
+
+    options.logger.error(message);
+
+    return message;
+};
+
 /**
  * The deploy pipeline's step. It creates account resources, so only a real Cloudflare
  * deploy creates them: a dry run must leave the account alone, and `prepare` (which
@@ -364,7 +374,7 @@ const blockPlaceholder = (cwd: string, options: Pick<DeployCommandOptions, "env"
  */
 const provisionDeployHyperdrive = async (
     cwd: string,
-    options: Pick<DeployCommandOptions, "dryRun" | "env" | "logger">,
+    options: Pick<DeployCommandOptions, "dryRun" | "env" | "logger" | "temporary">,
     command: PreDeployCommand,
     target: string,
 ): Promise<string | undefined> => {
@@ -374,6 +384,10 @@ const provisionDeployHyperdrive = async (
 
     if (command === "prepare") {
         return blockPlaceholder(cwd, options);
+    }
+
+    if (options.temporary === true) {
+        return blockTemporary(cwd, options);
     }
 
     return options.dryRun === true ? undefined : provisionHyperdrive({ cwd, logger: options.logger, wranglerEnvironment: options.env });
