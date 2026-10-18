@@ -152,7 +152,8 @@ interface LivePublisher {
      * with no subscribers is a no-op. Rejects when the shard refuses the publish:
      * a `room:` topic (403), a topic over the control-key bound (400), or a
      * payload over the publish cap (413), so a refused publish is not silently
-     * dropped.
+     * dropped. On a target that does not serve live streams it rejects with
+     * `LIVE_STREAMS_UNSUPPORTED`.
      */
     publish: (topic: string, payload: unknown, options: LivePublishOptions) => Promise<void>;
 }

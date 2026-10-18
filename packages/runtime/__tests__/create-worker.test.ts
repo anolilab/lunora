@@ -3432,18 +3432,30 @@ describe("createWorker — live streams and socket paths", () => {
         expect(body).toMatchObject({ stream: "posts", topic: "post:1" });
     });
 
-    it("omits ctx.live from the HTTP context when the worker is built with liveStreams: false", async () => {
-        expect.assertions(2);
+    it("refuses ctx.live.publish from the HTTP context when the worker is built with liveStreams: false", async () => {
+        expect.assertions(3);
 
+        // The publisher stays on the context, so a typed handler still runs; its publish rejects before any forward reaches a shard.
         const worker = createWorker({
-            httpRouter: honoApp((app) => app.get("/probe", (c) => Response.json({ hasLive: c.var.lunora.live !== undefined }))),
+            httpRouter: honoApp((app) =>
+                app.post("/publish", async (c) => {
+                    try {
+                        await c.var.lunora.live?.publish("post:1", { event: "x" }, { stream: "posts" });
+
+                        return new Response("published");
+                    } catch (error) {
+                        return Response.json({ code: (error as { code?: unknown }).code }, { status: 501 });
+                    }
+                }),
+            ),
             liveStreams: false,
             shardDO: shard.namespace,
         });
 
-        const res = await worker.fetch(new Request("https://app.example/probe"), {}, fakeContext);
+        const res = await worker.fetch(new Request("https://app.example/publish", { method: "POST" }), {}, fakeContext);
 
-        await expect(res.json()).resolves.toStrictEqual({ hasLive: false });
+        expect(res.status).toBe(501);
+        await expect(res.json()).resolves.toStrictEqual({ code: "LIVE_STREAMS_UNSUPPORTED" });
         expect(shard.calls).toHaveLength(0);
     });
 
