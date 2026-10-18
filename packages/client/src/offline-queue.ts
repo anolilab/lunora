@@ -492,6 +492,9 @@ class OfflineQueue {
             const error = new Error("CLIENT_CLOSED");
 
             (error as Error & { code?: string }).code = "CLIENT_CLOSED";
+            // The record outlives this client and replays in the next session: the
+            // write is not lost, whatever the rejection suggests.
+            (error as Error & { persisted?: boolean }).persisted = this.persistence !== undefined && !this.unpersisted.has(item.id ?? "");
             item.reject(error);
         }
 
