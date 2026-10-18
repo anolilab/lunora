@@ -109,7 +109,16 @@ const scrubSensitiveValues = (message: string, parsedArgs: unknown, sensitive: R
         return message;
     }
 
-    const leaves = sensitive.flatMap((name) => leavesOf((parsedArgs as Record<string, unknown>)[name])).toSorted((a, b) => b.length - a.length);
+    // A handler that quotes `JSON.stringify(args)` prints a value with its quotes, backslashes and
+    // newlines escaped, so mask that spelling as well as the raw one.
+    const leaves = sensitive
+        .flatMap((name) => leavesOf((parsedArgs as Record<string, unknown>)[name]))
+        .flatMap((leaf) => {
+            const escaped = JSON.stringify(leaf).slice(1, -1);
+
+            return escaped === leaf ? [leaf] : [leaf, escaped];
+        })
+        .toSorted((a, b) => b.length - a.length);
 
     let scrubbed = message;
 

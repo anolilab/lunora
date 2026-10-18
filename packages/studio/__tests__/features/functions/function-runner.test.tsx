@@ -541,6 +541,36 @@ describe("functionRunner with a v.sensitive argument", () => {
         expect(shown).toContain("«sensitive»");
     });
 
+    it("masks a sensitive value that a handler quotes in its JSON-escaped form", async () => {
+        expect.assertions(4);
+
+        const ESCAPED_SECRET = 'a"b\\c\nd';
+        const mock = createMockClient({
+            mutation: (_reference, args) => {
+                throw new Error(`rejected ${JSON.stringify(args)}`);
+            },
+        });
+
+        render(
+            <LunoraProvider client={mock.asClient}>
+                <FunctionRunner functions={VAULT_FUNCTIONS} />
+            </LunoraProvider>,
+        );
+
+        typeArgs(JSON.stringify({ label: "primary", value: ESCAPED_SECRET }));
+        fireEvent.click(screen.getByTestId("run-button"));
+
+        await screen.findByTestId("fn-history");
+
+        const shown = screen.getByTestId("error").textContent ?? "";
+
+        expect(shown).not.toContain(ESCAPED_SECRET);
+        expect(shown).not.toContain(JSON.stringify(ESCAPED_SECRET).slice(1, -1));
+        expect(shown).toContain("«sensitive»");
+        // The sibling argument is still shown, so the message stays useful.
+        expect(shown).toContain("primary");
+    });
+
     it("does not reload a sensitive run's args from history, and says why", async () => {
         expect.assertions(2);
 
