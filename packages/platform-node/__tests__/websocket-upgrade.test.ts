@@ -120,14 +120,21 @@ describe("node websocket upgrades", () => {
         }
     });
 
-    const start = async () => {
+    // `rebuild` mirrors the worker, which rebuilds every non-101 response it returns (security headers).
+    const start = async ({ rebuild = false }: { rebuild?: boolean } = {}) => {
         const registry = createNodeShardRegistry();
         const shard = registry.shardFor("tenant-42");
         const shardDo = new TestShardDO(createNodeShardState(shard) as never, {});
 
         bindShardSockets(shardDo, shard.inbound);
 
-        const server = await createNodeHttpServer({ fetch: (request) => shardDo.fetch(request) });
+        const server = await createNodeHttpServer({
+            fetch: async (request) => {
+                const response = await shardDo.fetch(request);
+
+                return rebuild ? new Response(response.body, response) : response;
+            },
+        });
 
         cleanups.push(async () => {
             await server.close();
@@ -249,6 +256,30 @@ describe("node websocket upgrades", () => {
 
         expect(closeEvents).toHaveLength(1);
         expect(client.readyState).toBe(WebSocket.CLOSED);
+    });
+
+    it("completes the handshake when the worker rebuilds the upgrade response", async () => {
+        expect.assertions(1);
+
+        const { server, shardDo } = await start({ rebuild: true });
+        const client = new WebSocket(socketUrl(server, "/chat"));
+
+        await new Promise<void>((resolve, reject) => {
+            client.addEventListener("open", () => {
+                resolve();
+            });
+            client.addEventListener("error", () => {
+                reject(new Error("the handshake failed"));
+            });
+        });
+
+        client.send(JSON.stringify({ text: "after rebuild" }));
+
+        await waitFor(() => shardDo.calls.some((call) => call.args["kind"] === "message"));
+
+        expect(JSON.stringify(shardDo.calls.find((call) => call.args["kind"] === "message")?.args)).toContain("after rebuild");
+
+        client.close();
     });
 
     it("refuses an anonymous upgrade on a route that requires auth, over HTTP", async () => {

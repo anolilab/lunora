@@ -9,8 +9,9 @@
  * complete.
  *
  * The client end travels to the HTTP listener inside a marker `Response`. A
- * Node `Response` cannot carry status 101, so the marker is a 200 the listener
- * recognises by identity and replaces with the real handshake.
+ * Node `Response` cannot carry status 101, so the marker is a 200 with a one-time
+ * token header, which survives a worker rebuilding the response. The listener
+ * looks the token up and replaces the marker with the real handshake.
  */
 
 import { LunoraError } from "@lunora/errors";
@@ -183,21 +184,47 @@ const createNodeSocketPair = (hub: NodeSocketHub): { client: NodeClientEnd; serv
     return { client, server };
 };
 
-/** Marker responses, keyed by identity, carrying the client end of a pair to the HTTP listener. */
-const upgrades = new WeakMap<Response, NodeClientEnd>();
+/** The header a marker carries its token in. A worker that rebuilds the response keeps its headers, not its identity. */
+const UPGRADE_TOKEN_HEADER = "x-lunora-node-upgrade";
+
+/** How long a marker waits for the HTTP listener. One it never sees, because the worker failed after the shard accepted, is dropped then. */
+const UPGRADE_TOKEN_TTL_MS = 30_000;
+
+/** Marker tokens, each mapped to the client end it carries until the HTTP listener takes it. */
+const upgrades = new Map<string, NodeClientEnd>();
 
 /** The marker `Response` a shard returns for an accepted upgrade. */
 const upgradeMarkerFor = (client: NodeClientEnd): Response => {
+    const token = crypto.randomUUID();
+
+    upgrades.set(token, client);
+
+    // ponytail: one timer per pending handshake, which is fine at handshake rates. An unclaimed marker's pair is
+    // abandoned, so the shard hears the socket close instead of keeping it registered.
+    setTimeout(() => {
+        if (upgrades.delete(token)) {
+            client.abandon();
+        }
+    }, UPGRADE_TOKEN_TTL_MS).unref();
+
     // eslint-disable-next-line unicorn/no-null -- a marker: its body is never read
-    const response = new Response(null, { status: 200 });
-
-    upgrades.set(response, client);
-
-    return response;
+    return new Response(null, { headers: { [UPGRADE_TOKEN_HEADER]: token }, status: 200 });
 };
 
-/** The client end a marker response carries, or `undefined` for any other response. */
-const takeUpgradeClient = (response: Response): NodeClientEnd | undefined => upgrades.get(response);
+/** The client end a marker response carries, or `undefined` for any other response. A token is taken once. */
+const takeUpgradeClient = (response: Response): NodeClientEnd | undefined => {
+    const token = response.headers.get(UPGRADE_TOKEN_HEADER);
+
+    if (token === null) {
+        return undefined;
+    }
+
+    const client = upgrades.get(token);
+
+    upgrades.delete(token);
+
+    return client;
+};
 
 export type { NodeServerEnd, NodeSocketHub };
 export { createNodeSocketPair, NodeClientEnd, takeUpgradeClient, upgradeMarkerFor };
