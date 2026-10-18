@@ -790,10 +790,9 @@ class OwnerRelay extends RelayLink {
     }
 
     protected override onAttach(index: number, seq: number | undefined): boolean {
-        if (!this.acceptRelaySeq(index, seq)) {
-            return false;
-        }
-
+        // An attach always applies: refusing one would strand a relay that has live sockets, which is the failure the sequence
+        // exists to prevent. It only raises the mark a later, older detach is checked against.
+        this.recordRelaySeq(index, seq);
         this.addRelayToSet(index);
 
         return true;
@@ -835,25 +834,45 @@ class OwnerRelay extends RelayLink {
         return { delivered: 0, matched: 0 };
     }
 
+    /** The newest attach or detach sequence applied for relay `index`, or `undefined` before the first sequenced frame. */
+    private relaySeqMark(index: number): number | undefined {
+        this.ensureRelayTables();
+
+        const [row] = this.host.sql().exec<{ seq: bigint | number }>("SELECT seq FROM __lunora_relay_seqs WHERE idx = ?", index).toArray();
+
+        return row === undefined ? undefined : Number(row.seq);
+    }
+
+    /** Raise relay `index`'s mark to `seq`, never lowering it. A frame without `seq` leaves it as it is. */
+    private recordRelaySeq(index: number, seq: number | undefined): void {
+        if (seq === undefined) {
+            return;
+        }
+
+        const mark = this.relaySeqMark(index);
+
+        if (mark === undefined || seq > mark) {
+            this.host.sql().exec("INSERT OR REPLACE INTO __lunora_relay_seqs (idx, seq) VALUES (?, ?)", index, seq);
+        }
+    }
+
     /**
-     * Whether an attach or detach from relay `index` is the newest this owner has seen from it. A late frame (a detach that answered after
-     * the relay's next attach) is refused, so it cannot unregister a relay that has live sockets. The high-water mark is its own row, kept
-     * across a detach, because the detach it guards against is the one that removes the relay's set row. A frame without `seq` always applies.
+     * Whether a detach from relay `index` may apply. A detach older than the relay's newest applied frame is a late one (it answered after
+     * the relay's next attach), so it is refused rather than unregister a relay that has live sockets. The mark is its own row, kept across
+     * a detach, because the detach it guards against is the one that removes the relay's set row. A frame without `seq` always applies.
      */
     private acceptRelaySeq(index: number, seq: number | undefined): boolean {
         if (seq === undefined) {
             return true;
         }
 
-        this.ensureRelayTables();
+        const mark = this.relaySeqMark(index);
 
-        const [row] = this.host.sql().exec<{ seq: bigint | number }>("SELECT seq FROM __lunora_relay_seqs WHERE idx = ?", index).toArray();
-
-        if (row !== undefined && seq < Number(row.seq)) {
+        if (mark !== undefined && seq < mark) {
             return false;
         }
 
-        this.host.sql().exec("INSERT OR REPLACE INTO __lunora_relay_seqs (idx, seq) VALUES (?, ?)", index, seq);
+        this.recordRelaySeq(index, seq);
 
         return true;
     }

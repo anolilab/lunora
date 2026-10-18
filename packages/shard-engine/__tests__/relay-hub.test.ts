@@ -1733,5 +1733,25 @@ describe("relay hub", () => {
 
             expect(relayAt(relays, 0).posts.map((post) => post["type"])).toContain("relay_frame");
         });
+
+        it("applies an attach whose sequence fell below the owner's mark, so a woken relay is not stranded", async () => {
+            expect.assertions(2);
+
+            const relays = new Map<number, RelayDouble>([[0, { down: false, posts: [] }]]);
+            const { owner } = ownerFor(database.sql, relays);
+            const frame = (type: string, seq: number): string => JSON.stringify({ relayIndex: 0, seq, type });
+
+            await deliver(owner, frame("relay_attach", 2_000_000));
+            await deliver(owner, frame("relay_detach", 3_000_000));
+
+            // The relay woke with a clock behind the owner's mark: its attach still registers it.
+            const reattach = await deliver(owner, frame("relay_attach", 1_000_000));
+
+            expect(reattach.status).toBe(204);
+
+            await owner.forwardWhisper("feed", "{}");
+
+            expect(relayAt(relays, 0).posts.map((post) => post["type"])).toContain("relay_frame");
+        });
     });
 });
