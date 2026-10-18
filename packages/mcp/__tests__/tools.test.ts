@@ -1000,3 +1000,67 @@ describe("write confirmation handshake", () => {
         expect(WRITE_TOOL_DEFINITIONS.every((tool) => tool.inputSchema.required?.length === 1)).toBe(true);
     });
 });
+
+describe("write confirmation with a v.sensitive argument", () => {
+    /** A mutation whose `value` argument is secret; the name is innocuous on purpose. */
+    const VAULT_FUNCTION: FunctionDescriptor = {
+        args: [
+            { kind: "string", name: "label", optional: false },
+            { kind: "string", name: "value", optional: false, sensitive: true },
+        ],
+        kind: "mutation",
+        path: "vault:store",
+    };
+    const SECRET = "hunter2-the-real-secret";
+    const input = { args: { label: "primary", value: SECRET }, functionPath: "vault:store" };
+
+    it("shows the sensitive value masked, and keeps its sibling argument", async () => {
+        expect.assertions(4);
+
+        const mock = mockClient();
+
+        mock.listFunctions.mockResolvedValue([...MOCK_FUNCTIONS, VAULT_FUNCTION]);
+
+        const result = await callTool(mock.asClient, "lunora_run_mutation", input, true);
+        const payload = parseResult(result) as ActionRequired;
+
+        expect(payload.proposedAction.args).toStrictEqual({ label: "primary", value: "«sensitive»" });
+        expect(result.content[0]!.text).not.toContain(SECRET);
+        expect(payload.nextStep).toContain("Resend the REAL values");
+        expect(mock.mutation).not.toHaveBeenCalled();
+    });
+
+    it("binds the digest to the real value: the confirmed call runs with the secret, through a sensitive reference", async () => {
+        expect.assertions(2);
+
+        const mock = mockClient();
+
+        mock.listFunctions.mockResolvedValue([...MOCK_FUNCTIONS, VAULT_FUNCTION]);
+
+        const { actionDigest } = await propose(mock.asClient, "lunora_run_mutation", input);
+
+        await callTool(mock.asClient, "lunora_run_mutation", { ...input, actionDigest, confirmed: true }, true);
+
+        expect(mock.mutation).toHaveBeenCalledWith({ __lunoraRef: "vault:store", sensitive: true }, input.args, { shardKey: undefined });
+        expect(mock.mutation.mock.calls[0]?.[1]).toStrictEqual({ label: "primary", value: SECRET });
+    });
+
+    it("refuses a confirmation that resends the masked placeholder in place of the value", async () => {
+        expect.assertions(2);
+
+        const mock = mockClient();
+
+        mock.listFunctions.mockResolvedValue([...MOCK_FUNCTIONS, VAULT_FUNCTION]);
+
+        const { actionDigest } = await propose(mock.asClient, "lunora_run_mutation", input);
+        const result = await callTool(
+            mock.asClient,
+            "lunora_run_mutation",
+            { ...input, args: { label: "primary", value: "«sensitive»" }, actionDigest, confirmed: true },
+            true,
+        );
+
+        expect(result.isError).toBe(true);
+        expect(mock.mutation).not.toHaveBeenCalled();
+    });
+});

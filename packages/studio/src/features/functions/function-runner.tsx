@@ -14,7 +14,7 @@ import { useT } from "../../i18n/i18n-context";
 import { ADMIN_FUNCTIONS } from "../../lib/admin";
 import { adminRef, dispatchByKind, errorMessage, fireAndForget, formatTimestamp, jsonRowReplacer } from "../../lib/internal";
 import { recordShard } from "../../lib/shard-history";
-import type { FunctionDescriptor, FunctionKind, RunStatus } from "../../lib/types";
+import type { FunctionArgumentDescriptor, FunctionDescriptor, FunctionKind, RunStatus } from "../../lib/types";
 import { argumentsTemplate, formatSignature } from "./function-signature";
 
 /**
@@ -26,9 +26,69 @@ import { argumentsTemplate, formatSignature } from "./function-signature";
  */
 const RUN_AS = adminRef(ADMIN_FUNCTIONS.runAs);
 
+/** What a `v.sensitive` argument's value is replaced with wherever the runner keeps args. */
+const SENSITIVE_PLACEHOLDER = "«sensitive»";
+
+/** The names of a function's `v.sensitive` arguments, from its discovery descriptor. */
+const sensitiveNamesOf = (args: FunctionArgumentDescriptor[] | undefined): string[] =>
+    (args ?? []).filter((argument) => argument.sensitive === true).map((argument) => argument.name);
+
+/**
+ * The args text history may keep: the typed JSON with each sensitive value replaced
+ * by {@link SENSITIVE_PLACEHOLDER}. Text that is not a JSON object is not kept.
+ */
+const historyArgsText = (argsText: string, sensitive: ReadonlyArray<string>): string => {
+    if (sensitive.length === 0) {
+        return argsText;
+    }
+
+    try {
+        const parsed: unknown = JSON.parse(argsText);
+
+        if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+            return "";
+        }
+
+        const masked: Record<string, unknown> = { ...parsed };
+
+        for (const name of sensitive) {
+            if (Object.hasOwn(masked, name)) {
+                masked[name] = SENSITIVE_PLACEHOLDER;
+            }
+        }
+
+        return JSON.stringify(masked, null, 2);
+    } catch {
+        return "";
+    }
+};
+
+/**
+ * A run's error text with every sensitive value taken out, for a handler that quotes
+ * the argument it rejected. Longest first, so a value containing another is masked whole.
+ */
+const scrubSensitiveValues = (message: string, parsedArgs: unknown, sensitive: ReadonlyArray<string>): string => {
+    if (sensitive.length === 0 || typeof parsedArgs !== "object" || parsedArgs === null) {
+        return message;
+    }
+
+    const secrets = sensitive
+        .map((name) => (parsedArgs as Record<string, unknown>)[name])
+        .filter((value): value is string => typeof value === "string" && value.length > 0)
+        .toSorted((a, b) => b.length - a.length);
+
+    let scrubbed = message;
+
+    for (const secret of secrets) {
+        scrubbed = scrubbed.replaceAll(secret, SENSITIVE_PLACEHOLDER);
+    }
+
+    return scrubbed;
+};
+
 /** A single recorded invocation, kept purely in component state. */
 interface RunHistoryEntry {
-    /** The raw JSON args text used for the run. */
+    /** The raw JSON args text used for the run, with sensitive values masked. */
     argsText: string;
     /** Epoch-ms the run resolved. */
     at: number;
@@ -36,6 +96,8 @@ interface RunHistoryEntry {
     id: number;
     kind: FunctionKind;
     path: string;
+    /** True when the run had sensitive arguments, so `argsText` cannot be re-run as is. */
+    redacted: boolean;
     /** Free-text shard key (empty for the root shard). */
     shardKey: string;
     status: "error" | "success";
@@ -170,16 +232,19 @@ export const FunctionRunner = ({ functions: functionsProp, runAsIdentity = false
         // observes that user. Empty userId (or the gate off) keeps the normal
         // path, running with the caller's own admin identity.
         const forgedUserId = runAsIdentity ? runAsUserId.trim() : "";
+        const sensitive = sensitiveNamesOf(selected.args);
 
-        // Snapshot the inputs so a re-run from history replays exactly what ran.
+        // Snapshot the inputs so a re-run from history replays what ran, except that a
+        // sensitive value is never kept: the entry holds a placeholder and is flagged.
         const record = (runStatus: "error" | "success"): void => {
             setRuns((previous) => {
                 const entry: RunHistoryEntry = {
-                    argsText,
+                    argsText: historyArgsText(argsText, sensitive),
                     at: Date.now(),
                     id: (previous[0]?.id ?? 0) + 1,
                     kind: selected.kind,
                     path: selected.path,
+                    redacted: sensitive.length > 0,
                     shardKey,
                     status: runStatus,
                 };
@@ -207,17 +272,27 @@ export const FunctionRunner = ({ functions: functionsProp, runAsIdentity = false
             record("success");
         } catch (runError) {
             setResult(undefined);
-            setError((runError as Error).message);
+            setError(scrubSensitiveValues((runError as Error).message, parsedArgs, sensitive));
             setStatus("error");
             record("error");
         }
     };
 
-    // Reload a recorded run's path + inputs into the form so it can be re-run.
+    // Reload a recorded run's path + inputs into the form so it can be re-run. A run
+    // with sensitive arguments keeps only the placeholder, so its args are not reloaded.
     const loadRun = (entry: RunHistoryEntry): void => {
         setSelectedPath(entry.path);
-        setArgsText(entry.argsText);
         setShardKey(entry.shardKey);
+
+        if (entry.redacted) {
+            setResult(undefined);
+            setError(t("Re-enter the sensitive values before running this again."));
+            setStatus("error");
+
+            return;
+        }
+
+        setArgsText(entry.argsText);
     };
 
     const onSelectChange = (event: ChangeEvent<HTMLSelectElement>): void => {
