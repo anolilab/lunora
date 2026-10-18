@@ -73,11 +73,25 @@ const DEFAULT_MAX_RELAYS = 8;
 const RELAY_LIVE_CONTROL_TIMEOUT_MS = 2000;
 
 /**
- * How long a relay waits on its owner's answer to an attach. Every connect and shape subscribe on the relay awaits the shared attach, so an
+ * How long a relay waits on its owner's answer to an attach or a detach. Every connect and shape subscribe on the relay awaits the shared attach, so an
  * owner that never answers would stall them all; past this, the attach counts as failed and the next caller retries it.
  * ponytail: one fixed ceiling, the same as the live-control one; tune it if a cold owner routinely takes longer.
  */
 const RELAY_ATTACH_TIMEOUT_MS = 2000;
+
+/** `request`, or `undefined` once {@link RELAY_ATTACH_TIMEOUT_MS} passes without an answer. Used for a relay's attach and detach. */
+const withRelayDeadline = async <T>(request: Promise<T>): Promise<T | undefined> => {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const deadline = new Promise<undefined>((resolve) => {
+        timer = setTimeout(() => {
+            resolve(undefined);
+        }, RELAY_ATTACH_TIMEOUT_MS);
+    });
+
+    return Promise.race([request, deadline]).finally(() => {
+        clearTimeout(timer);
+    });
+};
 
 /**
  * The identity the owner computes a relay-multicast shape delta under (plan 075
@@ -1695,21 +1709,9 @@ class RelayMember extends RelayLink {
             const generation = this.announceGeneration;
 
             this.pendingAnnounce = (this.pendingDetach ?? Promise.resolve())
-                .then(async () => {
-                    let timer: ReturnType<typeof setTimeout> | undefined;
-                    const deadline = new Promise<undefined>((resolve) => {
-                        timer = setTimeout(() => {
-                            resolve(undefined);
-                        }, RELAY_ATTACH_TIMEOUT_MS);
-                    });
-
-                    return Promise.race([
-                        this.requestRelayMessage(this.roleId.ownerKey, { relayIndex: this.roleId.relayIndex as number, type: "relay_attach" }),
-                        deadline,
-                    ]).finally(() => {
-                        clearTimeout(timer);
-                    });
-                })
+                .then(async () =>
+                    withRelayDeadline(this.requestRelayMessage(this.roleId.ownerKey, { relayIndex: this.roleId.relayIndex as number, type: "relay_attach" })),
+                )
                 .then((response) => {
                     const attached = response?.ok === true;
 
@@ -1771,7 +1773,10 @@ class RelayMember extends RelayLink {
         // attach that followed the newer one.
         const priorDetach = this.pendingDetach;
         const detach = Promise.all([inflightAttach?.catch(() => false), priorDetach])
-            .then(async () => this.postRelayMessage(this.roleId.ownerKey, { relayIndex: this.roleId.relayIndex as number, type: "relay_detach" }))
+            // Bounded like the attach: a detach the owner never answers must not hold every later connect behind it.
+            .then(async () =>
+                withRelayDeadline(this.postRelayMessage(this.roleId.ownerKey, { relayIndex: this.roleId.relayIndex as number, type: "relay_detach" })),
+            )
             .catch(() => undefined)
             .finally(() => {
                 if (this.pendingDetach === detach) {

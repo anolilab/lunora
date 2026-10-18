@@ -1312,6 +1312,52 @@ describe("relay hub", () => {
             await expect(link.announce()).resolves.toBe(true);
         });
 
+        it("lets a reconnecting socket attach when the drain's detach is never answered", async () => {
+            expect.assertions(2);
+
+            const sent: string[] = [];
+            const owner = {
+                fetch: (_url: string, init?: RequestInit) => {
+                    const type = frameType(init);
+
+                    sent.push(type);
+
+                    if (type === "relay_detach") {
+                        return new Promise<Response>(() => {
+                            // The owner never answers the detach.
+                        });
+                    }
+
+                    return Promise.resolve(new Response());
+                },
+            };
+            const link = memberOf({
+                doName: () => `${OWNER_KEY}::relay::0`,
+                env: () => {
+                    return { SHARD: { get: () => owner, getByName: () => owner, idFromName: (id: string) => id } };
+                },
+                getWebSockets: () => [],
+                shardBinding: () => "SHARD",
+                shardJurisdiction: () => undefined,
+                sql: () => database.sql,
+            } as unknown as RelayHost);
+
+            vi.useFakeTimers();
+
+            try {
+                const drained = link.announceDrain({} as ShardSocketLike);
+                const attached = link.announce();
+
+                await vi.advanceTimersByTimeAsync(2000);
+                await drained;
+
+                await expect(attached).resolves.toBe(true);
+                expect(sent).toStrictEqual(["relay_detach", "relay_attach"]);
+            } finally {
+                vi.useRealTimers();
+            }
+        });
+
         it("orders a second drain's detach behind the first", async () => {
             expect.assertions(2);
 
