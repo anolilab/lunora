@@ -180,6 +180,10 @@ const CLOUDFLARE_CAPABILITIES: PlatformCapabilities = {
         },
         mail: { level: "emulated", note: "Resend (third-party) via Cloudflare Queues" },
         secrets: { level: "native", note: "Secrets Store" },
+        secretValues: {
+            level: "native",
+            note: "Held in the shard's own Durable Object key-value storage under a reserved key prefix, so the value stays inside the shard and is not a separate service. Cloudflare encrypts all Durable Object data at rest (AES-256, keys managed by Cloudflare). The value is not readable through the shard's SQL surface: the key-value table appears in the schema listing, but reads of its key and value columns are refused by the SQLite authorizer. The reserved prefix is filtered out of `ShardKvStore`, so the key-value contract cannot list or read it. Point-in-time recovery covers key-value `put()` data for 30 days, so a restore to a bookmark earlier than a `discard` brings the discarded value back, and it also reverts the claimant binding",
+        },
         services: {
             level: "native",
             note: "Cloudflare service bindings: the bound Worker runs on the same thread of the same server, with no extra request fee. Fetch services and WorkerEntrypoint RPC both work, in deploy and in local dev (auxiliary Workers / multiple wrangler configs)",

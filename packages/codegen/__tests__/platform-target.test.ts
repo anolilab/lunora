@@ -285,6 +285,24 @@ describe("gatePlatformFeatures", () => {
         expect(result.signals.workflowSchedules).toBe(!refused);
     });
 
+    it.each([
+        ["celld", true],
+        ["node", true],
+        ["cloudflare", false],
+    ])("gates a requestSecretTool agent per target (%s)", async (target, refused) => {
+        expect.assertions(2);
+
+        const { gatePlatformFeatures } = await import("../src/platform-target");
+        const result = gatePlatformFeatures(ALL_OFF, target, { secretValues: true });
+
+        expect(result.signals.secretValues).toBe(!refused);
+        expect(
+            result.diagnostics
+                .filter((diagnostic) => diagnostic.name === "platform_unsupported_feature")
+                .map((diagnostic) => QUOTED_KEY.exec(diagnostic.remediation)?.[1]),
+        ).toStrictEqual(refused ? ["secretValues"] : []);
+    });
+
     it.each(["celld", "node", "cloudflare"])("lets topics through on every target, since each rates them emulated (%s)", async (target) => {
         expect.assertions(2);
 
