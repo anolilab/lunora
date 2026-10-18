@@ -80,7 +80,9 @@ const whenOnline = async (): Promise<void> =>
  * TanStack never retries; the queue owns replays. An online-only write (`onlineOnly:
  * true`, or any call to a function with a `v.sensitive` argument) is not held for a
  * later send: it reaches `client.mutation` at once and rejects with
- * `OFFLINE_NOT_QUEUED` if the network is down.
+ * `OFFLINE_NOT_QUEUED` if the network is down. Such a call also leaves TanStack's
+ * mutation cache, and with it the call's arguments, as soon as nothing observes it
+ * (the hook still holds the latest call while mounted).
  */
 const useMutation = <F extends FunctionReference>(function_: F): MutationHook<F> => {
     const client = useLunora();
@@ -110,6 +112,11 @@ const useMutation = <F extends FunctionReference>(function_: F): MutationHook<F>
         // paused every call before `client.mutation` ran, so an offline write got
         // none of that, and closing the tab lost it.
         networkMode: "always",
+        // A settled mutation keeps its variables, which here are the call's arguments, in
+        // TanStack's mutation cache until `gcTime` passes with nothing observing it. The
+        // default is five minutes in a browser, so a credential would outlive the component
+        // that sent it. A sensitive call drops out of the cache as soon as it is unobserved.
+        ...(sensitive ? { gcTime: 0 } : {}),
         // A retry re-runs `mutationFn`, which mints a fresh `mutationId`, so the
         // server cannot dedupe it against an attempt that already committed.
         retry: 0,
