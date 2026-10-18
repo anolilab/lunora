@@ -6,12 +6,13 @@
  * second implementation: it was one, and the copies had drifted so that prepare
  * checked LESS than the deploy it precedes.
  */
+import { resolveLazyFunctions } from "@lunora/config";
+
 import type { ApiSpec } from "../../util/api-spec";
 import { parseApiSpec } from "../../util/api-spec";
 import type { CommandHandler } from "../../util/command";
 import { defineHandler } from "../../util/command";
 import { EXIT_CODE } from "../../util/exit-code";
-import resolveLazyFunctions from "../../util/lazy-functions";
 import type { Logger } from "../../util/logger";
 import type { Spawner } from "../../util/spawn";
 import { runPreDeployPipeline } from "../deploy/handler";
