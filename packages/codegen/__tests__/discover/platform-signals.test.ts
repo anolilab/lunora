@@ -423,6 +423,37 @@ describe("discoverPlatformSignals", () => {
         expect(signals().secrets).toBe(true);
     });
 
+    it("does not treat an unrelated local `ctx.live` read as a ctx.live read", () => {
+        expect.assertions(1);
+
+        // A local named `ctx` that is no handler's context must not block a build on a target that withholds live streams.
+        write("scratch.ts", `const ctx = {} as { live?: unknown };\n\nexport const probe = () => ctx.live;\n`);
+
+        expect(signals().liveContext).toBe(false);
+    });
+
+    it("detects a ctx.live read through a renamed context parameter aliased to `ctx`", () => {
+        expect.assertions(1);
+
+        write(
+            "announce.ts",
+            `import { action } from "@lunora/server";\n\nexport const announce = action({ args: {}, handler: async (context) => {\n    const ctx = context;\n\n    return ctx.live.publish("posts", {});\n} });\n`,
+        );
+
+        expect(signals().liveContext).toBe(true);
+    });
+
+    it("detects a ctx.live read through a plain `ctx` parameter", () => {
+        expect.assertions(1);
+
+        write(
+            "announce.ts",
+            `import { action } from "@lunora/server";\n\nexport const announce = action({ args: {}, handler: async (ctx) => ctx.live.publish("posts", {}) });\n`,
+        );
+
+        expect(signals().liveContext).toBe(true);
+    });
+
     it("detects a ctx.secrets read", () => {
         expect.assertions(1);
 

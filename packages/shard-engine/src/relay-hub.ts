@@ -66,6 +66,38 @@ const DEFAULT_RELAY_FAN = 2;
 const DEFAULT_MAX_RELAYS = 8;
 
 /**
+ * How long the owner waits on one relay's answer to a forwarded live control call. A relay that has not answered by then counts as not
+ * holding the socket, so a stalled relay cannot hold up a subscribe that another relay has already answered.
+ * ponytail: one fixed ceiling for every relay; a measured per-relay latency is the upgrade path if it is ever hit in practice.
+ */
+const RELAY_LIVE_CONTROL_TIMEOUT_MS = 2000;
+
+/**
+ * How long a relay waits on its owner's answer to an attach or a detach. Every connect and shape subscribe on the relay awaits the shared attach, so an
+ * owner that never answers would stall them all; past this, the attach counts as failed and the next caller retries it.
+ * ponytail: one fixed ceiling, the same as the live-control one; tune it if a cold owner routinely takes longer.
+ */
+const RELAY_ATTACH_TIMEOUT_MS = 2000;
+
+/**
+ * `request`, or `undefined` once {@link RELAY_ATTACH_TIMEOUT_MS} passes without an answer. Used for a relay's attach and detach.
+ * ponytail: the deadline only stops the wait; the request still runs and can reach the owner after a later one (a late detach after
+ * the next attach, a late subscribe after its unsubscribe). Per-relay sequence numbers the receiver checks are the upgrade path.
+ */
+const withRelayDeadline = async <T>(request: Promise<T>): Promise<T | undefined> => {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const deadline = new Promise<undefined>((resolve) => {
+        timer = setTimeout(() => {
+            resolve(undefined);
+        }, RELAY_ATTACH_TIMEOUT_MS);
+    });
+
+    return Promise.race([request, deadline]).finally(() => {
+        clearTimeout(timer);
+    });
+};
+
+/**
  * The identity the owner computes a relay-multicast shape delta under (plan 075
  * Phase 3). It is the empty (anonymous) identity, and it is **load-bearing for
  * RLS**: a shape may only be relay-multicast if the uniform gate has PROVEN its
@@ -422,8 +454,11 @@ abstract class RelayLink {
         identity: SubscriptionIdentity,
     ): Promise<"ok" | undefined | { code: string; message: string }>;
 
-    /** A relay announces itself to its owner on its first subscriber (so the owner forwards to it); a no-op on an owner. */
-    public abstract announce(): Promise<void>;
+    /**
+     * A relay announces itself to its owner on its first subscriber (so the owner forwards to it); a no-op on an owner.
+     * @returns `false` only when the attach to the owner failed; the relay then stays unannounced, and the next call attaches again
+     */
+    public abstract announce(): Promise<boolean>;
 
     /** A relay detaches from its owner once its last socket closes; a no-op on an owner. */
     public abstract announceDrain(closing: ShardSocketLike): Promise<void>;
@@ -501,6 +536,12 @@ class OwnerRelay extends RelayLink {
     private liveGrantRelayCache: Set<number> | undefined;
 
     /**
+     * Relays with a subscribe still unanswered, by count. A subscribe past its deadline may still store the grant, so an unsubscribe
+     * reaches these relays too: it arrives behind that subscribe and removes what it stored.
+     */
+    private readonly pendingSubscribeRelays = new Map<number, number>();
+
+    /**
      * The shape registry, hydrated once per wake from `__lunora_relay_shapes` —
      * see {@link OwnerRelay.relayShapes} for why it is read back from SQLite
      * rather than started empty. `cohort` holds the relay-uniform shapes keyed
@@ -544,12 +585,17 @@ class OwnerRelay extends RelayLink {
      * the first answer that is not a 404. A connection id lives on exactly one DO, so at most one
      * relay applies it. The worker has already run `onSubscribe`; the relay repeats only the
      * socket ownership and grant checks.
+     *
+     * Resolves on the first non-404 answer, without waiting for the others, and each relay is
+     * bounded by {@link RELAY_LIVE_CONTROL_TIMEOUT_MS}. A relay is recorded as a grant holder only
+     * when it stored the grant (an OK answer), so a refused subscribe does not pull later publishes
+     * to a relay that cannot deliver them.
      * ponytail: fans out to every relay on a miss; index connection id to relay if the cap grows.
      * @returns the holding relay's response, or `undefined` when no relay holds the socket
      */
-    public async forwardLiveControl(control: LiveSocketControlCall): Promise<Response | undefined> {
+    public forwardLiveControl(control: LiveSocketControlCall): Promise<Response | undefined> {
         if (!this.canAddressSiblings()) {
-            return undefined;
+            return Promise.resolve(undefined);
         }
 
         // An unsubscribe can only find its socket on a relay that has held a grant, so it skips
@@ -557,29 +603,25 @@ class OwnerRelay extends RelayLink {
         // reaches the relay that will hold it.
         // ponytail: a publish that lands while a relay's first subscribe is still in flight misses
         // that relay, since it is recorded as a holder only once its answer returns.
-        const targets = control.action === "unsubscribe" ? this.liveGrantRelaySet() : this.ownerRelaySet();
+        const targets = control.action === "unsubscribe" ? new Set([...this.liveGrantRelaySet(), ...this.pendingSubscribeRelays.keys()]) : this.ownerRelaySet();
 
         if (targets.size === 0) {
-            return undefined;
+            return Promise.resolve(undefined);
         }
 
-        const answers = await Promise.all(
+        // The first non-404 answer names the holder. `Promise.any` settles on it without waiting for the other relays; a 404 rejects, so
+        // the wait goes on, and only when every relay has refused to hold the socket does it settle as `undefined`.
+        return Promise.any(
             [...targets].map(async (index) => {
-                return {
-                    index,
-                    response: await this.requestRelayMessage(relayName(this.roleId.ownerKey, index), { control, type: "relay_live_control" }),
-                };
+                const response = await this.liveControlAnswer(index, control);
+
+                if (response === undefined || response.status === 404) {
+                    throw new Error("relay does not hold the socket");
+                }
+
+                return response;
             }),
-        );
-        const holders = answers.filter(
-            (answer): answer is { index: number; response: Response } => answer.response !== undefined && answer.response.status !== 404,
-        );
-
-        for (const { index } of holders) {
-            this.recordLiveGrantRelay(index);
-        }
-
-        return holders[0]?.response;
+        ).catch(() => undefined);
     }
 
     /**
@@ -623,8 +665,8 @@ class OwnerRelay extends RelayLink {
     }
 
     // eslint-disable-next-line class-methods-use-this -- role hook: only a relay announces
-    public override announce(): Promise<void> {
-        return Promise.resolve();
+    public override announce(): Promise<boolean> {
+        return Promise.resolve(true);
     }
 
     // eslint-disable-next-line class-methods-use-this -- role hook: only a relay drains
@@ -1409,6 +1451,54 @@ class OwnerRelay extends RelayLink {
     private tableHasAnyMask(table: string): boolean {
         return this.host.maskMetadata().columns.some((entry) => entry.table === table);
     }
+
+    /**
+     * One relay's answer to a forwarded live control call: `undefined` when the relay did not answer within
+     * {@link RELAY_LIVE_CONTROL_TIMEOUT_MS}. An OK answer means the relay stored the grant, so it is recorded as a grant holder here.
+     */
+    private async liveControlAnswer(index: number, control: LiveSocketControlCall): Promise<Response | undefined> {
+        // The relay keeps working past the deadline and may store the grant after it. Recording on the request itself, not on the
+        // race below, means that late OK still makes the relay a holder, so later publishes and unsubscribes reach it.
+        const subscribing = control.action === "subscribe";
+
+        if (subscribing) {
+            this.pendingSubscribeRelays.set(index, (this.pendingSubscribeRelays.get(index) ?? 0) + 1);
+        }
+
+        const answer = this.requestRelayMessage(relayName(this.roleId.ownerKey, index), { control, type: "relay_live_control" })
+            .then((response) => {
+                // Only a subscribe stores a grant: an OK unsubscribe is no proof the relay holds one.
+                if (subscribing && response?.ok === true) {
+                    this.recordLiveGrantRelay(index);
+                }
+
+                return response;
+            })
+            .finally(() => {
+                if (!subscribing) {
+                    return;
+                }
+
+                const left = (this.pendingSubscribeRelays.get(index) ?? 1) - 1;
+
+                if (left === 0) {
+                    this.pendingSubscribeRelays.delete(index);
+                } else {
+                    this.pendingSubscribeRelays.set(index, left);
+                }
+            });
+
+        let timer: ReturnType<typeof setTimeout> | undefined;
+        const deadline = new Promise<undefined>((resolve) => {
+            timer = setTimeout(() => {
+                resolve(undefined);
+            }, RELAY_LIVE_CONTROL_TIMEOUT_MS);
+        });
+
+        return Promise.race([answer, deadline]).finally(() => {
+            clearTimeout(timer);
+        });
+    }
 }
 
 /**
@@ -1419,6 +1509,21 @@ class OwnerRelay extends RelayLink {
 class RelayMember extends RelayLink {
     /** `true` once this relay has announced itself to its owner this wake, so a hot socket churn doesn't re-attach on every subscribe. */
     private relayAnnounced = false;
+
+    /** The attach to the owner while one is in flight, so concurrent announces share it. */
+    private pendingAnnounce: Promise<boolean> | undefined;
+
+    /**
+     * Bumped by every drain. An attach records the generation it started in and sets the latch only if it is still current:
+     * a drain detaches the relay from the owner, so an attach that answers after it must not mark the relay announced.
+     */
+    private announceGeneration = 0;
+
+    /**
+     * The detach a drain sent, while the owner has not yet answered it. A later attach waits for it, so the owner never applies a
+     * detach after the attach that followed it and drops a relay that has live sockets again.
+     */
+    private pendingDetach: Promise<void> | undefined;
 
     /**
      * Every socket's cohort memos on this relay, `connectionId → subId → memo`:
@@ -1595,20 +1700,40 @@ class RelayMember extends RelayLink {
         return "ok";
     }
 
-    /** A relay announces itself to its owner (once per wake) on its first subscriber, retrying on a failed attach so a dropped frame can't strand its sockets (LOW-4). */
-    public override async announce(): Promise<void> {
+    /**
+     * A relay announces itself to its owner (once per wake) on its first subscriber, retrying on a failed attach so a dropped frame can't strand its sockets (LOW-4).
+     * A burst of callers shares the one attach in flight, so none of them is told the relay is registered before the owner has answered.
+     * @returns `false` when the attach failed; the relay then stays unannounced, and the next call attaches again
+     */
+    public override announce(): Promise<boolean> {
         if (this.relayAnnounced || !this.canAddressSiblings()) {
-            return;
+            return Promise.resolve(true);
         }
 
-        // Latch optimistically so a burst of subscribes doesn't re-announce, but reset
-        // on a failed attach so the next subscriber retries.
-        this.relayAnnounced = true;
-        const response = await this.requestRelayMessage(this.roleId.ownerKey, { relayIndex: this.roleId.relayIndex as number, type: "relay_attach" });
+        if (this.pendingAnnounce === undefined) {
+            const generation = this.announceGeneration;
 
-        if (!response?.ok) {
-            this.relayAnnounced = false;
+            this.pendingAnnounce = (this.pendingDetach ?? Promise.resolve())
+                .then(async () =>
+                    withRelayDeadline(this.requestRelayMessage(this.roleId.ownerKey, { relayIndex: this.roleId.relayIndex as number, type: "relay_attach" })),
+                )
+                .then((response) => {
+                    const attached = response?.ok === true;
+
+                    if (generation === this.announceGeneration) {
+                        this.relayAnnounced = attached;
+                    }
+
+                    return attached;
+                })
+                .finally(() => {
+                    if (generation === this.announceGeneration) {
+                        this.pendingAnnounce = undefined;
+                    }
+                });
         }
+
+        return this.pendingAnnounce;
     }
 
     /**
@@ -1640,7 +1765,32 @@ class RelayMember extends RelayLink {
         }
 
         this.relayAnnounced = false;
-        await this.postRelayMessage(this.roleId.ownerKey, { relayIndex: this.roleId.relayIndex as number, type: "relay_detach" });
+        // An attach still in flight answers for a registration the owner has just dropped: the next socket starts its own attach.
+        this.announceGeneration += 1;
+
+        const inflightAttach = this.pendingAnnounce;
+
+        this.pendingAnnounce = undefined;
+
+        // The detach goes out only after that attach has been answered, so it can never reach the owner first and leave a relay
+        // with no sockets registered as active. It is tracked from the start, so an attach begun meanwhile waits behind it.
+        // Behind any earlier detach too: two overlapping drains must reach the owner in order, or the older one could land after an
+        // attach that followed the newer one.
+        const priorDetach = this.pendingDetach;
+        const detach = Promise.all([inflightAttach?.catch(() => false), priorDetach])
+            // Bounded like the attach: a detach the owner never answers must not hold every later connect behind it.
+            .then(async () =>
+                withRelayDeadline(this.postRelayMessage(this.roleId.ownerKey, { relayIndex: this.roleId.relayIndex as number, type: "relay_detach" })),
+            )
+            .catch(() => undefined)
+            .finally(() => {
+                if (this.pendingDetach === detach) {
+                    this.pendingDetach = undefined;
+                }
+            });
+
+        this.pendingDetach = detach;
+        await detach;
     }
 
     /**

@@ -3432,18 +3432,30 @@ describe("createWorker — live streams and socket paths", () => {
         expect(body).toMatchObject({ stream: "posts", topic: "post:1" });
     });
 
-    it("omits ctx.live from the HTTP context when the worker is built with liveStreams: false", async () => {
-        expect.assertions(2);
+    it("refuses ctx.live.publish from the HTTP context when the worker is built with liveStreams: false", async () => {
+        expect.assertions(3);
 
+        // The publisher stays on the context, so a typed handler still runs; its publish rejects before any forward reaches a shard.
         const worker = createWorker({
-            httpRouter: honoApp((app) => app.get("/probe", (c) => Response.json({ hasLive: c.var.lunora.live !== undefined }))),
+            httpRouter: honoApp((app) =>
+                app.post("/publish", async (c) => {
+                    try {
+                        await c.var.lunora.live?.publish("post:1", { event: "x" }, { stream: "posts" });
+
+                        return new Response("published");
+                    } catch (error) {
+                        return Response.json({ code: (error as { code?: unknown }).code }, { status: 501 });
+                    }
+                }),
+            ),
             liveStreams: false,
             shardDO: shard.namespace,
         });
 
-        const res = await worker.fetch(new Request("https://app.example/probe"), {}, fakeContext);
+        const res = await worker.fetch(new Request("https://app.example/publish", { method: "POST" }), {}, fakeContext);
 
-        await expect(res.json()).resolves.toStrictEqual({ hasLive: false });
+        expect(res.status).toBe(501);
+        await expect(res.json()).resolves.toStrictEqual({ code: "LIVE_STREAMS_UNSUPPORTED" });
         expect(shard.calls).toHaveLength(0);
     });
 
@@ -3491,6 +3503,29 @@ describe("createWorker — live streams and socket paths", () => {
         expect(shard.calls).toHaveLength(1);
         expect(new URL(forwarded?.url ?? "").pathname).toBe("/_lunora/live/publish");
         expect(body).toMatchObject({ stream: "posts", topic: "digest:1" });
+    });
+
+    it("refuses a direct queue consumer's publish on a worker built with liveStreams: false, before any forward", async () => {
+        expect.assertions(2);
+
+        // A direct `queue` callback is handed the publisher as its fifth argument. With live streams off it must not reach a shard.
+        let thrown: unknown;
+        const worker = createWorker({
+            liveStreams: false,
+            queue: async (_batch, _env, _context, _trigger, live) => {
+                try {
+                    await live.publish("digest:1", { event: "ready" }, { stream: "posts" });
+                } catch (error) {
+                    thrown = error;
+                }
+            },
+            shardDO: shard.namespace,
+        });
+
+        await worker.queue?.({ messages: [], queue: "digest" }, {}, fakeContext);
+
+        expect(thrown).toBeInstanceOf(Error);
+        expect(shard.calls).toHaveLength(0);
     });
 
     it("refuses an HTTP action publish to a non-default shard the caller may not address, before any forward", async () => {

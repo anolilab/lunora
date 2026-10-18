@@ -153,8 +153,8 @@ interface HttpActionContext {
 
     /**
      * Publish an arbitrary event to a live topic on a stream. Structural mirror of
-     * `@lunora/server`'s `LivePublisher`. Absent when the worker was built with
-     * `liveStreams: false`, a target that does not serve live streams.
+     * `@lunora/server`'s `LivePublisher`. Present on every worker; built with
+     * `liveStreams: false` (a target that does not serve live streams), its `publish` rejects.
      */
     live?: { publish: (topic: string, payload: unknown, options: { shardKey?: string; stream: string }) => Promise<void> };
 
@@ -636,6 +636,23 @@ interface QueueLivePublisherLike {
  * pathname, so any fixed internal origin is correct.
  */
 const QUEUE_LIVE_ORIGIN = "https://queue.lunora.internal";
+
+/**
+ * The publisher a worker built with `liveStreams: false` hands out where a working one would go. The shape is kept, so a handler that
+ * calls `publish` still type-checks and runs, and the call rejects with a clear error instead of forwarding to a shard this target does
+ * not serve.
+ */
+const unsupportedLivePublisher = (): { publish: () => Promise<never> } => {
+    return {
+        publish: () =>
+            Promise.reject(
+                new LunoraError("ctx.live.publish is unavailable: this worker does not serve live streams", {
+                    code: "LIVE_STREAMS_UNSUPPORTED",
+                    status: 501,
+                }),
+            ),
+    };
+};
 
 /**
  * The error a shard's live publish route refused with. The shard answers
@@ -1271,9 +1288,10 @@ interface WorkerOptions {
     listSchemaTables?: () => ReadonlyArray<string>;
 
     /**
-     * Whether the target serves live topic streams. Defaults to `true`. `false` leaves
-     * `ctx.live` off the HTTP action context, so a publish is not offered on a target
-     * with no subscriber to reach. Codegen sets it from the target's capability matrix.
+     * Whether the target serves live topic streams. Defaults to `true`. `false` keeps
+     * `ctx.live` on the HTTP action context and on a direct queue consumer, but its `publish`
+     * rejects with `LIVE_STREAMS_UNSUPPORTED`, so no publish reaches a shard with no subscriber
+     * to reach. Codegen sets it from the target's capability matrix.
      */
     liveStreams?: boolean;
 
@@ -4252,14 +4270,13 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
 
                 return { runAction: scoped, runMutation: scoped, runQuery: scoped };
             },
-            ...(options.liveStreams === false
-                ? {}
-                : {
-                      live: {
+            live:
+                options.liveStreams === false
+                    ? unsupportedLivePublisher()
+                    : {
                           publish: (topic: string, payload: unknown, publishOptions: { shardKey?: string; stream: string }) =>
                               publishLiveToShard(request.url, topic, payload, publishOptions, { identity }),
                       },
-                  }),
             runAction: run,
             runMutation: run,
             runQuery: run,
@@ -5923,9 +5940,12 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
             await instrumentTrigger(`queue:${queueNameOf(batch)}`, context, async (traceparent) => {
                 // The consumer's publish is `"trusted"`: no caller is checked against the `shardKey` it names. A `shardKey` taken from a
                 // client-supplied message body must be checked by the consumer before it is passed, or any message can publish into any shard.
-                const live: QueueLivePublisherLike = {
-                    publish: (topic, payload, publishOptions) => publishLiveToShard(QUEUE_LIVE_ORIGIN, topic, payload, publishOptions, "trusted"),
-                };
+                const live: QueueLivePublisherLike =
+                    options.liveStreams === false
+                        ? unsupportedLivePublisher()
+                        : {
+                              publish: (topic, payload, publishOptions) => publishLiveToShard(QUEUE_LIVE_ORIGIN, topic, payload, publishOptions, "trusted"),
+                          };
 
                 await options.queue?.(batch, env, context, { traceparent }, live, options.queueFetchImpl);
             });
