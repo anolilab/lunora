@@ -1,3 +1,11 @@
+## @lunora/react-native [1.0.0-alpha.207](https://github.com/anolilab/lunora/compare/@lunora/react-native@1.0.0-alpha.206...@lunora/react-native@1.0.0-alpha.207) (2026-10-18)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.227
+* **@lunora/react:** upgraded to 1.0.0-alpha.240
+
 ## @lunora/react-native [1.0.0-alpha.206](https://github.com/anolilab/lunora/compare/@lunora/react-native@1.0.0-alpha.205...@lunora/react-native@1.0.0-alpha.206) (2026-10-18)
 
 
