@@ -1478,15 +1478,17 @@ export const agentComponent = (): AgentComponent => {
      * `expired` here, so a supply that arrives later is refused; a supply that already
      * landed is honoured even though the wait timed out. Returns the status only, never
      * the ref. A missing row (a thread paused before this table existed) reads as
-     * `expired`, so the run fails closed instead of crashing.
+     * `expired`, so the run fails closed instead of crashing. A row that a later run
+     * reopened under the same tool-call id belongs to that run, so the settling run's
+     * wait reads as `expired` and the row is left as it is.
      */
     const agentSettleSecretRequest = asInternal(
         mutation
-            .input({ threadKey: v.string(), toolCallId: v.string() })
+            .input({ instanceId: v.string(), threadKey: v.string(), toolCallId: v.string() })
             .mutation(async ({ args, ctx: context }): Promise<{ status: "declined" | "expired" | "supplied" }> => {
                 const request = await secretRequestOf(context.db, args.threadKey, args.toolCallId);
 
-                if (request === undefined) {
+                if (request?.["instanceId"] !== args.instanceId) {
                     return { status: "expired" };
                 }
 

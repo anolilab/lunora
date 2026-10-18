@@ -752,3 +752,30 @@ describe("withSecret — a callback that throws never exposes the value", () => 
         expect(row?.content).not.toContain(SECRET);
     });
 });
+
+describe("a request is settled only by the run that opened it", () => {
+    it("leaves a request that a newer run reopened under the same tool-call id pending", async () => {
+        expect.assertions(2);
+
+        const host = await secretHost(new WaitJournal());
+        const open = (instanceId: string): unknown =>
+            host.handlers["agents:agentOpenSecretRequest"]?.({
+                consumerTool: "charge",
+                expiresAt: Date.now() + DEADLINE_MS,
+                instanceId,
+                threadKey: THREAD,
+                toolCallId: "call_1",
+                toolName: "requestKey",
+            });
+
+        await open(INSTANCE);
+        // A later run reuses the provider-issued call id, so it reopens the same request row.
+        await open("wf-2");
+
+        // The older run's wait ends late, and its settle must not expire the newer run's request.
+        const settled = await host.handlers["agents:agentSettleSecretRequest"]?.({ instanceId: INSTANCE, threadKey: THREAD, toolCallId: "call_1" });
+
+        expect(settled).toStrictEqual({ status: "expired" });
+        expect(host.rows.get("agent_secret_requests")?.[0]).toMatchObject({ instanceId: "wf-2", status: "pending" });
+    });
+});
