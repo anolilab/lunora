@@ -9,14 +9,14 @@ const WORKFLOW_TIMEOUT_ERROR_NAME = "WorkflowTimeoutError";
 const waitKey = (instanceId: string, name: string): string => JSON.stringify([instanceId, name]);
 
 class WaitRegistry {
-    /** Every wait a run resolved, in order: the payload the journal recorded for it. */
-    public readonly records: { name: string; payload: unknown; type: string }[] = [];
-
     private readonly delivered = new Map<string, unknown>();
 
     private readonly pending = new Map<string, { reject: (error: Error) => void; resolve: (payload: unknown) => void }>();
 
     private readonly reached = new Map<string, (() => void)[]>();
+
+    /** The harness's journal: a resolved wait is appended here, in the order it resolves against the run's steps. */
+    public constructor(private readonly journal: unknown[]) {}
 
     public wait(instanceId: string, name: string, type: string): Promise<unknown> {
         const key = waitKey(instanceId, name);
@@ -95,7 +95,7 @@ class WaitRegistry {
     }
 
     private record(name: string, type: string, payload: unknown): unknown {
-        this.records.push({ name, payload, type });
+        this.journal.push({ kind: "wait", name, payload, type });
 
         return payload;
     }
