@@ -1,3 +1,17 @@
+## @lunora/studio [1.0.0-alpha.317](https://github.com/anolilab/lunora/compare/@lunora/studio@1.0.0-alpha.316...@lunora/studio@1.0.0-alpha.317) (2026-10-18)
+
+### Features
+
+* **workflow:** add restart action and rollingBack status ([#1249](https://github.com/anolilab/lunora/issues/1249)) ([01ec235](https://github.com/anolilab/lunora/commit/01ec2353b2d3cad8d26e32aff70fd42dd5590c96))
+
+
+### Dependencies
+
+* **@lunora/bindings:** upgraded to 1.0.0-alpha.123
+* **@lunora/client:** upgraded to 1.0.0-alpha.227
+* **@lunora/react:** upgraded to 1.0.0-alpha.240
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.219
+
 ## @lunora/studio [1.0.0-alpha.316](https://github.com/anolilab/lunora/compare/@lunora/studio@1.0.0-alpha.315...@lunora/studio@1.0.0-alpha.316) (2026-10-18)
 
 
