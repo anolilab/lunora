@@ -107,6 +107,65 @@ const containsSecret = (value: unknown, secret: string): boolean => {
     return serialized.includes(secret) || serialized.includes(JSON.stringify(secret).slice(1, -1));
 };
 
+/** What a redacted secret reads as in a message the caller, telemetry or the journal sees. */
+const REDACTED = "[redacted]";
+
+/** Replace the secret in `text`, both raw and JSON-escaped, the spelling a serialized copy carries. */
+const redactText = (text: string, secret: string): string => {
+    // An empty secret is in every string, so there is nothing that can be replaced.
+    if (secret.length === 0) {
+        return text;
+    }
+
+    return text.split(secret).join(REDACTED).split(JSON.stringify(secret).slice(1, -1)).join(REDACTED);
+};
+
+/**
+ * Scrub the secret from a callback's error in place, so the error the step and the loop
+ * see is safe. Mutated rather than copied, so its class, `code`, `status` and dispatch
+ * brand still decide whether the step retries it or the loop records it as a
+ * deterministic failure. A non-error throw is replaced outright, since it cannot be
+ * checked for the secret without running its own `toString`.
+ */
+const redactCallbackError = (error: unknown, secret: string, seen: Set<unknown> = new Set()): unknown => {
+    if (!(error instanceof Error)) {
+        return new LunoraError("INTERNAL", "@lunora/agent: withSecret's callback threw a value that is withheld, in case it carries the secret");
+    }
+
+    if (seen.has(error)) {
+        return error;
+    }
+
+    seen.add(error);
+
+    // In place on purpose: a copy would lose the class and brand that classify the error.
+    // eslint-disable-next-line no-param-reassign -- the error is rewritten in place, see above
+    error.message = redactText(error.message, secret);
+
+    if (typeof error.stack === "string") {
+        // eslint-disable-next-line no-param-reassign -- the error is rewritten in place, see above
+        error.stack = redactText(error.stack, secret);
+    }
+
+    const fields = error as unknown as Record<string, unknown>;
+
+    for (const key of Object.getOwnPropertyNames(error)) {
+        if (key === "message" || key === "stack") {
+            continue;
+        }
+
+        const value = fields[key];
+
+        if (value instanceof Error) {
+            redactCallbackError(value, secret, seen);
+        } else if (containsSecret(value, secret)) {
+            fields[key] = JSON.parse(redactText(JSON.stringify(value), secret));
+        }
+    }
+
+    return error;
+};
+
 /**
  * Read a human-supplied secret inside the tool that the request declared as its
  * `consumer`, hand it to `use`, and return only what `use` returns. The value never
@@ -120,9 +179,10 @@ const containsSecret = (value: unknown, secret: string): boolean => {
  * wrong tool, another thread, an expired request) cannot burn a value the declared
  * consumer still needs. If `use` keeps failing, the value stays until its TTL expires,
  * which is the backstop for a crash between the take and the discard. `use` must not
- * return, log, or throw the value, and a result that carries it is refused (the call
- * fails with `LunoraError`) rather than journalled; `traceToolExecution` records the
- * tool's input and output.
+ * return or log the value. A result that carries it is refused (the call fails with
+ * `LunoraError`) rather than journalled. An error that carries it is redacted before
+ * it propagates, so the step's retry, the failure the loop records and telemetry never
+ * see the value; `traceToolExecution` records the tool's input and output.
  * @throws {SecretUnavailableError} when the request is unknown, not supplied, declared for another consumer, or from another thread
  * @experimental
  */
@@ -139,7 +199,14 @@ const withSecret = async <Result>(context: AgentToolContext, secretRef: string, 
             return { unavailable: true } as const;
         }
 
-        const result = await use(secret);
+        let result: Result;
+
+        try {
+            result = await use(secret);
+        } catch (error: unknown) {
+            // The step retries this error and the loop records its message, so the value must not survive into either.
+            throw redactCallbackError(error, secret);
+        }
 
         // The step's return value is what the durable journal keeps. A callback that
         // returns the credential (an echoed token, a signed header) would write it
