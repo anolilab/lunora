@@ -427,19 +427,24 @@ const startLocalHyperdrive = async (options: StartLocalHyperdriveOptions): Promi
 
     // Bindings that get no database still get an address that refuses connections, so wrangler starts the
     // session and `ctx.sql` fails with a connection error, instead of the whole dev server refusing to boot.
-    const unavailable: string[] = [];
+    // What this call wrote into the environment, so releasing it removes only that: a later call may have replaced a value.
+    const written = new Map<string, string>();
     const makeUnavailable = (binding: string): void => {
         env[variableFor(binding)] = UNAVAILABLE_CONNECTION_STRING;
-        unavailable.push(binding);
+        written.set(binding, UNAVAILABLE_CONNECTION_STRING);
     };
     const started: { binding: string; stop: () => Promise<void> }[] = [];
     const release = async (): Promise<void> => {
         // Emptied as it goes, so a second call (the failure path, then the caller's stop) has nothing left to stop or unlock.
         const stopping = started.splice(0);
-        const names = [...stopping.map((entry) => entry.binding), ...unavailable.splice(0)];
+        const entries = [...written];
 
-        for (const binding of names) {
-            Reflect.deleteProperty(env, variableFor(binding));
+        written.clear();
+
+        for (const [binding, value] of entries) {
+            if (env[variableFor(binding)] === value) {
+                Reflect.deleteProperty(env, variableFor(binding));
+            }
         }
 
         await Promise.allSettled(stopping.map(async (server) => server.stop()));
@@ -480,6 +485,7 @@ const startLocalHyperdrive = async (options: StartLocalHyperdriveOptions): Promi
 
             started.push({ binding, stop: server.stop });
             env[variableFor(binding)] = server.connectionString;
+            written.set(binding, server.connectionString);
         }
     } catch (error) {
         options.onWarning?.(`Could not start the embedded Postgres for Hyperdrive: ${error instanceof Error ? error.message : String(error)}`);

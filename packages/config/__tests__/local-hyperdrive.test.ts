@@ -247,6 +247,26 @@ describe("local hyperdrive", () => {
             await missing?.stop();
         });
 
+        it("leaves a live database address alone when an older, failed attempt is stopped afterwards", async () => {
+            expect.assertions(3);
+
+            writeWrangler([{ binding: "DB", id: "a" }]);
+
+            const env: NodeJS.ProcessEnv = {};
+            const missing = await startLocalHyperdrive({ env, load: async () => undefined, onWarning: () => {}, projectRoot: root });
+            const { runtime } = fakeRuntime();
+            const retried = await startLocalHyperdrive({ env, load: async () => runtime, projectRoot: root });
+
+            await missing?.stop();
+
+            expect(env[`${VAR}DB`]).toBe("postgres://local/DB");
+
+            await retried?.stop();
+
+            expect(env[`${VAR}DB`]).toBeUndefined();
+            expect(retried?.bindings).toStrictEqual(["DB"]);
+        });
+
         it("rolls back the servers already started when a later one fails", async () => {
             expect.assertions(3);
 
