@@ -164,9 +164,9 @@ const withheldBindings = (config: RemoteOnlyBindings | undefined, hasCredentials
 /** The one dev warning for a withheld binding, shared by `lunora dev` and `@lunora/vite`. */
 const describeWithheld = ({ binding, kind }: WithheldBinding): string =>
     kind === "ai"
-        ? `Workers AI is off in this dev session (${binding} binding left out): no Cloudflare login found, and Workers AI only runs remotely. ` +
+        ? `Workers AI is off in this dev session (${binding} binding left out): no usable Cloudflare login found, and Workers AI only runs remotely. ` +
           "`@cf/…` models will throw; AI SDK models and `LUNORA_AI_PROXY_URL` slugs still work. Run `wrangler login` or set CLOUDFLARE_API_TOKEN to turn it on."
-        : `Artifacts is off in this dev session (${binding} binding left out): no Cloudflare login found, and Artifacts only runs remotely. ` +
+        : `Artifacts is off in this dev session (${binding} binding left out): no usable Cloudflare login found, and Artifacts only runs remotely. ` +
           "`ctx.artifacts` will throw. Run `wrangler login` or set CLOUDFLARE_API_TOKEN to turn it on.";
 
 export type { DevConfigKind, WithheldBinding };
