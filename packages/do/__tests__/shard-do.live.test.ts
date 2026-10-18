@@ -512,29 +512,13 @@ describe("shardDO live streams", () => {
         expect(withoutAck(socket)).toContainEqual({ connectionId: "ws-a", subject: "user-a", type: "identity", whisperAck: true });
     });
 
-    it("closes a WebSocket for a retry, and does not advertise its connection id, when its relay attach failed", async () => {
-        expect.assertions(3);
+    it("keeps serving a WebSocket whose relay attach failed, and still advertises its connection id", async () => {
+        expect.assertions(2);
 
         const socket = new FakeSocket({ connectionId: "ws-a", subs: {}, userId: "user-a" });
         const shard = makeShard([socket]);
 
-        // The owner did not register this relay, so a grant sent on its connection id would have nowhere to go.
-        Reflect.set(shard, "relay", { announce: () => Promise.resolve(false) });
-
-        await shard.webSocketMessage(socket as unknown as WebSocket, JSON.stringify({ type: "connect" }));
-
-        expect(socket.closed).toStrictEqual({ code: 1013, reason: "relay is not yet registered with its owner" });
-        expect(withoutAck(socket).some((frame) => frame.type === "identity")).toBe(false);
-        expect(JSON.stringify(socket.frames)).not.toContain("ws-a");
-    });
-
-    it("leaves a WebSocket that already holds subscriptions open when its relay attach fails", async () => {
-        expect.assertions(2);
-
-        // A server-initiated close skips the teardown `webSocketClose` runs, so an established socket is not closed here.
-        const socket = new FakeSocket({ connectionId: "ws-a", subs: { s1: { args: {}, name: "posts" } }, userId: "user-a" });
-        const shard = makeShard([socket]);
-
+        // A persistent refusal, such as a sibling-secret mismatch, must not turn every new socket into a reconnect loop.
         Reflect.set(shard, "relay", { announce: () => Promise.resolve(false) });
 
         await shard.webSocketMessage(socket as unknown as WebSocket, JSON.stringify({ type: "connect" }));
