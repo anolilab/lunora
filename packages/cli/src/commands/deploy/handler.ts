@@ -760,16 +760,29 @@ const createsAccountResources = (options: Pick<DeployCommandOptions, "dryRun" | 
  * build (which has the same outcome) reports that and goes on. Only a temporary deploy, which never creates
  * one, reports it as missing.
  */
-const artifactsModeFor = (options: Pick<DeployCommandOptions, "temporary">): ArtifactsCheckMode => (options.temporary === true ? "report" : "defer");
+const artifactsModeFor = (options: Pick<DeployCommandOptions, "dryRun" | "temporary">): ArtifactsCheckMode => {
+    if (options.temporary === true) {
+        return "report";
+    }
+
+    return options.dryRun === true ? "preview" : "defer";
+};
 
 /**
  * How the Artifacts namespace check treats a namespace that does not exist yet: `report` refuses (a
  * dry run, a temporary deploy), `defer` lets it pass because `create` makes it later, just before the deploy.
  */
-type ArtifactsCheckMode = "create" | "defer" | "report";
+type ArtifactsCheckMode = "create" | "defer" | "preview" | "report";
 
-/** Log each namespace check's outcome; returns the lines of the ones that stop the deploy. */
-const reportArtifactsChecks = (checks: ReadonlyArray<Awaited<ReturnType<typeof checkArtifactsJurisdiction>>>, logger: Logger): string[] => {
+/**
+ * Log each namespace check's outcome; returns the lines of the ones that stop the deploy. A dry run or build
+ * needs no token to bundle, so a namespace it cannot check is a warning there and stops a real deploy.
+ */
+const reportArtifactsChecks = (
+    checks: ReadonlyArray<Awaited<ReturnType<typeof checkArtifactsJurisdiction>>>,
+    logger: Logger,
+    mode: ArtifactsCheckMode,
+): string[] => {
     const failures: string[] = [];
 
     for (const check of checks) {
@@ -778,15 +791,15 @@ const reportArtifactsChecks = (checks: ReadonlyArray<Awaited<ReturnType<typeof c
             if (check.changesAccount === true) {
                 logger.info(check.message);
             }
+        } else if (check.verdict === "unchecked" && mode === "preview") {
+            logger.warn(`dry run: ${check.message} A real deploy stops here.`);
+        } else {
+            const line = describeArtifactsFailure(check);
 
-            continue;
+            // Logged here like the migrate preflight: a pretty-mode run prints no returned error.
+            logger.error(line);
+            failures.push(line);
         }
-
-        const line = describeArtifactsFailure(check);
-
-        // Logged here like the migrate preflight: a pretty-mode run prints no returned error.
-        logger.error(line);
-        failures.push(line);
     }
 
     return failures;
@@ -840,10 +853,10 @@ const checkArtifactsNamespaces = async (
     const namespaces = [...new Map(entries.map((entry) => [entry.namespace, entry])).values()];
     const checks = await Promise.all(
         namespaces.map(async (entry) =>
-            checkArtifactsJurisdiction({ ...entry, accountId, create: mode === "create", jurisdiction, missingOk: mode === "defer" }),
+            checkArtifactsJurisdiction({ ...entry, accountId, create: mode === "create", jurisdiction, missingOk: mode === "defer" || mode === "preview" }),
         ),
     );
-    const failures = reportArtifactsChecks(checks, logger);
+    const failures = reportArtifactsChecks(checks, logger, mode);
 
     return failures.length === 0 ? undefined : failures.join("\n");
 };

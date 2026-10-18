@@ -758,6 +758,26 @@ describe("lunora deploy", () => {
                 ).toBe(true);
             });
 
+            it("lets a dry run through with a warning when there is no API token to check the namespace with, so a build needs none", async () => {
+                expect.assertions(3);
+
+                seedPinnedArtifacts();
+                vi.stubEnv("CLOUDFLARE_API_TOKEN", "");
+
+                const { errors, logger, warns } = silentLogger();
+                const result = await runDeployCommand({
+                    cwd: workdir,
+                    dryRun: true,
+                    logger,
+                    secretLister: noRemoteSecrets,
+                    spawner: createRecordingSpawner().spawner,
+                });
+
+                expect(result.error).toBeUndefined();
+                expect(errors).toStrictEqual([]);
+                expect(warns.some((message) => message.includes("dry run:") && message.includes("A real deploy stops here"))).toBe(true);
+            });
+
             it("stops before wrangler when there is no API token to check the namespace with", async () => {
                 expect.assertions(4);
 
