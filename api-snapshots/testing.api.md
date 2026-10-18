@@ -14,6 +14,7 @@ here is a public-API change and must be reviewed as one (SemVer applies).
 ```ts
 interface AgentHarness {
     awaitWait: (name: string) => Promise<void>;
+    decline: (threadKey: string, toolCallId: string) => void;
     deliver: (name: string, payload: unknown) => void;
     readonly dispatches: ReadonlyArray<HarnessDispatch>;
     expire: (name: string) => void;
@@ -21,6 +22,7 @@ interface AgentHarness {
     messages: (threadKey: string) => AgentMessageRow[];
     run: (params: AgentRunInput, overrides?: AgentRunOverrides) => Promise<AgentRunResult>;
     readonly secrets: SecretValueHost;
+    supply: (threadKey: string, toolCallId: string, value: string) => Promise<void>;
     thread: (threadKey: string) => HarnessThread | undefined;
 }
 ```
