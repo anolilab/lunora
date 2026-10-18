@@ -1344,70 +1344,70 @@ describe("relay hub", () => {
         });
     });
 
-    it("keeps at most a bounded number of live control records per connection", async () => {
-        expect.assertions(1);
-
-        const member = memberOf({
-            doName: () => `${OWNER_KEY}::relay::0`,
-            env: () => {
-                return {};
-            },
-            getWebSockets: () => [],
-            liveControl: () => Promise.resolve(new Response(undefined, { status: 200 })),
-            readAttachment: () => {
-                return {};
-            },
-            shardBinding: () => "SHARD",
-            shardJurisdiction: () => undefined,
-            sql: () => database.sql,
-        } as unknown as RelayHost);
-
-        // A long-lived socket that subscribes and unsubscribes 200 distinct subscriptions.
-        for (let index = 0; index < 200; index += 1) {
-            const control = { action: "unsubscribe", callerId: "u1", connectionId: "c1", key: "k1", seq: index + 1, subscriptionId: `s${String(index)}` };
-
-            // eslint-disable-next-line no-await-in-loop -- each call is applied in order, as the owner sends them
-            await deliver(member, JSON.stringify({ control, type: "relay_live_control" }));
-        }
-
-        const records = (member as unknown as { liveControlSeqs: Map<string, Map<string, number>> }).liveControlSeqs.get("c1");
-
-        expect(records?.size).toBe(64);
-    });
-
-    it("still refuses a late live control call whose record the cap evicted", async () => {
-        expect.assertions(1);
-
-        const liveControl = vi.fn<(control: unknown) => Promise<Response>>(() => Promise.resolve(new Response(undefined, { status: 200 })));
-        const member = memberOf({
-            doName: () => `${OWNER_KEY}::relay::0`,
-            env: () => {
-                return {};
-            },
-            getWebSockets: () => [],
-            liveControl,
-            readAttachment: () => {
-                return {};
-            },
-            shardBinding: () => "SHARD",
-            shardJurisdiction: () => undefined,
-            sql: () => database.sql,
-        } as unknown as RelayHost);
+    describe("relay live control records", () => {
+        const memberWithLiveControl = (): RelayMember =>
+            memberOf({
+                doName: () => `${OWNER_KEY}::relay::0`,
+                env: () => {
+                    return {};
+                },
+                getWebSockets: () => [],
+                liveControl: () => Promise.resolve(new Response(undefined, { status: 200 })),
+                readAttachment: () => {
+                    return {};
+                },
+                shardBinding: () => "SHARD",
+                shardJurisdiction: () => undefined,
+                sql: () => database.sql,
+            } as unknown as RelayHost);
         const control = (action: string, subscriptionId: string, seq: number): string =>
             JSON.stringify({ control: { action, callerId: "u1", connectionId: "c1", key: "k1", seq, subscriptionId }, type: "relay_live_control" });
 
-        // A's unsubscribe lands first, then 64 other subscriptions' calls push A's record out.
-        await deliver(member, control("unsubscribe", "a", 100));
+        it("prunes records older than the late-frame window, so a long-lived socket holds only its recent calls", async () => {
+            expect.assertions(1);
 
-        for (let index = 0; index < 64; index += 1) {
-            // eslint-disable-next-line no-await-in-loop -- applied in order, as the owner sends them
-            await deliver(member, control("unsubscribe", `s${String(index)}`, 101 + index));
-        }
+            const member = memberWithLiveControl();
 
-        // A's delayed subscribe, stamped before its unsubscribe, finally arrives.
-        const late = await deliver(member, control("subscribe", "a", 50));
+            vi.useFakeTimers();
 
-        expect(late.status).toBe(409);
+            try {
+                // A long-lived socket that subscribes and unsubscribes 200 distinct subscriptions.
+                for (let index = 0; index < 200; index += 1) {
+                    // eslint-disable-next-line no-await-in-loop -- each call is applied in order, as the owner sends them
+                    await deliver(member, control("unsubscribe", `s${String(index)}`, index + 1));
+                }
+
+                vi.advanceTimersByTime(31_000);
+                await deliver(member, control("subscribe", "fresh", 1000));
+            } finally {
+                vi.useRealTimers();
+            }
+
+            const records = (member as unknown as { liveControlSeqs: Map<string, Map<string, unknown>> }).liveControlSeqs.get("c1");
+
+            expect(records?.size).toBe(1);
+        });
+
+        it("refuses a late call within the window even after many other subscriptions' calls, and admits a delayed first call", async () => {
+            expect.assertions(2);
+
+            const member = memberWithLiveControl();
+
+            await deliver(member, control("unsubscribe", "a", 100));
+
+            for (let index = 0; index < 100; index += 1) {
+                // eslint-disable-next-line no-await-in-loop -- applied in order, as the owner sends them
+                await deliver(member, control("unsubscribe", `s${String(index)}`, 101 + index));
+            }
+
+            // A's delayed subscribe, stamped before its unsubscribe, is still refused...
+            const late = await deliver(member, control("subscribe", "a", 50));
+            // ...while another subscription's delayed first call, superseded by nothing, still applies.
+            const first = await deliver(member, control("subscribe", "b", 60));
+
+            expect(late.status).toBe(409);
+            expect(first.status).toBe(200);
+        });
     });
 
     describe("relay announce", () => {

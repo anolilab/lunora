@@ -257,12 +257,12 @@ const jsonRelayResponse = (body: unknown): Response => Response.json(body, { hea
 const noContent = (): Response => new Response(null, { status: 204 });
 
 /**
- * How many subscriptions per connection a relay keeps a live control sequence for. A long-lived socket that subscribes and unsubscribes
- * repeatedly would otherwise keep one entry per subscription it ever had. Only the newest matter: the race the sequence guards against is
- * a late frame within seconds of the one that superseded it.
- * An evicted entry still raises a per-connection floor, so a late call for it is refused rather than applied.
+ * How long a relay remembers the sequence of a live control call it applied. The race the sequence guards against is a late frame: a call
+ * the owner stopped waiting on after {@link RELAY_LIVE_CONTROL_TIMEOUT_MS} that still lands. A record older than this is pruned, so a
+ * long-lived socket that keeps subscribing and unsubscribing holds only its recent calls.
+ * ponytail: a fixed window; a cross-DO request delayed longer than this could still apply out of order. Lengthen it if one ever is.
  */
-const LIVE_CONTROL_SEQS_PER_CONNECTION = 64;
+const LIVE_CONTROL_SEQ_TTL_MS = 30_000;
 
 /** Status a relay answers a forwarded frame with when it holds no sockets, so the owner stops fanning out to it. */
 const RELAY_IDLE_STATUS = 410;
@@ -1657,13 +1657,7 @@ class RelayMember extends RelayLink {
     private relayAnnounced = false;
 
     /** The newest live control sequence applied per connection and subscription; see {@link RelayMember.onLiveControl}. */
-    private readonly liveControlSeqs = new Map<string, Map<string, number>>();
-
-    /**
-     * Per connection, the highest sequence the cap in {@link RelayMember.onLiveControl} has evicted. The owner's sequences only grow, so a
-     * call for a subscription with no record that is at or below this floor is a late one whose record was evicted: it is refused too.
-     */
-    private readonly liveControlFloors = new Map<string, number>();
+    private readonly liveControlSeqs = new Map<string, Map<string, { appliedAt: number; seq: number }>>();
 
     /** The attach to the owner while one is in flight, so concurrent announces share it. */
     private pendingAnnounce: Promise<boolean> | undefined;
@@ -1921,7 +1915,6 @@ class RelayMember extends RelayLink {
         this.relayMemos().clear();
         deleteAllRelayMemos(this.host.sql());
         this.liveControlSeqs.clear();
-        this.liveControlFloors.clear();
 
         if (!this.canAddressSiblings()) {
             return;
@@ -1985,7 +1978,6 @@ class RelayMember extends RelayLink {
             // A closed socket takes its live control sequences with it: no later control call can name it on this relay.
             if (subId === undefined) {
                 this.liveControlSeqs.delete(connectionId);
-                this.liveControlFloors.delete(connectionId);
             }
         }
 
@@ -2072,30 +2064,27 @@ class RelayMember extends RelayLink {
             this.liveControlSeqs.set(connectionId, subscriptions);
         }
 
-        const last = subscriptions.get(subscriptionId);
-        const floor = this.liveControlFloors.get(connectionId);
+        const now = Date.now();
 
-        if ((last !== undefined && seq < last) || (last === undefined && floor !== undefined && seq <= floor)) {
-            return Response.json({ error: { code: "LIVE_CONTROL_SUPERSEDED", message: "a later live control call already applied" } }, { status: 409 });
-        }
-
-        // Re-inserted, so the map stays ordered oldest call first and the cap below evicts the stalest entry.
-        subscriptions.delete(subscriptionId);
-        subscriptions.set(subscriptionId, seq);
-
-        if (subscriptions.size > LIVE_CONTROL_SEQS_PER_CONNECTION) {
-            const [oldest] = subscriptions.entries();
-
-            if (oldest !== undefined) {
-                subscriptions.delete(oldest[0]);
-                // Raise the floor, so the evicted subscription's late calls are still refused.
-                this.liveControlFloors.set(connectionId, Math.max(floor ?? 0, oldest[1]));
+        for (const [id, record] of subscriptions) {
+            if (now - record.appliedAt > LIVE_CONTROL_SEQ_TTL_MS) {
+                subscriptions.delete(id);
             }
         }
 
+        const last = subscriptions.get(subscriptionId);
+
+        if (last !== undefined && seq < last.seq) {
+            return Response.json({ error: { code: "LIVE_CONTROL_SUPERSEDED", message: "a later live control call already applied" } }, { status: 409 });
+        }
+
+        const applied = { appliedAt: now, seq };
+
+        subscriptions.set(subscriptionId, applied);
+
         const response = await this.host.liveControl(control);
 
-        if (response.status === 404 && subscriptions.get(subscriptionId) === seq) {
+        if (response.status === 404 && subscriptions.get(subscriptionId) === applied) {
             subscriptions.delete(subscriptionId);
 
             if (subscriptions.size === 0) {
