@@ -400,12 +400,14 @@ const reconcileKv = (text: string, parsed: WranglerShape, jurisdiction: Inferred
 
 /**
  * Add the `ARTIFACTS` binding when the project binds no namespace, naming the namespace after the
- * Worker. The namespace itself is created on first use, or by `lunora deploy` in the schema's
- * jurisdiction when the schema pins one (and the deploy refuses to go on if it can't). A logged-out
- * dev session leaves the binding out, since Artifacts only runs remotely. Pure.
+ * Worker. The namespace itself is created on first use. A logged-out dev session leaves the binding
+ * out, since Artifacts only runs remotely. Not run for a jurisdiction-pinned schema: the first
+ * `create()` against a missing namespace makes it unrestricted and its jurisdiction cannot change, and
+ * a logged-in dev session would make that call, so that app creates the namespace itself (the hint
+ * says how) and adds the binding, and `lunora deploy` then checks it. Pure.
  */
-const reconcileArtifacts = (text: string, parsed: WranglerShape, target: string | undefined): ReconcileStep => {
-    if (!createsCloudflareResources(target) || (parsed.artifacts?.length ?? 0) > 0) {
+const reconcileArtifacts = (text: string, parsed: WranglerShape, jurisdiction: InferredBindings["jurisdiction"], target: string | undefined): ReconcileStep => {
+    if (!createsCloudflareResources(target) || jurisdiction !== undefined || (parsed.artifacts?.length ?? 0) > 0) {
         return { added: [], text };
     }
 
@@ -1009,7 +1011,7 @@ const reconcileWranglerBindings = (
         { enabled: inferred.needsD1, run: (text) => reconcileD1(text, parsed) },
         { enabled: inferred.usesKv, run: (text) => reconcileKv(text, parsed, inferred.jurisdiction, target) },
         { enabled: inferred.usesHyperdrive, run: (text) => reconcileHyperdrive(text, parsed, target) },
-        { enabled: inferred.usesArtifacts, run: (text) => reconcileArtifacts(text, parsed, target) },
+        { enabled: inferred.usesArtifacts, run: (text) => reconcileArtifacts(text, parsed, inferred.jurisdiction, target) },
         { enabled: inferred.usesAi, run: (text) => reconcileSelfDescribing(text, parsed, "ai") },
         {
             enabled: inferred.usesAiSearch,

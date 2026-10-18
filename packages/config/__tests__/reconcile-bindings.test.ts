@@ -425,17 +425,26 @@ describe("reconcileWranglerBindings", () => {
         expect(readConfig().r2_buckets).toBeUndefined();
     });
 
-    it("writes an ARTIFACTS binding whose namespace is the Worker's name, once, pinned or not", () => {
-        expect.assertions(5);
+    it("writes an ARTIFACTS binding whose namespace is the Worker's name, once", () => {
+        expect.assertions(4);
 
-        const first = reconcileWranglerBindings(root, baseInferred({ jurisdiction: "us", usesArtifacts: true }));
+        const first = reconcileWranglerBindings(root, baseInferred({ usesArtifacts: true }));
 
         expect(first.added).toContain("ARTIFACTS (Cloudflare Artifacts)");
         expect(readConfig().artifacts).toStrictEqual([{ binding: "ARTIFACTS", namespace: "lunora-app" }]);
         expect(first.warnings.join(" ")).not.toMatch(/"artifacts" binding/u);
-        // The namespace's residency is settled at deploy, which creates it in the schema's jurisdiction or stops.
-        expect(first.warnings.join(" ")).not.toContain("jurisdiction");
-        expect(reconcileWranglerBindings(root, baseInferred({ jurisdiction: "us", usesArtifacts: true })).added).toStrictEqual([]);
+        expect(reconcileWranglerBindings(root, baseInferred({ usesArtifacts: true })).added).toStrictEqual([]);
+    });
+
+    it("writes no ARTIFACTS binding for a schema that pins a jurisdiction, and says to create the namespace first", () => {
+        expect.assertions(3);
+
+        // A logged-in dev session's first create() would make the namespace unrestricted, for good.
+        const result = reconcileWranglerBindings(root, baseInferred({ jurisdiction: "us", usesArtifacts: true }));
+
+        expect(result.added).not.toContain("ARTIFACTS (Cloudflare Artifacts)");
+        expect(readConfig().artifacts).toBeUndefined();
+        expect(result.warnings.join(" ")).toContain('pins data to "us"');
     });
 
     it("writes no ARTIFACTS binding for a non-Cloudflare target, and says what to add", () => {
