@@ -214,7 +214,7 @@ export const listItems = query({
         ).toStrictEqual([]);
     });
 
-    it("reads a `program` wrapped in `as const` or `satisfies` as written", () => {
+    it("reads a `program` wrapped in `as const` as written", () => {
         expect.assertions(1);
 
         writeConfig(`export default { codegen: { program: "tsconfig" as const } };\n`);
