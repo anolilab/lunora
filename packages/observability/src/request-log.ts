@@ -387,7 +387,9 @@ const collectSecretLeaves = (root: unknown, found: string[]): void => {
             if (value.length > 0) {
                 found.push(...stringSpellings(value));
             }
-        } else if (typeof value === "number" || typeof value === "boolean" || typeof value === "bigint") {
+        } else if (typeof value === "number" || typeof value === "bigint") {
+            // Not booleans: `true` and `false` carry no secret, and registering them as text would
+            // rewrite every unrelated `true` in the invocation's logs, spans and events.
             found.push(String(value));
         } else if (typeof value === "object" && value !== null && !seen.has(value)) {
             seen.add(value);
