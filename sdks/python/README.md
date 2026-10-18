@@ -133,6 +133,13 @@ flush (`OFFLINE_WRITE_UNENCODABLE`) rather than being retried forever, and every
 discard — including one the capacity cap evicts out of a _restored_ queue, which
 has no caller left to tell — is reported to `client.on_mutation_settled`.
 
+A write that must never sit on disk — a credential, a one-time token — passes
+`online_only=True`. It is never queued, persisted or replayed: where a normal
+write would be queued, `submit` raises `OfflineError` with code
+`OFFLINE_NOT_QUEUED` before any optimistic layer is installed, and its arguments
+never reach the persistence adapter. It does not wait for a flush or queue behind
+pending writes, so it may land before an older queued write to the same document.
+
 `client.identity` is an opaque, **non-secret** stamp — a user id, not a bearer
 token. It is persisted with every queued write and re-checked before that write
 replays, so a restart cannot push one user's queued writes as another. Left
