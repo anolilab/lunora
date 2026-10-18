@@ -256,6 +256,14 @@ const jsonRelayResponse = (body: unknown): Response => Response.json(body, { hea
 // eslint-disable-next-line unicorn/no-null -- 204 No Content has no body; null is the standard "no body" value
 const noContent = (): Response => new Response(null, { status: 204 });
 
+/**
+ * How long a relay remembers the sequence of a live control call it applied. The race the sequence guards against is a late frame: a call
+ * the owner stopped waiting on after {@link RELAY_LIVE_CONTROL_TIMEOUT_MS} that still lands. A record older than this is pruned, so a
+ * long-lived socket that keeps subscribing and unsubscribing holds only its recent calls.
+ * ponytail: a fixed window; a cross-DO request delayed longer than this could still apply out of order. Lengthen it if one ever is.
+ */
+const LIVE_CONTROL_SEQ_TTL_MS = 30_000;
+
 /** Status a relay answers a forwarded frame with when it holds no sockets, so the owner stops fanning out to it. */
 const RELAY_IDLE_STATUS = 410;
 
@@ -1648,8 +1656,11 @@ class RelayMember extends RelayLink {
     /** `true` once this relay has announced itself to its owner this wake, so a hot socket churn doesn't re-attach on every subscribe. */
     private relayAnnounced = false;
 
-    /** The newest live control sequence applied per connection and subscription; see {@link RelayMember.onLiveControl}. */
-    private readonly liveControlSeqs = new Map<string, Map<string, number>>();
+    /**
+     * The newest live control sequence applied per connection and subscription, keyed by both and kept oldest first, so expired records
+     * are pruned from the front; see {@link RelayMember.onLiveControl}.
+     */
+    private readonly liveControlSeqs = new Map<string, { appliedAt: number; seq: number }>();
 
     /** The attach to the owner while one is in flight, so concurrent announces share it. */
     private pendingAnnounce: Promise<boolean> | undefined;
@@ -1966,11 +1977,6 @@ class RelayMember extends RelayLink {
         // connection id can't be admitted by a memo whose row is gone.
         if (connectionId !== undefined) {
             this.forgetRelayShapeMemos(connectionId, subId);
-
-            // A closed socket takes its live control sequences with it: no later control call can name it on this relay.
-            if (subId === undefined) {
-                this.liveControlSeqs.delete(connectionId);
-            }
         }
 
         // No connection id means nothing was ever registered: the owner refuses
@@ -2049,29 +2055,34 @@ class RelayMember extends RelayLink {
             return this.host.liveControl(control);
         }
 
-        let subscriptions = this.liveControlSeqs.get(connectionId);
+        const now = Date.now();
 
-        if (subscriptions === undefined) {
-            subscriptions = new Map();
-            this.liveControlSeqs.set(connectionId, subscriptions);
+        // Oldest first, since every record is (re)inserted when applied: prune from the front and stop at the first one still inside
+        // the window, so this costs amortized constant work and every socket's records expire, busy or idle.
+        for (const [recordKey, record] of this.liveControlSeqs) {
+            if (now - record.appliedAt <= LIVE_CONTROL_SEQ_TTL_MS) {
+                break;
+            }
+
+            this.liveControlSeqs.delete(recordKey);
         }
 
-        const last = subscriptions.get(subscriptionId);
+        const key = `${connectionId}\u0000${subscriptionId}`;
+        const last = this.liveControlSeqs.get(key);
 
-        if (last !== undefined && seq < last) {
+        if (last !== undefined && seq < last.seq) {
             return Response.json({ error: { code: "LIVE_CONTROL_SUPERSEDED", message: "a later live control call already applied" } }, { status: 409 });
         }
 
-        subscriptions.set(subscriptionId, seq);
+        const applied = { appliedAt: now, seq };
+
+        this.liveControlSeqs.delete(key);
+        this.liveControlSeqs.set(key, applied);
 
         const response = await this.host.liveControl(control);
 
-        if (response.status === 404 && subscriptions.get(subscriptionId) === seq) {
-            subscriptions.delete(subscriptionId);
-
-            if (subscriptions.size === 0) {
-                this.liveControlSeqs.delete(connectionId);
-            }
+        if (response.status === 404 && this.liveControlSeqs.get(key) === applied) {
+            this.liveControlSeqs.delete(key);
         }
 
         return response;

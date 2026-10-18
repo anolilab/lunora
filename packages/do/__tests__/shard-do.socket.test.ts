@@ -161,6 +161,48 @@ describe("shardDO socket routes", () => {
         expect(server.frames).toEqual([{ data: { opened: true }, topic: CHAT_TOPIC, type: "message" }]);
     });
 
+    it("hands a route's onOpen to the host's waitUntil, so an eviction cannot cut it off", async () => {
+        expect.assertions(2);
+
+        const sockets: FakeSocket[] = [];
+        const server = new FakeSocket();
+        const deferred: Promise<unknown>[] = [];
+        const globalWithPair = globalThis as { WebSocketPair?: unknown };
+        const original = globalWithPair.WebSocketPair;
+
+        globalWithPair.WebSocketPair = function WebSocketPair() {
+            return { 0: {}, 1: server } as unknown;
+        };
+
+        const state = {
+            acceptWebSocket(ws: FakeSocket) {
+                sockets.push(ws);
+            },
+            getWebSockets: () => sockets,
+            storage: { sql: {} },
+            waitUntil: (promise: Promise<unknown>) => {
+                deferred.push(promise);
+            },
+        } as unknown as ShardDOState;
+        const shard = new SocketShard(state, CHAT_ROUTE);
+
+        try {
+            await shard.fetch(new Request("https://shard.internal/chat", { headers: { Upgrade: "websocket", "x-lunora-userid": "user-1" } }));
+        } catch (error) {
+            // Node refuses to build a 101 response; the dispatch already ran by then.
+            if (!(error instanceof RangeError)) {
+                throw error;
+            }
+        } finally {
+            globalWithPair.WebSocketPair = original;
+        }
+
+        await Promise.all(deferred);
+
+        expect(deferred.length).toBeGreaterThan(0);
+        expect(socketCalls(shard).some((call) => call.args["kind"] === "open")).toBe(true);
+    });
+
     it("validates a typed message and broadcasts the handler's reply to every route socket", async () => {
         expect.assertions(3);
 
